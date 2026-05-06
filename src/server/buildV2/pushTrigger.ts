@@ -10,7 +10,6 @@
  */
 
 import { EventEmitter } from "events";
-import { execFileSync } from "child_process";
 import { discoverPackageGraph, type PackageGraph } from "./packageGraph.js";
 import type { ContentHashMap, EffectiveVersionMap } from "./effectiveVersion.js";
 import {
@@ -28,6 +27,7 @@ import {
 import * as buildStore from "./buildStore.js";
 import { buildUnit } from "./builder.js";
 import type { GitPushEvent, GitServer } from "@natstack/git-server";
+import { execGitFileSync } from "@natstack/shared/gitRuntime";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -240,8 +240,8 @@ export class PushTrigger extends EventEmitter {
   private checkPackageJsonChanged(nodeName: string, commitSha: string): boolean {
     const node = this.graph.get(nodeName);
     try {
-      const pkgStr = execFileSync(
-        "git", ["show", `${commitSha}:package.json`],
+      const pkgStr = execGitFileSync(
+        ["show", `${commitSha}:package.json`],
         { cwd: node.path, encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
       );
       const pkg = JSON.parse(pkgStr);

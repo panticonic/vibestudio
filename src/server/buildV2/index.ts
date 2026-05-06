@@ -98,7 +98,7 @@ export interface BuildSystemV2 {
 export async function initBuildSystemV2(
   workspaceRoot: string,
   gitServer: GitServer,
-  appNodeModules: string,
+  appNodeModules: string | string[],
 ): Promise<BuildSystemV2> {
   console.log("[BuildV2] Initializing...");
 

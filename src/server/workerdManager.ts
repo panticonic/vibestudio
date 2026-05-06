@@ -22,6 +22,10 @@ import type { BuildResult } from "./buildV2/buildStore.js";
 import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
 import type { CodeIdentityResolver } from "./services/codeIdentityResolver.js";
 import { createDevLogger } from "@natstack/dev-log";
+import {
+  getPhysicalPathForAsarPath,
+  getPlatformPackageBinaryPath,
+} from "@natstack/shared/runtimePaths";
 
 const log = createDevLogger("WorkerdManager");
 declare const __filename: string | undefined;
@@ -179,12 +183,26 @@ export class WorkerdManager {
     };
     const platformKey = `${process.platform} ${os.arch()} ${os.endianness()}`;
     const platformPackage = platformPackages[platformKey];
+    const appRoot = process.env["NATSTACK_APP_ROOT"];
+
+    if (platformPackage && appRoot) {
+      const packagedCandidate = getPlatformPackageBinaryPath(
+        appRoot,
+        platformPackage,
+        `workerd${maybeExeExtension}`,
+      );
+      if (fs.existsSync(packagedCandidate)) {
+        this.workerdBinary = packagedCandidate;
+        return packagedCandidate;
+      }
+    }
 
     if (platformPackage) {
       try {
         const resolved = require.resolve(`${platformPackage}/bin/workerd${maybeExeExtension}`);
-        this.workerdBinary = resolved;
-        return resolved;
+        const physicalResolved = getPhysicalPathForAsarPath(resolved);
+        this.workerdBinary = fs.existsSync(physicalResolved) ? physicalResolved : resolved;
+        return this.workerdBinary;
       } catch {
         // Fall through to local candidate paths and PATH lookup below.
       }

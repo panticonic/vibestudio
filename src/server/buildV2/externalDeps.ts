@@ -13,8 +13,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { execSync } from "child_process";
 import { getUserDataPath } from "@natstack/env-paths";
+import { runNpmInstall } from "@natstack/shared/npmInstaller";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
 
 // ---------------------------------------------------------------------------
@@ -161,12 +161,7 @@ export async function ensureExternalDeps(
   );
 
   try {
-    // Use npm install (or pnpm if available)
-    execSync("npm install --prefer-offline --no-audit --no-fund --ignore-scripts --legacy-peer-deps", {
-      cwd: tmpDir,
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: 120_000,
-    });
+    runNpmInstall(tmpDir);
 
     // Write sentinel inside tmpDir BEFORE rename so winner is always complete
     fs.writeFileSync(path.join(tmpDir, ".ready"), new Date().toISOString());

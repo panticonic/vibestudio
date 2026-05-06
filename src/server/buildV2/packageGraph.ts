@@ -333,6 +333,18 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
     graph.addNode(node);
   }
 
+  // The template workspace may contain packages whose real package name is not
+  // under an @workspace/* scope, e.g. @natstack/pubsub. Treat any dependency
+  // whose package name is present in the graph as internal so source extraction,
+  // EV computation, and esbuild resolution all see the same workspace graph.
+  for (const node of graph.allNodes()) {
+    for (const [depName, depSpec] of Object.entries(node.dependencies)) {
+      if (!graph.has(depName) || node.internalDeps.includes(depName)) continue;
+      node.internalDeps.push(depName);
+      node.internalDepRefs[depName] = parseInternalDepRef(depSpec);
+    }
+  }
+
   // Inject template dependencies into panels so template content flows into EVs
   const hasDefaultTemplate = graph.has("template:default");
   for (const node of graph.allNodes()) {

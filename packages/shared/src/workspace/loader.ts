@@ -14,11 +14,12 @@ import { getCentralDataPath, getWorkspacesDir, getWorkspaceDir } from "@natstack
 import YAML from "yaml";
 import dotenv from "dotenv";
 import { createDevLogger } from "@natstack/dev-log";
-import { execFileSync } from "child_process";
 
 const log = createDevLogger("Workspace");
 import type { Workspace, WorkspaceConfig, CentralConfig, CentralConfigPaths, WorkspaceEntry } from "./types.js";
 import type { CentralDataManager } from "../centralData.js";
+import { assertGitAvailable, execGitFileSync } from "../gitRuntime.js";
+import { getExistingWorkspaceTemplateDir, getWorkspaceTemplateCandidates } from "../runtimePaths.js";
 import { WORKSPACE_GIT_INIT_PATTERNS, WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "./sourceDirs.js";
 
 const WORKSPACE_CONFIG_FILE = "meta/natstack.yml";
@@ -304,21 +305,23 @@ function validateWorkspaceName(name: string): void {
 /**
  * Resolve the workspace template directory for first-run workspace creation.
  *
- * In development (NODE_ENV=development): workspace/ at app root (the dev workspace)
- * In production: workspace-template/ in resources directory (or app root for headless)
+ * Packaged builds ship workspace-template/ as an Electron resource. Dev uses
+ * workspace/ at the app root. The candidate selection is shared with the rest
+ * of runtime path resolution so dev and packaged follow the same contract.
  *
  * Returns null if no template directory exists.
  */
 export function resolveWorkspaceTemplateDir(appRoot: string): string | null {
-  const isDev = process.env["NODE_ENV"] === "development";
-  if (isDev) {
-    const devPath = path.join(appRoot, "workspace");
-    return fs.existsSync(path.join(devPath, WORKSPACE_CONFIG_FILE)) ? devPath : null;
+  const debug = process.env["NATSTACK_DEBUG_PATHS"] === "1";
+  const templateDir = getExistingWorkspaceTemplateDir(appRoot, WORKSPACE_CONFIG_FILE);
+  if (debug) {
+    console.log(
+      `[Workspace] resolveWorkspaceTemplateDir appRoot=${appRoot} candidates=${JSON.stringify(
+        getWorkspaceTemplateCandidates(appRoot),
+      )} selected=${templateDir ?? "(none)"}`,
+    );
   }
-  // Production: Electron sets process.resourcesPath; headless falls back to appRoot
-  const resourcesPath = "resourcesPath" in process ? (process.resourcesPath as string) : appRoot;
-  const prodPath = path.join(resourcesPath, "workspace-template");
-  return fs.existsSync(path.join(prodPath, WORKSPACE_CONFIG_FILE)) ? prodPath : null;
+  return templateDir;
 }
 
 /**
@@ -425,12 +428,7 @@ function copyDirRecursive(src: string, dest: string): void {
  * git repo with an initial commit.
  */
 function initGitRepos(wsDir: string): void {
-  // Verify git is available before attempting repo initialization
-  try {
-    execFileSync("git", ["--version"], { stdio: "pipe" });
-  } catch {
-    throw new Error("git is required but not found on PATH — cannot initialize workspace");
-  }
+  assertGitAvailable();
 
   for (const sourceDir of WORKSPACE_SOURCE_DIRS) {
     const parentDir = path.join(wsDir, sourceDir);
@@ -447,10 +445,9 @@ function initGitRepos(wsDir: string): void {
       const contents = fs.readdirSync(repoDir);
       if (contents.length === 0) continue;
 
-      execFileSync("git", ["init"], { cwd: repoDir, stdio: "pipe" });
-      execFileSync("git", ["add", "-A"], { cwd: repoDir, stdio: "pipe" });
-      execFileSync(
-        "git",
+      execGitFileSync(["init"], { cwd: repoDir, stdio: "pipe" });
+      execGitFileSync(["add", "-A"], { cwd: repoDir, stdio: "pipe" });
+      execGitFileSync(
         ["-c", "user.email=natstack@local", "-c", "user.name=natstack", "commit", "-m", "Initial workspace"],
         { cwd: repoDir, stdio: "pipe" },
       );

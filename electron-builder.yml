@@ -13,19 +13,15 @@ files:
 
 asar: true
 asarUnpack:
-  # Native modules that need to be unpacked for execution
-  - "node_modules/better-sqlite3/**/*"
-  # esbuild binaries for runtime panel compilation
-  - "node_modules/esbuild/**/*"
-  - "node_modules/@esbuild/**/*"
-  # TypeScript for type checking
-  - "node_modules/typescript/**/*"
-  # Package resolution tools
-  - "node_modules/@npmcli/arborist/**/*"
-  - "node_modules/pacote/**/*"
-  # @natstack packages need to be unpacked for panel builds
+  # utilityProcess.fork() needs a physical entry point; this bootstrap loads
+  # the real server bundle from app.asar.
+  - "dist/server-bootstrap.cjs"
+  # Runtime panel/worker builds use esbuild against installed packages. Keep
+  # node_modules on the real filesystem so package resolution and native
+  # executables do not cross ASAR virtual paths.
+  - "node_modules/**/*"
+  # @natstack packages need to be unpacked for panel builds.
   - "packages/**/*"
-  - "node_modules/@natstack/**/*"
 
 extraResources:
   # Default workspace template (used to create first workspace on fresh install).
@@ -33,7 +29,7 @@ extraResources:
   - from: "workspace"
     to: "workspace-template"
     filter:
-      - "natstack.yml"
+      - "meta/**/*"
       - "panels/**/*"
       - "packages/**/*"
       - "agents/**/*"

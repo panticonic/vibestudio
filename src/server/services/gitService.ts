@@ -2,7 +2,6 @@ import * as fs from "fs";
 import { lstatSync } from "fs";
 import * as fsPromises from "fs/promises";
 import { readFile, mkdir, writeFile } from "fs/promises";
-import { execFileSync } from "child_process";
 import { resolve, join, dirname, relative, isAbsolute } from "path";
 import { z } from "zod";
 import YAML from "yaml";
@@ -24,6 +23,7 @@ import {
   validateWorkspaceGitRemoteName,
 } from "@natstack/shared/workspace/remotes";
 import { WORKSPACE_IMPORT_PARENT_DIRS } from "@natstack/shared/workspace/sourceDirs";
+import { execGitFileSync } from "@natstack/shared/gitRuntime";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
@@ -197,11 +197,11 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
           // Use execFileSync (no shell) for every git invocation. Even though
           // current command strings are constant, this prevents future
           // interpolation regressions from becoming RCE.
-          execFileSync("git", ["init"], { cwd: absolutePath, stdio: "pipe" });
+          execGitFileSync(["init"], { cwd: absolutePath, stdio: "pipe" });
           const repoName = repoPath.split("/").pop() ?? "project";
           await writeFile(join(absolutePath, "README.md"), `# ${repoName}\n\nA new NatStack project.\n`, "utf-8");
-          execFileSync("git", ["add", "--", "README.md"], { cwd: absolutePath, stdio: "pipe" });
-          execFileSync("git", ["commit", "-m", "Initial commit"], { cwd: absolutePath, stdio: "pipe" });
+          execGitFileSync(["add", "--", "README.md"], { cwd: absolutePath, stdio: "pipe" });
+          execGitFileSync(["commit", "-m", "Initial commit"], { cwd: absolutePath, stdio: "pipe" });
           if (deps.workspaceConfig) {
             await syncDeclaredRemoteForRepo({
               config: deps.workspaceConfig,
@@ -513,14 +513,13 @@ async function persistWorkspaceConfigChange(
   }
   await writeFile(configPath, nextContent, "utf-8");
   mutateWorkspaceConfig(currentConfig, nextConfig);
-  execFileSync("git", ["add", "--", "natstack.yml"], { cwd: metaDir, stdio: "pipe" });
-  const status = execFileSync("git", ["status", "--porcelain", "--", "natstack.yml"], {
+  execGitFileSync(["add", "--", "natstack.yml"], { cwd: metaDir, stdio: "pipe" });
+  const status = execGitFileSync(["status", "--porcelain", "--", "natstack.yml"], {
     cwd: metaDir,
     encoding: "utf-8",
   });
   if (!status.trim()) return;
-  execFileSync(
-    "git",
+  execGitFileSync(
     ["-c", "user.email=natstack@local", "-c", "user.name=natstack", "commit", "-m", opts.message],
     { cwd: metaDir, stdio: "pipe" },
   );

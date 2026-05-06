@@ -14,6 +14,7 @@ import * as os from "os";
 import { spawnSync } from "child_process";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { getCommitAt, resolveMainRef } from "./effectiveVersion.js";
+import { spawnGitSync } from "@natstack/shared/gitRuntime";
 
 // ---------------------------------------------------------------------------
 // Git Archive Extraction
@@ -29,7 +30,7 @@ function extractGitTree(
   targetDir: string,
 ): void {
   // git archive outputs tar to stdout
-  const archive = spawnSync("git", ["archive", "--format=tar", commitSha], {
+  const archive = spawnGitSync(["archive", "--format=tar", commitSha], {
     cwd: repoPath,
     stdio: ["pipe", "pipe", "pipe"],
     maxBuffer: 100 * 1024 * 1024, // 100MB

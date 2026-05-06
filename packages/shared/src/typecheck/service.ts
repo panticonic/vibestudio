@@ -21,7 +21,6 @@ import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { execSync } from "child_process";
 import {
   TypeCheckService,
   createDiskFileSource,
@@ -30,6 +29,7 @@ import {
   discoverWorkspaceContext,
 } from "@natstack/typecheck";
 import { getUserDataPath } from "@natstack/env-paths";
+import { runNpmInstall } from "../npmInstaller.js";
 
 /** Per-panel TypeCheckService cache — keyed by absolute panel path. */
 const typeCheckServiceCache = new Map<string, TypeCheckService>();
@@ -99,11 +99,7 @@ async function ensureExternalDeps(
   );
 
   try {
-    execSync("npm install --prefer-offline --no-audit --no-fund --ignore-scripts --legacy-peer-deps", {
-      cwd: tmpDir,
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout: 120_000,
-    });
+    runNpmInstall(tmpDir);
     fsSync.writeFileSync(path.join(tmpDir, ".ready"), new Date().toISOString());
     try {
       fsSync.renameSync(tmpDir, cacheDir);

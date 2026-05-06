@@ -298,7 +298,7 @@ if (!ipcChannel) {
     process.exit(1);
   }
   if (args.workspaceDir) process.env["NATSTACK_WORKSPACE_DIR"] = args.workspaceDir;
-  process.env["NATSTACK_APP_ROOT"] = args.appRoot ?? process.cwd();
+  process.env["NATSTACK_APP_ROOT"] = args.appRoot ?? process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
   if (args.logLevel) process.env["NATSTACK_LOG_LEVEL"] = args.logLevel;
 } else {
   // IPC mode: env vars already set by parent via fork({ env: {...} })
@@ -318,6 +318,8 @@ async function main() {
   const { z } = await import("zod");
   const { ServiceDispatcher } = await import("@natstack/shared/serviceDispatcher");
   const { EventService, createEventsServiceDefinition } = await import("@natstack/shared/eventsService");
+  const { getExistingAppNodeModulesRoots } = await import("@natstack/shared/runtimePaths");
+  const { assertGitAvailable } = await import("@natstack/shared/gitRuntime");
   const eventService = new EventService();
   const { RpcServer } = await import("./rpcServer.js");
   const { ServiceContainer } = await import("@natstack/shared/serviceContainer");
@@ -339,6 +341,7 @@ async function main() {
   // With --init: auto-create from template if workspace doesn't exist.
 
   const appRoot = process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
+  assertGitAvailable();
   const centralData = !ipcChannel ? new CentralDataManager() : null;
 
   const wsDir = args.workspaceDir ?? process.env["NATSTACK_WORKSPACE_DIR"];
@@ -383,13 +386,8 @@ async function main() {
   // App node_modules resolution (for @natstack/* platform packages)
   // ===========================================================================
 
-  // In production, esbuild (native binary) can't read from .asar — use .asar.unpacked
-  const appNodeModulesCandidates = [
-    path.join(appRoot, "node_modules"),
-    path.join(appRoot.replace(/\.asar$/, ".asar.unpacked"), "node_modules"),
-  ];
-  const appNodeModules = appNodeModulesCandidates.find((p) => fs.existsSync(p));
-  if (!appNodeModules) {
+  const appNodeModules = getExistingAppNodeModulesRoots(appRoot);
+  if (appNodeModules.length === 0) {
     console.warn("[Server] Could not find app node_modules — panel builds may fail");
   }
 
@@ -541,7 +539,11 @@ async function main() {
   container.register({
     name: "buildSystem",
     async start() {
-      return await initBuildSystemV2(workspacePath, gitServer, appNodeModules ?? path.join(appRoot, "node_modules"));
+      return await initBuildSystemV2(
+        workspacePath,
+        gitServer,
+        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
+      );
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) { await instance?.shutdown(); },
   });

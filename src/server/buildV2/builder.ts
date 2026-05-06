@@ -27,26 +27,26 @@ import { PANEL_CSP_META } from "@natstack/shared/constants";
 import { getAdapter } from "./adapters/index.js";
 import type { FrameworkAdapter } from "./adapters/types.js";
 import { resolveTemplate } from "./templateResolver.js";
-import { parseWorkspaceImport, resolveExportSubpath } from "@natstack/typecheck";
+import { resolveExportSubpath } from "@natstack/typecheck";
 
 // ---------------------------------------------------------------------------
 // Module Initialization
 // ---------------------------------------------------------------------------
 
 /**
- * Absolute path to the app's node_modules directory, where @natstack/*
- * platform packages are installed. Must be set via initBuilder() before
- * any builds run. These packages use workspace:* versions in package.json,
- * so they're skipped by ensureExternalDeps and resolved via this path instead.
+ * Absolute paths to the app's node_modules directories, where runtime packages
+ * and @natstack/* platform packages are installed. Packaged builds may need
+ * both app.asar.unpacked/node_modules for physical packages and app.asar/node_modules
+ * for workspace-linked packages that electron-builder stores in the archive.
  */
-let _appNodeModules: string | null = null;
+let _appNodeModules: string[] = [];
 
 /**
- * Initialize the builder with the app's node_modules path.
+ * Initialize the builder with the app's node_modules paths.
  * Must be called once before any buildUnit() calls.
  */
-export function initBuilder(appNodeModules: string): void {
-  _appNodeModules = appNodeModules;
+export function initBuilder(appNodeModules: string | string[]): void {
+  _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
 }
 
 // ---------------------------------------------------------------------------
@@ -151,6 +151,24 @@ const inFlightLibraryBuilds = new Map<string, Promise<{ bundle: string }>>();
 const PANEL_CONDITIONS = ["natstack-panel", "import", "default"] as const;
 const NODE_CONDITIONS = ["import", "default"] as const;
 
+function parseGraphImport(importPath: string, graph: PackageGraph): { packageName: string; subpath: string } | null {
+  const names = graph
+    .allNodes()
+    .map((node) => node.name)
+    .sort((a, b) => b.length - a.length);
+
+  for (const name of names) {
+    if (importPath === name) {
+      return { packageName: name, subpath: "." };
+    }
+    if (importPath.startsWith(`${name}/`)) {
+      return { packageName: name, subpath: `./${importPath.slice(name.length + 1)}` };
+    }
+  }
+
+  return null;
+}
+
 function createWorkspaceResolvePlugin(
   graph: PackageGraph,
   workspaceRoot: string,
@@ -160,15 +178,19 @@ function createWorkspaceResolvePlugin(
   return {
     name: "workspace-packages",
     setup(build) {
-      // Match @workspace/*, @workspace-panels/*, @workspace-about/*, @workspace-workers/*
-      build.onResolve({ filter: /^@workspace[-/]/ }, (args) => {
-        const parsed = parseWorkspaceImport(args.path);
+      // Match any package discovered in the workspace graph, including
+      // @workspace/* aliases and template-provided @natstack/* source packages.
+      build.onResolve({ filter: /^[^./]|^@/ }, (args) => {
+        const parsed = parseGraphImport(args.path, graph);
         if (!parsed) return null;
 
         const node = graph.tryGet(parsed.packageName);
         if (!node) return null;
 
-        const sourcePath = remapPath(node.path, workspaceRoot, sourceRoot);
+        const extractedPath = remapPath(node.path, workspaceRoot, sourceRoot);
+        const sourcePath = fs.existsSync(path.join(extractedPath, "package.json"))
+          ? extractedPath
+          : node.path;
         const pkgJsonPath = path.join(sourcePath, "package.json");
         if (!fs.existsSync(pkgJsonPath)) return null;
 
@@ -930,8 +952,8 @@ async function prepareBuildEnv(
 
   // App's node_modules for @natstack/* packages (workspace:* deps).
   // These are skipped by ensureExternalDeps and must be found via nodePaths.
-  if (_appNodeModules) {
-    nodePaths.push(_appNodeModules);
+  if (_appNodeModules.length > 0) {
+    nodePaths.push(..._appNodeModules);
   }
 
   const resolveDir = pickResolveDir(nodePaths, workspaceRoot);
@@ -1669,8 +1691,8 @@ async function doNpmBuild(
     fs.mkdirSync(outdir, { recursive: true });
 
     const nodePaths = [nodeModulesDir];
-    if (_appNodeModules) {
-      nodePaths.push(_appNodeModules);
+    if (_appNodeModules.length > 0) {
+      nodePaths.push(..._appNodeModules);
     }
 
     // Use a virtual entry file instead of string interpolation to avoid injection
@@ -1730,7 +1752,7 @@ export async function buildPlatformLibrary(
   specifier: string,
   externals: string[],
 ): Promise<string> {
-  if (!_appNodeModules) {
+  if (_appNodeModules.length === 0) {
     throw new Error("App node_modules not configured — cannot build @natstack/* packages");
   }
 
@@ -1769,7 +1791,7 @@ async function doPlatformBuild(
     );
     fs.mkdirSync(outdir, { recursive: true });
 
-    const nodePaths = [_appNodeModules!];
+    const nodePaths = [..._appNodeModules];
 
     // Virtual entry file
     const entryFile = path.join(outdir, "_entry.js");

@@ -9,12 +9,12 @@
  * stale tokens in running panels make partial recovery unreliable.
  */
 
-import * as path from "path";
 import {
   type ProcessAdapter,
   hasElectronUtilityProcess,
   createNodeProcessAdapter,
 } from "@natstack/process-adapter";
+import { getEsbuildBinaryPath, getServerProcessEntryPath } from "./paths.js";
 
 export interface ServerPorts {
   rpcPort: number;
@@ -153,11 +153,13 @@ export class ServerProcessManager {
   }
 
   private spawn(): ProcessAdapter {
-    const bundlePath = path.join(this.config.appRoot, "dist", "server-electron.cjs");
+    const bundlePath = getServerProcessEntryPath();
+    const esbuildBinaryPath = getEsbuildBinaryPath();
     const env: Record<string, string | undefined> = {
       ...process.env,
       NATSTACK_WORKSPACE_DIR: this.config.wsDir,
       NATSTACK_APP_ROOT: this.config.appRoot,
+      ...(esbuildBinaryPath ? { ESBUILD_BINARY_PATH: esbuildBinaryPath } : {}),
       ...(this.config.isEphemeral ? { NATSTACK_WORKSPACE_EPHEMERAL: "1" } : {}),
       ...(this.config.logLevel ? { NATSTACK_LOG_LEVEL: this.config.logLevel } : {}),
     };

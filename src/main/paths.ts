@@ -2,6 +2,11 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 import { getCentralDataPath } from "@natstack/env-paths";
+import {
+  createRuntimeLayout,
+  getPhysicalAppPath as getSharedPhysicalAppPath,
+  getPlatformPackageBinaryPath,
+} from "@natstack/shared/runtimePaths";
 import { isDev } from "./utils.js";
 
 // Derive __dirname in a way that works in CJS builds
@@ -195,14 +200,7 @@ export function getAppRoot(): string {
  * In production, returns the app's resources directory.
  */
 export function getResourcesPath(): string {
-  if (isDev()) {
-    return getAppRoot();
-  }
-  if (process.resourcesPath) {
-    return process.resourcesPath;
-  }
-  // Headless: resources are at app root
-  return getAppRoot();
+  return createRuntimeLayout(getAppRoot()).resourcesRoot;
 }
 
 /**
@@ -213,25 +211,86 @@ export function getResourcesPath(): string {
  * @returns Absolute path to the unpacked location
  */
 export function getUnpackedPath(relativePath: string): string {
+  return getSharedPhysicalAppPath(getAppRoot(), relativePath);
+}
+
+/**
+ * Get the packaged app archive root.
+ *
+ * In development this is the repository root. In a packaged Electron app this
+ * is usually `<resources>/app.asar`; it is suitable for module loading and
+ * bundled reads, but not for APIs that require a real executable file path.
+ */
+export function getAppArchiveRoot(): string {
+  return getAppRoot();
+}
+
+/**
+ * Get the unpacked app root.
+ *
+ * In development this is the repository root. In a packaged Electron app this
+ * is `<resources>/app.asar.unpacked`, where files listed in `asarUnpack` are
+ * materialized as regular filesystem entries.
+ */
+export function getAppUnpackedRoot(): string {
+  return createRuntimeLayout(getAppRoot()).appUnpackedRoot;
+}
+
+/**
+ * Resolve a path that must exist as a physical file or directory.
+ *
+ * This is the right helper for process entry points, native executables, and
+ * other APIs that cannot operate on virtual ASAR paths.
+ */
+export function getPhysicalAppPath(relativePath: string): string {
+  return getSharedPhysicalAppPath(getAppRoot(), relativePath);
+}
+
+/**
+ * Entry point used to start the managed NatStack server process.
+ *
+ * Development can fork the bundled server directly from `dist/`. Packaged
+ * builds fork a small unpacked bootstrap that loads the actual server bundle
+ * from the app archive, keeping module resolution tied to the packaged app
+ * while satisfying Electron's requirement for a real entry file.
+ */
+export function getServerProcessEntryPath(): string {
   if (isDev()) {
-    // In development, everything is unpacked
-    return path.join(getAppRoot(), relativePath);
+    return path.join(getAppRoot(), "dist", "server-electron.cjs");
   }
-  // In production, unpacked files are at app.asar.unpacked
-  try {
-    const { app } = require("electron");
-    const appPath = app.getAppPath();
-    const unpackedPath = appPath.replace(/\.asar$/, ".asar.unpacked");
-    return path.join(unpackedPath, relativePath);
-  } catch {
-    // Headless mode — no ASAR, everything is unpacked
-    if (process.env["NATSTACK_APP_ROOT"]) {
-      return path.join(process.env["NATSTACK_APP_ROOT"], relativePath);
-    }
-    throw new Error(
-      "getUnpackedPath(): NATSTACK_APP_ROOT must be set when running without Electron in production mode"
-    );
+  return getPhysicalAppPath(path.join("dist", "server-bootstrap.cjs"));
+}
+
+/**
+ * Resolve esbuild's native executable.
+ *
+ * The esbuild JS API locates its binary relative to `node_modules/esbuild`.
+ * Inside an ASAR that relative path is virtual and cannot be spawned, so
+ * packaged builds must point esbuild at the unpacked platform package.
+ */
+export function getEsbuildBinaryPath(): string | null {
+  if (isDev()) {
+    return null;
   }
+
+  const packageByPlatformArch: Record<string, string> = {
+    "darwin:arm64": "darwin-arm64",
+    "darwin:x64": "darwin-x64",
+    "linux:arm64": "linux-arm64",
+    "linux:x64": "linux-x64",
+    "win32:arm64": "win32-arm64",
+    "win32:ia32": "win32-ia32",
+    "win32:x64": "win32-x64",
+  };
+
+  const pkg = packageByPlatformArch[`${process.platform}:${process.arch}`];
+  if (!pkg) {
+    return null;
+  }
+
+  const binaryName = process.platform === "win32" ? "esbuild.exe" : "esbuild";
+  const binaryPath = getPlatformPackageBinaryPath(getAppRoot(), `@esbuild/${pkg}`, binaryName);
+  return fs.existsSync(binaryPath) ? binaryPath : null;
 }
 
 

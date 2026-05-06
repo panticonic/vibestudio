@@ -3,8 +3,9 @@ import { getUserDataPath } from "@natstack/env-paths";
 import * as path from "path";
 import * as fs from "fs";
 import * as http from "http";
-import { execFile, spawn, spawnSync } from "child_process";
+import { execFile } from "child_process";
 import { createDevLogger } from "@natstack/dev-log";
+import { execGitFile, spawnGit, spawnGitSync } from "@natstack/shared/gitRuntime";
 
 const log = createDevLogger("GitServer");
 import type {
@@ -226,7 +227,7 @@ export class GitServer {
       // Ensure repo allows pushes to checked-out branches (may be auto-created
       // by node-git-server, which doesn't set this config)
       const pushRepoDir = path.join(reposPath, pushRepo);
-      spawnSync("git", ["config", "receive.denyCurrentBranch", "ignore"], {
+      spawnGitSync(["config", "receive.denyCurrentBranch", "ignore"], {
         cwd: pushRepoDir,
         stdio: "ignore",
       });
@@ -247,11 +248,11 @@ export class GitServer {
         // the pushed branch and checkout files.
         const repoDir = path.join(reposPath, repo);
         const pushedRef = `refs/heads/${branch}`;
-        execFile("git", ["symbolic-ref", "HEAD", pushedRef], { cwd: repoDir }, (symErr) => {
+        execGitFile(["symbolic-ref", "HEAD", pushedRef], { cwd: repoDir }, (symErr) => {
           if (symErr) {
             log.verbose(` symbolic-ref failed for ${repo}: ${symErr.message}`);
           }
-          execFile("git", ["reset", "--hard", "HEAD"], { cwd: repoDir }, (resetErr) => {
+          execGitFile(["reset", "--hard", "HEAD"], { cwd: repoDir }, (resetErr) => {
             if (resetErr) {
               log.verbose(` Post-push checkout failed for ${repo}: ${resetErr.message}`);
             }
@@ -424,28 +425,28 @@ export class GitServer {
 
     try {
       // Initialize git repo
-      spawnSync("git", ["init"], { cwd: dirPath, stdio: "ignore" });
+      spawnGitSync(["init"], { cwd: dirPath, stdio: "ignore" });
 
       // Configure user for this repo (required for commits)
-      spawnSync("git", ["config", "user.email", "natstack@local"], {
+      spawnGitSync(["config", "user.email", "natstack@local"], {
         cwd: dirPath,
         stdio: "ignore",
       });
-      spawnSync("git", ["config", "user.name", "NatStack"], {
+      spawnGitSync(["config", "user.name", "NatStack"], {
         cwd: dirPath,
         stdio: "ignore",
       });
 
       // Allow pushes to checked-out branches — the post-push handler
       // updates the working tree via git reset --hard
-      spawnSync("git", ["config", "receive.denyCurrentBranch", "ignore"], {
+      spawnGitSync(["config", "receive.denyCurrentBranch", "ignore"], {
         cwd: dirPath,
         stdio: "ignore",
       });
 
       // Add all files and create initial commit
-      spawnSync("git", ["add", "-A"], { cwd: dirPath, stdio: "ignore" });
-      spawnSync("git", ["commit", "-m", "Initial commit"], {
+      spawnGitSync(["add", "-A"], { cwd: dirPath, stdio: "ignore" });
+      spawnGitSync(["commit", "-m", "Initial commit"], {
         cwd: dirPath,
         stdio: "ignore",
       });
@@ -462,13 +463,13 @@ export class GitServer {
    */
   private ensureDenyCurrentBranch(dirPath: string): void {
     try {
-      const result = spawnSync("git", ["config", "receive.denyCurrentBranch"], {
+      const result = spawnGitSync(["config", "receive.denyCurrentBranch"], {
         cwd: dirPath,
         encoding: "utf-8",
         stdio: ["ignore", "pipe", "ignore"],
       });
-      if (result.stdout?.trim() !== "ignore") {
-        spawnSync("git", ["config", "receive.denyCurrentBranch", "ignore"], {
+      if (result.stdout?.toString().trim() !== "ignore") {
+        spawnGitSync(["config", "receive.denyCurrentBranch", "ignore"], {
           cwd: dirPath,
           stdio: "ignore",
         });
@@ -694,7 +695,7 @@ export class GitServer {
    */
   private runGit(args: string[], cwd: string): Promise<string> {
     return new Promise((resolve, reject) => {
-      const child = spawn("git", args, { cwd });
+      const child = spawnGit(args, { cwd });
       let stdout = "";
       let stderr = "";
       child.stdout?.on("data", (data) => {

@@ -18,6 +18,7 @@
   "dependencies": {
     "@natstack/dev-log": "workspace:*",
     "@natstack/env-paths": "workspace:*",
+    "@natstack/shared": "workspace:*",
     "@natstack/port-utils": "workspace:*",
     "node-git-server": "^1.0.0"
   },

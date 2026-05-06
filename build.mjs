@@ -323,6 +323,7 @@ const rendererConfig = {
 
 function copyAssets() {
   fs.copyFileSync("src/renderer/index.html", "dist/index.html");
+  fs.copyFileSync("src/server/server-bootstrap.cjs", "dist/server-bootstrap.cjs");
 }
 
 function copyDirectoryRecursive(srcDir, destDir) {
