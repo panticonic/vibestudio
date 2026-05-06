@@ -21,6 +21,8 @@ packages/*/**/*.map
 # Build artifacts
 **/.npmrc
 .npmrc.dist-tag-temp
+/.pnpm-store/
+/*.tgz
 
 # IDE
 .vscode/settings.json
