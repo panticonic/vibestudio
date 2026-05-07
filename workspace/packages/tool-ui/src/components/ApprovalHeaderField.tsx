@@ -4,11 +4,12 @@
  * Renders the header for tool approval prompts.
  * Handles both first-time agent grants and per-call approvals.
  *
- * First-time grant: Blue card with lock icon, approval level explanation
- * Per-call: Orange warning with "@agent wants to use Tool" message
+ * The surrounding FeedbackContainer already provides the "Approval needed"
+ * chrome, so this header focuses on what's actually being requested
+ * (which agent, which tool, what scope) without redundant framing.
  */
 
-import { Box, Card, Code, Flex, Text } from "@radix-ui/themes";
+import { Box, Code, Flex, Text } from "@radix-ui/themes";
 import { LockClosedIcon, ExclamationTriangleIcon, CheckCircledIcon } from "@radix-ui/react-icons";
 import { APPROVAL_LEVELS } from "../hooks/useToolApproval";
 
@@ -29,61 +30,53 @@ export function ApprovalHeaderField({
 }: ApprovalHeaderFieldProps) {
   const toolDisplayName = displayName ?? toolName;
 
-  // First-time grant header
   if (isFirstTimeGrant) {
+    const level = APPROVAL_LEVELS[floorLevel as keyof typeof APPROVAL_LEVELS];
     return (
-      <Card style={{ borderLeft: "4px solid var(--blue-9)" }}>
-        <Flex direction="column" gap="3" p="3">
-          {/* Header */}
-          <Flex gap="2" align="center">
-            <LockClosedIcon style={{ color: "var(--blue-9)" }} />
-            <Text size="3" weight="bold">
-              New Agent Tool Access
-            </Text>
-          </Flex>
-
-          {/* Description */}
-          <Box>
-            <Text size="2">
-              <Text weight="bold">@{agentName}</Text> wants to access workspace tools.
-            </Text>
-          </Box>
-
-          {/* Floor level explanation */}
-          <Box style={{ background: "var(--gray-3)", borderRadius: 6, padding: 12 }}>
-            <Text size="2" color="gray" style={{ display: "block", marginBottom: 8 }}>
-              Based on current permission level ({APPROVAL_LEVELS[floorLevel as keyof typeof APPROVAL_LEVELS]?.label ?? "Unknown"}), this agent will:
-            </Text>
-            <Flex direction="column" gap="1">
-              {APPROVAL_LEVELS[floorLevel as keyof typeof APPROVAL_LEVELS]?.details.map((desc, i) => (
-                <Text key={i} size="2">
-                  • {desc}
-                </Text>
-              ))}
-            </Flex>
-          </Box>
-
-          {/* First tool call preview */}
-          <Box>
-            <Text size="2" color="gray" style={{ display: "block", marginBottom: 4 }}>
-              First tool call: <Code>{toolDisplayName}</Code>
-            </Text>
-          </Box>
+      <Flex direction="column" gap="3">
+        <Flex gap="2" align="center">
+          <LockClosedIcon style={{ color: "var(--blue-10)", flexShrink: 0 }} />
+          <Text size="3" weight="bold">
+            <Text color="blue">@{agentName}</Text> wants workspace access
+          </Text>
         </Flex>
-      </Card>
+
+        <Box
+          style={{
+            background: "var(--gray-3)",
+            borderRadius: "var(--radius-2)",
+            padding: "10px 12px",
+          }}
+        >
+          <Text size="1" color="gray" weight="medium" style={{ display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+            Permission level: {level?.label ?? "Unknown"}
+          </Text>
+          <Flex direction="column" gap="1">
+            {level?.details.map((desc, i) => (
+              <Text key={i} size="2" color="gray">
+                • {desc}
+              </Text>
+            ))}
+          </Flex>
+        </Box>
+
+        <Text size="1" color="gray">
+          First call: <Code size="1">{toolDisplayName}</Code>
+        </Text>
+      </Flex>
     );
   }
 
-  // Per-call approval header - special handling for plan mode
+  // Per-call approval - special handling for plan mode
   const isExitPlanApproval = toolName === "exit_plan_mode";
   const isEnterPlanApproval = toolName === "enter_plan_mode";
 
   if (isEnterPlanApproval) {
     return (
-      <Flex gap="2" align="center" mb="3">
-        <ExclamationTriangleIcon style={{ color: "var(--blue-9)" }} />
+      <Flex gap="2" align="center" mb="2">
+        <ExclamationTriangleIcon style={{ color: "var(--blue-10)", flexShrink: 0 }} />
         <Text size="3" weight="bold">
-          @{agentName} wants to enter planning mode
+          <Text color="blue">@{agentName}</Text> wants to enter planning mode
         </Text>
       </Flex>
     );
@@ -91,20 +84,20 @@ export function ApprovalHeaderField({
 
   if (isExitPlanApproval) {
     return (
-      <Flex gap="2" align="center" mb="3">
-        <CheckCircledIcon style={{ color: "var(--green-9)" }} />
+      <Flex gap="2" align="center" mb="2">
+        <CheckCircledIcon style={{ color: "var(--green-10)", flexShrink: 0 }} />
         <Text size="3" weight="bold">
-          @{agentName} is ready to implement
+          <Text color="green">@{agentName}</Text> is ready to implement
         </Text>
       </Flex>
     );
   }
 
   return (
-    <Flex gap="2" align="center" mb="3">
-      <ExclamationTriangleIcon style={{ color: "var(--orange-9)" }} />
+    <Flex gap="2" align="center" mb="2">
+      <ExclamationTriangleIcon style={{ color: "var(--amber-10)", flexShrink: 0 }} />
       <Text size="3" weight="bold">
-        @{agentName} wants to use <Code>{toolDisplayName}</Code>
+        <Text color="amber">@{agentName}</Text> wants to use <Code>{toolDisplayName}</Code>
       </Text>
     </Flex>
   );

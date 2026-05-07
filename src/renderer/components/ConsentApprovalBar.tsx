@@ -99,24 +99,31 @@ export function ConsentApprovalBar() {
     <Box
       ref={barRef}
       style={{
-        background: "linear-gradient(180deg, var(--gray-1), var(--gray-2))",
-        borderBottom: "1px solid var(--amber-7)",
-        boxShadow: "0 1px 0 rgba(0, 0, 0, 0.03)",
+        // Panel surface beneath, flat alpha-sky tint layered on top.
+        // The two-property form is needed because background-image draws over
+        // background-color; using `background` shorthand would clobber one.
+        backgroundColor: "var(--color-panel-solid)",
+        backgroundImage: "linear-gradient(var(--sky-a3), var(--sky-a3))",
+        borderBottom: "1px solid var(--gray-a6)",
+        // Accent strip on top edge.
+        boxShadow: [
+          "inset 0 3px 0 0 var(--sky-9)",
+          "0 4px 12px -4px var(--black-a6)",
+        ].join(", "),
         flexShrink: 0,
       }}
     >
       <Flex align="start" justify="between" gap="3" px="3" py="2" wrap="wrap">
-        <Flex align="start" gap="3" style={{ minWidth: 280, flex: "1 1 560px" }}>
+        <Flex align="start" gap="3" style={{ minWidth: 280, flex: "1 1 0" }}>
           <Flex
             align="center"
             justify="center"
             style={{
-              width: 30,
-              height: 30,
-              borderRadius: 6,
-              backgroundColor: "var(--amber-4)",
-              color: "var(--amber-11)",
-              border: "1px solid var(--amber-7)",
+              width: 32,
+              height: 32,
+              borderRadius: 8,
+              backgroundColor: "var(--sky-9)",
+              color: "var(--sky-contrast)",
               flexShrink: 0,
             }}
           >
@@ -129,14 +136,18 @@ export function ConsentApprovalBar() {
 
           <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>
             <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
-              <Badge color="amber" variant="soft">
+              <Text size="1" weight="bold" style={{
+                color: "var(--sky-11)",
+                textTransform: "uppercase",
+                letterSpacing: "0.05em",
+              }}>
                 {getApprovalCategoryLabel(current)}
-              </Badge>
-              <Text size="2" weight="medium">
+              </Text>
+              <Text size="2" weight="bold">
                 {copy.title}
               </Text>
               {current.kind === "credential" ? (
-                <Badge color="amber" variant="soft">
+                <Badge color="gray" variant="soft" highContrast>
                   {current.credentialLabel}
                 </Badge>
               ) : null}
@@ -225,22 +236,26 @@ function StandardApprovalActions({
       <DecisionButton
         label={copy.once.label}
         description={copy.once.description}
-        variant="solid"
+        variant="surface"
         onClick={() => decide("once")}
       />
       <DecisionButton
         label={copy.session.label}
         description={copy.session.description}
+        color="sky"
+        variant="solid"
         onClick={() => decide("session")}
       />
       <DecisionButton
         label={copy.version.label}
         description={copy.version.description}
+        variant="surface"
         onClick={() => decide("version")}
       />
       <DecisionButton
         label={copy.repo.label}
         description={copy.repo.description}
+        variant="surface"
         onClick={() => decide("repo")}
       />
       <DecisionButton
@@ -288,7 +303,7 @@ function ClientConfigActions({
       }}
     >
       <Tooltip content={missingRequired ? "Enter the required fields first." : "Save this connected service."}>
-        <Button size="1" variant="solid" disabled={missingRequired} onClick={onSubmit}>
+        <Button size="1" variant="solid" color="sky" disabled={missingRequired} onClick={onSubmit}>
           <CheckCircledIcon />
           Save service
         </Button>
@@ -337,7 +352,7 @@ function CredentialInputActions({
       }}
     >
       <Tooltip content={missingRequired ? "Enter the required secret first." : "Save this connected service."}>
-        <Button size="1" variant="solid" disabled={missingRequired} onClick={onSubmit}>
+        <Button size="1" variant="solid" color="sky" disabled={missingRequired} onClick={onSubmit}>
           <CheckCircledIcon />
           Save service
         </Button>
@@ -369,8 +384,8 @@ function DecisionButton({
 }: {
   label: string;
   description: string;
-  color?: "red";
-  variant?: "solid" | "soft";
+  color?: "red" | "sky";
+  variant?: "solid" | "soft" | "surface" | "outline";
   icon?: ReactNode;
   style?: CSSProperties;
   onClick: () => void;
