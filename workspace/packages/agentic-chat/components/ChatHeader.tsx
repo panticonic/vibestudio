@@ -1,5 +1,5 @@
 import React, { useRef } from "react";
-import { Badge, Button, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
+import { Badge, Button, Card, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
 import { PlusIcon } from "@radix-ui/react-icons";
 import type { Participant } from "@natstack/pubsub";
 import type { ToolApprovalProps } from "@workspace/tool-ui";
@@ -146,95 +146,97 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
   isMobile,
 }: ChatHeaderInnerProps) {
   return (
-    <Flex justify="between" align="center" flexShrink="0" wrap="wrap" gap="2" style={{ minWidth: 0 }}>
-      <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0, flex: "1 1 240px" }}>
-        <Text size="5" weight="bold" style={{ minWidth: 0 }}>
-          Agentic Chat
-        </Text>
-        <Badge
-          color="gray"
-          style={{
-            maxWidth: "min(46vw, 220px)",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {channelId}
-        </Badge>
-        <Badge color={sessionEnabled ? "blue" : "orange"} title={sessionEnabled ? "Session persistence enabled - messages are saved and can be replayed" : "Ephemeral session - messages are not persisted"}>
-          {sessionEnabled ? "Session" : "Ephemeral"}
-        </Badge>
-      </Flex>
-      <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0 }}>
-        <Badge color={connected ? "green" : "gray"}>{connected ? "Connected" : status}</Badge>
-        {Object.values(participants).map((p) => {
-          const hasActive = participantActiveStatus.get(p.id) ?? false;
+    <Card className="chat-surface-card chat-header-card" size="1" variant="surface" style={{ flexShrink: 0 }}>
+      <Flex justify="between" align="center" wrap="wrap" gap="2" style={{ minWidth: 0 }}>
+        <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0, flex: "1 1 240px" }}>
+          <Text size="5" weight="bold" style={{ minWidth: 0 }}>
+            Agentic Chat
+          </Text>
+          <Badge
+            color="gray"
+            style={{
+              maxWidth: "min(46vw, 220px)",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {channelId}
+          </Badge>
+          <Badge color={sessionEnabled ? "blue" : "orange"} title={sessionEnabled ? "Session persistence enabled - messages are saved and can be replayed" : "Ephemeral session - messages are not persisted"}>
+            {sessionEnabled ? "Session" : "Ephemeral"}
+          </Badge>
+        </Flex>
+        <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0 }}>
+          <Badge color={connected ? "green" : "gray"}>{connected ? "Connected" : status}</Badge>
+          {Object.values(participants).map((p) => {
+            const hasActive = participantActiveStatus.get(p.id) ?? false;
 
-          return (
-            <ParticipantBadgeMenu
-              key={p.id}
-              participant={p}
-              hasActiveMessage={hasActive}
-              onCallMethod={onCallMethod ?? NOOP}
-              onRemoveAgent={onRemoveAgent}
-              onOpenDebugConsole={onDebugConsoleChange ?? undefined}
-            />
-          );
-        })}
-        {/* Pending/failed agents not yet in roster */}
-        {pendingAgents && Array.from(pendingAgents.entries())
-          .filter(([handle, _info]) => {
-            // Hide pending badge if a participant with this handle already joined.
-            return !Object.values(participants ?? {}).some(
-              (p) => (p?.metadata?.handle as string | undefined) === handle,
+            return (
+              <ParticipantBadgeMenu
+                key={p.id}
+                participant={p}
+                hasActiveMessage={hasActive}
+                onCallMethod={onCallMethod ?? NOOP}
+                onRemoveAgent={onRemoveAgent}
+                onOpenDebugConsole={onDebugConsoleChange ?? undefined}
+              />
             );
-          })
-          .map(([handle, info]) => (
-          <PendingAgentBadge
-            key={`pending-${handle}`}
-            handle={handle}
-            agentId={info.agentId}
-            status={info.status}
-            error={info.error}
-            onOpenDebugConsole={onDebugConsoleChange ?? undefined}
-          />
-        ))}
-        {onAddAgent && availableAgents && availableAgents.length > 0 ? (
-          <DropdownMenu.Root>
-            <DropdownMenu.Trigger>
-              {isMobile ? (
-                <IconButton variant="soft" size="1" aria-label="Add Agent"><PlusIcon /></IconButton>
-              ) : (
-                <Button variant="soft" size="1">Add Agent</Button>
-              )}
-            </DropdownMenu.Trigger>
-            <DropdownMenu.Content>
-              {availableAgents.map((agent) => (
-                <DropdownMenu.Item key={agent.id} onSelect={() => onAddAgent(agent.id)}>
-                  {agent.name}
-                </DropdownMenu.Item>
-              ))}
-            </DropdownMenu.Content>
-          </DropdownMenu.Root>
-        ) : onAddAgent ? (
-          isMobile ? (
-            <IconButton variant="soft" size="1" onClick={() => onAddAgent()} aria-label="Add Agent">
-              <PlusIcon />
-            </IconButton>
-          ) : (
-            <Button variant="soft" size="1" onClick={() => onAddAgent()}>
-              Add Agent
-            </Button>
-          )
-        ) : null}
-        {toolApproval && (
-          <ToolPermissionsDropdown
-            settings={toolApproval.settings}
-            onSetFloor={toolApproval.onSetFloor}
-          />
-        )}
+          })}
+          {/* Pending/failed agents not yet in roster */}
+          {pendingAgents && Array.from(pendingAgents.entries())
+            .filter(([handle, _info]) => {
+              // Hide pending badge if a participant with this handle already joined.
+              return !Object.values(participants ?? {}).some(
+                (p) => (p?.metadata?.handle as string | undefined) === handle,
+              );
+            })
+            .map(([handle, info]) => (
+              <PendingAgentBadge
+                key={`pending-${handle}`}
+                handle={handle}
+                agentId={info.agentId}
+                status={info.status}
+                error={info.error}
+                onOpenDebugConsole={onDebugConsoleChange ?? undefined}
+              />
+            ))}
+          {onAddAgent && availableAgents && availableAgents.length > 0 ? (
+            <DropdownMenu.Root>
+              <DropdownMenu.Trigger>
+                {isMobile ? (
+                  <IconButton variant="soft" size="1" aria-label="Add Agent"><PlusIcon /></IconButton>
+                ) : (
+                  <Button variant="soft" size="1">Add Agent</Button>
+                )}
+              </DropdownMenu.Trigger>
+              <DropdownMenu.Content>
+                {availableAgents.map((agent) => (
+                  <DropdownMenu.Item key={agent.id} onSelect={() => onAddAgent(agent.id)}>
+                    {agent.name}
+                  </DropdownMenu.Item>
+                ))}
+              </DropdownMenu.Content>
+            </DropdownMenu.Root>
+          ) : onAddAgent ? (
+            isMobile ? (
+              <IconButton variant="soft" size="1" onClick={() => onAddAgent()} aria-label="Add Agent">
+                <PlusIcon />
+              </IconButton>
+            ) : (
+              <Button variant="soft" size="1" onClick={() => onAddAgent()}>
+                Add Agent
+              </Button>
+            )
+          ) : null}
+          {toolApproval && (
+            <ToolPermissionsDropdown
+              settings={toolApproval.settings}
+              onSetFloor={toolApproval.onSetFloor}
+            />
+          )}
+        </Flex>
       </Flex>
-    </Flex>
+    </Card>
   );
 }, chatHeaderInnerPropsEqual);

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Box, Callout, Flex, IconButton, TextArea } from "@radix-ui/themes";
+import { Box, Callout, Card, Flex, IconButton, TextArea } from "@radix-ui/themes";
 import { PaperPlaneIcon, ImageIcon } from "@radix-ui/react-icons";
 import { useIsMobile, useTouchDevice, useViewportHeight } from "@workspace/react";
 import { useChatContext } from "../context/ChatContext";
@@ -143,18 +143,18 @@ export function ChatInput() {
 
       {/* Image input - shown when toggled or when images are pending */}
       {(showImageInput || pendingImages.length > 0) && (
-        <Box className="chat-attachment-panel" flexShrink="0">
+        <Card className="chat-surface-card chat-attachment-card" size="1" variant="surface" style={{ flexShrink: 0 }}>
           <ImageInput
             images={pendingImages}
             onImagesChange={handleImagesChange}
             onError={(error) => setSendError(error)}
             disabled={!connected}
           />
-        </Box>
+        </Card>
       )}
 
       {/* Input */}
-      <Box className="chat-input-frame" flexShrink="0">
+      <Card className="chat-surface-card chat-input-card" size="1" variant="surface" style={{ flexShrink: 0 }}>
         <Flex align="end" gap="1">
           <TextArea
             ref={textAreaRef}
@@ -189,7 +189,7 @@ export function ChatInput() {
             </IconButton>
           </Flex>
         </Flex>
-      </Box>
+      </Card>
     </>
   );
 }

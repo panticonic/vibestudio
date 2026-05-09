@@ -504,7 +504,7 @@ export const MessageList = React.memo(function MessageList({
         <div
           ref={contentRef}
           className="message-list-content"
-          style={{ padding: 2 }}
+          style={{ padding: "var(--message-list-padding)" }}
         >
           {/* Load earlier messages button */}
           {hasMoreHistory && onLoadEarlierMessages && (
