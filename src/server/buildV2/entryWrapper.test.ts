@@ -12,6 +12,7 @@ import {
   generateExposeModuleCode,
   generateWorkerEntry,
   generateForcedSplitEntry,
+  injectHtmlTransforms,
 } from "./builder.js";
 
 describe("generateModuleMapBootstrap (panel target)", () => {
@@ -135,5 +136,28 @@ describe("generateForcedSplitEntry", () => {
     expect(code).toContain('import * as __natstackForcedSplitModule from "@radix-ui/react-icons"');
     expect(code).toContain("export { __natstackForcedSplitModule }");
     expect(code).not.toContain('import "@radix-ui/react-icons"');
+  });
+});
+
+describe("injectHtmlTransforms", () => {
+  it("links emitted CSS for template HTML", () => {
+    const html = injectHtmlTransforms(
+      '<html><head><title>Panel</title></head><body><div id="root"></div><script src="bundle.js"></script></body></html>',
+      "/panels/chat/",
+      true,
+    );
+
+    expect(html).toContain('<link rel="stylesheet" href="./bundle.css" />');
+    expect(html).toContain('<script src="/__loader.js"></script>');
+  });
+
+  it("does not duplicate an existing bundle stylesheet", () => {
+    const html = injectHtmlTransforms(
+      '<html><head><link rel="stylesheet" href="./bundle.css" /></head><body><script src="./bundle.js"></script></body></html>',
+      "/panels/chat/",
+      true,
+    );
+
+    expect(html.match(/bundle\.css/g)).toHaveLength(1);
   });
 });

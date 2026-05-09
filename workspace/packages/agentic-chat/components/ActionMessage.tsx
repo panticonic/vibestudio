@@ -64,6 +64,7 @@ export const ActionPill = React.memo(function ActionPill({
 
   return (
     <Flex
+      className="inline-action-pill"
       align="center"
       gap="1"
       onClick={() => onExpand(id)}
@@ -75,23 +76,22 @@ export const ActionPill = React.memo(function ActionPill({
         borderRadius: "4px",
         backgroundColor: `var(--${color}-a3)`,
         border: `1px solid var(--${color}-a5)`,
-        display: "inline-flex",
       }}
     >
       {isPending ? <Spinner size="1" /> : <StatusDot statusKey={statusKey} />}
-      <Text size="1" color={color} weight="medium">
+      <Text className="inline-pill-label" size="1" color={color} weight="medium">
         {prettifyToolName(payload.name)}
       </Text>
       {argsSummary && (
-        <Text size="1" color="gray" style={{
-          opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        <Text className="inline-pill-summary" size="1" color="gray" style={{
+          opacity: 0.85,
         }}>
           ({argsSummary})
         </Text>
       )}
       {payload.execution.description && (
-        <Text size="1" color="gray" style={{
-          opacity: 0.7, maxWidth: "300px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+        <Text className="inline-pill-description" size="1" color="gray" style={{
+          opacity: 0.85,
         }}>
           {payload.execution.description}
         </Text>

@@ -112,16 +112,22 @@ export const MessageContent = React.memo(function MessageContent({ content, isSt
   }, [content, isStreaming, highlightLoaded, mdxActions]);
 
   if (MdxComponent) {
-    return <MdxComponent />;
+    return (
+      <div className="message-prose">
+        <MdxComponent />
+      </div>
+    );
   }
 
   // Fast path: during streaming, if content has no markdown syntax yet,
   // skip ReactMarkdown entirely and render as plain text
   if (isStreaming && !MARKDOWN_SYNTAX_RE.test(content)) {
     return (
-      <Text as="div" size="2" style={{ whiteSpace: "pre-wrap" }}>
-        {content}
-      </Text>
+      <div className="message-prose">
+        <Text as="div" size="2" style={{ whiteSpace: "pre-wrap" }}>
+          {content}
+        </Text>
+      </div>
     );
   }
 
@@ -132,8 +138,10 @@ export const MessageContent = React.memo(function MessageContent({ content, isSt
     : [];
 
   return (
-    <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-      {content}
-    </ReactMarkdown>
+    <div className="message-prose">
+      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
   );
 });

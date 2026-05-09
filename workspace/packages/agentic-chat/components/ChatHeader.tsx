@@ -146,17 +146,27 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
   isMobile,
 }: ChatHeaderInnerProps) {
   return (
-    <Flex justify="between" align="center" flexShrink="0" wrap="wrap" gap="2">
-      <Flex gap="2" align="center">
-        <Text size="5" weight="bold">
+    <Flex justify="between" align="center" flexShrink="0" wrap="wrap" gap="2" style={{ minWidth: 0 }}>
+      <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0, flex: "1 1 240px" }}>
+        <Text size="5" weight="bold" style={{ minWidth: 0 }}>
           Agentic Chat
         </Text>
-        <Badge color="gray">{channelId}</Badge>
+        <Badge
+          color="gray"
+          style={{
+            maxWidth: "min(46vw, 220px)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {channelId}
+        </Badge>
         <Badge color={sessionEnabled ? "blue" : "orange"} title={sessionEnabled ? "Session persistence enabled - messages are saved and can be replayed" : "Ephemeral session - messages are not persisted"}>
           {sessionEnabled ? "Session" : "Ephemeral"}
         </Badge>
       </Flex>
-      <Flex gap="2" align="center" wrap="wrap">
+      <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0 }}>
         <Badge color={connected ? "green" : "gray"}>{connected ? "Connected" : status}</Badge>
         {Object.values(participants).map((p) => {
           const hasActive = participantActiveStatus.get(p.id) ?? false;

@@ -47,6 +47,7 @@ export interface PanelWebViewProps {
   externalHost: string;
   onNavigationStateChange?: (navState: WebViewNavigation) => void;
   onPanelNavigate?: (event: PanelNavigationEvent) => void;
+  onTitleChange?: (panelId: string, title: string) => void;
   onBridgeCall?: (panelId: string, method: string, args: unknown[]) => Promise<unknown>;
   onUnmount?: (panelId: string) => void;
   colors?: {
@@ -73,6 +74,20 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
       let nextListenerId = 1;
       const enableDebug = ${enableDebug ? "true" : "false"};
 
+      function ensureViewportMeta() {
+        try {
+          let meta = document.querySelector('meta[name="viewport"]');
+          if (!meta) {
+            meta = document.createElement("meta");
+            meta.setAttribute("name", "viewport");
+            const parent = document.head || document.documentElement;
+            parent.appendChild(meta);
+          }
+          meta.setAttribute("content", "width=device-width, initial-scale=1, viewport-fit=cover");
+        } catch (_) {}
+      }
+      ensureViewportMeta();
+
       function postDebug(level, args) {
         if (!enableDebug) return;
         try {
@@ -98,6 +113,46 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
           }));
         } catch (_) {}
       }
+
+      let lastDocumentTitle = document.title || "";
+      function shouldForwardTitle(title) {
+        const trimmed = typeof title === "string" ? title.trim() : "";
+        return trimmed.length > 0 && trimmed !== "Panel";
+      }
+      function postTitleChange(force) {
+        try {
+          const title = document.title || "";
+          if (!force && title === lastDocumentTitle) return;
+          lastDocumentTitle = title;
+          if (!shouldForwardTitle(title)) return;
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            __natstackTitle: true,
+            title,
+          }));
+        } catch (_) {}
+      }
+      function installTitleObserver() {
+        try {
+          const observer = new MutationObserver(function () {
+            postTitleChange(false);
+          });
+          if (document.documentElement) {
+            observer.observe(document.documentElement, {
+              childList: true,
+              subtree: true,
+              characterData: true,
+            });
+          }
+          if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", function () {
+              postTitleChange(true);
+            }, { once: true });
+          } else {
+            setTimeout(function () { postTitleChange(true); }, 0);
+          }
+        } catch (_) {}
+      }
+      installTitleObserver();
 
       if (enableDebug) {
         const originalConsole = globalThis.console || {};
@@ -222,6 +277,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
       externalHost,
       onNavigationStateChange,
       onPanelNavigate,
+      onTitleChange,
       onBridgeCall,
       onUnmount,
       colors,
@@ -313,7 +369,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
     );
 
     const handleMessage = useCallback(async (event: WebViewMessageEvent) => {
-      if (!managed || !onBridgeCall) return;
+      if (!managed) return;
 
       // Origin check: bridge calls (createBrowserPanel, openExternal,
       // auth.startOAuthLogin, setStateArgs, ...) are only accepted when the
@@ -336,6 +392,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
           __natstackBridge?: boolean;
           __natstackDebug?: boolean;
           __natstackDomSnapshot?: boolean;
+          __natstackTitle?: boolean;
           id?: string;
           method?: string;
           args?: unknown[];
@@ -359,6 +416,14 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
           );
           return;
         }
+        if (message.__natstackTitle) {
+          const title = typeof message.title === "string" ? message.title.trim() : "";
+          if (title.length > 0) {
+            onTitleChange?.(panelId, title);
+          }
+          return;
+        }
+        if (!onBridgeCall) return;
         if (!message.__natstackBridge || !message.id || !message.method) return;
 
         try {
@@ -375,7 +440,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
       } catch {
         // Ignore non-bridge messages.
       }
-    }, [externalHost, managed, onBridgeCall, panelId]);
+    }, [externalHost, managed, onBridgeCall, onTitleChange, panelId]);
 
     const handleError = useCallback(
       (syntheticEvent: { nativeEvent: { description?: string; code?: number } }) => {
@@ -473,6 +538,8 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
           onLoadEnd={handleLoadEnd}
           injectedJavaScriptBeforeContentLoaded={managed ? buildBridgeBootstrapScript(panelInit, __DEV__) : undefined}
           injectedJavaScript={REFERRER_POLICY_SCRIPT}
+          scalesPageToFit={false}
+          textZoom={100}
           sharedCookiesEnabled={false}
           thirdPartyCookiesEnabled={false}
           setSupportMultipleWindows

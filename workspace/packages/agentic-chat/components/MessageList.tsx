@@ -451,22 +451,22 @@ export const MessageList = React.memo(function MessageList({
 
     if (item.type === "inline-group") {
       if (customRenderInlineGroup) {
-        return <Flex direction="column">{customRenderInlineGroup(item.inlineItems)}</Flex>;
+        return <Flex className="message-item" direction="column">{customRenderInlineGroup(item.inlineItems)}</Flex>;
       }
-      return <Flex direction="column"><InlineGroup key={item.key} items={item.inlineItems} onInterrupt={handleTypingInterrupt} /></Flex>;
+      return <Flex className="message-item" direction="column"><InlineGroup key={item.key} items={item.inlineItems} onInterrupt={handleTypingInterrupt} /></Flex>;
     }
 
     const { msg, index: msgIndex } = item;
     const sender = getSenderInfo(msg.senderId, msg);
 
     if (customRenderMessage) {
-      return <Flex direction="column">{customRenderMessage(msg, sender as SenderInfo)}</Flex>;
+      return <Flex className="message-item" direction="column">{customRenderMessage(msg, sender as SenderInfo)}</Flex>;
     }
 
     const isStreaming = msg.kind === "message" && !msg.complete && !msg.pending;
 
     return (
-      <Flex direction="column">
+      <Flex className="message-item" direction="column">
         <MessageCard
           key={msg.id || `fallback-msg-${msgIndex}`}
           msg={msg}
@@ -491,16 +491,22 @@ export const MessageList = React.memo(function MessageList({
   // --- Render ---
   return (
     <Box flexGrow="1" overflow="hidden" style={{ minHeight: 0, position: "relative" }} asChild>
-      <Card>
+      <Card className="message-list-card">
         <ScrollArea
+          className="message-scroll-area"
           ref={(node) => { scrollRef(node); }}
           style={{
             height: "100%",
+            width: "100%",
           }}
           scrollbars="vertical"
           size="1"
         >
-          <div ref={contentRef} style={{ padding: "var(--space-1)" }}>
+          <div
+            ref={contentRef}
+            className="message-list-content"
+            style={{ padding: "var(--space-1)" }}
+          >
             {/* Load earlier messages button */}
             {hasMoreHistory && onLoadEarlierMessages && (
               <Flex justify="center" py="2">
@@ -519,15 +525,18 @@ export const MessageList = React.memo(function MessageList({
                 Send a message to start chatting
               </Text>
             ) : (
-              <Flex direction="column" gap="1">
+              <Flex className="message-list-stack" direction="column" gap="1">
                 {groupedItems.map((item, index) => (
-                  <div key={item.type === "inline-group" ? item.key : (item.msg.id || `msg-${index}`)}>
+                  <div
+                    className="message-item"
+                    key={item.type === "inline-group" ? item.key : (item.msg.id || `msg-${index}`)}
+                  >
                     {renderItem(index)}
                   </div>
                 ))}
                 {activeTypingItems.length > 0 && (
-                  <div key="active-typing">
-                    <Flex direction="column">
+                  <div className="message-item" key="active-typing">
+                    <Flex className="message-item" direction="column">
                       {customRenderInlineGroup
                         ? customRenderInlineGroup(activeTypingItems)
                         : <InlineGroup items={activeTypingItems} onInterrupt={handleTypingInterrupt} />}

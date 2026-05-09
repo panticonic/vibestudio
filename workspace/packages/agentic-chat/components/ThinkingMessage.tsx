@@ -18,6 +18,7 @@ const ThinkingPill = React.memo(function ThinkingPill({
 }) {
   return (
     <Flex
+      className="inline-status-pill"
       align="center"
       gap="1"
       onClick={() => onExpand(id)}
@@ -32,11 +33,11 @@ const ThinkingPill = React.memo(function ThinkingPill({
       tabIndex={0}
     >
       {isStreaming && <Spinner size="1" />}
-      <Text size="1" color="gray" weight="medium">
+      <Text className="inline-pill-label" size="1" color="gray" weight="medium">
         Thinking
       </Text>
       {preview && (
-        <Text size="1" color="gray" style={{ opacity: 0.7 }}>
+        <Text className="inline-pill-summary" size="1" color="gray" style={{ opacity: 0.85 }}>
           {preview}{isTruncated ? "..." : ""}
         </Text>
       )}

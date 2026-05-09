@@ -198,13 +198,18 @@ export function MainScreen() {
     const showApproval = (approval: PendingApproval | null | undefined) => {
       if (!approval || shownApprovals.has(approval.approvalId)) return;
       shownApprovals.add(approval.approvalId);
-      Alert.alert(
-        approval.kind === "capability" ? approval.title : "Use stored credential",
-        formatApprovalMessage(approval),
-        [
+      const buttons = approval.kind === "client-config" || approval.kind === "credential-input"
+        ? [
+          {
+            text: "Dismiss",
+            style: "cancel" as const,
+            onPress: () => resolveApproval(approval.approvalId, "deny"),
+          },
+        ]
+        : [
           {
             text: "Deny",
-            style: "cancel",
+            style: "cancel" as const,
             onPress: () => resolveApproval(approval.approvalId, "deny"),
           },
           {
@@ -219,7 +224,11 @@ export function MainScreen() {
             text: "Trust Repo",
             onPress: () => resolveApproval(approval.approvalId, "repo"),
           },
-        ],
+        ];
+      Alert.alert(
+        formatApprovalTitle(approval),
+        formatApprovalMessage(approval),
+        buttons,
       );
     };
 
@@ -364,6 +373,18 @@ export function MainScreen() {
     });
   }, [activatePanel, refreshTree, shellClient]);
 
+  const handlePanelTitleChange = useCallback((panelId: string, title: string) => {
+    if (!shellClient) return;
+    void shellClient.panels.updateTitle(panelId, title)
+      .then(refreshTree)
+      .catch((error: unknown) => {
+        console.warn(
+          `[MainScreen] Failed to update title for panel ${panelId}:`,
+          error,
+        );
+      });
+  }, [refreshTree, shellClient]);
+
   const handleBridgeCall = useCallback(async (panelId: string, method: string, args: unknown[]) => {
     if (!shellClient) throw new Error("Shell client not available");
     const result = await shellClient.handlePanelBridgeCall(panelId, method, args);
@@ -439,6 +460,7 @@ export function MainScreen() {
               panelInit={entry.panelInit}
               externalHost={externalHost}
               onPanelNavigate={handlePanelNavigate}
+              onTitleChange={handlePanelTitleChange}
               onBridgeCall={handleBridgeCall}
               onUnmount={handleWebViewUnmount}
               colors={{
@@ -455,20 +477,47 @@ export function MainScreen() {
   );
 }
 
+function formatApprovalTitle(approval: PendingApproval): string {
+  switch (approval.kind) {
+    case "capability":
+      return approval.title;
+    case "client-config":
+      return "Configure service";
+    case "credential-input":
+      return "Add service";
+    case "credential":
+      return "Use stored credential";
+  }
+}
+
 function formatApprovalMessage(approval: PendingApproval): string {
   const caller = `${approval.callerKind === "worker" ? "Worker" : "Panel"} ${approval.callerId}`;
-  if (approval.kind === "capability") {
-    const destination =
-      approval.details?.find((detail) => detail.label.toLowerCase() === "url")?.value ??
-      approval.resource?.value ??
-      "an external destination";
-    return `${caller} wants to open ${destination} in your system browser.\n\nApprove only if you expected this handoff.`;
+  switch (approval.kind) {
+    case "capability": {
+      const destination =
+        approval.details?.find((detail) => detail.label.toLowerCase() === "url")?.value ??
+        approval.resource?.value ??
+        "an external destination";
+      return `${caller} wants to open ${destination} in your system browser.\n\nApprove only if you expected this handoff.`;
+    }
+    case "client-config":
+      return `${caller} wants to save OAuth client settings for this service.\n\nThis mobile build cannot submit setup fields yet. Configure the service from desktop, then retry on mobile.`;
+    case "credential-input": {
+      const audience = formatAudienceSummary(approval.audience, "this service");
+      return `${caller} wants to save ${approval.credentialLabel} for ${audience}.\n\nThis mobile build cannot submit credential fields yet. Add the service credential from desktop, then retry on mobile.`;
+    }
+    case "credential": {
+      const audience = formatAudienceSummary(approval.audience, "an unspecified audience");
+      const warning = approval.oauthAudienceDomainMismatch
+        ? "\n\nCheck first: the OAuth provider domain does not match the credential audience."
+        : "";
+      return `${caller} wants to use ${approval.credentialLabel} for ${audience}.\n\nAllow Session is temporary. Trust Version and Trust Repo allow reuse.${warning}`;
+    }
   }
-  const audience = approval.audience.map((entry) => entry.url).join(", ") || "unspecified audience";
-  const warning = approval.oauthAudienceDomainMismatch
-    ? "\n\nCheck first: the OAuth provider domain does not match the credential audience."
-    : "";
-  return `${caller} wants to use ${approval.credentialLabel} for ${audience}.\n\nAllow Session is temporary. Trust Version and Trust Repo allow reuse.${warning}`;
+}
+
+function formatAudienceSummary(audience: Array<{ url: string }>, fallback: string): string {
+  return audience.map((entry) => entry.url).join(", ") || fallback;
 }
 
 const styles = StyleSheet.create({

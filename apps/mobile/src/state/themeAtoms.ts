@@ -22,11 +22,11 @@ export const isDarkModeAtom = atom((get) => {
 export const themeColorsAtom = atom((get) => {
   const dark = get(isDarkModeAtom);
   return {
-    background: dark ? "#1a1a2e" : "#f5f5f5",
-    surface: dark ? "#16213e" : "#ffffff",
+    background: dark ? "#1a1a2e" : "#e9eef6",
+    surface: dark ? "#16213e" : "#f1f5f9",
     text: dark ? "#e0e0e0" : "#1a1a1a",
-    textSecondary: dark ? "#888888" : "#666666",
-    border: dark ? "#333333" : "#cccccc",
+    textSecondary: dark ? "#888888" : "#4b5563",
+    border: dark ? "#333333" : "#cbd5e1",
     primary: dark ? "#0f3460" : "#1a73e8",
     danger: dark ? "#5c2e2e" : "#d93025",
     statusConnected: "#4caf50",

@@ -40,10 +40,10 @@ export const InlineGroup = React.memo(function InlineGroup({ items, onInterrupt 
     : null;
 
   return (
-    <Box style={{ maxWidth: "96%", alignSelf: "flex-start" }}>
-      <Flex direction="column" gap="1">
+    <Box className="inline-group">
+      <Flex className="inline-group-body" direction="column" gap="1">
         {/* Compact pills row */}
-        <Flex gap="1" wrap="wrap" align="center">
+        <Flex className="inline-pill-row" gap="1" wrap="wrap" align="center">
           {items.map((item) => {
             const itemId = item.id;
             if (expandedId === itemId) return null;

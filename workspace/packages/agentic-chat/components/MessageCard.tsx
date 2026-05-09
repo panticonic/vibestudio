@@ -26,6 +26,10 @@ interface MessageCardProps {
   mdxActions?: MdxActionHandlers;
 }
 
+function classNames(...values: Array<string | false | null | undefined>): string {
+  return values.filter(Boolean).join(" ");
+}
+
 /**
  * Individual message card — wrapped in React.memo so it only re-renders
  * when its own message data or relevant callbacks change.
@@ -68,7 +72,7 @@ export const MessageCard = React.memo(function MessageCard({
       return (
         <Box
           key={key}
-          style={{ maxWidth: "96%", alignSelf: "flex-start" }}
+          className="message-row message-row-agent"
         >
           <InlineUiMessage
             data={data}
@@ -85,7 +89,7 @@ export const MessageCard = React.memo(function MessageCard({
     return (
       <Box
         key={key}
-        style={{ maxWidth: "96%", alignSelf: "center" }}
+        className="message-row message-row-system"
       >
         <AgentDisconnectedMessage
           agent={msg.disconnectedAgent}
@@ -105,26 +109,21 @@ export const MessageCard = React.memo(function MessageCard({
 
   return (
     <Box
-      style={{
-        maxWidth: "96%",
-        alignSelf: isClient ? "flex-end" : "flex-start",
-      }}
+      className={classNames("message-row", isClient ? "message-row-client" : "message-row-agent")}
     >
       <Card
-        className="message-card"
+        className={classNames(
+          "message-card",
+          isClient && "message-card-client",
+          hasError && "message-card-error",
+        )}
         style={{
-          position: "relative",
-          backgroundColor: isClient
-            ? "var(--gray-5)"
-            : msg.error
-              ? "var(--red-3)"
-              : "var(--gray-3)",
           opacity: msg.pending ? 0.7 : 1,
         }}
       >
-        <Flex direction="column" gap="2">
+        <Flex className="message-card-body" direction="column" gap="2">
           {hasContent && (
-            <Box style={{ color: isClient ? "white" : "inherit" }}>
+            <Box className="message-content">
               <MessageContent
                 content={msg.content}
                 isStreaming={isStreaming}

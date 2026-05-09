@@ -71,7 +71,10 @@ export function AgenticChat({
           so that ChatLayout does NOT read from context. This prevents
           keystroke-driven context updates from re-rendering ChatLayout and
           causing layout shifts that break autoscroll. */}
-      <Theme appearance={contextValue.theme ?? "dark"}>
+      <Theme
+        appearance={contextValue.theme ?? "dark"}
+        style={{ minWidth: 0, width: "100%", height: "100%" }}
+      >
         <ChatProvider value={contextValue} inputValue={inputContextValue}>
           <ChatLayout />
         </ChatProvider>

@@ -15,6 +15,7 @@ export function TypingPill({
 }) {
   return (
     <Flex
+      className="inline-status-pill"
       align="center"
       gap="1"
       style={{
@@ -25,7 +26,7 @@ export function TypingPill({
       }}
     >
       <Spinner size="1" />
-      <Text size="1" color="purple" weight="medium">
+      <Text className="inline-pill-summary" size="1" color="purple" weight="medium">
         {data.senderName ?? "Agent"} typing
       </Text>
       {onInterrupt && (

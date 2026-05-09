@@ -150,6 +150,11 @@ class MobilePanels {
     return this.requireManager().updateStateArgs(panelId, updates);
   }
 
+  async updateTitle(panelId: string, title: string): Promise<void> {
+    await this.requireManager().updateTitle(panelId, title);
+    this.deps.onTreeUpdated?.(this.getTree());
+  }
+
   async updateTheme(theme: ThemeAppearance): Promise<void> {
     this.requireManager().setCurrentTheme(theme);
   }

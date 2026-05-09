@@ -618,9 +618,10 @@ function escapeHtml(str: string): string {
  * Inject standard transforms into a custom/template HTML file:
  * importmap, CSP, base href, bundle.js → __loader.js replacement.
  */
-function injectHtmlTransforms(
+export function injectHtmlTransforms(
   html: string,
   baseHref: string,
+  hasCss: boolean,
   externals?: Record<string, string>,
 ): string {
   let result = html;
@@ -646,6 +647,19 @@ function injectHtmlTransforms(
   if (!/<base\b/i.test(result)) {
     result = result.replace(/(<head\b[^>]*>)/i, `$1\n  <base href="${escapeHtml(baseHref)}">`);
   }
+  // If esbuild emitted CSS for imported component styles, make custom panel
+  // templates load it too. The fallback HTML path already includes this link.
+  if (
+    hasCss &&
+    !/<link\b[^>]*\bhref\s*=\s*["'](?:\.\/)?bundle\.css(?:\?[^"']*)?["'][^>]*>/i.test(result)
+  ) {
+    const cssLink = `<link rel="stylesheet" href="./bundle.css" />`;
+    if (/<\/head>/i.test(result)) {
+      result = result.replace(/<\/head>/i, `  ${cssLink}\n</head>`);
+    } else {
+      result = `${cssLink}\n${result}`;
+    }
+  }
   // Replace bundle.js script with loader
   result = result.replace(
     /<script\b[^>]*\bsrc\s*=\s*["'](?:\.\/)?bundle\.js(?:\?[^"']*)?["'][^>]*><\/script>/i,
@@ -666,7 +680,7 @@ function generatePanelHtml(
   // If template or panel provides HTML, use it with standard injections
   if (templateHtmlPath && fs.existsSync(templateHtmlPath)) {
     const html = fs.readFileSync(templateHtmlPath, "utf-8");
-    return injectHtmlTransforms(html, baseHref, options.externals);
+    return injectHtmlTransforms(html, baseHref, options.hasCss, options.externals);
   }
 
   // Adapter-generated fallback HTML

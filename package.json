@@ -17,6 +17,7 @@
     "server": "node dist/server.mjs",
     "server:dev": "NODE_ENV=development node dist/server.mjs",
     "dev:mobile-server": "node scripts/dev-mobile-server.mjs",
+    "mobile:emulator": "node scripts/start-mobile-emulator.mjs",
     "mobile:dev": "node scripts/start-mobile-dev.mjs",
     "pack": "pnpm build:dist && electron-builder --dir",
     "dist": "pnpm build:dist && electron-builder",
