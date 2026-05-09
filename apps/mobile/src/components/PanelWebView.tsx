@@ -60,6 +60,7 @@ export interface PanelWebViewProps {
 }
 
 const NATSTACK_USER_AGENT = `NatStack-Mobile/1.0 (${Platform.OS}; ${Platform.Version})`;
+const MANAGED_PANEL_LOAD_TIMEOUT_MS = 30_000;
 const REFERRER_POLICY_SCRIPT = `try{var m=document.createElement('meta');m.name='referrer';m.content='no-referrer';document.head.appendChild(m);}catch(e){}true;`;
 const RANDOM_UUID_POLYFILL_SCRIPT = `
   (function () {
@@ -363,6 +364,30 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
       };
     }, [panelId, onUnmount]);
 
+    useEffect(() => {
+      currentUrlRef.current = url;
+      setHasError(false);
+      setIsLoading(true);
+      setErrorMessage("");
+    }, [url]);
+
+    useEffect(() => {
+      if (!managed || !visible || !isLoading || hasError) return;
+      const timeout = setTimeout(() => {
+        const stalledUrl = currentUrlRef.current || url;
+        logDiagnostic("load timeout", { url: stalledUrl, timeoutMs: MANAGED_PANEL_LOAD_TIMEOUT_MS });
+        webViewRef.current?.stopLoading();
+        setIsLoading(false);
+        setHasError(true);
+        setErrorMessage(
+          `Timed out loading the panel after ${Math.round(MANAGED_PANEL_LOAD_TIMEOUT_MS / 1000)}s.\n\n` +
+          `Check that the phone can reach the NatStack server and retry.\n\n${stalledUrl}`,
+        );
+      }, MANAGED_PANEL_LOAD_TIMEOUT_MS);
+
+      return () => clearTimeout(timeout);
+    }, [hasError, isLoading, logDiagnostic, managed, url, visible]);
+
     const containerStyle = useMemo(
       () => [styles.container, !visible && styles.hidden],
       [visible],
@@ -525,8 +550,9 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
       setHasError(false);
       setIsLoading(true);
       setErrorMessage("");
+      currentUrlRef.current = url;
       webViewRef.current?.reload();
-    }, []);
+    }, [url]);
 
     const handleLoadEnd = useCallback(() => {
       logDiagnostic("load end", { url: currentUrlRef.current });
@@ -617,6 +643,8 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
           source={{ uri: url }}
           style={styles.webView}
           userAgent={NATSTACK_USER_AGENT}
+          cacheEnabled={!managed}
+          cacheMode={managed ? "LOAD_NO_CACHE" : "LOAD_DEFAULT"}
           onShouldStartLoadWithRequest={handleShouldStartLoad}
           onNavigationStateChange={handleNavigationStateChange}
           onMessage={handleMessage}

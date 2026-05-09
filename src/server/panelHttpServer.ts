@@ -121,6 +121,11 @@ function extractSourcePath(pathname: string): { source: string; resource: string
   return { source: match[1]!, resource: match[2] || "/" };
 }
 
+function shouldLogPanelResourceRequests(): boolean {
+  if (process.env["NATSTACK_PANEL_RESOURCE_LOG"] === "0") return false;
+  return process.env["NATSTACK_PANEL_RESOURCE_LOG"] === "1" || process.env["NODE_ENV"] === "development";
+}
+
 // ---------------------------------------------------------------------------
 // PanelHttpServer
 // ---------------------------------------------------------------------------
@@ -386,6 +391,7 @@ export class PanelHttpServer {
     if (parsed) {
       const routeLabel = url.searchParams.get("contextId") || parsed.source;
       const ref = url.searchParams.get("ref") || undefined;
+      this.logPanelResourceRequest(req, res, parsed.source, parsed.resource, routeLabel);
       const isHtmlRequest = parsed.resource === "/" || parsed.resource === "/index.html";
       if (isHtmlRequest) {
         await this.resolveAndServeBuild(res, parsed.source, routeLabel, true, ref);
@@ -408,6 +414,29 @@ export class PanelHttpServer {
 
     res.writeHead(404, { "Content-Type": "text/plain" });
     res.end("Not found");
+  }
+
+  private logPanelResourceRequest(
+    req: import("http").IncomingMessage,
+    res: import("http").ServerResponse,
+    source: string,
+    resource: string,
+    routeLabel: string,
+  ): void {
+    if (!shouldLogPanelResourceRequests()) return;
+    const startedAt = Date.now();
+    const method = req.method ?? "GET";
+    const userAgent = req.headers["user-agent"];
+    res.once("finish", () => {
+      const durationMs = Date.now() - startedAt;
+      const client = typeof userAgent === "string" && userAgent.includes("NatStack-Mobile")
+        ? "mobile"
+        : "web";
+      log.info(
+        `Panel resource ${method} ${source}${resource} route=${routeLabel} ` +
+        `status=${res.statusCode} durationMs=${durationMs} client=${client}`,
+      );
+    });
   }
 
   // =========================================================================
@@ -660,7 +689,7 @@ export class PanelHttpServer {
     if (resource === "/bundle.js") {
       res.writeHead(200, {
         "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "no-store",
       });
       res.end(build.bundle);
       return;
@@ -670,7 +699,7 @@ export class PanelHttpServer {
     if (resource === "/bundle.css" && build.css) {
       res.writeHead(200, {
         "Content-Type": "text/css; charset=utf-8",
-        "Cache-Control": "public, max-age=31536000, immutable",
+        "Cache-Control": "no-store",
       });
       res.end(build.css);
       return;
