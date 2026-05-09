@@ -105,6 +105,7 @@
 }
 
 .agentic-chat-root {
+  --cursor-button: pointer;
   container-type: inline-size;
   min-inline-size: 0;
   inline-size: 100%;
@@ -114,6 +115,13 @@
 .agentic-chat-root,
 .agentic-chat-root * {
   box-sizing: border-box;
+}
+
+.agentic-chat-root :where(
+  button:not(:disabled):not([data-disabled]):not([aria-disabled="true"]),
+  [role="button"]:not([aria-disabled="true"]):not([data-disabled])
+) {
+  cursor: pointer;
 }
 
 .message-list-card,
