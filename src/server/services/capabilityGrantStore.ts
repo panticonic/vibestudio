@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeJsonFileAtomic } from "./atomicFile.js";
 
 export type CapabilityGrantDecision = "session" | "version" | "repo";
 
@@ -97,8 +98,7 @@ export class CapabilityGrantStore {
   }
 
   private save(): void {
-    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
-    fs.writeFileSync(this.filePath, JSON.stringify(this.persistent, null, 2), "utf8");
+    writeJsonFileAtomic(this.filePath, this.persistent);
   }
 }
 
@@ -108,6 +108,7 @@ function grantKey(
   resourceKey: string,
   identity: CapabilityGrantIdentity,
 ): string {
+  // TODO(canonicalKey): migrate this legacy grant key to shared canonicalKey.
   return [
     scope,
     capability,

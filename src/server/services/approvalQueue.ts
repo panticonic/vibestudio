@@ -8,14 +8,20 @@
 
 import { randomUUID } from "node:crypto";
 
+import { canonicalKey } from "@natstack/shared/canonicalKey";
 import type { EventService } from "@natstack/shared/eventsService";
 import type {
   ApprovalDecision,
+  ApprovalPrincipal,
   PendingApproval,
   PendingCapabilityApproval,
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingClientConfigApproval,
+  PendingUserlandApproval,
+  UserlandApprovalChoice,
+  UserlandApprovalOption,
+  UserlandApprovalSubject,
 } from "@natstack/shared/approvals";
 import type { AccountIdentity, CredentialInjection, UrlAudience } from "@natstack/shared/credentials/types";
 
@@ -84,6 +90,17 @@ export interface CredentialInputApprovalQueueRequest extends ApprovalQueueReques
   fields: PendingCredentialInputApproval["fields"];
 }
 
+export interface UserlandApprovalQueueRequest {
+  principal: ApprovalPrincipal;
+  subject: UserlandApprovalSubject;
+  title: string;
+  summary?: string;
+  warning?: string;
+  details?: PendingUserlandApproval["details"];
+  options: UserlandApprovalOption[];
+  signal?: AbortSignal;
+}
+
 export type ApprovalQueueRequest =
   | CredentialApprovalQueueRequest
   | CapabilityApprovalQueueRequest
@@ -95,6 +112,7 @@ export type ClientConfigApprovalResult =
   | { decision: "submit"; values: Record<string, string> }
   | { decision: "deny" };
 export type FieldInputApprovalResult = ClientConfigApprovalResult;
+export type UserlandApprovalResult = UserlandApprovalChoice;
 
 interface QueueWaiter {
   resolve: (decision: GrantedDecision) => void;
@@ -108,11 +126,18 @@ interface FieldInputQueueWaiter {
   onAbort?: () => void;
 }
 
+interface UserlandQueueWaiter {
+  resolve: (result: UserlandApprovalResult) => void;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
 interface QueueEntry {
   approval: PendingApproval;
   dedupKey: string;
   waiters: Map<number, QueueWaiter>;
   fieldInputWaiters: Map<number, FieldInputQueueWaiter>;
+  userlandWaiters: Map<number, UserlandQueueWaiter>;
   nextWaiterId: number;
 }
 
@@ -120,7 +145,9 @@ export interface ApprovalQueue {
   request(req: DecisionApprovalQueueRequest): Promise<GrantedDecision>;
   requestClientConfig(req: ClientConfigApprovalQueueRequest): Promise<ClientConfigApprovalResult>;
   requestCredentialInput(req: CredentialInputApprovalQueueRequest): Promise<FieldInputApprovalResult>;
+  requestUserland(req: UserlandApprovalQueueRequest): Promise<UserlandApprovalResult>;
   resolve(approvalId: string, decision: ApprovalDecision): void;
+  resolveUserland(approvalId: string, choice: string): void;
   submitClientConfig(approvalId: string, values: Record<string, string>): void;
   submitCredentialInput(approvalId: string, values: Record<string, string>): void;
   listPending(): PendingApproval[];
@@ -144,6 +171,7 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
   }
 
   function dedupKeyFor(req: ApprovalQueueRequest): string {
+    // TODO(canonicalKey): migrate these legacy approval keys to shared canonicalKey.
     if (req.kind === "capability") {
       if (req.dedupKey === null) {
         return ["capability-isolated", randomUUID()].join("\x00");
@@ -177,6 +205,10 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
       return ["credential-input-isolated", randomUUID()].join("\x00");
     }
     return `${req.repoPath}\x00${req.effectiveVersion}\x00${req.credentialId}`;
+  }
+
+  function userlandDedupKeyFor(req: UserlandApprovalQueueRequest): string {
+    return canonicalKey(["userland", req.principal.callerId, req.subject.id]);
   }
 
   function createPendingApproval(req: ApprovalQueueRequest): PendingApproval {
@@ -259,6 +291,7 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
         dedupKey,
         waiters: new Map(),
         fieldInputWaiters: new Map(),
+        userlandWaiters: new Map(),
         nextWaiterId: 0,
       };
       entriesById.set(approval.approvalId, entry);
@@ -283,7 +316,7 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
             return;
           }
           e.fieldInputWaiters.delete(waiterId);
-          if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0) {
+          if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0 && e.userlandWaiters.size === 0) {
             removeEntry(e);
             emitPendingChanged();
           }
@@ -325,6 +358,13 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
       waiter.resolve("deny");
     }
     entry.waiters.clear();
+    for (const waiter of entry.userlandWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ kind: "dismissed" });
+    }
+    entry.userlandWaiters.clear();
 
     emitPendingChanged();
   }
@@ -341,6 +381,7 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
           dedupKey,
           waiters: new Map(),
           fieldInputWaiters: new Map(),
+          userlandWaiters: new Map(),
           nextWaiterId: 0,
         };
         entriesById.set(approval.approvalId, entry);
@@ -361,7 +402,7 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
               return;
             }
             e.waiters.delete(waiterId);
-            if (e.waiters.size === 0) {
+            if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0 && e.userlandWaiters.size === 0) {
               removeEntry(e);
               emitPendingChanged();
             }
@@ -399,6 +440,78 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
       );
     },
 
+    requestUserland(req) {
+      const dedupKey = userlandDedupKeyFor(req);
+      let entry = entriesByDedupKey.get(dedupKey);
+      let newEntry = false;
+      if (!entry) {
+        const approval = {
+          approvalId: randomUUID(),
+          callerId: req.principal.callerId,
+          callerKind: req.principal.callerKind,
+          repoPath: req.principal.repoPath,
+          effectiveVersion: req.principal.effectiveVersion,
+          requestedAt: Date.now(),
+          kind: "userland",
+          subject: req.subject,
+          title: req.title,
+          summary: req.summary,
+          warning: req.warning,
+          details: req.details,
+          options: req.options,
+        } satisfies PendingUserlandApproval;
+        entry = {
+          approval,
+          dedupKey,
+          waiters: new Map(),
+          fieldInputWaiters: new Map(),
+          userlandWaiters: new Map(),
+          nextWaiterId: 0,
+        };
+        entriesById.set(approval.approvalId, entry);
+        entriesByDedupKey.set(dedupKey, entry);
+        newEntry = true;
+      }
+
+      if (entry.approval.kind !== "userland") {
+        throw new Error("Approval dedup collision for userland request");
+      }
+
+      const bound = entry;
+      return new Promise<UserlandApprovalResult>((resolve) => {
+        const waiterId = bound.nextWaiterId++;
+        const waiter: UserlandQueueWaiter = { resolve, signal: req.signal };
+
+        if (req.signal) {
+          const onAbort = () => {
+            const e = entriesById.get(bound.approval.approvalId);
+            if (!e) {
+              resolve({ kind: "dismissed" });
+              return;
+            }
+            e.userlandWaiters.delete(waiterId);
+            if (e.waiters.size === 0 && e.fieldInputWaiters.size === 0 && e.userlandWaiters.size === 0) {
+              removeEntry(e);
+              emitPendingChanged();
+            }
+            resolve({ kind: "dismissed" });
+          };
+          waiter.onAbort = onAbort;
+          if (req.signal.aborted) {
+            queueMicrotask(onAbort);
+          } else {
+            req.signal.addEventListener("abort", onAbort, { once: true });
+          }
+        }
+
+        bound.userlandWaiters.set(waiterId, waiter);
+
+        if (newEntry) {
+          emitPendingChanged();
+        }
+      });
+    },
+
     resolve(approvalId, decision) {
       const entry = entriesById.get(approvalId);
       if (!entry) return;
@@ -413,6 +526,48 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
           waiter.signal.removeEventListener("abort", waiter.onAbort);
         }
         waiter.resolve(granted);
+      }
+      entry.waiters.clear();
+      for (const waiter of entry.fieldInputWaiters.values()) {
+        if (waiter.signal && waiter.onAbort) {
+          waiter.signal.removeEventListener("abort", waiter.onAbort);
+        }
+        waiter.resolve({ decision: "deny" });
+      }
+      entry.fieldInputWaiters.clear();
+      for (const waiter of entry.userlandWaiters.values()) {
+        if (waiter.signal && waiter.onAbort) {
+          waiter.signal.removeEventListener("abort", waiter.onAbort);
+        }
+        waiter.resolve({ kind: "dismissed" });
+      }
+      entry.userlandWaiters.clear();
+
+      emitPendingChanged();
+    },
+
+    resolveUserland(approvalId, choice) {
+      const entry = entriesById.get(approvalId);
+      if (!entry || entry.approval.kind !== "userland") return;
+
+      if (!entry.approval.options.some((option) => option.value === choice)) {
+        throw new Error(`Unknown userland approval choice: ${choice}`);
+      }
+
+      removeEntry(entry);
+
+      for (const waiter of entry.userlandWaiters.values()) {
+        if (waiter.signal && waiter.onAbort) {
+          waiter.signal.removeEventListener("abort", waiter.onAbort);
+        }
+        waiter.resolve({ kind: "choice", choice });
+      }
+      entry.userlandWaiters.clear();
+      for (const waiter of entry.waiters.values()) {
+        if (waiter.signal && waiter.onAbort) {
+          waiter.signal.removeEventListener("abort", waiter.onAbort);
+        }
+        waiter.resolve("deny");
       }
       entry.waiters.clear();
       for (const waiter of entry.fieldInputWaiters.values()) {

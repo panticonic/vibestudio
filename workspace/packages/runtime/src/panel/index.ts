@@ -13,6 +13,13 @@ import { createGatewayFetch } from "../shared/gatewayFetch.js";
 export type { ThemeAppearance, RuntimeFs, FileStats, MkdirOptions, RmOptions } from "../types.js";
 export { createGatewayFetch } from "../shared/gatewayFetch.js";
 export type { GatewayFetch, GatewayFetchConfig } from "../shared/gatewayFetch.js";
+export type {
+  UserlandApprovalChoice,
+  UserlandApprovalGrant,
+  UserlandApprovalOption,
+  UserlandApprovalRequest,
+  UserlandApprovalSubject,
+} from "../approvals.js";
 
 // Initialize runtime with panel-specific providers
 const { runtime, config } = initRuntime({
@@ -222,6 +229,16 @@ export type {
   WebhookVerifierConfig,
 } from "../shared/webhooks.js";
 export const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));
+
+// Userland consent approvals.
+import {
+  listUserlandApprovals,
+  requestUserlandApproval,
+  revokeUserlandApproval,
+} from "../approvals.js";
+export const requestApproval = requestUserlandApproval.bind(null, rpc);
+export const revokeApproval = revokeUserlandApproval.bind(null, rpc);
+export const listApprovals = listUserlandApprovals.bind(null, rpc);
 
 // Shell notifications
 import { createNotificationClient } from "./notifications.js";

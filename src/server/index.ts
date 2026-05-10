@@ -468,6 +468,8 @@ async function main() {
   const credentialSessionGrantStore = new CredentialSessionGrantStore();
   const { CapabilityGrantStore } = await import("./services/capabilityGrantStore.js");
   const capabilityGrantStore = new CapabilityGrantStore({ statePath });
+  const { UserlandApprovalGrantStore } = await import("./services/userlandApprovalGrantStore.js");
+  const userlandApprovalGrantStore = new UserlandApprovalGrantStore({ statePath });
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
   const approvalQueue = createApprovalQueue({ eventService });
   const credentialLifecycle = new CredentialLifecycle({
@@ -770,6 +772,16 @@ async function main() {
   // ── Shell approval service (consent bar queue) ──
   const { createShellApprovalService } = await import("./services/shellApprovalService.js");
   container.register(rpcService(createShellApprovalService({ approvalQueue })));
+  const { createUserlandApprovalService } = await import("./services/userlandApprovalService.js");
+  container.register(
+    rpcService(
+      createUserlandApprovalService({
+        approvalQueue,
+        grantStore: userlandApprovalGrantStore,
+        codeIdentityResolver,
+      })
+    )
+  );
 
   // ── Credential service ──
   {

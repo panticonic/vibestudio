@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type {
   AccountIdentity,
   CredentialBindingUse,
@@ -8,7 +9,98 @@ import type {
 export type ApprovalDecision = "once" | "session" | "version" | "repo" | "deny" | "dismiss";
 export type ApprovalConfigFieldType = "text" | "secret";
 
+const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
+const ZERO_WIDTH_CHARS = /[\u200B-\u200F]/g;
+const SUBJECT_ID_PATTERN = /^[A-Za-z0-9._:/-]+$/;
+const OPTION_VALUE_PATTERN = /^[A-Za-z0-9_-]+$/;
+export const USERLAND_APPROVAL_RESERVED_SUBJECT_PREFIXES = ["shell:", "server:", "system:", "@"] as const;
+
+export function approvalCleanString(
+  label: string,
+  opts: { min?: number; max: number; pattern?: RegExp },
+): z.ZodType<string> {
+  let schema: z.ZodType<string> = z.string()
+    .refine((value) => !CONTROL_CHARS.test(value), { message: `${label} contains control characters` })
+    .transform((value) => value.replace(ZERO_WIDTH_CHARS, ""));
+  if (opts.min !== undefined) {
+    schema = schema.refine((value) => value.length >= opts.min!, { message: `${label} is too short` });
+  }
+  schema = schema.refine((value) => value.length <= opts.max, { message: `${label} is too long` });
+  if (opts.pattern) {
+    schema = schema.refine((value) => opts.pattern!.test(value), { message: `${label} has invalid characters` });
+  }
+  return schema;
+}
+
+export const userlandApprovalSubjectIdSchema = approvalCleanString(
+  "subject id",
+  { min: 1, max: 128, pattern: SUBJECT_ID_PATTERN },
+).refine(
+  (id) => !USERLAND_APPROVAL_RESERVED_SUBJECT_PREFIXES.some((prefix) => id.startsWith(prefix)),
+  { message: "subject id uses a reserved prefix" },
+);
+
+export const userlandApprovalDetailSchema = z.object({
+  label: approvalCleanString("detail label", { max: 40 }),
+  value: approvalCleanString("detail value", { max: 200 }),
+}).strict();
+
+export const userlandApprovalOptionSchema = z.object({
+  value: approvalCleanString("option value", { min: 1, max: 40, pattern: OPTION_VALUE_PATTERN })
+    .refine((value) => value !== "dismiss", { message: "option value is reserved" }),
+  label: approvalCleanString("option label", { min: 1, max: 40 }),
+  description: approvalCleanString("option description", { max: 120 }).optional(),
+  tone: z.enum(["primary", "danger", "neutral"]).optional(),
+}).strict();
+
+export const userlandApprovalRequestSchema = z.object({
+  subject: z.object({
+    id: userlandApprovalSubjectIdSchema,
+    label: approvalCleanString("subject label", { max: 80 }).optional(),
+  }).strict(),
+  title: approvalCleanString("title", { min: 1, max: 120 }),
+  summary: approvalCleanString("summary", { max: 1000 }).optional(),
+  warning: approvalCleanString("warning", { max: 200 }).optional(),
+  details: z.array(userlandApprovalDetailSchema).max(8).optional(),
+  options: z.array(userlandApprovalOptionSchema).min(1).max(6),
+}).strict().superRefine((req, ctx) => {
+  const values = new Set<string>();
+  for (const [index, option] of req.options.entries()) {
+    if (values.has(option.value)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["options", index, "value"],
+        message: "option values must be unique",
+      });
+    }
+    values.add(option.value);
+  }
+});
+
+/** The verified runtime caller that issued the prompt. Populated by the dispatcher. */
+export interface ApprovalPrincipal {
+  callerId: string;
+  callerKind: "panel" | "worker";
+  repoPath: string;
+  effectiveVersion: string;
+}
+
+/** What a userland approval is about. The issuing provider supplies this. */
+export interface UserlandApprovalSubject {
+  id: string;
+  label?: string;
+}
+
+/** A persisted decision for one flat (principal, subject) pair. */
+export interface UserlandApprovalGrant {
+  principal: { callerId: string; callerKind: "panel" | "worker" };
+  subject: UserlandApprovalSubject;
+  choice: string;
+  grantedAt: number;
+}
+
 export interface PendingApprovalBase {
+  // principal == { callerId, callerKind, repoPath, effectiveVersion }
   approvalId: string;
   callerId: string;
   callerKind: "panel" | "worker";
@@ -85,8 +177,45 @@ export interface PendingCredentialInputApproval extends PendingApprovalBase {
   fields: PendingClientConfigField[];
 }
 
+export interface UserlandApprovalOption {
+  value: string;
+  label: string;
+  description?: string;
+  tone?: "primary" | "danger" | "neutral";
+}
+
+export interface PendingUserlandApproval extends PendingApprovalBase {
+  kind: "userland";
+  subject: UserlandApprovalSubject;
+  title: string;
+  summary?: string;
+  warning?: string;
+  details?: Array<{
+    label: string;
+    value: string;
+  }>;
+  options: UserlandApprovalOption[];
+}
+
+export interface UserlandApprovalRequest {
+  subject: UserlandApprovalSubject;
+  title: string;
+  summary?: string;
+  warning?: string;
+  details?: Array<{
+    label: string;
+    value: string;
+  }>;
+  options: UserlandApprovalOption[];
+}
+
+export type UserlandApprovalChoice =
+  | { kind: "choice"; choice: string }
+  | { kind: "dismissed" };
+
 export type PendingApproval =
   | PendingCredentialApproval
   | PendingCapabilityApproval
   | PendingClientConfigApproval
-  | PendingCredentialInputApproval;
+  | PendingCredentialInputApproval
+  | PendingUserlandApproval;

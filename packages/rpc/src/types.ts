@@ -176,6 +176,7 @@ export const SERVER_SERVICE_NAMES = [
   "test",
   "tokens",
   "typecheck",
+  "userlandApproval",
   "webhookIngress",
   "workerd",
   "workerLog",

@@ -39,6 +39,14 @@ import { createNotificationClient, type NotificationClient } from "../shared/not
 import { createParentHandle } from "../shared/handles.js";
 import { helpfulNamespace } from "../shared/helpfulNamespace.js";
 import { createGatewayFetch, type GatewayFetch } from "../shared/gatewayFetch.js";
+import {
+  listUserlandApprovals,
+  requestUserlandApproval,
+  revokeUserlandApproval,
+  type UserlandApprovalChoice,
+  type UserlandApprovalGrant,
+  type UserlandApprovalRequest,
+} from "../approvals.js";
 import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
 import type { ParentHandle } from "../core/index.js";
 import type { WorkerEnv } from "./types.js";
@@ -71,6 +79,13 @@ export type { DurableObjectContext, SqlStorage, SqlResult, DORef } from "./durab
 export { fs } from "./fs.js";
 export { createGatewayFetch } from "../shared/gatewayFetch.js";
 export type { GatewayFetch } from "../shared/gatewayFetch.js";
+export type {
+  UserlandApprovalChoice,
+  UserlandApprovalGrant,
+  UserlandApprovalOption,
+  UserlandApprovalRequest,
+  UserlandApprovalSubject,
+} from "../approvals.js";
 // Note: createTestDO is intentionally NOT exported here because it depends on
 // sql.js test-only helpers that should not be bundled into production workers.
 // Import directly from "@workspace/runtime/src/worker/durable-test-utils" in tests.
@@ -132,6 +147,9 @@ export interface WorkerRuntime {
   getWorkspaceTree(): Promise<unknown>;
   listBranches(repoPath: string): Promise<unknown[]>;
   listCommits(repoPath: string, ref?: string, limit?: number): Promise<unknown[]>;
+  requestApproval(req: UserlandApprovalRequest): Promise<UserlandApprovalChoice>;
+  revokeApproval(subjectId: string): Promise<boolean>;
+  listApprovals(): Promise<UserlandApprovalGrant[]>;
   /** Expose a method callable by other callers (panels, workers, server). */
   exposeMethod: RpcBridge["exposeMethod"];
   /** Get a handle to the parent panel/worker (null if no parent). */
@@ -233,6 +251,9 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     listBranches: (repoPath: string) => callMain<unknown[]>("git.listBranches", repoPath),
     listCommits: (repoPath: string, ref?: string, limit?: number) =>
       callMain<unknown[]>("git.listCommits", repoPath, ref, limit),
+    requestApproval: (req: UserlandApprovalRequest) => requestUserlandApproval(rpc, req),
+    revokeApproval: (subjectId: string) => revokeUserlandApproval(rpc, subjectId),
+    listApprovals: () => listUserlandApprovals(rpc),
     exposeMethod: rpc.exposeMethod.bind(rpc),
     getParent: () => createParentHandle({ rpc, parentId }),
     handleRpcPost: (body: unknown) => rpc.handleIncomingPost(body),

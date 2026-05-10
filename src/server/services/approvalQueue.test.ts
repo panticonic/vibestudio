@@ -261,4 +261,88 @@ describe("approvalQueue", () => {
     queue.resolve(queue.listPending()[0]!.approvalId, "deny");
     await expect(second).resolves.toEqual({ decision: "deny" });
   });
+
+  describe("userland approvals", () => {
+    const userlandRequest = {
+      principal: {
+        callerId: "worker:alpha",
+        callerKind: "worker" as const,
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
+      subject: { id: "team-x:foo", label: "Team X foo" },
+      title: "Allow foo?",
+      options: [
+        { value: "allow", label: "Allow", tone: "primary" as const },
+        { value: "deny", label: "Deny", tone: "danger" as const },
+      ],
+    };
+
+    it("deduplicates concurrent prompts for the same issuer and subject", async () => {
+      const { queue } = createQueue();
+      const first = queue.requestUserland(userlandRequest);
+      const second = queue.requestUserland(userlandRequest);
+
+      const pending = queue.listPending();
+      expect(pending).toHaveLength(1);
+      expect(pending[0]).toMatchObject({
+        kind: "userland",
+        callerId: "worker:alpha",
+        subject: { id: "team-x:foo" },
+      });
+
+      queue.resolveUserland(pending[0]!.approvalId, "allow");
+      await expect(first).resolves.toEqual({ kind: "choice", choice: "allow" });
+      await expect(second).resolves.toEqual({ kind: "choice", choice: "allow" });
+    });
+
+    it("keeps different issuers with the same subject separate", () => {
+      const { queue } = createQueue();
+      void queue.requestUserland(userlandRequest);
+      void queue.requestUserland({
+        ...userlandRequest,
+        principal: {
+          ...userlandRequest.principal,
+          callerId: "worker:beta",
+          repoPath: "workers/beta",
+        },
+      });
+
+      expect(queue.listPending()).toHaveLength(2);
+    });
+
+    it("dismisses userland waiters through the generic dismiss path", async () => {
+      const { queue } = createQueue();
+      const promise = queue.requestUserland(userlandRequest);
+      const pending = queue.listPending()[0]!;
+
+      queue.resolve(pending.approvalId, "dismiss");
+
+      await expect(promise).resolves.toEqual({ kind: "dismissed" });
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("rejects resolving a choice the user was not shown", async () => {
+      const { queue } = createQueue();
+      const promise = queue.requestUserland(userlandRequest);
+      const pending = queue.listPending()[0]!;
+
+      expect(() => queue.resolveUserland(pending.approvalId, "maybe")).toThrow(/Unknown userland/);
+      expect(queue.listPending()).toHaveLength(1);
+
+      queue.resolve(pending.approvalId, "dismiss");
+      await expect(promise).resolves.toEqual({ kind: "dismissed" });
+    });
+
+    it("cleans up aborted userland requests", async () => {
+      const { queue } = createQueue();
+      const ac = new AbortController();
+      const promise = queue.requestUserland({ ...userlandRequest, signal: ac.signal });
+
+      ac.abort();
+
+      await expect(promise).resolves.toEqual({ kind: "dismissed" });
+      expect(queue.listPending()).toEqual([]);
+    });
+  });
 });

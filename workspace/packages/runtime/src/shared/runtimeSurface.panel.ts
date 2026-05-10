@@ -111,6 +111,9 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "revokeSubscription",
       "rotateSecret",
     ]),
+    requestApproval: valueEntry(),
+    revokeApproval: valueEntry(),
+    listApprovals: valueEntry(),
     notifications: namespaceEntry(["show", "dismiss"]),
   },
 };

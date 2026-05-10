@@ -19,6 +19,7 @@ import type {
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingClientConfigApproval,
+  PendingUserlandApproval,
 } from "@natstack/shared/approvals";
 import { useShellEvent } from "../shell/useShellEvent";
 import { shellApproval, view } from "../shell/client";
@@ -89,6 +90,12 @@ export function ConsentApprovalBar() {
     void shellApproval
       .submitCredentialInput(current.approvalId, secretConfigValues)
       .catch((err: unknown) => console.error("[ConsentApprovalBar] submitCredentialInput failed:", err));
+  };
+  const resolveUserland = (choice: string | "dismiss") => {
+    if (current?.kind !== "userland") return;
+    void shellApproval
+      .resolveUserland(current.approvalId, choice)
+      .catch((err: unknown) => console.error("[ConsentApprovalBar] resolveUserland failed:", err));
   };
 
   const callerLabel = current.callerKind === "worker" ? "Worker" : "Panel";
@@ -176,6 +183,9 @@ export function ConsentApprovalBar() {
               callerLabel={callerLabel}
               defaultOpen={shouldOpenApprovalDetails(current)}
             />
+            {current.kind === "userland" ? (
+              <UserlandApprovalBody approval={current} />
+            ) : null}
             {current.kind === "client-config" || current.kind === "credential-input" ? (
               <SecretConfigFields
                 approval={current}
@@ -205,6 +215,8 @@ export function ConsentApprovalBar() {
               onDeny={() => decide("deny")}
               onDismiss={() => decide("dismiss")}
             />
+          ) : current.kind === "userland" ? (
+            <UserlandApprovalActions approval={current} onChoose={resolveUserland} />
           ) : (
             <StandardApprovalActions approval={current} decide={decide} />
           )}
@@ -357,6 +369,45 @@ function CredentialInputActions({
   );
 }
 
+function UserlandApprovalActions({
+  approval,
+  onChoose,
+}: {
+  approval: PendingUserlandApproval;
+  onChoose: (choice: string | "dismiss") => void;
+}) {
+  return (
+    <Flex direction="column" align="end" gap="1">
+      <Flex
+        align="center"
+        className="approval-actions"
+        gap="2"
+        wrap="wrap"
+      >
+        {approval.options.map((option) => (
+          <DecisionButton
+            key={option.value}
+            label={option.label}
+            description={option.description ?? option.label}
+            color={option.tone === "danger" ? "red" : option.tone === "primary" ? "sky" : undefined}
+            variant={option.tone === "primary" ? "solid" : "surface"}
+            icon={option.tone === "danger" ? <CrossCircledIcon /> : <CheckCircledIcon />}
+            onClick={() => onChoose(option.value)}
+          />
+        ))}
+        <Tooltip content="Dismiss">
+          <IconButton size="1" variant="ghost" color="gray" onClick={() => onChoose("dismiss")}>
+            <Cross2Icon />
+          </IconButton>
+        </Tooltip>
+      </Flex>
+      <Text size="1" color="gray">
+        Remembered until revoked.
+      </Text>
+    </Flex>
+  );
+}
+
 function DecisionButton({
   label,
   description,
@@ -381,6 +432,55 @@ function DecisionButton({
         {label}
       </Button>
     </Tooltip>
+  );
+}
+
+function UserlandApprovalBody({
+  approval,
+}: {
+  approval: PendingUserlandApproval;
+}) {
+  return (
+    <Box
+      mt="1"
+      p="2"
+      style={{
+        border: "1px solid var(--gray-a6)",
+        borderRadius: 6,
+        backgroundColor: "var(--color-panel-translucent)",
+        maxWidth: 680,
+      }}
+    >
+      <Flex direction="column" gap="1">
+        <Text size="1" color="gray">
+          From <IdCode value={approval.callerId} />
+        </Text>
+        <Flex direction="column" gap="1">
+          <Text size="1" color="gray">Request</Text>
+          <Text size="2" weight="medium" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+            {approval.title}
+          </Text>
+        </Flex>
+        <Flex align="center" gap="2" wrap="wrap">
+          <Text size="1" color="gray">Subject</Text>
+          <IdCode value={approval.subject.id} />
+          {approval.subject.label ? <InlineCode>{approval.subject.label}</InlineCode> : null}
+        </Flex>
+        {approval.warning ? (
+          <Flex align="center" gap="1" style={{ color: "var(--red-11)" }}>
+            <ExclamationTriangleIcon width={13} height={13} />
+            <Text size="1" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+              {approval.warning}
+            </Text>
+          </Flex>
+        ) : null}
+        {approval.summary ? (
+          <Text size="2" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+            {approval.summary}
+          </Text>
+        ) : null}
+      </Flex>
+    </Box>
   );
 }
 
@@ -441,6 +541,8 @@ function ApprovalDetails({
           <ClientConfigDetails approval={approval} />
         ) : approval.kind === "credential-input" ? (
           <CredentialInputDetails approval={approval} />
+        ) : approval.kind === "userland" ? (
+          <UserlandDetails approval={approval} />
         ) : (
           <CapabilityDetails approval={approval} />
         )}
@@ -749,6 +851,33 @@ function CapabilityDetails({ approval }: { approval: PendingCapabilityApproval }
   );
 }
 
+function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
+  return (
+    <>
+      <Detail
+        icon={<LockClosedIcon />}
+        label="Subject"
+        value={<IdCode value={approval.subject.id} />}
+      />
+      {approval.subject.label ? (
+        <Detail
+          icon={<LockClosedIcon />}
+          label="Label"
+          value={<InlineCode>{approval.subject.label}</InlineCode>}
+        />
+      ) : null}
+      {(approval.details ?? []).map((detail) => (
+        <Detail
+          key={detail.label}
+          icon={<LockClosedIcon />}
+          label={detail.label}
+          value={<InlineCode>{detail.value}</InlineCode>}
+        />
+      ))}
+    </>
+  );
+}
+
 function InlineCode({ children }: { children: ReactNode }) {
   return (
     <Code size="1" variant="soft" style={{ maxWidth: "100%" }}>
@@ -787,6 +916,9 @@ function getApprovalCategoryLabel(approval: PendingApproval): string {
   }
   if (approval.kind === "credential-input") {
     return "Service setup";
+  }
+  if (approval.kind === "userland") {
+    return approval.callerKind === "worker" ? "Worker request" : "Panel request";
   }
   if (approval.capability === "internal-git-write") {
     return approval.resource?.value === "meta" ? "Config edit" : "Write request";
@@ -987,6 +1119,16 @@ function getApprovalCopy(
     return {
       title: "Add service",
       summary: `${requester} wants to save ${approval.credentialLabel} for ${audience}. Secrets stay encrypted and are only sent to matching requests.`,
+    };
+  }
+  if (approval.kind === "userland") {
+    // Header text is renderer-controlled. Provider-supplied title, summary,
+    // and warning render inside the "From <issuer>" framed body so they
+    // cannot impersonate the verified-issuer chrome.
+    const callerKindLabel = approval.callerKind === "worker" ? "Worker" : "Panel";
+    return {
+      title: `${callerKindLabel} requests your decision`,
+      summary: `${requester} is asking about ${approval.subject.id}. Your choice will be remembered until revoked.`,
     };
   }
 
