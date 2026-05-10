@@ -198,6 +198,34 @@ export interface PendingUserlandApproval extends PendingApprovalBase {
   options: UserlandApprovalOption[];
 }
 
+/**
+ * OAuth 2.0 Device Authorization Grant (RFC 8628) flow status.
+ *
+ * Surfaced on the trusted approval bar so the user can read the `userCode`
+ * to type into the provider's verification page (when the provider doesn't
+ * embed it in `verification_uri_complete`), and so the polling loop is
+ * cancellable. The server auto-resolves this approval when polling
+ * completes — granted, denied, or expired — without user interaction.
+ */
+export interface PendingDeviceCodeApproval extends PendingApprovalBase {
+  kind: "device-code";
+  credentialLabel: string;
+  /** The short code the user types into the provider's page. */
+  userCode: string;
+  /** The page the user opens to enter the code. */
+  verificationUri: string;
+  /**
+   * Some providers (Google, GitHub, others) return a URL with the code
+   * pre-filled. When present, the natstack shell auto-opens this URL; the
+   * user code is still displayed in case the user prefers to type it.
+   */
+  verificationUriComplete?: string;
+  /** Wall-clock ms when the device authorization expires. */
+  expiresAt: number;
+  /** Origin of the OAuth provider's token endpoint (for display). */
+  oauthTokenOrigin: string;
+}
+
 export interface UserlandApprovalRequest {
   subject: UserlandApprovalSubject;
   title: string;
@@ -219,4 +247,5 @@ export type PendingApproval =
   | PendingCapabilityApproval
   | PendingClientConfigApproval
   | PendingCredentialInputApproval
-  | PendingUserlandApproval;
+  | PendingUserlandApproval
+  | PendingDeviceCodeApproval;

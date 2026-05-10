@@ -3,6 +3,7 @@ import type {
   PendingCapabilityApproval,
   PendingCredentialApproval,
   PendingCredentialInputApproval,
+  PendingDeviceCodeApproval,
 } from "./approvals.js";
 
 function truncateId(id: string, head = 8, tail = 4): string {
@@ -28,6 +29,9 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   }
   if (approval.kind === "userland") {
     return approval.callerKind === "worker" ? "Worker request" : "Panel request";
+  }
+  if (approval.kind === "device-code") {
+    return "Device sign-in";
   }
   if (approval.capability === "internal-git-write") {
     return approval.resource?.value === "meta" ? "Config edit" : "Write request";
@@ -280,6 +284,15 @@ export function getApprovalCopy(
     return {
       title: `${callerKindLabel} requests your decision`,
       summary: `${requester} is asking about ${approval.subject.id}. Your choice will be remembered until revoked.`,
+    };
+  }
+  if (approval.kind === "device-code") {
+    return {
+      title: `Sign in to ${approval.credentialLabel}`,
+      summary:
+        `Enter code ${approval.userCode} at ${originForUrl(approval.verificationUri)} `
+        + `to finish connecting ${approval.credentialLabel}. `
+        + `${requester} initiated this request.`,
     };
   }
 

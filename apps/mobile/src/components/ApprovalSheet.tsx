@@ -25,6 +25,7 @@ import type {
   PendingClientConfigApproval,
   PendingCredentialApproval,
   PendingCredentialInputApproval,
+  PendingDeviceCodeApproval,
   PendingUserlandApproval,
   UserlandApprovalOption,
 } from "@natstack/shared/approvals";
@@ -265,6 +266,7 @@ export function ApprovalSheet({
                 <Text style={[styles.summary, { color: colors.textSecondary }]}>{copy.summary}</Text>
                 {copy.warning ? <WarningBand message={copy.warning} /> : null}
                 {current.kind === "userland" ? <IssuerPanel approval={current} /> : null}
+                {current.kind === "device-code" ? <DeviceCodePanel approval={current} /> : null}
                 {error ? <InlineError message={error} /> : null}
                 {(current.kind === "client-config" || current.kind === "credential-input") ? (
                   <SecretConfigFields
@@ -302,6 +304,12 @@ export function ApprovalSheet({
                     busy={isBusy}
                     pendingAction={pendingAction}
                     onChoose={(choice) => runAction(`userland:${choice}`, () => onResolveUserland(current.approvalId, choice))}
+                  />
+                ) : current.kind === "device-code" ? (
+                  <DeviceCodeActions
+                    busy={isBusy}
+                    pendingAction={pendingAction}
+                    onCancel={() => runAction("dismiss", () => onResolve(current.approvalId, "dismiss"))}
                   />
                 ) : (
                   <StandardActions
@@ -347,6 +355,7 @@ function getCategoryIcon(approval: PendingApproval): IconComponent {
   if (approval.kind === "capability") return ExternalLink;
   if (approval.kind === "client-config" || approval.kind === "credential-input") return Settings2;
   if (approval.kind === "userland") return approval.callerKind === "worker" ? Workflow : LayoutPanelTop;
+  if (approval.kind === "device-code") return ExternalLink;
   return Lock;
 }
 
@@ -471,6 +480,8 @@ function ApprovalDetails({
             <CredentialInputDetails approval={approval} />
           ) : approval.kind === "userland" ? (
             <UserlandDetails approval={approval} />
+          ) : approval.kind === "device-code" ? (
+            <DeviceCodeDetails approval={approval} />
           ) : (
             <CapabilityDetails approval={approval} />
           )}
@@ -550,6 +561,63 @@ function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
         <DetailRow key={detail.label} icon={Lock} label={detail.label} value={detail.value} code />
       ))}
     </>
+  );
+}
+
+function DeviceCodeDetails({ approval }: { approval: PendingDeviceCodeApproval }) {
+  return (
+    <>
+      <DetailRow icon={Lock} label="Service" value={approval.credentialLabel} code />
+      <DetailRow icon={Globe} label="Verify at" value={approval.verificationUri} code />
+      <DetailRow icon={Lock} label="Provider" value={originForUrl(approval.oauthTokenOrigin)} code />
+    </>
+  );
+}
+
+function DeviceCodePanel({ approval }: { approval: PendingDeviceCodeApproval }) {
+  const colors = useAtomValue(themeColorsAtom);
+  return (
+    <View style={[styles.issuerPanel, { backgroundColor: colors.background, borderColor: colors.border }]}>
+      <Text style={[styles.helperText, { color: colors.textSecondary }]}>Enter this code:</Text>
+      <Text
+        accessibilityLabel={`Device code ${approval.userCode}`}
+        selectable
+        style={[styles.deviceCode, { color: colors.text, backgroundColor: colors.codeBackground }]}
+      >
+        {approval.userCode}
+      </Text>
+      <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+        at <Text style={[styles.codeText, { color: colors.text }]}>{originForUrl(approval.verificationUri)}</Text>
+      </Text>
+      <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+        The browser was opened to the verification page. The connection will complete automatically once you approve there.
+      </Text>
+    </View>
+  );
+}
+
+function DeviceCodeActions({
+  busy,
+  pendingAction,
+  onCancel,
+}: {
+  busy: boolean;
+  pendingAction: PendingAction | null;
+  onCancel: () => void;
+}) {
+  return (
+    <View style={styles.actionRow}>
+      <DecisionButton
+        label="Cancel"
+        description="Stop waiting for the device sign-in."
+        variant="outline"
+        disabled={busy}
+        loading={pendingAction === "dismiss"}
+        icon={XCircle}
+        onPress={onCancel}
+        testID="approval-action-device-cancel"
+      />
+    </View>
   );
 }
 
@@ -1025,6 +1093,17 @@ const styles = StyleSheet.create({
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
     paddingHorizontal: 6,
     paddingVertical: 2,
+  },
+  deviceCode: {
+    fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),
+    fontSize: 28,
+    fontWeight: "700",
+    letterSpacing: 4,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginVertical: 8,
+    alignSelf: "flex-start",
+    borderRadius: 6,
   },
   actionBar: {
     borderTopWidth: StyleSheet.hairlineWidth,

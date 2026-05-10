@@ -29,6 +29,7 @@ import type {
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingClientConfigApproval,
+  PendingDeviceCodeApproval,
   PendingUserlandApproval,
 } from "@natstack/shared/approvals";
 import {
@@ -165,7 +166,7 @@ export function ConsentApprovalBar() {
               flexShrink: 0,
             }}
           >
-            {current.kind === "capability" ? (
+            {current.kind === "capability" || current.kind === "device-code" ? (
               <ExternalLinkIcon width={16} height={16} />
             ) : (
               <LockClosedIcon width={16} height={16} />
@@ -219,6 +220,7 @@ export function ConsentApprovalBar() {
               defaultOpen={shouldOpenApprovalDetails(current)}
             />
             {current.kind === "userland" ? <UserlandApprovalBody approval={current} /> : null}
+            {current.kind === "device-code" ? <DeviceCodeBody approval={current} /> : null}
             {current.kind === "client-config" || current.kind === "credential-input" ? (
               <SecretConfigFields
                 approval={current}
@@ -250,6 +252,8 @@ export function ConsentApprovalBar() {
             />
           ) : current.kind === "userland" ? (
             <UserlandApprovalActions approval={current} onChoose={resolveUserland} />
+          ) : current.kind === "device-code" ? (
+            <DeviceCodeActions onCancel={() => decide("dismiss")} />
           ) : (
             <StandardApprovalActions approval={current} decide={decide} />
           )}
@@ -509,6 +513,63 @@ function UserlandApprovalBody({ approval }: { approval: PendingUserlandApproval 
   );
 }
 
+function DeviceCodeBody({ approval }: { approval: PendingDeviceCodeApproval }) {
+  return (
+    <Box
+      mt="1"
+      p="2"
+      style={{
+        border: "1px solid var(--gray-a6)",
+        borderRadius: 6,
+        backgroundColor: "var(--color-panel-translucent)",
+        maxWidth: 680,
+      }}
+    >
+      <Flex direction="column" gap="2">
+        <Text size="1" color="gray">Enter this code:</Text>
+        <Code
+          size="6"
+          weight="bold"
+          style={{
+            letterSpacing: "0.3em",
+            paddingInline: 12,
+            paddingBlock: 6,
+            userSelect: "all",
+            alignSelf: "flex-start",
+          }}
+        >
+          {approval.userCode}
+        </Code>
+        <Text size="1" color="gray">
+          at <InlineCode>{originForUrl(approval.verificationUri)}</InlineCode>
+        </Text>
+        <Text size="1" color="gray" style={{ lineHeight: 1.35 }}>
+          The browser was opened to the verification page. The connection completes
+          automatically once you approve there.
+        </Text>
+      </Flex>
+    </Box>
+  );
+}
+
+function DeviceCodeActions({ onCancel }: { onCancel: () => void }) {
+  return (
+    <Button onClick={onCancel} size="2" variant="soft" color="gray">
+      Cancel
+    </Button>
+  );
+}
+
+function DeviceCodeDetails({ approval }: { approval: PendingDeviceCodeApproval }) {
+  return (
+    <>
+      <Detail icon={<LockClosedIcon />} label="Service" value={<InlineCode>{approval.credentialLabel}</InlineCode>} />
+      <Detail icon={<GlobeIcon />} label="Verify at" value={<InlineCode>{approval.verificationUri}</InlineCode>} />
+      <Detail icon={<LockClosedIcon />} label="Provider" value={<InlineCode>{originForUrl(approval.oauthTokenOrigin)}</InlineCode>} />
+    </>
+  );
+}
+
 function Detail({ icon, label, value }: { icon: ReactNode; label: string; value: ReactNode }) {
   return (
     <Flex
@@ -568,6 +629,8 @@ function ApprovalDetails({
           <CredentialInputDetails approval={approval} />
         ) : approval.kind === "userland" ? (
           <UserlandDetails approval={approval} />
+        ) : approval.kind === "device-code" ? (
+          <DeviceCodeDetails approval={approval} />
         ) : (
           <CapabilityDetails approval={approval} />
         )}

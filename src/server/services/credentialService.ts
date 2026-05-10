@@ -1939,27 +1939,55 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (!eventService || !verificationUrl) {
       throw new OAuthConnectionError("browser_unavailable");
     }
+    if (!device.userCode) {
+      // RFC 8628 requires user_code; without it the user has nothing to type
+      // and we can't surface the flow meaningfully.
+      throw new OAuthConnectionError("invalid_token_response");
+    }
+    // Present the user_code on the trusted approval bar so the operator
+    // sees it even when the provider didn't embed it in
+    // verification_uri_complete. Cancelling the bar entry aborts polling.
+    const presentation = approvalQueue?.presentDeviceCode({
+      kind: "device-code",
+      callerId: ctx.callerId,
+      callerKind: ctx.callerKind === "panel" || ctx.callerKind === "worker" ? ctx.callerKind : "panel",
+      repoPath: identity.repoPath,
+      effectiveVersion: identity.effectiveVersion,
+      credentialLabel: request.credential.label,
+      userCode: device.userCode,
+      verificationUri: device.verificationUri,
+      verificationUriComplete: device.verificationUriComplete,
+      expiresAt: Date.now() + Math.max(1, request.flow.expiresInSeconds ?? device.expiresInSeconds) * 1000,
+      oauthTokenOrigin: new URL(request.flow.tokenUrl).origin,
+    });
     const browserTarget = resolveBrowserHandoffTarget(ctx);
     if (!browserTarget || !eventService.emitTo(browserTarget.deliveryCallerId, "external-open:open", {
       url: verificationUrl,
       callerId: ctx.callerId,
       callerKind: ctx.callerKind,
     })) {
+      presentation?.dispose();
       throw new OAuthConnectionError("browser_unavailable");
     }
-    const token = await pollDeviceToken({
-      tokenUrl: request.flow.tokenUrl,
-      clientId,
-      clientSecret,
-      privateKeyPem,
-      keyId: config?.fields["keyId"]?.value,
-      keyAlgorithm: config?.fields["algorithm"]?.value,
-      tokenAuth,
-      deviceCode: device.deviceCode,
-      intervalSeconds: request.flow.pollIntervalSeconds ?? device.intervalSeconds,
-      expiresInSeconds: request.flow.expiresInSeconds ?? device.expiresInSeconds,
-      persistRefreshToken: request.flow.persistRefreshToken,
-    });
+    let token: Awaited<ReturnType<typeof pollDeviceToken>>;
+    try {
+      token = await pollDeviceToken({
+        tokenUrl: request.flow.tokenUrl,
+        clientId,
+        clientSecret,
+        privateKeyPem,
+        keyId: config?.fields["keyId"]?.value,
+        keyAlgorithm: config?.fields["algorithm"]?.value,
+        tokenAuth,
+        deviceCode: device.deviceCode,
+        intervalSeconds: request.flow.pollIntervalSeconds ?? device.intervalSeconds,
+        expiresInSeconds: request.flow.expiresInSeconds ?? device.expiresInSeconds,
+        persistRefreshToken: request.flow.persistRefreshToken,
+        cancelSignal: presentation?.cancelled,
+      });
+    } finally {
+      presentation?.dispose();
+    }
     const stored = await storeCredential(ctx, {
       label: request.credential.label,
       audience,
@@ -2660,11 +2688,18 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     intervalSeconds: number;
     expiresInSeconds: number;
     persistRefreshToken?: boolean;
+    cancelSignal?: AbortSignal;
   }): Promise<{ accessToken: string; refreshToken?: string; expiresAt?: number; scopes?: string[] }> {
     let intervalMs = Math.max(1, params.intervalSeconds) * 1000;
     const deadline = Date.now() + Math.max(1, params.expiresInSeconds) * 1000;
     while (Date.now() < deadline) {
+      if (params.cancelSignal?.aborted) {
+        throw new OAuthConnectionError("approval_denied");
+      }
       await delay(intervalMs);
+      if (params.cancelSignal?.aborted) {
+        throw new OAuthConnectionError("approval_denied");
+      }
       const body = new URLSearchParams();
       body.set("grant_type", "urn:ietf:params:oauth:grant-type:device_code");
       body.set("device_code", params.deviceCode);

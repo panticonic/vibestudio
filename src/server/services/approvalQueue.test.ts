@@ -390,4 +390,77 @@ describe("approvalQueue", () => {
       expect(queue.listPending()).toEqual([]);
     });
   });
+
+  describe("device-code approvals", () => {
+    function makeDeviceCodeReq() {
+      return {
+        kind: "device-code" as const,
+        callerId: "panel:test",
+        callerKind: "panel" as const,
+        repoPath: "panel:test",
+        effectiveVersion: "v1",
+        credentialLabel: "GitHub CLI",
+        userCode: "ABCD-EFGH",
+        verificationUri: "https://github.com/login/device",
+        verificationUriComplete: undefined,
+        expiresAt: Date.now() + 60_000,
+        oauthTokenOrigin: "https://github.com",
+      };
+    }
+
+    it("surfaces the user_code in the pending approvals list", () => {
+      const { queue } = createQueue();
+      const handle = queue.presentDeviceCode(makeDeviceCodeReq());
+      const pending = queue.listPending();
+      expect(pending).toHaveLength(1);
+      const entry = pending[0]!;
+      expect(entry.kind).toBe("device-code");
+      if (entry.kind === "device-code") {
+        expect(entry.userCode).toBe("ABCD-EFGH");
+        expect(entry.verificationUri).toBe("https://github.com/login/device");
+        expect(entry.credentialLabel).toBe("GitHub CLI");
+      }
+      expect(handle.cancelled.aborted).toBe(false);
+      handle.dispose();
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("fires the cancellation signal when the user dismisses the entry", () => {
+      const { queue } = createQueue();
+      const handle = queue.presentDeviceCode(makeDeviceCodeReq());
+      const fired = vi.fn();
+      handle.cancelled.addEventListener("abort", fired);
+      queue.resolve(handle.approvalId, "dismiss");
+      expect(fired).toHaveBeenCalled();
+      expect(handle.cancelled.aborted).toBe(true);
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("dispose() removes the entry without firing cancellation", () => {
+      const { queue } = createQueue();
+      const handle = queue.presentDeviceCode(makeDeviceCodeReq());
+      const fired = vi.fn();
+      handle.cancelled.addEventListener("abort", fired);
+      handle.dispose();
+      expect(fired).not.toHaveBeenCalled();
+      expect(handle.cancelled.aborted).toBe(false);
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("dispose() is idempotent", () => {
+      const { queue } = createQueue();
+      const handle = queue.presentDeviceCode(makeDeviceCodeReq());
+      handle.dispose();
+      handle.dispose();
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("each presented device-code is independent (no dedup)", () => {
+      const { queue } = createQueue();
+      const h1 = queue.presentDeviceCode(makeDeviceCodeReq());
+      const h2 = queue.presentDeviceCode(makeDeviceCodeReq());
+      expect(queue.listPending()).toHaveLength(2);
+      expect(h1.approvalId).not.toBe(h2.approvalId);
+    });
+  });
 });

@@ -94,6 +94,51 @@ const stored = await credentials.connect({
 });
 ```
 
+### Choosing an OAuth flow type
+
+| Flow | When to use |
+|---|---|
+| `oauth2-auth-code-pkce` | Default. Provider supports public PKCE clients. Most modern providers. |
+| `oauth2-auth-code` | Legacy. Requires `pkce: false` and `compatibilityReason`. Avoid unless the provider rejects PKCE. |
+| `oauth2-device-code` | Provider issues a short code the user types into a verification page. Best fallback when redirect-based flows can't reach the server — e.g., providers that won't accept a Tailscale `*.ts.net` redirect URI, headless installs, environments without app-link infrastructure. |
+| `oauth2-client-credentials` | Server-to-server. No user identity. |
+| `oauth2-jwt-bearer` / `oauth2-token-exchange` | Federated / STS-style. |
+| `oauth1a` | Legacy providers (some Twitter/X API surfaces). |
+
+### Device-code flow
+
+When you call `credentials.connect()` with `type: "oauth2-device-code"`, the server:
+
+1. Hits the provider's `device_authorization_url` to obtain a `device_code`, `user_code`, and `verification_uri`.
+2. Opens the verification URL in the user's browser (uses `verification_uri_complete` when the provider supplies it — Google, GitHub, Microsoft all do — so the page is pre-filled).
+3. **Surfaces the `user_code` on the trusted approval bar** as a `device-code` approval entry. The user can read the code there even when the provider didn't pre-fill it, and can cancel the flow with one click.
+4. Polls the token endpoint at the provider-specified interval until either a token grant arrives or the user cancels / the device code expires.
+
+```ts
+const stored = await credentials.connect({
+  flow: {
+    type: "oauth2-device-code",
+    deviceAuthorizationUrl: "https://oauth2.googleapis.com/device/code",
+    tokenUrl: "https://oauth2.googleapis.com/token",
+    clientId: "public-client-id",
+    scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+  },
+  credential: {
+    label: "Google Drive",
+    audience: [{ url: "https://www.googleapis.com/", match: "origin" }],
+    injection: {
+      type: "header",
+      name: "authorization",
+      valueTemplate: "Bearer {token}",
+    },
+  },
+});
+```
+
+Providers known to support device code: **Google, Microsoft / Azure AD, GitHub,
+GitLab, Slack, Twitch, Spotify, Dropbox, Atlassian, Discord.** Apple does
+**not** support device code; see the credential-system docs for Apple options.
+
 Use credentials only through host-mediated egress:
 
 ```ts

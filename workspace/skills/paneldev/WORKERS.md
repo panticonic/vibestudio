@@ -81,6 +81,14 @@ const stored = await credentials.connect({
 });
 ```
 
+Use `type: "oauth2-device-code"` when redirect-based flows can't reach the
+server — providers that won't accept a Tailscale `*.ts.net` redirect URI,
+headless installs, or when the user wants to authorize on a different device.
+The server displays the `user_code` on the trusted approval bar while it
+polls the token endpoint. See [api-integrations
+SKILL.md](../api-integrations/SKILL.md#device-code-flow) for the full
+provider compatibility matrix.
+
 ## Use
 
 ```ts

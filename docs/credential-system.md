@@ -57,6 +57,33 @@ device-code, client-credentials, JWT bearer, and token exchange. Stored client
 configs support `client_secret_post`, `client_secret_basic`, and
 `private_key_jwt`; private keys and client secrets stay in the host config.
 
+### Device-code flow (RFC 8628)
+
+`type: "oauth2-device-code"` is the right choice when a redirect-based flow
+can't reach the server — for example, when an OAuth provider rejects the
+auto-detected Tailscale `*.ts.net` redirect URI, or when the user wants to
+authorize from a different device than the one running natstack. The server:
+
+1. Calls the provider's `device_authorization_url` to obtain a `device_code`,
+   `user_code`, and `verification_uri`.
+2. Opens the verification URL in the user's browser (using
+   `verification_uri_complete` when the provider supplies it, so the page
+   pre-fills the code).
+3. Presents a **device-code approval bar entry** that displays the
+   `user_code` in a large, copyable, monospace surface. The entry persists
+   until polling completes; the user can cancel with one click.
+4. Polls the token endpoint at the provider-specified interval until either
+   a token grant arrives, the user cancels, or the device code expires.
+
+Provider support is partial. Known good: Google, Microsoft / Azure AD,
+GitHub, GitLab, Slack, Twitch, Spotify, Dropbox, Atlassian, Discord. **Apple
+does not support device code** — for Apple Sign-In, see the redirect-URI
+options in `docs/remote-server.md`.
+
+Use device-code as a fallback path in personal-server installs whose public
+URL can't be registered with a given provider, since it skips the redirect
+URI entirely.
+
 ## Trusted URL-Bound OAuth Client Config
 
 Panels and workers can request a shell-owned input prompt for OAuth client

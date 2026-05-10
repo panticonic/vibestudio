@@ -23,6 +23,11 @@ describe("externalOpenService", () => {
       requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
       requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
       requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
+      presentDeviceCode: vi.fn(() => ({
+        approvalId: "device-code-test",
+        cancelled: new AbortController().signal,
+        dispose: vi.fn(),
+      })),
       resolve: vi.fn(),
       resolveUserland: vi.fn(),
       submitClientConfig: vi.fn(),

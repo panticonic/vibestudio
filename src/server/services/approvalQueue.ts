@@ -18,6 +18,7 @@ import type {
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingClientConfigApproval,
+  PendingDeviceCodeApproval,
   PendingUserlandApproval,
   UserlandApprovalChoice,
   UserlandApprovalOption,
@@ -101,11 +102,34 @@ export interface UserlandApprovalQueueRequest {
   signal?: AbortSignal;
 }
 
+export interface DeviceCodeApprovalQueueRequest extends ApprovalQueueRequestBase {
+  kind: "device-code";
+  credentialLabel: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete?: string;
+  expiresAt: number;
+  oauthTokenOrigin: string;
+}
+
+/**
+ * Device-code approvals are passive informational entries — the server runs
+ * the polling loop, the bar displays the user_code while it runs, and the
+ * user can cancel. The handle surfaces a cancellation AbortSignal plus a
+ * `dispose()` to clear the bar entry when polling completes.
+ */
+export interface DeviceCodeApprovalHandle {
+  approvalId: string;
+  cancelled: AbortSignal;
+  dispose(): void;
+}
+
 export type ApprovalQueueRequest =
   | CredentialApprovalQueueRequest
   | CapabilityApprovalQueueRequest
   | ClientConfigApprovalQueueRequest
-  | CredentialInputApprovalQueueRequest;
+  | CredentialInputApprovalQueueRequest
+  | DeviceCodeApprovalQueueRequest;
 export type DecisionApprovalQueueRequest = CredentialApprovalQueueRequest | CapabilityApprovalQueueRequest;
 
 export type ClientConfigApprovalResult =
@@ -132,12 +156,17 @@ interface UserlandQueueWaiter {
   onAbort?: () => void;
 }
 
+interface DeviceCodeQueueWaiter {
+  cancel: () => void;
+}
+
 interface QueueEntry {
   approval: PendingApproval;
   dedupKey: string;
   waiters: Map<number, QueueWaiter>;
   fieldInputWaiters: Map<number, FieldInputQueueWaiter>;
   userlandWaiters: Map<number, UserlandQueueWaiter>;
+  deviceCodeWaiters: Map<number, DeviceCodeQueueWaiter>;
   nextWaiterId: number;
 }
 
@@ -146,6 +175,7 @@ export interface ApprovalQueue {
   requestClientConfig(req: ClientConfigApprovalQueueRequest): Promise<ClientConfigApprovalResult>;
   requestCredentialInput(req: CredentialInputApprovalQueueRequest): Promise<FieldInputApprovalResult>;
   requestUserland(req: UserlandApprovalQueueRequest): Promise<UserlandApprovalResult>;
+  presentDeviceCode(req: DeviceCodeApprovalQueueRequest): DeviceCodeApprovalHandle;
   onPendingChanged?(listener: (pending: PendingApproval[]) => void): () => void;
   resolve(approvalId: string, decision: ApprovalDecision): void;
   resolveUserland(approvalId: string, choice: string): void;
@@ -217,6 +247,11 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
       // waiters and create duplicate credentials.
       return ["credential-input-isolated", randomUUID()].join("\x00");
     }
+    if (req.kind === "device-code") {
+      // Each device-code flow is independent — the user_code is unique and
+      // the polling loop is tied to a specific outstanding request.
+      return ["device-code", randomUUID()].join("\x00");
+    }
     return `${req.repoPath}\x00${req.effectiveVersion}\x00${req.credentialId}`;
   }
 
@@ -270,6 +305,18 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
         fields: req.fields,
       } satisfies PendingCredentialInputApproval;
     }
+    if (req.kind === "device-code") {
+      return {
+        ...base,
+        kind: "device-code",
+        credentialLabel: req.credentialLabel,
+        userCode: req.userCode,
+        verificationUri: req.verificationUri,
+        verificationUriComplete: req.verificationUriComplete,
+        expiresAt: req.expiresAt,
+        oauthTokenOrigin: req.oauthTokenOrigin,
+      } satisfies PendingDeviceCodeApproval;
+    }
     return {
       ...base,
       kind: "credential",
@@ -305,6 +352,7 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
         waiters: new Map(),
         fieldInputWaiters: new Map(),
         userlandWaiters: new Map(),
+        deviceCodeWaiters: new Map(),
         nextWaiterId: 0,
       };
       entriesById.set(approval.approvalId, entry);
@@ -395,6 +443,7 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
           waiters: new Map(),
           fieldInputWaiters: new Map(),
           userlandWaiters: new Map(),
+          deviceCodeWaiters: new Map(),
           nextWaiterId: 0,
         };
         entriesById.set(approval.approvalId, entry);
@@ -453,6 +502,47 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
       );
     },
 
+    presentDeviceCode(req) {
+      const dedupKey = dedupKeyFor(req);
+      const approval = createPendingApproval(req) as PendingDeviceCodeApproval;
+      const entry: QueueEntry = {
+        approval,
+        dedupKey,
+        waiters: new Map(),
+        fieldInputWaiters: new Map(),
+        userlandWaiters: new Map(),
+        deviceCodeWaiters: new Map(),
+        nextWaiterId: 0,
+      };
+      entriesById.set(approval.approvalId, entry);
+      entriesByDedupKey.set(dedupKey, entry);
+
+      const controller = new AbortController();
+      const waiterId = entry.nextWaiterId++;
+      entry.deviceCodeWaiters.set(waiterId, {
+        cancel: () => {
+          if (!controller.signal.aborted) controller.abort();
+        },
+      });
+      emitPendingChanged();
+
+      let disposed = false;
+      const handle: DeviceCodeApprovalHandle = {
+        approvalId: approval.approvalId,
+        cancelled: controller.signal,
+        dispose: () => {
+          if (disposed) return;
+          disposed = true;
+          const e = entriesById.get(approval.approvalId);
+          if (!e) return;
+          removeEntry(e);
+          e.deviceCodeWaiters.clear();
+          emitPendingChanged();
+        },
+      };
+      return handle;
+    },
+
     requestUserland(req) {
       const dedupKey = userlandDedupKeyFor(req);
       let entry = entriesByDedupKey.get(dedupKey);
@@ -479,6 +569,7 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
           waiters: new Map(),
           fieldInputWaiters: new Map(),
           userlandWaiters: new Map(),
+          deviceCodeWaiters: new Map(),
           nextWaiterId: 0,
         };
         entriesById.set(approval.approvalId, entry);
@@ -562,6 +653,10 @@ export function createApprovalQueue(deps: { eventService: EventService }): Appro
         waiter.resolve({ kind: "dismissed" });
       }
       entry.userlandWaiters.clear();
+      for (const waiter of entry.deviceCodeWaiters.values()) {
+        waiter.cancel();
+      }
+      entry.deviceCodeWaiters.clear();
 
       emitPendingChanged();
     },

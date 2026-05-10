@@ -127,7 +127,14 @@ function approvingQueue(decision: "once" | "session" | "version" | "repo" = "ver
     request: vi.fn(async () => decision),
     requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
     requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
+    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
+    presentDeviceCode: vi.fn((_req: unknown) => ({
+      approvalId: "device-code-test",
+      cancelled: new AbortController().signal,
+      dispose: vi.fn(),
+    })),
     resolve: vi.fn(),
+    resolveUserland: vi.fn(),
     submitClientConfig: vi.fn(),
     submitCredentialInput: vi.fn(),
     listPending: vi.fn(() => []),
@@ -1845,6 +1852,7 @@ describe("credentialService", () => {
       if (url === "https://auth.example.test/device") {
         return new Response(JSON.stringify({
           device_code: "device-1",
+          user_code: "USR-CODE",
           verification_uri: "https://auth.example.test/verify",
           interval: 1,
           expires_in: 5,
@@ -1881,6 +1889,91 @@ describe("credentialService", () => {
 
     expect(stored.id).toBeTruthy();
     expect((await store.loadUrlBound(stored.id))?.accessToken).toBe("device-token");
+  });
+
+  it("surfaces the user_code via presentDeviceCode and cancels polling when the user dismisses", async () => {
+    const store = new MemoryCredentialStore();
+    const clientConfigStore = new MemoryClientConfigStore();
+    await clientConfigStore.save({
+      configId: "device-cancel",
+      currentVersion: "v1",
+      owner: { callerId: "panel:test", callerKind: "panel", repoPath: "panel:test", effectiveVersion: "unknown" },
+      authorizeUrl: "https://auth.example.test/device",
+      tokenUrl: "https://auth.example.test/token",
+      status: "active",
+      flowTypes: ["oauth2-device-code"],
+      fields: { clientId: { value: "client-1", type: "text", updatedAt: 1 } },
+      versions: {},
+      createdAt: 1,
+      updatedAt: 1,
+    });
+
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "https://auth.example.test/device") {
+        return new Response(JSON.stringify({
+          device_code: "device-2",
+          user_code: "ABCD-1234",
+          verification_uri: "https://auth.example.test/verify",
+          interval: 1,
+          expires_in: 60,
+        }), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      // Provider never grants — would poll until cancelled or expired.
+      return new Response(JSON.stringify({ error: "authorization_pending" }), {
+        status: 400, headers: { "content-type": "application/json" },
+      });
+    }));
+
+    const presentDeviceCode = vi.fn();
+    const controller = new AbortController();
+    let approvalId = "";
+    const customQueue = {
+      ...approvingQueue("session"),
+      presentDeviceCode: vi.fn((req: unknown) => {
+        presentDeviceCode(req);
+        approvalId = "device-code-1";
+        return {
+          approvalId,
+          cancelled: controller.signal,
+          dispose: vi.fn(),
+        };
+      }),
+    };
+    const service = createCredentialService({
+      credentialStore: store as never,
+      clientConfigStore: clientConfigStore as never,
+      eventService: targetedOpenEventService(vi.fn()) as never,
+      approvalQueue: customQueue as never,
+    });
+
+    const pending = service.handler({ callerId: "panel:test", callerKind: "panel" }, "connect", [{
+      flow: {
+        type: "oauth2-device-code",
+        deviceAuthorizationUrl: "https://auth.example.test/device",
+        tokenUrl: "https://auth.example.test/token",
+        clientConfigId: "device-cancel",
+        pollIntervalSeconds: 1,
+      },
+      credential: {
+        label: "Device API",
+        audience: [{ url: "https://api.example.test/", match: "origin" }],
+        injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+      },
+    }]) as Promise<StoredCredentialSummary>;
+
+    await vi.waitFor(() => expect(presentDeviceCode).toHaveBeenCalled());
+    const presented = presentDeviceCode.mock.calls[0]![0] as {
+      userCode: string;
+      verificationUri: string;
+      credentialLabel: string;
+    };
+    expect(presented.userCode).toBe("ABCD-1234");
+    expect(presented.verificationUri).toBe("https://auth.example.test/verify");
+    expect(presented.credentialLabel).toBe("Device API");
+
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ code: "approval_denied" });
   });
 
   it("connects AWS SigV4 credentials through host-owned input", async () => {
