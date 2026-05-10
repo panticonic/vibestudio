@@ -12,13 +12,9 @@
 import { useEffect, useRef } from "react";
 import { AppState, type AppStateStatus } from "react-native";
 import NetInfo, { type NetInfoState } from "@react-native-community/netinfo";
-import { useSetAtom, useAtomValue } from "jotai";
+import { useSetAtom } from "jotai";
 import type { ShellClient } from "../services/shellClient";
-import {
-  connectionStatusAtom,
-  networkReachableAtom,
-  biometricLockedAtom,
-} from "../state/connectionAtoms";
+import { connectionStatusAtom, networkReachableAtom } from "../state/connectionAtoms";
 
 /** How long to wait (ms) before disconnecting after the app is backgrounded */
 const BACKGROUND_DISCONNECT_DELAY_MS = 30_000;
@@ -32,14 +28,6 @@ const BACKGROUND_DISCONNECT_DELAY_MS = 30_000;
 export function useAppLifecycle(shellClient: ShellClient | null): void {
   const setConnectionStatus = useSetAtom(connectionStatusAtom);
   const setNetworkReachable = useSetAtom(networkReachableAtom);
-  const isBiometricLocked = useAtomValue(biometricLockedAtom);
-
-  // Mirror biometric lock state in a ref so the main effect doesn't re-run on
-  // lock/unlock (which would tear down listeners and dispose the client).
-  const isBiometricLockedRef = useRef(isBiometricLocked);
-  useEffect(() => {
-    isBiometricLockedRef.current = isBiometricLocked;
-  }, [isBiometricLocked]);
 
   // Track the delayed disconnect timer so we can cancel it on resume
   const backgroundTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -49,9 +37,6 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
 
   // Track network reachability
   const isNetworkReachableRef = useRef<boolean>(true);
-
-  // Track whether reconnect was deferred due to biometric lock
-  const deferredReconnectRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (!shellClient) return;
@@ -72,17 +57,12 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
           backgroundTimerRef.current = null;
         }
 
-        // If biometric lock is active, defer reconnection until unlock
-        if (isBiometricLockedRef.current) {
-          deferredReconnectRef.current = true;
-        } else {
-          // Reconnect if the transport is not already connected
-          if (transport.status !== "connected") {
-            transport.reconnect();
-          }
-          // Resume periodic sync
-          shellClient.startPeriodicSync();
+        // Reconnect if the transport is not already connected
+        if (transport.status !== "connected") {
+          transport.reconnect();
         }
+        // Resume periodic sync
+        shellClient.startPeriodicSync();
       }
 
       // Transition to background or inactive
@@ -141,18 +121,4 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
       shellClient.dispose();
     };
   }, [shellClient, setConnectionStatus, setNetworkReachable]);
-
-  // When biometric lock is dismissed, perform the deferred reconnect
-  useEffect(() => {
-    if (!shellClient || isBiometricLocked) return;
-    if (!deferredReconnectRef.current) return;
-
-    deferredReconnectRef.current = false;
-    const transport = shellClient.transport;
-
-    if (transport.status !== "connected") {
-      transport.reconnect();
-    }
-    shellClient.startPeriodicSync();
-  }, [shellClient, isBiometricLocked]);
 }

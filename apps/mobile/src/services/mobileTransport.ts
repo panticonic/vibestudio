@@ -121,7 +121,8 @@ export class MobileTransport implements RpcBridge {
   // === RpcBridge interface ===
 
   call<T = unknown>(_targetId: string, method: string, ...args: unknown[]): Promise<T> {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN || !this.authenticated) {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this.authenticated) {
       return Promise.reject(new Error("Not connected to server"));
     }
 
@@ -141,7 +142,7 @@ export class MobileTransport implements RpcBridge {
         args,
       };
       const envelope: WsClientMessage = { type: "ws:rpc", message: rpcMsg };
-      this.ws!.send(JSON.stringify(envelope));
+      ws.send(JSON.stringify(envelope));
     });
   }
 
@@ -186,8 +187,8 @@ export class MobileTransport implements RpcBridge {
     }
     listeners.add(listener);
     return () => {
-      listeners!.delete(listener);
-      if (listeners!.size === 0) {
+      listeners.delete(listener);
+      if (listeners.size === 0) {
         this.eventListeners.delete(event);
       }
     };
@@ -219,14 +220,15 @@ export class MobileTransport implements RpcBridge {
     const wsUrl = buildWsUrl(this.config.serverUrl);
     this.lastCloseInfo = null;
     console.log(`[MobileTransport] Connecting WebSocket to ${wsUrl}`);
-    this.ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl);
+    this.ws = ws;
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
       console.log(`[MobileTransport] WebSocket open, sending auth`);
-      this.ws!.send(JSON.stringify({ type: "ws:auth", token: this.config.shellToken }));
+      ws.send(JSON.stringify({ type: "ws:auth", token: this.config.shellToken }));
     };
 
-    this.ws.onmessage = (event) => {
+    ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data as string) as WsServerMessage;
         this.handleServerMessage(msg);
@@ -235,7 +237,7 @@ export class MobileTransport implements RpcBridge {
       }
     };
 
-    this.ws.onclose = (event: { code?: number; reason?: string }) => {
+    ws.onclose = (event: { code?: number; reason?: string }) => {
       this.authenticated = false;
       // Stash details so waitForConnection can surface a meaningful reason.
       this.lastCloseInfo = { code: event?.code, reason: event?.reason };
@@ -250,7 +252,7 @@ export class MobileTransport implements RpcBridge {
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = (event: unknown) => {
+    ws.onerror = (event: unknown) => {
       // RN's WebSocket onerror doesn't carry native error details, but logging
       // confirms we at least reached the error path.
       const message = (event as { message?: string })?.message;

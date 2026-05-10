@@ -1,15 +1,19 @@
 import React, { useEffect, useCallback, useMemo, useRef, useState } from "react";
-import { View, Text, StyleSheet, BackHandler, Platform, Linking, Appearance, Alert, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, BackHandler, Platform, Linking, Appearance, ActivityIndicator } from "react-native";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
-import { useAtomValue, useSetAtom } from "jotai";
+import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { ConnectionBar } from "./ConnectionBar";
 import { AppBar } from "./AppBar";
 import { PanelWebView } from "./PanelWebView";
 import { WebViewErrorBoundary } from "./WebViewErrorBoundary";
+import { ApprovalSheet } from "./ApprovalSheet";
+import { Toast } from "./Toast";
 import { useAppLifecycle } from "../hooks/useAppLifecycle";
 import type { PanelWebViewHandle, PanelNavigationEvent } from "./PanelWebView";
 import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
 import { colorSchemeAtom, themeColorsAtom } from "../state/themeAtoms";
+import { approvalDeepLinkAtom } from "../state/approvalDeepLinkAtom";
+import { pushToastAtom } from "../state/toastAtoms";
 import {
   activePanelIdAtom,
   activePanelTitleAtom,
@@ -22,6 +26,7 @@ import {
 } from "../services/panelUrls";
 import type { HostConfig } from "../services/panelUrls";
 import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
+import { RPC_METHODS } from "@natstack/shared/approvalContract";
 const MAX_WEBVIEWS = 5;
 
 interface WebViewEntry {
@@ -55,11 +60,14 @@ export function MainScreen() {
   const activePanelTitle = useAtomValue(activePanelTitleAtom);
   const activePanelParentId = useAtomValue(activePanelParentIdAtom);
   const colors = useAtomValue(themeColorsAtom);
+  const [approvalDeepLinkId, setApprovalDeepLinkId] = useAtom(approvalDeepLinkAtom);
+  const pushToast = useSetAtom(pushToastAtom);
 
   useAppLifecycle(shellClient);
 
   const [webViewStack, setWebViewStack] = useState<WebViewEntry[]>([]);
   const [loadingPanelId, setLoadingPanelId] = useState<string | null>(null);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const webViewStackRef = useRef<WebViewEntry[]>([]);
   const webViewRefsMap = useRef<Map<string, PanelWebViewHandle | null>>(new Map());
   const pendingPanelLoads = useRef<Set<string>>(new Set());
@@ -102,12 +110,73 @@ export function MainScreen() {
     return hostConfig ? getExternalHost(hostConfig) : "";
   }, [hostConfig]);
 
+  const visibleApprovals = useMemo(() => {
+    if (!approvalDeepLinkId) return pendingApprovals;
+    const linked = pendingApprovals.find((approval) => approval.approvalId === approvalDeepLinkId);
+    if (!linked) return pendingApprovals;
+    return [linked, ...pendingApprovals.filter((approval) => approval.approvalId !== approvalDeepLinkId)];
+  }, [approvalDeepLinkId, pendingApprovals]);
+
+  useEffect(() => {
+    if (!approvalDeepLinkId) return;
+    if (pendingApprovals.some((approval) => approval.approvalId === approvalDeepLinkId)) {
+      setApprovalDeepLinkId(null);
+    }
+  }, [approvalDeepLinkId, pendingApprovals, setApprovalDeepLinkId]);
+
+  useEffect(() => {
+    if (!shellClient) {
+      setPendingApprovals([]);
+    }
+  }, [shellClient]);
+
   const refreshTree = useCallback(() => {
     if (!shellClient) return;
     const tree = shellClient.panels.getTree();
     setPanelTree(tree);
     setWebViewStack((prev) => prev.filter((entry) => shellClient.panels.registry.getPanel(entry.panelId) !== undefined));
   }, [shellClient, setPanelTree]);
+
+  const refreshPendingApprovals = useCallback(async () => {
+    if (!shellClient) {
+      setPendingApprovals([]);
+      return [];
+    }
+    const pending = await shellClient.transport.call<PendingApproval[]>(
+      "main",
+      RPC_METHODS.shellApproval.listPending,
+    );
+    setPendingApprovals(pending);
+    return pending;
+  }, [shellClient]);
+
+  const removeResolvedApproval = useCallback((approvalId: string) => {
+    setPendingApprovals((current) => current.filter((approval) => approval.approvalId !== approvalId));
+  }, []);
+
+  const resolveApproval = useCallback(async (approvalId: string, decision: ApprovalDecision) => {
+    if (!shellClient) throw new Error("Shell client not available");
+    await shellClient.transport.call("main", RPC_METHODS.shellApproval.resolve, approvalId, decision);
+    removeResolvedApproval(approvalId);
+  }, [removeResolvedApproval, shellClient]);
+
+  const submitClientConfig = useCallback(async (approvalId: string, values: Record<string, string>) => {
+    if (!shellClient) throw new Error("Shell client not available");
+    await shellClient.transport.call("main", RPC_METHODS.shellApproval.submitClientConfig, approvalId, values);
+    removeResolvedApproval(approvalId);
+  }, [removeResolvedApproval, shellClient]);
+
+  const submitCredentialInput = useCallback(async (approvalId: string, values: Record<string, string>) => {
+    if (!shellClient) throw new Error("Shell client not available");
+    await shellClient.transport.call("main", RPC_METHODS.shellApproval.submitCredentialInput, approvalId, values);
+    removeResolvedApproval(approvalId);
+  }, [removeResolvedApproval, shellClient]);
+
+  const resolveUserland = useCallback(async (approvalId: string, choice: string | "dismiss") => {
+    if (!shellClient) throw new Error("Shell client not available");
+    await shellClient.transport.call("main", RPC_METHODS.shellApproval.resolveUserland, approvalId, choice);
+    removeResolvedApproval(approvalId);
+  }, [removeResolvedApproval, shellClient]);
 
   const activatePanel = useCallback((panelId: string) => {
     if (!shellClient || !hostConfig) return;
@@ -175,6 +244,7 @@ export function MainScreen() {
 
     const unsubReconnect = shellClient.transport.onReconnect(() => {
       subscribeAll();
+      void refreshPendingApprovals().catch(() => {});
       void shellClient.panels.refresh().then(() => {
         refreshTree();
       }).catch(() => refreshTree());
@@ -193,52 +263,7 @@ export function MainScreen() {
       },
     );
 
-    const resolveApproval = (approvalId: string, decision: ApprovalDecision) => {
-      void shellClient.transport.call("main", "shellApproval.resolve", approvalId, decision);
-    };
-
-    const shownApprovals = new Set<string>();
-    const showApproval = (approval: PendingApproval | null | undefined) => {
-      if (!approval || shownApprovals.has(approval.approvalId)) return;
-      shownApprovals.add(approval.approvalId);
-      const buttons = approval.kind === "client-config" || approval.kind === "credential-input"
-        ? [
-          {
-            text: "Dismiss",
-            style: "cancel" as const,
-            onPress: () => resolveApproval(approval.approvalId, "deny"),
-          },
-        ]
-        : [
-          {
-            text: "Deny",
-            style: "cancel" as const,
-            onPress: () => resolveApproval(approval.approvalId, "deny"),
-          },
-          {
-            text: "Allow Session",
-            onPress: () => resolveApproval(approval.approvalId, "session"),
-          },
-          {
-            text: "Trust Version",
-            onPress: () => resolveApproval(approval.approvalId, "version"),
-          },
-          {
-            text: "Trust Repo",
-            onPress: () => resolveApproval(approval.approvalId, "repo"),
-          },
-        ];
-      Alert.alert(
-        formatApprovalTitle(approval),
-        formatApprovalMessage(approval),
-        buttons,
-      );
-    };
-
-    void shellClient.transport
-      .call<PendingApproval[]>("main", "shellApproval.listPending")
-      .then((pending) => showApproval(pending[0]))
-      .catch(() => {});
+    void refreshPendingApprovals().catch(() => {});
 
     const unsubExternal = shellClient.transport.onEvent(
       "event:external-open:open",
@@ -263,33 +288,17 @@ export function MainScreen() {
           const provider = notif.consent?.provider ?? "service";
           const scopes = notif.consent?.scopes?.join(", ") ?? "access";
           const callerTitle = notif.consent?.callerTitle ?? "A panel";
-          Alert.alert(
-            notif.title ?? "OAuth Access Requested",
-            `${callerTitle} wants to connect to ${provider} (${scopes}).`,
-            [
-              {
-                text: "Deny",
-                style: "cancel",
-                onPress: () => {
-                  void shellClient.transport.call("main", "notification.reportAction", notif.id, "deny");
-                },
-              },
-              {
-                text: "Approve",
-                onPress: () => {
-                  void shellClient.transport.call("main", "notification.reportAction", notif.id, "approve");
-                },
-              },
-              {
-                text: "Always Allow",
-                onPress: () => {
-                  void shellClient.transport.call("main", "notification.reportAction", notif.id, "approve-workspace");
-                },
-              },
-            ],
-          );
+          pushToast({
+            title: notif.title ?? "OAuth access requested",
+            message: `${callerTitle} wants to connect to ${provider} (${scopes}).`,
+            tone: "info",
+          });
         } else {
-          Alert.alert(notif.title ?? "NatStack", notif.message ?? "");
+          pushToast({
+            title: notif.title ?? "NatStack",
+            message: notif.message ?? "",
+            tone: "info",
+          });
         }
       },
     );
@@ -298,7 +307,7 @@ export function MainScreen() {
       "event:shell-approval:pending-changed",
       (_from: string, payload: unknown) => {
         const { pending } = payload as { pending?: PendingApproval[] };
-        showApproval(pending?.[0]);
+        setPendingApprovals(pending ?? []);
       },
     );
 
@@ -316,7 +325,7 @@ export function MainScreen() {
         void shellClient.events.unsubscribe(name).catch(() => {});
       }
     };
-  }, [activatePanel, refreshTree, shellClient]);
+  }, [activatePanel, pushToast, refreshPendingApprovals, refreshTree, shellClient]);
 
   useEffect(() => {
     if (!activePanelId || !shellClient) return;
@@ -369,12 +378,13 @@ export function MainScreen() {
         activatePanel(result.id);
       }
     }).catch((error: unknown) => {
-      Alert.alert(
-        "Panel Navigation Failed",
-        error instanceof Error ? error.message : "Could not open panel.",
-      );
+      pushToast({
+        title: "Panel navigation failed",
+        message: error instanceof Error ? error.message : "Could not open panel.",
+        tone: "danger",
+      });
     });
-  }, [activatePanel, refreshTree, shellClient]);
+  }, [activatePanel, pushToast, refreshTree, shellClient]);
 
   const handlePanelTitleChange = useCallback((panelId: string, title: string) => {
     if (!shellClient) return;
@@ -482,51 +492,16 @@ export function MainScreen() {
           </View>
         ))}
       </View>
+      <ApprovalSheet
+        approvals={visibleApprovals}
+        onResolve={resolveApproval}
+        onSubmitClientConfig={submitClientConfig}
+        onSubmitCredentialInput={submitCredentialInput}
+        onResolveUserland={resolveUserland}
+      />
+      <Toast />
     </View>
   );
-}
-
-function formatApprovalTitle(approval: PendingApproval): string {
-  switch (approval.kind) {
-    case "capability":
-      return approval.title;
-    case "client-config":
-      return "Configure service";
-    case "credential-input":
-      return "Add service";
-    case "credential":
-      return "Use stored credential";
-  }
-}
-
-function formatApprovalMessage(approval: PendingApproval): string {
-  const caller = `${approval.callerKind === "worker" ? "Worker" : "Panel"} ${approval.callerId}`;
-  switch (approval.kind) {
-    case "capability": {
-      const destination =
-        approval.details?.find((detail) => detail.label.toLowerCase() === "url")?.value ??
-        approval.resource?.value ??
-        "an external destination";
-      return `${caller} wants to open ${destination} in your system browser.\n\nApprove only if you expected this handoff.`;
-    }
-    case "client-config":
-      return `${caller} wants to save OAuth client settings for this service.\n\nThis mobile build cannot submit setup fields yet. Configure the service from desktop, then retry on mobile.`;
-    case "credential-input": {
-      const audience = formatAudienceSummary(approval.audience, "this service");
-      return `${caller} wants to save ${approval.credentialLabel} for ${audience}.\n\nThis mobile build cannot submit credential fields yet. Add the service credential from desktop, then retry on mobile.`;
-    }
-    case "credential": {
-      const audience = formatAudienceSummary(approval.audience, "an unspecified audience");
-      const warning = approval.oauthAudienceDomainMismatch
-        ? "\n\nCheck first: the OAuth provider domain does not match the credential audience."
-        : "";
-      return `${caller} wants to use ${approval.credentialLabel} for ${audience}.\n\nAllow Session is temporary. Trust Version and Trust Repo allow reuse.${warning}`;
-    }
-  }
-}
-
-function formatAudienceSummary(audience: Array<{ url: string }>, fallback: string): string {
-  return audience.map((entry) => entry.url).join(", ") || fallback;
 }
 
 const styles = StyleSheet.create({

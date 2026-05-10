@@ -11,7 +11,8 @@ function chooseNextPanel(registry: PanelRegistry, closingPanelId: string): strin
   const parent = parentId ? registry.getPanel(parentId) : null;
   if (parent) {
     const siblings = parent.children.filter((child) => child.id !== closingPanelId);
-    return siblings.length > 0 ? siblings[siblings.length - 1]!.id : parentId;
+    const previousSibling = siblings[siblings.length - 1];
+    return previousSibling ? previousSibling.id : parentId;
   }
   const roots = registry.getRootPanels().filter((panel) => panel.id !== closingPanelId);
   return roots[0]?.id ?? null;

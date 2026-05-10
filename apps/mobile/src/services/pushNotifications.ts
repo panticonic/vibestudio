@@ -1,17 +1,107 @@
 /**
- * Push notification service -- FCM/APNs token registration and handling.
+ * Push notification service -- FCM/APNs token registration and approval actions.
  *
- * Provides an abstraction layer for push notifications. Uses
- * @react-native-firebase/messaging when available, but gracefully
- * degrades when the native modules are not installed (common in
- * development builds without Firebase configured).
- *
- * Push tokens are registered with the NatStack server via RPC so
- * the server can send notifications (e.g., agent task completion).
+ * Native notification modules are loaded behind guarded `require` calls so the
+ * development app and tests still run before Firebase/Notifee are installed.
  */
 
-import { Platform, Alert } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
+import {
+  APPROVAL_CATEGORY_DECIDE,
+  RPC_METHODS,
+  type PushApprovalDataPayload,
+} from "@natstack/shared/approvalContract";
+import type { PendingApproval } from "@natstack/shared/approvals";
 import type { ShellClient } from "./shellClient";
+import {
+  APPROVAL_NOTIFICATION_CHANNEL_ID,
+  getAndroidNotificationActions,
+} from "./notificationCategories";
+import {
+  drainBackgroundActionQueue,
+  enqueueDeepLink,
+  queueBackgroundAction,
+  takePendingDeepLink,
+  updateActionNotification,
+} from "./backgroundActionQueue";
+import { isBackgroundDecision } from "./backgroundActionQueueCore";
+
+declare const require: (moduleName: string) => unknown;
+
+const PERMISSION_DENIED_TOAST_KEY = "natstack:push:permission-denied-toast-at";
+const PERMISSION_DENIED_TOAST_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
+
+interface FirebaseMessagingModule {
+  (): FirebaseMessagingInstance;
+}
+
+interface FirebaseMessagingInstance {
+  requestPermission(): Promise<number | { authorizationStatus?: number }>;
+  getToken(): Promise<string>;
+  deleteToken(): Promise<void>;
+  onTokenRefresh(callback: (token: string) => void): () => void;
+  onMessage(callback: (message: RemoteMessage) => void): () => void;
+  onNotificationOpenedApp(callback: (message: RemoteMessage) => void): () => void;
+  getInitialNotification(): Promise<RemoteMessage | null>;
+}
+
+interface NotifeeModule {
+  cancelNotification(id: string): Promise<void>;
+  displayNotification(notification: Record<string, unknown>): Promise<void>;
+  getDisplayedNotifications?(): Promise<Array<{
+    id?: string;
+    notification?: { id?: string; data?: Record<string, unknown> };
+  }>>;
+  onForegroundEvent(callback: (event: NotifeeEvent) => void | Promise<void>): () => void;
+  requestPermission?(): Promise<{ authorizationStatus?: number } | undefined>;
+}
+
+interface NotifeeEvent {
+  type: number;
+  detail: {
+    notification?: {
+      id?: string;
+      title?: string;
+      data?: Record<string, unknown>;
+      android?: Record<string, unknown>;
+      ios?: Record<string, unknown>;
+    };
+    pressAction?: {
+      id?: string;
+    };
+  };
+}
+
+interface AsyncStorageLike {
+  getItem(key: string): Promise<string | null>;
+  setItem(key: string, value: string): Promise<void>;
+}
+
+/** Minimal remote message shape */
+export interface RemoteMessage {
+  messageId?: string;
+  notification?: {
+    title?: string;
+    body?: string;
+  };
+  data?: Record<string, string | undefined>;
+}
+
+export interface PushRuntimeCallbacks {
+  onApprovalDeepLink?: (approvalId: string) => void;
+  onToast?: (toast: {
+    title?: string;
+    message: string;
+    tone?: "info" | "success" | "warning" | "danger";
+    durationMs?: number;
+  }) => void;
+}
+
+/** Callback invoked when a notification is tapped */
+export type NotificationTapHandler = (data: Record<string, string>) => void;
+
+/** Active subscription cleanup functions */
+let cleanupFunctions: Array<() => void> = [];
 
 /**
  * Get a stable device-scoped client ID for push registration.
@@ -24,176 +114,318 @@ async function getDeviceClientId(): Promise<string> {
   if (cachedDeviceId) return cachedDeviceId;
 
   try {
-    // Try to load persisted ID from keychain
-    const Keychain = await import("react-native-keychain");
+    const Keychain = require("react-native-keychain") as {
+      ACCESSIBLE?: { WHEN_UNLOCKED_THIS_DEVICE_ONLY?: string };
+      getGenericPassword(options: { service: string }): Promise<false | { password?: string }>;
+      setGenericPassword(
+        username: string,
+        password: string,
+        options: { service: string; accessible?: string },
+      ): Promise<unknown>;
+    };
     const existing = await Keychain.getGenericPassword({ service: "natstack-push-device-id" });
     if (existing && existing.password) {
-      const id = existing.password;
-      cachedDeviceId = id;
-      return id;
+      cachedDeviceId = existing.password;
+      return existing.password;
     }
   } catch {
-    // Keychain unavailable — fall through to generate
+    // Keychain unavailable -- fall through to generate.
   }
 
-  // Generate a new stable ID
   cachedDeviceId = `device-${Platform.OS}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
   try {
-    const Keychain = await import("react-native-keychain");
+    const Keychain = require("react-native-keychain") as {
+      ACCESSIBLE?: { WHEN_UNLOCKED_THIS_DEVICE_ONLY?: string };
+      setGenericPassword(
+        username: string,
+        password: string,
+        options: { service: string; accessible?: string },
+      ): Promise<unknown>;
+    };
     await Keychain.setGenericPassword("push-device-id", cachedDeviceId, {
       service: "natstack-push-device-id",
-      // Device-only: if this ID leaks via backup, an attacker could receive
-      // push notifications addressed to the original device (cloned device).
-      accessible: Keychain.ACCESSIBLE.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
+      accessible: Keychain.ACCESSIBLE?.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
     });
   } catch {
-    // Keychain write failed — ID works for this session but won't persist
+    // ID works for this session but will not persist.
   }
 
   return cachedDeviceId;
 }
 
-/**
- * Lazy-loaded Firebase messaging module.
- * Returns null if @react-native-firebase/messaging is not installed.
- */
-async function getFirebaseMessaging(): Promise<FirebaseMessagingModule | null> {
+function getFirebaseMessaging(): FirebaseMessagingModule | null {
   try {
-    // Dynamic import -- will throw if the native module is not linked
-    const mod = await import("@react-native-firebase/messaging");
+    const mod = require("@react-native-firebase/messaging") as {
+      default?: FirebaseMessagingModule;
+    } & FirebaseMessagingModule;
     return mod.default ?? mod;
   } catch {
-    console.warn(
-      "[PushNotifications] @react-native-firebase/messaging not available. " +
-      "Push notifications are disabled.",
-    );
+    console.warn("[PushNotifications] @react-native-firebase/messaging not available. Push disabled.");
     return null;
   }
 }
 
+function getNotifee(): { notifee: NotifeeModule; EventType: Record<string, number> } | null {
+  try {
+    const mod = require("@notifee/react-native") as {
+      default?: NotifeeModule;
+      EventType?: Record<string, number>;
+    } & NotifeeModule;
+    return {
+      notifee: mod.default ?? mod,
+      EventType: mod.EventType ?? {},
+    };
+  } catch {
+    console.warn("[PushNotifications] @notifee/react-native not available. Local notifications disabled.");
+    return null;
+  }
+}
+
+function getAsyncStorage(): AsyncStorageLike | null {
+  try {
+    const mod = require("@react-native-async-storage/async-storage") as {
+      default?: AsyncStorageLike;
+    } & AsyncStorageLike;
+    return mod.default ?? mod;
+  } catch {
+    return null;
+  }
+}
+
+async function registerToken(shellClient: ShellClient, token: string): Promise<void> {
+  const platform = Platform.OS === "ios" ? "ios" : "android";
+  const clientId = await getDeviceClientId();
+  await shellClient.transport.call(
+    "main",
+    RPC_METHODS.push.register,
+    { token, platform, clientId },
+  );
+}
+
+function isAuthorizedStatus(status: number | { authorizationStatus?: number } | undefined): boolean {
+  const value = typeof status === "number" ? status : status?.authorizationStatus;
+  return value === 1 || value === 2;
+}
+
+async function maybeShowDeniedToast(callbacks: PushRuntimeCallbacks): Promise<void> {
+  const storage = getAsyncStorage();
+  const now = Date.now();
+  const lastShown = storage ? Number(await storage.getItem(PERMISSION_DENIED_TOAST_KEY) ?? 0) : 0;
+  if (lastShown && now - lastShown < PERMISSION_DENIED_TOAST_INTERVAL_MS) return;
+
+  callbacks.onToast?.({
+    title: "Notifications are off",
+    message: "Enable notifications in system settings to approve requests from the lock screen.",
+    tone: "warning",
+    durationMs: 8000,
+  });
+
+  if (storage) await storage.setItem(PERMISSION_DENIED_TOAST_KEY, String(now));
+}
+
+export async function displayApprovalNotification(
+  message: RemoteMessage,
+  notifee: Pick<NotifeeModule, "displayNotification" | "cancelNotification">,
+): Promise<void> {
+  const data = (message.data ?? {}) as PushApprovalDataPayload;
+
+  if (data.kind === "approval-cancel") {
+    const cancelKey = data.cancelKey ?? data.approvalId;
+    if (cancelKey) await notifee.cancelNotification(cancelKey);
+    return;
+  }
+
+  if (data.kind !== "approval-prompt" || !data.approvalId) return;
+
+  const category = data.category ?? APPROVAL_CATEGORY_DECIDE;
+  await notifee.displayNotification({
+    id: data.cancelKey ?? data.approvalId,
+    title: data.title ?? message.notification?.title ?? "Approval requested",
+    body: data.body ?? message.notification?.body ?? "",
+    data: {
+      ...data,
+      approvalId: data.approvalId,
+      category,
+    },
+    android: {
+      channelId: APPROVAL_NOTIFICATION_CHANNEL_ID,
+      pressAction: { id: "open", launchActivity: "default" },
+      actions: getAndroidNotificationActions(category),
+    },
+    ios: {
+      categoryId: category,
+    },
+  });
+}
+
+export async function reconcilePushNotifications(
+  shellClient: ShellClient,
+  notifee?: NotifeeModule | null,
+): Promise<void> {
+  if (!notifee) return;
+
+  try {
+    const pending = await shellClient.transport.call<PendingApproval[]>(
+      "main",
+      RPC_METHODS.shellApproval.listPending,
+    );
+    const pendingIds = new Set(pending.map((approval) => approval.approvalId));
+    const displayed = await notifee.getDisplayedNotifications?.() ?? [];
+
+    for (const entry of displayed) {
+      const id = entry.notification?.id ?? entry.id;
+      if (id && !pendingIds.has(id)) {
+        await notifee.cancelNotification(id);
+      }
+    }
+  } catch (error) {
+    console.warn("[PushNotifications] Failed to reconcile displayed notifications:", error);
+  }
+
+  await drainBackgroundActionQueue(shellClient, notifee);
+}
+
+async function handleDeepLink(
+  approvalId: string,
+  callbacks: PushRuntimeCallbacks,
+): Promise<void> {
+  await enqueueDeepLink(approvalId);
+  callbacks.onApprovalDeepLink?.(approvalId);
+}
+
+async function consumeStoredDeepLink(callbacks: PushRuntimeCallbacks): Promise<void> {
+  const approvalId = await takePendingDeepLink();
+  if (approvalId) callbacks.onApprovalDeepLink?.(approvalId);
+}
+
+async function handleForegroundEvent(
+  event: NotifeeEvent,
+  EventType: Record<string, number>,
+  shellClient: ShellClient,
+  notifee: NotifeeModule,
+  callbacks: PushRuntimeCallbacks,
+): Promise<void> {
+  const notification = event.detail.notification;
+  const approvalId = readApprovalId(notification);
+  if (!approvalId) return;
+
+  const actionId = event.detail.pressAction?.id;
+  if (event.type === EventType["ACTION_PRESS"] && isBackgroundDecision(actionId)) {
+    if (shellClient.transport.status === "connected") {
+      await shellClient.transport.call(
+        "main",
+        RPC_METHODS.shellApproval.resolve,
+        approvalId,
+        actionId,
+      );
+      await notifee.cancelNotification(approvalId);
+    } else {
+      await queueBackgroundAction(approvalId, actionId);
+      await updateActionNotification(notifee, approvalId, notification);
+    }
+    return;
+  }
+
+  if (
+    (event.type === EventType["ACTION_PRESS"] && actionId === "open") ||
+    event.type === EventType["PRESS"]
+  ) {
+    await handleDeepLink(approvalId, callbacks);
+  }
+}
+
+function readApprovalId(notification: NotifeeEvent["detail"]["notification"]): string | null {
+  const dataApprovalId = notification?.data?.["approvalId"];
+  if (typeof dataApprovalId === "string" && dataApprovalId.length > 0) return dataApprovalId;
+  return notification?.id ?? null;
+}
+
 /**
- * Minimal interface for the Firebase messaging module.
- * Defined here to avoid requiring the package at compile time.
- */
-interface FirebaseMessagingModule {
-  (): FirebaseMessagingInstance;
-}
-
-interface FirebaseMessagingInstance {
-  requestPermission(): Promise<number>;
-  getToken(): Promise<string>;
-  deleteToken(): Promise<void>;
-  onMessage(callback: (message: RemoteMessage) => void): () => void;
-  onNotificationOpenedApp(callback: (message: RemoteMessage) => void): () => void;
-  getInitialNotification(): Promise<RemoteMessage | null>;
-  setBackgroundMessageHandler(handler: (message: RemoteMessage) => Promise<void>): void;
-}
-
-/** Minimal remote message shape */
-export interface RemoteMessage {
-  messageId?: string;
-  notification?: {
-    title?: string;
-    body?: string;
-  };
-  data?: Record<string, string>;
-}
-
-/** Callback invoked when a notification is tapped */
-export type NotificationTapHandler = (data: Record<string, string>) => void;
-
-/** Active subscription cleanup functions */
-let cleanupFunctions: Array<() => void> = [];
-
-/**
- * Register for push notifications.
- *
- * 1. Requests notification permission (iOS specifically requires this)
- * 2. Gets the FCM/APNs device token
- * 3. Registers the token with the NatStack server via RPC
- * 4. Sets up foreground + tap handlers
+ * Register for push notifications and wire foreground lifecycle handling.
  *
  * Call this after the ShellClient is connected and authenticated.
  */
 export async function registerForPushNotifications(
   shellClient: ShellClient,
-  onNotificationTap?: NotificationTapHandler,
-): Promise<void> {
-  const messagingModule = await getFirebaseMessaging();
-  if (!messagingModule) return;
+  callbacksOrTap?: PushRuntimeCallbacks | NotificationTapHandler,
+): Promise<() => void> {
+  const callbacks: PushRuntimeCallbacks = typeof callbacksOrTap === "function"
+    ? { onApprovalDeepLink: (approvalId) => callbacksOrTap({ approvalId }) }
+    : callbacksOrTap ?? {};
+
+  cleanupPushNotificationSubscriptions();
+
+  const messagingModule = getFirebaseMessaging();
+  const loadedNotifee = getNotifee();
+  if (!messagingModule) return cleanupPushNotificationSubscriptions;
 
   const messaging = messagingModule();
+  const notifee = loadedNotifee?.notifee ?? null;
 
-  // Request permission (iOS requires explicit ask; Android auto-grants)
   const authStatus = await messaging.requestPermission();
-  // authStatus: 1 = AUTHORIZED, 2 = PROVISIONAL
-  const isAuthorized = authStatus === 1 || authStatus === 2;
-  if (!isAuthorized) {
-    console.warn("[PushNotifications] Permission denied by user");
-    return;
+  if (notifee?.requestPermission) {
+    await notifee.requestPermission().catch(() => undefined);
   }
 
-  // Get the device push token
-  let token: string;
+  if (!isAuthorizedStatus(authStatus)) {
+    await maybeShowDeniedToast(callbacks);
+    return cleanupPushNotificationSubscriptions;
+  }
+
   try {
-    token = await messaging.getToken();
+    await registerToken(shellClient, await messaging.getToken());
+    console.log(`[PushNotifications] Token registered (${Platform.OS === "ios" ? "ios" : "android"})`);
   } catch (error) {
-    console.error("[PushNotifications] Failed to get token:", error);
-    return;
+    console.error("[PushNotifications] Failed to register token:", error);
   }
 
-  // Register the token with the NatStack server.
-  // Platform must match server's expected enum: "ios" | "android" | "web".
-  // clientId is device-scoped so multiple devices don't overwrite each other.
-  const platform = Platform.OS === "ios" ? "ios" : "android";
-  const clientId = await getDeviceClientId();
-  try {
-    await shellClient.transport.call(
-      "main",
-      "push.register",
-      { token, platform, clientId },
-    );
-    console.log(`[PushNotifications] Token registered (${platform})`);
-  } catch (error) {
-    console.error("[PushNotifications] Failed to register token with server:", error);
-    // Non-fatal -- notifications just won't work
+  cleanupFunctions.push(messaging.onTokenRefresh((token) => {
+    void registerToken(shellClient, token).catch((error) => {
+      console.error("[PushNotifications] Failed to register refreshed token:", error);
+    });
+  }));
+
+  if (notifee) {
+    cleanupFunctions.push(messaging.onMessage((message) => {
+      void displayApprovalNotification(message, notifee).catch((error) => {
+        console.error("[PushNotifications] Failed to display foreground notification:", error);
+      });
+    }));
+
+    cleanupFunctions.push(notifee.onForegroundEvent((event) => {
+      return handleForegroundEvent(event, loadedNotifee?.EventType ?? {}, shellClient, notifee, callbacks)
+        .catch((error) => {
+          console.error("[PushNotifications] Failed to handle foreground action:", error);
+        });
+    }));
   }
 
-  // Handle foreground messages -- show an in-app alert
-  const unsubForeground = messaging.onMessage((message: RemoteMessage) => {
-    const title = message.notification?.title ?? "NatStack";
-    const body = message.notification?.body ?? "";
+  cleanupFunctions.push(messaging.onNotificationOpenedApp((message) => {
+    const approvalId = message.data?.["approvalId"];
+    if (approvalId) void handleDeepLink(approvalId, callbacks);
+  }));
 
-    Alert.alert(title, body, [
-      { text: "Dismiss", style: "cancel" },
-      ...(message.data && onNotificationTap
-        ? [{
-            text: "View",
-            onPress: () => onNotificationTap(message.data!),
-          }]
-        : []),
-    ]);
+  const initialNotification = await messaging.getInitialNotification().catch(() => null);
+  if (initialNotification?.data?.["approvalId"]) {
+    await handleDeepLink(initialNotification.data["approvalId"], callbacks);
+  }
+
+  const appStateSub = AppState.addEventListener("change", (nextState: AppStateStatus) => {
+    if (nextState !== "active") return;
+    void consumeStoredDeepLink(callbacks);
+    void reconcilePushNotifications(shellClient, notifee);
   });
-  cleanupFunctions.push(unsubForeground);
+  cleanupFunctions.push(() => appStateSub.remove());
 
-  // Handle notification taps when app is in background (but not killed)
-  if (onNotificationTap) {
-    const unsubBackgroundTap = messaging.onNotificationOpenedApp(
-      (message: RemoteMessage) => {
-        if (message.data) {
-          onNotificationTap(message.data);
-        }
-      },
-    );
-    cleanupFunctions.push(unsubBackgroundTap);
+  cleanupFunctions.push(shellClient.transport.onReconnect(() => {
+    void reconcilePushNotifications(shellClient, notifee);
+  }));
 
-    // Check if the app was opened from a killed state by a notification
-    const initialNotification = await messaging.getInitialNotification();
-    if (initialNotification?.data) {
-      onNotificationTap(initialNotification.data);
-    }
-  }
+  await consumeStoredDeepLink(callbacks);
+  await reconcilePushNotifications(shellClient, notifee);
+
+  return cleanupPushNotificationSubscriptions;
 }
 
 /**
@@ -205,21 +437,15 @@ export async function registerForPushNotifications(
 export async function unregisterPushNotifications(
   shellClient: ShellClient,
 ): Promise<void> {
-  // Clean up message listeners
-  for (const cleanup of cleanupFunctions) {
-    cleanup();
-  }
-  cleanupFunctions = [];
+  cleanupPushNotificationSubscriptions();
 
-  const messagingModule = await getFirebaseMessaging();
+  const messagingModule = getFirebaseMessaging();
   if (!messagingModule) return;
 
   const messaging = messagingModule();
 
   try {
-    // Notify server to remove this device's token.
-    // Server expects clientId as a positional string argument.
-    await shellClient.transport.call("main", "push.unregister", await getDeviceClientId());
+    await shellClient.transport.call("main", RPC_METHODS.push.unregister, await getDeviceClientId());
   } catch (error) {
     console.error("[PushNotifications] Failed to unregister token from server:", error);
   }
@@ -230,4 +456,12 @@ export async function unregisterPushNotifications(
   } catch (error) {
     console.error("[PushNotifications] Failed to delete token:", error);
   }
+}
+
+function cleanupPushNotificationSubscriptions(): () => void {
+  for (const cleanup of cleanupFunctions) {
+    cleanup();
+  }
+  cleanupFunctions = [];
+  return cleanupPushNotificationSubscriptions;
 }

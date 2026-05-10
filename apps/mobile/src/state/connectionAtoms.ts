@@ -22,10 +22,3 @@ export const networkReachableAtom = atom<boolean>(true);
 
 /** Optional error message from the last connection failure */
 export const connectionErrorAtom = atom<string | null>(null);
-
-/**
- * Whether the biometric lock screen is currently active.
- * Written by useBiometricLock, read by useAppLifecycle to defer
- * transport reconnection until the lock is dismissed.
- */
-export const biometricLockedAtom = atom<boolean>(false);

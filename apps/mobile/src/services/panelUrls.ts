@@ -35,10 +35,12 @@ export function parseHostConfig(serverUrl: string): HostConfig {
   // Manual parsing instead of `new URL()` — Hermes doesn't fully implement URL API
   const match = serverUrl.match(/^(https?):\/\/([^:/]+)(?::(\d+))?/);
   if (!match) throw new Error(`Invalid server URL: ${serverUrl}`);
+  const [, protocol, host, port] = match;
+  if (!protocol || !host) throw new Error(`Invalid server URL: ${serverUrl}`);
   return {
-    protocol: match[1]!,
-    host: match[2]!,
-    port: match[3] ?? "",
+    protocol,
+    host,
+    port: port ?? "",
   };
 }
 

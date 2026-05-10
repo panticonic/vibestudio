@@ -3,7 +3,13 @@ import tseslint from "typescript-eslint";
 
 export default [
   {
-    ignores: ["node_modules", "dist"],
+    ignores: [
+      "node_modules",
+      "dist",
+      "apps/mobile/*.config.js",
+      "apps/mobile/index.js",
+      "apps/mobile/src/polyfills/*.js",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.strict,

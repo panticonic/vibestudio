@@ -1,13 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-
-const { openURL } = vi.hoisted(() => ({
-  openURL: vi.fn(() => Promise.resolve()),
-}));
-
-vi.mock("react-native", () => ({
-  Linking: { openURL },
-}));
-
+import { Linking } from "react-native";
 import { consumePendingFlow } from "./authCallbackRegistry";
 import {
   buildMobileOAuthRedirectUri,
@@ -15,9 +6,15 @@ import {
   waitForMobileOAuthCode,
 } from "./mobileCredentialOAuth";
 
+const mockOpenURL = jest.fn(() => Promise.resolve());
+
+beforeEach(() => {
+  (Linking as unknown as { openURL: typeof mockOpenURL }).openURL = mockOpenURL;
+});
+
 afterEach(() => {
-  vi.useRealTimers();
-  openURL.mockClear();
+  jest.useRealTimers();
+  mockOpenURL.mockClear();
 });
 
 describe("mobileCredentialOAuth", () => {
@@ -29,11 +26,11 @@ describe("mobileCredentialOAuth", () => {
   });
 
   it("waits for the deep-link callback matching the OAuth state", async () => {
-    vi.useFakeTimers();
+    jest.useFakeTimers();
     const authorizeUrl = "https://auth.example.test/oauth?state=state-1";
     const pending = waitForMobileOAuthCode(authorizeUrl, "state-1");
 
-    expect(openURL).toHaveBeenCalledWith(authorizeUrl);
+    expect(mockOpenURL).toHaveBeenCalledWith(authorizeUrl);
     const entry = consumePendingFlow("state-1");
     expect(entry).toBeTruthy();
     entry!.resolve({ code: "code-1", state: "state-1" });
@@ -45,14 +42,14 @@ describe("mobileCredentialOAuth", () => {
     await expect(
       waitForMobileOAuthCode("https://auth.example.test/oauth?state=wrong", "state-1", 1),
     ).rejects.toThrow(/OAuth state mismatch/);
-    expect(openURL).not.toHaveBeenCalled();
+    expect(mockOpenURL).not.toHaveBeenCalled();
   });
 
   it("delegates credential OAuth connection to the server transaction API", async () => {
     const calls: Array<{ method: string; args: unknown[] }> = [];
     const shellClient = {
       transport: {
-        call: vi.fn(async (_target: string, method: string, ...args: unknown[]) => {
+        call: jest.fn(async (_target: string, method: string, ...args: unknown[]) => {
           calls.push({ method, args });
           if (method === "credentials.connect") {
             return { id: "cred-1" };
@@ -80,17 +77,17 @@ describe("mobileCredentialOAuth", () => {
         },
       },
     })).resolves.toEqual({ id: "cred-1" });
-    expect(openURL).not.toHaveBeenCalled();
-	    expect(calls[0]).toMatchObject({
-	      method: "credentials.connect",
-	      args: [expect.objectContaining({
-	        flow: expect.objectContaining({ clientId: "client" }),
-	        browser: "external",
-	        redirect: {
-	          type: "client-forwarded",
-	          callbackUri: "https://auth.snugenv.com/oauth/callback/example",
-	        },
-	      })],
-	    });
-	  });
+    expect(mockOpenURL).not.toHaveBeenCalled();
+    expect(calls[0]).toMatchObject({
+      method: "credentials.connect",
+      args: [expect.objectContaining({
+        flow: expect.objectContaining({ clientId: "client" }),
+        browser: "external",
+        redirect: {
+          type: "client-forwarded",
+          callbackUri: "https://auth.snugenv.com/oauth/callback/example",
+        },
+      })],
+    });
+  });
 });

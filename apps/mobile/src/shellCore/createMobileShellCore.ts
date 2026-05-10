@@ -13,7 +13,6 @@ export function createMobileShellCore(deps: {
   const registry = new PanelRegistry({ onTreeUpdated: deps.onTreeUpdated });
   const store = new PanelStoreAsync(deps.workspaceId);
   const host = parseHostConfig(deps.serverUrl);
-  const gatewayPort = host.port ? Number(host.port) : host.protocol === "https" ? 443 : 80;
   const hostWithPort = `${host.host}${host.port ? `:${host.port}` : ""}`;
 
   const panelManager = new PanelManager({
@@ -22,10 +21,6 @@ export function createMobileShellCore(deps: {
     workspacePath: "",
     allowMissingManifests: true,
     serverInfo: {
-      protocol: host.protocol as "http" | "https",
-      externalHost: host.host,
-      gatewayPort,
-      workerdPort: gatewayPort,
       gatewayConfig: { serverUrl: `${host.protocol}://${hostWithPort}` },
     },
     tokenClient: {

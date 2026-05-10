@@ -136,7 +136,8 @@ export class PanelStoreAsync implements PanelStore {
 
     const roots: Panel[] = [];
     for (const record of activeRecords) {
-      const panel = panelMap.get(record.panel.id)!;
+      const panel = panelMap.get(record.panel.id);
+      if (!panel) continue;
       if (record.parentId) {
         panelMap.get(record.parentId)?.children.push(panel);
       } else {
