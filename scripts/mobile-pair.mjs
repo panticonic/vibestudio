@@ -199,11 +199,13 @@ function main() {
   // to also emit the Mobile URL line (when tailscale serve is verified). If
   // Mobile URL never arrives, we fall back to the gateway URL.
   let pendingTimer = null;
+  let waitElapsed = false;
   const tryPrintBanner = () => {
     if (bannerPrinted || !shellToken || (!gatewayUrl && !mobileUrl)) return;
-    if (!mobileUrl && pendingTimer === null) {
+    if (!mobileUrl && !waitElapsed && pendingTimer === null) {
       pendingTimer = setTimeout(() => {
         pendingTimer = null;
+        waitElapsed = true;
         tryPrintBanner();
       }, 500);
       return;
