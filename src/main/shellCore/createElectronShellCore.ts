@@ -1,7 +1,7 @@
 import type { PanelRegistry } from "@natstack/shared/panelRegistry";
 import { PanelManager } from "@natstack/shared/shell/panelManager";
+import { PanelStoreRpc } from "@natstack/shared/shell/panelStoreRpc";
 import type { ServerClient } from "../serverClient.js";
-import { PanelStoreRpc } from "./panelStoreRpc.js";
 import { createPanelPersistenceClient } from "../../server/services/panelPersistenceClient.js";
 
 export function createElectronShellCore(deps: {
@@ -16,7 +16,9 @@ export function createElectronShellCore(deps: {
 }) {
   const persistence = createPanelPersistenceClient(deps.serverClient);
   const searchIndex = persistence;
-  const store = new PanelStoreRpc(deps.serverClient);
+  const store = new PanelStoreRpc((method, args) =>
+    deps.serverClient.call("panel-persistence", method, args),
+  );
   const panelManager = new PanelManager({
     store,
     registry: deps.registry,
