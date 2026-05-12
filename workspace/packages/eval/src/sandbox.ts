@@ -21,6 +21,7 @@ import {
   preloadRequires,
 } from "./execute.js";
 import {
+  getMissingPackageDeclarations,
   inferImportsFromPackageJson,
   prepareSourceCode,
   type ExternalRequireContext,
@@ -110,9 +111,9 @@ const loadedBundleContent = new Map<string, string>();
  * Skips re-execution if the bundle content is identical to what's already loaded.
  */
 function loadLibraryBundle(specifier: string, bundleCode: string): void {
-  if (loadedBundleContent.get(specifier) === bundleCode) return;
-
   const moduleMap = getModuleMap();
+  if (loadedBundleContent.get(specifier) === bundleCode && moduleMap[specifier]) return;
+
   const requireFn = (globalThis as Record<string, unknown>)["__natstackRequire__"] as ((id: string) => unknown) | undefined;
   if (!requireFn) throw new Error("__natstackRequire__ not available");
 
@@ -182,6 +183,15 @@ async function ensureRequires(
   }
 
   if (!validation.valid) {
+    const missingModules = requires.filter((r) => !getModuleMap()[r]);
+    const missingDeclarations = await getMissingPackageDeclarations(missingModules, {
+      importerPath: context?.importerPath ?? options.sourcePath,
+      loadSourceFile: options.loadSourceFile,
+      explicitImports: options.imports,
+    });
+    if (missingDeclarations.length > 0) {
+      throw new Error(`Package import not declared for file-loaded source: ${missingDeclarations.join("; ")}. Add it to package.json dependencies or pass the imports parameter.`);
+    }
     throw new Error(validation.error ?? `Module "${validation.missingModule}" not available`);
   }
 }
@@ -337,10 +347,18 @@ export async function executeSandbox(
       const suggestedImports = Object.fromEntries(
         missingModules.map((m) => [m, m.startsWith("@workspace") || m.startsWith("@natstack/") ? "latest" : "npm:latest"]),
       );
+      const missingDeclarations = await getMissingPackageDeclarations(missingModules, {
+        importerPath: options.sourcePath,
+        loadSourceFile: options.loadSourceFile,
+        explicitImports: options.imports,
+      });
+      const packageHint = missingDeclarations.length > 0
+        ? `\nPackage context: ${missingDeclarations.join("; ")}.`
+        : "";
       return {
         success: false,
         consoleOutput: "",
-        error: `Module "${missing}" not available. For npm packages, add the imports parameter:\n  imports: ${JSON.stringify(suggestedImports)}\nCurrently loaded: ${available.join(", ")}`,
+        error: `Module "${missing}" not available.${packageHint} For npm packages, add the imports parameter:\n  imports: ${JSON.stringify(suggestedImports)}\nCurrently loaded: ${available.join(", ")}`,
       };
     }
 

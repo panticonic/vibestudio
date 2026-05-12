@@ -6,6 +6,7 @@ export type LoadSourceFile = (path: string) => Promise<string>;
 export interface SourceFileBundle {
   entryPath: string;
   files: Record<string, string>;
+  resolutions: Record<string, string>;
 }
 
 export interface SourceFileOptions {
@@ -112,10 +113,18 @@ export function getPackageSpecifier(specifier: string): string | null {
 }
 
 interface PackageJsonShape {
+  imports?: Record<string, unknown>;
   dependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
+}
+
+interface TsConfigShape {
+  compilerOptions?: {
+    baseUrl?: string;
+    paths?: Record<string, string[]>;
+  };
 }
 
 function getPackageDependencyVersion(pkg: PackageJsonShape, packageName: string): string | undefined {
@@ -140,7 +149,7 @@ function normalizeDependencyRef(specifier: string, version: string | undefined):
 export async function findNearestPackageJson(
   sourcePath: string | undefined,
   loadSourceFile: LoadSourceFile | undefined,
-): Promise<{ path: string; packageJson: PackageJsonShape } | null> {
+): Promise<{ path: string; dir: string; packageJson: PackageJsonShape } | null> {
   if (!sourcePath || !loadSourceFile) return null;
   let dir: string | null = dirname(sourcePath);
 
@@ -148,7 +157,27 @@ export async function findNearestPackageJson(
     const packagePath = normalizeSourcePath(dir ? `${dir}/package.json` : "package.json");
     try {
       const raw = await loadSourceFile(packagePath);
-      return { path: packagePath, packageJson: JSON.parse(raw) as PackageJsonShape };
+      return { path: packagePath, dir, packageJson: JSON.parse(raw) as PackageJsonShape };
+    } catch {
+      dir = parentDir(dir);
+    }
+  }
+
+  return null;
+}
+
+async function findNearestTsConfig(
+  sourcePath: string | undefined,
+  loadSourceFile: LoadSourceFile | undefined,
+): Promise<{ path: string; dir: string; tsconfig: TsConfigShape } | null> {
+  if (!sourcePath || !loadSourceFile) return null;
+  let dir: string | null = dirname(sourcePath);
+
+  while (dir !== null) {
+    const tsconfigPath = normalizeSourcePath(dir ? `${dir}/tsconfig.json` : "tsconfig.json");
+    try {
+      const raw = await loadSourceFile(tsconfigPath);
+      return { path: tsconfigPath, dir, tsconfig: JSON.parse(raw) as TsConfigShape };
     } catch {
       dir = parentDir(dir);
     }
@@ -169,9 +198,13 @@ export async function inferImportsFromPackageJson(
   const packageJson = await findNearestPackageJson(context.importerPath, context.loadSourceFile);
 
   for (const specifier of specifiers) {
-    if (context.explicitImports?.[specifier]) continue;
     const packageName = getPackageSpecifier(specifier);
     if (!packageName) continue;
+    const explicitRef = context.explicitImports?.[specifier] ?? context.explicitImports?.[packageName];
+    if (explicitRef) {
+      inferred[specifier] = explicitRef;
+      continue;
+    }
 
     const version = packageJson
       ? getPackageDependencyVersion(packageJson.packageJson, packageName)
@@ -183,17 +216,129 @@ export async function inferImportsFromPackageJson(
   return inferred;
 }
 
+export async function getMissingPackageDeclarations(
+  specifiers: string[],
+  context: {
+    importerPath?: string;
+    loadSourceFile?: LoadSourceFile;
+    explicitImports?: Record<string, string>;
+  },
+): Promise<string[]> {
+  const packageJson = await findNearestPackageJson(context.importerPath, context.loadSourceFile);
+  if (!packageJson) return [];
+  const missing: string[] = [];
+  for (const specifier of specifiers) {
+    const packageName = getPackageSpecifier(specifier);
+    if (!packageName) continue;
+    if (context.explicitImports?.[specifier] || context.explicitImports?.[packageName]) continue;
+    if (!getPackageDependencyVersion(packageJson.packageJson, packageName)) {
+      missing.push(`${specifier} (package ${packageName}) is not declared in ${packageJson.path}`);
+    }
+  }
+  return missing;
+}
+
+function extractConditionalTarget(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.find((item): item is string => typeof item === "string");
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return extractConditionalTarget(record["browser"])
+      ?? extractConditionalTarget(record["import"])
+      ?? extractConditionalTarget(record["default"]);
+  }
+  return undefined;
+}
+
+function applyPattern(pattern: string, target: string, specifier: string): string | null {
+  const star = pattern.indexOf("*");
+  if (star < 0) return pattern === specifier ? target : null;
+  const prefix = pattern.slice(0, star);
+  const suffix = pattern.slice(star + 1);
+  if (!specifier.startsWith(prefix) || !specifier.endsWith(suffix)) return null;
+  const matched = specifier.slice(prefix.length, specifier.length - suffix.length);
+  return target.replace("*", matched);
+}
+
+function resolveConfigPath(baseDir: string, target: string): string {
+  if (target === ".") return normalizeSourcePath(baseDir);
+  if (target.startsWith("/")) return normalizeSourcePath(target);
+  return normalizeSourcePath(target.startsWith(".") ? target : `./${target}`, baseDir);
+}
+
+async function localAliasCandidates(
+  specifier: string,
+  importerPath: string | undefined,
+  loadSourceFile?: LoadSourceFile,
+): Promise<string[]> {
+  if (!importerPath || !loadSourceFile) return [];
+  const candidates: string[] = [];
+
+  if (specifier.startsWith("#")) {
+    const packageJson = await findNearestPackageJson(importerPath, loadSourceFile);
+    if (packageJson?.packageJson.imports) {
+      for (const [pattern, value] of Object.entries(packageJson.packageJson.imports)) {
+        const target = extractConditionalTarget(value);
+        if (!target) continue;
+        const applied = applyPattern(pattern, target, specifier);
+        if (!applied || !applied.startsWith(".")) continue;
+        candidates.push(...candidatePaths(resolveConfigPath(packageJson.dir, applied)));
+      }
+    }
+  }
+
+  const tsconfig = await findNearestTsConfig(importerPath, loadSourceFile);
+  const paths = tsconfig?.tsconfig.compilerOptions?.paths;
+  if (tsconfig && paths) {
+    const baseUrl = resolveConfigPath(tsconfig.dir, tsconfig.tsconfig.compilerOptions?.baseUrl ?? ".");
+    for (const [pattern, targets] of Object.entries(paths)) {
+      for (const target of targets) {
+        const applied = applyPattern(pattern, target, specifier);
+        if (!applied) continue;
+        candidates.push(...candidatePaths(resolveConfigPath(baseUrl, applied)));
+      }
+    }
+  }
+
+  return Array.from(new Set(candidates));
+}
+
+export function findStaticSpecifiers(code: string): string[] {
+  const patterns = [
+    /\b(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["']([^"']+)["']/g,
+    /\brequire\(\s*["']([^"']+)["']\s*\)/g,
+  ];
+  const specifiers: string[] = [];
+  for (const pattern of patterns) {
+    for (const match of code.matchAll(pattern)) {
+      if (match[1]) specifiers.push(match[1]);
+    }
+  }
+  return Array.from(new Set(specifiers));
+}
+
 async function resolveSourceFile(
   specifier: string,
   importerPath: string | undefined,
   files: Map<string, string>,
   loadSourceFile?: LoadSourceFile,
+  resolutions?: Map<string, string>,
 ): Promise<{ path: string; code: string }> {
-  const candidates = candidatePaths(specifier, importerPath);
+  const candidates = !importerPath
+    ? candidatePaths(specifier)
+    : isRelativeSpecifier(specifier)
+    ? candidatePaths(specifier, importerPath)
+    : await localAliasCandidates(specifier, importerPath, loadSourceFile);
+  if (candidates.length === 0) {
+    throw new Error(`Specifier "${specifier}" does not resolve to a source file from ${importerPath ?? "<inline source>"}`);
+  }
   for (const candidate of candidates) {
     const normalized = normalizeSourcePath(candidate);
     const existing = files.get(normalized);
-    if (existing !== undefined) return { path: normalized, code: existing };
+    if (existing !== undefined) {
+      if (resolutions && importerPath) resolutions.set(`${importerPath}\n${specifier}`, normalized);
+      return { path: normalized, code: existing };
+    }
   }
 
   if (!loadSourceFile) {
@@ -206,6 +351,7 @@ async function resolveSourceFile(
     try {
       const code = await loadSourceFile(normalized);
       files.set(normalized, code);
+      if (resolutions && importerPath) resolutions.set(`${importerPath}\n${specifier}`, normalized);
       return { path: normalized, code };
     } catch (err) {
       errors.push(err instanceof Error ? err.message : String(err));
@@ -218,12 +364,32 @@ async function resolveSourceFile(
   );
 }
 
+async function tryResolveSourceFile(
+  specifier: string,
+  importerPath: string,
+  files: Map<string, string>,
+  loadSourceFile: LoadSourceFile | undefined,
+  resolutions: Map<string, string>,
+): Promise<{ path: string; code: string } | null> {
+  if (!isRelativeSpecifier(specifier) && !specifier.startsWith("#")) {
+    const aliasCandidates = await localAliasCandidates(specifier, importerPath, loadSourceFile);
+    if (aliasCandidates.length === 0) return null;
+  }
+  try {
+    return await resolveSourceFile(specifier, importerPath, files, loadSourceFile, resolutions);
+  } catch (err) {
+    if (isRelativeSpecifier(specifier)) throw err;
+    return null;
+  }
+}
+
 export async function loadSourceFileBundle(
   entryPath: string,
   loadSourceFile: LoadSourceFile,
   entryCode?: string,
 ): Promise<SourceFileBundle> {
   const files = new Map<string, string>();
+  const resolutions = new Map<string, string>();
   const first = await resolveSourceFile(entryPath, undefined, files, async (path) => (
     path === normalizeSourcePath(entryPath) && entryCode !== undefined ? entryCode : loadSourceFile(path)
   ));
@@ -235,36 +401,32 @@ export async function loadSourceFileBundle(
     visiting.add(normalized);
     const code = files.get(normalized);
     if (code === undefined) throw new Error(`Source file missing from bundle: ${normalized}`);
-    for (const specifier of findRelativeSpecifiers(code)) {
-      const resolved = await resolveSourceFile(specifier, normalized, files, loadSourceFile);
-      await visit(resolved.path);
+    for (const specifier of findStaticSpecifiers(code)) {
+      const resolved = await tryResolveSourceFile(specifier, normalized, files, loadSourceFile, resolutions);
+      if (resolved) await visit(resolved.path);
     }
   }
 
   await visit(first.path);
-  return { entryPath: first.path, files: Object.fromEntries(files) };
+  return { entryPath: first.path, files: Object.fromEntries(files), resolutions: Object.fromEntries(resolutions) };
 }
 
 function rewriteRelativeSpecifiers(
   code: string,
   importerPath: string,
-  files: Map<string, string>,
+  resolutions: Map<string, string>,
 ): string {
   function resolve(specifier: string): string {
-    for (const candidate of candidatePaths(specifier, importerPath)) {
-      const normalized = normalizeSourcePath(candidate);
-      if (files.has(normalized)) return normalized;
-    }
-    return specifier;
+    return resolutions.get(`${importerPath}\n${specifier}`) ?? specifier;
   }
 
   return code
     .replace(
-      /(\b(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["'])(\.{1,2}\/[^"']+)(["'])/g,
+      /(\b(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["'])([^"']+)(["'])/g,
       (_match, prefix: string, specifier: string, suffix: string) => `${prefix}${resolve(specifier)}${suffix}`,
     )
     .replace(
-      /(\brequire\(\s*["'])(\.{1,2}\/[^"']+)(["']\s*\))/g,
+      /(\brequire\(\s*["'])([^"']+)(["']\s*\))/g,
       (_match, prefix: string, specifier: string, suffix: string) => `${prefix}${resolve(specifier)}${suffix}`,
     );
 }
@@ -281,6 +443,7 @@ async function defaultEnsureExternalRequires(requires: string[]): Promise<void> 
 async function loadLocalModules(
   entryPath: string,
   files: Map<string, string>,
+  resolutions: Map<string, string>,
   syntax: TransformOptions["syntax"],
   ensureExternalRequires: EnsureExternalRequires,
 ): Promise<void> {
@@ -299,14 +462,14 @@ async function loadLocalModules(
     const code = files.get(normalized);
     if (code === undefined) throw new Error(`Source file missing from bundle: ${normalized}`);
 
-    const rewritten = rewriteRelativeSpecifiers(code, normalized, files);
+    const rewritten = rewriteRelativeSpecifiers(code, normalized, resolutions);
     if (loadedContent.get(normalized) === rewritten && moduleMap[normalized]) return;
 
     loading.add(normalized);
     try {
-      for (const specifier of findRelativeSpecifiers(code)) {
-        const resolved = await resolveSourceFile(specifier, normalized, files);
-        await loadModule(resolved.path);
+      for (const specifier of findStaticSpecifiers(code)) {
+        const resolvedPath = resolutions.get(`${normalized}\n${specifier}`);
+        if (resolvedPath) await loadModule(resolvedPath);
       }
 
       const transformed = await transformCode(rewritten, { syntax });
@@ -321,9 +484,9 @@ async function loadLocalModules(
     }
   }
 
-  for (const specifier of findRelativeSpecifiers(files.get(entryPath) ?? "")) {
-    const resolved = await resolveSourceFile(specifier, entryPath, files);
-    await loadModule(resolved.path);
+  for (const specifier of findStaticSpecifiers(files.get(entryPath) ?? "")) {
+    const resolvedPath = resolutions.get(`${entryPath}\n${specifier}`);
+    if (resolvedPath) await loadModule(resolvedPath);
   }
 }
 
@@ -359,11 +522,12 @@ export async function prepareSourceCode(
   for (const [filePath, fileCode] of Object.entries(bundle.files)) {
     files.set(normalizeSourcePath(filePath), fileCode);
   }
+  const resolutions = new Map(Object.entries(bundle.resolutions));
   const localModuleIds = new Set(files.keys());
-  await loadLocalModules(bundle.entryPath, files, options.syntax, ensureExternalRequires);
+  await loadLocalModules(bundle.entryPath, files, resolutions, options.syntax, ensureExternalRequires);
 
   return {
-    code: rewriteRelativeSpecifiers(files.get(bundle.entryPath) ?? code, bundle.entryPath, files),
+    code: rewriteRelativeSpecifiers(files.get(bundle.entryPath) ?? code, bundle.entryPath, resolutions),
     entryPath: bundle.entryPath,
     sourceFiles: Object.fromEntries(files),
     localModuleIds,

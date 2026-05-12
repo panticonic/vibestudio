@@ -70,6 +70,11 @@ Workspace packages (`@workspace*`, `@natstack/*`) are **auto-resolved** — just
 
 npm packages require the `imports` parameter with `"npm:<version>"` for raw inline code. File-loaded code can infer dependency versions from the nearest `package.json`.
 
+File-loaded package inference checks `dependencies`, `peerDependencies`,
+`optionalDependencies`, then `devDependencies`. It also supports
+`package.json` `imports` aliases and simple `tsconfig.json` paths. Use explicit
+`imports` to override inferred versions.
+
 To pin a workspace package to a specific git ref, use the `imports` parameter explicitly: `imports: { "pkg": "branch-name" }`.
 
 ```

@@ -26,7 +26,8 @@ Available imports are the same as `inline_ui`: `react`, `@radix-ui/themes`,
 available in the panel. Static relative imports from the action-bar file are
 supported for local helpers/components. Bare package imports are inferred from
 the nearest `package.json` when possible; use `imports` for explicit package
-versions.
+versions. Package-local aliases from `package.json` `imports` and simple
+`tsconfig.json` paths are supported.
 
 Keep the component compact. The chat panel clamps the action bar to a small
 scrollable area.

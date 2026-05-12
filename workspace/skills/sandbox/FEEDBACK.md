@@ -84,7 +84,8 @@ For complex interactions that schema-based forms can't express.
 
 File-loaded feedback components support static relative imports from the entry
 file and infer bare package imports from the nearest `package.json` when
-possible.
+possible. Package-local aliases from `package.json` `imports` and simple
+`tsconfig.json` paths are supported.
 
 ### Component Contract
 

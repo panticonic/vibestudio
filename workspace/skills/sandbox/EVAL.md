@@ -102,8 +102,14 @@ Packages are installed with `--ignore-scripts` for security (no postinstall hook
 Installed packages and their bundles are both cached, so subsequent imports of the same package/version are fast. The first install of a new package may take 10-30 seconds (npm download + esbuild bundle); eval waits for that work to complete.
 
 For file-loaded code, npm package versions are inferred from the nearest
-`package.json` dependency fields when possible. Use `imports` to override or
-provide versions not declared there.
+`package.json` dependency fields when possible. The lookup checks
+`dependencies`, `peerDependencies`, `optionalDependencies`, and
+`devDependencies`, in that order. Use `imports` to override or provide versions
+not declared there.
+
+File-loaded code also supports package-local aliases declared through
+`package.json` `imports` (for `#alias` style imports) and simple
+`tsconfig.json` `compilerOptions.paths` mappings.
 
 ### Mixing workspace and npm imports
 
@@ -127,6 +133,8 @@ eval({
 - File-loaded code supports static relative `import`, `export ... from`, and
   literal `require()` specifiers only. Dynamic `import()` and computed
   `require()` are not supported.
+- `package.json` `exports`, lockfile-exact versions, and full Node
+  `node_modules` resolution are not implemented.
 - `eval`, `inline_ui`, `load_action_bar`, and `feedback_custom` all support explicit `imports`; file-loaded sources also infer bare imports from the nearest `package.json` when possible.
 - Only packages with standard npm names are accepted (e.g. `lodash`, `@scope/pkg`). URLs, file paths, and git specifiers are rejected.
 - Packages requiring native addons (`.node` binaries) won't work — esbuild cannot bundle them.
