@@ -20,10 +20,23 @@ const READ_POLICY: ServicePolicy = { allowed: ["panel", "worker", "shell", "serv
 const ADMIN_POLICY: ServicePolicy = { allowed: ["shell", "server"] };
 
 const DigestSchema = z.string().regex(DIGEST_RE);
+const Base64Schema = z.string().refine((value) => {
+  try {
+    return Buffer.from(value, "base64").toString("base64").replace(/=+$/u, "") === value.replace(/=+$/u, "");
+  } catch {
+    return false;
+  }
+}, "Invalid base64 payload");
 const ListOptsSchema = z.object({
   prefix: z.string().regex(PREFIX_RE).optional(),
   limit: z.number().int().positive().max(100_000).optional(),
 }).optional();
+const PruneOptsSchema = z.object({
+  referenced: z.array(DigestSchema),
+  dryRun: z.boolean().optional(),
+  olderThanMs: z.number().int().nonnegative().optional(),
+  limit: z.number().int().positive().max(100_000).optional(),
+});
 const ListArgsSchema = z.union([z.tuple([]), z.tuple([ListOptsSchema])]);
 
 export interface BlobstoreServiceDeps {
@@ -128,6 +141,45 @@ async function putBlob(blobsDir: string, req: IncomingMessage): Promise<{ digest
   }
 }
 
+async function putBytes(
+  blobsDir: string,
+  bytes: Buffer,
+): Promise<{ digest: string; size: number }> {
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const finalPath = blobPath(blobsDir, digest);
+  if (await pathExists(finalPath)) {
+    return { digest, size: bytes.byteLength };
+  }
+
+  const tmpPath = path.join(blobsDir, "tmp", `${process.pid}-${randomUUID()}.tmp`);
+  try {
+    await fsp.writeFile(tmpPath, bytes, { flag: "wx" });
+    await fsp.mkdir(path.dirname(finalPath), { recursive: true });
+    try {
+      await fsp.link(tmpPath, finalPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    await fsp.unlink(tmpPath).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    });
+    return { digest, size: bytes.byteLength };
+  } catch (error) {
+    await fsp.unlink(tmpPath).catch(() => {});
+    throw error;
+  }
+}
+
+async function getBytes(blobsDir: string, digest: string): Promise<Buffer | null> {
+  const filePath = blobPath(blobsDir, digest);
+  try {
+    return await fsp.readFile(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
 async function listBlobs(
   blobsDir: string,
   opts?: { prefix?: string; limit?: number },
@@ -174,6 +226,36 @@ async function listBlobs(
   return results;
 }
 
+async function pruneUnreferencedBlobs(
+  blobsDir: string,
+  opts: { referenced: string[]; dryRun?: boolean; olderThanMs?: number; limit?: number },
+): Promise<{ deleted: string[]; kept: number; dryRun: boolean }> {
+  const referenced = new Set(opts.referenced);
+  const all = await listBlobs(blobsDir, { limit: opts.limit });
+  const deleted: string[] = [];
+  let kept = 0;
+  const now = Date.now();
+  for (const digest of all) {
+    if (referenced.has(digest)) {
+      kept++;
+      continue;
+    }
+    const stat = await statBlob(blobsDir, digest);
+    if (!stat) continue;
+    if (opts.olderThanMs != null && now - stat.mtime < opts.olderThanMs) {
+      kept++;
+      continue;
+    }
+    deleted.push(digest);
+    if (!opts.dryRun) {
+      await fsp.unlink(blobPath(blobsDir, digest)).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
+    }
+  }
+  return { deleted, kept, dryRun: opts.dryRun === true };
+}
+
 export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithRoutes {
   const definition: ServiceDefinition = {
     name: "blobstore",
@@ -186,8 +268,33 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
         returns: z.object({ size: z.number(), mtime: z.number() }).nullable(),
         policy: READ_POLICY,
       },
+      putText: {
+        args: z.tuple([z.string()]),
+        returns: z.object({ digest: z.string(), size: z.number() }),
+        policy: READ_POLICY,
+      },
+      getText: {
+        args: z.tuple([DigestSchema]),
+        returns: z.string().nullable(),
+        policy: READ_POLICY,
+      },
+      putBase64: {
+        args: z.tuple([Base64Schema]),
+        returns: z.object({ digest: z.string(), size: z.number() }),
+        policy: READ_POLICY,
+      },
+      getBase64: {
+        args: z.tuple([DigestSchema]),
+        returns: z.string().nullable(),
+        policy: READ_POLICY,
+      },
       delete: { args: z.tuple([DigestSchema]), returns: z.boolean(), policy: ADMIN_POLICY },
       list: { args: ListArgsSchema, returns: z.array(z.string()), policy: ADMIN_POLICY },
+      pruneUnreferenced: {
+        args: z.tuple([PruneOptsSchema]),
+        returns: z.object({ deleted: z.array(z.string()), kept: z.number(), dryRun: z.boolean() }),
+        policy: ADMIN_POLICY,
+      },
     },
     handler: async (_ctx, method, args) => {
       switch (method) {
@@ -195,6 +302,18 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
           return pathExists(blobPath(deps.blobsDir, args[0] as string));
         case "stat":
           return statBlob(deps.blobsDir, args[0] as string);
+        case "putText":
+          return putBytes(deps.blobsDir, Buffer.from(args[0] as string, "utf8"));
+        case "getText": {
+          const bytes = await getBytes(deps.blobsDir, args[0] as string);
+          return bytes ? bytes.toString("utf8") : null;
+        }
+        case "putBase64":
+          return putBytes(deps.blobsDir, Buffer.from(args[0] as string, "base64"));
+        case "getBase64": {
+          const bytes = await getBytes(deps.blobsDir, args[0] as string);
+          return bytes ? bytes.toString("base64") : null;
+        }
         case "delete": {
           const filePath = blobPath(deps.blobsDir, args[0] as string);
           try {
@@ -207,6 +326,8 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
         }
         case "list":
           return listBlobs(deps.blobsDir, args[0] as { prefix?: string; limit?: number } | undefined);
+        case "pruneUnreferenced":
+          return pruneUnreferencedBlobs(deps.blobsDir, args[0] as { referenced: string[]; dryRun?: boolean; olderThanMs?: number; limit?: number });
         default:
           throw new Error(`Unknown blobstore method '${method}'`);
       }

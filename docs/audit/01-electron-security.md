@@ -661,4 +661,4 @@ With `contextIsolation: false`, `globalThis` is shared with the page. Any shell-
 - `packages/shared/src/servicePolicy.ts`
 - `packages/shared/src/shell/urlParsing.ts`
 - `packages/shared/src/contextIdToPartition.ts`
-- `packages/rpc/src/types.ts` (for `SERVER_SERVICE_NAMES`)
+- `packages/rpc/src/types.ts` (for Electron-local routing exceptions)

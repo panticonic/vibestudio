@@ -1,13 +1,12 @@
 /**
  * IPC Dispatcher — replaces Electron-side RpcServer for shell communication.
  *
- * Listens on ipcMain for RPC messages from the shell renderer, dispatches
- * to the Electron ServiceDispatcher for Electron-local services, and forwards
- * server-service calls to the server via serverClient.
+ * Listens on ipcMain for RPC messages from the shell renderer. Electron-local
+ * services dispatch in-process; everything else forwards to the server.
  */
 
 import { ipcMain, type WebContents } from "electron";
-import { SERVER_SERVICE_NAMES } from "@natstack/rpc";
+import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
 import type { ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
 import type { RpcMessage, RpcRequest, RpcResponse } from "@natstack/rpc";
 import type { ServerClient } from "./serverClient.js";
@@ -15,8 +14,8 @@ import type { EventService, Subscriber } from "@natstack/shared/eventsService";
 import type { CallerKind } from "@natstack/shared/serviceDispatcher";
 import type { WebSocket } from "ws";
 
-/** Server services that should be forwarded to the server process */
-const SERVER_SERVICES: ReadonlySet<string> = new Set(SERVER_SERVICE_NAMES);
+/** Electron-main services that are not owned by the NatStack server process. */
+const ELECTRON_LOCAL_SERVICES: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
 
 export interface IpcDispatcherDeps {
   /** Electron-local service dispatcher */
@@ -146,15 +145,15 @@ export class IpcDispatcher {
 
       try {
         let result: unknown;
-        // Forward server-owned services to the server process.
-        const forwardToServer = SERVER_SERVICES.has(service);
-        if (forwardToServer) {
-          result = await this.deps.serverClient.call(service, method, req.args);
-        } else {
+        if (ELECTRON_LOCAL_SERVICES.has(service)) {
           // Dispatch locally to Electron services. The dispatcher itself
           // enforces policy via checkServiceAccess (single choke-point).
           const ctx = { callerId, callerKind };
           result = await this.deps.dispatcher.dispatch(ctx, service, method, req.args);
+        } else {
+          // Server is the default owner so newly registered userland/workerd
+          // services are reachable without a shared routing-list update.
+          result = await this.deps.serverClient.call(service, method, req.args);
         }
         this.sendResponse(sender, req.requestId, {
           type: "response",

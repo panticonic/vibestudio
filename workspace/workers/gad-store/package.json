@@ -1,0 +1,17 @@
+{
+  "name": "@workspace-workers/gad-store",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "natstack": {
+    "title": "Gad Workspace Store",
+    "kind": "worker",
+    "entry": "index.ts",
+    "durable": {
+      "classes": [{ "className": "GadWorkspaceDO" }]
+    }
+  },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*"
+  }
+}

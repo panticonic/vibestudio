@@ -24,7 +24,7 @@ beforeAll(async () => {
   });
 });
 
-function createWorkerdHarness() {
+function createWorkerdHarness(overrides: Partial<WorkerdManagerDeps> = {}) {
   const tokenManager = new TokenManager();
   const manager = new WorkerdManager({
     tokenManager,
@@ -45,6 +45,7 @@ function createWorkerdHarness() {
       upsertCallerIdentity: () => {},
       unregisterCaller: () => {},
     },
+    ...overrides,
   } satisfies WorkerdManagerDeps);
 
   const dispatch = new DODispatch();
@@ -119,6 +120,62 @@ describe("internal storage DOs under workerd", () => {
     ]);
     await expect(harness.dispatch.dispatch(ref, "deleteHistoryRange", 100, 200)).resolves.toBe(1);
     await expect(harness.dispatch.dispatch(ref, "searchHistory", "durable", 10)).resolves.toEqual([]);
+  }, 30_000);
+
+  it("persists gad provenance through real workerd DO dispatch", async () => {
+    const harness = createWorkerdHarness({
+      getBuild: async (source: string) => {
+        expect(source).toBe("workers/gad-store");
+        const result = await esbuild.build({
+          entryPoints: ["workspace/workers/gad-store/index.ts"],
+          bundle: true,
+          platform: "browser",
+          target: "es2022",
+          format: "esm",
+          write: false,
+          conditions: ["worker", "browser"],
+          external: ["node:*", "electron"],
+          logLevel: "silent",
+        });
+        return {
+          bundle: result.outputFiles[0]!.text,
+          metadata: { ev: "gad-store-test" },
+        } as never;
+      },
+    });
+    manager = harness.manager;
+    await manager.registerAllDOClasses([
+      { source: "workers/gad-store", className: "GadWorkspaceDO" },
+    ]);
+
+    const ref = { source: "workers/gad-store", className: "GadWorkspaceDO", objectKey: "workspace-gad" };
+    await harness.dispatch.dispatch(ref, "recordSession", {
+      id: "session-live",
+      source: "integration-test",
+      channelId: "channel-live",
+      contextId: "context-live",
+    });
+    await harness.dispatch.dispatch(ref, "recordTurn", {
+      sessionId: "session-live",
+      role: "user",
+      content: "write the file",
+    });
+    const tool = await harness.dispatch.dispatch(ref, "beginToolCall", {
+      sessionId: "session-live",
+      turnId: 1,
+      toolName: "write",
+      isMutation: true,
+    }) as { id: number };
+    await harness.dispatch.dispatch(ref, "recordMutation", {
+      toolCallId: tool.id,
+      filePath: "/src/live.ts",
+      afterHash: "d".repeat(64),
+      afterSize: 12,
+      mutationType: "create",
+    });
+    const status = await harness.dispatch.dispatch(ref, "getStatus") as Array<{ metric: string; value: number }>;
+    expect(status.find((row) => row.metric === "Sessions")?.value).toBe(1);
+    expect(status.find((row) => row.metric === "File versions")?.value).toBe(1);
   }, 30_000);
 
   it("returns affected counts for BrowserDataDO cookie clears", async () => {

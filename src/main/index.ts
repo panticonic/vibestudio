@@ -961,9 +961,9 @@ app.on("ready", async () => {
     );
     // Workspace operations live entirely on the server now (single source of
     // truth, accessible to panels/workers/shell). The shell renderer's
-    // `workspace.*` calls reach the server via IpcDispatcher's forwardToServer
-    // path because "workspace" is in SERVER_SERVICE_NAMES. Workspace.select
-    // (relaunch) is signalled from the server back to Electron main via
+    // `workspace.*` calls reach the server by default because only true
+    // Electron-local services are routed here. Workspace.select (relaunch) is
+    // signalled from the server back to Electron main via
     // ServerProcessManager.onRelaunch (wired in serverSession.ts).
     electronContainer.register(rpcService(createSettingsService({ serverClient: sc })));
     const { createRemoteCredService } = await import("./services/remoteCredService.js");

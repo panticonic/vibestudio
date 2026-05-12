@@ -16,9 +16,8 @@
  *    `createWorkspaceService` use the same service name (`"workspace"`) and
  *    the same method names. Any drift on either side fails a test.
  *
- * 2. `"workspace"` is in `SERVER_SERVICE_NAMES` so the IpcDispatcher forwards
- *    shell-renderer calls to the server (instead of dispatching them locally
- *    against an Electron-side service that no longer exists).
+ * 2. `"workspace"` is not Electron-local, so the IpcDispatcher forwards
+ *    shell-renderer calls to the server by default.
  *
  * 3. The service policy allows `panel`, `worker`, `shell`, and `server`
  *    callers — panels and workers must be able to reach this service
@@ -32,7 +31,7 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { SERVER_SERVICE_NAMES } from "@natstack/rpc";
+import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
 import type { RpcCaller } from "@natstack/rpc";
 import { createWorkspaceService } from "../workspaceService.js";
 import { createWorkspaceClient } from "../../../../workspace/packages/runtime/src/shared/workspace.js";
@@ -177,16 +176,16 @@ describe("workspace service ↔ client contract", () => {
   });
 });
 
-// ─── Routing: SERVER_SERVICE_NAMES inclusion ──────────────────────────────────
+// ─── Routing: server-by-default service ownership ────────────────────────────
 
 describe("workspace service routing", () => {
-  it("`workspace` is in SERVER_SERVICE_NAMES so IpcDispatcher forwards to server", () => {
-    expect((SERVER_SERVICE_NAMES as readonly string[]).includes("workspace")).toBe(true);
+  it("`workspace` is not Electron-local so IpcDispatcher forwards to server", () => {
+    expect((ELECTRON_LOCAL_SERVICE_NAMES as readonly string[]).includes("workspace")).toBe(false);
   });
 
-  it("the obsolete `workspaceInfo` name is gone from SERVER_SERVICE_NAMES", () => {
+  it("the obsolete `workspaceInfo` name is not Electron-local", () => {
     // Catches the cleanup regression where someone re-introduces both names.
-    expect((SERVER_SERVICE_NAMES as readonly string[]).includes("workspaceInfo")).toBe(false);
+    expect((ELECTRON_LOCAL_SERVICE_NAMES as readonly string[]).includes("workspaceInfo")).toBe(false);
   });
 });
 

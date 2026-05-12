@@ -98,7 +98,7 @@ For each failure, determine the root cause category and act accordingly:
 - **Error swallowed silently** → add proper error propagation
 - **API signature unintuitive** → redesign the API, add defaults, improve types
 - **Missing capability** → implement it in the service layer
-- **Service not registered** → add to ServiceContainer + SERVER_SERVICE_NAMES
+- **Service not registered** → add it to the server or Electron ServiceContainer; only add true Electron-local services to `ELECTRON_LOCAL_SERVICE_NAMES`
 
 ### Documentation bugs (fix the docs)
 - **Skill docs describe a different API** → update the skill docs to match reality

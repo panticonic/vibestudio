@@ -145,46 +145,29 @@ export interface RpcCaller {
 }
 
 // =============================================================================
-// Server Service Names — single source of truth for routing
+// Electron-Local Service Names — routing exceptions
 // =============================================================================
 
 /**
- * Services that run on the server process (backend compute).
+ * Services that are owned by Electron main instead of the NatStack server.
  *
- * Used by the routing bridge to decide whether an RPC call should go to the
- * server (WebSocket) or Electron (IPC). Any service registered on the server
- * that panels/shell may call must be listed here.
- *
- * IMPORTANT: When adding a new server service, add its name here — otherwise
- * panel calls will be silently misrouted to Electron IPC.
+ * Unknown service names intentionally default to the server path. This keeps
+ * userland and workerd-backed services callable without touching a central RPC
+ * routing list every time a new server service is introduced.
  */
-export const SERVER_SERVICE_NAMES = [
-  "build",
-  "capabilities",
-  "credentials",
-  "externalOpen",
-  "fs",
-  "git",
-  "harness",
-  "image",
-  "meta",
-  "notification",
-  "browser-data",
-  "secrets",
-  "shellApproval",
-  "scope",
-  "test",
-  "tokens",
-  "typecheck",
-  "userlandApproval",
-  "webhookIngress",
-  "workerd",
-  "workerLog",
-  "workers",
-  "workspace",
+export const ELECTRON_LOCAL_SERVICE_NAMES = [
+  "adblock",
+  "app",
+  "browser",
+  "browser-session-sync",
+  "menu",
+  "panel",
+  "remoteCred",
+  "settings",
+  "view",
 ] as const;
 
-export type ServerServiceName = (typeof SERVER_SERVICE_NAMES)[number];
+export type ElectronLocalServiceName = (typeof ELECTRON_LOCAL_SERVICE_NAMES)[number];
 
 // =============================================================================
 // IPC Envelope Types

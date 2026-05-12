@@ -1138,6 +1138,30 @@ async function main() {
     });
   }
 
+  // ── gad provenance store ──
+  {
+    const { createGadService } = await import("./services/gadService.js");
+    let gadDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null = null;
+    container.register({
+      name: "gad",
+      dependencies: ["doDispatch"],
+      async start(resolve) {
+        const doDispatch = resolve<import("./doDispatch.js").DODispatch>("doDispatch")!;
+        gadDefinition = createGadService({
+          doDispatch,
+          workspaceId: workspace.config.id,
+          approvalQueue,
+          grantStore: userlandApprovalGrantStore,
+          codeIdentityResolver,
+        });
+      },
+      getServiceDefinition() {
+        if (!gadDefinition) throw new Error("gad service not initialized");
+        return gadDefinition;
+      },
+    });
+  }
+
   // Admin token resolution (first hit wins):
   //   1. NATSTACK_ADMIN_TOKEN env var (always overrides)
   //   2. Persisted token at ~/.config/natstack/admin-token (survives restarts)
@@ -1578,34 +1602,6 @@ async function main() {
   panelServiceData?.urlConfig?.finalizeForGateway(gatewayPort);
 
   dispatcher.markInitialized();
-
-  // Validate that SERVER_SERVICE_NAMES covers all server-side services.
-  // This catches drift where a new service is added to the server but not
-  // to the shared constant (which would cause silent misrouting in Electron mode).
-  {
-    const { SERVER_SERVICE_NAMES } = await import("@natstack/rpc");
-    const sharedSet = new Set<string>(SERVER_SERVICE_NAMES);
-    // Services that live on both Electron and server, are internal lifecycle only,
-    // or are standalone-mode-only (not present in IPC/Electron mode)
-    const localOnly = new Set([
-      "events",
-      "browser",
-      "panel",
-      "panel-persistence",
-      "settings",
-      "push",
-      "shellPresence",
-      "auth",
-    ]);
-    for (const name of dispatcher.getServices()) {
-      if (!sharedSet.has(name) && !localOnly.has(name)) {
-        console.warn(
-          `[Server] Service "${name}" is registered on the server but missing from SERVER_SERVICE_NAMES in @natstack/rpc. ` +
-            `Panel calls to this service will be misrouted in Electron mode.`
-        );
-      }
-    }
-  }
 
   // ===========================================================================
   // Report ready

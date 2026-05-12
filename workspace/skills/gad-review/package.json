@@ -1,0 +1,7 @@
+{
+  "name": "@workspace-skills/gad-review",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Review proposed or existing changes by tracing gad provenance back to user turns and prior context."
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SERVER_SERVICE_NAMES } from "@natstack/rpc";
+import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
 import { createPanelPersistenceService } from "./panelPersistenceService.js";
 
 describe("panelPersistenceService", () => {
@@ -10,6 +10,6 @@ describe("panelPersistenceService", () => {
     });
 
     expect(service.policy.allowed).toEqual(["shell", "server"]);
-    expect((SERVER_SERVICE_NAMES as readonly string[]).includes("panel-persistence")).toBe(false);
+    expect((ELECTRON_LOCAL_SERVICE_NAMES as readonly string[]).includes("panel-persistence")).toBe(false);
   });
 });
