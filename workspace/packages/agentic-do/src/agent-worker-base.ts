@@ -359,6 +359,9 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   /** Dedup inline credential prompts per channel/provider while this DO is alive. */
   private credentialPromptCardsEmitted = new Set<string>();
 
+  /** Best-effort gad ids for in-flight non-builtin channel tool calls. */
+  private gadToolCallByDispatch = new Map<string, number>();
+
   /** Phase 0D: Transient poison message tracker. Resets on hibernation. */
   private failedEvents = new Map<number, number>();
   private static readonly POISON_MAX_ATTEMPTS = 3;
@@ -1062,6 +1065,15 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       ...this.getRunnerPromptConfig(channelId),
       approvalLevel: this.getApprovalLevel(channelId),
       initialMessages,
+      gad: {
+        sessionId: `channel:${channelId}`,
+        channelId,
+        contextId: this.subscriptions.getContextId(channelId),
+        source: "agent-worker",
+        metadata: {
+          workerRef: this.identity.refOrNull,
+        },
+      },
       onPersist: async (messages) => {
         await this.saveMessages(channelId, runner.trimTrailingAbortedAssistant(messages));
         await this.drainDeferredDispatchesFor(channelId);
@@ -1389,6 +1401,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
 
     const callId = crypto.randomUUID();
+    const gadToolCallId = await this.beginGadChannelToolCall(channelId, toolCallId, participantHandle, method, args);
+    if (gadToolCallId != null) this.gadToolCallByDispatch.set(callId, gadToolCallId);
     if (onStreamUpdate) this.streamCallbacks.set(callId, onStreamUpdate);
     this.dispatches.store({
       callId,
@@ -1401,10 +1415,59 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     } catch (err) {
       this.dispatches.deleteOne(callId);
       this.streamCallbacks.delete(callId);
+      await this.completeGadChannelToolCall(callId, err instanceof Error ? `error: ${err.message}` : `error: ${String(err)}`);
       throw err;
     }
     await this.abortAgentForReason(channelId, "participant-method-dispatch", `${participantHandle}.${method}`);
     return makeDispatchPlaceholder(toolCallId, callId, "tool-call");
+  }
+
+  private async beginGadChannelToolCall(
+    channelId: string,
+    piToolCallId: string,
+    participantHandle: string,
+    method: string,
+    args: unknown,
+  ): Promise<number | null> {
+    try {
+      const result = await this.rpc.call<{ id: number }>("main", "gad.beginToolCall", {
+        sessionId: `channel:${channelId}`,
+        toolName: `${participantHandle}.${method}`,
+        parameters: {
+          piToolCallId,
+          participantHandle,
+          method,
+          args,
+        },
+        isMutation: false,
+        channelId,
+        contextId: this.subscriptions.getContextId(channelId),
+      });
+      return result.id;
+    } catch (err) {
+      console.warn("[AgentWorkerBase] gad.beginToolCall for channel tool failed:", err);
+      return null;
+    }
+  }
+
+  private async completeGadChannelToolCall(callId: string, summary: string): Promise<void> {
+    const gadToolCallId = this.gadToolCallByDispatch.get(callId);
+    if (gadToolCallId == null) return;
+    this.gadToolCallByDispatch.delete(callId);
+    try {
+      await this.rpc.call("main", "gad.completeToolCall", gadToolCallId, summary);
+      const blob = await this.rpc.call<{ digest: string; size: number }>("main", "blobstore.putText", summary);
+      await this.rpc.call("main", "gad.recordRead", {
+        toolCallId: gadToolCallId,
+        readType: "channel_tool_result",
+        filePath: null,
+        contentHash: blob.digest,
+        contentSize: blob.size,
+        metadata: { dispatchCallId: callId },
+      });
+    } catch (err) {
+      console.warn("[AgentWorkerBase] gad.completeToolCall for channel tool failed:", err);
+    }
   }
 
   private async askUser(
@@ -1558,6 +1621,10 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     this.streamCallbacks.delete(callId);
     const breadcrumb = this.dispatches.peek(callId);
     if (!breadcrumb) return;
+    await this.completeGadChannelToolCall(
+      callId,
+      `${isError ? "error: " : ""}${summarizeUnknownResult(result)}`,
+    );
     this.dispatches.bufferResult(callId, result, isError);
 
     const messages = this.loadMessages(breadcrumb.channelId);
@@ -2220,6 +2287,12 @@ function toAgentToolResult(result: unknown): AgentToolResult<any> {
     content: [{ type: "text", text }],
     details: undefined,
   };
+}
+
+function summarizeUnknownResult(result: unknown): string {
+  const text = typeof result === "string" ? result : JSON.stringify(result) ?? String(result);
+  const compact = text.replace(/\s+/gu, " ").trim();
+  return compact.length > 500 ? `${compact.slice(0, 497)}...` : compact;
 }
 
 function decodeBufferedDispatchResult(json: string): unknown {

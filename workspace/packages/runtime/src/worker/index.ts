@@ -36,6 +36,7 @@ import { createWebhookIngressClient, type WebhookIngressClient } from "../shared
 import { createWorkerdClient, type WorkerdClient } from "../shared/workerd.js";
 import { createWorkspaceClient, type WorkspaceClient } from "../shared/workspace.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
+import { createGadClient, type GadClient } from "../shared/gad.js";
 import { createParentHandle } from "../shared/handles.js";
 import { helpfulNamespace } from "../shared/helpfulNamespace.js";
 import { createGatewayFetch, type GatewayFetch } from "../shared/gatewayFetch.js";
@@ -74,6 +75,7 @@ export type {
   WebhookVerifierConfig,
 } from "../shared/webhooks.js";
 export type { NotificationClient } from "../shared/notifications.js";
+export type * from "../shared/gad.js";
 export { DurableObjectBase } from "./durable-base.js";
 export type { DurableObjectContext, SqlStorage, SqlResult, DORef } from "./durable-base.js";
 export { fs } from "./fs.js";
@@ -139,6 +141,7 @@ export interface WorkerRuntime {
   readonly gatewayFetch: GatewayFetch;
   readonly gitConfig: { serverUrl: string; token: string } | null;
   readonly git: RuntimeGitApi;
+  readonly gad: GadClient;
   readonly pubsubConfig: null;
 
   /** Call a server-side service method via RPC. */
@@ -223,6 +226,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   });
   const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));
   const notifications = helpfulNamespace("notifications", createNotificationClient(rpc));
+  const gad = helpfulNamespace("gad", createGadClient(rpc));
 
   const parentId = (env.PARENT_ID as string) || null;
 
@@ -237,6 +241,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     workspace: workspaceApi,
     credentials,
     git,
+    gad,
     webhooks,
     notifications,
     contextId: env.CONTEXT_ID,

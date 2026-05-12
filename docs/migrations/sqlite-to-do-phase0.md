@@ -2,7 +2,7 @@
 
 ## Trusted Bridge Audit
 
-The server services reachable through `SERVER_SERVICE_NAMES` had shell-only
+The server services reachable through the panel/shell RPC bridge had shell-only
 method policies that were sensitive to Electron main's admin-token bridge
 identity. The relevant current services are:
 

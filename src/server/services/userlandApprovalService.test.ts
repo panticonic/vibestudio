@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SERVER_SERVICE_NAMES } from "@natstack/rpc";
+import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
 import { ServiceAccessError, ServiceDispatcher, ServiceError } from "@natstack/shared/serviceDispatcher";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import { createUserlandApprovalService } from "./userlandApprovalService.js";
@@ -43,8 +43,8 @@ const validRequest = {
 };
 
 describe("userlandApprovalService", () => {
-  it("is listed as a routed server service", () => {
-    expect(SERVER_SERVICE_NAMES).toContain("userlandApproval");
+  it("is routed to the server by default", () => {
+    expect(ELECTRON_LOCAL_SERVICE_NAMES).not.toContain("userlandApproval");
   });
 
   it("allows panels and workers but rejects shell/server through policy", async () => {

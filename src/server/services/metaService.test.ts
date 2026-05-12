@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { z } from "zod";
-import { SERVER_SERVICE_NAMES } from "@natstack/rpc";
 import { ServiceDispatcher, type ServiceContext } from "../../../packages/shared/src/serviceDispatcher.js";
 import { createMetaService } from "./metaService.js";
 import { panelRuntimeSurface } from "../../../workspace/packages/runtime/src/shared/runtimeSurface.panel.js";
@@ -68,7 +67,7 @@ describe("metaService", () => {
     ).resolves.toEqual(workerRuntimeSurface);
   });
 
-  it("is included in SERVER_SERVICE_NAMES for shell/electron forwarding", () => {
-    expect((SERVER_SERVICE_NAMES as readonly string[]).includes("meta")).toBe(true);
+  it("is server-routable by default", () => {
+    expect(dispatcher.getServices()).toContain("meta");
   });
 });

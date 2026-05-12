@@ -235,6 +235,13 @@ describe("blobstoreService", () => {
       )).resolves.toEqual([digest]);
 
       await expect(dispatcher.dispatch(
+        { callerId: "shell", callerKind: "shell" },
+        "blobstore",
+        "pruneUnreferenced",
+        [{ referenced: [digest], dryRun: true }],
+      )).resolves.toMatchObject({ deleted: [], dryRun: true });
+
+      await expect(dispatcher.dispatch(
         { callerId: "server", callerKind: "server" },
         "blobstore",
         "delete",

@@ -10,9 +10,11 @@ import { fs } from "./fs.js"; // RPC-backed fs (server-side per-context folders)
 import { initRuntime } from "../setup/initRuntime.js";
 import { helpfulNamespace } from "../shared/helpfulNamespace.js";
 import { createGatewayFetch } from "../shared/gatewayFetch.js";
+import { createGadClient } from "../shared/gad.js";
 export type { ThemeAppearance, RuntimeFs, FileStats, MkdirOptions, RmOptions } from "../types.js";
 export { createGatewayFetch } from "../shared/gatewayFetch.js";
 export type { GatewayFetch, GatewayFetchConfig } from "../shared/gatewayFetch.js";
+export type * from "../shared/gad.js";
 export type {
   UserlandApprovalChoice,
   UserlandApprovalGrant,
@@ -90,6 +92,7 @@ export {
 const { workers } = runtime;
 const helpfulWorkers = helpfulNamespace("workers", workers);
 export { fs, gatewayConfig, gatewayFetch, gitConfig, pubsubConfig, env, helpfulWorkers as workers };
+export const gad = helpfulNamespace("gad", createGadClient(rpc));
 
 // Path utilities for cross-platform path handling
 export { normalizePath, getFileName, resolvePath } from "../shared/pathUtils.js";
