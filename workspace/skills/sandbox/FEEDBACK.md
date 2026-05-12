@@ -77,8 +77,12 @@ For complex interactions that schema-based forms can't express.
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `code` | string | TSX source code |
+| `code` | string | TSX source code. Provide either `code` or `path` |
+| `path` | string | Context-relative TSX file to load instead of inline code |
 | `title` | string | Container header title |
+
+File-loaded feedback components support static relative imports from the entry
+file.
 
 ### Component Contract
 

@@ -14,7 +14,7 @@
 import { useCallback, useMemo, useRef, useEffect, useState } from "react";
 import { z } from "zod";
 import type { ChannelConfig, MethodDefinition, MethodExecutionContext } from "@natstack/pubsub";
-import { executeSandbox, ScopeManager, RpcScopePersistence } from "@workspace/eval";
+import { executeSandbox, loadSourceFileBundle, ScopeManager, RpcScopePersistence } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult, HydrateResult } from "@workspace/eval";
 import type { ActiveFeedbackSchema, FeedbackResult } from "@workspace/tool-ui";
 import { useChatCore } from "./core/useChatCore";
@@ -266,8 +266,11 @@ export function useAgenticChat({
 
     try {
       const code = await sandboxRef.current.rpc.call("main", "fs.readFile", trimmedPath, "utf8") as string;
+      const files = (await loadSourceFileBundle(trimmedPath, async (filePath) => (
+        sandboxRef.current.rpc.call("main", "fs.readFile", filePath, "utf8") as Promise<string>
+      ), code)).files;
       const id = crypto.randomUUID();
-      setActionBarData({ id, path: trimmedPath, code, props, maxHeight });
+      setActionBarData({ id, path: trimmedPath, code, files, props, maxHeight });
       lastLoadedActionBarKeyRef.current = actionBarLoadKey(trimmedPath, props, maxHeight);
       if (persistStateArgs) {
         await onActionBarFileChange?.({ path: trimmedPath, props, maxHeight });
@@ -388,6 +391,7 @@ export function useAgenticChat({
 Users can expand/collapse at any time. Persists in chat history.
 
 **Available imports:** react, @radix-ui/themes, @radix-ui/react-icons
+You may provide either \`code\` or \`path\`. \`path\` reads a context-relative TSX file and supports static relative imports.
 **Must use** \`export default\`
 
 **Example:**
@@ -431,16 +435,26 @@ export default function App({ props, chat }) {
 }
 \`\`\``,
             parameters: z.object({
-              code: z.string().describe("TSX source code for the component"),
+              code: z.string().optional().describe("TSX source code for the component. Provide either code or path."),
+              path: z.string().optional().describe("Context-relative TSX file to render instead of inline code. Supports static relative imports."),
               props: z.record(z.unknown()).optional().describe("Props passed to the component as { props }"),
             }),
             execute: async (args: unknown) => {
-              const { code, props } = args as { code: string; props?: Record<string, unknown> };
-              if (!code) return { ok: false, error: "Missing code" };
+              const { code, path, props } = args as { code?: string; path?: string; props?: Record<string, unknown> };
+              const trimmedPath = path?.trim();
+              const sourceCode = trimmedPath
+                ? await sandboxRef.current.rpc.call("main", "fs.readFile", trimmedPath, "utf8") as string
+                : code;
+              if (!sourceCode) return { ok: false, error: "Missing code or path" };
+              const files = trimmedPath
+                ? (await loadSourceFileBundle(trimmedPath, async (filePath) => (
+                  sandboxRef.current.rpc.call("main", "fs.readFile", filePath, "utf8") as Promise<string>
+                ), sourceCode)).files
+                : undefined;
               const client = core.clientRef.current;
               if (!client) return { ok: false, error: "Not connected" };
               const id = crypto.randomUUID();
-              const data = JSON.stringify({ id, code, props });
+              const data = JSON.stringify({ id, code: sourceCode, path: trimmedPath, files, props });
               await client.publish("message", { id, content: data, contentType: "inline_ui" }, { persist: true, idempotencyKey: `inline_ui:${id}` });
               return { ok: true, id };
             },
@@ -451,14 +465,14 @@ export default function App({ props, chat }) {
 Use this for small always-available controls or status for the current workflow.
 The TSX source is read from a file in this panel's current filesystem context.
 The loaded component receives { props, chat, scope, scopes }, supports the same
-imports as inline_ui, and must export default.
+imports as inline_ui, supports static relative imports from the loaded file, and
+must export default.
 
 Unlike inline_ui, load_action_bar does not add visible chat history. The latest
 loaded file replaces any previous action bar for this panel only. Other panels
 connected to this channel may be in different filesystem contexts.
 Keep it compact; the panel clamps the rendered height to a small scrollable area.
-Relative imports from the loaded file are not supported yet; use the same package
-imports available to inline_ui.`,
+Use package imports available to inline_ui plus relative imports for local helper files.`,
             parameters: z.object({
               path: z.string().optional().describe("Context-relative TSX file to load. Required unless clear is true."),
               props: z.record(z.unknown()).optional().describe("Props passed to the component as { props }"),

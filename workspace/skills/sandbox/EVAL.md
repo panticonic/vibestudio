@@ -8,11 +8,21 @@ Run TypeScript/JavaScript code in the panel sandbox. Code executes immediately, 
 eval({ code: `console.log("hello")` })
 ```
 
+For multi-file code, put the entry point in the workspace and use `path`:
+
+```
+eval({ path: ".natstack/eval/check-project.ts" })
+```
+
+File-loaded eval reads the entry file from the current context and supports
+static relative imports from that file, such as `./helpers` or `../shared/ui`.
+
 ## Parameters
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `code` | string | required | TypeScript/JavaScript code to execute |
+| `code` | string | — | TypeScript/JavaScript code to execute. Provide either `code` or `path` |
+| `path` | string | — | Context-relative TypeScript/TSX file to execute instead of inline code |
 | `syntax` | `"typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax |
 | `imports` | `Record<string, string>` | — | Packages to build on-demand (workspace or npm) |
 
@@ -109,6 +119,9 @@ eval({
 
 ### Limitations
 
+- File-loaded code supports static relative `import`, `export ... from`, and
+  literal `require()` specifiers only. Dynamic `import()` and computed
+  `require()` are not supported.
 - npm packages are only available in `eval`, not in `inline_ui`, `load_action_bar`, or `feedback_custom` components. To use an npm package in a component, preload it via `eval` first (it will remain in the module map).
 - Only packages with standard npm names are accepted (e.g. `lodash`, `@scope/pkg`). URLs, file paths, and git specifiers are rejected.
 - Packages requiring native addons (`.node` binaries) won't work — esbuild cannot bundle them.

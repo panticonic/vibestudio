@@ -20,6 +20,10 @@ assistants in the transcript, prefer `inline_ui`. For compact controls or
 status that should remain pinned above chat history in the current panel, use
 `load_action_bar` with a TSX file instead.
 
+You can send raw TSX with `code`, or put the component in a context-relative
+file and call `inline_ui({ path: ".natstack/ui/review.tsx", props: {...} })`.
+File-loaded components support static relative imports from that file.
+
 ## Component Rules
 
 - Components must `export default`.

@@ -20,6 +20,7 @@ import {
   validateRequires,
   preloadRequires,
 } from "./execute.js";
+import { prepareSourceCode, type LoadSourceFile } from "./sourceFiles.js";
 import {
   createConsoleCapture,
   formatConsoleEntry,
@@ -43,6 +44,12 @@ export interface SandboxOptions {
   onConsole?: (formatted: string) => void;
   /** Dynamic import loader — keeps this module free of runtime/RPC deps */
   loadImport?: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>;
+  /** File path for this source. Enables relative imports. */
+  sourcePath?: string;
+  /** Embedded source files keyed by normalized path. Enables replay without filesystem reads. */
+  sourceFiles?: Record<string, string>;
+  /** Source-file loader for resolving relative imports. */
+  loadSourceFile?: LoadSourceFile;
   /** Extra scope variables injected into the sandbox */
   bindings?: Record<string, unknown>;
 }
@@ -67,6 +74,15 @@ export interface CompileResult<T> {
   cacheKey?: string;
   /** Error message (if failed) */
   error?: string;
+}
+
+export interface CompileComponentOptions {
+  /** File path for this source. Enables relative imports. */
+  sourcePath?: string;
+  /** Embedded source files keyed by normalized path. Enables replay without filesystem reads. */
+  sourceFiles?: Record<string, string>;
+  /** Source-file loader for resolving relative imports. */
+  loadSourceFile?: LoadSourceFile;
 }
 
 // =============================================================================
@@ -114,6 +130,32 @@ async function loadImports(
     const externals = Object.keys(moduleMap);
     const bundleCode = await loadImport(specifier, ref, externals);
     loadLibraryBundle(specifier, bundleCode);
+  }
+}
+
+async function ensureRequires(
+  requires: string[],
+  loadImport?: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>,
+): Promise<void> {
+  if (requires.length === 0) return;
+  const requireFn = getDefaultRequire();
+  if (!requireFn) throw new Error("__natstackRequire__ not available. Build may be outdated.");
+
+  let validation = validateRequires(requires, requireFn);
+  if (!validation.valid && loadImport) {
+    const moduleMap = getModuleMap();
+    const missingWorkspace = requires.filter(
+      (r) => !moduleMap[r] && (r.startsWith("@workspace") || r.startsWith("@natstack/")),
+    );
+    if (missingWorkspace.length > 0) {
+      const autoImports = Object.fromEntries(missingWorkspace.map((m) => [m, "latest"]));
+      await loadImports(autoImports, loadImport);
+      validation = validateRequires(requires, requireFn);
+    }
+  }
+
+  if (!validation.valid) {
+    throw new Error(validation.error ?? `Module "${validation.missingModule}" not available`);
   }
 }
 
@@ -217,7 +259,14 @@ export async function executeSandbox(
       await loadImports(options.imports, options.loadImport);
     }
 
-    const transformed = await transformCode(code, { syntax });
+    const prepared = await prepareSourceCode(code, {
+      syntax,
+      sourcePath: options.sourcePath,
+      sourceFiles: options.sourceFiles,
+      loadSourceFile: options.loadSourceFile,
+    }, (requires) => ensureRequires(requires, options.loadImport));
+
+    const transformed = await transformCode(prepared.code, { syntax });
 
     // Validate requires
     const requireFn = getDefaultRequire();
@@ -331,11 +380,21 @@ export async function executeSandbox(
  */
 export async function compileComponent<T = ComponentType<Record<string, unknown>>>(
   code: string,
+  options: CompileComponentOptions = {},
 ): Promise<CompileResult<T>> {
   try {
-    const transformed = await transformCode(code, { syntax: "tsx" });
+    const prepared = await prepareSourceCode(code, {
+      syntax: "tsx",
+      sourcePath: options.sourcePath,
+      sourceFiles: options.sourceFiles,
+      loadSourceFile: options.loadSourceFile,
+    });
 
-    const preloadResult = await preloadRequires(transformed.requires);
+    const transformed = await transformCode(prepared.code, { syntax: "tsx" });
+
+    const preloadResult = await preloadRequires(
+      transformed.requires.filter((specifier) => !prepared.localModuleIds.has(specifier)),
+    );
     if (!preloadResult.success) {
       return { success: false, error: preloadResult.error };
     }

@@ -48,27 +48,39 @@ Call \`await help()\` first when you need the live service catalog or runtime su
 
 Workspace packages (\`@workspace/*\`, \`@workspace-skills/*\`, \`@natstack/*\`) are auto-resolved — just write the \`import\` statement. npm packages require the \`imports\` parameter with \`"npm:<version>"\`.
 
+Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. File-loaded eval supports static relative imports (\`./x\`, \`../x\`) from that file.
+
 \`eval\` has no timeout parameter. Do not pass \`timeout\`; long-running work should finish, fail, or be interrupted explicitly by the user.
 
 \`return\` sends a value back to the agent. \`console.log\` streams in real time. \`scope\` persists across eval calls.`,
     parameters: z.object({
-      code: z.string().describe("The TypeScript/JavaScript code to execute"),
+      code: z.string().optional().describe("The TypeScript/JavaScript code to execute. Provide either code or path."),
+      path: z.string().optional().describe("Context-relative TypeScript/TSX file to execute instead of inline code. Supports static relative imports."),
       syntax: z.enum(["typescript", "jsx", "tsx"]).default("tsx").describe("Target syntax"),
       imports: z.record(z.string(), z.string()).optional()
         .describe("On-demand package builds. Workspace packages (@workspace/*, @natstack/*) are auto-resolved and don't need this. Use for npm packages (\"npm:<version>\") or to pin a workspace package to a specific git ref."),
     }).strict(),
     streaming: true,
     execute: async (args: unknown, ctx: MethodExecutionContext) => {
-      const typedArgs = args as { code: string; syntax?: "typescript" | "jsx" | "tsx"; imports?: Record<string, string> };
+      const typedArgs = args as { code?: string; path?: string; syntax?: "typescript" | "jsx" | "tsx"; imports?: Record<string, string> };
+      const path = typedArgs.path?.trim();
+      const code = path
+        ? await opts.rpc.call("main", "fs.readFile", path, "utf8") as string
+        : typedArgs.code;
+      if (!code) throw new Error("Missing code or path");
 
       // Only manage scope lifecycle if using the default executeSandbox
       // (callers who override executeSandbox handle scope themselves)
       if (!opts.executeSandbox) scopeManager?.enterEval();
       try {
-        const result: SandboxResult = await runSandbox(typedArgs.code, {
+        const result: SandboxResult = await runSandbox(code, {
           syntax: typedArgs.syntax,
           imports: typedArgs.imports,
           loadImport: sandbox.loadImport,
+          sourcePath: path,
+          loadSourceFile: path
+            ? async (filePath: string) => opts.rpc.call("main", "fs.readFile", filePath, "utf8") as Promise<string>
+            : undefined,
           bindings: {
             chat: opts.getChatSandboxValue(),
             scope: scopeManager?.current ?? {},

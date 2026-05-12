@@ -43,7 +43,20 @@ export type {
   SandboxOptions,
   SandboxResult,
   CompileResult,
+  CompileComponentOptions,
 } from "./sandbox.js";
+
+export {
+  loadSourceFileBundle,
+  normalizeSourcePath,
+  prepareSourceCode,
+} from "./sourceFiles.js";
+export type {
+  LoadSourceFile,
+  PreparedSource,
+  SourceFileBundle,
+  SourceFileOptions,
+} from "./sourceFiles.js";
 
 // REPL scope — persistent scope across eval calls
 export { ScopeManager } from "./scope.js";

@@ -47,6 +47,7 @@ initPanels:
         - `feedback_custom` for setup workflows where you need to wait for the user's choices or confirmations
         - `inline_ui` for persistent setup panels, link buttons, checklists, or controls in the transcript
         - `load_action_bar` for compact file-backed controls or status pinned above the current chat panel's history
+        - For multi-file eval/UI implementations, prefer a context-relative `path`; file-loaded sources support static relative imports
         - `createBrowserPanel(url, { focus: true })` for internal browser-panel opens
         - `openExternal(url)` for approval-gated system-browser opens
         - `openExternal(authorizeUrl, { expectedRedirectUri })` for OAuth authorize URLs

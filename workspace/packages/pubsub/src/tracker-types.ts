@@ -68,6 +68,10 @@ export interface InlineUiData {
   id: string;
   /** The MDX/TSX code to compile and render */
   code: string;
+  /** Context-relative source path when the UI was loaded from a file */
+  path?: string;
+  /** Embedded source files for resolving relative imports during replay */
+  files?: Record<string, string>;
   /** Optional props to pass to the component */
   props?: Record<string, unknown>;
 }
@@ -178,4 +182,3 @@ export interface ActionTracker {
   isActive(): boolean;
   cleanup(): Promise<boolean>;
 }
-

@@ -29,6 +29,9 @@ export function parseActionBarData(value: unknown): ActionBarData | null {
     id: value["id"],
     path: typeof value["path"] === "string" ? value["path"] : undefined,
     code: value["code"],
+    files: isRecord(value["files"])
+      ? Object.fromEntries(Object.entries(value["files"]).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      : undefined,
     props: isRecord(value["props"]) ? value["props"] : undefined,
     maxHeight: typeof value["maxHeight"] === "number" && Number.isFinite(value["maxHeight"])
       ? value["maxHeight"]
@@ -49,7 +52,10 @@ export function useActionBar({ data }: UseActionBarOptions): ActionBarHookState 
     setComponent(undefined);
     void (async () => {
       try {
-        const result = await compileComponent<import("react").ComponentType<{ props: Record<string, unknown>; chat: Record<string, unknown>; scope: Record<string, unknown>; scopes: Record<string, unknown> }>>(data.code);
+        const result = await compileComponent<import("react").ComponentType<{ props: Record<string, unknown>; chat: Record<string, unknown>; scope: Record<string, unknown>; scopes: Record<string, unknown> }>>(data.code, {
+          sourcePath: data.path,
+          sourceFiles: data.files,
+        });
         if (cancelled) return;
         if (result.success) {
           setComponent({ Component: result.Component!, cacheKey: result.cacheKey! });

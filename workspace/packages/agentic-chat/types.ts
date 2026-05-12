@@ -67,6 +67,8 @@ export interface ActionBarData {
   path?: string;
   /** TSX source code for the component */
   code: string;
+  /** Embedded source files for resolving relative imports */
+  files?: Record<string, string>;
   /** Optional props to pass to the component */
   props?: Record<string, unknown>;
   /** Optional preferred maximum height in pixels. Clamped by the renderer. */

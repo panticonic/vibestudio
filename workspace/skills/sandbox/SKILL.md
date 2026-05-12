@@ -24,7 +24,7 @@ How to use the chat panel's code execution sandbox — the eval tool, inline UI 
 
 ## Execution Modes
 
-All code runs in the same sandbox (Sucrase transform + CJS execution in the panel's browser context). The three tools differ in presentation:
+All code runs in the same sandbox (Sucrase transform + CJS execution in the panel's browser context). Eval/UI tools accept either raw `code` or a context-relative `path` where noted; file-loaded sources support static relative imports. The execution modes differ in presentation:
 
 | Tool | Rendering | Lifecycle | Response |
 |------|-----------|-----------|----------|
@@ -89,7 +89,7 @@ See [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) for when to use inline UI
 
 ## Critical Rules
 
-1. **Static imports only** — `import { rpc } from "@workspace/runtime"` (NOT `await import(...)`)
+1. **Static imports only** — `import { rpc } from "@workspace/runtime"` (NOT `await import(...)`). File-loaded relative imports must also be static/literal.
 2. **Workspace packages are auto-resolved** — `import { GitClient } from "@natstack/git"` just works. npm packages require `imports: { "lodash": "npm:4" }`
 3. **Components must `export default`** — named exports alone won't work for inline_ui/load_action_bar/feedback_custom components
 4. **Inline UI components receive `{ props, chat, scope, scopes }`** — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
