@@ -316,6 +316,21 @@ export function useAgenticChat({
     await publishActionBarContext("cleared", { ok: true, idempotencyKey });
   }, [onActionBarFileChange, publishActionBarContext]);
 
+  const updateActionBarMaxHeight = useCallback((maxHeight: number, options?: { persist?: boolean }) => {
+    setActionBarData((current) => {
+      if (!current) return current;
+      const next = { ...current, maxHeight };
+      if (options?.persist !== false && current.source.type === "file") {
+        void onActionBarFileChange?.({
+          path: current.source.path,
+          props: current.props,
+          maxHeight,
+        });
+      }
+      return next;
+    });
+  }, [onActionBarFileChange]);
+
   useEffect(() => {
     if (!core.connected || !initialActionBarFile) return;
     const loadKey = actionBarLoadKey(initialActionBarFile, initialActionBarProps, initialActionBarMaxHeight);
@@ -486,7 +501,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
               path: z.string().optional().describe("Context-relative TSX file to load. Required unless clear is true."),
               imports: z.record(z.string(), z.string()).optional().describe("On-demand package builds. Same semantics as eval imports."),
               props: z.record(z.unknown()).optional().describe("Props passed to the component as { props }"),
-              maxHeight: z.number().optional().describe("Preferred maximum height in pixels. Clamped between 64 and 240."),
+              maxHeight: z.number().optional().describe("Preferred maximum height in pixels. Defaults to 180 and is clamped between 64 and 360."),
               clear: z.boolean().optional().describe("When true, remove the current action bar."),
             }),
             execute: async (args: unknown) => {
@@ -729,6 +744,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
     methodEntries: core.methodEntries,
     inlineUiComponents: inlineUi.inlineUiComponents,
     actionBar: actionBar.actionBar,
+    onActionBarMaxHeightChange: updateActionBarMaxHeight,
     hasMoreHistory: core.hasMoreHistory,
     loadingMore: core.loadingMore,
     selfId: core.selfId,
@@ -756,7 +772,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
   }), [
     core.connected, core.status, core.connectionError, core.dismissConnectionError,
     channelName, sessionEnabled, chat,
-    core.messages, core.methodEntries, inlineUi.inlineUiComponents, actionBar.actionBar, core.hasMoreHistory, core.loadingMore,
+    core.messages, core.methodEntries, inlineUi.inlineUiComponents, actionBar.actionBar, updateActionBarMaxHeight, core.hasMoreHistory, core.loadingMore,
     core.participants, core.allParticipants,
     core.debugEvents, debug.debugConsoleAgent, core.dirtyRepoWarnings, core.pendingAgents,
     feedback.activeFeedbacks, theme,

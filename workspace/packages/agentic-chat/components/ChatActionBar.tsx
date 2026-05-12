@@ -1,4 +1,5 @@
-import { Suspense, useCallback, useEffect, useMemo, useReducer, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import type { KeyboardEvent, PointerEvent } from "react";
 import { Box, Spinner } from "@radix-ui/themes";
 import { EventErrorBoundary } from "@workspace/tool-ui/components/EventErrorBoundary";
 import { useChatContext } from "../context/ChatContext";
@@ -6,9 +7,9 @@ import { wrapChatForErrorReporting, wrapScopesForErrorReporting } from "../utils
 import { InlineUiErrorCallout } from "./InlineUiMessage";
 import type { ActionBarState } from "../types";
 
-const DEFAULT_MAX_HEIGHT = 160;
+const DEFAULT_MAX_HEIGHT = 180;
 const MIN_MAX_HEIGHT = 64;
-const MAX_MAX_HEIGHT = 240;
+const MAX_MAX_HEIGHT = 360;
 
 function clampMaxHeight(value: number | undefined): number {
   if (value === undefined) return DEFAULT_MAX_HEIGHT;
@@ -16,12 +17,15 @@ function clampMaxHeight(value: number | undefined): number {
 }
 
 function ChatActionBarContent({ actionBar }: { actionBar: ActionBarState }) {
-  const { chat, scope, scopes, scopeManager } = useChatContext();
+  const { chat, scope, scopes, scopeManager, onActionBarMaxHeightChange } = useChatContext();
   const { data, component } = actionBar;
   const CompiledComponent = component?.Component;
   const componentProps = useMemo(() => data.props ?? {}, [data.props]);
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
   const [asyncError, setAsyncError] = useState<Error | null>(null);
+  const [isAtLimit, setIsAtLimit] = useState(false);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const dragRef = useRef<{ startY: number; startHeight: number; nextHeight: number } | null>(null);
 
   const onAsyncError = useCallback((err: Error) => setAsyncError(err), []);
   const wrappedChat = useMemo(
@@ -48,6 +52,56 @@ function ChatActionBarContent({ actionBar }: { actionBar: ActionBarState }) {
   useEffect(() => { setAsyncError(null); }, [resetKey]);
 
   const maxHeight = clampMaxHeight(data.maxHeight);
+  const showResizeHandle = isAtLimit || data.maxHeight !== undefined;
+
+  useEffect(() => {
+    const content = contentRef.current;
+    if (!content) return;
+
+    const update = () => {
+      setIsAtLimit(content.scrollHeight >= maxHeight - 1);
+    };
+    update();
+
+    const observer = new ResizeObserver(update);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [maxHeight, resetKey]);
+
+  const onResizePointerDown = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { startY: event.clientY, startHeight: maxHeight, nextHeight: maxHeight };
+  }, [maxHeight]);
+
+  const onResizePointerMove = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    const next = clampMaxHeight(dragRef.current.startHeight + event.clientY - dragRef.current.startY);
+    dragRef.current.nextHeight = next;
+    onActionBarMaxHeightChange?.(next, { persist: false });
+  }, [onActionBarMaxHeightChange]);
+
+  const onResizePointerEnd = useCallback((event: PointerEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return;
+    const next = dragRef.current.nextHeight;
+    dragRef.current = null;
+    onActionBarMaxHeightChange?.(next);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }, [onActionBarMaxHeightChange]);
+
+  const onResizeKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
+    const step = event.shiftKey ? 24 : 12;
+    let next: number | null = null;
+    if (event.key === "ArrowUp") next = clampMaxHeight(maxHeight - step);
+    if (event.key === "ArrowDown") next = clampMaxHeight(maxHeight + step);
+    if (event.key === "Home") next = MIN_MAX_HEIGHT;
+    if (event.key === "End") next = MAX_MAX_HEIGHT;
+    if (next === null) return;
+    event.preventDefault();
+    onActionBarMaxHeightChange?.(next);
+  }, [maxHeight, onActionBarMaxHeightChange]);
 
   return (
     <Box
@@ -57,6 +111,7 @@ function ChatActionBarContent({ actionBar }: { actionBar: ActionBarState }) {
     >
       <Box
         className="chat-action-bar-content"
+        ref={contentRef}
         onClickCapture={onInteraction}
         onInputCapture={onInteraction}
         onChangeCapture={onInteraction}
@@ -80,6 +135,23 @@ function ChatActionBarContent({ actionBar }: { actionBar: ActionBarState }) {
           </EventErrorBoundary>
         )}
       </Box>
+      {showResizeHandle && onActionBarMaxHeightChange ? (
+        <Box
+          className="chat-action-bar-resize"
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Resize action bar"
+          aria-valuemin={MIN_MAX_HEIGHT}
+          aria-valuemax={MAX_MAX_HEIGHT}
+          aria-valuenow={maxHeight}
+          tabIndex={0}
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={onResizePointerEnd}
+          onPointerCancel={onResizePointerEnd}
+          onKeyDown={onResizeKeyDown}
+        />
+      ) : null}
     </Box>
   );
 }

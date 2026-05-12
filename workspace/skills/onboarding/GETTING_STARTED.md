@@ -79,38 +79,30 @@ Key directories:
 
 ## Step 2: Recommend a First Setup Path
 
-After the workspace overview, ask what the user wants to do first. Present these
-as peer options. Prefer an MDX message with `ActionButton`s:
+After the workspace overview, ask what the user wants to do first. In the
+template workspace, the chat panel loads [ActionBar.tsx](ActionBar.tsx) through
+`actionBarFile` in `meta/natstack.yml`, so these choices are already pinned
+above the chat history before the first agent reply:
 
-```mdx
-I checked the workspace. Here are good next steps:
+- **Google Workspace** — set up Google provider integration
+- **GitHub** — set up GitHub provider integration
+- **Slack** — set up Slack provider integration
+- **Model key** — set up a model or API key provider
+- **Custom API** — set up a custom OAuth or API provider
+- **Browser import** — import cookies, bookmarks, passwords, or local browser state
+- **Build panel** — scaffold and launch a panel app
+- **Explore runtime** — inspect runtime APIs and live examples
+- **Workspaces** — create, fork, or switch workspaces
 
-<Flex gap="2" wrap="wrap">
-  <ActionButton message="Set up Google Workspace provider integration">
-    Google Workspace
-  </ActionButton>
-  <ActionButton message="Set up GitHub provider integration">
-    GitHub
-  </ActionButton>
-  <ActionButton message="Set up Slack provider integration">
-    Slack
-  </ActionButton>
-  <ActionButton message="Set up a model or API key provider">
-    Model/API key
-  </ActionButton>
-  <ActionButton message="Set up a custom OAuth or API provider">
-    Custom provider
-  </ActionButton>
-  <ActionButton message="Import browser data">
-    Browser import
-  </ActionButton>
-  <ActionButton message="Help me build a panel">
-    Build a panel
-  </ActionButton>
-</Flex>
-```
+Do not duplicate that full list in the first message. Mention the most relevant
+state-aware next steps and tell the user they can use the pinned actions or ask
+for something specific.
 
-If MDX is not available, use the same choices in a concise plain-text list:
+Use MDX `ActionButton`s only as a fallback when the action bar is unavailable,
+or later in the transcript for contextual choices that are not already pinned.
+
+If neither the action bar nor MDX is available, use the same choices in a
+concise plain-text list:
 
 1. **Connect API providers** — set up Gmail, GitHub, Slack, or other provider
    integrations through OAuth/credentials. This is available immediately and

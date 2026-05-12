@@ -29,8 +29,10 @@ the nearest `package.json` when possible; use `imports` for explicit package
 versions. Package-local aliases from `package.json` `imports` and simple
 `tsconfig.json` paths are supported.
 
-Keep the component compact. The chat panel clamps the action bar to a small
-scrollable area.
+Keep the component compact. The chat panel defaults to a 180px maximum height,
+keeps overflow scrollable, and shows a resize handle when content reaches the
+height cap. User resizing updates the panel's `actionBarMaxHeight` state arg for
+file-backed action bars.
 
 ## Load Or Replace
 
@@ -38,7 +40,7 @@ scrollable area.
 load_action_bar({
   path: ".natstack/action-bars/review.tsx",
   props: { mode: "review" },
-  maxHeight: 160
+  maxHeight: 220
 })
 ```
 
@@ -59,8 +61,7 @@ Chat panels can be opened with an initial action bar via state args:
 ```ts
 {
   actionBarFile: ".natstack/action-bars/review.tsx",
-  actionBarProps: { mode: "review" },
-  actionBarMaxHeight: 160
+  actionBarProps: { mode: "review" }
 }
 ```
 

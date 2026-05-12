@@ -15,6 +15,7 @@ Guide new users through understanding NatStack and getting their workspace set u
 | [WORKSPACE_STRUCTURE.md](WORKSPACE_STRUCTURE.md) | Workspace directory layout, meta/, context folders, template vs live |
 | [GETTING_STARTED.md](GETTING_STARTED.md) | First-time setup: API provider integrations, browser import, workspace setup, first panel |
 | [REMOTE_SERVER.md](REMOTE_SERVER.md) | Running the state server on a different machine (home server, VPS) and connecting desktop/mobile clients to it |
+| [ActionBar.tsx](ActionBar.tsx) | Pinned first-run action bar loaded by the onboarding chat panel |
 
 ## Related Skills
 
@@ -75,10 +76,15 @@ eval({ code: `
 
 ## Typical Onboarding Flow
 
+The template onboarding chat panel loads `skills/onboarding/ActionBar.tsx` through
+`actionBarFile` in `meta/natstack.yml`, so the first setup actions are available
+before the agent sends its first message. Treat action bar clicks as the user's
+chosen setup path.
+
 ### New Users
 
 1. **Explain** — Read [OVERVIEW.md](OVERVIEW.md), introduce key concepts based on what the user already knows
-2. **Recommend first actions** — Offer state-aware choices with MDX `ActionButton`s when available
+2. **Recommend first actions** — Keep the first reply short and state-aware; rely on the pinned action bar for the initial setup choices
 3. **API integrations** — Highlight concrete provider choices: Google Workspace, GitHub, Slack, model/API keys, or custom OAuth/API provider. Do not gate this on browser data import.
 4. **Import browser data** — Use the `browser-import` skill only when the user wants cookies, bookmarks, passwords, or local browser state
 5. **First project** — Use the `paneldev` skill to scaffold and launch a panel
@@ -94,7 +100,7 @@ eval({ code: `
 
 See the sandbox skill's [MDX.md](../sandbox/MDX.md) and [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERNS.md) for when to use MDX, inline UI, feedback UI, or eval. During onboarding:
 
-- Use MDX `ActionButton`s for the initial choice list and other simple follow-up prompts.
+- Use the pinned [ActionBar.tsx](ActionBar.tsx) for the initial choice list when the chat panel has loaded it. Use MDX `ActionButton`s for simple follow-up prompts in the transcript.
 - Use `feedback_custom` or `inline_ui` after the user chooses a setup path that needs OAuth, provider console links, browser opens, persistence, or error handling. Use `load_action_bar` for compact pinned setup status or controls that should stay visible while the conversation continues.
 - Actions like switching workspaces or importing browser data should be workflow UIs, not blind eval calls.
 

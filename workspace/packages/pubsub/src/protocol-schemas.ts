@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import type { FieldDefinition, FieldValue } from "@natstack/types";
 
 /**
  * Schema for required method specification in agent type advertisements.
@@ -156,8 +157,8 @@ export const AgentTypeAdvertisementSchema = z.object({
  */
 export interface FeedbackFormArgs {
   title: string;
-  fields: z.infer<typeof FieldDefinitionSchema>[];
-  values?: Record<string, string | number | boolean | string[]>;
+  fields: FieldDefinition[];
+  values?: Record<string, FieldValue>;
   submitLabel?: string;
   cancelLabel?: string;
   severity?: "info" | "warning" | "danger";     // Affects styling/icon

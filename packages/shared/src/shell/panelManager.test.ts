@@ -90,6 +90,10 @@ describe("PanelManager", () => {
     expect(nextStateArgs).toEqual({ greeting: "updated" });
     expect(registry.getPanel(created.panelId)?.snapshot.stateArgs).toEqual({ greeting: "updated" });
 
+    const clearedStateArgs = await manager.updateStateArgs(created.panelId, { greeting: null });
+    expect(clearedStateArgs).toEqual({});
+    expect(registry.getPanel(created.panelId)?.snapshot.stateArgs).toEqual({});
+
     await manager.close(created.panelId);
     expect(tokenClient.revokePanelToken).toHaveBeenCalledWith(created.panelId);
     expect(registry.getPanel(created.panelId)).toBeUndefined();

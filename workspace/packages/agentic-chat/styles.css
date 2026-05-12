@@ -184,18 +184,56 @@
 
 .chat-action-bar {
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
   inline-size: 100%;
   min-inline-size: 0;
-  overflow: auto;
+  min-block-size: 0;
+  overflow: hidden;
   border: 1px solid var(--gray-a4);
   border-radius: var(--radius-2);
   background: var(--color-surface);
 }
 
 .chat-action-bar-content {
+  flex: 1 1 auto;
   inline-size: 100%;
   min-inline-size: 0;
+  min-block-size: 0;
+  overflow: auto;
   padding: var(--space-2);
+}
+
+.chat-action-bar-resize {
+  flex: 0 0 8px;
+  cursor: ns-resize;
+  position: relative;
+  border-block-start: 1px solid var(--gray-a3);
+  background: var(--gray-a1);
+  touch-action: none;
+}
+
+.chat-action-bar-resize::before {
+  content: "";
+  position: absolute;
+  inset-block-start: 3px;
+  inset-inline-start: 50%;
+  inline-size: 40px;
+  block-size: 2px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: var(--gray-a7);
+}
+
+.chat-action-bar-resize:hover,
+.chat-action-bar-resize:focus-visible {
+  background: var(--accent-a2);
+  outline: none;
+}
+
+.chat-action-bar-resize:hover::before,
+.chat-action-bar-resize:focus-visible::before {
+  background: var(--accent-a9);
 }
 
 .message-list-content {
