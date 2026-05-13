@@ -323,6 +323,7 @@ export async function createServerClient(
   function wireCloseHandler(socket: WebSocket) {
     socket.on("close", () => {
       if (closed) return;
+      if (socket !== ws) return;
 
       // Reject pending calls — they won't be answered on the old socket
       for (const [, pending] of pendingCalls) {

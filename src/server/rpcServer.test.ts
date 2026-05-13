@@ -57,6 +57,26 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function createTestWs() {
+  const handlers = new Map<string, (...args: any[]) => void>();
+  return {
+    readyState: WebSocket.OPEN as number,
+    send: vi.fn(),
+    close: vi.fn(),
+    on: vi.fn((event: string, handler: (...args: any[]) => void) => {
+      handlers.set(event, handler);
+    }),
+    off: vi.fn(),
+    emitMessage(message: unknown) {
+      handlers.get("message")?.(Buffer.from(JSON.stringify(message)));
+    },
+    emitClose(code = 1006, reason = "network") {
+      this.readyState = WebSocket.CLOSED;
+      handlers.get("close")?.(code, Buffer.from(reason));
+    },
+  };
+}
+
 function registerClient(server: RpcServer, client: WsClientState): void {
   (server as any).connections.addClient(client);
 }
@@ -98,6 +118,56 @@ describe("RpcServer relay behavior", () => {
       connectionId: "conn-2",
       serverBootId: expect.any(String),
     });
+  });
+
+  it("keeps the replacement bridge when the old same-connection socket closes late", () => {
+    const { server, tokenManager } = createServer();
+    const token = tokenManager.getToken("panel-a");
+    const ws1 = createTestWs();
+    const ws2 = createTestWs();
+
+    (server as any).handleAuth(ws1, token, "conn-1");
+    const firstBridge = server.getClientBridge("panel-a");
+    expect(firstBridge).toBeTruthy();
+
+    (server as any).handleAuth(ws2, token, "conn-1");
+    const replacementBridge = server.getClientBridge("panel-a");
+    expect(replacementBridge).toBeTruthy();
+    expect(replacementBridge).not.toBe(firstBridge);
+    expect(ws1.close).toHaveBeenCalledWith(4002, "Replaced by new connection");
+
+    ws1.emitClose(4002, "Replaced by new connection");
+
+    expect(server.getClientBridge("panel-a")).toBe(replacementBridge);
+    expect((server as any).connections.getCallerConnections("panel-a")).toEqual([
+      expect.objectContaining({ connectionId: "conn-1", ws: ws2 }),
+    ]);
+  });
+
+  it("ignores late frames from a replaced same-connection socket", async () => {
+    const { server, tokenManager } = createServer();
+    const token = tokenManager.getToken("panel-a");
+    const ws1 = createTestWs();
+    const ws2 = createTestWs();
+
+    (server as any).dispatcher.getPolicy.mockReturnValue({ allowed: ["panel"] });
+    (server as any).dispatcher.dispatch.mockResolvedValue("ok");
+
+    (server as any).handleAuth(ws1, token, "conn-1");
+    (server as any).handleAuth(ws2, token, "conn-1");
+
+    ws1.emitMessage({
+      type: "ws:rpc",
+      message: {
+        type: "request",
+        requestId: "late-old-frame",
+        method: "workspace.ping",
+        args: [],
+      },
+    });
+    await Promise.resolve();
+
+    expect((server as any).dispatcher.dispatch).not.toHaveBeenCalled();
   });
 
   it("fans routed events out to every live connection for the target caller", () => {

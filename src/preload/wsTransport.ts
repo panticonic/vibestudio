@@ -45,6 +45,8 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
   let authToken = config.authToken;
   let refreshingAuth = false;
   let authRefreshReconnectScheduled = false;
+  let connectionGeneration = 0;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   const connectionId = makeConnectionId();
   const recoveryListeners = new Map<RecoveryKind, Set<() => void | Promise<void>>>();
 
@@ -230,15 +232,23 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
   };
 
   const connect = () => {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    const generation = ++connectionGeneration;
     const url = config.wsUrl ?? `ws://127.0.0.1:${config.wsPort}`;
-    ws = new WebSocket(url);
+    const socket = new WebSocket(url);
+    ws = socket;
 
-    ws.onopen = () => {
+    socket.onopen = () => {
+      if (generation !== connectionGeneration || ws !== socket) return;
       // Send auth message immediately — callerKind determined server-side
-      ws!.send(JSON.stringify({ type: "ws:auth", token: authToken, connectionId }));
+      socket.send(JSON.stringify({ type: "ws:auth", token: authToken, connectionId }));
     };
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (generation !== connectionGeneration || ws !== socket) return;
       try {
         const msg = JSON.parse(event.data as string) as WsServerMessage;
         handleServerMessage(msg);
@@ -247,7 +257,8 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
       }
     };
 
-    ws.onclose = (event) => {
+    socket.onclose = (event) => {
+      if (generation !== connectionGeneration || ws !== socket) return;
       authenticated = false;
       // Terminal close codes — don't reconnect
       // 4001 = token revoked (panel closing), 4005 = bad handshake, 4006 = invalid token
@@ -268,10 +279,15 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
       const jitter = Math.random() * 500;
       const delay = Math.min(1000 * Math.pow(2, reconnectAttempt) + jitter, 10000);
       reconnectAttempt++;
-      setTimeout(connect, delay);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (generation !== connectionGeneration) return;
+        connect();
+      }, delay);
     };
 
-    ws.onerror = () => {
+    socket.onerror = () => {
+      if (generation !== connectionGeneration || ws !== socket) return;
       // Error events are followed by close events, so reconnection is handled there
     };
   };

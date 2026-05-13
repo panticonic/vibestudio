@@ -94,6 +94,10 @@ class ConnectionRegistry {
     return client?.ws.readyState === WebSocket.OPEN ? client : undefined;
   }
 
+  isActiveClient(client: WsClientState): boolean {
+    return this.callerConnections.get(client.callerId)?.get(client.connectionId) === client;
+  }
+
   getCallerConnections(callerId: string): WsClientState[] {
     return [...(this.callerConnections.get(callerId)?.values() ?? [])].filter(
       (client) => client.ws.readyState === WebSocket.OPEN,
@@ -125,9 +129,9 @@ class ConnectionRegistry {
       if (callerClients?.size === 0) {
         this.callerConnections.delete(client.callerId);
       }
+      this.removeBridge(client.callerId, client.connectionId);
     }
     this.clients.delete(client.ws);
-    this.removeBridge(client.callerId, client.connectionId);
     return removedActive;
   }
 
@@ -507,6 +511,8 @@ export class RpcServer {
   }
 
   private handleMessage(client: WsClientState, data: Buffer | ArrayBuffer | Buffer[]): void {
+    if (!this.connections.isActiveClient(client)) return;
+
     let msg: WsClientMessage;
     try {
       msg = JSON.parse(data.toString()) as WsClientMessage;
