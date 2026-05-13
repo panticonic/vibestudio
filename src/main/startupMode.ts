@@ -29,7 +29,14 @@ export interface RemoteTlsOptions {
 
 export type StartupMode =
   | { kind: "local"; wsDir: string; workspaceId: string; isEphemeral: boolean }
-  | { kind: "remote"; remoteUrl: URL; adminToken: string; tls?: RemoteTlsOptions };
+  | {
+      kind: "remote";
+      remoteUrl: URL;
+      adminToken: string;
+      deviceId?: string;
+      refreshToken?: string;
+      tls?: RemoteTlsOptions;
+    };
 
 function isLoopbackHostname(hostname: string): boolean {
   if (hostname === "localhost") {
@@ -65,7 +72,13 @@ export function isTrustworthyRemoteOrigin(remoteUrl: URL): boolean {
  *
  * Priority: environment variables > safeStorage-backed store > nothing
  */
-export function parseRemoteStartupMode(): { remoteUrl: URL; adminToken: string; tls?: RemoteTlsOptions } | null {
+export function parseRemoteStartupMode(): {
+  remoteUrl: URL;
+  adminToken: string;
+  deviceId?: string;
+  refreshToken?: string;
+  tls?: RemoteTlsOptions;
+} | null {
   const stored = loadRemoteCredentials();
 
   // Resolution order: env var -> safeStorage-backed store.
@@ -75,6 +88,12 @@ export function parseRemoteStartupMode(): { remoteUrl: URL; adminToken: string; 
   const adminToken =
     process.env["NATSTACK_REMOTE_TOKEN"] ??
     stored?.token;
+  const deviceId =
+    process.env["NATSTACK_REMOTE_DEVICE_ID"] ??
+    stored?.deviceId;
+  const refreshToken =
+    process.env["NATSTACK_REMOTE_REFRESH_TOKEN"] ??
+    stored?.refreshToken;
 
   if (!rawUrl || !adminToken) return null;
 
@@ -105,7 +124,7 @@ export function parseRemoteStartupMode(): { remoteUrl: URL; adminToken: string; 
   const tls: RemoteTlsOptions | undefined =
     caPath || fingerprint ? { caPath, fingerprint: normalizeFingerprint(fingerprint) } : undefined;
 
-  return { remoteUrl, adminToken, tls };
+  return { remoteUrl, adminToken, deviceId, refreshToken, tls };
 }
 
 /**
@@ -139,7 +158,14 @@ export function resolveStartupMode(centralData: CentralDataManager): StartupMode
   const remote = parseRemoteStartupMode();
   if (remote) {
     log.info("[Workspace] Remote mode — workspace on server");
-    return { kind: "remote", remoteUrl: remote.remoteUrl, adminToken: remote.adminToken, tls: remote.tls };
+    return {
+      kind: "remote",
+      remoteUrl: remote.remoteUrl,
+      adminToken: remote.adminToken,
+      deviceId: remote.deviceId,
+      refreshToken: remote.refreshToken,
+      tls: remote.tls,
+    };
   }
 
   // Local mode: resolve workspace from disk

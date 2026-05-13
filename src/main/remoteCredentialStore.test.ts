@@ -59,6 +59,8 @@ describe("remoteCredentialStore", () => {
     storeMod.saveRemoteCredentials({
       url: "https://example:3000",
       token: "secret-token",
+      deviceId: "dev_123",
+      refreshToken: "refresh-secret",
       caPath: "/ca.pem",
       fingerprint: "AA:BB",
     });
@@ -66,6 +68,8 @@ describe("remoteCredentialStore", () => {
     expect(loaded).toEqual({
       url: "https://example:3000",
       token: "secret-token",
+      deviceId: "dev_123",
+      refreshToken: "refresh-secret",
       caPath: "/ca.pem",
       fingerprint: "AA:BB",
     });

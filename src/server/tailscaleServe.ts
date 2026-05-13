@@ -104,7 +104,12 @@ export async function ensureHttpsServe(
  * checks for the `{ ok: true }` marker. Reaching any other server (or a
  * dangling tailscaled forwarder returning 502) counts as "not reachable".
  */
-export function verifyHttpsReachable(baseUrl: string, timeoutMs = 2500): Promise<boolean> {
+export interface HttpsReachabilityResult {
+  ok: boolean;
+  reason?: string;
+}
+
+export function probeHttpsReachable(baseUrl: string, timeoutMs = 2500): Promise<HttpsReachabilityResult> {
   let healthUrl: string;
   try {
     const u = new URL(baseUrl);
@@ -113,52 +118,63 @@ export function verifyHttpsReachable(baseUrl: string, timeoutMs = 2500): Promise
     u.hash = "";
     healthUrl = u.toString();
   } catch {
-    return Promise.resolve(false);
+    return Promise.resolve({ ok: false, reason: "URL is not valid" });
   }
   return new Promise((resolve) => {
     let settled = false;
     let body = "";
-    const finish = (ok: boolean) => {
+    const finish = (result: HttpsReachabilityResult) => {
       if (settled) return;
       settled = true;
-      resolve(ok);
+      resolve(result);
     };
     try {
       const req = httpsRequest(healthUrl, { method: "GET", timeout: timeoutMs }, (res) => {
-        if (res.statusCode !== 200) {
-          res.resume();
-          finish(false);
-          return;
-        }
         res.setEncoding("utf8");
         res.on("data", (chunk: string) => {
           body += chunk;
           // Cap body to avoid runaway memory if the forwarder is hostile.
           if (body.length > 4096) {
             res.destroy();
-            finish(false);
+            finish({ ok: false, reason: "health check response was too large" });
           }
         });
         res.on("end", () => {
+          if (res.statusCode !== 200) {
+            const summary = body.trim().replace(/\s+/g, " ").slice(0, 160);
+            finish({
+              ok: false,
+              reason: `/healthz returned HTTP ${res.statusCode}${summary ? `: ${summary}` : ""}`,
+            });
+            return;
+          }
           try {
             const parsed = JSON.parse(body) as { ok?: unknown };
-            finish(parsed.ok === true);
+            finish(parsed.ok === true
+              ? { ok: true }
+              : { ok: false, reason: '/healthz did not return {"ok":true}' });
           } catch {
-            finish(false);
+            finish({ ok: false, reason: "/healthz body was not JSON" });
           }
         });
-        res.on("error", () => finish(false));
+        res.on("error", (error: Error) => finish({ ok: false, reason: error.message }));
       });
       req.on("timeout", () => {
-        req.destroy();
-        finish(false);
+        req.destroy(new Error(`health check timed out after ${timeoutMs}ms`));
+        finish({ ok: false, reason: `health check timed out after ${timeoutMs}ms` });
       });
-      req.on("error", () => finish(false));
+      req.on("error", (error: NodeJS.ErrnoException) => {
+        finish({ ok: false, reason: error.code ? `${error.code}: ${error.message}` : error.message });
+      });
       req.end();
     } catch {
-      finish(false);
+      finish({ ok: false, reason: "health check request could not be started" });
     }
   });
+}
+
+export function verifyHttpsReachable(baseUrl: string, timeoutMs = 2500): Promise<boolean> {
+  return probeHttpsReachable(baseUrl, timeoutMs).then((result) => result.ok);
 }
 
 // ── helpers ────────────────────────────────────────────────────────────

@@ -6,7 +6,6 @@
  */
 
 import { WebSocketServer, WebSocket } from "ws";
-import { randomUUID } from "crypto";
 import {
   createRpcBridge,
   type RpcBridge,
@@ -237,7 +236,7 @@ export class RpcServer {
       const msg: WsServerMessage = {
         type: "ws:auth-result",
         success: false,
-        error: "Admin token cannot authenticate RPC; exchange admin for a shell token first.",
+        error: "Admin token cannot authenticate RPC; issue a device credential and refresh a shell token first.",
       };
       ws.send(JSON.stringify(msg));
       ws.close(4006, "Admin token cannot authenticate RPC");
@@ -256,10 +255,7 @@ export class RpcServer {
       return;
     }
     const callerKind = entry.callerKind;
-    // Shell callers get unique per-connection IDs so multiple mobile devices
-    // can connect simultaneously without disconnecting each other.
-    const callerId =
-      callerKind === "shell" ? `${entry.callerId}:${randomUUID().slice(0, 8)}` : entry.callerId;
+    const callerId = entry.callerId;
 
     // Single-active-connection enforcement for non-admin callers
     if (callerKind !== "server") {
@@ -826,7 +822,7 @@ export class RpcServer {
       res.writeHead(401, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
-          error: "Admin token cannot authenticate RPC; exchange admin for a shell token first.",
+          error: "Admin token cannot authenticate RPC; issue a device credential and refresh a shell token first.",
         })
       );
       return;

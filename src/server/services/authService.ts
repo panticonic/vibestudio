@@ -4,9 +4,30 @@ import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { TokenManager } from "@natstack/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../rpcServiceWithRoutes.js";
+import type { DeviceAuthStore } from "./deviceAuthStore.js";
 
-const ExchangeBodySchema = z.object({
-  callerId: z.string().min(1).max(256),
+const IssueDeviceBodySchema = z.object({
+  label: z.string().min(1).max(128).optional(),
+  platform: z.string().min(1).max(64).optional(),
+});
+
+const CreatePairingCodeBodySchema = z.object({
+  ttlMs: z.number().int().min(30_000).max(60 * 60 * 1000).optional(),
+});
+
+const CompletePairingBodySchema = z.object({
+  code: z.string().min(16).max(512),
+  label: z.string().min(1).max(128).optional(),
+  platform: z.string().min(1).max(64).optional(),
+});
+
+const RefreshShellBodySchema = z.object({
+  deviceId: z.string().min(1).max(128),
+  refreshToken: z.string().min(16).max(512),
+});
+
+const RevokeDeviceBodySchema = z.object({
+  deviceId: z.string().min(1).max(128),
 });
 
 async function readJson(req: IncomingMessage): Promise<unknown> {
@@ -23,7 +44,12 @@ function sendJson(res: ServerResponse, status: number, payload: unknown): void {
   res.end(JSON.stringify(payload));
 }
 
-export function createAuthService(deps: { tokenManager: TokenManager }): ServiceWithRoutes {
+export function createAuthService(deps: {
+  tokenManager: TokenManager;
+  deviceAuthStore: DeviceAuthStore;
+  getServerBootId: () => string;
+  getWorkspaceId: () => string;
+}): ServiceWithRoutes {
   const definition: ServiceDefinition = {
     name: "auth",
     description: "Gateway authentication bootstrap routes",
@@ -37,14 +63,114 @@ export function createAuthService(deps: { tokenManager: TokenManager }): Service
   const routes: ServiceRouteDecl[] = [
     {
       serviceName: "auth",
-      path: "/exchange-admin-for-shell",
+      path: "/issue-device",
       methods: ["POST"],
       auth: "admin-token",
       handler: async (req, res) => {
         try {
-          const body = ExchangeBodySchema.parse(await readJson(req));
-          const token = deps.tokenManager.ensureToken(body.callerId, "shell");
-          sendJson(res, 200, { token });
+          const body = IssueDeviceBodySchema.parse(await readJson(req));
+          const credential = deps.deviceAuthStore.issueDevice({
+            label: body.label ?? "NatStack client",
+            platform: body.platform,
+          });
+          sendJson(res, 200, responseForCredential(deps, credential));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 400, { error: message });
+        }
+      },
+    },
+    {
+      serviceName: "auth",
+      path: "/create-pairing-code",
+      methods: ["POST"],
+      auth: "admin-token",
+      handler: async (req, res) => {
+        try {
+          const body = CreatePairingCodeBodySchema.parse(await readJson(req));
+          const expiresInMs = body.ttlMs ?? 10 * 60 * 1000;
+          const code = deps.deviceAuthStore.createPairingCode(expiresInMs);
+          sendJson(res, 200, {
+            code,
+            expiresInMs,
+            serverId: deps.deviceAuthStore.getServerId(),
+            serverBootId: deps.getServerBootId(),
+            workspaceId: deps.getWorkspaceId(),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 400, { error: message });
+        }
+      },
+    },
+    {
+      serviceName: "auth",
+      path: "/complete-pairing",
+      methods: ["POST"],
+      auth: "public",
+      handler: async (req, res) => {
+        try {
+          const body = CompletePairingBodySchema.parse(await readJson(req));
+          const credential = deps.deviceAuthStore.completePairing({
+            code: body.code,
+            label: body.label,
+            platform: body.platform,
+          });
+          sendJson(res, 200, responseForCredential(deps, credential));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 401, { error: message });
+        }
+      },
+    },
+    {
+      serviceName: "auth",
+      path: "/refresh-shell",
+      methods: ["POST"],
+      auth: "public",
+      handler: async (req, res) => {
+        try {
+          const body = RefreshShellBodySchema.parse(await readJson(req));
+          const device = deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken);
+          const shellToken = deps.tokenManager.ensureToken(shellCallerId(body.deviceId), "shell");
+          sendJson(res, 200, {
+            shellToken,
+            callerId: shellCallerId(body.deviceId),
+            deviceId: body.deviceId,
+            label: device.label,
+            serverId: deps.deviceAuthStore.getServerId(),
+            serverBootId: deps.getServerBootId(),
+            workspaceId: deps.getWorkspaceId(),
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          sendJson(res, 401, { error: message });
+        }
+      },
+    },
+    {
+      serviceName: "auth",
+      path: "/devices",
+      methods: ["GET"],
+      auth: "admin-token",
+      handler: async (_req, res) => {
+        sendJson(res, 200, {
+          serverId: deps.deviceAuthStore.getServerId(),
+          devices: deps.deviceAuthStore.listDevices().map(({ refreshTokenHash: _secret, ...device }) => device),
+        });
+      },
+    },
+    {
+      serviceName: "auth",
+      path: "/revoke-device",
+      methods: ["POST"],
+      auth: "admin-token",
+      handler: async (req, res) => {
+        try {
+          const body = RevokeDeviceBodySchema.parse(await readJson(req));
+          const revoked = deps.deviceAuthStore.revokeDevice(body.deviceId);
+          deps.tokenManager.revokeToken(shellCallerId(body.deviceId));
+          sendJson(res, 200, { revoked });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           sendJson(res, 400, { error: message });
@@ -54,4 +180,28 @@ export function createAuthService(deps: { tokenManager: TokenManager }): Service
   ];
 
   return { definition, routes };
+}
+
+function shellCallerId(deviceId: string): string {
+  return `shell:${deviceId}`;
+}
+
+function responseForCredential(
+  deps: {
+    tokenManager: TokenManager;
+    deviceAuthStore: DeviceAuthStore;
+    getServerBootId: () => string;
+    getWorkspaceId: () => string;
+  },
+  credential: { deviceId: string; refreshToken: string; label: string; platform?: string },
+): Record<string, unknown> {
+  const shellToken = deps.tokenManager.ensureToken(shellCallerId(credential.deviceId), "shell");
+  return {
+    ...credential,
+    shellToken,
+    callerId: shellCallerId(credential.deviceId),
+    serverId: deps.deviceAuthStore.getServerId(),
+    serverBootId: deps.getServerBootId(),
+    workspaceId: deps.getWorkspaceId(),
+  };
 }

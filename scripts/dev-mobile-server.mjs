@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Start a dev server bound to the LAN so a phone on the same Wi-Fi can reach
-// it, then print a `natstack://connect?url=…&token=…` deep link as a QR code
+// it, then print a `natstack://connect?url=…&code=…` deep link as a QR code
 // that the mobile client picks up via its URL-scheme intent filter.
 //
 // Usage:
@@ -22,7 +22,7 @@ function main() {
 
   const child = spawn(
     process.execPath,
-    ["dist/server.mjs", "--host", host.address, "--serve-panels", "--init", "--ephemeral", "--print-token"],
+    ["dist/server.mjs", "--host", host.address, "--serve-panels", "--init", "--ephemeral", "--print-credentials"],
     {
       cwd: repoRoot,
       stdio: ["inherit", "pipe", "inherit"],
@@ -31,7 +31,7 @@ function main() {
   );
 
   let gatewayUrl = null;
-  let shellToken = null;
+  let pairingCode = null;
   let bannerPrinted = false;
   let buffer = "";
 
@@ -46,15 +46,15 @@ function main() {
 
       const gMatch = line.match(/Gateway:\s+(\S+)/);
       if (gMatch) gatewayUrl = gMatch[1];
-      const tMatch = line.match(/(?:NATSTACK_SHELL_TOKEN=|Shell token:\s+)([A-Za-z0-9_-]+)/);
-      if (tMatch) shellToken = tMatch[1];
+      const pMatch = line.match(/(?:NATSTACK_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/);
+      if (pMatch) pairingCode = pMatch[1];
 
-      if (!bannerPrinted && gatewayUrl && shellToken) {
+      if (!bannerPrinted && gatewayUrl && pairingCode) {
         bannerPrinted = true;
         printConnectBanner({
           title: "NatStack mobile dev server",
           gatewayUrl,
-          shellToken,
+          pairingCode,
           instructions: "Point the Pixel camera at the QR code above, tap the notification, and the app will auto-connect.",
         });
       }

@@ -140,7 +140,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
       expect(status).toBe(401);
-      expect(body["error"]).toContain("exchange admin for a shell token");
+      expect(body["error"]).toContain("issue a device credential");
     });
 
     it("accepts worker token", async () => {
