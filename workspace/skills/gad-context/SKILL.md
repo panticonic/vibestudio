@@ -3,9 +3,9 @@ name: gad-context
 description: >-
   Use this skill when the user asks about Pi/gad trajectory, provenance, why code
   changed, assumptions behind a change, branch context, tracked edits, or gad.
-  Query NatStack's immutable gad service for branches, trajectory items,
-  message blocks, tool calls, state transitions, file blame, branch heads, and
-  semantic sidecars.
+  Query NatStack's immutable gad service for branches, recursive trajectory
+  chains, message blocks, tool calls, state transitions, file hunks, branch
+  heads, and semantic sidecars.
 ---
 
 # gad Context
@@ -17,18 +17,26 @@ the workspace blobstore.
 Core model:
 
 - `gad_trajectory_items` is the authoritative append-only Pi trajectory DAG.
+- Branch history is not stored in a membership table. Start from
+  `gad_branches.head_trajectory_id` and recursively walk
+  `gad_trajectory_items.parent_id`.
 - `gad_branches` are mutable heads that point at immutable trajectory and state
-  hashes. Compatibility `head_history_*` fields remain for older callers.
+  hashes.
+- `origin_branch_id` records where an item was first appended. It is not branch
+  membership.
 - `gad_state_transitions` records only real workspace state changes.
-- `gad_file_change_hunks` and `gad_file_blame_segments` connect file regions
-  directly back to the trajectory/tool call that edited them.
+  Non-mutating trajectory items have no transition row and no output state.
+- `gad_file_change_hunks` connects file regions directly back to the trajectory
+  item that edited them.
+- Tool calls are reconstructed from `tool_call_requested` and
+  `tool_result_observed` trajectory items sharing `tool_call_id`.
+- Pi messages are materialized by folding the recursive branch trajectory joined
+  to `gad_payloads`.
+- `gad_claims`, `gad_claim_edges`, `gad_theories`,
+  `gad_theory_versions`, and `gad_contradictions` are semantic sidecars.
 - `gad_state_roots` point at persistent manifest trees. `gad_manifest_nodes`
   are content-addressed directory nodes; `gad_manifest_entries` links each
   directory entry name to either a child manifest hash or a file version.
-- `pi_messages_view`, `pi_message_blocks_view`, `gad_tool_calls`, and
-  `gad_file_activity_view` are rebuildable read models.
-- `gad_claims`, `gad_claim_edges`, `gad_theories`,
-  `gad_theory_versions`, and `gad_contradictions` are semantic sidecars.
 - Blob bytes live in the builtin blobstore; `gad_blobs` stores metadata.
 - Direct writes to authoritative tables are break-glass operations.
 
@@ -66,10 +74,28 @@ LIMIT 20;
 ### Branch Trajectory
 
 ```sql
-SELECT trajectory_id, trajectory_hash, parent_hash, kind, actor, message_id, block_id, tool_call_id,
+WITH RECURSIVE branch_chain AS (
+  SELECT ti.*
+  FROM gad_branches b
+  JOIN gad_trajectory_items ti
+    ON ti.workspace_id = b.workspace_id
+   AND ti.id = b.head_trajectory_id
+  WHERE b.workspace_id = ?
+    AND b.id = ?
+    AND b.head_trajectory_id IS NOT NULL
+
+  UNION ALL
+
+  SELECT parent.*
+  FROM gad_trajectory_items parent
+  JOIN branch_chain child
+    ON parent.workspace_id = child.workspace_id
+   AND parent.id = child.parent_id
+)
+SELECT id AS trajectory_id, hash AS trajectory_hash, parent_hash,
+       origin_branch_id, kind, actor, message_id, block_id, tool_call_id,
        input_state_hash, output_state_hash, created_at
-FROM gad_branch_trajectory_view
-WHERE branch_id = ?
+FROM branch_chain
 ORDER BY trajectory_id;
 ```
 
@@ -81,32 +107,53 @@ Prefer the service API when reconstructing chat history:
 const { messages } = await gad.materializePiMessages({ branchId });
 ```
 
-Or inspect the read model:
+Or inspect canonical message trajectory items:
 
 ```sql
-SELECT idx, message_id, role, message_json, finalized
-FROM pi_messages_view
-WHERE branch_id = ?
-ORDER BY idx;
-```
-
-### Message Blocks
-
-```sql
-SELECT message_id, block_id, block_idx, block_type, tool_call_id, tool_name,
-       SUBSTR(text, 1, 800) AS preview
-FROM pi_message_blocks_view
-WHERE branch_id = ?
-ORDER BY message_id, block_idx;
+WITH RECURSIVE branch_chain AS (
+  SELECT ti.*
+  FROM gad_branches b
+  JOIN gad_trajectory_items ti
+    ON ti.workspace_id = b.workspace_id
+   AND ti.id = b.head_trajectory_id
+  WHERE b.workspace_id = ? AND b.id = ?
+  UNION ALL
+  SELECT parent.*
+  FROM gad_trajectory_items parent
+  JOIN branch_chain child
+    ON parent.workspace_id = child.workspace_id
+   AND parent.id = child.parent_id
+)
+SELECT bc.id AS trajectory_id, bc.kind, bc.message_id, bc.block_id, p.json
+FROM branch_chain bc
+LEFT JOIN gad_payloads p
+  ON p.workspace_id = bc.workspace_id
+ AND p.hash = bc.payload_hash
+WHERE bc.kind IN ('message_created', 'message_block_added', 'message_finalized', 'tool_result_observed')
+ORDER BY bc.id;
 ```
 
 ### Tool Calls
 
 ```sql
-SELECT tool_call_id, message_id, block_id, tool_name, provider_handle,
-       status, result_summary, request_trajectory_id, result_trajectory_id
-FROM gad_tool_calls
-WHERE branch_id = ?
+WITH RECURSIVE branch_chain AS (
+  SELECT ti.*
+  FROM gad_branches b
+  JOIN gad_trajectory_items ti
+    ON ti.workspace_id = b.workspace_id
+   AND ti.id = b.head_trajectory_id
+  WHERE b.workspace_id = ? AND b.id = ?
+  UNION ALL
+  SELECT parent.*
+  FROM gad_trajectory_items parent
+  JOIN branch_chain child
+    ON parent.workspace_id = child.workspace_id
+   AND parent.id = child.parent_id
+)
+SELECT id AS trajectory_id, hash AS trajectory_hash, kind, message_id,
+       block_id, tool_call_id, payload_hash, created_at
+FROM branch_chain
+WHERE tool_call_id = ?
 ORDER BY id;
 ```
 
@@ -118,17 +165,37 @@ Prefer the service API:
 const producer = await gad.getGadStateProducer({ stateHash, branchId });
 ```
 
-Or query the sidecar:
+Or query the sidecar through the branch chain:
 
 ```sql
-SELECT st.*, ti.kind, ti.actor, tc.tool_name
+WITH RECURSIVE branch_chain AS (
+  SELECT ti.*
+  FROM gad_branches b
+  JOIN gad_trajectory_items ti
+    ON ti.workspace_id = b.workspace_id
+   AND ti.id = b.head_trajectory_id
+  WHERE b.workspace_id = ? AND b.id = ?
+  UNION ALL
+  SELECT parent.*
+  FROM gad_trajectory_items parent
+  JOIN branch_chain child
+    ON parent.workspace_id = child.workspace_id
+   AND parent.id = child.parent_id
+)
+SELECT st.*, bc.hash AS trajectory_hash, bc.kind, bc.actor,
+       bc.message_id, bc.block_id, bc.tool_call_id
 FROM gad_state_transitions st
-JOIN gad_trajectory_items ti ON ti.id = st.trajectory_id
-LEFT JOIN gad_tool_calls tc ON tc.tool_call_id = st.tool_call_id
+JOIN branch_chain bc
+  ON bc.workspace_id = st.workspace_id
+ AND bc.id = st.trajectory_id
 WHERE st.output_state_hash = ?;
 ```
 
 ### Snippet Blame
+
+Snippet blame walks file-version ancestry through `gad_file_change_hunks` so an
+unchanged line in a later file version can still trace back to the earlier
+trajectory item that introduced it.
 
 ```ts
 const rows = await gad.blameGadFileSnippet({
@@ -137,26 +204,6 @@ const rows = await gad.blameGadFileSnippet({
   startLine: 10,
   endLine: 12,
 });
-```
-
-### File Activity
-
-```sql
-SELECT operation, path, before_hash, after_hash,
-       input_state_hash, output_state_hash, history_hash
-FROM gad_file_activity_view
-WHERE branch_id = ?
-ORDER BY id;
-```
-
-### Branches
-
-```sql
-SELECT id, name, channel_id, context_id, parent_branch_id,
-       forked_from_trajectory_id, forked_from_state_hash,
-       head_trajectory_hash, head_state_hash, dirty, updated_at
-FROM gad_branches
-ORDER BY updated_at DESC;
 ```
 
 ### Branch Files
@@ -182,16 +229,16 @@ FROM gad_manifest_entries
 WHERE parent_hash = ?;
 ```
 
-### Raw History Append
+### Raw Trajectory Append
 
-Agents should normally let the Pi harness append history. For custom workers,
-append immutable facts through the service API:
+Agents should normally let the Pi harness append trajectory items. For custom
+workers, append immutable facts through the service API:
 
 ```ts
 const head = await gad.getGadBranchHead({ branchId });
-await gad.appendGadHistoryBatch({
+await gad.appendGadTrajectoryBatch({
   branchId: head.branchId,
-  expectedHeadHash: head.headHistoryHash,
+  expectedTrajectoryHash: head.headTrajectoryHash,
   expectedStateHash: head.headStateHash,
   items: [{
     kind: "system_event",
@@ -203,10 +250,5 @@ await gad.appendGadHistoryBatch({
 
 ## Writing SQL
 
-Use raw writes sparingly. Approved writes to immutable/head tables mark branches
-or workspaces dirty and should be followed by validation/rebuild:
-
-```ts
-await gad.rawSql("UPDATE gad_branches SET dirty = 1 WHERE id = ?", [branchId]);
-await gad.validateGadHashes({});
-```
+Use raw writes sparingly. Approved writes to immutable/head/sidecar tables mark
+branches or workspaces dirty and should be followed by validation.

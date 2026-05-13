@@ -313,13 +313,13 @@ describe("PiRunner approval-gate tool wrapping", () => {
     const rpc = createMockRpc({
       "main:gad.ensureGadBranch": {
         branchId: "branch:channel:test",
-        headHistoryHash: null,
+        headTrajectoryHash: null,
         headStateHash: "state:empty",
       },
       "main:blobstore.putText": { digest: "blob:file", size: 12 },
-      "main:gad.appendGadHistoryBatch": {
+      "main:gad.appendGadTrajectoryBatch": {
         branchId: "branch:channel:test",
-        headHistoryHash: "history:1",
+        headTrajectoryHash: "trajectory:1",
         headStateHash: "state:next",
       },
     });
@@ -334,7 +334,7 @@ describe("PiRunner approval-gate tool wrapping", () => {
     const writeTool = tools.find((t) => t.name === "write");
     await writeTool.execute("call-1", { path: "src/app.ts", content: "hello" }, undefined);
 
-    expect(rpc.call).toHaveBeenCalledWith("main", "gad.appendGadHistoryBatch", expect.objectContaining({
+    expect(rpc.call).toHaveBeenCalledWith("main", "gad.appendGadTrajectoryBatch", expect.objectContaining({
       items: [expect.objectContaining({
         kind: "file_mutation",
         payload: expect.objectContaining({ path: "src/app.ts" }),
@@ -366,24 +366,24 @@ describe("PiRunner event forwarding", () => {
     expect(events.map((e) => e.type)).toEqual(["agent_start", "message_end"]);
   });
 
-  it("appends gad history on message_end", async () => {
-    const onHistoryAdvanced = vi.fn();
+  it("appends gad trajectory on message_end", async () => {
+    const onTrajectoryAdvanced = vi.fn();
     const rpc = createMockRpc({
       "main:gad.ensureGadBranch": {
         branchId: "branch:channel:test",
-        headHistoryHash: null,
+        headTrajectoryHash: null,
         headStateHash: "state:empty",
       },
-      "main:gad.appendGadHistoryBatch": {
+      "main:gad.appendGadTrajectoryBatch": {
         branchId: "branch:channel:test",
-        headHistoryHash: "history:1",
+        headTrajectoryHash: "trajectory:1",
         headStateHash: "state:empty",
       },
     });
     const runner = new PiRunner(createOptions({
       rpc,
       gad: { branchId: "branch:channel:test", channelId: "test" },
-      onHistoryAdvanced,
+      onTrajectoryAdvanced,
     }));
     await runner.init();
 
@@ -403,7 +403,7 @@ describe("PiRunner event forwarding", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(rpc.call).toHaveBeenCalledWith("main", "gad.appendGadHistoryBatch", expect.objectContaining({
+    expect(rpc.call).toHaveBeenCalledWith("main", "gad.appendGadTrajectoryBatch", expect.objectContaining({
       branchId: "branch:channel:test",
       items: expect.arrayContaining([
         expect.objectContaining({ kind: "message_created", messageId: "msg:0" }),
@@ -411,7 +411,41 @@ describe("PiRunner event forwarding", () => {
         expect.objectContaining({ kind: "message_finalized", messageId: "msg:0" }),
       ]),
     }));
-    expect(onHistoryAdvanced).toHaveBeenCalledTimes(1);
+    expect(onTrajectoryAdvanced).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-append a materialized gad prefix after replaceHistory", async () => {
+    const rpc = createMockRpc({
+      "main:gad.ensureGadBranch": {
+        branchId: "branch:channel:test",
+        headTrajectoryHash: "trajectory:2",
+        headStateHash: "state:empty",
+      },
+    });
+    const runner = new PiRunner(createOptions({
+      rpc,
+      gad: { branchId: "branch:channel:test", channelId: "test" },
+    }));
+    await runner.init();
+    rpc.call.mockClear();
+
+    const messages = [
+      { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },
+      { role: "assistant", content: [{ type: "text", text: "hello" }], timestamp: 2 },
+    ] as any[];
+    runner.replaceHistory(messages);
+
+    const agent = agentInstances[0];
+    const cb = subscribeCallbacks.get(agent)!;
+    cb({ type: "agent_end", messages });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(rpc.call).not.toHaveBeenCalledWith(
+      "main",
+      "gad.appendGadTrajectoryBatch",
+      expect.anything(),
+    );
   });
 
   it("refreshes active tools on turn_start", async () => {

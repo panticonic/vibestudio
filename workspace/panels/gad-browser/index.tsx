@@ -72,12 +72,12 @@ function App() {
       const branchId = (selectedBranchId ?? asText(nextBranches[0]?.["id"])) || null;
       setSelectedBranchId(branchId);
       if (branchId) {
-        const [nextHistory, nextFiles, nextToolCalls] = await Promise.all([
+        const [nextTrajectory, nextFiles, nextToolCalls] = await Promise.all([
           gad.listGadBranchTrajectory({ branchId }),
           gad.listGadBranchFiles({ branchId }),
           gad.listGadBranchToolCalls({ branchId }),
         ]);
-        setTrajectory(nextHistory);
+        setTrajectory(nextTrajectory);
         setFiles(nextFiles);
         setToolCalls(nextToolCalls);
       } else {
@@ -157,7 +157,7 @@ function App() {
                     <DataTable rows={files} columns={["path", "content_hash", "mode", "created_at"]} />
                   </Tabs.Content>
                   <Tabs.Content value="tool-calls">
-                    <DataTable rows={toolCalls} columns={["tool_call_id", "tool_name", "status", "result_summary", "request_trajectory_id", "result_trajectory_id"]} />
+                    <DataTable rows={toolCalls} columns={["tool_call_id", "tool_name", "status", "result_summary", "request_trajectory_id", "request_trajectory_hash", "result_trajectory_id", "result_trajectory_hash"]} />
                   </Tabs.Content>
                   <Tabs.Content value="status">
                     <DataTable rows={status} columns={["metric", "value"]} />

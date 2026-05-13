@@ -4,7 +4,7 @@
  * Embeds `@mariozechner/pi-agent-core`'s `Agent` in-process via `PiRunner`
  * from `@natstack/harness`. One PiRunner per channel, owned by the DO for
  * the lifetime of the chat. The runner drives agent state (messages,
- * streaming, tool calls); durable transcript/history persistence lives in gad,
+ * streaming, tool calls); durable transcript persistence lives in gad,
  * while this DO only keeps execution-local runner/cache state and forwards
  * runner events to the channel as ephemeral events.
  *
@@ -339,7 +339,7 @@ interface AgentAbortContext {
 }
 
 export abstract class AgentWorkerBase extends DurableObjectBase {
-  static override schemaVersion = 10;
+  static override schemaVersion = 11;
 
   protected identity: DOIdentity;
   protected subscriptions: SubscriptionManager;
@@ -368,7 +368,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   /** Dedup inline credential prompts per channel/provider while this DO is alive. */
   private credentialPromptCardsEmitted = new Set<string>();
 
-  /** Materialized gad history cache; execution-local only. */
+  /** Materialized gad message cache; execution-local only. */
   private messageCache = new Map<string, AgentMessage[]>();
 
   /** Phase 0D: Transient poison message tracker. Resets on hibernation. */
@@ -403,6 +403,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     this.subscriptions.createTables();
     this.dispatches.createTables();
     this.sql.exec(`DROP TABLE IF EXISTS pending_calls`);
+    this.sql.exec(`DROP TABLE IF EXISTS pi_messages`);
+    this.sql.exec(`DROP TABLE IF EXISTS pi_sessions`);
     // Delivery cursor for event dedup + gap repair.
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS delivery_cursor (
@@ -410,11 +412,6 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         last_delivered_seq INTEGER NOT NULL
       )
     `);
-  }
-
-  protected override migrate(_fromVersion: number, _toVersion: number): void {
-    this.sql.exec(`DROP TABLE IF EXISTS pi_messages`);
-    this.sql.exec(`DROP TABLE IF EXISTS pi_sessions`);
   }
 
   // ── Identity bootstrap ──────────────────────────────────────────────────
@@ -1034,7 +1031,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
           workerRef: this.identity.refOrNull,
         },
       },
-      onHistoryAdvanced: async () => {
+      onTrajectoryAdvanced: async () => {
         const materialized = await this.loadMessages(channelId, { refresh: true });
         runner.replaceHistory(runner.trimTrailingAbortedAssistant(materialized));
         await this.drainDeferredDispatchesFor(channelId);
@@ -1181,12 +1178,12 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     try {
       const head = await this.rpc.call<{
         branchId: string;
-        headHistoryHash: string | null;
+        headTrajectoryHash: string | null;
         headStateHash: string;
       }>("main", "gad.getGadBranchHead", { branchId: gadBranchIdForChannel(channelId) });
-      await this.rpc.call("main", "gad.appendGadHistoryBatch", {
+      await this.rpc.call("main", "gad.appendGadTrajectoryBatch", {
         branchId: head.branchId,
-        expectedHeadHash: head.headHistoryHash,
+        expectedTrajectoryHash: head.headTrajectoryHash,
         expectedStateHash: head.headStateHash,
         items,
       });
@@ -2060,7 +2057,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     this.sql.exec(`DELETE FROM delivery_cursor`);
     this.sql.exec(`DELETE FROM dispatched_calls`);
 
-    await this.forkGadHistoryForClone(oldChannelId, newChannelId, forkAtMessageIndex);
+    await this.forkGadTrajectoryForClone(oldChannelId, newChannelId, forkAtMessageIndex);
 
     // Rename approvalLevel state key.
     const oldApprovalKey = `approvalLevel:${oldChannelId}`;
@@ -2106,7 +2103,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     // Default: no-op
   }
 
-  private async forkGadHistoryForClone(
+  private async forkGadTrajectoryForClone(
     oldChannelId: string,
     newChannelId: string,
     forkAtMessageIndex: number | null,
@@ -2115,11 +2112,11 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       await this.ensureGadBranch(oldChannelId);
       const oldBranchId = gadBranchIdForChannel(oldChannelId);
       const newBranchId = gadBranchIdForChannel(newChannelId);
-      const head = await this.rpc.call<{ headHistoryHash: string | null }>("main", "gad.getGadBranchHead", {
+      const head = await this.rpc.call<{ headTrajectoryHash: string | null }>("main", "gad.getGadBranchHead", {
         branchId: oldBranchId,
       });
-      let historyHash = head.headHistoryHash;
-      let historyId: number | null = null;
+      let trajectoryHash = head.headTrajectoryHash;
+      let trajectoryId: number | null = null;
       if (forkAtMessageIndex != null) {
         const chain = await this.rpc.call<Array<Record<string, unknown>>>("main", "gad.listGadBranchTrajectory", {
           branchId: oldBranchId,
@@ -2129,19 +2126,19 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
           row["message_id"] === targetMessageId && row["kind"] === "message_finalized"
         ) ?? [...chain].reverse().find((row) => row["message_id"] === targetMessageId);
         if (target) {
-          historyHash = typeof target["trajectory_hash"] === "string" ? target["trajectory_hash"] : historyHash;
-          historyId = typeof target["trajectory_id"] === "number" ? target["trajectory_id"] : null;
+          trajectoryHash = typeof target["trajectory_hash"] === "string" ? target["trajectory_hash"] : trajectoryHash;
+          trajectoryId = typeof target["trajectory_id"] === "number" ? target["trajectory_id"] : null;
         }
       }
-      if (!historyHash && historyId == null) {
+      if (!trajectoryHash && trajectoryId == null) {
         await this.ensureGadBranch(newChannelId);
         return;
       }
       await this.rpc.call("main", "gad.forkGadBranch", {
         sourceBranchId: oldBranchId,
         newBranchId,
-        historyHash,
-        historyId,
+        trajectoryHash,
+        trajectoryId,
         channelId: newChannelId,
         contextId: this.subscriptions.getContextId(oldChannelId),
       });

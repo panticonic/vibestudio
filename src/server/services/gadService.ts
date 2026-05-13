@@ -26,7 +26,7 @@ const EnsureGadBranchSchema = z.object({
   metadata: OptionalJsonRecordSchema,
 }).strict();
 
-const GadHistoryItemSchema = z.object({
+const GadTrajectoryItemSchema = z.object({
   kind: z.enum([
     "message_created",
     "message_block_added",
@@ -58,12 +58,12 @@ const GadHistoryItemSchema = z.object({
   metadata: OptionalJsonRecordSchema,
 }).strict();
 
-const AppendGadHistoryBatchSchema = z.object({
+const AppendGadTrajectoryBatchSchema = z.object({
   workspaceId: z.string().nullable().optional(),
   branchId: z.string(),
-  expectedHeadHash: z.string().nullable().optional(),
+  expectedTrajectoryHash: z.string().nullable().optional(),
   expectedStateHash: z.string().nullable().optional(),
-  items: z.array(GadHistoryItemSchema),
+  items: z.array(GadTrajectoryItemSchema),
 }).strict();
 
 const BranchHeadSchema = z.object({
@@ -75,8 +75,8 @@ const ForkGadBranchSchema = z.object({
   workspaceId: z.string().nullable().optional(),
   sourceBranchId: z.string(),
   newBranchId: z.string().nullable().optional(),
-  historyHash: z.string().nullable().optional(),
-  historyId: z.number().int().nullable().optional(),
+  trajectoryHash: z.string().nullable().optional(),
+  trajectoryId: z.number().int().nullable().optional(),
   channelId: z.string().nullable().optional(),
   contextId: z.string().nullable().optional(),
 }).strict();
@@ -279,10 +279,9 @@ export function createGadService(deps: GadServiceDeps): ServiceDefinition {
       ensureBlob: { args: z.tuple([z.string(), z.number().int().optional(), z.string().nullable().optional()]) },
       ensureGadBranch: { args: z.tuple([EnsureGadBranchSchema]) },
       getGadBranchHead: { args: z.tuple([BranchHeadSchema]) },
-      appendGadHistoryBatch: { args: z.tuple([AppendGadHistoryBatchSchema]) },
+      appendGadTrajectoryBatch: { args: z.tuple([AppendGadTrajectoryBatchSchema]) },
       materializePiMessages: { args: z.tuple([BranchHeadSchema]) },
       listGadBranchTrajectory: { args: z.tuple([BranchListOptsSchema]) },
-      listGadBranchHistory: { args: z.tuple([BranchListOptsSchema]) },
       listGadBranchToolCalls: { args: z.tuple([BranchListOptsSchema]) },
       forkGadBranch: { args: z.tuple([ForkGadBranchSchema]) },
       listGadBranches: { args: z.tuple([ListOptsSchema]) },
@@ -311,7 +310,6 @@ export function createGadService(deps: GadServiceDeps): ServiceDefinition {
         jobKind: z.string(),
       }).strict()]) },
       processGadIndexJobs: { args: z.tuple([ListOptsSchema]) },
-      rebuildGadReadModels: { args: z.tuple([BranchHeadSchema]) },
       validateGadHashes: { args: z.tuple([ListOptsSchema]) },
       clearDirtyAfterValidation: { args: z.tuple([ListOptsSchema]) },
       revokeRawSqlWriteApproval: { args: z.tuple([]), policy: { allowed: ["panel", "worker"] } },
@@ -333,10 +331,9 @@ export function createGadService(deps: GadServiceDeps): ServiceDefinition {
           return dispatch("ensureBlob", args);
         case "ensureGadBranch":
         case "getGadBranchHead":
-        case "appendGadHistoryBatch":
+        case "appendGadTrajectoryBatch":
         case "materializePiMessages":
         case "listGadBranchTrajectory":
-        case "listGadBranchHistory":
         case "listGadBranchToolCalls":
         case "forkGadBranch":
         case "listGadBranches":
@@ -348,7 +345,6 @@ export function createGadService(deps: GadServiceDeps): ServiceDefinition {
         case "blameGadFileSnippet":
         case "enqueueGadIndexJob":
         case "processGadIndexJobs":
-        case "rebuildGadReadModels":
         case "validateGadHashes":
         case "clearDirtyAfterValidation":
           return dispatch(method, args);

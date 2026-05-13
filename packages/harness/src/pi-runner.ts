@@ -126,13 +126,13 @@ export interface PiRunnerOptions {
    * on the next tool_call.
    */
   approvalLevel: ApprovalLevel;
-  /** Pre-existing message history materialized from gad for runner startup. */
+  /** Pre-existing messages materialized from gad for runner startup. */
   initialMessages?: AgentMessage[];
-  /** Called after gad history advances so the worker can drain execution-local state. */
-  onHistoryAdvanced?: () => Promise<void> | void;
+  /** Called after the gad trajectory advances so the worker can drain execution-local state. */
+  onTrajectoryAdvanced?: () => Promise<void> | void;
   /** Working directory passed to file tools and the extension runtime. */
   cwd?: string;
-  /** Enables immutable gad history/provenance for Pi sessions. */
+  /** Enables immutable gad trajectory/provenance for Pi sessions. */
   gad?: PiRunnerGadProvenance;
 }
 
@@ -316,7 +316,7 @@ export class PiRunner {
     try {
       const head = await this.options.rpc.call<{
         branchId: string;
-        headHistoryHash: string | null;
+        headTrajectoryHash: string | null;
         headStateHash: string;
       }>("main", "gad.ensureGadBranch", {
         workspaceId: gad.workspaceId ?? null,
@@ -330,7 +330,7 @@ export class PiRunner {
         },
       });
       this.gadBranchId = head.branchId;
-      this.gadHeadHash = head.headHistoryHash;
+      this.gadHeadHash = head.headTrajectoryHash;
       this.gadStateHash = head.headStateHash;
     } catch (err) {
       console.warn("[PiRunner] gad.ensureGadBranch failed:", err);
@@ -419,22 +419,22 @@ export class PiRunner {
     if (!gad || items.length === 0) return;
     try {
       const result = await this.options.rpc.call<{
-        headHistoryHash: string | null;
+        headTrajectoryHash: string | null;
         headStateHash: string;
         branchId: string;
-      }>("main", "gad.appendGadHistoryBatch", {
+      }>("main", "gad.appendGadTrajectoryBatch", {
         workspaceId: gad.workspaceId ?? null,
         branchId: this.gadBranchId ?? gad.branchId,
-        expectedHeadHash: this.gadHeadHash,
+        expectedTrajectoryHash: this.gadHeadHash,
         expectedStateHash: this.gadStateHash,
         items,
       });
-      this.gadHeadHash = result.headHistoryHash;
+      this.gadHeadHash = result.headTrajectoryHash;
       this.gadStateHash = result.headStateHash;
       this.gadBranchId = result.branchId;
-      await this.options.onHistoryAdvanced?.();
+      await this.options.onTrajectoryAdvanced?.();
     } catch (err) {
-      console.warn("[PiRunner] gad.appendGadHistoryBatch failed:", err);
+      console.warn("[PiRunner] gad.appendGadTrajectoryBatch failed:", err);
     }
   }
 
@@ -799,6 +799,7 @@ export class PiRunner {
   replaceHistory(messages: AgentMessage[]): void {
     if (!this.agent) throw new Error("PiRunner not initialized");
     this.agent.state.messages = messages;
+    this.recordedMessageCount = messages.length;
   }
 
   markToolCallPreApproved(toolCallId: string): void {

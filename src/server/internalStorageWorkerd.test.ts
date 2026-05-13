@@ -153,10 +153,10 @@ describe("internal storage DOs under workerd", () => {
       branchId: "branch-live",
       channelId: "channel-live",
       contextId: "context-live",
-    }) as { branchId: string; headHistoryHash: string | null; headStateHash: string };
-    await harness.dispatch.dispatch(ref, "appendGadHistoryBatch", {
+    }) as { branchId: string; headTrajectoryHash: string | null; headStateHash: string };
+    await harness.dispatch.dispatch(ref, "appendGadTrajectoryBatch", {
       branchId: head.branchId,
-      expectedHeadHash: head.headHistoryHash,
+      expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [
         {
