@@ -15,8 +15,24 @@ import type { ConnectionConfig, AgenticChatActions, ToolProvider, ToolProviderDe
 import { createPanelSandboxConfig, buildEvalTool } from "@workspace/agentic-core";
 import { resolveChatContextId } from "./bootstrap.js";
 
+function detectHostPlatform(): "mobile" | "electron" {
+  const explicitPlatform = (globalThis as { __natstackHostPlatform?: unknown }).__natstackHostPlatform;
+  if (explicitPlatform === "mobile") {
+    return "mobile";
+  }
+  if (typeof navigator !== "undefined" && /\bNatStack-Mobile\//.test(navigator.userAgent)) {
+    return "mobile";
+  }
+  return "electron";
+}
+
 /** Stable metadata object — avoids creating a new object every render */
-const PANEL_METADATA = { name: "Chat Panel", type: "panel" as const, handle: "user" };
+const PANEL_METADATA = {
+  name: "Chat Panel",
+  type: "panel" as const,
+  handle: "user",
+  hostPlatform: detectHostPlatform(),
+};
 
 /** Default DO worker source and class for the AI chat agent */
 const DEFAULT_WORKER_SOURCE = "workers/agent-worker";
@@ -45,6 +61,12 @@ interface ChatStateArgs {
   systemPrompt?: string;
   /** How systemPrompt interacts with NatStack base, workspace prompt, and skills */
   systemPromptMode?: "append" | "replace-natstack" | "replace";
+  /** Context-relative TSX file to load into the panel-local action bar */
+  actionBarFile?: string | null;
+  /** Props for actionBarFile */
+  actionBarProps?: Record<string, unknown> | null;
+  /** Preferred max height for actionBarFile */
+  actionBarMaxHeight?: number | null;
 }
 
 /**
@@ -221,6 +243,18 @@ export default function ChatPanel() {
     void focusPanel(panelId);
   }, []);
 
+  const handleActionBarFileChange = useCallback((value: {
+    path: string | null;
+    props?: Record<string, unknown>;
+    maxHeight?: number;
+  }) => {
+    void setStateArgs({
+      actionBarFile: value.path,
+      actionBarProps: value.path ? (value.props ?? null) : null,
+      actionBarMaxHeight: value.path ? (value.maxHeight ?? null) : null,
+    });
+  }, []);
+
   // Fetch available worker sources (DO agents) on mount
   const [availableAgents, setAvailableAgents] = useState<Array<{ id: string; name: string; proposedHandle: string; className: string }>>([]);
   useEffect(() => {
@@ -348,6 +382,10 @@ export default function ChatPanel() {
         pendingAgents={pendingAgents}
         initialPrompt={initialPromptCaptured.current}
         sandbox={sandboxConfig}
+        initialActionBarFile={stateArgs.actionBarFile ?? undefined}
+        initialActionBarProps={stateArgs.actionBarProps ?? undefined}
+        initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}
+        onActionBarFileChange={handleActionBarFileChange}
       />
     </>
   );

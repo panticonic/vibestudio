@@ -134,7 +134,7 @@ interface CliArgs {
   protocol?: "http" | "https";
   tlsCert?: string;
   tlsKey?: string;
-  printToken?: boolean;
+  printCredentials?: boolean;
   publicUrl?: string;
   noVpnDetect?: boolean;
   help?: boolean;
@@ -163,7 +163,7 @@ Options:
   --panel-port <port>      Port for panel HTTP (default: auto-assigned)
   --init                   Auto-create workspace from template if it doesn't exist
   --log-level <level>      Log verbosity
-  --print-token            Print the admin token in NATSTACK_ADMIN_TOKEN=... format
+  --print-credentials      Print NATSTACK_ADMIN_TOKEN and NATSTACK_PAIRING_CODE for scripting
   --public-url <url>       Externally-reachable base URL (e.g. https://server.lan:3000).
                            Used for OAuth redirect URIs, webhooks, and any route that
                            needs to be reached from the user's browser. Falls back to
@@ -211,6 +211,37 @@ function parseEnvPort(name: string): number | undefined {
   return parsePort(value, name);
 }
 
+function printReadinessActionBlock(title: string, lines: string[]): void {
+  const divider = "=".repeat(72);
+  console.log("");
+  console.log(divider);
+  console.log(`  ACTION NEEDED — ${title}`);
+  console.log(divider);
+  for (const line of lines) {
+    console.log(line ? `  ${line}` : "");
+  }
+  console.log(`${divider}\n`);
+}
+
+async function waitForPublicUrlReachable(
+  probe: (url: string) => Promise<{ ok: boolean; reason?: string }>,
+  url: string,
+  timeoutMs = 12_000,
+  intervalMs = 1_000
+): Promise<{ ok: boolean; reason?: string }> {
+  const deadline = Date.now() + timeoutMs;
+  let lastResult: { ok: boolean; reason?: string } = { ok: false, reason: "not checked yet" };
+  while (true) {
+    lastResult = await probe(url).catch((error) => ({
+      ok: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }));
+    if (lastResult.ok) return lastResult;
+    if (Date.now() >= deadline) return lastResult;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, Math.max(0, deadline - Date.now()))));
+  }
+}
+
 function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {};
   const known = new Set([
@@ -229,7 +260,7 @@ function parseArgs(argv: string[]): CliArgs {
     "protocol",
     "tls-cert",
     "tls-key",
-    "print-token",
+    "print-credentials",
     "public-url",
     "no-vpn-detect",
     "help",
@@ -239,7 +270,7 @@ function parseArgs(argv: string[]): CliArgs {
     "serve-panels",
     "ephemeral",
     "init",
-    "print-token",
+    "print-credentials",
     "no-vpn-detect",
     "help",
   ]);
@@ -329,8 +360,8 @@ function parseArgs(argv: string[]): CliArgs {
       case "tls-key":
         args.tlsKey = value;
         break;
-      case "print-token":
-        args.printToken = true;
+      case "print-credentials":
+        args.printCredentials = true;
         break;
       case "public-url":
         args.publicUrl = value;
@@ -469,6 +500,10 @@ async function main() {
   // ===========================================================================
 
   const tokenManager = new TokenManager();
+  const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
+  const { DeviceAuthStore } = await import("./services/deviceAuthStore.js");
+  const deviceAuthStore = new DeviceAuthStore(path.join(statePath, "auth", "devices.json"));
+  const startupPairingCode = !ipcChannel ? deviceAuthStore.createPairingCode() : null;
 
   // Re-seed TokenManager from persisted DO state so DOs that wake from a
   // restart-survived alarm don't 401 with a token issued by a previous
@@ -1459,7 +1494,12 @@ async function main() {
     const { createBlobstoreService } = await import("./services/blobstoreService.js");
     const { createAuthService } = await import("./services/authService.js");
     const { rpcServiceWithRoutes } = await import("./rpcServiceWithRoutes.js");
-    container.register(rpcServiceWithRoutes(createAuthService({ tokenManager }), routeRegistry));
+    container.register(rpcServiceWithRoutes(createAuthService({
+      tokenManager,
+      deviceAuthStore,
+      getServerBootId: () => serverBootId,
+      getWorkspaceId: () => workspace.config.id,
+    }), routeRegistry));
 
     const blobsDir = path.join(getUserDataPath(), "blobs");
     container.register(rpcServiceWithRoutes(createBlobstoreService({ blobsDir }), routeRegistry));
@@ -1501,6 +1541,9 @@ async function main() {
       const base: Record<string, unknown> = {
         ok: true,
         protocol: isTlsInitial ? "https" : "http",
+        serverId: deviceAuthStore.getServerId(),
+        serverBootId,
+        workspaceId: workspace.config.id,
       };
       if (!detailed) return base;
       return {
@@ -1522,6 +1565,7 @@ async function main() {
     detectedVpn: import("./vpnDetect.js").DetectedVpnPublicUrl | null;
     serveProvision: import("./tailscaleServe.js").ServeProvisionResult | null;
     publicUrlVerified: boolean;
+    publicUrlReachabilityReason?: string;
   }
   const explicitOverride = args.publicUrl ?? process.env["NATSTACK_PUBLIC_URL"];
   const skipVpnDetect =
@@ -1547,8 +1591,12 @@ async function main() {
       if (!detectedVpn) {
         return { detectedVpn: null, serveProvision: null, publicUrlVerified: false };
       }
-      const { verifyHttpsReachable, ensureHttpsServe } = await import("./tailscaleServe.js");
-      let publicUrlVerified = await verifyHttpsReachable(detectedVpn.url).catch(() => false);
+      const { probeHttpsReachable, ensureHttpsServe } = await import("./tailscaleServe.js");
+      let reachability = await probeHttpsReachable(detectedVpn.url).catch((error) => ({
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      }));
+      let publicUrlVerified = reachability.ok;
       let serveProvision: import("./tailscaleServe.js").ServeProvisionResult | null = null;
       if (!publicUrlVerified && detectedVpn.vendor === "tailscale") {
         serveProvision = await ensureHttpsServe({
@@ -1559,7 +1607,11 @@ async function main() {
           message: err instanceof Error ? err.message : String(err),
         } as import("./tailscaleServe.js").ServeProvisionResult));
         if (serveProvision.kind === "configured" || serveProvision.kind === "already-configured") {
-          publicUrlVerified = await verifyHttpsReachable(detectedVpn.url).catch(() => false);
+          reachability = await waitForPublicUrlReachable(
+            (url) => probeHttpsReachable(url),
+            detectedVpn.url
+          );
+          publicUrlVerified = reachability.ok;
         }
       }
       configurePublicUrl({
@@ -1569,14 +1621,19 @@ async function main() {
         gatewayPort,
       });
       markPublicUrlVerified(publicUrlVerified);
-      return { detectedVpn, serveProvision, publicUrlVerified };
+      return {
+        detectedVpn,
+        serveProvision,
+        publicUrlVerified,
+        publicUrlReachabilityReason: reachability.ok ? undefined : reachability.reason,
+      };
     })();
 
   // ── Start all services in dependency order ──
   await container.startAll();
   // Settle VPN setup before printing the readiness banner (so the operator
   // sees the auto-detected Mobile URL line if one is available).
-  const { detectedVpn, serveProvision, publicUrlVerified } = await vpnSetupPromise;
+  const { detectedVpn, serveProvision, publicUrlVerified, publicUrlReachabilityReason } = await vpnSetupPromise;
 
   // Wire DODispatch to workerdManager for restart recovery
   const workerdManager =
@@ -1680,46 +1737,122 @@ async function main() {
         console.log(`  OAuth callback (register with each provider):`);
         console.log(`    ${publicUrlForBanner}/_r/s/credentials/oauth/callback`);
         if (serveProvision?.kind === "configured") {
-          console.log(`  Tailscale: configured \`tailscale serve\` to forward https://${detectedVpn?.hostname}/ → 127.0.0.1:${gatewayPort}.`);
-          console.log(`             Persistent across reboots; remove with \`tailscale serve reset\`.`);
-        } else if (serveProvision?.kind === "permission-denied") {
-          console.log(`  Note: ${serveProvision.hint}`);
-        } else if (serveProvision?.kind === "https-feature-disabled") {
-          console.log(`  Note: ${serveProvision.hint}`);
-        } else if (serveProvision?.kind === "serve-feature-disabled") {
-          // Conspicuous bordered banner: this is a hard blocker for mobile
-          // OAuth, the user must act, and the line otherwise gets lost
-          // between the readiness block and the QR banner that follows.
-          const line = "=".repeat(72);
-          console.log("");
-          console.log(line);
-          console.log("  ACTION NEEDED — Tailscale Serve is not enabled");
-          console.log(line);
-          console.log("  Mobile OAuth needs a public HTTPS URL. Without Tailscale Serve,");
-          console.log("  redirects fall back to localhost and won't work on your phone.");
-          console.log("");
-          console.log("  Enable Tailscale Serve (one click):");
-          if (serveProvision.activationUrl) {
-            console.log(`    ${serveProvision.activationUrl}`);
+          if (publicUrlVerified) {
+            console.log(`  Tailscale: configured \`tailscale serve\` to forward https://${detectedVpn?.hostname}/ → 127.0.0.1:${gatewayPort}.`);
+            console.log(`             Persistent across reboots; remove with \`tailscale serve reset\`.`);
           } else {
-            console.log("    Open the Tailscale admin console → Settings → Serve.");
+            printReadinessActionBlock("Tailscale Serve is configured but not reachable", [
+              "Tailscale accepted the Serve configuration, but the HTTPS URL",
+              "did not return NatStack's health check.",
+              "",
+              `Public URL: https://${detectedVpn?.hostname}`,
+              publicUrlReachabilityReason ? `Last check: ${publicUrlReachabilityReason}` : "",
+              "",
+              "This can be a short Tailscale startup delay, a stale Serve target,",
+              "or a local gateway that is not listening on the configured port.",
+              "",
+              "First try rerunning:",
+              "  pnpm mobile:pair",
+              "",
+              "If it still falls back to HTTP, check both:",
+              "  tailscale serve status",
+              `  curl http://127.0.0.1:${gatewayPort}/healthz`,
+            ]);
           }
-          console.log("");
-          console.log("  Then restart `pnpm mobile:pair`.");
-          console.log(`${line}\n`);
+        } else if (serveProvision?.kind === "permission-denied") {
+          printReadinessActionBlock("Tailscale Serve needs permission", [
+            "NatStack found your Tailscale HTTPS name:",
+            `  https://${detectedVpn?.hostname}`,
+            "",
+            "That URL will only work after Tailscale is told to forward HTTPS",
+            `traffic to this NatStack server on local port ${gatewayPort}. NatStack tried`,
+            "to configure that automatically, but Tailscale denied permission.",
+            "",
+            "Recommended one-time fix:",
+            "  sudo tailscale set --operator=$USER",
+            "Then restart your terminal/session if Tailscale asks, and run:",
+            "  pnpm mobile:pair",
+            "",
+            "Manual alternative for this port only:",
+            `  sudo tailscale serve --bg ${gatewayPort}`,
+            "Then run:",
+            "  pnpm mobile:pair",
+            "",
+            "Until this is fixed, the QR below uses a Tailscale HTTP fallback.",
+            "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
+          ]);
+        } else if (serveProvision?.kind === "https-feature-disabled") {
+          printReadinessActionBlock("Tailscale HTTPS certificates are not enabled", [
+            "NatStack found your Tailscale name, but this tailnet is not allowed",
+            "to issue HTTPS certificates for MagicDNS names yet.",
+            "",
+            "Enable HTTPS Certificates here:",
+            "  https://login.tailscale.com/admin/dns",
+            "Then run:",
+            "  pnpm mobile:pair",
+            "",
+            "Until this is fixed, the QR below uses a Tailscale HTTP fallback.",
+            "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
+          ]);
+        } else if (serveProvision?.kind === "serve-feature-disabled") {
+          printReadinessActionBlock("Tailscale Serve is not enabled", [
+            "NatStack found your Tailscale HTTPS name, but Tailscale Serve is",
+            "not enabled for this tailnet. Serve is the Tailscale feature that",
+            "forwards that HTTPS name to this NatStack server.",
+            "",
+            "Enable Tailscale Serve:",
+            serveProvision.activationUrl
+              ? `  ${serveProvision.activationUrl}`
+              : "  Open the Tailscale admin console -> Settings -> Serve.",
+            "",
+            "Then run:",
+            "  pnpm mobile:pair",
+            "",
+            "Until this is fixed, the QR below uses a Tailscale HTTP fallback.",
+            "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
+          ]);
         } else if (serveProvision?.kind === "skipped-conflict") {
-          console.log(`  Note: ${serveProvision.reason}`);
+          printReadinessActionBlock("Existing Tailscale Serve config conflicts", [
+            "Tailscale Serve is already configured for something else, and",
+            "NatStack will not overwrite that automatically.",
+            "",
+            serveProvision.reason,
+            "",
+            "If you want NatStack to manage this hostname, run:",
+            "  tailscale serve reset",
+            "",
+            "Then run:",
+            "  pnpm mobile:pair",
+          ]);
         } else if (serveProvision?.kind === "error") {
-          console.log(`  Note: tailscale serve setup failed: ${serveProvision.message}`);
+          printReadinessActionBlock("Tailscale Serve setup failed", [
+            "NatStack found a Tailscale HTTPS name, but could not configure",
+            "Tailscale Serve for it.",
+            "",
+            `Tailscale error: ${serveProvision.message}`,
+            "",
+            "The QR below will use the HTTP fallback.",
+            "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
+            "",
+            "Fix Tailscale Serve, then run:",
+            "  pnpm mobile:pair",
+          ]);
         } else if (!publicUrlVerified && !explicitPublicUrl && detectedVpn?.setupHint) {
-          console.log(`  Note: ${detectedVpn.setupHint}`);
+          printReadinessActionBlock("HTTPS mobile URL is not ready", [
+            "NatStack found a likely mobile HTTPS URL, but it is not reachable yet.",
+            publicUrlReachabilityReason ? `Last check: ${publicUrlReachabilityReason}` : "",
+            "",
+            detectedVpn.setupHint,
+            "",
+            "The QR below will use the HTTP fallback.",
+            "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
+          ]);
         }
       }
     }
-    // Mint a shell token for mobile/remote shell clients.
-    // Shell tokens give callerKind "shell" (not "server"), which is the correct
-    // privilege level for browser chrome operations.
-    const shellToken = tokenManager.ensureToken("remote-shell", "shell");
+    if (startupPairingCode) {
+      console.log(`  Pairing code: ${startupPairingCode}`);
+    }
 
     if (args.readyFile) {
       const readyPayload = {
@@ -1732,7 +1865,9 @@ async function main() {
         gitUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_git/`,
         workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,
         adminToken,
-        shellToken,
+        pairingCode: startupPairingCode,
+        serverId: deviceAuthStore.getServerId(),
+        serverBootId,
         tokenFilePath,
         gatewayPort,
         workerdPort: workerdMgr?.getPort() ?? 0,
@@ -1745,9 +1880,9 @@ async function main() {
       }
     }
 
-    if (args.printToken) {
+    if (args.printCredentials) {
       console.log(`\nNATSTACK_ADMIN_TOKEN=${adminToken}`);
-      console.log(`NATSTACK_SHELL_TOKEN=${tokenManager.getToken("remote-shell")}`);
+      if (startupPairingCode) console.log(`NATSTACK_PAIRING_CODE=${startupPairingCode}`);
     }
   }
 

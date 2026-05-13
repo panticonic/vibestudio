@@ -138,6 +138,17 @@ export default function Shuffler({ props }) {
 })
 ```
 
+For larger eval/UI code, prefer writing a context-relative file and using the
+tool's `path` parameter. Static relative imports from that file are resolved,
+and bare package imports are inferred from the nearest `package.json` when
+possible:
+
+```ts
+eval({ path: ".natstack/eval/audit.ts" })
+inline_ui({ path: ".natstack/ui/audit-panel.tsx", props: { runId } })
+feedback_custom({ path: ".natstack/ui/confirm-audit.tsx", title: "Confirm audit" })
+```
+
 ## Call an API with a URL-bound credential
 
 The general pattern: store a URL-bound credential once, then fetch through the runtime credential proxy.

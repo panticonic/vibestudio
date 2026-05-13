@@ -33,6 +33,8 @@ vi.mock("./utils.js", () => ({ isDev: () => false }));
 const ENV_KEYS = [
   "NATSTACK_REMOTE_URL",
   "NATSTACK_REMOTE_TOKEN",
+  "NATSTACK_REMOTE_DEVICE_ID",
+  "NATSTACK_REMOTE_REFRESH_TOKEN",
   "NATSTACK_REMOTE_CA",
   "NATSTACK_REMOTE_FINGERPRINT",
 ];
@@ -65,10 +67,33 @@ describe("parseRemoteStartupMode priority", () => {
   });
 
   it("uses store when env is unset", () => {
-    mockLoadRemoteCredentials.mockReturnValue({ url: "https://store:1", token: "store-token" });
+    mockLoadRemoteCredentials.mockReturnValue({
+      url: "https://store:1",
+      token: "store-token",
+      deviceId: "dev_store",
+      refreshToken: "refresh-store",
+    });
     const result = mod.parseRemoteStartupMode()!;
     expect(result.remoteUrl.href).toBe("https://store:1/");
     expect(result.adminToken).toBe("store-token");
+    expect(result.deviceId).toBe("dev_store");
+    expect(result.refreshToken).toBe("refresh-store");
+  });
+
+  it("env device credential overrides store device credential", () => {
+    process.env["NATSTACK_REMOTE_URL"] = "https://env:1";
+    process.env["NATSTACK_REMOTE_TOKEN"] = "env-token";
+    process.env["NATSTACK_REMOTE_DEVICE_ID"] = "dev_env";
+    process.env["NATSTACK_REMOTE_REFRESH_TOKEN"] = "refresh-env";
+    mockLoadRemoteCredentials.mockReturnValue({
+      url: "https://store:1",
+      token: "store-token",
+      deviceId: "dev_store",
+      refreshToken: "refresh-store",
+    });
+    const result = mod.parseRemoteStartupMode()!;
+    expect(result.deviceId).toBe("dev_env");
+    expect(result.refreshToken).toBe("refresh-env");
   });
 
   it("throws on malformed URL", () => {

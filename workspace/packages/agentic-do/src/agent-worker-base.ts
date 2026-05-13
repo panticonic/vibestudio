@@ -101,18 +101,21 @@ interface ModelCredentialOAuthConfig {
 }
 
 interface ModelCredentialRedirectConfig {
-  type?: "loopback" | "public" | "client-forwarded";
+  type?: "loopback" | "public" | "client-forwarded" | "client-loopback";
   host?: string;
   port?: number;
   callbackPath?: string;
   fallback?: "dynamic-port";
 }
 
+type ModelCredentialRedirectPolicy = "loopback-required";
+
 interface ConnectModelCredentialOAuthArgs {
   providerId?: unknown;
   browserOpenMode?: unknown;
   browserHandoffCallerId?: unknown;
   browserHandoffCallerKind?: unknown;
+  browserHandoffPlatform?: unknown;
 }
 
 const MODEL_CREDENTIAL_REQUIRED_CARD_TSX = `
@@ -125,6 +128,13 @@ export default function ModelCredentialRequiredCard({ props, chat }) {
   const flow = props.flow;
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
+
+  const resolveBrowserHandoffPlatform = () => {
+    if (props.browserHandoffPlatform) return props.browserHandoffPlatform;
+    if (globalThis.__natstackHostPlatform === "mobile") return "mobile";
+    if (typeof navigator !== "undefined" && /\\bNatStack-Mobile\\//.test(navigator.userAgent)) return "mobile";
+    return undefined;
+  };
 
   const startOAuth = async (openMode) => {
     if (!flow || !modelBaseUrl) return;
@@ -140,6 +150,7 @@ export default function ModelCredentialRequiredCard({ props, chat }) {
         browserOpenMode: openMode,
         browserHandoffCallerId: props.browserHandoffCallerId,
         browserHandoffCallerKind: props.browserHandoffCallerKind,
+        browserHandoffPlatform: resolveBrowserHandoffPlatform(),
       });
       setStatus("done");
       if (props.agentParticipantId) {
@@ -268,7 +279,8 @@ function isModelCredentialRedirectConfig(value: unknown): value is ModelCredenti
     (config["type"] === undefined ||
       config["type"] === "loopback" ||
       config["type"] === "public" ||
-      config["type"] === "client-forwarded") &&
+      config["type"] === "client-forwarded" ||
+      config["type"] === "client-loopback") &&
     (config["host"] === undefined || typeof config["host"] === "string") &&
     (config["port"] === undefined || typeof config["port"] === "number") &&
     (config["callbackPath"] === undefined || typeof config["callbackPath"] === "string") &&
@@ -502,6 +514,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   private getModelCredentialOAuthConfig(providerId: string): {
     flow: ModelCredentialOAuthConfig & { type: "oauth2-auth-code-pkce" };
     redirect?: ModelCredentialRedirectConfig;
+    clientLoopbackRedirect?: ModelCredentialRedirectConfig;
+    redirectPolicy?: ModelCredentialRedirectPolicy;
     credentialLabel: string;
     accountIdentityJwtClaimRoot: string;
     accountIdentityJwtClaimField: string;
@@ -515,12 +529,16 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       throw new Error(`No OAuth setup is available for model provider: ${providerId}`);
     }
     const credentialLabel = setup?.["credentialLabel"];
-    const redirect = setup?.["loopback"];
+    const redirect = setup?.["redirect"];
+    const clientLoopbackRedirect = setup?.["clientLoopbackRedirect"];
+    const redirectPolicy = setup?.["redirectPolicy"];
     const accountIdentityJwtClaimRoot = setup?.["accountIdentityJwtClaimRoot"];
     const accountIdentityJwtClaimField = setup?.["accountIdentityJwtClaimField"];
     return {
       flow,
       ...(isModelCredentialRedirectConfig(redirect) ? { redirect } : {}),
+      ...(isModelCredentialRedirectConfig(clientLoopbackRedirect) ? { clientLoopbackRedirect } : {}),
+      ...(redirectPolicy === "loopback-required" ? { redirectPolicy } : {}),
       credentialLabel: typeof credentialLabel === "string"
         ? credentialLabel
         : `Model credential: ${providerId}`,
@@ -546,8 +564,18 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     const browserHandoffCallerKind = args.browserHandoffCallerKind === "shell"
       ? "shell"
       : "panel";
+    const browserHandoffPlatform = typeof args.browserHandoffPlatform === "string"
+      ? args.browserHandoffPlatform
+      : undefined;
     const modelBaseUrl = this.getModelBaseUrl();
     const setup = this.getModelCredentialOAuthConfig(args.providerId);
+    const redirect = browserHandoffPlatform === "mobile" && setup.clientLoopbackRedirect
+      ? setup.clientLoopbackRedirect
+      : setup.redirect;
+    if (setup.redirectPolicy === "loopback-required"
+      && (!redirect || (redirect.type !== "loopback" && redirect.type !== "client-loopback"))) {
+      throw new Error(`Model provider ${args.providerId} requires a loopback OAuth redirect`);
+    }
     const spec = {
       flow: {
         ...setup.flow,
@@ -569,7 +597,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         },
       },
       browser: browserOpenMode,
-      ...(setup.redirect ? { redirect: setup.redirect } : {}),
+      ...(redirect ? { redirect } : {}),
     };
     return this.rpc.call<ModelCredentialSummary>(
       "main",
@@ -771,7 +799,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
           // than collapsing into a single steered run. Without this, the 2nd
           // and later replay events would hit `running=true` (set by the 1st
           // event's drainLoop pre-await) and route to steer.
-          await this.onChannelEvent(opts.channelId, event, { mode: "sequential" });
+          await this.dispatchChannelEvent(opts.channelId, event, { mode: "sequential" });
         }
       } catch (err) {
         console.warn(`[AgentWorkerBase] Replay processing stopped:`, err);
@@ -912,7 +940,11 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     }
   }
 
-  private async dispatchChannelEvent(channelId: string, event: ChannelEvent): Promise<void> {
+  private async dispatchChannelEvent(
+    channelId: string,
+    event: ChannelEvent,
+    opts?: { mode?: "auto" | "sequential" },
+  ): Promise<void> {
     if (event.type === "config-update") {
       let newLevel: number | undefined;
       try {
@@ -926,6 +958,11 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       if (newLevel !== undefined && (newLevel === 0 || newLevel === 1 || newLevel === 2)) {
         this.setApprovalLevel(channelId, newLevel);
       }
+      return;
+    }
+
+    if (event.type === "agent-context") {
+      await this.appendAgentContext(channelId, event);
       return;
     }
 
@@ -950,7 +987,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       return;
     }
 
-    await this.onChannelEvent(channelId, event);
+    await this.onChannelEvent(channelId, event, opts);
   }
 
   // ── PiRunner lifecycle (one per channel, lazy) ──────────────────────────
@@ -1159,6 +1196,43 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         console.warn(`[AgentWorkerBase] gad append failed for channel=${channelId}:`, err);
       }
     }
+  }
+
+  private async appendAgentContext(channelId: string, event: ChannelEvent): Promise<void> {
+    const senderType = event.senderMetadata?.["type"] as string | undefined;
+    if (!isClientParticipantType(senderType)) return;
+
+    const payload = event.payload as Record<string, unknown> | undefined;
+    const content = typeof payload?.["content"] === "string" ? payload["content"] : undefined;
+    if (!content) return;
+
+    const messages = this.loadMessages(channelId);
+    const eventKey = event.id > 0 ? `event:${event.id}` : `message:${event.messageId}`;
+    if (messages.some((message) => {
+      const details = (message as { details?: Record<string, unknown> }).details;
+      return details?.["__natstack_agent_context_key"] === eventKey;
+    })) {
+      return;
+    }
+
+    const nextMessages: AgentMessage[] = [
+      ...messages,
+      {
+        role: "user",
+        content,
+        timestamp: event.ts ?? Date.now(),
+        details: {
+          __natstack_agent_context: true,
+          __natstack_agent_context_key: eventKey,
+          kind: payload?.["kind"],
+          senderId: event.senderId,
+        },
+      } as AgentMessage,
+    ];
+
+    await this.saveMessages(channelId, nextMessages);
+    const entry = this.runners.get(channelId);
+    if (entry) entry.runner.replaceHistory(nextMessages);
   }
 
   private async saveMessages(channelId: string, messages: AgentMessage[]): Promise<void> {
@@ -1532,6 +1606,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
 
     const channel = this.createChannelClient(channelId);
     let browserHandoffCallerId: string | undefined;
+    let browserHandoffPlatform: string | undefined;
     try {
       const participants = await channel.getParticipants();
       const panel = participants.find((p) => {
@@ -1539,6 +1614,9 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         return t === "panel" || t === "client";
       });
       browserHandoffCallerId = panel?.participantId;
+      browserHandoffPlatform = typeof panel?.metadata["hostPlatform"] === "string"
+        ? panel.metadata["hostPlatform"] as string
+        : undefined;
     } catch (err) {
       console.warn(`[AgentWorkerBase] Failed to resolve browser handoff panel for ${providerId}:`, err);
     }
@@ -1552,6 +1630,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         agentParticipantId: participantId,
         browserHandoffCallerId,
         browserHandoffCallerKind: browserHandoffCallerId ? "panel" : undefined,
+        browserHandoffPlatform,
         ...(this.getModelCredentialSetupProps(providerId) ?? {}),
       },
     });

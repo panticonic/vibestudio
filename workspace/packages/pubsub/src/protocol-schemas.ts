@@ -6,6 +6,7 @@
  */
 
 import { z } from "zod";
+import type { FieldDefinition, FieldValue } from "@natstack/types";
 
 /**
  * Schema for required method specification in agent type advertisements.
@@ -156,8 +157,8 @@ export const AgentTypeAdvertisementSchema = z.object({
  */
 export interface FeedbackFormArgs {
   title: string;
-  fields: z.infer<typeof FieldDefinitionSchema>[];
-  values?: Record<string, string | number | boolean | string[]>;
+  fields: FieldDefinition[];
+  values?: Record<string, FieldValue>;
   submitLabel?: string;
   cancelLabel?: string;
   severity?: "info" | "warning" | "danger";     // Affects styling/icon
@@ -170,7 +171,11 @@ export interface FeedbackFormArgs {
  * Use this for complex custom UIs with custom layout, validation, or interactions.
  */
 export interface FeedbackCustomArgs {
-  code: string;
+  code?: string;
+  /** Context-relative TSX file to load instead of inline code */
+  path?: string;
+  /** On-demand package builds. Same semantics as eval imports. */
+  imports?: Record<string, string>;
   /** Optional title for the feedback container header (default: "Agent requires input") */
   title?: string;
 }
@@ -193,6 +198,8 @@ export const FeedbackFormArgsSchema = z.object({
  * Zod schema for feedback_custom method arguments.
  */
 export const FeedbackCustomArgsSchema = z.object({
-  code: z.string(),
+  code: z.string().optional(),
+  path: z.string().optional(),
+  imports: z.record(z.string(), z.string()).optional(),
   title: z.string().optional(),
-});
+}).strict();

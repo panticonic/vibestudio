@@ -37,10 +37,32 @@ export function createViewService(deps: {
       setThemeCss: { args: z.tuple([z.string()]) },
       updateLayout: { args: z.tuple([z.object({ titleBarHeight: z.number().optional(), sidebarVisible: z.boolean().optional(), sidebarWidth: z.number().optional(), saveBarHeight: z.number().optional(), notificationBarHeight: z.number().optional(), consentBarHeight: z.number().optional() })]) },
       setShellOverlay: { args: z.tuple([z.boolean()]) },
+      showNativeShellOverlay: {
+        args: z.tuple([
+          z.object({
+            id: z.string(),
+            html: z.string(),
+            bounds: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+            focus: z.boolean().optional(),
+          }),
+        ]),
+      },
+      updateNativeShellOverlay: {
+        args: z.tuple([
+          z.object({
+            id: z.string().optional(),
+            html: z.string().optional(),
+            bounds: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+            focus: z.boolean().optional(),
+          }),
+        ]),
+      },
+      hideNativeShellOverlay: { args: z.union([z.tuple([]), z.tuple([z.string().optional()])]) },
       browserNavigate: { args: z.tuple([z.string(), z.string()]) },
       browserGoBack: { args: z.tuple([z.string()]) },
       browserGoForward: { args: z.tuple([z.string()]) },
       browserReload: { args: z.tuple([z.string()]) },
+      browserForceReload: { args: z.tuple([z.string()]) },
       browserStop: { args: z.tuple([z.string()]) },
     },
     handler: async (ctx, method, args) => {
@@ -85,6 +107,39 @@ export function createViewService(deps: {
           vm.setShellOverlayActive(active);
           return;
         }
+        case "showNativeShellOverlay": {
+          if (ctx.callerId !== "shell") {
+            throw new Error("view.showNativeShellOverlay: shell-only");
+          }
+          const [options] = args as [{
+            id: string;
+            html: string;
+            bounds: { x: number; y: number; width: number; height: number };
+            focus?: boolean;
+          }];
+          vm.showNativeShellOverlay(options);
+          return;
+        }
+        case "updateNativeShellOverlay": {
+          if (ctx.callerId !== "shell") {
+            throw new Error("view.updateNativeShellOverlay: shell-only");
+          }
+          const [options] = args as [{
+            id?: string;
+            html?: string;
+            bounds?: { x: number; y: number; width: number; height: number };
+            focus?: boolean;
+          }];
+          vm.updateNativeShellOverlay(options);
+          return;
+        }
+        case "hideNativeShellOverlay": {
+          if (ctx.callerId !== "shell") {
+            throw new Error("view.hideNativeShellOverlay: shell-only");
+          }
+          vm.hideNativeShellOverlay(args[0] as string | undefined);
+          return;
+        }
         case "browserNavigate": {
           const [browserId, url] = args as [string, string];
           assertOwnsOrShell(ctx.callerId, browserId, "browserNavigate");
@@ -107,6 +162,12 @@ export function createViewService(deps: {
           const browserId = args[0] as string;
           assertOwnsOrShell(ctx.callerId, browserId, "browserReload");
           vm.reload(browserId);
+          return;
+        }
+        case "browserForceReload": {
+          const browserId = args[0] as string;
+          assertOwnsOrShell(ctx.callerId, browserId, "browserForceReload");
+          vm.forceReload(browserId);
           return;
         }
         case "browserStop": {

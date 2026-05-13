@@ -46,6 +46,29 @@ async function archiveFocusedPanel(mainWindow: Electron.BaseWindow): Promise<voi
   }
 }
 
+function reloadFocusedPanel(force = false): void {
+  const focusedId = _menuPanelRegistry?.getFocusedPanelId();
+  if (!focusedId || !_menuViewManager) return;
+  if (force) _menuViewManager.forceReload(focusedId);
+  else _menuViewManager.reload(focusedId);
+}
+
+function dispatchChromeCommand(command: "reload-panel" | "force-reload-view" | "stop"): void {
+  try {
+    eventService().emit("panel-chrome-command", { command });
+  } catch {
+    if (command === "reload-panel") reloadFocusedPanel(false);
+    if (command === "force-reload-view") reloadFocusedPanel(true);
+    if (command === "stop") stopFocusedPanel();
+  }
+}
+
+function stopFocusedPanel(): void {
+  const focusedId = _menuPanelRegistry?.getFocusedPanelId();
+  if (!focusedId || !_menuViewManager) return;
+  _menuViewManager.stop(focusedId);
+}
+
 /**
  * Build common menu items that are shared between the app menu and hamburger popup.
  * These items need shell webcontents for IPC communication.
@@ -112,8 +135,17 @@ export function buildCommonMenuItems(
     view.push({ type: "separator" });
   }
   view.push(
-    { label: "Reload", accelerator: "CmdOrCtrl+R", role: "reload" },
-    { label: "Force Reload", accelerator: "CmdOrCtrl+Shift+R", role: "forceReload" },
+    { label: "Reload Panel", accelerator: "CmdOrCtrl+R", click: () => dispatchChromeCommand("reload-panel") },
+    { label: "Force Reload View", accelerator: "CmdOrCtrl+Shift+R", click: () => dispatchChromeCommand("force-reload-view") },
+    { label: "Stop Loading", accelerator: "Esc", click: () => dispatchChromeCommand("stop") },
+    {
+      label: "Toggle Address Bar",
+      accelerator: "CmdOrCtrl+L",
+      click: () => {
+        eventService().emit("toggle-address-bar");
+        eventService().emit("focus-address-bar");
+      },
+    },
     { type: "separator" },
     {
       label: "Refresh Panel Display",
@@ -300,8 +332,18 @@ export function setupMenu(
       label: "View",
       submenu: [
         ...viewSubmenu,
-        { role: "reload" },
-        { role: "forceReload" },
+        { label: "Reload Panel", accelerator: "CmdOrCtrl+R", click: () => dispatchChromeCommand("reload-panel") },
+        { label: "Force Reload View", accelerator: "CmdOrCtrl+Shift+R", click: () => dispatchChromeCommand("force-reload-view") },
+        { label: "Stop Loading", accelerator: "Esc", click: () => dispatchChromeCommand("stop") },
+        { type: "separator" },
+        {
+          label: "Toggle Address Bar",
+          accelerator: "CmdOrCtrl+L",
+          click: () => {
+            eventService().emit("toggle-address-bar");
+            eventService().emit("focus-address-bar");
+          },
+        },
         { type: "separator" },
         {
           label: "Refresh Panel Display",

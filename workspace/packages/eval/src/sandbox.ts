@@ -6,7 +6,7 @@
  *
  * Two entry points:
  * - executeSandbox(): imperative code execution (eval tool)
- * - compileComponent(): React component compilation (inline_ui, feedback_custom)
+ * - compileComponent(): React component compilation (inline_ui, load_action_bar, feedback_custom)
  *
  * Both use the same transform → preload → execute pipeline from @workspace/eval.
  */
@@ -20,6 +20,13 @@ import {
   validateRequires,
   preloadRequires,
 } from "./execute.js";
+import {
+  getMissingPackageDeclarations,
+  inferImportsFromPackageJson,
+  prepareSourceCode,
+  type ExternalRequireContext,
+  type LoadSourceFile,
+} from "./sourceFiles.js";
 import {
   createConsoleCapture,
   formatConsoleEntry,
@@ -43,6 +50,12 @@ export interface SandboxOptions {
   onConsole?: (formatted: string) => void;
   /** Dynamic import loader — keeps this module free of runtime/RPC deps */
   loadImport?: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>;
+  /** File path for this source. Enables relative imports. */
+  sourcePath?: string;
+  /** Preloaded source files keyed by normalized path. */
+  sourceFiles?: Record<string, string>;
+  /** Source-file loader for resolving relative imports. */
+  loadSourceFile?: LoadSourceFile;
   /** Extra scope variables injected into the sandbox */
   bindings?: Record<string, unknown>;
 }
@@ -69,6 +82,19 @@ export interface CompileResult<T> {
   error?: string;
 }
 
+export interface CompileComponentOptions {
+  /** Packages to build and load before compilation. Same semantics as eval imports. */
+  imports?: Record<string, string>;
+  /** Dynamic import loader — keeps this module free of runtime/RPC deps */
+  loadImport?: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>;
+  /** File path for this source. Enables relative imports. */
+  sourcePath?: string;
+  /** Preloaded source files keyed by normalized path. */
+  sourceFiles?: Record<string, string>;
+  /** Source-file loader for resolving relative imports. */
+  loadSourceFile?: LoadSourceFile;
+}
+
 // =============================================================================
 // Module Map Helpers
 // =============================================================================
@@ -85,9 +111,9 @@ const loadedBundleContent = new Map<string, string>();
  * Skips re-execution if the bundle content is identical to what's already loaded.
  */
 function loadLibraryBundle(specifier: string, bundleCode: string): void {
-  if (loadedBundleContent.get(specifier) === bundleCode) return;
-
   const moduleMap = getModuleMap();
+  if (loadedBundleContent.get(specifier) === bundleCode && moduleMap[specifier]) return;
+
   const requireFn = (globalThis as Record<string, unknown>)["__natstackRequire__"] as ((id: string) => unknown) | undefined;
   if (!requireFn) throw new Error("__natstackRequire__ not available");
 
@@ -114,6 +140,59 @@ async function loadImports(
     const externals = Object.keys(moduleMap);
     const bundleCode = await loadImport(specifier, ref, externals);
     loadLibraryBundle(specifier, bundleCode);
+  }
+}
+
+async function ensureRequires(
+  requires: string[],
+  options: {
+    loadImport?: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>;
+    loadSourceFile?: LoadSourceFile;
+    sourcePath?: string;
+    imports?: Record<string, string>;
+  } = {},
+  context?: ExternalRequireContext,
+): Promise<void> {
+  if (requires.length === 0) return;
+  const requireFn = getDefaultRequire();
+  if (!requireFn) throw new Error("__natstackRequire__ not available. Build may be outdated.");
+
+  let validation = validateRequires(requires, requireFn);
+  if (!validation.valid && options.loadImport) {
+    const moduleMap = getModuleMap();
+    const missing = requires.filter((r) => !moduleMap[r]);
+    const inferredImports = await inferImportsFromPackageJson(
+      missing,
+      {
+        importerPath: context?.importerPath ?? options.sourcePath,
+        loadSourceFile: options.loadSourceFile,
+        explicitImports: options.imports,
+      },
+    );
+
+    if (Object.keys(inferredImports).length > 0) {
+      await loadImports(inferredImports, options.loadImport);
+      validation = validateRequires(requires, requireFn);
+    }
+  }
+
+  if (!validation.valid) {
+    const preload = await preloadRequires(requires);
+    if (preload.success) return;
+    validation = validateRequires(requires, requireFn);
+  }
+
+  if (!validation.valid) {
+    const missingModules = requires.filter((r) => !getModuleMap()[r]);
+    const missingDeclarations = await getMissingPackageDeclarations(missingModules, {
+      importerPath: context?.importerPath ?? options.sourcePath,
+      loadSourceFile: options.loadSourceFile,
+      explicitImports: options.imports,
+    });
+    if (missingDeclarations.length > 0) {
+      throw new Error(`Package import not declared for file-loaded source: ${missingDeclarations.join("; ")}. Add it to package.json dependencies or pass the imports parameter.`);
+    }
+    throw new Error(validation.error ?? `Module "${validation.missingModule}" not available`);
   }
 }
 
@@ -217,7 +296,19 @@ export async function executeSandbox(
       await loadImports(options.imports, options.loadImport);
     }
 
-    const transformed = await transformCode(code, { syntax });
+    const prepared = await prepareSourceCode(code, {
+      syntax,
+      sourcePath: options.sourcePath,
+      sourceFiles: options.sourceFiles,
+      loadSourceFile: options.loadSourceFile,
+    }, (requires, context) => ensureRequires(requires, {
+      loadImport: options.loadImport,
+      loadSourceFile: options.loadSourceFile,
+      sourcePath: options.sourcePath,
+      imports: options.imports,
+    }, context));
+
+    const transformed = await transformCode(prepared.code, { syntax });
 
     // Validate requires
     const requireFn = getDefaultRequire();
@@ -233,14 +324,14 @@ export async function executeSandbox(
     if (!validation.valid && options.loadImport) {
       // Auto-resolve: build missing workspace packages on-demand
       const moduleMap = getModuleMap();
-      const missingWorkspace = transformed.requires.filter(
-        (r) => !moduleMap[r] && (r.startsWith("@workspace") || r.startsWith("@natstack/")),
-      );
-      if (missingWorkspace.length > 0) {
-        options.onConsole?.(`[eval] Auto-loading: ${missingWorkspace.join(", ")}...`);
-        const autoImports = Object.fromEntries(
-          missingWorkspace.map((m) => [m, "latest"]),
-        );
+      const missingModules = transformed.requires.filter((r) => !moduleMap[r]);
+      const autoImports = await inferImportsFromPackageJson(missingModules, {
+        importerPath: options.sourcePath,
+        loadSourceFile: options.loadSourceFile,
+        explicitImports: options.imports,
+      });
+      if (Object.keys(autoImports).length > 0) {
+        options.onConsole?.(`[eval] Auto-loading: ${Object.keys(autoImports).join(", ")}...`);
         await loadImports(autoImports, options.loadImport);
         validation = validateRequires(transformed.requires, requireFn);
       }
@@ -256,10 +347,18 @@ export async function executeSandbox(
       const suggestedImports = Object.fromEntries(
         missingModules.map((m) => [m, m.startsWith("@workspace") || m.startsWith("@natstack/") ? "latest" : "npm:latest"]),
       );
+      const missingDeclarations = await getMissingPackageDeclarations(missingModules, {
+        importerPath: options.sourcePath,
+        loadSourceFile: options.loadSourceFile,
+        explicitImports: options.imports,
+      });
+      const packageHint = missingDeclarations.length > 0
+        ? `\nPackage context: ${missingDeclarations.join("; ")}.`
+        : "";
       return {
         success: false,
         consoleOutput: "",
-        error: `Module "${missing}" not available. For npm packages, add the imports parameter:\n  imports: ${JSON.stringify(suggestedImports)}\nCurrently loaded: ${available.join(", ")}`,
+        error: `Module "${missing}" not available.${packageHint} For npm packages, add the imports parameter:\n  imports: ${JSON.stringify(suggestedImports)}\nCurrently loaded: ${available.join(", ")}`,
       };
     }
 
@@ -324,20 +423,46 @@ export async function executeSandbox(
 /**
  * Compile TSX code into a React component.
  *
- * Used for both persistent (inline_ui) and transient (feedback_custom) components.
+ * Used for persistent (inline_ui/action bar) and transient (feedback_custom)
+ * components.
  * The when-to-compile decision is made by the caller; callers store the result
  * in their own state (React useState / Map) to avoid recompilation on re-render.
  */
 export async function compileComponent<T = ComponentType<Record<string, unknown>>>(
   code: string,
+  options: CompileComponentOptions = {},
 ): Promise<CompileResult<T>> {
   try {
-    const transformed = await transformCode(code, { syntax: "tsx" });
-
-    const preloadResult = await preloadRequires(transformed.requires);
-    if (!preloadResult.success) {
-      return { success: false, error: preloadResult.error };
+    if (options.imports && Object.keys(options.imports).length > 0) {
+      if (!options.loadImport) {
+        throw new Error("loadImport callback required when imports are specified");
+      }
+      await loadImports(options.imports, options.loadImport);
     }
+
+    const prepared = await prepareSourceCode(code, {
+      syntax: "tsx",
+      sourcePath: options.sourcePath,
+      sourceFiles: options.sourceFiles,
+      loadSourceFile: options.loadSourceFile,
+    }, (requires, context) => ensureRequires(requires, {
+      loadImport: options.loadImport,
+      loadSourceFile: options.loadSourceFile,
+      sourcePath: options.sourcePath,
+      imports: options.imports,
+    }, context));
+
+    const transformed = await transformCode(prepared.code, { syntax: "tsx" });
+
+    await ensureRequires(
+      transformed.requires.filter((specifier) => !prepared.localModuleIds.has(specifier)),
+      {
+        loadImport: options.loadImport,
+        loadSourceFile: options.loadSourceFile,
+        sourcePath: options.sourcePath,
+        imports: options.imports,
+      },
+    );
 
     const cacheKey = transformed.code;
     const Component = executeDefault<T>(cacheKey);

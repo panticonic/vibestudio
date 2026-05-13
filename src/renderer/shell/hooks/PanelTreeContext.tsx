@@ -27,8 +27,11 @@ import type {
   PanelSummary,
   PanelAncestor,
   DescendantSiblingGroup,
+  PanelNavigationState,
+  PanelArtifacts,
 } from "@natstack/shared/types";
 import {
+  getCurrentSnapshot,
   getPanelContextId,
   getPanelSource,
   getPanelOptions,
@@ -51,14 +54,9 @@ export interface FullPanel {
   parentId: string | null;
   position: number;
   selectedChildId: string | null;
-  artifacts: {
-    htmlPath?: string;
-    bundlePath?: string;
-    error?: string;
-    buildState?: string;
-    buildProgress?: string;
-    buildLog?: string;
-  };
+  history: Panel["history"];
+  navigation?: PanelNavigationState;
+  artifacts: PanelArtifacts;
   path?: string;
   sourceRepo?: string;
   injectHostThemeVariables?: boolean;
@@ -345,6 +343,8 @@ function panelToFull(panel: Panel, parentId: string | null, position: number): F
     parentId,
     position,
     selectedChildId: panel.selectedChildId,
+    history: panel.history,
+    navigation: panel.navigation,
     artifacts: panel.artifacts ?? {},
     path: source,
     sourceRepo: source,

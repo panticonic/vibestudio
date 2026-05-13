@@ -25,15 +25,20 @@ interface StoredPlain {
   url: string;
   caPath?: string;
   fingerprint?: string;
-  /** Base64 encoded ciphertext from safeStorage, or the raw token if safeStorage is unavailable. */
+  /** Base64 encoded ciphertext from safeStorage, or the raw admin token if safeStorage is unavailable. */
   token: string;
-  /** Whether `token` is encrypted (true) or stored plaintext (fallback only). */
+  /** Base64 encoded ciphertext from safeStorage, or the raw refresh token if safeStorage is unavailable. */
+  refreshToken?: string;
+  deviceId?: string;
+  /** Whether secret fields are encrypted (true) or stored plaintext (fallback only). */
   encrypted: boolean;
 }
 
 export interface RemoteCredentials {
   url: string;
   token: string;
+  deviceId?: string;
+  refreshToken?: string;
   caPath?: string;
   fingerprint?: string;
 }
@@ -57,6 +62,7 @@ export function loadRemoteCredentials(): RemoteCredentials | null {
   }
 
   let token = stored.token;
+  let refreshToken = stored.refreshToken;
   if (stored.encrypted) {
     if (!safeStorage.isEncryptionAvailable()) {
       log.warn(`safeStorage unavailable — cannot decrypt token at ${p}`);
@@ -64,6 +70,9 @@ export function loadRemoteCredentials(): RemoteCredentials | null {
     }
     try {
       token = safeStorage.decryptString(Buffer.from(stored.token, "base64"));
+      refreshToken = stored.refreshToken
+        ? safeStorage.decryptString(Buffer.from(stored.refreshToken, "base64"))
+        : undefined;
     } catch (err) {
       log.warn(`Failed to decrypt token: ${(err as Error).message}`);
       return null;
@@ -73,6 +82,8 @@ export function loadRemoteCredentials(): RemoteCredentials | null {
   return {
     url: stored.url,
     token,
+    deviceId: stored.deviceId,
+    refreshToken,
     caPath: stored.caPath,
     fingerprint: stored.fingerprint,
   };
@@ -86,10 +97,17 @@ export function saveRemoteCredentials(creds: RemoteCredentials): void {
   const tokenField = encrypted
     ? safeStorage.encryptString(creds.token).toString("base64")
     : creds.token;
+  const refreshTokenField = creds.refreshToken
+    ? encrypted
+      ? safeStorage.encryptString(creds.refreshToken).toString("base64")
+      : creds.refreshToken
+    : undefined;
 
   const payload: StoredPlain = {
     url: creds.url,
     token: tokenField,
+    deviceId: creds.deviceId,
+    refreshToken: refreshTokenField,
     encrypted,
     caPath: creds.caPath,
     fingerprint: creds.fingerprint,

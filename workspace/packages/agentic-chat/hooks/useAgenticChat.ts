@@ -11,7 +11,7 @@
  * For minimal chat (no tools, no feedback, no debug), use useChatCore directly.
  */
 
-import { useCallback, useMemo, useRef, useEffect } from "react";
+import { useCallback, useMemo, useRef, useEffect, useState } from "react";
 import { z } from "zod";
 import type { ChannelConfig, MethodDefinition, MethodExecutionContext } from "@natstack/pubsub";
 import { executeSandbox, ScopeManager, RpcScopePersistence } from "@workspace/eval";
@@ -22,6 +22,7 @@ import { useChatFeedback } from "./features/useChatFeedback";
 import { useChatTools } from "./features/useChatTools";
 import { useChatDebug } from "./features/useChatDebug";
 import { useInlineUi } from "./features/useInlineUi";
+import { useActionBar } from "./features/useActionBar";
 import type {
   ConnectionConfig,
   AgenticChatActions,
@@ -31,12 +32,23 @@ import type {
   ChatParticipantMetadata,
   ChatContextValue,
   ChatInputContextValue,
+  ActionBarData,
 } from "../types";
 
 /** Pending agent info passed from launcher */
 interface PendingAgentInfo {
   agentId: string;
   handle: string;
+}
+
+function actionBarLoadKey(path: string, props: Record<string, unknown> | undefined, maxHeight: number | undefined): string {
+  let propsKey = "";
+  try {
+    propsKey = JSON.stringify(props ?? null);
+  } catch {
+    propsKey = "[unserializable-props]";
+  }
+  return `${path}\n${propsKey}\n${maxHeight ?? ""}`;
 }
 
 export interface UseAgenticChatOptions {
@@ -53,6 +65,14 @@ export interface UseAgenticChatOptions {
   initialPrompt?: string;
   /** Sandbox config — provides RPC and import loading (keeps agentic-chat runtime-agnostic) */
   sandbox: SandboxConfig;
+  /** Context-relative TSX file to load into the panel-local action bar on mount */
+  initialActionBarFile?: string;
+  /** Props for initialActionBarFile */
+  initialActionBarProps?: Record<string, unknown>;
+  /** Preferred max height for initialActionBarFile */
+  initialActionBarMaxHeight?: number;
+  /** Called when load_action_bar changes the panel-local action bar file */
+  onActionBarFileChange?: (value: { path: string | null; props?: Record<string, unknown>; maxHeight?: number }) => void | Promise<void>;
 }
 
 export function useAgenticChat({
@@ -67,6 +87,10 @@ export function useAgenticChat({
   pendingAgentInfos,
   initialPrompt,
   sandbox,
+  initialActionBarFile,
+  initialActionBarProps,
+  initialActionBarMaxHeight,
+  onActionBarFileChange,
 }: UseAgenticChatOptions): { contextValue: ChatContextValue; inputContextValue: ChatInputContextValue } {
   // --- Sandbox config ref (stable access in callbacks) ---
   const sandboxRef = useRef(sandbox);
@@ -160,10 +184,18 @@ export function useAgenticChat({
     [],
   );
 
+  const loadSourceFile = useCallback((path: string) => (
+    sandboxRef.current.rpc.call("main", "fs.readFile", path, "utf8") as Promise<string>
+  ), []);
+  const loadImport = useCallback<NonNullable<SandboxOptions["loadImport"]>>((specifier, ref, externals) => (
+    sandboxRef.current.loadImport(specifier, ref, externals)
+  ), []);
+
   const feedback = useChatFeedback({
     addMethodHistoryEntry: core.addMethodHistoryEntry,
     updateMethodHistoryEntry: core.updateMethodHistoryEntry,
     chat,
+    loadImport,
     clientRef: core.clientRef,
     connected: core.connected,
   });
@@ -183,7 +215,141 @@ export function useAgenticChat({
 
   const debug = useChatDebug();
 
-  const inlineUi = useInlineUi({ messages: core.messages });
+  const inlineUi = useInlineUi({ messages: core.messages, loadSourceFile, loadImport });
+  const [actionBarData, setActionBarData] = useState<ActionBarData | null>(null);
+  const actionBar = useActionBar({ data: actionBarData, loadSourceFile, loadImport });
+  const lastLoadedActionBarKeyRef = useRef<string | null>(null);
+
+  const publishActionBarContext = useCallback(async (
+    action: "loaded" | "cleared",
+    payload: {
+      path?: string;
+      props?: Record<string, unknown>;
+      maxHeight?: number;
+      ok: boolean;
+      error?: string;
+      idempotencyKey?: string;
+    },
+  ) => {
+    const client = core.clientRef.current;
+    if (!client) return;
+    const args = payload.path
+      ? { path: payload.path, props: payload.props, maxHeight: payload.maxHeight }
+      : { clear: true };
+    const result = payload.ok
+      ? { ok: true, panelLocal: true, action }
+      : { ok: false, panelLocal: true, action, error: payload.error };
+    const content =
+      `Panel-local tool context: load_action_bar(${JSON.stringify(args)}) -> ` +
+      `${JSON.stringify(result)}. This action bar belongs to this chat panel's filesystem context. ` +
+      `Use load_action_bar to replace or clear it for this panel.`;
+    await client.publish("agent-context", {
+      id: crypto.randomUUID(),
+      kind: "action_bar",
+      content,
+      action,
+      args,
+      result,
+    }, {
+      persist: true,
+      idempotencyKey: payload.idempotencyKey ?? `agent-context:action-bar:${crypto.randomUUID()}`,
+    });
+  }, [core.clientRef]);
+
+  const loadActionBarFromFile = useCallback(async ({
+    path,
+    props,
+    maxHeight,
+    imports,
+    persistStateArgs = true,
+    idempotencyKey,
+  }: {
+    path: string;
+    props?: Record<string, unknown>;
+    maxHeight?: number;
+    imports?: Record<string, string>;
+    persistStateArgs?: boolean;
+    idempotencyKey?: string;
+  }): Promise<{ ok: true; id: string } | { ok: false; error: string }> => {
+    const trimmedPath = path.trim();
+    if (!trimmedPath) return { ok: false, error: "Missing path" };
+
+    try {
+      await loadSourceFile(trimmedPath);
+      const id = crypto.randomUUID();
+      setActionBarData({ id, source: { type: "file", path: trimmedPath }, imports, props, maxHeight });
+      lastLoadedActionBarKeyRef.current = actionBarLoadKey(trimmedPath, props, maxHeight);
+      if (persistStateArgs) {
+        await onActionBarFileChange?.({ path: trimmedPath, props, maxHeight });
+      }
+      await publishActionBarContext("loaded", {
+        path: trimmedPath,
+        props,
+        maxHeight,
+        ok: true,
+        idempotencyKey,
+      });
+      return { ok: true, id };
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await publishActionBarContext("loaded", {
+        path: trimmedPath,
+        props,
+        maxHeight,
+        ok: false,
+        error,
+        idempotencyKey,
+      });
+      return { ok: false, error };
+    }
+  }, [loadSourceFile, onActionBarFileChange, publishActionBarContext]);
+
+  const clearActionBar = useCallback(async ({
+    persistStateArgs = true,
+    idempotencyKey,
+  }: { persistStateArgs?: boolean; idempotencyKey?: string } = {}) => {
+    setActionBarData(null);
+    lastLoadedActionBarKeyRef.current = null;
+    if (persistStateArgs) {
+      await onActionBarFileChange?.({ path: null });
+    }
+    await publishActionBarContext("cleared", { ok: true, idempotencyKey });
+  }, [onActionBarFileChange, publishActionBarContext]);
+
+  const updateActionBarMaxHeight = useCallback((maxHeight: number, options?: { persist?: boolean }) => {
+    setActionBarData((current) => {
+      if (!current) return current;
+      const next = { ...current, maxHeight };
+      if (options?.persist !== false && current.source.type === "file") {
+        void onActionBarFileChange?.({
+          path: current.source.path,
+          props: current.props,
+          maxHeight,
+        });
+      }
+      return next;
+    });
+  }, [onActionBarFileChange]);
+
+  useEffect(() => {
+    if (!core.connected || !initialActionBarFile) return;
+    const loadKey = actionBarLoadKey(initialActionBarFile, initialActionBarProps, initialActionBarMaxHeight);
+    if (lastLoadedActionBarKeyRef.current === loadKey) return;
+    void loadActionBarFromFile({
+      path: initialActionBarFile,
+      props: initialActionBarProps,
+      maxHeight: initialActionBarMaxHeight,
+      persistStateArgs: false,
+      idempotencyKey: `agent-context:initial-action-bar:${channelName}:${loadKey}`,
+    });
+  }, [
+    channelName,
+    core.connected,
+    initialActionBarFile,
+    initialActionBarProps,
+    initialActionBarMaxHeight,
+    loadActionBarFromFile,
+  ]);
 
   // --- Stable refs for connection effect (avoids unstable object deps) ---
   const feedbackRef = useRef(feedback);
@@ -247,6 +413,7 @@ export function useAgenticChat({
 Users can expand/collapse at any time. Persists in chat history.
 
 **Available imports:** react, @radix-ui/themes, @radix-ui/react-icons
+You may provide either \`code\` or \`path\`. \`path\` reads a context-relative TSX file, supports static relative imports, and infers bare package imports from the nearest package.json when possible. Use \`imports\` for explicit package versions.
 **Must use** \`export default\`
 
 **Example:**
@@ -290,18 +457,67 @@ export default function App({ props, chat }) {
 }
 \`\`\``,
             parameters: z.object({
-              code: z.string().describe("TSX source code for the component"),
+              code: z.string().optional().describe("TSX source code for the component. Provide either code or path."),
+              path: z.string().optional().describe("Context-relative TSX file to render instead of inline code. Supports static relative imports."),
+              imports: z.record(z.string(), z.string()).optional().describe("On-demand package builds. Same semantics as eval imports."),
               props: z.record(z.unknown()).optional().describe("Props passed to the component as { props }"),
             }),
             execute: async (args: unknown) => {
-              const { code, props } = args as { code: string; props?: Record<string, unknown> };
-              if (!code) return { ok: false, error: "Missing code" };
+              const { code, path, imports, props } = args as { code?: string; path?: string; imports?: Record<string, string>; props?: Record<string, unknown> };
+              const trimmedPath = path?.trim();
+              if (trimmedPath) {
+                await loadSourceFile(trimmedPath);
+              } else if (!code) {
+                return { ok: false, error: "Missing code or path" };
+              }
+              if (imports && Object.keys(imports).length > 0) {
+                await executeSandbox("", { imports, loadImport });
+              }
               const client = core.clientRef.current;
               if (!client) return { ok: false, error: "Not connected" };
               const id = crypto.randomUUID();
-              const data = JSON.stringify({ id, code, props });
+              const source = trimmedPath ? { type: "file" as const, path: trimmedPath } : { type: "code" as const, code: code! };
+              const data = JSON.stringify({ id, source, props });
               await client.publish("message", { id, content: data, contentType: "inline_ui" }, { persist: true, idempotencyKey: `inline_ui:${id}` });
               return { ok: true, id };
+            },
+          },
+          load_action_bar: {
+            description: `Load, replace, or clear a compact persistent action bar at the top of this chat panel.
+
+Use this for small always-available controls or status for the current workflow.
+The TSX source is read from a file in this panel's current filesystem context.
+The loaded component receives { props, chat, scope, scopes }, supports the same
+imports as inline_ui, supports static relative imports from the loaded file,
+infers bare package imports from the nearest package.json when possible, and
+must export default.
+
+Unlike inline_ui, load_action_bar does not add visible chat history. The latest
+loaded file replaces any previous action bar for this panel only. Other panels
+connected to this channel may be in different filesystem contexts.
+Keep it compact; the panel clamps the rendered height to a small scrollable area.
+Use package imports available to inline_ui plus relative imports for local helper files.`,
+            parameters: z.object({
+              path: z.string().optional().describe("Context-relative TSX file to load. Required unless clear is true."),
+              imports: z.record(z.string(), z.string()).optional().describe("On-demand package builds. Same semantics as eval imports."),
+              props: z.record(z.unknown()).optional().describe("Props passed to the component as { props }"),
+              maxHeight: z.number().optional().describe("Preferred maximum height in pixels. Defaults to 180 and is clamped between 64 and 360."),
+              clear: z.boolean().optional().describe("When true, remove the current action bar."),
+            }),
+            execute: async (args: unknown) => {
+              const { path, imports, props, maxHeight, clear } = args as {
+                path?: string;
+                imports?: Record<string, string>;
+                props?: Record<string, unknown>;
+                maxHeight?: number;
+                clear?: boolean;
+              };
+              if (clear) {
+                await clearActionBar();
+                return { ok: true, cleared: true };
+              }
+              if (!path) return { ok: false, error: "Missing path" };
+              return loadActionBarFromFile({ path, imports, props, maxHeight });
             },
           },
           // ui_prompt — serves NatStackExtensionUIContext (select/confirm/input/editor)
@@ -480,7 +696,18 @@ export default function App({ props, chat }) {
     }
 
     void doConnect();
-  }, [channelName, channelConfig, contextId, core.connectToChannel, config.serverUrl, core.hasConnectedRef, core.selfIdRef, core.clientRef]);
+  }, [
+    channelName,
+    channelConfig,
+    contextId,
+    core.connectToChannel,
+    config.serverUrl,
+    core.hasConnectedRef,
+    core.selfIdRef,
+    core.clientRef,
+    clearActionBar,
+    loadActionBarFromFile,
+  ]);
 
   // --- Wrap platform actions ---
   const handleAddAgent = useCallback(async (agentId?: string) => {
@@ -516,6 +743,8 @@ export default function App({ props, chat }) {
     messages: core.messages,
     methodEntries: core.methodEntries,
     inlineUiComponents: inlineUi.inlineUiComponents,
+    actionBar: actionBar.actionBar,
+    onActionBarMaxHeightChange: updateActionBarMaxHeight,
     hasMoreHistory: core.hasMoreHistory,
     loadingMore: core.loadingMore,
     selfId: core.selfId,
@@ -543,7 +772,7 @@ export default function App({ props, chat }) {
   }), [
     core.connected, core.status, core.connectionError, core.dismissConnectionError,
     channelName, sessionEnabled, chat,
-    core.messages, core.methodEntries, inlineUi.inlineUiComponents, core.hasMoreHistory, core.loadingMore,
+    core.messages, core.methodEntries, inlineUi.inlineUiComponents, actionBar.actionBar, updateActionBarMaxHeight, core.hasMoreHistory, core.loadingMore,
     core.participants, core.allParticipants,
     core.debugEvents, debug.debugConsoleAgent, core.dirtyRepoWarnings, core.pendingAgents,
     feedback.activeFeedbacks, theme,

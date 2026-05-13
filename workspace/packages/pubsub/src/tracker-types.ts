@@ -61,13 +61,20 @@ export interface ChatParticipantMetadata extends AgenticParticipantMetadata {
 }
 
 /**
+ * Source for sandbox-backed UI components.
+ */
+export type SandboxSource =
+  | { type: "code"; code: string }
+  | { type: "file"; path: string };
+
+/**
  * Inline UI data structure sent as message content (JSON stringified).
  */
 export interface InlineUiData {
   /** Unique ID for this inline UI instance (allows updates with same ID) */
   id: string;
-  /** The MDX/TSX code to compile and render */
-  code: string;
+  /** Component source to compile and render */
+  source: SandboxSource;
   /** Optional props to pass to the component */
   props?: Record<string, unknown>;
 }
@@ -178,4 +185,3 @@ export interface ActionTracker {
   isActive(): boolean;
   cleanup(): Promise<boolean>;
 }
-

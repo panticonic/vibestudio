@@ -77,8 +77,15 @@ For complex interactions that schema-based forms can't express.
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `code` | string | TSX source code |
+| `code` | string | TSX source code. Provide either `code` or `path` |
+| `path` | string | Context-relative TSX file to load instead of inline code |
+| `imports` | `Record<string, string>` | Explicit package versions, same semantics as eval imports |
 | `title` | string | Container header title |
+
+File-loaded feedback components support static relative imports from the entry
+file and infer bare package imports from the nearest `package.json` when
+possible. Package-local aliases from `package.json` `imports` and simple
+`tsconfig.json` paths are supported.
 
 ### Component Contract
 

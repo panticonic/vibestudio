@@ -209,13 +209,24 @@ async function waitForAndroidBoot(device, timeoutMs = 180_000) {
   throw new Error("Timed out waiting for Android boot completion");
 }
 
-async function writeDevBootstrap(serverUrl, shellToken) {
+async function writeDevBootstrap(serverUrl, pairingCode) {
+  const response = await fetch(`${serverUrl.replace(/\/$/, "")}/_r/s/auth/complete-pairing`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code: pairingCode, label: "Mobile dev bootstrap", platform: "mobile-dev" }),
+  });
+  const credential = await response.json();
+  if (!response.ok) {
+    throw new Error(`Failed to complete dev pairing: ${credential?.error ?? response.status}`);
+  }
   await runCommand("node", [
     "scripts/write-mobile-dev-bootstrap.mjs",
     "--server-url",
     serverUrl,
-    "--shell-token",
-    shellToken,
+    "--device-id",
+    credential.deviceId,
+    "--refresh-token",
+    credential.refreshToken,
     "--auto-connect",
     "true",
   ], { label: "bootstrap" });
@@ -337,7 +348,7 @@ async function main() {
 
     const ready = await waitForServerReady(readyFilePath, serverChild);
     readyInfo = ready;
-    await writeDevBootstrap(ready.gatewayUrl, ready.shellToken);
+    await writeDevBootstrap(ready.gatewayUrl, ready.pairingCode);
 
     await adb(options.device, "reverse", `tcp:${metroPort}`, `tcp:${metroPort}`);
     await adb(options.device, "reverse", `tcp:${ready.gatewayPort}`, `tcp:${ready.gatewayPort}`);

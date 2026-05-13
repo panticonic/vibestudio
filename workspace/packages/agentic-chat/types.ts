@@ -30,7 +30,7 @@ export type {
 // ===========================================================================
 // UI-only types
 // ===========================================================================
-import type { AgentDebugPayload, Participant, AttachmentInput } from "@natstack/pubsub";
+import type { AgentDebugPayload, Participant, AttachmentInput, SandboxSource } from "@natstack/pubsub";
 import type { ActiveFeedback, ToolApprovalProps } from "@workspace/tool-ui";
 import type { PendingImage } from "./utils/imageUtils";
 import type { ComponentType } from "react";
@@ -54,6 +54,28 @@ export interface InlineUiComponentEntry {
   Component?: ComponentType<{ props: Record<string, unknown>; chat: Record<string, unknown>; scope: Record<string, unknown>; scopes: Record<string, unknown> }>;
   cacheKey: string;
   error?: string;
+}
+
+// ===========================================================================
+// Action Bar
+// ===========================================================================
+
+export interface ActionBarData {
+  /** Unique ID for this action bar revision. New revisions replace old ones. */
+  id: string;
+  /** Component source to compile and render. */
+  source: SandboxSource;
+  /** Optional explicit imports for the current compiled revision. */
+  imports?: Record<string, string>;
+  /** Optional props to pass to the component */
+  props?: Record<string, unknown>;
+  /** Optional preferred maximum height in pixels. Clamped by the renderer. */
+  maxHeight?: number;
+}
+
+export interface ActionBarState {
+  data: ActionBarData;
+  component?: InlineUiComponentEntry;
 }
 
 // ===========================================================================
@@ -115,6 +137,8 @@ export interface ChatContextValue {
   messages: ChatMessage[];
   methodEntries: Map<string, MethodHistoryEntry>;
   inlineUiComponents: Map<string, InlineUiComponentEntry>;
+  actionBar: ActionBarState | null;
+  onActionBarMaxHeightChange?: (maxHeight: number, options?: { persist?: boolean }) => void;
   hasMoreHistory: boolean;
   loadingMore: boolean;
 

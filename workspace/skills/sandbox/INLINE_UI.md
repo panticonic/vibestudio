@@ -16,7 +16,16 @@ Use a UI instead of plain text when the task has:
 
 For one-shot approval/setup workflows, prefer `feedback_custom`; it returns a
 structured result to the agent. For dashboards, previews, logs, or long-lived
-assistants, prefer `inline_ui`.
+assistants in the transcript, prefer `inline_ui`. For compact controls or
+status that should remain pinned above chat history in the current panel, use
+`load_action_bar` with a TSX file instead.
+
+You can send raw TSX with `code`, or put the component in a context-relative
+file and call `inline_ui({ path: ".natstack/ui/review.tsx", props: {...} })`.
+File-loaded components support static relative imports from that file and infer
+bare package imports from the nearest `package.json` when possible. Use
+`imports` for explicit package versions. Package-local aliases from
+`package.json` `imports` and simple `tsconfig.json` paths are supported.
 
 ## Component Rules
 

@@ -150,7 +150,7 @@ function buildServerArgs(options, host) {
     "--protocol",
     options.protocol,
     "--serve-panels",
-    "--print-token",
+    "--print-credentials",
   ];
 
   if (!options.noInit) args.push("--init");
@@ -192,7 +192,7 @@ function main() {
 
   let gatewayUrl = null;
   let mobileUrl = null;
-  let shellToken = null;
+  let pairingCode = null;
   let bannerPrinted = false;
   let buffer = "";
   // Captured Tailscale-Serve activation URL, when the server emits an
@@ -201,23 +201,43 @@ function main() {
   // when they look up from scanning. Without this, the bordered server
   // block scrolls off as the QR is rendered.
   let pendingServeActivationUrl = null;
+  let publicUrlNotReachable = null;
+  const serveActionLines = [];
   // Wait briefly after seeing the Gateway line to give the server a chance
   // to also emit the Mobile URL line (when tailscale serve is verified). If
   // Mobile URL never arrives, we fall back to the gateway URL.
   let pendingTimer = null;
   let waitElapsed = false;
   const printServeActionFollowup = () => {
-    if (!pendingServeActivationUrl) return;
+    if (!pendingServeActivationUrl && !publicUrlNotReachable && serveActionLines.length === 0) return;
     const divider = "=".repeat(72);
     console.log(`\n${divider}`);
-    console.log("  Heads up: mobile OAuth will fall back to localhost until you");
-    console.log("  enable Tailscale Serve. One click here:");
-    console.log(`    ${pendingServeActivationUrl}`);
-    console.log("  Then restart `pnpm mobile:pair` to pick up the public HTTPS URL.");
+    console.log("  ACTION NEEDED — HTTPS mobile URL is not ready");
+    console.log(divider);
+    if (publicUrlNotReachable) {
+      console.log(`  Public URL: ${publicUrlNotReachable}`);
+    }
+    if (pendingServeActivationUrl) {
+      console.log("  Enable Tailscale Serve here:");
+      console.log(`    ${pendingServeActivationUrl}`);
+    }
+    if (serveActionLines.length > 0) {
+      for (const actionLine of serveActionLines) {
+        console.log(actionLine ? `  ${actionLine}` : "");
+      }
+    } else {
+      console.log("  NatStack found a Tailscale HTTPS name, but it is not usable yet.");
+      console.log("  The QR above used the HTTP fallback instead.");
+      console.log("");
+      console.log("  Basic pairing may work, but mobile OAuth/browser redirects need");
+      console.log("  the HTTPS Tailscale URL.");
+    }
+    console.log("");
+    console.log("  Then restart `pnpm mobile:pair` to pick up the HTTPS URL.");
     console.log(`${divider}\n`);
   };
   const tryPrintBanner = () => {
-    if (bannerPrinted || !shellToken || (!gatewayUrl && !mobileUrl)) return;
+    if (bannerPrinted || !pairingCode || (!gatewayUrl && !mobileUrl)) return;
     if (!mobileUrl && !waitElapsed && pendingTimer === null) {
       pendingTimer = setTimeout(() => {
         pendingTimer = null;
@@ -235,7 +255,7 @@ function main() {
     printConnectBanner({
       title: "NatStack Android pairing",
       gatewayUrl: url,
-      shellToken,
+      pairingCode,
     });
     printServeActionFollowup();
   };
@@ -253,13 +273,38 @@ function main() {
       if (mobileMatch) mobileUrl = mobileMatch[1];
       const gatewayMatch = line.match(/Gateway:\s+(\S+)/);
       if (gatewayMatch) gatewayUrl = gatewayMatch[1];
-      const tokenMatch = line.match(/(?:NATSTACK_SHELL_TOKEN=|Shell token:\s+)([A-Za-z0-9_-]+)/);
-      if (tokenMatch) shellToken = tokenMatch[1];
+      const publicUrlMatch = line.match(/Public URL:\s+(\S+).*\(not yet reachable/);
+      if (publicUrlMatch) publicUrlNotReachable = publicUrlMatch[1];
+      const pairingMatch = line.match(/(?:NATSTACK_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/);
+      if (pairingMatch) pairingCode = pairingMatch[1];
       // Matches the "    https://login.tailscale.com/f/serve?node=..." line
       // inside the server's ACTION NEEDED block. Restricted to the Tailscale
       // activation host so other URLs in startup logs aren't captured.
       const serveActivationMatch = line.match(/(https:\/\/login\.tailscale\.com\/f\/serve\?\S+)/);
       if (serveActivationMatch) pendingServeActivationUrl = serveActivationMatch[1];
+      if (
+        line.includes("sudo tailscale")
+        || line.includes("tailscale serve reset")
+        || line.includes("tailscale serve status")
+        || line.includes("Tailscale Serve")
+        || line.includes("HTTPS Certificates")
+        || line.includes("HTTP fallback")
+        || line.includes("mobile OAuth")
+        || line.includes("configured but not reachable")
+        || line.includes("Last check:")
+        || line.includes("stale Serve target")
+        || line.includes("curl http://127.0.0.1")
+      ) {
+        const cleaned = line.trim();
+        if (
+          cleaned
+          && !cleaned.startsWith("Tailscale:")
+          && !cleaned.startsWith("Persistent across reboots")
+          && !serveActionLines.includes(cleaned)
+        ) {
+          serveActionLines.push(cleaned);
+        }
+      }
 
       tryPrintBanner();
     }

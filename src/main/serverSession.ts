@@ -25,6 +25,7 @@ import type { ServerInfo } from "./serverInfo.js";
 import type { WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { CentralDataManager } from "@natstack/shared/centralData";
 import type { StartupMode } from "./startupMode.js";
+import { saveRemoteCredentials } from "./remoteCredentialStore.js";
 
 const log = createDevLogger("ServerSession");
 
@@ -70,35 +71,47 @@ function buildServerInfo(
   };
 }
 
-async function exchangeAdminForShell(
+interface ShellCredentialResponse {
+  deviceId: string;
+  refreshToken?: string;
+  shellToken: string;
+  serverId?: string;
+  serverBootId?: string;
+  workspaceId?: string;
+}
+
+async function postAuthJson(
   remoteUrl: URL,
-  adminToken: string,
+  path: string,
+  bodyValue: unknown,
+  bearerToken: string | null,
   tls?: TlsPinningOptions
-): Promise<string> {
-  const exchangeUrl = new URL("/_r/s/auth/exchange-admin-for-shell", remoteUrl);
-  const body = JSON.stringify({ callerId: "electron-remote" });
-  const responseBody = await new Promise<{
+): Promise<{ statusCode: number; statusMessage: string; body: string }> {
+  const requestUrl = new URL(path, remoteUrl);
+  const body = JSON.stringify(bodyValue);
+  return new Promise<{
     statusCode: number;
     statusMessage: string;
     body: string;
   }>((resolve, reject) => {
-    const isHttps = exchangeUrl.protocol === "https:";
+    const isHttps = requestUrl.protocol === "https:";
     const agent =
       isHttps && tls?.fingerprint
         ? createPinnedHttpsAgent(tls.fingerprint)
         : isHttps && tls?.caPath
           ? new https.Agent({ ca: fs.readFileSync(tls.caPath) })
           : undefined;
+    const headers: Record<string, string | number> = {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    };
+    if (bearerToken) headers["Authorization"] = `Bearer ${bearerToken}`;
     const req = (isHttps ? https : http).request(
-      exchangeUrl,
+      requestUrl,
       {
         method: "POST",
         agent,
-        headers: {
-          Authorization: `Bearer ${adminToken}`,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(body),
-        },
+        headers,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -115,19 +128,94 @@ async function exchangeAdminForShell(
     req.on("error", reject);
     req.end(body);
   });
-  const json = JSON.parse(responseBody.body || "{}") as { token?: unknown; error?: unknown };
+}
+
+async function issueElectronDevice(
+  remoteUrl: URL,
+  adminToken: string,
+  tls?: TlsPinningOptions
+): Promise<ShellCredentialResponse> {
+  const responseBody = await postAuthJson(
+    remoteUrl,
+    "/_r/s/auth/issue-device",
+    { label: "Electron remote", platform: "electron" },
+    adminToken,
+    tls,
+  );
+  const json = JSON.parse(responseBody.body || "{}") as Partial<ShellCredentialResponse> & { error?: unknown };
   if (
     responseBody.statusCode < 200 ||
     responseBody.statusCode >= 300 ||
-    typeof json.token !== "string"
+    typeof json.shellToken !== "string" ||
+    typeof json.deviceId !== "string"
   ) {
     throw new Error(
-      `Failed to exchange admin token for shell token (${responseBody.statusCode}): ${
+      `Failed to issue remote device credential (${responseBody.statusCode}): ${
         typeof json.error === "string" ? json.error : responseBody.statusMessage
       }`
     );
   }
-  return json.token;
+  return json as ShellCredentialResponse;
+}
+
+async function refreshShellCredential(
+  remoteUrl: URL,
+  deviceId: string,
+  refreshToken: string,
+  tls?: TlsPinningOptions
+): Promise<ShellCredentialResponse> {
+  const responseBody = await postAuthJson(
+    remoteUrl,
+    "/_r/s/auth/refresh-shell",
+    { deviceId, refreshToken },
+    null,
+    tls,
+  );
+  const json = JSON.parse(responseBody.body || "{}") as Partial<ShellCredentialResponse> & { error?: unknown };
+  if (
+    responseBody.statusCode < 200 ||
+    responseBody.statusCode >= 300 ||
+    typeof json.shellToken !== "string"
+  ) {
+    throw new Error(
+      `Failed to refresh shell token (${responseBody.statusCode}): ${
+        typeof json.error === "string" ? json.error : responseBody.statusMessage
+      }`
+    );
+  }
+  return json as ShellCredentialResponse;
+}
+
+async function acquireShellCredential(
+  mode: Extract<StartupMode, { kind: "remote" }>
+): Promise<ShellCredentialResponse> {
+  if (mode.deviceId && mode.refreshToken) {
+    try {
+      return await refreshShellCredential(
+        mode.remoteUrl,
+        mode.deviceId,
+        mode.refreshToken,
+        mode.tls,
+      );
+    } catch (err) {
+      log.warn(`Stored device credential could not refresh shell token: ${(err as Error).message}`);
+    }
+  }
+
+  const credential = await issueElectronDevice(mode.remoteUrl, mode.adminToken, mode.tls);
+  if (credential.refreshToken) {
+    saveRemoteCredentials({
+      url: mode.remoteUrl.href,
+      token: mode.adminToken,
+      deviceId: credential.deviceId,
+      refreshToken: credential.refreshToken,
+      caPath: mode.tls?.caPath,
+      fingerprint: mode.tls?.fingerprint,
+    });
+    mode.deviceId = credential.deviceId;
+    mode.refreshToken = credential.refreshToken;
+  }
+  return credential;
 }
 
 /**
@@ -160,7 +248,8 @@ export async function establishServerSession(args: {
     const remotePort = parseInt(remoteUrl.port) || (protocol === "https" ? 443 : 80);
     gatewayConfig = { serverUrl: `${protocol}://${externalHost}:${remotePort}` };
 
-    let shellToken = await exchangeAdminForShell(remoteUrl, adminToken, tls);
+    let shellCredential = await acquireShellCredential(mode);
+    let shellToken = shellCredential.shellToken;
     ports = {
       workerdPort: remotePort,
       gatewayPort: remotePort,
@@ -174,7 +263,17 @@ export async function establishServerSession(args: {
       reconnect: true,
       maxReconnectAttempts: 10,
       refreshAuthToken: async () => {
-        shellToken = await exchangeAdminForShell(remoteUrl, adminToken, tls);
+        if (!shellCredential.refreshToken) {
+          shellCredential = await acquireShellCredential(mode);
+        } else {
+          shellCredential = await refreshShellCredential(
+            remoteUrl,
+            shellCredential.deviceId,
+            shellCredential.refreshToken,
+            tls,
+          ).catch(() => acquireShellCredential(mode));
+        }
+        shellToken = shellCredential.shellToken;
         ports.shellToken = shellToken;
         return shellToken;
       },

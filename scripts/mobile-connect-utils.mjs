@@ -18,8 +18,8 @@ export function listIPv4Interfaces() {
   return out;
 }
 
-export function createConnectDeepLink(gatewayUrl, shellToken) {
-  return `natstack://connect?url=${encodeURIComponent(gatewayUrl)}&token=${encodeURIComponent(shellToken)}`;
+export function createConnectDeepLink(gatewayUrl, pairingCode) {
+  return `natstack://connect?url=${encodeURIComponent(gatewayUrl)}&code=${encodeURIComponent(pairingCode)}`;
 }
 
 function isTailscaleAddress(address, name) {
@@ -86,16 +86,16 @@ export function pickMobileHost(preference, options = {}) {
 export function printConnectBanner({
   title,
   gatewayUrl,
-  shellToken,
+  pairingCode,
   instructions = "Open the QR code with the Android camera. NatStack will confirm and save the connection.",
 }) {
-  const deepLink = createConnectDeepLink(gatewayUrl, shellToken);
+  const deepLink = createConnectDeepLink(gatewayUrl, pairingCode);
   const divider = "=".repeat(72);
   console.log(`\n${divider}`);
   console.log(`  ${title}`);
   console.log(divider);
   console.log(`  Gateway:    ${gatewayUrl}`);
-  console.log(`  Shell tok:  ${shellToken}`);
+  console.log(`  Pair code:  ${pairingCode}`);
   console.log(`  Deep link:  ${deepLink}`);
   console.log();
   qrcode.generate(deepLink, { small: true });
