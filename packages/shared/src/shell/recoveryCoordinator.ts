@@ -88,6 +88,9 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
         }
       }
     }
+    console.warn(
+      `[RecoveryCoordinator] ${kind} handler "${handler.name}" exhausted all ${maxAttempts} attempts`,
+    );
   }
 }
 

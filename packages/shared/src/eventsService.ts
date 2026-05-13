@@ -290,22 +290,6 @@ export class EventService {
   }
 
   /**
-   * @deprecated Prefer `emitToCaller` or `emitToConnection` so caller-wide
-   * delivery cannot be confused with session-specific delivery.
-   */
-  emitTo<E extends EventName>(
-    callerId: string,
-    event: E,
-    data?: EventPayloads[E],
-    opts?: { connectionId?: string },
-  ): boolean {
-    if (opts?.connectionId !== undefined) {
-      return this.emitToConnection(callerId, opts.connectionId, event, data);
-    }
-    return this.emitToCaller(callerId, event, data);
-  }
-
-  /**
    * Get the number of subscribers for an event.
    */
   getSubscriberCount(event: EventName): number {

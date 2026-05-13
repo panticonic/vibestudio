@@ -1,13 +1,22 @@
 import { randomBytes, timingSafeEqual } from "crypto";
 import type { CallerKind } from "./serviceDispatcher.js";
 
-export interface PanelTokenRecord {
+export type EphemeralConnectionId = string & { readonly __ephemeralConnectionId: unique symbol };
+
+export function ephemeralConnectionId(value: string): EphemeralConnectionId {
+  return value as EphemeralConnectionId;
+}
+
+export interface PersistedPanelTokenRecord {
   panelId: string;
   token: string;
   callerKind: "panel";
   parentId?: string | null;
   ownerCallerId?: string;
-  ownerConnectionId?: string;
+}
+
+export interface PanelTokenRecord extends PersistedPanelTokenRecord {
+  ownerConnectionId?: EphemeralConnectionId;
 }
 
 /**
@@ -50,7 +59,7 @@ export class TokenManager {
   private panelParentIds = new Map<string, string | null>();
   // panelId -> authenticated shell/client caller id that owns browser handoff
   private panelOwnerCallerIds = new Map<string, string>();
-  private panelOwnerConnectionIds = new Map<string, string>();
+  private panelOwnerConnectionIds = new Map<string, EphemeralConnectionId>();
   // revocation listeners
   private revokeListeners: ((callerId: string) => void)[] = [];
   private panelTokenListeners: ((record: PanelTokenRecord | null, panelId: string) => void)[] = [];
@@ -213,10 +222,14 @@ export class TokenManager {
     return this.panelParentIds.get(panelId);
   }
 
-  setPanelOwner(panelId: string, ownerCallerId: string, ownerConnectionId?: string): void {
+  setPanelOwner(
+    panelId: string,
+    ownerCallerId: string,
+    ownerConnectionId?: EphemeralConnectionId | string,
+  ): void {
     this.panelOwnerCallerIds.set(panelId, ownerCallerId);
     if (ownerConnectionId) {
-      this.panelOwnerConnectionIds.set(panelId, ownerConnectionId);
+      this.panelOwnerConnectionIds.set(panelId, ephemeralConnectionId(ownerConnectionId));
     } else {
       this.panelOwnerConnectionIds.delete(panelId);
     }
@@ -227,7 +240,7 @@ export class TokenManager {
     return this.panelOwnerCallerIds.get(panelId);
   }
 
-  getPanelOwnerConnection(panelId: string): string | undefined {
+  getPanelOwnerConnection(panelId: string): EphemeralConnectionId | undefined {
     return this.panelOwnerConnectionIds.get(panelId);
   }
 

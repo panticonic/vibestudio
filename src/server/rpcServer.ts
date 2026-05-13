@@ -79,6 +79,135 @@ type RelayErrorCode =
   | "TARGET_NOT_REACHABLE"
   | "UNKNOWN_TARGET_KIND";
 
+class ConnectionRegistry {
+  private clients = new Map<WebSocket, WsClientState>();
+  private callerConnections = new Map<string, Map<string, WsClientState>>();
+  private bridges = new Map<string, Map<string, RpcBridge>>();
+  private transports = new Map<string, Map<string, WsServerTransportInternal>>();
+
+  getBySocket(ws: WebSocket): WsClientState | undefined {
+    return this.clients.get(ws);
+  }
+
+  getConnection(callerId: string, connectionId: string): WsClientState | undefined {
+    const client = this.callerConnections.get(callerId)?.get(connectionId);
+    return client?.ws.readyState === WebSocket.OPEN ? client : undefined;
+  }
+
+  getCallerConnections(callerId: string): WsClientState[] {
+    return [...(this.callerConnections.get(callerId)?.values() ?? [])].filter(
+      (client) => client.ws.readyState === WebSocket.OPEN,
+    );
+  }
+
+  pickPrimary(callerId: string): WsClientState | undefined {
+    return this.getCallerConnections(callerId).sort(
+      (a, b) => a.authenticatedAt - b.authenticatedAt || a.connectionId.localeCompare(b.connectionId),
+    )[0];
+  }
+
+  addClient(client: WsClientState): void {
+    this.clients.set(client.ws, client);
+    let callerClients = this.callerConnections.get(client.callerId);
+    if (!callerClients) {
+      callerClients = new Map();
+      this.callerConnections.set(client.callerId, callerClients);
+    }
+    callerClients.set(client.connectionId, client);
+  }
+
+  removeClient(client: WsClientState): boolean {
+    const current = this.callerConnections.get(client.callerId)?.get(client.connectionId);
+    const removedActive = current === client;
+    if (removedActive) {
+      const callerClients = this.callerConnections.get(client.callerId);
+      callerClients?.delete(client.connectionId);
+      if (callerClients?.size === 0) {
+        this.callerConnections.delete(client.callerId);
+      }
+    }
+    this.clients.delete(client.ws);
+    this.removeBridge(client.callerId, client.connectionId);
+    return removedActive;
+  }
+
+  setBridge(
+    callerId: string,
+    connectionId: string,
+    bridge: RpcBridge,
+    transport: WsServerTransportInternal,
+  ): void {
+    let bridges = this.bridges.get(callerId);
+    if (!bridges) {
+      bridges = new Map();
+      this.bridges.set(callerId, bridges);
+    }
+    bridges.set(connectionId, bridge);
+
+    let transports = this.transports.get(callerId);
+    if (!transports) {
+      transports = new Map();
+      this.transports.set(callerId, transports);
+    }
+    transports.set(connectionId, transport);
+  }
+
+  getBridge(callerId: string, connectionId: string): RpcBridge | undefined {
+    return this.bridges.get(callerId)?.get(connectionId);
+  }
+
+  getPrimaryBridge(callerId: string): RpcBridge | undefined {
+    const primary = this.pickPrimary(callerId);
+    return primary ? this.getBridge(callerId, primary.connectionId) : undefined;
+  }
+
+  getTransport(callerId: string, connectionId: string): WsServerTransportInternal | undefined {
+    return this.transports.get(callerId)?.get(connectionId);
+  }
+
+  removeBridge(callerId: string, connectionId: string): void {
+    const transports = this.transports.get(callerId);
+    const transport = transports?.get(connectionId);
+    if (transport) {
+      transport.close();
+      transports?.delete(connectionId);
+      if (transports?.size === 0) this.transports.delete(callerId);
+    }
+
+    const bridges = this.bridges.get(callerId);
+    bridges?.delete(connectionId);
+    if (bridges?.size === 0) this.bridges.delete(callerId);
+  }
+
+  forEachControlPlane(fn: (client: WsClientState) => void): void {
+    for (const callerClients of this.callerConnections.values()) {
+      for (const client of callerClients.values()) {
+        if (
+          (client.callerKind === "server" || client.callerKind === "shell") &&
+          client.ws.readyState === WebSocket.OPEN
+        ) {
+          fn(client);
+        }
+      }
+    }
+  }
+
+  closeAll(code: number, reason: string): void {
+    for (const transports of this.transports.values()) {
+      for (const transport of transports.values()) {
+        transport.close();
+      }
+    }
+    for (const ws of this.clients.keys()) {
+      ws.close(code, reason);
+    }
+    this.clients.clear();
+    this.callerConnections.clear();
+    this.bridges.clear();
+    this.transports.clear();
+  }
+}
+
 function getErrorCode(error: unknown): string | undefined {
   return error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
 }
@@ -92,9 +221,7 @@ export class RpcServer {
   private workerdUrl: string | null = null;
   private workerdGatewayToken: string | null = null;
 
-  // Connection tracking
-  private clients = new Map<WebSocket, WsClientState>();
-  private callerConnections = new Map<string, Map<string, WsClientState>>();
+  private connections = new ConnectionRegistry();
   private pendingToolCalls = new Map<string, PendingToolCall>();
   private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastDisconnectAt = new Map<string, number>();
@@ -122,9 +249,6 @@ export class RpcServer {
   >();
   private routedRequestOrigins = new Map<string, { callerId: string; connectionId: string }>();
 
-  // Per-client RPC bridges for server→client calls
-  private clientBridges = new Map<string, Map<string, RpcBridge>>();
-  private clientTransports = new Map<string, Map<string, WsServerTransportInternal>>();
   private readonly bootId = randomUUID();
 
   // SCAFFOLD: 3-second reconnect grace window. This closes the relay race for
@@ -168,20 +292,15 @@ export class RpcServer {
   }
 
   private getCallerConnections(callerId: string): WsClientState[] {
-    return [...(this.callerConnections.get(callerId)?.values() ?? [])].filter(
-      (client) => client.ws.readyState === WebSocket.OPEN,
-    );
+    return this.connections.getCallerConnections(callerId);
   }
 
   private pickPrimary(callerId: string): WsClientState | undefined {
-    return this.getCallerConnections(callerId).sort(
-      (a, b) => a.authenticatedAt - b.authenticatedAt || a.connectionId.localeCompare(b.connectionId),
-    )[0];
+    return this.connections.pickPrimary(callerId);
   }
 
   private getConnection(callerId: string, connectionId: string): WsClientState | undefined {
-    const client = this.callerConnections.get(callerId)?.get(connectionId);
-    return client?.ws.readyState === WebSocket.OPEN ? client : undefined;
+    return this.connections.getConnection(callerId, connectionId);
   }
 
   private setBridge(
@@ -190,19 +309,7 @@ export class RpcServer {
     bridge: RpcBridge,
     transport: WsServerTransportInternal,
   ): void {
-    let bridges = this.clientBridges.get(callerId);
-    if (!bridges) {
-      bridges = new Map();
-      this.clientBridges.set(callerId, bridges);
-    }
-    bridges.set(connectionId, bridge);
-
-    let transports = this.clientTransports.get(callerId);
-    if (!transports) {
-      transports = new Map();
-      this.clientTransports.set(callerId, transports);
-    }
-    transports.set(connectionId, transport);
+    this.connections.setBridge(callerId, connectionId, bridge, transport);
   }
 
   /** Register a callback for client disconnect events. */
@@ -333,7 +440,7 @@ export class RpcServer {
       connectionWaiter.resolve();
     }
 
-    const existing = this.callerConnections.get(callerId)?.get(connectionId);
+    const existing = this.connections.getConnection(callerId, connectionId);
     if (existing) {
       existing.ws.close(4002, "Replaced by new connection");
       this.cleanupClient(existing);
@@ -348,13 +455,7 @@ export class RpcServer {
       authenticatedAt: Date.now(),
     };
 
-    this.clients.set(ws, client);
-    let callerClients = this.callerConnections.get(callerId);
-    if (!callerClients) {
-      callerClients = new Map();
-      this.callerConnections.set(callerId, callerClients);
-    }
-    callerClients.set(connectionId, client);
+    this.connections.addClient(client);
 
     if (callerKind === "panel") {
       const previousDisconnectAt = this.lastDisconnectAt.get(callerId);
@@ -423,7 +524,7 @@ export class RpcServer {
         // If the message is a response or event, it may be for a server-initiated
         // call via the client's RPC bridge. Route it to the bridge transport.
         if (msg.message.type === "response" || msg.message.type === "event") {
-          const transport = this.clientTransports.get(client.callerId)?.get(client.connectionId);
+          const transport = this.connections.getTransport(client.callerId, client.connectionId);
           if (transport) {
             transport.deliver(client.callerId, msg.message);
             // For responses, we're done — don't also process as a new request.
@@ -749,16 +850,8 @@ export class RpcServer {
 
   private handleClose(client: WsClientState, code?: number, reason?: string): void {
     const connectionKey = this.connectionKey(client.callerId, client.connectionId);
-    const current = this.callerConnections.get(client.callerId)?.get(client.connectionId);
-    const wasReplaced = current !== client;
-    if (current === client) {
-      const callerClients = this.callerConnections.get(client.callerId);
-      callerClients?.delete(client.connectionId);
-      if (callerClients?.size === 0) {
-        this.callerConnections.delete(client.callerId);
-      }
-    }
-    this.clients.delete(client.ws);
+    const wasReplaced = this.connections.getConnection(client.callerId, client.connectionId) !== client;
+    this.connections.removeClient(client);
 
     if (client.callerKind === "panel") {
       this.lastDisconnectAt.set(client.callerId, Date.now());
@@ -784,12 +877,6 @@ export class RpcServer {
         this.pendingToolCalls.delete(callId);
         pending.reject(new Error("Client disconnected"));
       }
-    }
-
-    // Clean up the old client's bridge transport (it's bound to the closed WebSocket).
-    // If the client was replaced, cleanupClient already handles this; if not, do it now.
-    if (!wasReplaced) {
-      this.cleanupClientBridge(client.callerId, client.connectionId);
     }
 
     // If this socket was replaced (code 4002), don't start cleanup timer —
@@ -898,32 +985,7 @@ export class RpcServer {
   }
 
   private cleanupClient(client: WsClientState): void {
-    const current = this.callerConnections.get(client.callerId)?.get(client.connectionId);
-    if (current === client) {
-      const callerClients = this.callerConnections.get(client.callerId);
-      callerClients?.delete(client.connectionId);
-      if (callerClients?.size === 0) {
-        this.callerConnections.delete(client.callerId);
-      }
-    }
-    this.clients.delete(client.ws);
-
-    // Clean up the client's RPC bridge and transport
-    this.cleanupClientBridge(client.callerId, client.connectionId);
-  }
-
-  /** Close and remove the RPC bridge/transport for a client */
-  private cleanupClientBridge(callerId: string, connectionId: string): void {
-    const transports = this.clientTransports.get(callerId);
-    const transport = transports?.get(connectionId);
-    if (transport) {
-      transport.close();
-      transports?.delete(connectionId);
-      if (transports?.size === 0) this.clientTransports.delete(callerId);
-    }
-    const bridges = this.clientBridges.get(callerId);
-    bridges?.delete(connectionId);
-    if (bridges?.size === 0) this.clientBridges.delete(callerId);
+    this.connections.removeClient(client);
   }
 
   private cleanupRoutedOriginsForConnection(callerId: string, connectionId: string): void {
@@ -947,8 +1009,7 @@ export class RpcServer {
    *   const result = await bridge.call(callerId, "someMethod", arg1, arg2);
    */
   getClientBridge(callerId: string): RpcBridge | undefined {
-    const primary = this.pickPrimary(callerId);
-    return primary ? this.clientBridges.get(callerId)?.get(primary.connectionId) : undefined;
+    return this.connections.getPrimaryBridge(callerId);
   }
 
   /** Send a message to a specific caller by ID */
@@ -965,16 +1026,7 @@ export class RpcServer {
 
   /** Broadcast a message to control-plane clients (server and shell callers). */
   broadcastToControlPlane(msg: WsServerMessage): void {
-    for (const callerClients of this.callerConnections.values()) {
-      for (const client of callerClients.values()) {
-      if (
-        (client.callerKind === "server" || client.callerKind === "shell") &&
-        client.ws.readyState === WebSocket.OPEN
-      ) {
-        this.sendToWs(client.ws, msg);
-      }
-      }
-    }
+    this.connections.forEachControlPlane((client) => this.sendToWs(client.ws, msg));
   }
 
   // ===========================================================================
@@ -1175,7 +1227,7 @@ export class RpcServer {
         ? this.getConnection(targetId, targetConnectionId)
         : this.pickPrimary(targetId);
       if (wsClient?.ws.readyState === WebSocket.OPEN) {
-        const bridge = this.clientBridges.get(targetId)?.get(wsClient.connectionId);
+        const bridge = this.connections.getBridge(targetId, wsClient.connectionId);
         if (bridge) {
           return await bridge.call(targetId, method, ...args);
         }
@@ -1183,7 +1235,7 @@ export class RpcServer {
 
       if (targetConnectionId) {
         const reconnectedClient = await this.resolveWsRelayTarget(targetId, targetConnectionId);
-        const bridge = this.clientBridges.get(targetId)?.get(reconnectedClient.connectionId);
+        const bridge = this.connections.getBridge(targetId, reconnectedClient.connectionId);
         if (!bridge) {
           throw new Error(`Target ${targetId}:${targetConnectionId} reconnected but bridge missing`);
         }
@@ -1193,7 +1245,7 @@ export class RpcServer {
       const outcome = await this.awaitReconnectIfPending(targetId);
       switch (outcome.kind) {
         case "reconnected": {
-          const bridge = this.clientBridges.get(targetId)?.get(outcome.client.connectionId);
+          const bridge = this.connections.getBridge(targetId, outcome.client.connectionId);
           if (!bridge) {
             throw new Error(`Target ${targetId} reconnected but bridge missing`);
           }
@@ -1489,21 +1541,7 @@ export class RpcServer {
 
   /** Shut down the server */
   async stop(): Promise<void> {
-    // Close all client bridges and transports
-    for (const transports of this.clientTransports.values()) {
-      for (const transport of transports.values()) {
-        transport.close();
-      }
-    }
-    this.clientTransports.clear();
-    this.clientBridges.clear();
-
-    // Close all client connections
-    for (const [ws] of this.clients) {
-      ws.close(1001, "Server shutting down");
-    }
-    this.clients.clear();
-    this.callerConnections.clear();
+    this.connections.closeAll(1001, "Server shutting down");
 
     // Clear pending tool calls
     for (const [, pending] of this.pendingToolCalls) {

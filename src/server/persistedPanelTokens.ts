@@ -1,12 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { PanelTokenRecord, TokenManager } from "@natstack/shared/tokenManager";
+import type { PanelTokenRecord, PersistedPanelTokenRecord, TokenManager } from "@natstack/shared/tokenManager";
 
 const PANEL_TOKEN_REGISTRY_FILE = "panel-tokens.json";
 
 interface PanelTokenRegistry {
   version: 1;
-  panels: PanelTokenRecord[];
+  panels: PersistedPanelTokenRecord[];
 }
 
 export interface PanelTokenRecoveryResult {
@@ -24,7 +24,7 @@ function readRegistry(filePath: string): PanelTokenRegistry {
   const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<PanelTokenRegistry>;
   return {
     version: 1,
-    panels: Array.isArray(parsed.panels) ? parsed.panels : [],
+    panels: Array.isArray(parsed.panels) ? parsed.panels.map(persistableRecord) : [],
   };
 }
 
@@ -35,9 +35,9 @@ function writeRegistry(filePath: string, registry: PanelTokenRegistry): void {
   fs.renameSync(tmpPath, filePath);
 }
 
-function persistableRecord(record: PanelTokenRecord): PanelTokenRecord {
+function persistableRecord(record: Partial<PanelTokenRecord>): PersistedPanelTokenRecord {
   const { ownerConnectionId: _ownerConnectionId, ...persisted } = record;
-  return persisted;
+  return persisted as PersistedPanelTokenRecord;
 }
 
 export function recoverPersistedPanelTokens(
@@ -91,12 +91,12 @@ export function installPanelTokenPersistence(
   statePath: string,
 ): void {
   const filePath = registryPath(statePath);
-  const records = new Map<string, PanelTokenRecord>();
+  const records = new Map<string, PersistedPanelTokenRecord>();
 
   try {
     for (const record of readRegistry(filePath).panels) {
       if (record?.panelId && record?.token && record.callerKind === "panel") {
-        records.set(record.panelId, record);
+        records.set(record.panelId, persistableRecord(record));
       }
     }
   } catch (error) {

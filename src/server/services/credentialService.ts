@@ -1,6 +1,7 @@
 import { createHash, createHmac, createPublicKey, createSign, generateKeyPairSync, randomBytes, randomUUID } from "node:crypto";
 import * as http from "node:http";
 import { z } from "zod";
+import { createDevLogger } from "@natstack/dev-log";
 import type { EventName, EventPayloads, EventService } from "@natstack/shared/eventsService";
 import type { TokenManager } from "@natstack/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
@@ -54,6 +55,7 @@ import {
   type CredentialSessionGrantScope,
 } from "./credentialSessionGrants.js";
 
+const log = createDevLogger("CredentialService");
 const IDENTIFIER_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
 const identifierSchema = z
   .string()
@@ -774,15 +776,20 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (!target.deliveryConnectionId) {
       return eventService.emitToCaller(target.deliveryCallerId, event, payload);
     }
-    return (
-      eventService.emitToConnection(
-        target.deliveryCallerId,
-        target.deliveryConnectionId,
-        event,
-        payload,
-      ) ||
-      eventService.emitToCaller(target.deliveryCallerId, event, payload)
-    );
+    if (eventService.emitToConnection(
+      target.deliveryCallerId,
+      target.deliveryConnectionId,
+      event,
+      payload,
+    )) {
+      return true;
+    }
+    log.warn("Browser handoff owner connection missing; falling back to caller-wide delivery", {
+      callerId: target.deliveryCallerId,
+      connectionId: target.deliveryConnectionId,
+      event,
+    });
+    return eventService.emitToCaller(target.deliveryCallerId, event, payload);
   }
 
   async function storeCredential(

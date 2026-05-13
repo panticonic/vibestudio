@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -14,6 +14,11 @@ describe("persisted panel tokens", () => {
     const token = original.createToken("panel-1", "panel");
     original.setPanelParent("panel-1", "root");
     original.setPanelOwner("panel-1", "shell:owner", "conn-1");
+
+    const persisted = readFileSync(join(statePath, "auth", "panel-tokens.json"), "utf8");
+    expect(persisted).toContain("ownerCallerId");
+    expect(persisted).not.toContain("ownerConnectionId");
+    expect(persisted).not.toContain("conn-1");
 
     const recovered = new TokenManager();
     const result = recoverPersistedPanelTokens(recovered, statePath);

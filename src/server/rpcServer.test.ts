@@ -57,6 +57,10 @@ function createDeferred<T>() {
   return { promise, resolve, reject };
 }
 
+function registerClient(server: RpcServer, client: WsClientState): void {
+  (server as any).connections.addClient(client);
+}
+
 describe("RpcServer relay behavior", () => {
   it("keeps distinct connections for the same caller authenticated simultaneously", () => {
     const { server, tokenManager } = createServer();
@@ -81,7 +85,7 @@ describe("RpcServer relay behavior", () => {
 
     expect(ws1.close).not.toHaveBeenCalled();
     expect(ws2.close).not.toHaveBeenCalled();
-    expect((server as any).callerConnections.get("panel-a").size).toBe(2);
+    expect((server as any).connections.getCallerConnections("panel-a")).toHaveLength(2);
     expect(JSON.parse(ws1.send.mock.calls[0]![0])).toMatchObject({
       type: "ws:auth-result",
       success: true,
@@ -102,10 +106,8 @@ describe("RpcServer relay behavior", () => {
     const source = createClientWithConnection("panel-a", "source-conn");
     const target1 = createClientWithConnection("panel-b", "conn-1");
     const target2 = createClientWithConnection("panel-b", "conn-2");
-    (server as any).callerConnections.set("panel-b", new Map([
-      ["conn-1", target1],
-      ["conn-2", target2],
-    ]));
+    registerClient(server, target1);
+    registerClient(server, target2);
 
     (server as any).handleRoute(source, "panel-b", {
       type: "event",
@@ -129,11 +131,9 @@ describe("RpcServer relay behavior", () => {
     const origin1 = createClientWithConnection("panel-a", "conn-1");
     const origin2 = createClientWithConnection("panel-a", "conn-2");
     const target = createClientWithConnection("panel-b", "target-conn");
-    (server as any).callerConnections.set("panel-a", new Map([
-      ["conn-1", origin1],
-      ["conn-2", origin2],
-    ]));
-    (server as any).callerConnections.set("panel-b", new Map([["target-conn", target]]));
+    registerClient(server, origin1);
+    registerClient(server, origin2);
+    registerClient(server, target);
 
     (server as any).handleRoute(origin2, "panel-b", {
       type: "request",
@@ -167,11 +167,9 @@ describe("RpcServer relay behavior", () => {
       const origin1 = createClientWithConnection("panel-a", "conn-1");
       const origin2 = createClientWithConnection("panel-a", "conn-2");
       const target = createClientWithConnection("panel-b", "target-conn");
-      (server as any).callerConnections.set("panel-a", new Map([
-        ["conn-1", origin1],
-        ["conn-2", origin2],
-      ]));
-      (server as any).callerConnections.set("panel-b", new Map([["target-conn", target]]));
+      registerClient(server, origin1);
+      registerClient(server, origin2);
+      registerClient(server, target);
 
       (server as any).handleRoute(origin2, "panel-b", {
         type: "request",
@@ -189,7 +187,7 @@ describe("RpcServer relay behavior", () => {
       await Promise.resolve();
 
       const reconnected = createClientWithConnection("panel-a", "conn-2");
-      (server as any).callerConnections.get("panel-a").set("conn-2", reconnected);
+      registerClient(server, reconnected);
       const waiter = (server as any).connectionReconnectWaiters.get("panel-a:conn-2");
       expect(waiter).toBeTruthy();
       waiter.resolve();

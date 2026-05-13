@@ -27,8 +27,8 @@ delivery. It bypasses the subscription table and sends to exactly one live
 transport instance. Use this for request-scoped handoffs where a sibling
 connection should not receive the message.
 
-Avoid adding new call sites to the deprecated overloaded `emitTo(...)` API. The
-explicit names are intentionally harder to misuse.
+There is no overloaded direct-delivery API. Callers must choose caller-wide or
+connection-specific delivery explicitly.
 
 ## Session Registration
 
