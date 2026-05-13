@@ -28,7 +28,7 @@ import {
 } from "../../packages/shared/src/serviceDispatcher.js";
 import { checkServiceAccess } from "../../packages/shared/src/servicePolicy.js";
 import type { TokenManager } from "../../packages/shared/src/tokenManager.js";
-import { WsSubscriber, type EventService } from "../../packages/shared/src/eventsService.js";
+import { WsEventSession, type EventService } from "../../packages/shared/src/eventsService.js";
 
 const log = createDevLogger("RpcServer");
 
@@ -149,9 +149,9 @@ export class RpcServer {
       onClientAuthenticate?: (callerId: string, callerKind: CallerKind) => void;
       /**
        * Optional: the shared EventService. When provided, every authenticated
-       * WS connection is registered as an event subscriber so
-       * `eventService.emitTo(callerId, ...)` can deliver events to the caller
-       * even before they've issued any explicit `events.subscribe` call.
+       * WS connection is registered as an event session so
+       * `eventService.emitToCaller(callerId, ...)` can deliver events to the
+       * caller even before they've issued any explicit `events.subscribe` call.
        * Without this, emitTo returns false for admin-client and other
        * passive subscribers — which broke remote OAuth (the initiating
        * Electron client never called events.subscribe, so the login URL
@@ -384,17 +384,16 @@ export class RpcServer {
     };
     ws.send(JSON.stringify(authResult));
 
-    // Register the authenticated connection as an event subscriber so
-    // `emitTo(callerId, ...)` can reach this client regardless of whether
-    // they call `events.subscribe`. The subscriber's `onDestroyed` handler
-    // (wired inside registerSubscriber) fires on ws.close and cleans itself
-    // up, so we don't need to double-unregister on disconnect.
+    // Register the authenticated connection as a direct-address event session.
+    // Pub/sub subscriptions still opt in per event; direct delivery can target
+    // either this one connection or all live connections for the caller.
     if (this.deps.eventService) {
       try {
-        const subscriber = new WsSubscriber(ws, callerKind);
-        this.deps.eventService.registerSubscriber(callerId, subscriber, connectionId);
+        this.deps.eventService.registerSession(
+          new WsEventSession(ws, callerKind, callerId, connectionId),
+        );
       } catch (err) {
-        log.warn(`Failed to register event subscriber for ${callerId}: ${(err as Error).message}`);
+        log.warn(`Failed to register event session for ${callerId}: ${(err as Error).message}`);
       }
     }
 

@@ -641,7 +641,7 @@ interface CredentialServiceDeps {
   credentialStore?: CredentialStore;
   clientConfigStore?: ClientConfigStore;
   auditLog?: AuditLog;
-  eventService?: Pick<EventService, "emit" | "emitTo">;
+  eventService?: Pick<EventService, "emit" | "emitToCaller" | "emitToConnection">;
   tokenManager?: Pick<TokenManager, "getPanelOwner" | "getPanelOwnerConnection">;
   egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;
   codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
@@ -772,16 +772,16 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   ): boolean {
     if (!eventService) return false;
     if (!target.deliveryConnectionId) {
-      return eventService.emitTo(target.deliveryCallerId, event, payload);
+      return eventService.emitToCaller(target.deliveryCallerId, event, payload);
     }
     return (
-      eventService.emitTo(
+      eventService.emitToConnection(
         target.deliveryCallerId,
+        target.deliveryConnectionId,
         event,
         payload,
-        { connectionId: target.deliveryConnectionId },
       ) ||
-      eventService.emitTo(target.deliveryCallerId, event, payload)
+      eventService.emitToCaller(target.deliveryCallerId, event, payload)
     );
   }
 

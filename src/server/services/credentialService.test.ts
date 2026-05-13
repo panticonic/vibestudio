@@ -144,7 +144,11 @@ function approvingQueue(decision: "once" | "session" | "version" | "repo" = "ver
 function targetedOpenEventService(emit: ReturnType<typeof vi.fn>) {
   return {
     emit,
-    emitTo: vi.fn((callerId: string, event: string, payload: unknown, _opts?: unknown) => {
+    emitToCaller: vi.fn((callerId: string, event: string, payload: unknown) => {
+      emit(event, payload);
+      return callerId.length > 0;
+    }),
+    emitToConnection: vi.fn((callerId: string, _connectionId: string, event: string, payload: unknown) => {
       emit(event, payload);
       return callerId.length > 0;
     }),
@@ -741,14 +745,14 @@ describe("credentialService", () => {
       },
     }]) as Promise<StoredCredentialSummary>;
 
-    await vi.waitFor(() => expect(eventService.emitTo).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(eventService.emitToConnection).toHaveBeenCalledWith(
       "shell:owner",
+      "owner-conn",
       "external-open:open",
       expect.objectContaining({
         callerId: "worker:test",
         callerKind: "worker",
       }),
-      { connectionId: "owner-conn" },
     ));
     const authorizeUrl = new URL(emit.mock.calls[0]![1].url);
     await deliverOAuthCallback(authorizeUrl.searchParams.get("redirect_uri")!, new URLSearchParams({
@@ -793,7 +797,7 @@ describe("credentialService", () => {
       },
     }]) as Promise<StoredCredentialSummary>;
 
-    await vi.waitFor(() => expect(eventService.emitTo).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(eventService.emitToCaller).toHaveBeenCalledWith(
       "shell:owner",
       "browser-panel:open",
       expect.objectContaining({
@@ -815,7 +819,8 @@ describe("credentialService", () => {
       credentialStore: new MemoryCredentialStore() as never,
       eventService: {
         emit: vi.fn(),
-        emitTo: vi.fn(() => false),
+        emitToCaller: vi.fn(() => false),
+        emitToConnection: vi.fn(() => false),
       } as never,
       approvalQueue: approvingQueue() as never,
     });
@@ -842,12 +847,14 @@ describe("credentialService", () => {
   });
 
   it("fails immediately when a panel handoff has no connected shell owner", async () => {
-    const emitTo = vi.fn(() => true);
+    const emitToCaller = vi.fn(() => true);
+    const emitToConnection = vi.fn(() => true);
     const service = createCredentialService({
       credentialStore: new MemoryCredentialStore() as never,
       eventService: {
         emit: vi.fn(),
-        emitTo,
+        emitToCaller,
+        emitToConnection,
       } as never,
       tokenManager: { getPanelOwner: vi.fn(() => undefined) } as never,
       approvalQueue: approvingQueue() as never,
@@ -872,7 +879,8 @@ describe("credentialService", () => {
         callerKind: "panel",
       },
     }])).rejects.toMatchObject({ code: "browser_unavailable" });
-    expect(emitTo).not.toHaveBeenCalled();
+    expect(emitToCaller).not.toHaveBeenCalled();
+    expect(emitToConnection).not.toHaveBeenCalled();
   });
 
   it("supports authenticated client-forwarded mobile callbacks by state", async () => {
@@ -967,7 +975,7 @@ describe("credentialService", () => {
       },
     }]) as Promise<StoredCredentialSummary>;
 
-    await vi.waitFor(() => expect(eventService.emitTo).toHaveBeenCalledWith(
+    await vi.waitFor(() => expect(eventService.emitToCaller).toHaveBeenCalledWith(
       "shell:owner",
       "external-open:open",
       expect.objectContaining({

@@ -57,13 +57,32 @@ describe("EventService", () => {
     await service.handler(conn2.ctx, "subscribe", ["panel-tree-updated"]);
     await service.handler(conn1.ctx, "unsubscribeAll", []);
 
-    const delivered = eventService.emitTo("panel:one", "focus-address-bar");
+    const delivered = eventService.emitToCaller("panel:one", "focus-address-bar");
 
     expect(delivered).toBe(true);
     expect(conn1.ws.send).toHaveBeenCalledWith(JSON.stringify({
       type: "ws:event",
       event: "event:focus-address-bar",
     }));
+    expect(conn2.ws.send).toHaveBeenCalledWith(JSON.stringify({
+      type: "ws:event",
+      event: "event:focus-address-bar",
+    }));
+  });
+
+  it("can direct-address exactly one live connection", async () => {
+    const eventService = new EventService();
+    const service = createEventsServiceDefinition(eventService);
+    const conn1 = makeWsClient("panel:one", "panel", "conn-1");
+    const conn2 = makeWsClient("panel:one", "panel", "conn-2");
+
+    await service.handler(conn1.ctx, "subscribe", ["panel-tree-updated"]);
+    await service.handler(conn2.ctx, "subscribe", ["panel-tree-updated"]);
+
+    const delivered = eventService.emitToConnection("panel:one", "conn-2", "focus-address-bar");
+
+    expect(delivered).toBe(true);
+    expect(conn1.ws.send).not.toHaveBeenCalled();
     expect(conn2.ws.send).toHaveBeenCalledWith(JSON.stringify({
       type: "ws:event",
       event: "event:focus-address-bar",
