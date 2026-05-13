@@ -1,6 +1,6 @@
 # Extension Services
 
-> **Status:** Planning document. Nothing in this file is implemented yet. See "Open questions" at the bottom.
+> **Status:** Planning document — design resolved, not yet implemented.
 
 NatStack extensions are **trusted Node.js modules** that run in a shared host process alongside the server. They extend the application itself — adding new RPC services, reacting to system events, and exposing APIs to userland panels — in the spirit of VSCode extensions, not browser extensions.
 
@@ -25,17 +25,19 @@ Extensions live under the state directory next to `builds/` and `context-scopes/
 
 ```
 {userData}/extensions/
-├── installed/                       # active extensions
+├── installed/                       # active extensions (source on disk)
 │   └── @acme/git-tools/
 │       ├── package.json
-│       ├── dist/index.js
+│       ├── index.ts
 │       └── ...
 ├── staged/                          # in-flight installs (atomic-renamed on success)
 │   └── @acme-git-tools-<rand>/
 ├── storage/                         # per-extension scratch / state
 │   └── @acme/git-tools/
-└── registry.json                    # name → { version, source, enabled, installedAt, integrity }
+└── registry.json                    # name → { version, source, ref, sha, enabled, installedAt, integrity }
 ```
+
+Bundles are not stored here — extensions are built JIT via the existing esbuild pipeline (see [BUILD_SYSTEM.md](BUILD_SYSTEM.md)) and the resulting artifact lives in `{userData}/builds/<key>/` keyed by content hash, the same as panels.
 
 `installed/` is the source of truth for what loads at startup. `registry.json` records provenance and enablement so disabled extensions stay on disk without being activated. `storage/<name>/` is exposed to the extension as `ctx.storage` and survives upgrades.
 
@@ -46,7 +48,7 @@ Extensions live under the state directory next to `builds/` and `context-scopes/
 ```
 @acme/git-tools/
 ├── package.json          # Manifest with natstack.extension field
-├── dist/index.js         # Entry (CommonJS or ESM; "main" or "exports" in package.json)
+├── index.ts              # Entry (TypeScript source)
 └── ...
 ```
 
@@ -56,12 +58,11 @@ Extensions live under the state directory next to `builds/` and `context-scopes/
 {
   "name": "@acme/git-tools",
   "version": "1.2.0",
-  "main": "dist/index.js",
   "natstack": {
     "extension": {
       "displayName": "Git Tools",
-      "activationEvents": ["*"],
-      "api": "dist/index.d.ts"
+      "entry": "index.ts",
+      "activationEvents": ["*"]
     }
   }
 }
@@ -70,15 +71,17 @@ Extensions live under the state directory next to `builds/` and `context-scopes/
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `displayName` | string | package name | Human-readable name for UI |
+| `entry` | string | `index.ts` | Entry source file (built JIT by esbuild, same pipeline as panels) |
 | `activationEvents` | string[] | `["*"]` | When to activate. `"*"` = eager at startup. Reserved for future lazy triggers (`"onPanel:<source>"`, `"onCommand:<id>"`, ...). |
-| `api` | string | `null` | Path to `.d.ts` describing the extension's public API for typed consumers |
 
 The presence of `natstack.extension` in `package.json` is what marks a package as an extension. Anything in `installed/` without it is ignored.
+
+There is no `main` field and no `dist/` — extensions ship source. Typed API consumers (other extensions, panels) import the package as a normal TypeScript package; the host's esbuild pipeline produces the runtime bundle.
 
 ## Activation contract
 
 ```ts
-// @acme/git-tools/dist/index.js (compiled from TS)
+// @acme/git-tools/index.ts
 import type { ExtensionContext } from "@natstack/extension";
 
 export interface GitToolsApi {
@@ -213,7 +216,9 @@ Events ride the existing `RpcEvent` channel. `ctx.emit(event, payload)` in an ex
 
 ## Userland extension management
 
-Userland code cannot bypass the extension manager — `installed/` and `storage/` live in the state directory, not the workspace, and panel `fs` is scoped to the context folder. To install, remove, enable, or inspect extensions, panels call the **same `extensions` service** but on its management methods. Every mutating method funnels through the existing `approvals` service.
+Userland code cannot bypass the extension manager — `installed/` and `storage/` live in the state directory, not the workspace, and panel `fs` is scoped to the context folder. To install, remove, enable, or inspect extensions, panels call the **same `extensions` service** but on its management methods.
+
+Every mutating method requests approval via the existing `approvals` service. Callers always call `approvals.request(...)` and never branch on granularity — the approvals system itself decides whether to prompt the user, auto-grant from a saved preference, or apply a scoped grant. Granularity is a property of the approvals UX, not of the extensions service.
 
 ```ts
 import { extensions } from "@workspace/runtime";
@@ -268,28 +273,38 @@ Extensions themselves call the same management surface without going through `ap
 ## Install pipeline
 
 1. **Approval granted** → fetch source into `extensions/staged/<name>-<rand>/`.
-   - `git`: shallow clone at `ref`.
-   - `tarball`: stream + verify `sha256`.
-   - `local`: copy (or symlink in dev).
+   - `git`: shallow clone, then `git rev-parse` to resolve the user-supplied ref (branch / tag / sha) to its commit sha. Record both `ref` (what the user asked for) and `sha` (what got installed) in `registry.json`.
+   - `tarball`: stream + verify `sha256` (required for tarball sources).
+   - `local`: copy (or symlink in dev). No integrity check.
 2. **Validate** the staged directory:
    - `package.json` parses and contains `natstack.extension`.
-   - `main` resolves inside the directory (no `..` escape).
-   - Optional `integrity` field matches.
+   - `entry` resolves inside the directory (no `..` escape).
 3. **Resolve dependencies** via the existing `build-artifacts/` pipeline (content-addressed `node_modules`, shared with panels).
-4. **Atomic promote**: rename `staged/<name>-<rand>/` → `installed/<name>/`. Update `registry.json`.
-5. **Activate**: `extensionHost.activate(name)` — `require()` the entry, call `activate(ctx)`, store the returned API in the registry.
-6. **Emit** `extensions:installed` over the event channel.
+4. **JIT build**: run esbuild on `entry` using the same pipeline panels use; the bundle lands at `{userData}/builds/<key>/` keyed by content hash. Build failures abort the install.
+5. **Atomic promote**: rename `staged/<name>-<rand>/` → `installed/<name>/`. Update `registry.json`.
+6. **Activate**: `extensionHost.activate(name)` — `require()` the built bundle, call `activate(ctx)`, store the returned API in the registry.
+7. **Emit** `extensions:installed` over the event channel.
 
-Uninstall reverses: `deactivate()` → dispose subscriptions → evict from `require.cache` → `rm -rf installed/<name>/` → update registry → emit `extensions:uninstalled`.
+Uninstall reverses: `deactivate()` → dispose subscriptions → evict from `require.cache` → `rm -rf installed/<name>/` → update registry → emit `extensions:uninstalled`. The built bundle in `builds/` is left for the build-cache GC.
 
-Upgrade = uninstall + install in one approval (`extension.upgrade`).
+Upgrade = uninstall + install in one approval (`extension.upgrade`). On upgrade the original `ref` is re-resolved against the source — branch refs move forward, pinned shas/tags don't.
+
+### Integrity & pinning
+
+| Source | Input ref | Stored | Mutable after install? |
+|--------|-----------|--------|------------------------|
+| `git`  | branch / tag / sha | resolved commit sha | No — upgrade re-resolves |
+| `tarball` | URL + required `sha256` | sha256 of fetched bytes | No |
+| `local` | path | path | Yes (dev convenience) |
+
+This matches the lockfile pattern: users supply ergonomic refs, the registry stores what actually got installed.
 
 ## Activation lifecycle
 
 - **Boot**: extension host walks `installed/`, filters by `registry.enabled`, sorts by declared dependencies, calls `activate` on each. Failures are logged and the extension is marked `error` in the registry but boot continues.
 - **Eager only for v1**. `activationEvents: ["*"]` is required. The field exists for forward-compat with lazy activation (e.g. `"onPanel:panels/editor"`).
 - **Hot install**: a freshly installed extension activates immediately — no app restart. Module cache is clean for a new package.
-- **Hot uninstall / upgrade**: deactivate → evict every cache entry under the extension's directory → optional re-activate. Subscriptions registered via `ctx.subscriptions` are disposed automatically. Anything an extension registered outside `ctx.subscriptions` (raw event listeners, timers) leaks — extensions are expected to use `ctx.subscriptions`.
+- **Hot uninstall / upgrade**: deactivate → dispose `ctx.subscriptions` → walk `require.cache` and delete every entry whose resolved path is under the extension's `installed/<name>/` directory or its built bundle → optional re-activate. Anything an extension registered outside `ctx.subscriptions` (raw event listeners, timers, references held by other code) leaks across an upgrade — extensions are expected to use `ctx.subscriptions` for everything. If an extension turns out to leak references in practice, the fix is in the extension, not the host. (We may revisit per-extension `Module` isolation later if this becomes a recurring problem.)
 - **Crash**: an extension throwing during `activate` is marked errored and does not block others. Crashes during a method call propagate as RPC errors to the caller; they do not take down the host.
 
 ## Dispatcher integration
@@ -298,7 +313,12 @@ Minimal change to `packages/shared/src/serviceDispatcher.ts`:
 
 - Add `"extension"` to `CallerKind`.
 - `ServiceContext.callerId` for an extension call is the extension name (`@acme/git-tools`).
-- No new policy code. Core services may inspect `callerKind === "extension"` for logging or scope decisions (e.g. `fs` may root extensions at `extensions/storage/<name>/` rather than a panel context folder) but do not enforce restrictions.
+- No blanket bypass — every existing service definition gets `"extension"` added to its `policy.allowed` list explicitly. Easier to read than a global rule.
+- Two places inspect `callerKind === "extension"`:
+  - **`fs`**: when no other root is specified, defaults to rooting at `{userData}/extensions/storage/<name>/`. This is what `ctx.storage` resolves to. Extensions can still target arbitrary paths — they are trusted — but their default scope is their own storage dir.
+  - **Logging**: log lines from service calls are tagged with the extension name as `callerId`.
+
+No other behavior differs between an extension call and a panel call.
 
 ## Extension host process
 
@@ -317,18 +337,16 @@ packages/extension-host/
 
 The host runs in-process with the server (single Node process). It mounts its `extensions` service onto the existing dispatcher. The Electron main process consumes the same package — there is one extension host per running NatStack instance, regardless of mode.
 
-## Open questions
+## Future work
 
-1. **Hot upgrade module cache**: aggressive `require.cache` eviction works for self-contained extensions but breaks if any other module captured a reference. Acceptable in v1 — document that upgrades may need a restart if the extension leaks references — or invest in a per-extension `Module` instance / VM context?
-2. **Sources for v1**: git + tarball + local? Or also npm registry (and what registry policy)?
-3. **Integrity**: require `sha256` for tarball; accept any git ref or require a tag/commit (not a branch)?
-4. **Approval granularity**: per-call, or "trust this panel to manage extensions for 10 minutes" (matches the credentials service's scoped grants)? Per-call is safer; scoped is much less annoying for an extension-manager UI doing bulk operations.
-5. **Cross-workspace extensions**: extensions live in `{userData}/extensions/` (per-user, cross-workspace) by design. Should there also be a per-workspace `{workspace}/.natstack/extensions/` for project-pinned versions? Defer until needed.
-6. **Bundling**: extensions ship pre-built (current assumption — `main` points at compiled JS) or run through the same esbuild JIT pipeline panels use? Pre-built is the VSCode model and simpler. JIT is more natstack-native and removes a publishing step.
-7. **What `callerKind: "extension"` changes downstream**: anywhere besides `fs` scope and logs?
-8. **Panel access to extension events**: routed through the same `RpcEvent` channel as service events. Do we want a separate namespace (`ext:<name>:<event>`) to avoid collisions, or trust extension authors to namespace?
-9. **An extension that ships a panel**: the panel still lives in `{workspace}/panels/...`? Or can extensions register panel sources at `extensions/installed/<name>/panels/...` and have them appear in the launcher? Probably yes — but defer.
-10. **Capabilities / per-extension permissions**: extensions are fully trusted today. If we ever want to install untrusted extensions, this is where a real permission system would slot in (`natstack.extension.permissions: [...]` declared in the manifest, prompted at install time). Out of scope for v1.
+Out of scope for v1, kept as forward-compat anchors:
+
+- **Lazy activation**: the `activationEvents` field is plumbed through but only `"*"` is honored. Other triggers (`"onPanel:<source>"`, `"onCommand:<id>"`, ...) can be added without breaking the manifest.
+- **Per-workspace extensions**: if project-pinned versions become useful, a per-workspace install location (`{workspace}/.natstack/extensions/`) can layer over the per-user one. Resolution order: workspace > user. Not built yet.
+- **Untrusted / sandboxed extensions**: today all extensions are trusted. If we ever want to install third-party untrusted extensions, the cleaner path is a separate sandboxed-extension kind with its own policy-gated context, not retrofitting capabilities onto the trusted variant. Today's trusted extensions stay trusted forever.
+- **Per-extension `Module` isolation**: if hot-upgrade reference leaks become a real problem in practice, revisit loading each extension in its own `Module` instance or `vm` context. Not worth the complexity until there's evidence we need it.
+- **npm registry as a source**: currently git / tarball / local only. npm can be added as a fourth `source.kind` if there's demand.
+- **Extensions shipping panels**: deliberately out of scope. Extensions register RPC APIs; if a UI is wanted, a separate panel can call into the extension. Revisit only if a concrete need appears.
 
 ## See also
 
