@@ -54,11 +54,16 @@ interface RegistryEntry {
   source: ExtensionSource;       // user-supplied (kind + url/repo + ref)
   installedAt: number;
 
-  resolvedSha: string;           // currently-resolved commit (what would run if approved)
-  activeSha: string | null;      // sha of the bundle currently running, if any
+  // Effective version is the approval gate — buildV2 already computes it
+  // and it cascades through every workspace and external-dep change.
+  resolvedEv: string;            // current EV (what would run if approved)
+  resolvedSha: string;           // commit at the extension's own repo, for diff display
+  activeEv: string | null;       // EV of the bundle currently running, if any
+  activeSha: string | null;
   activeBundleKey: string | null;
 
-  pendingSha: string | null;     // built by push trigger, not yet known-approved
+  pendingEv: string | null;      // built but not yet known-approved
+  pendingSha: string | null;
   pendingBundleKey: string | null;
 
   enabled: boolean;
@@ -67,7 +72,9 @@ interface RegistryEntry {
 }
 ```
 
-Activation is gated by an explicit `approvals.request(...)` call at the time the manager wants to run code at a given sha. The approvals system replies grant or deny based on stored decisions it manages internally; the manager never inspects that state, it just calls request and obeys the answer. On grant, the manager promotes `pendingSha → activeSha`, `pendingBundleKey → activeBundleKey` (if applicable), and starts/restarts the extension process.
+Activation is gated by an explicit `approvals.request(...)` call that names the **effective version** — not the source sha. The EV captures both the extension's own source (via its tree hash) and the EVs of every workspace dependency it transitively depends on; package.json changes (including external npm dep version bumps) are part of the tree hash. Any rebuild that produces a different bundle produces a different EV, and a different EV is a different consent. The approvals system stores decisions keyed by `(extension, ev)`; the manager never inspects that state, just calls request and obeys the answer. On grant, the manager promotes `pendingEv → activeEv`, `pendingBundleKey → activeBundleKey`, and starts/restarts the extension process.
+
+A `BUILD_CACHE_VERSION` bump in buildV2 changes the **build key** but not the **EV**, so a NatStack-side build-pipeline change that rebuilds extensions without changing their semantic content does **not** re-prompt. The user approves their code, not our build.
 
 ## Manifest
 
@@ -288,17 +295,19 @@ interface ExtensionsClient {
 
 ## Elevated approvals — informed-consent UX
 
-The extension subsystem **always** calls `approvals.request(...)` before running code at a sha, regardless of context — at install, at push-trigger pickup, at reload, at boot. The approvals system decides whether to auto-grant (from a stored decision), prompt the user, or hold pending. Callers never inspect or branch on stored decisions; that's the approvals system's job.
+The extension subsystem **always** calls `approvals.request(...)` before running code at a given EV, regardless of context — at install, at push-trigger pickup, at reload, at boot. The approvals system decides whether to auto-grant (from a stored decision), prompt the user, or hold pending. Callers never inspect or branch on stored decisions; that's the approvals system's job.
 
-Three call sites issue **elevated**-category requests:
+Three elevated-category sub-kinds cover all the cases:
 
-1. **Initial install of an extension** — `kind: "extension.install"`. Native-capability code is about to land in the workspace and run.
-2. **Push-trigger pickup** when a push produces a new sha — `kind: "extension.update"`. The bundle is built and parked in `pendingSha` / `pendingBundleKey`; activation waits on the request result.
-3. **`reload`** when it would change the running sha — `kind: "extension.update"`. Same shape as a push update, different entry point.
+1. **`extension.install`** — first time this extension is being installed. Native-capability code is about to land in the workspace and run.
+2. **`extension.update`** — a push changed the extension's *own* source. Issued by the push trigger and by `reload`.
+3. **`extension.dep-update`** — the extension's EV changed because a transitive workspace dep or external npm dep changed, **without** any change to the extension's own source. Issued by the push trigger when a non-extension unit's push cascades into an extension's EV.
 
-At every server boot, the manager additionally issues an `extension.run` request for each enabled extension at its `resolvedSha`. This is the elevated category too, but in the common case the approvals system has a stored decision from a prior install or update and auto-grants without prompting. If not, the request stays pending until consented to.
+The `dep-update` sub-kind is intentionally separate because the trust shape is different: the user already trusted this extension's authored behavior; what changed is the library underneath. The prompt leads with that framing ("@workspace/runtime updated; @acme/git-tools and @acme/other-thing run different code now") rather than re-introducing the extension. See "Workspace dep update prompt" below.
 
-Routine approvals (per-call `fs.write`, `credentials.read`, etc. through `ctx.*` clients) are standard-category — the same approval pipeline panels and workers use, attributed to the extension's `callerId`. Disable, enable (when the sha is unchanged), and uninstall are also standard.
+At every server boot the manager also issues an **`extension.run`** request for each enabled extension at its `resolvedEv`. Same elevated category, but in the common case the approvals system has a stored decision keyed by `(name, ev)` from a prior install / update / dep-update and auto-grants without prompting.
+
+Routine approvals (per-call `fs.write`, `credentials.read`, etc. through `ctx.*` clients) are standard-category — the same approval pipeline panels and workers use, attributed to the extension's `callerId`. Disable, enable (when the EV is unchanged), and uninstall are also standard.
 
 ### What the prompt has to communicate
 
@@ -306,16 +315,33 @@ The elevated approval payload includes everything needed for the UI to render an
 
 ```ts
 await approvals.request({
-  kind: "extension.install",   // or "extension.update"
-  category: "extension-elevated",   // signals the distinct UI treatment
+  kind: "extension.install",   // or "extension.update", "extension.dep-update", "extension.run"
+  category: "extension-elevated",
   callerId: ctx.callerId,
   detail: {
     name: "@workspace-extensions/git-tools",
     version: "1.2.0",
     source: { kind: "internal-git", repo: "extensions/git-tools", ref: "v1.2.0" },
-    sha: "abc123...",
-    previousSha: "def456...",       // present on update
-    diffSummary: { filesChanged: 7, insertions: 142, deletions: 11 },  // present on update
+
+    // The approval gate
+    ev: "ev_2a9f...",                // EV the user is being asked to approve
+    previousEv: "ev_117c...",        // EV currently running (or last approved); null on install
+
+    // Diff information for the prompt — three layers
+    extensionDiff: {                 // null on install or pure dep-update
+      sha: "abc123...",
+      previousSha: "def456...",
+      stat: { filesChanged: 7, insertions: 142, deletions: 11 },
+    },
+    workspaceDepChanges: [           // empty on a pure same-source update
+      { name: "@workspace/runtime", fromEv: "ev_a1...", toEv: "ev_b2...",
+        sha: "...", previousSha: "...",
+        stat: { filesChanged: 3, insertions: 18, deletions: 4 } },
+    ],
+    externalDepChanges: [            // empty when package.json/lockfile is unchanged
+      { name: "zod", fromVersion: "3.22.4", toVersion: "3.23.8" },
+    ],
+
     integrity: "sha256-...",
     capabilities: ["node:fs", "node:child_process", "node:net", "userland:*"],
   },
@@ -326,30 +352,47 @@ UI requirements (these are contract, not implementation details):
 
 - **Visually distinct from regular approvals.** Different card style, different icon, more spacing, plain-language framing.
 - **Lead with capability, not provenance.** The first sentence is "This will run as native code on your machine with access to your filesystem, network, and ability to launch other programs." Provenance comes second.
-- **Show the ref and sha being approved.** For updates, show what changed at the commit level — at minimum the diff stat, ideally a link to view the diff in a panel.
-- **Decision options.** `once` and `deny` are always offered. `session` is offered with the user-facing label "dev session", and when picked it stores a session-scope decision in the approvals system, scoped to this extension repo — subsequent elevated requests for the same extension within that session auto-grant without prompting. This trades the per-push prompt for one up-front "I'm hacking on this" consent. The standard `version` and `repo` decision keys are **not** offered for elevated approvals: a future sha is a future trust grant, and shouldn't carry over from a sha the user previously saw.
+- **Show all three diff layers.** Extension source diff, workspace dep EV changes (with their own commit diffs), external npm version changes. Each layer is collapsible; on a pure extension update the dep sections are empty and hidden; on a pure dep update the extension section is empty and hidden, and the prompt's title leads with the dep that changed (see "Workspace dep update prompt").
+- **Decision options.** `once` and `deny` are always offered. `session` is offered with the user-facing label "dev session", and when picked it stores a session-scope decision in the approvals system, scoped to this extension — subsequent elevated requests for the same extension within that session auto-grant without prompting, regardless of which EV ships next. This is the dev-loop escape hatch. The standard `version` and `repo` decision keys are **not** offered for elevated approvals: a future EV is a future trust grant, and shouldn't carry over from an EV the user previously saw.
 - **Distinct decision verbs.** "Install and run" / "Don't install" rather than "Allow" / "Deny". Verb choice matters when the action is qualitatively different.
 - **Deferred default.** The default action when the user dismisses the prompt (closes the window, navigates away) is `deny`, never grant.
 
+### Workspace dep update prompt
+
+When a push to a non-extension unit cascades into an extension's EV (e.g. `@workspace/runtime` was pushed; three extensions depend on it), the push trigger issues an `extension.dep-update` request for each affected extension. The UI's treatment is distinct from `extension.install` and `extension.update`:
+
+- **Title leads with the dep.** "An update to `@workspace/runtime` changes 3 of your extensions" rather than re-introducing the extension. The capability framing is shorter — the user previously approved each extension and that authored behavior is unchanged; only the library underneath has new code.
+- **Batch by dep, not by extension.** If one push to `@workspace/runtime` affects N extensions, the UI surfaces a single combined card listing all N, not N separate cards. Each extension's `extension.dep-update` request still goes through the approvals system independently; the UI's batching is an aggregation over what's in the queue. A "review and approve all" path is available; a per-extension expand-to-inspect is always available.
+- **Diff sections.** The dep diff (commit / stat / link) is the lead. Per-extension subsections list which EVs changed and let the user drill into the dep diff or the extension's own state. The extension source-diff section is empty for dep-updates (no extension source changed).
+- **Decision still per-extension.** Granting the batched prompt issues a `once`-equivalent grant per extension, all keyed to the new EVs. Decline declines all (still per-extension on the wire). The user can split out individual decisions from the batch UI.
+
+This mitigates the obvious approval-fatigue problem: a `@workspace/runtime` change in a workspace with a dozen extensions doesn't fire a dozen modal prompts in series, just one card describing the cascade with twelve sub-rows.
+
 ### Push-triggered updates
 
-`pushTrigger` (in `src/server/buildV2/pushTrigger.ts`) gains a hook for extension units: when a push changes any unit whose `kind === "extension"`, the trigger:
+`pushTrigger` (in `src/server/buildV2/pushTrigger.ts`) reacts to **any push that changes an extension's EV** — not just pushes to the extension's own repo. The EV cascade is what buildV2 already computes: a push to `@workspace/runtime` recomputes EVs for every unit transitively depending on it, including extensions.
 
-1. Computes the new effective version and builds the new bundle as normal.
-2. Updates `resolvedSha` to the new commit and stores `pendingSha` / `pendingBundleKey` in the registry. The currently running bundle is unchanged — `activeSha` / `activeBundleKey` stay as they were.
-3. Calls `approvals.request({ kind: "extension.update", category: "extension-elevated", ... })`. Whatever the approvals system returns is honored: grant → promote `pendingSha → activeSha`, `pendingBundleKey → activeBundleKey`, reload the process; deny → discard `pendingSha`/`pendingBundleKey` (bundle becomes GC-eligible). The trigger does not look at stored decisions itself — auto-grant from a dev-session decision is handled transparently inside the approvals system.
+For each affected extension:
 
-This means **a push to an extension repo can never silently change running code** unless the user has previously consented to a dev-session decision for that extension — and that decision lives in the approvals system, not in any flag the push trigger reads.
+1. Build the new bundle (using buildV2's normal incremental path).
+2. Update `resolvedEv` and `resolvedSha` in the registry; stash the new build artifact in `pendingEv` / `pendingSha` / `pendingBundleKey`. The currently running bundle is unchanged — `activeEv` / `activeBundleKey` stay as they were.
+3. Decide which sub-kind of approval to request based on what changed:
+   - Extension's own source changed → `extension.update`.
+   - Only transitive deps changed (no extension source diff) → `extension.dep-update`.
+   - Both → `extension.update` (it subsumes dep-update; one prompt covers all the layers).
+4. Call `approvals.request({ kind, category: "extension-elevated", detail: { ev, previousEv, extensionDiff, workspaceDepChanges, externalDepChanges, ... } })`. On grant: promote `pendingEv → activeEv`, etc., reload the process. On deny: discard the pending fields. The trigger does not look at stored decisions; auto-grant from a dev-session decision is handled transparently inside the approvals system.
+
+This means **no bundle change ever silently activates**. A pure source change, a transitive dep change, a npm version bump in package.json — all of them flip the EV, and the EV is what's approved.
 
 ### Boot-time activation consent
 
-At server boot, the manager walks the registry. For each enabled extension it computes `resolvedSha` and calls `approvals.request({ kind: "extension.run", category: "extension-elevated", detail: { name, sha: resolvedSha } })`. The approvals system replies:
+At server boot, the manager walks the registry. For each enabled extension it computes `resolvedEv` (this is cheap — buildV2 caches it) and calls `approvals.request({ kind: "extension.run", category: "extension-elevated", detail: { name, ev: resolvedEv } })`. The approvals system replies:
 
-- **Grant** (typically from a stored install/update decision for the same sha, or from an active dev-session decision): activate.
+- **Grant** (typically from a stored install / update / dep-update decision matching `(name, ev)`, or from an active dev-session decision for this extension): activate.
 - **Deny**: mark `error`.
 - **Pending** (no stored decision, no consumer available to prompt): set `status: "pending-approval"` and leave the request open. When a UI later consents (or denies), the manager reacts accordingly.
 
-**Headless mode**: same flow. Sensitive operations always request approval regardless of UI presence. Pre-approved shas auto-grant from stored decisions and activate normally with no UI in the loop. Requests without a stored decision stay pending forever, or until a UI client connects and answers them. There is no "skip the approval in headless" path.
+**Headless mode**: same flow. Sensitive operations always request approval regardless of UI presence. EVs with a stored grant auto-resolve and activate normally with no UI in the loop. Requests without a stored decision stay pending until a UI client connects and answers them. There is no "skip the approval in headless" path.
 
 ## Userland extension management
 
@@ -368,7 +411,7 @@ await extensions.install({
   // or { kind: "tarball", url: "...", sha256: "..." }
 });
 
-// Standard approval (disable/enable when sha unchanged)
+// Standard approval (disable/enable when EV unchanged)
 await extensions.setEnabled("@workspace-extensions/git-tools", false);
 
 // Standard approval (uninstall)
@@ -386,19 +429,19 @@ For all sources, `install` fetches into `workspace/extensions/<name>/` as a new 
 | `install` | `extension.install` (elevated) | Fetches into workspace, registers, builds, activates |
 | `uninstall` | `extension.uninstall` | Deactivates, removes workspace unit, updates registry; `storage/<workspaceId>/<name>/` is retained unless `purge: true` |
 | `setEnabled` | `extension.toggle` | Persisted in registry; on disable, kills the extension process |
-| `reload` | `extension.reload` (elevated if sha changed) | Re-resolves the source ref, rebuilds, respawns the process |
+| `reload` | `extension.reload` (elevated if EV changed) | Re-resolves the source ref, rebuilds, respawns the process |
 
 There is no `readFile` / `writeFile` over the RPC surface. Source authoring happens against the workspace git; to push changes, commit and let the push trigger prepare the update.
 
 ## Activation lifecycle
 
 - **Boot**:
-  1. Read the registry. For each enabled extension, compute `resolvedSha` and call `approvals.request({ kind: "extension.run", category: "extension-elevated", detail: { name, sha: resolvedSha } })`.
-  2. On grant: spawn the process, wait for the ready handshake (timeout: 10s), call `activate(ctx)` over the wire, record the exposed API metadata, set `activeSha = resolvedSha` and `status = "running"`. On pending: set `status = "pending-approval"` and hold; spawn when the approval resolves. On deny: set `status = "error"`.
+  1. Read the registry. For each enabled extension, compute `resolvedEv` (via the buildV2 cache) and call `approvals.request({ kind: "extension.run", category: "extension-elevated", detail: { name, ev: resolvedEv } })`.
+  2. On grant: spawn the process, wait for the ready handshake (timeout: 10s), call `activate(ctx)` over the wire, record the exposed API metadata, set `activeEv = resolvedEv` and `status = "running"`. On pending: set `status = "pending-approval"` and hold; spawn when the approval resolves. On deny: set `status = "error"`.
   3. Throws during `activate` are caught, logged, marked `error` in the registry, and emitted as `extensions:error` events. The process is killed. One extension's failure does not block others.
 - **Eager only for v1**. `activationEvents` is plumbed through but only `"*"` is accepted; other values fail validation.
 - **Hot install**: a freshly installed extension activates immediately — the manager spawns the process after the elevated approval resolves and the build completes.
-- **Hot reload**: `reload` calls `deactivate()` on the running process (with a 5s grace period), then kills it, rebuilds if the sha changed, and spawns a fresh process. Subscribers receive an `extensions:reloaded` event before the old subscriptions go dead.
+- **Hot reload**: `reload` calls `deactivate()` on the running process (with a 5s grace period), then kills it, rebuilds if the EV changed, and spawns a fresh process. Subscribers receive an `extensions:reloaded` event before the old subscriptions go dead.
 - **Crash**: handled by the crash policy above. The process boundary contains the failure; the host keeps running.
 
 ## Dispatcher integration
