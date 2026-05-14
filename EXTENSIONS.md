@@ -177,7 +177,7 @@ interface ExtensionContext {
   // Per-extension scratch, scoped to {userData}/extensions/storage/<workspaceId>/<name>/.
   readonly storage: ExtensionStorage;
 
-  // Userland runtime — same client surface panels and workers see, dispatched
+  // Host substrate — coordination services the host has to own. Dispatched
   // back to the host over the extension's WebSocket connection. Calls here
   // hit standard per-call approvals; use these when you want user-visible,
   // auditable operations. For silent ambient work, import "node:fs" etc.
@@ -185,13 +185,10 @@ interface ExtensionContext {
   // whole host filesystem, matching the raw-Node access the extension
   // already has.
   readonly fs: FsClient;
-  readonly ai: AiClient;
-  readonly git: GitClient;
   readonly panel: PanelClient;
   readonly workspace: WorkspaceClient;
-  readonly credentials: CredentialsClient;
   readonly db: DbClient;
-  readonly webhooks: WebhooksClient;
+  readonly credentials: CredentialsClient;
   readonly approvals: ApprovalsClient;
   readonly notifications: NotificationsClient;
   readonly extensions: ExtensionsClient;
@@ -232,7 +229,9 @@ interface HealthDetail {
 }
 ```
 
-The userland clients on `ctx` are the same the panel runtime exposes, bound through the extension process's WebSocket connection to the dispatcher with `callerKind: "extension"` and `callerId: <extension name>`. Every call is attributed to the extension for logs and approval prompts.
+The substrate clients on `ctx` are the host's coordination surface — filesystem, scoped DB, workspace metadata, panel lifecycle, the trust system (`credentials`, `approvals`), UX (`notifications`), the extension subsystem itself. They're bound through the extension process's WebSocket connection to the dispatcher with `callerKind: "extension"` and `callerId: <extension name>`; every call is attributed to the extension for logs and approval prompts.
+
+**Capability services are not on `ctx.*`.** Things like AI clients, user-facing git operations (`blame`, `log`, `branches`), and webhook subscription management are themselves extensions, reached via `extensions.use<T>(name)`. The principle: `ctx.*` is what the host *has to* provide (coordination, trust, lifecycle); anything that's a discrete capability — even one shipped by default — should be an extension. Several of these capabilities exist today as in-host services and appear as migration candidates below.
 
 Node's standard library is available globally inside the extension process — `import * as fs from "node:fs"`, child processes, native addons all work normally. There is no host-mediated wrapper; the extension is running in a real Node process.
 
@@ -761,11 +760,19 @@ A survey of `src/server/services/` against the extension fit criteria suggests t
 
 5. **`typecheckService`** — TS typecheck driver. Compute-heavy, long-running TS server. Tests an extension that holds substantial in-memory state across many calls.
 
+### Workspace-wide refactors (touch panels and workers, not just extensions)
+
+These are migrations where the current in-host service is exposed on `ctx.*` to *all* userland — panels, workers, and (until now in this doc) extensions. Migrating them means dropping the `ctx.*` entry across the panel/worker runtime too, and codemodding every consumer to `extensions.use(...)`. The blast radius is much larger than for imageService, so they're deliberately not first canaries.
+
+6. **`ai` / `packages/ai`** — AI provider client (Anthropic, OpenAI, etc.). The textbook capability service: has its own credentials surface, model selection, retry policy. Nothing about it is host-core. Migration: `ctx.ai.*` disappears from panel/worker/extension runtimes; every caller becomes `extensions.use<AiApi>("@workspace-extensions/ai-provider").*`. Opens the door to alternative providers as drop-in replacements at the same canonical path. Big consumer surface — defer until the canaries land and the migration patterns are well-tested.
+
+7. **`gitService`'s user-facing methods** (`blame`, `log`, `branches`, etc.) — same shape as ai, but with a complication: the in-host git service has *two* caller populations. Build-internal callers (the build pipeline depends on git tree hashing, source extraction, push events) must stay in-host. User-facing callers (panels viewing repo state, extensions inspecting commit history) should migrate. Requires teasing apart the in-host caller graph before migration is mechanical.
+
+8. **`webhooks` consumer surface** — once `webhookIngressService` (canary 1) lands as an extension, the corresponding `ctx.webhooks` subscription client also goes away in favor of `extensions.use<WebhookApi>("@workspace-extensions/webhook-ingress")`. Done as a follow-on cleanup after canary 1, before the next canary.
+
 ### Will need new design work before migrating
 
-6. **`egressProxy`** — needs a port-allocation primitive (no current design for "extension binds its own listening port and publishes it"). Defer until a port-claim mechanism is added, parallel to route claims but for raw TCP.
-
-7. **`gitService`'s user-facing methods** — could split (user-facing methods migrate, build-internal methods stay) but requires teasing apart the in-host caller graph. Worth a separate plan rather than a rote migration.
+9. **`egressProxy`** — needs a port-allocation primitive (no current design for "extension binds its own listening port and publishes it"). Defer until a port-claim mechanism is added, parallel to route claims but for raw TCP.
 
 ### Must stay in-host
 
