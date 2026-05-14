@@ -750,7 +750,7 @@ A survey of `src/server/services/` against the extension fit criteria suggests t
    - Health reporting (degraded when upstream secret validation rate-limits, unhealthy when the DO is unreachable).
 
 2. **`imageService`** — second migration. Exercises:
-   - The "extension replaces in-tree service" pattern. Currently every caller does `ctx.image.resize(...)`; after migration, a caller does `extensions.use<ImageApi>("@workspace-extensions/image").resize(...)`. **This will surface the `provides`-a-named-capability gap** flagged below: if we want `ctx.image` to keep working, we need a host-side capability registry that routes to whichever extension claims `image`. Otherwise every consumer changes shape.
+   - The "extension replaces in-tree service" pattern. Existing `ctx.image.*` call sites migrate mechanically to `extensions.use<ImageApi>("@workspace-extensions/image-service").*` — a one-time codemod. After migration `ctx.image` is gone from the host runtime; consumers reach the image extension explicitly through `extensions.use`. Swapping implementations later means uninstalling and installing a different extension at the same canonical name.
    - Pure compute, no statefulness — minimal blast radius if it goes sideways.
 
 ### Follow-on (after canaries land)
@@ -783,25 +783,24 @@ Listed here so future readers don't waste time considering them:
 
 ### Gaps surfaced by the migration plan
 
-The webhookIngressService and imageService canaries cover route claims, HTTP fetch, and health. Three additional gaps the rest of the migration plan flags, **not addressed in v1**:
+The webhookIngressService and imageService canaries cover route claims, HTTP fetch, and health. Two additional gaps the rest of the migration plan flags, **not addressed in v1**:
 
-- **`provides`-a-named-capability mechanism.** Without it, moving any in-tree service that has many consumers (imageService is the lead example) means every consumer changes its call shape. With it, the host registry routes `ctx.image.resize(...)` to whichever extension claims `image`, and the consumer code is unchanged. Needed before imageService can migrate cleanly — currently a future-work item; promote.
 - **Port-claim mechanism for non-HTTP listeners.** Required for egressProxy. Parallel to route claims; same install-time conflict check, same elevated-approval surfacing. Defer until a candidate forces it.
 - **Scheduled-work primitive.** Email-sync-style "poll every 5 minutes, survive restarts" — works today with `setInterval` plus self-managed persistence, but ergonomically wants a `ctx.schedule(name, intervalOrCron, handler)` helper that uses the extension's storage. Defer; not blocking the first migrations.
+
+A "named capabilities" / `provides` mechanism was considered and rejected: paths suffice. The canonical name for a given capability (e.g. `@workspace-extensions/image-service`) is a convention, swapping implementations means uninstalling and installing a different extension at the same name, and migration from an in-host service drops `ctx.image` in favor of explicit `extensions.use(...)` calls at the call sites. Introducing a host-side capability registry would add provider conflict resolution, missing-provider semantics, and asymmetry in `ctx.*` (some entries host-direct, others extension-routed) — none of which buy more than the path-based convention already does.
 
 ## Future work
 
 Out of scope for v1, kept as forward-compat anchors:
 
 - **Lazy activation**: the `activationEvents` field is plumbed through but only `"*"` is honored.
-- **Named-capability `provides` mechanism**: `natstack.extension.provides: ["image"]` + a host-side capability registry that routes generic `ctx.image.*` calls to whichever extension claims `image`. Needed before the imageService migration can keep call shapes stable for existing consumers. See "Migration candidates → Gaps".
 - **Port-claim mechanism**: parallel to HTTP route claims but for raw TCP/UDP listeners. Needed for egressProxy and any future protocol-bridge extension. Same install-time conflict and elevated-approval surfacing.
 - **Scheduled-work primitive**: `ctx.schedule(name, intervalOrCron, handler)` with restart-survival via the extension's storage scope. Email-sync-style use cases work today with `setInterval` + self-managed persistence, but the ergonomics could be much better.
 - **HTTP fetch streaming**: v1 buffers bodies to ~10 MB. True streaming over the WebSocket fetch envelope is a bigger frame protocol change.
 - **Per-workspace extension catalogs**: today extensions are workspace units. A central catalog of vetted extensions could layer on top.
 - **Cross-extension type sharing**: today consumers either define interfaces themselves or duplicate types. A generated aggregate `.d.ts` from active extensions becomes pressing once a few services migrate.
 - **Resource limits**: per-extension RSS caps and CPU quotas. The OS can enforce these via `setrlimit`-equivalents; not wired in v1.
-- **Health-aware routing**: today health is observability only. A future "automatically route around `unhealthy` providers when multiple extensions claim the same capability" mode depends on the `provides` mechanism existing.
 - **npm registry as a source**: currently internal-git / git / tarball. npm can be added later.
 - **Extensions shipping panels**: deliberately out of scope. Extensions register RPC APIs and HTTP routes; a separate panel can call into the extension.
 - **Config schema in manifest**: `natstack.extension.config: <jsonschema>` paired with a host-rendered generic config UI. Several migration candidates (push, browserData, image) have user-tweakable settings; shipping a panel per extension is heavy.
