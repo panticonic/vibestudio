@@ -45,7 +45,7 @@ By convention, workspace-internal extensions use the `@workspace-extensions/*` s
 
 There is no per-user `{userData}/extensions/installed/` tree. Source lives in workspace git (every extension is a workspace unit, even those originally fetched from a remote source — they're cloned into `workspace/extensions/<name>/` at install time). Bundles live in `{userData}/builds/<key>/` keyed by content hash. Per-extension scratch lives at `{userData}/extensions/storage/<workspaceId>/<name>/`.
 
-The registry is a small JSON in workspace state. Each entry has this canonical shape:
+The registry is a small JSON in workspace state. It holds **operational state only** — never approval state. The single source of truth for "did the user consent to run this code" is the approvals system; the registry never duplicates it. Each entry has this canonical shape:
 
 ```ts
 interface RegistryEntry {
@@ -54,14 +54,12 @@ interface RegistryEntry {
   source: ExtensionSource;       // user-supplied (kind + url/repo + ref)
   installedAt: number;
 
-  resolvedSha: string;           // currently-resolved commit (what would activate)
-  approvedSha: string | null;    // sha the user explicitly consented to
-  approvedAt: number | null;
+  resolvedSha: string;           // currently-resolved commit (what would run if approved)
+  activeSha: string | null;      // sha of the bundle currently running, if any
+  activeBundleKey: string | null;
 
-  pendingSha: string | null;     // built by push trigger, awaiting approval
+  pendingSha: string | null;     // built by push trigger, not yet known-approved
   pendingBundleKey: string | null;
-
-  activeBundleKey: string | null; // bundle for approvedSha — what's running
 
   enabled: boolean;
   status: "running" | "stopped" | "error" | "pending-approval";
@@ -69,7 +67,7 @@ interface RegistryEntry {
 }
 ```
 
-Activation is gated by `approvedSha === resolvedSha`. The push trigger updates `resolvedSha` and `pendingBundleKey`; elevated approval promotes `pendingSha → approvedSha` and `pendingBundleKey → activeBundleKey`, then schedules a reload.
+Activation is gated by an explicit `approvals.request(...)` call at the time the manager wants to run code at a given sha. The approvals system replies grant or deny based on stored decisions it manages internally; the manager never inspects that state, it just calls request and obeys the answer. On grant, the manager promotes `pendingSha → activeSha`, `pendingBundleKey → activeBundleKey` (if applicable), and starts/restarts the extension process.
 
 ## Manifest
 
@@ -290,13 +288,17 @@ interface ExtensionsClient {
 
 ## Elevated approvals — informed-consent UX
 
-Three things trigger the **elevated** approval treatment:
+The extension subsystem **always** calls `approvals.request(...)` before running code at a sha, regardless of context — at install, at push-trigger pickup, at reload, at boot. The approvals system decides whether to auto-grant (from a stored decision), prompt the user, or hold pending. Callers never inspect or branch on stored decisions; that's the approvals system's job.
 
-1. **Initial install of an extension** — the user is installing native-capability code that will run at every server boot.
-2. **A push to an extension's git repo that changes the resolved sha away from `approvedSha`** — new code is about to run with the trust already granted. The push triggers a build but the new bundle does **not** activate until elevated approval is granted; the previous approved bundle keeps running.
-3. **`reload` of an extension when `resolvedSha !== approvedSha`** — same situation, different entry point.
+Three call sites issue **elevated**-category requests:
 
-Routine approvals (per-call `fs.write`, `credentials.read`, etc. through `ctx.*` clients) flow through the standard approvals pipeline unchanged. Disable, enable (when the sha is unchanged), and uninstall use standard approvals.
+1. **Initial install of an extension** — `kind: "extension.install"`. Native-capability code is about to land in the workspace and run.
+2. **Push-trigger pickup** when a push produces a new sha — `kind: "extension.update"`. The bundle is built and parked in `pendingSha` / `pendingBundleKey`; activation waits on the request result.
+3. **`reload`** when it would change the running sha — `kind: "extension.update"`. Same shape as a push update, different entry point.
+
+At every server boot, the manager additionally issues an `extension.run` request for each enabled extension at its `resolvedSha`. This is the elevated category too, but in the common case the approvals system has a stored decision from a prior install or update and auto-grants without prompting. If not, the request stays pending until consented to.
+
+Routine approvals (per-call `fs.write`, `credentials.read`, etc. through `ctx.*` clients) are standard-category — the same approval pipeline panels and workers use, attributed to the extension's `callerId`. Disable, enable (when the sha is unchanged), and uninstall are also standard.
 
 ### What the prompt has to communicate
 
@@ -325,28 +327,29 @@ UI requirements (these are contract, not implementation details):
 - **Visually distinct from regular approvals.** Different card style, different icon, more spacing, plain-language framing.
 - **Lead with capability, not provenance.** The first sentence is "This will run as native code on your machine with access to your filesystem, network, and ability to launch other programs." Provenance comes second.
 - **Show the ref and sha being approved.** For updates, show what changed at the commit level — at minimum the diff stat, ideally a link to view the diff in a panel.
-- **No "allow always" option.** Standard approvals can be granted session-wide or repo-wide; elevated approvals are scoped to **exactly the sha being approved**. A new sha re-prompts.
-- **A "dev session" decision is available** for the common case of an extension author iterating on their own extension. Choosing it auto-approves subsequent updates to *this specific extension* for a bounded window (default 4 hours), without re-prompting. The decision is per-extension, time-bounded, and surfaced on a status indicator so the user can revoke at any time. This trades the per-push prompt for a single up-front "I'm hacking on this for the next few hours" consent.
+- **Decision options.** `once` and `deny` are always offered. `session` is offered with the user-facing label "dev session", and when picked it stores a session-scope decision in the approvals system, scoped to this extension repo — subsequent elevated requests for the same extension within that session auto-grant without prompting. This trades the per-push prompt for one up-front "I'm hacking on this" consent. The standard `version` and `repo` decision keys are **not** offered for elevated approvals: a future sha is a future trust grant, and shouldn't carry over from a sha the user previously saw.
 - **Distinct decision verbs.** "Install and run" / "Don't install" rather than "Allow" / "Deny". Verb choice matters when the action is qualitatively different.
-- **Deferred default.** The default action when the user dismisses the prompt (closes the window, navigates away) is "don't install", never "allow".
+- **Deferred default.** The default action when the user dismisses the prompt (closes the window, navigates away) is `deny`, never grant.
 
 ### Push-triggered updates
 
 `pushTrigger` (in `src/server/buildV2/pushTrigger.ts`) gains a hook for extension units: when a push changes any unit whose `kind === "extension"`, the trigger:
 
 1. Computes the new effective version and builds the new bundle as normal.
-2. Updates `resolvedSha` to the new commit and stores `pendingSha` / `pendingBundleKey` in the registry. `activeBundleKey` is unchanged — the previous approved bundle keeps running.
-3. Submits an elevated approval request. If a dev-session decision is active for this extension, the approval auto-resolves to "install and run", `pendingSha` is promoted to `approvedSha`, and a reload is scheduled. Otherwise it queues for the user. Denial discards `pendingSha` and `pendingBundleKey`; the bundle becomes eligible for GC.
+2. Updates `resolvedSha` to the new commit and stores `pendingSha` / `pendingBundleKey` in the registry. The currently running bundle is unchanged — `activeSha` / `activeBundleKey` stay as they were.
+3. Calls `approvals.request({ kind: "extension.update", category: "extension-elevated", ... })`. Whatever the approvals system returns is honored: grant → promote `pendingSha → activeSha`, `pendingBundleKey → activeBundleKey`, reload the process; deny → discard `pendingSha`/`pendingBundleKey` (bundle becomes GC-eligible). The trigger does not look at stored decisions itself — auto-grant from a dev-session decision is handled transparently inside the approvals system.
 
-The approval queue is the gate and the surfacing mechanism — there is no parallel `updatePending` event; UIs listening to the approvals service already see pending elevated approvals.
-
-This means **a push to an extension repo can never silently change running code** (outside of an active dev session the user opened deliberately). The push prepares an update; consent applies it.
+This means **a push to an extension repo can never silently change running code** unless the user has previously consented to a dev-session decision for that extension — and that decision lives in the approvals system, not in any flag the push trigger reads.
 
 ### Boot-time activation consent
 
-At server boot, every enabled extension whose `approvedSha === resolvedSha` activates without prompting — the user already granted consent at install time, and the sha hasn't changed. Mismatches submit an elevated approval to the approvals queue. When the queue's UI surfaces is available (Electron shell or a panel listening to approvals), the user can consent and the extension activates; until then the extension's `status` is `pending-approval`.
+At server boot, the manager walks the registry. For each enabled extension it computes `resolvedSha` and calls `approvals.request({ kind: "extension.run", category: "extension-elevated", detail: { name, sha: resolvedSha } })`. The approvals system replies:
 
-**Headless mode**: a server running without any UI cannot surface elevated approvals. Extensions whose `approvedSha === resolvedSha` activate normally; mismatched or freshly-installed-via-pre-seeded-registry entries stay in `pending-approval` until a UI client connects and consents. There is no "auto-approve in headless" path — by design, the trust grant always involves a person.
+- **Grant** (typically from a stored install/update decision for the same sha, or from an active dev-session decision): activate.
+- **Deny**: mark `error`.
+- **Pending** (no stored decision, no consumer available to prompt): set `status: "pending-approval"` and leave the request open. When a UI later consents (or denies), the manager reacts accordingly.
+
+**Headless mode**: same flow. Sensitive operations always request approval regardless of UI presence. Pre-approved shas auto-grant from stored decisions and activate normally with no UI in the loop. Requests without a stored decision stay pending forever, or until a UI client connects and answers them. There is no "skip the approval in headless" path.
 
 ## Userland extension management
 
@@ -390,8 +393,8 @@ There is no `readFile` / `writeFile` over the RPC surface. Source authoring happ
 ## Activation lifecycle
 
 - **Boot**:
-  1. Read the registry. For each enabled extension, check `approvedSha === resolvedSha`. Mismatched entries submit an elevated approval and set `status: "pending-approval"`. Activation is held for those until consent.
-  2. For matching entries, spawn the process, wait for the ready handshake (timeout: 10s), call `activate(ctx)` over the wire, record the exposed API metadata.
+  1. Read the registry. For each enabled extension, compute `resolvedSha` and call `approvals.request({ kind: "extension.run", category: "extension-elevated", detail: { name, sha: resolvedSha } })`.
+  2. On grant: spawn the process, wait for the ready handshake (timeout: 10s), call `activate(ctx)` over the wire, record the exposed API metadata, set `activeSha = resolvedSha` and `status = "running"`. On pending: set `status = "pending-approval"` and hold; spawn when the approval resolves. On deny: set `status = "error"`.
   3. Throws during `activate` are caught, logged, marked `error` in the registry, and emitted as `extensions:error` events. The process is killed. One extension's failure does not block others.
 - **Eager only for v1**. `activationEvents` is plumbed through but only `"*"` is accepted; other values fail validation.
 - **Hot install**: a freshly installed extension activates immediately — the manager spawns the process after the elevated approval resolves and the build completes.
