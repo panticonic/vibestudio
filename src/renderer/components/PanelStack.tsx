@@ -524,20 +524,19 @@ export function PanelStack({
             if (intent) void panelService.markBrowserNavigationIntent(panelId, intent);
             if (mode === "external") {
               void app.openExternal(url);
+            } else if (mode === "child") {
+              void panelService.createBrowserChild(panelId, url, { focus: true })
+                .then((result) => navigateToPanelId(result.id));
+            } else if (mode === "root") {
+              void panelService.createBrowser(url, { focus: true })
+                .then((result) => navigateToPanelId(result.id));
+            } else if (visiblePanel && isBrowserPanelSource(getCurrentSnapshot(visiblePanel).source)) {
+              void view.browserNavigate(panelId, url);
+            } else {
+              void panelService.createBrowser(url, { focus: true })
+                .then((result) => navigateToPanelId(result.id));
+            }
             return;
-          }
-          if (mode === "child") {
-            void panelService.createBrowserChild(panelId, url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
-          } else if (mode === "root") {
-            void panelService.createBrowser(url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
-          } else if (visiblePanel && isBrowserPanelSource(getCurrentSnapshot(visiblePanel).source)) {
-            void view.browserNavigate(panelId, url);
-          } else {
-            void panelService.createBrowser(url, { focus: true })
-              .then((result) => navigateToPanelId(result.id));
-          }
           }
         }
       }
