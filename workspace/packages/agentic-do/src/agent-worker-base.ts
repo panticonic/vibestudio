@@ -1145,6 +1145,10 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       if (last.stopReason !== "error") return;
       const msg = last.errorMessage ?? "Turn failed.";
       if (credentialRequiredMessage(msg)) {
+        // The durable resume breadcrumb is recorded at getApiKey failure time,
+        // before pi-core persists the terminal assistant error. A re-emitted
+        // persisted credential error is already resumable by trimming that
+        // trailing assistant message, so do not create a late breadcrumb here.
         this.emitModelCredentialRequiredCard(channelId, this.getModelProviderId(), this.getModelBaseUrl());
         return;
       }
