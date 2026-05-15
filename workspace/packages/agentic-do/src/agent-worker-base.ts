@@ -148,8 +148,7 @@ export default function ModelCredentialRequiredCard({ props, chat }) {
           providerId,
           modelBaseUrl,
         });
-        const resumeResult = result?.content ?? result;
-        if (!resumeResult?.resumed) {
+        if (!result?.resumed) {
           throw new Error("Credential connected, but there was no interrupted turn to continue.");
         }
       }

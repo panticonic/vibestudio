@@ -75,4 +75,11 @@ export type {
   WireErrorMessage,
 } from "./channel-chat-merge.js";
 
+// --- Method call result helpers ---
+export {
+  isChatMethodResult,
+  unwrapChatMethodResult,
+} from "./method-result.js";
+export type { ChatMethodResult } from "./method-result.js";
+
 // --- Pi snapshot → ChatMessage[] deriver (removed: channel messages replace snapshots) ---
