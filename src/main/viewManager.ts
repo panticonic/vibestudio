@@ -118,6 +118,8 @@ export class ViewManager {
   private protectedViewIds = new Set<string>();
   private crashCallback: ((viewId: string, reason: string) => void) | null = null;
   private windowVisible = true;
+  /** Reverse index for O(1) IPC sender webContents lookup */
+  private webContentsIdToViewId = new Map<number, string>();
   /** Callbacks invoked after view z-order changes */
   private viewOrderChangedCallbacks: Array<() => void> = [];
   /** Callbacks invoked when a panel view is hidden */
@@ -149,11 +151,14 @@ export class ViewManager {
         additionalArguments: options.shellAdditionalArguments,
       },
     });
-    this.nativeShellOverlay = new ShellOverlayView(options.shellOverlayPreload ?? options.shellPreload, (event) => {
-      if (!this.shellView.webContents.isDestroyed()) {
-        this.shellView.webContents.send("natstack:shell-overlay:event", event);
+    this.nativeShellOverlay = new ShellOverlayView(
+      options.shellOverlayPreload ?? options.shellPreload,
+      (event) => {
+        if (!this.shellView.webContents.isDestroyed()) {
+          this.shellView.webContents.send("natstack:shell-overlay:event", event);
+        }
       }
-    });
+    );
     this.nativeShellOverlay.setWindow(this.window);
 
     // Add shell to window and set it to fill
@@ -169,6 +174,7 @@ export class ViewManager {
       bounds: { x: 0, y: 0, width: 0, height: 0 },
       injectHostThemeVariables: false,
     });
+    this.webContentsIdToViewId.set(this.shellView.webContents.id, "shell");
 
     // Load shell HTML
     void this.shellView.webContents.loadFile(options.shellHtmlPath);
@@ -249,9 +255,7 @@ export class ViewManager {
     // Create session - use partition if specified, otherwise default session.
     // Browser panels share BROWSER_SESSION_PARTITION for cookies/auth.
     // Workspace panels use the default session (no external sites).
-    const ses = config.partition
-      ? session.fromPartition(config.partition)
-      : session.defaultSession;
+    const ses = config.partition ? session.fromPartition(config.partition) : session.defaultSession;
 
     // All panels run in safe sandboxed mode
     const webPreferences: Electron.WebPreferences = {
@@ -291,7 +295,10 @@ export class ViewManager {
       injectHostThemeVariables: config.injectHostThemeVariables ?? true,
     };
     this.views.set(config.id, managed);
-    log.verbose(` Created view for ${config.id}, type: ${config.type}, url: ${config.url?.slice(0, 80)}...`);
+    this.webContentsIdToViewId.set(view.webContents.id, config.id);
+    log.verbose(
+      ` Created view for ${config.id}, type: ${config.type}, url: ${config.url?.slice(0, 80)}...`
+    );
 
     // Load URL if provided
     if (config.url) {
@@ -392,7 +399,7 @@ export class ViewManager {
           click: () => {
             void shell.openExternal(params.linkURL);
           },
-        },
+        }
       );
     }
 
@@ -407,7 +414,7 @@ export class ViewManager {
         { label: "Back", enabled: contents.canGoBack(), click: () => contents.goBack() },
         { label: "Forward", enabled: contents.canGoForward(), click: () => contents.goForward() },
         { label: "Reload", click: () => contents.reload() },
-        { label: "Copy Page Address", click: () => clipboard.writeText(contents.getURL()) },
+        { label: "Copy Page Address", click: () => clipboard.writeText(contents.getURL()) }
       );
     }
 
@@ -433,6 +440,8 @@ export class ViewManager {
     if (!managed) {
       return;
     }
+
+    this.webContentsIdToViewId.delete(managed.view.webContents.id);
 
     // View destruction is a normal operation - no need to log
 
@@ -557,7 +566,14 @@ export class ViewManager {
     const size = this.window.getContentSize();
     const windowWidth = size[0] ?? 0;
     const windowHeight = size[1] ?? 0;
-    const { titleBarHeight, sidebarVisible, sidebarWidth, saveBarHeight, notificationBarHeight, consentBarHeight } = this.layoutState;
+    const {
+      titleBarHeight,
+      sidebarVisible,
+      sidebarWidth,
+      saveBarHeight,
+      notificationBarHeight,
+      consentBarHeight,
+    } = this.layoutState;
     const effectiveSidebarWidth = sidebarVisible ? sidebarWidth : 0;
     const topOffset = titleBarHeight + notificationBarHeight + saveBarHeight + consentBarHeight;
 
@@ -830,12 +846,16 @@ export class ViewManager {
    * Returns null if no view with that webContents ID exists.
    */
   findViewIdByWebContentsId(webContentsId: number): string | null {
-    for (const [id, managed] of this.views) {
-      if (!managed.view.webContents.isDestroyed() && managed.view.webContents.id === webContentsId) {
-        return id;
-      }
+    const viewId = this.webContentsIdToViewId.get(webContentsId);
+    if (!viewId) {
+      return null;
     }
-    return null;
+    const managed = this.views.get(viewId);
+    if (!managed || managed.view.webContents.isDestroyed()) {
+      this.webContentsIdToViewId.delete(webContentsId);
+      return null;
+    }
+    return viewId;
   }
 
   /**
@@ -1028,6 +1048,7 @@ export class ViewManager {
 
     // Shell is destroyed with window
     this.views.clear();
+    this.webContentsIdToViewId.clear();
   }
 
   // =========================================================================
@@ -1059,8 +1080,7 @@ export class ViewManager {
     const panelId = this.visiblePanelId;
     if (!panelId || !this.windowVisible) return;
     const managed = this.views.get(panelId);
-    if (!managed || !managed.visible || managed.view.webContents.isDestroyed())
-      return;
+    if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
 
     // Re-apply bounds to nudge the compositor without stealing focus
     const bounds = this.calculatePanelBounds();
@@ -1112,8 +1132,7 @@ export class ViewManager {
     const panelId = this.visiblePanelId;
     if (!panelId || !this.windowVisible) return;
     const managed = this.views.get(panelId);
-    if (!managed || !managed.visible || managed.view.webContents.isDestroyed())
-      return;
+    if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
 
     try {
       const image = await managed.view.webContents.capturePage();

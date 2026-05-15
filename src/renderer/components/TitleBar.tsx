@@ -13,7 +13,17 @@ import {
   StopIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Flex, IconButton, Text, TextField, Tooltip } from "@radix-ui/themes";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type MouseEvent,
+  type RefObject,
+} from "react";
 import { useTouchDevice } from "@workspace/react/responsive";
 
 import { useNavigation } from "./NavigationContext";
@@ -43,7 +53,12 @@ import {
   type PanelSourceSuggestion,
 } from "@natstack/shared/panelChrome";
 import { getAddressNavigationModeFromModifiers } from "@natstack/shared/panelCommands";
-import { menu, panel, type NativeShellOverlayEvent, type NativeShellOverlayOptions } from "../shell/client";
+import {
+  menu,
+  panel,
+  type NativeShellOverlayEvent,
+  type NativeShellOverlayOptions,
+} from "../shell/client";
 import { useNativeShellOverlay } from "../shell/useNativeShellOverlay";
 
 interface TitleBarProps {
@@ -54,7 +69,13 @@ interface TitleBarProps {
   onPanelAction?: (panelId: string, action: PanelContextMenuAction) => void;
 }
 
-export function TitleBar({ title, chromeState, onChromeCommand, onNavigateToId, onPanelAction }: TitleBarProps) {
+export function TitleBar({
+  title,
+  chromeState,
+  onChromeCommand,
+  onNavigateToId,
+  onPanelAction,
+}: TitleBarProps) {
   const {
     mode: navigationMode,
     setMode,
@@ -124,7 +145,9 @@ export function TitleBar({ title, chromeState, onChromeCommand, onNavigateToId, 
               onClick={() => setAddressBarVisible(!addressBarVisible)}
               aria-label={addressBarVisible ? "Hide address bar" : "Show address bar"}
             >
-              <Text size="1" weight="bold">URL</Text>
+              <Text size="1" weight="bold">
+                URL
+              </Text>
             </IconButton>
           </Tooltip>
 
@@ -134,9 +157,11 @@ export function TitleBar({ title, chromeState, onChromeCommand, onNavigateToId, 
               size="1"
               onClick={async () => {
                 const result = await panel.createAboutPanel("new");
-                window.dispatchEvent(new CustomEvent("shell-panel-created", {
-                  detail: { panelId: result.id }
-                }));
+                window.dispatchEvent(
+                  new CustomEvent("shell-panel-created", {
+                    detail: { panelId: result.id },
+                  })
+                );
               }}
               aria-label="New panel"
             >
@@ -179,7 +204,10 @@ export function TitleBar({ title, chromeState, onChromeCommand, onNavigateToId, 
         </Flex>
       </Flex>
 
-      <ConnectionSettingsDialog open={connectionSettingsOpen} onOpenChange={setConnectionSettingsOpen} />
+      <ConnectionSettingsDialog
+        open={connectionSettingsOpen}
+        onOpenChange={setConnectionSettingsOpen}
+      />
     </Box>
   );
 }
@@ -231,7 +259,9 @@ function BrowserAddressBar({
   const [value, setValue] = useState(chromeState?.editableAddress ?? "");
   const [addressOptions, setAddressOptions] = useState<BrowserAddressOptions | null>(null);
   const [focused, setFocused] = useState(false);
-  const [overlayBounds, setOverlayBounds] = useState<NativeShellOverlayOptions["bounds"] | null>(null);
+  const [overlayBounds, setOverlayBounds] = useState<NativeShellOverlayOptions["bounds"] | null>(
+    null
+  );
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -242,7 +272,8 @@ function BrowserAddressBar({
     if (!focused) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void panel.getBrowserAddressOptions(value)
+      void panel
+        .getBrowserAddressOptions(value)
         .then((options) => {
           if (!cancelled) setAddressOptions(options);
         })
@@ -265,52 +296,68 @@ function BrowserAddressBar({
     return () => window.removeEventListener("shell-focus-address", focusAddress);
   }, []);
 
-  const autocompleteItems = useMemo(() => buildAddressAutocompleteItems({
-    kind: "browser",
-    input: value,
-    browserSuggestions: addressOptions?.suggestions,
-    limit: 8,
-  }), [addressOptions?.suggestions, value]);
+  const autocompleteItems = useMemo(
+    () =>
+      buildAddressAutocompleteItems({
+        kind: "browser",
+        input: value,
+        browserSuggestions: addressOptions?.suggestions,
+        limit: 8,
+      }),
+    [addressOptions?.suggestions, value]
+  );
 
-  const openOverlay = useCallback((target: HTMLElement | null) => {
-    if (!target) return;
-    const rect = target.getBoundingClientRect();
-    const rowCount = Math.min(Math.max(autocompleteItems.length, 1), 8);
-    setOverlayBounds({
-      x: Math.round(rect.left),
-      y: Math.round(rect.bottom + 4),
-      width: Math.max(360, rect.width),
-      height: Math.max(52, Math.min(360, 28 + rowCount * 42)),
-    });
-  }, [autocompleteItems.length]);
+  const openOverlay = useCallback(
+    (target: HTMLElement | null) => {
+      if (!target) return;
+      const rect = target.getBoundingClientRect();
+      const rowCount = Math.min(Math.max(autocompleteItems.length, 1), 8);
+      setOverlayBounds({
+        x: Math.round(rect.left),
+        y: Math.round(rect.bottom + 4),
+        width: Math.max(360, rect.width),
+        height: Math.max(52, Math.min(360, 28 + rowCount * 42)),
+      });
+    },
+    [autocompleteItems.length]
+  );
 
-  const submitValue = useCallback((nextValue: string, event?: KeyboardEvent<HTMLInputElement>) => {
-    if (!nextValue.trim()) return;
-    setOverlayBounds(null);
-    onChromeCommand?.({
-      type: "navigate",
-      value: nextValue,
-      mode: event ? getAddressNavigationModeFromModifiers(event) : "current",
-    });
-  }, [onChromeCommand]);
-
-  const overlayHtml = useMemo(() => buildBrowserAddressOverlayHtml(autocompleteItems, value), [autocompleteItems, value]);
-
-  const handleOverlayEvent = useCallback((event: NativeShellOverlayEvent) => {
-    const payload = event.payload as { value?: string; action?: AddressAction } | undefined;
-    if (event.type === "browser-address-select" && payload?.value) {
-      setValue(payload.value);
-      if (payload.action) {
-        setOverlayBounds(null);
-        onChromeCommand?.({ type: "navigate", value: payload.value, action: payload.action });
-      } else {
-        submitValue(payload.value);
-      }
-      window.requestAnimationFrame(() => inputRef.current?.blur());
-    } else if (event.type === "dismiss") {
+  const submitValue = useCallback(
+    (nextValue: string, event?: KeyboardEvent<HTMLInputElement>) => {
+      if (!nextValue.trim()) return;
       setOverlayBounds(null);
-    }
-  }, [onChromeCommand, submitValue]);
+      onChromeCommand?.({
+        type: "navigate",
+        value: nextValue,
+        mode: event ? getAddressNavigationModeFromModifiers(event) : "current",
+      });
+    },
+    [onChromeCommand]
+  );
+
+  const overlayHtml = useMemo(
+    () => buildBrowserAddressOverlayHtml(autocompleteItems, value),
+    [autocompleteItems, value]
+  );
+
+  const handleOverlayEvent = useCallback(
+    (event: NativeShellOverlayEvent) => {
+      const payload = event.payload as { value?: string; action?: AddressAction } | undefined;
+      if (event.type === "browser-address-select" && payload?.value) {
+        setValue(payload.value);
+        if (payload.action) {
+          setOverlayBounds(null);
+          onChromeCommand?.({ type: "navigate", value: payload.value, action: payload.action });
+        } else {
+          submitValue(payload.value);
+        }
+        window.requestAnimationFrame(() => inputRef.current?.blur());
+      } else if (event.type === "dismiss") {
+        setOverlayBounds(null);
+      }
+    },
+    [onChromeCommand, submitValue]
+  );
 
   useNativeShellOverlay(
     overlayBounds
@@ -322,7 +369,7 @@ function BrowserAddressBar({
           focus: false,
         }
       : null,
-    handleOverlayEvent,
+    handleOverlayEvent
   );
 
   return (
@@ -357,7 +404,9 @@ function BrowserAddressBar({
         <IconButton
           size="1"
           variant="ghost"
-          onClick={() => onChromeCommand?.({ type: chromeState?.isLoading ? "stop" : "reload-panel" })}
+          onClick={() =>
+            onChromeCommand?.({ type: chromeState?.isLoading ? "stop" : "reload-panel" })
+          }
           aria-label={chromeState?.isLoading ? "Stop" : "Reload"}
         >
           {chromeState?.isLoading ? <StopIcon /> : <ReloadIcon />}
@@ -417,7 +466,9 @@ function PanelAddressBar({
   const commitButtonRef = useRef<HTMLButtonElement | null>(null);
   const [pathValue, setPathValue] = useState(chromeState.source);
   const [addressOptions, setAddressOptions] = useState<PanelAddressOptions | null>(null);
-  const [selectedBranch, setSelectedBranch] = useState<string | null>(chromeState.ref ?? chromeState.repo?.branch ?? null);
+  const [selectedBranch, setSelectedBranch] = useState<string | null>(
+    chromeState.ref ?? chromeState.repo?.branch ?? null
+  );
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<PanelAddressOverlayState | null>(null);
 
@@ -435,7 +486,8 @@ function PanelAddressBar({
     }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      void panel.getAddressOptions(source, selectedBranch ?? undefined)
+      void panel
+        .getAddressOptions(source, selectedBranch ?? undefined)
         .then((options) => {
           if (!cancelled) setAddressOptions(options);
         })
@@ -458,8 +510,10 @@ function PanelAddressBar({
     return () => window.removeEventListener("shell-focus-address", focusAddress);
   }, []);
 
-  const branchValue = selectedBranch ?? addressOptions?.repo?.branch ?? chromeState.repo?.branch ?? "HEAD";
-  const commitValue = selectedCommit ?? addressOptions?.repo?.commit ?? chromeState.repo?.commit ?? null;
+  const branchValue =
+    selectedBranch ?? addressOptions?.repo?.branch ?? chromeState.repo?.branch ?? "HEAD";
+  const commitValue =
+    selectedCommit ?? addressOptions?.repo?.commit ?? chromeState.repo?.commit ?? null;
   const commitShort = commitValue ? commitValue.slice(0, 7) : "commit";
   const dirty = addressOptions?.repo?.dirty ?? chromeState.repo?.dirty ?? false;
 
@@ -475,26 +529,34 @@ function PanelAddressBar({
     });
   };
 
-  const openOverlay = useCallback((kind: PanelAddressOverlayState["kind"], target: HTMLElement | null) => {
-    if (!target) return;
-    const rect = target.getBoundingClientRect();
-    const width = kind === "commit" ? Math.max(420, rect.width) : Math.max(320, rect.width);
-    const rowCount = kind === "path"
-      ? Math.min(addressOptions?.suggestions.length ?? 0, 8)
-      : kind === "branch"
-        ? Math.min(addressOptions?.branches.length ?? 0, 10)
-        : Math.min(addressOptions?.commits.length ?? 0, 10);
-    const height = Math.max(52, Math.min(360, 28 + rowCount * 42));
-    setOverlay({
-      kind,
-      bounds: {
-        x: Math.round(rect.left),
-        y: Math.round(rect.bottom + 4),
-        width,
-        height,
-      },
-    });
-  }, [addressOptions?.branches.length, addressOptions?.commits.length, addressOptions?.suggestions.length]);
+  const openOverlay = useCallback(
+    (kind: PanelAddressOverlayState["kind"], target: HTMLElement | null) => {
+      if (!target) return;
+      const rect = target.getBoundingClientRect();
+      const width = kind === "commit" ? Math.max(420, rect.width) : Math.max(320, rect.width);
+      const rowCount =
+        kind === "path"
+          ? Math.min(addressOptions?.suggestions.length ?? 0, 8)
+          : kind === "branch"
+            ? Math.min(addressOptions?.branches.length ?? 0, 10)
+            : Math.min(addressOptions?.commits.length ?? 0, 10);
+      const height = Math.max(52, Math.min(360, 28 + rowCount * 42));
+      setOverlay({
+        kind,
+        bounds: {
+          x: Math.round(rect.left),
+          y: Math.round(rect.bottom + 4),
+          width,
+          height,
+        },
+      });
+    },
+    [
+      addressOptions?.branches.length,
+      addressOptions?.commits.length,
+      addressOptions?.suggestions.length,
+    ]
+  );
 
   const overlayHtml = useMemo(() => {
     if (!overlay) return "";
@@ -505,7 +567,15 @@ function PanelAddressBar({
       return buildBranchOverlayHtml(addressOptions?.branches ?? [], branchValue);
     }
     return buildCommitOverlayHtml(addressOptions?.commits ?? [], commitValue);
-  }, [addressOptions?.branches, addressOptions?.commits, addressOptions?.suggestions, branchValue, commitValue, overlay, pathValue]);
+  }, [
+    addressOptions?.branches,
+    addressOptions?.commits,
+    addressOptions?.suggestions,
+    branchValue,
+    commitValue,
+    overlay,
+    pathValue,
+  ]);
 
   const overlayOptions = overlay
     ? {
@@ -518,7 +588,9 @@ function PanelAddressBar({
     : null;
 
   const handleOverlayEvent = useCallback((event: NativeShellOverlayEvent) => {
-    const payload = event.payload as { source?: string; branch?: string; commit?: string } | undefined;
+    const payload = event.payload as
+      | { source?: string; branch?: string; commit?: string }
+      | undefined;
     if (event.type === "path-select" && payload?.source) {
       setPathValue(payload.source);
       setSelectedBranch(null);
@@ -575,7 +647,9 @@ function PanelAddressBar({
         <IconButton
           size="1"
           variant="ghost"
-          onClick={() => onChromeCommand?.({ type: chromeState.isLoading ? "stop" : "reload-panel" })}
+          onClick={() =>
+            onChromeCommand?.({ type: chromeState.isLoading ? "stop" : "reload-panel" })
+          }
           aria-label={chromeState.isLoading ? "Stop" : "Reload"}
         >
           {chromeState.isLoading ? <StopIcon /> : <ReloadIcon />}
@@ -754,12 +828,17 @@ function buildListOverlayHtml(args: {
     payload: Record<string, unknown>;
   }>;
 }): string {
-  const rowsJson = JSON.stringify(args.rows).replace(/</g, "\\u003c");
-  const emptyJson = JSON.stringify(args.empty).replace(/</g, "\\u003c");
+  const overlayData = escapeOverlayHtmlText(
+    JSON.stringify({
+      empty: args.empty,
+      rows: args.rows,
+    })
+  );
   return `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'none'">
 <style>
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -785,64 +864,13 @@ html, body { margin: 0; padding: 0; background: transparent; font-family: -apple
 </head>
 <body>
 <div class="panel" role="listbox" id="panel"></div>
-<script>
-const rows = ${rowsJson};
-const emptyText = ${emptyJson};
-const panel = document.getElementById("panel");
-if (!rows.length) {
-  panel.innerHTML = '<div class="empty">' + escapeHtml(emptyText) + '</div>';
-} else {
-  panel.innerHTML = rows.map((row, index) => '<button class="row" data-index="' + index + '" data-selected="' + Boolean(row.selected) + '" type="button"><div class="row-inner">' + (row.icon ? '<div class="icon">' + escapeHtml(iconText(row.icon)) + '</div>' : '') + '<div class="text"><div class="label">' + renderMatchedText(row.label, row.labelRanges) + '</div>' + (row.meta ? '<div class="meta">' + renderMatchedText(row.meta, row.metaRanges) + '</div>' : '') + '</div></div></button>').join('');
-  panel.querySelectorAll(".row").forEach((button) => {
-    button.addEventListener("click", () => {
-      const row = rows[Number(button.dataset.index)];
-      window.__natstack_shell_overlay.emit(row.type, row.payload);
-    });
-    button.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") button.click();
-      if (event.key === "Tab") { event.preventDefault(); button.click(); }
-      if (event.key === "Escape") window.__natstack_shell_overlay.emit("dismiss");
-      if (event.key === "ArrowDown") {
-        event.preventDefault();
-        (button.nextElementSibling || panel.querySelector(".row"))?.focus();
-      }
-      if (event.key === "ArrowUp") {
-        event.preventDefault();
-        (button.previousElementSibling || panel.querySelector(".row:last-child"))?.focus();
-      }
-    });
-  });
-}
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") window.__natstack_shell_overlay.emit("dismiss");
-});
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-}
-function renderMatchedText(value, ranges) {
-  const text = String(value);
-  if (!Array.isArray(ranges) || !ranges.length) return escapeHtml(text);
-  let cursor = 0;
-  let html = "";
-  ranges
-    .map((range) => ({ start: Math.max(0, Math.min(text.length, Number(range.start))), end: Math.max(0, Math.min(text.length, Number(range.end))) }))
-    .filter((range) => range.end > range.start)
-    .sort((a, b) => a.start - b.start)
-    .forEach((range) => {
-      if (range.start < cursor) return;
-      if (range.start > cursor) html += escapeHtml(text.slice(cursor, range.start));
-      html += '<span class="match">' + escapeHtml(text.slice(range.start, range.end)) + '</span>';
-      cursor = range.end;
-    });
-  if (cursor < text.length) html += escapeHtml(text.slice(cursor));
-  return html;
-}
-function iconText(kind) {
-  return ({ globe: "go", history: "h", bookmark: "*", search: "?", session: "s", panel: "p", branch: "br", commit: "c" })[kind] || "-";
-}
-</script>
+<template id="overlay-data">${overlayData}</template>
 </body>
 </html>`;
+}
+
+function escapeOverlayHtmlText(value: string): string {
+  return value.replace(/[&<]/g, (ch) => (ch === "&" ? "&amp;" : "&lt;"));
 }
 
 // Shared styles for breadcrumb items
@@ -906,7 +934,8 @@ function HoverableBreadcrumbItem({
       style={{
         position: "relative",
         ...itemStyle,
-        backgroundColor: isCurrent && isActive ? "var(--gray-a4)" : isHovered ? "var(--gray-a3)" : undefined,
+        backgroundColor:
+          isCurrent && isActive ? "var(--gray-a4)" : isHovered ? "var(--gray-a3)" : undefined,
       }}
       onClick={onNavigate}
       onContextMenu={onContextMenu}
@@ -930,18 +959,20 @@ function HoverableBreadcrumbItem({
           aria-label="Archive panel"
           onClick={handleArchive}
           className="breadcrumb-archive-btn"
-          style={{
-            appRegion: "no-drag",
-            WebkitAppRegion: "no-drag",
-            position: "absolute",
-            right: 2,
-            top: "50%",
-            transform: "translateY(-50%)",
-            width: 16,
-            height: 16,
-            padding: 0,
-            opacity: 0.6,
-          } as CSSProperties}
+          style={
+            {
+              appRegion: "no-drag",
+              WebkitAppRegion: "no-drag",
+              position: "absolute",
+              right: 2,
+              top: "50%",
+              transform: "translateY(-50%)",
+              width: 16,
+              height: 16,
+              padding: 0,
+              opacity: 0.6,
+            } as CSSProperties
+          }
         >
           <Cross2Icon width={10} height={10} />
         </IconButton>
@@ -979,11 +1010,7 @@ function BreadcrumbBar({
     }
   };
 
-  const renderBreadcrumbItem = (
-    panel: PanelSummary,
-    isActive: boolean,
-    isCurrent: boolean
-  ) => (
+  const renderBreadcrumbItem = (panel: PanelSummary, isActive: boolean, isCurrent: boolean) => (
     <HoverableBreadcrumbItem
       key={panel.id}
       panelId={panel.id}
@@ -1024,11 +1051,7 @@ function BreadcrumbBar({
                 style={{ color: "var(--gray-7)", width: 12, height: 12, flexShrink: 0 }}
               />
             )}
-            {renderBreadcrumbItem(
-              sibling,
-              sibling.id === effectiveActiveId,
-              isCurrent
-            )}
+            {renderBreadcrumbItem(sibling, sibling.id === effectiveActiveId, isCurrent)}
           </span>
         ))}
       </span>
@@ -1075,11 +1098,7 @@ function BreadcrumbBar({
                 style={{ color: "var(--gray-7)", width: 12, height: 12, flexShrink: 0 }}
               />
             )}
-            {renderBreadcrumbItem(
-              sibling,
-              sibling.id === group.selectedId,
-              false
-            )}
+            {renderBreadcrumbItem(sibling, sibling.id === group.selectedId, false)}
           </span>
         ))}
       </span>
@@ -1105,26 +1124,17 @@ function BreadcrumbBar({
       )}
       {visibleAncestors.map((ancestor) => (
         <Flex key={ancestor.id} align="center" gap="1">
-          <span style={groupStyle}>
-            {renderAncestorItem(ancestor)}
-          </span>
+          <span style={groupStyle}>{renderAncestorItem(ancestor)}</span>
           <ChevronRightIcon color="var(--gray-8)" />
         </Flex>
       ))}
 
       {/* Current (with siblings) */}
       {currentSiblings.length > 0 ? (
-        renderSiblingGroup(
-          currentSiblings,
-          navigationData?.currentId ?? null,
-          true
-        )
+        renderSiblingGroup(currentSiblings, navigationData?.currentId ?? null, true)
       ) : (
         <span style={groupStyle}>
-          <Text
-            size="2"
-            style={{ ...itemStyle, backgroundColor: "var(--gray-a4)" }}
-          >
+          <Text size="2" style={{ ...itemStyle, backgroundColor: "var(--gray-a4)" }}>
             {navigationData?.currentTitle ?? title}
           </Text>
         </span>

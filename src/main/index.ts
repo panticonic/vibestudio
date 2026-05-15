@@ -126,6 +126,8 @@ let mainWindow: BaseWindow | null = null;
 let viewManager: ViewManager | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
 let autofillManager: import("./autofill/autofillManager.js").AutofillManager | null = null;
+const corsApprovalCache = new Set<string>();
+const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheable: boolean }>>();
 let browserDataStoreForCredentialCapture: {
   cookies: {
     getByDomain(domain?: string): Promise<
@@ -298,6 +300,116 @@ function importedCookieMatchesOrigin(
     url.pathname === cookiePath ||
     url.pathname.startsWith(cookiePath.endsWith("/") ? cookiePath : `${cookiePath}/`)
   );
+}
+
+function getHttpOrigin(rawUrl: string): string | null {
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return null;
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function getWebRequestPanelCallerId(
+  details: Electron.OnHeadersReceivedListenerDetails
+): string | null {
+  if (!viewManager) return null;
+  const webContentsId = details.webContentsId ?? details.webContents?.id;
+  if (typeof webContentsId !== "number") return null;
+  const shellContents = viewManager.getShellWebContents();
+  if (shellContents && !shellContents.isDestroyed() && shellContents.id === webContentsId) {
+    return null;
+  }
+  return viewManager.findViewIdByWebContentsId(webContentsId);
+}
+
+function getCorsRequestOrigin(details: Electron.OnHeadersReceivedListenerDetails): string | null {
+  const referrerOrigin = details.referrer ? getHttpOrigin(details.referrer) : null;
+  if (referrerOrigin) return referrerOrigin;
+  const currentUrl =
+    details.webContents && !details.webContents.isDestroyed() ? details.webContents.getURL() : "";
+  return currentUrl ? getHttpOrigin(currentUrl) : null;
+}
+
+async function authorizeCorsResponseAccess(
+  details: Electron.OnHeadersReceivedListenerDetails
+): Promise<{ allowed: boolean; requestOrigin: string | null }> {
+  if (details.resourceType !== "xhr") {
+    return { allowed: false, requestOrigin: null };
+  }
+  const targetOrigin = getHttpOrigin(details.url);
+  const requestOrigin = getCorsRequestOrigin(details);
+  if (!targetOrigin || !requestOrigin || targetOrigin === requestOrigin) {
+    return { allowed: false, requestOrigin };
+  }
+
+  const callerId = getWebRequestPanelCallerId(details);
+  if (!callerId || !serverSession?.serverClient) {
+    return { allowed: false, requestOrigin };
+  }
+
+  const cacheKey = `${callerId}\x00${targetOrigin}`;
+  if (corsApprovalCache.has(cacheKey)) {
+    return { allowed: true, requestOrigin };
+  }
+
+  let pending = pendingCorsApprovals.get(cacheKey);
+  if (!pending) {
+    pending = serverSession.serverClient
+      .call("corsApproval", "authorize", [
+        {
+          callerId,
+          targetUrl: details.url,
+          requestOrigin,
+        },
+      ])
+      .then((result: unknown) => {
+        const response = result as { allowed?: unknown; decision?: unknown };
+        const allowed = response.allowed === true;
+        const cacheable = allowed && response.decision !== "once";
+        if (cacheable) corsApprovalCache.add(cacheKey);
+        return { allowed, cacheable };
+      })
+      .catch((error: unknown) => {
+        log.warn(`CORS approval failed: ${error instanceof Error ? error.message : String(error)}`);
+        return { allowed: false, cacheable: false };
+      })
+      .finally(() => {
+        pendingCorsApprovals.delete(cacheKey);
+      });
+    pendingCorsApprovals.set(cacheKey, pending);
+  }
+
+  const result = await pending;
+  return { allowed: result.allowed, requestOrigin };
+}
+
+function withCorsRelaxedHeaders(
+  responseHeaders: Record<string, string[]> | undefined,
+  requestOrigin: string
+): Record<string, string[]> {
+  const strippedCorsHeaderNames = new Set([
+    "access-control-allow-origin",
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-credentials",
+    "access-control-expose-headers",
+  ]);
+  const headers: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(responseHeaders ?? {})) {
+    const lower = key.toLowerCase();
+    if (!strippedCorsHeaderNames.has(lower)) {
+      headers[key] = value;
+    }
+  }
+  headers["access-control-allow-origin"] = [requestOrigin];
+  headers["access-control-allow-headers"] = ["*"];
+  headers["access-control-allow-methods"] = ["GET, POST, PUT, PATCH, DELETE, OPTIONS"];
+  headers["access-control-allow-credentials"] = ["true"];
+  headers["access-control-expose-headers"] = ["*"];
+  return headers;
 }
 
 async function handleCredentialSessionCaptureRequest(
@@ -551,16 +663,26 @@ function createWindow(): void {
 app.on("ready", async () => {
   performance.mark("startup:ready");
 
-  // Strip CORS restrictions for app panels (defaultSession).
-  // App panels are trusted workspace code that needs to call external APIs
-  // (Gmail, Notion, etc.) directly via fetch(). Browser panels use
-  // a separate "persist:browser" partition and are unaffected.
+  // Default to browser CORS. For panel fetch/XHR responses, relax CORS only
+  // after the trusted shell approval flow grants that panel access to the
+  // target origin. Browser panels use a separate "persist:browser" partition
+  // and are unaffected.
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    const headers = { ...details.responseHeaders };
-    headers["access-control-allow-origin"] = ["*"];
-    headers["access-control-allow-headers"] = ["*"];
-    headers["access-control-allow-methods"] = ["*"];
-    callback({ responseHeaders: headers });
+    void authorizeCorsResponseAccess(details)
+      .then(({ allowed, requestOrigin }) => {
+        callback({
+          responseHeaders:
+            allowed && requestOrigin
+              ? withCorsRelaxedHeaders(details.responseHeaders, requestOrigin)
+              : details.responseHeaders,
+        });
+      })
+      .catch((error: unknown) => {
+        log.warn(
+          `CORS header handling failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+        callback({ responseHeaders: details.responseHeaders });
+      });
   });
 
   // -------------------------------------------------------------------------
@@ -1153,35 +1275,17 @@ app.on("ready", async () => {
     });
 
     // Panel lifecycle
-    ipcMain.handle("natstack:bridge.closeSelf", async (event) => {
-      const callerId = resolveCallerId(event);
-      return panelOrchestrator!.closePanel(callerId);
-    });
     ipcMain.handle("natstack:closeSelf", async (event) => {
       const callerId = resolveCallerId(event);
       return panelOrchestrator!.closePanel(callerId);
-    });
-    ipcMain.handle("natstack:bridge.closeChild", async (event, childId: string) => {
-      const callerId = resolveCallerId(event);
-      return panelOrchestrator!.closeChild(callerId, childId);
     });
     ipcMain.handle("natstack:closeChild", async (event, childId: string) => {
       const callerId = resolveCallerId(event);
       return panelOrchestrator!.closeChild(callerId, childId);
     });
-    ipcMain.handle("natstack:bridge.focusPanel", async (_event, panelId: string) => {
-      panelOrchestrator!.focusPanel(panelId);
-    });
     ipcMain.handle("natstack:focusPanel", async (_event, panelId: string) => {
       panelOrchestrator!.focusPanel(panelId);
     });
-    ipcMain.handle(
-      "natstack:bridge.createBrowserPanel",
-      async (event, url: string, opts?: { name?: string; focus?: boolean }) => {
-        const callerId = resolveCallerId(event);
-        return panelOrchestrator!.createBrowserPanel(callerId, url, opts);
-      }
-    );
     ipcMain.handle(
       "natstack:createBrowserPanel",
       async (event, url: string, opts?: { name?: string; focus?: boolean }) => {
@@ -1206,23 +1310,10 @@ app.on("ready", async () => {
     });
 
     // Electron-native
-    ipcMain.handle("natstack:bridge.openDevtools", async (event) => {
-      const callerId = resolveCallerId(event);
-      if (!viewManager) throw new Error("ViewManager not initialized");
-      viewManager.openDevTools(callerId);
-    });
     ipcMain.handle("natstack:openDevtools", async (event) => {
       const callerId = resolveCallerId(event);
       if (!viewManager) throw new Error("ViewManager not initialized");
       viewManager.openDevTools(callerId);
-    });
-    ipcMain.handle("natstack:bridge.openFolderDialog", async (event, opts?: { title?: string }) => {
-      requireShellSender(event, "natstack:bridge.openFolderDialog");
-      const result = await dialog.showOpenDialog({
-        properties: ["openDirectory", "createDirectory"],
-        title: opts?.title ?? "Select Folder",
-      });
-      return result.canceled ? null : (result.filePaths[0] ?? null);
     });
     ipcMain.handle("natstack:openFolderDialog", async (event, opts?: { title?: string }) => {
       requireShellSender(event, "natstack:openFolderDialog");
@@ -1245,17 +1336,6 @@ app.on("ready", async () => {
           filters: opts?.filters,
         });
         return result.canceled ? null : (result.filePaths[0] ?? null);
-      }
-    );
-    ipcMain.handle(
-      "natstack:bridge.openExternal",
-      async (event, url: string, options?: unknown) => {
-        const caller = resolveCaller(event);
-        if (caller.callerKind === "shell") {
-          await sc.call("externalOpen", "openExternal", [url, options]);
-        } else {
-          await sc.call("externalOpen", "openExternalForCaller", [{ ...caller, url, options }]);
-        }
       }
     );
     ipcMain.handle("natstack:openExternal", async (event, url: string, options?: unknown) => {
