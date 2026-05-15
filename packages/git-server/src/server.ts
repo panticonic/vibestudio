@@ -37,6 +37,34 @@ function assertSafeGitRef(ref: string, label = "ref"): string {
   return ref;
 }
 
+function expandDirectoryPattern(root: string, pattern: string): string[] {
+  const parts = pattern.split("/");
+  const results: string[] = [];
+
+  function walk(base: string, index: number): void {
+    if (index >= parts.length) {
+      results.push(base);
+      return;
+    }
+
+    const part = parts[index]!;
+    if (part === "*") {
+      if (!fs.existsSync(base)) return;
+      for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+        if (entry.isDirectory() && !entry.name.startsWith(".")) {
+          walk(path.join(base, entry.name), index + 1);
+        }
+      }
+      return;
+    }
+
+    walk(path.join(base, part), index + 1);
+  }
+
+  walk(root, 0);
+  return results.filter((dirPath) => fs.existsSync(dirPath));
+}
+
 /**
  * Structured push event emitted after a git push is accepted.
  */
@@ -131,6 +159,7 @@ export class GitServer {
     if (!fs.existsSync(reposPath)) {
       fs.mkdirSync(reposPath, { recursive: true });
     }
+    await this.initializeRepos();
 
     // Pass a custom dirMap function instead of a plain string.
     // node-git-server's create() always appends ".git" to repo names internally,
@@ -376,17 +405,11 @@ export class GitServer {
     const reposPath = this.ensureReposPath();
 
     for (const pattern of this.initPatterns) {
-      // Simple glob expansion for "dir/*" patterns
-      if (pattern.endsWith("/*")) {
-        const parentDir = path.join(reposPath, pattern.slice(0, -2));
-        if (!fs.existsSync(parentDir)) continue;
-
-        const entries = fs.readdirSync(parentDir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.isDirectory() && !entry.name.startsWith(".")) {
-            const dirPath = path.join(parentDir, entry.name);
-            await this.ensureGitRepo(dirPath);
-          }
+      // Simple glob expansion for workspace unit patterns such as "dir/*"
+      // and scoped package patterns such as "extensions/*/*".
+      if (pattern.includes("*")) {
+        for (const dirPath of expandDirectoryPattern(reposPath, pattern)) {
+          await this.ensureGitRepo(dirPath);
         }
       } else {
         // Direct path
@@ -415,6 +438,8 @@ export class GitServer {
     log.verbose(` Initializing git repo: ${dirName}`);
 
     try {
+      if (fs.readdirSync(dirPath).length === 0) return;
+
       // Initialize git repo
       spawnGitSync(["init"], { cwd: dirPath, stdio: "ignore" });
 
