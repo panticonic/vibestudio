@@ -27,7 +27,7 @@ import type { PackageGraph, GraphNode } from "./packageGraph.js";
  */
 export function collectTransitiveExternalDeps(
   unit: GraphNode,
-  graph: PackageGraph,
+  graph: PackageGraph
 ): Record<string, string> {
   const externals: Record<string, string> = {};
   const visited = new Set<string>();
@@ -99,6 +99,18 @@ function getExtensionRuntimeDepsBaseDir(): string {
   return path.join(getUserDataPath(), "extension-runtime-deps");
 }
 
+function isFileSystemErrorCode(error: unknown, codes: readonly string[]): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return typeof code === "string" && codes.includes(code);
+}
+
+function warnCleanupFailure(pathName: string, error: unknown): void {
+  console.warn(
+    `[externalDeps] Failed to remove ${pathName}: ${error instanceof Error ? error.message : String(error)}`
+  );
+}
+
 /**
  * Get or install external dependencies. Returns the path to the
  * node_modules directory.
@@ -161,7 +173,7 @@ async function ensureDepsInstalled(
     if (!NPM_DEP_VERSION_RE.test(version)) {
       throw new Error(
         `Refusing non-registry npm specifier for ${name}: "${version}". ` +
-        `Only strict semver, "latest", or "*" allowed.`,
+          `Only strict semver, "latest", or "*" allowed.`
       );
     }
   }
@@ -189,10 +201,7 @@ async function ensureDepsInstalled(
     private: true,
     dependencies: deps,
   };
-  fs.writeFileSync(
-    path.join(tmpDir, "package.json"),
-    JSON.stringify(pkgJson, null, 2),
-  );
+  fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify(pkgJson, null, 2));
 
   try {
     runNpmInstall(tmpDir, { ignoreScripts: options.ignoreScripts });
@@ -203,11 +212,15 @@ async function ensureDepsInstalled(
     // Race-safe promotion: try rename, handle concurrent winner
     try {
       fs.renameSync(tmpDir, cacheDir);
-    } catch (err: any) {
-      if (err.code === "ENOTEMPTY" || err.code === "EEXIST" || err.code === "ENOTDIR") {
+    } catch (err: unknown) {
+      if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
         // Another process won — verify their sentinel, use their cache
         if (fs.existsSync(sentinelPath)) {
-          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+          try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          } catch (cleanupError) {
+            warnCleanupFailure(tmpDir, cleanupError);
+          }
           return nodeModulesDir;
         }
         // Winner incomplete — remove stale dir, retry rename
@@ -216,8 +229,16 @@ async function ensureDepsInstalled(
           fs.renameSync(tmpDir, cacheDir);
         } catch {
           // Clean up both dirs to avoid stale state, let build fail transiently
-          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-          try { fs.rmSync(cacheDir, { recursive: true, force: true }); } catch {}
+          try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          } catch (cleanupError) {
+            warnCleanupFailure(tmpDir, cleanupError);
+          }
+          try {
+            fs.rmSync(cacheDir, { recursive: true, force: true });
+          } catch (cleanupError) {
+            warnCleanupFailure(cacheDir, cleanupError);
+          }
           throw new Error(`External deps cache race: failed to install for key ${options.key}`);
         }
       } else {
@@ -230,11 +251,11 @@ async function ensureDepsInstalled(
     // Clean up temp dir on failure
     try {
       fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      // Ignore
+    } catch (cleanupError) {
+      warnCleanupFailure(tmpDir, cleanupError);
     }
     throw new Error(
-      `Failed to install external dependencies: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to install external dependencies: ${error instanceof Error ? error.message : String(error)}`
     );
   }
 }

@@ -3,7 +3,11 @@
  * name sanitization, and rebuild handling.
  */
 
-import { WorkerdManager, type WorkerdManagerDeps, type WorkerCreateOptions } from "./workerdManager.js";
+import {
+  WorkerdManager,
+  type WorkerdManagerDeps,
+  type WorkerCreateOptions,
+} from "./workerdManager.js";
 import { spawn } from "child_process";
 
 // Mock child_process to prevent actual workerd spawning
@@ -30,7 +34,8 @@ vi.mock("child_process", () => ({
       kill: vi.fn(() => {
         // Simulate process exit after kill
         setTimeout(() => {
-          for (const fn of listeners.get("exit") ?? []) (fn as (code: number | null, signal: string | null) => void)(null, "SIGTERM");
+          for (const fn of listeners.get("exit") ?? [])
+            (fn as (code: number | null, signal: string | null) => void)(null, "SIGTERM");
         }, 0);
       }),
       pid: 12345,
@@ -51,12 +56,12 @@ function createMockDeps(overrides: Partial<WorkerdManagerDeps> = {}): WorkerdMan
     tokenManager: {
       ensureToken: vi.fn().mockReturnValue("mock-token-123"),
       revokeToken: vi.fn(),
-    } as any,
+    } as unknown as WorkerdManagerDeps["tokenManager"],
     fsService: {
       registerCallerContext: vi.fn(),
       unregisterCallerContext: vi.fn(),
       closeHandlesForCaller: vi.fn(),
-    } as any,
+    } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => "http://127.0.0.1:9999",
     getBuild: vi.fn().mockResolvedValue({
       bundle: 'export default { fetch() { return new Response("ok"); } };',
@@ -69,7 +74,7 @@ function createMockDeps(overrides: Partial<WorkerdManagerDeps> = {}): WorkerdMan
     codeIdentityResolver: {
       upsertCallerIdentity: vi.fn(),
       unregisterCaller: vi.fn(),
-    } as any,
+    } as unknown as WorkerdManagerDeps["codeIdentityResolver"],
     ...overrides,
   };
 }
@@ -117,7 +122,7 @@ describe("WorkerdManager", () => {
 
       await mgr.createInstance(defaultCreateOptions());
       await expect(mgr.createInstance(defaultCreateOptions())).rejects.toThrow(
-        'Worker instance "hello" already exists',
+        'Worker instance "hello" already exists'
       );
     });
 
@@ -153,11 +158,11 @@ describe("WorkerdManager", () => {
       const mgr = new WorkerdManager(deps);
 
       const instance = await mgr.createInstance(
-        defaultCreateOptions({ name: 'hello"; process.exit();//' }),
+        defaultCreateOptions({ name: 'hello"; process.exit();//' })
       );
       // All non-alphanumeric/dash/underscore chars replaced
       expect(instance.name).not.toContain('"');
-      expect(instance.name).not.toContain(';');
+      expect(instance.name).not.toContain(";");
       expect(instance.name).toMatch(/^[a-zA-Z0-9_-]+$/);
     });
 
@@ -166,7 +171,7 @@ describe("WorkerdManager", () => {
       const mgr = new WorkerdManager(deps);
 
       const instance = await mgr.createInstance(
-        defaultCreateOptions({ source: "workspace/workers/my-api" }),
+        defaultCreateOptions({ source: "workspace/workers/my-api" })
       );
       expect(instance.name).toBe("my-api");
     });
@@ -342,7 +347,7 @@ describe("WorkerdManager", () => {
         .mockResolvedValueOnce({
           bundle: "// ok",
           metadata: { ev: "v2" },
-        } as any)
+        } as Awaited<ReturnType<WorkerdManagerDeps["getBuild"]>>)
         .mockRejectedValueOnce(new Error("build broken"));
 
       // The restart itself might not throw (it catches internally)
@@ -390,16 +395,14 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.registerAllDOClasses([
-        { source: "workers/agent", className: "AgentDO" },
-      ]);
+      await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
 
       const revokeSpy = vi.spyOn(deps.tokenManager, "revokeToken");
       await mgr.onSourceRebuilt("workers/agent");
 
       // No revokes — the caller passed `undefined` meaning "don't touch DOs".
       expect(revokeSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining("do-service:workers/agent"),
+        expect.stringContaining("do-service:workers/agent")
       );
     });
 
@@ -424,11 +427,10 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
-      await mgr.registerAllDOClasses([
-        { source: "workers/agent", className: "AgentDO" },
-      ]);
+      await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
 
-      const fetchMock = vi.fn()
+      const fetchMock = vi
+        .fn()
         .mockRejectedValueOnce(new TypeError("fetch failed"))
         .mockResolvedValueOnce(new Response(null, { status: 204 }));
       vi.stubGlobal("fetch", fetchMock);
@@ -440,15 +442,12 @@ describe("WorkerdManager", () => {
       }
 
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(fetchMock).toHaveBeenCalledWith(
-        "http://127.0.0.1:49552/__natstack_workerd_ready",
-        {
-          method: "GET",
-          headers: {
-            "Authorization": "Bearer mock-workerd-gateway-token",
-          },
+      expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:49552/__natstack_workerd_ready", {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer mock-workerd-gateway-token",
         },
-      );
+      });
     });
   });
 });

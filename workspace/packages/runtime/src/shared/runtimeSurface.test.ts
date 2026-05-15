@@ -37,7 +37,9 @@ function extractNamedExports(source: string): Set<string> {
 }
 
 function extractInterfaceMembers(source: string, interfaceName: string): Set<string> {
-  const blockMatch = source.match(new RegExp(`export interface ${interfaceName} \\{([\\s\\S]*?)\\n\\}`, "m"));
+  const blockMatch = source.match(
+    new RegExp(`export interface ${interfaceName} \\{([\\s\\S]*?)\\n\\}`, "m")
+  );
   if (!blockMatch) throw new Error(`Could not find interface ${interfaceName}`);
 
   const members = new Set<string>();
@@ -62,16 +64,19 @@ function extractObjectKeys(source: string, prefix: string): Set<string> {
 
 function extractHelpfulNamespaceTargets(source: string): Set<string> {
   return new Set(
-    Array.from(source.matchAll(/helpfulNamespace\("([A-Za-z0-9_]+)"/g)).map((match) => match[1]!),
+    Array.from(source.matchAll(/helpfulNamespace\("([A-Za-z0-9_]+)"/g)).map((match) => match[1]!)
   );
 }
 
 describe("runtimeSurface manifests", () => {
   it("throws a helpful error for missing namespace members", () => {
-    const wrapped = helpfulNamespace("workspace", { list: async () => [], openPanel: async () => {} });
+    const wrapped = helpfulNamespace("workspace", {
+      list: async () => [],
+      openPanel: async () => {},
+    });
 
     expect(() => (wrapped as Record<string, unknown>)["listSources"]).toThrow(
-      "workspace.listSources is not available. Known members on workspace: list, openPanel. Call `await help()` for the live surface.",
+      "workspace.listSources is not available. Known members on workspace: list, openPanel. Call `await help()` for the live surface."
     );
   });
 
@@ -117,12 +122,14 @@ describe("runtimeSurface manifests", () => {
   it("exposes only the provider-agnostic credential connection API", () => {
     for (const surface of [panelRuntimeSurface, workerRuntimeSurface]) {
       const members = surface.exports["credentials"]?.members ?? [];
-      expect(members).toEqual(expect.arrayContaining([
-        "connect",
-        "configureClient",
-        "getClientConfigStatus",
-        "deleteClientConfig",
-      ]));
+      expect(members).toEqual(
+        expect.arrayContaining([
+          "connect",
+          "configureClient",
+          "getClientConfigStatus",
+          "deleteClientConfig",
+        ])
+      );
     }
   });
 });

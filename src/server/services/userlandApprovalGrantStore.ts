@@ -96,7 +96,9 @@ export class UserlandApprovalGrantStore {
 
   private load(): void {
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as UserlandApprovalGrantFile;
+      const parsed = JSON.parse(
+        fs.readFileSync(this.filePath, "utf8")
+      ) as UserlandApprovalGrantFile;
       this.persistent = {
         grants: Array.isArray(parsed.grants) ? parsed.grants.filter(isGrant) : [],
       };
@@ -132,13 +134,13 @@ function isGrant(value: unknown): value is UserlandApprovalGrant {
     return false;
   }
   return (
-    typeof grant.choice === "string"
-    && typeof grant.grantedAt === "number"
-    && !!grant.principal
-    && typeof grant.principal.callerId === "string"
-    && (grant.principal.callerKind === "panel" || grant.principal.callerKind === "worker")
-    && !!grant.subject
-    && typeof grant.subject.id === "string"
-    && (grant.subject.label === undefined || typeof grant.subject.label === "string")
+    typeof grant.choice === "string" &&
+    typeof grant.grantedAt === "number" &&
+    !!grant.principal &&
+    typeof grant.principal.callerId === "string" &&
+    (grant.principal.callerKind === "panel" || grant.principal.callerKind === "worker") &&
+    !!grant.subject &&
+    typeof grant.subject.id === "string" &&
+    (grant.subject.label === undefined || typeof grant.subject.label === "string")
   );
 }

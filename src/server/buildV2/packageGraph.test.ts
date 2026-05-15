@@ -12,7 +12,7 @@ import { discoverPackageGraph, PackageGraph, type GraphNode } from "./packageGra
 function makeNode(
   name: string,
   internalDeps: string[] = [],
-  overrides: Partial<GraphNode> = {},
+  overrides: Partial<GraphNode> = {}
 ): GraphNode {
   return {
     path: `/ws/packages/${name}`,
@@ -44,7 +44,9 @@ describe("PackageGraph", () => {
 
     it("get throws for unknown package", () => {
       const graph = new PackageGraph();
-      expect(() => graph.get("@workspace/missing")).toThrowError("Unknown package: @workspace/missing");
+      expect(() => graph.get("@workspace/missing")).toThrowError(
+        "Unknown package: @workspace/missing"
+      );
     });
 
     it("tryGet returns undefined for unknown package", () => {

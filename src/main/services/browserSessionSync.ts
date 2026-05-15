@@ -53,9 +53,13 @@ export function createBrowserSessionSyncService(deps: {
     name: "browser-session-sync",
     async start() {
       deps.eventService.subscribe(importEventName as never, SUBSCRIBER_ID, subscriber);
-      await deps.serverClient.call("events", "subscribe", [importEventName]).catch((err: unknown) => {
-        log.warn(`Server event subscribe failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+      await deps.serverClient
+        .call("events", "subscribe", [importEventName])
+        .catch((err: unknown) => {
+          log.warn(
+            `Server event subscribe failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+        });
       return { syncCookies };
     },
     async stop() {

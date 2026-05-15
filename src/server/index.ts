@@ -238,7 +238,9 @@ async function waitForPublicUrlReachable(
     }));
     if (lastResult.ok) return lastResult;
     if (Date.now() >= deadline) return lastResult;
-    await new Promise((resolve) => setTimeout(resolve, Math.min(intervalMs, Math.max(0, deadline - Date.now()))));
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(intervalMs, Math.max(0, deadline - Date.now())))
+    );
   }
 }
 
@@ -513,7 +515,7 @@ async function main() {
     if (summary.recovered > 0 || summary.errors > 0) {
       console.log(
         `[Server] Recovered ${summary.recovered} persisted panel token(s)` +
-          (summary.errors > 0 ? ` (${summary.errors} unreadable)` : ""),
+          (summary.errors > 0 ? ` (${summary.errors} unreadable)` : "")
       );
     }
   } catch (err) {
@@ -532,7 +534,7 @@ async function main() {
     if (summary.recovered > 0 || summary.errors > 0) {
       console.log(
         `[Server] Recovered ${summary.recovered} persisted DO token(s)` +
-          (summary.errors > 0 ? ` (${summary.errors} unreadable)` : ""),
+          (summary.errors > 0 ? ` (${summary.errors} unreadable)` : "")
       );
     }
   } catch (err) {
@@ -890,7 +892,7 @@ async function main() {
         const push = resolve<import("./services/pushService.js").PushServiceResult>("push")!;
         const shellPresence =
           resolve<import("./services/shellPresenceService.js").ShellPresenceServiceResult>(
-            "shellPresence",
+            "shellPresence"
           )!;
         return createApprovalPushBridge({
           approvalQueue,
@@ -907,6 +909,16 @@ async function main() {
   // ── Shell approval service (consent bar queue) ──
   const { createShellApprovalService } = await import("./services/shellApprovalService.js");
   container.register(rpcService(createShellApprovalService({ approvalQueue })));
+  const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
+  container.register(
+    rpcService(
+      createCorsApprovalService({
+        approvalQueue,
+        grantStore: capabilityGrantStore,
+        codeIdentityResolver,
+      })
+    )
+  );
   const { createUserlandApprovalService } = await import("./services/userlandApprovalService.js");
   container.register(
     rpcService(
@@ -1194,7 +1206,8 @@ async function main() {
         const buildSystem = resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")!;
         gadDefinition = createGadService({
           doDispatch,
-          resolveStore: () => toDORef(resolveUserlandService(buildSystem, "natstack.gad.workspace.v1")),
+          resolveStore: () =>
+            toDORef(resolveUserlandService(buildSystem, "natstack.gad.workspace.v1")),
           approvalQueue,
           grantStore: userlandApprovalGrantStore,
           codeIdentityResolver,
@@ -1602,12 +1615,17 @@ async function main() {
     const { createBlobstoreService } = await import("./services/blobstoreService.js");
     const { createAuthService } = await import("./services/authService.js");
     const { rpcServiceWithRoutes } = await import("./rpcServiceWithRoutes.js");
-    container.register(rpcServiceWithRoutes(createAuthService({
-      tokenManager,
-      deviceAuthStore,
-      getServerBootId: () => serverBootId,
-      getWorkspaceId: () => workspace.config.id,
-    }), routeRegistry));
+    container.register(
+      rpcServiceWithRoutes(
+        createAuthService({
+          tokenManager,
+          deviceAuthStore,
+          getServerBootId: () => serverBootId,
+          getWorkspaceId: () => workspace.config.id,
+        }),
+        routeRegistry
+      )
+    );
 
     const blobsDir = path.join(getUserDataPath(), "blobs");
     container.register(rpcServiceWithRoutes(createBlobstoreService({ blobsDir }), routeRegistry));
@@ -1678,9 +1696,7 @@ async function main() {
   }
   const explicitOverride = args.publicUrl ?? process.env["NATSTACK_PUBLIC_URL"];
   const skipVpnDetect =
-    args.noVpnDetect
-    || process.env["NATSTACK_NO_VPN_DETECT"] === "1"
-    || !!explicitOverride;
+    args.noVpnDetect || process.env["NATSTACK_NO_VPN_DETECT"] === "1" || !!explicitOverride;
   const { configurePublicUrl, markPublicUrlVerified } = await import("./publicUrl.js");
   configurePublicUrl({
     override: explicitOverride,
@@ -1695,54 +1711,61 @@ async function main() {
   const vpnSetupPromise: Promise<VpnSetupResult> = skipVpnDetect
     ? Promise.resolve({ detectedVpn: null, serveProvision: null, publicUrlVerified: false })
     : (async (): Promise<VpnSetupResult> => {
-      const { detectVpnPublicUrl } = await import("./vpnDetect.js");
-      const detectedVpn = await detectVpnPublicUrl().catch(() => null);
-      if (!detectedVpn) {
-        return { detectedVpn: null, serveProvision: null, publicUrlVerified: false };
-      }
-      const { probeHttpsReachable, ensureHttpsServe } = await import("./tailscaleServe.js");
-      let reachability = await probeHttpsReachable(detectedVpn.url).catch((error) => ({
-        ok: false,
-        reason: error instanceof Error ? error.message : String(error),
-      }));
-      let publicUrlVerified = reachability.ok;
-      let serveProvision: import("./tailscaleServe.js").ServeProvisionResult | null = null;
-      if (!publicUrlVerified && detectedVpn.vendor === "tailscale") {
-        serveProvision = await ensureHttpsServe({
-          port: gatewayPort,
-          hostname: detectedVpn.hostname,
-        }).catch((err) => ({
-          kind: "error",
-          message: err instanceof Error ? err.message : String(err),
-        } as import("./tailscaleServe.js").ServeProvisionResult));
-        if (serveProvision.kind === "configured" || serveProvision.kind === "already-configured") {
-          reachability = await waitForPublicUrlReachable(
-            (url) => probeHttpsReachable(url),
-            detectedVpn.url
-          );
-          publicUrlVerified = reachability.ok;
+        const { detectVpnPublicUrl } = await import("./vpnDetect.js");
+        const detectedVpn = await detectVpnPublicUrl().catch(() => null);
+        if (!detectedVpn) {
+          return { detectedVpn: null, serveProvision: null, publicUrlVerified: false };
         }
-      }
-      configurePublicUrl({
-        override: detectedVpn.url,
-        protocol: isTlsInitial ? "https" : "http",
-        externalHost: hostConfig.externalHost,
-        gatewayPort,
-      });
-      markPublicUrlVerified(publicUrlVerified);
-      return {
-        detectedVpn,
-        serveProvision,
-        publicUrlVerified,
-        publicUrlReachabilityReason: reachability.ok ? undefined : reachability.reason,
-      };
-    })();
+        const { probeHttpsReachable, ensureHttpsServe } = await import("./tailscaleServe.js");
+        let reachability = await probeHttpsReachable(detectedVpn.url).catch((error) => ({
+          ok: false,
+          reason: error instanceof Error ? error.message : String(error),
+        }));
+        let publicUrlVerified = reachability.ok;
+        let serveProvision: import("./tailscaleServe.js").ServeProvisionResult | null = null;
+        if (!publicUrlVerified && detectedVpn.vendor === "tailscale") {
+          serveProvision = await ensureHttpsServe({
+            port: gatewayPort,
+            hostname: detectedVpn.hostname,
+          }).catch(
+            (err) =>
+              ({
+                kind: "error",
+                message: err instanceof Error ? err.message : String(err),
+              }) as import("./tailscaleServe.js").ServeProvisionResult
+          );
+          if (
+            serveProvision.kind === "configured" ||
+            serveProvision.kind === "already-configured"
+          ) {
+            reachability = await waitForPublicUrlReachable(
+              (url) => probeHttpsReachable(url),
+              detectedVpn.url
+            );
+            publicUrlVerified = reachability.ok;
+          }
+        }
+        configurePublicUrl({
+          override: detectedVpn.url,
+          protocol: isTlsInitial ? "https" : "http",
+          externalHost: hostConfig.externalHost,
+          gatewayPort,
+        });
+        markPublicUrlVerified(publicUrlVerified);
+        return {
+          detectedVpn,
+          serveProvision,
+          publicUrlVerified,
+          publicUrlReachabilityReason: reachability.ok ? undefined : reachability.reason,
+        };
+      })();
 
   // ── Start all services in dependency order ──
   await container.startAll();
   // Settle VPN setup before printing the readiness banner (so the operator
   // sees the auto-detected Mobile URL line if one is available).
-  const { detectedVpn, serveProvision, publicUrlVerified, publicUrlReachabilityReason } = await vpnSetupPromise;
+  const { detectedVpn, serveProvision, publicUrlVerified, publicUrlReachabilityReason } =
+    await vpnSetupPromise;
 
   // Wire DODispatch to workerdManager for restart recovery
   const workerdManager =
@@ -1841,7 +1864,9 @@ async function main() {
         const reachabilityLabel = publicUrlVerified
           ? "verified reachable"
           : "not yet reachable — see note below";
-        console.log(`  Public URL:  ${publicUrlForBanner} ${publicUrlLabel} (${reachabilityLabel})`);
+        console.log(
+          `  Public URL:  ${publicUrlForBanner} ${publicUrlLabel} (${reachabilityLabel})`
+        );
         if (publicUrlVerified) {
           // Single canonical URL for QR pairing, panel chrome, and OAuth.
           // mobile-pair prefers this line over Gateway: when present.
@@ -1851,8 +1876,12 @@ async function main() {
         console.log(`    ${publicUrlForBanner}/_r/s/credentials/oauth/callback`);
         if (serveProvision?.kind === "configured") {
           if (publicUrlVerified) {
-            console.log(`  Tailscale: configured \`tailscale serve\` to forward https://${detectedVpn?.hostname}/ → 127.0.0.1:${gatewayPort}.`);
-            console.log(`             Persistent across reboots; remove with \`tailscale serve reset\`.`);
+            console.log(
+              `  Tailscale: configured \`tailscale serve\` to forward https://${detectedVpn?.hostname}/ → 127.0.0.1:${gatewayPort}.`
+            );
+            console.log(
+              `             Persistent across reboots; remove with \`tailscale serve reset\`.`
+            );
           } else {
             printReadinessActionBlock("Tailscale Serve is configured but not reachable", [
               "Tailscale accepted the Serve configuration, but the HTTPS URL",

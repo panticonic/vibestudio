@@ -2,12 +2,14 @@ import { describe, expect, it, vi } from "vitest";
 import { ConnectionManager } from "./connection.js";
 import type { ChatParticipantMetadata, ConnectionConfig } from "./types.js";
 
+const RESOLVED_DO_TARGET = "do:workers/pubsub-channel:PubSubChannel:chat-1";
+
 function createConfig(): ConnectionConfig {
   const call = vi.fn((_target: string, method: string) => {
     if (method === "workers.resolveService") {
       return Promise.resolve({
         kind: "durable-object",
-        targetId: "do:workers/pubsub-channel:PubSubChannel:chat-1",
+        targetId: RESOLVED_DO_TARGET,
       });
     }
     if (method === "subscribe") return new Promise(() => {});
@@ -43,7 +45,7 @@ describe("ConnectionManager", () => {
     expect(config.rpc!.call).toHaveBeenCalledWith(
       "do:workers/pubsub-channel:PubSubChannel:chat-1",
       "unsubscribe",
-      "panel-1",
+      "panel-1"
     );
   });
 });
