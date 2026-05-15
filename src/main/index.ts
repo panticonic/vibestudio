@@ -32,6 +32,7 @@ import { loadCentralEnv, deleteWorkspaceDir } from "@natstack/shared/workspace/l
 import { CentralDataManager } from "@natstack/shared/centralData";
 import { resolveStartupMode, getRemoteUserDataDir, type StartupMode } from "./startupMode.js";
 import { establishServerSession, type SessionConnection } from "./serverSession.js";
+import { handleExternalOpenPayload, type ExternalOpenPayload } from "./oauthLoopbackHandoff.js";
 import { CdpServer } from "./cdpServer.js";
 import { TokenManager } from "@natstack/shared/tokenManager";
 import { EventService } from "@natstack/shared/eventsService";
@@ -736,18 +737,15 @@ app.on("ready", async () => {
     if (event.startsWith("event:")) {
       const bareEvent = event.slice("event:".length);
       if (bareEvent === "external-open:open") {
-        const { url, oauthLoopback } = payload as { url?: string; oauthLoopback?: unknown };
-        if (oauthLoopback) {
-          log.warn("[externalOpen] client-loopback OAuth handoff is not supported by Electron; ignoring external open request.");
-          return;
-        }
-        if (typeof url === "string") {
-          void shell.openExternal(url).catch((err: unknown) => {
-            log.warn(
-              `[externalOpen] shell.openExternal failed: ${err instanceof Error ? err.message : String(err)}`
-            );
-          });
-        }
+        void handleExternalOpenPayload(payload as ExternalOpenPayload, {
+          openExternal: (url) => shell.openExternal(url),
+          forwardOAuthCallback: (request) =>
+            serverClientRef!.call("credentials", "forwardOAuthCallback", [request]),
+        }).catch((err: unknown) => {
+          log.warn(
+            `[externalOpen] OAuth browser handoff failed: ${err instanceof Error ? err.message : String(err)}`
+          );
+        });
       }
       if (bareEvent === "browser-panel:open") {
         const { url, parentPanelId } = payload as { url?: string; parentPanelId?: string };
