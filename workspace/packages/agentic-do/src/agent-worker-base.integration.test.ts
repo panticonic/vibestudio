@@ -758,6 +758,32 @@ describe("AgentWorkerBase — onChannelEvent → TurnDispatcher wiring", () => {
     expect(instance.fakeState!.continueCount).toBe(0);
   });
 
+  it("does not replay an older credential interruption after a newer user turn", async () => {
+    const { instance } = await createTestDO(TestWorker);
+
+    await (instance as any).saveMessages("ch-1", [
+      { role: "user", content: "needs credential", timestamp: 1 },
+    ]);
+    (instance as any).recordModelCredentialInterruption(
+      "ch-1",
+      "openai-codex",
+      "https://api.openai.com/v1",
+    );
+    await (instance as any).saveMessages("ch-1", [
+      { role: "user", content: "needs credential", timestamp: 1 },
+      { role: "user", content: "newer turn", timestamp: 2 },
+    ]);
+
+    const resumed = await (instance as TestWorker).resumeAfterCredentialFor("ch-1", {
+      providerId: "openai-codex",
+      modelBaseUrl: "https://api.openai.com/v1",
+    });
+    await flush();
+
+    expect(resumed).toBe(false);
+    expect(instance.fakeState!.continueCount).toBe(0);
+  });
+
   it("clears stale resolving tokens so buffered dispatch results can drain after restart", async () => {
     const { instance, sql } = await createTestDO(TestWorker);
 

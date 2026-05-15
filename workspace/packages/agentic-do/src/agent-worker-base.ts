@@ -2027,7 +2027,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     let resumableMessages: AgentMessage[];
     if (isCredentialRequiredAssistantMessage(last)) {
       resumableMessages = messages.slice(0, -1);
-    } else if (interruption) {
+    } else if (interruption && messages.length === interruption.resumeCount) {
       resumableMessages = messages.slice(0, interruption.resumeCount);
     } else {
       return false;
