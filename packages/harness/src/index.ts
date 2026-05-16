@@ -34,8 +34,9 @@ export type {
   WebRpcCaller,
   SearchResult,
   ProviderName,
-  ProviderApiKeyGetter,
+  CredentialPresenceProbe,
 } from "./extensions/web/index.js";
+export { SEARCH_PROVIDER_ORIGINS } from "./extensions/web/provider.js";
 
 // UI bridge
 export {

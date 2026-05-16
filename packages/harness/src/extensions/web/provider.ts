@@ -1,28 +1,42 @@
 import type { ProviderName } from "./types.js";
 
-export type ProviderApiKeyGetter = (
-  name: string,
-) => string | undefined | Promise<string | undefined>;
+/**
+ * Well-known API origins for each search provider. Provider availability
+ * is determined by checking whether the credentials system holds a
+ * credential whose audience matches one of these origins.
+ */
+export const SEARCH_PROVIDER_ORIGINS: Readonly<Record<Exclude<ProviderName, "duckduckgo">, string>> = {
+  tavily: "https://api.tavily.com/",
+  brave: "https://api.search.brave.com/",
+  exa: "https://api.exa.ai/",
+};
 
 /**
- * Picks the search provider based on which API keys are available.
+ * Asks the host "is a stored credential available for this provider?".
+ * The host implements this by querying the credentials runtime (e.g.
+ * `credentials.resolveCredential({ url })` on the main process). The
+ * harness never sees the credential value — only whether one exists.
+ */
+export type CredentialPresenceProbe = (
+  providerOriginUrl: string,
+) => Promise<boolean>;
+
+/**
+ * Picks the search provider based on which credentials the user has
+ * configured via the app's credentials system.
  *
- * Preference order: Tavily > Brave > Exa > DuckDuckGo (zero-config fallback).
- * Tavily wins because it's the most agent-friendly (returns long, clean
- * snippets); Brave is the next-best general engine; Exa is excellent for
- * semantic/neural queries; DDG is the residual free fallback.
+ * Preference order: Tavily > Brave > Exa > DuckDuckGo (zero-config
+ * fallback). Tavily wins because it's the most agent-friendly (long
+ * clean snippets); Brave is the next-best general engine; Exa is
+ * excellent for semantic/neural queries; DDG is the residual free
+ * fallback that needs no credential.
  */
 export async function selectSearchProvider(
-  getKey: ProviderApiKeyGetter | undefined,
+  probe: CredentialPresenceProbe | undefined,
 ): Promise<ProviderName> {
-  if (!getKey) return "duckduckgo";
-  if (await hasKey(getKey, "TAVILY_API_KEY")) return "tavily";
-  if (await hasKey(getKey, "BRAVE_API_KEY")) return "brave";
-  if (await hasKey(getKey, "EXA_API_KEY")) return "exa";
+  if (!probe) return "duckduckgo";
+  if (await probe(SEARCH_PROVIDER_ORIGINS.tavily)) return "tavily";
+  if (await probe(SEARCH_PROVIDER_ORIGINS.brave)) return "brave";
+  if (await probe(SEARCH_PROVIDER_ORIGINS.exa)) return "exa";
   return "duckduckgo";
-}
-
-async function hasKey(getKey: ProviderApiKeyGetter, name: string): Promise<boolean> {
-  const v = await getKey(name);
-  return typeof v === "string" && v.trim().length > 0;
 }

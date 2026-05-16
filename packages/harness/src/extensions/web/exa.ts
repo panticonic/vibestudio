@@ -6,17 +6,21 @@ export interface ExaFetcher {
   (url: string, init: RequestInit): Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 }
 
+/**
+ * Exa search. Authentication is injected by the credentialed fetcher.
+ * Register an Exa credential whose audience matches `https://api.exa.ai/`
+ * and whose injection is a header `x-api-key: {token}`; the host's
+ * credentialed fetcher attaches it automatically.
+ */
 export async function searchExa(
   query: string,
   limit: number,
-  apiKey: string,
   fetcher: ExaFetcher = fetch as unknown as ExaFetcher,
 ): Promise<SearchResult[]> {
   const res = await fetcher(EXA_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-api-key": apiKey,
     },
     body: JSON.stringify({
       query,

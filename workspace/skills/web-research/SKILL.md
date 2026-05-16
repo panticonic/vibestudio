@@ -16,12 +16,17 @@ auto-approve at approval level 1 (the default for most workspaces).
 web_search({ query: string, max_results?: number })  →  { title, url, snippet }[]
 ```
 
-Discovery. Returns ranked results from DuckDuckGo (zero-config), or
-Tavily when the user has set `TAVILY_API_KEY` in their environment.
+Discovery. Returns ranked results from DuckDuckGo (zero-config), or one
+of three keyed providers (Tavily, Brave, Exa) when the user has
+registered a credential for one through the app's credentials system.
 
 - Default `max_results` is 5; allowed range 1–20.
 - Snippets are short — use them only to pick a URL, not to answer the
   question. Always follow up with `web_fetch` on the best result.
+- Provider preference is fixed: **Tavily > Brave > Exa > DuckDuckGo**.
+  The tool selects the first one whose credential is registered. See
+  the *Upgrading the search provider* section below if DDG is failing
+  or you want longer snippets.
 
 ### web_fetch
 
@@ -240,11 +245,59 @@ eval({ code: `
   current events) → start with `web_search`.
 - **Verifying or quoting** a fact → fetch the source, cite its URL.
 
+## Upgrading the search provider
+
+DuckDuckGo works without setup but rate-limits under load and ships
+short snippets. Tavily / Brave / Exa give cleaner, longer results.
+**Provider keys live in the app's encrypted credentials system, not in
+environment variables or settings files** — register them with the
+helpers below and the credentialed fetcher injects auth automatically
+when `web_search` calls the provider URL.
+
+```
+eval({ code: `
+  import { requestTavilyApiKey } from "@workspace-skills/web-research";
+  // Pops the trusted credential-input dialog. The user pastes their key
+  // and it's stored encrypted, bound to https://api.tavily.com/. The
+  // agent never sees the key value — subsequent web_search calls are
+  // routed through Tavily automatically.
+  await requestTavilyApiKey();
+` })
+```
+
+Same shape for Brave and Exa:
+
+```
+import { requestBraveApiKey, requestExaApiKey } from "@workspace-skills/web-research";
+await requestBraveApiKey();
+await requestExaApiKey();
+```
+
+Check what's currently active without making a search call:
+
+```
+import { getActiveSearchProvider, listSearchProviderCredentials }
+  from "@workspace-skills/web-research";
+await getActiveSearchProvider();       // "tavily" | "brave" | "exa" | "duckduckgo"
+await listSearchProviderCredentials(); // full credential summaries
+```
+
+Revoke one:
+
+```
+import { revokeSearchProviderCredential } from "@workspace-skills/web-research";
+await revokeSearchProviderCredential(credentialId);
+```
+
+**When to suggest an upgrade**: if `web_search` returns a
+`DuckDuckGoBlockedError`, returns 0 results twice in a row, or the
+user is doing lots of research, mention they can register a Tavily
+key — it's the most agent-friendly of the three. Don't ask for the
+key in chat — call `requestTavilyApiKey()` and let the user paste it
+into the trusted approval UI.
+
 ## Notes
 
-- DuckDuckGo can occasionally rate-limit under heavy use. If `web_search`
-  starts returning empty results or errors, tell the user they can set
-  `TAVILY_API_KEY` in the worker env for a higher-quality, keyed provider.
 - The cache is content-addressed: the same page fetched twice produces the
   same digest, so digests from earlier in the session are still valid.
 - Pages with paywalls, login walls, or heavy client-side rendering may

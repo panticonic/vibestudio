@@ -16,7 +16,7 @@ export class DuckDuckGoBlockedError extends Error {
   constructor(reason: string) {
     super(
       `DuckDuckGo is blocking automated requests (${reason}). ` +
-        "Set TAVILY_API_KEY, BRAVE_API_KEY, or EXA_API_KEY in the worker env to use a keyed search provider.",
+        "Register a Tavily, Brave, or Exa credential via the web-research skill (e.g. `await requestTavilyApiKey()`) to upgrade to a keyed provider.",
     );
     this.name = "DuckDuckGoBlockedError";
   }

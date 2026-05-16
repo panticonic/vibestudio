@@ -6,10 +6,16 @@ export interface BraveFetcher {
   (url: string, init: RequestInit): Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 }
 
+/**
+ * Brave search. Authentication is injected by the credentialed fetcher.
+ * Register a Brave credential whose audience matches
+ * `https://api.search.brave.com/` and whose injection is a header
+ * `X-Subscription-Token: {token}`; the host's credentialed fetcher
+ * attaches it automatically.
+ */
 export async function searchBrave(
   query: string,
   limit: number,
-  apiKey: string,
   fetcher: BraveFetcher = fetch as unknown as BraveFetcher,
 ): Promise<SearchResult[]> {
   const params = new URLSearchParams({
@@ -20,7 +26,6 @@ export async function searchBrave(
     method: "GET",
     headers: {
       Accept: "application/json",
-      "X-Subscription-Token": apiKey,
     },
   });
   if (!res.ok) {

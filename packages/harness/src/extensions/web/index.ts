@@ -2,16 +2,20 @@
  * NatStack Web Tools Extension
  *
  * Registers three Pi tools:
- *   - `web_search` — Discovery via DuckDuckGo (zero-config) or Tavily when
- *     `TAVILY_API_KEY` is set in the worker env.
+ *   - `web_search` — Discovery via DuckDuckGo (zero-config) or an
+ *     auto-selected keyed provider when the user has configured one
+ *     in the credentials system.
  *   - `web_fetch` — Fetches a URL, extracts main content with Mozilla
  *     Readability, converts to markdown, stores the full result in the
  *     content-addressed blobstore, and returns `{ url, title, digest, size, head }`.
  *   - `web_read` — Reads a byte range of a previously-fetched blob by digest
  *     so the agent can drill into large pages without re-fetching.
  *
- * Designed for a "good basic experience" with zero API setup: DDG works from
- * any residential IP; the abstraction lets keyed providers auto-upgrade.
+ * Designed for a "good basic experience" with zero setup: DDG works from
+ * any residential IP. To upgrade to Tavily / Brave / Exa, the agent
+ * registers a credential via the `@workspace-skills/web-research` skill;
+ * the harness never sees the API key — it just fetches the provider URL
+ * and the credentialed fetcher attaches auth based on URL audience.
  */
 
 import type { PiExtensionAPI, PiExtensionFactory } from "../../pi-extension-api.js";
@@ -20,7 +24,7 @@ import { searchTavily } from "./tavily.js";
 import { searchBrave } from "./brave.js";
 import { searchExa } from "./exa.js";
 import { extractPage } from "./extract.js";
-import { selectSearchProvider, type ProviderApiKeyGetter } from "./provider.js";
+import { selectSearchProvider, type CredentialPresenceProbe } from "./provider.js";
 
 export type WebRpcCaller = <T = unknown>(
   target: string,
@@ -31,10 +35,27 @@ export type WebRpcCaller = <T = unknown>(
 export interface WebToolsDeps {
   /** RPC client for blobstore put/range reads. */
   rpc: { call: WebRpcCaller };
-  /** Reads an API key from the worker env. Optional; defaults to "no keys". */
-  getProviderApiKey?: ProviderApiKeyGetter;
-  /** Override for the global fetch — used in tests. */
+  /**
+   * Asks the host whether a credential exists for a given provider origin
+   * (e.g. `https://api.tavily.com/`). The host implements this by querying
+   * the credentials runtime — the harness never sees the credential value.
+   * Without this hook the extension stays on DuckDuckGo.
+   */
+  hasCredentialForOrigin?: CredentialPresenceProbe;
+  /**
+   * Override for the global fetch — used by `web_fetch` for arbitrary
+   * URLs (HTML + binary content like PDFs). Must be binary-safe.
+   */
   fetcher?: typeof fetch;
+  /**
+   * Credentialed fetcher used only for keyed search provider API calls
+   * (Tavily / Brave / Exa). Bodies are JSON, so a host-side proxy that
+   * stringifies the response body is fine here. Auth is injected by
+   * URL-audience matching against stored credentials — the harness
+   * never sees the credential value. Without this, keyed providers are
+   * unreachable and selection falls back to DuckDuckGo.
+   */
+  searchProviderFetcher?: typeof fetch;
   /** Length of the head excerpt included inline with `web_fetch` results. */
   headLength?: number;
   /** TTL (ms) for the URL→digest session memo. Default 10 minutes; 0 disables. */
@@ -154,7 +175,7 @@ export function createWebToolsExtension(deps: WebToolsDeps): PiExtensionFactory 
       name: "web_search",
       label: "Web Search",
       description:
-        "Search the open web. Returns a list of { title, url, snippet }. Uses DuckDuckGo by default; auto-upgrades to Tavily if TAVILY_API_KEY is set.",
+        "Search the open web. Returns a list of { title, url, snippet }. Uses DuckDuckGo by default; auto-upgrades to Tavily / Brave / Exa when the user has registered a credential for one of those providers (see the web-research skill).",
       parameters: SEARCH_PARAMETERS as never,
       execute: async (_toolCallId, params) => {
         const { query, max_results } = params as { query: string; max_results?: number };
@@ -162,7 +183,7 @@ export function createWebToolsExtension(deps: WebToolsDeps): PiExtensionFactory 
           throw new Error("web_search: 'query' is required");
         }
         const limit = clampInt(max_results, 1, MAX_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT);
-        const provider = await selectSearchProvider(deps.getProviderApiKey);
+        const provider = await selectSearchProvider(deps.hasCredentialForOrigin);
 
         const t0 = now();
         const results = await runProvider(provider, query, limit, deps, fetcher);
@@ -321,28 +342,17 @@ async function runProvider(
   deps: WebToolsDeps,
   fetcher: typeof fetch,
 ): Promise<import("./types.js").SearchResult[]> {
+  // Keyed providers must use the credentialed fetcher so auth is injected
+  // by URL-audience matching. DDG is unauthenticated, so the regular
+  // (binary-safe) fetcher is fine.
+  const credentialed = deps.searchProviderFetcher ?? fetcher;
   switch (provider) {
     case "tavily":
-      return searchTavily(
-        query,
-        limit,
-        (await deps.getProviderApiKey?.("TAVILY_API_KEY")) ?? "",
-        fetcher as never,
-      );
+      return searchTavily(query, limit, credentialed as never);
     case "brave":
-      return searchBrave(
-        query,
-        limit,
-        (await deps.getProviderApiKey?.("BRAVE_API_KEY")) ?? "",
-        fetcher as never,
-      );
+      return searchBrave(query, limit, credentialed as never);
     case "exa":
-      return searchExa(
-        query,
-        limit,
-        (await deps.getProviderApiKey?.("EXA_API_KEY")) ?? "",
-        fetcher as never,
-      );
+      return searchExa(query, limit, credentialed as never);
     case "duckduckgo":
     default:
       return searchDuckDuckGo(query, limit, fetcher as never);
@@ -395,4 +405,4 @@ function formatSearchResults(
 }
 
 export type { SearchResult, ProviderName } from "./types.js";
-export type { ProviderApiKeyGetter } from "./provider.js";
+export type { CredentialPresenceProbe } from "./provider.js";

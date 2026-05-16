@@ -6,17 +6,22 @@ export interface TavilyFetcher {
   (url: string, init: RequestInit): Promise<{ ok: boolean; status: number; text: () => Promise<string> }>;
 }
 
+/**
+ * Tavily search. Authentication is injected by the credentialed fetcher
+ * passed in — this module never sees the API key. Register a Tavily
+ * credential whose audience matches `https://api.tavily.com/` and whose
+ * injection is a header `Authorization: Bearer {token}`; the host's
+ * credentialed fetcher attaches it automatically.
+ */
 export async function searchTavily(
   query: string,
   limit: number,
-  apiKey: string,
   fetcher: TavilyFetcher = fetch as unknown as TavilyFetcher,
 ): Promise<SearchResult[]> {
   const res = await fetcher(TAVILY_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       query,

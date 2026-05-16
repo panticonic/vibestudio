@@ -729,6 +729,51 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     globals.__natstackModelFetchProxyInstalled = true;
   }
 
+  /**
+   * Builds a credentialed fetcher for keyed search provider API calls.
+   * Routes through `main:credentials.proxyFetch` which (a) attaches auth
+   * by URL-audience matching against stored credentials, and (b) audits
+   * the egress like any other credentialed request. The harness never
+   * sees the credential value. Only used for JSON API calls (Tavily /
+   * Brave / Exa); arbitrary `web_fetch` uses the regular global fetch
+   * because the proxy stringifies bodies and would mangle binary content.
+   */
+  private buildSearchProviderFetcher(): typeof fetch {
+    const rpc = this.rpc;
+    return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+      const method = (init?.method ?? "GET").toUpperCase();
+      const headers: Record<string, string> = {};
+      if (init?.headers) {
+        const h = init.headers instanceof Headers
+          ? init.headers
+          : new Headers(init.headers as HeadersInit);
+        h.forEach((value, key) => {
+          headers[key] = value;
+        });
+      }
+      let body: string | undefined;
+      if (init?.body !== undefined && init.body !== null) {
+        body = typeof init.body === "string" ? init.body : String(init.body);
+      }
+      const result = await rpc.call<{
+        status: number;
+        statusText: string;
+        headers: Record<string, string>;
+        body: string;
+      }>("main", "credentials.proxyFetch", { url, method, headers, body });
+      return new Response(result.body, {
+        status: result.status,
+        statusText: result.statusText,
+        headers: result.headers,
+      });
+    }) as typeof fetch;
+  }
+
   protected getApprovalLevel(channelId: string): ApprovalLevel {
     const value = this.getStateValue(`approvalLevel:${channelId}`);
     if (!value) return 2; // Default: full auto
@@ -1091,10 +1136,19 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         this.askUser(channelId, toolCallId, params, signal),
       model: this.getModel(),
       getApiKey: this.getApiKeyForChannel(channelId),
-      getProviderApiKey: (name) => {
-        const value = (this.env as Record<string, unknown>)[name];
-        return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+      hasCredentialForOrigin: async (originUrl) => {
+        try {
+          const c = await this.rpc.call<{ id: string } | null>(
+            "main",
+            "credentials.resolveCredential",
+            { url: originUrl },
+          );
+          return c !== null;
+        } catch {
+          return false;
+        }
       },
+      searchProviderFetcher: this.buildSearchProviderFetcher(),
       thinkingLevel: this.getThinkingLevel(),
       ...this.getRunnerPromptConfig(channelId),
       approvalLevel: this.getApprovalLevel(channelId),

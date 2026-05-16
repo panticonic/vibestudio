@@ -59,7 +59,7 @@ import {
   type AskUserParams,
 } from "./extensions/ask-user.js";
 import { createWebToolsExtension } from "./extensions/web/index.js";
-import type { ProviderApiKeyGetter } from "./extensions/web/provider.js";
+import type { CredentialPresenceProbe } from "./extensions/web/provider.js";
 import {
   DispatchedError,
   type NatStackScopedUiContext,
@@ -139,11 +139,25 @@ export interface PiRunnerOptions {
   /** Enables gad persistence for Pi sessions, turns, reads, and mutations. */
   gad?: PiRunnerGadProvenance;
   /**
-   * Optional getter for provider API keys (e.g. `TAVILY_API_KEY`). Reading
-   * keys lazily lets web tools auto-upgrade from DuckDuckGo to a paid search
-   * provider when the user has configured one.
+   * Optional probe asking whether the credentials runtime holds a credential
+   * whose audience matches a given provider origin. Used to auto-upgrade
+   * web search from DuckDuckGo to a paid provider when the user has
+   * registered one through the credentials system. The harness never sees
+   * the credential value — auth is injected by the host's fetcher.
    */
-  getProviderApiKey?: ProviderApiKeyGetter;
+  hasCredentialForOrigin?: CredentialPresenceProbe;
+  /**
+   * Optional global-fetch override for general web fetches (HTML + binary
+   * content like PDFs). Must be binary-safe.
+   */
+  fetcher?: typeof fetch;
+  /**
+   * Credentialed fetcher used only by keyed search provider API calls
+   * (Tavily / Brave / Exa). Wires the harness through the host's
+   * credentials runtime so auth is auto-attached by URL-audience matching.
+   * The harness never sees the credential value.
+   */
+  searchProviderFetcher?: typeof fetch;
 }
 
 /** Snapshot of Agent state surfaced via the snapshot ephemeral channel stream. */
@@ -205,7 +219,9 @@ export class PiRunner {
       }),
       createWebToolsExtension({
         rpc: this.options.rpc,
-        getProviderApiKey: this.options.getProviderApiKey,
+        hasCredentialForOrigin: this.options.hasCredentialForOrigin,
+        fetcher: this.options.fetcher,
+        searchProviderFetcher: this.options.searchProviderFetcher,
       }),
     ]);
 

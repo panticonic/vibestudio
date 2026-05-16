@@ -157,12 +157,16 @@ describe("createWebToolsExtension", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("selects Brave when only BRAVE_API_KEY is set", async () => {
+  it("selects Brave when a Brave credential is registered", async () => {
     const { rpc } = makeBlobstore();
-    const fetcher = vi.fn(async (input: string | URL) => {
+    const credentialedFetcher = vi.fn(async (input: string | URL, init: RequestInit | undefined) => {
       expect(typeof input === "string" ? input : input.toString()).toContain(
         "search.brave.com",
       );
+      // Auth header is NOT set by the provider module — the host fetcher
+      // would inject it. The provider must not leak the API key in any form.
+      const headers = new Headers(init?.headers);
+      expect(headers.get("X-Subscription-Token")).toBeNull();
       return mockResponse(
         JSON.stringify({
           web: {
@@ -180,8 +184,9 @@ describe("createWebToolsExtension", () => {
     }) as unknown as typeof fetch;
     const factory = createWebToolsExtension({
       rpc: rpc as never,
-      fetcher,
-      getProviderApiKey: (n) => (n === "BRAVE_API_KEY" ? "k" : undefined),
+      fetcher: vi.fn() as never,
+      searchProviderFetcher: credentialedFetcher,
+      hasCredentialForOrigin: async (origin) => origin.includes("search.brave.com"),
     });
     const api = createMockApi();
     factory(api as never);
@@ -193,10 +198,12 @@ describe("createWebToolsExtension", () => {
     expect(details.results[0]!.snippet).toBe("from brave");
   });
 
-  it("selects Exa when only EXA_API_KEY is set", async () => {
+  it("selects Exa when an Exa credential is registered", async () => {
     const { rpc } = makeBlobstore();
-    const fetcher = vi.fn(async (input: string | URL) => {
+    const credentialedFetcher = vi.fn(async (input: string | URL, init: RequestInit | undefined) => {
       expect(typeof input === "string" ? input : input.toString()).toContain("exa.ai");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("x-api-key")).toBeNull();
       return mockResponse(
         JSON.stringify({
           results: [
@@ -212,8 +219,9 @@ describe("createWebToolsExtension", () => {
     }) as unknown as typeof fetch;
     const factory = createWebToolsExtension({
       rpc: rpc as never,
-      fetcher,
-      getProviderApiKey: (n) => (n === "EXA_API_KEY" ? "k" : undefined),
+      fetcher: vi.fn() as never,
+      searchProviderFetcher: credentialedFetcher,
+      hasCredentialForOrigin: async (origin) => origin.includes("exa.ai"),
     });
     const api = createMockApi();
     factory(api as never);
@@ -224,11 +232,15 @@ describe("createWebToolsExtension", () => {
     expect(details.results[0]!.snippet).toBe("semantic snippet");
   });
 
-  it("auto-upgrades to Tavily when TAVILY_API_KEY is set", async () => {
+  it("auto-upgrades to Tavily when a Tavily credential is registered", async () => {
     const { rpc } = makeBlobstore();
-    const fetcher = vi.fn(async (input: string | URL) => {
+    const credentialedFetcher = vi.fn(async (input: string | URL, init: RequestInit | undefined) => {
       const url = typeof input === "string" ? input : input.toString();
       expect(url).toContain("tavily.com");
+      // The provider module must not embed any auth header. The host's
+      // credentialed fetcher is responsible for attaching `Authorization`.
+      const headers = new Headers(init?.headers);
+      expect(headers.get("authorization")).toBeNull();
       return mockResponse(
         JSON.stringify({
           results: [
@@ -240,8 +252,9 @@ describe("createWebToolsExtension", () => {
     }) as unknown as typeof fetch;
     const factory = createWebToolsExtension({
       rpc: rpc as never,
-      fetcher,
-      getProviderApiKey: (name) => (name === "TAVILY_API_KEY" ? "key-123" : undefined),
+      fetcher: vi.fn() as never,
+      searchProviderFetcher: credentialedFetcher,
+      hasCredentialForOrigin: async (origin) => origin.includes("tavily.com"),
     });
     const api = createMockApi();
     factory(api as never);
@@ -541,16 +554,29 @@ describe("htmlToReadableMarkdown", () => {
 });
 
 describe("selectSearchProvider", () => {
-  it("defaults to duckduckgo when no getter is provided", async () => {
+  it("defaults to duckduckgo when no probe is provided", async () => {
     await expect(selectSearchProvider(undefined)).resolves.toBe("duckduckgo");
   });
-  it("returns tavily when the getter returns a non-empty key", async () => {
+  it("returns tavily when the probe reports a Tavily credential", async () => {
     await expect(
-      selectSearchProvider((name) => (name === "TAVILY_API_KEY" ? "x" : undefined)),
+      selectSearchProvider(async (origin) => origin.includes("tavily.com")),
     ).resolves.toBe("tavily");
   });
-  it("returns duckduckgo when the getter returns empty", async () => {
-    await expect(selectSearchProvider(() => "  ")).resolves.toBe("duckduckgo");
+  it("prefers tavily over brave when both credentials exist", async () => {
+    await expect(
+      selectSearchProvider(async () => true),
+    ).resolves.toBe("tavily");
+  });
+  it("falls back to brave then exa when tavily is absent", async () => {
+    await expect(
+      selectSearchProvider(async (origin) => origin.includes("brave.com") || origin.includes("exa.ai")),
+    ).resolves.toBe("brave");
+    await expect(
+      selectSearchProvider(async (origin) => origin.includes("exa.ai")),
+    ).resolves.toBe("exa");
+  });
+  it("returns duckduckgo when no provider credential is present", async () => {
+    await expect(selectSearchProvider(async () => false)).resolves.toBe("duckduckgo");
   });
 });
 
