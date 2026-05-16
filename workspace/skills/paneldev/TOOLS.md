@@ -110,6 +110,28 @@ Available via `import { ... } from "@workspace/runtime"` and `import { ... } fro
 | `buildPanelLink(source, opts)` | Build a URL for panel navigation (low-level — prefer `openPanel`) |
 | `focusPanel(panelId)` | Focus an existing panel by ID (does NOT open new panels) |
 
+### Extension Install / Enable Prompts
+
+`extensions.use(name).method(...)` prompts automatically when the named extension is present in the workspace but not installed or enabled. If you need to prompt explicitly before invoking it, call `extensions.install` for a missing extension or `extensions.setEnabled(name, true)` for an installed disabled extension.
+
+```
+eval({ code: `
+  import { extensions } from "@workspace/runtime";
+  const name = "@workspace-extensions/image-service";
+  const installed = (await extensions.list()).find((entry) => entry.name === name);
+  if (!installed) {
+    await extensions.install({
+      source: { kind: "internal-git", repo: "extensions/@workspace-extensions/image-service", ref: "HEAD" },
+    });
+  } else if (!installed.enabled) {
+    await extensions.setEnabled(name, true);
+  }
+`
+})
+```
+
+The shell will show the user an extension-management approval prompt. If the user denies it, stop and report that the extension is required for the requested operation.
+
 **Pre-injected** (use directly, do NOT import):
 
 | Variable | Description |
