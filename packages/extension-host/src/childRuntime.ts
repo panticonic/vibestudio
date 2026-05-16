@@ -1,6 +1,7 @@
 import * as nodeFs from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
@@ -579,6 +580,7 @@ function settleWaitUntil(waitUntil: Promise<unknown>[]): void {
 async function main(): Promise<void> {
   runtimeBridge = await connectRuntimeBridge();
   const bundlePath = requiredEnv("NATSTACK_EXTENSION_BUNDLE_PATH");
+  installCommonJsGlobals(bundlePath);
   const mod = await import(pathToFileURL(bundlePath).href);
   const ctx = createContext();
   const api = typeof mod.activate === "function" ? await mod.activate(ctx) : undefined;
@@ -674,6 +676,17 @@ async function main(): Promise<void> {
     console.error("[ExtensionRuntime] Failed to report initial health:", err);
   });
   await rpcCall("extensions.ready", [{ methods, hasFetch: !!fetchHandler }]);
+}
+
+function installCommonJsGlobals(bundlePath: string): void {
+  const globals = globalThis as typeof globalThis & {
+    require?: NodeRequire;
+    __filename?: string;
+    __dirname?: string;
+  };
+  globals.require = createRequire(pathToFileURL(bundlePath).href);
+  globals.__filename = bundlePath;
+  globals.__dirname = path.dirname(bundlePath);
 }
 
 main().catch((err) => {

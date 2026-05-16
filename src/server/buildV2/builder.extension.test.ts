@@ -89,4 +89,68 @@ describe("buildUnit extension builds", () => {
     expect(result.bundle).toContain("ping() {");
     expect(result.bundle).toContain("sourceMappingURL=data:application/json");
   });
+
+  it("runs bundled CommonJS dependencies from an ESM extension bundle", async () => {
+    const extensionDir = path.join(
+      workspaceRoot,
+      "extensions",
+      "@workspace-extensions",
+      "cjs-extension",
+    );
+    fs.mkdirSync(extensionDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(extensionDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-extensions/cjs-extension",
+        version: "0.1.0",
+        type: "module",
+        private: true,
+        natstack: {
+          displayName: "CJS Extension",
+          entry: "index.ts",
+          sourcemap: true,
+          extension: { activationEvents: ["*"] },
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(extensionDir, "cjs-dep.cjs"),
+      [
+        "const path = require('path');",
+        "module.exports = { base: (value) => path.basename(value) };",
+        "",
+      ].join("\n"),
+    );
+    fs.writeFileSync(
+      path.join(extensionDir, "index.ts"),
+      [
+        "import dep from './cjs-dep.cjs';",
+        "export async function activate() {",
+        "  return {",
+        "    basename(value: string) { return dep.base(value); },",
+        "  };",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    git(extensionDir, ["init", "-b", "main"]);
+    git(extensionDir, ["add", "."]);
+    git(extensionDir, [
+      "-c",
+      "user.name=NatStack Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-m",
+      "initial extension",
+    ]);
+
+    const graph = discoverPackageGraph(workspaceRoot);
+    const node = graph.get("@workspace-extensions/cjs-extension");
+    const result = await buildUnit(node, "ev-extension-cjs-test", graph, workspaceRoot);
+    const mod = await import(`file://${path.join(result.dir, "bundle.js")}`);
+    const api = await mod.activate();
+
+    expect(api.basename("/tmp/example.txt")).toBe("example.txt");
+  });
 });

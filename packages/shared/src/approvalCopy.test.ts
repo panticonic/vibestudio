@@ -219,7 +219,7 @@ describe("approvalCopy", () => {
         fixtures.find((fixture) => fixture.name === "extension source push")!
           .approval as Extract<PendingApproval, { kind: "extension" }>
       ).session.label
-    ).toBe("Allow dev session");
+    ).toBe("Allow push");
   });
 
   it("formats low-level detail helpers", () => {

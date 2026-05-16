@@ -10,6 +10,16 @@ function tempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extension-host-"));
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function makeHost(overrides: {
   approvalDecision?: "once" | "session" | "version" | "repo" | "deny";
   activeEv?: string | null;
@@ -17,6 +27,7 @@ function makeHost(overrides: {
   activeDepEv?: string | null;
   activeExternalDeps?: Record<string, string>;
   candidateExternalDeps?: Record<string, string>;
+  activeRuntimeDepsKey?: string | null;
   extensionTransport?: { call: ReturnType<typeof vi.fn> };
   installed?: boolean;
   enabled?: boolean;
@@ -71,6 +82,10 @@ function makeHost(overrides: {
       if (name === "@workspace/runtime") return overrides.depEv ?? "ev-runtime";
       return null;
     }),
+    getExternalDeps: vi.fn((name: string) => {
+      if (name === extensionNode.name) return overrides.candidateExternalDeps ?? {};
+      return {};
+    }),
     getGraph: () => ({ allNodes: () => [extensionNode] }),
     onPushBuild: vi.fn(),
   };
@@ -109,7 +124,7 @@ function makeHost(overrides: {
       activeBundleKey: overrides.activeBundleKey === undefined ? "bundle-key" : overrides.activeBundleKey,
       activeDependencyEvs: { "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime" },
       activeExternalDeps: overrides.activeExternalDeps ?? {},
-      activeRuntimeDepsKey: "runtime-key",
+      activeRuntimeDepsKey: overrides.activeRuntimeDepsKey === undefined ? "runtime-key" : overrides.activeRuntimeDepsKey,
       enabled: overrides.enabled ?? true,
       status: overrides.status ?? "running",
       lastError: overrides.status === "error" ? "previous failure" : null,
@@ -312,6 +327,128 @@ describe("ExtensionHost activation", () => {
         method: "blame",
       }),
     );
+  });
+
+  it("prompts to install a pending workspace extension on first invoke", async () => {
+    const extensionTransport = { call: vi.fn(async () => "transport-result") };
+    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+      extensionTransport,
+      installed: false,
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await host.ensureBuiltInExtensions([extensionNode.name]);
+    await expect(
+      host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "blame", ["README.md"]),
+    ).resolves.toBe("transport-result");
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "extension",
+      action: "install",
+      extensionName: extensionNode.name,
+    }));
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "HEAD");
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      enabled: true,
+      activeBundleKey: "candidate-key",
+    });
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invoke",
+      "blame",
+      ["README.md"],
+      expect.objectContaining({ extensionName: extensionNode.name }),
+    );
+  });
+
+  it("prompts to enable an installed disabled extension on first invoke", async () => {
+    const extensionTransport = { call: vi.fn(async () => "transport-result") };
+    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+      extensionTransport,
+      enabled: false,
+      status: "stopped",
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "blame", ["README.md"]),
+    ).resolves.toBe("transport-result");
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "extension",
+      action: "toggle",
+      extensionName: extensionNode.name,
+      title: "Enable extension",
+    }));
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      enabled: true,
+      activeBundleKey: "bundle-key",
+    });
+    expect(extensionTransport.call).toHaveBeenCalled();
+  });
+
+  it("prompts to update an enabled extension whose active bundle predates runtime deps", async () => {
+    const extensionTransport = { call: vi.fn(async () => "transport-result") };
+    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+      extensionTransport,
+      activeExternalDeps: { "@silvia-odwyer/photon-node": "^0.3.4" },
+      candidateExternalDeps: { "@silvia-odwyer/photon-node": "^0.3.4" },
+      activeRuntimeDepsKey: null,
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "resize", []),
+    ).resolves.toBe("transport-result");
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "extension",
+      action: "update",
+      extensionName: extensionNode.name,
+    }));
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      activeBundleKey: "candidate-key",
+      activeRuntimeDepsKey: "runtime-candidate",
+    });
+  });
+
+  it("shares one pending install approval across concurrent first invokes", async () => {
+    const extensionTransport = { call: vi.fn(async () => "transport-result") };
+    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+      extensionTransport,
+      installed: false,
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    const approval = deferred<"once">();
+    let approvalRequested!: () => void;
+    const approvalStarted = new Promise<void>((resolve) => {
+      approvalRequested = resolve;
+    });
+    approvalQueue.request.mockImplementation(async () => {
+      approvalRequested();
+      return approval.promise;
+    });
+
+    await host.ensureBuiltInExtensions([extensionNode.name]);
+    const first = host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "blame", ["a"]);
+    await approvalStarted;
+    const second = host.invoke({ callerId: "panel-2", callerKind: "panel" }, extensionNode.name, "blame", ["b"]);
+    await Promise.resolve();
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+
+    approval.resolve("once");
+    await expect(Promise.all([first, second])).resolves.toEqual(["transport-result", "transport-result"]);
+
+    expect(buildSystem.getBuild).toHaveBeenCalledTimes(1);
+    expect(extensionTransport.call).toHaveBeenCalledTimes(2);
   });
 
   it("streams extension fetch request bodies through chunk RPC", async () => {

@@ -37,6 +37,7 @@ interface BuildSystemLike {
   ): Promise<{ bundlePath: string; dir: string; metadata: { ev: string; runtimeDepsKey?: string | null } }>;
   getBuildByKey?(key: string): { bundlePath: string; dir: string; metadata: { ev: string; runtimeDepsKey?: string | null } } | null;
   getEffectiveVersion(unitName: string): string | null;
+  getExternalDeps(unitName: string): Record<string, string>;
   getGraph(): {
     allNodes(): Array<{
       name: string;
@@ -148,6 +149,7 @@ export class ExtensionHost {
   private inspectorUrls = new Map<string, string | null>();
   private unitLogs = new Map<string, UnitLogRecord[]>();
   private fetchRequestBodies = new Map<string, FetchRequestBodyStream>();
+  private invokeAvailability = new Map<string, Promise<RegistryEntry | null>>();
   private readonly sourcePushGrants: SourcePushGrantStore;
 
   constructor(private readonly deps: ExtensionHostDeps) {
@@ -218,7 +220,7 @@ export class ExtensionHost {
         this.registry.upsert({
           name: node.name,
           version: this.readNodeVersion(node.path),
-          source: { kind: "internal-git", repo: node.relativePath, ref: "main" },
+          source: { kind: "internal-git", repo: node.relativePath, ref: "HEAD" },
           installedAt: Date.now(),
           activeEv: null,
           activeSha: null,
@@ -323,21 +325,91 @@ export class ExtensionHost {
   }
 
   async invoke(ctx: ServiceContext, name: string, method: string, args: unknown[]): Promise<unknown> {
-    const entry = this.registry.get(name);
+    const entry = await this.ensureAvailableForInvoke(ctx, name);
     if (!entry || !entry.enabled) {
       throw new ServiceError("extensions", "invoke", `Extension is not installed or enabled: ${name}`, "ENOEXT");
     }
     const invocation: ExtensionInvocation = invocationFromServiceContext(
       ctx,
-      name,
+      entry.name,
       method,
       randomUUID(),
       this.deps.codeIdentityResolver,
     );
-    if (!this.processes.isRunning(name)) {
-      throw new ServiceError("extensions", "invoke", `Extension is not running: ${name}`, "ENOEXT");
+    if (!this.processes.isRunning(entry.name)) {
+      throw new ServiceError("extensions", "invoke", `Extension is not running: ${entry.name}`, "ENOEXT");
     }
-    return this.deps.extensionTransport.call(name, "extension.invoke", method, args, invocation);
+    return this.deps.extensionTransport.call(entry.name, "extension.invoke", method, args, invocation);
+  }
+
+  private async ensureAvailableForInvoke(
+    ctx: ServiceContext,
+    name: string,
+  ): Promise<RegistryEntry | null> {
+    let node: ReturnType<ExtensionHost["findExtensionNode"]>;
+    try {
+      node = this.findExtensionNode(name);
+    } catch {
+      const entry = this.registry.get(name);
+      return entry?.enabled ? entry : null;
+    }
+
+    const entry = this.registry.get(node.name);
+    if (entry?.enabled) {
+      if (!entry.activeBundleKey) {
+        return this.runInvokeAvailability(node.name, () => this.buildAndActivate(entry.name, entry.source.ref));
+      }
+      if (this.needsBuildRefresh(entry, node)) {
+        return this.runInvokeAvailability(node.name, () => this.update(ctx, entry.name));
+      }
+      return entry;
+    }
+
+    return this.runInvokeAvailability(node.name, async () => {
+      const current = this.registry.get(node.name);
+      if (current?.enabled && current.activeBundleKey && !this.needsBuildRefresh(current, node)) return;
+      if (current?.enabled && current.activeBundleKey) {
+        await this.update(ctx, current.name);
+        return;
+      }
+      if (current?.enabled && !current.activeBundleKey) {
+        await this.buildAndActivate(current.name, current.source.ref);
+        return;
+      }
+
+      if (!current) {
+        await this.install(ctx, {
+          source: { kind: "internal-git", repo: node.relativePath, ref: "HEAD" },
+        });
+        return;
+      }
+
+      if (!current.activeBundleKey) {
+        await this.install(ctx, { source: current.source });
+        return;
+      }
+
+      await this.setEnabled(ctx, node.name, true);
+    });
+  }
+
+  private async runInvokeAvailability(
+    name: string,
+    work: () => Promise<void>,
+  ): Promise<RegistryEntry | null> {
+    const existing = this.invokeAvailability.get(name);
+    if (existing) return existing;
+
+    const promise = (async () => {
+      await work();
+      return this.registry.get(name) ?? null;
+    })();
+    this.invokeAvailability.set(name, promise);
+    try {
+      return await promise;
+    } finally {
+      this.invokeAvailability.delete(name);
+    }
   }
 
   async handleExtensionHttpRequest(
@@ -647,11 +719,13 @@ export class ExtensionHost {
     const node = this.findExtensionNode(name);
     const currentEv = this.deps.buildSystem.getEffectiveVersion(node.name);
     const currentDependencyEvs = this.currentDependencyEvs(node);
+    const currentExternalDeps = this.currentExternalDeps(node);
     if (
       currentEv
       && entry.activeEv === currentEv
       && shallowRecordEqual(entry.activeDependencyEvs, currentDependencyEvs)
-      && shallowRecordEqual(entry.activeExternalDeps ?? {}, this.currentExternalDeps(node))
+      && shallowRecordEqual(entry.activeExternalDeps ?? {}, currentExternalDeps)
+      && (Object.keys(currentExternalDeps).length === 0 || entry.activeRuntimeDepsKey)
     ) {
       return;
     }
@@ -936,7 +1010,19 @@ export class ExtensionHost {
   }
 
   private currentExternalDeps(node: ReturnType<ExtensionHost["findExtensionNode"]>): Record<string, string> {
-    return collectExternalDeps(node, this.deps.buildSystem.getGraph().allNodes());
+    return this.deps.buildSystem.getExternalDeps(node.name);
+  }
+
+  private needsBuildRefresh(
+    entry: RegistryEntry,
+    node: ReturnType<ExtensionHost["findExtensionNode"]>,
+  ): boolean {
+    const currentEv = this.deps.buildSystem.getEffectiveVersion(node.name);
+    if (currentEv && entry.activeEv !== currentEv) return true;
+    if (!shallowRecordEqual(entry.activeDependencyEvs, this.currentDependencyEvs(node))) return true;
+    const currentExternalDeps = this.currentExternalDeps(node);
+    if (!shallowRecordEqual(entry.activeExternalDeps ?? {}, currentExternalDeps)) return true;
+    return Object.keys(currentExternalDeps).length > 0 && !entry.activeRuntimeDepsKey;
   }
 
   private findExtensionNode(nameOrRepo: string) {
@@ -995,7 +1081,7 @@ export class ExtensionHost {
     const source = entry?.source ?? {
       kind: "internal-git" as const,
       repo: node.relativePath,
-      ref: "main",
+      ref: "HEAD",
     };
     const version = entry?.version ?? this.readNodeVersion(node.path);
     const details = [
@@ -1011,7 +1097,6 @@ export class ExtensionHost {
       callerKind: ctx.callerKind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
-      dedupKey: null,
       action: approvalAction,
       extensionName: node.name,
       version,
@@ -1245,7 +1330,7 @@ function extensionRuntimeCapabilities(): string[] {
 
 function resolveGitCommit(repoPath: string, ref = "HEAD"): string | null {
   try {
-    return String(execGitFileSync(["rev-parse", "--verify", ref], {
+    return String(execGitFileSync(["rev-parse", "--verify", "--end-of-options", ref], {
       cwd: repoPath,
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
@@ -1253,30 +1338,6 @@ function resolveGitCommit(repoPath: string, ref = "HEAD"): string | null {
   } catch {
     return null;
   }
-}
-
-type ExtensionGraphNode = ReturnType<BuildSystemLike["getGraph"]>["allNodes"] extends () => Array<infer Node> ? Node : never;
-
-function collectExternalDeps(root: ExtensionGraphNode, nodes: ExtensionGraphNode[]): Record<string, string> {
-  const byName = new Map(nodes.map((node) => [node.name, node]));
-  const visited = new Set<string>();
-  const deps: Record<string, string> = {};
-
-  function visit(node: ExtensionGraphNode): void {
-    if (visited.has(node.name)) return;
-    visited.add(node.name);
-    for (const [name, version] of Object.entries(node.dependencies)) {
-      const internal = byName.get(name);
-      if (internal) {
-        visit(internal);
-      } else if (!version.startsWith("workspace:")) {
-        deps[name] = version;
-      }
-    }
-  }
-
-  visit(root);
-  return deps;
 }
 
 function dependencyEvChanges(

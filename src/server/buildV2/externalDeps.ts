@@ -27,33 +27,134 @@ import type { PackageGraph, GraphNode } from "./packageGraph.js";
  */
 export function collectTransitiveExternalDeps(
   unit: GraphNode,
-  graph: PackageGraph
+  graph: PackageGraph,
+  workspaceRoot?: string,
+  packageRoots: string[] = [],
 ): Record<string, string> {
   const externals: Record<string, string> = {};
   const visited = new Set<string>();
+  const visitedPackageJson = new Set<string>();
 
-  function walk(node: GraphNode) {
-    if (visited.has(node.name)) return;
-    visited.add(node.name);
-
-    for (const [name, version] of Object.entries(node.dependencies)) {
-      if (graph.isInternal(name)) {
-        const dep = graph.tryGet(name);
-        if (dep) walk(dep);
-      } else {
-        // Skip workspace:* deps — these are @natstack/* platform packages
-        // resolved via appNodeModules (declared in builder.initBuilder()).
-        if (version.startsWith("workspace:")) continue;
-        // External dependency — take higher version if conflict
-        if (!externals[name] || compareVersions(version, externals[name]!) > 0) {
-          externals[name] = version;
-        }
-      }
+  function recordExternal(name: string, version: string) {
+    // Skip workspace:* deps — these are source packages resolved from the app
+    // install or the package graph. Their own npm deps are collected by walking
+    // the package.json when available.
+    if (version.startsWith("workspace:")) return;
+    // External dependency — take higher version if conflict
+    if (!externals[name] || compareVersions(version, externals[name]!) > 0) {
+      externals[name] = version;
     }
   }
 
-  walk(unit);
+  function walkDeps(dependencies: Record<string, string>, options: { walkWorkspaceDeps: boolean }) {
+    for (const [name, version] of Object.entries(dependencies)) {
+      if (graph.isInternal(name)) {
+        const dep = graph.tryGet(name);
+        if (dep) walkNode(dep);
+        continue;
+      }
+      if (version.startsWith("workspace:") && options.walkWorkspaceDeps) {
+        const pkg = workspaceRoot ? readWorkspacePackageJson(workspaceRoot, name, packageRoots) : null;
+        if (pkg) walkPackageJson(pkg.path, pkg.dependencies);
+        continue;
+      }
+      recordExternal(name, version);
+    }
+  }
+
+  function walkPackageJson(packageJsonPath: string, dependencies: Record<string, string>) {
+    if (visitedPackageJson.has(packageJsonPath)) return;
+    visitedPackageJson.add(packageJsonPath);
+    walkDeps(dependencies, { walkWorkspaceDeps: false });
+  }
+
+  function walkNode(node: GraphNode) {
+    if (visited.has(node.name)) return;
+    visited.add(node.name);
+    walkDeps(node.dependencies, { walkWorkspaceDeps: true });
+  }
+
+  walkNode(unit);
   return externals;
+}
+
+function readWorkspacePackageJson(
+  workspaceRoot: string,
+  packageName: string,
+  packageRoots: string[] = [],
+): { path: string; dependencies: Record<string, string> } | null {
+  for (const pkgJsonPath of workspacePackageJsonCandidates(workspaceRoot, packageName, packageRoots)) {
+    if (!fs.existsSync(pkgJsonPath)) continue;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
+        name?: string;
+        dependencies?: Record<string, string>;
+        peerDependencies?: Record<string, string>;
+      };
+      if (pkg.name !== packageName) continue;
+      return {
+        path: pkgJsonPath,
+        dependencies: { ...pkg.peerDependencies, ...pkg.dependencies },
+      };
+    } catch {
+      continue;
+    }
+  }
+
+  for (const baseDir of workspacePackageRoots(workspaceRoot)) {
+    if (!fs.existsSync(baseDir)) continue;
+    for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+      const pkgJsonPath = path.join(baseDir, entry.name, "package.json");
+      if (!fs.existsSync(pkgJsonPath)) continue;
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
+          name?: string;
+          dependencies?: Record<string, string>;
+          peerDependencies?: Record<string, string>;
+        };
+        if (pkg.name !== packageName) continue;
+        return {
+          path: pkgJsonPath,
+          dependencies: { ...pkg.peerDependencies, ...pkg.dependencies },
+        };
+      } catch {
+        continue;
+      }
+    }
+  }
+  return null;
+}
+
+function workspacePackageJsonCandidates(
+  workspaceRoot: string,
+  packageName: string,
+  packageRoots: string[],
+): string[] {
+  const candidates: string[] = [];
+  const addNodeModulesCandidate = (baseDir: string) => {
+    candidates.push(path.join(baseDir, ...packageName.split("/"), "package.json"));
+  };
+  const addWorkspacePackageCandidate = (baseDir: string) => {
+    candidates.push(path.join(baseDir, packageName.replace(/^@[^/]+\//, ""), "package.json"));
+  };
+
+  for (const baseDir of packageRoots) {
+    addNodeModulesCandidate(baseDir);
+  }
+  for (const baseDir of workspacePackageRoots(workspaceRoot)) {
+    addWorkspacePackageCandidate(baseDir);
+  }
+
+  return candidates;
+}
+
+function workspacePackageRoots(workspaceRoot: string): string[] {
+  const repoRoot = path.dirname(workspaceRoot);
+  return [
+    path.join(workspaceRoot, "packages"),
+    path.join(repoRoot, "packages"),
+  ];
 }
 
 /**

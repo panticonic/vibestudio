@@ -38,7 +38,8 @@ function categoryFor(approval: PendingApproval): string {
 }
 
 function actionsFor(approval: PendingApproval): readonly string[] {
-  return approval.kind === "credential" || approval.kind === "capability" || approval.kind === "extension"
+  if (approval.kind === "extension") return ["once", "deny", "open"];
+  return approval.kind === "credential" || approval.kind === "capability"
     ? NOTIFICATION_ACTION_IDS_STANDARD
     : NOTIFICATION_ACTION_IDS_INPUT_REQUIRED;
 }
@@ -55,7 +56,7 @@ const ACTION_TITLES: Record<string, string> = {
 function actionPayloadFor(approval: PendingApproval): Array<{ id: string; title: string }> {
   return actionsFor(approval).map((id) => ({
     id,
-    title: ACTION_TITLES[id] ?? id,
+    title: approval.kind === "extension" && id === "once" ? "Approve" : ACTION_TITLES[id] ?? id,
   }));
 }
 

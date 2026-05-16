@@ -134,70 +134,76 @@ export function getStandardActionCopy(
       return {
         once: { label: "Allow push", description: "Allow this extension source push once." },
         session: {
-          label: "Allow dev session",
-          description: `Allow pushes to ${approval.extensionName} without asking for the next 4 hours.`,
+          label: "Allow push",
+          description: "Allow this extension source push.",
         },
         version: {
-          label: "Trust version",
-          description: "Allow this code version to push this extension source.",
+          label: "Allow push",
+          description: "Allow this extension source push.",
         },
         repo: {
-          label: "Trust repo",
-          description: "Allow this workspace project to push this extension source.",
+          label: "Allow push",
+          description: "Allow this extension source push.",
         },
         denyDescription: "Reject this extension source push.",
       };
     }
     if (approval.action === "install") {
       return {
-        once: { label: "Install and run", description: "Install and run this extension once." },
+        once: {
+          label: "Install and run",
+          description: "Install this extension in the workspace and start it.",
+        },
         session: {
-          label: "Allow this session",
-          description: "Allow extension installs until NatStack restarts.",
+          label: "Install and run",
+          description: "Install this extension in the workspace and start it.",
         },
         version: {
-          label: "Trust version",
-          description: "Allow this code version to install extensions.",
+          label: "Install and run",
+          description: "Install this extension in the workspace and start it.",
         },
         repo: {
-          label: "Trust repo",
-          description: "Allow this workspace project to install extensions.",
+          label: "Install and run",
+          description: "Install this extension in the workspace and start it.",
         },
         denyDescription: "Don't install this extension.",
       };
     }
     if (approval.action === "update") {
       return {
-        once: { label: "Update and run", description: "Update and run this extension once." },
+        once: {
+          label: "Update and run",
+          description: "Update this workspace extension and start the approved build.",
+        },
         session: {
-          label: "Allow this session",
-          description: "Allow extension updates until NatStack restarts.",
+          label: "Update and run",
+          description: "Update this workspace extension and start the approved build.",
         },
         version: {
-          label: "Trust version",
-          description: "Allow this code version to update extensions.",
+          label: "Update and run",
+          description: "Update this workspace extension and start the approved build.",
         },
         repo: {
-          label: "Trust repo",
-          description: "Allow this workspace project to update extensions.",
+          label: "Update and run",
+          description: "Update this workspace extension and start the approved build.",
         },
         denyDescription: "Cancel this extension update.",
       };
     }
     const action = approval.action === "toggle" ? "change" : approval.action;
     return {
-      once: { label: "Allow once", description: `Allow this extension ${action} once.` },
+      once: { label: "Approve", description: `Approve this extension ${action} operation.` },
       session: {
-        label: "Allow this session",
-        description: "Allow extension management until NatStack restarts.",
+        label: "Approve",
+        description: `Approve this extension ${action} operation.`,
       },
       version: {
-        label: "Trust version",
-        description: "Allow this code version to manage extensions.",
+        label: "Approve",
+        description: `Approve this extension ${action} operation.`,
       },
       repo: {
-        label: "Trust repo",
-        description: "Allow this workspace project to manage extensions.",
+        label: "Approve",
+        description: `Approve this extension ${action} operation.`,
       },
       denyDescription: "Do not manage this extension.",
     };

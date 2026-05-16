@@ -997,7 +997,7 @@ async function prepareBuildEnv(
   const sourcePath = remapPath(node.path, workspaceRoot, sourceRoot);
   const entryFile = resolveEntryPoint(node, sourcePath);
 
-  const externalDeps = collectTransitiveExternalDeps(node, graph);
+  const externalDeps = collectTransitiveExternalDeps(node, graph, workspaceRoot, _appNodeModules);
   const nodeModulesDir = await ensureExternalDeps(externalDeps);
   const nodePaths = nodeModulesDir ? [nodeModulesDir] : [];
 
@@ -1641,12 +1641,22 @@ async function buildExtension(
       format: "esm",
       splitting: false,
       outfile: path.join(outdir, "bundle.js"),
+      banner: {
+        js: [
+          "import { createRequire as __natstackCreateRequire } from 'node:module';",
+          "import { fileURLToPath as __natstackFileURLToPath } from 'node:url';",
+          "import { dirname as __natstackDirname } from 'node:path';",
+          "const require = __natstackCreateRequire(import.meta.url);",
+          "const __filename = __natstackFileURLToPath(import.meta.url);",
+          "const __dirname = __natstackDirname(__filename);",
+        ].join("\n"),
+      },
       sourcemap: "inline",
       metafile: true,
       logLevel: "warning",
       conditions: [...EXTENSION_CONDITIONS],
       mainFields: ["module", "main"],
-      external: [...KNOWN_NATIVE_EXTERNALS],
+      external: [...KNOWN_NATIVE_EXTERNALS, ...expandExternalSpecifiers(env.externalDeps)],
       plugins,
       nodePaths,
       tsconfigRaw: { compilerOptions: {} },

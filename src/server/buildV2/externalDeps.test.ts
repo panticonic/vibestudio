@@ -2,6 +2,10 @@
  * Tests for collectTransitiveExternalDeps from externalDeps.ts.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+
 vi.mock("@natstack/shared/envPaths", () => ({
   getUserDataPath: vi.fn().mockReturnValue("/tmp/test-extdeps"),
 }));
@@ -71,6 +75,90 @@ describe("collectTransitiveExternalDeps", () => {
     // Internal workspace deps should NOT appear
     expect(deps).not.toHaveProperty("@workspace/inner");
     expect(deps).not.toHaveProperty("@workspace/middle");
+  });
+
+  it("collects external runtime deps from @natstack internal packages", () => {
+    const graph = new PackageGraph();
+    const shared = makeNode("@natstack/shared", {
+      "@silvia-odwyer/photon-node": "^0.3.4",
+    });
+    const extension = makeNode(
+      "@workspace-extensions/image-service",
+      { "@natstack/shared": "workspace:*" },
+      ["@natstack/shared"],
+    );
+    graph.addNode(shared);
+    graph.addNode(extension);
+
+    const deps = collectTransitiveExternalDeps(extension, graph);
+    expect(deps).toEqual({
+      "@silvia-odwyer/photon-node": "^0.3.4",
+    });
+  });
+
+  it("walks repo-root workspace package manifests that are outside the workspace graph", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extdeps-"));
+    try {
+      const workspaceRoot = path.join(root, "workspace");
+      const sharedDir = path.join(root, "packages", "shared");
+      fs.mkdirSync(workspaceRoot, { recursive: true });
+      fs.mkdirSync(sharedDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sharedDir, "package.json"),
+        JSON.stringify({
+          name: "@natstack/shared",
+          dependencies: {
+            "@silvia-odwyer/photon-node": "^0.3.4",
+          },
+        }),
+      );
+
+      const graph = new PackageGraph();
+      const extension = makeNode("@workspace-extensions/image-service", {
+        "@natstack/shared": "workspace:*",
+      });
+      graph.addNode(extension);
+
+      const deps = collectTransitiveExternalDeps(extension, graph, workspaceRoot);
+      expect(deps).toEqual({
+        "@silvia-odwyer/photon-node": "^0.3.4",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("walks scoped workspace package manifests resolved from app node_modules", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-extdeps-"));
+    try {
+      const workspaceRoot = path.join(root, "fresh-dev-workspace", "source");
+      const appNodeModules = path.join(root, "app", "node_modules");
+      const sharedDir = path.join(appNodeModules, "@natstack", "shared");
+      fs.mkdirSync(workspaceRoot, { recursive: true });
+      fs.mkdirSync(sharedDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sharedDir, "package.json"),
+        JSON.stringify({
+          name: "@natstack/shared",
+          dependencies: {
+            "@silvia-odwyer/photon-node": "^0.3.4",
+          },
+        }),
+      );
+
+      const graph = new PackageGraph();
+      const extension = makeNode("@workspace-extensions/image-service", {
+        "@natstack/shared": "workspace:*",
+      });
+      graph.addNode(extension);
+
+      const deps = collectTransitiveExternalDeps(extension, graph, workspaceRoot, [appNodeModules]);
+      expect(deps).toEqual({
+        "@silvia-odwyer/photon-node": "^0.3.4",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("skips workspace:* deps (they are internal)", () => {

@@ -275,6 +275,32 @@ function StandardApprovalActions({
   decide: (decision: ApprovalDecision) => void;
 }) {
   const copy = getStandardActionCopy(approval);
+  if (approval.kind === "extension") {
+    return (
+      <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
+        <DecisionButton
+          label={copy.once.label}
+          description={copy.once.description}
+          color="amber"
+          variant="solid"
+          onClick={() => decide("once")}
+        />
+        <DecisionButton
+          label="Deny"
+          description={copy.denyDescription}
+          color="red"
+          icon={<CrossCircledIcon />}
+          style={{ marginLeft: 6 }}
+          onClick={() => decide("deny")}
+        />
+        <Tooltip content="Dismiss">
+          <IconButton size="1" variant="ghost" color="gray" onClick={() => decide("dismiss")}>
+            <Cross2Icon />
+          </IconButton>
+        </Tooltip>
+      </Flex>
+    );
+  }
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       <DecisionButton
@@ -452,7 +478,7 @@ function DecisionButton({
 }: {
   label: string;
   description: string;
-  color?: "red" | "sky";
+  color?: "amber" | "red" | "sky";
   variant?: "solid" | "soft" | "surface" | "outline";
   icon?: ReactNode;
   style?: CSSProperties;

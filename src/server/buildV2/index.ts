@@ -42,6 +42,7 @@ import {
   type BuildUnitOptions,
 } from "./builder.js";
 import { PushTrigger } from "./pushTrigger.js";
+import { collectTransitiveExternalDeps } from "./externalDeps.js";
 import type { GitServer } from "@natstack/git-server";
 
 // ---------------------------------------------------------------------------
@@ -73,6 +74,9 @@ export interface BuildSystemV2 {
 
   /** Get effective version for a unit */
   getEffectiveVersion(unitName: string): string | null;
+
+  /** Get external npm runtime/build dependencies for a unit. */
+  getExternalDeps(unitName: string): Record<string, string>;
 
   /** Force recompute all effective versions */
   recompute(): Promise<ChangeSet>;
@@ -113,9 +117,10 @@ export async function initBuildSystemV2(
   appNodeModules: string | string[]
 ): Promise<BuildSystemV2> {
   console.log("[BuildV2] Initializing...");
+  const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
 
   // Declare where @natstack/* platform packages live (workspace:* deps).
-  initBuilder(appNodeModules);
+  initBuilder(appNodeModuleRoots);
 
   // Step 1: Discover package graph
   const graph = discoverPackageGraph(workspaceRoot);
@@ -341,6 +346,12 @@ export async function initBuildSystemV2(
 
     getEffectiveVersion(unitName: string): string | null {
       return currentEvMap[unitName] ?? null;
+    },
+
+    getExternalDeps(unitName: string): Record<string, string> {
+      const node = resolveUnit(currentGraph, unitName, workspaceRoot);
+      if (!node) return {};
+      return collectTransitiveExternalDeps(node, currentGraph, workspaceRoot, appNodeModuleRoots);
     },
 
     async recompute(): Promise<ChangeSet> {

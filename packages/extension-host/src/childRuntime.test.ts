@@ -36,4 +36,18 @@ describe("extension child runtime", () => {
     expect(source).toContain("settleWaitUntil(waitUntil)");
     expect(source).not.toContain("await Promise.allSettled(waitUntil)");
   });
+
+  it("installs CommonJS globals before importing the extension bundle", () => {
+    const source = fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts"),
+      "utf8",
+    );
+
+    expect(source).toContain("installCommonJsGlobals(bundlePath)");
+    expect(source.indexOf("installCommonJsGlobals(bundlePath)")).toBeLessThan(
+      source.indexOf("await import(pathToFileURL(bundlePath).href)"),
+    );
+    expect(source).toContain("createRequire(pathToFileURL(bundlePath).href)");
+    expect(source).toContain("globals.__dirname = path.dirname(bundlePath)");
+  });
 });
