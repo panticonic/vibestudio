@@ -102,6 +102,24 @@ class ForwardRejection extends Error {
   }
 }
 
+/**
+ * Frames emitted by `forwardProxyFetchStream`. The HTTP-stream serializer
+ * encodes each one as a length-prefixed binary frame (see frame-codec.ts);
+ * the client-side decoder reconstructs them and pipes the bytes into a
+ * `Response` body's ReadableStream.
+ */
+export type StreamFrame =
+  | {
+      kind: "head";
+      status: number;
+      statusText: string;
+      headerPairs: Array<[string, string]>;
+      finalUrl: string;
+    }
+  | { kind: "chunk"; bytes: Uint8Array }
+  | { kind: "end"; bytesIn: number }
+  | { kind: "error"; status: number; message: string; code?: string };
+
 interface CircuitState {
   failures: number;
   state: AuditEntry["breakerState"];
@@ -220,6 +238,131 @@ export class EgressProxy {
         };
       },
     });
+  }
+
+  /**
+   * Streaming variant of `forwardProxyFetch`. Performs the same credential
+   * resolution + audit + retry machinery, but instead of buffering the
+   * upstream response body it pumps it through a sink one chunk at a
+   * time. The sink is called with:
+   *
+   *   - `{ kind: "head", status, statusText, headerPairs, finalUrl }`
+   *     exactly once, as soon as the upstream response headers arrive.
+   *   - `{ kind: "chunk", bytes }` zero or more times as response body
+   *     chunks arrive from the upstream.
+   *   - `{ kind: "end", bytesIn }` exactly once when the upstream body
+   *     EOFs cleanly.
+   *
+   * Retries: only meaningful BEFORE the head frame is emitted. Once
+   * downstream consumers have seen the head, the response is committed —
+   * a mid-stream upstream error surfaces as a `kind: "error"` frame and
+   * is not retried.
+   *
+   * Audit logging is finalized after the stream completes (or errors),
+   * with `bytesIn` totaled across all emitted chunks.
+   */
+  async forwardProxyFetchStream(
+    params: {
+      callerId: string;
+      url: string;
+      method: string;
+      headers?: Record<string, string>;
+      body?: string | Uint8Array;
+      credentialId?: string;
+    },
+    sink: (frame: StreamFrame) => Promise<void> | void,
+    abortSignal?: AbortSignal,
+  ): Promise<{ status: number; bytesIn: number }> {
+    const body = params.body;
+    const bytesOut = body === undefined
+      ? 0
+      : typeof body === "string"
+        ? Buffer.byteLength(body)
+        : body.byteLength;
+
+    let headEmitted = false;
+    let bytesInTotal = 0;
+
+    const result = await this.executeAuthorizedRequest({
+      callerId: params.callerId,
+      method: params.method.toUpperCase(),
+      targetUrl: new URL(params.url),
+      inputHeaders: params.headers ?? {},
+      credentialId: params.credentialId,
+      credentialUse: "fetch",
+      initialBytesOut: bytesOut,
+      // Retries are unsafe once the head frame has been emitted (the
+      // caller has already seen a partial response). Disable retries
+      // entirely for the streaming path to keep the contract simple.
+      replaySafe: false,
+      execute: async (targetUrl, headers) => {
+        const upstream = await fetch(targetUrl.toString(), {
+          method: params.method,
+          headers: headers as HeadersInit,
+          body: body as BodyInit | undefined,
+          signal: abortSignal,
+        });
+
+        await sink({
+          kind: "head",
+          status: upstream.status,
+          statusText: upstream.statusText,
+          headerPairs: Array.from(upstream.headers.entries()) as Array<[string, string]>,
+          finalUrl: upstream.url || targetUrl.toString(),
+        });
+        headEmitted = true;
+
+        if (upstream.body) {
+          const reader = upstream.body.getReader();
+          try {
+            while (true) {
+              if (abortSignal?.aborted) {
+                await reader.cancel().catch(() => {});
+                throw new Error("Streaming proxy fetch aborted by caller");
+              }
+              const { value, done } = await reader.read();
+              if (done) break;
+              if (value && value.byteLength > 0) {
+                bytesInTotal += value.byteLength;
+                await sink({ kind: "chunk", bytes: value });
+              }
+            }
+          } finally {
+            reader.releaseLock();
+          }
+        }
+
+        await sink({ kind: "end", bytesIn: bytesInTotal });
+
+        return {
+          statusCode: upstream.status,
+          bytesIn: bytesInTotal,
+          bytesOut,
+          payload: { status: upstream.status, bytesIn: bytesInTotal },
+        };
+      },
+    }).catch(async (err) => {
+      // If we've already committed to the response by emitting the head,
+      // surface the error as a frame instead of throwing — the HTTP
+      // response is already streaming and can't go back to an error
+      // status code. Otherwise let the caller observe a thrown error so
+      // it can return a proper error status before any bytes go out.
+      if (headEmitted) {
+        try {
+          await sink({
+            kind: "error",
+            status: 502,
+            message: err instanceof Error ? err.message : String(err),
+          });
+        } catch {
+          // Best-effort — connection may already be torn down.
+        }
+        return { status: 502, bytesIn: bytesInTotal };
+      }
+      throw err;
+    });
+
+    return result;
   }
 
   async forwardGitHttp(params: {

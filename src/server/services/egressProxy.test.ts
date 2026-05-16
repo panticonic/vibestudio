@@ -436,6 +436,70 @@ describe("EgressProxy", () => {
     expect(Array.from(receivedBody!)).toEqual(Array.from(upload));
   });
 
+  it("streams upstream response bytes through forwardProxyFetchStream", async () => {
+    const auditLog = new MemoryAuditLog();
+    const proxy = createProxy(createCredential(), auditLog);
+    // Upstream emits the body as three discrete chunks separated by
+    // microtask boundaries. The streaming forwarder must surface each
+    // chunk as it arrives — not buffer the whole body.
+    const chunks = [
+      new Uint8Array([0x68, 0x65, 0x6c, 0x6c, 0x6f]), // "hello"
+      new Uint8Array([0x20]), // " "
+      new Uint8Array([0x77, 0x6f, 0x72, 0x6c, 0x64]), // "world"
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            for (const chunk of chunks) {
+              controller.enqueue(chunk);
+              // Yield so the consumer can observe chunks individually.
+              await new Promise((resolve) => setTimeout(resolve, 0));
+            }
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "text/plain" },
+        });
+      }),
+    );
+
+    const observed: Array<{ kind: string; size?: number; status?: number; finalUrl?: string }> = [];
+    let aggregated = new Uint8Array(0);
+    const result = await proxy.forwardProxyFetchStream(
+      {
+        callerId: "worker:test",
+        credentialId: "cred-1",
+        url: "https://api.example.test/v1/stream",
+        method: "GET",
+      },
+      (frame) => {
+        if (frame.kind === "head") {
+          observed.push({ kind: "head", status: frame.status, finalUrl: frame.finalUrl });
+        } else if (frame.kind === "chunk") {
+          observed.push({ kind: "chunk", size: frame.bytes.byteLength });
+          const next = new Uint8Array(aggregated.byteLength + frame.bytes.byteLength);
+          next.set(aggregated, 0);
+          next.set(frame.bytes, aggregated.byteLength);
+          aggregated = next;
+        } else if (frame.kind === "end") {
+          observed.push({ kind: "end" });
+        }
+      },
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.bytesIn).toBe(11);
+    expect(observed[0]).toEqual({ kind: "head", status: 200, finalUrl: "https://api.example.test/v1/stream" });
+    expect(observed.filter((o) => o.kind === "chunk")).toHaveLength(3);
+    expect(observed[observed.length - 1]!.kind).toBe("end");
+    expect(new TextDecoder().decode(aggregated)).toBe("hello world");
+  });
+
   it("refreshes expired OAuth credentials before injection", async () => {
     const auditLog = new MemoryAuditLog();
     const credential = createCredential({

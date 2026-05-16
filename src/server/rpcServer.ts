@@ -287,6 +287,13 @@ export class RpcServer {
        * had nowhere to go).
        */
       eventService?: EventService;
+      /**
+       * Optional: the EgressProxy. When provided, the server exposes a
+       * `POST /rpc/stream` endpoint that performs a credentialed upstream
+       * fetch with a streaming response body. Without this, the streaming
+       * endpoint returns 503.
+       */
+      egressProxy?: Pick<import("./services/egressProxy.js").EgressProxy, "forwardProxyFetchStream">;
     }
   ) {
     this.dispatcher = deps.dispatcher;
@@ -1052,6 +1059,14 @@ export class RpcServer {
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse
   ): Promise<void> {
+    // Streaming proxy-fetch endpoint — separate route because it uses
+    // chunked transfer with a binary frame format, not the JSON
+    // request/response of the regular RPC.
+    if (req.method === "POST" && req.url === "/rpc/stream") {
+      await this.handleStreamingProxyFetch(req, res);
+      return;
+    }
+
     // Only handle POST /rpc
     if (req.method !== "POST" || req.url !== "/rpc") {
       res.writeHead(404);
@@ -1173,6 +1188,171 @@ export class RpcServer {
     }
 
     throw new Error(`Unknown message type: ${type}`);
+  }
+
+  /**
+   * `POST /rpc/stream` — credentialed upstream fetch with a streaming
+   * response body. Request body is the same shape as the regular
+   * `credentials.proxyFetch` RPC args; response is a chunked binary
+   * stream framed by `packages/shared/src/credentials/streamFraming.ts`.
+   *
+   * Only `credentials.proxyFetch` is exposed here: a service+method
+   * allow-list keeps the streaming surface deliberately narrow, since
+   * arbitrary RPC methods aren't designed for incremental delivery.
+   */
+  private async handleStreamingProxyFetch(
+    req: import("http").IncomingMessage,
+    res: import("http").ServerResponse,
+  ): Promise<void> {
+    const authHeader = req.headers["authorization"];
+    const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing authorization" }));
+      return;
+    }
+    if (this.deps.tokenManager.validateAdminToken(token)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        error: "Admin token cannot authenticate RPC; issue a device credential and refresh a shell token first.",
+      }));
+      return;
+    }
+    const entry = this.deps.tokenManager.validateToken(token);
+    if (!entry) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid token" }));
+      return;
+    }
+    const callerId = entry.callerId;
+
+    const egress = this.deps.egressProxy;
+    if (!egress) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Streaming proxy fetch is unavailable" }));
+      return;
+    }
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+    const MAX_REQUEST_BODY = 16 * 1024 * 1024;
+    for await (const chunk of req) {
+      const buf = chunk as Buffer;
+      total += buf.byteLength;
+      if (total > MAX_REQUEST_BODY) {
+        res.writeHead(413, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Request body too large for streaming proxy fetch" }));
+        return;
+      }
+      chunks.push(buf);
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(Buffer.concat(chunks).toString()) as Record<string, unknown>;
+    } catch {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Invalid JSON body" }));
+      return;
+    }
+
+    const method = body["method"] as string | undefined;
+    if (method !== "credentials.proxyFetch") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        error: `Method '${method}' is not exposed on the streaming endpoint. Only 'credentials.proxyFetch' is allowed.`,
+      }));
+      return;
+    }
+    const args = (body["args"] as unknown[]) ?? [];
+    const params = (args[0] ?? {}) as {
+      url?: string;
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      bodyBase64?: string;
+      credentialId?: string;
+    };
+    if (!params.url || !params.method) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing required params: url and method" }));
+      return;
+    }
+
+    const upstreamBody: string | Uint8Array | undefined =
+      params.bodyBase64 !== undefined
+        ? new Uint8Array(Buffer.from(params.bodyBase64, "base64"))
+        : params.body;
+
+    res.writeHead(200, {
+      "Content-Type": "application/vnd.natstack.credentialed-fetch+binary",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+    });
+
+    const abortController = new AbortController();
+    req.on("close", () => abortController.abort());
+    res.on("close", () => abortController.abort());
+
+    const {
+      encodeHeadFrame,
+      encodeDataFrame,
+      encodeEndFrame,
+      encodeErrorFrame,
+    } = await import("../../packages/shared/src/credentials/streamFraming.js");
+
+    const writeFrame = (bytes: Uint8Array): Promise<void> =>
+      new Promise<void>((resolve, reject) => {
+        const ok = res.write(bytes, (err) => {
+          if (err) reject(err);
+        });
+        if (ok) resolve();
+        else res.once("drain", () => resolve());
+      });
+
+    try {
+      await egress.forwardProxyFetchStream(
+        {
+          callerId,
+          url: params.url,
+          method: params.method,
+          headers: params.headers,
+          body: upstreamBody,
+          credentialId: params.credentialId,
+        },
+        async (frame) => {
+          if (frame.kind === "head") {
+            await writeFrame(encodeHeadFrame({
+              status: frame.status,
+              statusText: frame.statusText,
+              headerPairs: frame.headerPairs,
+              finalUrl: frame.finalUrl,
+            }));
+          } else if (frame.kind === "chunk") {
+            await writeFrame(encodeDataFrame(frame.bytes));
+          } else if (frame.kind === "end") {
+            await writeFrame(encodeEndFrame({ bytesIn: frame.bytesIn }));
+          } else if (frame.kind === "error") {
+            await writeFrame(encodeErrorFrame({
+              status: frame.status,
+              message: frame.message,
+              code: frame.code,
+            }));
+          }
+        },
+        abortController.signal,
+      );
+    } catch (err) {
+      try {
+        await writeFrame(encodeErrorFrame({
+          status: 502,
+          message: err instanceof Error ? err.message : String(err),
+        }));
+      } catch {
+        // Best-effort — connection may already be torn down.
+      }
+    } finally {
+      res.end();
+    }
   }
 
   // ===========================================================================
