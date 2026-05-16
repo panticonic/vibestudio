@@ -58,6 +58,8 @@ import {
   createAskUserExtension,
   type AskUserParams,
 } from "./extensions/ask-user.js";
+import { createWebToolsExtension } from "./extensions/web/index.js";
+import type { ProviderApiKeyGetter } from "./extensions/web/provider.js";
 import {
   DispatchedError,
   type NatStackScopedUiContext,
@@ -66,7 +68,10 @@ import {
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 /** Built-in file tool names that are always active alongside roster tools. */
-const BUILTIN_TOOL_NAMES = ["read", "edit", "write", "grep", "find", "ls"] as const;
+const BUILTIN_TOOL_NAMES = [
+  "read", "edit", "write", "grep", "find", "ls",
+  "web_search", "web_fetch", "web_read",
+] as const;
 
 export interface PiRunnerGadProvenance {
   sessionId: string;
@@ -133,6 +138,12 @@ export interface PiRunnerOptions {
   cwd?: string;
   /** Enables gad persistence for Pi sessions, turns, reads, and mutations. */
   gad?: PiRunnerGadProvenance;
+  /**
+   * Optional getter for provider API keys (e.g. `TAVILY_API_KEY`). Reading
+   * keys lazily lets web tools auto-upgrade from DuckDuckGo to a paid search
+   * provider when the user has configured one.
+   */
+  getProviderApiKey?: ProviderApiKeyGetter;
 }
 
 /** Snapshot of Agent state surfaced via the snapshot ephemeral channel stream. */
@@ -191,6 +202,10 @@ export class PiRunner {
       }),
       createAskUserExtension({
         askUser: this.options.askUserCallback,
+      }),
+      createWebToolsExtension({
+        rpc: this.options.rpc,
+        getProviderApiKey: this.options.getProviderApiKey,
       }),
     ]);
 

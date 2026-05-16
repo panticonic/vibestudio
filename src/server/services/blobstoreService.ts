@@ -182,6 +182,32 @@ async function getBytes(blobsDir: string, digest: string): Promise<Buffer | null
   }
 }
 
+async function getByteRange(
+  blobsDir: string,
+  digest: string,
+  offset: number,
+  length: number,
+): Promise<Buffer | null> {
+  const filePath = blobPath(blobsDir, digest);
+  let handle: fsp.FileHandle | null = null;
+  try {
+    handle = await fsp.open(filePath, "r");
+    const stat = await handle.stat();
+    if (offset >= stat.size) return Buffer.alloc(0);
+    const cappedLength = Math.min(length, stat.size - offset);
+    const buf = Buffer.alloc(cappedLength);
+    if (cappedLength > 0) {
+      await handle.read(buf, 0, cappedLength, offset);
+    }
+    return buf;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
 async function listBlobs(
   blobsDir: string,
   opts?: { prefix?: string; limit?: number }
@@ -280,6 +306,15 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
         returns: z.string().nullable(),
         policy: READ_POLICY,
       },
+      getRange: {
+        args: z.tuple([
+          DigestSchema,
+          z.number().int().nonnegative(),
+          z.number().int().positive(),
+        ]),
+        returns: z.string().nullable(),
+        policy: READ_POLICY,
+      },
       putBase64: {
         args: z.tuple([Base64Schema]),
         returns: z.object({ digest: z.string(), size: z.number() }),
@@ -308,6 +343,15 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
           return putBytes(deps.blobsDir, Buffer.from(args[0] as string, "utf8"));
         case "getText": {
           const bytes = await getBytes(deps.blobsDir, args[0] as string);
+          return bytes ? bytes.toString("utf8") : null;
+        }
+        case "getRange": {
+          const bytes = await getByteRange(
+            deps.blobsDir,
+            args[0] as string,
+            args[1] as number,
+            args[2] as number,
+          );
           return bytes ? bytes.toString("utf8") : null;
         }
         case "putBase64":

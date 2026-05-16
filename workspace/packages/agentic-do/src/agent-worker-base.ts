@@ -1091,6 +1091,10 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         this.askUser(channelId, toolCallId, params, signal),
       model: this.getModel(),
       getApiKey: this.getApiKeyForChannel(channelId),
+      getProviderApiKey: (name) => {
+        const value = (this.env as Record<string, unknown>)[name];
+        return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+      },
       thinkingLevel: this.getThinkingLevel(),
       ...this.getRunnerPromptConfig(channelId),
       approvalLevel: this.getApprovalLevel(channelId),

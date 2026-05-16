@@ -28,6 +28,15 @@ export type {
   AskUserDeps,
 } from "./extensions/ask-user.js";
 
+export { createWebToolsExtension } from "./extensions/web/index.js";
+export type {
+  WebToolsDeps,
+  WebRpcCaller,
+  SearchResult,
+  ProviderName,
+  ProviderApiKeyGetter,
+} from "./extensions/web/index.js";
+
 // UI bridge
 export {
   DispatchedError,

@@ -266,4 +266,68 @@ describe("blobstoreService", () => {
 
     await expect(fsp.readdir(tmpDir)).resolves.toEqual([]);
   });
+
+  describe("getRange", () => {
+    async function putViaRpc(digest: string, body: string): Promise<void> {
+      const service = createBlobstoreService({ blobsDir });
+      await service.start?.();
+      const dispatcher = new ServiceDispatcher();
+      dispatcher.registerService(service.definition);
+      dispatcher.markInitialized();
+      const result = (await dispatcher.dispatch(
+        { callerId: "w1", callerKind: "worker" },
+        "blobstore",
+        "putText",
+        [body],
+      )) as { digest: string };
+      expect(result.digest).toBe(digest);
+    }
+
+    function dispatchGetRange(
+      digest: string,
+      offset: number,
+      length: number,
+    ): Promise<unknown> {
+      const service = createBlobstoreService({ blobsDir });
+      const dispatcher = new ServiceDispatcher();
+      dispatcher.registerService(service.definition);
+      dispatcher.markInitialized();
+      return dispatcher.dispatch(
+        { callerId: "w1", callerKind: "worker" },
+        "blobstore",
+        "getRange",
+        [digest, offset, length],
+      );
+    }
+
+    it("returns a partial slice of a stored blob", async () => {
+      const body = "The quick brown fox jumps over the lazy dog.";
+      const digest = createHash("sha256").update(body, "utf8").digest("hex");
+      await putViaRpc(digest, body);
+
+      await expect(dispatchGetRange(digest, 4, 5)).resolves.toBe("quick");
+      await expect(dispatchGetRange(digest, 0, 3)).resolves.toBe("The");
+    });
+
+    it("truncates at EOF when length overruns the blob", async () => {
+      const body = "short text";
+      const digest = createHash("sha256").update(body, "utf8").digest("hex");
+      await putViaRpc(digest, body);
+
+      await expect(dispatchGetRange(digest, 6, 999)).resolves.toBe("text");
+    });
+
+    it("returns an empty string when offset is past EOF", async () => {
+      const body = "tiny";
+      const digest = createHash("sha256").update(body, "utf8").digest("hex");
+      await putViaRpc(digest, body);
+
+      await expect(dispatchGetRange(digest, 100, 50)).resolves.toBe("");
+    });
+
+    it("returns null when the digest is unknown", async () => {
+      const unknown = "0".repeat(64);
+      await expect(dispatchGetRange(unknown, 0, 10)).resolves.toBeNull();
+    });
+  });
 });

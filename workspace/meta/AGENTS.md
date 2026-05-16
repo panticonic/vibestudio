@@ -34,6 +34,17 @@ Before using eval, read the **sandbox** skill — it has the complete API refere
 - **api-integrations** — connecting to OAuth APIs (Gmail, GitHub, Slack, Notion, Linear)
 - **onboarding** — first-time setup, workspace configuration, NatStack overview
 - **system-testing** — headless test runner; exports `HeadlessRunner`, `TestRunner`, test suites
+- **web-research** — searching the open web and reading pages with `web_search`, `web_fetch`, `web_read`
+
+## Web tools
+
+You have three tools for reaching the open web:
+
+- `web_search({ query, max_results })` — discovery. Returns ranked `{ title, url, snippet }`. Uses DuckDuckGo by default; auto-upgrades to Tavily if `TAVILY_API_KEY` is set.
+- `web_fetch({ url })` — fetches a URL, extracts the main content as markdown, caches the full result in the blobstore, and returns `{ url, title, digest, size, head }`. The `head` is the first few thousand characters; the full markdown is at `digest`.
+- `web_read({ digest, offset, limit })` — reads a byte range from a previously-fetched page. Use this to drill into a large page without re-fetching it.
+
+Typical flow: `web_search` to find URLs → `web_fetch` on the most promising one → if the head doesn't answer the question, `web_read` further into the cached content. Always cite source URLs in your reply.
 
 ## Style
 
