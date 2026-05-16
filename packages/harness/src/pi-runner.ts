@@ -147,17 +147,13 @@ export interface PiRunnerOptions {
    */
   hasCredentialForOrigin?: CredentialPresenceProbe;
   /**
-   * Optional global-fetch override for general web fetches (HTML + binary
-   * content like PDFs). Must be binary-safe.
+   * Optional global-fetch override. In production the host wires a
+   * binary-safe credentialed fetcher that routes through the credentials
+   * runtime: auth is auto-attached by URL-audience matching, every call
+   * is audited, and PDFs/images round-trip as bytes. The harness never
+   * sees credential values.
    */
   fetcher?: typeof fetch;
-  /**
-   * Credentialed fetcher used only by keyed search provider API calls
-   * (Tavily / Brave / Exa). Wires the harness through the host's
-   * credentials runtime so auth is auto-attached by URL-audience matching.
-   * The harness never sees the credential value.
-   */
-  searchProviderFetcher?: typeof fetch;
 }
 
 /** Snapshot of Agent state surfaced via the snapshot ephemeral channel stream. */
@@ -221,7 +217,6 @@ export class PiRunner {
         rpc: this.options.rpc,
         hasCredentialForOrigin: this.options.hasCredentialForOrigin,
         fetcher: this.options.fetcher,
-        searchProviderFetcher: this.options.searchProviderFetcher,
       }),
     ]);
 

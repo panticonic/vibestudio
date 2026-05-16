@@ -168,32 +168,54 @@ async function proxyFetch(
   opts?: { credentialId?: string },
 ): Promise<Response> {
   const headers = Object.fromEntries(new Headers(init?.headers).entries());
-  const body = init?.body === undefined || init.body === null
-    ? undefined
-    : typeof init.body === "string"
-      ? init.body
-      : init.body instanceof URLSearchParams
-        ? init.body.toString()
-        : (() => {
-            throw new Error("credentials.fetch currently supports string and URLSearchParams request bodies");
-          })();
+  const encoded = await encodeRequestBody(init?.body);
   const result = await rpc.call<{
     status: number;
     statusText: string;
     headers: Record<string, string>;
-    body: string;
+    bodyBase64: string;
   }>("main", "credentials.proxyFetch", {
     url: url.toString(),
     method: init?.method ?? "GET",
     headers,
-    body,
+    body: encoded.body,
+    bodyBase64: encoded.bodyBase64,
     credentialId: opts?.credentialId,
   });
-  return new Response(result.body, {
+  const bytes = result.bodyBase64 ? base64ToBytes(result.bodyBase64) : new Uint8Array(0);
+  return new Response(bytes as BodyInit, {
     status: result.status,
     statusText: result.statusText,
     headers: result.headers,
   });
+}
+
+/**
+ * Encode a `RequestInit.body` for transport over the `credentials.proxyFetch`
+ * RPC. String / URLSearchParams bodies cross the wire as UTF-8 text; binary
+ * bodies (Uint8Array, ArrayBuffer, Blob, typed arrays) cross as base64.
+ * Streams aren't supported — the RPC has no streaming envelope.
+ */
+async function encodeRequestBody(
+  body: BodyInit | null | undefined,
+): Promise<{ body?: string; bodyBase64?: string }> {
+  if (body === undefined || body === null) return {};
+  if (typeof body === "string") return { body };
+  if (body instanceof URLSearchParams) return { body: body.toString() };
+  if (body instanceof ArrayBuffer) {
+    return { bodyBase64: bytesToBase64(new Uint8Array(body)) };
+  }
+  if (ArrayBuffer.isView(body)) {
+    const view = body as ArrayBufferView;
+    const bytes = new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
+    return { bodyBase64: bytesToBase64(bytes) };
+  }
+  if (typeof Blob !== "undefined" && body instanceof Blob) {
+    return { bodyBase64: bytesToBase64(new Uint8Array(await body.arrayBuffer())) };
+  }
+  throw new Error(
+    "credentials.fetch supports string, URLSearchParams, ArrayBuffer, typed-array, and Blob request bodies",
+  );
 }
 
 function bytesToBase64(bytes: Uint8Array): string {

@@ -711,7 +711,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         status: number;
         statusText: string;
         headers: Record<string, string>;
-        body: string;
+        bodyBase64: string;
       }>("main", "credentials.proxyFetch", {
         url: targetUrl.toString(),
         method: request.method,
@@ -719,7 +719,10 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.text(),
       });
 
-      return new Response(result.body, {
+      const responseBytes = result.bodyBase64
+        ? Buffer.from(result.bodyBase64, "base64")
+        : new Uint8Array(0);
+      return new Response(responseBytes, {
         status: result.status,
         statusText: result.statusText,
         headers: result.headers,
@@ -730,43 +733,56 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   }
 
   /**
-   * Builds a credentialed fetcher for keyed search provider API calls.
-   * Routes through `main:credentials.proxyFetch` which (a) attaches auth
-   * by URL-audience matching against stored credentials, and (b) audits
-   * the egress like any other credentialed request. The harness never
-   * sees the credential value. Only used for JSON API calls (Tavily /
-   * Brave / Exa); arbitrary `web_fetch` uses the regular global fetch
-   * because the proxy stringifies bodies and would mangle binary content.
+   * Builds a binary-safe credentialed fetcher. Every request is routed
+   * through `main:credentials.proxyFetch` which (a) attaches auth by
+   * URL-audience matching against stored credentials, (b) audits the
+   * egress, and (c) carries response bodies as base64 so binary content
+   * (PDFs, images, etc.) round-trips intact. The harness never sees
+   * credential values — auth injection happens host-side based on the
+   * target URL.
+   *
+   * Used for both keyed search provider APIs (Tavily / Brave / Exa,
+   * which need auth) and arbitrary `web_fetch` URLs (which usually
+   * don't, but if the user has registered an audience-matching
+   * credential, it'll be attached transparently).
    */
-  private buildSearchProviderFetcher(): typeof fetch {
+  private buildCredentialedFetcher(): typeof fetch {
     const rpc = this.rpc;
     return (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
-      const url = typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : input.url;
-      const method = (init?.method ?? "GET").toUpperCase();
-      const headers: Record<string, string> = {};
-      if (init?.headers) {
-        const h = init.headers instanceof Headers
-          ? init.headers
-          : new Headers(init.headers as HeadersInit);
-        h.forEach((value, key) => {
-          headers[key] = value;
-        });
-      }
+      const request = new Request(input as RequestInfo, init);
+      const headerEntries: Record<string, string> = {};
+      request.headers.forEach((value, key) => {
+        headerEntries[key] = value;
+      });
       let body: string | undefined;
-      if (init?.body !== undefined && init.body !== null) {
-        body = typeof init.body === "string" ? init.body : String(init.body);
+      let bodyBase64: string | undefined;
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        const bytes = new Uint8Array(await request.arrayBuffer());
+        if (bytes.byteLength > 0) {
+          const ct = request.headers.get("content-type") ?? "";
+          if (ct.startsWith("text/") || ct.includes("json") || ct.includes("xml") || ct.includes("urlencoded")) {
+            body = new TextDecoder().decode(bytes);
+          } else {
+            bodyBase64 = Buffer.from(bytes).toString("base64");
+          }
+        }
       }
       const result = await rpc.call<{
         status: number;
         statusText: string;
         headers: Record<string, string>;
-        body: string;
-      }>("main", "credentials.proxyFetch", { url, method, headers, body });
-      return new Response(result.body, {
+        bodyBase64: string;
+      }>("main", "credentials.proxyFetch", {
+        url: request.url,
+        method: request.method,
+        headers: headerEntries,
+        body,
+        bodyBase64,
+      });
+      const responseBytes = result.bodyBase64
+        ? Buffer.from(result.bodyBase64, "base64")
+        : new Uint8Array(0);
+      return new Response(responseBytes, {
         status: result.status,
         statusText: result.statusText,
         headers: result.headers,
@@ -1148,7 +1164,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
           return false;
         }
       },
-      searchProviderFetcher: this.buildSearchProviderFetcher(),
+      fetcher: this.buildCredentialedFetcher(),
       thinkingLevel: this.getThinkingLevel(),
       ...this.getRunnerPromptConfig(channelId),
       approvalLevel: this.getApprovalLevel(channelId),

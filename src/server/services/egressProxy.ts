@@ -165,16 +165,20 @@ export class EgressProxy {
     url: string;
     method: string;
     headers?: Record<string, string>;
-    body?: string;
+    body?: string | Uint8Array;
     credentialId?: string;
   }): Promise<{
     status: number;
     statusText: string;
     headers: Record<string, string>;
-    body: string;
+    body: Uint8Array;
   }> {
     const body = params.body;
-    const bytesOut = body ? Buffer.byteLength(body) : 0;
+    const bytesOut = body === undefined
+      ? 0
+      : typeof body === "string"
+        ? Buffer.byteLength(body)
+        : body.byteLength;
     return this.executeAuthorizedRequest({
       callerId: params.callerId,
       method: params.method.toUpperCase(),
@@ -188,12 +192,12 @@ export class EgressProxy {
         const response = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
-          body,
+          body: body as BodyInit | undefined,
         });
-        const responseBody = await response.text();
+        const responseBody = new Uint8Array(await response.arrayBuffer());
         return {
           statusCode: response.status,
-          bytesIn: Buffer.byteLength(responseBody),
+          bytesIn: responseBody.byteLength,
           bytesOut,
           payload: {
             status: response.status,

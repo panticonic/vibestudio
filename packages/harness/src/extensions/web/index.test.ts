@@ -184,8 +184,7 @@ describe("createWebToolsExtension", () => {
     }) as unknown as typeof fetch;
     const factory = createWebToolsExtension({
       rpc: rpc as never,
-      fetcher: vi.fn() as never,
-      searchProviderFetcher: credentialedFetcher,
+      fetcher: credentialedFetcher,
       hasCredentialForOrigin: async (origin) => origin.includes("search.brave.com"),
     });
     const api = createMockApi();
@@ -219,8 +218,7 @@ describe("createWebToolsExtension", () => {
     }) as unknown as typeof fetch;
     const factory = createWebToolsExtension({
       rpc: rpc as never,
-      fetcher: vi.fn() as never,
-      searchProviderFetcher: credentialedFetcher,
+      fetcher: credentialedFetcher,
       hasCredentialForOrigin: async (origin) => origin.includes("exa.ai"),
     });
     const api = createMockApi();
@@ -252,8 +250,7 @@ describe("createWebToolsExtension", () => {
     }) as unknown as typeof fetch;
     const factory = createWebToolsExtension({
       rpc: rpc as never,
-      fetcher: vi.fn() as never,
-      searchProviderFetcher: credentialedFetcher,
+      fetcher: credentialedFetcher,
       hasCredentialForOrigin: async (origin) => origin.includes("tavily.com"),
     });
     const api = createMockApi();

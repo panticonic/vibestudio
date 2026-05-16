@@ -43,19 +43,13 @@ export interface WebToolsDeps {
    */
   hasCredentialForOrigin?: CredentialPresenceProbe;
   /**
-   * Override for the global fetch — used by `web_fetch` for arbitrary
-   * URLs (HTML + binary content like PDFs). Must be binary-safe.
+   * Override for the global fetch. In production the host wires a
+   * binary-safe credentialed fetcher (`main:credentials.proxyFetch`)
+   * that auto-attaches auth by URL-audience matching and carries
+   * response bodies as bytes so PDFs/images round-trip intact. Tests
+   * pass plain mocks.
    */
   fetcher?: typeof fetch;
-  /**
-   * Credentialed fetcher used only for keyed search provider API calls
-   * (Tavily / Brave / Exa). Bodies are JSON, so a host-side proxy that
-   * stringifies the response body is fine here. Auth is injected by
-   * URL-audience matching against stored credentials — the harness
-   * never sees the credential value. Without this, keyed providers are
-   * unreachable and selection falls back to DuckDuckGo.
-   */
-  searchProviderFetcher?: typeof fetch;
   /** Length of the head excerpt included inline with `web_fetch` results. */
   headLength?: number;
   /** TTL (ms) for the URL→digest session memo. Default 10 minutes; 0 disables. */
@@ -339,20 +333,16 @@ async function runProvider(
   provider: import("./types.js").ProviderName,
   query: string,
   limit: number,
-  deps: WebToolsDeps,
+  _deps: WebToolsDeps,
   fetcher: typeof fetch,
 ): Promise<import("./types.js").SearchResult[]> {
-  // Keyed providers must use the credentialed fetcher so auth is injected
-  // by URL-audience matching. DDG is unauthenticated, so the regular
-  // (binary-safe) fetcher is fine.
-  const credentialed = deps.searchProviderFetcher ?? fetcher;
   switch (provider) {
     case "tavily":
-      return searchTavily(query, limit, credentialed as never);
+      return searchTavily(query, limit, fetcher as never);
     case "brave":
-      return searchBrave(query, limit, credentialed as never);
+      return searchBrave(query, limit, fetcher as never);
     case "exa":
-      return searchExa(query, limit, credentialed as never);
+      return searchExa(query, limit, fetcher as never);
     case "duckduckgo":
     default:
       return searchDuckDuckGo(query, limit, fetcher as never);

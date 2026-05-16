@@ -318,7 +318,8 @@ describe("EgressProxy", () => {
       headers: { authorization: "Bearer attacker" },
     });
 
-    expect(response).toMatchObject({ status: 200, body: "ok" });
+    expect(response.status).toBe(200);
+    expect(new TextDecoder().decode(response.body)).toBe("ok");
     expect(auditLog.entries[0]).toMatchObject({
       callerId: "worker:test",
       providerId: "url-bound",
@@ -326,6 +327,58 @@ describe("EgressProxy", () => {
       status: 200,
       scopesUsed: ["read"],
     });
+  });
+
+  it("round-trips binary response bodies as bytes", async () => {
+    // Verifies parity for web_fetch: a PDF magic-header sequence must
+    // come back byte-identical after going through the proxy.
+    const auditLog = new MemoryAuditLog();
+    const proxy = createProxy(createCredential(), auditLog);
+    const pdfMagic = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]); // "%PDF-1.7"
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(pdfMagic, {
+          status: 200,
+          statusText: "OK",
+          headers: { "content-type": "application/pdf" },
+        }),
+      ),
+    );
+    const response = await proxy.forwardProxyFetch({
+      callerId: "worker:test",
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/doc.pdf",
+      method: "GET",
+    });
+    expect(response.status).toBe(200);
+    expect(response.body).toBeInstanceOf(Uint8Array);
+    expect(Array.from(response.body)).toEqual(Array.from(pdfMagic));
+    expect(response.headers["content-type"]).toBe("application/pdf");
+  });
+
+  it("round-trips binary request bodies as bytes", async () => {
+    const auditLog = new MemoryAuditLog();
+    const proxy = createProxy(createCredential(), auditLog);
+    const upload = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]); // PNG magic
+    let receivedBody: Uint8Array | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const ab = await new Response(init?.body as BodyInit).arrayBuffer();
+        receivedBody = new Uint8Array(ab);
+        return new Response(null, { status: 204 });
+      }),
+    );
+    await proxy.forwardProxyFetch({
+      callerId: "worker:test",
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/upload",
+      method: "POST",
+      body: upload,
+    });
+    expect(receivedBody).not.toBeNull();
+    expect(Array.from(receivedBody!)).toEqual(Array.from(upload));
   });
 
   it("refreshes expired OAuth credentials before injection", async () => {
