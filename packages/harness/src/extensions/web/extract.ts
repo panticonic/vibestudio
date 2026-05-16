@@ -1,5 +1,6 @@
 import { parseHTML } from "linkedom";
 import { Readability } from "@mozilla/readability";
+import { extractText, getDocumentProxy, getMeta } from "unpdf";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
@@ -8,6 +9,8 @@ export interface ExtractedPage {
   title: string;
   markdown: string;
   url: string;
+  /** Source content-type after sniffing. "html" | "pdf" | "text" | "markdown". */
+  contentType: "html" | "pdf" | "text" | "markdown";
 }
 
 export interface ExtractFetcher {
@@ -17,6 +20,7 @@ export interface ExtractFetcher {
     url?: string;
     headers: { get(name: string): string | null };
     text: () => Promise<string>;
+    arrayBuffer: () => Promise<ArrayBuffer>;
   }>;
 }
 
@@ -28,7 +32,7 @@ export async function extractPage(
     method: "GET",
     headers: {
       "User-Agent": USER_AGENT,
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept": "text/html,application/xhtml+xml,application/pdf;q=0.9,application/xml;q=0.9,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
     },
     redirect: "follow",
@@ -36,12 +40,36 @@ export async function extractPage(
   if (!res.ok) {
     throw new Error(`Fetch ${url} returned HTTP ${res.status}`);
   }
-  const contentType = res.headers.get("content-type") ?? "";
+  const contentType = (res.headers.get("content-type") ?? "").toLowerCase();
   const finalUrl = res.url ?? url;
+  const looksLikePdf =
+    contentType.includes("application/pdf") || /\.pdf(?:$|[?#])/iu.test(finalUrl);
 
-  if (contentType.includes("text/plain") || contentType.includes("text/markdown")) {
+  if (looksLikePdf) {
+    const buf = await res.arrayBuffer();
+    return await pdfToMarkdown(new Uint8Array(buf), finalUrl);
+  }
+  if (contentType.includes("text/markdown") || contentType.includes("text/x-markdown")) {
     const text = await res.text();
-    return { title: deriveTitleFromUrl(finalUrl), markdown: text, url: finalUrl };
+    return {
+      title: deriveTitleFromUrl(finalUrl),
+      markdown: text,
+      url: finalUrl,
+      contentType: "markdown",
+    };
+  }
+  if (contentType.includes("text/plain") || contentType === "") {
+    const text = await res.text();
+    // If the body sniffs as HTML, fall through to HTML parsing.
+    if (/^\s*<!doctype html|<html[\s>]/iu.test(text)) {
+      return htmlToReadableMarkdown(text, finalUrl);
+    }
+    return {
+      title: deriveTitleFromUrl(finalUrl),
+      markdown: text,
+      url: finalUrl,
+      contentType: "text",
+    };
   }
   if (!contentType.includes("text/html") && !contentType.includes("application/xhtml")) {
     throw new Error(`Unsupported content-type for web_fetch: ${contentType || "unknown"}`);
@@ -49,6 +77,45 @@ export async function extractPage(
 
   const html = await res.text();
   return htmlToReadableMarkdown(html, finalUrl);
+}
+
+async function pdfToMarkdown(bytes: Uint8Array, sourceUrl: string): Promise<ExtractedPage> {
+  const doc = await getDocumentProxy(bytes);
+  const [{ text: pages }, meta] = await Promise.all([
+    extractText(doc, { mergePages: false }),
+    getMeta(doc).catch(() => ({ info: {} as Record<string, unknown> })),
+  ]);
+
+  const info = (meta as { info?: Record<string, unknown> }).info ?? {};
+  const title =
+    (typeof info["Title"] === "string" && info["Title"].trim()) ||
+    deriveTitleFromUrl(sourceUrl);
+
+  const parts: string[] = [];
+  parts.push(`# ${title}`);
+  parts.push("");
+  const author = typeof info["Author"] === "string" ? info["Author"].trim() : "";
+  if (author) parts.push(`_Author: ${author}_`);
+  parts.push(`_Source: ${sourceUrl}_  _Pages: ${pages.length}_`);
+  parts.push("");
+
+  const pageTexts = Array.isArray(pages) ? pages : [String(pages)];
+  for (let i = 0; i < pageTexts.length; i++) {
+    parts.push(`## Page ${i + 1}`);
+    parts.push("");
+    parts.push(normalizePdfPageText(pageTexts[i] ?? ""));
+    parts.push("");
+  }
+
+  return { title, markdown: parts.join("\n"), url: sourceUrl, contentType: "pdf" };
+}
+
+function normalizePdfPageText(s: string): string {
+  return s
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[ \t]+\n/gu, "\n")
+    .replace(/\n{3,}/gu, "\n\n")
+    .trim();
 }
 
 export function htmlToReadableMarkdown(html: string, sourceUrl: string): ExtractedPage {
@@ -77,7 +144,7 @@ export function htmlToReadableMarkdown(html: string, sourceUrl: string): Extract
   const { document: contentDoc } = parseHTML(`<div>${contentHtml}</div>`);
   const root = contentDoc.querySelector("div");
   const md = root ? domToMarkdown(root as unknown as Element).trim() : "";
-  return { title, markdown: md, url: sourceUrl };
+  return { title, markdown: md, url: sourceUrl, contentType: "html" };
 }
 
 function deriveTitleFromUrl(url: string): string {

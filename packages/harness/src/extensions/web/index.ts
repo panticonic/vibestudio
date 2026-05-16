@@ -164,11 +164,19 @@ export function createWebToolsExtension(deps: WebToolsDeps): PiExtensionFactory 
         const limit = clampInt(max_results, 1, MAX_SEARCH_LIMIT, DEFAULT_SEARCH_LIMIT);
         const provider = await selectSearchProvider(deps.getProviderApiKey);
 
+        const t0 = now();
         const results = await runProvider(provider, query, limit, deps, fetcher);
+        const elapsedMs = now() - t0;
         const text = formatSearchResults(results, provider, query);
         return {
           content: [{ type: "text" as const, text }],
-          details: { provider, query, count: results.length, results },
+          details: {
+            provider,
+            query,
+            count: results.length,
+            results,
+            elapsed_ms: elapsedMs,
+          },
         };
       },
     });
@@ -187,6 +195,8 @@ export function createWebToolsExtension(deps: WebToolsDeps): PiExtensionFactory 
         if (!/^https?:\/\//iu.test(url)) {
           throw new Error("web_fetch: 'url' must start with http:// or https://");
         }
+
+        const t0 = now();
 
         const cached = urlCacheGet(url);
         if (cached) {
@@ -220,6 +230,7 @@ export function createWebToolsExtension(deps: WebToolsDeps): PiExtensionFactory 
                 head_length: headSlice.length,
                 truncated,
                 served_from_cache: true,
+                elapsed_ms: now() - t0,
               },
             };
           }
@@ -258,6 +269,8 @@ export function createWebToolsExtension(deps: WebToolsDeps): PiExtensionFactory 
             head_length: head.length,
             truncated,
             served_from_cache: false,
+            elapsed_ms: now() - t0,
+            content_type: page.contentType,
           },
         };
       },

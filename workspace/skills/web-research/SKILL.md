@@ -159,26 +159,16 @@ MDN has no documented search API; use `web_search` for it (DDG ranks MDN
 pages highly for JS/CSS terms). If you need the page content, `web_fetch`
 the result URL — MDN pages extract cleanly with Readability.
 
-## Fetching and parsing PDFs (eval)
+## PDFs
 
-`web_fetch` currently expects HTML or plain text; for PDFs, fetch the
-bytes, drop them in the blobstore, then parse with a worker-side library
-or summarize the binary directly with a vision-capable model:
+`web_fetch` handles PDFs natively — point it at a `.pdf` URL and you get
+markdown back with the extracted text broken into `## Page N` sections,
+just like an HTML page. The `content_type` field in the tool details
+will be `"pdf"`. Use `web_read` and the eval grep recipe above on the
+resulting digest just like any other cached page.
 
-```
-eval({ code: `
-  const res = await fetch("https://arxiv.org/pdf/2401.12345.pdf");
-  const buf = new Uint8Array(await res.arrayBuffer());
-  const b64 = btoa(String.fromCharCode(...buf));
-  // Store the raw PDF so we don't re-download it
-  const { digest, size } = await rpc.call("main", "blobstore.putBase64", b64);
-  return { digest, size };
-` })
-```
-
-PDF→text parsing depends on what packages your project allows. For
-short PDFs, asking a vision-capable model to read the bytes works well;
-for long PDFs, run pdf.js/pdfminer in a separate worker.
+For images-only / scanned PDFs that have no embedded text, drop into
+eval and pass the raw bytes to a vision-capable model.
 
 ## Summarizing long pages with an aux model (eval)
 

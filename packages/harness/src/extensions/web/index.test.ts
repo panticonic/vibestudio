@@ -43,9 +43,11 @@ function createMockApi() {
 }
 
 function mockResponse(
-  body: string,
+  body: string | Uint8Array,
   init?: { ok?: boolean; status?: number; contentType?: string; url?: string },
 ) {
+  const bytes =
+    body instanceof Uint8Array ? body : new TextEncoder().encode(body);
   return {
     ok: init?.ok ?? true,
     status: init?.status ?? 200,
@@ -58,7 +60,9 @@ function mockResponse(
         return null;
       },
     },
-    text: async () => body,
+    text: async () => (typeof body === "string" ? body : new TextDecoder().decode(bytes)),
+    arrayBuffer: async () =>
+      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
   };
 }
 
@@ -325,6 +329,37 @@ describe("createWebToolsExtension", () => {
     await expect(
       readTool.execute("call-1", { digest: "0".repeat(64) }, undefined),
     ).rejects.toThrow(/no cached blob/);
+  });
+
+  it("web_fetch extracts text from PDF responses", async () => {
+    const { rpc, store } = makeBlobstore();
+    const pdfBytes = readFileSync(join(FIXTURES_DIR, "hello.pdf"));
+    const fetcher = vi.fn(async () =>
+      mockResponse(new Uint8Array(pdfBytes), {
+        contentType: "application/pdf",
+        url: "https://example.com/doc.pdf",
+      }),
+    ) as unknown as typeof fetch;
+    const factory = createWebToolsExtension({ rpc: rpc as never, fetcher });
+    const api = createMockApi();
+    factory(api as never);
+
+    const tool = api.getRegistered().get("web_fetch")!;
+    const result = await tool.execute(
+      "c1",
+      { url: "https://example.com/doc.pdf" },
+      undefined,
+    );
+    const details = result.details as {
+      digest: string;
+      content_type: string;
+      size: number;
+    };
+    expect(details.content_type).toBe("pdf");
+    expect(details.size).toBeGreaterThan(0);
+    const stored = store.get(details.digest)!;
+    expect(stored).toContain("Hello PDF fixture text");
+    expect(stored).toContain("Page 1");
   });
 
   it("web_fetch rejects non-http URLs", async () => {
