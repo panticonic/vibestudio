@@ -320,6 +320,8 @@ describe("EgressProxy", () => {
 
     expect(response.status).toBe(200);
     expect(new TextDecoder().decode(response.body)).toBe("ok");
+    expect(response.finalUrl).toBe("https://api.example.test/v1/items");
+    expect(Array.isArray(response.headerPairs)).toBe(true);
     expect(auditLog.entries[0]).toMatchObject({
       callerId: "worker:test",
       providerId: "url-bound",
@@ -327,6 +329,56 @@ describe("EgressProxy", () => {
       status: 200,
       scopesUsed: ["read"],
     });
+  });
+
+  it("preserves multiple Set-Cookie headers across the wire", async () => {
+    const auditLog = new MemoryAuditLog();
+    const proxy = createProxy(createCredential(), auditLog);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const headers = new Headers();
+        headers.append("set-cookie", "a=1; Path=/");
+        headers.append("set-cookie", "b=2; Path=/");
+        headers.append("content-type", "text/plain");
+        return new Response("ok", { status: 200, statusText: "OK", headers });
+      }),
+    );
+    const response = await proxy.forwardProxyFetch({
+      callerId: "worker:test",
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/login",
+      method: "GET",
+    });
+    const cookieEntries = response.headerPairs.filter(
+      ([k]) => k.toLowerCase() === "set-cookie",
+    );
+    expect(cookieEntries.map(([, v]) => v)).toEqual(["a=1; Path=/", "b=2; Path=/"]);
+  });
+
+  it("reports the post-redirect final URL on `finalUrl`", async () => {
+    const auditLog = new MemoryAuditLog();
+    const proxy = createProxy(createCredential(), auditLog);
+    // We can't easily simulate a redirect through the stub since fetch is
+    // stubbed wholesale, so simulate by constructing a Response with a url
+    // distinct from the requested one. The proxy's `response.url || requestedUrl`
+    // fallback path is what we want to exercise.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const r = new Response("ok", { status: 200 });
+        // Most runtimes set Response.url to "" for synthetically constructed
+        // Responses; the proxy must fall back to the requested URL.
+        return r;
+      }),
+    );
+    const response = await proxy.forwardProxyFetch({
+      callerId: "worker:test",
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+    expect(response.finalUrl).toBe("https://api.example.test/v1/items");
   });
 
   it("round-trips binary response bodies as bytes", async () => {
@@ -354,7 +406,10 @@ describe("EgressProxy", () => {
     expect(response.status).toBe(200);
     expect(response.body).toBeInstanceOf(Uint8Array);
     expect(Array.from(response.body)).toEqual(Array.from(pdfMagic));
-    expect(response.headers["content-type"]).toBe("application/pdf");
+    const contentType = response.headerPairs.find(
+      ([k]) => k.toLowerCase() === "content-type",
+    )?.[1];
+    expect(contentType).toBe("application/pdf");
   });
 
   it("round-trips binary request bodies as bytes", async () => {

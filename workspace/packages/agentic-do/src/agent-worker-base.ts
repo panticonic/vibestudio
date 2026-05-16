@@ -710,7 +710,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       const result = await this.rpc.call<{
         status: number;
         statusText: string;
-        headers: Record<string, string>;
+        headerPairs: Array<[string, string]>;
+        finalUrl: string;
         bodyBase64: string;
       }>("main", "credentials.proxyFetch", {
         url: targetUrl.toString(),
@@ -725,7 +726,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       return new Response(responseBytes, {
         status: result.status,
         statusText: result.statusText,
-        headers: result.headers,
+        headers: new Headers(result.headerPairs),
       });
     };
 
@@ -770,7 +771,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       const result = await rpc.call<{
         status: number;
         statusText: string;
-        headers: Record<string, string>;
+        headerPairs: Array<[string, string]>;
+        finalUrl: string;
         bodyBase64: string;
       }>("main", "credentials.proxyFetch", {
         url: request.url,
@@ -782,11 +784,23 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       const responseBytes = result.bodyBase64
         ? Buffer.from(result.bodyBase64, "base64")
         : new Uint8Array(0);
-      return new Response(responseBytes, {
+      const response = new Response(responseBytes, {
         status: result.status,
         statusText: result.statusText,
-        headers: result.headers,
+        headers: new Headers(result.headerPairs),
       });
+      if (result.finalUrl) {
+        try {
+          Object.defineProperty(response, "url", {
+            value: result.finalUrl,
+            writable: false,
+            configurable: true,
+          });
+        } catch {
+          // Best-effort; some runtimes lock the descriptor.
+        }
+      }
+      return response;
     }) as typeof fetch;
   }
 

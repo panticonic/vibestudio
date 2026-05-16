@@ -170,7 +170,18 @@ export class EgressProxy {
   }): Promise<{
     status: number;
     statusText: string;
-    headers: Record<string, string>;
+    /**
+     * Headers as ordered pairs (not a flat Record) so multiple
+     * `Set-Cookie` entries — which the Fetch spec deliberately does
+     * NOT combine when iterating — round-trip intact.
+     */
+    headerPairs: Array<[string, string]>;
+    /**
+     * Final URL after any redirects the underlying fetch followed.
+     * Mirrors `Response.url`. Falls back to the requested URL when
+     * the runtime didn't expose it.
+     */
+    finalUrl: string;
     body: Uint8Array;
   }> {
     const body = params.body;
@@ -202,7 +213,8 @@ export class EgressProxy {
           payload: {
             status: response.status,
             statusText: response.statusText,
-            headers: Object.fromEntries(response.headers.entries()),
+            headerPairs: Array.from(response.headers.entries()) as Array<[string, string]>,
+            finalUrl: response.url || targetUrl.toString(),
             body: responseBody,
           },
         };

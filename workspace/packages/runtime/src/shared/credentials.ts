@@ -169,13 +169,15 @@ async function proxyFetch(
 ): Promise<Response> {
   const headers = Object.fromEntries(new Headers(init?.headers).entries());
   const encoded = await encodeRequestBody(init?.body);
+  const requestedUrl = url.toString();
   const result = await rpc.call<{
     status: number;
     statusText: string;
-    headers: Record<string, string>;
+    headerPairs: Array<[string, string]>;
+    finalUrl: string;
     bodyBase64: string;
   }>("main", "credentials.proxyFetch", {
-    url: url.toString(),
+    url: requestedUrl,
     method: init?.method ?? "GET",
     headers,
     body: encoded.body,
@@ -183,11 +185,48 @@ async function proxyFetch(
     credentialId: opts?.credentialId,
   });
   const bytes = result.bodyBase64 ? base64ToBytes(result.bodyBase64) : new Uint8Array(0);
-  return new Response(bytes as BodyInit, {
+  return buildResponse(bytes, result);
+}
+
+/**
+ * Build a `Response` that mirrors the upstream response as faithfully as
+ * the RPC wire format allows. Specifically:
+ *
+ * - `new Headers(pairs)` preserves duplicate `Set-Cookie` entries (the
+ *   Fetch spec doesn't combine them); `getSetCookie()` on the result
+ *   returns the same array the upstream produced.
+ * - `response.url` is shadowed onto the instance via `Object.defineProperty`
+ *   because the `Response` constructor has no `url` option — the standard
+ *   one is normally set by `fetch()`. We surface the post-redirect URL so
+ *   callers can resolve relative links against the right base.
+ */
+function buildResponse(
+  bytes: Uint8Array,
+  result: {
+    status: number;
+    statusText: string;
+    headerPairs: Array<[string, string]>;
+    finalUrl: string;
+  },
+): Response {
+  const response = new Response(bytes as BodyInit, {
     status: result.status,
     statusText: result.statusText,
-    headers: result.headers,
+    headers: new Headers(result.headerPairs),
   });
+  if (result.finalUrl) {
+    try {
+      Object.defineProperty(response, "url", {
+        value: result.finalUrl,
+        writable: false,
+        configurable: true,
+      });
+    } catch {
+      // Some runtimes lock down Response.url's descriptor; if so, leave
+      // it as the constructor default (empty string) rather than throw.
+    }
+  }
+  return response;
 }
 
 /**

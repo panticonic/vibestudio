@@ -3420,7 +3420,15 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   ): Promise<{
     status: number;
     statusText: string;
-    headers: Record<string, string>;
+    /**
+     * Headers as ordered pairs. Preserves duplicate `Set-Cookie`
+     * entries (which the Fetch spec doesn't combine on iteration)
+     * across the RPC boundary; a flat Record would silently drop all
+     * but the last one.
+     */
+    headerPairs: Array<[string, string]>;
+    /** Final URL after any redirects the upstream fetch followed. Mirrors `Response.url`. */
+    finalUrl: string;
     /** Response body, base64-encoded. Always set; empty string for zero-byte bodies. */
     bodyBase64: string;
   }> {
@@ -3442,7 +3450,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     return {
       status: result.status,
       statusText: result.statusText,
-      headers: result.headers,
+      headerPairs: result.headerPairs,
+      finalUrl: result.finalUrl,
       bodyBase64: Buffer.from(result.body).toString("base64"),
     };
   }
