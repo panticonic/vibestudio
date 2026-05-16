@@ -170,6 +170,52 @@ resulting digest just like any other cached page.
 For images-only / scanned PDFs that have no embedded text, drop into
 eval and pass the raw bytes to a vision-capable model.
 
+## Paywalled / logged-in pages (eval + browser panel)
+
+`web_fetch` is a bare HTTP GET — it has no cookies, no JavaScript
+execution, and no user session. For paywalled articles, sites that
+require login, or apps that need client-side rendering, route the
+fetch through a real browser panel instead:
+
+```
+eval({ code: `
+  import { createBrowserPanel } from "@workspace/runtime";
+  import { htmlToReadableMarkdown } from "@natstack/harness/web-extract";
+
+  const browser = await createBrowserPanel("https://example.com/article");
+  const page = await browser.page();
+  await page.waitForLoadState("networkidle");
+  const html = await page.content();
+  const { title, markdown } = htmlToReadableMarkdown(html, page.url());
+  const { digest, size } = await rpc.call("main", "blobstore.putText", markdown);
+  // The panel stays open by default; close it (or hand it back) when done:
+  // await browser.close();
+  return { title, digest, size, head: markdown.slice(0, 5000) };
+` })
+```
+
+The blob you get back is indistinguishable from a `web_fetch` blob —
+`web_read` and `blobstore.grep` work on it the same way. The user's
+existing session in the browser panel (any prior logins, cookies) is
+used automatically.
+
+When to use this over `web_fetch`:
+
+- **Use first**: `web_fetch` — fast, cheap, works for ~95% of pages.
+- **Fall back to the browser recipe** when:
+  - `web_fetch` returns a head shorter than ~300 chars (likely a paywall
+    or a JS-rendered SPA shell)
+  - the page is gated behind a login the user has set up in the panel
+  - the page only finishes rendering after JS runs (Twitter, Notion,
+    Linear, etc.)
+
+The recipe opens a real Electron panel, so be sparing — don't loop
+over 50 URLs this way. For batch crawls, prefer `web_fetch` and accept
+the partial results.
+
+For login flows or interactive pages, see the `sandbox` skill's
+`BROWSER_AUTOMATION.md` for the full Playwright API.
+
 ## Summarizing long pages with an aux model (eval)
 
 When a page is too long to read entirely, summarize it in eval using a

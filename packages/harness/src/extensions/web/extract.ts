@@ -1,6 +1,5 @@
 import { parseHTML } from "linkedom";
 import { Readability } from "@mozilla/readability";
-import { extractText, getDocumentProxy, getMeta } from "unpdf";
 
 const USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
@@ -80,6 +79,8 @@ export async function extractPage(
 }
 
 async function pdfToMarkdown(bytes: Uint8Array, sourceUrl: string): Promise<ExtractedPage> {
+  // Lazy-import so panel-side subpath consumers don't pay the pdf.js cost.
+  const { extractText, getDocumentProxy, getMeta } = await import("unpdf");
   const doc = await getDocumentProxy(bytes);
   const [{ text: pages }, meta] = await Promise.all([
     extractText(doc, { mergePages: false }),
