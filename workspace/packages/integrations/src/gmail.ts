@@ -166,6 +166,8 @@ interface ListHistoryOptions {
   historyTypes?: Array<"messageAdded" | "messageDeleted" | "labelAdded" | "labelRemoved">
 }
 
+export type { ListHistoryOptions }
+
 function toQueryParams(params?: Record<string, string | number | string[] | undefined>): string {
   if (!params) {
     return ""
@@ -263,6 +265,13 @@ export interface GmailClient {
   sendMessage(params: SendMessageParams): Promise<GmailMessage>
   getProfile(): Promise<GmailProfile>
   listLabels(): Promise<GmailLabel[]>
+  /**
+   * Page through Gmail's history endpoint from the given cursor. Used
+   * by incremental sync flows (the built-in `startPolling`, and
+   * external pollers like email-sync-do). Returns the combined
+   * history across all pages.
+   */
+  listHistory(opts: ListHistoryOptions): Promise<GmailHistoryResponse>
   startPolling(opts?: StartPollingOptions): () => void
   onNewMessage(event: GmailNewMessageEvent | unknown): Promise<GmailNewMessageEvent | void>
   search(q: string, opts?: Omit<ListMessagesOptions, "q">): Promise<ListMessagesResult>
@@ -480,6 +489,7 @@ export function createGmailClient(credentials: CredentialClient): GmailClient {
       const data = await apiFetch<{ labels?: GmailLabel[] }>("/labels")
       return data.labels ?? []
     },
+    listHistory,
     startPolling,
     onNewMessage,
     search: (q, opts) => listMessages({ ...opts, q }),

@@ -59,6 +59,16 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
    * when calling `streamCall`. The bridge routes incoming
    * `stream-frame` messages to the matching entry.
    */
+  /**
+   * Default idle timeout for in-flight streams. A peer that initiates
+   * a stream but goes silent (no HEAD/DATA/END/ERROR within this
+   * window) gets the stream errored and the entry removed. Without
+   * this, a half-broken peer could leak entries in `pendingStreams`
+   * indefinitely. 90s is long enough to cover slow upstream model
+   * completions while still bounding leaked entries to ~minutes.
+   */
+  const STREAM_IDLE_TIMEOUT_MS = config.streamIdleTimeoutMs ?? 90_000;
+
   const pendingStreams = new Map<
     string,
     {
@@ -72,8 +82,37 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
       rejectHead: (err: unknown) => void;
       headEmitted: boolean;
       bodyClosed: boolean;
+      /** Cleared and rearmed on every incoming frame. */
+      idleTimer: ReturnType<typeof setTimeout> | null;
     }
   >();
+
+  function clearPendingStream(requestId: string): void {
+    const entry = pendingStreams.get(requestId);
+    if (!entry) return;
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    pendingStreams.delete(requestId);
+  }
+
+  function rearmStreamIdleTimer(requestId: string): void {
+    const entry = pendingStreams.get(requestId);
+    if (!entry) return;
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    entry.idleTimer = setTimeout(() => {
+      // Idle timeout fired. Surface as either a rejected head promise
+      // (no HEAD yet) or a stream-body error (already streaming).
+      const current = pendingStreams.get(requestId);
+      if (!current || current.bodyClosed) return;
+      const err = new Error("Streaming RPC timed out — no frames received");
+      if (current.headEmitted) {
+        current.bodyClosed = true;
+        current.controller.error(err);
+      } else {
+        current.rejectHead(err);
+      }
+      pendingStreams.delete(requestId);
+    }, STREAM_IDLE_TIMEOUT_MS);
+  }
 
   /**
    * Active outbound streams — calls our peer is making to us that
@@ -158,6 +197,10 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
     if (!entry) return;
     if (entry.bodyClosed) return;
 
+    // Every frame restarts the idle timer — a peer that's actively
+    // sending data isn't silent.
+    rearmStreamIdleTimer(frame.requestId);
+
     if (frame.frameType === FRAME_HEAD) {
       try {
         const head = JSON.parse(frame.payload) as {
@@ -170,7 +213,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
         entry.resolveHead(head);
       } catch (err) {
         entry.rejectHead(err);
-        pendingStreams.delete(frame.requestId);
+        clearPendingStream(frame.requestId);
       }
       return;
     }
@@ -184,7 +227,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
     if (frame.frameType === FRAME_END) {
       entry.bodyClosed = true;
       entry.controller.close();
-      pendingStreams.delete(frame.requestId);
+      clearPendingStream(frame.requestId);
       return;
     }
 
@@ -203,7 +246,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
       } else {
         entry.rejectHead(err);
       }
-      pendingStreams.delete(frame.requestId);
+      clearPendingStream(frame.requestId);
       return;
     }
     // Unknown frame type — drop (forward-compatible).
@@ -383,10 +426,8 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
         },
         cancel() {
           const entry = pendingStreams.get(requestId);
-          if (entry) {
-            entry.bodyClosed = true;
-            pendingStreams.delete(requestId);
-          }
+          if (entry) entry.bodyClosed = true;
+          clearPendingStream(requestId);
           sendCancel();
         },
       });
@@ -400,7 +441,11 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
         rejectHead,
         headEmitted: false,
         bodyClosed: false,
+        idleTimer: null,
       });
+      // Arm the idle timer immediately — if the peer never sends a
+      // HEAD frame, we'll bail out instead of hanging forever.
+      rearmStreamIdleTimer(requestId);
 
       const onAbort = (): void => {
         const entry = pendingStreams.get(requestId);
@@ -412,7 +457,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
         } else {
           entry.rejectHead(err);
         }
-        pendingStreams.delete(requestId);
+        clearPendingStream(requestId);
         sendCancel();
       };
       options?.signal?.addEventListener("abort", onAbort);
@@ -427,7 +472,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
       try {
         await config.transport.send(targetId, request);
       } catch (err) {
-        pendingStreams.delete(requestId);
+        clearPendingStream(requestId);
         options?.signal?.removeEventListener("abort", onAbort);
         throw err;
       }

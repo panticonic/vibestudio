@@ -1,3 +1,10 @@
+/**
+ * `@natstack/rpc` — stateless point-to-point RPC with fetch-shaped
+ * streaming. For stateful pub/sub channels with chat-shaped methods
+ * and structured attachments, use `@natstack/pubsub` instead. See
+ * `docs/architecture/rpc-vs-pubsub.md` for the boundary.
+ */
+
 export type {
   RpcRequest,
   RpcResponse,

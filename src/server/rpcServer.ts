@@ -1221,10 +1221,77 @@ export class RpcServer {
    * allow-list keeps the streaming surface deliberately narrow, since
    * arbitrary RPC methods aren't designed for incremental delivery.
    */
+  /**
+   * Pre-flight validation for streaming proxy fetch — runs the
+   * method allow-list, egress-proxy availability check, and param
+   * presence/decoding. Callable BEFORE the transport commits to a
+   * response (so HTTP can return a real 400/503 status code, not a
+   * 200-with-error-frame). Returns either a ready-to-execute call
+   * descriptor or a rejection with status + error message.
+   */
+  private validateStreamingProxyFetch(request: {
+    method: string;
+    args: unknown[];
+  }):
+    | {
+        ok: true;
+        egress: Pick<
+          import("./services/egressProxy.js").EgressProxy,
+          "forwardProxyFetchStream"
+        >;
+        proxyParams: {
+          url: string;
+          method: string;
+          headers?: Record<string, string>;
+          body?: string | Uint8Array;
+          credentialId?: string;
+        };
+      }
+    | { ok: false; status: number; error: string } {
+    if (request.method !== "credentials.proxyFetch") {
+      return {
+        ok: false,
+        status: 400,
+        error: `Method '${request.method}' is not exposed on the streaming endpoint. Only 'credentials.proxyFetch' is allowed.`,
+      };
+    }
+    const egress = this.deps.egressProxy;
+    if (!egress) {
+      return { ok: false, status: 503, error: "Streaming proxy fetch is unavailable" };
+    }
+    const params = (request.args?.[0] ?? {}) as {
+      url?: string;
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      bodyBase64?: string;
+      credentialId?: string;
+    };
+    if (!params.url || !params.method) {
+      return { ok: false, status: 400, error: "Missing required params: url and method" };
+    }
+    const upstreamBody: string | Uint8Array | undefined =
+      params.bodyBase64 !== undefined
+        ? new Uint8Array(Buffer.from(params.bodyBase64, "base64"))
+        : params.body;
+    return {
+      ok: true,
+      egress,
+      proxyParams: {
+        url: params.url,
+        method: params.method,
+        headers: params.headers,
+        body: upstreamBody,
+        credentialId: params.credentialId,
+      },
+    };
+  }
+
   private async handleStreamingProxyFetch(
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
   ): Promise<void> {
+    // Auth — same flow as `POST /rpc`.
     const authHeader = req.headers["authorization"];
     const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
     if (!token) {
@@ -1247,13 +1314,7 @@ export class RpcServer {
     }
     const callerId = entry.callerId;
 
-    const egress = this.deps.egressProxy;
-    if (!egress) {
-      res.writeHead(503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Streaming proxy fetch is unavailable" }));
-      return;
-    }
-
+    // Read request body (capped).
     const chunks: Buffer[] = [];
     let total = 0;
     const MAX_REQUEST_BODY = 16 * 1024 * 1024;
@@ -1277,51 +1338,25 @@ export class RpcServer {
     }
 
     const method = body["method"] as string | undefined;
-    if (method !== "credentials.proxyFetch") {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        error: `Method '${method}' is not exposed on the streaming endpoint. Only 'credentials.proxyFetch' is allowed.`,
-      }));
-      return;
-    }
     const args = (body["args"] as unknown[]) ?? [];
-    const params = (args[0] ?? {}) as {
-      url?: string;
-      method?: string;
-      headers?: Record<string, string>;
-      body?: string;
-      bodyBase64?: string;
-      credentialId?: string;
-    };
-    if (!params.url || !params.method) {
-      res.writeHead(400, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Missing required params: url and method" }));
+
+    // Run validation BEFORE committing to a 200 response, so policy
+    // failures (wrong method, no egress proxy, missing params) come
+    // back as proper HTTP error statuses.
+    const check = this.validateStreamingProxyFetch({ method: method ?? "", args });
+    if (!check.ok) {
+      res.writeHead(check.status, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: check.error }));
       return;
     }
 
-    const upstreamBody: string | Uint8Array | undefined =
-      params.bodyBase64 !== undefined
-        ? new Uint8Array(Buffer.from(params.bodyBase64, "base64"))
-        : params.body;
-
-    res.writeHead(200, {
-      "Content-Type": "application/vnd.natstack.credentialed-fetch+binary",
-      "Cache-Control": "no-store",
-      "X-Accel-Buffering": "no",
-    });
-
+    // Cancellation: HTTP transport close = caller went away.
     const abortController = new AbortController();
     req.on("close", () => abortController.abort());
     res.on("close", () => abortController.abort());
 
-    const {
-      encodeHeadFrame,
-      encodeDataFrame,
-      encodeEndFrame,
-      encodeErrorFrame,
-    } = await import("../../packages/shared/src/credentials/streamFraming.js");
-
-    const writeFrame = (bytes: Uint8Array): Promise<void> =>
+    const codec = await import("../../packages/shared/src/credentials/streamFraming.js");
+    const writeBytes = (bytes: Uint8Array): Promise<void> =>
       new Promise<void>((resolve, reject) => {
         const ok = res.write(bytes, (err) => {
           if (err) reject(err);
@@ -1330,44 +1365,55 @@ export class RpcServer {
         else res.once("drain", () => resolve());
       });
 
+    // HTTP encodes frames as raw binary on the chunked response —
+    // no base64 overhead since the response IS a binary stream.
+    const emitFrame = async (
+      frame: import("./services/egressProxy.js").StreamFrame,
+    ): Promise<void> => {
+      if (frame.kind === "head") {
+        await writeBytes(
+          codec.encodeHeadFrame({
+            status: frame.status,
+            statusText: frame.statusText,
+            headerPairs: frame.headerPairs,
+            finalUrl: frame.finalUrl,
+          }),
+        );
+      } else if (frame.kind === "chunk") {
+        await writeBytes(codec.encodeDataFrame(frame.bytes));
+      } else if (frame.kind === "end") {
+        await writeBytes(codec.encodeEndFrame({ bytesIn: frame.bytesIn }));
+      } else if (frame.kind === "error") {
+        await writeBytes(
+          codec.encodeErrorFrame({
+            status: frame.status,
+            message: frame.message,
+            code: frame.code,
+          }),
+        );
+      }
+    };
+
+    // Headers go out before the first frame.
+    res.writeHead(200, {
+      "Content-Type": "application/vnd.natstack.credentialed-fetch+binary",
+      "Cache-Control": "no-store",
+      "X-Accel-Buffering": "no",
+    });
+
     try {
-      await egress.forwardProxyFetchStream(
-        {
-          callerId,
-          url: params.url,
-          method: params.method,
-          headers: params.headers,
-          body: upstreamBody,
-          credentialId: params.credentialId,
-        },
-        async (frame) => {
-          if (frame.kind === "head") {
-            await writeFrame(encodeHeadFrame({
-              status: frame.status,
-              statusText: frame.statusText,
-              headerPairs: frame.headerPairs,
-              finalUrl: frame.finalUrl,
-            }));
-          } else if (frame.kind === "chunk") {
-            await writeFrame(encodeDataFrame(frame.bytes));
-          } else if (frame.kind === "end") {
-            await writeFrame(encodeEndFrame({ bytesIn: frame.bytesIn }));
-          } else if (frame.kind === "error") {
-            await writeFrame(encodeErrorFrame({
-              status: frame.status,
-              message: frame.message,
-              code: frame.code,
-            }));
-          }
-        },
+      await check.egress.forwardProxyFetchStream(
+        { callerId, ...check.proxyParams },
+        emitFrame,
         abortController.signal,
       );
     } catch (err) {
       try {
-        await writeFrame(encodeErrorFrame({
+        await emitFrame({
+          kind: "error",
           status: 502,
           message: err instanceof Error ? err.message : String(err),
-        }));
+        });
       } catch {
         // Best-effort — connection may already be torn down.
       }
@@ -1401,91 +1447,69 @@ export class RpcServer {
         },
       });
     };
-    const emitError = (status: number, message: string): void => {
-      sendFrame(0x04, JSON.stringify({ status, message }));
+
+    // WS encodes DATA frames as base64 in JSON (the `ws:rpc`
+    // envelope is JSON-serialized). The HTTP endpoint avoids this
+    // overhead by writing raw bytes to the chunked response.
+    const emitFrame = (
+      frame: import("./services/egressProxy.js").StreamFrame,
+    ): void => {
+      if (frame.kind === "head") {
+        sendFrame(
+          0x01,
+          JSON.stringify({
+            status: frame.status,
+            statusText: frame.statusText,
+            headerPairs: frame.headerPairs,
+            finalUrl: frame.finalUrl,
+          }),
+        );
+      } else if (frame.kind === "chunk") {
+        let binary = "";
+        for (const byte of frame.bytes) binary += String.fromCharCode(byte);
+        sendFrame(0x02, btoa(binary));
+      } else if (frame.kind === "end") {
+        sendFrame(0x03, JSON.stringify({ bytesIn: frame.bytesIn }));
+      } else if (frame.kind === "error") {
+        sendFrame(
+          0x04,
+          JSON.stringify({
+            status: frame.status,
+            message: frame.message,
+            code: frame.code,
+          }),
+        );
+      }
     };
 
-    if (request.method !== "credentials.proxyFetch") {
-      emitError(
-        400,
-        `Method '${request.method}' is not exposed on the streaming endpoint. Only 'credentials.proxyFetch' is allowed.`,
-      );
+    // WS has no separate-status-code path — pre-flight failures
+    // become ERROR frames just like in-flight failures. The client's
+    // `streamCall` promise rejects with the error message either way.
+    const check = this.validateStreamingProxyFetch({
+      method: request.method,
+      args: request.args,
+    });
+    if (!check.ok) {
+      emitFrame({ kind: "error", status: check.status, message: check.error });
       return;
     }
-
-    const egress = this.deps.egressProxy;
-    if (!egress) {
-      emitError(503, "Streaming proxy fetch is unavailable");
-      return;
-    }
-
-    const params = (request.args?.[0] ?? {}) as {
-      url?: string;
-      method?: string;
-      headers?: Record<string, string>;
-      body?: string;
-      bodyBase64?: string;
-      credentialId?: string;
-    };
-    if (!params.url || !params.method) {
-      emitError(400, "Missing required params: url and method");
-      return;
-    }
-
-    const upstreamBody: string | Uint8Array | undefined =
-      params.bodyBase64 !== undefined
-        ? new Uint8Array(Buffer.from(params.bodyBase64, "base64"))
-        : params.body;
 
     const abortController = new AbortController();
     this.wsStreamAborts.set(request.requestId, abortController);
 
     try {
-      await egress.forwardProxyFetchStream(
-        {
-          callerId: client.callerId,
-          url: params.url,
-          method: params.method,
-          headers: params.headers,
-          body: upstreamBody,
-          credentialId: params.credentialId,
-        },
-        async (frame) => {
-          if (frame.kind === "head") {
-            sendFrame(
-              0x01,
-              JSON.stringify({
-                status: frame.status,
-                statusText: frame.statusText,
-                headerPairs: frame.headerPairs,
-                finalUrl: frame.finalUrl,
-              }),
-            );
-          } else if (frame.kind === "chunk") {
-            // Encode binary chunk as base64 for the WS JSON envelope.
-            // The HTTP endpoint avoids this overhead by writing raw
-            // bytes to the chunked response — see streamFraming.ts.
-            let binary = "";
-            for (const byte of frame.bytes) binary += String.fromCharCode(byte);
-            sendFrame(0x02, btoa(binary));
-          } else if (frame.kind === "end") {
-            sendFrame(0x03, JSON.stringify({ bytesIn: frame.bytesIn }));
-          } else if (frame.kind === "error") {
-            sendFrame(
-              0x04,
-              JSON.stringify({
-                status: frame.status,
-                message: frame.message,
-                code: frame.code,
-              }),
-            );
-          }
-        },
+      await check.egress.forwardProxyFetchStream(
+        { callerId: client.callerId, ...check.proxyParams },
+        emitFrame,
         abortController.signal,
       );
     } catch (err) {
       try {
-        emitError(502, err instanceof Error ? err.message : String(err));
+        emitFrame({
+          kind: "error",
+          status: 502,
+          message: err instanceof Error ? err.message : String(err),
+        });
       } catch {
         // Best-effort — client may already be gone.
       }

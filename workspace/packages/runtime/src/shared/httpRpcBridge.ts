@@ -81,17 +81,22 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
     },
 
     /**
-     * Streaming methods on the HTTP bridge are served by the
-     * dedicated `/rpc/stream` HTTP endpoint, not by inbound message
-     * dispatch — there is no inbound channel for a one-shot HTTP
-     * POST/response RPC bridge. The method is here to satisfy the
-     * RpcBridge contract; calling it is a no-op and a warning since
-     * any caller that wires a streaming handler through the HTTP
-     * bridge is almost certainly mistargeting the registration.
+     * Streaming method handlers can't be registered on the HTTP
+     * bridge: HTTP is one-shot POST/response with no inbound channel,
+     * so there's nowhere for a peer-initiated `stream-request` to
+     * arrive. Streaming method handlers belong on the server-side
+     * RpcServer (which serves `/rpc/stream`) or on the WS-side bridge
+     * (which dispatches peer-initiated `stream-request` messages).
+     *
+     * We throw rather than silently no-op so that a caller wiring
+     * the handler in the wrong place gets immediate feedback.
      */
-    exposeStreamingMethod(_method, _handler) {
-      // Intentionally no-op. HTTP bridge serves streams via the
-      // server-side `/rpc/stream` route registered separately.
+    exposeStreamingMethod(method, _handler) {
+      throw new Error(
+        `exposeStreamingMethod("${method}") is not supported on the HTTP RPC bridge — ` +
+          `register the handler on the server-side RpcServer (for /rpc/stream) ` +
+          `or on a transport-based RpcBridge instead.`,
+      );
     },
 
     async call<T>(targetId: string, method: string, ...args: unknown[]): Promise<T> {

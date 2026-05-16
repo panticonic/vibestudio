@@ -148,6 +148,14 @@ export interface RpcBridgeConfig {
   selfId: string;
   /** The transport implementation */
   transport: RpcTransport;
+  /**
+   * Idle timeout for in-flight streaming calls. If no frame arrives
+   * within this window the stream is errored and the bookkeeping
+   * entry removed — prevents leaks from peers that go silent without
+   * sending END or ERROR. Defaults to 90s. Use a smaller value in
+   * tests if you want to assert timeout behavior quickly.
+   */
+  streamIdleTimeoutMs?: number;
 }
 
 /**
