@@ -15,6 +15,7 @@ interface RunningExtension {
   stopping: boolean;
   health: ExtensionHealth | null;
   inspectorUrl: string | null;
+  stderrTail: string[];
 }
 
 interface CrashState {
@@ -69,6 +70,7 @@ export class ExtensionProcessManager {
       },
       {
         execArgv: extensionInspectorEnabled() ? ["--inspect=0"] : undefined,
+        preferNode: true,
       },
     );
     const running: RunningExtension = {
@@ -82,6 +84,7 @@ export class ExtensionProcessManager {
       stopping: false,
       health: null,
       inspectorUrl: null,
+      stderrTail: [],
     };
     this.running.set(state.name, running);
 
@@ -183,7 +186,7 @@ export class ExtensionProcessManager {
     this.running.delete(state.name);
     const ready = running.pending.get("__ready__");
     if (ready) {
-      ready.reject(new Error(`Extension ${state.name} exited before ready (code ${code ?? "signal"})`));
+      ready.reject(new Error(this.exitBeforeReadyMessage(state.name, code, running.stderrTail)));
     }
     for (const [requestId, pending] of running.pending) {
       if (requestId === "__ready__") continue;
@@ -199,7 +202,7 @@ export class ExtensionProcessManager {
       state,
       running.ready
         ? `Exited with code ${code ?? "signal"}`
-        : `Exited before ready with code ${code ?? "signal"}`,
+        : this.exitBeforeReadyMessage(state.name, code, running.stderrTail),
     );
   }
 
@@ -215,8 +218,23 @@ export class ExtensionProcessManager {
         continue;
       }
       if (isInspectorHelpLine(trimmed)) continue;
+      if (level === "error") {
+        const running = this.running.get(name);
+        if (running) {
+          running.stderrTail.push(trimmed);
+          if (running.stderrTail.length > 20) {
+            running.stderrTail.splice(0, running.stderrTail.length - 20);
+          }
+        }
+      }
       this.deps.onLog(name, level, trimmed, undefined, level === "error" ? "stderr" : "stdout");
     }
+  }
+
+  private exitBeforeReadyMessage(name: string, code: number | null, stderrTail: string[]): string {
+    const base = `Extension ${name} exited before ready (code ${code ?? "signal"})`;
+    if (stderrTail.length === 0) return base;
+    return `${base}\nRecent stderr:\n${stderrTail.join("\n")}`;
   }
 
   getRespawn(name: string): { attempts: number; nextAttemptAt: number | null } | null {

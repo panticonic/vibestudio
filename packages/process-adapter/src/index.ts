@@ -3,6 +3,11 @@
  *
  * Used by ServerProcessManager for server process spawning.
  */
+import { fork as nodeFork } from "node:child_process";
+import type { Serializable } from "node:child_process";
+import { createRequire } from "node:module";
+
+const requireOptional = createRequire(import.meta.url);
 
 /**
  * Abstraction over Electron utilityProcess / Node.js child_process.
@@ -24,6 +29,7 @@ export interface ProcessAdapter {
 
 export interface ProcessAdapterOptions {
   execArgv?: string[];
+  preferNode?: boolean;
 }
 
 /** Detect whether we're running inside Electron with a functional utilityProcess. */
@@ -36,7 +42,7 @@ export function hasElectronUtilityProcess(): boolean {
     // (a string), so .utilityProcess would be undefined — not a usable API.
     if (process.versions["electron"]) {
       try {
-        const mod = require("electron");
+        const mod = requireOptional("electron");
         _useElectron = typeof mod?.utilityProcess?.fork === "function";
       } catch {
         // electron module not loadable (shouldn't happen inside Electron, but be safe)
@@ -54,14 +60,17 @@ export function createNodeProcessAdapter(
   env: Record<string, string | undefined>,
   options: ProcessAdapterOptions = {},
 ): ProcessAdapter {
-  const { fork } = require("child_process") as typeof import("child_process");
-  const proc = fork(bundlePath, [], {
+  const childEnv = {
+    ...env,
+    ...(process.versions["electron"] ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
+  };
+  const proc = nodeFork(bundlePath, [], {
     stdio: ["pipe", "pipe", "pipe", "ipc"],
-    env: env as NodeJS.ProcessEnv,
+    env: childEnv as NodeJS.ProcessEnv,
     execArgv: options.execArgv,
   });
   const adapter: ProcessAdapter = {
-    postMessage: (msg) => proc.send!(msg as import("child_process").Serializable),
+    postMessage: (msg) => proc.send!(msg as Serializable),
     on: (event: string, handler: (...args: any[]) => void) => {
       proc.on(event as any, handler);
       return adapter;
@@ -93,10 +102,10 @@ export function createProcessAdapter(
   env: Record<string, string | undefined>,
   options: ProcessAdapterOptions = {},
 ): ProcessAdapter {
-  if (!hasElectronUtilityProcess()) {
+  if (options.preferNode || !hasElectronUtilityProcess()) {
     return createNodeProcessAdapter(bundlePath, env, options);
   }
-  const { utilityProcess } = require("electron") as {
+  const { utilityProcess } = requireOptional("electron") as {
     utilityProcess: {
       fork(
         modulePath: string,
