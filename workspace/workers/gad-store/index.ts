@@ -27,21 +27,31 @@ const AUTHORITATIVE_TABLES = new Set([
   "gad_branches",
 ]);
 
-const MUTATING_TRAJECTORY_KINDS = new Set<GadTrajectoryKind>([
-  "file_observed",
-  "file_mutation",
-  "workspace_observed",
-]);
-
-export type GadTrajectoryKind =
-  | "message_created"
-  | "message_block_added"
-  | "message_finalized"
+/**
+ * Envelope-unified entry types. Mirrors `GadEntryType` in
+ * `@workspace/runtime/shared/gad`. The union is duplicated here to keep
+ * the gad-store DO self-contained at compile time.
+ */
+export type GadEntryType =
+  // Transcript subset
+  | "message"
+  | "model_change"
+  | "thinking_level_change"
+  | "compaction"
+  | "branch_summary"
+  | "custom"
+  | "custom_message"
+  | "label"
+  | "session_info"
+  | "leaf"
+  // Provenance subset
+  | "message_block"
   | "tool_call_requested"
   | "tool_result_observed"
   | "file_observed"
   | "file_read"
-  | "file_mutation"
+  | "file_mutation_intent"
+  | "file_mutation_observed"
   | "workspace_observed"
   | "approval_requested"
   | "approval_resolved"
@@ -54,15 +64,65 @@ export type GadTrajectoryKind =
   | "theory_updated"
   | "system_event";
 
+const VALID_ENTRY_TYPES = new Set<GadEntryType>([
+  "message",
+  "model_change",
+  "thinking_level_change",
+  "compaction",
+  "branch_summary",
+  "custom",
+  "custom_message",
+  "label",
+  "session_info",
+  "leaf",
+  "message_block",
+  "tool_call_requested",
+  "tool_result_observed",
+  "file_observed",
+  "file_read",
+  "file_mutation_intent",
+  "file_mutation_observed",
+  "workspace_observed",
+  "approval_requested",
+  "approval_resolved",
+  "dispatch_abandoned",
+  "branch_created",
+  "snapshot_marked",
+  "claim_asserted",
+  "claim_revised",
+  "contradiction_detected",
+  "theory_updated",
+  "system_event",
+]);
+
+const STATE_MUTATING_ENTRY_TYPES = new Set<GadEntryType>([
+  "file_observed",
+  "file_mutation_observed",
+  "workspace_observed",
+]);
+
+const TOOL_CALL_ID_BEARING_TYPES = new Set<GadEntryType>([
+  "tool_call_requested",
+  "tool_result_observed",
+  "file_mutation_intent",
+  "file_mutation_observed",
+]);
+
+// Lightweight UUID shape check. We don't require strict UUIDv7 here — any
+// non-empty string that looks like a UUID is accepted. The actual UUIDv7
+// minting happens in the adapter; this is a defence against malformed input.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+function isLikelyEntryId(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
 export interface GadTrajectoryItemSpec {
-  kind: GadTrajectoryKind;
+  entryId: string;
+  parentEntryId: string | null;
+  entryType: GadEntryType;
+  payload: JsonRecord;
   actor?: string | null;
-  payload?: JsonRecord | string | null;
-  messageId?: string | null;
-  blockId?: string | null;
-  toolCallId?: string | null;
-  inputStateHash?: string | null;
-  outputStateHash?: string | null;
   metadata?: JsonRecord | null;
 }
 
@@ -86,10 +146,35 @@ export interface ForkGadBranchInput {
   workspaceId?: string | null;
   sourceBranchId: string;
   newBranchId?: string | null;
-  trajectoryHash?: string | null;
-  trajectoryId?: number | null;
+  entryId?: string | null;
   channelId?: string | null;
   contextId?: string | null;
+}
+
+export interface SetBranchHeadInput {
+  workspaceId?: string | null;
+  branchId: string;
+  entryId: string | null;
+  expectedHeadTrajectoryHash?: string | null;
+}
+
+export interface GetEntryByIdInput {
+  workspaceId?: string | null;
+  entryId: string;
+}
+
+export interface GetBranchPathInput {
+  workspaceId?: string | null;
+  branchId: string;
+  throughEntryId?: string | null;
+}
+
+export interface FindBranchEntriesByTypeInput {
+  workspaceId?: string | null;
+  branchId: string;
+  entryType: GadEntryType;
+  offset?: number | null;
+  limit?: number | null;
 }
 
 export interface GadIntegrityError {
@@ -97,10 +182,33 @@ export interface GadIntegrityError {
   message: string;
   trajectoryId?: number;
   trajectoryHash?: string;
+  entryId?: string;
   branchId?: string;
   stateHash?: string;
   path?: string;
   toolCallId?: string;
+}
+
+export interface GadBranchHead {
+  workspaceId: string;
+  branchId: string;
+  headTrajectoryId: number | null;
+  headTrajectoryHash: string | null;
+  headEntryId: string | null;
+  headStateHash: string;
+  dirty: boolean;
+}
+
+export interface GadEntryRow {
+  trajectoryId: number;
+  trajectoryHash: string;
+  entryId: string;
+  parentEntryId: string | null;
+  entryType: GadEntryType;
+  actor: string | null;
+  payload: JsonRecord;
+  metadata: JsonRecord | null;
+  createdAt: string;
 }
 
 interface BranchTrajectoryOptions {
@@ -139,6 +247,15 @@ interface StateTransitionPlan {
   oldFile: ManifestFileEntry | null;
   newFile: { path: string; contentHash: string; mode: number | null } | null;
   newFileVersionId?: number | null;
+}
+
+interface PendingIntent {
+  path: string;
+  beforeHash: string | null;
+  beforeSize: number | null;
+  toolCallId: string | null;
+  plannedTool: string | null;
+  plannedParams: JsonRecord | null;
 }
 
 function nowIso(): string {
@@ -225,18 +342,6 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier.replace(/"/g, "\"\"")}"`;
 }
 
-function toolNameFromBlock(block: unknown): string | null {
-  if (!block || typeof block !== "object") return null;
-  const item = block as Record<string, unknown>;
-  return asString(item["name"]) ?? asString(item["toolName"]) ?? null;
-}
-
-function toolCallIdFromBlock(block: unknown): string | null {
-  if (!block || typeof block !== "object") return null;
-  const item = block as Record<string, unknown>;
-  return asString(item["id"]) ?? asString(item["toolCallId"]);
-}
-
 function textLineCount(text: string | null): number | null {
   if (text == null) return null;
   if (text.length === 0) return 0;
@@ -280,8 +385,12 @@ function translateLineRangeBeforeHunk(row: JsonRecord, startLine: number, endLin
   return null;
 }
 
+function toolCallIdFromPayload(payload: JsonRecord): string | null {
+  return asString(payload["toolCallId"]);
+}
+
 export class GadWorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 8;
+  static override schemaVersion = 9;
 
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
@@ -422,6 +531,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_branches_channel ON gad_branches(workspace_id, channel_id)`);
+    // Envelope schema: every row has `entry_id` (UUIDv7), `parent_entry_id`
+    // (logical parent), and `entry_type` (discriminator). `parent_id` /
+    // `parent_hash` keep the chain-internal hash linkage. `tool_call_id`
+    // stays as a denormalized lookup column populated at insert time from
+    // payloads that carry a `toolCallId`.
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS gad_trajectory_items (
         id INTEGER PRIMARY KEY,
@@ -430,22 +544,23 @@ export class GadWorkspaceDO extends DurableObjectBase {
         parent_id INTEGER,
         parent_hash TEXT,
         introduced_on_branch_id TEXT,
-        kind TEXT NOT NULL,
+        entry_id TEXT NOT NULL,
+        parent_entry_id TEXT,
+        entry_type TEXT NOT NULL,
         actor TEXT,
         payload_hash TEXT,
-        input_state_hash TEXT,
-        output_state_hash TEXT,
-        message_id TEXT,
-        block_id TEXT,
         tool_call_id TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         metadata_json TEXT,
-        UNIQUE (workspace_id, hash)
+        UNIQUE (workspace_id, hash),
+        UNIQUE (workspace_id, entry_id)
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_introduced_branch ON gad_trajectory_items(workspace_id, introduced_on_branch_id, id)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_parent ON gad_trajectory_items(workspace_id, parent_id)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_tool_call ON gad_trajectory_items(workspace_id, tool_call_id)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_parent_entry ON gad_trajectory_items(workspace_id, parent_entry_id)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_entry_type ON gad_trajectory_items(workspace_id, entry_type)`);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS gad_state_transitions (
         id INTEGER PRIMARY KEY,
@@ -579,14 +694,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     );
   }
 
-  ensureGadBranch(input: EnsureGadBranchInput): {
-    workspaceId: string;
-    branchId: string;
-    headTrajectoryId: number | null;
-    headTrajectoryHash: string | null;
-    headStateHash: string;
-    dirty: boolean;
-  } {
+  ensureGadBranch(input: EnsureGadBranchInput): GadBranchHead {
     this.ensureReady();
     const workspaceId = input.workspaceId ?? WORKSPACE_ID;
     const branchId = input.branchId;
@@ -615,18 +723,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.getGadBranchHead({ workspaceId, branchId });
   }
 
-  getGadBranchHead(input: { workspaceId?: string | null; branchId: string }): {
-    workspaceId: string;
-    branchId: string;
-    headTrajectoryId: number | null;
-    headTrajectoryHash: string | null;
-    headStateHash: string;
-    dirty: boolean;
-  } {
+  getGadBranchHead(input: { workspaceId?: string | null; branchId: string }): GadBranchHead {
     this.ensureReady();
     const workspaceId = input.workspaceId ?? WORKSPACE_ID;
     const row = this.sql.exec(
-      `SELECT * FROM gad_branches WHERE workspace_id = ? AND id = ?`,
+      `SELECT b.*, ti.entry_id AS head_entry_id
+       FROM gad_branches b
+       LEFT JOIN gad_trajectory_items ti
+         ON ti.workspace_id = b.workspace_id AND ti.id = b.head_trajectory_id
+       WHERE b.workspace_id = ? AND b.id = ?`,
       workspaceId,
       input.branchId,
     ).toArray()[0] as JsonRecord | undefined;
@@ -636,6 +741,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       branchId: input.branchId,
       headTrajectoryId: row["head_trajectory_id"] == null ? null : asNumber(row["head_trajectory_id"]),
       headTrajectoryHash: asString(row["head_trajectory_hash"]),
+      headEntryId: asString(row["head_entry_id"]),
       headStateHash: asString(row["head_state_hash"]) ?? EMPTY_STATE_HASH,
       dirty: row["dirty"] === 1,
     };
@@ -646,8 +752,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
     branchId: string;
     headTrajectoryId: number | null;
     headTrajectoryHash: string | null;
+    headEntryId: string | null;
     headStateHash: string;
-    items: Array<{ id: number; hash: string; inputStateHash: string | null; outputStateHash: string | null }>;
+    items: Array<{ id: number; hash: string; entryId: string; parentEntryId: string | null }>;
   }> {
     this.ensureReady();
     const workspaceId = input.workspaceId ?? WORKSPACE_ID;
@@ -665,6 +772,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
     let parentId = branch.headTrajectoryId;
     let currentState = branch.headStateHash;
     let currentFiles: ManifestFileEntry[] | null = null;
+
+    // Track entry ids appearing in this batch so parent_entry_id can
+    // reference items earlier in the same batch.
+    const batchEntryIds = new Set<string>();
+
     const prepared: Array<{
       hash: string;
       payloadHash: string | null;
@@ -672,67 +784,109 @@ export class GadWorkspaceDO extends DurableObjectBase {
       payloadJson: string | null;
       payloadText: string | null;
       spec: GadTrajectoryItemSpec;
+      toolCallId: string | null;
       inputStateHash: string | null;
       outputStateHash: string | null;
       parentHash: string | null;
       parentId: number | null;
       stateTransition?: StateTransitionPlan;
+      intentPayload?: PendingIntent | null;
     }> = [];
 
     for (const spec of input.items) {
-      const specPayload = typeof spec.payload === "object" && spec.payload != null ? spec.payload : null;
-      if (spec.kind === "message_created" && specPayload && asString(specPayload["role"]) === "toolResult") {
-        console.error("[GadWorkspaceDO] Rejecting generic toolResult message_created", {
-          workspaceId,
-          branchId,
-          messageId: spec.messageId ?? null,
-        });
-        throw new Error("Malformed GAD append: toolResult must be recorded as tool_result_observed");
+      // Envelope validation
+      if (!spec || typeof spec !== "object") throw new Error("Malformed GAD append: item is not an object");
+      if (!isLikelyEntryId(spec.entryId)) {
+        throw new Error(`Malformed GAD append: invalid entryId ${JSON.stringify(spec.entryId)}`);
       }
-      const itemInputState = spec.inputStateHash ?? currentState;
-      if (itemInputState !== currentState) throw new Error(`Invalid state transition for ${spec.kind}`);
+      if (!VALID_ENTRY_TYPES.has(spec.entryType)) {
+        throw new Error(`Malformed GAD append: unknown entryType ${spec.entryType}`);
+      }
+      if (!spec.payload || typeof spec.payload !== "object" || Array.isArray(spec.payload)) {
+        throw new Error(`Malformed GAD append: payload for ${spec.entryType} must be a JSON object`);
+      }
+      const parentEntryId = spec.parentEntryId ?? null;
+      if (parentEntryId != null) {
+        if (typeof parentEntryId !== "string" || !parentEntryId) {
+          throw new Error(`Malformed GAD append: parentEntryId must be a string`);
+        }
+        if (!batchEntryIds.has(parentEntryId)) {
+          // Allow forward references resolved against existing rows
+          const exists = this.sql.exec(
+            `SELECT 1 AS ok FROM gad_trajectory_items WHERE workspace_id = ? AND entry_id = ? LIMIT 1`,
+            workspaceId,
+            parentEntryId,
+          ).toArray()[0] as JsonRecord | undefined;
+          if (!exists) {
+            throw new Error(`Malformed GAD append: parentEntryId ${parentEntryId} not found`);
+          }
+        }
+      }
+      if (batchEntryIds.has(spec.entryId)) {
+        throw new Error(`Malformed GAD append: duplicate entryId ${spec.entryId} in batch`);
+      }
+      // Detect collisions with already-persisted rows.
+      const collision = this.sql.exec(
+        `SELECT 1 AS ok FROM gad_trajectory_items WHERE workspace_id = ? AND entry_id = ? LIMIT 1`,
+        workspaceId,
+        spec.entryId,
+      ).toArray()[0] as JsonRecord | undefined;
+      if (collision) throw new Error(`Malformed GAD append: entryId ${spec.entryId} already exists`);
+
+      const payload = spec.payload;
+      const itemToolCallId = TOOL_CALL_ID_BEARING_TYPES.has(spec.entryType)
+        ? toolCallIdFromPayload(payload)
+        : null;
+
       const stateTransition = await this.prepareStateTransition(workspaceId, currentState, spec, currentFiles ?? undefined);
-      if (!stateTransition && spec.outputStateHash != null) throw new Error(`Non-mutating ${spec.kind} cannot set outputStateHash`);
-      const effectiveStateTransition = stateTransition?.stateHash === currentState ? null : stateTransition;
-      if (stateTransition && spec.outputStateHash != null && spec.outputStateHash !== stateTransition.stateHash) {
-        throw new Error(`Invalid outputStateHash for ${spec.kind}`);
-      }
+      const effectiveStateTransition = stateTransition && stateTransition.stateHash === currentState ? null : stateTransition;
+      const itemInputState = currentState;
       const itemOutputState = effectiveStateTransition ? effectiveStateTransition.stateHash : null;
-      const payload = spec.payload ?? null;
-      const payloadKind = typeof payload === "string" ? "text" : spec.kind;
-      const payloadHash = payload == null ? null : await sha256("payload", { kind: payloadKind, payload });
+
+      const payloadKind = spec.entryType;
+      const payloadHash = await sha256("payload", { kind: payloadKind, payload });
+
       const hash = await sha256("trajectory", {
         parentHash,
-        kind: spec.kind,
+        entryId: spec.entryId,
+        parentEntryId: parentEntryId,
+        entryType: spec.entryType,
         actor: spec.actor ?? null,
         payloadHash,
-        inputStateHash: itemInputState,
-        outputStateHash: itemOutputState,
-        messageId: spec.messageId ?? null,
-        blockId: spec.blockId ?? null,
-        toolCallId: spec.toolCallId ?? null,
         metadata: spec.metadata ?? null,
       });
+
+      // For file_mutation_observed we may need to expose the intent payload
+      // to recordFileProvenance. Resolve it now (intent is either in-batch
+      // earlier or already persisted).
+      let intentPayload: PendingIntent | null = null;
+      if (spec.entryType === "file_mutation_observed" && parentEntryId) {
+        intentPayload = this.lookupIntentForObserved(workspaceId, parentEntryId, prepared) ?? null;
+      }
+
       prepared.push({
         hash,
         payloadHash,
-        payloadKind: payload == null ? null : payloadKind,
-        payloadJson: payload != null && typeof payload !== "string" ? json(payload) : null,
-        payloadText: typeof payload === "string" ? payload : null,
+        payloadKind,
+        payloadJson: json(payload),
+        payloadText: null,
         spec,
+        toolCallId: itemToolCallId,
         inputStateHash: itemInputState,
         outputStateHash: itemOutputState,
         parentHash,
         parentId,
         stateTransition: effectiveStateTransition ?? undefined,
+        intentPayload,
       });
+      batchEntryIds.add(spec.entryId);
       parentHash = hash;
       parentId = null;
       if (itemOutputState) currentState = itemOutputState;
       if (effectiveStateTransition) currentFiles = effectiveStateTransition.files;
     }
 
-    const created: Array<{ id: number; hash: string; inputStateHash: string | null; outputStateHash: string | null }> = [];
+    const created: Array<{ id: number; hash: string; entryId: string; parentEntryId: string | null }> = [];
     this.transaction(() => {
       const currentBranch = this.sql.exec(
         `SELECT head_trajectory_hash, head_state_hash FROM gad_branches WHERE workspace_id = ? AND id = ?`,
@@ -809,27 +963,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
         const resolvedParentId = item.parentId ?? (parentRow?.["id"] == null ? null : asNumber(parentRow["id"]));
         this.sql.exec(
           `INSERT INTO gad_trajectory_items (
-             workspace_id, hash, parent_id, parent_hash, introduced_on_branch_id, kind, actor,
-             payload_hash, input_state_hash, output_state_hash, message_id, block_id, tool_call_id, metadata_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             workspace_id, hash, parent_id, parent_hash, introduced_on_branch_id,
+             entry_id, parent_entry_id, entry_type, actor, payload_hash, tool_call_id, metadata_json
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           workspaceId,
           item.hash,
           resolvedParentId,
           item.parentHash,
           branchId,
-          item.spec.kind,
+          item.spec.entryId,
+          item.spec.parentEntryId ?? null,
+          item.spec.entryType,
           item.spec.actor ?? null,
           item.payloadHash,
-          item.inputStateHash,
-          item.outputStateHash,
-          item.spec.messageId ?? null,
-          item.spec.blockId ?? null,
-          item.spec.toolCallId ?? null,
+          item.toolCallId,
           json(item.spec.metadata),
         );
         const id = asNumber(this.sql.exec(`SELECT last_insert_rowid() AS id`).one()["id"]);
         parentId = id;
-        created.push({ id, hash: item.hash, inputStateHash: item.inputStateHash, outputStateHash: item.outputStateHash });
+        created.push({ id, hash: item.hash, entryId: item.spec.entryId, parentEntryId: item.spec.parentEntryId ?? null });
         if (item.stateTransition) {
           this.sql.exec(
             `INSERT OR IGNORE INTO gad_state_roots (
@@ -839,7 +991,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
             item.stateTransition.stateHash,
             item.stateTransition.rootHash,
             id,
-            JSON.stringify({ source: "trajectory", kind: item.spec.kind }),
+            JSON.stringify({ source: "trajectory", entryType: item.spec.entryType }),
           );
         }
         this.applyTrajectorySidecars(workspaceId, item, id);
@@ -866,14 +1018,130 @@ export class GadWorkspaceDO extends DurableObjectBase {
       for (const item of created) this.enqueueIndexJob(workspaceId, item.hash, "trajectory", "trajectory-sidecars");
     });
 
+    const last = created.length > 0 ? created[created.length - 1] : undefined;
     return {
       workspaceId,
       branchId,
-      headTrajectoryId: (created.length > 0 ? created[created.length - 1]?.id : undefined) ?? branch.headTrajectoryId,
-      headTrajectoryHash: (created.length > 0 ? created[created.length - 1]?.hash : undefined) ?? branch.headTrajectoryHash,
+      headTrajectoryId: last?.id ?? branch.headTrajectoryId,
+      headTrajectoryHash: last?.hash ?? branch.headTrajectoryHash,
+      headEntryId: last?.entryId ?? branch.headEntryId,
       headStateHash: currentState,
       items: created,
     };
+  }
+
+  /** Move the branch head to point at an existing entry, or detach to null.
+   *  Recomputes head_state_hash by reading the state-root chain at the target.
+   *  CAS-protected via the optional `expectedHeadTrajectoryHash`. */
+  setBranchHead(input: SetBranchHeadInput): GadBranchHead {
+    this.ensureReady();
+    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
+    const branch = this.getGadBranchHead({ workspaceId, branchId: input.branchId });
+    if ("expectedHeadTrajectoryHash" in input && input.expectedHeadTrajectoryHash !== undefined &&
+        (input.expectedHeadTrajectoryHash ?? null) !== branch.headTrajectoryHash) {
+      throw new Error("gad head conflict");
+    }
+
+    if (input.entryId == null) {
+      this.transaction(() => {
+        this.sql.exec(
+          `UPDATE gad_branches
+           SET head_trajectory_id = NULL,
+               head_trajectory_hash = NULL,
+               head_state_hash = ?,
+               updated_at = ?
+           WHERE workspace_id = ? AND id = ?`,
+          EMPTY_STATE_HASH,
+          nowIso(),
+          workspaceId,
+          input.branchId,
+        );
+      });
+      return this.getGadBranchHead({ workspaceId, branchId: input.branchId });
+    }
+
+    // Locate the trajectory row for this entry_id and verify it belongs
+    // to this branch's chain.
+    const target = this.sql.exec(
+      `SELECT id, hash FROM gad_trajectory_items WHERE workspace_id = ? AND entry_id = ?`,
+      workspaceId,
+      input.entryId,
+    ).toArray()[0] as JsonRecord | undefined;
+    if (!target) throw new Error(`Unknown entryId for setBranchHead: ${input.entryId}`);
+    const targetTrajId = asNumber(target["id"]);
+    const targetTrajHash = asString(target["hash"]);
+
+    const chain = this.branchTrajectoryRows(workspaceId, input.branchId, { order: "ASC" });
+    const inChain = chain.some((row) => asNumber(row["trajectory_id"]) === targetTrajId);
+    if (!inChain) {
+      throw new Error(`entryId ${input.entryId} is not on branch ${input.branchId}`);
+    }
+
+    const stateHash = this.stateHashAtTrajectory(workspaceId, targetTrajId, chain);
+
+    this.transaction(() => {
+      this.sql.exec(
+        `UPDATE gad_branches
+         SET head_trajectory_id = ?,
+             head_trajectory_hash = ?,
+             head_state_hash = ?,
+             updated_at = ?
+         WHERE workspace_id = ? AND id = ?`,
+        targetTrajId,
+        targetTrajHash,
+        stateHash,
+        nowIso(),
+        workspaceId,
+        input.branchId,
+      );
+    });
+    return this.getGadBranchHead({ workspaceId, branchId: input.branchId });
+  }
+
+  getEntryById(input: GetEntryByIdInput): GadEntryRow | null {
+    this.ensureReady();
+    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
+    const row = this.sql.exec(
+      `SELECT ti.id AS trajectory_id, ti.hash AS trajectory_hash, ti.entry_id, ti.parent_entry_id,
+              ti.entry_type, ti.actor, ti.payload_hash, ti.metadata_json, ti.created_at,
+              p.json AS payload_json
+       FROM gad_trajectory_items ti
+       LEFT JOIN gad_payloads p ON p.workspace_id = ti.workspace_id AND p.hash = ti.payload_hash
+       WHERE ti.workspace_id = ? AND ti.entry_id = ?`,
+      workspaceId,
+      input.entryId,
+    ).toArray()[0] as JsonRecord | undefined;
+    if (!row) return null;
+    return this.mapEntryRow(row);
+  }
+
+  getBranchPath(input: GetBranchPathInput): GadEntryRow[] {
+    this.ensureReady();
+    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
+    const rows = this.branchTrajectoryRows(workspaceId, input.branchId, {
+      order: "ASC",
+      includePayload: true,
+    });
+    let filtered = rows;
+    if (input.throughEntryId != null) {
+      const idx = rows.findIndex((row) => asString(row["entry_id"]) === input.throughEntryId);
+      if (idx < 0) return [];
+      filtered = rows.slice(0, idx + 1);
+    }
+    return filtered.map((row) => this.mapEntryRow(row));
+  }
+
+  findBranchEntriesByType(input: FindBranchEntriesByTypeInput): GadEntryRow[] {
+    this.ensureReady();
+    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
+    const rows = this.branchTrajectoryRows(workspaceId, input.branchId, {
+      order: "ASC",
+      includePayload: true,
+    });
+    const filtered = rows.filter((row) => asString(row["entry_type"]) === input.entryType);
+    const offset = input.offset ?? 0;
+    const sliced = input.limit != null ? filtered.slice(offset, offset + input.limit) : filtered.slice(offset);
+    return sliced.map((row) => this.mapEntryRow(row));
   }
 
   materializePiMessages(input: { workspaceId?: string | null; branchId: string }): { messages: JsonRecord[] } {
@@ -888,22 +1156,24 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.branchTrajectoryRows(input.workspaceId ?? WORKSPACE_ID, input.branchId, { order: "DESC", limit: input.limit ?? null });
   }
 
-  forkGadBranch(input: ForkGadBranchInput): ReturnType<GadWorkspaceDO["getGadBranchHead"]> {
+  forkGadBranch(input: ForkGadBranchInput): GadBranchHead {
     this.ensureReady();
     const workspaceId = input.workspaceId ?? WORKSPACE_ID;
     const sourceBranch = this.getGadBranchHead({ workspaceId, branchId: input.sourceBranchId });
-    const chain = input.trajectoryId != null || input.trajectoryHash
-      ? this.branchTrajectoryRows(workspaceId, input.sourceBranchId, { order: "ASC" })
-      : [];
-    const row = input.trajectoryId != null
-      ? (chain.find((item) => item["trajectory_id"] === input.trajectoryId) ?? null)
-      : input.trajectoryHash
-        ? (chain.find((item) => item["trajectory_hash"] === input.trajectoryHash) ?? null)
-        : null;
-    if ((input.trajectoryId != null || input.trajectoryHash) && !row) throw new Error("Unknown fork trajectory item");
-    const forkTrajectoryId = row ? asNumber(row["trajectory_id"]) : sourceBranch.headTrajectoryId;
-    const forkTrajectoryHash = row ? asString(row["trajectory_hash"]) : sourceBranch.headTrajectoryHash;
-    const stateHash = (row ? (asString(row["output_state_hash"]) ?? asString(row["input_state_hash"])) : sourceBranch.headStateHash) ?? EMPTY_STATE_HASH;
+
+    let forkTrajectoryId: number | null = sourceBranch.headTrajectoryId;
+    let forkTrajectoryHash: string | null = sourceBranch.headTrajectoryHash;
+    let stateHash = sourceBranch.headStateHash;
+
+    if (input.entryId != null) {
+      const chain = this.branchTrajectoryRows(workspaceId, input.sourceBranchId, { order: "ASC" });
+      const row = chain.find((r) => asString(r["entry_id"]) === input.entryId);
+      if (!row) throw new Error(`Unknown fork entryId: ${input.entryId}`);
+      forkTrajectoryId = asNumber(row["trajectory_id"]);
+      forkTrajectoryHash = asString(row["trajectory_hash"]);
+      stateHash = this.stateHashAtTrajectory(workspaceId, forkTrajectoryId, chain);
+    }
+
     const branchId = input.newBranchId ?? `${input.sourceBranchId}:fork:${Date.now()}`;
     this.sql.exec(
       `INSERT INTO gad_branches (
@@ -1179,10 +1449,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
       }
       const requested = new Map<string, number>();
       for (const row of traced.rows) {
-        const kind = asString(row["kind"]);
+        const entryType = asString(row["entry_type"]);
         const toolCallId = asString(row["tool_call_id"]);
         if (!toolCallId) continue;
-        if (kind === "tool_call_requested") {
+        if (entryType === "tool_call_requested") {
           const count = requested.get(toolCallId) ?? 0;
           if (count > 0) {
             add({
@@ -1196,7 +1466,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
           }
           requested.set(toolCallId, count + 1);
         }
-        if (kind === "tool_result_observed" && !requested.has(toolCallId)) {
+        if (entryType === "tool_result_observed" && !requested.has(toolCallId)) {
           add({
             code: "tool_result_without_request",
             message: `Branch ${branchId ?? "(unknown)"} has a tool result without an earlier request for ${toolCallId}`,
@@ -1226,11 +1496,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
         });
         continue;
       }
-      const kind = asString(trajectory["kind"]) as GadTrajectoryKind | null;
-      if (!kind || !MUTATING_TRAJECTORY_KINDS.has(kind)) {
+      const entryType = asString(trajectory["entry_type"]) as GadEntryType | null;
+      if (!entryType || !STATE_MUTATING_ENTRY_TYPES.has(entryType)) {
         add({
           code: "state_transition_non_mutating_kind",
-          message: `State transition trajectory ${trajectoryId} has non-mutating kind ${kind ?? "(unknown)"}`,
+          message: `State transition trajectory ${trajectoryId} has non-mutating entry_type ${entryType ?? "(unknown)"}`,
           trajectoryId,
           trajectoryHash: asString(trajectory["hash"]) ?? undefined,
           stateHash: outputStateHash,
@@ -1434,9 +1704,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
        ),
        branch_rows AS (
        SELECT id AS trajectory_id, hash AS trajectory_hash, workspace_id,
-              parent_id, parent_hash, introduced_on_branch_id, kind, actor, payload_hash,
-              input_state_hash, output_state_hash, message_id, block_id,
-              tool_call_id, created_at, metadata_json
+              parent_id, parent_hash, introduced_on_branch_id, entry_id, parent_entry_id,
+              entry_type, actor, payload_hash, tool_call_id, created_at, metadata_json
        FROM branch_chain
        )
        SELECT branch_rows.*${payloadSelect}
@@ -1470,8 +1739,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
           AND parent.path = file_lineage.path
           AND parent.after_file_version_id = file_lineage.before_file_version_id
        )
-       SELECT file_lineage.*, ti.hash AS origin_trajectory_hash, ti.kind, ti.actor,
-              ti.message_id, ti.block_id, ti.tool_call_id AS origin_tool_call_id
+       SELECT file_lineage.*, ti.hash AS origin_trajectory_hash, ti.entry_type, ti.actor,
+              ti.entry_id AS origin_entry_id, ti.parent_entry_id AS origin_parent_entry_id,
+              ti.tool_call_id AS origin_tool_call_id
        FROM file_lineage
        JOIN gad_trajectory_items ti
          ON ti.workspace_id = file_lineage.workspace_id
@@ -1534,8 +1804,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const workspaceId = input.workspaceId ?? WORKSPACE_ID;
     const branchIds = input.branchId ? this.branchTrajectoryIdSet(workspaceId, input.branchId) : null;
     const rows = this.sql.exec(
-      `SELECT st.*, ti.hash AS trajectory_hash, ti.kind, ti.actor, ti.message_id,
-              ti.block_id, ti.tool_call_id, ti.payload_hash
+      `SELECT st.*, ti.hash AS trajectory_hash, ti.entry_type, ti.actor,
+              ti.entry_id, ti.parent_entry_id, ti.tool_call_id, ti.payload_hash
        FROM gad_state_transitions st
        JOIN gad_trajectory_items ti
          ON ti.workspace_id = st.workspace_id AND ti.id = st.trajectory_id
@@ -1593,6 +1863,106 @@ export class GadWorkspaceDO extends DurableObjectBase {
     ];
   }
 
+  private mapEntryRow(row: JsonRecord): GadEntryRow {
+    const payloadJson = asString(row["payload_json"]);
+    let payload: JsonRecord = {};
+    if (payloadJson) {
+      try {
+        const parsed = JSON.parse(payloadJson);
+        payload = parseJsonRecord(parsed);
+      } catch {
+        payload = {};
+      }
+    }
+    const metadataJson = asString(row["metadata_json"]);
+    let metadata: JsonRecord | null = null;
+    if (metadataJson) {
+      try {
+        const parsed = JSON.parse(metadataJson);
+        metadata = parseJsonRecord(parsed);
+      } catch {
+        metadata = null;
+      }
+    }
+    return {
+      trajectoryId: asNumber(row["trajectory_id"] ?? row["id"]),
+      trajectoryHash: asString(row["trajectory_hash"] ?? row["hash"]) ?? "",
+      entryId: asString(row["entry_id"]) ?? "",
+      parentEntryId: asString(row["parent_entry_id"]),
+      entryType: (asString(row["entry_type"]) as GadEntryType) ?? "system_event",
+      actor: asString(row["actor"]),
+      payload,
+      metadata,
+      createdAt: asString(row["created_at"]) ?? "",
+    };
+  }
+
+  private stateHashAtTrajectory(workspaceId: string, trajectoryId: number, chain: JsonRecord[]): string {
+    // Walk forward through gad_state_transitions, finding the last
+    // transition trajectory at or before targetTrajId in the chain order.
+    let stateHash = EMPTY_STATE_HASH;
+    for (const row of chain) {
+      const trajId = asNumber(row["trajectory_id"]);
+      const transition = this.sql.exec(
+        `SELECT output_state_hash FROM gad_state_transitions WHERE workspace_id = ? AND trajectory_id = ?`,
+        workspaceId,
+        trajId,
+      ).toArray()[0] as JsonRecord | undefined;
+      if (transition) {
+        const outHash = asString(transition["output_state_hash"]);
+        if (outHash) stateHash = outHash;
+      }
+      if (trajId === trajectoryId) return stateHash;
+    }
+    return stateHash;
+  }
+
+  private lookupIntentForObserved(
+    workspaceId: string,
+    intentEntryId: string,
+    prepared: Array<{ spec: GadTrajectoryItemSpec }>,
+  ): PendingIntent | null {
+    // Look in the in-progress batch first.
+    for (const item of prepared) {
+      if (item.spec.entryId === intentEntryId && item.spec.entryType === "file_mutation_intent") {
+        return this.intentFromPayload(item.spec.payload);
+      }
+    }
+    // Then fall back to a persisted row.
+    const row = this.sql.exec(
+      `SELECT ti.entry_type, p.json AS payload_json
+       FROM gad_trajectory_items ti
+       LEFT JOIN gad_payloads p ON p.workspace_id = ti.workspace_id AND p.hash = ti.payload_hash
+       WHERE ti.workspace_id = ? AND ti.entry_id = ?`,
+      workspaceId,
+      intentEntryId,
+    ).toArray()[0] as JsonRecord | undefined;
+    if (!row) return null;
+    if (asString(row["entry_type"]) !== "file_mutation_intent") return null;
+    const payloadJson = asString(row["payload_json"]);
+    if (!payloadJson) return null;
+    try {
+      return this.intentFromPayload(parseJsonRecord(JSON.parse(payloadJson)));
+    } catch {
+      return null;
+    }
+  }
+
+  private intentFromPayload(payload: JsonRecord): PendingIntent {
+    const plannedParamsRaw = payload["plannedParams"];
+    const plannedParams = plannedParamsRaw && typeof plannedParamsRaw === "object" && !Array.isArray(plannedParamsRaw)
+      ? plannedParamsRaw as JsonRecord
+      : null;
+    return {
+      path: asString(payload["path"]) ?? "",
+      beforeHash: asString(payload["beforeHash"]),
+      beforeSize: typeof payload["beforeSize"] === "number" ? payload["beforeSize"] : null,
+      toolCallId: asString(payload["toolCallId"]),
+      plannedTool: asString(payload["plannedTool"]),
+      plannedParams,
+    };
+  }
+
   private applyTrajectorySidecars(workspaceId: string, item: {
     hash: string;
     payloadHash: string | null;
@@ -1600,6 +1970,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     inputStateHash: string | null;
     outputStateHash: string | null;
     stateTransition?: StateTransitionPlan;
+    intentPayload?: PendingIntent | null;
   }, trajectoryId: number): void {
     const payload = item.payloadHash ? this.payloadFor(workspaceId, item.payloadHash) : {};
     if (item.stateTransition && item.inputStateHash && item.outputStateHash && item.inputStateHash !== item.outputStateHash) {
@@ -1614,13 +1985,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
       );
       this.recordFileProvenance(workspaceId, item, payload, trajectoryId);
     }
-    if (item.spec.kind === "claim_asserted" || item.spec.kind === "claim_revised") {
+    const entryType = item.spec.entryType;
+    if (entryType === "claim_asserted" || entryType === "claim_revised") {
       this.recordSemanticClaim(workspaceId, item, payload, trajectoryId);
     }
-    if (item.spec.kind === "theory_updated") {
+    if (entryType === "theory_updated") {
       this.recordTheoryUpdate(workspaceId, payload, trajectoryId);
     }
-    if (item.spec.kind === "contradiction_detected") {
+    if (entryType === "contradiction_detected") {
       this.recordContradiction(workspaceId, payload, trajectoryId);
     }
     void trajectoryId;
@@ -1726,16 +2098,28 @@ export class GadWorkspaceDO extends DurableObjectBase {
     hash: string;
     spec: GadTrajectoryItemSpec;
     stateTransition?: StateTransitionPlan;
+    intentPayload?: PendingIntent | null;
   }, payload: JsonRecord, trajectoryId: number): void {
     const transition = item.stateTransition;
     if (!transition) return;
-    if (!transition?.newFile && asString(payload["operation"]) !== "delete") return;
+    if (!transition.newFile && asString(payload["operation"]) !== "delete") return;
     const path = transition.newFile?.path ?? asString(payload["path"]);
     if (!path) return;
-    const oldString = asString(payload["oldString"]);
-    const newString = asString(payload["newString"]);
-    const beforeText = asString(payload["beforeText"]);
-    const afterText = asString(payload["afterText"]);
+
+    // For file_mutation_observed, pull oldString/newString/beforeText/afterText
+    // out of the intent's plannedParams when present (so existing edit/write
+    // semantics still produce hunk records). For non-observed mutations
+    // (file_observed, workspace_observed) read from payload directly.
+    const intentParams = item.intentPayload?.plannedParams ?? null;
+    const readFromIntent = (key: string): string | null => intentParams ? asString(intentParams[key]) : null;
+    const oldString = asString(payload["oldString"]) ?? readFromIntent("oldString");
+    const newString = asString(payload["newString"]) ?? readFromIntent("newString");
+    const beforeText = asString(payload["beforeText"]) ?? readFromIntent("beforeText");
+    const afterText = asString(payload["afterText"]) ?? readFromIntent("afterText");
+    const beforeHash = asString(payload["beforeHash"])
+      ?? (item.intentPayload?.beforeHash ?? null);
+    const afterHash = asString(payload["afterHash"]) ?? asString(payload["contentHash"]);
+
     const oldStartLine = lineForSubstring(beforeText, oldString) ?? (oldString != null ? 1 : null);
     const newStartLine = lineForSubstring(afterText, newString) ?? (newString != null ? 1 : null);
     const oldLineCount = textLineCount(oldString);
@@ -1760,8 +2144,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
       byteLength(oldString),
       null,
       byteLength(newString),
-      asString(payload["beforeHash"]) ?? null,
-      asString(payload["afterHash"]) ?? asString(payload["contentHash"]) ?? null,
+      beforeHash,
+      afterHash,
     );
   }
 
@@ -1778,135 +2162,111 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return {};
   }
 
+  /**
+   * One `message` envelope entry → one materialized message. The envelope
+   * payload `{ message: AgentMessage }` is the single source of truth for
+   * transcript content. We do not reassemble blocks from `message_block`
+   * entries — those are pure addressability handles.
+   *
+   * For `tool_result_observed` entries: emit a `toolResult` message only
+   * when a matching prior `tool_call_requested` exists on the chain (we
+   * still surface a tool result from the chain context, sourcing the body
+   * from the parent `message` entry of role "toolResult" when present, or
+   * synthesised from the payload summary otherwise).
+   */
   private materializePiMessagesFromTrajectory(workspaceId: string, rows: JsonRecord[]): JsonRecord[] {
-    type PendingMessage = {
-      idx: number;
-      messageId: string;
-      message: JsonRecord;
-      blocks: Array<{ idx: number; block: JsonValue }>;
-      toolResultOverride?: JsonRecord;
-    };
-    const byId = new Map<string, PendingMessage>();
-    const materializedToolCallIds = new Set<string>();
-    let nextIdx = 0;
-    const entryFor = (messageId: string, fallbackRole: string, createdAt: string | null): PendingMessage => {
-      const existing = byId.get(messageId);
-      if (existing) return existing;
-      const timestamp = createdAt ? Date.parse(createdAt) : NaN;
-      const message: JsonRecord = { role: fallbackRole, content: [] };
-      if (Number.isFinite(timestamp)) message["timestamp"] = timestamp;
-      const entry = { idx: nextIdx++, messageId, message, blocks: [] };
-      byId.set(messageId, entry);
-      return entry;
-    };
+    const output: JsonRecord[] = [];
+    const requestedToolCallIds = new Set<string>();
 
+    // First pass: collect tool-call ids that were actually requested.
     for (const row of rows) {
-      const kind = asString(row["kind"]);
-      const messageId = asString(row["message_id"]);
-      const toolCallId = asString(row["tool_call_id"]);
-      const actor = asString(row["actor"]) ?? "assistant";
-      const payload = this.payloadFor(workspaceId, asString(row["payload_hash"]));
-      const createdAt = asString(row["created_at"]);
+      const entryType = asString(row["entry_type"]);
+      if (entryType !== "tool_call_requested") continue;
+      const toolCallId = asString(row["tool_call_id"])
+        ?? asString(this.payloadFor(workspaceId, asString(row["payload_hash"]))["toolCallId"]);
+      if (toolCallId) requestedToolCallIds.add(toolCallId);
+    }
 
-      if (kind === "message_created" && messageId) {
-        const role = asString(payload["role"]) ?? actor;
-        const entry = entryFor(messageId, role, createdAt);
-        entry.message["role"] = role;
-        entry.idx = typeof payload["messageIndex"] === "number" ? payload["messageIndex"] : entry.idx;
-        if (typeof payload["timestamp"] === "number") entry.message["timestamp"] = payload["timestamp"];
-        if (payload["details"] != null) entry.message["details"] = payload["details"];
-        continue;
-      }
-
-      if (kind === "message_block_added" && messageId) {
-        const entry = entryFor(messageId, actor, createdAt);
-        const block = payload["block"];
-        if (block != null) {
-          const blockToolCallId = toolCallIdFromBlock(block);
-          if (blockToolCallId) materializedToolCallIds.add(blockToolCallId);
-          entry.blocks.push({
-            idx: typeof payload["blockIndex"] === "number" ? payload["blockIndex"] : entry.blocks.length,
-            block,
-          });
+    // Index tool_result_observed rows whose payload carries a toolResult
+    // message body, keyed by their parent `message` entry id. Falls back
+    // to the payload's own toolName/content/isError when the payload
+    // already encodes the full toolResult shape (the standard observed
+    // payload includes content + toolCallId + summary).
+    for (const row of rows) {
+      const entryType = asString(row["entry_type"]);
+      if (entryType === "message") {
+        const payload = this.payloadFor(workspaceId, asString(row["payload_hash"]));
+        const inner = payload["message"];
+        if (!inner || typeof inner !== "object" || Array.isArray(inner)) {
+          // Skip malformed message entries — readers shouldn't crash on bad
+          // payload shape.
+          continue;
+        }
+        const msg = inner as JsonRecord;
+        if (asString(msg["role"]) === "toolResult") {
+          const toolCallId = asString(msg["toolCallId"]);
+          if (!toolCallId) {
+            throw new Error(`Malformed GAD transcript: toolResult message ${asString(row["entry_id"]) ?? ""} is missing toolCallId`);
+          }
+          if (!requestedToolCallIds.has(toolCallId)) {
+            throw new Error(`Malformed GAD transcript: tool_result_observed for ${toolCallId} has no matching tool call`);
+          }
+          output.push({ ...msg });
+        } else {
+          output.push({ ...msg });
         }
         continue;
       }
-
-      if (kind === "tool_call_requested" && messageId && toolCallId) {
-        materializedToolCallIds.add(toolCallId);
-        continue;
-      }
-
-      if (kind === "message_finalized" && messageId) {
-        const entry = entryFor(messageId, actor, createdAt);
-        if (payload["stopReason"] != null) entry.message["stopReason"] = payload["stopReason"];
-        if (payload["errorMessage"] != null) entry.message["errorMessage"] = payload["errorMessage"];
-        continue;
-      }
-
-      if (kind === "tool_result_observed") {
-        const payloadToolCallId = toolCallId ?? asString(payload["toolCallId"]);
-        if (!payloadToolCallId) {
-          console.error("[GadWorkspaceDO] Malformed tool_result_observed without toolCallId", {
-            workspaceId,
-            branchMessageId: messageId,
-            trajectoryId: row["trajectory_id"],
-            trajectoryHash: row["trajectory_hash"],
-          });
+      if (entryType === "tool_result_observed") {
+        // Synthesize a toolResult message from the observed payload
+        // when the chain does not include a separate `message` entry
+        // for it. This preserves prior behaviour where some flows
+        // record only the observed event.
+        const payload = this.payloadFor(workspaceId, asString(row["payload_hash"]));
+        const toolCallId = asString(row["tool_call_id"]) ?? asString(payload["toolCallId"]);
+        if (!toolCallId) {
           throw new Error("Malformed GAD transcript: tool_result_observed is missing toolCallId");
         }
-        if (!materializedToolCallIds.has(payloadToolCallId)) {
-          console.error("[GadWorkspaceDO] Orphan tool_result_observed without matching tool call", {
-            workspaceId,
-            branchMessageId: messageId,
-            toolCallId: payloadToolCallId,
-            trajectoryId: row["trajectory_id"],
-            trajectoryHash: row["trajectory_hash"],
-          });
-          throw new Error(`Malformed GAD transcript: tool_result_observed for ${payloadToolCallId} has no matching tool call`);
+        if (!requestedToolCallIds.has(toolCallId)) {
+          throw new Error(`Malformed GAD transcript: tool_result_observed for ${toolCallId} has no matching tool call`);
         }
-        const id = messageId ?? (payloadToolCallId ? `tool-result:${payloadToolCallId}` : null);
-        if (!id) continue;
+        // Skip synthesis if there's already a parent `message` entry that
+        // will produce the toolResult message itself.
+        const parentEntryId = asString(row["parent_entry_id"]);
+        let hasParentMessage = false;
+        if (parentEntryId) {
+          for (const candidate of rows) {
+            if (asString(candidate["entry_id"]) === parentEntryId &&
+                asString(candidate["entry_type"]) === "message") {
+              hasParentMessage = true;
+              break;
+            }
+          }
+        }
+        if (hasParentMessage) continue;
         const content = Array.isArray(payload["content"])
           ? payload["content"] as JsonValue[]
           : [{ type: "text", text: asString(payload["summary"]) ?? "" }];
         const message: JsonRecord = {
           role: "toolResult",
-          toolCallId: payloadToolCallId ?? "",
+          toolCallId,
           toolName: asString(payload["toolName"]) ?? "unknown",
           content,
           isError: payload["isError"] === true,
         };
         if (typeof payload["timestamp"] === "number") message["timestamp"] = payload["timestamp"];
         if (payload["details"] != null) message["details"] = payload["details"];
-        const entry = entryFor(id, "toolResult", createdAt);
-        entry.toolResultOverride = message;
+        output.push(message);
       }
     }
-
-    return [...byId.values()]
-      .sort((a, b) => a.idx - b.idx)
-      .flatMap((entry): JsonRecord[] => {
-        if (entry.toolResultOverride) return [entry.toolResultOverride];
-        if (entry.message["role"] === "toolResult") {
-          console.error("[GadWorkspaceDO] Malformed materialized toolResult without toolCallId", {
-            workspaceId,
-            messageId: entry.messageId,
-          });
-          throw new Error(`Malformed GAD transcript: toolResult message ${entry.messageId} is missing toolCallId`);
-        }
-        entry.message["content"] = entry.blocks
-          .sort((a, b) => a.idx - b.idx)
-          .map((block) => block.block);
-        return [entry.message];
-      });
+    return output;
   }
 
   private materializeToolCallsFromTrajectory(workspaceId: string, branchId: string, rows: JsonRecord[]): JsonRecord[] {
     const calls = new Map<string, JsonRecord>();
     for (const row of rows) {
-      const kind = asString(row["kind"]);
-      if (kind !== "tool_call_requested" && kind !== "tool_result_observed") continue;
+      const entryType = asString(row["entry_type"]);
+      if (entryType !== "tool_call_requested" && entryType !== "tool_result_observed") continue;
       const payload = this.payloadFor(workspaceId, asString(row["payload_hash"]));
       const toolCallId = asString(row["tool_call_id"]) ?? asString(payload["toolCallId"]);
       if (!toolCallId) continue;
@@ -1918,8 +2278,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
         request_trajectory_hash: null,
         result_trajectory_id: null,
         result_trajectory_hash: null,
-        message_id: null,
-        block_id: null,
+        entry_id: null,
+        parent_entry_id: null,
         tool_name: null,
         provider_handle: null,
         parameters_json: null,
@@ -1930,12 +2290,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
         source_trajectory_id: null,
       };
 
-      if (kind === "tool_call_requested") {
+      if (entryType === "tool_call_requested") {
         existing["request_trajectory_id"] = row["trajectory_id"] ?? null;
         existing["request_trajectory_hash"] = row["trajectory_hash"] ?? null;
-        existing["message_id"] = row["message_id"] ?? existing["message_id"] ?? null;
-        existing["block_id"] = row["block_id"] ?? existing["block_id"] ?? null;
-        existing["tool_name"] = asString(payload["toolName"]) ?? toolNameFromBlock(payload["block"]) ?? existing["tool_name"] ?? null;
+        existing["entry_id"] = row["entry_id"] ?? existing["entry_id"] ?? null;
+        existing["parent_entry_id"] = row["parent_entry_id"] ?? existing["parent_entry_id"] ?? null;
+        existing["tool_name"] = asString(payload["toolName"]) ?? existing["tool_name"] ?? null;
         existing["provider_handle"] = asString(payload["providerHandle"]) ?? existing["provider_handle"] ?? null;
         existing["parameters_json"] = json(payload["parameters"] ?? null);
         existing["status"] = "requested";
@@ -1943,8 +2303,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
       } else {
         existing["result_trajectory_id"] = row["trajectory_id"] ?? null;
         existing["result_trajectory_hash"] = row["trajectory_hash"] ?? null;
-        existing["message_id"] = row["message_id"] ?? existing["message_id"] ?? null;
-        existing["block_id"] = row["block_id"] ?? existing["block_id"] ?? null;
+        existing["entry_id"] = row["entry_id"] ?? existing["entry_id"] ?? null;
+        existing["parent_entry_id"] = row["parent_entry_id"] ?? existing["parent_entry_id"] ?? null;
         existing["tool_name"] = asString(payload["toolName"]) ?? existing["tool_name"] ?? null;
         existing["status"] = payload["isError"] === true ? "error" : "complete";
         existing["result_summary"] = asString(payload["summary"]);
@@ -1962,16 +2322,33 @@ export class GadWorkspaceDO extends DurableObjectBase {
     spec: GadTrajectoryItemSpec,
     baseFiles?: ManifestFileEntry[],
   ): Promise<StateTransitionPlan | null> {
-    if (spec.kind !== "file_observed" && spec.kind !== "file_mutation" && spec.kind !== "workspace_observed") {
+    const entryType = spec.entryType;
+    if (entryType !== "file_observed" && entryType !== "file_mutation_observed" && entryType !== "workspace_observed") {
       return null;
     }
-    const payload = typeof spec.payload === "object" && spec.payload != null ? spec.payload as JsonRecord : {};
+    const payload = spec.payload;
+
+    // For file_mutation_observed: payload carries {path, afterHash, afterSize,
+    // outcome}. The path is denormalized from intent.
+    // For file_observed / workspace_observed: payload carries path + contentHash/afterHash.
     const rawPath = asString(payload["path"]);
     if (!rawPath) return null;
     const path = normalizePath(rawPath);
-    const operation = asString(payload["operation"]) ?? spec.kind;
-    const contentHash = asString(payload["afterHash"]) ?? asString(payload["contentHash"]);
-    const mode = typeof payload["mode"] === "number" ? payload["mode"] : null;
+
+    let operation: string;
+    let contentHash: string | null;
+    let mode: number | null = typeof payload["mode"] === "number" ? payload["mode"] : null;
+
+    if (entryType === "file_mutation_observed") {
+      const outcome = asString(payload["outcome"]);
+      // Only successful observed mutations affect state.
+      if (outcome && outcome !== "ok") return null;
+      operation = asString(payload["operation"]) ?? "write";
+      contentHash = asString(payload["afterHash"]);
+    } else {
+      operation = asString(payload["operation"]) ?? entryType;
+      contentHash = asString(payload["afterHash"]) ?? asString(payload["contentHash"]);
+    }
 
     const files: ManifestFileEntry[] = baseFiles ?? this.filesForState(workspaceId, currentStateHash).flatMap((file) => {
       const existingContentHash = asString(file["content_hash"]);

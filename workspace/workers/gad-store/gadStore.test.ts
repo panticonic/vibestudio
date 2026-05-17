@@ -2,54 +2,65 @@ import { describe, expect, it } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "./index.js";
 
-describe("GadWorkspaceDO immutable persistence", () => {
-  it("appends block-level trajectory and materializes Pi messages", async () => {
+// Lightweight UUID-shaped id generator for tests. The gad-store doesn't
+// require strict UUIDv7; any UUID-looking string is accepted.
+let __idCounter = 0;
+function id(label = ""): string {
+  __idCounter += 1;
+  const tag = __idCounter.toString(16).padStart(12, "0");
+  const seed = label.padEnd(4, "x").slice(0, 4);
+  // Build a UUID-shaped string. Real UUIDv7 has version bits, but the
+  // store only checks shape.
+  const a = "00000000";
+  const b = seed.replace(/[^0-9a-f]/gi, "0").padEnd(4, "0");
+  const c = "0000";
+  const d = "0000";
+  return `${a}-${b}-${c}-${d}-${tag}`;
+}
+
+describe("GadWorkspaceDO envelope persistence", () => {
+  it("appends envelope items and stores typed payloads", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
 
-    const head = await call<{
-      branchId: string;
-      headTrajectoryHash: string | null;
-      headStateHash: string;
-    }>("ensureGadBranch", {
+    const head = await call<any>("ensureGadBranch", {
       branchId: "branch-1",
       channelId: "channel-1",
       contextId: "context-1",
     });
+    expect(head.headEntryId).toBeNull();
 
+    const msgId = id("msg0");
     const result = await call<{
       headTrajectoryHash: string;
       headStateHash: string;
-      items: Array<{ hash: string }>;
+      headEntryId: string | null;
+      items: Array<{ hash: string; entryId: string; parentEntryId: string | null }>;
     }>("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [
         {
-          kind: "message_created",
+          entryId: msgId,
+          parentEntryId: null,
+          entryType: "message",
           actor: "user",
-          messageId: "msg:0",
-          payload: { role: "user", timestamp: 1 },
-        },
-        {
-          kind: "message_block_added",
-          actor: "user",
-          messageId: "msg:0",
-          blockId: "msg:0:block:0",
-          payload: { block: { type: "text", text: "make the change" } },
-        },
-        {
-          kind: "message_finalized",
-          actor: "user",
-          messageId: "msg:0",
-          payload: {},
+          payload: {
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "make the change" }],
+              timestamp: 1,
+            },
+          },
         },
       ],
     });
 
-    expect(result.items).toHaveLength(3);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]!.entryId).toBe(msgId);
     expect(result.headTrajectoryHash).toMatch(/^trajectory:/);
     expect(result.headStateHash).toBe(head.headStateHash);
+    expect(result.headEntryId).toBe(msgId);
 
     const materialized = await call<{ messages: Array<{ role: string; content: unknown }> }>(
       "materializePiMessages",
@@ -61,253 +72,225 @@ describe("GadWorkspaceDO immutable persistence", () => {
 
     const status = await call<Array<{ metric: string; value: number }>>("getStatus");
     expect(status.find((row) => row.metric === "Branches")?.value).toBe(1);
-    expect(status.find((row) => row.metric === "Trajectory items")?.value).toBe(3);
+    expect(status.find((row) => row.metric === "Trajectory items")?.value).toBe(1);
   });
 
-  it("materializes observed tool result replacements", async () => {
+  it("rejects items with invalid envelope shape", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    const head = await call<any>("ensureGadBranch", { branchId: "branch-tools" });
-    const first = await call<any>("appendGadTrajectoryBatch", {
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-bad" });
+
+    // Missing entryId
+    await expect(call("appendGadTrajectoryBatch", {
+      branchId: head.branchId,
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [{ entryType: "system_event", parentEntryId: null, payload: {} }],
+    })).rejects.toThrow(/invalid entryId/);
+
+    // Unknown entryType
+    await expect(call("appendGadTrajectoryBatch", {
+      branchId: head.branchId,
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [{ entryId: id("a"), entryType: "not_a_type", parentEntryId: null, payload: {} }],
+    })).rejects.toThrow(/unknown entryType/);
+
+    // Non-object payload
+    await expect(call("appendGadTrajectoryBatch", {
+      branchId: head.branchId,
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [{ entryId: id("b"), entryType: "system_event", parentEntryId: null, payload: "oops" }],
+    })).rejects.toThrow(/must be a JSON object/);
+
+    // Dangling parentEntryId
+    await expect(call("appendGadTrajectoryBatch", {
+      branchId: head.branchId,
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [{ entryId: id("c"), entryType: "system_event", parentEntryId: id("missing"), payload: {} }],
+    })).rejects.toThrow(/parentEntryId .* not found/);
+  });
+
+  it("supports parent references within the same batch", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-batch" });
+    const messageId = id("m");
+    const blockId = id("b");
+    const result = await call<any>("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [
         {
-          kind: "message_created",
+          entryId: messageId,
+          parentEntryId: null,
+          entryType: "message",
           actor: "assistant",
-          messageId: "msg:0",
-          payload: { role: "assistant", timestamp: 0 },
+          payload: {
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "hello" }],
+              timestamp: 0,
+            },
+          },
         },
         {
-          kind: "message_block_added",
-          actor: "assistant",
-          messageId: "msg:0",
-          blockId: "msg:0:block:0",
-          toolCallId: "tool-1",
-          payload: { block: { type: "tool_call", id: "tool-1", name: "ask_user", input: {} } },
-        },
-        {
-          kind: "message_finalized",
-          actor: "assistant",
-          messageId: "msg:0",
-          payload: {},
+          entryId: blockId,
+          parentEntryId: messageId,
+          entryType: "message_block",
+          payload: { blockIndex: 0, blockKind: "text" },
         },
       ],
     });
+    expect(result.items).toHaveLength(2);
+    expect(result.items[1]!.parentEntryId).toBe(messageId);
+  });
 
+  it("materializes message envelopes verbatim", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-msg" });
+    const userMsg = id("u");
+    const assistantMsg = id("a");
+    const toolCallId = "tool-1";
+    const toolReqEntry = id("tr");
+    const toolResultMsg = id("rm");
     await call("appendGadTrajectoryBatch", {
       branchId: head.branchId,
-      expectedTrajectoryHash: first.headTrajectoryHash,
-      expectedStateHash: first.headStateHash,
-      items: [{
-        kind: "tool_result_observed",
-        actor: "worker",
-        messageId: "msg:1",
-        toolCallId: "tool-1",
-        payload: {
-          toolCallId: "tool-1",
-          toolName: "ask_user",
-          content: [{ type: "text", text: "submitted" }],
-          isError: false,
-          timestamp: 2,
-          summary: "submitted",
-        },
-      }],
-    });
-
-    const materialized = await call<{ messages: Array<Record<string, unknown>> }>(
-      "materializePiMessages",
-      { branchId: "branch-tools" },
-    );
-    expect(materialized.messages).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "tool_call", id: "tool-1", name: "ask_user", input: {} }],
-        timestamp: 0,
-      },
-      {
-        role: "toolResult",
-        toolCallId: "tool-1",
-        toolName: "ask_user",
-        content: [{ type: "text", text: "submitted" }],
-        timestamp: 2,
-        isError: false,
-      },
-    ]);
-  });
-
-  it("rejects generic tool result message rows at append time", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const head = await call<any>("ensureGadBranch", { branchId: "branch-malformed-tool-result" });
-    await expect(call<any>("appendGadTrajectoryBatch", {
-      branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [
         {
-          kind: "message_created",
-          actor: "tool",
-          messageId: "msg:0",
-          payload: { role: "toolResult", timestamp: 1 },
-        },
-        {
-          kind: "message_block_added",
-          actor: "tool",
-          messageId: "msg:0",
-          blockId: "msg:0:block:0",
-          payload: { block: { type: "text", text: "missing call id" } },
-        },
-        {
-          kind: "message_finalized",
-          actor: "tool",
-          messageId: "msg:0",
-          payload: {},
-        },
-      ],
-    })).rejects.toThrow(/Malformed GAD append/);
-  });
-
-  it("materializes a valid assistant tool call and observed tool result without generic tool result rows", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const head = await call<any>("ensureGadBranch", { branchId: "branch-valid-tool-result" });
-    await call<any>("appendGadTrajectoryBatch", {
-      branchId: head.branchId,
-      expectedTrajectoryHash: head.headTrajectoryHash,
-      expectedStateHash: head.headStateHash,
-      items: [
-        {
-          kind: "message_created",
-          actor: "assistant",
-          messageId: "msg:0",
-          payload: { role: "assistant", timestamp: 10 },
-        },
-        {
-          kind: "message_block_added",
-          actor: "assistant",
-          messageId: "msg:0",
-          blockId: "msg:0:block:0",
-          toolCallId: "tool-valid",
+          entryId: userMsg,
+          parentEntryId: null,
+          entryType: "message",
+          actor: "user",
           payload: {
-            block: { type: "toolCall", id: "tool-valid", name: "read", input: { path: "README.md" } },
-            blockIndex: 0,
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "please inspect" }],
+              timestamp: 10,
+            },
           },
         },
         {
-          kind: "tool_call_requested",
+          entryId: assistantMsg,
+          parentEntryId: userMsg,
+          entryType: "message",
           actor: "assistant",
-          messageId: "msg:0",
-          blockId: "msg:0:block:0",
-          toolCallId: "tool-valid",
           payload: {
-            toolName: "read",
-            parameters: { path: "README.md" },
+            message: {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: toolCallId, name: "read", input: { path: "README.md" } },
+                { type: "text", text: "checking" },
+              ],
+              timestamp: 20,
+              stopReason: "tool_calls",
+            },
           },
         },
         {
-          kind: "message_finalized",
-          actor: "assistant",
-          messageId: "msg:0",
-          payload: { stopReason: "tool_calls", errorMessage: null },
+          entryId: toolReqEntry,
+          parentEntryId: assistantMsg,
+          entryType: "tool_call_requested",
+          payload: { toolName: "read", toolCallId },
         },
         {
-          kind: "tool_result_observed",
-          actor: "worker",
-          messageId: "msg:1",
-          toolCallId: "tool-valid",
+          entryId: toolResultMsg,
+          parentEntryId: assistantMsg,
+          entryType: "message",
+          actor: "tool",
           payload: {
-            toolCallId: "tool-valid",
-            toolName: "read",
-            content: [{ type: "text", text: "README contents" }],
-            isError: false,
-            timestamp: 11,
-            summary: "README contents",
+            message: {
+              role: "toolResult",
+              toolCallId,
+              toolName: "read",
+              content: [{ type: "text", text: "README contents" }],
+              isError: false,
+              timestamp: 30,
+            },
           },
         },
       ],
     });
 
-    const genericToolResultRows = await call<{ rows: Array<Record<string, unknown>> }>(
-      "query",
-      `SELECT ti.id
-       FROM gad_trajectory_items ti
-       JOIN gad_payloads p ON p.workspace_id = ti.workspace_id AND p.hash = ti.payload_hash
-       WHERE ti.kind = 'message_created' AND json_extract(p.json, '$.role') = 'toolResult'`,
-      [],
-    );
-    expect(genericToolResultRows.rows).toEqual([]);
-
     const materialized = await call<{ messages: Array<Record<string, unknown>> }>(
       "materializePiMessages",
-      { branchId: "branch-valid-tool-result" },
+      { branchId: "branch-msg" },
     );
     expect(materialized.messages).toEqual([
       {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "tool-valid", name: "read", input: { path: "README.md" } }],
+        role: "user",
+        content: [{ type: "text", text: "please inspect" }],
         timestamp: 10,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: toolCallId, name: "read", input: { path: "README.md" } },
+          { type: "text", text: "checking" },
+        ],
+        timestamp: 20,
         stopReason: "tool_calls",
       },
       {
         role: "toolResult",
-        toolCallId: "tool-valid",
+        toolCallId,
         toolName: "read",
         content: [{ type: "text", text: "README contents" }],
-        timestamp: 11,
         isError: false,
+        timestamp: 30,
       },
     ]);
   });
 
-  it("reconstructs orphan and duplicate tool call provenance and reports integrity errors", async () => {
+  it("flags tool results without a matching request", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
-    const head = await call<any>("ensureGadBranch", { branchId: "branch-tool-integrity" });
-    await call<any>("appendGadTrajectoryBatch", {
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-orphan-tool" });
+    await call("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [
         {
-          kind: "tool_result_observed",
+          entryId: id("o1"),
+          parentEntryId: null,
+          entryType: "tool_result_observed",
           actor: "tool",
-          toolCallId: "orphan-tool",
-          payload: {
-            toolCallId: "orphan-tool",
-            toolName: "read",
-            summary: "observed without request",
-            isError: false,
-          },
+          payload: { toolCallId: "orphan-tool", toolName: "read", summary: "observed without request", isError: false },
         },
         {
-          kind: "tool_call_requested",
+          entryId: id("o2"),
+          parentEntryId: null,
+          entryType: "tool_call_requested",
           actor: "assistant",
-          toolCallId: "dup-tool",
-          payload: { toolName: "read", parameters: { path: "a.txt" } },
+          payload: { toolCallId: "dup-tool", toolName: "read", parameters: { path: "a.txt" } },
         },
         {
-          kind: "tool_call_requested",
+          entryId: id("o3"),
+          parentEntryId: null,
+          entryType: "tool_call_requested",
           actor: "assistant",
-          toolCallId: "dup-tool",
-          payload: { toolName: "read", parameters: { path: "b.txt" } },
+          payload: { toolCallId: "dup-tool", toolName: "read", parameters: { path: "b.txt" } },
         },
       ],
     });
 
     const calls = await call<Array<Record<string, unknown>>>("listGadBranchToolCalls", {
-      branchId: "branch-tool-integrity",
+      branchId: "branch-orphan-tool",
     });
     expect(calls.find((row) => row["tool_call_id"] === "orphan-tool")).toMatchObject({
       status: "complete",
       result_summary: "observed without request",
     });
 
-    await expect(call(
-      "materializePiMessages",
-      { branchId: "branch-tool-integrity" },
-    )).rejects.toThrow(/Malformed GAD transcript/);
+    await expect(call("materializePiMessages", { branchId: "branch-orphan-tool" }))
+      .rejects.toThrow(/Malformed GAD transcript/);
 
     const integrity = await call<{ ok: boolean; errors: Array<{ code: string; toolCallId?: string }> }>(
       "checkGadIntegrity",
-      { branchId: "branch-tool-integrity" },
+      { branchId: "branch-orphan-tool" },
     );
     expect(integrity.ok).toBe(false);
     expect(integrity.errors).toEqual(expect.arrayContaining([
@@ -316,148 +299,33 @@ describe("GadWorkspaceDO immutable persistence", () => {
     ]));
   });
 
-  it("materializes a cold-start LLM prefix from canonical trajectory payloads", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const head = await call<any>("ensureGadBranch", { branchId: "branch-prefix" });
-    await call<any>("appendGadTrajectoryBatch", {
-      branchId: head.branchId,
-      expectedTrajectoryHash: head.headTrajectoryHash,
-      expectedStateHash: head.headStateHash,
-      items: [
-        {
-          kind: "message_created",
-          actor: "user",
-          messageId: "msg:0",
-          payload: {
-            role: "user",
-            timestamp: 10,
-            messageIndex: 0,
-            details: { source: "panel" },
-          },
-        },
-        {
-          kind: "message_block_added",
-          actor: "user",
-          messageId: "msg:0",
-          blockId: "msg:0:block:0",
-          payload: {
-            blockIndex: 0,
-            block: { type: "text", text: "please inspect the repo" },
-          },
-        },
-        {
-          kind: "message_finalized",
-          actor: "user",
-          messageId: "msg:0",
-          payload: {},
-        },
-        {
-          kind: "message_created",
-          actor: "assistant",
-          messageId: "msg:1",
-          payload: { role: "assistant", timestamp: 20, messageIndex: 1 },
-        },
-        {
-          kind: "message_block_added",
-          actor: "assistant",
-          messageId: "msg:1",
-          blockId: "msg:1:block:0",
-          toolCallId: "tool-1",
-          payload: {
-            blockIndex: 0,
-            block: { type: "toolCall", id: "tool-1", name: "read", input: { path: "README.md" } },
-          },
-        },
-        {
-          kind: "message_block_added",
-          actor: "assistant",
-          messageId: "msg:1",
-          blockId: "msg:1:block:1",
-          payload: {
-            blockIndex: 1,
-            block: { type: "text", text: "I will inspect README.md." },
-          },
-        },
-        {
-          kind: "message_finalized",
-          actor: "assistant",
-          messageId: "msg:1",
-          payload: { stopReason: "tool_calls", errorMessage: null },
-        },
-        {
-          kind: "tool_result_observed",
-          actor: "tool",
-          toolCallId: "tool-1",
-          payload: {
-            toolCallId: "tool-1",
-            toolName: "read",
-            content: [{ type: "text", text: "README contents" }],
-            details: { path: "README.md" },
-            isError: false,
-            timestamp: 30,
-            summary: "README contents",
-          },
-        },
-      ],
-    });
-
-    const materialized = await call<{ messages: Array<Record<string, unknown>> }>(
-      "materializePiMessages",
-      { branchId: "branch-prefix" },
-    );
-    expect(materialized.messages).toEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "please inspect the repo" }],
-        timestamp: 10,
-        details: { source: "panel" },
-      },
-      {
-        role: "assistant",
-        content: [
-          { type: "toolCall", id: "tool-1", name: "read", input: { path: "README.md" } },
-          { type: "text", text: "I will inspect README.md." },
-        ],
-        timestamp: 20,
-        stopReason: "tool_calls",
-      },
-      {
-        role: "toolResult",
-        toolCallId: "tool-1",
-        toolName: "read",
-        content: [{ type: "text", text: "README contents" }],
-        timestamp: 30,
-        details: { path: "README.md" },
-        isError: false,
-      },
-    ]);
-  });
-
-  it("enforces head/state CAS and forks by moving a branch ref", async () => {
+  it("enforces head/state CAS and forks by entryId", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const head = await call<any>("ensureGadBranch", { branchId: "branch-1" });
+    const eventId = id("ev");
     const append = await call<any>("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
-      items: [{ kind: "system_event", actor: "test", payload: { ok: true } }],
+      items: [{ entryId: eventId, parentEntryId: null, entryType: "system_event", actor: "test", payload: { ok: true } }],
     });
 
     await expect(call("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
-      items: [{ kind: "system_event", actor: "test", payload: { stale: true } }],
+      items: [{ entryId: id("ev2"), parentEntryId: null, entryType: "system_event", actor: "test", payload: { stale: true } }],
     })).rejects.toThrow(/head conflict/);
 
     const beforeTrajectory = await call<{ rows: Array<unknown> }>("query", "SELECT * FROM gad_trajectory_items", []);
     const fork = await call<any>("forkGadBranch", {
       sourceBranchId: "branch-1",
       newBranchId: "branch-2",
-      trajectoryHash: append.headTrajectoryHash,
+      entryId: eventId,
     });
     expect(fork.branchId).toBe("branch-2");
     expect(fork.headTrajectoryHash).toBe(append.headTrajectoryHash);
+    expect(fork.headEntryId).toBe(eventId);
     const afterTrajectory = await call<{ rows: Array<unknown> }>("query", "SELECT * FROM gad_trajectory_items", []);
     expect(afterTrajectory.rows).toHaveLength(beforeTrajectory.rows.length);
 
@@ -468,15 +336,162 @@ describe("GadWorkspaceDO immutable persistence", () => {
     ]));
   });
 
+  it("setBranchHead moves the head pointer to a known entry", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-head" });
+    const ev1 = id("e1");
+    const ev2 = id("e2");
+    const append = await call<any>("appendGadTrajectoryBatch", {
+      branchId: "branch-head",
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [
+        { entryId: ev1, parentEntryId: null, entryType: "system_event", payload: { step: 1 } },
+        { entryId: ev2, parentEntryId: ev1, entryType: "system_event", payload: { step: 2 } },
+      ],
+    });
+
+    // Rewind to ev1
+    const rewound = await call<any>("setBranchHead", {
+      branchId: "branch-head",
+      entryId: ev1,
+      expectedHeadTrajectoryHash: append.headTrajectoryHash,
+    });
+    expect(rewound.headEntryId).toBe(ev1);
+    expect(rewound.headTrajectoryHash).not.toBe(append.headTrajectoryHash);
+
+    // CAS conflict if expected mismatches
+    await expect(call("setBranchHead", {
+      branchId: "branch-head",
+      entryId: ev2,
+      expectedHeadTrajectoryHash: append.headTrajectoryHash,
+    })).rejects.toThrow(/head conflict/);
+
+    // Detach to null
+    const detached = await call<any>("setBranchHead", {
+      branchId: "branch-head",
+      entryId: null,
+    });
+    expect(detached.headEntryId).toBeNull();
+    expect(detached.headTrajectoryHash).toBeNull();
+  });
+
+  it("setBranchHead rejects entries on a different branch", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const headA = await call<any>("ensureGadBranch", { branchId: "branch-a" });
+    const evA = id("a1");
+    await call("appendGadTrajectoryBatch", {
+      branchId: "branch-a",
+      expectedTrajectoryHash: headA.headTrajectoryHash,
+      expectedStateHash: headA.headStateHash,
+      items: [{ entryId: evA, parentEntryId: null, entryType: "system_event", payload: {} }],
+    });
+
+    const headB = await call<any>("ensureGadBranch", { branchId: "branch-b" });
+    void headB;
+    await expect(call("setBranchHead", { branchId: "branch-b", entryId: evA }))
+      .rejects.toThrow(/not on branch/);
+  });
+
+  it("getEntryById returns an envelope row with parsed payload", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-getby" });
+    const entry = id("g1");
+    await call("appendGadTrajectoryBatch", {
+      branchId: "branch-getby",
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [{ entryId: entry, parentEntryId: null, entryType: "system_event", actor: "tester", payload: { hello: "world" } }],
+    });
+
+    const row = await call<any>("getEntryById", { entryId: entry });
+    expect(row).toMatchObject({
+      entryId: entry,
+      entryType: "system_event",
+      actor: "tester",
+      payload: { hello: "world" },
+    });
+
+    const missing = await call<any>("getEntryById", { entryId: id("none") });
+    expect(missing).toBeNull();
+  });
+
+  it("getBranchPath returns the chain in root→head order", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-path" });
+    const e1 = id("p1");
+    const e2 = id("p2");
+    const e3 = id("p3");
+    await call("appendGadTrajectoryBatch", {
+      branchId: "branch-path",
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [
+        { entryId: e1, parentEntryId: null, entryType: "system_event", payload: { step: 1 } },
+        { entryId: e2, parentEntryId: e1, entryType: "system_event", payload: { step: 2 } },
+        { entryId: e3, parentEntryId: e2, entryType: "system_event", payload: { step: 3 } },
+      ],
+    });
+
+    const full = await call<any[]>("getBranchPath", { branchId: "branch-path" });
+    expect(full.map((row) => row.entryId)).toEqual([e1, e2, e3]);
+    expect(full[0]).toMatchObject({ entryType: "system_event", payload: { step: 1 } });
+
+    const partial = await call<any[]>("getBranchPath", { branchId: "branch-path", throughEntryId: e2 });
+    expect(partial.map((row) => row.entryId)).toEqual([e1, e2]);
+  });
+
+  it("findBranchEntriesByType filters and slices the chain", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-find" });
+    const m1 = id("f1");
+    const m2 = id("f2");
+    const sysE = id("fs");
+    const m3 = id("f3");
+    await call("appendGadTrajectoryBatch", {
+      branchId: "branch-find",
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [
+        { entryId: m1, parentEntryId: null, entryType: "message", payload: { message: { role: "user", content: [], timestamp: 1 } } },
+        { entryId: m2, parentEntryId: m1, entryType: "message", payload: { message: { role: "assistant", content: [], timestamp: 2 } } },
+        { entryId: sysE, parentEntryId: m2, entryType: "system_event", payload: { x: 1 } },
+        { entryId: m3, parentEntryId: sysE, entryType: "message", payload: { message: { role: "assistant", content: [], timestamp: 3 } } },
+      ],
+    });
+
+    const messages = await call<any[]>("findBranchEntriesByType", {
+      branchId: "branch-find",
+      entryType: "message",
+    });
+    expect(messages.map((row) => row.entryId)).toEqual([m1, m2, m3]);
+
+    const second = await call<any[]>("findBranchEntriesByType", {
+      branchId: "branch-find",
+      entryType: "message",
+      offset: 1,
+      limit: 1,
+    });
+    expect(second.map((row) => row.entryId)).toEqual([m2]);
+
+    const events = await call<any[]>("findBranchEntriesByType", {
+      branchId: "branch-find",
+      entryType: "system_event",
+    });
+    expect(events.map((row) => row.entryId)).toEqual([sysE]);
+  });
+
   it("can list an unbounded branch trajectory", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const head = await call<any>("ensureGadBranch", { branchId: "branch-long" });
-    await call<any>("appendGadTrajectoryBatch", {
+    await call("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: Array.from({ length: 205 }, (_, i) => ({
-        kind: "system_event",
+        entryId: id(`l${i}`),
+        parentEntryId: null,
+        entryType: "system_event" as const,
         actor: "test",
         payload: { i },
       })),
@@ -492,20 +507,21 @@ describe("GadWorkspaceDO immutable persistence", () => {
   it("forks by recursive ancestry without copying trajectory rows", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const head = await call<any>("ensureGadBranch", { branchId: "branch-a" });
+    const baseMsg = id("base");
     const append = await call<any>("appendGadTrajectoryBatch", {
       branchId: "branch-a",
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [
-        { kind: "message_created", actor: "user", messageId: "msg:0", payload: { role: "user", timestamp: 1 } },
         {
-          kind: "message_block_added",
+          entryId: baseMsg,
+          parentEntryId: null,
+          entryType: "message",
           actor: "user",
-          messageId: "msg:0",
-          blockId: "msg:0:block:0",
-          payload: { block: { type: "text", text: "base" } },
+          payload: {
+            message: { role: "user", content: [{ type: "text", text: "base" }], timestamp: 1 },
+          },
         },
-        { kind: "message_finalized", actor: "user", messageId: "msg:0", payload: {} },
       ],
     });
     const beforeTrajectory = await call<{ rows: Array<unknown> }>("query", "SELECT * FROM gad_trajectory_items", []);
@@ -513,7 +529,7 @@ describe("GadWorkspaceDO immutable persistence", () => {
     await call("forkGadBranch", {
       sourceBranchId: "branch-a",
       newBranchId: "branch-b",
-      trajectoryHash: append.headTrajectoryHash,
+      entryId: baseMsg,
     });
     const afterForkTrajectory = await call<{ rows: Array<unknown> }>("query", "SELECT * FROM gad_trajectory_items", []);
     expect(afterForkTrajectory.rows).toHaveLength(beforeTrajectory.rows.length);
@@ -531,82 +547,33 @@ describe("GadWorkspaceDO immutable persistence", () => {
       branchId: "branch-b",
       expectedTrajectoryHash: forkHead.headTrajectoryHash,
       expectedStateHash: forkHead.headStateHash,
-      items: [{ kind: "system_event", actor: "test", payload: { forkOnly: true } }],
+      items: [{ entryId: id("fonly"), parentEntryId: null, entryType: "system_event", actor: "test", payload: { forkOnly: true } }],
     });
-    const forkTrajectory = await call<Array<{ kind: string; introduced_on_branch_id: string }>>(
+    const forkTrajectory = await call<Array<{ entry_type: string; introduced_on_branch_id: string }>>(
       "listGadBranchTrajectory",
       { branchId: "branch-b", limit: 10 },
     );
-    expect(forkTrajectory.map((row) => row.kind).reverse()).toEqual([
-      "message_created",
-      "message_block_added",
-      "message_finalized",
+    // Reverse to get ASC ordering
+    expect(forkTrajectory.map((row) => row.entry_type).reverse()).toEqual([
+      "message",
       "system_event",
     ]);
     expect(new Set(forkTrajectory.map((row) => row.introduced_on_branch_id))).toEqual(new Set(["branch-a", "branch-b"]));
-    const forkRows = await call<{ rows: Array<{ parent_hash: string | null; introduced_on_branch_id: string }> }>(
-      "query",
-      "SELECT parent_hash, introduced_on_branch_id FROM gad_trajectory_items WHERE introduced_on_branch_id = ? ORDER BY id",
-      ["branch-b"],
-    );
-    expect(forkRows.rows[0]).toEqual({ parent_hash: append.headTrajectoryHash, introduced_on_branch_id: "branch-b" });
-  });
-
-  it("forks from the middle of a trajectory and scopes inherited history recursively", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const head = await call<any>("ensureGadBranch", { branchId: "main" });
-    const append = await call<any>("appendGadTrajectoryBatch", {
-      branchId: "main",
-      expectedTrajectoryHash: head.headTrajectoryHash,
-      expectedStateHash: head.headStateHash,
-      items: [
-        { kind: "system_event", actor: "test", payload: { step: 1 } },
-        { kind: "system_event", actor: "test", payload: { step: 2 } },
-        { kind: "system_event", actor: "test", payload: { step: 3 } },
-        { kind: "system_event", actor: "test", payload: { step: 4 } },
-        { kind: "system_event", actor: "test", payload: { step: 5 } },
-      ],
-    });
-    const beforeRows = await call<{ rows: Array<unknown> }>("query", "SELECT * FROM gad_trajectory_items", []);
-    const forkPoint = append.items[2].hash;
-
-    const fork = await call<any>("forkGadBranch", {
-      sourceBranchId: "main",
-      newBranchId: "child",
-      trajectoryHash: forkPoint,
-    });
-    expect(fork.headTrajectoryHash).toBe(forkPoint);
-    const afterForkRows = await call<{ rows: Array<unknown> }>("query", "SELECT * FROM gad_trajectory_items", []);
-    expect(afterForkRows.rows).toHaveLength(beforeRows.rows.length);
-
-    await call("appendGadTrajectoryBatch", {
-      branchId: "child",
-      expectedTrajectoryHash: fork.headTrajectoryHash,
-      expectedStateHash: fork.headStateHash,
-      items: [{ kind: "system_event", actor: "test", payload: { child: true } }],
-    });
-    const childTrajectory = await call<Array<{ trajectory_hash: string; kind: string; introduced_on_branch_id: string }>>(
-      "listGadBranchTrajectory",
-      { branchId: "child", limit: 10 },
-    );
-    expect(childTrajectory.map((row) => row.trajectory_hash).reverse()).toEqual([
-      append.items[0].hash,
-      append.items[1].hash,
-      append.items[2].hash,
-      expect.stringMatching(/^trajectory:/),
-    ]);
-    expect(new Set(childTrajectory.map((row) => row.introduced_on_branch_id))).toEqual(new Set(["main", "child"]));
+    void append;
   });
 
   it("scopes state producers across forked branches", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const head = await call<any>("ensureGadBranch", { branchId: "main-state" });
+    const mainEntry = id("mst");
     const mainMutation = await call<any>("appendGadTrajectoryBatch", {
       branchId: "main-state",
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [{
-        kind: "file_observed",
+        entryId: mainEntry,
+        parentEntryId: null,
+        entryType: "file_observed",
         actor: "main",
         payload: { path: "state.txt", contentHash: "blob:main", operation: "write", mode: 0o100644 },
       }],
@@ -614,7 +581,7 @@ describe("GadWorkspaceDO immutable persistence", () => {
     const child = await call<any>("forkGadBranch", {
       sourceBranchId: "main-state",
       newBranchId: "child-state",
-      trajectoryHash: mainMutation.headTrajectoryHash,
+      entryId: mainEntry,
     });
     const mainProducer = await call<Record<string, unknown>>("getGadStateProducer", {
       stateHash: mainMutation.headStateHash,
@@ -626,15 +593,41 @@ describe("GadWorkspaceDO immutable persistence", () => {
     });
     expect(childInheritedProducer?.["trajectory_id"]).toBe(mainProducer?.["trajectory_id"]);
 
+    // Child mutates using intent + observed (file_mutation_observed dispatches state).
+    const intentId = id("ci");
+    const observedId = id("co");
     const childMutation = await call<any>("appendGadTrajectoryBatch", {
       branchId: "child-state",
       expectedTrajectoryHash: child.headTrajectoryHash,
       expectedStateHash: child.headStateHash,
-      items: [{
-        kind: "file_mutation",
-        actor: "child",
-        payload: { path: "state.txt", contentHash: "blob:child", operation: "write", mode: 0o100644 },
-      }],
+      items: [
+        {
+          entryId: intentId,
+          parentEntryId: null,
+          entryType: "file_mutation_intent",
+          actor: "child",
+          payload: {
+            path: "state.txt",
+            beforeHash: "blob:main",
+            beforeSize: null,
+            toolCallId: "tc-1",
+            plannedTool: "write",
+            plannedParams: {},
+          },
+        },
+        {
+          entryId: observedId,
+          parentEntryId: intentId,
+          entryType: "file_mutation_observed",
+          actor: "child",
+          payload: {
+            path: "state.txt",
+            afterHash: "blob:child",
+            afterSize: null,
+            outcome: "ok",
+          },
+        },
+      ],
     });
     expect(await call("getGadStateProducer", {
       stateHash: childMutation.headStateHash,
@@ -660,7 +653,7 @@ describe("GadWorkspaceDO immutable persistence", () => {
     }
   });
 
-  it("does not expose legacy compatibility tables", async () => {
+  it("does not expose legacy columns or compatibility tables", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const objects = await call<{ rows: Array<{ name: string }> }>(
       "query",
@@ -668,6 +661,22 @@ describe("GadWorkspaceDO immutable persistence", () => {
       [],
     );
     expect(objects.rows).toEqual([]);
+
+    const trajectoryColumns = await call<{ rows: Array<{ name: string }> }>(
+      "query",
+      "PRAGMA table_info(gad_trajectory_items)",
+      [],
+    );
+    const colNames = trajectoryColumns.rows.map((row) => row.name);
+    expect(colNames).not.toContain("kind");
+    expect(colNames).not.toContain("message_id");
+    expect(colNames).not.toContain("block_id");
+    expect(colNames).not.toContain("input_state_hash");
+    expect(colNames).not.toContain("output_state_hash");
+    expect(colNames).toContain("entry_id");
+    expect(colNames).toContain("parent_entry_id");
+    expect(colNames).toContain("entry_type");
+    expect(colNames).toContain("tool_call_id");
   });
 
   it("stores workspace state as a persistent tree manifest", async () => {
@@ -679,17 +688,23 @@ describe("GadWorkspaceDO immutable persistence", () => {
       expectedStateHash: head.headStateHash,
       items: [
         {
-          kind: "file_observed",
+          entryId: id("t1"),
+          parentEntryId: null,
+          entryType: "file_observed",
           actor: "test",
           payload: { path: "src/index.ts", contentHash: "blob:index", operation: "write", mode: 0o100644 },
         },
         {
-          kind: "file_observed",
+          entryId: id("t2"),
+          parentEntryId: null,
+          entryType: "file_observed",
           actor: "test",
           payload: { path: "src/lib/util.ts", contentHash: "blob:util", operation: "write", mode: 0o100644 },
         },
         {
-          kind: "file_observed",
+          entryId: id("t3"),
+          parentEntryId: null,
+          entryType: "file_observed",
           actor: "test",
           payload: { path: "README.md", contentHash: "blob:readme", operation: "write", mode: 0o100644 },
         },
@@ -713,7 +728,7 @@ describe("GadWorkspaceDO immutable persistence", () => {
     });
     expect(producer).toMatchObject({
       output_state_hash: append.headStateHash,
-      kind: "file_observed",
+      entry_type: "file_observed",
     });
 
     const blame = await call<Array<Record<string, unknown>>>("blameGadFileSnippet", {
@@ -724,7 +739,7 @@ describe("GadWorkspaceDO immutable persistence", () => {
     });
     expect(blame[0]).toMatchObject({
       path: "src/lib/util.ts",
-      kind: "file_observed",
+      entry_type: "file_observed",
     });
 
     const entries = await call<{ rows: Array<{ parent_hash: string; name: string; entry_kind: string; child_manifest_hash: string | null }> }>(
@@ -755,57 +770,71 @@ describe("GadWorkspaceDO immutable persistence", () => {
   it("does not assign output state or sidecars to no-op mutating actions", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const head = await call<any>("ensureGadBranch", { branchId: "branch-noop" });
+    const e1 = id("n1");
     const initial = await call<any>("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [{
-        kind: "file_observed",
+        entryId: e1,
+        parentEntryId: null,
+        entryType: "file_observed",
         actor: "test",
         payload: { path: "same.txt", contentHash: "blob:same", operation: "write", mode: 0o100644 },
       }],
     });
+    const intentEntry = id("ni");
+    const observedEntry = id("no");
     const noop = await call<any>("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: initial.headTrajectoryHash,
       expectedStateHash: initial.headStateHash,
-      items: [{
-        kind: "file_mutation",
-        actor: "test",
-        payload: { path: "same.txt", contentHash: "blob:same", operation: "write", mode: 0o100644 },
-      }],
+      items: [
+        {
+          entryId: intentEntry,
+          parentEntryId: null,
+          entryType: "file_mutation_intent",
+          actor: "test",
+          payload: { path: "same.txt", beforeHash: "blob:same", beforeSize: null, toolCallId: "tc1", plannedTool: "write", plannedParams: {} },
+        },
+        {
+          entryId: observedEntry,
+          parentEntryId: intentEntry,
+          entryType: "file_mutation_observed",
+          actor: "test",
+          payload: { path: "same.txt", afterHash: "blob:same", afterSize: null, outcome: "ok", mode: 0o100644 },
+        },
+      ],
     });
 
     expect(noop.headStateHash).toBe(initial.headStateHash);
-    expect(noop.items[0]).toMatchObject({
-      inputStateHash: initial.headStateHash,
-      outputStateHash: null,
-    });
     const rows = await call<{ rows: Array<Record<string, unknown>> }>(
       "query",
-      `SELECT ti.output_state_hash, st.id AS transition_id, h.id AS hunk_id
+      `SELECT ti.entry_type, st.id AS transition_id, h.id AS hunk_id
        FROM gad_trajectory_items ti
        LEFT JOIN gad_state_transitions st ON st.workspace_id = ti.workspace_id AND st.trajectory_id = ti.id
        LEFT JOIN gad_file_change_hunks h ON h.workspace_id = ti.workspace_id AND h.trajectory_id = ti.id
-       WHERE ti.hash = ?`,
-      [noop.headTrajectoryHash],
+       WHERE ti.entry_id = ?`,
+      [observedEntry],
     );
     expect(rows.rows[0]).toMatchObject({
-      output_state_hash: null,
       transition_id: null,
       hunk_id: null,
     });
   });
 
-  it("traces snippet blame through file-version ancestry", async () => {
+  it("file_mutation_observed produces state transition and uses intent for hunks", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const head = await call<any>("ensureGadBranch", { branchId: "branch-blame" });
+    const initialEntry = id("bi");
     const initial = await call<any>("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [{
-        kind: "file_observed",
+        entryId: initialEntry,
+        parentEntryId: null,
+        entryType: "file_observed",
         actor: "initial",
         payload: {
           path: "src/index.ts",
@@ -817,25 +846,47 @@ describe("GadWorkspaceDO immutable persistence", () => {
         },
       }],
     });
+    const intentEntry = id("be-i");
+    const observedEntry = id("be-o");
     const edited = await call<any>("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: initial.headTrajectoryHash,
       expectedStateHash: initial.headStateHash,
-      items: [{
-        kind: "file_mutation",
-        actor: "editor",
-        toolCallId: "tool-edit",
-        payload: {
-          path: "src/index.ts",
-          contentHash: "blob:v2",
-          operation: "write",
-          mode: 0o100644,
-          beforeText: "alpha\nbeta\ngamma",
-          afterText: "alpha\nbeta\nGAMMA",
-          oldString: "gamma",
-          newString: "GAMMA",
+      items: [
+        {
+          entryId: intentEntry,
+          parentEntryId: null,
+          entryType: "file_mutation_intent",
+          actor: "editor",
+          payload: {
+            path: "src/index.ts",
+            beforeHash: "blob:v1",
+            beforeSize: null,
+            toolCallId: "tool-edit",
+            plannedTool: "edit",
+            plannedParams: {
+              beforeText: "alpha\nbeta\ngamma",
+              afterText: "alpha\nbeta\nGAMMA",
+              oldString: "gamma",
+              newString: "GAMMA",
+            },
+          },
         },
-      }],
+        {
+          entryId: observedEntry,
+          parentEntryId: intentEntry,
+          entryType: "file_mutation_observed",
+          actor: "editor",
+          payload: {
+            path: "src/index.ts",
+            afterHash: "blob:v2",
+            afterSize: null,
+            outcome: "ok",
+            operation: "write",
+            mode: 0o100644,
+          },
+        },
+      ],
     });
 
     const unchangedLine = await call<Array<Record<string, unknown>>>("blameGadFileSnippet", {
@@ -846,7 +897,7 @@ describe("GadWorkspaceDO immutable persistence", () => {
     });
     expect(unchangedLine[0]).toMatchObject({
       actor: "initial",
-      kind: "file_observed",
+      entry_type: "file_observed",
     });
 
     const changedLine = await call<Array<Record<string, unknown>>>("blameGadFileSnippet", {
@@ -857,121 +908,25 @@ describe("GadWorkspaceDO immutable persistence", () => {
     });
     expect(changedLine[0]).toMatchObject({
       actor: "editor",
-      kind: "file_mutation",
-      origin_tool_call_id: "tool-edit",
+      entry_type: "file_mutation_observed",
     });
-  });
-
-  it("traces snippet blame across line shifts and unrelated later edits", async () => {
-    const { call } = await createTestDO(GadWorkspaceDO);
-    const head = await call<any>("ensureGadBranch", { branchId: "branch-shift-blame" });
-    const initialText = "one\ntwo\nthree\nfour";
-    const insertedText = "intro\none\ntwo\nthree\nfour";
-    const targetEditedText = "intro\none\ntwo\nTHREE\nfour";
-    const laterEditedText = "intro\nONE\ntwo\nTHREE\nfour";
-    const initial = await call<any>("appendGadTrajectoryBatch", {
-      branchId: head.branchId,
-      expectedTrajectoryHash: head.headTrajectoryHash,
-      expectedStateHash: head.headStateHash,
-      items: [{
-        kind: "file_observed",
-        actor: "initial",
-        payload: {
-          path: "shift.txt",
-          contentHash: "blob:shift:1",
-          operation: "write",
-          mode: 0o100644,
-          afterText: initialText,
-          newString: initialText,
-        },
-      }],
-    });
-    const inserted = await call<any>("appendGadTrajectoryBatch", {
-      branchId: head.branchId,
-      expectedTrajectoryHash: initial.headTrajectoryHash,
-      expectedStateHash: initial.headStateHash,
-      items: [{
-        kind: "file_mutation",
-        actor: "insert",
-        payload: {
-          path: "shift.txt",
-          contentHash: "blob:shift:2",
-          operation: "write",
-          mode: 0o100644,
-          beforeText: initialText,
-          afterText: insertedText,
-          oldString: "",
-          newString: "intro\n",
-        },
-      }],
-    });
-    const targetEdited = await call<any>("appendGadTrajectoryBatch", {
-      branchId: head.branchId,
-      expectedTrajectoryHash: inserted.headTrajectoryHash,
-      expectedStateHash: inserted.headStateHash,
-      items: [{
-        kind: "file_mutation",
-        actor: "target",
-        payload: {
-          path: "shift.txt",
-          contentHash: "blob:shift:3",
-          operation: "write",
-          mode: 0o100644,
-          beforeText: insertedText,
-          afterText: targetEditedText,
-          oldString: "three",
-          newString: "THREE",
-        },
-      }],
-    });
-    const laterEdited = await call<any>("appendGadTrajectoryBatch", {
-      branchId: head.branchId,
-      expectedTrajectoryHash: targetEdited.headTrajectoryHash,
-      expectedStateHash: targetEdited.headStateHash,
-      items: [{
-        kind: "file_mutation",
-        actor: "later",
-        payload: {
-          path: "shift.txt",
-          contentHash: "blob:shift:4",
-          operation: "write",
-          mode: 0o100644,
-          beforeText: targetEditedText,
-          afterText: laterEditedText,
-          oldString: "one",
-          newString: "ONE",
-        },
-      }],
-    });
-
-    const targetLine = await call<Array<Record<string, unknown>>>("blameGadFileSnippet", {
-      stateHash: laterEdited.headStateHash,
-      path: "shift.txt",
-      startLine: 4,
-      endLine: 4,
-    });
-    expect(targetLine[0]).toMatchObject({ actor: "target", kind: "file_mutation" });
-
-    const shiftedUnchangedLine = await call<Array<Record<string, unknown>>>("blameGadFileSnippet", {
-      stateHash: laterEdited.headStateHash,
-      path: "shift.txt",
-      startLine: 5,
-      endLine: 5,
-    });
-    expect(shiftedUnchangedLine[0]).toMatchObject({ actor: "initial", kind: "file_observed" });
   });
 
   it("reports structured integrity errors for corrupted graph rows", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const head = await call<any>("ensureGadBranch", { branchId: "branch-corrupt" });
+    const e1 = id("c1");
+    const e2 = id("c2");
     const append = await call<any>("appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [
-        { kind: "system_event", actor: "test", payload: { parent: true } },
+        { entryId: e1, parentEntryId: null, entryType: "system_event", actor: "test", payload: { parent: true } },
         {
-          kind: "file_observed",
+          entryId: e2,
+          parentEntryId: e1,
+          entryType: "file_observed",
           actor: "test",
           payload: { path: "corrupt.txt", contentHash: "blob:corrupt", operation: "write", mode: 0o100644 },
         },

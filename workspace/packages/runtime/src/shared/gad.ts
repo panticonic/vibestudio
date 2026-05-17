@@ -12,15 +12,35 @@ export interface GadStatusMetric {
   value: number;
 }
 
-export type GadTrajectoryKind =
-  | "message_created"
-  | "message_block_added"
-  | "message_finalized"
+/**
+ * Transcript-subset entry types — read by upstream `Session.buildContext()`
+ * and the `GadSessionStorage` adapter. One row per logical message; the
+ * envelope is the single source of truth for transcript content.
+ */
+export type GadTranscriptEntryType =
+  | "message"
+  | "model_change"
+  | "thinking_level_change"
+  | "compaction"
+  | "branch_summary"
+  | "custom"
+  | "custom_message"
+  | "label"
+  | "session_info"
+  | "leaf";
+
+/**
+ * Provenance-subset entry types — read by claim, file-blob and audit
+ * consumers via the gad client; never surfaced through `Session`.
+ */
+export type GadProvenanceEntryType =
+  | "message_block"
   | "tool_call_requested"
   | "tool_result_observed"
   | "file_observed"
   | "file_read"
-  | "file_mutation"
+  | "file_mutation_intent"
+  | "file_mutation_observed"
   | "workspace_observed"
   | "approval_requested"
   | "approval_resolved"
@@ -33,15 +53,22 @@ export type GadTrajectoryKind =
   | "theory_updated"
   | "system_event";
 
+export type GadEntryType = GadTranscriptEntryType | GadProvenanceEntryType;
+
+/**
+ * Envelope item carried by every row in `gad_trajectory_items`.
+ *
+ * `entryId` is caller-assigned (UUIDv7) so logical references — parent
+ * pointers, label targets, fork points — survive across CAS retries and
+ * fork branches. `parentEntryId` is the logical parent; the chain hash
+ * itself remains gad-internal.
+ */
 export interface GadTrajectoryItemSpec {
-  kind: GadTrajectoryKind;
+  entryId: string;
+  parentEntryId: string | null;
+  entryType: GadEntryType;
+  payload: GadJsonRecord;
   actor?: string | null;
-  payload?: GadJsonRecord | string | null;
-  messageId?: string | null;
-  blockId?: string | null;
-  toolCallId?: string | null;
-  inputStateHash?: string | null;
-  outputStateHash?: string | null;
   metadata?: GadJsonRecord | null;
 }
 
@@ -58,8 +85,22 @@ export interface GadBranchHead {
   branchId: string;
   headTrajectoryId: number | null;
   headTrajectoryHash: string | null;
+  headEntryId: string | null;
   headStateHash: string;
   dirty: boolean;
+}
+
+/** Materialised row joining trajectory + payload, returned by envelope reads. */
+export interface GadEntryRow {
+  trajectoryId: number;
+  trajectoryHash: string;
+  entryId: string;
+  parentEntryId: string | null;
+  entryType: GadEntryType;
+  actor: string | null;
+  payload: GadJsonRecord;
+  metadata: GadJsonRecord | null;
+  createdAt: string;
 }
 
 export interface GadAppendTrajectoryBatchInput {
@@ -75,8 +116,54 @@ export interface GadAppendTrajectoryBatchResult {
   branchId: string;
   headTrajectoryId: number | null;
   headTrajectoryHash: string | null;
+  headEntryId: string | null;
   headStateHash: string;
-  items: Array<{ id: number; hash: string; inputStateHash: string | null; outputStateHash: string | null }>;
+  items: Array<{
+    id: number;
+    hash: string;
+    entryId: string;
+    parentEntryId: string | null;
+  }>;
+}
+
+/** Move a branch head to point at an existing trajectory entry (or detach
+ *  to `null`). Used by `Session.moveTo` and fork-branch flows. */
+export interface GadSetBranchHeadInput {
+  workspaceId?: string | null;
+  branchId: string;
+  entryId: string | null;
+  expectedHeadTrajectoryHash?: string | null;
+}
+
+export interface GadGetEntryByIdInput {
+  workspaceId?: string | null;
+  entryId: string;
+}
+
+export interface GadGetBranchPathInput {
+  workspaceId?: string | null;
+  branchId: string;
+  /** When set, walks the chain up to and including this entry. */
+  throughEntryId?: string | null;
+}
+
+export interface GadFindBranchEntriesByTypeInput {
+  workspaceId?: string | null;
+  branchId: string;
+  entryType: GadEntryType;
+  offset?: number | null;
+  limit?: number | null;
+}
+
+export interface GadForkBranchInput {
+  workspaceId?: string | null;
+  sourceBranchId: string;
+  newBranchId?: string | null;
+  /** Fork point: the new branch's head is set to this entry's chain
+   *  position. When omitted, forks from the source branch's current head. */
+  entryId?: string | null;
+  channelId?: string | null;
+  contextId?: string | null;
 }
 
 export interface GadIntegrityError {
@@ -84,6 +171,7 @@ export interface GadIntegrityError {
   message: string;
   trajectoryId?: number;
   trajectoryHash?: string;
+  entryId?: string;
   branchId?: string;
   stateHash?: string;
   path?: string;
@@ -98,18 +186,13 @@ export interface GadClient {
   ensureGadBranch(input: GadEnsureBranchInput): Promise<GadBranchHead>;
   getGadBranchHead(input: { workspaceId?: string | null; branchId: string }): Promise<GadBranchHead>;
   appendGadTrajectoryBatch(input: GadAppendTrajectoryBatchInput): Promise<GadAppendTrajectoryBatchResult>;
-  materializePiMessages(input: { workspaceId?: string | null; branchId: string }): Promise<{ messages: GadJsonRecord[] }>;
+  setBranchHead(input: GadSetBranchHeadInput): Promise<GadBranchHead>;
+  getEntryById(input: GadGetEntryByIdInput): Promise<GadEntryRow | null>;
+  getBranchPath(input: GadGetBranchPathInput): Promise<GadEntryRow[]>;
+  findBranchEntriesByType(input: GadFindBranchEntriesByTypeInput): Promise<GadEntryRow[]>;
   listGadBranchTrajectory(input: { workspaceId?: string | null; branchId: string; limit?: number | null }): Promise<GadJsonRecord[]>;
   listGadBranchToolCalls(input: { workspaceId?: string | null; branchId: string; limit?: number | null }): Promise<GadJsonRecord[]>;
-  forkGadBranch(input: {
-    workspaceId?: string | null;
-    sourceBranchId: string;
-    newBranchId?: string | null;
-    trajectoryHash?: string | null;
-    trajectoryId?: number | null;
-    channelId?: string | null;
-    contextId?: string | null;
-  }): Promise<GadBranchHead>;
+  forkGadBranch(input: GadForkBranchInput): Promise<GadBranchHead>;
   listGadBranches(input?: { workspaceId?: string | null }): Promise<GadJsonRecord[]>;
   listGadBranchFiles(input: { workspaceId?: string | null; branchId: string }): Promise<GadJsonRecord[]>;
   diffGadStates(input: { workspaceId?: string | null; leftStateHash: string; rightStateHash: string }): Promise<{
@@ -145,7 +228,10 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     ensureGadBranch: (input) => rpc.call("main", "gad.ensureGadBranch", input),
     getGadBranchHead: (input) => rpc.call("main", "gad.getGadBranchHead", input),
     appendGadTrajectoryBatch: (input) => rpc.call("main", "gad.appendGadTrajectoryBatch", input),
-    materializePiMessages: (input) => rpc.call("main", "gad.materializePiMessages", input),
+    setBranchHead: (input) => rpc.call("main", "gad.setBranchHead", input),
+    getEntryById: (input) => rpc.call("main", "gad.getEntryById", input),
+    getBranchPath: (input) => rpc.call("main", "gad.getBranchPath", input),
+    findBranchEntriesByType: (input) => rpc.call("main", "gad.findBranchEntriesByType", input),
     listGadBranchTrajectory: (input) => rpc.call("main", "gad.listGadBranchTrajectory", input),
     listGadBranchToolCalls: (input) => rpc.call("main", "gad.listGadBranchToolCalls", input),
     forkGadBranch: (input) => rpc.call("main", "gad.forkGadBranch", input),

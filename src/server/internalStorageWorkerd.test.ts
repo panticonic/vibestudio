@@ -174,33 +174,52 @@ describe("internal storage DOs under workerd", () => {
       channelId: "channel-live",
       contextId: "context-live",
     }) as { branchId: string; headTrajectoryHash: string | null; headStateHash: string };
+    const userMessageId = "01900000-0000-7000-8000-000000000001";
+    const intentId = "01900000-0000-7000-8000-000000000002";
+    const observedId = "01900000-0000-7000-8000-000000000003";
     await harness.dispatch.dispatch(ref, "appendGadTrajectoryBatch", {
       branchId: head.branchId,
       expectedTrajectoryHash: head.headTrajectoryHash,
       expectedStateHash: head.headStateHash,
       items: [
         {
-          kind: "message_created",
+          entryId: userMessageId,
+          parentEntryId: null,
+          entryType: "message",
           actor: "user",
-          messageId: "msg:0",
-          payload: { role: "user", timestamp: 1 },
-        },
-        {
-          kind: "message_block_added",
-          actor: "user",
-          messageId: "msg:0",
-          blockId: "msg:0:block:0",
-          payload: { block: { type: "text", text: "write the file" } },
-        },
-        {
-          kind: "file_mutation",
-          actor: "tool",
-          toolCallId: "tool-live",
           payload: {
-            operation: "write",
+            message: {
+              role: "user",
+              content: [{ type: "text", text: "write the file" }],
+              timestamp: 1,
+            },
+          },
+        },
+        {
+          entryId: intentId,
+          parentEntryId: userMessageId,
+          entryType: "file_mutation_intent",
+          actor: "tool",
+          payload: {
+            toolCallId: "tool-live",
+            path: "src/live.ts",
+            plannedTool: "write",
+            beforeHash: null,
+            beforeSize: null,
+            plannedParams: { path: "src/live.ts" },
+          },
+        },
+        {
+          entryId: observedId,
+          parentEntryId: intentId,
+          entryType: "file_mutation_observed",
+          actor: "tool",
+          payload: {
+            toolCallId: "tool-live",
             path: "src/live.ts",
             afterHash: "d".repeat(64),
             afterSize: 12,
+            outcome: "ok",
           },
         },
       ],
