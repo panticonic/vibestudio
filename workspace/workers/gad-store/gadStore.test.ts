@@ -74,22 +74,22 @@ describe("GadWorkspaceDO immutable persistence", () => {
       items: [
         {
           kind: "message_created",
-          actor: "tool",
-          messageId: "msg:1",
-          payload: { role: "toolResult", timestamp: 1 },
+          actor: "assistant",
+          messageId: "msg:0",
+          payload: { role: "assistant", timestamp: 0 },
         },
         {
           kind: "message_block_added",
-          actor: "tool",
-          messageId: "msg:1",
-          blockId: "msg:1:block:0",
+          actor: "assistant",
+          messageId: "msg:0",
+          blockId: "msg:0:block:0",
           toolCallId: "tool-1",
-          payload: { block: { type: "text", text: "dispatched: ask-user" } },
+          payload: { block: { type: "tool_call", id: "tool-1", name: "ask_user", input: {} } },
         },
         {
           kind: "message_finalized",
-          actor: "tool",
-          messageId: "msg:1",
+          actor: "assistant",
+          messageId: "msg:0",
           payload: {},
         },
       ],
@@ -121,11 +121,138 @@ describe("GadWorkspaceDO immutable persistence", () => {
     );
     expect(materialized.messages).toEqual([
       {
+        role: "assistant",
+        content: [{ type: "tool_call", id: "tool-1", name: "ask_user", input: {} }],
+        timestamp: 0,
+      },
+      {
         role: "toolResult",
         toolCallId: "tool-1",
         toolName: "ask_user",
         content: [{ type: "text", text: "submitted" }],
         timestamp: 2,
+        isError: false,
+      },
+    ]);
+  });
+
+  it("rejects generic tool result message rows at append time", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-malformed-tool-result" });
+    await expect(call<any>("appendGadTrajectoryBatch", {
+      branchId: head.branchId,
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [
+        {
+          kind: "message_created",
+          actor: "tool",
+          messageId: "msg:0",
+          payload: { role: "toolResult", timestamp: 1 },
+        },
+        {
+          kind: "message_block_added",
+          actor: "tool",
+          messageId: "msg:0",
+          blockId: "msg:0:block:0",
+          payload: { block: { type: "text", text: "missing call id" } },
+        },
+        {
+          kind: "message_finalized",
+          actor: "tool",
+          messageId: "msg:0",
+          payload: {},
+        },
+      ],
+    })).rejects.toThrow(/Malformed GAD append/);
+  });
+
+  it("materializes a valid assistant tool call and observed tool result without generic tool result rows", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-valid-tool-result" });
+    await call<any>("appendGadTrajectoryBatch", {
+      branchId: head.branchId,
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: [
+        {
+          kind: "message_created",
+          actor: "assistant",
+          messageId: "msg:0",
+          payload: { role: "assistant", timestamp: 10 },
+        },
+        {
+          kind: "message_block_added",
+          actor: "assistant",
+          messageId: "msg:0",
+          blockId: "msg:0:block:0",
+          toolCallId: "tool-valid",
+          payload: {
+            block: { type: "toolCall", id: "tool-valid", name: "read", input: { path: "README.md" } },
+            blockIndex: 0,
+          },
+        },
+        {
+          kind: "tool_call_requested",
+          actor: "assistant",
+          messageId: "msg:0",
+          blockId: "msg:0:block:0",
+          toolCallId: "tool-valid",
+          payload: {
+            toolName: "read",
+            parameters: { path: "README.md" },
+          },
+        },
+        {
+          kind: "message_finalized",
+          actor: "assistant",
+          messageId: "msg:0",
+          payload: { stopReason: "tool_calls", errorMessage: null },
+        },
+        {
+          kind: "tool_result_observed",
+          actor: "worker",
+          messageId: "msg:1",
+          toolCallId: "tool-valid",
+          payload: {
+            toolCallId: "tool-valid",
+            toolName: "read",
+            content: [{ type: "text", text: "README contents" }],
+            isError: false,
+            timestamp: 11,
+            summary: "README contents",
+          },
+        },
+      ],
+    });
+
+    const genericToolResultRows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      `SELECT ti.id
+       FROM gad_trajectory_items ti
+       JOIN gad_payloads p ON p.workspace_id = ti.workspace_id AND p.hash = ti.payload_hash
+       WHERE ti.kind = 'message_created' AND json_extract(p.json, '$.role') = 'toolResult'`,
+      [],
+    );
+    expect(genericToolResultRows.rows).toEqual([]);
+
+    const materialized = await call<{ messages: Array<Record<string, unknown>> }>(
+      "materializePiMessages",
+      { branchId: "branch-valid-tool-result" },
+    );
+    expect(materialized.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "tool-valid", name: "read", input: { path: "README.md" } }],
+        timestamp: 10,
+        stopReason: "tool_calls",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-valid",
+        toolName: "read",
+        content: [{ type: "text", text: "README contents" }],
+        timestamp: 11,
         isError: false,
       },
     ]);
@@ -172,6 +299,11 @@ describe("GadWorkspaceDO immutable persistence", () => {
       status: "complete",
       result_summary: "observed without request",
     });
+
+    await expect(call(
+      "materializePiMessages",
+      { branchId: "branch-tool-integrity" },
+    )).rejects.toThrow(/Malformed GAD transcript/);
 
     const integrity = await call<{ ok: boolean; errors: Array<{ code: string; toolCallId?: string }> }>(
       "checkGadIntegrity",
@@ -334,6 +466,27 @@ describe("GadWorkspaceDO immutable persistence", () => {
       "branch-1",
       "branch-2",
     ]));
+  });
+
+  it("can list an unbounded branch trajectory", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const head = await call<any>("ensureGadBranch", { branchId: "branch-long" });
+    await call<any>("appendGadTrajectoryBatch", {
+      branchId: head.branchId,
+      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedStateHash: head.headStateHash,
+      items: Array.from({ length: 205 }, (_, i) => ({
+        kind: "system_event",
+        actor: "test",
+        payload: { i },
+      })),
+    });
+
+    const rows = await call<Array<Record<string, unknown>>>("listGadBranchTrajectory", {
+      branchId: "branch-long",
+      limit: null,
+    });
+    expect(rows).toHaveLength(205);
   });
 
   it("forks by recursive ancestry without copying trajectory rows", async () => {

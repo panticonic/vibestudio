@@ -40,6 +40,7 @@ interface FakeRunnerState {
   buildCalls: Array<{ content: string; images?: unknown }>;
   clearCount: number;
   continueCount: number;
+  abortCount: number;
   executeToolDirectCalls: Array<{ toolName: string; toolCallId: string; params: unknown }>;
   executeToolDirectImpl?: (toolName: string, toolCallId: string, params: unknown) => Promise<any>;
   replaceHistoryCalls: AgentMessage[][];
@@ -61,6 +62,7 @@ function makeFakeRunner(): { fake: PiRunner; state: FakeRunnerState } {
     buildCalls: [],
     clearCount: 0,
     continueCount: 0,
+    abortCount: 0,
     executeToolDirectCalls: [],
     replaceHistoryCalls: [],
     emit: (event) => {
@@ -118,6 +120,9 @@ function makeFakeRunner(): { fake: PiRunner; state: FakeRunnerState } {
     },
     clearSteeringQueue() {
       state.clearCount++;
+    },
+    abortAgent() {
+      state.abortCount++;
     },
     dispose() { /* no-op */ },
     setApprovalLevel() { /* no-op */ },
@@ -206,6 +211,14 @@ class TestWorker extends AgentWorkerBase {
       "openai-codex",
       "https://api.openai.com/v1",
     );
+  }
+
+  surfaceTranscriptShapeError(channelId: string, err: unknown): Promise<void> {
+    return (this as any).handleTranscriptShapeError(channelId, err);
+  }
+
+  dispatchRaw(channelId: string, event: ChannelEvent): Promise<void> {
+    return (this as any).dispatchChannelEvent(channelId, event);
   }
 }
 
@@ -299,8 +312,27 @@ describe("AgentWorkerBase — onChannelEvent → TurnDispatcher wiring", () => {
   });
 
   it("panel agent-context events are appended to Pi history without starting a turn", async () => {
-    const { instance, sql } = await createTestDO(TestWorker);
+    const { instance } = await createTestDO(TestWorker);
     await (instance as any).getOrCreateRunner("ch-1");
+    const rpcCall = vi.fn(async (_target: string, method: string, arg?: any) => {
+      if (method === "gad.materializePiMessages") return { messages: [] };
+      if (method === "gad.getGadBranchHead") {
+        return {
+          branchId: arg.branchId,
+          headTrajectoryHash: null,
+          headStateHash: "state:empty",
+        };
+      }
+      if (method === "gad.appendGadTrajectoryBatch") {
+        return {
+          branchId: arg.branchId,
+          headTrajectoryHash: "trajectory:ctx",
+          headStateHash: "state:empty",
+        };
+      }
+      throw new Error(`Unexpected RPC method: ${method}`);
+    });
+    (instance as any)._rpc = { call: rpcCall, handleIncomingPost: vi.fn() };
 
     await (instance as any).dispatchChannelEvent("ch-1", agentContext("load_action_bar(...) -> ok"));
     await flush();
@@ -319,6 +351,70 @@ describe("AgentWorkerBase — onChannelEvent → TurnDispatcher wiring", () => {
     expect((instance as TestWorker).fakeState!.runTurnCalls).toHaveLength(0);
     const replaceCalls = (instance as TestWorker).fakeState!.replaceHistoryCalls;
     expect(replaceCalls[replaceCalls.length - 1]).toMatchObject(messages);
+    expect(rpcCall).toHaveBeenCalledWith("main", "gad.appendGadTrajectoryBatch", expect.objectContaining({
+      items: expect.arrayContaining([
+        expect.objectContaining({ kind: "message_created", actor: "user", messageId: "msg:0" }),
+        expect.objectContaining({ kind: "message_block_added", actor: "user", messageId: "msg:0" }),
+        expect.objectContaining({ kind: "message_finalized", actor: "user", messageId: "msg:0" }),
+      ]),
+    }));
+  });
+
+  it("surfaces transcript shape errors once and stops channel dispatch until unsubscribe", async () => {
+    const { instance, sql } = await createTestDO(TestWorker);
+    sql.exec(
+      `INSERT INTO subscriptions (channel_id, context_id, subscribed_at, config, participant_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      "ch-1",
+      "ctx-1",
+      Date.now(),
+      null,
+      "agent-1",
+    );
+
+    await (instance as TestWorker).surfaceTranscriptShapeError(
+      "ch-1",
+      new Error("Malformed GAD transcript: toolResult message msg:2 is missing toolCallId"),
+    );
+    await flush();
+
+    expect((instance as TestWorker).sentMessages).toHaveLength(1);
+    expect((instance as TestWorker).sentMessages[0]).toMatchObject({
+      participantId: "agent-1",
+      content: "Transcript error: Malformed GAD transcript: toolResult message msg:2 is missing toolCallId",
+    });
+    expect((instance as TestWorker).sentMessages[0]!.opts).toMatchObject({
+      contentType: "error",
+      persist: true,
+      idempotencyKey: "transcript-shape-error:ch-1",
+    });
+
+    await (instance as TestWorker).surfaceTranscriptShapeError(
+      "ch-1",
+      new Error("Malformed GAD transcript: repeated"),
+    );
+    await (instance as TestWorker).dispatchRaw("ch-1", userMessage("should not run"));
+    await flush();
+
+    expect((instance as TestWorker).sentMessages).toHaveLength(1);
+    expect((instance as TestWorker).fakeState).toBeNull();
+
+    sql.exec(`UPDATE subscriptions SET participant_id = NULL WHERE channel_id = ?`, "ch-1");
+    await instance.unsubscribeChannel("ch-1");
+    sql.exec(
+      `INSERT INTO subscriptions (channel_id, context_id, subscribed_at, config, participant_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      "ch-1",
+      "ctx-1",
+      Date.now(),
+      null,
+      "agent-1",
+    );
+    await (instance as TestWorker).dispatchRaw("ch-1", userMessage("after reset"));
+    await flush();
+
+    expect((instance as TestWorker).fakeState!.runTurnCalls).toHaveLength(1);
+    expect((instance as TestWorker).fakeState!.runTurnCalls[0]!.content).toBe("after reset");
   });
 
   it("message events with a contentType are filtered (agent-emitted sub-blocks)", async () => {
@@ -354,6 +450,7 @@ describe("AgentWorkerBase — onChannelEvent → TurnDispatcher wiring", () => {
           buildCalls: [],
           clearCount: 0,
           continueCount: 0,
+          abortCount: 0,
           executeToolDirectCalls: [],
           replaceHistoryCalls: [],
           emit: (event) => { for (const l of listeners) l(event); },
@@ -379,6 +476,7 @@ describe("AgentWorkerBase — onChannelEvent → TurnDispatcher wiring", () => {
           },
           steerMessage(msg: AgentMessage) { state.steerCalls.push(msg); },
           clearSteeringQueue() { state.clearCount++; },
+          abortAgent() { state.abortCount++; },
           dispose() {},
           setApprovalLevel() {},
         } as unknown as PiRunner;
@@ -420,6 +518,7 @@ describe("AgentWorkerBase — onChannelEvent → TurnDispatcher wiring", () => {
           buildCalls: [],
           clearCount: 0,
           continueCount: 0,
+          abortCount: 0,
           executeToolDirectCalls: [],
           replaceHistoryCalls: [],
           emit: (event) => { for (const l of listeners) l(event); },
@@ -445,6 +544,7 @@ describe("AgentWorkerBase — onChannelEvent → TurnDispatcher wiring", () => {
           },
           steerMessage(msg: AgentMessage) { state.steerCalls.push(msg); },
           clearSteeringQueue() { state.clearCount++; },
+          abortAgent() { state.abortCount++; },
           dispose() {},
           setApprovalLevel() {},
         } as unknown as PiRunner;
@@ -692,6 +792,29 @@ describe("AgentWorkerBase — onChannelEvent → TurnDispatcher wiring", () => {
     expect(cachedMessages(instance, "ch-1")).toEqual([
       { role: "user", content: "hello", timestamp: 1 },
     ]);
+  });
+
+  it("fails closed on malformed tool results without a toolCallId", async () => {
+    const { instance } = await createTestDO(TestWorker);
+
+    await expect((instance as any).saveMessages("ch-1", [
+      { role: "user", content: "hello", timestamp: 1 },
+      {
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: "missing call id" }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        content: [{ type: "text", text: "ok" }],
+        timestamp: 3,
+      },
+    ])).rejects.toThrow(/Malformed agent transcript/);
+
+    expect(cachedMessages(instance, "ch-1")).toEqual([]);
   });
 
   it("resumes the failed user turn after a model credential is connected", async () => {

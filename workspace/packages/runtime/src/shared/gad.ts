@@ -99,8 +99,8 @@ export interface GadClient {
   getGadBranchHead(input: { workspaceId?: string | null; branchId: string }): Promise<GadBranchHead>;
   appendGadTrajectoryBatch(input: GadAppendTrajectoryBatchInput): Promise<GadAppendTrajectoryBatchResult>;
   materializePiMessages(input: { workspaceId?: string | null; branchId: string }): Promise<{ messages: GadJsonRecord[] }>;
-  listGadBranchTrajectory(input: { workspaceId?: string | null; branchId: string; limit?: number }): Promise<GadJsonRecord[]>;
-  listGadBranchToolCalls(input: { workspaceId?: string | null; branchId: string; limit?: number }): Promise<GadJsonRecord[]>;
+  listGadBranchTrajectory(input: { workspaceId?: string | null; branchId: string; limit?: number | null }): Promise<GadJsonRecord[]>;
+  listGadBranchToolCalls(input: { workspaceId?: string | null; branchId: string; limit?: number | null }): Promise<GadJsonRecord[]>;
   forkGadBranch(input: {
     workspaceId?: string | null;
     sourceBranchId: string;

@@ -901,6 +901,16 @@ async function main() {
   // ── Shell approval service (consent bar queue) ──
   const { createShellApprovalService } = await import("./services/shellApprovalService.js");
   container.register(rpcService(createShellApprovalService({ approvalQueue })));
+  const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
+  container.register(
+    rpcService(
+      createCorsApprovalService({
+        approvalQueue,
+        grantStore: capabilityGrantStore,
+        codeIdentityResolver,
+      })
+    )
+  );
   const { createUserlandApprovalService } = await import("./services/userlandApprovalService.js");
   container.register(
     rpcService(

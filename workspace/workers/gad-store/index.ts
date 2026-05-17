@@ -231,6 +231,12 @@ function toolNameFromBlock(block: unknown): string | null {
   return asString(item["name"]) ?? asString(item["toolName"]) ?? null;
 }
 
+function toolCallIdFromBlock(block: unknown): string | null {
+  if (!block || typeof block !== "object") return null;
+  const item = block as Record<string, unknown>;
+  return asString(item["id"]) ?? asString(item["toolCallId"]);
+}
+
 function textLineCount(text: string | null): number | null {
   if (text == null) return null;
   if (text.length === 0) return 0;
@@ -674,6 +680,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }> = [];
 
     for (const spec of input.items) {
+      const specPayload = typeof spec.payload === "object" && spec.payload != null ? spec.payload : null;
+      if (spec.kind === "message_created" && specPayload && asString(specPayload["role"]) === "toolResult") {
+        console.error("[GadWorkspaceDO] Rejecting generic toolResult message_created", {
+          workspaceId,
+          branchId,
+          messageId: spec.messageId ?? null,
+        });
+        throw new Error("Malformed GAD append: toolResult must be recorded as tool_result_observed");
+      }
       const itemInputState = spec.inputStateHash ?? currentState;
       if (itemInputState !== currentState) throw new Error(`Invalid state transition for ${spec.kind}`);
       const stateTransition = await this.prepareStateTransition(workspaceId, currentState, spec, currentFiles ?? undefined);
@@ -719,6 +734,17 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     const created: Array<{ id: number; hash: string; inputStateHash: string | null; outputStateHash: string | null }> = [];
     this.transaction(() => {
+      const currentBranch = this.sql.exec(
+        `SELECT head_trajectory_hash, head_state_hash FROM gad_branches WHERE workspace_id = ? AND id = ?`,
+        workspaceId,
+        branchId,
+      ).toArray()[0] as JsonRecord | undefined;
+      if (!currentBranch) throw new Error(`gad branch not found: ${branchId}`);
+      const currentHeadHash = asString(currentBranch["head_trajectory_hash"]);
+      const currentStateHash = asString(currentBranch["head_state_hash"]) ?? EMPTY_STATE_HASH;
+      if (currentHeadHash !== branch.headTrajectoryHash) throw new Error("gad head conflict");
+      if (currentStateHash !== branch.headStateHash) throw new Error("gad state conflict");
+
       const pendingFileVersionIds = new Map<string, number>();
       for (const item of prepared) {
         if (item.payloadHash) {
@@ -835,6 +861,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
         branch.headTrajectoryHash,
         branch.headStateHash,
       );
+      const changed = asNumber(this.sql.exec(`SELECT changes() AS changes`).one()["changes"]);
+      if (changed !== 1) throw new Error("gad head conflict");
       for (const item of created) this.enqueueIndexJob(workspaceId, item.hash, "trajectory", "trajectory-sidecars");
     });
 
@@ -855,9 +883,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { messages: this.materializePiMessagesFromTrajectory(workspaceId, rows) };
   }
 
-  listGadBranchTrajectory(input: { workspaceId?: string | null; branchId: string; limit?: number }): JsonRecord[] {
+  listGadBranchTrajectory(input: { workspaceId?: string | null; branchId: string; limit?: number | null }): JsonRecord[] {
     this.ensureReady();
-    return this.branchTrajectoryRows(input.workspaceId ?? WORKSPACE_ID, input.branchId, { order: "DESC", limit: input.limit ?? 200 });
+    return this.branchTrajectoryRows(input.workspaceId ?? WORKSPACE_ID, input.branchId, { order: "DESC", limit: input.limit ?? null });
   }
 
   forkGadBranch(input: ForkGadBranchInput): ReturnType<GadWorkspaceDO["getGadBranchHead"]> {
@@ -1487,12 +1515,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { processed: rows.length };
   }
 
-  listGadBranchToolCalls(input: { workspaceId?: string | null; branchId: string; limit?: number }): JsonRecord[] {
+  listGadBranchToolCalls(input: { workspaceId?: string | null; branchId: string; limit?: number | null }): JsonRecord[] {
     this.ensureReady();
     const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    return this.toolCallRowsFromTrajectory(workspaceId, input.branchId)
-      .sort((a, b) => asNumber(b["source_trajectory_id"]) - asNumber(a["source_trajectory_id"]))
-      .slice(0, input.limit ?? 200);
+    const rows = this.toolCallRowsFromTrajectory(workspaceId, input.branchId)
+      .sort((a, b) => asNumber(b["source_trajectory_id"]) - asNumber(a["source_trajectory_id"]));
+    return input.limit == null ? rows : rows.slice(0, input.limit);
   }
 
   getGadToolProvenance(input: { workspaceId?: string | null; branchId: string; toolCallId: string }): JsonRecord | null {
@@ -1753,11 +1781,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
   private materializePiMessagesFromTrajectory(workspaceId: string, rows: JsonRecord[]): JsonRecord[] {
     type PendingMessage = {
       idx: number;
+      messageId: string;
       message: JsonRecord;
       blocks: Array<{ idx: number; block: JsonValue }>;
       toolResultOverride?: JsonRecord;
     };
     const byId = new Map<string, PendingMessage>();
+    const materializedToolCallIds = new Set<string>();
     let nextIdx = 0;
     const entryFor = (messageId: string, fallbackRole: string, createdAt: string | null): PendingMessage => {
       const existing = byId.get(messageId);
@@ -1765,7 +1795,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const timestamp = createdAt ? Date.parse(createdAt) : NaN;
       const message: JsonRecord = { role: fallbackRole, content: [] };
       if (Number.isFinite(timestamp)) message["timestamp"] = timestamp;
-      const entry = { idx: nextIdx++, message, blocks: [] };
+      const entry = { idx: nextIdx++, messageId, message, blocks: [] };
       byId.set(messageId, entry);
       return entry;
     };
@@ -1792,11 +1822,18 @@ export class GadWorkspaceDO extends DurableObjectBase {
         const entry = entryFor(messageId, actor, createdAt);
         const block = payload["block"];
         if (block != null) {
+          const blockToolCallId = toolCallIdFromBlock(block);
+          if (blockToolCallId) materializedToolCallIds.add(blockToolCallId);
           entry.blocks.push({
             idx: typeof payload["blockIndex"] === "number" ? payload["blockIndex"] : entry.blocks.length,
             block,
           });
         }
+        continue;
+      }
+
+      if (kind === "tool_call_requested" && messageId && toolCallId) {
+        materializedToolCallIds.add(toolCallId);
         continue;
       }
 
@@ -1809,6 +1846,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
       if (kind === "tool_result_observed") {
         const payloadToolCallId = toolCallId ?? asString(payload["toolCallId"]);
+        if (!payloadToolCallId) {
+          console.error("[GadWorkspaceDO] Malformed tool_result_observed without toolCallId", {
+            workspaceId,
+            branchMessageId: messageId,
+            trajectoryId: row["trajectory_id"],
+            trajectoryHash: row["trajectory_hash"],
+          });
+          throw new Error("Malformed GAD transcript: tool_result_observed is missing toolCallId");
+        }
+        if (!materializedToolCallIds.has(payloadToolCallId)) {
+          console.error("[GadWorkspaceDO] Orphan tool_result_observed without matching tool call", {
+            workspaceId,
+            branchMessageId: messageId,
+            toolCallId: payloadToolCallId,
+            trajectoryId: row["trajectory_id"],
+            trajectoryHash: row["trajectory_hash"],
+          });
+          throw new Error(`Malformed GAD transcript: tool_result_observed for ${payloadToolCallId} has no matching tool call`);
+        }
         const id = messageId ?? (payloadToolCallId ? `tool-result:${payloadToolCallId}` : null);
         if (!id) continue;
         const content = Array.isArray(payload["content"])
@@ -1830,12 +1886,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
     return [...byId.values()]
       .sort((a, b) => a.idx - b.idx)
-      .map((entry) => {
-        if (entry.toolResultOverride) return entry.toolResultOverride;
+      .flatMap((entry): JsonRecord[] => {
+        if (entry.toolResultOverride) return [entry.toolResultOverride];
+        if (entry.message["role"] === "toolResult") {
+          console.error("[GadWorkspaceDO] Malformed materialized toolResult without toolCallId", {
+            workspaceId,
+            messageId: entry.messageId,
+          });
+          throw new Error(`Malformed GAD transcript: toolResult message ${entry.messageId} is missing toolCallId`);
+        }
         entry.message["content"] = entry.blocks
           .sort((a, b) => a.idx - b.idx)
           .map((block) => block.block);
-        return entry.message;
+        return [entry.message];
       });
   }
 

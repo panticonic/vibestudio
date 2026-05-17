@@ -80,6 +80,28 @@ function isExpectedTestServerFailure(error: unknown): boolean {
   return String(error).includes("test-server.invalid") || String(cause).includes("test-server.invalid");
 }
 
+function isGadConflict(error: unknown): boolean {
+  return /\bgad (?:head|state) conflict\b/.test(String(error));
+}
+
+function isTranscriptShapeError(error: unknown): boolean {
+  return /\bMalformed (?:agent|GAD) (?:append|transcript)\b/.test(String(error));
+}
+
+interface GadAppendRequest {
+  workspaceId?: string | null;
+  branchId: string;
+  expectedTrajectoryHash?: string | null;
+  expectedStateHash?: string | null;
+  items: Array<Record<string, unknown>>;
+}
+
+interface GadBranchHead {
+  branchId: string;
+  headTrajectoryHash: string | null;
+  headStateHash: string;
+}
+
 export interface ModelCredentialSummary {
   id: string;
   accountIdentity?: {
@@ -389,6 +411,15 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
 
   /** Materialized gad message cache; execution-local only. */
   private messageCache = new Map<string, AgentMessage[]>();
+
+  /** Channels with structurally invalid transcript state. Fail closed and
+   *  surface one visible error instead of repeatedly reprocessing the same
+   *  malformed history. */
+  private transcriptPoisonedChannels = new Map<string, string>();
+  private transcriptPoisonNotified = new Set<string>();
+
+  /** Pi can execute tools in parallel, while GAD branches have a single immutable head. */
+  private gadAppendQueue = new Map<string, Promise<unknown>>();
 
   /** Phase 0D: Transient poison message tracker. Resets on hibernation. */
   private failedEvents = new Map<number, number>();
@@ -870,6 +901,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     this.dispatches.deleteForChannel(channelId);
     this.subscriptions.deleteSubscription(channelId);
     this.messageCache.delete(channelId);
+    this.transcriptPoisonedChannels.delete(channelId);
+    this.transcriptPoisonNotified.delete(channelId);
 
     return { ok: true };
   }
@@ -988,6 +1021,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       return;
     }
 
+    if (await this.failIfTranscriptPoisoned(channelId)) return;
+
     if (event.type === "agent-context") {
       await this.appendAgentContext(channelId, event);
       return;
@@ -1028,8 +1063,14 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
 
     const runner = new PiRunner({
       rpc: {
-        call: <T = unknown>(target: string, method: string, ...args: unknown[]): Promise<T> =>
-          this.rpc.call<T>(target, method, ...args),
+        call: <T = unknown>(target: string, method: string, ...args: unknown[]): Promise<T> => {
+          if (target === "main" && method === "gad.appendGadTrajectoryBatch") {
+            return this.enqueueGadAppend(channelId, () =>
+              this.appendGadTrajectoryWithRetry(channelId, args[0] as GadAppendRequest)
+            ) as Promise<T>;
+          }
+          return this.rpc.call<T>(target, method, ...args);
+        },
       },
       fs: this.fs,
       uiCallbacks: this.buildUICallbacks(channelId),
@@ -1062,9 +1103,17 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         },
       },
       onTrajectoryAdvanced: async () => {
-        const materialized = await this.loadMessages(channelId, { refresh: true });
-        runner.replaceHistory(runner.trimTrailingAbortedAssistant(materialized));
-        await this.drainDeferredDispatchesFor(channelId);
+        try {
+          const materialized = await this.loadMessages(channelId, { refresh: true });
+          runner.replaceHistory(runner.trimTrailingAbortedAssistant(materialized));
+          await this.drainDeferredDispatchesFor(channelId);
+        } catch (err) {
+          if (isTranscriptShapeError(err)) {
+            await this.handleTranscriptShapeError(channelId, err);
+            return;
+          }
+          throw err;
+        }
       },
     });
 
@@ -1182,7 +1231,58 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     });
   }
 
+  private transcriptShapeErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  private async emitTranscriptShapeError(channelId: string, detail: string): Promise<void> {
+    if (this.transcriptPoisonNotified.has(channelId)) return;
+    const participantId = this.subscriptions.getParticipantId(channelId);
+    if (!participantId) return;
+
+    this.transcriptPoisonNotified.add(channelId);
+    const channel = this.createChannelClient(channelId);
+    const messageId = crypto.randomUUID();
+    await channel.send(
+      participantId,
+      messageId,
+      `Transcript error: ${detail}`,
+      {
+        contentType: "error",
+        persist: true,
+        idempotencyKey: `transcript-shape-error:${channelId}`,
+      },
+    ).catch((err) => {
+      console.error(`[AgentWorkerBase] Failed to emit transcript-shape error for channel=${channelId}:`, err);
+      this.transcriptPoisonNotified.delete(channelId);
+    });
+  }
+
+  private async handleTranscriptShapeError(channelId: string, error: unknown): Promise<void> {
+    const detail = this.transcriptShapeErrorMessage(error);
+    const existing = this.transcriptPoisonedChannels.get(channelId);
+    if (!existing) {
+      this.transcriptPoisonedChannels.set(channelId, detail);
+      console.error(`[AgentWorkerBase] Transcript shape error on channel=${channelId}: ${detail}`);
+      this.dispatchers.get(channelId)?.reset();
+      this.abortContexts.set(channelId, { reason: "interrupt-channel", detail: "transcript-shape-error", at: Date.now() });
+      const runner = this.runners.get(channelId)?.runner as { abortAgent?: () => void } | undefined;
+      runner?.abortAgent?.();
+    }
+    await this.emitTranscriptShapeError(channelId, existing ?? detail);
+  }
+
+  private async failIfTranscriptPoisoned(channelId: string): Promise<boolean> {
+    const detail = this.transcriptPoisonedChannels.get(channelId);
+    if (!detail) return false;
+    await this.emitTranscriptShapeError(channelId, detail);
+    return true;
+  }
+
   private async loadMessages(channelId: string, opts: { refresh?: boolean } = {}): Promise<AgentMessage[]> {
+    if (await this.failIfTranscriptPoisoned(channelId)) {
+      throw new Error(this.transcriptPoisonedChannels.get(channelId));
+    }
     if (!opts.refresh) {
       const cached = this.messageCache.get(channelId);
       if (cached) return cached;
@@ -1191,38 +1291,80 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       const result = await this.rpc.call<{ messages: AgentMessage[] }>("main", "gad.materializePiMessages", {
         branchId: gadBranchIdForChannel(channelId),
       });
-      const messages = trimTrailingEmptyAbortedAssistant(result.messages ?? []);
+      const messages = validateAgentMessages(result.messages ?? [], `gad.materializePiMessages channel=${channelId}`);
       this.messageCache.set(channelId, messages);
       return messages;
     } catch (err) {
-      const fallback = this.messageCache.get(channelId) ?? [];
+      if (isTranscriptShapeError(err)) {
+        await this.handleTranscriptShapeError(channelId, err);
+        throw err;
+      }
+      const fallback = validateAgentMessages(this.messageCache.get(channelId) ?? [], `messageCache fallback channel=${channelId}`);
       if (fallback.length > 0) {
         console.warn(`[AgentWorkerBase] gad.materializePiMessages failed for channel=${channelId}; using cache:`, err);
       }
+      this.messageCache.set(channelId, fallback);
       return fallback;
     }
   }
 
   private async appendGadItems(channelId: string, items: Array<Record<string, unknown>>): Promise<void> {
     if (items.length === 0) return;
-    try {
+    if (await this.failIfTranscriptPoisoned(channelId)) return;
+    await this.enqueueGadAppend(channelId, async () => {
       const head = await this.rpc.call<{
         branchId: string;
         headTrajectoryHash: string | null;
         headStateHash: string;
       }>("main", "gad.getGadBranchHead", { branchId: gadBranchIdForChannel(channelId) });
-      await this.rpc.call("main", "gad.appendGadTrajectoryBatch", {
+      await this.appendGadTrajectoryWithRetry(channelId, {
         branchId: head.branchId,
         expectedTrajectoryHash: head.headTrajectoryHash,
         expectedStateHash: head.headStateHash,
         items,
       });
       await this.loadMessages(channelId, { refresh: true });
-    } catch (err) {
+    }).catch(async (err) => {
+      if (isTranscriptShapeError(err)) {
+        await this.handleTranscriptShapeError(channelId, err);
+        return;
+      }
       if (!isExpectedTestServerFailure(err)) {
         console.warn(`[AgentWorkerBase] gad append failed for channel=${channelId}:`, err);
       }
+    });
+  }
+
+  private enqueueGadAppend<T>(channelId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.gadAppendQueue.get(channelId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(fn);
+    const tracked = next.catch(() => undefined).finally(() => {
+      if (this.gadAppendQueue.get(channelId) === tracked) this.gadAppendQueue.delete(channelId);
+    });
+    this.gadAppendQueue.set(channelId, tracked);
+    return next;
+  }
+
+  private async appendGadTrajectoryWithRetry(channelId: string, input: GadAppendRequest): Promise<unknown> {
+    let current = input;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        return await this.rpc.call("main", "gad.appendGadTrajectoryBatch", current);
+      } catch (err) {
+        if (!isGadConflict(err) || attempt === 2) throw err;
+        const head = await this.rpc.call<GadBranchHead>("main", "gad.getGadBranchHead", {
+          workspaceId: current.workspaceId ?? null,
+          branchId: current.branchId,
+        });
+        current = {
+          ...current,
+          branchId: head.branchId,
+          expectedTrajectoryHash: head.headTrajectoryHash,
+          expectedStateHash: head.headStateHash,
+        };
+      }
     }
+    throw new Error(`Failed to append gad trajectory for ${channelId}`);
   }
 
   private async appendAgentContext(channelId: string, event: ChannelEvent): Promise<void> {
@@ -1257,44 +1399,96 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       } as AgentMessage,
     ];
 
-    await this.saveMessages(channelId, nextMessages);
+    const savedMessages = await this.saveMessages(channelId, nextMessages);
     const entry = this.runners.get(channelId);
-    if (entry) entry.runner.replaceHistory(nextMessages);
+    if (entry) entry.runner.replaceHistory(savedMessages);
   }
 
-  private async saveMessages(channelId: string, messages: AgentMessage[]): Promise<void> {
-    messages = trimTrailingEmptyAbortedAssistant(messages);
-    const previous = this.messageCache.get(channelId) ?? [];
+  private async saveMessages(channelId: string, messages: AgentMessage[]): Promise<AgentMessage[]> {
+    messages = validateAgentMessages(messages, `saveMessages channel=${channelId}`);
+    const previous = validateAgentMessages(this.messageCache.get(channelId) ?? [], `messageCache previous channel=${channelId}`);
     const items: Array<Record<string, unknown>> = [];
     for (let i = 0; i < messages.length; i++) {
       const message = messages[i]!;
-      if ((message as { role?: string }).role !== "toolResult") continue;
+      const role = messageRole(message);
       const toolCallId = (message as { toolCallId?: string }).toolCallId;
-      if (!toolCallId) continue;
-      const prior = previous.find((candidate) =>
-        (candidate as { role?: string; toolCallId?: string }).role === "toolResult" &&
-        (candidate as { toolCallId?: string }).toolCallId === toolCallId &&
+      const messageId = messageIdFor(i, message);
+      const prior = previous.find((candidate, candidateIndex) =>
+        messageIdFor(candidateIndex, candidate) === messageId &&
         JSON.stringify(candidate) === JSON.stringify(message)
       );
       if (prior) continue;
-      items.push({
-        kind: "tool_result_observed",
-        actor: "worker",
-        messageId: messageIdFor(i, message),
-        toolCallId,
-        payload: {
+      if (role === "toolResult") {
+        if (!toolCallId) {
+          throw new Error(`Malformed agent transcript: toolResult at saveMessages channel=${channelId}[${i}] is missing toolCallId`);
+        }
+        items.push({
+          kind: "tool_result_observed",
+          actor: "worker",
+          messageId,
           toolCallId,
-          toolName: (message as { toolName?: string }).toolName ?? toolNameFromMessages(messages, toolCallId),
-          content: (message as { content?: unknown }).content ?? [],
-          details: (message as { details?: unknown }).details ?? null,
-          isError: (message as { isError?: boolean }).isError === true,
+          payload: {
+            toolCallId,
+            toolName: (message as { toolName?: string }).toolName ?? toolNameFromMessages(messages, toolCallId),
+            content: (message as { content?: unknown }).content ?? [],
+            details: (message as { details?: unknown }).details ?? null,
+            isError: (message as { isError?: boolean }).isError === true,
+            timestamp: (message as { timestamp?: unknown }).timestamp ?? Date.now(),
+            summary: summarizeUnknownResult((message as { content?: unknown }).content ?? ""),
+          },
+        });
+        continue;
+      }
+      items.push({
+        kind: "message_created",
+        actor: role,
+        messageId,
+        payload: {
+          role,
           timestamp: (message as { timestamp?: unknown }).timestamp ?? Date.now(),
-          summary: summarizeUnknownResult((message as { content?: unknown }).content ?? ""),
+          messageIndex: i,
+          details: (message as { details?: unknown }).details ?? null,
+        },
+      });
+      for (const [blockIndex, block] of messageBlocks(message).entries()) {
+        const blockId = `${messageId}:block:${blockIndex}`;
+        const blockToolCallId = toolCallIdFromBlock(block);
+        items.push({
+          kind: "message_block_added",
+          actor: role,
+          messageId,
+          blockId,
+          toolCallId: blockToolCallId,
+          payload: { block, blockIndex },
+        });
+        if (blockToolCallId) {
+          items.push({
+            kind: "tool_call_requested",
+            actor: "assistant",
+            messageId,
+            blockId,
+            toolCallId: blockToolCallId,
+            payload: {
+              block,
+              toolName: toolNameFromBlock(block),
+              parameters: toolParamsFromBlock(block),
+            },
+          });
+        }
+      }
+      items.push({
+        kind: "message_finalized",
+        actor: role,
+        messageId,
+        payload: {
+          stopReason: (message as { stopReason?: unknown }).stopReason ?? null,
+          errorMessage: (message as { errorMessage?: unknown }).errorMessage ?? null,
         },
       });
     }
     await this.appendGadItems(channelId, items);
     this.messageCache.set(channelId, messages);
+    return messages;
   }
 
   private async recordModelCredentialInterruption(
@@ -1836,7 +2030,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     const runner = this.runners.get(breadcrumb.channelId)!.runner;
     messages = runner.trimTrailingAbortedAssistant(messages);
 
-    await this.saveMessages(breadcrumb.channelId, messages);
+    messages = await this.saveMessages(breadcrumb.channelId, messages);
     runner.replaceHistory(messages);
     this.dispatches.deleteClaimed(breadcrumb.callId, breadcrumb.resolvingToken);
 
@@ -2063,7 +2257,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       return false;
     }
 
-    await this.saveMessages(channelId, resumableMessages);
+    resumableMessages = await this.saveMessages(channelId, resumableMessages);
     entry.runner.replaceHistory(resumableMessages);
     this.clearModelCredentialInterruption(channelId, providerId);
     this.credentialPromptCardsEmitted.delete(`${channelId}::model-credential::${providerId}`);
@@ -2206,6 +2400,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       if (forkAtMessageIndex != null) {
         const chain = await this.rpc.call<Array<Record<string, unknown>>>("main", "gad.listGadBranchTrajectory", {
           branchId: oldBranchId,
+          limit: null,
         });
         const targetMessageId = `msg:${Math.max(0, forkAtMessageIndex - 1)}`;
         const target = [...chain].reverse().find((row) =>
@@ -2390,10 +2585,71 @@ function replaceToolResultMessage(
   return next;
 }
 
+function validateAgentMessages(messages: AgentMessage[], source: string): AgentMessage[] {
+  for (const [index, message] of messages.entries()) {
+    if ((message as { role?: string }).role !== "toolResult") continue;
+    const toolCallId = (message as { toolCallId?: unknown }).toolCallId;
+    const valid = typeof toolCallId === "string" && toolCallId.length > 0;
+    if (!valid) {
+      console.error("[AgentWorkerBase] Malformed toolResult without toolCallId", {
+        source,
+        index,
+        toolName: (message as { toolName?: unknown }).toolName,
+      });
+      throw new Error(`Malformed agent transcript: toolResult at ${source}[${index}] is missing toolCallId`);
+    }
+  }
+  return trimTrailingEmptyAbortedAssistant(messages);
+}
+
+function messageRole(message: AgentMessage | undefined): string {
+  if (!message) return "unknown";
+  return (message as { role?: string }).role ?? "unknown";
+}
+
 function messageIdFor(index: number, message: AgentMessage): string {
   const existing = (message as { id?: unknown; messageId?: unknown }).id
     ?? (message as { id?: unknown; messageId?: unknown }).messageId;
   return typeof existing === "string" ? existing : `msg:${index}`;
+}
+
+function messageBlocks(message: AgentMessage): unknown[] {
+  const content = (message as { content?: unknown }).content;
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (Array.isArray(content)) return content;
+  return [];
+}
+
+function toolCallIdFromBlock(block: unknown): string | null {
+  if (!block || typeof block !== "object") return null;
+  const item = block as Record<string, unknown>;
+  return typeof item["id"] === "string"
+    ? item["id"]
+    : typeof item["toolCallId"] === "string"
+      ? item["toolCallId"]
+      : null;
+}
+
+function toolNameFromBlock(block: unknown): string | null {
+  if (!block || typeof block !== "object") return null;
+  const item = block as Record<string, unknown>;
+  return typeof item["name"] === "string"
+    ? item["name"]
+    : typeof item["toolName"] === "string"
+      ? item["toolName"]
+      : null;
+}
+
+function toolParamsFromBlock(block: unknown): Record<string, unknown> | null {
+  if (!block || typeof block !== "object") return null;
+  const item = block as Record<string, unknown>;
+  const params = item["input"] ?? item["arguments"] ?? item["args"];
+  return asJsonRecord(params);
+}
+
+function asJsonRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 function toAgentToolResult(result: unknown): AgentToolResult<any> {

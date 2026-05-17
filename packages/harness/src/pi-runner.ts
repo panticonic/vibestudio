@@ -154,6 +154,7 @@ export class PiRunner {
   private gadHeadHash: string | null = null;
   private gadStateHash: string | null = null;
   private gadBranchId: string | null = null;
+  private gadAppendQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: PiRunnerOptions) {
     this._approvalLevel = options.approvalLevel;
@@ -221,6 +222,7 @@ export class PiRunner {
       throw new Error(`PiRunner: unknown model: ${this.options.model}`);
     }
 
+    const initialMessages = this.validateMessages(this.options.initialMessages ?? [], "init");
     this.agent = new Agent({
       // pi-agent-core 0.66+: initialState only accepts the user-controllable
       // fields. Runtime state (`isStreaming`, `streamingMessage`,
@@ -236,11 +238,11 @@ export class PiRunner {
         model,
         thinkingLevel: this.options.thinkingLevel ?? "medium",
         tools: [],
-        messages: this.options.initialMessages ?? [],
+        messages: initialMessages,
       },
       getApiKey: this.options.getApiKey,
     });
-    this.recordedMessageCount = this.options.initialMessages?.length ?? 0;
+    this.recordedMessageCount = initialMessages.length;
     await this.recordGadBranch();
 
     // 6. Forward Agent events into our handler.
@@ -340,7 +342,9 @@ export class PiRunner {
   private async recordNewGadMessages(): Promise<void> {
     const gad = this.gad;
     if (!gad || !this.agent) return;
-    const messages = this.agent.state.messages as AgentMessage[];
+    const rawMessages = this.agent.state.messages as AgentMessage[];
+    const messages = this.validateMessages(rawMessages, "recordNewGadMessages");
+    if (this.recordedMessageCount > messages.length) this.recordedMessageCount = messages.length;
     const items: Array<{
       kind: string;
       actor?: string | null;
@@ -353,6 +357,26 @@ export class PiRunner {
     for (let i = this.recordedMessageCount; i < messages.length; i++) {
       const message = messages[i]!;
       const messageId = this.messageIdFor(i, message);
+      if (this.messageRole(message) === "toolResult") {
+        const toolCallId = this.toolCallIdFromMessage(message, "recordNewGadMessages", i);
+        items.push({
+          kind: "tool_result_observed",
+          actor: "tool",
+          messageId,
+          toolCallId,
+          payload: {
+            toolCallId,
+            toolName: (message as { toolName?: string }).toolName ?? "unknown",
+            content: (message as { content?: unknown }).content ?? [],
+            details: (message as { details?: unknown }).details ?? null,
+            isError: (message as { isError?: boolean }).isError === true,
+            timestamp: (message as { timestamp?: unknown }).timestamp ?? Date.now(),
+            summary: this.summarizeToolResult(message as AgentToolResult<any>),
+          },
+        });
+        this.recordedMessageCount = i + 1;
+        continue;
+      }
       items.push({
         kind: "message_created",
         actor: this.messageRole(message),
@@ -417,6 +441,23 @@ export class PiRunner {
   }>): Promise<void> {
     const gad = this.gad;
     if (!gad || items.length === 0) return;
+    this.gadAppendQueue = this.gadAppendQueue
+      .catch(() => undefined)
+      .then(() => this.appendGadItemsNow(items));
+    await this.gadAppendQueue;
+  }
+
+  private async appendGadItemsNow(items: Array<{
+    kind: string;
+    actor?: string | null;
+    payload?: Record<string, unknown> | string | null;
+    messageId?: string | null;
+    blockId?: string | null;
+    toolCallId?: string | null;
+    metadata?: Record<string, unknown> | null;
+  }>): Promise<void> {
+    const gad = this.gad;
+    if (!gad || items.length === 0) return;
     try {
       const result = await this.options.rpc.call<{
         headTrajectoryHash: string | null;
@@ -434,7 +475,59 @@ export class PiRunner {
       this.gadBranchId = result.branchId;
       await this.options.onTrajectoryAdvanced?.();
     } catch (err) {
+      if (this.isGadConflict(err)) {
+        const refreshed = await this.refreshGadBranchHead();
+        if (refreshed) {
+          try {
+            const result = await this.options.rpc.call<{
+              headTrajectoryHash: string | null;
+              headStateHash: string;
+              branchId: string;
+            }>("main", "gad.appendGadTrajectoryBatch", {
+              workspaceId: gad.workspaceId ?? null,
+              branchId: this.gadBranchId ?? gad.branchId,
+              expectedTrajectoryHash: this.gadHeadHash,
+              expectedStateHash: this.gadStateHash,
+              items,
+            });
+            this.gadHeadHash = result.headTrajectoryHash;
+            this.gadStateHash = result.headStateHash;
+            this.gadBranchId = result.branchId;
+            await this.options.onTrajectoryAdvanced?.();
+            return;
+          } catch (retryErr) {
+            console.warn("[PiRunner] gad.appendGadTrajectoryBatch retry failed:", retryErr);
+            return;
+          }
+        }
+      }
       console.warn("[PiRunner] gad.appendGadTrajectoryBatch failed:", err);
+    }
+  }
+
+  private isGadConflict(err: unknown): boolean {
+    return /\bgad (?:head|state) conflict\b/.test(String(err));
+  }
+
+  private async refreshGadBranchHead(): Promise<boolean> {
+    const gad = this.gad;
+    if (!gad) return false;
+    try {
+      const head = await this.options.rpc.call<{
+        branchId: string;
+        headTrajectoryHash: string | null;
+        headStateHash: string;
+      }>("main", "gad.getGadBranchHead", {
+        workspaceId: gad.workspaceId ?? null,
+        branchId: this.gadBranchId ?? gad.branchId,
+      });
+      this.gadBranchId = head.branchId;
+      this.gadHeadHash = head.headTrajectoryHash;
+      this.gadStateHash = head.headStateHash;
+      return true;
+    } catch (err) {
+      console.warn("[PiRunner] gad.getGadBranchHead failed:", err);
+      return false;
     }
   }
 
@@ -792,14 +885,15 @@ export class PiRunner {
 
   async continueAgent(): Promise<void> {
     if (!this.agent) throw new Error("PiRunner not initialized");
-    this.agent.state.messages = this.trimTrailingAbortedAssistant(this.agent.state.messages);
+    this.agent.state.messages = this.validateMessages(this.agent.state.messages, "continueAgent");
     await this.agent.continue();
   }
 
   replaceHistory(messages: AgentMessage[]): void {
     if (!this.agent) throw new Error("PiRunner not initialized");
-    this.agent.state.messages = messages;
-    this.recordedMessageCount = messages.length;
+    const validMessages = this.validateMessages(messages, "replaceHistory");
+    this.agent.state.messages = validMessages;
+    this.recordedMessageCount = validMessages.length;
   }
 
   markToolCallPreApproved(toolCallId: string): void {
@@ -844,6 +938,25 @@ export class PiRunner {
       return true;
     });
     return hasVisibleContent ? messages : messages.slice(0, -1);
+  }
+
+  private validateMessages(messages: AgentMessage[], source: string): AgentMessage[] {
+    for (const [index, message] of messages.entries()) {
+      if ((message as { role?: string }).role !== "toolResult") continue;
+      this.toolCallIdFromMessage(message, source, index);
+    }
+    return this.trimTrailingAbortedAssistant(messages);
+  }
+
+  private toolCallIdFromMessage(message: AgentMessage, source: string, index: number): string {
+    const toolCallId = (message as { toolCallId?: unknown }).toolCallId;
+    if (typeof toolCallId === "string" && toolCallId.length > 0) return toolCallId;
+    console.error("[PiRunner] Malformed toolResult without toolCallId", {
+      source,
+      index,
+      toolName: (message as { toolName?: unknown }).toolName,
+    });
+    throw new Error(`Malformed agent transcript: toolResult at ${source}[${index}] is missing toolCallId`);
   }
 
   /** Abort the current operation and wait for the loop to drain. */

@@ -34,6 +34,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `onFocus` | value |  |  |
 | `exposeMethod` | value |  |  |
 | `contextId` | value |  |  |
+| `recoveryCoordinator` | value |  | Panel transport recovery phase coordinator. |
 | `parentId` | value |  |  |
 | `fs` | value |  |  |
 | `createGatewayFetch` | value |  | Create a gateway-authenticated fetch helper from an explicit config. |

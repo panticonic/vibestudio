@@ -414,6 +414,118 @@ describe("PiRunner event forwarding", () => {
     expect(onTrajectoryAdvanced).toHaveBeenCalledTimes(1);
   });
 
+  it("records tool results as observed tool results, not generic messages", async () => {
+    const rpc = createMockRpc({
+      "main:gad.ensureGadBranch": {
+        branchId: "branch:channel:test",
+        headTrajectoryHash: null,
+        headStateHash: "state:empty",
+      },
+      "main:gad.appendGadTrajectoryBatch": {
+        branchId: "branch:channel:test",
+        headTrajectoryHash: "trajectory:1",
+        headStateHash: "state:empty",
+      },
+    });
+    const runner = new PiRunner(createOptions({
+      rpc,
+      gad: { branchId: "branch:channel:test", channelId: "test" },
+    }));
+    await runner.init();
+
+    const agent = agentInstances[0];
+    agent.state.messages = [
+      {
+        role: "assistant",
+        content: [{ type: "tool_call", id: "tool-1", name: "read", input: { path: "README.md" } }],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        content: [{ type: "text", text: "README contents" }],
+        timestamp: 2,
+      },
+    ];
+
+    const cb = subscribeCallbacks.get(agent)!;
+    cb({ type: "message_end", message: agent.state.messages[1] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const appendCall = rpc.call.mock.calls.find(([target, method]) =>
+      target === "main" && method === "gad.appendGadTrajectoryBatch"
+    );
+    expect(appendCall).toBeDefined();
+    const items = appendCall![2].items;
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "tool_call_requested", toolCallId: "tool-1" }),
+      expect.objectContaining({ kind: "tool_result_observed", messageId: "msg:1", toolCallId: "tool-1" }),
+    ]));
+    expect(items).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "message_created", messageId: "msg:1" }),
+    ]));
+  });
+
+  it("refreshes and retries gad appends after a stale branch head", async () => {
+    const onTrajectoryAdvanced = vi.fn();
+    const call = vi.fn(async (targetId: string, method: string, arg?: any) => {
+      const key = `${targetId}:${method}`;
+      if (key === "main:workspace.getAgentsMd") return "BASE SYSTEM PROMPT";
+      if (key === "main:workspace.listSkills") return [];
+      if (key === "main:gad.ensureGadBranch") {
+        return {
+          branchId: "branch:channel:test",
+          headTrajectoryHash: "trajectory:old",
+          headStateHash: "state:empty",
+        };
+      }
+      if (key === "main:gad.appendGadTrajectoryBatch") {
+        if (arg.expectedTrajectoryHash === "trajectory:old") {
+          throw new Error("gad head conflict");
+        }
+        return {
+          branchId: "branch:channel:test",
+          headTrajectoryHash: "trajectory:new",
+          headStateHash: "state:empty",
+        };
+      }
+      if (key === "main:gad.getGadBranchHead") {
+        return {
+          branchId: "branch:channel:test",
+          headTrajectoryHash: "trajectory:refreshed",
+          headStateHash: "state:empty",
+        };
+      }
+      throw new Error(`Unexpected RPC call: ${key}`);
+    });
+    const runner = new PiRunner(createOptions({
+      rpc: { call } as unknown as RpcCaller,
+      gad: { branchId: "branch:channel:test", channelId: "test" },
+      onTrajectoryAdvanced,
+    }));
+    await runner.init();
+
+    const agent = agentInstances[0];
+    agent.state.messages = [
+      { role: "user", content: "hi", timestamp: 1 } as any,
+    ];
+
+    const cb = subscribeCallbacks.get(agent)!;
+    await cb({ type: "message_end", message: agent.state.messages[0] });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(call).toHaveBeenCalledWith("main", "gad.getGadBranchHead", expect.objectContaining({
+      branchId: "branch:channel:test",
+    }));
+    expect(call).toHaveBeenCalledWith("main", "gad.appendGadTrajectoryBatch", expect.objectContaining({
+      expectedTrajectoryHash: "trajectory:refreshed",
+    }));
+    expect(onTrajectoryAdvanced).toHaveBeenCalledTimes(1);
+  });
+
   it("does not re-append a materialized gad prefix after replaceHistory", async () => {
     const rpc = createMockRpc({
       "main:gad.ensureGadBranch": {
@@ -446,6 +558,19 @@ describe("PiRunner event forwarding", () => {
       "gad.appendGadTrajectoryBatch",
       expect.anything(),
     );
+  });
+
+  it("fails closed on malformed tool results before replacing model history", async () => {
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+
+    expect(() => runner.replaceHistory([
+      { role: "user", content: "hi", timestamp: 1 },
+      { role: "toolResult", toolName: "read", content: [{ type: "text", text: "missing id" }] } as any,
+      { role: "toolResult", toolCallId: "tool-1", toolName: "read", content: [{ type: "text", text: "ok" }] } as any,
+    ])).toThrow(/Malformed agent transcript/);
+
+    expect(agentInstances[0].state.messages).toEqual([]);
   });
 
   it("refreshes active tools on turn_start", async () => {

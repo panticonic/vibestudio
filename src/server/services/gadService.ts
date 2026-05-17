@@ -87,7 +87,7 @@ const BranchIdSchema = z.object({
 }).strict();
 
 const BranchListOptsSchema = BranchIdSchema.extend({
-  limit: z.number().int().positive().optional(),
+  limit: z.number().int().positive().nullable().optional(),
 }).strict();
 
 const StateProducerSchema = z.object({
