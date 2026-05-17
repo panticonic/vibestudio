@@ -526,6 +526,54 @@ describe("PiRunner event forwarding", () => {
     expect(onTrajectoryAdvanced).toHaveBeenCalledTimes(1);
   });
 
+  it("does not advance the gad message cursor when append fails", async () => {
+    let appendAttempts = 0;
+    const call = vi.fn(async (targetId: string, method: string, arg?: any) => {
+      const key = `${targetId}:${method}`;
+      if (key === "main:workspace.getAgentsMd") return "BASE SYSTEM PROMPT";
+      if (key === "main:workspace.listSkills") return [];
+      if (key === "main:gad.ensureGadBranch") {
+        return {
+          branchId: "branch:channel:test",
+          headTrajectoryHash: null,
+          headStateHash: "state:empty",
+        };
+      }
+      if (key === "main:gad.appendGadTrajectoryBatch") {
+        appendAttempts++;
+        if (appendAttempts === 1) throw new Error("temporary gad outage");
+        return {
+          branchId: "branch:channel:test",
+          headTrajectoryHash: "trajectory:1",
+          headStateHash: "state:empty",
+        };
+      }
+      throw new Error(`Unexpected RPC call: ${key}`);
+    });
+    const runner = new PiRunner(createOptions({
+      rpc: { call } as unknown as RpcCaller,
+      gad: { branchId: "branch:channel:test", channelId: "test" },
+    }));
+    await runner.init();
+
+    const agent = agentInstances[0];
+    agent.state.messages = [
+      { role: "user", content: "hi", timestamp: 1 } as any,
+    ];
+    const cb = subscribeCallbacks.get(agent)!;
+
+    await expect(cb({ type: "message_end", message: agent.state.messages[0] })).rejects.toThrow("temporary gad outage");
+    await cb({ type: "agent_end", messages: agent.state.messages });
+
+    const appendCalls = call.mock.calls.filter(([target, method]) =>
+      target === "main" && method === "gad.appendGadTrajectoryBatch"
+    );
+    expect(appendCalls).toHaveLength(2);
+    expect(appendCalls[1]![2].items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "message_created", messageId: "msg:0" }),
+    ]));
+  });
+
   it("does not re-append a materialized gad prefix after replaceHistory", async () => {
     const rpc = createMockRpc({
       "main:gad.ensureGadBranch": {

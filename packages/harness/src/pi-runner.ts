@@ -285,24 +285,9 @@ export class PiRunner {
           throw new Error(result.reason ?? `Tool "${tool.name}" blocked`);
         }
         const before = await runner.snapshotMutationTarget(tool.name, params);
-        try {
-          const toolResult = await tool.execute(toolCallId, params, signal, onUpdate);
-          await runner.recordGadToolEffect(toolCallId, tool.name, params, before, toolResult);
-          return toolResult;
-        } catch (err) {
-          await runner.appendGadItems([{
-            kind: "tool_result_observed",
-            actor: "tool",
-            toolCallId,
-            payload: {
-              toolName: tool.name,
-              isError: true,
-              summary: err instanceof Error ? err.message : String(err),
-              timestamp: Date.now(),
-            },
-          }]);
-          throw err;
-        }
+        const toolResult = await tool.execute(toolCallId, params, signal, onUpdate);
+        await runner.recordGadToolEffect(toolCallId, tool.name, params, before, toolResult);
+        return toolResult;
       },
     };
     return wrapped;
@@ -354,6 +339,7 @@ export class PiRunner {
       toolCallId?: string | null;
       metadata?: Record<string, unknown> | null;
     }> = [];
+    let nextRecordedMessageCount = this.recordedMessageCount;
     for (let i = this.recordedMessageCount; i < messages.length; i++) {
       const message = messages[i]!;
       const messageId = this.messageIdFor(i, message);
@@ -374,7 +360,7 @@ export class PiRunner {
             summary: this.summarizeToolResult(message as AgentToolResult<any>),
           },
         });
-        this.recordedMessageCount = i + 1;
+        nextRecordedMessageCount = i + 1;
         continue;
       }
       items.push({
@@ -425,9 +411,10 @@ export class PiRunner {
           errorMessage: (message as { errorMessage?: unknown }).errorMessage ?? null,
         },
       });
-      this.recordedMessageCount = i + 1;
+      nextRecordedMessageCount = i + 1;
     }
     if (items.length > 0) await this.appendGadItems(items);
+    this.recordedMessageCount = nextRecordedMessageCount;
   }
 
   private async appendGadItems(items: Array<{
@@ -497,11 +484,12 @@ export class PiRunner {
             return;
           } catch (retryErr) {
             console.warn("[PiRunner] gad.appendGadTrajectoryBatch retry failed:", retryErr);
-            return;
+            throw retryErr;
           }
         }
       }
       console.warn("[PiRunner] gad.appendGadTrajectoryBatch failed:", err);
+      throw err;
     }
   }
 

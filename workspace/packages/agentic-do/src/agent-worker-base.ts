@@ -1327,11 +1327,11 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     }).catch(async (err) => {
       if (isTranscriptShapeError(err)) {
         await this.handleTranscriptShapeError(channelId, err);
-        return;
+        throw err;
       }
-      if (!isExpectedTestServerFailure(err)) {
-        console.warn(`[AgentWorkerBase] gad append failed for channel=${channelId}:`, err);
-      }
+      if (isExpectedTestServerFailure(err)) return;
+      console.warn(`[AgentWorkerBase] gad append failed for channel=${channelId}:`, err);
+      throw err;
     });
   }
 
@@ -1701,13 +1701,14 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
 
     const callId = crypto.randomUUID();
-    await this.beginGadChannelToolCall(channelId, toolCallId, participantHandle, method, args);
     if (onStreamUpdate) this.streamCallbacks.set(callId, onStreamUpdate);
     this.dispatches.store({
       callId,
       channelId,
       kind: "tool-call",
       toolCallId,
+      toolName: `${participantHandle}.${method}`,
+      paramsJson: JSON.stringify({ participantHandle, method, args }),
     });
     try {
       await channel.callMethod(callerId, target.participantId, callId, method, args);
@@ -1719,33 +1720,6 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     }
     await this.abortAgentForReason(channelId, "participant-method-dispatch", `${participantHandle}.${method}`);
     return makeDispatchPlaceholder(toolCallId, callId, "tool-call");
-  }
-
-  private async beginGadChannelToolCall(
-    channelId: string,
-    piToolCallId: string,
-    participantHandle: string,
-    method: string,
-    args: unknown,
-  ): Promise<void> {
-    try {
-      await this.appendGadItems(channelId, [{
-        kind: "tool_call_requested",
-        actor: "worker",
-        toolCallId: piToolCallId,
-        payload: {
-          toolName: `${participantHandle}.${method}`,
-          providerHandle: participantHandle,
-          parameters: {
-            participantHandle,
-            method,
-            args,
-          },
-        },
-      }]);
-    } catch (err) {
-      console.warn("[AgentWorkerBase] gad tool_call_requested for channel tool failed:", err);
-    }
   }
 
   private async completeGadChannelToolCall(callId: string, summary: string): Promise<void> {
