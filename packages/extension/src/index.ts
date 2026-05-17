@@ -174,11 +174,9 @@ export interface ExtensionContext {
   };
   readonly fs: ExtensionFsClient;
   readonly git: ExtensionRpcSurface;
-  readonly panel: ExtensionRpcSurface;
   readonly workspace: ExtensionWorkspaceLike;
   readonly workers: ExtensionWorkersLike;
   readonly credentials: ExtensionRpcSurface;
-  readonly db: ExtensionRpcSurface;
   readonly webhooks: ExtensionRpcSurface;
   readonly approvals: {
     requestForCaller(req: UserlandApprovalRequest): Promise<UserlandApprovalChoice>;

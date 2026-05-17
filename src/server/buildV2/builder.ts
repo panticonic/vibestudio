@@ -24,6 +24,7 @@ import { createRequire } from "module";
 import { promisify } from "util";
 import { pathToFileURL } from "url";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
+import { validateExtensionManifestBlock } from "@natstack/shared/extensionManifest";
 import * as buildStore from "./buildStore.js";
 import type { BuildArtifacts, BuildMetadata, BuildResult } from "./buildStore.js";
 import { computeBuildKey } from "./effectiveVersion.js";
@@ -1794,40 +1795,7 @@ async function buildWorker(
 // ---------------------------------------------------------------------------
 
 function validateExtensionManifest(node: GraphNode, manifest: Record<string, unknown>): void {
-  const kindBlocks = ["extension", "worker", "panel"].filter((key) => {
-    const value = manifest[key];
-    return value !== undefined && value !== null;
-  });
-  if (kindBlocks.length !== 1 || kindBlocks[0] !== "extension") {
-    throw new Error(
-      `Extension ${node.name} must declare exactly one kind block: natstack.extension`,
-    );
-  }
-  if (manifest["sourcemap"] === false) {
-    throw new Error(`Extension ${node.name} must use inline sourcemaps in v1`);
-  }
-
-  const extension = manifest["extension"] as {
-    activationEvents?: unknown;
-    dependencyMode?: unknown;
-  } | undefined;
-  const events = extension?.activationEvents;
-  if (events !== undefined) {
-    if (!Array.isArray(events) || events.some((event) => event !== "*")) {
-      throw new Error(`Extension ${node.name} only supports activationEvents: ["*"] in v1`);
-    }
-  }
-  const dependencyMode = extension?.dependencyMode;
-  if (
-    dependencyMode !== undefined
-    && dependencyMode !== "auto"
-    && dependencyMode !== "bundle"
-    && dependencyMode !== "external"
-  ) {
-    throw new Error(
-      `Extension ${node.name} dependencyMode must be "auto", "bundle", or "external"`,
-    );
-  }
+  validateExtensionManifestBlock(manifest, { unitName: node.name });
 }
 
 async function buildExtension(

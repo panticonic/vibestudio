@@ -18,6 +18,10 @@ import type {
   UserlandApprovalRequest,
 } from "@natstack/shared/approvals";
 import { userlandApprovalRequestSchema } from "@natstack/shared/approvals";
+import {
+  ExtensionManifestError,
+  readAndValidateExtensionManifest,
+} from "@natstack/shared/extensionManifest";
 import { execGitFileSync } from "@natstack/shared/gitRuntime";
 
 import { ExtensionRegistry } from "./registry.js";
@@ -220,6 +224,10 @@ export class ExtensionHost {
       if (!entry.enabled || !entry.activeBundleKey) continue;
       try {
         const node = this.findExtensionNode(entry.name);
+        // Fail-closed manifest validation at boot — the source on disk may
+        // have drifted out of spec since install. A failing extension is
+        // marked error and not activated; siblings keep starting.
+        this.validateExtensionManifestAtPath(node.path, entry.name);
         if (this.needsBuildRefresh(entry, node)) {
           await this.buildAndActivate(entry.name, entry.source.ref);
         } else {
@@ -231,6 +239,22 @@ export class ExtensionHost {
           lastError: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+  }
+
+  private validateExtensionManifestAtPath(nodePath: string, unitName: string): void {
+    try {
+      readAndValidateExtensionManifest(
+        path.join(nodePath, "package.json"),
+        { unitName },
+        fs.readFileSync as (p: string, encoding: "utf-8") => string,
+      );
+    } catch (err) {
+      if (err instanceof ExtensionManifestError) throw err;
+      throw new ExtensionManifestError(
+        `Extension ${unitName} manifest validation failed: ${err instanceof Error ? err.message : String(err)}`,
+        "MANIFEST_INTERNAL",
+      );
     }
   }
 
@@ -791,6 +815,9 @@ export class ExtensionHost {
 
   async install(ctx: ServiceContext, spec: InstallSpec): Promise<void> {
     const node = this.findExtensionNode(spec.source.repo);
+    // Validate the manifest before asking the user to approve installation —
+    // a malformed manifest should fail closed without prompting.
+    this.validateExtensionManifestAtPath(node.path, node.name);
     await this.requestManagementApproval(ctx, "install", node.name);
     const version = this.readNodeVersion(node.path);
     const ev = this.deps.buildSystem.getEffectiveVersion(node.name);
@@ -880,6 +907,9 @@ export class ExtensionHost {
     activeEv: string | null;
     activeBundleKey: string | null;
     activeRuntimeDepsKey: string | null;
+    lastBuiltAt: number | null;
+    pendingApproval: { kind: string; submittedAt: number } | null;
+    availableUpdate: { reason: "dependency"; checkedAt: number } | null;
     lastError: string | null;
     health: unknown;
     methods: string[];
@@ -891,6 +921,13 @@ export class ExtensionHost {
     return this.registry.list().map((entry) => {
       const node = this.findExtensionNode(entry.name);
       const running = runningByName.get(entry.name);
+      const lastBuiltAt = this.resolveBundleMtime(entry);
+      const pendingApproval = entry.status === "pending-approval"
+        ? { kind: entry.activeBundleKey ? "extension.update" : "extension.install", submittedAt: entry.installedAt }
+        : null;
+      const availableUpdate = entry.enabled && entry.activeBundleKey && this.needsBuildRefresh(entry, node)
+        ? { reason: "dependency" as const, checkedAt: Date.now() }
+        : null;
       return {
         name: entry.name,
         kind: "extension",
@@ -903,6 +940,9 @@ export class ExtensionHost {
         activeEv: entry.activeEv,
         activeBundleKey: entry.activeBundleKey,
         activeRuntimeDepsKey: entry.activeRuntimeDepsKey,
+        lastBuiltAt,
+        pendingApproval,
+        availableUpdate,
         lastError: entry.lastError,
         health: running?.health ?? this.health.get(entry.name) ?? null,
         methods: running?.methods ?? [],
@@ -911,6 +951,17 @@ export class ExtensionHost {
         inspectorUrl: running?.inspectorUrl ?? this.inspectorUrls.get(entry.name) ?? null,
       };
     });
+  }
+
+  private resolveBundleMtime(entry: RegistryEntry): number | null {
+    if (!entry.activeBundleKey) return null;
+    const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
+    if (!build) return null;
+    try {
+      return Math.floor(fs.statSync(build.bundlePath).mtimeMs);
+    } catch {
+      return null;
+    }
   }
 
   listWorkspaceUnitLogs(

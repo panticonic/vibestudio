@@ -40,6 +40,21 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
+const UNIT_LOG_LEVEL_RANK = { debug: 10, info: 20, warn: 30, error: 40 } as const;
+
+function filterUnitLogs(
+  records: import("./services/workspaceService.js").WorkspaceUnitLogRecord[],
+  opts?: { since?: number; level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"]; limit?: number },
+): import("./services/workspaceService.js").WorkspaceUnitLogRecord[] {
+  const minLevel = opts?.level ? UNIT_LOG_LEVEL_RANK[opts.level] : null;
+  const filtered = records.filter((record) =>
+    (opts?.since === undefined || record.timestamp >= opts.since)
+    && (minLevel === null || UNIT_LOG_LEVEL_RANK[record.level] >= minLevel)
+  );
+  const limit = opts?.limit && opts.limit > 0 ? Math.min(Math.floor(opts.limit), 1000) : 200;
+  return filtered.slice(-limit);
+}
+
 function detectServerIpcChannel(): IpcChannel | null {
   // Electron utilityProcess: process.parentPort exists
   const parentPort = (process as NodeJS.Process & { parentPort?: ElectronParentPort }).parentPort;
@@ -838,9 +853,33 @@ async function main() {
   container.register(
     rpcService(createTestService({ contextFolderManager, workspacePath, panelTestSetupPath }))
   );
+  // Per-worker-source ring buffer feeding `workspace.units.logs`. Same shape
+  // as the extension log store: capped at 1000 records per source, FIFO drop.
+  const workerUnitLogs = new Map<string, import("./services/workspaceService.js").WorkspaceUnitLogRecord[]>();
+  const workerUnitLogsAppend = (source: string, record: import("./services/workspaceService.js").WorkspaceUnitLogRecord): void => {
+    const existing = workerUnitLogs.get(source) ?? [];
+    existing.push(record);
+    if (existing.length > 1000) existing.splice(0, existing.length - 1000);
+    workerUnitLogs.set(source, existing);
+  };
   {
     const { createWorkerLogService } = await import("./services/workerLogService.js");
-    container.register(rpcService(createWorkerLogService()));
+    container.register(rpcService(createWorkerLogService({
+      onLog: (entry) => {
+        if (!entry.source) return;
+        const record: import("./services/workspaceService.js").WorkspaceUnitLogRecord = {
+          workspaceId: workspace.config.id,
+          unitName: entry.source,
+          kind: "worker",
+          timestamp: entry.timestamp,
+          level: entry.level,
+          message: entry.message,
+          source: "console",
+        };
+        workerUnitLogsAppend(entry.source, record);
+        eventService.emit("workspace:unit-log", record);
+      },
+    })));
   }
   container.register(rpcService(createEventsServiceDefinition(eventService)));
 
@@ -1557,6 +1596,12 @@ async function main() {
           inspectorUrl: workerInstance
             ? workerdManagerForGateway?.getWorkerInspectorUrl(workerInstance.source) ?? null
             : null,
+          bindings: node.kind === "worker" && workerInstance
+            ? (workerInstance as { bindings?: Record<string, unknown> | null }).bindings ?? null
+            : null,
+          lastBuiltAt: null,
+          pendingApproval: null,
+          availableUpdate: null,
         });
       }
       return rows;
@@ -1565,17 +1610,58 @@ async function main() {
       ctx: import("@natstack/shared/serviceDispatcher").ServiceContext,
       name: string,
     ) => {
+      // Resolve by kind via the build graph so callers can use either the
+      // package name or the workspace-relative source path. Extensions go
+      // through the approval-gated reload; workers re-spawn through workerd's
+      // config-reload path. Panels have no host-driven restart concept — a
+      // panel restarts on the next page navigation.
       const extensionHost = extensionHostForGateway;
-      if (!extensionHost?.registry.get(name)) {
-        throw new Error(`Workspace unit restart is only available for installed extensions: ${name}`);
+      if (extensionHost?.registry.get(name)) {
+        await extensionHost.reload(ctx, name);
+        return;
       }
-      await extensionHost.reload(ctx, name);
+      const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+      const node = buildSystem?.getGraph().allNodes().find((candidate) =>
+        candidate.name === name || candidate.relativePath === name
+      );
+      if (!node) {
+        throw new Error(`Workspace unit not found: ${name}`);
+      }
+      if (node.kind === "worker") {
+        const workerdManager = workerdManagerForGateway;
+        if (!workerdManager) throw new Error("Worker runtime is not available");
+        const instance = workerdManager.listInstances().find((entry) => entry.source === node.relativePath);
+        if (!instance) {
+          throw new Error(`Worker has no running instance to restart: ${node.relativePath}`);
+        }
+        await workerdManager.updateInstance(instance.name, {});
+        return;
+      }
+      if (node.kind === "panel") {
+        throw new Error("Panels restart on next page navigation; no host-driven restart is available");
+      }
+      throw new Error(`Workspace unit kind not restartable: ${node.kind}`);
     },
     listWorkspaceUnitLogs: (
       name: string,
       opts?: { since?: number; level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"]; limit?: number },
-    ) =>
-      extensionHostForGateway?.listWorkspaceUnitLogs(name, opts) ?? [],
+    ) => {
+      // Resolve the unit kind from the build graph (the same surface
+      // listWorkspaceUnits uses) and pull from the corresponding store.
+      const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+      const node = buildSystem?.getGraph().allNodes().find((candidate) =>
+        candidate.name === name || candidate.relativePath === name
+      );
+      const kind = node?.kind;
+      if (kind === "worker") {
+        const source = node?.relativePath ?? name;
+        const buffer = workerUnitLogs.get(source) ?? [];
+        return filterUnitLogs(buffer, opts);
+      }
+      // Default and extension: the extension host has its own buffer and
+      // also returns [] if the name is unknown.
+      return extensionHostForGateway?.listWorkspaceUnitLogs(name, opts) ?? [];
+    },
     codeIdentityResolver,
     getEffectiveVersion: async (source: string) => {
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");

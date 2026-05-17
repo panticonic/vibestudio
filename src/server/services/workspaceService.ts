@@ -127,6 +127,22 @@ export interface WorkspaceUnitStatus {
   activeEv?: string | null;
   activeBundleKey?: string | null;
   activeRuntimeDepsKey?: string | null;
+  /** Epoch ms when the currently active build was produced (best-effort; null if unknown). */
+  lastBuiltAt?: number | null;
+  /** Worker bindings (DOs, env). Only populated for kind === "worker". */
+  bindings?: Record<string, unknown> | null;
+  /**
+   * Set when an extension install/update approval is currently in flight,
+   * so a "running units" panel can surface a "pending approval" affordance
+   * without polling the approval queue separately.
+   */
+  pendingApproval?: { kind: string; submittedAt: number } | null;
+  /**
+   * Set when current workspace state would change the unit's runtime inputs
+   * (a dependency push, an external-dep bump). Driven by needsBuildRefresh
+   * for extensions; absent for workers/panels in v1.
+   */
+  availableUpdate?: { reason: "dependency"; checkedAt: number } | null;
   lastError?: string | null;
   health?: unknown;
   methods?: string[];

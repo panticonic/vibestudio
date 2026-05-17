@@ -50,7 +50,14 @@ function makeHost(overrides: {
   fs.mkdirSync(extensionNode.path, { recursive: true });
   fs.writeFileSync(
     path.join(extensionNode.path, "package.json"),
-    JSON.stringify({ name: extensionNode.name, version: "1.0.0" }),
+    JSON.stringify({
+      name: extensionNode.name,
+      version: "1.0.0",
+      natstack: {
+        displayName: "Git Tools",
+        extension: { activationEvents: ["*"] },
+      },
+    }),
   );
   const approvalQueue = {
     request: vi.fn(async () => overrides.approvalDecision ?? "once"),

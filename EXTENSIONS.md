@@ -232,18 +232,25 @@ interface ExtensionContext {
   // extension already has.
   //
   // The long-term shape is narrower than this: only host-substrate clients
-  // (fs, panel, workspace, db, credentials, approvals, notifications,
+  // (fs, workspace, workers, credentials, approvals, notifications,
   // extensions) genuinely belong here. The capability clients (git
   // user-facing methods, webhooks subscriptions) are migration candidates
   // that should become extensions and be reached via ctx.extensions.use(...)
   // instead. The current list matches the panel/worker runtime today;
   // entries drop as each capability migrates. See "Migration candidates".
+  //
+  // `ctx.workers.callDO(source, className, key, method, ...args)` dispatches
+  // into a Durable Object. Useful for extensions whose canonical surface
+  // wraps a workerd-backed store (e.g. browser-data).
+  //
+  // `ctx.panel` and `ctx.db` were considered for the substrate set but are
+  // not exposed in v1: the panel orchestration service is shell-only and
+  // there is no host "db" service. Either could land later as an extension.
   readonly fs: FsClient;
   readonly git: GitClient;
-  readonly panel: PanelClient;
   readonly workspace: WorkspaceClient;
+  readonly workers: WorkersClient;          // workers.callDO for DO-backed stores
   readonly credentials: CredentialsClient;
-  readonly db: DbClient;
   readonly webhooks: WebhooksClient;
   readonly approvals: ApprovalsClient;
   readonly notifications: NotificationsClient;
@@ -311,7 +318,7 @@ Clients on `ctx` are bound through the extension process's WebSocket connection 
 
 `ctx.approvals.requestForCaller(...)` is the extension-specific approval path. It reuses the existing userland approval request system, including the same subject/options model, grant storage, pending queue, and shell UI. The key difference is principal and issuer derivation: panels and workers still call `userlandApproval.request` directly and the service derives both the principal and default issuer from `ServiceContext`; extensions call through the extension host, and the host derives the principal from the current `ExtensionInvocation.userlandCaller` and the issuer from the extension identity. The extension never sends `repoPath`, `effectiveVersion`, `callerKind`, or issuer identity as trusted input.
 
-**Parity now, narrower later.** The starting set above mirrors what `@workspace/runtime` already exposes to panels and workers, so an extension has feature parity with the rest of userland from day one and no consumer of the runtime has to learn a new shape. The longer-term target is narrower: only host *substrate* (`fs`, `panel`, `workspace`, `db`, `credentials`, `approvals`, `notifications`, `extensions`) genuinely belongs on `ctx.*`. The capability clients (`ai`, the user-facing portion of `git`, the `webhooks` subscription surface) are migration candidates that should become extensions in their own right and be reached via `ctx.extensions.use(...)` once that work lands. Each capability migration drops its entry from `ctx.*` across all three runtimes (panel, worker, extension) in the same change. The principle: `ctx.*` is what the host *has to* provide; anything that's a discrete capability — even one shipped by default — eventually moves out.
+**Parity now, narrower later.** The starting set above mirrors what `@workspace/runtime` already exposes to panels and workers, so an extension has feature parity with the rest of userland from day one and no consumer of the runtime has to learn a new shape. The longer-term target is narrower: only host *substrate* (`fs`, `workspace`, `workers`, `credentials`, `approvals`, `notifications`, `extensions`) genuinely belongs on `ctx.*`. The capability clients (`ai`, the user-facing portion of `git`, the `webhooks` subscription surface) are migration candidates that should become extensions in their own right and be reached via `ctx.extensions.use(...)` once that work lands. Each capability migration drops its entry from `ctx.*` across all three runtimes (panel, worker, extension) in the same change. The principle: `ctx.*` is what the host *has to* provide; anything that's a discrete capability — even one shipped by default — eventually moves out.
 
 Node's standard library is available globally inside the extension process — `import * as fs from "node:fs"`, child processes, native addons all work normally. There is no host-mediated wrapper; the extension is running in a real Node process.
 
