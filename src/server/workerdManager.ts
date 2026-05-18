@@ -27,6 +27,7 @@ import {
   getPlatformPackageBinaryPath,
 } from "@natstack/shared/runtimePaths";
 import { getInternalDOBundle, isInternalDOSource } from "./internalDOs/internalDoLoader.js";
+import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("WorkerdManager");
 declare const __filename: string | undefined;
@@ -1002,8 +1003,8 @@ ${doBlock}${cases.join("\n")}
         }
       };
 
-      this.process!.on("exit", onExit);
-      this.process!.on("error", onError);
+      assertPresent(this.process).on("exit", onExit);
+      assertPresent(this.process).on("error", onError);
 
       // If the process survives 500ms, consider it started
       setTimeout(() => {
@@ -1377,7 +1378,8 @@ ${doBlock}${cases.join("\n")}
       }
       const canonical = canonicalInstanceNameForSource(source);
       const hasCanonicalInstance =
-        this.instances.has(canonical) && this.instances.get(canonical)!.source === source;
+        this.instances.has(canonical) &&
+        assertPresent(this.instances.get(canonical)).source === source;
       this.deps.routeRegistry.reconcileWorkerRoutes(
         source,
         newRoutes,

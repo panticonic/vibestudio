@@ -24,6 +24,7 @@ import type { Duplex } from "stream";
 import { createDevLogger } from "@natstack/dev-log";
 import { constantTimeStringEqual, type TokenManager } from "@natstack/shared/tokenManager";
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
+import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("Gateway");
 
@@ -307,7 +308,7 @@ export class Gateway {
 
       // /rpc → RPC WebSocket (in-process via WSS)
       if ((url === "/rpc" || url.startsWith("/rpc?")) && rpcHandler) {
-        this.wss!.handleUpgrade(req, socket, head, (ws) => {
+        assertPresent(this.wss).handleUpgrade(req, socket, head, (ws) => {
           rpcHandler.handleGatewayWsConnection(ws);
         });
         return;
@@ -363,13 +364,13 @@ export class Gateway {
     const isTls = !!(tlsCert && tlsKey);
     const bindHost = this.deps.bindHost ?? "0.0.0.0";
     return new Promise((resolve, reject) => {
-      this.server!.listen(port, bindHost, () => {
-        const addr = this.server!.address();
+      assertPresent(this.server).listen(port, bindHost, () => {
+        const addr = assertPresent(this.server).address();
         const assignedPort = typeof addr === "object" && addr ? addr.port : port;
         log.info(`Gateway listening on ${bindHost}:${assignedPort}${isTls ? " (TLS)" : ""}`);
         resolve(assignedPort);
       });
-      this.server!.on("error", reject);
+      assertPresent(this.server).on("error", reject);
     });
   }
 
@@ -385,7 +386,7 @@ export class Gateway {
     }
     if (!this.server) return;
     return new Promise((resolve) => {
-      this.server!.close(() => resolve());
+      assertPresent(this.server).close(() => resolve());
     });
   }
 }

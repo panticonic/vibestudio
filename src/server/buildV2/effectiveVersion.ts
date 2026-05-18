@@ -17,6 +17,7 @@ import * as crypto from "crypto";
 import type { InternalDepRef, PackageGraph } from "./packageGraph.js";
 import { getUserDataPath } from "@natstack/env-paths";
 import { execGitFile, execGitFileSync } from "@natstack/shared/gitRuntime";
+import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -153,7 +154,7 @@ function buildDepSignatures(
     const ref = resolveDepRefToGitRef(depNode.path, depRef);
     const commitKey = `${depNode.path}\0${ref}`;
     const depCommit = commitCache.has(commitKey)
-      ? commitCache.get(commitKey)!
+      ? assertPresent(commitCache.get(commitKey))
       : (() => {
           const commit = getCommitAt(depNode.path, ref);
           commitCache.set(commitKey, commit);
@@ -398,7 +399,7 @@ export function computeEffectiveVersionsWithCache(
 
     if (prevCommit === curCommit && !depChanged && !hasNonDefaultDepRefs && prevEvMap[node.name]) {
       // No change — reuse cached EV
-      evMap[node.name] = prevEvMap[node.name]!;
+      evMap[node.name] = assertPresent(prevEvMap[node.name]);
     } else {
       // Changed — recompute tree hash
       let hash: string;

@@ -15,6 +15,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { getUserDataPath } from "@natstack/env-paths";
+import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -259,7 +260,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
         } catch (cleanupError) {
           warnCleanupFailure(tmpDir, cleanupError);
         }
-        return get(key)!;
+        return assertPresent(get(key));
       }
       // Winner incomplete — remove stale dir, retry rename
       try {
@@ -289,7 +290,7 @@ export function put(key: string, artifacts: BuildArtifacts, metadata: BuildMetad
     }
   }
 
-  return get(key)!;
+  return assertPresent(get(key));
 }
 
 export function gc(activeKeys: Set<string>): { freed: number } {

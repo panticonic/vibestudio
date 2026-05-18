@@ -30,6 +30,7 @@ import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
 import type { EgressProxy } from "./egressProxy.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import { INTERNAL_GIT_WRITE_CAPABILITY } from "./gitWritePermission.js";
+import { deleteDynamicProperty } from "../../lintHelpers";
 
 /**
  * Allowed characters in user-supplied git refs/paths. Disallow anything that
@@ -639,7 +640,7 @@ async function collectGitBody(body: Uint8Array | AsyncIterable<Uint8Array>): Pro
 
 function mutateWorkspaceConfig(target: WorkspaceConfig, next: WorkspaceConfig): void {
   for (const key of Object.keys(target) as Array<keyof WorkspaceConfig>) {
-    delete target[key];
+    deleteDynamicProperty(target, key);
   }
   Object.assign(target, next);
 }

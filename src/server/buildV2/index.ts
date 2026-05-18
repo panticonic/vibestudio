@@ -48,6 +48,7 @@ import { PushTrigger } from "./pushTrigger.js";
 import { collectTransitiveExternalDeps, ensureExternalDeps } from "./externalDeps.js";
 import type { GitServer } from "@natstack/git-server";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@natstack/shared/extensionRuntimeAbi";
+import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -191,7 +192,7 @@ export async function initBuildSystemV2(
       })
       .map(async (node) => {
         try {
-          await buildUnit(node, initResult.evMap[node.name]!, graph, workspaceRoot);
+          await buildUnit(node, assertPresent(initResult.evMap[node.name]), graph, workspaceRoot);
           console.log(`[BuildV2] Built ${node.name}`);
         } catch (error) {
           console.error(
@@ -484,7 +485,7 @@ export async function initBuildSystemV2(
 
       for (const name of buildableChanged) {
         const n = newGraph.get(name);
-        const ev = result.evMap[name]!;
+        const ev = assertPresent(result.evMap[name]);
         const sourcemap = sourcemapForNode(n);
         const bk = computeBuildKey(name, ev, sourcemap);
 

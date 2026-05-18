@@ -16,6 +16,7 @@ import * as crypto from "crypto";
 import { getUserDataPath } from "@natstack/env-paths";
 import { runNpmInstall } from "@natstack/shared/npmInstaller";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
+import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
 // Transitive collection
@@ -41,7 +42,7 @@ export function collectTransitiveExternalDeps(
     // the package.json when available.
     if (version.startsWith("workspace:")) return;
     // External dependency — take higher version if conflict
-    if (!externals[name] || compareVersions(version, externals[name]!) > 0) {
+    if (!externals[name] || compareVersions(version, assertPresent(externals[name])) > 0) {
       externals[name] = version;
     }
   }

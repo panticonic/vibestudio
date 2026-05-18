@@ -64,6 +64,7 @@ import {
   type CredentialSessionGrantResource,
   type CredentialSessionGrantScope,
 } from "./credentialSessionGrants.js";
+import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("CredentialService");
 const IDENTIFIER_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
@@ -1309,7 +1310,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (request.fields.length !== 1) {
       throw new Error("Credential input expects exactly one secret field");
     }
-    const tokenField = request.fields[0]!;
+    const tokenField = assertPresent(request.fields[0]);
     if (tokenField.name !== request.material.tokenField) {
       throw new Error("Credential input tokenField must match the submitted secret field");
     }

@@ -40,6 +40,7 @@ import { getAdapter } from "./adapters/index.js";
 import type { FrameworkAdapter } from "./adapters/types.js";
 import { resolveTemplate } from "./templateResolver.js";
 import { resolveExportSubpath } from "@natstack/typecheck";
+import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
 // Module Initialization
@@ -426,7 +427,7 @@ function hasFileWithExtension(dir: string, extensions: Set<string>): boolean {
   if (!fs.existsSync(dir)) return false;
   const stack = [dir];
   while (stack.length > 0) {
-    const current = stack.pop()!;
+    const current = assertPresent(stack.pop());
     let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(current, { withFileTypes: true });

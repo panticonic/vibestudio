@@ -34,6 +34,7 @@ import {
   type CredentialSessionGrantResource,
 } from "./credentialSessionGrants.js";
 import { CredentialLifecycleError, type CredentialLifecycle } from "./credentialLifecycle.js";
+import { deleteDynamicProperty } from "../../lintHelpers";
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   "connection",
@@ -430,7 +431,7 @@ export class EgressProxy {
     const injection = binding?.injection ?? credential?.bindings?.[0]?.injection;
     if (credential && injection) {
       for (const headerName of credentialCarrierStripHeaders(injection)) {
-        delete headers[headerName.toLowerCase()];
+        deleteDynamicProperty(headers, headerName.toLowerCase());
       }
       if (injection.type === "query-param") {
         const modified = new URL(targetUrl.toString());

@@ -15,6 +15,7 @@ import type { DODispatch } from "../doDispatch.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { createDevLogger } from "@natstack/dev-log";
 import { resolveUserlandService, toDORef } from "../userlandServices.js";
+import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("WorkerService");
 const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
@@ -75,7 +76,7 @@ export function createWorkerService(deps: {
               name: n.name,
               source: n.relativePath,
               title: n.manifest.title,
-              classes: n.manifest.durable!.classes,
+              classes: assertPresent(n.manifest.durable).classes,
             }));
         }
 

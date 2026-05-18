@@ -11,6 +11,7 @@ import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ServicePolicy } from "@natstack/shared/servicePolicy";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../rpcServiceWithRoutes.js";
+import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("BlobstoreService");
 
@@ -294,12 +295,13 @@ async function grepBlob(
   const matches: GrepMatch[] = [];
   for (let i = 0; i < lines.length; i++) {
     if (matches.length >= maxMatches) break;
-    if (!re.test(lines[i]!)) continue;
+    if (!re.test(assertPresent(lines[i]))) continue;
     const before: string[] = [];
-    for (let j = Math.max(0, i - context); j < i; j++) before.push(lines[j]!);
+    for (let j = Math.max(0, i - context); j < i; j++) before.push(assertPresent(lines[j]));
     const after: string[] = [];
-    for (let j = i + 1; j < Math.min(lines.length, i + 1 + context); j++) after.push(lines[j]!);
-    matches.push({ lineNumber: i + 1, line: lines[i]!, before, after });
+    for (let j = i + 1; j < Math.min(lines.length, i + 1 + context); j++)
+      after.push(assertPresent(lines[j]));
+    matches.push({ lineNumber: i + 1, line: assertPresent(lines[i]), before, after });
   }
   return matches;
 }

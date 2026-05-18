@@ -28,6 +28,7 @@ import * as buildStore from "./buildStore.js";
 import { buildUnit } from "./builder.js";
 import type { GitPushEvent, GitServer } from "@natstack/git-server";
 import { execGitFileSync } from "@natstack/shared/gitRuntime";
+import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -232,7 +233,7 @@ export class PushTrigger extends EventEmitter {
       if (node.kind === "package" || node.kind === "template") continue; // Packages/templates are not directly buildable
       if (node.kind === "extension" && name !== nodeName) continue;
 
-      const ev = result.evMap[name]!;
+      const ev = assertPresent(result.evMap[name]);
       const sourcemap = node.kind === "extension" ? true : node.manifest.sourcemap !== false;
       const buildKey = computeBuildKey(name, ev, sourcemap);
 
@@ -335,7 +336,7 @@ export class PushTrigger extends EventEmitter {
       if (node.kind === "package" || node.kind === "template") continue;
       if (node.kind === "extension" && name !== sourceNodeName) continue;
 
-      const ev = result.evMap[name]!;
+      const ev = assertPresent(result.evMap[name]);
       const sourcemap = node.kind === "extension" ? true : node.manifest.sourcemap !== false;
       const buildKey = computeBuildKey(name, ev, sourcemap);
 

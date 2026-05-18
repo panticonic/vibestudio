@@ -13,6 +13,7 @@ import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/type
 import type { CentralDataManager } from "@natstack/shared/centralData";
 import type { HostConfig } from "@natstack/shared/hostConfig";
 import type { CodeIdentityResolver } from "./services/codeIdentityResolver.js";
+import { assertPresent } from "../lintHelpers";
 
 export interface CommonDeps {
   container: ServiceContainer;
@@ -72,7 +73,9 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       name: "panelService",
       dependencies: ["fsService"],
       async start(resolve) {
-        const fsServiceInst = resolve<import("@natstack/shared/fsService").FsService>("fsService")!;
+        const fsServiceInst = assertPresent(
+          resolve<import("@natstack/shared/fsService").FsService>("fsService")
+        );
         const panelPersistenceRpc = {
           call: (service: string, method: string, args: unknown[]) =>
             dispatcher.dispatch(
@@ -172,13 +175,17 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     name: "panelHttpWiring",
     dependencies: ["panelHttpServer", "buildSystem", "rpcServer"],
     async start(resolve) {
-      const { server: panelHttpServer } = resolve<{
-        server: import("./panelHttpServer.js").PanelHttpServer;
-      }>("panelHttpServer")!;
-      const buildSystem = resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")!;
-      const { server: rpcServer } = resolve<{ server: import("./rpcServer.js").RpcServer }>(
-        "rpcServer"
-      )!;
+      const { server: panelHttpServer } = assertPresent(
+        resolve<{
+          server: import("./panelHttpServer.js").PanelHttpServer;
+        }>("panelHttpServer")
+      );
+      const buildSystem = assertPresent(
+        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+      );
+      const { server: rpcServer } = assertPresent(
+        resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+      );
 
       const graph = buildSystem.getGraph();
       const panelNodes = graph.allNodes().filter((n) => n.kind === "panel");
@@ -213,7 +220,9 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       name: "fsRpc",
       dependencies: ["fsService"],
       async start(resolve) {
-        fsServiceInstance = resolve<import("@natstack/shared/fsService").FsService>("fsService")!;
+        fsServiceInstance = assertPresent(
+          resolve<import("@natstack/shared/fsService").FsService>("fsService")
+        );
       },
       getServiceDefinition() {
         const fsMethodSchema = { args: z.tuple([z.string()]).rest(z.unknown()) };

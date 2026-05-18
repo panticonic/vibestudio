@@ -19,6 +19,8 @@ import * as path from "path";
 import * as fs from "fs";
 import { randomBytes } from "crypto";
 import { getPublicUrl } from "./publicUrl.js";
+import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
+
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
 
@@ -77,7 +79,7 @@ function detectServerIpcChannel(): IpcChannel | null {
   // Node.js fork: process.send exists
   if (typeof process.send === "function") {
     return {
-      postMessage: (msg: unknown) => process.send!(msg),
+      postMessage: (msg: unknown) => assertPresent(process.send)(msg),
       on: (_event: string, handler: (msg: unknown) => void) => {
         process.on("message", handler);
       },
@@ -104,7 +106,7 @@ if (ipcChannel) {
     const record = asRecord(msg);
     const id = typeof record?.["id"] === "string" ? record["id"] : null;
     if (id && pendingIpcResponses.has(id)) {
-      pendingIpcResponses.get(id)!(msg);
+      assertPresent(pendingIpcResponses.get(id))(msg);
       pendingIpcResponses.delete(id);
     }
   });
@@ -298,7 +300,7 @@ function parseArgs(argv: string[]): CliArgs {
   ]);
 
   for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
+    const arg = assertPresent(argv[i]);
     let key: string;
     let value: string | undefined;
 
@@ -791,7 +793,7 @@ async function main() {
     path.resolve(serverDir, "../src/main/services/testSetup.ts"),
   ];
   const panelTestSetupPath: string =
-    setupCandidates.find((p) => fs.existsSync(p)) ?? setupCandidates[0]!;
+    setupCandidates.find((p) => fs.existsSync(p)) ?? assertPresent(setupCandidates[0]);
 
   {
     let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
@@ -799,10 +801,12 @@ async function main() {
       name: "build",
       dependencies: ["buildSystem"],
       start: async (resolve) => {
-        buildSystemInstance = resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")!;
+        buildSystemInstance = assertPresent(
+          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+        );
       },
       getServiceDefinition() {
-        return createBuildService({ buildSystem: buildSystemInstance! });
+        return createBuildService({ buildSystem: assertPresent(buildSystemInstance) });
       },
     });
   }
@@ -813,7 +817,9 @@ async function main() {
       name: "tokens",
       dependencies: ["tokenManager", "fsService"],
       async start(resolve) {
-        const fsService = resolve<import("@natstack/shared/fsService").FsService>("fsService")!;
+        const fsService = assertPresent(
+          resolve<import("@natstack/shared/fsService").FsService>("fsService")
+        );
         // Only persist the admin token centrally in standalone mode. In
         // IPC/Electron-embedded mode the token is consumed by the parent
         // process from the ready message, and writing it into the shared
@@ -943,11 +949,14 @@ async function main() {
       name: "approvalPushBridge",
       dependencies: ["push", "shellPresence"],
       start: async (resolve) => {
-        const push = resolve<import("./services/pushService.js").PushServiceResult>("push")!;
-        const shellPresence =
+        const push = assertPresent(
+          resolve<import("./services/pushService.js").PushServiceResult>("push")
+        );
+        const shellPresence = assertPresent(
           resolve<import("./services/shellPresenceService.js").ShellPresenceServiceResult>(
             "shellPresence"
-          )!;
+          )
+        );
         return createApprovalPushBridge({
           approvalQueue,
           push: push.internal,
@@ -1097,8 +1106,9 @@ async function main() {
       const doDispatch = new DODispatch();
 
       // Dispatch DO method calls via HTTP POST to the workerd /_w/ URL scheme.
-      const workerdManager =
-        resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")!;
+      const workerdManager = assertPresent(
+        resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+      );
       doDispatch.setDispatcher(async (urlPath, args) => {
         const port = workerdManager.getPort();
         if (!port) {
@@ -1168,7 +1178,9 @@ async function main() {
       name: "scope",
       dependencies: ["doDispatch"],
       async start(resolve) {
-        const doDispatch = resolve<import("./doDispatch.js").DODispatch>("doDispatch")!;
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        );
         scopeDefinition = createScopeService({ doDispatch });
       },
       getServiceDefinition() {
@@ -1187,7 +1199,9 @@ async function main() {
       name: "panel-persistence",
       dependencies: ["doDispatch"],
       async start(resolve) {
-        const doDispatch = resolve<import("./doDispatch.js").DODispatch>("doDispatch")!;
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        );
         panelPersistenceDefinition = createPanelPersistenceService({
           doDispatch,
           workspaceId: workspace.config.id,
@@ -1214,7 +1228,9 @@ async function main() {
       name: "webhookIngress",
       dependencies: ["doDispatch"],
       async start(resolve) {
-        const doDispatch = resolve<import("./doDispatch.js").DODispatch>("doDispatch")!;
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        );
         webhookIngress = createWebhookIngressService({
           relaySigningSecret: process.env["NATSTACK_RELAY_SIGNING_SECRET"],
           publicBaseUrl: process.env["NATSTACK_WEBHOOK_PUBLIC_URL"] ?? "https://hooks.snugenv.com",
@@ -1256,8 +1272,12 @@ async function main() {
       name: "gad",
       dependencies: ["doDispatch", "buildSystem"],
       async start(resolve) {
-        const doDispatch = resolve<import("./doDispatch.js").DODispatch>("doDispatch")!;
-        const buildSystem = resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")!;
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        );
+        const buildSystem = assertPresent(
+          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+        );
         gadDefinition = createGadService({
           doDispatch,
           resolveStore: () =>
@@ -1286,7 +1306,7 @@ async function main() {
   let adminToken: string;
   let tokenSource: "env" | "persisted" | "generated" = "generated";
   if (process.env["NATSTACK_ADMIN_TOKEN"]) {
-    adminToken = process.env["NATSTACK_ADMIN_TOKEN"]!;
+    adminToken = assertPresent(process.env["NATSTACK_ADMIN_TOKEN"]);
     tokenSource = "env";
   } else if (!ipcChannel) {
     const persisted = loadPersistedAdminToken();
@@ -1330,9 +1350,12 @@ async function main() {
     dependencies: ["buildSystem", "tokenManager"],
     async start(resolve) {
       const { ExtensionHost } = await import("@natstack/extension-host");
-      const buildSystemInst = resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")!;
-      const tokenManagerInst =
-        resolve<import("@natstack/shared/tokenManager").TokenManager>("tokenManager")!;
+      const buildSystemInst = assertPresent(
+        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+      );
+      const tokenManagerInst = assertPresent(
+        resolve<import("@natstack/shared/tokenManager").TokenManager>("tokenManager")
+      );
       const host = new ExtensionHost({
         statePath,
         workspacePath,
@@ -1381,9 +1404,15 @@ async function main() {
       name: "workersRpc",
       dependencies: ["doDispatch", "buildSystem", "fsService"],
       async start(resolve) {
-        const doDispatch = resolve<import("./doDispatch.js").DODispatch>("doDispatch")!;
-        const buildSystemInst = resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")!;
-        const fsServiceInst = resolve<import("@natstack/shared/fsService").FsService>("fsService")!;
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        );
+        const buildSystemInst = assertPresent(
+          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+        );
+        const fsServiceInst = assertPresent(
+          resolve<import("@natstack/shared/fsService").FsService>("fsService")
+        );
         workerServiceDef = createWorkerService({
           doDispatch,
           buildSystem: buildSystemInst,
@@ -1425,8 +1454,12 @@ async function main() {
       dependencies: ["buildSystem", "fsService"],
       async start(resolve) {
         const { WorkerdManager } = await import("./workerdManager.js");
-        buildSystemForWorkerd = resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")!;
-        const fsServiceInst = resolve<import("@natstack/shared/fsService").FsService>("fsService")!;
+        buildSystemForWorkerd = assertPresent(
+          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+        );
+        const fsServiceInst = assertPresent(
+          resolve<import("@natstack/shared/fsService").FsService>("fsService")
+        );
 
         workerdManagerInstance = new WorkerdManager({
           tokenManager,
@@ -1437,7 +1470,7 @@ async function main() {
             }
             return `http://127.0.0.1:${gatewayPortResolved}`;
           },
-          getBuild: (unitPath, ref) => buildSystemForWorkerd!.getBuild(unitPath, ref),
+          getBuild: (unitPath, ref) => assertPresent(buildSystemForWorkerd).getBuild(unitPath, ref),
           workspacePath,
           statePath,
           routeRegistry,
@@ -2213,7 +2246,7 @@ function collectWorkspaceRepoPaths(
 function replaceWorkspaceConfig<T extends object>(target: T, next: T): void {
   const mutableTarget = target as Record<string, unknown>;
   for (const key of Object.keys(mutableTarget)) {
-    delete mutableTarget[key];
+    deleteDynamicProperty(mutableTarget, key);
   }
   Object.assign(target, next);
 }

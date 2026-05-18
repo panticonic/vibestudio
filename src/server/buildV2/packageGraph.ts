@@ -130,7 +130,7 @@ export class PackageGraph {
     const result = new Set<string>();
     const queue = [name];
     while (queue.length > 0) {
-      const current = queue.pop()!;
+      const current = assertPresent(queue.pop());
       for (const node of this.nodes.values()) {
         if (node.internalDeps.includes(current) && !result.has(node.name)) {
           result.add(node.name);
@@ -315,6 +315,7 @@ function scanExtensions(dir: string, workspaceRoot: string): GraphNode[] {
 }
 
 import type { TemplateConfig } from "./templateResolver.js";
+import { assertPresent } from "../../lintHelpers";
 
 function scanTemplates(dir: string, workspaceRoot: string): GraphNode[] {
   if (!fs.existsSync(dir)) return [];
