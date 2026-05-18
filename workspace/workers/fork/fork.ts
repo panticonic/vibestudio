@@ -49,7 +49,7 @@ function doTarget(ref: DORef): string {
 async function callDoTarget<T = unknown>(
   rpc: RpcCaller, ref: DORef, method: string, ...args: unknown[]
 ): Promise<T> {
-  return rpc.call<T>(doTarget(ref), method, ...args);
+  return rpc.call<T>(doTarget(ref), method, args);
 }
 
 // ─── Fork orchestration ─────────────────────────────────────────────────────

@@ -29,7 +29,7 @@ All browser data operations go through `@workspace/panel-browser`, which wraps R
 ```
 Sandbox code (eval / inline_ui / feedback_custom)
   → import { browserData } from "@workspace/panel-browser"
-    → rpc.call("main", "extensions.invoke", "@workspace-extensions/browser-data", ...)
+    → rpc.call("main", "extensions.invoke", ["@workspace-extensions/browser-data", method, args])
       → browser-data extension
         → reads Chrome/Firefox/Safari profile databases
 ```

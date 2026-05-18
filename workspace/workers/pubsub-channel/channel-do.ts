@@ -337,9 +337,7 @@ export class PubSubChannel extends DurableObjectBase {
       await this.rpc.call(
         "main",
         "workers.resolveDurableObject",
-        doRef.source,
-        doRef.className,
-        doRef.objectKey
+        [doRef.source, doRef.className, doRef.objectKey]
       );
     }
 
@@ -1360,10 +1358,7 @@ export class PubSubChannel extends DurableObjectBase {
         const result = await this.rpc.call(
           targetPid,
           "onMethodCall",
-          this.objectKey,
-          callId,
-          method,
-          args
+          [this.objectKey, callId, method, args]
         );
         // Method returned a result — deliver to caller
         const pending = consumeCall(this.sql, callId);

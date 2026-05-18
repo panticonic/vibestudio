@@ -43,8 +43,7 @@ describe("ConnectionManager", () => {
       expect(config.rpc!.call).toHaveBeenCalledWith(
         CHANNEL_TARGET,
         "subscribe",
-        "panel:panel-1",
-        expect.any(Object),
+        ["panel:panel-1", expect.any(Object)],
       );
     });
     manager.disconnect();
@@ -53,7 +52,7 @@ describe("ConnectionManager", () => {
     expect(config.rpc!.call).toHaveBeenCalledWith(
       CHANNEL_TARGET,
       "unsubscribe",
-      "panel:panel-1",
+      ["panel:panel-1"],
     );
   });
 });

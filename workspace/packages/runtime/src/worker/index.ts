@@ -20,13 +20,11 @@
  * };
  * ```
  */
-
 // Buffer polyfill for non-Node environments
 import { Buffer } from "buffer";
 if (typeof globalThis.Buffer === "undefined") {
-  (globalThis as any).Buffer = Buffer;
+    (globalThis as any).Buffer = Buffer;
 }
-
 import type { RpcBridge } from "@natstack/rpc";
 import { createHttpRpcBridge } from "../shared/httpRpcBridge.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/externalOpen";
@@ -47,40 +45,14 @@ import { createGadClient, type GadClient } from "../shared/gad.js";
 import { createParentHandle } from "../shared/handles.js";
 import { helpfulNamespace } from "../shared/helpfulNamespace.js";
 import { createGatewayFetch, type GatewayFetch } from "../shared/gatewayFetch.js";
-import {
-  listUserlandApprovals,
-  requestUserlandApproval,
-  revokeUserlandApproval,
-  type UserlandApprovalChoice,
-  type UserlandApprovalGrant,
-  type UserlandApprovalRequest,
-} from "../approvals.js";
+import { listUserlandApprovals, requestUserlandApproval, revokeUserlandApproval, type UserlandApprovalChoice, type UserlandApprovalGrant, type UserlandApprovalRequest, } from "../approvals.js";
 import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
 import type { ParentHandle } from "../core/index.js";
 import type { WorkerEnv } from "./types.js";
 import type { RuntimeFs } from "../types.js";
-
 export type { WorkerEnv, ExecutionContext } from "./types.js";
-export type {
-  ClientConfigStatus,
-  CredentialClient,
-  StoredCredentialSummary,
-  StoreUrlBoundCredentialRequest,
-  ConfigureClientRequest,
-  ConnectCredentialRequest,
-  DeleteClientConfigRequest,
-  RequestCredentialInputRequest,
-  GitHttpClient,
-} from "../shared/credentials.js";
-export type {
-  CreateWebhookIngressSubscriptionRequest,
-  RotateWebhookIngressSecretRequest,
-  RotateWebhookIngressSecretResult,
-  WebhookIngressClient,
-  WebhookIngressSubscriptionSummary,
-  WebhookTarget,
-  WebhookVerifierConfig,
-} from "../shared/webhooks.js";
+export type { ClientConfigStatus, CredentialClient, StoredCredentialSummary, StoreUrlBoundCredentialRequest, ConfigureClientRequest, ConnectCredentialRequest, DeleteClientConfigRequest, RequestCredentialInputRequest, GitHttpClient, } from "../shared/credentials.js";
+export type { CreateWebhookIngressSubscriptionRequest, RotateWebhookIngressSecretRequest, RotateWebhookIngressSecretResult, WebhookIngressClient, WebhookIngressSubscriptionSummary, WebhookTarget, WebhookVerifierConfig, } from "../shared/webhooks.js";
 export type { NotificationClient } from "../shared/notifications.js";
 export { doTargetId, createDurableObjectServiceClient } from "../shared/workerd.js";
 export type { DurableObjectServiceClient, ResolvedUserlandService, UserlandServiceInfo } from "../shared/workerd.js";
@@ -105,52 +77,49 @@ export type { DurableObjectContext, SqlStorage, SqlResult, DORef } from "./durab
 export { fs } from "./fs.js";
 export { createGatewayFetch } from "../shared/gatewayFetch.js";
 export type { GatewayFetch } from "../shared/gatewayFetch.js";
-export type {
-  UserlandApprovalChoice,
-  UserlandApprovalGrant,
-  UserlandApprovalOption,
-  UserlandApprovalRequest,
-  UserlandApprovalSubject,
-} from "../approvals.js";
+export type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalOption, UserlandApprovalRequest, UserlandApprovalSubject, } from "../approvals.js";
 // Note: createTestDO is intentionally NOT exported here because it depends on
 // sql.js test-only helpers that should not be bundled into production workers.
 // Import directly from "@workspace/runtime/src/worker/durable-test-utils" in tests.
-
 export interface GitRemoteSpec {
-  name: string;
-  url: string;
+    name: string;
+    url: string;
 }
-
 export interface ImportProjectRequest {
-  path: string;
-  remote: GitRemoteSpec;
-  credentialId?: string;
+    path: string;
+    remote: GitRemoteSpec;
+    credentialId?: string;
 }
-
 export interface ImportedWorkspaceRepo {
-  path: string;
-  remote: GitRemoteSpec;
+    path: string;
+    remote: GitRemoteSpec;
 }
-
 export interface CompleteWorkspaceDependenciesResult {
-  imported: ImportedWorkspaceRepo[];
-  skipped: Array<{ path: string; reason: "already-present" | "unsupported-path" }>;
-  failed: Array<{ path: string; error: string }>;
+    imported: ImportedWorkspaceRepo[];
+    skipped: Array<{
+        path: string;
+        reason: "already-present" | "unsupported-path";
+    }>;
+    failed: Array<{
+        path: string;
+        error: string;
+    }>;
 }
-
 export interface RuntimeGitApi {
-  http: CredentialClient["gitHttp"];
-  importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo>;
-  completeWorkspaceDependencies(options?: { credentialId?: string }): Promise<CompleteWorkspaceDependenciesResult>;
-  setSharedRemote(repoPath: string, remote: GitRemoteSpec): Promise<Record<string, unknown> | undefined>;
-  removeSharedRemote(repoPath: string, remoteName: string): Promise<Record<string, unknown> | undefined>;
-  client(options?: { credentialId?: string }): GitClient;
+    http: CredentialClient["gitHttp"];
+    importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo>;
+    completeWorkspaceDependencies(options?: {
+        credentialId?: string;
+    }): Promise<CompleteWorkspaceDependenciesResult>;
+    setSharedRemote(repoPath: string, remote: GitRemoteSpec): Promise<Record<string, unknown> | undefined>;
+    removeSharedRemote(repoPath: string, remoteName: string): Promise<Record<string, unknown> | undefined>;
+    client(options?: {
+        credentialId?: string;
+    }): GitClient;
 }
-
 // Cache runtime per worker ID to avoid creating multiple bridges
 let cachedRuntime: WorkerRuntime | null = null;
 let cachedWorkerId: string | null = null;
-
 export interface WorkerRuntime {
   readonly id: string;
   readonly rpc: RpcBridge;
@@ -191,7 +160,6 @@ export interface WorkerRuntime {
   handleRpcPost(body: unknown): Promise<unknown>;
   destroy(): void;
 }
-
 /**
  * Create or retrieve the worker runtime for the given environment.
  *
@@ -262,7 +230,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   const parentId = (env.PARENT_ID as string) || null;
 
   const callMain = <T>(method: string, ...args: unknown[]) =>
-    rpc.call<T>("main", method, ...args);
+    rpc.call<T>("main", method, args);
 
   const runtime: WorkerRuntime = {
     id: workerId,
@@ -310,7 +278,6 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
 
   return runtime;
 }
-
 /**
  * Handle incoming RPC POST requests for a worker.
  *
@@ -320,15 +287,15 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
  * @returns A Response promise if the request is an RPC call, or null if not.
  */
 export function handleWorkerRpc(runtime: WorkerRuntime, request: Request): Promise<Response> | null {
-  const url = new URL(request.url);
-  if (url.pathname.endsWith("/__rpc") && request.method === "POST") {
-    return (async () => {
-      const body = await request.json();
-      const result = await runtime.handleRpcPost(body);
-      return new Response(JSON.stringify(result), {
-        headers: { "Content-Type": "application/json" },
-      });
-    })();
-  }
-  return null;
+    const url = new URL(request.url);
+    if (url.pathname.endsWith("/__rpc") && request.method === "POST") {
+        return (async () => {
+            const body = await request.json();
+            const result = await runtime.handleRpcPost(body);
+            return new Response(JSON.stringify(result), {
+                headers: { "Content-Type": "application/json" },
+            });
+        })();
+    }
+    return null;
 }

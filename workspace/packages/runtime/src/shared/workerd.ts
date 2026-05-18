@@ -14,7 +14,6 @@
  *
  * Available to server, panel, and worker callers.
  */
-
 import type { RpcCaller } from "@natstack/rpc";
 import {
   createDurableObjectServiceClient,
@@ -40,82 +39,90 @@ export type {
 // ---------------------------------------------------------------------------
 // Types (mirror server-side WorkerdManager types, minus internal fields)
 // ---------------------------------------------------------------------------
-
-export type WorkerBindingDef =
-  | { type: "service"; worker: string }
-  | { type: "text"; value: string }
-  | { type: "json"; value: unknown };
-
+export type WorkerBindingDef = {
+    type: "service";
+    worker: string;
+} | {
+    type: "text";
+    value: string;
+} | {
+    type: "json";
+    value: unknown;
+};
 export interface WorkerCreateOptions {
-  /** Source path relative to workspace root (e.g., "workers/hello") */
-  source: string;
-  /** Context ID for storage partition */
-  contextId: string;
-  /** Instance name (defaults to last segment of source) */
-  name?: string;
-  /** Extra text bindings injected as env vars */
-  env?: Record<string, string>;
-  /** Typed bindings (service, text, json) */
-  bindings?: Record<string, WorkerBindingDef>;
-  /** Initial state args (available via STATE_ARGS binding) */
-  stateArgs?: Record<string, unknown>;
-  /** Build at a specific git ref (branch, tag, or commit SHA).
-   *  Use a commit SHA for immutable pinning (content-addressed cache guarantees same build). */
-  ref?: string;
-  /** ID of the creating caller. Worker can call getParent() to communicate back. */
-  parentId?: string;
+    /** Source path relative to workspace root (e.g., "workers/hello") */
+    source: string;
+    /** Context ID for storage partition */
+    contextId: string;
+    /** Instance name (defaults to last segment of source) */
+    name?: string;
+    /** Extra text bindings injected as env vars */
+    env?: Record<string, string>;
+    /** Typed bindings (service, text, json) */
+    bindings?: Record<string, WorkerBindingDef>;
+    /** Initial state args (available via STATE_ARGS binding) */
+    stateArgs?: Record<string, unknown>;
+    /** Build at a specific git ref (branch, tag, or commit SHA).
+     *  Use a commit SHA for immutable pinning (content-addressed cache guarantees same build). */
+    ref?: string;
+    /** ID of the creating caller. Worker can call getParent() to communicate back. */
+    parentId?: string;
 }
-
 export interface WorkerUpdateOptions {
-  env?: Record<string, string>;
-  bindings?: Record<string, WorkerBindingDef>;
-  stateArgs?: Record<string, unknown>;
-  /** Change the git ref this instance builds at */
-  ref?: string;
+    env?: Record<string, string>;
+    bindings?: Record<string, WorkerBindingDef>;
+    stateArgs?: Record<string, unknown>;
+    /** Change the git ref this instance builds at */
+    ref?: string;
 }
-
 export interface WorkerInstanceInfo {
-  name: string;
-  source: string;
-  contextId: string;
-  callerId: string;
-  env: Record<string, string>;
-  bindings: Record<string, WorkerBindingDef>;
-  stateArgs?: Record<string, unknown>;
-  buildKey?: string;
-  /** Git ref this instance is built at. */
-  ref?: string;
-  status: "building" | "starting" | "running" | "stopped" | "error";
+    name: string;
+    source: string;
+    contextId: string;
+    callerId: string;
+    env: Record<string, string>;
+    bindings: Record<string, WorkerBindingDef>;
+    stateArgs?: Record<string, unknown>;
+    buildKey?: string;
+    /** Git ref this instance is built at. */
+    ref?: string;
+    status: "building" | "starting" | "running" | "stopped" | "error";
 }
-
 export interface WorkerSourceInfo {
-  name: string;
-  source: string;
-  title?: string;
+    name: string;
+    source: string;
+    title?: string;
 }
-
 export type UserlandServiceInfo = {
-  name: string;
-  title?: string;
-  description?: string;
-  protocols: string[];
-  source: string;
-} & (
-  | { kind: "durable-object"; className: string; defaultObjectKey: string | null }
-  | { kind: "worker"; routePath: string }
-);
-
+    name: string;
+    title?: string;
+    description?: string;
+    protocols: string[];
+    source: string;
+} & ({
+    kind: "durable-object";
+    className: string;
+    defaultObjectKey: string | null;
+} | {
+    kind: "worker";
+    routePath: string;
+});
 export type ResolvedUserlandService = {
-  name: string;
-  title?: string;
-  description?: string;
-  protocols: string[];
-  source: string;
-} & (
-  | { kind: "durable-object"; className: string; objectKey: string; targetId: string }
-  | { kind: "worker"; routePath: string; routeBasePath: string }
-);
-
+    name: string;
+    title?: string;
+    description?: string;
+    protocols: string[];
+    source: string;
+} & ({
+    kind: "durable-object";
+    className: string;
+    objectKey: string;
+    targetId: string;
+} | {
+    kind: "worker";
+    routePath: string;
+    routeBasePath: string;
+});
 // ---------------------------------------------------------------------------
 // Client
 // ---------------------------------------------------------------------------
@@ -154,12 +161,11 @@ export interface WorkerdClient {
   /** Destroy a DO's SQLite storage (main + WAL/SHM files). */
   destroyDO(ref: DORefParam): Promise<void>;
 }
-
 export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
   const call = <T>(method: string, ...args: unknown[]) =>
-    rpc.call<T>("main", `workerd.${method}`, ...args);
+    rpc.call<T>("main", `workerd.${method}`, args);
   const callWorkers = <T>(method: string, ...args: unknown[]) =>
-    rpc.call<T>("main", `workers.${method}`, ...args);
+    rpc.call<T>("main", `workers.${method}`, args);
 
   return {
     create: (options) => call<WorkerInstanceInfo>("createInstance", options),

@@ -1,14 +1,15 @@
 import { PanelRegistry } from "@natstack/shared/panelRegistry";
 import { PanelManager } from "@natstack/shared/shell/panelManager";
-import { PanelStoreRpc } from "@natstack/shared/shell/panelStoreRpc";
 import type { MobileTransport } from "../services/mobileTransport";
 import { parseHostConfig } from "../services/panelUrls";
+import { enqueueWorkspaceRpcMutation } from "../services/backgroundActionQueue";
+import { createMobileLocalViewStateStore } from "./localViewState";
 
 export function createMobileShellCore(deps: {
-  workspaceId: string;
-  serverUrl: string;
-  transport: MobileTransport;
-  onTreeUpdated?: (tree: import("@natstack/shared/types").Panel[]) => void;
+    workspaceId: string;
+    serverUrl: string;
+    transport: MobileTransport;
+    onTreeUpdated?: (tree: import("@natstack/shared/types").Panel[]) => void;
 }) {
   const registry = new PanelRegistry({ onTreeUpdated: deps.onTreeUpdated });
   // Server-backed panel store via `panel-persistence` service (same backend

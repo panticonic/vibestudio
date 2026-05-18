@@ -84,26 +84,24 @@ Full RPC bridge to all server and main-process services. Same as `rpc` from `@wo
 
 ```typescript
 // Filesystem
-const content = await chat.rpc.call("main", "fs.readFile", "/src/index.ts", "utf-8");
+const content = await chat.rpc.call("main", "fs.readFile", ["/src/index.ts", "utf-8"]);
 
 // Database
 Call a Durable Object method that stores data with `this.sql`.
-const rows = await chat.rpc.call("main", "db.query", handle, "SELECT * FROM items");
+const rows = await chat.rpc.call("main", "db.query", [handle, "SELECT * FROM items"]);
 
 // Build
-const build = await chat.rpc.call("main", "build.getBuild", "panels/my-app");
+const build = await chat.rpc.call("main", "build.getBuild", ["panels/my-app"]);
 
 // Browser data
 const browsers = await chat.rpc.call(
   "main",
   "extensions.invoke",
-  "@workspace-extensions/browser-data",
-  "detectBrowsers",
-  [],
+  ["@workspace-extensions/browser-data", "detectBrowsers", []],
 );
 
 // Workers
-const instances = await chat.rpc.call("main", "workerd.listInstances");
+const instances = await chat.rpc.call("main", "workerd.listInstances", []);
 ```
 
 ## chat.contextId / chat.channelId

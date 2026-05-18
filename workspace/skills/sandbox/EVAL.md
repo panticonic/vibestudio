@@ -277,7 +277,7 @@ For read-only queries, RPC shortcuts work too:
 ```
 eval({ code: `
   import { rpc } from "@workspace/runtime";
-  const tree = await rpc.call("main", "git.getWorkspaceTree");
+  const tree = await rpc.call("main", "git.getWorkspaceTree", []);
   console.log("Workspace tree:", tree);
 ` })
 ```
@@ -340,10 +340,10 @@ eval({ code: `
 eval({ code: `
   import { rpc } from "@workspace/runtime";
   // Build a panel and get its bundle
-  const build = await rpc.call("main", "build.getBuild", "panels/my-app");
+  const build = await rpc.call("main", "build.getBuild", ["panels/my-app"]);
   console.log("Build artifacts:", Object.keys(build));
   // Check effective version
-  const ev = await rpc.call("main", "build.getEffectiveVersion", "panels/my-app");
+  const ev = await rpc.call("main", "build.getEffectiveVersion", ["panels/my-app"]);
   console.log("Effective version:", ev);
 `
 })

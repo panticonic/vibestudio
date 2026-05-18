@@ -121,7 +121,7 @@ function requiredEnv(name: string): string {
 
 async function rpcCall<T>(serviceMethod: string, args: unknown[], targetId = "main"): Promise<T> {
   const bridge = getRuntimeBridge();
-  return bridge.call<T>(targetId, serviceMethod, ...args);
+  return bridge.call<T>(targetId, serviceMethod, args);
 }
 
 function serviceProxy(service: string): Record<string, (...args: unknown[]) => Promise<unknown>> {

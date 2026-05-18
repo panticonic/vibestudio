@@ -161,29 +161,25 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
   create(
     input: Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">
   ): Promise<WebhookIngressSubscription> {
-    return this.rpc.call(
-      doTargetId(this.ref),
-      "create",
-      input
-    ) as Promise<WebhookIngressSubscription>;
+    return this.rpc.call(doTargetId(this.ref), "create", [
+      input,
+    ]) as Promise<WebhookIngressSubscription>;
   }
 
   get(subscriptionId: string): Promise<WebhookIngressSubscription | null> {
-    return this.rpc.call(
-      doTargetId(this.ref),
-      "get",
-      subscriptionId
-    ) as Promise<WebhookIngressSubscription | null>;
+    return this.rpc.call(doTargetId(this.ref), "get", [
+      subscriptionId,
+    ]) as Promise<WebhookIngressSubscription | null>;
   }
 
   list(ownerCallerId?: string): Promise<WebhookIngressSubscription[]> {
-    return this.rpc.call(doTargetId(this.ref), "list", ownerCallerId) as Promise<
+    return this.rpc.call(doTargetId(this.ref), "list", [ownerCallerId]) as Promise<
       WebhookIngressSubscription[]
     >;
   }
 
   async replace(subscription: WebhookIngressSubscription): Promise<void> {
-    await this.rpc.call(doTargetId(this.ref), "replace", subscription);
+    await this.rpc.call(doTargetId(this.ref), "replace", [subscription]);
   }
 }
 

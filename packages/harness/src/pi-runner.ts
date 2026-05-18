@@ -89,7 +89,6 @@ const BUILTIN_TOOL_NAMES = [
   "web_fetch",
   "web_read",
 ] as const;
-
 export interface PiRunnerGadProvenance {
   branchId: string;
   workspaceId?: string | null;
@@ -98,7 +97,6 @@ export interface PiRunnerGadProvenance {
   source?: string;
   metadata?: Record<string, unknown>;
 }
-
 interface GadBlobSnapshot {
   digest: string;
   size: number;
@@ -108,7 +106,6 @@ interface AgentHarnessQueueAccess {
   steerQueue: AgentMessage[];
   emitQueueUpdate(): Promise<void>;
 }
-
 export interface PiRunnerOptions {
   rpc: RpcCaller;
   fs: RuntimeFs;
@@ -159,8 +156,8 @@ export interface PiRunnerOptions {
 }
 
 export interface PiStateSnapshot {
-  messages: AgentMessage[];
-  isStreaming: boolean;
+    messages: AgentMessage[];
+    isStreaming: boolean;
 }
 
 export interface RunnerTurnInput {
@@ -717,12 +714,12 @@ export class PiRunner {
   private async putGadBlob(value: string | Uint8Array | Buffer): Promise<GadBlobSnapshot | null> {
     try {
       if (typeof value === "string") {
-        return await this.options.rpc.call<GadBlobSnapshot>("main", "blobstore.putText", value);
+        return await this.options.rpc.call<GadBlobSnapshot>("main", "blobstore.putText", [value]);
       }
       return await this.options.rpc.call<GadBlobSnapshot>(
         "main",
         "blobstore.putBase64",
-        Buffer.from(value).toString("base64")
+        [Buffer.from(value).toString("base64")]
       );
     } catch (err) {
       console.warn("[PiRunner] blobstore put failed:", err);

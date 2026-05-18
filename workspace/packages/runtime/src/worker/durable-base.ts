@@ -66,7 +66,7 @@ function installConsoleBridge(rpc: RpcBridge): void {
     try {
       // Fire-and-forget. Failures go to the *original* console to avoid
       // infinite recursion if the RPC path itself is broken.
-      rpc.call("main", "workerLog.write", level, message).catch((err) => {
+      rpc.call("main", "workerLog.write", [level, message]).catch((err) => {
         original.warn("[console-bridge] forward failed:", err);
       });
     } finally {

@@ -1,7 +1,7 @@
 import type { TestCase } from "../types.js";
 import { findLastAgentMessage } from "./_helpers.js";
 
-const buildHint = `Use rpc from @workspace/runtime to call the build service. Example:\nimport { rpc } from "@workspace/runtime";\nconst result = await rpc.call("main", "build.getBuild", "panels/chat");`;
+const buildHint = `Use rpc from @workspace/runtime to call the build service. Example:\nimport { rpc } from "@workspace/runtime";\nconst result = await rpc.call("main", "build.getBuild", ["panels/chat"]);`;
 
 export const buildTests: TestCase[] = [
   {
@@ -24,7 +24,7 @@ export const buildTests: TestCase[] = [
     name: "build-npm-package",
     description: "Build an npm package and get a bundle",
     category: "build",
-    prompt: `Build an npm package using the build service and tell me about the bundle.\n\nimport { rpc } from "@workspace/runtime";\nconst result = await rpc.call("main", "build.getBuildNpm", "lodash-es", "4.17.21");\nReport the bundle length.`,
+    prompt: `Build an npm package using the build service and tell me about the bundle.\n\nimport { rpc } from "@workspace/runtime";\nconst result = await rpc.call("main", "build.getBuildNpm", ["lodash-es", "4.17.21"]);\nReport the bundle length.`,
     validate: (result) => {
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();
@@ -40,7 +40,7 @@ export const buildTests: TestCase[] = [
     name: "build-at-ref",
     description: "Build a workspace package at a specific git ref",
     category: "build",
-    prompt: `Build the workspace package "panels/chat" at the git ref "HEAD~1" using the build service and tell me the result.\n\nimport { rpc } from "@workspace/runtime";\nconst result = await rpc.call("main", "build.getBuild", "panels/chat", "HEAD~1");\nThe second argument is the git ref. Report whether it succeeded and the bundle length.`,
+    prompt: `Build the workspace package "panels/chat" at the git ref "HEAD~1" using the build service and tell me the result.\n\nimport { rpc } from "@workspace/runtime";\nconst result = await rpc.call("main", "build.getBuild", ["panels/chat", "HEAD~1"]);\nThe second argument is the git ref. Report whether it succeeded and the bundle length.`,
     validate: (result) => {
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();

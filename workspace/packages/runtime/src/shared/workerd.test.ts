@@ -9,7 +9,7 @@ function createMockRpc() {
 
   return {
     rpc: {
-      call: vi.fn(async (target: string, method: string, ...args: unknown[]) => {
+      call: vi.fn(async (target: string, method: string, args: unknown[]) => {
         calls.push({ target, method, args });
         return undefined;
       }),
@@ -34,12 +34,12 @@ describe("createWorkerdClient", () => {
     };
     await client.create(opts);
 
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.createInstance", opts);
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.createInstance", [opts]);
   });
 
   it("destroy calls workerd.destroyInstance", async () => {
     await client.destroy("hello");
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.destroyInstance", "hello");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.destroyInstance", ["hello"]);
   });
 
   it("update calls workerd.updateInstance", async () => {
@@ -47,34 +47,33 @@ describe("createWorkerdClient", () => {
     expect(mock.rpc.call).toHaveBeenCalledWith(
       "main",
       "workerd.updateInstance",
-      "hello",
-      { env: { X: "1" } },
+      ["hello", { env: { X: "1" } }],
     );
   });
 
   it("list calls workerd.listInstances", async () => {
     await client.list();
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.listInstances");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.listInstances", []);
   });
 
   it("status calls workerd.getInstanceStatus", async () => {
     await client.status("hello");
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.getInstanceStatus", "hello");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.getInstanceStatus", ["hello"]);
   });
 
   it("listInstanceSources calls workerd.listInstanceSources", async () => {
     await client.listInstanceSources();
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.listInstanceSources");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.listInstanceSources", []);
   });
 
   it("listServices calls workers.listServices", async () => {
     await client.listServices();
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.listServices");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.listServices", []);
   });
 
   it("resolveService calls workers.resolveService", async () => {
     await client.resolveService("natstack.channel.v1", "chat-1");
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.resolveService", "natstack.channel.v1", "chat-1");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.resolveService", ["natstack.channel.v1", "chat-1"]);
   });
 
   it("durableObjectService resolves then calls the service target through unified RPC", async () => {
@@ -89,8 +88,11 @@ describe("createWorkerdClient", () => {
     });
 
     await expect(client.durableObjectService("example.service.v1", "key-1").call("ping")).resolves.toBe("ok");
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.resolveService", "example.service.v1", "key-1");
-    expect(mock.rpc.call).toHaveBeenCalledWith("do:workers/example:ExampleDO:key-1", "ping");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.resolveService", [
+      "example.service.v1",
+      "key-1",
+    ]);
+    expect(mock.rpc.call).toHaveBeenCalledWith("do:workers/example:ExampleDO:key-1", "ping", []);
   });
 
   it("resolveDurableObject calls workers.resolveDurableObject", async () => {
@@ -98,19 +100,17 @@ describe("createWorkerdClient", () => {
     expect(mock.rpc.call).toHaveBeenCalledWith(
       "main",
       "workers.resolveDurableObject",
-      "workers/example",
-      "ExampleDO",
-      "key-1",
+      ["workers/example", "ExampleDO", "key-1"],
     );
   });
 
   it("getPort calls workerd.getPort", async () => {
     await client.getPort();
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.getPort");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.getPort", []);
   });
 
   it("restartAll calls workerd.restartAll", async () => {
     await client.restartAll();
-    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.restartAll");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.restartAll", []);
   });
 });

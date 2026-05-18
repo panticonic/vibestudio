@@ -97,7 +97,7 @@ export function broadcast(
     if (p["transport"] === "do") {
       const prev = deliveryChains.get(pid) ?? Promise.resolve();
       const next: Promise<void> = prev.then(() =>
-        deps.rpc.call(pid, "onChannelEvent", deps.objectKey, event)
+        deps.rpc.call(pid, "onChannelEvent", [deps.objectKey, event])
           .then(() => {})
           .catch(err => console.error(`[Channel] delivery failed for ${pid}:`, err)),
       );
@@ -150,7 +150,7 @@ export function broadcastConfigUpdate(
 
       const prev = deliveryChains.get(pid) ?? Promise.resolve();
       const next: Promise<void> = prev.then(() =>
-        deps.rpc.call(pid, "onChannelEvent", deps.objectKey, event)
+        deps.rpc.call(pid, "onChannelEvent", [deps.objectKey, event])
           .then(() => {})
           .catch(err => console.error(`[Channel] config-update delivery failed for ${pid}:`, err)),
       );

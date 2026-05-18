@@ -749,6 +749,8 @@ async function main() {
   const { createBuildService } = await import("./services/buildService.js");
   const { createWorkerdService } = await import("./services/workerdService.js");
   const { createTokensService } = await import("./services/tokensService.js");
+  const { createPresenceService, createPresenceTracker } =
+    await import("./services/presenceService.js");
   const { createGitService } = await import("./services/gitService.js");
   const { createTestService } = await import("./services/testService.js");
   const { createWorkerService } = await import("./services/workerService.js");
@@ -777,6 +779,9 @@ async function main() {
       },
     });
   }
+  const presence = createPresenceTracker({ eventService });
+  container.register(rpcService(createPresenceService({ presence })));
+
   {
     let tokensDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
       null;
@@ -1078,29 +1083,26 @@ async function main() {
   }
 
   {
-    const { createPanelPersistenceService } = await import("./services/panelPersistenceService.js");
-    let panelPersistenceDefinition:
+    const { createWorkspaceSyncService } = await import("./services/workspaceSyncService.js");
+    let workspaceSyncDefinition:
       | import("@natstack/shared/serviceDefinition").ServiceDefinition
       | null = null;
     container.register({
-      name: "panel-persistence",
-      dependencies: ["rpcServer"],
+      name: "workspace-sync",
+      dependencies: ["doDispatch"],
       async start(resolve) {
-        const rpcServer = assertPresent(
-          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
-        panelPersistenceDefinition = createPanelPersistenceService({
-          rpc: {
-            call: (targetId, method, ...args) =>
-              rpcServer.server.callTarget(targetId, method, ...args),
-          },
+        workspaceSyncDefinition = createWorkspaceSyncService({
+          doDispatch,
           workspaceId: workspace.config.id,
+          eventService,
         });
       },
       getServiceDefinition() {
-        if (!panelPersistenceDefinition)
-          throw new Error("panel-persistence service not initialized");
-        return panelPersistenceDefinition;
+        if (!workspaceSyncDefinition) throw new Error("workspace-sync service not initialized");
+        return workspaceSyncDefinition;
       },
     });
   }
@@ -1242,10 +1244,10 @@ async function main() {
           return `${isTls ? "https" : "http"}://127.0.0.1:${gatewayPortResolved}`;
         },
         extensionTransport: {
-          call(name, method, ...args) {
+          call(name, method, args) {
             const rpcServer = rpcServerForGateway;
             if (!rpcServer) throw new Error("RPC server is not initialized");
-            return rpcServer.callTarget(name, method, ...args);
+            return rpcServer.callTarget(name, method, args);
           },
         },
       });
@@ -1810,11 +1812,6 @@ async function main() {
   rpcServerInstance.setEnsureDO((source, className, objectKey) =>
     workerdManager.ensureDO(source, className, objectKey)
   );
-
-  const panelServiceData = container.get<{
-    urlConfig: import("./services/panelService.js").PanelUrlConfig;
-  }>("panelService");
-  panelServiceData?.urlConfig?.finalizeForGateway(gatewayPort);
 
   dispatcher.markInitialized();
 

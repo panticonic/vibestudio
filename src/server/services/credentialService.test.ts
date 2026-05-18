@@ -881,13 +881,12 @@ describe("credentialService", () => {
       ]
     ) as Promise<StoredCredentialSummary>;
 
-    await vi.waitFor(() =>
-      expect(eventService.emitToConnection).toHaveBeenCalledWith(
-        "shell:owner",
-        "stale-owner-conn",
-        "external-open:open",
-        expect.any(Object)
-      )
+    await vi.waitFor(() => expect(eventService.emitToCaller).toHaveBeenCalled());
+    expect(eventService.emitToConnection).toHaveBeenCalledWith(
+      "shell:owner",
+      "stale-owner-conn",
+      "external-open:open",
+      expect.objectContaining({ callerId: "worker:test" })
     );
     expect(eventService.emitToCaller).toHaveBeenCalledWith(
       "shell:owner",

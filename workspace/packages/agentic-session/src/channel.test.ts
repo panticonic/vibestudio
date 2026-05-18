@@ -10,9 +10,9 @@
 import { describe, it, expect, vi } from "vitest";
 import { subscribeHeadlessAgent, getRecommendedChannelConfig } from "./channel.js";
 
-function makeRpcCall(captured: { config?: Record<string, unknown> }): (target: string, method: string, ...args: unknown[]) => Promise<unknown> {
-  return vi.fn(async (_target: string, _method: string, ..._args: unknown[]) => {
-    const payload = _args[0] as { config?: Record<string, unknown> } | undefined;
+function makeRpcCall(captured: { config?: Record<string, unknown> }): (target: string, method: string, args: unknown[]) => Promise<unknown> {
+  return vi.fn(async (_target: string, _method: string, args: unknown[]) => {
+    const payload = args[0] as { config?: Record<string, unknown> } | undefined;
     captured.config = payload?.config;
     return { ok: true, participantId: "agent-1" };
   });

@@ -226,9 +226,10 @@ export interface Panel {
 
   // Tree structure
   children: Panel[];
-  selectedChildId: string | null;
-
-  history: PanelSnapshotHistory;
+  positionId?: string;
+  selectedChildId?: string | null;
+  snapshot: PanelSnapshot;
+  history?: PanelSnapshotHistory;
 
   // Runtime only (not in snapshot)
   artifacts: PanelArtifacts;

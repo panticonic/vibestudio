@@ -71,7 +71,7 @@ Resolve and call it:
 ```ts
 const svc = await workers.resolveService("example.my-store.v1", "tenant-1");
 if (svc.kind !== "durable-object") throw new Error("Expected DO service");
-await rpc.call(svc.targetId, "methodName", arg);
+await rpc.call(svc.targetId, "methodName", [arg]);
 ```
 
 **Stateless worker service**:

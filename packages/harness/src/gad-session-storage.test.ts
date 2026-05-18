@@ -27,7 +27,7 @@ function fakeGad(branchId = "branch:test"): { rpc: GadRpcCaller; state: FakeStat
     gadEvents: [],
     conflictsRemaining: 0,
   };
-  const call = vi.fn(async (_target: string, method: string, ...args: unknown[]): Promise<unknown> => {
+  const call = vi.fn(async (_target: string, method: string, args: unknown[]): Promise<unknown> => {
     switch (method) {
       case "workers.resolveService":
         return {

@@ -7,20 +7,16 @@
 
 import { z } from "zod";
 import type { ServiceContainer } from "@natstack/shared/serviceContainer";
-import { createVerifiedCaller, type ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import type { ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
 import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { CentralDataManager } from "@natstack/shared/centralData";
 import type { HostConfig } from "@natstack/shared/hostConfig";
-import type { PrincipalRegistry } from "@natstack/shared/principalRegistry";
-import type { ConnectionGrantService } from "@natstack/shared/connectionGrants";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
 
 export interface CommonDeps {
   container: ServiceContainer;
   dispatcher: ServiceDispatcher;
-  principalRegistry: PrincipalRegistry;
-  connectionGrants: ConnectionGrantService;
   workspace: Workspace;
   workspacePath: string;
   workspaceConfig: WorkspaceConfig;
@@ -55,7 +51,6 @@ export interface CommonDeps {
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   const {
     container,
-    dispatcher,
     workspace,
     workspacePath,
     workspaceConfig,
@@ -65,60 +60,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   } = deps;
   const path = await import("path");
   const { rpcService } = await import("@natstack/shared/managedService");
-
-  {
-    const { createPanelService } = await import("./services/panelService.js");
-    const { createPanelPersistenceClient } = await import("./services/panelPersistenceClient.js");
-
-    container.register({
-      name: "panelService",
-      dependencies: ["fsService"],
-      async start(resolve) {
-        const fsServiceInst = assertPresent(
-          resolve<import("@natstack/shared/fsService").FsService>("fsService")
-        );
-        const panelPersistenceRpc = {
-          call: (service: string, method: string, args: unknown[]) =>
-            dispatcher.dispatch(
-              { caller: createVerifiedCaller("server", "server") },
-              service,
-              method,
-              args
-            ),
-        };
-        const persistence = createPanelPersistenceClient(panelPersistenceRpc);
-        const searchIndex = persistence;
-        const { protocol, externalHost } = hostConfig;
-        const urlConfig = new (await import("./services/panelService.js")).PanelUrlConfig({
-          protocol,
-          externalHost,
-          gatewayPort: 0,
-        });
-
-        return {
-          persistence,
-          searchIndex,
-          urlConfig,
-          definition: createPanelService({
-            persistence,
-            searchIndex,
-            fsService: fsServiceInst,
-            principalRegistry: deps.principalRegistry,
-            connectionGrants: deps.connectionGrants,
-            workspacePath,
-            urlConfig,
-            getEffectiveVersion: deps.getEffectiveVersion,
-          }),
-        };
-      },
-      getServiceDefinition() {
-        const inst = container.get<{
-          definition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
-        }>("panelService");
-        return inst?.definition;
-      },
-    });
-  }
 
   {
     const { createWorkspaceService } = await import("./services/workspaceService.js");

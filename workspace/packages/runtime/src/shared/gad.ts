@@ -5,14 +5,12 @@ export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@natstack/shared/userlandService
 
 export type GadSqlBinding = null | string | number | boolean | Uint8Array;
 export type GadJsonRecord = Record<string, unknown>;
-
 export interface GadSqlResult {
-  rows: GadJsonRecord[];
+    rows: GadJsonRecord[];
 }
-
 export interface GadStatusMetric {
-  metric: string;
-  value: number;
+    metric: string;
+    value: number;
 }
 
 export type PiEntryType =
@@ -66,7 +64,6 @@ export interface PiEntryRow {
   metadata: GadJsonRecord | null;
   createdAt: string;
 }
-
 export interface GadClient {
   rawSql(sql: string, bindings?: GadSqlBinding[]): Promise<GadSqlResult>;
   query(sql: string, bindings?: GadSqlBinding[]): Promise<GadSqlResult>;
@@ -107,7 +104,6 @@ export interface GadClient {
   checkGadIntegrity(input?: object): Promise<{ ok: boolean; errors: GadJsonRecord[] }>;
   replayGadEvents(input?: object): Promise<{ replayed: number }>;
 }
-
 export function createGadClient(rpc: RpcCaller): GadClient {
   const service = createGadServiceClient(rpc);
   const call = <T>(method: string, ...args: unknown[]) => service.call<T>(method, ...args);

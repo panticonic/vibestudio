@@ -192,7 +192,7 @@ eval({ code: `
   await page.waitForLoadState("networkidle");
   const html = await page.content();
   const { title, markdown } = htmlToReadableMarkdown(html, page.url());
-  const { digest, size } = await rpc.call("main", "blobstore.putText", markdown);
+  const { digest, size } = await rpc.call("main", "blobstore.putText", [markdown]);
   // The panel stays open by default; close it (or hand it back) when done:
   // await browser.close();
   return { title, digest, size, head: markdown.slice(0, 5000) };
@@ -229,7 +229,7 @@ cheap fast model — your worker's API surface usually exposes a chat call:
 ```
 eval({ code: `
   // Pull the full markdown by digest
-  const md = await rpc.call("main", "blobstore.getText", "<digest>");
+  const md = await rpc.call("main", "blobstore.getText", ["<digest>"]);
   // Then ask a fast model to summarize it
   // (exact import depends on your workspace; check the api-integrations skill)
   // ... return the summary

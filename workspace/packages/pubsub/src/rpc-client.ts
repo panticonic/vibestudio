@@ -146,7 +146,7 @@ interface PresencePayload {
 
 export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMetadata> {
   rpc: {
-    call<R = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<R>;
+    call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;
     onEvent(event: string, listener: (fromId: string, payload: unknown) => void): () => void;
     selfId: string;
   };
@@ -174,7 +174,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   let doTargetPromise: Promise<string> | null = null;
   const getDoTarget = () => {
     doTargetPromise ??= rpc
-      .call<ResolvedService>("main", "workers.resolveService", CHANNEL_SERVICE_PROTOCOL, channel)
+      .call<ResolvedService>("main", "workers.resolveService", [CHANNEL_SERVICE_PROTOCOL, channel])
       .then((service) => {
         if (service.kind !== "durable-object" || !service.targetId) {
           throw new Error("Channel service must resolve to a Durable Object service");
@@ -184,7 +184,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     return doTargetPromise;
   };
   const callChannel = async <R = unknown>(method: string, ...args: unknown[]): Promise<R> =>
-    rpc.call<R>(await getDoTarget(), method, ...args);
+    rpc.call<R>(await getDoTarget(), method, args);
 
   // Convert MethodDefinitions to MethodAdvertisements
   function toMethodAdvertisements(methods: Record<string, MethodDefinition>): MethodAdvertisement[] {

@@ -119,7 +119,7 @@ const sandbox = createRpcSandboxConfig(rpc);
 const session = await HeadlessSession.createWithAgent({
   config: { serverUrl: gatewayUrl, token, clientId: `worker-${objectKey}` },
   sandbox,
-  rpcCall: (t, m, ...a) => rpc.call(t, m, ...a),
+  rpcCall: (t, m, a) => rpc.call(t, m, a),
   source: "workers/agent-worker",
   className: "AiChatWorker",
   contextId,

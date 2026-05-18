@@ -31,6 +31,6 @@ export function createScopeService(deps: { rpc: RpcCallerLike }): ServiceDefinit
       get: { args: z.tuple([z.string()]) },
       list: { args: z.tuple([z.string()]) },
     },
-    handler: (_ctx, method, args) => deps.rpc.call(doTargetId(ref), method, ...args),
+    handler: (_ctx, method, args) => deps.rpc.call(doTargetId(ref), method, args),
   };
 }

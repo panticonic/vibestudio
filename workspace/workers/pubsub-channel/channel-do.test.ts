@@ -440,16 +440,18 @@ describe("PubSubChannel", () => {
       expect((instance as any)._rpc.call).toHaveBeenCalledWith(
         "do:workers/agent-worker:AiChatWorker:agent-1",
         "onChannelEvent",
-        "test-channel",
-        expect.objectContaining({
-          type: "method-result",
-          payload: expect.objectContaining({
-            callId: "55555555-5555-4555-8555-555555555555",
-            content: { ok: true },
-            complete: true,
-            isError: false,
+        [
+          "test-channel",
+          expect.objectContaining({
+            type: "method-result",
+            payload: expect.objectContaining({
+              callId: "55555555-5555-4555-8555-555555555555",
+              content: { ok: true },
+              complete: true,
+              isError: false,
+            }),
           }),
-        }),
+        ],
       );
       expect((instance as any)._rpc.emit).toHaveBeenCalledWith(
         "do:workers/agent-worker:AiChatWorker:agent-1",
@@ -651,16 +653,18 @@ describe("PubSubChannel", () => {
       expect(mockRpc.call).toHaveBeenCalledWith(
         "do:workers/agent-worker:AiChatWorker:agent-1",
         "onChannelEvent",
-        "test-channel",
-        expect.objectContaining({
-          type: "method-result",
-          payload: expect.objectContaining({
-            callId: "33333333-3333-4333-8333-333333333333",
-            content: { ok: true },
-            complete: true,
-            isError: false,
+        [
+          "test-channel",
+          expect.objectContaining({
+            type: "method-result",
+            payload: expect.objectContaining({
+              callId: "33333333-3333-4333-8333-333333333333",
+              content: { ok: true },
+              complete: true,
+              isError: false,
+            }),
           }),
-        }),
+        ],
       );
       for (const participantId of [
         "do:workers/agent-worker:AiChatWorker:agent-1",
@@ -736,16 +740,18 @@ describe("PubSubChannel", () => {
       expect(mockRpc.call).toHaveBeenCalledWith(
         "do:workers/agent-worker:AiChatWorker:agent-1",
         "onChannelEvent",
-        "test-channel",
-        expect.objectContaining({
-          type: "method-result",
-          payload: expect.objectContaining({
-            callId: "call-1",
-            content: { ok: true, result: 42 },
-            complete: true,
-            isError: false,
+        [
+          "test-channel",
+          expect.objectContaining({
+            type: "method-result",
+            payload: expect.objectContaining({
+              callId: "call-1",
+              content: { ok: true, result: 42 },
+              complete: true,
+              isError: false,
+            }),
           }),
-        }),
+        ],
       );
 
       expect(mockRpc.emit).toHaveBeenCalledWith(

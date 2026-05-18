@@ -450,8 +450,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     super(ctx, env);
 
     const lazyRpc = {
-      call: <T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T> => {
-        return this.rpc.call<T>(targetId, method, ...args);
+      call: <T = unknown>(targetId: string, method: string, args: unknown[]): Promise<T> => {
+        return this.rpc.call<T>(targetId, method, args);
       },
       streamCall: (
         targetId: string,
@@ -561,9 +561,9 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     return async () => {
       const modelBaseUrl = this.getModelBaseUrl();
       this.installUrlBoundModelFetchProxy(modelBaseUrl);
-      const credential = await this.rpc.call<ModelCredentialSummary | null>("main", "credentials.resolveCredential", {
-        url: modelBaseUrl,
-      });
+      const credential = await this.rpc.call<ModelCredentialSummary | null>("main", "credentials.resolveCredential", [
+        { url: modelBaseUrl },
+      ]);
       if (!credential) {
         await this.recordModelCredentialInterruption(channelId, providerId, modelBaseUrl);
         await this.emitModelCredentialRequiredCard(channelId, providerId, modelBaseUrl);
@@ -690,15 +690,17 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     return this.rpc.call<ModelCredentialSummary>(
       "main",
       "credentials.connect",
-      browserHandoffCallerId
-        ? {
-          spec,
-          handoffTarget: {
-            callerId: browserHandoffCallerId,
-            callerKind: browserHandoffCallerKind,
-          },
-        }
-        : spec,
+      [
+        browserHandoffCallerId
+          ? {
+            spec,
+            handoffTarget: {
+              callerId: browserHandoffCallerId,
+              callerKind: browserHandoffCallerKind,
+            },
+          }
+          : spec,
+      ],
     );
   }
 
@@ -867,7 +869,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     // across repeated subscribes to the same context.
     if (!this._fsContextBound.has(opts.contextId)) {
       try {
-        await this.rpc.call<void>("main", "fs.bindContext", opts.contextId);
+        await this.rpc.call<void>("main", "fs.bindContext", [opts.contextId]);
         this._fsContextBound.add(opts.contextId);
       } catch (err) {
         console.warn(
@@ -1099,7 +1101,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     // own `Session<GadSessionMetadata>` backed by this adapter; the worker
     // no longer maintains a messageCache or intercepts gad RPCs.
     const gadSessionStorage = new GadSessionStorage({
-      rpc: { call: (target, method, ...args) => this.rpc.call(target, method, ...args) },
+      rpc: { call: (target: string, method: string, args: unknown[]) => this.rpc.call(target, method, args) },
       branchId: gadBranchIdForChannel(channelId),
       channelId,
       contextId: this.subscriptions.getContextId(channelId),
@@ -1118,8 +1120,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     // before the PiRunner type definition is updated upstream.
     const runnerOptions = {
       rpc: {
-        call: <T = unknown>(target: string, method: string, ...args: unknown[]): Promise<T> => {
-          return this.rpc.call<T>(target, method, ...args);
+        call: <T = unknown>(target: string, method: string, args: unknown[]): Promise<T> => {
+          return this.rpc.call<T>(target, method, args);
         },
         streamCall: (
           target: string,
@@ -1183,7 +1185,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
           const c = await this.rpc.call<{ id: string } | null>(
             "main",
             "credentials.resolveCredential",
-            { url: probeUrl },
+            [{ url: probeUrl }],
           );
           return c !== null;
         } catch {
@@ -2098,9 +2100,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         }>(
           "main",
           "extensions.invoke",
-          IMAGE_SERVICE_EXTENSION,
-          "resize",
-          [bytes, att.mimeType, { maxWidth: 2000, maxHeight: 2000 }],
+          [IMAGE_SERVICE_EXTENSION, "resize", [bytes, att.mimeType, { maxWidth: 2000, maxHeight: 2000 }]],
         );
         images.push({
           type: "image",

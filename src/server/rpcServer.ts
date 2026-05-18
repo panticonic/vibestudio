@@ -1692,7 +1692,7 @@ export class RpcServer {
       if (wsClient?.ws.readyState === WebSocket.OPEN) {
         const bridge = this.connections.getBridge(targetId, wsClient.connectionId);
         if (bridge) {
-          return await bridge.call(targetId, method, ...args);
+          return await bridge.call(targetId, method, args);
         }
       }
 
@@ -1704,7 +1704,7 @@ export class RpcServer {
             `Target ${targetId}:${targetConnectionId} reconnected but bridge missing`
           );
         }
-        return await bridge.call(targetId, method, ...args);
+        return await bridge.call(targetId, method, args);
       }
 
       const outcome = await this.awaitReconnectIfPending(targetId);
@@ -1714,7 +1714,7 @@ export class RpcServer {
           if (!bridge) {
             throw new Error(`Target ${targetId} reconnected but bridge missing`);
           }
-          return await bridge.call(targetId, method, ...args);
+          return await bridge.call(targetId, method, args);
         }
         case "server-shutdown":
           throw createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN");

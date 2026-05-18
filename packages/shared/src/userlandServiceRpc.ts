@@ -1,5 +1,5 @@
 export interface RpcCallerLike {
-  call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
+  call<T = unknown>(targetId: string, method: string, args: unknown[]): Promise<T>;
 }
 
 export interface DORefParam {
@@ -63,8 +63,7 @@ export async function resolveDurableObjectService(
   const service = await rpc.call<ResolvedUserlandService>(
     "main",
     "workers.resolveService",
-    query,
-    objectKey ?? null,
+    [query, objectKey ?? null],
   );
   if (service.kind !== "durable-object") {
     throw new Error(`Service '${query}' does not expose a Durable Object RPC target`);
@@ -86,7 +85,7 @@ export function createDurableObjectServiceClient(
     resolve,
     async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
       const service = await resolve();
-      return rpc.call<T>(service.targetId, method, ...args);
+      return rpc.call<T>(service.targetId, method, args);
     },
   };
 }

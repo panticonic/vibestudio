@@ -5,20 +5,18 @@
  * Uses stateArgs.repoPath to show the git status and commit UI.
  * "Continue Build" calls panel.retryDirtyBuild which navigates back to trigger rebuild.
  */
-
 import { createRoot } from "react-dom/client";
 import "@radix-ui/themes/styles.css";
 import { Theme } from "@radix-ui/themes";
 import { id, rpc, getStateArgs } from "@workspace/runtime";
 import { usePanelTheme } from "@workspace/react";
 import { DirtyRepoView } from "./DirtyRepoView";
-
 function App() {
   const theme = usePanelTheme();
   const { repoPath } = getStateArgs<{ repoPath: string }>();
 
   const handleRetryBuild = () => {
-    void rpc.call("main", "panel.retryDirtyBuild", id).catch((err: unknown) => console.error("[DirtyRepo] Failed to retry build:", err));
+    void rpc.call("main", "panel.retryDirtyBuild", [id]).catch((err: unknown) => console.error("[DirtyRepo] Failed to retry build:", err));
   };
 
   return (
@@ -27,6 +25,6 @@ function App() {
     </Theme>
   );
 }
-
 const root = document.getElementById("root");
-if (root) createRoot(root).render(<App />);
+if (root)
+    createRoot(root).render(<App />);

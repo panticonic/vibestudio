@@ -389,7 +389,7 @@ extensions.on("@workspace-extensions/git-tools", "indexed", (payload) => {
 });
 ```
 
-`extensions.use()` returns a `Proxy` that turns property access into `rpc.call("extensions", "invoke", [name, prop, args])`. The proxy's `get` trap returns `undefined` for `then`, `Symbol.toPrimitive`, and other well-known protocol properties. Calls to a non-existent or stopped extension fail with `ENOEXT` at invocation time; the proxy itself is always defined.
+`extensions.use()` returns a `Proxy` that turns property access into `rpc.call("main", "extensions.invoke", [name, prop, args])`. The proxy's `get` trap returns `undefined` for `then`, `Symbol.toPrimitive`, and other well-known protocol properties. Calls to a non-existent or stopped extension fail with `ENOEXT` at invocation time; the proxy itself is always defined.
 
 Extension-to-extension calls are intentionally not delegated as the original panel/worker. The downstream extension sees the immediate extension caller and decides whether to serve that extension. If a panel/worker approval is needed for the composite operation, the upstream extension requests it before making the downstream call.
 
@@ -847,7 +847,7 @@ Listed here so future readers don't waste time considering them:
 - **Auth and identity** (`authService`, `tokensService`, `deviceAuthStore`, `codeIdentityResolver`) — every RPC's caller identity flows through these.
 - **Build pipeline** (`buildService`, buildV2) — builds the extensions.
 - **Worker lifecycle** (`workerdService`, `workerService`, `workerLogService`) — co-equal infrastructure.
-- **Panel orchestration** (`panelService`, `panelPersistenceService`).
+- **Panel orchestration** (`workspace-sync`, `PanelStoreDO`).
 - **Core services other services use** (`blobstoreService`, `scopeService`, `metaService`, `notificationService`).
 - **Credential storage** (`credentialService`, `credentialLifecycle`) — host-rooted trust. Additional credential *backends* (hardware tokens, etc.) could be extensions; the core stays.
 - **`auditService`** — security audit log. Could technically be an extension, but making auditing optional weakens it as a property. Keep in-host.

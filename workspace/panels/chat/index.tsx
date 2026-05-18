@@ -80,8 +80,7 @@ async function getChannelDOParticipants(channelId: string): Promise<ChannelDORef
   const channelService = await rpc.call<{ kind: string; targetId?: string }>(
     "main",
     "workers.resolveService",
-    CHANNEL_SERVICE_PROTOCOL,
-    channelId,
+    [CHANNEL_SERVICE_PROTOCOL, channelId],
   );
   if (channelService.kind !== "durable-object" || !channelService.targetId) {
     throw new Error("Channel service must resolve to a Durable Object service");
@@ -89,6 +88,7 @@ async function getChannelDOParticipants(channelId: string): Promise<ChannelDORef
   const participants = await rpc.call<ChannelParticipant[]>(
     channelService.targetId,
     "getParticipants",
+    [],
   );
   return participants.map((p) => parseDoTargetId(p.participantId)).filter((p): p is ChannelDORef => p !== null);
 }
@@ -131,14 +131,12 @@ async function subscribeDOToChannel(
   const target = await rpc.call<{ targetId: string }>(
     "main",
     "workers.resolveDurableObject",
-    source,
-    className,
-    objectKey,
+    [source, className, objectKey],
   );
   return rpc.call<{ ok: boolean; participantId?: string }>(
     target.targetId,
     "subscribeChannel",
-    { channelId, contextId: channelContextId, config, replay },
+    [{ channelId, contextId: channelContextId, config, replay }],
   );
 }
 
@@ -152,11 +150,9 @@ async function unsubscribeDOFromChannel(
   const target = await rpc.call<{ targetId: string }>(
     "main",
     "workers.resolveDurableObject",
-    source,
-    className,
-    objectKey,
+    [source, className, objectKey],
   );
-  await rpc.call(target.targetId, "unsubscribeChannel", channelId);
+  await rpc.call(target.targetId, "unsubscribeChannel", [channelId]);
 }
 
 export default function ChatPanel() {
@@ -304,7 +300,7 @@ export default function ChatPanel() {
   // Fetch available worker sources (DO agents) on mount
   const [availableAgents, setAvailableAgents] = useState<Array<{ id: string; name: string; proposedHandle: string; className: string }>>([]);
   useEffect(() => {
-    rpc.call<WorkerSourceEntry[]>("main", "workers.listSources").then((sources) => {
+    rpc.call<WorkerSourceEntry[]>("main", "workers.listSources", []).then((sources) => {
       const agents: Array<{ id: string; name: string; proposedHandle: string; className: string }> = [];
       for (const source of sources) {
         for (const cls of source.classes) {

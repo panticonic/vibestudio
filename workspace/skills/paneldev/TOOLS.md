@@ -105,7 +105,7 @@ Available via `import { ... } from "@workspace/runtime"` and `import { ... } fro
 
 | API | Description |
 |-----|-------------|
-| `rpc` | RPC bridge for calling main-process services via `rpc.call(target, method, ...args)` |
+| `rpc` | RPC bridge for calling services via `rpc.call(target, method, args)` |
 | `openPanel(source, opts?)` | Open any panel — URLs become browser panels, source paths open workspace panels |
 | `buildPanelLink(source, opts)` | Build a URL for panel navigation (low-level — prefer `openPanel`) |
 | `focusPanel(panelId)` | Focus an existing panel by ID (does NOT open new panels) |
@@ -140,7 +140,7 @@ The shell will show the user an extension-management approval prompt. If the use
 
 ### RPC Services
 
-Called via `rpc.call("main", "service.method", ...args)`:
+Called via `rpc.call("main", "service.method", args)`:
 
 #### workerd (Worker Management)
 
