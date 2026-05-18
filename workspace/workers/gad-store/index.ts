@@ -182,8 +182,12 @@ function sortJson(value: unknown): unknown {
   return out;
 }
 
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
 async function sha256(domain: string, value: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(JSON.stringify(sortJson(value)));
+  const bytes = new TextEncoder().encode(canonicalJson(value));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `${domain}:${hex}`;
@@ -871,8 +875,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   async appendGadEvents(input: { events: GadEventSpec[] }): Promise<{ eventIds: string[] }> {
     this.ensureReady();
+    const toAppend: Array<{ event: GadEventSpec; eventHash: string; prevEventHash: string | null; projection: MutationObservedPlan | null }> = [];
+    let prevEventHash = asString(this.sql.exec(`SELECT event_hash FROM gad_events ORDER BY event_seq DESC LIMIT 1`).toArray()[0]?.["event_hash"]);
     for (const event of input.events) {
-      await this.appendGadEvent(event);
+      const existing = this.sql.exec(`SELECT event_hash, kind, anchor_kind, anchor_id, payload_json, metadata_json FROM gad_events WHERE event_id = ?`, event.eventId).toArray()[0] as JsonRecord | undefined;
+      if (existing) {
+        this.assertExistingEventMatches(event, existing);
+        const existingHash = asString(existing["event_hash"]);
+        if (existingHash === prevEventHash) prevEventHash = existingHash;
+        continue;
+      }
+      const eventHash = await this.hashGadEvent(event, prevEventHash);
+      const projection = await this.prepareGadProjection(event);
+      toAppend.push({ event, eventHash, prevEventHash, projection });
+      prevEventHash = eventHash;
+    }
+    if (toAppend.length > 0) {
+      this.transaction(() => {
+        for (const item of toAppend) this.insertGadEvent(item.event, item.eventHash, item.prevEventHash, item.projection);
+      });
     }
     return { eventIds: input.events.map((event) => event.eventId) };
   }
@@ -1310,9 +1331,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   private async appendGadEvent(event: GadEventSpec): Promise<void> {
-    const prev = this.sql.exec(`SELECT event_hash FROM gad_events ORDER BY event_seq DESC LIMIT 1`).toArray()[0] as JsonRecord | undefined;
-    const eventHash = await sha256("gad-event-v1", {
-      prevEventHash: asString(prev?.["event_hash"]),
+    await this.appendGadEvents({ events: [event] });
+  }
+
+  private hashGadEvent(event: GadEventSpec, prevEventHash: string | null): Promise<string> {
+    return sha256("gad-event-v1", {
+      prevEventHash,
       eventId: event.eventId,
       kind: event.kind,
       anchorKind: event.anchorKind ?? null,
@@ -1320,22 +1344,33 @@ export class GadWorkspaceDO extends DurableObjectBase {
       payloadCanonical: event.payload,
       metadataCanonical: event.metadata ?? null,
     });
-    const projection = await this.prepareGadProjection(event);
-    this.transaction(() => {
-      this.sql.exec(
-        `INSERT INTO gad_events (event_id, event_hash, prev_event_hash, kind, anchor_kind, anchor_id, payload_json, metadata_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        event.eventId,
-        eventHash,
-        asString(prev?.["event_hash"]),
-        event.kind,
-        event.anchorKind ?? null,
-        event.anchorId ?? null,
-        JSON.stringify(event.payload),
-        json(event.metadata),
-      );
-      this.applyGadProjection(event, projection);
-    });
+  }
+
+  private insertGadEvent(event: GadEventSpec, eventHash: string, prevEventHash: string | null, projection: MutationObservedPlan | null): void {
+    this.sql.exec(
+      `INSERT INTO gad_events (event_id, event_hash, prev_event_hash, kind, anchor_kind, anchor_id, payload_json, metadata_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      event.eventId,
+      eventHash,
+      prevEventHash,
+      event.kind,
+      event.anchorKind ?? null,
+      event.anchorId ?? null,
+      JSON.stringify(event.payload),
+      json(event.metadata),
+    );
+    this.applyGadProjection(event, projection);
+  }
+
+  private assertExistingEventMatches(event: GadEventSpec, existing: JsonRecord): void {
+    const metadata = existing["metadata_json"] == null ? null : parseRecord(asString(existing["metadata_json"]));
+    const same =
+      existing["kind"] === event.kind &&
+      (asString(existing["anchor_kind"]) ?? null) === (event.anchorKind ?? null) &&
+      (asString(existing["anchor_id"]) ?? null) === (event.anchorId ?? null) &&
+      canonicalJson(parseRecord(asString(existing["payload_json"]))) === canonicalJson(event.payload) &&
+      canonicalJson(metadata) === canonicalJson(event.metadata ?? null);
+    if (!same) throw new Error(`GAD event id collision with different content: ${event.eventId}`);
   }
 
   private async prepareGadProjection(event: GadEventSpec): Promise<MutationObservedPlan | null> {
@@ -1598,9 +1633,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
       return;
     }
     const existing = this.sql.exec(`SELECT status FROM gad_dispatches WHERE dispatch_call_id = ?`, id).toArray()[0] as JsonRecord | undefined;
-    if (!existing) throw new Error(`Cannot ${event.kind.replace("dispatch_", "")} unknown dispatch: ${id}`);
+    const action = event.kind === "dispatch_resolved" ? "resolve" : "abandon";
+    if (!existing) throw new Error(`Cannot ${action} unknown dispatch: ${id}`);
     if (existing["status"] !== "pending") {
-      throw new Error(`Cannot ${event.kind.replace("dispatch_", "")} dispatch ${id} from status ${String(existing["status"])}`);
+      throw new Error(`Cannot ${action} dispatch ${id} from status ${String(existing["status"])}`);
     }
     this.sql.exec(
       `UPDATE gad_dispatches

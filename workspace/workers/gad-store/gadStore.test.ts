@@ -348,6 +348,53 @@ describe("GadWorkspaceDO clean Pi/GAD persistence", () => {
     })).rejects.toThrow(/more than once/u);
   });
 
+  it("appends GAD event batches atomically and treats identical retries as idempotent", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const badBatch = {
+      events: [
+        {
+          eventId: "atomic-system",
+          kind: "system_event",
+          payload: { kind: "audit" },
+        },
+        {
+          eventId: "atomic-resolve-missing",
+          kind: "dispatch_resolved",
+          payload: { dispatchCallId: "missing", resultEntryId: "entry" },
+        },
+      ],
+    };
+    await expect(call("appendGadEvents", badBatch)).rejects.toThrow(/unknown dispatch/u);
+    expect(await call<Array<Record<string, unknown>>>("listGadEvents", {})).toHaveLength(0);
+
+    const goodBatch = {
+      events: [
+        {
+          eventId: "idempotent-pending",
+          kind: "dispatch_pending",
+          payload: { dispatchCallId: "dispatch-idempotent", toolCallId: "dispatch-idempotent" },
+        },
+        {
+          eventId: "idempotent-resolved",
+          kind: "dispatch_resolved",
+          payload: { dispatchCallId: "dispatch-idempotent", resultEntryId: "entry" },
+        },
+      ],
+    };
+    await call("appendGadEvents", goodBatch);
+    await call("appendGadEvents", goodBatch);
+    const events = await call<Array<Record<string, unknown>>>("listGadEvents", {});
+    expect(events.map((event) => event["event_id"])).toEqual(["idempotent-pending", "idempotent-resolved"]);
+
+    await expect(call("appendGadEvents", {
+      events: [{
+        eventId: "idempotent-resolved",
+        kind: "dispatch_resolved",
+        payload: { dispatchCallId: "dispatch-idempotent", resultEntryId: "different-entry" },
+      }],
+    })).rejects.toThrow(/id collision/u);
+  });
+
   it("tracks index jobs through claim, retry, failure, requeue, and completion", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const created = await call<{ id: number }>("enqueueGadIndexJob", {

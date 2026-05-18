@@ -442,6 +442,7 @@ export class PiRunner {
           anchorId: toolCallId,
           payload: {
             toolCallId,
+            dispatchCallId: toolCallId,
             dispatchKind: "model-tool-call",
             methodName: this.toolNameFromBlock(block) ?? "unknown",
             blockIndex,
