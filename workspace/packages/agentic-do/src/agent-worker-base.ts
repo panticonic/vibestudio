@@ -1083,8 +1083,14 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         call: <T = unknown>(target: string, method: string, ...args: unknown[]): Promise<T> => {
           return this.rpc.call<T>(target, method, ...args);
         },
-        streamCall: (target, method, args, options) =>
-          this.rpc.streamCall(target, method, args, options),
+        streamCall: (
+          target: string,
+          method: string,
+          args: unknown[],
+          options?: { signal?: AbortSignal },
+        ): Promise<Response> => {
+          return this.rpc.streamCall(target, method, args, options);
+        },
       },
       fs: this.fs,
       uiCallbacks: this.buildUICallbacks(channelId),
@@ -1114,7 +1120,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         this.askUser(channelId, toolCallId, params, signal),
       model: this.getModel(),
       getApiKey: this.getApiKeyForChannel(channelId),
-      hasCredentialForOrigin: async (originUrl) => {
+      hasCredentialForOrigin: async (originUrl: string) => {
         try {
           // `resolveCredential` matches the probe URL against stored
           // audience patterns. Model credentials are stored against
