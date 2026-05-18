@@ -221,7 +221,7 @@ await scope.git.push(scope.checkoutDir, { remote: "origin", ref: branchName });
 // Then rebuild if the fix touched workspace runtime repos.
 // Plain projects such as projects/natstack are not live build inputs.
 if (!scope.checkoutDir.startsWith("projects/")) {
-  const buildResult = await chat.rpc.call("main", "build.recompute");
+  const buildResult = await chat.rpc.call("main", "build.recompute", []);
   console.log("Build recomputed:", buildResult);
 }
 

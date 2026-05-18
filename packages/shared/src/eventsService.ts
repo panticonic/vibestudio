@@ -8,7 +8,7 @@
  *
  * Usage:
  *   // Subscribe (from shell/panel/worker)
- *   rpc.call("main", "events.subscribe", "panel-tree-updated");
+ *   rpc.call("main", "events.subscribe", ["panel-tree-updated"]);
  *
  *   // Listen for events
  *   rpc.on("event:panel-tree-updated", (data) => { ... });

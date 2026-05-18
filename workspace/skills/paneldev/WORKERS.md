@@ -13,7 +13,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `rpc` | value |  |  |
 | `fs` | value |  |  |
 | `workers` | namespace | `create`, `destroy`, `update`, `list`, `status`, `listInstanceSources`, `listServices`, `resolveService`, `getPort`, `restartAll`, `cloneDO`, `destroyDO` |  |
-| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `setInitPanels`, `switchTo`, `units` |  |
+| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `units` |  |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp` |  |
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote`, `client` |  |
 | `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `ensureBranch`, `recordSession`, `endSession`, `recordTurn`, `beginToolCall`, `completeToolCall`, `recordRead`, `recordMutation`, `listBranches`, `getBranch`, `listBranchFiles`, `forkBranch`, `createBranchSnapshot`, `listBranchSnapshots`, `recordPlan`, `supersedePlan`, `listPlans`, `getPlanChain`, `createChunk`, `addChunkMention`, `relateChunk`, `listChunks`, `getChunkMentions`, `getChunksFor`, `getRelationsFor`, `walkDependencies`, `upsertChunkEmbedding`, `upsertTurnEmbedding`, `findSimilarChunks`, `findSimilarTurns`, `parseFileVersion`, `getStructures`, `findParsedByName`, `getStructuresInRange`, `getSupportedLanguages`, `indexTurn`, `indexFileVersion`, `indexSession`, `getReviewContext`, `setBlobPolicy`, `getBlobPolicy`, `redactBlob`, `listBlobReferences`, `revokeRawSqlWriteApproval` |  |
@@ -69,7 +69,7 @@ Resolve and call it:
 ```ts
 const svc = await workers.resolveService("example.my-store.v1", "tenant-1");
 if (svc.kind !== "durable-object") throw new Error("Expected DO service");
-await rpc.call(svc.targetId, "methodName", arg);
+await rpc.call(svc.targetId, "methodName", [arg]);
 ```
 
 **Stateless worker service**:

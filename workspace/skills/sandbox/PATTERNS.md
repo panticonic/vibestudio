@@ -337,7 +337,7 @@ export default function SqlRunner({ props, chat }) {
     try {
       Use a Durable Object method backed by `this.sql` for persistent data.
       if (!handle) setHandle(h);
-      const result = await chat.rpc.call("main", "db.query", h, sql);
+      const result = await chat.rpc.call("main", "db.query", [h, sql]);
       setRows(result);
     } catch (e) { setError(e.message); }
   }, [sql, handle]);

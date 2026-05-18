@@ -72,7 +72,7 @@ export const workerTests: TestCase[] = [
     name: "call-do-method",
     description: "Call a method on a Durable Object worker",
     category: "workers",
-    prompt: `List the available worker sources using workers.listInstanceSources() and find one that has durable object classes. Then call a DO method on it using RPC.\n\nimport { workers, rpc } from "@workspace/runtime";\nconst sources = await workers.listInstanceSources();\n// Find a source with durable classes, then:\n// await rpc.call("workers", "callDO", source, className, objectKey, methodName, ...args)\nTell me what sources are available and which have DOs.`,
+    prompt: `List the available worker sources using workers.listInstanceSources() and find one that has durable object classes. Then call a DO method on it using RPC.\n\nimport { workers, rpc } from "@workspace/runtime";\nconst sources = await workers.listInstanceSources();\n// Find a source with durable classes, then:\n// await rpc.call("main", "workers.callDO", [source, className, objectKey, methodName, ...args])\nTell me what sources are available and which have DOs.`,
     validate: (result) => {
       const msg = findLastAgentMessage(result);
       if (!msg) return { passed: false, reason: "No agent response received" };

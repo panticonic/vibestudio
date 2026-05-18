@@ -229,8 +229,8 @@ Metadata calls work via the normal RPC bridge:
 ```typescript
 import { rpc } from "@workspace/runtime";
 
-const exists = await rpc.call("main", "blobstore.has", digest);
-const meta = await rpc.call("main", "blobstore.stat", digest); // { size, mtime } | null
+const exists = await rpc.call("main", "blobstore.has", [digest]);
+const meta = await rpc.call("main", "blobstore.stat", [digest]); // { size, mtime } | null
 ```
 
 Binary I/O happens on the gateway HTTP routes — `PUT /_r/s/blobstore/blob`
