@@ -9,6 +9,7 @@ import {
   type WorkerCreateOptions,
 } from "./workerdManager.js";
 import { spawn } from "child_process";
+import { findServicePort } from "@natstack/port-utils";
 import { PrincipalRegistry } from "@natstack/shared/principalRegistry";
 
 // Mock child_process to prevent actual workerd spawning
@@ -73,6 +74,7 @@ function createMockDeps(overrides: Partial<WorkerdManagerDeps> = {}): WorkerdMan
     statePath: "/tmp/test-workspace-state",
     getProxyPort: () => 49444,
     getWorkerdGatewayToken: () => "mock-workerd-gateway-token",
+    workerdStartupReadyTimeoutMs: 50,
     principalRegistry,
     ...overrides,
   };
@@ -85,6 +87,21 @@ function defaultCreateOptions(overrides: Partial<WorkerCreateOptions> = {}): Wor
     ...overrides,
   };
 }
+
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response(null, { status: 204 }))
+  );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.mocked(findServicePort).mockImplementation(
+    async (service: Parameters<typeof findServicePort>[0]) =>
+      service === "workerdInspector" ? 49652 : 49552
+  );
+});
 
 describe("WorkerdManager", () => {
   // -------------------------------------------------------------------------
@@ -301,6 +318,35 @@ describe("WorkerdManager", () => {
       );
       expect(mgr.getWorkerInspectorUrl("workers/hello")).toBe("http://127.0.0.1:49652");
       expect(mgr.getWorkerInspectorUrl("workers/missing")).toBeNull();
+    });
+
+    it("retries startup on a fresh port when the router never becomes ready", async () => {
+      let workerdPortCalls = 0;
+      vi.mocked(findServicePort).mockImplementation(
+        async (service: Parameters<typeof findServicePort>[0]) => {
+          if (service === "workerdInspector") return 49652;
+          return workerdPortCalls++ === 0 ? 49552 : 49553;
+        }
+      );
+      const fetchMock = vi.fn(async (url: string | URL | Request) => {
+        const href = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        if (href.includes(":49552/")) throw new TypeError("fetch failed");
+        return new Response(null, { status: 204 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.createInstance(defaultCreateOptions());
+
+      expect(mgr.getPort()).toBe(49553);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:49552/__natstack_workerd_ready",
+        expect.any(Object)
+      );
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:49553/__natstack_workerd_ready",
+        expect.any(Object)
+      );
     });
   });
 

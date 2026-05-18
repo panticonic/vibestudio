@@ -133,6 +133,8 @@ export interface WorkerdManagerDeps {
   getManifestRoutes?: (source: string) => ManifestRouteDecl[];
   getProxyPort: (caller: VerifiedCaller) => Promise<number | null> | number | null;
   getWorkerdGatewayToken: () => string;
+  /** Override for tests; production uses the default router readiness window. */
+  workerdStartupReadyTimeoutMs?: number;
   principalRegistry?: PrincipalRegistry;
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
 }
@@ -966,6 +968,25 @@ ${doBlock}${cases.join("\n")}
 
     if (this.instances.size === 0 && this.doServices.size === 0) return;
 
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await this.startWorkerdOnce();
+        return;
+      } catch (err) {
+        lastError = err;
+        log.warn(
+          `workerd startup attempt ${attempt} failed${attempt < 3 ? "; retrying with a fresh port" : ""}:`,
+          err
+        );
+        await this.stopWorkerd();
+      }
+    }
+
+    throw lastError instanceof Error ? lastError : new Error("workerd failed to start");
+  }
+
+  private async startWorkerdOnce(): Promise<void> {
     const config = await this.generateConfig();
     const configPath = path.join(this.configDir, "config.capnp");
     const capnpText = this.toCapnpText(config as Record<string, unknown>);
@@ -997,7 +1018,10 @@ ${doBlock}${cases.join("\n")}
       if (line) log.warn(`[workerd] ${line}`);
     });
 
-    // Wait for startup, detecting early failures (ENOENT, crash, etc.)
+    // Wait for startup readiness, detecting early failures (ENOENT, bind
+    // conflicts, crashes, etc.). A surviving process is not enough: workerd
+    // may print a fatal bind error and exit just after spawn, and DO dispatch
+    // must not race ahead until the router accepts HTTP.
     await new Promise<void>((resolve, reject) => {
       let settled = false;
 
@@ -1022,12 +1046,12 @@ ${doBlock}${cases.join("\n")}
       assertPresent(this.process).on("exit", onExit);
       assertPresent(this.process).on("error", onError);
 
-      // If the process survives 500ms, consider it started
-      setTimeout(() => {
-        if (!settled) {
+      this.waitForHttpReady(this.deps.workerdStartupReadyTimeoutMs ?? 5_000).then(
+        () => {
+          if (settled) return;
           settled = true;
           // Keep the exit/error handlers for ongoing monitoring, but replace
-          // them with non-rejecting versions since the promise is settled
+          // them with non-rejecting versions since the promise is settled.
           this.process?.removeListener("exit", onExit);
           this.process?.removeListener("error", onError);
           this.process?.on("exit", (code, signal) => {
@@ -1039,8 +1063,13 @@ ${doBlock}${cases.join("\n")}
             this.process = null;
           });
           resolve();
+        },
+        (err: unknown) => {
+          if (settled) return;
+          settled = true;
+          reject(err instanceof Error ? err : new Error(String(err)));
         }
-      }, 500);
+      );
     });
 
     log.info(`workerd started on port ${this.port} with ${this.instances.size} worker(s)`);
