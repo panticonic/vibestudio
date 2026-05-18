@@ -73,8 +73,8 @@
       "protobufjs": "^7.5.5"
     },
     "patchedDependencies": {
-      "@earendil-works/pi-agent-core@0.74.1": "patches/@earendil-works__pi-agent-core@0.74.1.patch",
-      "re2@1.24.0": "patches/re2@1.24.0.patch"
+      "re2@1.24.0": "patches/re2@1.24.0.patch",
+      "@earendil-works/pi-agent-core@0.74.1": "patches/@earendil-works__pi-agent-core@0.74.1.patch"
     }
   },
   "devDependencies": {

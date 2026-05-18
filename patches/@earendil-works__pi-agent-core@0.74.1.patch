@@ -1,9 +1,8 @@
 diff --git a/dist/harness/agent-harness.d.ts b/dist/harness/agent-harness.d.ts
-index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000 100644
+index 24eafe939d2a0444dccf82f49b50d5e3d1b826e9..0602180d6d5a3d95765baf473aae7c46dffe4c50 100644
 --- a/dist/harness/agent-harness.d.ts
 +++ b/dist/harness/agent-harness.d.ts
-@@ -31,6 +31,7 @@ export declare class AgentHarness<TSkill extends Skill = Skill, TPromptTemplate
-     private executeTurn;
+@@ -44,6 +44,7 @@ export declare class AgentHarness<TSkill extends Skill = Skill, TPromptTemplate
      prompt(text: string, options?: {
          images?: ImageContent[];
      }): Promise<AssistantMessage>;
@@ -12,7 +11,7 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
      promptFromTemplate(name: string, args?: string[]): Promise<AssistantMessage>;
      steer(text: string, options?: {
 diff --git a/dist/harness/agent-harness.js b/dist/harness/agent-harness.js
-index 0000000000000000000000000000000000000000..0000000000000000000000000000000000000000 100644
+index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..fc95f02b9ffac3d9edcb5a8f624903e6eade4cdf 100644
 --- a/dist/harness/agent-harness.js
 +++ b/dist/harness/agent-harness.js
 @@ -1,5 +1,5 @@
@@ -22,7 +21,7 @@ index 0000000000000000000000000000000000000000..00000000000000000000000000000000
  import { collectEntriesForBranchSummary, generateBranchSummary } from "./compaction/branch-summarization.js";
  import { compact, DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "./compaction/compaction.js";
  import { convertToLlm } from "./messages.js";
-@@ -432,6 +432,61 @@ export class AgentHarness {
+@@ -531,6 +531,60 @@ export class AgentHarness {
              finishRunPromise();
          }
      }
