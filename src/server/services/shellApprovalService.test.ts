@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ServiceError } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceError } from "@natstack/shared/serviceDispatcher";
 import { createApprovalQueue } from "./approvalQueue.js";
 import { createShellApprovalService } from "./shellApprovalService.js";
 import { createPushMetrics } from "./pushMetrics.js";
@@ -60,7 +60,7 @@ describe("shellApprovalService", () => {
     });
 
     await expect(
-      service.handler({ callerId: "shell", callerKind: "shell" }, "resolveUserland", [
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveUserland", [
         "approval-1",
         "allow",
       ])
@@ -68,14 +68,14 @@ describe("shellApprovalService", () => {
     expect(resolveUserland).toHaveBeenCalledWith("approval-1", "allow");
 
     await expect(
-      service.handler({ callerId: "shell", callerKind: "shell" }, "resolveUserland", [
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveUserland", [
         "approval-1",
         "synthetic",
       ])
     ).rejects.toMatchObject({ name: "ServiceError", code: "EINVAL" });
 
     await expect(
-      service.handler({ callerId: "shell", callerKind: "shell" }, "resolveUserland", [
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveUserland", [
         "approval-1",
         "dismiss",
       ])
@@ -101,13 +101,13 @@ describe("shellApprovalService", () => {
     });
 
     await expect(
-      service.handler({ callerId: "shell", callerKind: "shell" }, "resolveUserland", [
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveUserland", [
         "approval-1",
         "allow",
       ])
     ).rejects.toMatchObject({ name: "ServiceError", code: "ENOENT" });
     await expect(
-      service.handler({ callerId: "shell", callerKind: "shell" }, "missing", [])
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "missing", [])
     ).rejects.toBeInstanceOf(ServiceError);
   });
 
@@ -117,7 +117,7 @@ describe("shellApprovalService", () => {
     const service = createShellApprovalService({ approvalQueue, metrics });
     const pendingPromise = approvalQueue.request({
       kind: "capability",
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -126,11 +126,11 @@ describe("shellApprovalService", () => {
     });
     const approvalId = approvalQueue.listPending()[0]!.approvalId;
 
-    await service.handler({ callerId: "shell", callerKind: "shell" }, "resolve", [
+    await service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolve", [
       approvalId,
       "once",
     ]);
-    await service.handler({ callerId: "shell", callerKind: "shell" }, "resolve", [
+    await service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolve", [
       approvalId,
       "deny",
     ]);

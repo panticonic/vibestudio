@@ -29,7 +29,6 @@ import { ServiceError, type ServiceContext } from "@natstack/shared/serviceDispa
 import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { ApprovalPrincipal } from "@natstack/shared/approvals";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
 
 /**
  * Minimal metadata for a skill directory under `<workspace>/skills/<name>/`.
@@ -119,8 +118,6 @@ export interface WorkspaceServiceDeps {
   ) => Promise<WorkspaceUnitLogRecord[]> | WorkspaceUnitLogRecord[];
   /** Queue used to gate userland workspace mutations. */
   approvalQueue?: Pick<ApprovalQueue, "requestUserland">;
-  /** Resolves panel/worker source identity for approval prompts. */
-  codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
 }
 
 export interface WorkspaceUnitStatus {
@@ -178,7 +175,7 @@ type WorkspaceApprovalOperation =
   | "setConfigField";
 
 function isTrustedWorkspaceCaller(ctx: ServiceContext): boolean {
-  return ctx.callerKind === "shell" || ctx.callerKind === "server";
+  return ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server";
 }
 
 function truncateApprovalValue(value: string, max = 200): string {
@@ -203,7 +200,7 @@ function resolveWorkspacePrincipal(
   ctx: ServiceContext,
   method: WorkspaceApprovalOperation
 ): ApprovalPrincipal {
-  if (ctx.callerKind !== "panel" && ctx.callerKind !== "worker") {
+  if (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker") {
     throw new ServiceError(
       "workspace",
       method,
@@ -211,7 +208,7 @@ function resolveWorkspacePrincipal(
       "EACCES"
     );
   }
-  if (!deps.approvalQueue || !deps.codeIdentityResolver) {
+  if (!deps.approvalQueue) {
     throw new ServiceError(
       "workspace",
       method,
@@ -219,20 +216,20 @@ function resolveWorkspacePrincipal(
       "EACCES"
     );
   }
-  const identity = deps.codeIdentityResolver.resolveByCallerId(ctx.callerId);
+  const identity = ctx.caller.code;
   if (!identity) {
     throw new ServiceError(
       "workspace",
       method,
-      `Unknown caller identity: ${ctx.callerId}`,
+      `Unknown caller identity: ${ctx.caller.runtime.id}`,
       "ENOENT"
     );
   }
-  if (identity.callerKind !== ctx.callerKind) {
+  if (identity.callerKind !== ctx.caller.runtime.kind) {
     throw new ServiceError(
       "workspace",
       method,
-      `Caller identity kind mismatch for ${ctx.callerId}`,
+      `Caller identity kind mismatch for ${ctx.caller.runtime.id}`,
       "EACCES"
     );
   }

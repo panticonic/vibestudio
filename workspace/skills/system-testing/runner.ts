@@ -33,8 +33,6 @@ export class HeadlessRunner {
       config: {
         serverUrl: "",
         token: "",
-        // Use the panel's bare ID (not rpc.selfId which has "panel:" prefix).
-        // PubSub events are routed by the RPC bridge using this ID.
         clientId: panelId,
         rpc: rpcConfig,
       },

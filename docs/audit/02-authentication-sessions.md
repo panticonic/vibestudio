@@ -208,12 +208,11 @@ private checkRelayAuth(callerId: string, callerKind: CallerKind, targetId: strin
 }
 ```
 
-Only `panel` callers are subject to the parent/descendant ACL. Any `worker`,
-`shell`, `server`, or `harness` caller can relay arbitrary RPC calls and
-events to any other target (`ws:route` / `ws:panel-rpc` messages, and the
-`type:"call"` / `type:"emit"` variants over HTTP POST `/rpc` at
-`rpcServer.ts:920-929`). For DO / worker targets there is no ACL at all —
-panels too can relay freely to any DO or worker in the process (line 947).
+Authenticated RPC participants can relay arbitrary RPC calls and events to any
+other target (`ws:route` / `ws:panel-rpc` messages, and the `type:"call"` /
+`type:"emit"` variants over HTTP POST `/rpc` at `rpcServer.ts:920-929`).
+This is intentional transport behavior; sensitive recipients must enforce their
+own access filters on receipt.
 
 **Attack scenario.**
 

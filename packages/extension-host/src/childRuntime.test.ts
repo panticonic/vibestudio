@@ -4,14 +4,15 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 describe("extension child runtime", () => {
-  it("routes ctx.workers.callDO through the registered workers service", () => {
+  it("exposes unified RPC for extension userland targets", () => {
     const source = fs.readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), "childRuntime.ts"),
       "utf8",
     );
 
-    expect(source).toContain('"workers.callDO"');
-    expect(source).not.toContain('"worker.callDO"');
+    expect(source).toContain("rpc: {");
+    expect(source).toContain("rpcCall<T>(method, args, targetId)");
+    expect(source.includes("call" + "DO")).toBe(false);
   });
 
   it("supports chunked streaming extension fetch bodies", () => {

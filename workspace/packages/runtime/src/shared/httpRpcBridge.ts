@@ -9,6 +9,7 @@
 import type { RpcBridge } from "@natstack/rpc";
 
 const rpcFetch = globalThis.fetch.bind(globalThis);
+const RPC_RUNTIME_ID_HEADER = "X-Natstack-Runtime-Id";
 
 export interface HttpRpcBridgeConfig {
   selfId: string;
@@ -33,6 +34,7 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
           headers: {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${authToken}`,
+            [RPC_RUNTIME_ID_HEADER]: selfId,
           },
           body: JSON.stringify(payload),
         });
@@ -132,6 +134,7 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
         headers: {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${authToken}`,
+          [RPC_RUNTIME_ID_HEADER]: selfId,
         },
         body: JSON.stringify({ targetId, method, args }),
         signal: options?.signal,
@@ -168,7 +171,7 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
     },
 
     async emit(targetId: string, event: string, payload: unknown): Promise<void> {
-      await postToServer({ type: "emit", targetId, event, payload, fromId: selfId });
+      await postToServer({ type: "emit", targetId, event, payload });
     },
 
     onEvent(event: string, listener: (fromId: string, payload: unknown) => void): () => void {

@@ -4,8 +4,8 @@
  * BridgePanelManager: minimal surface used by bridge handlers (implemented by
  * PanelOrchestrator on Electron and other shell-owned implementations).
  *
- * PanelRelationshipProvider: panel tree relationship queries used by RpcServer
- * for panel-to-panel authorization (implemented by PanelRegistry).
+ * PanelRelationshipProvider: panel tree relationship queries implemented by
+ * PanelRegistry.
  *
  * ServerInfoLike, PanelViewLike, PanelHttpServerLike: narrow dependency
  * abstractions for cross-process wiring.
@@ -36,8 +36,7 @@ export interface BridgePanelManager {
 }
 
 /**
- * Panel tree relationship queries — used by RpcServer for panel-to-panel
- * authorization (determining if one panel is an ancestor/descendant of another).
+ * Panel tree relationship queries used for panel ownership and UI topology.
  */
 export interface PanelRelationshipProvider {
   getPanel(panelId: string): unknown | undefined;

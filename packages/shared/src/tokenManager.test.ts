@@ -89,7 +89,7 @@ describe("TokenManager", () => {
     expect(tm.validateAdminToken("wrong")).toBe(false);
   });
 
-  it("tracks panel parent relationships for relay auth", () => {
+  it("tracks panel parent relationships", () => {
     tm.setPanelParent("root", null);
     tm.setPanelParent("child", "root");
     tm.setPanelParent("grandchild", "child");

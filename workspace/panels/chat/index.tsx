@@ -38,6 +38,7 @@ const PANEL_METADATA = {
 const DEFAULT_WORKER_SOURCE = "workers/agent-worker";
 const DEFAULT_CLASS_NAME = "AiChatWorker";
 const DEFAULT_HANDLE = "ai-chat";
+const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
 
 /** Response shape from workers.listSources */
 interface WorkerSourceEntry {
@@ -45,6 +46,51 @@ interface WorkerSourceEntry {
   source: string;
   title?: string;
   classes: Array<{ className: string }>;
+}
+
+interface ChannelParticipant {
+  participantId: string;
+  metadata: Record<string, unknown>;
+}
+
+interface ChannelDORef {
+  source: string;
+  className: string;
+  objectKey: string;
+}
+
+function parseDoTargetId(participantId: string): ChannelDORef | null {
+  if (!participantId.startsWith("do:")) return null;
+  const body = participantId.slice(3);
+  const slashIdx = body.indexOf("/");
+  const colonAfterSlash = slashIdx >= 0 ? body.indexOf(":", slashIdx) : -1;
+  if (colonAfterSlash === -1) return null;
+  const source = body.slice(0, colonAfterSlash);
+  const rest = body.slice(colonAfterSlash + 1);
+  const nextColon = rest.indexOf(":");
+  if (nextColon === -1) return null;
+  return {
+    source,
+    className: rest.slice(0, nextColon),
+    objectKey: rest.slice(nextColon + 1),
+  };
+}
+
+async function getChannelDOParticipants(channelId: string): Promise<ChannelDORef[]> {
+  const channelService = await rpc.call<{ kind: string; targetId?: string }>(
+    "main",
+    "workers.resolveService",
+    CHANNEL_SERVICE_PROTOCOL,
+    channelId,
+  );
+  if (channelService.kind !== "durable-object" || !channelService.targetId) {
+    throw new Error("Channel service must resolve to a Durable Object service");
+  }
+  const participants = await rpc.call<ChannelParticipant[]>(
+    channelService.targetId,
+    "getParticipants",
+  );
+  return participants.map((p) => parseDoTargetId(p.participantId)).filter((p): p is ChannelDORef => p !== null);
 }
 
 /** Type for chat panel state args */
@@ -69,10 +115,7 @@ interface ChatStateArgs {
   actionBarMaxHeight?: number | null;
 }
 
-/**
- * Subscribe a DO to a channel via the workers service.
- * Ensures the DO is reachable (idempotent) then calls subscribeChannel.
- */
+/** Subscribe a DO to a channel via unified RPC. */
 async function subscribeDOToChannel(
   source: string,
   className: string,
@@ -85,29 +128,35 @@ async function subscribeDOToChannel(
   if (!channelContextId) {
     throw new Error("Cannot subscribe an agent DO without a context ID");
   }
-  // callDO dispatches via DODispatch which internally ensures the DO is alive
-  // on failure (ensureDO + retry). No eager setup needed.
-  return rpc.call<{ ok: boolean; participantId?: string }>(
+  const target = await rpc.call<{ targetId: string }>(
     "main",
-    "workers.callDO",
+    "workers.resolveDurableObject",
     source,
     className,
     objectKey,
+  );
+  return rpc.call<{ ok: boolean; participantId?: string }>(
+    target.targetId,
     "subscribeChannel",
     { channelId, contextId: channelContextId, config, replay },
   );
 }
 
-/**
- * Unsubscribe a DO from a channel via the workers service.
- */
+/** Unsubscribe a DO from a channel via unified RPC. */
 async function unsubscribeDOFromChannel(
   source: string,
   className: string,
   objectKey: string,
   channelId: string,
 ): Promise<void> {
-  await rpc.call("main", "workers.callDO", source, className, objectKey, "unsubscribeChannel", channelId);
+  const target = await rpc.call<{ targetId: string }>(
+    "main",
+    "workers.resolveDurableObject",
+    source,
+    className,
+    objectKey,
+  );
+  await rpc.call(target.targetId, "unsubscribeChannel", channelId);
 }
 
 export default function ChatPanel() {
@@ -175,11 +224,7 @@ export default function ChatPanel() {
     const channelName = stateArgs.channelName;
     void (async () => {
       try {
-        const dos = await rpc.call<Array<{ source: string; className: string; objectKey: string }>>(
-          "main",
-          "workers.getChannelWorkers",
-          channelName,
-        );
+        const dos = await getChannelDOParticipants(channelName);
         if (dos.length > 0) return;
 
         const workerSource = stateArgs.agentSource ?? DEFAULT_WORKER_SOURCE;
@@ -298,15 +343,7 @@ export default function ChatPanel() {
   }, [availableAgents]);
 
   const handleRemoveAgent = useCallback(async (channelName: string, handle: string) => {
-    // Find the DO participant on this channel that matches the handle.
-    // getChannelWorkers returns all DO participants subscribed to the channel.
-    const channelWorkers = await rpc.call<Array<{
-      participantId: string;
-      source: string;
-      className: string;
-      objectKey: string;
-      channelId: string;
-    }>>("main", "workers.getChannelWorkers", channelName);
+    const channelWorkers = await getChannelDOParticipants(channelName);
 
     // Match by objectKey containing the handle prefix (objectKey is "{handle}-{uuid}")
     const match = channelWorkers.find(w => w.objectKey.startsWith(handle));

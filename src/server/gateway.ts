@@ -23,8 +23,14 @@ import { WebSocketServer, WebSocket } from "ws";
 import type { Duplex } from "stream";
 import { createDevLogger } from "@natstack/dev-log";
 import { constantTimeStringEqual, type TokenManager } from "@natstack/shared/tokenManager";
+import {
+  createVerifiedCaller,
+  type CallerKind,
+  type VerifiedCaller,
+} from "@natstack/shared/serviceDispatcher";
 import type { RouteRegistry, LookupResult } from "./routeRegistry.js";
 import { assertPresent } from "../lintHelpers";
+import type { CodeIdentityResolver } from "./services/codeIdentityResolver.js";
 
 const log = createDevLogger("Gateway");
 
@@ -82,8 +88,7 @@ export interface GitHttpHandler {
   handleHttpRequest(
     req: IncomingMessage,
     res: ServerResponse,
-    callerId: string | null,
-    callerKind: string | null
+    caller: VerifiedCaller | null
   ): Promise<void> | void;
 }
 
@@ -93,7 +98,7 @@ export interface ExtensionHttpHandler {
     res: ServerResponse,
     name: string,
     remainderPath: string,
-    caller: { callerId: string; callerKind: string }
+    caller: VerifiedCaller
   ): Promise<void> | void;
 }
 
@@ -132,6 +137,8 @@ export interface GatewayDeps {
   adminToken?: string;
   /** Caller token manager for route auth modes used by panels/workers/shell/server callers. */
   tokenManager: TokenManager;
+  /** Resolves verified code/build identity for authenticated caller tokens. */
+  codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
   /** Route registry for `/_r/` dispatch (worker and service routes). Optional
    *  — when absent, `/_r/` paths fall through to 404. */
   routeRegistry?: RouteRegistry;
@@ -189,7 +196,7 @@ export class Gateway {
 
       // /_w/ → workerd reverse proxy
       if (url.startsWith("/_w/")) {
-        if (!validateCallerBearer(req, tokenManager)) {
+        if (!validateCallerBearer(req, tokenManager, this.deps.codeIdentityResolver)) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Unauthorized");
           return;
@@ -210,7 +217,7 @@ export class Gateway {
           res.end("Extension route not found");
           return;
         }
-        const entry = validateCallerBearer(req, tokenManager);
+        const entry = validateCallerBearer(req, tokenManager, this.deps.codeIdentityResolver);
         if (!entry) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Unauthorized");
@@ -244,15 +251,15 @@ export class Gateway {
       // /_git/ → git server reverse proxy
       if (url.startsWith("/_git/") && gitHandler) {
         if (req.method === "OPTIONS") {
-          return gitHandler.handleHttpRequest(req, res, null, null);
+          return gitHandler.handleHttpRequest(req, res, null);
         }
-        const entry = validateCallerBearer(req, tokenManager);
+        const entry = validateCallerBearer(req, tokenManager, this.deps.codeIdentityResolver);
         if (!entry) {
           res.writeHead(401, { "Content-Type": "text/plain" });
           res.end("Unauthorized");
           return;
         }
-        return gitHandler.handleHttpRequest(req, res, entry.callerId, entry.callerKind);
+        return gitHandler.handleHttpRequest(req, res, entry);
       }
 
       // POST /rpc → RPC handler (in-process). `/rpc/stream` is the
@@ -316,7 +323,7 @@ export class Gateway {
 
       // /_w/ → workerd WebSocket proxy
       if (url.startsWith("/_w/")) {
-        if (!validateCallerBearer(req, tokenManager)) {
+        if (!validateCallerBearer(req, tokenManager, this.deps.codeIdentityResolver)) {
           socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
           socket.destroy();
           return;
@@ -577,11 +584,18 @@ function extractBearerToken(req: IncomingMessage): string | null {
 
 function validateCallerBearer(
   req: IncomingMessage,
-  tokenManager: TokenManager
-): { callerId: string; callerKind: string } | null {
+  tokenManager: TokenManager,
+  codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">
+): VerifiedCaller | null {
   const token = extractBearerToken(req);
   if (!token) return null;
-  return tokenManager.validateToken(token);
+  const entry = tokenManager.validateToken(token);
+  if (!entry) return null;
+  return createVerifiedCaller(
+    entry.callerId,
+    entry.callerKind as CallerKind,
+    codeIdentityResolver?.resolveByCallerId(entry.callerId) ?? undefined
+  );
 }
 
 function validateAdminBearer(req: IncomingMessage, adminToken: string | undefined): boolean {

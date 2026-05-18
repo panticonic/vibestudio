@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
 import {
+  createVerifiedCaller,
   ServiceAccessError,
   ServiceDispatcher,
   ServiceError,
@@ -21,30 +22,21 @@ function createDeps() {
   const record = vi.fn(async () => {});
   const revoke = vi.fn(async () => true);
   const list = vi.fn<(callerId: string) => UserlandApprovalGrant[]>(() => []);
-  const resolveByCallerId = vi.fn(
-    (
-      callerId: string
-    ): {
-      callerId: string;
-      callerKind: "panel" | "worker";
-      repoPath: string;
-      effectiveVersion: string;
-    } | null => ({
-      callerId,
-      callerKind: callerId.startsWith("panel:") ? ("panel" as const) : ("worker" as const),
-      repoPath: "workers/alpha",
-      effectiveVersion: "hash-1",
-    })
-  );
   const service = createUserlandApprovalService({
     approvalQueue: { requestUserland: queued } as Partial<ApprovalQueue> as ApprovalQueue,
     grantStore: { lookup, record, revoke, list },
-    codeIdentityResolver: { resolveByCallerId },
   });
-  return { service, queued, lookup, record, revoke, list, resolveByCallerId };
+  return { service, queued, lookup, record, revoke, list };
 }
 
-const workerCtx: ServiceContext = { callerId: "worker:alpha", callerKind: "worker" };
+const workerCtx: ServiceContext = {
+  caller: createVerifiedCaller("worker:alpha", "worker", {
+    callerId: "worker:alpha",
+    callerKind: "worker",
+    repoPath: "workers/alpha",
+    effectiveVersion: "hash-1",
+  }),
+};
 const validRequest = {
   subject: { id: "team-x:foo", label: "Team X foo" },
   title: "Allow foo?",
@@ -71,7 +63,7 @@ describe("userlandApprovalService", () => {
     );
     await expect(
       dispatcher.dispatch(
-        { callerId: "shell", callerKind: "shell" },
+        { caller: createVerifiedCaller("shell", "shell") },
         "userlandApproval",
         "list",
         []
@@ -80,25 +72,30 @@ describe("userlandApprovalService", () => {
   });
 
   it("rejects unknown caller identities", async () => {
-    const { service, resolveByCallerId } = createDeps();
-    resolveByCallerId.mockReturnValueOnce(null);
+    const { service } = createDeps();
 
-    await expect(service.handler(workerCtx, "request", [validRequest])).rejects.toMatchObject({
+    await expect(
+      service.handler({ caller: createVerifiedCaller("worker:unknown", "worker") }, "request", [
+        validRequest,
+      ])
+    ).rejects.toMatchObject({
       name: "ServiceError",
       code: "ENOENT",
     });
   });
 
   it("rejects caller kind mismatches with a typed error", async () => {
-    const { service, resolveByCallerId } = createDeps();
-    resolveByCallerId.mockReturnValueOnce({
-      callerId: "worker:alpha",
-      callerKind: "panel",
-      repoPath: "workers/alpha",
-      effectiveVersion: "hash-1",
-    });
+    const { service } = createDeps();
+    const mismatchCtx: ServiceContext = {
+      caller: createVerifiedCaller("worker:alpha", "worker", {
+        callerId: "worker:alpha",
+        callerKind: "panel",
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      }),
+    };
 
-    await expect(service.handler(workerCtx, "request", [validRequest])).rejects.toMatchObject({
+    await expect(service.handler(mismatchCtx, "request", [validRequest])).rejects.toMatchObject({
       name: "ServiceError",
       code: "EACCES",
     });

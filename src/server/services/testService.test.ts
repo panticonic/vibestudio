@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { ServiceAccessError, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceAccessError,
+  ServiceDispatcher,
+} from "@natstack/shared/serviceDispatcher";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import { createTestService } from "./testService.js";
 
@@ -11,9 +15,13 @@ function createService() {
   });
 }
 
-const serverCtx: ServiceContext = { callerId: "server", callerKind: "server" };
-const panelCtx: ServiceContext = { callerId: "tree/panels~my-app/abc123", callerKind: "panel" };
-const workerCtx: ServiceContext = { callerId: "tree/workers~alpha/xyz", callerKind: "worker" };
+const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
+const panelCtx: ServiceContext = {
+  caller: createVerifiedCaller("tree/panels~my-app/abc123", "panel"),
+};
+const workerCtx: ServiceContext = {
+  caller: createVerifiedCaller("tree/workers~alpha/xyz", "worker"),
+};
 
 describe("testService policy", () => {
   it("restricts to server-only callers", () => {

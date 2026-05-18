@@ -546,6 +546,9 @@ importers:
       '@natstack/rpc':
         specifier: workspace:*
         version: link:../rpc
+      '@natstack/shared':
+        specifier: workspace:*
+        version: link:../shared
       linkedom:
         specifier: ^0.18.5
         version: 0.18.12
@@ -729,6 +732,9 @@ importers:
       '@natstack/pubsub':
         specifier: workspace:*
         version: link:../pubsub
+      '@natstack/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime

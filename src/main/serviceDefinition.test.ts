@@ -3,13 +3,14 @@
  */
 
 import { z } from "zod";
-import { ServiceDispatcher, type ServiceContext } from "@natstack/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type ServiceContext,
+} from "@natstack/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 
-const ctx: ServiceContext = {
-  callerId: "test",
-  callerKind: "shell",
-};
+const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 
 describe("ServiceDispatcher.registerService", () => {
   it("registers and dispatches a service definition", async () => {

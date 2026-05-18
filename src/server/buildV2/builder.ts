@@ -2017,10 +2017,15 @@ function createExtensionSmokeContext() {
         return { id: "smoke", name: "smoke", path: process.cwd(), contextsPath: process.cwd() };
       },
     },
-    workers: {
-      async callDO() {
+    rpc: {
+      async call() {
         return null;
       },
+    },
+    workers: {
+      listServices: asyncNull,
+      resolveService: asyncNull,
+      resolveDurableObject: asyncNull,
     },
     credentials: asyncNull,
     db: asyncNull,

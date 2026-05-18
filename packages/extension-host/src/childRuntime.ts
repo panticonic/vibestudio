@@ -119,9 +119,9 @@ function requiredEnv(name: string): string {
   return value;
 }
 
-async function rpcCall<T>(serviceMethod: string, args: unknown[]): Promise<T> {
+async function rpcCall<T>(serviceMethod: string, args: unknown[], targetId = "main"): Promise<T> {
   const bridge = getRuntimeBridge();
-  return bridge.call<T>("main", serviceMethod, ...args);
+  return bridge.call<T>(targetId, serviceMethod, ...args);
 }
 
 function serviceProxy(service: string): Record<string, (...args: unknown[]) => Promise<unknown>> {
@@ -359,14 +359,16 @@ function createContext() {
     fs: createFsClient(),
     git: serviceProxy("git"),
     workspace: serviceProxy("workspace"),
+    rpc: {
+      call: <T>(targetId: string, method: string, ...args: unknown[]) =>
+        rpcCall<T>(method, args, targetId),
+    },
     workers: {
-      callDO: <T>(
-        source: string,
-        className: string,
-        objectKey: string,
-        method: string,
-        ...args: unknown[]
-      ) => rpcCall<T>("workers.callDO", [source, className, objectKey, method, ...args]),
+      listServices: () => rpcCall("workers.listServices", []),
+      resolveService: (query: string, objectKey?: string | null) =>
+        rpcCall("workers.resolveService", [query, objectKey ?? null]),
+      resolveDurableObject: (source: string, className: string, objectKey: string) =>
+        rpcCall("workers.resolveDurableObject", [source, className, objectKey]),
     },
     credentials: serviceProxy("credentials"),
     webhooks: serviceProxy("webhookIngress"),

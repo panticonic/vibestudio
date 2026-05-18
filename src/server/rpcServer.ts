@@ -21,16 +21,20 @@ import type { ToolExecutionResult } from "@natstack/shared/types";
 import { createDevLogger } from "@natstack/dev-log";
 import {
   parseServiceMethod,
+  createVerifiedCaller,
   ServiceDispatcher,
   type CallerKind,
   type ServiceContext,
   type WsClientInfo,
+  type VerifiedCaller,
 } from "@natstack/shared/serviceDispatcher";
 import { checkServiceAccess } from "@natstack/shared/servicePolicy";
 import type { TokenManager } from "@natstack/shared/tokenManager";
 import { WsEventSession, type EventService } from "@natstack/shared/eventsService";
+import type { CodeIdentityResolver } from "./services/codeIdentityResolver.js";
 
 const log = createDevLogger("RpcServer");
+const RPC_RUNTIME_ID_HEADER = "x-natstack-runtime-id";
 
 /**
  * Parse a "do:source:className:objectKey" target ID.
@@ -95,7 +99,9 @@ class ConnectionRegistry {
   }
 
   isActiveClient(client: WsClientState): boolean {
-    return this.callerConnections.get(client.callerId)?.get(client.connectionId) === client;
+    return (
+      this.callerConnections.get(client.caller.runtime.id)?.get(client.connectionId) === client
+    );
   }
 
   getCallerConnections(callerId: string): WsClientState[] {
@@ -113,24 +119,24 @@ class ConnectionRegistry {
 
   addClient(client: WsClientState): void {
     this.clients.set(client.ws, client);
-    let callerClients = this.callerConnections.get(client.callerId);
+    let callerClients = this.callerConnections.get(client.caller.runtime.id);
     if (!callerClients) {
       callerClients = new Map();
-      this.callerConnections.set(client.callerId, callerClients);
+      this.callerConnections.set(client.caller.runtime.id, callerClients);
     }
     callerClients.set(client.connectionId, client);
   }
 
   removeClient(client: WsClientState): boolean {
-    const current = this.callerConnections.get(client.callerId)?.get(client.connectionId);
+    const current = this.callerConnections.get(client.caller.runtime.id)?.get(client.connectionId);
     const removedActive = current === client;
     if (removedActive) {
-      const callerClients = this.callerConnections.get(client.callerId);
+      const callerClients = this.callerConnections.get(client.caller.runtime.id);
       callerClients?.delete(client.connectionId);
       if (callerClients?.size === 0) {
-        this.callerConnections.delete(client.callerId);
+        this.callerConnections.delete(client.caller.runtime.id);
       }
-      this.removeBridge(client.callerId, client.connectionId);
+      this.removeBridge(client.caller.runtime.id, client.connectionId);
     }
     this.clients.delete(client.ws);
     return removedActive;
@@ -188,7 +194,7 @@ class ConnectionRegistry {
     for (const callerClients of this.callerConnections.values()) {
       for (const client of callerClients.values()) {
         if (
-          (client.callerKind === "server" || client.callerKind === "shell") &&
+          (client.caller.runtime.kind === "server" || client.caller.runtime.kind === "shell") &&
           client.ws.readyState === WebSocket.OPEN
         ) {
           fn(client);
@@ -221,21 +227,58 @@ function createRelayError(message: string, code: RelayErrorCode): Error {
   return Object.assign(new Error(message), { code });
 }
 
+function isRetryableDORelayError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    msg.includes("No such module") ||
+    msg.includes("No such Durable Object") ||
+    msg.includes("class not found") ||
+    msg.includes("ECONNREFUSED") ||
+    msg.includes("fetch failed") ||
+    msg.includes("workerd not running")
+  );
+}
+
+function isRuntimeIdForServiceToken(
+  authenticatedCallerId: string,
+  runtimeId: string | undefined
+): boolean {
+  if (!runtimeId || !authenticatedCallerId.startsWith("do-service:")) return false;
+  const serviceTargetPrefix = `do:${authenticatedCallerId.slice("do-service:".length)}:`;
+  return runtimeId.startsWith(serviceTargetPrefix);
+}
+
+function resolveHttpRuntimeCaller(
+  authenticatedCallerId: string,
+  callerKind: CallerKind,
+  runtimeIdHeader: string | string[] | undefined
+): string {
+  const runtimeId = Array.isArray(runtimeIdHeader) ? runtimeIdHeader[0] : runtimeIdHeader;
+  if (runtimeId == null || runtimeId === "") return authenticatedCallerId;
+  if (typeof runtimeId !== "string") {
+    throw new Error("Invalid RPC runtime identity");
+  }
+  if (runtimeId === authenticatedCallerId) return authenticatedCallerId;
+  if (isRuntimeIdForServiceToken(authenticatedCallerId, runtimeId)) {
+    return runtimeId;
+  }
+  throw new Error(
+    `RPC runtime identity denied: ${authenticatedCallerId} cannot act as ${runtimeId}`
+  );
+}
+
 export class RpcServer {
   private wss: WebSocketServer | null = null;
   private workerdUrl: string | null = null;
   private workerdGatewayToken: string | null = null;
+  private ensureDOFn:
+    | ((source: string, className: string, objectKey: string) => Promise<void>)
+    | null = null;
 
   private connections = new ConnectionRegistry();
   private pendingToolCalls = new Map<string, PendingToolCall>();
   private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private lastDisconnectAt = new Map<string, number>();
-  /**
-   * Promises that resolve when a caller (currently in the disconnect grace
-   * window) reconnects, or reject when the grace timer expires. Lets relays
-   * targeting a mid-reconnect client wait briefly instead of failing fast
-   * with "Target not reachable" — see relayCall.
-   */
   private reconnectWaiters = new Map<
     string,
     {
@@ -256,14 +299,6 @@ export class RpcServer {
 
   private readonly bootId = randomUUID();
 
-  // SCAFFOLD: 3-second reconnect grace window. This closes the relay race for
-  // panels/shells that disconnect briefly and then reconnect, but it is not
-  // considered steady-state architecture.
-  //
-  // Removal condition: reconnect instrumentation shows the observed churn is
-  // either expected page-reload/network behavior or the root cause has been
-  // fixed at the client/runtime layer. If reconnects are being caused by a
-  // bug, fix that bug and delete this grace window.
   private static readonly DISCONNECT_GRACE_MS = 3000;
 
   private dispatcher: ServiceDispatcher;
@@ -297,9 +332,30 @@ export class RpcServer {
         import("./services/egressProxy.js").EgressProxy,
         "forwardProxyFetchStream"
       >;
+      fsService?: Pick<
+        import("@natstack/shared/fsService").FsService,
+        "getCallerContext" | "registerCallerContext"
+      >;
+      codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
     }
   ) {
     this.dispatcher = deps.dispatcher;
+  }
+
+  private verifiedCallerFor(callerId: string, callerKind: CallerKind): VerifiedCaller {
+    const code = this.deps.codeIdentityResolver?.resolveByCallerId(callerId) ?? null;
+    return createVerifiedCaller(callerId, callerKind, code);
+  }
+
+  private serviceContextFor(
+    callerId: string,
+    callerKind: CallerKind,
+    extras: Omit<ServiceContext, "caller"> = {}
+  ): ServiceContext {
+    return {
+      caller: this.verifiedCallerFor(callerId, callerKind),
+      ...extras,
+    };
   }
 
   private connectionKey(callerId: string, connectionId: string): string {
@@ -344,6 +400,10 @@ export class RpcServer {
 
   setWorkerdGatewayToken(token: string): void {
     this.workerdGatewayToken = token;
+  }
+
+  setEnsureDO(fn: (source: string, className: string, objectKey: string) => Promise<void>): void {
+    this.ensureDOFn = fn;
   }
 
   /**
@@ -436,15 +496,12 @@ export class RpcServer {
     const connectionId = requestedConnectionId || randomUUID();
     const connectionKey = this.connectionKey(callerId, connectionId);
 
-    // Cancel pending disconnect cleanup for this specific connection.
     const pendingTimer = this.disconnectTimers.get(connectionKey);
     if (pendingTimer) {
       clearTimeout(pendingTimer);
       this.disconnectTimers.delete(connectionKey);
     }
 
-    // Wake up caller-level relays waiting for any connection and response
-    // steering waiters waiting for this exact connection.
     const callerWaiter = this.reconnectWaiters.get(callerId);
     if (callerWaiter) {
       this.reconnectWaiters.delete(callerId);
@@ -461,12 +518,12 @@ export class RpcServer {
       existing.ws.close(4002, "Replaced by new connection");
       this.cleanupClient(existing);
     }
+    const caller = this.verifiedCallerFor(callerId, callerKind);
 
     const client: WsClientState = {
       ws,
-      callerId,
+      caller,
       connectionId,
-      callerKind,
       authenticated: true,
       authenticatedAt: Date.now(),
     };
@@ -530,8 +587,8 @@ export class RpcServer {
       msg = JSON.parse(data.toString()) as WsClientMessage;
     } catch (error) {
       log.warn("malformed ws frame", {
-        callerId: client.callerId,
-        callerKind: client.callerKind,
+        callerId: client.caller.runtime.id,
+        callerKind: client.caller.runtime.kind,
         cause: error instanceof Error ? error.message : String(error),
       });
       return;
@@ -542,9 +599,12 @@ export class RpcServer {
         // If the message is a response or event, it may be for a server-initiated
         // call via the client's RPC bridge. Route it to the bridge transport.
         if (msg.message.type === "response" || msg.message.type === "event") {
-          const transport = this.connections.getTransport(client.callerId, client.connectionId);
+          const transport = this.connections.getTransport(
+            client.caller.runtime.id,
+            client.connectionId
+          );
           if (transport) {
-            transport.deliver(client.callerId, msg.message);
+            transport.deliver(client.caller.runtime.id, msg.message);
             // For responses, we're done — don't also process as a new request.
             // For events, deliver to bridge and also fall through would be harmless,
             // but there's no server-side event handling for client events currently.
@@ -588,7 +648,7 @@ export class RpcServer {
       // Look up by the full {callerId, connectionId, requestId}
       // triple — a peer can only cancel streams it owns.
       const controller = this.wsStreamAborts.get(
-        this.wsStreamKey(client.callerId, client.connectionId, message.requestId)
+        this.wsStreamKey(client.caller.runtime.id, client.connectionId, message.requestId)
       );
       if (controller) controller.abort();
       return;
@@ -618,7 +678,7 @@ export class RpcServer {
     const { service, method } = parsed;
 
     try {
-      checkServiceAccess(service, client.callerKind, this.dispatcher, method);
+      checkServiceAccess(service, client.caller.runtime.kind, this.dispatcher, method);
     } catch (error) {
       this.sendToWs(client.ws, {
         type: "ws:rpc",
@@ -632,8 +692,7 @@ export class RpcServer {
     }
 
     const ctx: ServiceContext = {
-      callerId: client.callerId,
-      callerKind: client.callerKind,
+      caller: client.caller,
       connectionId: client.connectionId,
       wsClient: client,
     };
@@ -675,7 +734,11 @@ export class RpcServer {
     message: RpcMessage,
     targetConnectionId?: string
   ): void {
-    const auth = this.checkRelayAuth(client.callerId, client.callerKind, targetId);
+    const auth = this.checkRelayAuth(
+      client.caller.runtime.id,
+      client.caller.runtime.kind,
+      targetId
+    );
     if (!auth.ok) {
       this.sendRouteError(client, targetId, message, new Error(auth.reason));
       return;
@@ -689,7 +752,7 @@ export class RpcServer {
           (originClient) => {
             this.sendToWs(originClient.ws, {
               type: "ws:routed",
-              fromId: client.callerId,
+              fromId: client.caller.runtime.id,
               message,
             });
           },
@@ -703,85 +766,65 @@ export class RpcServer {
       ? this.getConnection(targetId, targetConnectionId)
       : this.pickPrimary(targetId);
     if (!targetClient || targetClient.ws.readyState !== WebSocket.OPEN) {
-      // Target not connected via WS — try HTTP relay for workers/DOs, or wait
-      // for a panel/shell client that's mid-reconnect (see relayCall).
+      // Target not connected via WS — try HTTP relay for workers/DOs; panel
+      // and shell targets fail fast when unreachable.
       if (message.type === "request") {
         const { requestId, method: reqMethod, args: reqArgs } = message;
         this.recordRoutedRequestOrigin(requestId, client);
         void this.relayCall(
-          client.callerId,
+          client.caller.runtime.id,
+          client.caller.runtime.kind,
           targetId,
           reqMethod,
           reqArgs ?? [],
           targetConnectionId
         ).then(
           (result) => {
-            void this.sendRoutedResponseToOrigin(client, targetId, {
-              type: "response",
-              requestId,
-              result,
-            }).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
+            void this.sendRoutedResponseToOrigin(
+              { callerId: client.caller.runtime.id, connectionId: client.connectionId },
+              targetId,
+              {
+                type: "response",
+                requestId,
+                result,
+              }
+            ).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
           },
           (err) => {
             const errorCode = getErrorCode(err);
-            void this.sendRoutedResponseToOrigin(client, targetId, {
-              type: "response",
-              requestId,
-              error: err instanceof Error ? err.message : String(err),
-              ...(errorCode ? { errorCode } : {}),
-            }).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
+            void this.sendRoutedResponseToOrigin(
+              { callerId: client.caller.runtime.id, connectionId: client.connectionId },
+              targetId,
+              {
+                type: "response",
+                requestId,
+                error: err instanceof Error ? err.message : String(err),
+                ...(errorCode ? { errorCode } : {}),
+              }
+            ).catch((sendErr) => this.sendRouteError(client, targetId, message, sendErr));
           }
         );
       } else if (message.type === "response") {
-        void this.relayResponse(client.callerId, targetId, message).catch((err) => {
+        void this.relayResponse(client.caller.runtime.id, targetId, message).catch((err) => {
           this.sendRouteError(client, targetId, message, err);
         });
       } else if (message.type === "event") {
-        const { fromId: eventFromId, event, payload } = message;
-        // Audit finding #20 (04-4.7): the event `fromId` MUST be derived from
-        // the authenticated transport, not trusted from the caller payload.
-        // Otherwise any panel can spoof events that claim to come from the
-        // server / another panel (e.g. "notification:show", "credentials:*").
-        // Server / harness callers may set fromId explicitly (they're trusted
-        // brokers); everyone else gets their real callerId substituted.
-        const trustedSource = client.callerKind === "server" || client.callerKind === "harness";
-        if (!trustedSource && eventFromId && eventFromId !== client.callerId) {
-          log.warn("rejecting event fromId spoof", {
-            callerId: client.callerId,
-            callerKind: client.callerKind,
-            attemptedFromId: eventFromId,
-            event,
-            targetId,
-          });
-        }
-        const sourceId = trustedSource ? (eventFromId ?? client.callerId) : client.callerId;
-        void this.relayEvent(sourceId, targetId, event, payload).catch((err) => {
-          this.sendRouteError(client, targetId, message, err);
-        });
+        const { event, payload } = message;
+        const sourceId = client.caller.runtime.id;
+        void this.relayEvent(sourceId, client.caller.runtime.kind, targetId, event, payload).catch(
+          (err) => {
+            this.sendRouteError(client, targetId, message, err);
+          }
+        );
       }
       return;
     }
 
-    // Authenticated direct delivery — overwrite fromId on relayed events to
-    // match the authenticated source unless the caller is a trusted broker.
-    // Without this, a panel can send a `ws:route` whose embedded message is
-    // an event with a forged fromId; the routed envelope below would carry
-    // the correct fromId at the outer level, but consumers also see the
-    // inner message.fromId and may use it. Normalize both.
+    // Authenticated direct delivery derives event source from the verified
+    // transport caller. Payload fromId is never authority.
     let outboundMessage = message;
     if (message.type === "event") {
-      const trustedSource = client.callerKind === "server" || client.callerKind === "harness";
-      const eventFromId = message.fromId;
-      if (!trustedSource && eventFromId && eventFromId !== client.callerId) {
-        log.warn("rejecting event fromId spoof (direct)", {
-          callerId: client.callerId,
-          callerKind: client.callerKind,
-          attemptedFromId: eventFromId,
-          event: message.event,
-          targetId,
-        });
-      }
-      const sourceId = trustedSource ? (eventFromId ?? client.callerId) : client.callerId;
+      const sourceId = client.caller.runtime.id;
       outboundMessage = { ...message, fromId: sourceId };
     }
     if (outboundMessage.type === "request") {
@@ -792,7 +835,7 @@ export class RpcServer {
       for (const connection of this.getCallerConnections(targetId)) {
         this.sendToWs(connection.ws, {
           type: "ws:routed",
-          fromId: client.callerId,
+          fromId: client.caller.runtime.id,
           message: outboundMessage,
         });
       }
@@ -801,7 +844,7 @@ export class RpcServer {
 
     this.sendToWs(targetClient.ws, {
       type: "ws:routed",
-      fromId: client.callerId,
+      fromId: client.caller.runtime.id,
       message: outboundMessage,
     });
   }
@@ -838,8 +881,8 @@ export class RpcServer {
 
     if (message.type === "response") {
       log.warn("relay response drop", {
-        callerId: client.callerId,
-        callerKind: client.callerKind,
+        callerId: client.caller.runtime.id,
+        callerKind: client.caller.runtime.kind,
         targetId,
         requestId: message.requestId,
         error: errorMessage,
@@ -858,8 +901,8 @@ export class RpcServer {
     {
       const eventMessage = message as RpcEvent;
       log.warn("relay event drop", {
-        callerId: client.callerId,
-        callerKind: client.callerKind,
+        callerId: client.caller.runtime.id,
+        callerKind: client.caller.runtime.kind,
         targetId,
         event: eventMessage.event,
         fromId: eventMessage.fromId,
@@ -878,7 +921,7 @@ export class RpcServer {
 
   private recordRoutedRequestOrigin(requestId: string, client: WsClientState): void {
     this.routedRequestOrigins.set(requestId, {
-      callerId: client.callerId,
+      callerId: client.caller.runtime.id,
       connectionId: client.connectionId,
     });
 
@@ -892,7 +935,7 @@ export class RpcServer {
   }
 
   private async sendRoutedResponseToOrigin(
-    origin: WsClientState,
+    origin: { callerId: string; connectionId: string },
     fromId: string,
     message: RpcResponse
   ): Promise<void> {
@@ -905,15 +948,16 @@ export class RpcServer {
   }
 
   private handleClose(client: WsClientState, code?: number, reason?: string): void {
-    const connectionKey = this.connectionKey(client.callerId, client.connectionId);
-    const wasReplaced =
-      this.connections.getConnection(client.callerId, client.connectionId) !== client;
+    const callerId = client.caller.runtime.id;
+    const callerKind = client.caller.runtime.kind;
+    const connectionKey = this.connectionKey(callerId, client.connectionId);
+    const wasReplaced = this.connections.getConnection(callerId, client.connectionId) !== client;
     this.connections.removeClient(client);
 
     // Abort any in-flight streaming RPCs owned by this connection.
     // Without this, the upstream fetch keeps draining bytes that
     // nobody can read — `sendToWs` would silently drop the frames.
-    const streamKeyPrefix = this.wsStreamKey(client.callerId, client.connectionId, "");
+    const streamKeyPrefix = this.wsStreamKey(callerId, client.connectionId, "");
     for (const [key, controller] of this.wsStreamAborts) {
       if (key.startsWith(streamKeyPrefix)) {
         controller.abort();
@@ -921,10 +965,10 @@ export class RpcServer {
       }
     }
 
-    if (client.callerKind === "panel") {
-      this.lastDisconnectAt.set(client.callerId, Date.now());
+    if (callerKind === "panel") {
+      this.lastDisconnectAt.set(callerId, Date.now());
       log.info("panel disconnected", {
-        callerId: client.callerId,
+        callerId,
         code: code ?? null,
         reason: reason || null,
         initiator:
@@ -947,8 +991,7 @@ export class RpcServer {
       }
     }
 
-    // If this socket was replaced (code 4002), don't start cleanup timer —
-    // the replacement is already connected.
+    // If this socket was replaced (code 4002), the replacement is already connected.
     if (wasReplaced) return;
 
     if (!this.connectionReconnectWaiters.has(connectionKey)) {
@@ -960,11 +1003,9 @@ export class RpcServer {
       });
       void promise.catch((error) => {
         const code = getErrorCode(error);
-        if (code === "RECONNECT_GRACE_EXPIRED" || code === "SERVER_SHUTTING_DOWN") {
-          return;
-        }
+        if (code === "RECONNECT_GRACE_EXPIRED" || code === "SERVER_SHUTTING_DOWN") return;
         log.error("unexpected connection reconnect waiter rejection", {
-          callerId: client.callerId,
+          callerId,
           connectionId: client.connectionId,
           cause: error instanceof Error ? error.message : String(error),
           errorCode: code,
@@ -977,40 +1018,27 @@ export class RpcServer {
       });
     }
 
-    const callerHasOtherConnections = this.getCallerConnections(client.callerId).length > 0;
-
-    // Grace-period cleanup: wait before firing disconnect callback.
-    // Normal reloads/reconnects will cancel this timer.
+    const callerHasOtherConnections = this.getCallerConnections(callerId).length > 0;
     const existing = this.disconnectTimers.get(connectionKey);
     if (existing) clearTimeout(existing);
 
-    // Set up a reconnect waiter so any in-flight relay targeting this client
-    // can pause briefly instead of failing fast with "Target not reachable".
-    // The waiter is resolved by handleAuth on reconnect or rejected when the
-    // grace timer expires below.
-    if (!callerHasOtherConnections && !this.reconnectWaiters.has(client.callerId)) {
+    if (!callerHasOtherConnections && !this.reconnectWaiters.has(callerId)) {
       let resolveWaiter!: () => void;
       let rejectWaiter!: (err: Error) => void;
       const promise = new Promise<void>((res, rej) => {
         resolveWaiter = res;
         rejectWaiter = rej;
       });
-      // Documented concurrent path: handleClose may reject the waiter before
-      // relayCall/relayEvent actually attach their await, because the client
-      // can fully miss the reconnect window with no in-flight relays. Known
-      // grace/shutdown rejections are expected here; anything else is a bug.
       void promise.catch((error) => {
         const code = getErrorCode(error);
-        if (code === "RECONNECT_GRACE_EXPIRED" || code === "SERVER_SHUTTING_DOWN") {
-          return;
-        }
+        if (code === "RECONNECT_GRACE_EXPIRED" || code === "SERVER_SHUTTING_DOWN") return;
         log.error("unexpected reconnect waiter rejection", {
-          callerId: client.callerId,
+          callerId,
           cause: error instanceof Error ? error.message : String(error),
           errorCode: code,
         });
       });
-      this.reconnectWaiters.set(client.callerId, {
+      this.reconnectWaiters.set(callerId, {
         promise,
         resolve: resolveWaiter,
         reject: rejectWaiter,
@@ -1019,11 +1047,9 @@ export class RpcServer {
 
     const timer = setTimeout(() => {
       this.disconnectTimers.delete(connectionKey);
-      // Reject any reconnect waiter so blocked relays fall through to the
-      // real "Target not reachable" path immediately.
-      const waiter = this.reconnectWaiters.get(client.callerId);
+      const waiter = this.reconnectWaiters.get(callerId);
       if (waiter) {
-        this.reconnectWaiters.delete(client.callerId);
+        this.reconnectWaiters.delete(callerId);
         waiter.reject(
           createRelayError(
             "Client did not reconnect within grace window",
@@ -1031,7 +1057,6 @@ export class RpcServer {
           )
         );
       }
-      // Only fire if the caller hasn't reconnected
       const connectionWaiter = this.connectionReconnectWaiters.get(connectionKey);
       if (connectionWaiter) {
         this.connectionReconnectWaiters.delete(connectionKey);
@@ -1042,10 +1067,9 @@ export class RpcServer {
           )
         );
       }
-      this.cleanupRoutedOriginsForConnection(client.callerId, client.connectionId);
-      // Only fire if the caller hasn't reconnected
-      if (this.getCallerConnections(client.callerId).length === 0) {
-        this.deps.onClientDisconnect?.(client.callerId, client.callerKind);
+      this.cleanupRoutedOriginsForConnection(callerId, client.connectionId);
+      if (this.getCallerConnections(callerId).length === 0) {
+        this.deps.onClientDisconnect?.(callerId, callerKind);
       }
     }, RpcServer.DISCONNECT_GRACE_MS);
 
@@ -1053,6 +1077,13 @@ export class RpcServer {
   }
 
   private cleanupClient(client: WsClientState): void {
+    const callerId = client.caller.runtime.id;
+    const connectionKey = this.connectionKey(callerId, client.connectionId);
+    const pendingTimer = this.disconnectTimers.get(connectionKey);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      this.disconnectTimers.delete(connectionKey);
+    }
     this.connections.removeClient(client);
   }
 
@@ -1162,11 +1193,27 @@ export class RpcServer {
       res.end(JSON.stringify({ error: "Invalid token" }));
       return;
     }
-    const callerId = entry.callerId;
+    let callerId: string;
     const callerKind = entry.callerKind;
+    try {
+      callerId = resolveHttpRuntimeCaller(
+        entry.callerId,
+        callerKind,
+        req.headers[RPC_RUNTIME_ID_HEADER]
+      );
+    } catch (err) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+      return;
+    }
 
     try {
-      const result = await this.handleHttpRpc(callerId, callerKind, body);
+      const runtimeCallerId = resolveHttpRuntimeCaller(
+        callerId,
+        callerKind,
+        req.headers[RPC_RUNTIME_ID_HEADER]
+      );
+      const result = await this.handleHttpRpc(runtimeCallerId, callerKind, body);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ result }));
     } catch (err) {
@@ -1194,7 +1241,7 @@ export class RpcServer {
 
       checkServiceAccess(parsed.service, callerKind, this.dispatcher, parsed.method);
 
-      const ctx: ServiceContext = { callerId, callerKind };
+      const ctx = this.serviceContextFor(callerId, callerKind);
       return await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
     }
 
@@ -1203,33 +1250,17 @@ export class RpcServer {
       if (!targetId) throw new Error("Missing targetId for relay call");
       const auth = this.checkRelayAuth(callerId, callerKind, targetId);
       if (!auth.ok) throw new Error(auth.reason);
-      return await this.relayCall(callerId, targetId, method, args);
+      return await this.relayCall(callerId, callerKind, targetId, method, args);
     }
 
     // Relay event to a target
     if (type === "emit") {
       const event = body["event"] as string;
       const payload = body["payload"];
-      const requestedFromId = body["fromId"] as string | undefined;
-      // Audit finding #20 (04-4.7): only trusted broker callers (server /
-      // harness) may set fromId; everyone else has their authenticated
-      // callerId substituted. Otherwise any caller can spoof events that
-      // claim to come from any other source.
-      const trustedSource = callerKind === "server" || callerKind === "harness";
-      if (!trustedSource && requestedFromId && requestedFromId !== callerId) {
-        log.warn("rejecting HTTP emit fromId spoof", {
-          callerId,
-          callerKind,
-          attemptedFromId: requestedFromId,
-          event,
-          targetId,
-        });
-      }
-      const fromId = trustedSource ? (requestedFromId ?? callerId) : callerId;
       if (!targetId) throw new Error("Missing targetId for emit");
       const auth = this.checkRelayAuth(callerId, callerKind, targetId);
       if (!auth.ok) throw new Error(auth.reason);
-      await this.relayEvent(fromId, targetId, event, payload);
+      await this.relayEvent(callerId, callerKind, targetId, event, payload);
       return "ok";
     }
 
@@ -1381,6 +1412,7 @@ export class RpcServer {
 
     const method = body["method"] as string | undefined;
     const args = (body["args"] as unknown[]) ?? [];
+    const effectiveCaller = this.verifiedCallerFor(callerId, callerKind);
 
     // Run validation BEFORE committing to a 200 response, so policy
     // failures (wrong method, no egress proxy, missing params,
@@ -1449,7 +1481,7 @@ export class RpcServer {
 
     try {
       await check.egress.forwardProxyFetchStream(
-        { callerId, ...check.proxyParams },
+        { caller: effectiveCaller, ...check.proxyParams },
         emitFrame,
         abortController.signal
       );
@@ -1531,7 +1563,7 @@ export class RpcServer {
     // `streamCall` promise rejects with the error message either way.
     const check = this.validateStreamingProxyFetch({
       method: request.method,
-      callerKind: client.callerKind,
+      callerKind: client.caller.runtime.kind,
       args: request.args,
     });
     if (!check.ok) {
@@ -1540,12 +1572,16 @@ export class RpcServer {
     }
 
     const abortController = new AbortController();
-    const streamKey = this.wsStreamKey(client.callerId, client.connectionId, request.requestId);
+    const streamKey = this.wsStreamKey(
+      client.caller.runtime.id,
+      client.connectionId,
+      request.requestId
+    );
     this.wsStreamAborts.set(streamKey, abortController);
 
     try {
       await check.egress.forwardProxyFetchStream(
-        { callerId: client.callerId, ...check.proxyParams },
+        { caller: client.caller, ...check.proxyParams },
         emitFrame,
         abortController.signal
       );
@@ -1571,32 +1607,15 @@ export class RpcServer {
   /**
    * Enforce authorization for relay calls/events.
    *
-   * Shell-owned panel trees are not mirrored on the server anymore, so
-   * relay authorization is now based only on caller authentication.
+   * RPC relay authorization is intentionally open between authenticated
+   * participants. Sensitive recipients must enforce their own method-level
+   * gates on receipt.
    */
   private checkRelayAuth(
-    callerId: string,
-    callerKind: CallerKind,
-    targetId: string
+    _callerId: string,
+    _callerKind: CallerKind,
+    _targetId: string
   ): RelayAuthCheck {
-    if (callerKind !== "panel") return { ok: true };
-    if (targetId === callerId) return { ok: true };
-    if (targetId.startsWith("do:") || targetId.startsWith("worker:")) return { ok: true };
-
-    const parentId = this.deps.tokenManager.getPanelParent(callerId);
-    const targetParentId = this.deps.tokenManager.getPanelParent(targetId);
-    const isDirectParent = parentId === targetId;
-    const isDirectChild = targetParentId === callerId;
-    const isRelated =
-      isDirectParent ||
-      isDirectChild ||
-      this.deps.tokenManager.isPanelDescendantOf(callerId, targetId) ||
-      this.deps.tokenManager.isPanelDescendantOf(targetId, callerId);
-
-    if (!isRelated) {
-      return { ok: false, reason: `Panel ${callerId} cannot relay to unrelated panel ${targetId}` };
-    }
-
     return { ok: true };
   }
 
@@ -1624,11 +1643,12 @@ export class RpcServer {
   }
 
   async callTarget<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T> {
-    return this.relayCall("main", targetId, method, args) as Promise<T>;
+    return this.relayCall("main", "server", targetId, method, args) as Promise<T>;
   }
 
   private async relayCall(
     callerId: string,
+    callerKind: CallerKind,
     targetId: string,
     method: string,
     args: unknown[],
@@ -1679,7 +1699,7 @@ export class RpcServer {
     }
 
     if (targetId.startsWith("do:")) {
-      return await this.relayToDO(callerId, targetId, method, args);
+      return await this.relayToDO(callerId, callerKind, targetId, method, args);
     }
 
     if (targetId.startsWith("worker:")) {
@@ -1704,31 +1724,47 @@ export class RpcServer {
 
   private async relayToDO(
     callerId: string,
+    callerKind: CallerKind,
     targetId: string,
     method: string,
     args: unknown[]
   ): Promise<unknown> {
     const ref = parseDOTarget(targetId);
+    const callerContext = this.deps.fsService?.getCallerContext(callerId);
+    if (callerContext) {
+      this.deps.fsService?.registerCallerContext(targetId, callerContext);
+    }
 
-    const { postToDOWithToken } = await import("./doDispatch.js");
+    const { postToDurableObject } = await import("./workerdRpcRelay.js");
 
     if (!this.deps.tokenManager || !this.workerdUrl || !this.workerdGatewayToken) {
       throw new Error(
         "Cannot relay to DO: tokenManager, workerdUrl, or workerdGatewayToken not configured"
       );
     }
+    const workerdUrl = this.workerdUrl;
+    const workerdGatewayToken = this.workerdGatewayToken;
 
-    return await postToDOWithToken(
-      ref,
-      method,
-      args,
-      {
-        tokenManager: this.deps.tokenManager,
-        workerdUrl: this.workerdUrl,
-        workerdGatewayToken: this.workerdGatewayToken,
-      },
-      callerId
-    );
+    const dispatch = async () => {
+      const result = await postToDurableObject(ref, method, args, {
+        workerdUrl,
+        workerdGatewayToken,
+        callerId,
+        callerKind,
+      });
+      return result;
+    };
+
+    try {
+      return await dispatch();
+    } catch (err) {
+      if (!this.ensureDOFn || !isRetryableDORelayError(err)) throw err;
+      console.warn(
+        `[RpcServer] DO relay ${targetId}.${method} failed (${err instanceof Error ? err.message : String(err)}), ensuring DO and retrying`
+      );
+      await this.ensureDOFn(ref.source, ref.className, ref.objectKey);
+      return await dispatch();
+    }
   }
 
   private async relayToWorker(targetId: string, method: string, args: unknown[]): Promise<unknown> {
@@ -1775,6 +1811,7 @@ export class RpcServer {
 
   private async relayEvent(
     fromId: string,
+    fromKind: CallerKind,
     targetId: string,
     event: string,
     payload: unknown
@@ -1826,13 +1863,14 @@ export class RpcServer {
         );
       }
 
-      const { postToDOWithToken } = await import("./doDispatch.js");
+      const { postToDurableObject } = await import("./workerdRpcRelay.js");
       // Don't pass fromId as callerId — callerId is for parent tracking,
       // fromId is the event source (already in the args).
-      await postToDOWithToken(ref, "__event", [event, payload, fromId], {
-        tokenManager: this.deps.tokenManager,
+      await postToDurableObject(ref, "__event", [event, payload, fromId], {
         workerdUrl: this.workerdUrl,
         workerdGatewayToken: this.workerdGatewayToken,
+        callerId: fromId,
+        callerKind: fromKind,
       });
       return;
     }
@@ -1965,13 +2003,11 @@ export class RpcServer {
     }
     this.pendingToolCalls.clear();
 
-    // Clear disconnect timers
     for (const timer of this.disconnectTimers.values()) {
       clearTimeout(timer);
     }
     this.disconnectTimers.clear();
 
-    // Reject any reconnect waiters so blocked relays unblock during shutdown.
     for (const waiter of this.reconnectWaiters.values()) {
       waiter.reject(createRelayError("Server shutting down", "SERVER_SHUTTING_DOWN"));
     }

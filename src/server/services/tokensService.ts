@@ -78,8 +78,8 @@ export function createTokensService(deps: {
           ];
           const token = tm.ensureToken(panelId, "panel");
           tm.setPanelParent(panelId, parentId ?? null);
-          if (ctx.callerKind === "shell" || ctx.callerKind === "server") {
-            tm.setPanelOwner(panelId, ctx.callerId, ctx.connectionId);
+          if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
+            tm.setPanelOwner(panelId, ctx.caller.runtime.id, ctx.connectionId);
           }
           deps.fsService.registerCallerContext(panelId, contextId);
           if (source && deps.codeIdentityResolver) {

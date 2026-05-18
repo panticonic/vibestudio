@@ -38,6 +38,10 @@ export interface SubscribeHeadlessAgentOptions {
   extraConfig?: Record<string, unknown>;
 }
 
+function doTargetId(source: string, className: string, objectKey: string): string {
+  return `do:${source}:${className}:${objectKey}`;
+}
+
 /**
  * Subscribe a DO agent to a channel with headless defaults.
  *
@@ -55,11 +59,7 @@ export async function subscribeHeadlessAgent(opts: SubscribeHeadlessAgentOptions
   };
 
   return opts.rpcCall(
-    "main",
-    "workers.callDO",
-    opts.source,
-    opts.className,
-    opts.objectKey,
+    doTargetId(opts.source, opts.className, opts.objectKey),
     "subscribeChannel",
     {
       channelId: opts.channelId,

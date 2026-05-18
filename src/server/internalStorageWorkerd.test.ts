@@ -5,8 +5,8 @@ import * as esbuild from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
-import { DODispatch } from "./doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { postToDurableObject, type DORef } from "./workerdRpcRelay.js";
 import { WorkerdManager, type WorkerdManagerDeps } from "./workerdManager.js";
 
 beforeAll(async () => {
@@ -48,20 +48,21 @@ function createWorkerdHarness(overrides: Partial<WorkerdManagerDeps> = {}) {
     ...overrides,
   } satisfies WorkerdManagerDeps);
 
-  const dispatch = new DODispatch();
-  dispatch.setTokenManager(tokenManager);
-  dispatch.setGetWorkerdUrl(() => {
+  const callDurableObject = async (
+    ref: DORef,
+    method: string,
+    ...args: unknown[]
+  ): Promise<unknown> => {
+    await manager.ensureDO(ref.source, ref.className, ref.objectKey);
     const port = manager.getPort();
     if (!port) throw new Error("workerd port is not available");
-    return `http://127.0.0.1:${port}`;
-  });
-  dispatch.setGetDispatchSecret(() => manager.getDispatchSecret());
-  dispatch.setGetWorkerdGatewayToken(() => manager.getWorkerdGatewayToken());
-  dispatch.setEnsureDO((source, className, objectKey) =>
-    manager.ensureDO(source, className, objectKey)
-  );
+    return postToDurableObject(ref, method, args, {
+      workerdUrl: `http://127.0.0.1:${port}`,
+      workerdGatewayToken: manager.getWorkerdGatewayToken(),
+    });
+  };
 
-  return { manager, dispatch };
+  return { manager, callDurableObject };
 }
 
 describe("internal storage DOs under workerd", () => {
@@ -85,19 +86,19 @@ describe("internal storage DOs under workerd", () => {
       objectKey: "workspace-fts",
     };
     const snapshot = { source: "panels/search/index.tsx", stateArgs: {} };
-    await harness.dispatch.dispatch(ref, "createPanel", {
+    await harness.callDurableObject(ref, "createPanel", {
       id: "root",
       title: "Root",
       parentId: null,
       snapshot,
     });
-    await harness.dispatch.dispatch(ref, "createPanel", {
+    await harness.callDurableObject(ref, "createPanel", {
       id: "child",
       title: "Search Console",
       parentId: "root",
       snapshot,
     });
-    await harness.dispatch.dispatch(ref, "indexPanel", {
+    await harness.callDurableObject(ref, "indexPanel", {
       id: "child",
       title: "Search Console",
       path: "panels/search/index.tsx",
@@ -105,11 +106,11 @@ describe("internal storage DOs under workerd", () => {
       tags: ["storage", "fts"],
     });
 
-    await expect(harness.dispatch.dispatch(ref, "search", "durable", 5)).resolves.toMatchObject([
+    await expect(harness.callDurableObject(ref, "search", "durable", 5)).resolves.toMatchObject([
       { id: "child", title: "Search Console" },
     ]);
-    await harness.dispatch.dispatch(ref, "archivePanel", "child");
-    await expect(harness.dispatch.dispatch(ref, "search", "durable", 5)).resolves.toEqual([]);
+    await harness.callDurableObject(ref, "archivePanel", "child");
+    await expect(harness.callDurableObject(ref, "search", "durable", 5)).resolves.toEqual([]);
   }, 30_000);
 
   it("supports BrowserDataDO history FTS5 search in real workerd storage", async () => {
@@ -120,7 +121,7 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
-    await harness.dispatch.dispatch(ref, "addHistoryBatch", [
+    await harness.callDurableObject(ref, "addHistoryBatch", [
       {
         url: "https://example.com/docs/storage",
         title: "Durable storage guide",
@@ -132,12 +133,12 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     await expect(
-      harness.dispatch.dispatch(ref, "searchHistory", "durable", 10)
+      harness.callDurableObject(ref, "searchHistory", "durable", 10)
     ).resolves.toMatchObject([
       { url: "https://example.com/docs/storage", title: "Durable storage guide" },
     ]);
-    await expect(harness.dispatch.dispatch(ref, "deleteHistoryRange", 100, 200)).resolves.toBe(1);
-    await expect(harness.dispatch.dispatch(ref, "searchHistory", "durable", 10)).resolves.toEqual(
+    await expect(harness.callDurableObject(ref, "deleteHistoryRange", 100, 200)).resolves.toBe(1);
+    await expect(harness.callDurableObject(ref, "searchHistory", "durable", 10)).resolves.toEqual(
       []
     );
   }, 30_000);
@@ -173,13 +174,13 @@ describe("internal storage DOs under workerd", () => {
       className: "GadWorkspaceDO",
       objectKey: "workspace-gad",
     };
-    const head = (await harness.dispatch.dispatch(ref, "ensurePiBranch", {
+    const head = (await harness.callDurableObject(ref, "ensurePiBranch", {
       branchId: "branch-live",
       channelId: "channel-live",
       metadata: { contextId: "context-live" },
     })) as { branchId: string; headEntryHash: string | null; headStateHash: string };
     const userMessageId = "01900000-0000-7000-8000-000000000001";
-    await harness.dispatch.dispatch(ref, "appendPiEntryBatch", {
+    await harness.callDurableObject(ref, "appendPiEntryBatch", {
       branchId: head.branchId,
       expectedHeadEntryHash: head.headEntryHash,
       expectedStateHash: head.headStateHash,
@@ -199,7 +200,7 @@ describe("internal storage DOs under workerd", () => {
         },
       ],
     });
-    await harness.dispatch.dispatch(ref, "appendGadEvents", {
+    await harness.callDurableObject(ref, "appendGadEvents", {
       events: [
         {
           eventId: "01900000-0000-7000-8000-000000000002",
@@ -233,7 +234,7 @@ describe("internal storage DOs under workerd", () => {
         },
       ],
     });
-    const status = (await harness.dispatch.dispatch(ref, "getStatus")) as Array<{
+    const status = (await harness.callDurableObject(ref, "getStatus")) as Array<{
       metric: string;
       value: number;
     }>;
@@ -254,20 +255,20 @@ describe("internal storage DOs under workerd", () => {
       className: "BrowserDataDO",
       objectKey: "global-record",
     };
-    await harness.dispatch.dispatch(ref, "recordHistoryVisit", {
+    await harness.callDurableObject(ref, "recordHistoryVisit", {
       url: "https://example.com/app",
       title: "Example App",
       transition: "typed",
       typed: true,
       visitTime: 100,
     });
-    await harness.dispatch.dispatch(ref, "updateHistoryTitle", {
+    await harness.callDurableObject(ref, "updateHistoryTitle", {
       url: "https://example.com/app",
       title: "Example App Updated",
       observedAt: 150,
     });
     await expect(
-      harness.dispatch.dispatch(ref, "searchHistoryForAutocomplete", {
+      harness.callDurableObject(ref, "searchHistoryForAutocomplete", {
         query: "updated",
         limit: 10,
       })
@@ -281,7 +282,7 @@ describe("internal storage DOs under workerd", () => {
         last_visit: 100,
       },
     ]);
-    await harness.dispatch.dispatch(ref, "recordHistoryVisit", {
+    await harness.callDurableObject(ref, "recordHistoryVisit", {
       url: "https://example.com/app",
       transition: "back_forward",
       typed: false,
@@ -289,7 +290,7 @@ describe("internal storage DOs under workerd", () => {
     });
 
     await expect(
-      harness.dispatch.dispatch(ref, "searchHistoryForAutocomplete", {
+      harness.callDurableObject(ref, "searchHistoryForAutocomplete", {
         query: "updated",
         limit: 10,
       })
@@ -313,7 +314,7 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
-    await harness.dispatch.dispatch(ref, "addCookiesBatch", [
+    await harness.callDurableObject(ref, "addCookiesBatch", [
       {
         name: "sid",
         value: "one",
@@ -340,8 +341,8 @@ describe("internal storage DOs under workerd", () => {
       },
     ]);
 
-    await expect(harness.dispatch.dispatch(ref, "clearCookies", "example.com")).resolves.toBe(1);
-    await expect(harness.dispatch.dispatch(ref, "clearCookies")).resolves.toBe(1);
+    await expect(harness.callDurableObject(ref, "clearCookies", "example.com")).resolves.toBe(1);
+    await expect(harness.callDurableObject(ref, "clearCookies")).resolves.toBe(1);
   }, 30_000);
 
   it("round-trips BrowserDataDO encrypted passwords in real workerd storage", async () => {
@@ -352,7 +353,7 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
-    const id = await harness.dispatch.dispatch(ref, "addPassword", {
+    const id = await harness.callDurableObject(ref, "addPassword", {
       url: "https://example.com/login",
       username: "ada",
       password: "correct horse battery staple",
@@ -362,7 +363,7 @@ describe("internal storage DOs under workerd", () => {
 
     expect(typeof id).toBe("number");
     await expect(
-      harness.dispatch.dispatch(ref, "getPasswordForSite", "https://example.com/login")
+      harness.callDurableObject(ref, "getPasswordForSite", "https://example.com/login")
     ).resolves.toMatchObject([
       {
         origin_url: "https://example.com/login",
@@ -372,8 +373,8 @@ describe("internal storage DOs under workerd", () => {
       },
     ]);
 
-    await harness.dispatch.dispatch(ref, "updatePassword", id, { password: "updated secret" });
-    await expect(harness.dispatch.dispatch(ref, "getPasswords")).resolves.toMatchObject([
+    await harness.callDurableObject(ref, "updatePassword", id, { password: "updated secret" });
+    await expect(harness.callDurableObject(ref, "getPasswords")).resolves.toMatchObject([
       { id, username: "ada", password: "updated secret" },
     ]);
   }, 30_000);
@@ -386,7 +387,7 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
-    const id = (await harness.dispatch.dispatch(ref, "addPassword", {
+    const id = (await harness.callDurableObject(ref, "addPassword", {
       url: "https://example.com/login",
       username: "ada",
       password: "first secret",
@@ -396,7 +397,7 @@ describe("internal storage DOs under workerd", () => {
     })) as number;
 
     await expect(
-      harness.dispatch.dispatch(ref, "getPasswordForSite", "https://example.com")
+      harness.callDurableObject(ref, "getPasswordForSite", "https://example.com")
     ).resolves.toMatchObject([
       {
         id,
@@ -407,15 +408,15 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     await expect(
-      harness.dispatch.dispatch(ref, "isNeverSave", "https://never.example")
+      harness.callDurableObject(ref, "isNeverSave", "https://never.example")
     ).resolves.toBe(false);
-    await harness.dispatch.dispatch(ref, "addNeverSave", "https://never.example");
+    await harness.callDurableObject(ref, "addNeverSave", "https://never.example");
     await expect(
-      harness.dispatch.dispatch(ref, "isNeverSave", "https://never.example")
+      harness.callDurableObject(ref, "isNeverSave", "https://never.example")
     ).resolves.toBe(true);
 
-    await harness.dispatch.dispatch(ref, "updateLastUsed", id);
-    await expect(harness.dispatch.dispatch(ref, "getPasswords")).resolves.toMatchObject([
+    await harness.callDurableObject(ref, "updateLastUsed", id);
+    await expect(harness.callDurableObject(ref, "getPasswords")).resolves.toMatchObject([
       { id, times_used: 1 },
     ]);
   }, 30_000);
@@ -436,13 +437,13 @@ describe("internal storage DOs under workerd", () => {
       realm: "",
       timesUsed: 1,
     };
-    await expect(harness.dispatch.dispatch(ref, "addPasswordsBatch", [password])).resolves.toBe(1);
+    await expect(harness.callDurableObject(ref, "addPasswordsBatch", [password])).resolves.toBe(1);
     await expect(
-      harness.dispatch.dispatch(ref, "addPasswordsBatch", [
+      harness.callDurableObject(ref, "addPasswordsBatch", [
         { ...password, password: "second secret", timesUsed: 7 },
       ])
     ).resolves.toBe(1);
-    await expect(harness.dispatch.dispatch(ref, "getPasswords")).resolves.toMatchObject([
+    await expect(harness.callDurableObject(ref, "getPasswords")).resolves.toMatchObject([
       {
         origin_url: "https://example.com/login",
         username: "ada",

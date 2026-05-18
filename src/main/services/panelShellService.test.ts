@@ -1,11 +1,9 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import { createPanelShellService } from "./panelShellService.js";
 
-const shellCtx: ServiceContext = {
-  callerId: "shell",
-  callerKind: "shell",
-};
+const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell", "shell") };
 
 function createServiceHarness(panelExists: boolean) {
   const focusPanel = vi.fn();

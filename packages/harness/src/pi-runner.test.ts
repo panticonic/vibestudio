@@ -45,7 +45,13 @@ function createOptions(overrides: Partial<PiRunnerOptions> = {}): PiRunnerOption
     call: vi.fn(async (_target: string, method: string) => {
       if (method === "workspace.getAgentsMd") return "workspace prompt";
       if (method === "workspace.listSkills") return [];
-      if (method === "gad.query") return { rows: [] };
+      if (method === "workers.resolveService") {
+        return {
+          kind: "durable-object",
+          targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+        };
+      }
+      if (method === "query") return { rows: [] };
       throw new Error(`unexpected rpc method ${method}`);
     }),
   };

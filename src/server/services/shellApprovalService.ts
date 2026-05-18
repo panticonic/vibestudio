@@ -54,7 +54,7 @@ export function createShellApprovalService(deps: {
             .some((approval) => approval.approvalId === approvalId);
           approvalQueue.resolve(approvalId, decision);
           if (existed) {
-            metrics.recordApprovalResolved({ decision, source: ctx.callerKind });
+            metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
           }
           return;
         }
@@ -73,7 +73,10 @@ export function createShellApprovalService(deps: {
           }
           if (choice === "dismiss") {
             approvalQueue.resolve(approvalId, "dismiss");
-            metrics.recordApprovalResolved({ decision: "dismiss", source: ctx.callerKind });
+            metrics.recordApprovalResolved({
+              decision: "dismiss",
+              source: ctx.caller.runtime.kind,
+            });
             return;
           }
           if (!pending.options.some((option) => option.value === choice)) {
@@ -85,7 +88,7 @@ export function createShellApprovalService(deps: {
             );
           }
           approvalQueue.resolveUserland(approvalId, choice);
-          metrics.recordApprovalResolved({ decision: choice, source: ctx.callerKind });
+          metrics.recordApprovalResolved({ decision: choice, source: ctx.caller.runtime.kind });
           return;
         }
         case "submitClientConfig": {
@@ -95,7 +98,7 @@ export function createShellApprovalService(deps: {
             .some((approval) => approval.approvalId === approvalId);
           approvalQueue.submitClientConfig(approvalId, values);
           if (existed) {
-            metrics.recordApprovalResolved({ decision: "submit", source: ctx.callerKind });
+            metrics.recordApprovalResolved({ decision: "submit", source: ctx.caller.runtime.kind });
           }
           return;
         }
@@ -106,7 +109,7 @@ export function createShellApprovalService(deps: {
             .some((approval) => approval.approvalId === approvalId);
           approvalQueue.submitCredentialInput(approvalId, values);
           if (existed) {
-            metrics.recordApprovalResolved({ decision: "submit", source: ctx.callerKind });
+            metrics.recordApprovalResolved({ decision: "submit", source: ctx.caller.runtime.kind });
           }
           return;
         }

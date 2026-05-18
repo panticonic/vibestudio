@@ -7,6 +7,7 @@ import { execFile } from "child_process";
 import { AsyncLocalStorage } from "async_hooks";
 import { createDevLogger } from "@natstack/dev-log";
 import { execGitFile, spawnGit, spawnGitSync } from "@natstack/shared/gitRuntime";
+import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
 
 const log = createDevLogger("GitServer");
 import type {
@@ -113,7 +114,7 @@ export class GitServer {
   private resolvedReposPath: string | null = null;
   private authManager: GitAuthManager;
   private initPatterns: string[];
-  private identityStore = new AsyncLocalStorage<{ callerId: string; callerKind: string }>();
+  private identityStore = new AsyncLocalStorage<VerifiedCaller>();
 
   // Workspace tree discovery (delegated to WorkspaceTreeManager)
   private treeManager: WorkspaceTreeManager | null = null;
@@ -185,7 +186,12 @@ export class GitServer {
 
         // Map git operation type to our fetch/push model
         const operation: "fetch" | "push" = type === "push" ? "push" : "fetch";
-        const result = this.authManager.canAccess(identity.callerId, identity.callerKind, repo, operation);
+        const result = this.authManager.canAccess(
+          identity.runtime.id,
+          identity.runtime.kind,
+          repo,
+          operation
+        );
 
         if (!result.allowed) {
           log.verbose(` Auth failed for ${operation} on ${repo}: ${result.reason}`);
@@ -204,8 +210,7 @@ export class GitServer {
 
         const repoPath = this.normalizePath(repo);
         Promise.resolve(this.writeAuthorizer({
-          callerId: identity.callerId,
-          callerKind: identity.callerKind,
+          caller: identity,
           repoPath,
         }))
           .then((authorization) => {
@@ -214,12 +219,12 @@ export class GitServer {
               return;
             }
             const reason = authorization.reason || "Git write permission denied";
-            log.verbose(` Write permission denied for ${identity.callerId} on ${repoPath}: ${reason}`);
+            log.verbose(` Write permission denied for ${identity.runtime.id} on ${repoPath}: ${reason}`);
             next(new Error(reason));
           })
           .catch((error: unknown) => {
             const reason = error instanceof Error ? error.message : String(error);
-            log.verbose(` Write permission check failed for ${identity.callerId} on ${repoPath}: ${reason}`);
+            log.verbose(` Write permission check failed for ${identity.runtime.id} on ${repoPath}: ${reason}`);
             next(new Error(reason || "Git write permission check failed"));
           });
       },
@@ -263,8 +268,7 @@ export class GitServer {
       // client without losing the request.
       const runPushAuthorization = this.pushAuthorizer
         ? Promise.resolve().then(() => this.pushAuthorizer!({
-            callerId: identity.callerId,
-            callerKind: identity.callerKind,
+            caller: identity,
             repoPath: this.normalizePath(pushRepo),
             branch,
             commit: push.commit,
@@ -336,8 +340,7 @@ export class GitServer {
   async handleHttpRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
-    callerId: string | null,
-    callerKind: string | null,
+    caller: VerifiedCaller | null,
   ): Promise<void> {
     const corsHandled = this.handleCors(req, res);
     if (corsHandled) return;
@@ -346,14 +349,14 @@ export class GitServer {
       res.end("Git server not initialized");
       return;
     }
-    if (!callerId || !callerKind) {
+    if (!caller) {
       res.writeHead(500, { "Content-Type": "text/plain" });
       res.end("Git caller identity missing");
       return;
     }
     const originalUrl = req.url ?? "/";
     req.url = originalUrl.startsWith("/_git/") ? originalUrl.slice("/_git".length) : originalUrl;
-    this.identityStore.run({ callerId, callerKind }, () => this.git!.handle(req, res));
+    this.identityStore.run(caller, () => this.git!.handle(req, res));
   }
 
   private handleCors(req: http.IncomingMessage, res: http.ServerResponse): boolean {

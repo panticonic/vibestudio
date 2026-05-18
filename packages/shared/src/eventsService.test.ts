@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEventsServiceDefinition, EventService } from "./eventsService.js";
-import type { CallerKind, ServiceContext } from "./serviceDispatcher.js";
+import { createVerifiedCaller, type CallerKind, type ServiceContext } from "./serviceDispatcher.js";
 
 function makeWsClient(callerId: string, callerKind: CallerKind, connectionId: string) {
   const ws = {
@@ -8,16 +8,15 @@ function makeWsClient(callerId: string, callerKind: CallerKind, connectionId: st
     send: vi.fn(),
     on: vi.fn(),
   };
+  const caller = createVerifiedCaller(callerId, callerKind);
   return {
     ws,
     ctx: {
-      callerId,
-      callerKind,
+      caller,
       connectionId,
       wsClient: {
         ws,
-        callerId,
-        callerKind,
+        caller,
         connectionId,
         authenticated: true,
       },
@@ -29,8 +28,8 @@ describe("EventService", () => {
   it("unsubscribeAll removes only the current connection's event subscriptions", async () => {
     const eventService = new EventService();
     const service = createEventsServiceDefinition(eventService);
-    const conn1 = makeWsClient("panel:one", "panel", "conn-1");
-    const conn2 = makeWsClient("panel:one", "panel", "conn-2");
+    const conn1 = makeWsClient("panel-one", "panel", "conn-1");
+    const conn2 = makeWsClient("panel-one", "panel", "conn-2");
 
     await service.handler(conn1.ctx, "subscribe", ["panel-tree-updated"]);
     await service.handler(conn2.ctx, "subscribe", ["panel-tree-updated"]);
@@ -50,14 +49,14 @@ describe("EventService", () => {
   it("unsubscribeAll does not remove direct-address reachability", async () => {
     const eventService = new EventService();
     const service = createEventsServiceDefinition(eventService);
-    const conn1 = makeWsClient("panel:one", "panel", "conn-1");
-    const conn2 = makeWsClient("panel:one", "panel", "conn-2");
+    const conn1 = makeWsClient("panel-one", "panel", "conn-1");
+    const conn2 = makeWsClient("panel-one", "panel", "conn-2");
 
     await service.handler(conn1.ctx, "subscribe", ["panel-tree-updated"]);
     await service.handler(conn2.ctx, "subscribe", ["panel-tree-updated"]);
     await service.handler(conn1.ctx, "unsubscribeAll", []);
 
-    const delivered = eventService.emitToCaller("panel:one", "focus-address-bar");
+    const delivered = eventService.emitToCaller("panel-one", "focus-address-bar");
 
     expect(delivered).toBe(true);
     expect(conn1.ws.send).toHaveBeenCalledWith(JSON.stringify({
@@ -73,13 +72,13 @@ describe("EventService", () => {
   it("can direct-address exactly one live connection", async () => {
     const eventService = new EventService();
     const service = createEventsServiceDefinition(eventService);
-    const conn1 = makeWsClient("panel:one", "panel", "conn-1");
-    const conn2 = makeWsClient("panel:one", "panel", "conn-2");
+    const conn1 = makeWsClient("panel-one", "panel", "conn-1");
+    const conn2 = makeWsClient("panel-one", "panel", "conn-2");
 
     await service.handler(conn1.ctx, "subscribe", ["panel-tree-updated"]);
     await service.handler(conn2.ctx, "subscribe", ["panel-tree-updated"]);
 
-    const delivered = eventService.emitToConnection("panel:one", "conn-2", "focus-address-bar");
+    const delivered = eventService.emitToConnection("panel-one", "conn-2", "focus-address-bar");
 
     expect(delivered).toBe(true);
     expect(conn1.ws.send).not.toHaveBeenCalled();

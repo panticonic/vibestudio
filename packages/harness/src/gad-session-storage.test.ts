@@ -29,10 +29,15 @@ function fakeGad(branchId = "branch:test"): { rpc: GadRpcCaller; state: FakeStat
   };
   const call = vi.fn(async (_target: string, method: string, ...args: unknown[]): Promise<unknown> => {
     switch (method) {
-      case "gad.ensurePiBranch":
-      case "gad.getPiBranchHead":
+      case "workers.resolveService":
+        return {
+          kind: "durable-object",
+          targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+        };
+      case "ensurePiBranch":
+      case "getPiBranchHead":
         return state.head;
-      case "gad.appendPiEntryBatch": {
+      case "appendPiEntryBatch": {
         const input = args[0] as AppendPiEntryBatchInput;
         state.appendCalls.push(input);
         if (state.conflictsRemaining > 0) {
@@ -59,10 +64,10 @@ function fakeGad(branchId = "branch:test"): { rpc: GadRpcCaller; state: FakeStat
         }
         return { ...state.head, items: input.items.map((item) => ({ entryId: item.entryId, entryHash: `pi-entry-v1:${item.entryId}`, parentEntryId: item.parentEntryId })) };
       }
-      case "gad.appendGadEvents":
+      case "appendGadEvents":
         state.gadEvents.push(...((args[0] as { events: unknown[] }).events));
         return { eventIds: [] };
-      case "gad.setBranchHead": {
+      case "setBranchHead": {
         const { entryId } = args[0] as { entryId: string | null };
         const row = state.rows.find((candidate) => candidate.entryId === entryId);
         state.head = {
@@ -73,17 +78,17 @@ function fakeGad(branchId = "branch:test"): { rpc: GadRpcCaller; state: FakeStat
         };
         return state.head;
       }
-      case "gad.getEntryById": {
+      case "getEntryById": {
         const { entryId } = args[0] as { entryId: string };
         return state.rows.find((row) => row.entryId === entryId) ?? null;
       }
-      case "gad.getBranchPath": {
+      case "getBranchPath": {
         const { throughEntryId } = args[0] as { throughEntryId?: string | null };
         if (throughEntryId == null) return [...state.rows];
         const index = state.rows.findIndex((row) => row.entryId === throughEntryId);
         return index < 0 ? [] : state.rows.slice(0, index + 1);
       }
-      case "gad.findEntries": {
+      case "findEntries": {
         const { entryType } = args[0] as { entryType: string };
         return state.rows.filter((row) => row.entryType === entryType);
       }

@@ -94,20 +94,20 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
             string,
             { x: number; y: number; width: number; height: number },
           ];
-          assertOwnsOrShell(ctx.callerId, viewId, "setBounds");
+          assertOwnsOrShell(ctx.caller.runtime.id, viewId, "setBounds");
           vm.setViewBounds(viewId, bounds);
           return;
         }
         case "setVisible": {
           const [viewId, visible] = args as [string, boolean];
-          assertOwnsOrShell(ctx.callerId, viewId, "setVisible");
+          assertOwnsOrShell(ctx.caller.runtime.id, viewId, "setVisible");
           vm.setViewVisible(viewId, visible);
           return;
         }
         case "setThemeCss": {
           // Theme CSS is process-wide; restrict to shell only as defense in
           // depth. (Service policy is already shell-only.)
-          if (ctx.callerId !== "shell") {
+          if (ctx.caller.runtime.id !== "shell") {
             throw new Error("view.setThemeCss: shell-only");
           }
           const css = args[0] as string;
@@ -115,7 +115,7 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           return;
         }
         case "updateLayout": {
-          if (ctx.callerId !== "shell") {
+          if (ctx.caller.runtime.id !== "shell") {
             throw new Error("view.updateLayout: shell-only");
           }
           const layoutUpdate = args[0] as {
@@ -130,7 +130,7 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           return;
         }
         case "setShellOverlay": {
-          if (ctx.callerId !== "shell") {
+          if (ctx.caller.runtime.id !== "shell") {
             throw new Error("view.setShellOverlay: shell-only");
           }
           const active = args[0] as boolean;
@@ -138,7 +138,7 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           return;
         }
         case "showNativeShellOverlay": {
-          if (ctx.callerId !== "shell") {
+          if (ctx.caller.runtime.id !== "shell") {
             throw new Error("view.showNativeShellOverlay: shell-only");
           }
           const [options] = args as [
@@ -153,7 +153,7 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           return;
         }
         case "updateNativeShellOverlay": {
-          if (ctx.callerId !== "shell") {
+          if (ctx.caller.runtime.id !== "shell") {
             throw new Error("view.updateNativeShellOverlay: shell-only");
           }
           const [options] = args as [
@@ -168,7 +168,7 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           return;
         }
         case "hideNativeShellOverlay": {
-          if (ctx.callerId !== "shell") {
+          if (ctx.caller.runtime.id !== "shell") {
             throw new Error("view.hideNativeShellOverlay: shell-only");
           }
           vm.hideNativeShellOverlay(args[0] as string | undefined);
@@ -176,38 +176,38 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
         }
         case "browserNavigate": {
           const [browserId, url] = args as [string, string];
-          assertOwnsOrShell(ctx.callerId, browserId, "browserNavigate");
+          assertOwnsOrShell(ctx.caller.runtime.id, browserId, "browserNavigate");
           assertHttpUrl(url);
           await vm.navigateView(browserId, url);
           return;
         }
         case "browserGoBack": {
           const browserId = args[0] as string;
-          assertOwnsOrShell(ctx.callerId, browserId, "browserGoBack");
+          assertOwnsOrShell(ctx.caller.runtime.id, browserId, "browserGoBack");
           vm.getWebContents(browserId)?.goBack();
           return;
         }
         case "browserGoForward": {
           const browserId = args[0] as string;
-          assertOwnsOrShell(ctx.callerId, browserId, "browserGoForward");
+          assertOwnsOrShell(ctx.caller.runtime.id, browserId, "browserGoForward");
           vm.getWebContents(browserId)?.goForward();
           return;
         }
         case "browserReload": {
           const browserId = args[0] as string;
-          assertOwnsOrShell(ctx.callerId, browserId, "browserReload");
+          assertOwnsOrShell(ctx.caller.runtime.id, browserId, "browserReload");
           vm.reload(browserId);
           return;
         }
         case "browserForceReload": {
           const browserId = args[0] as string;
-          assertOwnsOrShell(ctx.callerId, browserId, "browserForceReload");
+          assertOwnsOrShell(ctx.caller.runtime.id, browserId, "browserForceReload");
           vm.forceReload(browserId);
           return;
         }
         case "browserStop": {
           const browserId = args[0] as string;
-          assertOwnsOrShell(ctx.callerId, browserId, "browserStop");
+          assertOwnsOrShell(ctx.caller.runtime.id, browserId, "browserStop");
           vm.stop(browserId);
           return;
         }

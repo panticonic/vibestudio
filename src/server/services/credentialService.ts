@@ -53,9 +53,8 @@ import {
   normalizeCredentialInjection,
   normalizeUrlAudiences,
 } from "../../../packages/shared/src/credentials/urlAudience.js";
-import type { ServiceContext } from "../../../packages/shared/src/serviceDispatcher.js";
+import type { CallerKind, ServiceContext } from "../../../packages/shared/src/serviceDispatcher.js";
 import type { ServiceDefinition } from "../../../packages/shared/src/serviceDefinition.js";
-import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
 import type { EgressProxy } from "./egressProxy.js";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import { CredentialLifecycle, CredentialLifecycleError } from "./credentialLifecycle.js";
@@ -807,7 +806,6 @@ interface CredentialServiceDeps {
   eventService?: Pick<EventService, "emit" | "emitToCaller" | "emitToConnection">;
   tokenManager?: Pick<TokenManager, "getPanelOwner" | "getPanelOwnerConnection">;
   egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;
-  codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
   approvalQueue?: ApprovalQueue;
   sessionGrantStore?: CredentialSessionGrantStore;
   credentialLifecycle?: CredentialLifecycle;
@@ -856,7 +854,7 @@ interface OAuthConnectionTransaction {
   createdAt: number;
   expiresAt: number;
   callerId: string;
-  callerKind: ServiceContext["callerKind"];
+  callerKind: CallerKind;
   repoPath: string;
   effectiveVersion: string;
   stateParam: string;
@@ -887,7 +885,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   const eventService = deps.eventService;
   const tokenManager = deps.tokenManager;
   const egressProxy = deps.egressProxy;
-  const codeIdentityResolver = deps.codeIdentityResolver;
   const approvalQueue = deps.approvalQueue;
   const sessionGrantStore = deps.sessionGrantStore ?? new CredentialSessionGrantStore();
   const sessionCredentialCapture = deps.sessionCredentialCapture;
@@ -908,13 +905,14 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     deliveryConnectionId?: string;
     parentPanelId?: string;
   } | null {
-    const targetCallerId = handoffTarget?.callerId ?? ctx.callerId;
-    const targetCallerKind = handoffTarget?.callerKind ?? ctx.callerKind;
+    const targetCallerId = handoffTarget?.callerId ?? ctx.caller.runtime.id;
+    const targetCallerKind = handoffTarget?.callerKind ?? ctx.caller.runtime.kind;
     if (targetCallerKind === "shell") {
       return {
         deliveryCallerId: targetCallerId,
         deliveryCallerKind: "shell",
-        deliveryConnectionId: targetCallerId === ctx.callerId ? ctx.connectionId : undefined,
+        deliveryConnectionId:
+          targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
       };
     }
     if (targetCallerKind === "panel") {
@@ -973,7 +971,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const audience = normalizeUrlAudiences(request.audience);
     const injection = normalizeCredentialInjection(request.injection);
     const bindings = normalizeCredentialBindings(request.bindings, { audience, injection });
-    const identity = codeIdentityResolver?.resolveByCallerId(ctx.callerId) ?? null;
+    const identity = ctx.caller.code ?? null;
     const now = Date.now();
     const approvalIdentity = resolveApprovalIdentity(ctx);
     if (!opts.approvalDecision) {
@@ -982,7 +980,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         credentialLabel: request.label,
         audience,
         injection,
-        accountIdentity: normalizeAccountIdentity(request.accountIdentity, ctx.callerId),
+        accountIdentity: normalizeAccountIdentity(request.accountIdentity, ctx.caller.runtime.id),
         scopes: request.scopes ?? [],
         identity: approvalIdentity,
         metadata: request.metadata,
@@ -990,11 +988,14 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       });
     }
     const owner = {
-      sourceId: identity?.repoPath ?? ctx.callerId,
+      sourceId: identity?.repoPath ?? ctx.caller.runtime.id,
       sourceKind: identity ? ("workspace" as const) : ("user" as const),
-      label: identity?.repoPath ?? ctx.callerId,
+      label: identity?.repoPath ?? ctx.caller.runtime.id,
     };
-    const accountIdentity = normalizeAccountIdentity(request.accountIdentity, ctx.callerId);
+    const accountIdentity = normalizeAccountIdentity(
+      request.accountIdentity,
+      ctx.caller.runtime.id
+    );
     const credential: Credential = {
       id,
       label: request.label,
@@ -1032,7 +1033,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         ? "connection_credential.replaced"
         : "connection_credential.created",
       ts: now,
-      callerId: ctx.callerId,
+      callerId: ctx.caller.runtime.id,
       providerId: "url-bound",
       connectionId: id,
       storageKind: "connection-credential",
@@ -1075,7 +1076,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     params: RequestClientConfigParams
   ): Promise<ClientConfigStatus> {
     const request = params as ConfigureClientRequest;
-    if (!approvalQueue || (ctx.callerKind !== "panel" && ctx.callerKind !== "worker")) {
+    if (
+      !approvalQueue ||
+      (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker")
+    ) {
       throw new Error("client config approval is unavailable");
     }
     const authorizeUrl = canonicalUrl(request.authorizeUrl);
@@ -1088,8 +1092,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const identity = resolveApprovalIdentity(ctx);
     const result = await approvalQueue.requestClientConfig({
       kind: "client-config",
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       configId: request.configId,
@@ -1152,8 +1156,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       configId: request.configId,
       currentVersion: version,
       owner: existing?.owner ?? {
-        callerId: ctx.callerId,
-        callerKind: ctx.callerKind,
+        callerId: ctx.caller.runtime.id,
+        callerKind: ctx.caller.runtime.kind,
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
       },
@@ -1172,7 +1176,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     await appendAudit({
       type: "client_config.updated",
       ts: now,
-      callerId: ctx.callerId,
+      callerId: ctx.caller.runtime.id,
       configId: request.configId,
       authorizeUrl,
       tokenUrl,
@@ -1203,7 +1207,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (
       record?.owner &&
       !isSameConfigTrustScope(
-        { ...resolveApprovalIdentity(ctx), callerId: ctx.callerId },
+        { ...resolveApprovalIdentity(ctx), callerId: ctx.caller.runtime.id },
         record.owner
       )
     ) {
@@ -1222,19 +1226,22 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (
       existing.owner &&
       !isSameConfigTrustScope(
-        { ...resolveApprovalIdentity(ctx), callerId: ctx.callerId },
+        { ...resolveApprovalIdentity(ctx), callerId: ctx.caller.runtime.id },
         existing.owner
       )
     ) {
       throw new Error("Client config deletion is not authorized for this caller");
     }
-    if (approvalQueue && (ctx.callerKind === "panel" || ctx.callerKind === "worker")) {
+    if (
+      approvalQueue &&
+      (ctx.caller.runtime.kind === "panel" || ctx.caller.runtime.kind === "worker")
+    ) {
       const identity = resolveApprovalIdentity(ctx);
       const decision = await approvalQueue.request({
         kind: "capability",
         dedupKey: `delete-client-config:${request.configId}`,
-        callerId: ctx.callerId,
-        callerKind: ctx.callerKind,
+        callerId: ctx.caller.runtime.id,
+        callerKind: ctx.caller.runtime.kind,
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         capability: "client-config-delete",
@@ -1281,11 +1288,11 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           "client-loopback callbacks require a transaction id"
         );
       }
-      if (tx.deliveryCallerId !== ctx.callerId || tx.deliveryCallerKind !== "shell") {
+      if (tx.deliveryCallerId !== ctx.caller.runtime.id || tx.deliveryCallerKind !== "shell") {
         throw new OAuthConnectionError("client_not_authorized");
       }
     } else if (tx.redirectStrategy === "client-forwarded") {
-      if (tx.callerId !== ctx.callerId) {
+      if (tx.callerId !== ctx.caller.runtime.id) {
         throw new OAuthConnectionError("client_not_authorized");
       }
     } else {
@@ -1304,7 +1311,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     params: RequestCredentialInputParams
   ): Promise<StoredCredentialSummary> {
     const request = params as RequestCredentialInputRequest;
-    if (!approvalQueue || (ctx.callerKind !== "panel" && ctx.callerKind !== "worker")) {
+    if (
+      !approvalQueue ||
+      (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker")
+    ) {
       throw new Error("Credential input approval is unavailable");
     }
     if (request.fields.length !== 1) {
@@ -1324,13 +1334,13 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const injection = normalizeCredentialInjection(request.credential.injection);
     const accountIdentity = normalizeAccountIdentity(
       request.credential.accountIdentity,
-      ctx.callerId
+      ctx.caller.runtime.id
     );
     const identity = resolveApprovalIdentity(ctx);
     const result = await approvalQueue.requestCredentialInput({
       kind: "credential-input",
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.title,
@@ -1420,7 +1430,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     handoffTarget?: { callerId: string; callerKind: "panel" | "shell" };
   } {
     if ("spec" in params) {
-      if (ctx.callerKind === "panel") {
+      if (ctx.caller.runtime.kind === "panel") {
         throw new OAuthConnectionError(
           "client_not_authorized",
           "Panel callers cannot specify a credential browser handoff target"
@@ -1545,7 +1555,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (request.flow.type !== "api-key") {
       throw new OAuthConnectionError("unsupported_flow");
     }
-    if (!approvalQueue || (ctx.callerKind !== "panel" && ctx.callerKind !== "worker")) {
+    if (
+      !approvalQueue ||
+      (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker")
+    ) {
       throw new Error("Credential input approval is unavailable");
     }
     for (const field of request.flow.fields) {
@@ -1560,7 +1573,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const injection = normalizeCredentialInjection(request.credential.injection);
     const accountIdentity = normalizeAccountIdentity(
       request.credential.accountIdentity,
-      ctx.callerId
+      ctx.caller.runtime.id
     );
     const identity = resolveApprovalIdentity(ctx);
     validateApiKeyMaterialTemplate(
@@ -1569,8 +1582,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     );
     const result = await approvalQueue.requestCredentialInput({
       kind: "credential-input",
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.flow.title ?? request.credential.label,
@@ -1633,14 +1646,17 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (request.credential.injection.type !== "aws-sigv4") {
       throw new OAuthConnectionError("unsupported_injection");
     }
-    if (!approvalQueue || (ctx.callerKind !== "panel" && ctx.callerKind !== "worker")) {
+    if (
+      !approvalQueue ||
+      (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker")
+    ) {
       throw new Error("Credential input approval is unavailable");
     }
     const audience = normalizeUrlAudiences(request.credential.audience);
     const injection = normalizeCredentialInjection(request.credential.injection);
     const accountIdentity = normalizeAccountIdentity(
       request.credential.accountIdentity,
-      ctx.callerId
+      ctx.caller.runtime.id
     );
     const identity = resolveApprovalIdentity(ctx);
     const fields = [
@@ -1655,8 +1671,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     ];
     const result = await approvalQueue.requestCredentialInput({
       kind: "credential-input",
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       title: request.flow.title ?? request.credential.label,
@@ -1735,7 +1751,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const identity = resolveApprovalIdentity(ctx);
     const approvalAccount = normalizeAccountIdentity(
       request.credential.accountIdentity,
-      ctx.callerId
+      ctx.caller.runtime.id
     );
     const approvalDecision = await requestCredentialApproval(ctx, {
       credentialId: randomUUID(),
@@ -1761,13 +1777,16 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       privateKey = pair.privateKey;
       publicKey = openSshEd25519PublicKey(pair.publicKey);
     } else {
-      if (!approvalQueue || (ctx.callerKind !== "panel" && ctx.callerKind !== "worker")) {
+      if (
+        !approvalQueue ||
+        (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker")
+      ) {
         throw new Error("Credential input approval is unavailable");
       }
       const result = await approvalQueue.requestCredentialInput({
         kind: "credential-input",
-        callerId: ctx.callerId,
-        callerKind: ctx.callerKind,
+        callerId: ctx.caller.runtime.id,
+        callerKind: ctx.caller.runtime.kind,
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         title: request.flow.title ?? request.credential.label,
@@ -2045,7 +2064,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       injection,
       accountIdentity:
         subject.accountIdentity ??
-        normalizeAccountIdentity(request.credential.accountIdentity, ctx.callerId),
+        normalizeAccountIdentity(request.credential.accountIdentity, ctx.caller.runtime.id),
       scopes: request.credential.scopes ?? request.flow.scopes ?? [],
       identity,
       metadata: {
@@ -2130,7 +2149,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       credentialLabel: request.credential.label,
       audience,
       injection,
-      accountIdentity: normalizeAccountIdentity(request.credential.accountIdentity, ctx.callerId),
+      accountIdentity: normalizeAccountIdentity(
+        request.credential.accountIdentity,
+        ctx.caller.runtime.id
+      ),
       scopes: request.credential.scopes ?? [],
       identity,
       metadata: {
@@ -2215,7 +2237,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       credentialLabel: request.credential.label,
       audience,
       injection,
-      accountIdentity: normalizeAccountIdentity(request.credential.accountIdentity, ctx.callerId),
+      accountIdentity: normalizeAccountIdentity(
+        request.credential.accountIdentity,
+        ctx.caller.runtime.id
+      ),
       scopes: request.credential.scopes ?? [],
       identity,
       metadata: {
@@ -2309,7 +2334,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       credentialLabel: request.credential.label,
       audience,
       injection,
-      accountIdentity: normalizeAccountIdentity(request.credential.accountIdentity, ctx.callerId),
+      accountIdentity: normalizeAccountIdentity(
+        request.credential.accountIdentity,
+        ctx.caller.runtime.id
+      ),
       scopes: request.credential.scopes ?? request.flow.scopes ?? [],
       identity,
       metadata: {
@@ -2342,9 +2370,11 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     // verification_uri_complete. Cancelling the bar entry aborts polling.
     const presentation = approvalQueue?.presentDeviceCode({
       kind: "device-code",
-      callerId: ctx.callerId,
+      callerId: ctx.caller.runtime.id,
       callerKind:
-        ctx.callerKind === "panel" || ctx.callerKind === "worker" ? ctx.callerKind : "panel",
+        ctx.caller.runtime.kind === "panel" || ctx.caller.runtime.kind === "worker"
+          ? ctx.caller.runtime.kind
+          : "panel",
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       credentialLabel: request.credential.label,
@@ -2360,8 +2390,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       !browserTarget ||
       !emitToBrowserTarget(browserTarget, "external-open:open", {
         url: verificationUrl,
-        callerId: ctx.callerId,
-        callerKind: ctx.callerKind,
+        callerId: ctx.caller.runtime.id,
+        callerKind: ctx.caller.runtime.kind,
       })
     ) {
       presentation?.dispose();
@@ -2490,7 +2520,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         credentialLabel: request.credential.label,
         audience,
         injection,
-        accountIdentity: normalizeAccountIdentity(request.credential.accountIdentity, ctx.callerId),
+        accountIdentity: normalizeAccountIdentity(
+          request.credential.accountIdentity,
+          ctx.caller.runtime.id
+        ),
         scopes: request.credential.scopes ?? [],
         identity,
         metadata: {
@@ -2517,8 +2550,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         !browserTarget ||
         !emitToBrowserTarget(browserTarget, "external-open:open", {
           url: authorizeUrl.toString(),
-          callerId: ctx.callerId,
-          callerKind: ctx.callerKind,
+          callerId: ctx.caller.runtime.id,
+          callerKind: ctx.caller.runtime.kind,
         })
       ) {
         throw new OAuthConnectionError("browser_unavailable");
@@ -2645,7 +2678,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         injection,
         accountIdentity: normalizeAccountIdentity(
           oauthRequest.credential.accountIdentity,
-          ctx.callerId
+          ctx.caller.runtime.id
         ),
         scopes: oauthRequest.credential.scopes ?? oauthRequest.flow.scopes ?? [],
         identity,
@@ -2677,8 +2710,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       }
       const openPayload = {
         url: started.authorizeUrl,
-        callerId: ctx.callerId,
-        callerKind: ctx.callerKind,
+        callerId: ctx.caller.runtime.id,
+        callerKind: ctx.caller.runtime.kind,
         ...(redirectStrategy === "client-loopback"
           ? { oauthLoopback: buildClientLoopbackHandoff(tx, started.state) }
           : {}),
@@ -2694,8 +2727,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         browserDelivered = emitToBrowserTarget(browserTarget, "browser-panel:open", {
           url: started.authorizeUrl,
           parentPanelId: browserTarget.parentPanelId,
-          callerId: ctx.callerId,
-          callerKind: ctx.callerKind,
+          callerId: ctx.caller.runtime.id,
+          callerKind: ctx.caller.runtime.kind,
         });
       } else {
         browserDelivered = emitToBrowserTarget(browserTarget, "external-open:open", openPayload);
@@ -3338,7 +3371,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       await appendAudit({
         type: "connection_credential.revocation_failed",
         ts: Date.now(),
-        callerId: ctx.callerId,
+        callerId: ctx.caller.runtime.id,
         providerId: credential.providerId,
         connectionId: credential.connectionId,
         storageKind: "connection-credential",
@@ -3439,7 +3472,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const requestBody: string | Uint8Array | undefined =
       params.bodyBase64 !== undefined ? Buffer.from(params.bodyBase64, "base64") : params.body;
     const result = await egressProxy.forwardProxyFetch({
-      callerId: ctx.callerId,
+      caller: ctx.caller,
       url: params.url,
       method: params.method,
       headers: params.headers,
@@ -3464,7 +3497,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }
     const request = params as ProxyGitHttpRequest;
     const result = await egressProxy.forwardGitHttp({
-      callerId: ctx.callerId,
+      caller: ctx.caller,
       url: request.url,
       method: request.method ?? "GET",
       headers: request.headers ?? {},
@@ -3516,8 +3549,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       state: "created",
       createdAt: Date.now(),
       expiresAt: Date.now() + PENDING_OAUTH_TTL_MS,
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       stateParam: params.stateParam,
@@ -3641,9 +3674,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     repoPath: string;
     effectiveVersion: string;
   } {
-    const identity = codeIdentityResolver?.resolveByCallerId(ctx.callerId);
+    const identity = ctx.caller.code;
     return {
-      repoPath: identity?.repoPath ?? ctx.callerId,
+      repoPath: identity?.repoPath ?? ctx.caller.runtime.id,
       effectiveVersion: identity?.effectiveVersion ?? "unknown",
     };
   }
@@ -3662,15 +3695,18 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       replacementCredentialLabel?: string;
     }
   ): Promise<Exclude<GrantedDecision, "deny">> {
-    if (!approvalQueue || (ctx.callerKind !== "panel" && ctx.callerKind !== "worker")) {
+    if (
+      !approvalQueue ||
+      (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker")
+    ) {
       return "session";
     }
     const oauthAuthorizeOrigin = params.metadata?.["oauthAuthorizeOrigin"];
     const oauthTokenOrigin = params.metadata?.["oauthTokenOrigin"];
     const oauthUserinfoOrigin = params.metadata?.["oauthUserinfoOrigin"];
     const decision = await approvalQueue.request({
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
       repoPath: params.identity.repoPath,
       effectiveVersion: params.identity.effectiveVersion,
       credentialId: params.credentialId,
@@ -3730,12 +3766,12 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       accountIdentity: Partial<AccountIdentity>;
     }
   ): Promise<(Credential & { id: string }) | null> {
-    const account = normalizeAccountIdentity(candidate.accountIdentity, ctx.callerId);
-    if (!account.providerUserId || account.providerUserId === ctx.callerId) {
+    const account = normalizeAccountIdentity(candidate.accountIdentity, ctx.caller.runtime.id);
+    if (!account.providerUserId || account.providerUserId === ctx.caller.runtime.id) {
       return null;
     }
-    const identity = codeIdentityResolver?.resolveByCallerId(ctx.callerId) ?? null;
-    const ownerSourceId = identity?.repoPath ?? ctx.callerId;
+    const identity = ctx.caller.code ?? null;
+    const ownerSourceId = identity?.repoPath ?? ctx.caller.runtime.id;
     const providerKey =
       candidate.metadata?.["providerId"] ??
       candidate.metadata?.["modelProviderId"] ??
@@ -3781,7 +3817,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (canCallerUseStoredCredential(ctx, credential, usage)) {
       return;
     }
-    if (!approvalQueue || (ctx.callerKind !== "panel" && ctx.callerKind !== "worker")) {
+    if (
+      !approvalQueue ||
+      (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker")
+    ) {
       throw new Error("Credential caller is not granted");
     }
     if (!credential.id) {
@@ -3789,8 +3828,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     }
     const identity = resolveApprovalIdentity(ctx);
     const decision = await approvalQueue.request({
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       credentialId: credential.id,
@@ -3824,7 +3863,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       ...credential,
       grants: upsertCredentialUseGrant(
         credential.grants ?? [],
-        grantForDecision(ctx.callerId, identity, decision, now, usage)
+        grantForDecision(ctx.caller.runtime.id, identity, decision, now, usage)
       ),
       metadata: {
         ...(credential.metadata ?? {}),
@@ -3834,10 +3873,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   }
 
   function canCallerSeeStoredCredential(ctx: ServiceContext, credential: Credential): boolean {
-    if (ctx.callerKind === "shell" || ctx.callerKind === "server") {
+    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
       return true;
     }
-    const identity = codeIdentityResolver?.resolveByCallerId(ctx.callerId);
+    const identity = ctx.caller.code;
     if (!identity) {
       return false;
     }
@@ -3852,7 +3891,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     credential: Credential,
     usage: CredentialUseContext
   ): boolean {
-    if (ctx.callerKind === "shell" || ctx.callerKind === "server") {
+    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
       return true;
     }
     return (
@@ -3865,7 +3904,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     ctx: ServiceContext,
     credential: Credential
   ): boolean {
-    if (ctx.callerKind === "shell" || ctx.callerKind === "server") {
+    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
       return true;
     }
     return canCallerSeeStoredCredential(ctx, credential);
@@ -3898,7 +3937,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       (grants, usage) =>
         upsertCredentialUseGrant(
           grants,
-          grantForDecision(ctx.callerId, identity, decision, now, usage)
+          grantForDecision(ctx.caller.runtime.id, identity, decision, now, usage)
         ),
       credential.grants ?? []
     );
@@ -4538,7 +4577,7 @@ function gitRemoteFromUrl(targetUrl: URL): string {
 }
 
 function requireShellOrServer(ctx: ServiceContext, method: string): void {
-  if (ctx.callerKind !== "shell" && ctx.callerKind !== "server") {
+  if (ctx.caller.runtime.kind !== "shell" && ctx.caller.runtime.kind !== "server") {
     throw new Error(`credentials.${method} is restricted to shell/server callers`);
   }
 }

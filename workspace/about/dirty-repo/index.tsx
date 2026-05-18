@@ -18,7 +18,6 @@ function App() {
   const { repoPath } = getStateArgs<{ repoPath: string }>();
 
   const handleRetryBuild = () => {
-    // `id` is the raw panelId. rpc.selfId is "panel:<id>".
     void rpc.call("main", "panel.retryDirtyBuild", id).catch((err: unknown) => console.error("[DirtyRepo] Failed to retry build:", err));
   };
 

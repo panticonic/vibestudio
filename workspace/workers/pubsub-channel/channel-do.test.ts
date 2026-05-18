@@ -2,6 +2,11 @@ import { describe, it, expect, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { PubSubChannel } from "./channel-do.js";
 
+function setRpcCaller(instance: PubSubChannel, callerId: string | null, callerKind: string | null): void {
+  (instance as unknown as { _currentRpcCallerId: string | null })._currentRpcCallerId = callerId;
+  (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind = callerKind;
+}
+
 describe("PubSubChannel", () => {
   describe("getParticipants()", () => {
     it("returns DO identity when present", async () => {
@@ -10,8 +15,8 @@ describe("PubSubChannel", () => {
       });
 
       sql.exec(
-        `INSERT INTO participants (id, metadata, transport, connected_at, do_source, do_class, do_key)
-         VALUES ('p1', '{"name":"Agent"}', 'do', 1000, 'workers/agent', 'AgentDO', 'key-1')`,
+        `INSERT INTO participants (id, metadata, transport, connected_at)
+         VALUES ('do:workers/agent:AgentDO:key-1', '{"name":"Agent"}', 'do', 1000)`,
       );
       sql.exec(
         `INSERT INTO participants (id, metadata, transport, connected_at)
@@ -21,7 +26,7 @@ describe("PubSubChannel", () => {
       const participants = await instance.getParticipants();
       expect(participants).toHaveLength(2);
 
-      const doParticipant = participants.find(p => p.participantId === "p1")!;
+      const doParticipant = participants.find(p => p.participantId === "do:workers/agent:AgentDO:key-1")!;
       expect(doParticipant.transport).toBe("do");
       expect(doParticipant.doRef).toEqual({ source: "workers/agent", className: "AgentDO", objectKey: "key-1" });
 
@@ -57,20 +62,22 @@ describe("PubSubChannel", () => {
       });
 
       const result = await instance.subscribe("do:workers/agent:AgentDO:key-1", {
-        transport: "do",
-        doSource: "workers/agent",
-        doClass: "AgentDO",
-        doKey: "key-1",
         contextId: "ctx-1",
         name: "TestAgent",
       });
 
       expect(result.ok).toBe(true);
 
-      const participants = sql.exec(`SELECT id, transport, do_source, do_class, do_key FROM participants WHERE id = 'do:workers/agent:AgentDO:key-1'`).toArray();
+      const participants = sql.exec(`SELECT id, transport FROM participants WHERE id = 'do:workers/agent:AgentDO:key-1'`).toArray();
       expect(participants).toHaveLength(1);
       expect(participants[0]!["transport"]).toBe("do");
-      expect(participants[0]!["do_source"]).toBe("workers/agent");
+
+      const roster = await instance.getParticipants();
+      expect(roster.find(p => p.participantId === "do:workers/agent:AgentDO:key-1")?.doRef).toEqual({
+        source: "workers/agent",
+        className: "AgentDO",
+        objectKey: "key-1",
+      });
     });
 
     it("registers RPC subscriber (panel) with transport='rpc'", async () => {
@@ -88,6 +95,21 @@ describe("PubSubChannel", () => {
       expect(participants[0]!["transport"]).toBe("rpc");
     });
 
+    it("rejects an RPC participant ID that does not match the verified caller", async () => {
+      const { instance } = await createTestDO(PubSubChannel, {
+        __objectKey: "test-channel",
+      });
+
+      (instance as unknown as { _currentRpcCallerId: string })._currentRpcCallerId = "panel-real";
+
+      await expect(
+        instance.subscribe("panel-spoofed", {
+          contextId: "ctx-1",
+          callerKind: "panel",
+        }),
+      ).rejects.toThrow("Participant panel-spoofed cannot be subscribed by caller panel-real");
+    });
+
     it("returns replay with REPLAY_LIMIT=50 and sets replayTruncated", async () => {
       const { instance, sql } = await createTestDO(PubSubChannel, {
         __objectKey: "test-channel",
@@ -103,10 +125,6 @@ describe("PubSubChannel", () => {
       }
 
       const result = await instance.subscribe("do:test:TestDO:key", {
-        transport: "do",
-        doSource: "test",
-        doClass: "TestDO",
-        doKey: "key",
         replay: true,
       });
 
@@ -132,10 +150,6 @@ describe("PubSubChannel", () => {
       }
 
       const result = await instance.subscribe("do:test:TestDO:key", {
-        transport: "do",
-        doSource: "test",
-        doClass: "TestDO",
-        doKey: "key",
         replay: true,
       });
 
@@ -150,14 +164,12 @@ describe("PubSubChannel", () => {
 
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
-        transport: "rpc",
         handle: "ai-chat",
       });
 
       await expect(
         instance.subscribe("panel-2", {
           contextId: "ctx-1",
-          transport: "rpc",
           handle: "ai-chat",
         }),
       ).rejects.toThrow(/handle "ai-chat" is already in use/);
@@ -170,12 +182,10 @@ describe("PubSubChannel", () => {
 
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
-        transport: "rpc",
         handle: "ai-chat",
       });
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
-        transport: "rpc",
         handle: "ai-chat",
       });
 
@@ -192,7 +202,6 @@ describe("PubSubChannel", () => {
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
         channelConfig: { title: "Test" },
-        transport: "rpc",
         replay: true,
         sinceId: 5,
         replayMessageLimit: 20,
@@ -224,8 +233,8 @@ describe("PubSubChannel", () => {
       (instance as any)._rpc = mockRpc;
 
       sql.exec(
-        `INSERT INTO participants (id, metadata, transport, connected_at, session_id, do_source, do_class, do_key)
-         VALUES (?, '{}', 'do', ?, 'caller-session', 'workers/agent-worker', 'AiChatWorker', 'agent-1')`,
+        `INSERT INTO participants (id, metadata, transport, connected_at, session_id)
+         VALUES (?, '{}', 'do', ?, 'caller-session')`,
         "do:workers/agent-worker:AiChatWorker:agent-1", Date.now(),
       );
       sql.exec(
@@ -247,7 +256,6 @@ describe("PubSubChannel", () => {
 
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
-        transport: "rpc",
         name: "new",
         __participantSessionId: "session-new",
       });
@@ -314,7 +322,6 @@ describe("PubSubChannel", () => {
 
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
-        transport: "rpc",
         name: "same",
         __participantSessionId: "session-same",
       });
@@ -347,6 +354,115 @@ describe("PubSubChannel", () => {
     });
   });
 
+  describe("participant caller gates", () => {
+    it("delivers eval-style method results from the canonical panel participant id", async () => {
+      const { instance, sql } = await createTestDO(PubSubChannel, {
+        __objectKey: "test-channel",
+      });
+      (instance as any)._rpc = {
+        emit: vi.fn().mockResolvedValue(undefined),
+        call: vi.fn().mockResolvedValue(undefined),
+      };
+      sql.exec(
+        `INSERT INTO participants (id, metadata, transport, connected_at)
+         VALUES ('panel-1', '{}', 'rpc', 1000)`,
+      );
+      sql.exec(
+        `INSERT INTO participants (id, metadata, transport, connected_at)
+         VALUES ('do:workers/agent-worker:AiChatWorker:agent-1', '{}', 'do', 1000)`,
+      );
+      sql.exec(
+        `INSERT INTO pending_calls (call_id, caller_id, target_id, method, args, expires_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        "55555555-5555-4555-8555-555555555555",
+        "do:workers/agent-worker:AiChatWorker:agent-1",
+        "panel-1",
+        "eval",
+        "{}",
+        0,
+        Date.now(),
+      );
+      setRpcCaller(instance, "panel-1", "panel");
+
+      await instance.publish("panel-1", "method-result", {
+        callId: "55555555-5555-4555-8555-555555555555",
+        content: { ok: true },
+        complete: true,
+        isError: false,
+      }, { persist: true });
+
+      expect(sql.exec(`SELECT call_id FROM pending_calls`).toArray()).toEqual([]);
+      expect((instance as any)._rpc.call).toHaveBeenCalledWith(
+        "do:workers/agent-worker:AiChatWorker:agent-1",
+        "onCallResult",
+        "55555555-5555-4555-8555-555555555555",
+        { ok: true },
+        false,
+      );
+    });
+
+    it("keeps participant-scoped methods restricted to the verified participant", async () => {
+      const { instance, sql } = await createTestDO(PubSubChannel, {
+        __objectKey: "test-channel",
+      });
+      sql.exec(
+        `INSERT INTO participants (id, metadata, transport, connected_at)
+         VALUES ('panel-2', '{}', 'rpc', 1000)`,
+      );
+      setRpcCaller(instance, "panel-1", "panel");
+
+      await expect(instance.unsubscribe("panel-2")).rejects.toThrow(
+        "unsubscribe: participant panel-2 cannot be used by caller panel-1",
+      );
+    });
+
+    it("rejects admin participant mutations from ordinary RPC participants", async () => {
+      const { instance } = await createTestDO(PubSubChannel, {
+        __objectKey: "test-channel",
+      });
+      setRpcCaller(instance, "panel-1", "panel");
+
+      await expect(instance.adminUnsubscribeParticipant("panel-2")).rejects.toThrow(
+        "adminUnsubscribeParticipant: privileged caller required",
+      );
+      await expect(instance.adminUpdateParticipantMetadata("panel-2", {})).rejects.toThrow(
+        "adminUpdateParticipantMetadata: privileged caller required",
+      );
+      await expect(instance.adminSetParticipantTypingState("panel-2", true)).rejects.toThrow(
+        "adminSetParticipantTypingState: privileged caller required",
+      );
+    });
+
+    it("allows privileged server callers to perform admin participant maintenance", async () => {
+      const { instance, sql } = await createTestDO(PubSubChannel, {
+        __objectKey: "test-channel",
+      });
+      (instance as any)._rpc = {
+        emit: vi.fn().mockResolvedValue(undefined),
+        call: vi.fn().mockResolvedValue(undefined),
+      };
+      sql.exec(
+        `INSERT INTO participants (id, metadata, transport, connected_at)
+         VALUES ('panel-2', '{"name":"Panel"}', 'rpc', 1000)`,
+      );
+      setRpcCaller(instance, "main", "server");
+
+      await instance.adminUpdateParticipantMetadata("panel-2", { name: "Renamed" });
+      await instance.adminSetParticipantTypingState("panel-2", true);
+
+      const metadataRow = sql.exec(
+        `SELECT metadata FROM participants WHERE id = 'panel-2'`,
+      ).one();
+      expect(JSON.parse(metadataRow["metadata"] as string)).toEqual({
+        name: "Renamed",
+        typing: true,
+      });
+
+      await instance.adminUnsubscribeParticipant("panel-2");
+      expect(sql.exec(`SELECT id FROM participants WHERE id = 'panel-2'`).toArray()).toEqual([]);
+    });
+  });
+
   describe("method result delivery", () => {
     it("redelivers an in-flight rpc tool call when the target reconnects with a new session", async () => {
       const { instance, sql } = await createTestDO(PubSubChannel, {
@@ -360,13 +476,12 @@ describe("PubSubChannel", () => {
       (instance as any)._rpc = mockRpc;
 
       sql.exec(
-        `INSERT INTO participants (id, metadata, transport, connected_at, session_id, do_source, do_class, do_key)
-         VALUES (?, '{}', 'do', ?, 'caller-session', 'workers/agent-worker', 'AiChatWorker', 'agent-1')`,
+        `INSERT INTO participants (id, metadata, transport, connected_at, session_id)
+         VALUES (?, '{}', 'do', ?, 'caller-session')`,
         "do:workers/agent-worker:AiChatWorker:agent-1", Date.now(),
       );
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
-        transport: "rpc",
         name: "old-panel",
         __participantSessionId: "session-old",
       });
@@ -386,7 +501,6 @@ describe("PubSubChannel", () => {
       mockRpc.emit.mockClear();
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
-        transport: "rpc",
         name: "new-panel",
         __participantSessionId: "session-new",
       });
@@ -430,8 +544,8 @@ describe("PubSubChannel", () => {
       (instance as any)._rpc = mockRpc;
 
       sql.exec(
-        `INSERT INTO participants (id, metadata, transport, connected_at, do_source, do_class, do_key)
-         VALUES (?, '{}', 'do', ?, 'workers/agent-worker', 'AiChatWorker', 'agent-1')`,
+        `INSERT INTO participants (id, metadata, transport, connected_at)
+         VALUES (?, '{}', 'do', ?)`,
         "do:workers/agent-worker:AiChatWorker:agent-1", Date.now(),
       );
       sql.exec(
@@ -481,8 +595,8 @@ describe("PubSubChannel", () => {
       (instance as any)._rpc = mockRpc;
 
       sql.exec(
-        `INSERT INTO participants (id, metadata, transport, connected_at, do_source, do_class, do_key)
-         VALUES (?, '{}', 'do', ?, 'workers/agent-worker', 'AiChatWorker', 'agent-1')`,
+        `INSERT INTO participants (id, metadata, transport, connected_at)
+         VALUES (?, '{}', 'do', ?)`,
         "do:workers/agent-worker:AiChatWorker:agent-1", Date.now(),
       );
       sql.exec(
@@ -749,7 +863,6 @@ describe("PubSubChannel", () => {
 
       await instance.subscribe("panel-1", {
         contextId: "ctx-1",
-        transport: "rpc",
         callerKind: "panel",
         // RPC replay is gated on sinceId / replayMessageLimit.
         replayMessageLimit: 100,

@@ -42,7 +42,8 @@ export type ChannelOp =
       attachments?: Array<{ data: string; mimeType: string }>;
     }
   | { kind: "update"; msgId: string; content: string; append?: boolean }
-  | { kind: "complete"; msgId: string };
+  | { kind: "complete"; msgId: string }
+  | { kind: "error"; msgId: string; message: string; code?: string };
 
 interface ToolCallRecord {
   msgId: string;
@@ -389,6 +390,20 @@ function isTerminatedByError(event: AgentEvent & { type: "agent_end" }): boolean
   return false;
 }
 
+function terminalErrorMessage(event: AgentEvent & { type: "agent_end" }): string | null {
+  const messages = (event as { messages?: unknown[] }).messages;
+  if (!Array.isArray(messages) || messages.length === 0) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i] as { role?: string; stopReason?: string; errorMessage?: unknown } | null;
+    if (!m || m.role !== "assistant") continue;
+    if (m.stopReason !== "error" && m.stopReason !== "aborted") return null;
+    return typeof m.errorMessage === "string" && m.errorMessage.length > 0
+      ? m.errorMessage
+      : "Agent turn failed";
+  }
+  return null;
+}
+
 function addToMap<K, V>(map: ReadonlyMap<K, V>, key: K, value: V): ReadonlyMap<K, V> {
   const next = new Map(map);
   next.set(key, value);
@@ -472,7 +487,17 @@ export class ContentBlockProjector {
     this.state = newState;
     for (const op of ops) this.dispatch(op);
     if (event.type === "agent_end" && isTerminatedByError(event)) {
-      this.enqueueCloseAll();
+      const openMsgIds = this.collectOpenMsgIds();
+      if (openMsgIds.length === 0) {
+        const message = terminalErrorMessage(event);
+        if (message) {
+          const msgId = this.allocMsgId();
+          this.dispatch({ kind: "send", msgId, content: message });
+          this.dispatch({ kind: "error", msgId, message, code: "agent_turn_failed" });
+        }
+      } else {
+        this.enqueueCloseAll();
+      }
     }
     return this.pendingOp;
   }
@@ -546,6 +571,9 @@ export class ContentBlockProjector {
         return;
       case "complete":
         await this.sink.complete(op.msgId);
+        return;
+      case "error":
+        await this.sink.error(op.msgId, op.message, op.code);
         return;
     }
   }

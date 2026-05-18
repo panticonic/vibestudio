@@ -5,7 +5,7 @@ import * as path from "path";
 import * as os from "os";
 import { Readable } from "stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
 import { createBlobstoreService } from "./blobstoreService.js";
 
 interface TestServer {
@@ -203,17 +203,22 @@ describe("blobstoreService", () => {
       const digest = put.digest as string;
 
       await expect(
-        dispatcher.dispatch({ callerId: "p1", callerKind: "panel" }, "blobstore", "delete", [
-          digest,
-        ])
+        dispatcher.dispatch(
+          { caller: createVerifiedCaller("p1", "panel") },
+          "blobstore",
+          "delete",
+          [digest]
+        )
       ).rejects.toMatchObject({ code: "EACCES" });
 
       await expect(
-        dispatcher.dispatch({ callerId: "p1", callerKind: "panel" }, "blobstore", "has", [digest])
+        dispatcher.dispatch({ caller: createVerifiedCaller("p1", "panel") }, "blobstore", "has", [
+          digest,
+        ])
       ).resolves.toBe(true);
 
       const stat = await dispatcher.dispatch(
-        { callerId: "w1", callerKind: "worker" },
+        { caller: createVerifiedCaller("w1", "worker") },
         "blobstore",
         "stat",
         [digest]
@@ -221,18 +226,26 @@ describe("blobstoreService", () => {
       expect(stat).toMatchObject({ size: bytes.length });
 
       await expect(
-        dispatcher.dispatch({ callerId: "shell", callerKind: "shell" }, "blobstore", "list", [])
+        dispatcher.dispatch(
+          { caller: createVerifiedCaller("shell", "shell") },
+          "blobstore",
+          "list",
+          []
+        )
       ).resolves.toContain(digest);
 
       await expect(
-        dispatcher.dispatch({ callerId: "shell", callerKind: "shell" }, "blobstore", "list", [
-          { prefix: digest.slice(0, 8), limit: 10 },
-        ])
+        dispatcher.dispatch(
+          { caller: createVerifiedCaller("shell", "shell") },
+          "blobstore",
+          "list",
+          [{ prefix: digest.slice(0, 8), limit: 10 }]
+        )
       ).resolves.toEqual([digest]);
 
       await expect(
         dispatcher.dispatch(
-          { callerId: "shell", callerKind: "shell" },
+          { caller: createVerifiedCaller("shell", "shell") },
           "blobstore",
           "pruneUnreferenced",
           [{ referenced: [digest], dryRun: true }]
@@ -240,14 +253,20 @@ describe("blobstoreService", () => {
       ).resolves.toMatchObject({ deleted: [], dryRun: true });
 
       await expect(
-        dispatcher.dispatch({ callerId: "server", callerKind: "server" }, "blobstore", "delete", [
-          digest,
-        ])
+        dispatcher.dispatch(
+          { caller: createVerifiedCaller("server", "server") },
+          "blobstore",
+          "delete",
+          [digest]
+        )
       ).resolves.toBe(true);
       await expect(
-        dispatcher.dispatch({ callerId: "server", callerKind: "server" }, "blobstore", "has", [
-          digest,
-        ])
+        dispatcher.dispatch(
+          { caller: createVerifiedCaller("server", "server") },
+          "blobstore",
+          "has",
+          [digest]
+        )
       ).resolves.toBe(false);
     } finally {
       await stopServer(server);
@@ -275,7 +294,7 @@ describe("blobstoreService", () => {
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       const result = (await dispatcher.dispatch(
-        { callerId: "w1", callerKind: "worker" },
+        { caller: createVerifiedCaller("w1", "worker") },
         "blobstore",
         "putText",
         [body]
@@ -289,7 +308,7 @@ describe("blobstoreService", () => {
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       return dispatcher.dispatch(
-        { callerId: "w1", callerKind: "worker" },
+        { caller: createVerifiedCaller("w1", "worker") },
         "blobstore",
         "getRange",
         [digest, offset, length]
@@ -347,13 +366,13 @@ describe("blobstoreService", () => {
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       await dispatcher.dispatch(
-        { callerId: "w1", callerKind: "worker" },
+        { caller: createVerifiedCaller("w1", "worker") },
         "blobstore",
         "putBase64",
         [bytes.toString("base64")]
       );
       const result = (await dispatcher.dispatch(
-        { callerId: "w1", callerKind: "worker" },
+        { caller: createVerifiedCaller("w1", "worker") },
         "blobstore",
         "getRangeBytes",
         [digest, 0, 8]
@@ -371,7 +390,7 @@ describe("blobstoreService", () => {
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       const result = (await dispatcher.dispatch(
-        { callerId: "w1", callerKind: "worker" },
+        { caller: createVerifiedCaller("w1", "worker") },
         "blobstore",
         "putText",
         [body]
@@ -389,7 +408,7 @@ describe("blobstoreService", () => {
       dispatcher.registerService(service.definition);
       dispatcher.markInitialized();
       return dispatcher.dispatch(
-        { callerId: "w1", callerKind: "worker" },
+        { caller: createVerifiedCaller("w1", "worker") },
         "blobstore",
         "grep",
         opts === undefined ? [digest, pattern] : [digest, pattern, opts]

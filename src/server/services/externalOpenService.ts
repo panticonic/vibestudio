@@ -6,7 +6,6 @@ import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 
 const CAPABILITY = "external-browser-open";
@@ -21,7 +20,6 @@ export interface ExternalOpenServiceDeps {
   eventService: EventService;
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
-  codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
 }
 
 export function createExternalOpenService(deps: ExternalOpenServiceDeps): ServiceDefinition {
@@ -37,19 +35,17 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
     const resource = resourceForExternalUrl(url);
 
     let approvalDecision: OpenExternalResult["approvalDecision"];
-    if (ctx.callerKind === "panel" || ctx.callerKind === "worker") {
-      if (!deps.grantStore || !deps.approvalQueue || !deps.codeIdentityResolver) {
+    if (ctx.caller.runtime.kind === "panel" || ctx.caller.runtime.kind === "worker") {
+      if (!deps.grantStore || !deps.approvalQueue) {
         throw new Error("External browser open approval is unavailable");
       }
       const authorization = await requestCapabilityPermission(
         {
           approvalQueue: deps.approvalQueue,
           grantStore: deps.grantStore,
-          codeIdentityResolver: deps.codeIdentityResolver,
         },
         {
-          callerId: ctx.callerId,
-          callerKind: ctx.callerKind,
+          caller: ctx.caller,
           capability: CAPABILITY,
           resource,
           title: "Open external browser",
@@ -66,8 +62,8 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
 
     deps.eventService.emit("external-open:open", {
       url: url.toString(),
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
     });
     return approvalDecision ? { approvalDecision } : {};
   }
@@ -78,44 +74,11 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
     policy: { allowed: ["shell", "server", "panel", "worker", "extension"] },
     methods: {
       openExternal: { args: z.tuple([z.string(), OPEN_EXTERNAL_OPTIONS_SCHEMA.optional()]) },
-      openExternalForCaller: {
-        args: z.tuple([
-          z
-            .object({
-              callerId: z.string(),
-              callerKind: z.enum(["panel", "worker"]),
-              url: z.string(),
-              options: OPEN_EXTERNAL_OPTIONS_SCHEMA.optional(),
-            })
-            .strict(),
-        ]),
-      },
     },
     handler: async (ctx, method, args) => {
       switch (method) {
         case "openExternal":
           return requestOpen(ctx, args[0] as string, args[1] as OpenExternalOptions | undefined);
-        case "openExternalForCaller": {
-          if (ctx.callerKind !== "shell" && ctx.callerKind !== "server") {
-            throw new Error("openExternalForCaller is shell/server-only");
-          }
-          const [request] = args as [
-            {
-              callerId: string;
-              callerKind: "panel" | "worker";
-              url: string;
-              options?: OpenExternalOptions;
-            },
-          ];
-          return requestOpen(
-            {
-              callerId: request.callerId,
-              callerKind: request.callerKind,
-            },
-            request.url,
-            request.options
-          );
-        }
         default:
           throw new Error(`Unknown externalOpen method: ${method}`);
       }

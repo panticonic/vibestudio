@@ -76,7 +76,7 @@ export function createWorkerLogService(deps: WorkerLogServiceDeps = {}): Service
     handler: async (ctx, method, args) => {
       if (method !== "write") throw new Error(`Unknown method: ${method}`);
       const [level, message] = args as [Level, string];
-      const prefix = `[${ctx.callerId}]`;
+      const prefix = `[${ctx.caller.runtime.id}]`;
       const normalizedLevel: WorkerLogRecord["level"] = level === "log" ? "info" : level;
       switch (level) {
         case "error":
@@ -92,8 +92,8 @@ export function createWorkerLogService(deps: WorkerLogServiceDeps = {}): Service
           break;
       }
       deps.onLog?.({
-        source: workerSourceFromCallerId(ctx.callerId),
-        callerId: ctx.callerId,
+        source: workerSourceFromCallerId(ctx.caller.runtime.id),
+        callerId: ctx.caller.runtime.id,
         timestamp: Date.now(),
         level: normalizedLevel,
         message,

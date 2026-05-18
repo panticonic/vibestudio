@@ -42,11 +42,6 @@ export interface WsTransportConfig {
   wsUrl?: string;
 }
 
-const normalizeEndpointId = (targetId: string): string => {
-  if (targetId.startsWith("panel:")) return targetId.slice(6);
-  return targetId;
-};
-
 export function createWsTransport(config: WsTransportConfig): TransportBridge {
   const listeners = new Set<AnyMessageHandler>();
   const bufferedMessages: Array<{ fromId: string; message: RpcMessage }> = [];
@@ -327,9 +322,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     ) {
       throw new Error("Invalid RPC message");
     }
-    const normalized = normalizeEndpointId(targetId);
-
-    if (normalized === "main") {
+    if (targetId === "main") {
       if (rpcMessage.type === "request") {
         // RPC request to main process
         wsSend({ type: "ws:rpc", message: rpcMessage });
@@ -346,7 +339,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     }
 
     // Message to another caller (panel, worker, etc.)
-    wsSend({ type: "ws:route", targetId: normalized, message: rpcMessage });
+    wsSend({ type: "ws:route", targetId, message: rpcMessage });
   };
 
   return {

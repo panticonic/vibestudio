@@ -8,7 +8,6 @@ import type {
   Server,
   ServerResponse,
 } from "node:http";
-import { connect as netConnect } from "node:net";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 
@@ -35,6 +34,10 @@ import {
 } from "./credentialSessionGrants.js";
 import { CredentialLifecycleError, type CredentialLifecycle } from "./credentialLifecycle.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
+import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { requestCapabilityPermission } from "./capabilityPermission.js";
+import { connect as netConnect } from "node:net";
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   "connection",
@@ -50,6 +53,8 @@ const HOP_BY_HOP_REQUEST_HEADERS = new Set([
 
 const PASSTHROUGH_PROVIDER_ID = "passthrough";
 const PASSTHROUGH_CONNECTION_ID = "passthrough";
+const RPC_RUNTIME_ID_HEADER = "x-natstack-runtime-id";
+const RAW_EGRESS_CAPABILITY = "external-network-fetch";
 const DEFAULT_RETRY_ATTEMPTS = 2;
 const DEFAULT_RETRY_INITIAL_DELAY_MS = 100;
 const DEFAULT_RETRY_MAX_DELAY_MS = 1_000;
@@ -67,6 +72,7 @@ export interface EgressProxyDeps {
   auditLog: Pick<AuditLog, "append">;
   codeIdentityResolver: Pick<CodeIdentityResolver, "resolveByCallerId">;
   approvalQueue?: ApprovalQueue;
+  grantStore?: CapabilityGrantStore;
   sessionGrantStore?: CredentialSessionGrantStore;
   credentialLifecycle?: Pick<CredentialLifecycle, "refreshIfNeeded">;
 }
@@ -129,6 +135,7 @@ interface CircuitState {
 
 export class EgressProxy {
   private server: Server | null = null;
+  private readonly attributedServers = new Map<string, { server: Server; port: number }>();
   private readonly circuits = new Map<string, CircuitState>();
   private readonly sessionGrantStore: CredentialSessionGrantStore;
 
@@ -145,11 +152,11 @@ export class EgressProxy {
     }
 
     const server = createServer((req, res) => {
-      void this.handleHttpRequest(req, res);
+      void this.handleHttpRequest(req, res, null);
     });
 
     server.on("connect", (req, socket, head) => {
-      void this.handleConnect(req, socket as Duplex, head);
+      void this.handleConnect(req, socket as Duplex, head, null);
     });
 
     this.server = server;
@@ -168,19 +175,48 @@ export class EgressProxy {
     });
   }
 
-  async stop(): Promise<void> {
-    const server = this.server;
-    this.server = null;
-    if (!server) {
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
+  async startForCaller(caller: VerifiedCaller): Promise<number> {
+    const key = caller.runtime.id;
+    const existing = this.attributedServers.get(key);
+    if (existing) return existing.port;
+
+    const server = createServer((req, res) => {
+      void this.handleHttpRequest(req, res, caller);
+    });
+    server.on("connect", (req, socket, head) => {
+      void this.handleConnect(req, socket as Duplex, head, caller);
+    });
+
+    return new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        const address = server.address() as AddressInfo | null;
+        if (!address) {
+          reject(new Error("Egress proxy failed to bind an attributed listener"));
+          return;
+        }
+        this.attributedServers.set(key, { server, port: address.port });
+        resolve(address.port);
+      });
     });
   }
 
+  async stop(): Promise<void> {
+    const server = this.server;
+    this.server = null;
+    const attributed = [...this.attributedServers.values()];
+    this.attributedServers.clear();
+    await Promise.all([
+      ...(server ? [new Promise<void>((resolve) => server.close(() => resolve()))] : []),
+      ...attributed.map(
+        ({ server }) => new Promise<void>((resolve) => server.close(() => resolve()))
+      ),
+    ]);
+  }
+
   async forwardProxyFetch(params: {
-    callerId: string;
+    caller: VerifiedCaller;
     url: string;
     method: string;
     headers?: Record<string, string>;
@@ -207,7 +243,7 @@ export class EgressProxy {
     const bytesOut =
       body === undefined ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
     return this.executeAuthorizedRequest({
-      callerId: params.callerId,
+      caller: params.caller,
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
@@ -261,7 +297,7 @@ export class EgressProxy {
    */
   async forwardProxyFetchStream(
     params: {
-      callerId: string;
+      caller: VerifiedCaller;
       url: string;
       method: string;
       headers?: Record<string, string>;
@@ -278,7 +314,7 @@ export class EgressProxy {
     let bytesInTotal = 0;
 
     const result = await this.executeAuthorizedRequest({
-      callerId: params.callerId,
+      caller: params.caller,
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
@@ -363,7 +399,7 @@ export class EgressProxy {
   }
 
   async forwardGitHttp(params: {
-    callerId: string;
+    caller: VerifiedCaller;
     url: string;
     method: string;
     headers?: Record<string, string>;
@@ -380,7 +416,7 @@ export class EgressProxy {
     const body = params.body;
     const bytesOut = body?.byteLength ?? 0;
     return this.executeAuthorizedRequest({
-      callerId: params.callerId,
+      caller: params.caller,
       method: params.method.toUpperCase(),
       targetUrl: new URL(params.url),
       inputHeaders: params.headers ?? {},
@@ -505,15 +541,62 @@ export class EgressProxy {
     }
   }
 
-  private async handleHttpRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  private async handleHttpRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    caller: VerifiedCaller | null
+  ): Promise<void> {
     const targetUrl = this.resolveTargetUrl(req);
     if (!targetUrl) {
       this.respondWithError(res, 400, "Proxy request URL is invalid");
       return;
     }
 
+    if (this.isPlatformRpcCallback(req, targetUrl)) {
+      try {
+        const forwardResult = await this.forwardHttpRequest(
+          req,
+          res,
+          targetUrl,
+          this.preparePlatformRpcHeaders(req.headers, targetUrl)
+        );
+        await this.appendAuditEntry({
+          ts: Date.now(),
+          workerId: "platform-rpc",
+          callerId: this.readHeader(req, RPC_RUNTIME_ID_HEADER) ?? "unknown",
+          providerId: PASSTHROUGH_PROVIDER_ID,
+          connectionId: PASSTHROUGH_CONNECTION_ID,
+          method: req.method ?? "POST",
+          url: `${targetUrl.origin}${targetUrl.pathname}`,
+          status: forwardResult.statusCode,
+          durationMs: 0,
+          bytesIn: forwardResult.bytesIn,
+          bytesOut: forwardResult.bytesOut,
+          scopesUsed: [],
+          retries: 0,
+          breakerState: "closed",
+        });
+      } catch {
+        if (!res.headersSent) {
+          this.respondWithError(res, 502, "Failed to forward platform RPC callback");
+        }
+      }
+      return;
+    }
+
+    if (!caller) {
+      req.resume();
+      this.respondWithError(
+        res,
+        403,
+        "Direct egress proxy HTTP forwarding requires an attributed workerd service"
+      );
+      return;
+    }
+
     try {
       await this.executeAuthorizedRequest({
+        caller,
         method: (req.method ?? "GET").toUpperCase(),
         targetUrl,
         inputHeaders: req.headers,
@@ -534,8 +617,33 @@ export class EgressProxy {
     }
   }
 
+  private isPlatformRpcCallback(req: IncomingMessage, targetUrl: URL): boolean {
+    const method = (req.method ?? "GET").toUpperCase();
+    if (method !== "POST") return false;
+    if (targetUrl.protocol !== "http:" && targetUrl.protocol !== "https:") return false;
+    if (targetUrl.pathname !== "/rpc" && targetUrl.pathname !== "/rpc/stream") return false;
+    if (!isLoopbackHostname(targetUrl.hostname)) return false;
+    const auth = this.readHeader(req, "authorization");
+    if (!auth?.startsWith("Bearer ")) return false;
+    return !!this.readHeader(req, RPC_RUNTIME_ID_HEADER);
+  }
+
+  private preparePlatformRpcHeaders(
+    inputHeaders: IncomingHttpHeaders,
+    targetUrl: URL
+  ): OutgoingHttpHeaders {
+    const headers: OutgoingHttpHeaders = {};
+    for (const [name, value] of this.iterateHeaders(inputHeaders)) {
+      const lower = name.toLowerCase();
+      if (HOP_BY_HOP_REQUEST_HEADERS.has(lower)) continue;
+      headers[lower] = value;
+    }
+    headers.host = targetUrl.host;
+    return headers;
+  }
+
   private async executeAuthorizedRequest<T>(params: {
-    callerId?: string | null;
+    caller: VerifiedCaller | null;
     method: string;
     targetUrl: URL;
     inputHeaders: IncomingHttpHeaders | Headers | Record<string, string | string[] | undefined>;
@@ -558,7 +666,7 @@ export class EgressProxy {
 
     try {
       authorization = await this.authorizeRequest({
-        callerId: params.callerId ?? null,
+        caller: params.caller,
         targetUrl,
         method: params.method,
         credentialId: params.credentialId,
@@ -628,7 +736,7 @@ export class EgressProxy {
       await this.appendAuditEntry({
         ts: startedAt,
         workerId: authorization?.attribution?.repoPath ?? "unknown",
-        callerId: authorization?.attribution?.callerId ?? params.callerId ?? "unknown",
+        callerId: authorization?.attribution?.callerId ?? params.caller?.runtime.id ?? "unknown",
         providerId: authorization?.credential?.providerId ?? PASSTHROUGH_PROVIDER_ID,
         connectionId: authorization?.connectionId ?? PASSTHROUGH_CONNECTION_ID,
         method: params.method,
@@ -646,15 +754,14 @@ export class EgressProxy {
   }
 
   private async authorizeRequest(params: {
-    callerId: string | null;
+    caller: VerifiedCaller | null;
     targetUrl: URL;
     method: string;
     credentialId?: string;
     credentialUse: CredentialBindingUse;
   }): Promise<Authorization> {
-    const attribution = params.callerId
-      ? this.resolveAttribution(params.callerId, params.credentialId)
-      : null;
+    const caller = params.caller;
+    const attribution = caller ? this.resolveAttribution(caller, params.credentialId) : null;
     if (!params.credentialId) {
       const credential = attribution
         ? await this.resolveCredentialForRequest(
@@ -664,6 +771,9 @@ export class EgressProxy {
             params.method
           )
         : null;
+      if (caller && attribution && !credential) {
+        await this.authorizeRawEgress(caller, attribution, params.targetUrl, params.method);
+      }
       return {
         attribution,
         credential,
@@ -694,11 +804,12 @@ export class EgressProxy {
       );
     }
     const usage = credentialUseResource(binding, params.targetUrl, params.method);
+    const callerId = params.caller?.runtime.id;
     if (
-      params.callerId &&
-      !this.isCallerAllowed(credential, params.callerId, attribution, usage.sessionResource)
+      callerId &&
+      !this.isCallerAllowed(credential, callerId, attribution, usage.sessionResource)
     ) {
-      await this.requestCredentialUseGrant(credential, binding, params.callerId, attribution, {
+      await this.requestCredentialUseGrant(credential, binding, callerId, attribution, {
         targetUrl: params.targetUrl,
         method: params.method,
       });
@@ -711,6 +822,46 @@ export class EgressProxy {
       connectionId: credential.id ?? credential.connectionId,
       scopes: credential.scopes,
     };
+  }
+
+  private async authorizeRawEgress(
+    caller: VerifiedCaller,
+    attribution: RequestAttribution,
+    targetUrl: URL,
+    method: string
+  ): Promise<void> {
+    if (!this.deps.approvalQueue || !this.deps.grantStore) {
+      throw new ForwardRejection(403, "Raw network egress approval is unavailable");
+    }
+    const origin = targetUrl.origin;
+    const authorization = await requestCapabilityPermission(
+      {
+        approvalQueue: this.deps.approvalQueue,
+        grantStore: this.deps.grantStore,
+      },
+      {
+        caller,
+        capability: RAW_EGRESS_CAPABILITY,
+        dedupKey: `raw-egress:${caller.runtime.id}:${origin}`,
+        resource: {
+          type: "url-origin",
+          label: "Target origin",
+          value: origin,
+          key: origin,
+        },
+        title: "Allow network access",
+        description: "Allow this code version to make raw network requests to this origin.",
+        details: [
+          { label: "Method", value: method },
+          { label: "Target origin", value: origin },
+          { label: "Source", value: attribution.repoPath },
+        ],
+        deniedReason: "Raw network egress denied",
+      }
+    );
+    if (!authorization.allowed) {
+      throw new ForwardRejection(403, authorization.reason ?? "Raw network egress denied");
+    }
   }
 
   private async resolveCredentialForRequest(
@@ -863,8 +1014,12 @@ export class EgressProxy {
     }
   }
 
-  private resolveAttribution(callerId: string, credentialId?: string): RequestAttribution | null {
-    const identity = this.deps.codeIdentityResolver.resolveByCallerId(callerId);
+  private resolveAttribution(
+    caller: VerifiedCaller,
+    credentialId?: string
+  ): RequestAttribution | null {
+    const callerId = caller.runtime.id;
+    const identity = caller.code;
     if (!identity && credentialId) {
       return null;
     }
@@ -913,28 +1068,30 @@ export class EgressProxy {
     );
   }
 
-  private async handleConnect(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+  private async handleConnect(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    caller: VerifiedCaller | null
+  ): Promise<void> {
     const startedAt = Date.now();
     const authority = req.url ?? "";
-    const [host, portStr] = authority.split(":");
-    const port = parseInt(portStr || "443", 10);
-    let auditStatus = 502;
-    let auditSettled = false;
-
-    const appendConnectAudit = async (): Promise<void> => {
-      if (auditSettled) {
-        return;
-      }
-      auditSettled = true;
+    const targetUrl = authority ? new URL(`https://${authority}`) : null;
+    let authorization: Authorization | null = null;
+    let status = 502;
+    let settled = false;
+    const finishAudit = async () => {
+      if (settled) return;
+      settled = true;
       await this.appendAuditEntry({
         ts: startedAt,
-        workerId: "unknown",
-        callerId: "unknown",
+        workerId: authorization?.attribution?.repoPath ?? "unknown",
+        callerId: authorization?.attribution?.callerId ?? caller?.runtime.id ?? "unknown",
         providerId: PASSTHROUGH_PROVIDER_ID,
         connectionId: PASSTHROUGH_CONNECTION_ID,
         method: "CONNECT",
-        url: authority ? `https://${authority}` : "CONNECT",
-        status: auditStatus,
+        url: targetUrl?.toString() ?? "CONNECT",
+        status,
         durationMs: Date.now() - startedAt,
         bytesIn: 0,
         bytesOut: 0,
@@ -944,27 +1101,53 @@ export class EgressProxy {
       });
     };
 
-    const upstream = netConnect(port, host || authority, () => {
-      auditStatus = 200;
+    if (!caller || !targetUrl) {
+      status = 403;
+      await finishAudit();
+      const body = "Direct egress proxy CONNECT requires an attributed workerd service";
+      socket.end(
+        `HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+      );
+      return;
+    }
+
+    try {
+      authorization = await this.authorizeRequest({
+        caller,
+        targetUrl,
+        method: "CONNECT",
+        credentialUse: "fetch",
+      });
+    } catch (error) {
+      status = error instanceof ForwardRejection ? error.statusCode : 403;
+      await finishAudit();
+      const body = error instanceof Error ? error.message : "CONNECT egress denied";
+      socket.end(
+        `HTTP/1.1 ${status} Forbidden\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+      );
+      return;
+    }
+
+    const port = targetUrl.port ? Number(targetUrl.port) : 443;
+    const upstream = netConnect(port, targetUrl.hostname, () => {
+      status = 200;
       socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length > 0) {
-        upstream.write(head);
-      }
+      if (head.length > 0) upstream.write(head);
       upstream.pipe(socket);
       socket.pipe(upstream);
-      void appendConnectAudit();
+      void finishAudit();
     });
 
     upstream.on("error", () => {
       if (!socket.destroyed) {
         socket.end("HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n");
       }
-      void appendConnectAudit();
+      void finishAudit();
     });
 
     socket.on("error", () => {
       upstream.destroy();
-      void appendConnectAudit();
+      void finishAudit();
     });
   }
 
@@ -1449,6 +1632,16 @@ function awsPercentEncode(value: string): string {
   return encodeURIComponent(value).replace(
     /[!'()*]/g,
     (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`
+  );
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === "localhost" ||
+    normalized === "127.0.0.1" ||
+    normalized === "::1" ||
+    normalized === "[::1]"
   );
 }
 

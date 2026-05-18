@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { z } from "zod";
 import {
@@ -9,7 +10,7 @@ import { panelRuntimeSurface } from "../../../workspace/packages/runtime/src/sha
 import { workerRuntimeSurface } from "../../../workspace/packages/runtime/src/shared/runtimeSurface.worker.js";
 import type { ServiceDefinition } from "../../../packages/shared/src/serviceDefinition.js";
 
-const ctx: ServiceContext = { callerId: "panel:test", callerKind: "panel" };
+const ctx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };
 
 function makeService(name: string): ServiceDefinition {
   return {

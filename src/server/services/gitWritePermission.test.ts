@@ -5,9 +5,24 @@ import type { ApprovalQueue } from "./approvalQueue.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-git-write-"));
+}
+
+function caller(
+  id: string,
+  kind: "panel" | "worker",
+  repoPath: string,
+  effectiveVersion = "version-1"
+) {
+  return createVerifiedCaller(id, kind, {
+    callerId: id,
+    callerKind: kind,
+    repoPath,
+    effectiveVersion,
+  });
 }
 
 function createApprovalQueueMock(
@@ -38,27 +53,17 @@ describe("gitWritePermission", () => {
     const authorizer = createGitWriteAuthorizer({
       approvalQueue,
       grantStore,
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel",
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
     await expect(
       authorizer({
-        callerId: "panel:source",
-        callerKind: "panel",
+        caller: caller("panel-source", "panel", "panels/source"),
         repoPath: "/panels/target.git",
       })
     ).resolves.toMatchObject({ allowed: true });
     await expect(
       authorizer({
-        callerId: "panel:source",
-        callerKind: "panel",
+        caller: caller("panel-source", "panel", "panels/source"),
         repoPath: "panels/target",
       })
     ).resolves.toMatchObject({ allowed: true });
@@ -85,24 +90,14 @@ describe("gitWritePermission", () => {
     const authorizer = createGitWriteAuthorizer({
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "worker:source",
-          callerKind: "worker",
-          repoPath: "workers/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
     await authorizer({
-      callerId: "worker:source",
-      callerKind: "worker",
+      caller: caller("worker:source", "worker", "workers/source"),
       repoPath: "packages/target",
     });
     await authorizer({
-      callerId: "worker:source",
-      callerKind: "worker",
+      caller: caller("worker:source", "worker", "workers/source"),
       repoPath: "packages/target",
     });
 
@@ -114,17 +109,12 @@ describe("gitWritePermission", () => {
     const authorizer = createGitWriteAuthorizer({
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel",
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
-    await authorizer({ callerId: "panel:source", callerKind: "panel", repoPath: "meta" });
+    await authorizer({
+      caller: caller("panel-source", "panel", "panels/source"),
+      repoPath: "meta",
+    });
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -149,20 +139,16 @@ describe("gitWritePermission", () => {
     const authorizer = createGitWriteAuthorizer({
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => null,
-      },
     });
 
     await expect(
       authorizer({
-        callerId: "panel:unknown",
-        callerKind: "panel",
+        caller: createVerifiedCaller("panel-unknown", "panel"),
         repoPath: "panels/target",
       })
     ).resolves.toMatchObject({
       allowed: false,
-      reason: "Unknown capability caller: panel:unknown",
+      reason: "Unknown capability caller: panel-unknown",
     });
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });

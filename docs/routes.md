@@ -44,8 +44,7 @@ Each entry binds one of two targets:
 ### DO-backed (`durableObject` set)
 
 The request is routed to `env[do_<source>_<class>].idFromName(objectKey).fetch()`
-in workerd, via the existing `/_w/` router. This matches the convention used by
-`DODispatch`. Default `objectKey` is `"singleton"` — all route hits for a
+in workerd, via the server-owned `/_w/` router. Default `objectKey` is `"singleton"` — all route hits for a
 package share one DO instance. Use a specific `objectKey` (or future-work:
 a `:param` lookup) to partition by tenant.
 

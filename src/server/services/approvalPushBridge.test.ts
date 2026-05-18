@@ -31,7 +31,7 @@ function createPushMock(): PushServiceInternal {
 function requestCapability(queue: ReturnType<typeof createQueue>) {
   return queue.request({
     kind: "capability",
-    callerId: "panel:1",
+    callerId: "panel-1",
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
@@ -48,7 +48,7 @@ function requestCapability(queue: ReturnType<typeof createQueue>) {
 function requestExtension(queue: ReturnType<typeof createQueue>) {
   return queue.request({
     kind: "extension",
-    callerId: "panel:1",
+    callerId: "panel-1",
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
@@ -263,7 +263,7 @@ describe("approvalPushBridge", () => {
 
     const promise = queue.requestClientConfig({
       kind: "client-config",
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",

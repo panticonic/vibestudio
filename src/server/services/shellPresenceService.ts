@@ -58,7 +58,7 @@ export function createShellPresenceService(
       if (method !== "heartbeat") {
         throw new Error(`Unknown shellPresence method: ${method}`);
       }
-      internal.markActive(ctx.callerId);
+      internal.markActive(ctx.caller.runtime.id);
       return { activeShellCount: internal.getActiveShellCount() };
     },
   };

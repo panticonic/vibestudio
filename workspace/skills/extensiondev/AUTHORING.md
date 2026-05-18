@@ -120,7 +120,8 @@ Today's surface (mirrors what panels and workers see; will narrow as capabilitie
 | `ctx.fs` | **Unrestricted** filesystem RPC — for auditable writes |
 | `ctx.git` | Git operations through the host's git server |
 | `ctx.workspace` | Workspace info (`getInfo`, etc.) |
-| `ctx.workers` | `callDO(source, className, key, method, ...args)` for DO dispatch |
+| `ctx.rpc` | `call(targetId, method, ...args)` for unified RPC targets |
+| `ctx.workers` | Userland service/DO discovery (`listServices`, `resolveService`, `resolveDurableObject`) |
 | `ctx.credentials` | Stored credentials (OAuth tokens, secrets) |
 | `ctx.webhooks` | Webhook ingress (`webhookIngress` service) |
 | `ctx.notifications` | `show`/`dismiss` notifications in the shell |
@@ -135,7 +136,7 @@ Today's surface (mirrors what panels and workers see; will narrow as capabilitie
 ### What's *not* on `ctx.*`
 
 - `ctx.panel` — the host panel orchestration service is shell-only; extensions cannot create or close panels in v1.
-- `ctx.db` — no general-purpose DB service exists. Use `ctx.workers.callDO(...)` for DO-backed storage, or `ctx.storage` for scratch.
+- `ctx.db` — no general-purpose DB service exists. Use `ctx.workers.resolveDurableObject(...)` plus `ctx.rpc.call(targetId, ...)` for DO-backed storage, or `ctx.storage` for scratch.
 
 If you find yourself wanting either, the right move is usually a new extension behind `ctx.extensions.use(...)`.
 

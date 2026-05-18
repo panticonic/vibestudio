@@ -1,6 +1,11 @@
 import type { PackageManifest } from "@natstack/shared/types";
+import type { CallerKind } from "@natstack/shared/serviceDispatcher";
+import type { DORefParam } from "@natstack/shared/userlandServiceRpc";
 import type { BuildSystemV2 } from "./buildV2/index.js";
-import type { DORef } from "./doDispatch.js";
+
+export interface UserlandServicePolicy {
+  allowed?: CallerKind[];
+}
 
 export interface UserlandServiceResolution {
   name: string;
@@ -8,6 +13,7 @@ export interface UserlandServiceResolution {
   description?: string;
   protocols: string[];
   source: string;
+  policy?: UserlandServicePolicy;
 }
 
 export interface DurableObjectServiceResolution extends UserlandServiceResolution {
@@ -47,6 +53,7 @@ export function resolveUserlandService(
           description: service.description,
           protocols,
           source,
+          policy: service.policy,
           className,
           objectKey: resolvedObjectKey,
           targetId: `do:${source}:${className}:${resolvedObjectKey}`,
@@ -69,6 +76,7 @@ export function resolveUserlandService(
           description: service.description,
           protocols,
           source,
+          policy: service.policy,
           routePath,
           routeBasePath: `/_r/w/${source}${routePath === "/" ? "" : routePath}`,
         };
@@ -86,7 +94,7 @@ function normalizeRoutePath(routePath: string): string {
     : `/${trimmed.replace(/\/+$/u, "")}`;
 }
 
-export function toDORef(resolution: ResolvedUserlandService): DORef {
+export function toDORef(resolution: ResolvedUserlandService): DORefParam {
   if (resolution.kind !== "durable-object") {
     throw new Error(`Userland service ${resolution.name} is not Durable Object-backed`);
   }

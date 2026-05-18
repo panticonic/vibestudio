@@ -98,7 +98,7 @@ Even after T1 is fixed, the service policies themselves over-grant
 | `authTokens.persist` / `authTokens.logout` | `panel` | Overwrite or delete the user's provider tokens | 02 |
 | `git.getTokenForPanel` / `git.revokeTokenForPanel` | removed | Historical finding remediated; methods no longer exist | 04-4.2 |
 | `browser-data.getPasswords`, `getCookies`, `getHistory`, `exportAll`, `exportPasswords` | `panel`, `worker`, `shell` | Dump the imported browser credential store in plaintext | 01-C2, 07-F-02 |
-| `workers.callDO` | `panel` | Dispatch arbitrary DO method on arbitrary object | 04-4.4 |
+| Legacy worker DO dispatch facade | `panel` | Dispatch arbitrary DO method on arbitrary object | 04-4.4 |
 | `credentials.revokeConsent` (with empty `connectionId`) | `panel` | Wipe all consent grants | 04-4.18 |
 | `workspace.setConfigField` / `workspace.select` | `panel` | Write arbitrary server config; force workspace relaunch (T1-adjacent) | 04-4.15 |
 | `fs.bindContext` | `panel` | Re-bind own fs context to any other panel's `contextId` → read/write that folder | 04-4.3 |
@@ -185,9 +185,6 @@ The RPC server is the primary trust-boundary enforcer, but:
   token can enumerate / act.
 - **Gateway forwards `Authorization` raw** to workerd / git upstreams
   [04-4.12] — privilege-carrying header reaches worker-served code.
-- **DO `__instanceToken`** is attached by the gateway but verified by no
-  code in-tree [04-4.8]. Any process that reaches the workerd port can
-  POST directly and pretend to be the gateway.
 - **CDP WebSocket** accepts any valid panel token and forwards
   `debugger.sendCommand` with no command allow-list [05-S6, 01-LOW-1].
   Electron CDP is now loopback-bound and CDP tokens are carried in a
@@ -313,14 +310,14 @@ Outside the runtime trust model:
 | 19 | `IpcDispatcher` / `natstack:rpc:send` hard-coded `callerKind:"shell"` | 01, 04 | High |
 | 20 | Event `fromId` spoofing in relay | 04 | High |
 | 21 | `git.getTokenForPanel` / `revokeTokenForPanel` reachable by panel | 04 | Remediated |
-| 22 | `workers.callDO` reachable by panel | 04 | High |
+| 22 | Legacy worker DO dispatch facade reachable by panel | 04 | High |
 | 23 | `RpcServer.checkRelayAuth` only ACLs `panel`, leaves worker/shell/server/harness open | 02 | High |
 | 24 | Egress proxy auth based on trusted HTTP headers only, no token | 02, 03 | High |
 | 25 | `panelHttpServer.validateManagementAuth` default-allow when token null | 02, 06 | High |
 | 26 | Mobile `authCallbackRegistry.consumePendingFlow` never called — OAuth broken | 02 | High |
 | 27 | Slack/Stripe webhook verifiers skip timestamp freshness check | 02, 06 | High |
 | 28 | Webhook ingress does not invoke `WebhookVerifierRegistry` — no HMAC | 06, 03 | High |
-| 29 | DO `__instanceToken` attached but never verified workerd-side | 04 | High |
+| 29 | Superseded: legacy DO dispatch token envelope removed | 04 | Resolved |
 | 30 | No Origin / Host check on WebSocket handshake | 04 | High |
 | 31 | No WS frame size limit; 200 MB HTTP `/rpc` body | 04, 06 | High |
 | 32 | Gateway forwards `Authorization` header raw to workerd / git | 04 | High |
@@ -366,7 +363,7 @@ finding(s) it closes.
    findings #3, #18, #19, #20 and the structural cause of #5–#8, #21–#22.
    [01, 04]
 2. **Tighten service `policy.allowed` across the board.** Remove `panel`
-   from: `authTokens.*`, `browser-data.*`, `workers.callDO`, `credentials.revokeConsent`,
+   from: `authTokens.*`, `browser-data.*`, `credentials.revokeConsent`,
    `workspace.setConfigField`/`select`, `fs.bindContext`, `db.exec`,
    `fs.chown`, `fs.symlink`. Closes findings #4–#8, #21–#22, #39, #7.
    [01, 02, 04, 07]

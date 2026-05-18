@@ -79,7 +79,7 @@ The canary migrations all follow the same shape:
 
 - Wraps a `BrowserDataDO` (a workerd Durable Object) for bookmarks/history/cookies.
 - The extension owns the public API and any shell-only enforcement; the DO still stores the data.
-- Pattern for "extension wraps a DO": `ctx.workers.callDO(source, className, key, method, ...args)` from the extension dispatches into the DO, keeping all the data-residency benefits.
+- Pattern for "extension wraps a DO": `ctx.workers.resolveDurableObject(source, className, key)` grants the target, then `ctx.rpc.call(targetId, method, ...args)` dispatches into the DO through unified RPC, keeping all the data-residency benefits.
 
 ## Migration checklist
 

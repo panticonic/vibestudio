@@ -1,4 +1,7 @@
 import type { RpcCaller } from "@natstack/rpc";
+import { createGadServiceClient } from "@natstack/shared/userlandServiceRpc";
+
+export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@natstack/shared/userlandServiceRpc";
 
 export type GadSqlBinding = null | string | number | boolean | Uint8Array;
 export type GadJsonRecord = Record<string, unknown>;
@@ -106,39 +109,42 @@ export interface GadClient {
 }
 
 export function createGadClient(rpc: RpcCaller): GadClient {
+  const service = createGadServiceClient(rpc);
+  const call = <T>(method: string, ...args: unknown[]) => service.call<T>(method, ...args);
+
   return {
-    rawSql: (sql, bindings) => rpc.call("main", "gad.rawSql", sql, bindings),
-    query: (sql, bindings) => rpc.call("main", "gad.query", sql, bindings),
-    status: () => rpc.call("main", "gad.status"),
-    ensureBlob: (hash, size, mimeType) => rpc.call("main", "gad.ensureBlob", hash, size, mimeType),
-    ensurePiBranch: (input) => rpc.call("main", "gad.ensurePiBranch", input),
-    getPiBranchHead: (input) => rpc.call("main", "gad.getPiBranchHead", input),
-    appendPiEntryBatch: (input) => rpc.call("main", "gad.appendPiEntryBatch", input),
-    appendGadEvents: (input) => rpc.call("main", "gad.appendGadEvents", input),
-    listGadEvents: (input) => rpc.call("main", "gad.listGadEvents", input),
-    setBranchHead: (input) => rpc.call("main", "gad.setBranchHead", input),
-    getEntryById: (input) => rpc.call("main", "gad.getEntryById", input),
-    getBranchPath: (input) => rpc.call("main", "gad.getBranchPath", input),
-    findEntries: (input) => rpc.call("main", "gad.findEntries", input),
-    materializePiMessages: (input) => rpc.call("main", "gad.materializePiMessages", input),
-    listGadBranchToolCalls: (input) => rpc.call("main", "gad.listGadBranchToolCalls", input),
-    forkPiBranch: (input) => rpc.call("main", "gad.forkPiBranch", input),
-    listPiBranches: (input) => rpc.call("main", "gad.listPiBranches", input),
-    listGadBranchFiles: (input) => rpc.call("main", "gad.listGadBranchFiles", input),
-    diffGadStates: (input) => rpc.call("main", "gad.diffGadStates", input),
-    readGadFileAtState: (input) => rpc.call("main", "gad.readGadFileAtState", input),
-    getGadToolProvenance: (input) => rpc.call("main", "gad.getGadToolProvenance", input),
-    getGadStateProducer: (input) => rpc.call("main", "gad.getGadStateProducer", input),
-    blameGadFileSnippet: (input) => rpc.call("main", "gad.blameGadFileSnippet", input),
-    enqueueGadIndexJob: (input) => rpc.call("main", "gad.enqueueGadIndexJob", input),
-    processGadIndexJobs: (input) => rpc.call("main", "gad.processGadIndexJobs", input),
-    claimGadIndexJobs: (input) => rpc.call("main", "gad.claimGadIndexJobs", input),
-    completeGadIndexJob: (input) => rpc.call("main", "gad.completeGadIndexJob", input),
-    failGadIndexJob: (input) => rpc.call("main", "gad.failGadIndexJob", input),
-    listGadIndexJobs: (input) => rpc.call("main", "gad.listGadIndexJobs", input),
-    validateGadHashes: (input) => rpc.call("main", "gad.validateGadHashes", input),
-    clearDirtyAfterValidation: (input) => rpc.call("main", "gad.clearDirtyAfterValidation", input),
-    checkGadIntegrity: (input) => rpc.call("main", "gad.checkGadIntegrity", input),
-    replayGadEvents: (input) => rpc.call("main", "gad.replayGadEvents", input),
+    rawSql: (sql, bindings) => call("rawSql", sql, bindings),
+    query: (sql, bindings) => call("query", sql, bindings),
+    status: () => call("getStatus"),
+    ensureBlob: (hash, size, mimeType) => call("ensureBlob", hash, size, mimeType),
+    ensurePiBranch: (input) => call("ensurePiBranch", input),
+    getPiBranchHead: (input) => call("getPiBranchHead", input),
+    appendPiEntryBatch: (input) => call("appendPiEntryBatch", input),
+    appendGadEvents: (input) => call("appendGadEvents", input),
+    listGadEvents: (input) => call("listGadEvents", input),
+    setBranchHead: (input) => call("setBranchHead", input),
+    getEntryById: (input) => call("getEntryById", input),
+    getBranchPath: (input) => call("getBranchPath", input),
+    findEntries: (input) => call("findEntries", input),
+    materializePiMessages: (input) => call("materializePiMessages", input),
+    listGadBranchToolCalls: (input) => call("listGadBranchToolCalls", input),
+    forkPiBranch: (input) => call("forkPiBranch", input),
+    listPiBranches: (input) => call("listPiBranches", input),
+    listGadBranchFiles: (input) => call("listGadBranchFiles", input),
+    diffGadStates: (input) => call("diffGadStates", input),
+    readGadFileAtState: (input) => call("readGadFileAtState", input),
+    getGadToolProvenance: (input) => call("getGadToolProvenance", input),
+    getGadStateProducer: (input) => call("getGadStateProducer", input),
+    blameGadFileSnippet: (input) => call("blameGadFileSnippet", input),
+    enqueueGadIndexJob: (input) => call("enqueueGadIndexJob", input),
+    processGadIndexJobs: (input) => call("processGadIndexJobs", input),
+    claimGadIndexJobs: (input) => call("claimGadIndexJobs", input),
+    completeGadIndexJob: (input) => call("completeGadIndexJob", input),
+    failGadIndexJob: (input) => call("failGadIndexJob", input),
+    listGadIndexJobs: (input) => call("listGadIndexJobs", input),
+    validateGadHashes: (input) => call("validateGadHashes", input),
+    clearDirtyAfterValidation: (input) => call("clearDirtyAfterValidation", input),
+    checkGadIntegrity: (input) => call("checkGadIntegrity", input),
+    replayGadEvents: (input) => call("replayGadEvents", input),
   };
 }

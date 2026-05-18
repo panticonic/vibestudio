@@ -1,7 +1,7 @@
 import type { PendingCapabilityApproval } from "@natstack/shared/approvals";
+import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
-import type { CapabilityGrantIdentity, CapabilityGrantStore } from "./capabilityGrantStore.js";
-import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
+import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 
 export interface CapabilityPermissionResource {
   type: string;
@@ -15,8 +15,7 @@ export interface CapabilityPermissionResource {
 }
 
 export interface CapabilityPermissionRequest {
-  callerId: string;
-  callerKind: string;
+  caller: VerifiedCaller;
   capability: string;
   dedupKey?: string | null;
   resource: CapabilityPermissionResource;
@@ -29,7 +28,6 @@ export interface CapabilityPermissionRequest {
 export interface CapabilityPermissionDeps {
   approvalQueue: ApprovalQueue;
   grantStore: CapabilityGrantStore;
-  codeIdentityResolver: Pick<CodeIdentityResolver, "resolveByCallerId">;
 }
 
 export interface CapabilityPermissionResult {
@@ -42,14 +40,14 @@ export async function requestCapabilityPermission(
   deps: CapabilityPermissionDeps,
   request: CapabilityPermissionRequest
 ): Promise<CapabilityPermissionResult> {
-  const callerKind = normalizeCallerKind(request.callerKind);
+  const callerKind = normalizeCallerKind(request.caller.runtime.kind);
   if (!callerKind) {
     return { allowed: false, reason: "Capability caller is not a panel or worker" };
   }
 
-  const identity = deps.codeIdentityResolver.resolveByCallerId(request.callerId);
+  const identity = request.caller.code;
   if (!identity) {
-    return { allowed: false, reason: `Unknown capability caller: ${request.callerId}` };
+    return { allowed: false, reason: `Unknown capability caller: ${request.caller.runtime.id}` };
   }
 
   const resourceKey = request.resource.key ?? request.resource.value;
@@ -59,7 +57,7 @@ export async function requestCapabilityPermission(
 
   const decision = await deps.approvalQueue.request({
     kind: "capability",
-    callerId: request.callerId,
+    callerId: request.caller.runtime.id,
     callerKind,
     repoPath: identity.repoPath,
     effectiveVersion: identity.effectiveVersion,
@@ -81,17 +79,6 @@ export async function requestCapabilityPermission(
     deps.grantStore.grant(request.capability, resourceKey, identity, decision);
   }
   return { allowed: true, decision };
-}
-
-export function resolveCapabilityIdentity(
-  callerId: string,
-  codeIdentityResolver: Pick<CodeIdentityResolver, "resolveByCallerId"> | undefined
-): CapabilityGrantIdentity {
-  const identity = codeIdentityResolver?.resolveByCallerId(callerId);
-  return {
-    repoPath: identity?.repoPath ?? callerId,
-    effectiveVersion: identity?.effectiveVersion ?? "unknown",
-  };
 }
 
 function normalizeCallerKind(kind: string): "panel" | "worker" | null {

@@ -42,7 +42,11 @@ import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
 
 const eventService = new EventService();
 import { ViewManager } from "./viewManager.js";
-import { ServiceDispatcher, parseServiceMethod } from "@natstack/shared/serviceDispatcher";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  parseServiceMethod,
+} from "@natstack/shared/serviceDispatcher";
 // RpcServer type: inline import("...") used intentionally — main/ constructs
 // server objects via dynamic import at runtime; inline types are acceptable
 // in entry points per the boundary rule (no static module-level imports).
@@ -357,7 +361,6 @@ async function authorizeCorsResponseAccess(
     pending = serverSession.serverClient
       .call("corsApproval", "authorize", [
         {
-          callerId,
           targetUrl: details.url,
           requestOrigin,
         },
@@ -1270,7 +1273,7 @@ app.on("ready", async () => {
           ...baseEventsService,
           handler: async (ctx, method, args) => {
             const result = await baseEventsService.handler(ctx, method, args);
-            if (ctx.callerKind !== "shell") return result;
+            if (ctx.caller.runtime.kind !== "shell") return result;
 
             if (method === "subscribe") {
               shellEventSubscriptions.add(args[0] as EventName);
@@ -1434,7 +1437,7 @@ app.on("ready", async () => {
       if (caller.callerKind === "shell") {
         await sc.call("externalOpen", "openExternal", [url, options]);
       } else {
-        await sc.call("externalOpen", "openExternalForCaller", [{ ...caller, url, options }]);
+        throw new Error("Panel openExternal must use its authenticated RPC transport");
       }
     });
 
@@ -1448,7 +1451,12 @@ app.on("ready", async () => {
       const { callerId, callerKind } = resolveCaller(event);
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}". Expected "service.method"`);
-      return dispatcher.dispatch({ callerId, callerKind }, parsed.service, parsed.method, args);
+      return dispatcher.dispatch(
+        { caller: createVerifiedCaller(callerId, callerKind) },
+        parsed.service,
+        parsed.method,
+        args
+      );
     });
 
     // Browser automation (CdpServer)

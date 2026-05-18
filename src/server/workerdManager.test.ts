@@ -452,4 +452,57 @@ describe("WorkerdManager", () => {
       });
     });
   });
+
+  describe("router generation", () => {
+    it("routes source-scoped DO requests with arbitrary-depth source paths", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      const code = (
+        mgr as unknown as {
+          generateRouterCode(
+            instanceNames: string[],
+            doClassNames: { className: string; source: string; serviceName: string }[]
+          ): string;
+        }
+      ).generateRouterCode(
+        [],
+        [
+          {
+            source: "workspace/workers/gad-store",
+            className: "EventStore",
+            serviceName: "do_workspace_workers_gad_store_EventStore",
+          },
+        ]
+      );
+      const router = new Function(`${code.replace("export default", "return")}`)() as {
+        fetch(request: Request, env: Record<string, unknown>): Promise<Response>;
+      };
+      const fetchedUrls: string[] = [];
+      const env = {
+        WORKERD_GATEWAY_TOKEN: "mock-workerd-gateway-token",
+        do_workspace_workers_gad_store_EventStore: {
+          idFromName: vi.fn((name: string) => ({ name })),
+          get: vi.fn(() => ({
+            fetch: vi.fn(async (request: Request) => {
+              fetchedUrls.push(request.url);
+              return new Response("ok");
+            }),
+          })),
+        },
+      };
+
+      const response = await router.fetch(
+        new Request(
+          "http://router/_w/workspace/workers/gad-store/EventStore/ctx%2Fchat/appendEvents?x=1",
+          { headers: { Authorization: "Bearer mock-workerd-gateway-token" } }
+        ),
+        env
+      );
+
+      expect(response.status).toBe(200);
+      expect(env.do_workspace_workers_gad_store_EventStore.idFromName).toHaveBeenCalledWith(
+        "ctx/chat"
+      );
+      expect(fetchedUrls).toEqual(["http://router/ctx%2Fchat/appendEvents?x=1"]);
+    });
+  });
 });

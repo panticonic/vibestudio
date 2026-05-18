@@ -7,7 +7,7 @@
 
 import { ipcMain, type WebContents } from "electron";
 import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
-import type { ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
 import type { RpcMessage, RpcRequest, RpcResponse } from "@natstack/rpc";
 import type { ServerClient } from "./serverClient.js";
 import type { EventService, Subscriber } from "@natstack/shared/eventsService";
@@ -149,7 +149,7 @@ export class IpcDispatcher {
         if (ELECTRON_LOCAL_SERVICES.has(service)) {
           // Dispatch locally to Electron services. The dispatcher itself
           // enforces policy via checkServiceAccess (single choke-point).
-          const ctx = { callerId, callerKind };
+          const ctx = { caller: createVerifiedCaller(callerId, callerKind) };
           result = await this.deps.dispatcher.dispatch(ctx, service, method, req.args);
         } else {
           // Server is the default owner so newly registered userland/workerd

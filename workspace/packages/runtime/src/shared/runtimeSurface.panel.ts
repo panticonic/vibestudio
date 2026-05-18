@@ -39,6 +39,8 @@ export const panelRuntimeSurface: RuntimeSurface = {
     gitConfig: valueEntry("Git HTTP endpoint and token derived from the gateway config."),
     pubsubConfig: valueEntry("PubSub WebSocket endpoint and token derived from the gateway config."),
     env: valueEntry(),
+    doTargetId: valueEntry("Build a unified RPC target ID for a Durable Object reference."),
+    createDurableObjectServiceClient: valueEntry("Resolve a Durable Object-backed service and call it through unified RPC."),
     workers: namespaceEntry([
       "create",
       "destroy",
@@ -48,6 +50,8 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "listInstanceSources",
       "listServices",
       "resolveService",
+      "resolveDurableObject",
+      "durableObjectService",
       "getPort",
       "restartAll",
       "cloneDO",

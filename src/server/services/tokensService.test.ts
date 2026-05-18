@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import { TokenManager } from "@natstack/shared/tokenManager";
 import { createTokensService } from "./tokensService.js";
@@ -19,7 +20,7 @@ describe("tokensService", () => {
     const { service, tokenManager } = createService();
 
     await service.handler(
-      { callerId: "shell:abc", callerKind: "shell", connectionId: "conn-1" },
+      { caller: createVerifiedCaller("shell:abc", "shell"), connectionId: "conn-1" },
       "ensurePanelToken",
       ["panel-1", "ctx-1", null, "panels/chat"]
     );
@@ -31,12 +32,11 @@ describe("tokensService", () => {
   it("records the authenticated local admin websocket as the panel browser handoff owner", async () => {
     const { service, tokenManager } = createService();
 
-    await service.handler({ callerId: "ws:local-main", callerKind: "server" }, "ensurePanelToken", [
-      "panel-1",
-      "ctx-1",
-      null,
-      "panels/chat",
-    ]);
+    await service.handler(
+      { caller: createVerifiedCaller("ws:local-main", "server") },
+      "ensurePanelToken",
+      ["panel-1", "ctx-1", null, "panels/chat"]
+    );
 
     expect(tokenManager.getPanelOwner("panel-1")).toBe("ws:local-main");
   });

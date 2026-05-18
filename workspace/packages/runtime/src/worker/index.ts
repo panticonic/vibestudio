@@ -33,7 +33,13 @@ import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/e
 import { fs, _initFsWithRpc } from "./fs.js";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createWebhookIngressClient, type WebhookIngressClient } from "../shared/webhooks.js";
-import { createWorkerdClient, type WorkerdClient } from "../shared/workerd.js";
+import {
+  createDurableObjectServiceClient,
+  createWorkerdClient,
+  doTargetId,
+  type WorkerdClient,
+  type DurableObjectServiceClient,
+} from "../shared/workerd.js";
 import { createWorkspaceClient, type WorkspaceClient } from "../shared/workspace.js";
 import { createExtensionsClient, type ExtensionsClient } from "../shared/extensions.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
@@ -76,6 +82,8 @@ export type {
   WebhookVerifierConfig,
 } from "../shared/webhooks.js";
 export type { NotificationClient } from "../shared/notifications.js";
+export { doTargetId, createDurableObjectServiceClient } from "../shared/workerd.js";
+export type { DurableObjectServiceClient, ResolvedUserlandService, UserlandServiceInfo } from "../shared/workerd.js";
 export type {
   WorkspaceClient,
   WorkspaceConfig,
@@ -147,6 +155,11 @@ export interface WorkerRuntime {
   readonly id: string;
   readonly rpc: RpcBridge;
   readonly fs: RuntimeFs;
+  readonly doTargetId: typeof doTargetId;
+  readonly createDurableObjectServiceClient: (
+    query: string,
+    objectKey?: string | null,
+  ) => DurableObjectServiceClient;
   readonly workers: WorkerdClient;
   readonly workspace: WorkspaceClient;
   readonly credentials: CredentialClient;
@@ -255,6 +268,9 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     id: workerId,
     rpc,
     fs: runtimeFs,
+    doTargetId,
+    createDurableObjectServiceClient: (query, objectKey) =>
+      createDurableObjectServiceClient(rpc, query, objectKey),
     workers,
     workspace: workspaceApi,
     credentials,

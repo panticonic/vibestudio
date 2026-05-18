@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -38,6 +39,22 @@ describe("externalOpenService", () => {
     };
   }
 
+  const panelCaller = () =>
+    createVerifiedCaller("panel-1", "panel", {
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "version-1",
+    });
+
+  const workerCaller = () =>
+    createVerifiedCaller("worker-1", "worker", {
+      callerId: "worker-1",
+      callerKind: "worker",
+      repoPath: "workers/example",
+      effectiveVersion: "version-1",
+    });
+
   it("requests approval for panel opens and emits approved browser events", async () => {
     const eventService = new EventService();
     const emit = vi.spyOn(eventService, "emit");
@@ -47,21 +64,11 @@ describe("externalOpenService", () => {
       eventService,
       approvalQueue,
       grantStore,
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId) => ({
-          callerId,
-          callerKind: "panel",
-          repoPath: "panels/example",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
-    const result = await service.handler(
-      { callerId: "panel-1", callerKind: "panel" },
-      "openExternal",
-      ["https://example.com/path?q=1#fragment"]
-    );
+    const result = await service.handler({ caller: panelCaller() }, "openExternal", [
+      "https://example.com/path?q=1#fragment",
+    ]);
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -89,22 +96,10 @@ describe("externalOpenService", () => {
       eventService,
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId) => ({
-          callerId,
-          callerKind: "worker",
-          repoPath: "workers/example",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
-    await service.handler({ callerId: "worker-1", callerKind: "worker" }, "openExternal", [
-      "https://example.com/a",
-    ]);
-    await service.handler({ callerId: "worker-1", callerKind: "worker" }, "openExternal", [
-      "https://example.com/b",
-    ]);
+    await service.handler({ caller: workerCaller() }, "openExternal", ["https://example.com/a"]);
+    await service.handler({ caller: workerCaller() }, "openExternal", ["https://example.com/b"]);
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
   });
@@ -117,22 +112,10 @@ describe("externalOpenService", () => {
       eventService,
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId) => ({
-          callerId,
-          callerKind: "worker",
-          repoPath: "workers/example",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
-    await service.handler({ callerId: "worker-1", callerKind: "worker" }, "openExternal", [
-      "https://example.com/a",
-    ]);
-    await service.handler({ callerId: "worker-1", callerKind: "worker" }, "openExternal", [
-      "https://example.com/b",
-    ]);
+    await service.handler({ caller: workerCaller() }, "openExternal", ["https://example.com/a"]);
+    await service.handler({ caller: workerCaller() }, "openExternal", ["https://example.com/b"]);
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
   });
@@ -141,9 +124,7 @@ describe("externalOpenService", () => {
     const service = createExternalOpenService({ eventService: new EventService() });
 
     await expect(
-      service.handler({ callerId: "panel-1", callerKind: "panel" }, "openExternal", [
-        "file:///etc/passwd",
-      ])
+      service.handler({ caller: panelCaller() }, "openExternal", ["file:///etc/passwd"])
     ).rejects.toThrow("openExternal only supports http(s) and mailto URLs");
   });
 
@@ -154,14 +135,6 @@ describe("externalOpenService", () => {
       eventService,
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId) => ({
-          callerId,
-          callerKind: "panel",
-          repoPath: "panels/example",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
     const authorizeUrl = new URL("https://login.example.com/oauth/authorize");
     authorizeUrl.searchParams.set("response_type", "code");
@@ -172,13 +145,13 @@ describe("externalOpenService", () => {
     authorizeUrl.searchParams.set("code_challenge_method", "S256");
 
     await expect(
-      service.handler({ callerId: "panel-1", callerKind: "panel" }, "openExternal", [
+      service.handler({ caller: panelCaller() }, "openExternal", [
         authorizeUrl.toString(),
         { expectedRedirectUri: "http://localhost:1456/auth/callback" },
       ])
     ).rejects.toThrow("redirect_uri does not match");
 
-    await service.handler({ callerId: "panel-1", callerKind: "panel" }, "openExternal", [
+    await service.handler({ caller: panelCaller() }, "openExternal", [
       authorizeUrl.toString(),
       { expectedRedirectUri: "http://localhost:1455/auth/callback" },
     ]);

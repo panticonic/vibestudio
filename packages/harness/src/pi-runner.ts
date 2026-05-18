@@ -27,6 +27,10 @@ import { getModel as piGetModel, type ImageContent, type Model } from "@earendil
 import { Buffer } from "node:buffer";
 import { basename } from "node:path";
 import { isAbsolute, relative as relativePath } from "node:path";
+import {
+  createGadServiceClient,
+  type DurableObjectServiceClient,
+} from "@natstack/shared/userlandServiceRpc";
 
 import type { RuntimeFs } from "./tools/runtime-fs.js";
 import { type NatStackResources, type RpcCaller, loadNatStackResources } from "./resource-loader.js";
@@ -87,6 +91,11 @@ export interface PiRunnerGadProvenance {
 interface GadBlobSnapshot {
   digest: string;
   size: number;
+}
+
+interface AgentHarnessQueueAccess {
+  steerQueue: AgentMessage[];
+  emitQueueUpdate(): Promise<void>;
 }
 
 export interface PiRunnerOptions {
@@ -169,11 +178,13 @@ export class PiRunner {
   private resolvedModel: Model<any> | null = null;
   private provenanceQueue: GadEventSpec[] = [];
   private readonly pendingMutations = new Map<string, PendingMutation>();
+  private readonly gad: DurableObjectServiceClient;
   private running = false;
 
   constructor(private readonly options: PiRunnerOptions) {
     this._approvalLevel = options.approvalLevel;
     this.compactionTrigger = new CompactionTrigger(options.compactionPolicy);
+    this.gad = createGadServiceClient(options.rpc);
   }
 
   async init(): Promise<void> {
@@ -278,18 +289,6 @@ export class PiRunner {
       this.currentResources = await loadNatStackResources({ rpc: this.options.rpc });
       return { systemPrompt: this.composeCurrentSystemPrompt() };
     });
-    this.harness.on("tool_call", async (event) => {
-      const dispatched = await this.dispatchToolCallEvent(
-        event.toolCallId,
-        event.toolName,
-        event.input,
-      );
-      if (dispatched) return dispatched;
-      if (event.toolName === "edit" || event.toolName === "write") {
-        await this.writeMutationIntent(event.toolCallId, event.toolName, event.input);
-      }
-      return undefined;
-    });
     this.harness.on("tool_result", async (event) => {
       if (event.toolName === "edit" || event.toolName === "write") {
         await this.recordMutationObserved(
@@ -323,7 +322,7 @@ export class PiRunner {
     toolCallId: string,
     toolName: string,
     input: Record<string, unknown>,
-  ): Promise<{ block?: boolean; reason?: string } | undefined> {
+  ): Promise<{ block?: boolean; reason?: string; placeholder?: AgentToolResult<any> } | undefined> {
     try {
       const result = await this.extensionRuntime!.dispatch("tool_call", {
         type: "tool_call",
@@ -334,10 +333,7 @@ export class PiRunner {
       return result ?? undefined;
     } catch (err) {
       if (err instanceof DispatchedError) {
-        return {
-          block: true,
-          reason: this.summarizeToolResult(err.placeholderResult),
-        };
+        return { placeholder: err.placeholderResult };
       }
       throw err;
     }
@@ -366,7 +362,28 @@ export class PiRunner {
   }
 
   private computeActiveTools(): AgentTool<any>[] {
-    return this.extensionRuntime!.getActiveTools(this.builtinTools);
+    return this.extensionRuntime!.getActiveTools(this.builtinTools).map((tool) => this.wrapTool(tool));
+  }
+
+  private wrapTool(tool: AgentTool<any>): AgentTool<any> {
+    return {
+      ...tool,
+      execute: async (toolCallId, params, signal, onUpdate) => {
+        const dispatchResult = await this.dispatchToolCallEvent(
+          toolCallId,
+          tool.name,
+          this.asJsonRecord(params) ?? {},
+        );
+        if (dispatchResult?.placeholder) return dispatchResult.placeholder;
+        if (dispatchResult?.block) {
+          throw new Error(dispatchResult.reason ?? `Tool "${tool.name}" blocked`);
+        }
+        if (tool.name === "edit" || tool.name === "write") {
+          await this.writeMutationIntent(toolCallId, tool.name, params);
+        }
+        return tool.execute(toolCallId, params, signal, onUpdate);
+      },
+    } as AgentTool<any>;
   }
 
   private async prepareFollowingTurn(): Promise<void> {
@@ -686,15 +703,13 @@ export class PiRunner {
     let intents: Array<{ event_id: string; payload_json: string }> = [];
     let observed: Array<{ payload_json: string }> = [];
     try {
-      const intentResult = await this.options.rpc.call<{ rows: Array<{ event_id: string; payload_json: string }> }>(
-        "main",
-        "gad.query",
+      const intentResult = await this.gad.call<{ rows: Array<{ event_id: string; payload_json: string }> }>(
+        "query",
         "SELECT event_id, payload_json FROM gad_events WHERE kind = 'file_mutation_planned'",
         [],
       );
-      const observedResult = await this.options.rpc.call<{ rows: Array<{ payload_json: string }> }>(
-        "main",
-        "gad.query",
+      const observedResult = await this.gad.call<{ rows: Array<{ payload_json: string }> }>(
+        "query",
         "SELECT payload_json FROM gad_events WHERE kind = 'file_mutation_observed'",
         [],
       );
@@ -853,9 +868,30 @@ export class PiRunner {
     await this.harness.prompt(input.content, input.images ? { images: input.images } : undefined);
   }
 
-  async steer(input: RunnerTurnInput): Promise<void> {
+  buildUserMessage(input: RunnerTurnInput): AgentMessage {
+    return {
+      role: "user",
+      content: [
+        { type: "text", text: input.content },
+        ...(input.images ?? []),
+      ],
+      timestamp: Date.now(),
+    } as AgentMessage;
+  }
+
+  async steerMessage(message: AgentMessage): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
-    await this.harness.steer(input.content, input.images ? { images: input.images } : undefined);
+    const harness = this.harness as unknown as AgentHarnessQueueAccess;
+    harness.steerQueue.push(message);
+    await harness.emitQueueUpdate();
+  }
+
+  async clearSteeringQueue(): Promise<void> {
+    if (!this.harness) return;
+    const harness = this.harness as unknown as AgentHarnessQueueAccess;
+    if (harness.steerQueue.length === 0) return;
+    harness.steerQueue.splice(0);
+    await harness.emitQueueUpdate();
   }
 
   async continueAgent(): Promise<void> {
@@ -891,21 +927,6 @@ export class PiRunner {
       };
     }
 
-    const dispatchResult = await this.dispatchToolCallEvent(
-      toolCallId,
-      toolName,
-      this.asJsonRecord(params) ?? {},
-    );
-    if (dispatchResult?.block) {
-      return {
-        content: [{ type: "text", text: dispatchResult.reason ?? "Tool call blocked" }],
-        details: null,
-      };
-    }
-
-    if (toolName === "edit" || toolName === "write") {
-      await this.writeMutationIntent(toolCallId, toolName, params);
-    }
     try {
       const result = await tool.execute(
         toolCallId,

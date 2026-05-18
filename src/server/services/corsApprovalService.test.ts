@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -38,21 +39,19 @@ describe("corsApprovalService", () => {
     const service = createCorsApprovalService({
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel-1",
-          callerKind: "panel" as const,
-          repoPath: "workspace/panels/chat",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
-    const ctx = { callerId: "shell", callerKind: "shell" as const };
+    const ctx = {
+      caller: createVerifiedCaller("panel-1", "panel", {
+        callerId: "panel-1",
+        callerKind: "panel",
+        repoPath: "workspace/panels/chat",
+        effectiveVersion: "version-1",
+      }),
+    };
 
     await expect(
       service.handler(ctx, "authorize", [
         {
-          callerId: "panel-1",
           targetUrl: "https://api.example.com/v1/models",
           requestOrigin: "http://localhost:9100",
         },
@@ -61,7 +60,6 @@ describe("corsApprovalService", () => {
     await expect(
       service.handler(ctx, "authorize", [
         {
-          callerId: "panel-1",
           targetUrl: "https://api.example.com/v1/other",
           requestOrigin: "http://localhost:9100",
         },
@@ -81,17 +79,16 @@ describe("corsApprovalService", () => {
     );
   });
 
-  it("rejects direct panel calls", async () => {
+  it("rejects callers without verified code identity", async () => {
     const service = createCorsApprovalService({
       approvalQueue: createApprovalQueueMock(),
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: { resolveByCallerId: vi.fn() },
     });
 
     await expect(
-      service.handler({ callerId: "panel-1", callerKind: "panel" }, "authorize", [
-        { callerId: "panel-1", targetUrl: "https://api.example.com/" },
+      service.handler({ caller: createVerifiedCaller("panel-1", "panel") }, "authorize", [
+        { targetUrl: "https://api.example.com/" },
       ])
-    ).rejects.toThrow("shell/server-only");
+    ).resolves.toMatchObject({ allowed: false, reason: "Unknown capability caller: panel-1" });
   });
 });

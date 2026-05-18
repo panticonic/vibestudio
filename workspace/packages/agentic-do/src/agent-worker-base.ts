@@ -70,6 +70,10 @@ import {
 import { ChannelClient } from "./channel-client.js";
 import { ContentBlockProjector, type ProjectorSink } from "./content-block-projector.js";
 import { TurnDispatcher } from "./turn-dispatcher.js";
+import {
+  createGadServiceClient,
+  type DurableObjectServiceClient,
+} from "@natstack/shared/userlandServiceRpc";
 
 const SAFE_TOOL_NAMES_DEFAULT: ReadonlySet<string> = new Set(["read", "ls", "grep", "find"]);
 const URL_BOUND_MODEL_CREDENTIAL_SENTINEL = "natstack-url-bound-model-credential";
@@ -410,6 +414,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   private failedEvents = new Map<number, number>();
   private static readonly POISON_MAX_ATTEMPTS = 3;
   private recoveredChannels = new Set<string>();
+  private gad: DurableObjectServiceClient;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -427,6 +432,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         return this.rpc.streamCall(targetId, method, args, options);
       },
     };
+    this.gad = createGadServiceClient(lazyRpc);
 
     this.identity = new DOIdentity(this.sql);
     this.subscriptions = new SubscriptionManager(
@@ -1188,6 +1194,10 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
 
     const projector = this.getOrCreateProjector(channelId);
     runner.subscribe((event) => projector.handleEvent(event));
+    runner.subscribe((event) => {
+      if (event.type !== "tool_result") return;
+      this.scheduleDeferredDispatchDrain(channelId);
+    });
 
     // Phase 7: register the only remaining piece of the legacy terminal-error
     // subscriber — the aborted-turn logging branch (NatStack-specific). The
@@ -1288,7 +1298,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   }
 
   private async ensurePiBranch(channelId: string): Promise<void> {
-    await this.rpc.call("main", "gad.ensurePiBranch", {
+    await this.gad.call("ensurePiBranch", {
       branchId: gadBranchIdForChannel(channelId),
       channelId,
       metadata: {
@@ -1505,6 +1515,22 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     const runner = await this.getOrCreateRunner(channelId);
     this.recordAbort(channelId, reason, detail);
     await runner.abort();
+    this.dispatchers.get(channelId)?.markCurrentTurnAborted();
+  }
+
+  private abortAgentAfterDispatch(
+    channelId: string,
+    reason: AgentAbortReason,
+    detail?: string,
+  ): void {
+    setTimeout(() => {
+      void this.abortAgentForReason(channelId, reason, detail).catch((err) => {
+        console.warn(
+          `[AgentWorkerBase] Deferred dispatch abort failed for channel=${channelId}:`,
+          err,
+        );
+      });
+    }, 0);
   }
 
   private async recoverDispatchesForChannel(channelId: string): Promise<void> {
@@ -1656,7 +1682,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       this.streamCallbacks.delete(callId);
       throw err;
     }
-    await this.abortAgentForReason(channelId, "participant-method-dispatch", `${participantHandle}.${method}`);
+    this.abortAgentAfterDispatch(channelId, "participant-method-dispatch", `${participantHandle}.${method}`);
     return makeDispatchPlaceholder(toolCallId, callId, "tool-call");
   }
 
@@ -1693,7 +1719,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       this.dispatches.deleteOne(callId);
       throw err;
     }
-    await this.abortAgentForReason(channelId, "ask-user-dispatch");
+    this.abortAgentAfterDispatch(channelId, "ask-user-dispatch");
     return makeDispatchPlaceholder(toolCallId, callId, "ask-user");
   }
 
@@ -1817,7 +1843,10 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     this.dispatches.bufferResult(callId, result, isError);
 
     const messages = await this.readRunnerMessages(breadcrumb.channelId);
-    if (!hasToolResultMessage(messages, breadcrumb.toolCallId)) return;
+    if (!hasToolResultMessage(messages, breadcrumb.toolCallId)) {
+      this.scheduleDeferredDispatchDrain(breadcrumb.channelId);
+      return;
+    }
 
     const claimed = this.dispatches.tryClaim(callId);
     if (!claimed) return;
@@ -1837,6 +1866,17 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       this.dispatches.releaseClaim(claimed.callId, claimed.resolvingToken);
       throw err;
     }
+  }
+
+  private scheduleDeferredDispatchDrain(channelId: string): void {
+    setTimeout(() => {
+      void this.drainDeferredDispatchesFor(channelId).catch((err) => {
+        console.warn(
+          `[AgentWorkerBase] Failed to drain deferred dispatches for channel=${channelId}:`,
+          err,
+        );
+      });
+    }, 0);
   }
 
   private async applyResult(
@@ -2009,9 +2049,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       throw err;
     }
 
-    const runner = await this.getOrCreateRunner(channelId);
-    this.recordAbort(channelId, "ui-prompt-dispatch", kind);
-    await runner.abort();
+    this.abortAgentAfterDispatch(channelId, "ui-prompt-dispatch", kind);
     const placeholder = makeDispatchPlaceholder(toolCallId, callId, breadcrumbKind);
     throw new DispatchedError(placeholder);
   }
@@ -2131,7 +2169,10 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   ): Promise<boolean> {
     await this.ensureChannelContext(channelId);
     const entry = this.runners.get(channelId);
-    if (!entry) return false;
+    if (!entry) {
+      console.warn(`[AgentWorkerBase] credential resume failed for channel=${channelId}: runner missing`);
+      return false;
+    }
 
     const providerId = opts?.providerId ?? this.getModelProviderId();
     const interruption = this.getModelCredentialInterruption(channelId, providerId, opts?.modelBaseUrl);
@@ -2143,6 +2184,12 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     } else if (interruption && messages.length === interruption.resumeCount) {
       resumableMessages = messages.slice(0, interruption.resumeCount);
     } else {
+      console.warn(
+        `[AgentWorkerBase] credential resume failed for channel=${channelId}: ` +
+        `no resumable turn provider=${providerId} messages=${messages.length} ` +
+        `interruptionCount=${interruption?.resumeCount ?? "none"} lastRole=${String((last as { role?: unknown } | undefined)?.role ?? "none")} ` +
+        `lastStop=${String((last as { stopReason?: unknown } | undefined)?.stopReason ?? "none")}`,
+      );
       return false;
     }
 
@@ -2150,13 +2197,24 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       | { role?: string }
       | undefined;
     if (!resumeFrom || (resumeFrom.role !== "user" && resumeFrom.role !== "toolResult")) {
+      console.warn(
+        `[AgentWorkerBase] credential resume failed for channel=${channelId}: ` +
+        `resume cursor is ${String(resumeFrom?.role ?? "missing")}`,
+      );
       return false;
     }
 
     const messageEntries = (await entry.runner.session?.getEntries())
       ?.filter((sessionEntry) => sessionEntry.type === "message");
     const target = messageEntries?.[resumableMessages.length - 1];
-    await entry.runner.session?.moveTo(target?.id ?? null);
+    if (!target) {
+      console.warn(
+        `[AgentWorkerBase] credential resume failed for channel=${channelId}: ` +
+        `session entry missing for messageIndex=${resumableMessages.length - 1} entries=${messageEntries?.length ?? 0}`,
+      );
+      return false;
+    }
+    await entry.runner.session?.moveTo(target.id);
     this.clearModelCredentialInterruption(channelId, providerId);
     this.credentialPromptCardsEmitted.delete(`${channelId}::model-credential::${providerId}`);
     const projector = this.getOrCreateProjector(channelId);
@@ -2296,9 +2354,8 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
       let entryId: string | null = null;
       if (forkAtMessageIndex != null) {
         const offset = Math.max(0, forkAtMessageIndex - 1);
-        const rows = await this.rpc.call<Array<Record<string, unknown>>>(
-          "main",
-          "gad.findEntries",
+        const rows = await this.gad.call<Array<Record<string, unknown>>>(
+          "findEntries",
           {
             branchId: oldBranchId,
             entryType: "message",
@@ -2316,7 +2373,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         }
       }
 
-      await this.rpc.call("main", "gad.forkPiBranch", {
+      await this.gad.call("forkPiBranch", {
         sourceBranchId: oldBranchId,
         newBranchId,
         entryId,
@@ -2331,14 +2388,13 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   // ── Fetch override ───────────────────────────────────────────────────────
 
   override async fetch(request: Request): Promise<Response> {
-    this.ensureReady();
-
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
     if (segments.length >= 1 && !(this as unknown as { _objectKey?: string })._objectKey) {
       (this as unknown as { _objectKey?: string })._objectKey = decodeURIComponent(segments[0]!);
     }
 
+    this.ensureReady();
     this.ensureBootstrapped();
 
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
@@ -2396,25 +2452,34 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         }
       }
 
-      if (method === "onChannelEvent" && args.length === 2) {
-        await this.handleIncomingChannelEvent(args[0] as string, args[1] as ChannelEvent);
-        return new Response(JSON.stringify(null), {
+      const previousCallerId = this._currentRpcCallerId;
+      const previousCallerKind = this._currentRpcCallerKind;
+      this._currentRpcCallerId = request.headers.get("X-Natstack-Rpc-Caller-Id");
+      this._currentRpcCallerKind = request.headers.get("X-Natstack-Rpc-Caller-Kind");
+      try {
+        if (method === "onChannelEvent" && args.length === 2) {
+          await this.handleIncomingChannelEvent(args[0] as string, args[1] as ChannelEvent);
+          return new Response(JSON.stringify(null), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        const fn = (this as unknown as Record<string, unknown>)[method];
+        if (typeof fn !== "function") {
+          return new Response(JSON.stringify({ error: `Unknown method: ${method}` }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        const result = await (fn as (...a: unknown[]) => Promise<unknown>).call(this, ...args);
+        return new Response(JSON.stringify(result ?? null), {
           headers: { "Content-Type": "application/json" },
         });
+      } finally {
+        this._currentRpcCallerId = previousCallerId;
+        this._currentRpcCallerKind = previousCallerKind;
       }
-
-      const fn = (this as unknown as Record<string, unknown>)[method];
-      if (typeof fn !== "function") {
-        return new Response(JSON.stringify({ error: `Unknown method: ${method}` }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const result = await (fn as (...a: unknown[]) => Promise<unknown>).call(this, ...args);
-      return new Response(JSON.stringify(result ?? null), {
-        headers: { "Content-Type": "application/json" },
-      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return new Response(JSON.stringify({ error: message }), {

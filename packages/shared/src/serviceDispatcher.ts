@@ -51,6 +51,37 @@ function normalizeArgs(args: unknown[], schema: z.ZodType): unknown[] {
 
 export type CallerKind = "panel" | "shell" | "server" | "worker" | "extension" | "harness";
 
+export interface VerifiedCodeIdentity {
+  /** Registered runtime/code principal, e.g. do-service:source:Class or a panel id. */
+  callerId: string;
+  callerKind: "worker" | "panel";
+  /** Workspace source path that produced this runtime. */
+  repoPath: string;
+  /** Effective build/content version for policy and audit. */
+  effectiveVersion: string;
+}
+
+export interface VerifiedCaller {
+  runtime: {
+    /** Concrete runtime principal, e.g. a panel id or do:source:Class:objectKey. */
+    id: string;
+    kind: CallerKind;
+  };
+  /** Code/build identity verified at the trust boundary, when applicable. */
+  code?: VerifiedCodeIdentity;
+}
+
+export function createVerifiedCaller(
+  callerId: string,
+  callerKind: CallerKind,
+  code?: VerifiedCodeIdentity | null,
+): VerifiedCaller {
+  return {
+    runtime: { id: callerId, kind: callerKind },
+    ...(code ? { code } : {}),
+  };
+}
+
 /**
  * WebSocket client state exposed to service handlers.
  * The full WsClientState in src/server/rpcServer.ts extends this with the
@@ -59,17 +90,14 @@ export type CallerKind = "panel" | "shell" | "server" | "worker" | "extension" |
  */
 export interface WsClientInfo {
   ws: unknown;
-  callerId: string;
+  caller: VerifiedCaller;
   connectionId: string;
-  callerKind: CallerKind;
   authenticated: boolean;
 }
 
 export type ServiceContext = {
-  /** The caller ID (panel/worker tree node ID, or "shell" for the shell renderer) */
-  callerId: string;
-  /** Whether the caller is a panel, worker, shell, or external server */
-  callerKind: CallerKind;
+  /** Canonical verified identity. Boundary code constructs this once. */
+  caller: VerifiedCaller;
   /** WS transport instance ID when caller connected via WebSocket. */
   connectionId?: string;
   /** WS client state when caller connected via WebSocket */
@@ -190,12 +218,12 @@ export class ServiceDispatcher {
     // checkServiceAccess() call as defense-in-depth, but this is the
     // load-bearing check.
     try {
-      checkServiceAccess(service, ctx.callerKind, this, method);
+      checkServiceAccess(service, ctx.caller.runtime.kind, this, method);
     } catch (error) {
       throw new ServiceAccessError(
         service,
         method,
-        ctx.callerKind,
+        ctx.caller.runtime.kind,
         error instanceof Error ? error.message : String(error),
       );
     }

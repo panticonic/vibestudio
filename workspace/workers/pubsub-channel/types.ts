@@ -43,9 +43,6 @@ export interface ParticipantInfo {
   metadata: Record<string, unknown>;
   transport: "rpc" | "do";
   connectedAt: number;
-  doSource?: string;
-  doClass?: string;
-  doKey?: string;
 }
 
 /** Channel config (mirrors PubSub client ChannelConfig). */
@@ -77,5 +74,5 @@ export interface StoredAttachment {
   size: number;
 }
 
-/** Event delivered to agent DOs via callDO. Same as ChannelEvent from harness/types. */
+/** Event delivered to agent DOs via callDoTarget. Same as ChannelEvent from harness/types. */
 export type { ChannelEvent, SendMessageOptions };

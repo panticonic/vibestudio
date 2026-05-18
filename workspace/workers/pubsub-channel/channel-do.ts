@@ -45,6 +45,18 @@ const PARTICIPANT_CLEANUP_INTERVAL_MS = 60 * 1000; // 1 minute
 /** Maximum replay events returned to DO subscribers. */
 const REPLAY_LIMIT = 50;
 
+function parseDOParticipantId(
+  participantId: string,
+): { source: string; className: string; objectKey: string } | null {
+  if (!participantId.startsWith("do:")) return null;
+  const parts = participantId.slice(3).split(":");
+  if (parts.length < 3) return null;
+  const [source, className, ...objectKeyParts] = parts;
+  const objectKey = objectKeyParts.join(":");
+  if (!source || !className || !objectKey) return null;
+  return { source, className, objectKey };
+}
+
 export class PubSubChannel extends DurableObjectBase {
   static override schemaVersion = 3;
 
@@ -76,10 +88,7 @@ export class PubSubChannel extends DurableObjectBase {
         metadata TEXT NOT NULL,
         transport TEXT NOT NULL,
         connected_at INTEGER NOT NULL,
-        session_id TEXT,
-        do_source TEXT,
-        do_class TEXT,
-        do_key TEXT
+        session_id TEXT
       )
     `);
     this.sql.exec(`
@@ -144,6 +153,31 @@ export class PubSubChannel extends DurableObjectBase {
     try { return JSON.parse(raw); } catch { return null; }
   }
 
+  private assertParticipantCaller(participantId: string, method: string): void {
+    const callerId = this.rpcCallerId;
+    if (callerId && callerId !== participantId) {
+      throw new Error(`${method}: participant ${participantId} cannot be used by caller ${callerId}`);
+    }
+  }
+
+  private isPrivilegedRpcCaller(): boolean {
+    const callerId = this.rpcCallerId;
+    const callerKind = this.rpcCallerKind;
+    return (
+      callerId === "main" ||
+      callerKind === "server" ||
+      callerKind === "shell" ||
+      callerKind === "harness"
+    );
+  }
+
+  private assertAdminCaller(method: string): void {
+    if (this.isPrivilegedRpcCaller()) return;
+    const callerId = this.rpcCallerId ?? "unknown";
+    const callerKind = this.rpcCallerKind ?? "unknown";
+    throw new Error(`${method}: privileged caller required (got ${callerKind} ${callerId})`);
+  }
+
   // ── Presence events ─────────────────────────────────────────────────────
 
   private publishPresenceEvent(
@@ -196,11 +230,14 @@ export class PubSubChannel extends DurableObjectBase {
     participantId: string,
     metadata: Record<string, unknown>,
   ): Promise<SubscribeResult> {
-    // Extract DO identity from metadata
-    const doSource = metadata["doSource"] as string | undefined;
-    const doClass = metadata["doClass"] as string | undefined;
-    const doKey = metadata["doKey"] as string | undefined;
-    const transport = metadata["transport"] as string ?? "rpc";
+    const doRef = parseDOParticipantId(participantId);
+    const transport = doRef ? "do" : "rpc";
+    const callerId = this.rpcCallerId;
+    if (callerId && callerId !== participantId) {
+      throw new Error(
+        `Participant ${participantId} cannot be subscribed by caller ${callerId}`,
+      );
+    }
     const participantSessionId = typeof metadata[PARTICIPANT_SESSION_METADATA_KEY] === "string"
       ? metadata[PARTICIPANT_SESSION_METADATA_KEY] as string
       : null;
@@ -258,6 +295,16 @@ export class PubSubChannel extends DurableObjectBase {
       }
     }
 
+    if (doRef && callerId) {
+      await this.rpc.call(
+        "main",
+        "workers.resolveDurableObject",
+        doRef.source,
+        doRef.className,
+        doRef.objectKey,
+      );
+    }
+
     // Re-subscribe with the same participant ID: replace the roster entry, but
     // only redeliver in-flight calls if the underlying client session changed.
     // Clients should keep participantId stable for the logical viewer so
@@ -294,9 +341,6 @@ export class PubSubChannel extends DurableObjectBase {
 
     // Clean metadata for storage (remove transport/DO fields and subscribe-time hints)
     const storedMetadata = { ...metadata };
-    delete storedMetadata["doSource"];
-    delete storedMetadata["doClass"];
-    delete storedMetadata["doKey"];
     delete storedMetadata["contextId"];
     delete storedMetadata["channelConfig"];
     delete storedMetadata["replay"];
@@ -306,16 +350,13 @@ export class PubSubChannel extends DurableObjectBase {
     delete storedMetadata[PARTICIPANT_SESSION_METADATA_KEY];
 
     this.sql.exec(
-      `INSERT INTO participants (id, metadata, transport, connected_at, session_id, do_source, do_class, do_key, handle)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO participants (id, metadata, transport, connected_at, session_id, handle)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       participantId,
       JSON.stringify(storedMetadata),
       transport === "do" ? "do" : "rpc",
       Date.now(),
       participantSessionId,
-      doSource ?? null,
-      doClass ?? null,
-      doKey ?? null,
       handle,
     );
 
@@ -489,12 +530,25 @@ export class PubSubChannel extends DurableObjectBase {
    * Unsubscribe a participant from this channel.
    */
   async unsubscribe(participantId: string): Promise<void> {
+    this.assertParticipantCaller(participantId, "unsubscribe");
+    await this.unsubscribeParticipant(participantId, "graceful");
+  }
+
+  async adminUnsubscribeParticipant(participantId: string): Promise<void> {
+    this.assertAdminCaller("adminUnsubscribeParticipant");
+    await this.unsubscribeParticipant(participantId, "graceful");
+  }
+
+  private async unsubscribeParticipant(
+    participantId: string,
+    leaveReason: "graceful" | "disconnect" | "replaced",
+  ): Promise<void> {
     const metadata = this.getSenderMetadata(participantId) ?? {};
 
     this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
     cleanupDeliveryChain(participantId);
-    await this.failPendingCallsTargeting(participantId, "graceful");
-    this.publishPresenceEvent(participantId, "leave", metadata, "graceful");
+    await this.failPendingCallsTargeting(participantId, leaveReason);
+    this.publishPresenceEvent(participantId, "leave", metadata, leaveReason);
   }
 
   /**
@@ -604,6 +658,7 @@ export class PubSubChannel extends DurableObjectBase {
     content: string,
     opts?: SendOpts,
   ): Promise<void> {
+    this.assertParticipantCaller(participantId, "send");
     // Phase 0B: Idempotency check
     const idempotencyKey = opts?.idempotencyKey;
     if (idempotencyKey) {
@@ -675,6 +730,7 @@ export class PubSubChannel extends DurableObjectBase {
     payload: unknown,
     opts?: { persist?: boolean; ref?: number; senderMetadata?: Record<string, unknown>; attachments?: StoredAttachment[]; idempotencyKey?: string },
   ): Promise<{ id?: number }> {
+    this.assertParticipantCaller(participantId, "publish");
     const ts = Date.now();
     const persist = opts?.persist !== false;
     const ref = opts?.ref;
@@ -771,6 +827,7 @@ export class PubSubChannel extends DurableObjectBase {
     idempotencyKey?: string,
     opts?: { append?: boolean },
   ): Promise<void> {
+    this.assertParticipantCaller(participantId, "update");
     // Phase 0B: Idempotency check
     if (idempotencyKey) {
       const existing = this.sql.exec(
@@ -817,6 +874,7 @@ export class PubSubChannel extends DurableObjectBase {
     messageId: string,
     idempotencyKey?: string,
   ): Promise<void> {
+    this.assertParticipantCaller(participantId, "complete");
     // Phase 0B: Idempotency check
     if (idempotencyKey) {
       const existing = this.sql.exec(
@@ -868,6 +926,7 @@ export class PubSubChannel extends DurableObjectBase {
     errorMessage: string,
     code?: string,
   ): Promise<void> {
+    this.assertParticipantCaller(participantId, "error");
     const ts = Date.now();
     const senderMetadata = this.getSenderMetadata(participantId);
     const payload: Record<string, unknown> = { id: messageId, error: errorMessage };
@@ -906,6 +965,7 @@ export class PubSubChannel extends DurableObjectBase {
     content: string,
     contentType?: string,
   ): Promise<void> {
+    this.assertParticipantCaller(participantId, "sendEphemeral");
     const ts = Date.now();
     const messageId = `eph_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -926,6 +986,22 @@ export class PubSubChannel extends DurableObjectBase {
     participantId: string,
     metadata: Record<string, unknown>,
   ): Promise<void> {
+    this.assertParticipantCaller(participantId, "updateMetadata");
+    this.updateParticipantMetadata(participantId, metadata);
+  }
+
+  async adminUpdateParticipantMetadata(
+    participantId: string,
+    metadata: Record<string, unknown>,
+  ): Promise<void> {
+    this.assertAdminCaller("adminUpdateParticipantMetadata");
+    this.updateParticipantMetadata(participantId, metadata);
+  }
+
+  private updateParticipantMetadata(
+    participantId: string,
+    metadata: Record<string, unknown>,
+  ): void {
     this.sql.exec(
       `UPDATE participants SET metadata = ? WHERE id = ?`,
       JSON.stringify(metadata), participantId,
@@ -939,6 +1015,16 @@ export class PubSubChannel extends DurableObjectBase {
    * (no row inserted into the messages table).
    */
   async setTypingState(participantId: string, typing: boolean): Promise<void> {
+    this.assertParticipantCaller(participantId, "setTypingState");
+    this.setParticipantTypingState(participantId, typing);
+  }
+
+  async adminSetParticipantTypingState(participantId: string, typing: boolean): Promise<void> {
+    this.assertAdminCaller("adminSetParticipantTypingState");
+    this.setParticipantTypingState(participantId, typing);
+  }
+
+  private setParticipantTypingState(participantId: string, typing: boolean): void {
     const rows = this.sql.exec(
       `SELECT metadata FROM participants WHERE id = ?`,
       participantId,
@@ -962,25 +1048,22 @@ export class PubSubChannel extends DurableObjectBase {
     doRef?: { source: string; className: string; objectKey: string };
   }>> {
     const rows = this.sql.exec(
-      `SELECT id, metadata, transport, do_source, do_class, do_key FROM participants`,
+      `SELECT id, metadata, transport FROM participants`,
     ).toArray();
     return rows.map(row => {
+      const participantId = row["id"] as string;
       const entry: {
         participantId: string;
         metadata: Record<string, unknown>;
         transport: string;
         doRef?: { source: string; className: string; objectKey: string };
       } = {
-        participantId: row["id"] as string,
+        participantId,
         metadata: JSON.parse(row["metadata"] as string),
         transport: row["transport"] as string,
       };
-      const doSource = row["do_source"] as string | null;
-      const doClass = row["do_class"] as string | null;
-      const doKey = row["do_key"] as string | null;
-      if (doSource && doClass && doKey) {
-        entry.doRef = { source: doSource, className: doClass, objectKey: doKey };
-      }
+      const doRef = parseDOParticipantId(participantId);
+      if (doRef) entry.doRef = doRef;
       return entry;
     });
   }
@@ -1025,12 +1108,13 @@ export class PubSubChannel extends DurableObjectBase {
     method: string,
     args: unknown,
   ): Promise<void> {
+    this.assertParticipantCaller(callerPid, "callMethod");
     storeCall(this.sql, callId, callerPid, targetPid, method, args);
     this.scheduleNextAlarm();
 
     // Deliver to target
     const target = this.sql.exec(
-      `SELECT transport, do_source, do_class, do_key FROM participants WHERE id = ?`,
+      `SELECT transport FROM participants WHERE id = ?`,
       targetPid,
     ).toArray();
 
@@ -1128,7 +1212,7 @@ export class PubSubChannel extends DurableObjectBase {
     isError: boolean,
   ): Promise<void> {
     const caller = this.sql.exec(
-      `SELECT transport, do_source, do_class, do_key FROM participants WHERE id = ?`,
+      `SELECT transport FROM participants WHERE id = ?`,
       callerId,
     ).toArray();
 

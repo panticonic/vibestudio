@@ -4,6 +4,7 @@
 
 import { z } from "zod";
 import {
+  createVerifiedCaller,
   ServiceDispatcher,
   ServiceError,
   parseServiceMethod,
@@ -11,10 +12,7 @@ import {
 import type { ServiceContext, ServiceHandler } from "@natstack/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 
-const ctx: ServiceContext = {
-  callerId: "test",
-  callerKind: "shell",
-};
+const ctx: ServiceContext = { caller: createVerifiedCaller("test", "shell") };
 
 function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
   return {

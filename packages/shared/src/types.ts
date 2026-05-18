@@ -97,6 +97,9 @@ export interface PackageManifest {
     title?: string;
     description?: string;
     protocols?: string[];
+    policy?: {
+      allowed?: Array<"panel" | "shell" | "server" | "worker" | "extension" | "harness">;
+    };
   } & (
     | { durableObject: { className: string; objectKey?: string }; worker?: never }
     | { worker: { routePath: string }; durableObject?: never }

@@ -1,18 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
-import { ServiceDispatcher, type ServiceContext } from "@natstack/shared/serviceDispatcher";
+import { describe, expect, it } from "vitest";
+import {
+  createVerifiedCaller,
+  ServiceDispatcher,
+  type ServiceContext,
+} from "@natstack/shared/serviceDispatcher";
 import { createWorkerService } from "./workerService.js";
 
-const panelCtx: ServiceContext = { callerId: "panel:test", callerKind: "panel" };
+const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };
 
 function createDeps() {
-  const dispatch = vi.fn(async () => [
-    {
-      participantId: "do:workers/agent-worker:AiChatWorker:agent-1",
-      metadata: {},
-    },
-  ]);
   return {
-    doDispatch: { dispatch },
     buildSystem: {
       getGraph: () => ({
         allNodes: () => [
@@ -26,6 +23,7 @@ function createDeps() {
                 {
                   name: "channel",
                   protocols: ["natstack.channel.v1"],
+                  policy: { allowed: ["panel", "worker", "shell"] },
                   durableObject: { className: "PubSubChannel" },
                 },
               ],
@@ -41,6 +39,7 @@ function createDeps() {
                 {
                   name: "stateless-api",
                   protocols: ["example.stateless.v1"],
+                  policy: { allowed: ["shell"] },
                   worker: { routePath: "/api" },
                 },
               ],
@@ -48,10 +47,6 @@ function createDeps() {
           },
         ],
       }),
-    },
-    fsService: {
-      getCallerContext: vi.fn(() => "ctx-1"),
-      registerCallerContext: vi.fn(),
     },
   };
 }
@@ -93,6 +88,15 @@ describe("workerService userland service resolution", () => {
 
     await expect(
       dispatcher.dispatch(panelCtx, "workers", "resolveService", ["example.stateless.v1"])
+    ).rejects.toMatchObject({ code: "EACCES" });
+
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("shell", "shell") },
+        "workers",
+        "resolveService",
+        ["example.stateless.v1"]
+      )
     ).resolves.toMatchObject({
       kind: "worker",
       name: "stateless-api",
@@ -102,27 +106,32 @@ describe("workerService userland service resolution", () => {
     });
   });
 
-  it("uses the channel service resolver for channel workers", async () => {
+  it("resolves concrete durable object targets", async () => {
     const deps = createDeps();
     const dispatcher = new ServiceDispatcher();
     dispatcher.registerService(createWorkerService(deps as never));
     dispatcher.markInitialized();
 
     await expect(
-      dispatcher.dispatch(panelCtx, "workers", "getChannelWorkers", ["chat-1"])
-    ).resolves.toEqual([
-      {
-        participantId: "do:workers/agent-worker:AiChatWorker:agent-1",
-        source: "workers/agent-worker",
-        className: "AiChatWorker",
-        objectKey: "agent-1",
-        channelId: "chat-1",
-      },
-    ]);
+      dispatcher.dispatch(panelCtx, "workers", "resolveDurableObject", [
+        "workers/pubsub-channel",
+        "PubSubChannel",
+        "chat-1",
+      ])
+    ).resolves.toMatchObject({
+      kind: "durable-object",
+      source: "workers/pubsub-channel",
+      className: "PubSubChannel",
+      objectKey: "chat-1",
+      targetId: "do:workers/pubsub-channel:PubSubChannel:chat-1",
+    });
 
-    expect(deps.doDispatch.dispatch).toHaveBeenCalledWith(
-      { source: "workers/pubsub-channel", className: "PubSubChannel", objectKey: "chat-1" },
-      "getParticipants"
-    );
+    await expect(
+      dispatcher.dispatch(panelCtx, "workers", "resolveDurableObject", [
+        "workers/missing",
+        "MissingDO",
+        "key",
+      ])
+    ).rejects.toThrow("No Durable Object class registered");
   });
 });

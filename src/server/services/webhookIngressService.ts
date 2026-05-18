@@ -5,7 +5,7 @@ import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
-import type { DODispatch } from "../doDispatch.js";
+import { doTargetId, type RpcCallerLike } from "@natstack/shared/userlandServiceRpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import {
   getHeader,
@@ -157,34 +157,34 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
     objectKey: "global",
   };
 
-  constructor(private readonly doDispatch: DODispatch) {}
+  constructor(private readonly rpc: RpcCallerLike) {}
 
   create(
     input: Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">
   ): Promise<WebhookIngressSubscription> {
-    return this.doDispatch.dispatch(
-      this.ref,
+    return this.rpc.call(
+      doTargetId(this.ref),
       "create",
       input
     ) as Promise<WebhookIngressSubscription>;
   }
 
   get(subscriptionId: string): Promise<WebhookIngressSubscription | null> {
-    return this.doDispatch.dispatch(
-      this.ref,
+    return this.rpc.call(
+      doTargetId(this.ref),
       "get",
       subscriptionId
     ) as Promise<WebhookIngressSubscription | null>;
   }
 
   list(ownerCallerId?: string): Promise<WebhookIngressSubscription[]> {
-    return this.doDispatch.dispatch(this.ref, "list", ownerCallerId) as Promise<
+    return this.rpc.call(doTargetId(this.ref), "list", ownerCallerId) as Promise<
       WebhookIngressSubscription[]
     >;
   }
 
   async replace(subscription: WebhookIngressSubscription): Promise<void> {
-    await this.doDispatch.dispatch(this.ref, "replace", subscription);
+    await this.rpc.call(doTargetId(this.ref), "replace", subscription);
   }
 }
 
@@ -192,7 +192,7 @@ export interface WebhookIngressServiceDeps {
   relaySigningSecret?: string;
   publicBaseUrl?: string;
   store?: WebhookIngressStore;
-  doDispatch?: DODispatch;
+  rpc?: RpcCallerLike;
   codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
   now?: () => number;
   dispatchToTarget?: (target: WebhookTarget, event: WebhookDeliveryEvent) => Promise<unknown>;
@@ -217,9 +217,7 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
 } {
   const store =
     deps.store ??
-    (deps.doDispatch
-      ? new DOWebhookIngressStore(deps.doDispatch)
-      : new InMemoryWebhookIngressStore());
+    (deps.rpc ? new DOWebhookIngressStore(deps.rpc) : new InMemoryWebhookIngressStore());
   const publicBaseUrl = normalizeBaseUrl(deps.publicBaseUrl ?? DEFAULT_PUBLIC_BASE_URL);
   const now = deps.now ?? Date.now;
   const seenReplayKeys = new Map<string, number>();
@@ -229,15 +227,15 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   }
 
   function ensureOwner(ctx: ServiceContext, subscription: WebhookIngressSubscription): void {
-    if (ctx.callerKind === "shell" || ctx.callerKind === "server") return;
-    if (subscription.ownerCallerId !== ctx.callerId) {
+    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") return;
+    if (subscription.ownerCallerId !== ctx.caller.runtime.id) {
       throw new Error("webhook subscription is not owned by caller");
     }
   }
 
   function ensureTargetIsCallerSource(ctx: ServiceContext, target: WebhookTarget): void {
-    if (ctx.callerKind === "shell" || ctx.callerKind === "server") return;
-    const identity = deps.codeIdentityResolver?.resolveByCallerId(ctx.callerId);
+    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") return;
+    const identity = ctx.caller.code;
     if (!identity) {
       throw new Error("webhook target source cannot be verified for caller");
     }
@@ -254,8 +252,8 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ensureTargetIsCallerSource(ctx, parsed.target);
     const subscription = await store.create({
       label: parsed.label,
-      ownerCallerId: ctx.callerId,
-      ownerCallerKind: ctx.callerKind,
+      ownerCallerId: ctx.caller.runtime.id,
+      ownerCallerKind: ctx.caller.runtime.kind,
       target: parsed.target,
       verifier: parsed.verifier,
       replay: parsed.replay,
@@ -274,7 +272,9 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ctx: ServiceContext
   ): Promise<WebhookIngressSubscriptionSummary[]> {
     const owner =
-      ctx.callerKind === "shell" || ctx.callerKind === "server" ? undefined : ctx.callerId;
+      ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server"
+        ? undefined
+        : ctx.caller.runtime.id;
     return (await store.list(owner)).map(toSummary);
   }
 

@@ -239,9 +239,10 @@ interface ExtensionContext {
   // instead. The current list matches the panel/worker runtime today;
   // entries drop as each capability migrates. See "Migration candidates".
   //
-  // `ctx.workers.callDO(source, className, key, method, ...args)` dispatches
-  // into a Durable Object. Useful for extensions whose canonical surface
-  // wraps a workerd-backed store (e.g. browser-data).
+  // `ctx.workers.resolveDurableObject(source, className, key)` returns and
+  // grants a Durable Object target. `ctx.rpc.call(targetId, method, ...args)`
+  // then dispatches through unified RPC. Useful for extensions whose
+  // canonical surface wraps a workerd-backed store (e.g. browser-data).
   //
   // `ctx.panel` and `ctx.db` were considered for the substrate set but are
   // not exposed in v1: the panel orchestration service is shell-only and
@@ -249,7 +250,8 @@ interface ExtensionContext {
   readonly fs: FsClient;
   readonly git: GitClient;
   readonly workspace: WorkspaceClient;
-  readonly workers: WorkersClient;          // workers.callDO for DO-backed stores
+  readonly rpc: RpcClient;                  // unified RPC for explicit targets
+  readonly workers: WorkersClient;          // userland service/DO discovery
   readonly credentials: CredentialsClient;
   readonly webhooks: WebhooksClient;
   readonly approvals: ApprovalsClient;

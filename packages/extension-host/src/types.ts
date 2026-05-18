@@ -44,24 +44,23 @@ export function invocationFromServiceContext(
   extensionName: string,
   method: string,
   requestId: string,
-  identityResolver: ExtensionHostCodeIdentityResolver,
 ): ExtensionInvocation {
-  const callerKind = ctx.callerKind === "server" || ctx.callerKind === "harness"
+  const callerKind = ctx.caller.runtime.kind === "server" || ctx.caller.runtime.kind === "harness"
     ? "shell"
-    : ctx.callerKind;
+    : ctx.caller.runtime.kind;
   const invocation: ExtensionInvocation = {
     requestId,
     extensionName,
     method,
     caller: {
-      callerId: ctx.callerId,
+      callerId: ctx.caller.runtime.id,
       callerKind,
       ...(ctx.connectionId ? { connectionId: ctx.connectionId } : {}),
     },
   };
-  if (ctx.callerKind === "panel" || ctx.callerKind === "worker") {
-    const identity = identityResolver.resolveByCallerId(ctx.callerId);
-    if (identity && identity.callerKind === ctx.callerKind) {
+  if (ctx.caller.runtime.kind === "panel" || ctx.caller.runtime.kind === "worker") {
+    const identity = ctx.caller.code;
+    if (identity && identity.callerKind === ctx.caller.runtime.kind) {
       invocation.userlandCaller = {
         callerId: identity.callerId,
         callerKind: identity.callerKind,

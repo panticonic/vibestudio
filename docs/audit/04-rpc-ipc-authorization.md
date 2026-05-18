@@ -1,6 +1,6 @@
 # 04 — RPC / IPC Transport & Service Authorization Audit
 
-Scope: `packages/rpc/`, `src/server/rpcServer*`, `src/server/wsServerTransport*`, `src/server/doDispatch*`, `src/server/gateway*`, `src/server/routeRegistry*`, `src/server/panelHttpServer*`, `src/server/headlessServiceRegistration*`, `src/server/panelRuntimeRegistration*`, `src/server/browserTransportEntry*`, `src/preload/{ipcTransport,wsTransport}*`, `src/main/ipcDispatcher*`, `src/main/ipc/*`, a sample of server services (`gitService`, `buildService`, `workspaceService`, `workerService`, `webhookService`, `pushService`, `settingsServiceStandalone`, `credentialService`, `authService`, `tokensService`, `fsService`), plus `packages/shared/src/{serviceDispatcher,servicePolicy,serviceDefinition,tokenManager}.ts`.
+Scope: `packages/rpc/`, `src/server/rpcServer*`, `src/server/wsServerTransport*`, `src/server/workerdRpcRelay*`, `src/server/gateway*`, `src/server/routeRegistry*`, `src/server/panelHttpServer*`, `src/server/headlessServiceRegistration*`, `src/server/panelRuntimeRegistration*`, `src/server/browserTransportEntry*`, `src/preload/{ipcTransport,wsTransport}*`, `src/main/ipcDispatcher*`, `src/main/ipc/*`, a sample of server services (`gitService`, `buildService`, `workspaceService`, `workerService`, `webhookService`, `pushService`, `settingsServiceStandalone`, `credentialService`, `authService`, `tokensService`, `fsService`), plus `packages/shared/src/{serviceDispatcher,servicePolicy,serviceDefinition,tokenManager}.ts`.
 
 Date: 2026-04-23 · Branch: audit · Auditor: Claude (Opus 4.7 1M) · Mode: read-only.
 
@@ -14,7 +14,7 @@ However, the implementation has substantive gaps between the declared policy mod
 
 1. **Policy is not enforced on Electron IPC** (`src/main/index.ts` `natstack:serviceCall` and `src/main/ipcDispatcher.ts`). `ServiceDispatcher.dispatch()` never calls `checkServiceAccess`; only the WS/HTTP RPC server does. In Electron mode panels can invoke Electron-local services with policies like `{ allowed: ["shell"] }` (app/panel/view/menu/adblock/settings services) simply by issuing `__natstackElectron.serviceCall("app.xxx", …)`. The `callerKind` at dispatch is heuristically set to `"panel"` for non-shell webContents but the dispatcher ignores it.
 
-2. **Several server services over-allow `panel` callers on privilege-sensitive methods.** Examples: `authTokens.getProviderToken` (any panel can read stored OAuth/API keys), `authTokens.persist` / `authTokens.logout` (any panel can overwrite/delete them), `auth.startOAuthLogin` / `auth.logout`, `credentials.revokeConsent` (destructive and unbounded), `credentials.renameConnection`, `workspace.setConfigField` (arbitrary config write by a panel), `workspace.select` (forces a workspace relaunch), `workers.callDO` (arbitrary DO method dispatch). The old `git.getTokenForPanel` / `git.revokeTokenForPanel` RPC surface has been removed.
+2. **Several server services over-allow `panel` callers on privilege-sensitive methods.** Examples: `authTokens.getProviderToken` (any panel can read stored OAuth/API keys), `authTokens.persist` / `authTokens.logout` (any panel can overwrite/delete them), `auth.startOAuthLogin` / `auth.logout`, `credentials.revokeConsent` (destructive and unbounded), `credentials.renameConnection`, `workspace.setConfigField` (arbitrary config write by a panel), `workspace.select` (forces a workspace relaunch). The old `git.getTokenForPanel` / `git.revokeTokenForPanel` RPC surface has been removed.
 
 3. **`fs.bindContext` lets any panel re-bind its own fs context to an arbitrary `contextId`.** This means a panel that learns another panel's contextId (they appear in URLs, logs, and the management API) can read and write the victim context's folder via the regular fs methods without any further authorization.
 
@@ -24,7 +24,7 @@ However, the implementation has substantive gaps between the declared policy mod
 
 6. **No WebSocket frame size limit.** `new WebSocketServer({ noServer: true })` and `new WebSocketServer({ server: this.httpServer })` both default to `maxPayload = 100 MiB`. A single authenticated (or even a pre-auth) client can send 100 MiB frames forcing buffer allocation. HTTP POST `/rpc` caps the body at `200 MiB` (also very generous).
 
-7. **DO dispatch attaches an `__instanceToken` in the body envelope that no code in-tree verifies.** `src/server/doDispatch.ts:78` passes the token and parentId alongside args, but there is no workerd-side receiver that rejects requests missing or carrying a mismatched token. Any process that can reach the workerd port can POST directly to `/_w/<source>/<className>/<objectKey>/<method>` and pretend to be the gateway.
+7. **Superseded:** the old DO dispatch token envelope was removed. DO calls now enter through unified RPC target IDs and the server-owned workerd relay.
 
 8. **Route registry auth is coarse.** Service-registered HTTP routes default to `auth: "public"` (`routeRegistry.ts:350`); the only gate is `"admin-token"`. There is no `"panel"` / `"shell"` / `"worker"` tier, no per-method scoping, and no integration with `TokenManager` for panel tokens on route requests.
 
@@ -59,7 +59,7 @@ Nothing in this report is a panic-level remote code execution, but several items
   - `createToken`/`ensureToken(callerId, callerKind)` — returns 32-byte random hex.
   - `validateToken(token) → { callerId, callerKind } | null`.
   - A single `adminToken` slot (`setAdminToken` / `validateAdminToken`) used by the host to identify itself as `callerKind: "server"`.
-  - Panel parent tree via `setPanelParent` / `isPanelDescendantOf` used for relay authorization.
+  - Panel parent tree via `setPanelParent` / `isPanelDescendantOf` for UI ownership metadata.
 
 ### 2.3 Server-side WebSocket RPC (`src/server/rpcServer.ts`)
 
@@ -85,7 +85,7 @@ checkServiceAccess(service, client.callerKind, dispatcher, method)
 dispatcher.dispatch({callerId, callerKind, wsClient}, service, method, args)
 ```
 
-Routed traffic (panel→panel, panel→worker, panel→DO) uses `ws:route` / `ws:panel-rpc`. `handleRoute` calls `checkRelayAuth` (panels may only relay to self, an ancestor/descendant, or a `do:`/`worker:` target) then forwards.
+Routed traffic (panel→panel, panel→worker, panel→DO) uses `ws:route` / `ws:panel-rpc`. `handleRoute` calls `checkRelayAuth`, which currently allows authenticated RPC participants to relay to any target; recipients are expected to enforce sensitive method-level gates on receipt.
 
 There is also an HTTP fallback: `POST /rpc` on the same server (or via gateway). Auth is `Authorization: Bearer <token>`. The body is `{method, args}` for direct dispatch, or `{type:"call"|"emit", targetId, method|event, args|payload, fromId?}` for relays.
 
@@ -137,7 +137,7 @@ Two separate IPC surfaces:
 | `callerKind` in the `ServiceContext` is always produced by the transport. | `rpcServer.ts handleAuth` uses the token entry. | `dispatcher.dispatch` never re-validates. | In IPC mode, `natstack:serviceCall` passes an attacker-friendly heuristic kind directly to dispatch. |
 | The WS frame has already been authenticated. | `handleMessage` dispatches on `msg.type`. | Yes — any message before `ws:auth` is discarded and the socket is closed. | OK. |
 | The event `fromId` of relayed messages is trustworthy. | Consumers of `ws:routed`/`runtime:*` events treat `fromId` as the origin. | Neither WS nor HTTP relay paths overwrite `fromId` with the caller's id. | Sender can impersonate any other caller on events. |
-| DO dispatch `__instanceToken` is verified workerd-side. | `doDispatch.ts:78`. | No in-tree receiver verifies it. | Direct POST to workerd bypasses server-enforced identity. |
+| Legacy DO dispatch token envelope is required for DO calls. | Superseded architecture. | Removed from source. | DO calls now use unified RPC target IDs plus the server-owned workerd relay. |
 | The gateway's admin token is opaque to downstream proxies. | `gateway.ts proxyRequest`. | Headers are forwarded verbatim (`gateway.ts:240`). | `Authorization: Bearer <admin>` reaches workerd if a panel/worker route is visited with it. |
 | Only the shell IPC renderer hits `natstack:rpc:send`. | `ipcDispatcher.ts:86`. | No `event.sender.id` check. | In principle any webContents with `preload: "index.cjs"` (the shell preload) bypasses the callerKind heuristic — today only the shell has that preload, so it's a structural invariant, not an enforced one. |
 | Panels can only bind to their own context. | `ensurePanelToken` registers the caller context. | `fs.bindContext` overrides with any string. | Cross-context fs access by pivoting `contextId`. |
@@ -195,33 +195,11 @@ for another panel's bearer credential.
 - Attack path: panel A knows panel B's contextId (exposed in URLs, `panels.listPanels()` output, `panel.getInfo()` result, etc.). Panel A issues `fs.bindContext("<B's contextId>")`, then `fs.readFile("secrets.json")` reads from panel B's context folder. Writes are equally possible.
 - Remediation: make `bindContext` a `{ allowed: ["server"] }` (or `[]`) method, perform context binding only via the trusted `tokens.ensurePanelToken` flow, and drop the "bindContext is special" branch or gate it on `callerKind === "server"`. Alternatively sign the contextId at panel creation time so `bindContext` verifies a server-issued MAC.
 
-### 4.4 CRITICAL — Panel access to `workers.callDO`
+### 4.4 RESOLVED — Legacy worker DO dispatch removed
 
-- File: `src/server/services/workerService.ts:27-117`
-- Snippet:
-
-  ```ts
-  policy: { allowed: ["server", "panel", "worker"] },
-  methods: {
-    callDO: { args: z.tuple([z.string(), z.string(), z.string(), z.string()]).rest(z.unknown()) },
-    ...
-  },
-  handler: async (_ctx, method, args) => {
-    ...
-    case "callDO": {
-      const source = args[0] as string;
-      const className = args[1] as string;
-      const objectKey = args[2] as string;
-      const doMethod = args[3] as string;
-      const doArgs = args.slice(4);
-      ...
-    }
-  }
-  ```
-
-- `_ctx` is unused. The handler accepts arbitrary `source`/`className`/`objectKey` and dispatches via `doDispatch`, which ultimately POSTs to the DO HTTP endpoint. There is no allowlist of DO classes a panel may call, no cross-check that the calling panel participates in that DO's channel/session.
-- Combined with 4.9 (`__instanceToken` not verified), a panel can send arbitrary RPC to any DO, then impersonate any other caller by including `__parentId` in the relayed call.
-- Remediation: scope `callDO` to `{ allowed: ["server"] }` (panels should call `workers.*` façade methods that the service already owns, and complex routing should go through the DO's registered service route), or, at minimum, accept only a DO that the calling panel is currently a participant of.
+The old direct DO dispatch facade was removed. DO access now goes
+through manifest service resolution or explicit unified RPC target IDs over the
+same authenticated RPC relay used by other participants.
 
 ### 4.5 HIGH — `ServiceDispatcher.dispatch` does not enforce policy; IPC path is unchecked
 
@@ -285,19 +263,12 @@ for another panel's bearer credential.
 - Attack path: panel A (legitimately related to panel B through the panel tree) sends `ws:route` with `{ type: "event", fromId: "server", event: "notification:show", payload: {...} }` → panel B sees an event that claims to be from the server and acts on it (e.g., renders a phishing notification prompting for credentials). Similar for impersonating `runtime:theme`, `runtime:focus`, `credentials:*`, custom app events.
 - Remediation: in both `handleRoute` and the HTTP emit branch, always overwrite `message.fromId`/`fromId` with `client.callerId`/`callerId` before relaying. Accept a caller-supplied `fromId` only when caller is admin/server.
 
-### 4.8 HIGH — DO `__instanceToken` is attached but never verified
+### 4.8 RESOLVED — Legacy DO token envelope removed
 
-- File: `src/server/doDispatch.ts:58-95`.
-- Snippet:
-
-  ```ts
-  const envelope = { args, __instanceToken: token, __instanceId: instanceId, __parentId: callerId ?? undefined };
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(envelope) });
-  ```
-
-- There is no matching verifier in the workerd runtime (no in-tree hit for `__instanceToken` outside this file). The DO receives the envelope body but has no obligation to validate the bearer.
-- Attack path: any process with access to the workerd port (loopback-bound, but see 4.12 for the proxy pass-through) can POST `{ args, __instanceToken: "", __instanceId: "do:foo:Bar:baz", __parentId: "server" }` directly, skipping the RpcServer entirely, and execute arbitrary DO methods with attacker-chosen `parentId`.
-- Remediation: add a workerd-side middleware that rejects DO invocations missing a valid `__instanceToken` (and that the token's caller matches the URL's `source/className/objectKey`). If token verification remains out of scope, require workerd to be reachable only via the gateway, and have the gateway strip+re-add the token so internal POSTs from outside the host process fail.
+The server no longer sends a per-request DO token envelope. Durable Objects use
+their workerd-provided `RPC_AUTH_TOKEN` plus `WORKER_SOURCE` /
+`WORKER_CLASS_NAME` bindings for outbound RPC identity; inbound DO method calls
+are routed only by the server-owned workerd relay.
 
 ### 4.9 HIGH — No Origin/Host check on WS handshake
 
@@ -340,23 +311,20 @@ for another panel's bearer credential.
 - Attack path: if the management token leaks (bug report, log, email) any website can query `/api/panels` and enumerate panel identities, contextIds, subdomains, parent IDs. Combined with 4.3, enumerated contextIds feed cross-context fs pivots.
 - Remediation: set `Access-Control-Allow-Origin` to a same-origin value (the server's own `externalHost`) instead of `*`, and require the origin to match on each request. Better: remove CORS from this surface entirely (it's internal management, not intended for third-party origins).
 
-### 4.14 MEDIUM — Relay auth allows any panel to call any `worker:*` and any `do:*`
+### 4.14 ACCEPTED — Relay auth allows any authenticated participant to call any RPC target
 
 - File: `src/server/rpcServer.ts:944-964`.
 - Snippet:
 
   ```ts
   private checkRelayAuth(callerId, callerKind, targetId): RelayAuthCheck {
-    if (callerKind !== "panel") return { ok: true };
-    if (targetId === callerId) return { ok: true };
-    if (targetId.startsWith("do:") || targetId.startsWith("worker:")) return { ok: true };
-    // panel-tree check
+    return { ok: true };
   }
   ```
 
-- Any panel can send any `ws:route` message (or HTTP `type:"call"`/`"emit"`) to any DO or worker, regardless of whether the panel has been granted consent to that worker/DO.
-- Attack path: combined with 4.4 and 4.8, panel → `worker:X.adminOnlyMethod` or `do:workers/secrets:SecretStore/main.read` without any consent flow.
-- Remediation: Track per-panel worker/DO access grants (already implied by channel-participant membership via `workers.getChannelWorkers`), and enforce that the target `worker:`/`do:` id is in the calling panel's grants.
+- Any authenticated participant can send any `ws:route` message (or HTTP `type:"call"`/`"emit"`) to any panel, worker, or DO target. This is intentional RPC transport behavior; sensitive services/participants must enforce access filters at receipt.
+- Attack path: if a sensitive recipient exposes privileged methods without its own access checks, any authenticated participant can invoke them.
+- Remediation: do not add transport-level reachability ACLs. Put approval/access logic in the receiving service or participant method handler.
 
 ### 4.15 MEDIUM — `workspace.setConfigField` / `workspace.select` callable by panels
 
@@ -403,7 +371,7 @@ for another panel's bearer credential.
 
 ### 4.19 MEDIUM — No rate limiting anywhere on RPC dispatch
 
-- Observation: `RpcServer` has no per-caller, per-method rate limiter. A malicious panel can burst `build.recompute`, `workers.callDO`, `webhooks.subscribe`, `push.register`, etc.
+- Observation: `RpcServer` has no per-caller, per-method rate limiter. A malicious panel can burst `build.recompute`, `webhooks.subscribe`, `push.register`, etc.
 - Attack path: DoS of the server, and flooding of `webhook` storage / push registrations.
 - Remediation: add a simple token-bucket limiter in `handleRpc` (and `handleHttpRpc`) keyed by `callerId`. For write-heavy methods, add a tighter limiter.
 
@@ -451,7 +419,7 @@ for another panel's bearer credential.
 - File: `src/server/configLoader.ts`. `sessionStorage.setItem("__natstackPanelInit", JSON.stringify(cfg))` stores the full panel init (including `gatewayConfig.token`) in the panel's sessionStorage. Any XSS on the panel exfiltrates it.
 - Remediation: avoid persisting the token: re-fetch via `__natstackShell.getPanelInit()` on each page load (already the code path when the shell is present). For gateway-served panels, consider a short-lived, HttpOnly cookie bound to the gateway origin plus a server-side mapping keyed by panelId, rather than injecting the bearer into JS globals.
 
-### 4.28 LOW — `workers.callDO` handler logs `doMethod` and `objectKey`
+### 4.28 LOW — Legacy worker DO dispatch handler logs `doMethod` and `objectKey`
 
 - File: `src/server/services/workerService.ts:104`. Not sensitive per se, but a panel that learns other panels' `objectKey`s from such logs accelerates 4.4.
 - Remediation: redact untrusted inputs in warn/info logs.
@@ -489,7 +457,7 @@ for another panel's bearer credential.
 
 3. **Re-audit each server service's method list** for panel-reachable destructive/credential methods. Specifically:
    - `authTokens.getProviderToken / persist / logout` → tighten to `shell/worker/server`.
-   - `workers.callDO` → drop `panel`.
+   - Legacy worker DO dispatch → remove facade or drop `panel`.
    - `workspace.setConfigField / select / setInitPanels` → drop `panel`/`worker`.
    - `credentials.revokeConsent` → require `connectionId`.
    - `webhooks.subscribe` → require `workerId === ctx.callerId` for worker callers.
@@ -501,7 +469,7 @@ for another panel's bearer credential.
 
 6. **Add an Origin allowlist on WS upgrade.** Only `http(s)://<externalHost>(:port)?`, known extension origins, the mobile URI scheme, and the empty origin in dev. Reject others.
 
-7. **Verify `__instanceToken` in workerd.** Either add a workerd-level middleware that validates the token against `TokenManager`, or stop sending it and move DO invocations to a gateway path that authenticates.
+7. **Done:** stopped sending the legacy DO token envelope and moved DO invocation to the unified RPC/workerd relay path.
 
 8. **Done:** gateway workerd proxying strips inbound auth/cookie headers and injects a narrow workerd-scoped bearer.
 
@@ -509,9 +477,9 @@ for another panel's bearer credential.
 
 10. **Stop persisting the bearer in `sessionStorage`.** The `configLoader` already re-fetches from `__natstackShell` when available; make that the only path. For gateway-served panels, issue a per-page ephemeral ticket that is swapped for the real bearer via a single-use XHR the panel JS can't re-read.
 
-11. **Rate-limit the RPC server.** Per-caller token bucket at the WS layer; tighter bucket on writes to `webhooks.subscribe`, `push.register`, `build.recompute`, `workers.callDO`.
+11. **Rate-limit the RPC server.** Per-caller token bucket at the WS layer; tighter bucket on writes to `webhooks.subscribe`, `push.register`, `build.recompute`, and unified DO-target calls.
 
-12. **Strengthen relay authorization** — per-panel allowlist of reachable `worker:` / `do:` targets; deny by default; grants created by the consent / participant bootstrap flow.
+12. **Audit recipient-side access filters** for sensitive RPC participants; transport-level reachability remains open by design.
 
 13. **Tighten CORS on the management API.** `Access-Control-Allow-Origin: <same origin>` only.
 
@@ -541,8 +509,7 @@ Server RPC:
 - `/home/werg/natstack/src/server/wsServerTransport.ts`
 - `/home/werg/natstack/src/server/rpcServer.test.ts`
 - `/home/werg/natstack/src/server/rpcServer.httpRpc.test.ts`
-- `/home/werg/natstack/src/server/doDispatch.ts`
-- `/home/werg/natstack/src/server/doDispatch.test.ts`
+- `/home/werg/natstack/src/server/workerdRpcRelay.ts`
 
 Gateway / route registry / panel HTTP:
 - `/home/werg/natstack/src/server/gateway.ts`

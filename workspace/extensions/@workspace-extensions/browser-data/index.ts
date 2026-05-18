@@ -28,18 +28,13 @@ interface InvocationLike {
   current(): { caller: { callerKind: string } } | null;
 }
 
-interface WorkersLike {
-  callDO<T>(
-    source: string,
-    className: string,
-    objectKey: string,
-    method: string,
-    ...args: unknown[]
-  ): Promise<T>;
-}
-
 interface ExtensionContextLike {
-  workers: WorkersLike;
+  rpc: {
+    call<T>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
+  };
+  workers: {
+    resolveDurableObject(source: string, className: string, objectKey: string): Promise<{ targetId: string }>;
+  };
   invocation: InvocationLike;
   log: { info(message: string): void };
   health?: {
@@ -93,8 +88,15 @@ export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("browser-data extension activating");
   ctx.health?.healthy({ summary: "Browser data extension ready" });
 
-  const callDO = <T>(method: string, ...args: unknown[]) =>
-    ctx.workers.callDO<T>(DO_SOURCE, DO_CLASS, DO_KEY, method, ...args);
+  let storeTargetPromise: Promise<string> | null = null;
+  const getStoreTarget = () => {
+    storeTargetPromise ??= ctx.workers
+      .resolveDurableObject(DO_SOURCE, DO_CLASS, DO_KEY)
+      .then((target) => target.targetId);
+    return storeTargetPromise;
+  };
+  const callStore = <T>(method: string, ...args: unknown[]) =>
+    getStoreTarget().then((targetId) => ctx.rpc.call<T>(targetId, method, ...args));
 
   const requireShell = (method: string): void => {
     const callerKind = ctx.invocation.current()?.caller.callerKind;
@@ -122,7 +124,7 @@ export async function activate(ctx: ExtensionContextLike) {
     doMethod: string,
     ...args: unknown[]
   ): Promise<T> => {
-    const result = await callDO<T>(doMethod, ...args);
+    const result = await callStore<T>(doMethod, ...args);
     emitChanged(dataType);
     return result;
   };
@@ -131,12 +133,12 @@ export async function activate(ctx: ExtensionContextLike) {
     detectBrowsers: guarded("detectBrowsers", async () => detectBrowsers()),
 
     startImport: guarded("startImport", async (request: ImportRequest) =>
-      importBrowserData(request, callDO, emitChanged, ctx)),
+      importBrowserData(request, callStore, emitChanged, ctx)),
 
-    getImportHistory: guarded("getImportHistory", async () => callDO("getImportHistory")),
+    getImportHistory: guarded("getImportHistory", async () => callStore("getImportHistory")),
 
     getBookmarks: guarded("getBookmarks", async (folderPath?: string) =>
-      callDO("getBookmarks", folderPath ?? "/")),
+      callStore("getBookmarks", folderPath ?? "/")),
     addBookmark: guarded("addBookmark", async (bookmark: unknown) =>
       mutate("bookmarks", "addBookmark", bookmark)),
     updateBookmark: guarded("updateBookmark", async (id: number, partial: unknown) =>
@@ -146,26 +148,26 @@ export async function activate(ctx: ExtensionContextLike) {
     moveBookmark: guarded("moveBookmark", async (id: number, folder: string, position: number) =>
       mutate("bookmarks", "moveBookmark", id, folder, position)),
     searchBookmarks: guarded("searchBookmarks", async (query: string) =>
-      callDO("searchBookmarks", query)),
+      callStore("searchBookmarks", query)),
 
-    getHistory: guarded("getHistory", async (query: unknown) => callDO("getHistory", query)),
+    getHistory: guarded("getHistory", async (query: unknown) => callStore("getHistory", query)),
     deleteHistoryEntry: guarded("deleteHistoryEntry", async (id: number) =>
       mutate("history", "deleteHistoryEntry", id)),
     deleteHistoryRange: guarded("deleteHistoryRange", async (start: number, end: number) =>
       mutate("history", "deleteHistoryRange", start, end)),
     clearAllHistory: guarded("clearAllHistory", async () => mutate("history", "clearAllHistory")),
     searchHistory: guarded("searchHistory", async (query: string, limit?: number) =>
-      callDO("searchHistory", query, limit)),
+      callStore("searchHistory", query, limit)),
     searchHistoryForAutocomplete: guarded("searchHistoryForAutocomplete", async (query: unknown) =>
-      callDO("searchHistoryForAutocomplete", query)),
+      callStore("searchHistoryForAutocomplete", query)),
     recordHistoryVisit: guarded("recordHistoryVisit", async (request: RecordHistoryVisitRequest) =>
       mutate("history", "recordHistoryVisit", validateHistoryVisit(request))),
     updateHistoryTitle: guarded("updateHistoryTitle", async (request: UpdateHistoryTitleRequest) =>
       mutate("history", "updateHistoryTitle", validateHistoryTitle(request))),
 
-    getPasswords: guarded("getPasswords", async () => callDO("getPasswords")),
+    getPasswords: guarded("getPasswords", async () => callStore("getPasswords")),
     getPasswordForSite: guarded("getPasswordForSite", async (origin: string) =>
-      callDO("getPasswordForSite", origin)),
+      callStore("getPasswordForSite", origin)),
     addPassword: guarded("addPassword", async (password: unknown) =>
       mutate("passwords", "addPassword", password)),
     updatePassword: guarded("updatePassword", async (id: number, partial: unknown) =>
@@ -177,42 +179,42 @@ export async function activate(ctx: ExtensionContextLike) {
     addNeverSavePassword: guarded("addNeverSavePassword", async (origin: string) =>
       mutate("passwords", "addNeverSave", origin)),
     isNeverSavePassword: guarded("isNeverSavePassword", async (origin: string) =>
-      callDO("isNeverSave", origin)),
+      callStore("isNeverSave", origin)),
     getAutofillSuggestions: guarded("getAutofillSuggestions", async (origin: string, fieldName?: string) =>
-      callDO("getAutofillSuggestions", origin, fieldName)),
+      callStore("getAutofillSuggestions", origin, fieldName)),
 
-    getSearchEngines: guarded("getSearchEngines", async () => callDO("getSearchEngines")),
+    getSearchEngines: guarded("getSearchEngines", async () => callStore("getSearchEngines")),
     setDefaultEngine: guarded("setDefaultEngine", async (id: number) =>
       mutate("searchEngines", "setDefaultEngine", id)),
     getPermissions: guarded("getPermissions", async (origin?: string) =>
-      callDO("getPermissions", origin)),
+      callStore("getPermissions", origin)),
     setPermission: guarded("setPermission", async (origin: string, perm: string, value: string) =>
       mutate("permissions", "setPermission", origin, perm, value)),
 
     exportBookmarks: guarded(
       "exportBookmarks",
       async (format: "html" | "json" | "chrome-json") =>
-        exportBookmarks(format, await callDO<Array<Record<string, unknown>>>("getAllBookmarks")),
+        exportBookmarks(format, await callStore<Array<Record<string, unknown>>>("getAllBookmarks")),
     ),
     exportPasswords: guarded(
       "exportPasswords",
       async (format: "csv-chrome" | "csv-firefox" | "json") =>
-        exportPasswords(format, await callDO<Array<Record<string, unknown>>>("getPasswords")),
+        exportPasswords(format, await callStore<Array<Record<string, unknown>>>("getPasswords")),
     ),
     exportCookies: guarded(
       "exportCookies",
       async (format: "json" | "netscape-txt") =>
-        exportCookies(format, await callDO<Array<Record<string, unknown>>>("getCookies")),
+        exportCookies(format, await callStore<Array<Record<string, unknown>>>("getCookies")),
     ),
     exportAll: guarded("exportAll", async () =>
       exportAll(
-        await callDO<Array<Record<string, unknown>>>("getAllBookmarks"),
-        await callDO<Array<Record<string, unknown>>>("getHistory", { limit: 2147483647 }),
-        await callDO<Array<Record<string, unknown>>>("getCookies"),
-        await callDO<Array<Record<string, unknown>>>("getPasswords"),
+        await callStore<Array<Record<string, unknown>>>("getAllBookmarks"),
+        await callStore<Array<Record<string, unknown>>>("getHistory", { limit: 2147483647 }),
+        await callStore<Array<Record<string, unknown>>>("getCookies"),
+        await callStore<Array<Record<string, unknown>>>("getPasswords"),
       )),
 
-    getCookies: guarded("getCookies", async (domain?: string) => callDO("getCookies", domain)),
+    getCookies: guarded("getCookies", async (domain?: string) => callStore("getCookies", domain)),
     deleteCookie: guarded("deleteCookie", async (id: number) =>
       mutate("cookies", "deleteCookie", id)),
     clearCookies: guarded("clearCookies", async (domain?: string) =>
@@ -222,23 +224,23 @@ export async function activate(ctx: ExtensionContextLike) {
 
 async function importBrowserData(
   request: ImportRequest,
-  callDO: <T>(method: string, ...args: unknown[]) => Promise<T>,
+  callStore: <T>(method: string, ...args: unknown[]) => Promise<T>,
   emitChanged: (dataType: ImportDataType | "passwords" | "searchEngines") => void,
   ctx: ExtensionContextLike,
 ): Promise<ImportResult[]> {
   const profilePath = resolveProfilePath(request);
   const store = {
-    bookmarks: { addBatch: (items: ImportedBookmark[]) => callDO<number>("addBookmarksBatch", items) },
-    history: { addBatch: (items: ImportedHistoryEntry[]) => callDO<number>("addHistoryBatch", items) },
-    cookies: { addBatch: (items: ImportedCookie[]) => callDO<number>("addCookiesBatch", items) },
-    passwords: { addBatch: (items: ImportedPassword[]) => callDO<number>("addPasswordsBatch", items) },
-    autofill: { addBatch: (items: ImportedAutofillEntry[]) => callDO<number>("addAutofillBatch", items) },
-    searchEngines: { addBatch: (items: ImportedSearchEngine[]) => callDO<number>("addSearchEnginesBatch", items) },
-    permissions: { addBatch: (items: ImportedPermission[]) => callDO<number>("addPermissionsBatch", items) },
-    favicons: { addBatch: (items: ImportedFavicon[]) => callDO<number>("addFaviconsBatch", items) },
+    bookmarks: { addBatch: (items: ImportedBookmark[]) => callStore<number>("addBookmarksBatch", items) },
+    history: { addBatch: (items: ImportedHistoryEntry[]) => callStore<number>("addHistoryBatch", items) },
+    cookies: { addBatch: (items: ImportedCookie[]) => callStore<number>("addCookiesBatch", items) },
+    passwords: { addBatch: (items: ImportedPassword[]) => callStore<number>("addPasswordsBatch", items) },
+    autofill: { addBatch: (items: ImportedAutofillEntry[]) => callStore<number>("addAutofillBatch", items) },
+    searchEngines: { addBatch: (items: ImportedSearchEngine[]) => callStore<number>("addSearchEnginesBatch", items) },
+    permissions: { addBatch: (items: ImportedPermission[]) => callStore<number>("addPermissionsBatch", items) },
+    favicons: { addBatch: (items: ImportedFavicon[]) => callStore<number>("addFaviconsBatch", items) },
   };
   const results = await runImportPipeline(request, store);
-  await Promise.all(results.map((result: ImportResult) => callDO("logImport", {
+  await Promise.all(results.map((result: ImportResult) => callStore("logImport", {
     browser: request.browser,
     profilePath,
     dataType: result.dataType,

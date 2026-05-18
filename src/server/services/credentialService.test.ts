@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as http from "node:http";
 import { generateKeyPairSync } from "node:crypto";
@@ -13,12 +14,43 @@ import type {
 } from "../../../packages/shared/src/credentials/types.js";
 import type { ClientConfigRecord } from "../../../packages/shared/src/credentials/clientConfigStore.js";
 import { createCredentialService } from "./credentialService.js";
+import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
 import { TokenManager } from "@natstack/shared/tokenManager";
 import {
   installPanelTokenPersistence,
   recoverPersistedPanelTokens,
 } from "../persistedPanelTokens.js";
+
+function verifiedTestCaller(callerId: string, callerKind: "panel" | "worker" | "shell") {
+  if (callerKind !== "panel" && callerKind !== "worker") {
+    return createVerifiedCaller(callerId, callerKind);
+  }
+  const suffix = callerId.startsWith("panel-")
+    ? callerId.slice("panel-".length)
+    : (callerId.split(":").pop() ?? callerId);
+  const repoPath =
+    suffix === "test"
+      ? "/repo"
+      : suffix === "owner" && callerKind === "panel"
+        ? "/repo"
+        : suffix === "owner" || suffix === "first"
+          ? "/owner"
+          : suffix === "other"
+            ? "/other"
+            : suffix === "consumer"
+              ? "/consumer"
+              : callerId.startsWith("do:")
+                ? "/owner"
+                : `/${suffix}`;
+  const effectiveVersion = suffix === "other" || suffix === "new-version" ? "hash-2" : "hash-1";
+  return createVerifiedCaller(callerId, callerKind, {
+    callerId,
+    callerKind,
+    repoPath,
+    effectiveVersion,
+  });
+}
 
 class MemoryCredentialStore {
   private readonly credentials = new Map<string, Credential>();
@@ -171,14 +203,14 @@ function targetedOpenEventService(emit: ReturnType<typeof vi.fn>) {
 async function startOAuthConnection(
   service: ReturnType<typeof createCredentialService>,
   emit: ReturnType<typeof vi.fn>,
-  ctx: { callerId: string; callerKind: "panel" },
+  ctx: ServiceContext,
   request: unknown
 ) {
   const pending = service.handler(ctx, "connect", [request]) as Promise<StoredCredentialSummary>;
   await vi.waitFor(() =>
     expect(emit).toHaveBeenCalledWith(
       "external-open:open",
-      expect.objectContaining({ callerId: ctx.callerId })
+      expect.objectContaining({ callerId: ctx.caller.runtime.id })
     )
   );
   const lastCall = emit.mock.calls[emit.mock.calls.length - 1]!;
@@ -213,18 +245,10 @@ describe("credentialService", () => {
     const service = createCredentialService({
       credentialStore: store as never,
       auditLog: auditLog as never,
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "worker:test",
-          callerKind: "worker",
-          repoPath: "/repo",
-          effectiveVersion: "hash-1",
-        }),
-      },
     });
 
     const stored = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "storeCredential",
       [
         {
@@ -249,16 +273,18 @@ describe("credentialService", () => {
     expect(persisted?.accessToken).toBe("secret-token");
 
     const listed = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "listStoredCredentials",
       []
     )) as StoredCredentialSummary[];
     expect(listed).toHaveLength(1);
     expect(JSON.stringify(listed)).not.toContain("secret-token");
 
-    await service.handler({ callerId: "worker:test", callerKind: "worker" }, "revokeCredential", [
-      { credentialId: stored.id },
-    ]);
+    await service.handler(
+      { caller: verifiedTestCaller("worker:test", "worker") },
+      "revokeCredential",
+      [{ credentialId: stored.id }]
+    );
     expect((await store.loadUrlBound(stored.id))?.revokedAt).toEqual(expect.any(Number));
     expect(auditLog.entries).toHaveLength(1);
   });
@@ -281,18 +307,10 @@ describe("credentialService", () => {
       credentialStore: store as never,
       approvalQueue: approvalQueue as never,
       sessionGrantStore: new CredentialSessionGrantStore(),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "worker:test",
-          callerKind: "worker",
-          repoPath: "/repo",
-          effectiveVersion: "hash-1",
-        }),
-      },
     });
 
     const stored = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "requestCredentialInput",
       [
         {
@@ -344,14 +362,6 @@ describe("credentialService", () => {
       credentialStore: new MemoryCredentialStore() as never,
       approvalQueue: approvalQueue as never,
       sessionGrantStore: new CredentialSessionGrantStore(),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "worker:test",
-          callerKind: "worker",
-          repoPath: "/repo",
-          effectiveVersion: "hash-1",
-        }),
-      },
     });
     const baseRequest = {
       title: "Add GitHub",
@@ -363,7 +373,7 @@ describe("credentialService", () => {
       fields: [{ name: "token", label: "Fine-grained PAT", type: "secret", required: true }],
       material: { type: "bearer-token", tokenField: "token" },
     };
-    const ctx = { callerId: "worker:test", callerKind: "worker" as const };
+    const ctx = { caller: verifiedTestCaller("worker:test", "worker") };
 
     await expect(
       service.handler(ctx, "requestCredentialInput", [
@@ -393,16 +403,10 @@ describe("credentialService", () => {
     const store = new MemoryCredentialStore();
     const service = createCredentialService({
       credentialStore: store as never,
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId: string) =>
-          callerId === "worker:owner"
-            ? { callerId, callerKind: "worker", repoPath: "/owner", effectiveVersion: "hash-1" }
-            : { callerId, callerKind: "worker", repoPath: "/other", effectiveVersion: "hash-2" },
-      },
     });
 
     const stored = (await service.handler(
-      { callerId: "worker:owner", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:owner", "worker") },
       "storeCredential",
       [
         {
@@ -415,9 +419,11 @@ describe("credentialService", () => {
     )) as StoredCredentialSummary;
 
     await expect(
-      service.handler({ callerId: "worker:other", callerKind: "worker" }, "revokeCredential", [
-        { credentialId: stored.id },
-      ])
+      service.handler(
+        { caller: verifiedTestCaller("worker:other", "worker") },
+        "revokeCredential",
+        [{ credentialId: stored.id }]
+      )
     ).rejects.toThrow(/not authorized to revoke/);
 
     expect((await store.loadUrlBound(stored.id))?.revokedAt).toBeUndefined();
@@ -434,31 +440,10 @@ describe("credentialService", () => {
       credentialStore: store as never,
       approvalQueue: approvalQueue as never,
       sessionGrantStore: new CredentialSessionGrantStore(),
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId: string) => {
-          if (callerId === "worker:first" || callerId === "do:worker:first") {
-            return {
-              callerId,
-              callerKind: "worker",
-              repoPath: "/agent",
-              effectiveVersion: "hash-1",
-            };
-          }
-          if (callerId === "worker:new-version") {
-            return {
-              callerId,
-              callerKind: "worker",
-              repoPath: "/agent",
-              effectiveVersion: "hash-2",
-            };
-          }
-          return null;
-        },
-      },
     });
 
     const stored = (await service.handler(
-      { callerId: "worker:first", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:first", "worker") },
       "storeCredential",
       [
         {
@@ -474,14 +459,16 @@ describe("credentialService", () => {
     approvalQueue.request.mockClear();
 
     await expect(
-      service.handler({ callerId: "do:worker:first", callerKind: "worker" }, "resolveCredential", [
-        { url: "https://api.example.test/v1" },
-      ])
+      service.handler(
+        { caller: verifiedTestCaller("do:worker:first", "worker") },
+        "resolveCredential",
+        [{ url: "https://api.example.test/v1" }]
+      )
     ).resolves.toMatchObject({ id: stored.id });
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
 
     await service.handler(
-      { callerId: "worker:new-version", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:new-version", "worker") },
       "resolveCredential",
       [{ url: "https://api.example.test/v1" }]
     );
@@ -499,16 +486,10 @@ describe("credentialService", () => {
       credentialStore: store as never,
       approvalQueue: approvalQueue as never,
       sessionGrantStore: new CredentialSessionGrantStore(),
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId: string) =>
-          callerId === "worker:owner"
-            ? { callerId, callerKind: "worker", repoPath: "/owner", effectiveVersion: "hash-1" }
-            : { callerId, callerKind: "worker", repoPath: "/consumer", effectiveVersion: "hash-1" },
-      },
     });
 
     const stored = (await service.handler(
-      { callerId: "worker:owner", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:owner", "worker") },
       "storeCredential",
       [
         {
@@ -522,12 +503,12 @@ describe("credentialService", () => {
     approvalQueue.request.mockClear();
 
     await service.handler(
-      { callerId: "worker:consumer", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:consumer", "worker") },
       "resolveCredential",
       [{ url: "https://api.example.test/v1" }]
     );
     await service.handler(
-      { callerId: "worker:consumer", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:consumer", "worker") },
       "resolveCredential",
       [{ url: "https://api.example.test/v1" }]
     );
@@ -547,16 +528,10 @@ describe("credentialService", () => {
       credentialStore: store as never,
       approvalQueue: approvalQueue as never,
       sessionGrantStore: new CredentialSessionGrantStore(),
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId: string) =>
-          callerId === "worker:owner"
-            ? { callerId, callerKind: "worker", repoPath: "/owner", effectiveVersion: "hash-1" }
-            : { callerId, callerKind: "worker", repoPath: "/consumer", effectiveVersion: "hash-1" },
-      },
     });
 
     const stored = (await service.handler(
-      { callerId: "worker:owner", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:owner", "worker") },
       "storeCredential",
       [
         {
@@ -570,12 +545,12 @@ describe("credentialService", () => {
     approvalQueue.request.mockClear();
 
     await service.handler(
-      { callerId: "worker:consumer", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:consumer", "worker") },
       "resolveCredential",
       [{ url: "https://api.example.test/v1" }]
     );
     await service.handler(
-      { callerId: "worker:consumer", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:consumer", "worker") },
       "resolveCredential",
       [{ url: "https://api.example.test/v1" }]
     );
@@ -602,7 +577,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue("version") as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
 
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
@@ -678,8 +653,8 @@ describe("credentialService", () => {
         resource: "https://api.example.test/v1",
         action: "use",
         scope: "version",
-        repoPath: "panel:test",
-        effectiveVersion: "unknown",
+        repoPath: "/repo",
+        effectiveVersion: "hash-1",
         grantedBy: "version",
       }),
     ]);
@@ -703,7 +678,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvalQueue as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
     vi.stubGlobal(
       "fetch",
       vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -744,7 +719,7 @@ describe("credentialService", () => {
     await vi.waitFor(() =>
       expect(emit).toHaveBeenCalledWith(
         "external-open:open",
-        expect.objectContaining({ callerId: "panel:test" })
+        expect.objectContaining({ callerId: "panel-test" })
       )
     );
     const authorizeUrl = new URL(emit.mock.calls[0]![1].url);
@@ -802,28 +777,32 @@ describe("credentialService", () => {
       )
     );
 
-    const pending = service.handler({ callerId: "worker:test", callerKind: "worker" }, "connect", [
-      {
-        spec: {
-          flow: {
-            type: "oauth2-auth-code-pkce",
-            authorizeUrl: "https://auth.example.test/oauth/authorize",
-            tokenUrl: "https://auth.example.test/oauth/token",
-            clientId: "client-1",
+    const pending = service.handler(
+      { caller: verifiedTestCaller("worker:test", "worker") },
+      "connect",
+      [
+        {
+          spec: {
+            flow: {
+              type: "oauth2-auth-code-pkce",
+              authorizeUrl: "https://auth.example.test/oauth/authorize",
+              tokenUrl: "https://auth.example.test/oauth/token",
+              clientId: "client-1",
+            },
+            credential: {
+              label: "Example OAuth",
+              audience: [{ url: "https://api.example.test/", match: "origin" }],
+              injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            },
+            browser: "external",
           },
-          credential: {
-            label: "Example OAuth",
-            audience: [{ url: "https://api.example.test/", match: "origin" }],
-            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          handoffTarget: {
+            callerId: "panel-test",
+            callerKind: "panel",
           },
-          browser: "external",
         },
-        handoffTarget: {
-          callerId: "panel:test",
-          callerKind: "panel",
-        },
-      },
-    ]) as Promise<StoredCredentialSummary>;
+      ]
+    ) as Promise<StoredCredentialSummary>;
 
     await vi.waitFor(() =>
       expect(eventService.emitToConnection).toHaveBeenCalledWith(
@@ -880,28 +859,32 @@ describe("credentialService", () => {
       )
     );
 
-    const pending = service.handler({ callerId: "worker:test", callerKind: "worker" }, "connect", [
-      {
-        spec: {
-          flow: {
-            type: "oauth2-auth-code-pkce",
-            authorizeUrl: "https://auth.example.test/oauth/authorize",
-            tokenUrl: "https://auth.example.test/oauth/token",
-            clientId: "client-1",
+    const pending = service.handler(
+      { caller: verifiedTestCaller("worker:test", "worker") },
+      "connect",
+      [
+        {
+          spec: {
+            flow: {
+              type: "oauth2-auth-code-pkce",
+              authorizeUrl: "https://auth.example.test/oauth/authorize",
+              tokenUrl: "https://auth.example.test/oauth/token",
+              clientId: "client-1",
+            },
+            credential: {
+              label: "Example OAuth",
+              audience: [{ url: "https://api.example.test/", match: "origin" }],
+              injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            },
+            browser: "external",
           },
-          credential: {
-            label: "Example OAuth",
-            audience: [{ url: "https://api.example.test/", match: "origin" }],
-            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          handoffTarget: {
+            callerId: "panel-test",
+            callerKind: "panel",
           },
-          browser: "external",
         },
-        handoffTarget: {
-          callerId: "panel:test",
-          callerKind: "panel",
-        },
-      },
-    ]) as Promise<StoredCredentialSummary>;
+      ]
+    ) as Promise<StoredCredentialSummary>;
 
     await vi.waitFor(() =>
       expect(eventService.emitToConnection).toHaveBeenCalledWith(
@@ -931,12 +914,12 @@ describe("credentialService", () => {
     const statePath = mkdtempSync(join(tmpdir(), "natstack-credential-recovery-"));
     const original = new TokenManager();
     installPanelTokenPersistence(original, statePath);
-    original.createToken("panel:test", "panel");
-    original.setPanelOwner("panel:test", "shell:owner", "old-owner-conn");
+    original.createToken("panel-test", "panel");
+    original.setPanelOwner("panel-test", "shell:owner", "old-owner-conn");
 
     const recovered = new TokenManager();
     recoverPersistedPanelTokens(recovered, statePath);
-    expect(recovered.getPanelOwnerConnection("panel:test")).toBeUndefined();
+    expect(recovered.getPanelOwnerConnection("panel-test")).toBeUndefined();
 
     const emit = vi.fn();
     const eventService = targetedOpenEventService(emit);
@@ -960,28 +943,32 @@ describe("credentialService", () => {
       )
     );
 
-    const pending = service.handler({ callerId: "worker:test", callerKind: "worker" }, "connect", [
-      {
-        spec: {
-          flow: {
-            type: "oauth2-auth-code-pkce",
-            authorizeUrl: "https://auth.example.test/oauth/authorize",
-            tokenUrl: "https://auth.example.test/oauth/token",
-            clientId: "client-1",
+    const pending = service.handler(
+      { caller: verifiedTestCaller("worker:test", "worker") },
+      "connect",
+      [
+        {
+          spec: {
+            flow: {
+              type: "oauth2-auth-code-pkce",
+              authorizeUrl: "https://auth.example.test/oauth/authorize",
+              tokenUrl: "https://auth.example.test/oauth/token",
+              clientId: "client-1",
+            },
+            credential: {
+              label: "Example OAuth",
+              audience: [{ url: "https://api.example.test/", match: "origin" }],
+              injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            },
+            browser: "external",
           },
-          credential: {
-            label: "Example OAuth",
-            audience: [{ url: "https://api.example.test/", match: "origin" }],
-            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          handoffTarget: {
+            callerId: "panel-test",
+            callerKind: "panel",
           },
-          browser: "external",
         },
-        handoffTarget: {
-          callerId: "panel:test",
-          callerKind: "panel",
-        },
-      },
-    ]) as Promise<StoredCredentialSummary>;
+      ]
+    ) as Promise<StoredCredentialSummary>;
 
     await vi.waitFor(() =>
       expect(eventService.emitToCaller).toHaveBeenCalledWith(
@@ -1025,35 +1012,39 @@ describe("credentialService", () => {
       )
     );
 
-    const pending = service.handler({ callerId: "worker:test", callerKind: "worker" }, "connect", [
-      {
-        spec: {
-          flow: {
-            type: "oauth2-auth-code-pkce",
-            authorizeUrl: "https://auth.example.test/oauth/authorize",
-            tokenUrl: "https://auth.example.test/oauth/token",
-            clientId: "client-1",
+    const pending = service.handler(
+      { caller: verifiedTestCaller("worker:test", "worker") },
+      "connect",
+      [
+        {
+          spec: {
+            flow: {
+              type: "oauth2-auth-code-pkce",
+              authorizeUrl: "https://auth.example.test/oauth/authorize",
+              tokenUrl: "https://auth.example.test/oauth/token",
+              clientId: "client-1",
+            },
+            credential: {
+              label: "Example OAuth",
+              audience: [{ url: "https://api.example.test/", match: "origin" }],
+              injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            },
+            browser: "internal",
           },
-          credential: {
-            label: "Example OAuth",
-            audience: [{ url: "https://api.example.test/", match: "origin" }],
-            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          handoffTarget: {
+            callerId: "panel-test",
+            callerKind: "panel",
           },
-          browser: "internal",
         },
-        handoffTarget: {
-          callerId: "panel:test",
-          callerKind: "panel",
-        },
-      },
-    ]) as Promise<StoredCredentialSummary>;
+      ]
+    ) as Promise<StoredCredentialSummary>;
 
     await vi.waitFor(() =>
       expect(eventService.emitToCaller).toHaveBeenCalledWith(
         "shell:owner",
         "browser-panel:open",
         expect.objectContaining({
-          parentPanelId: "panel:test",
+          parentPanelId: "panel-test",
           callerId: "worker:test",
           callerKind: "worker",
         })
@@ -1082,7 +1073,7 @@ describe("credentialService", () => {
     });
 
     await expect(
-      service.handler({ callerId: "worker:test", callerKind: "worker" }, "connect", [
+      service.handler({ caller: verifiedTestCaller("worker:test", "worker") }, "connect", [
         {
           spec: {
             flow: {
@@ -1098,7 +1089,7 @@ describe("credentialService", () => {
             },
           },
           handoffTarget: {
-            callerId: "panel:missing",
+            callerId: "panel-missing",
             callerKind: "panel",
           },
         },
@@ -1121,7 +1112,7 @@ describe("credentialService", () => {
     });
 
     await expect(
-      service.handler({ callerId: "worker:test", callerKind: "worker" }, "connect", [
+      service.handler({ caller: verifiedTestCaller("worker:test", "worker") }, "connect", [
         {
           spec: {
             flow: {
@@ -1137,7 +1128,7 @@ describe("credentialService", () => {
             },
           },
           handoffTarget: {
-            callerId: "panel:missing-owner",
+            callerId: "panel-missing-owner",
             callerKind: "panel",
           },
         },
@@ -1169,7 +1160,7 @@ describe("credentialService", () => {
       )
     );
 
-    const pending = service.handler({ callerId: "shell", callerKind: "shell" }, "connect", [
+    const pending = service.handler({ caller: verifiedTestCaller("shell", "shell") }, "connect", [
       {
         flow: {
           type: "oauth2-auth-code-pkce",
@@ -1201,11 +1192,15 @@ describe("credentialService", () => {
     );
     const state = authorizeUrl.searchParams.get("state")!;
 
-    await service.handler({ callerId: "shell", callerKind: "shell" }, "forwardOAuthCallback", [
-      {
-        url: `https://auth.snugenv.com/oauth/callback/example?code=code-1&state=${state}`,
-      },
-    ]);
+    await service.handler(
+      { caller: verifiedTestCaller("shell", "shell") },
+      "forwardOAuthCallback",
+      [
+        {
+          url: `https://auth.snugenv.com/oauth/callback/example?code=code-1&state=${state}`,
+        },
+      ]
+    );
 
     await expect(pending).resolves.toMatchObject({ label: "Example OAuth" });
   });
@@ -1235,34 +1230,38 @@ describe("credentialService", () => {
       })
     );
 
-    const pending = service.handler({ callerId: "worker:test", callerKind: "worker" }, "connect", [
-      {
-        spec: {
-          flow: {
-            type: "oauth2-auth-code-pkce",
-            authorizeUrl: "https://auth.example.test/oauth/authorize",
-            tokenUrl: "https://auth.example.test/oauth/token",
-            clientId: "client-1",
+    const pending = service.handler(
+      { caller: verifiedTestCaller("worker:test", "worker") },
+      "connect",
+      [
+        {
+          spec: {
+            flow: {
+              type: "oauth2-auth-code-pkce",
+              authorizeUrl: "https://auth.example.test/oauth/authorize",
+              tokenUrl: "https://auth.example.test/oauth/token",
+              clientId: "client-1",
+            },
+            credential: {
+              label: "Example OAuth",
+              audience: [{ url: "https://api.example.test/", match: "origin" }],
+              injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            },
+            redirect: {
+              type: "client-loopback",
+              host: "localhost",
+              port: 1455,
+              callbackPath: "/auth/callback",
+            },
+            browser: "external",
           },
-          credential: {
-            label: "Example OAuth",
-            audience: [{ url: "https://api.example.test/", match: "origin" }],
-            injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          handoffTarget: {
+            callerId: "panel-test",
+            callerKind: "panel",
           },
-          redirect: {
-            type: "client-loopback",
-            host: "localhost",
-            port: 1455,
-            callbackPath: "/auth/callback",
-          },
-          browser: "external",
         },
-        handoffTarget: {
-          callerId: "panel:test",
-          callerKind: "panel",
-        },
-      },
-    ]) as Promise<StoredCredentialSummary>;
+      ]
+    ) as Promise<StoredCredentialSummary>;
 
     await vi.waitFor(() =>
       expect(eventService.emitToCaller).toHaveBeenCalledWith(
@@ -1289,16 +1288,20 @@ describe("credentialService", () => {
     );
 
     await expect(
-      service.handler({ callerId: "shell:other", callerKind: "shell" }, "forwardOAuthCallback", [
-        {
-          transactionId: payload.oauthLoopback.transactionId,
-          url: `http://localhost:1455/auth/callback?code=code-1&state=${payload.oauthLoopback.state}`,
-        },
-      ])
+      service.handler(
+        { caller: verifiedTestCaller("shell:other", "shell") },
+        "forwardOAuthCallback",
+        [
+          {
+            transactionId: payload.oauthLoopback.transactionId,
+            url: `http://localhost:1455/auth/callback?code=code-1&state=${payload.oauthLoopback.state}`,
+          },
+        ]
+      )
     ).rejects.toMatchObject({ code: "client_not_authorized" });
 
     await service.handler(
-      { callerId: "shell:owner", callerKind: "shell" },
+      { caller: verifiedTestCaller("shell:owner", "shell") },
       "forwardOAuthCallback",
       [
         {
@@ -1336,7 +1339,7 @@ describe("credentialService", () => {
     });
 
     await expect(
-      service.handler({ callerId: "shell", callerKind: "shell" }, "connect", [
+      service.handler({ caller: verifiedTestCaller("shell", "shell") }, "connect", [
         {
           flow: {
             type: "oauth1a",
@@ -1369,7 +1372,7 @@ describe("credentialService", () => {
       approvalQueue: approvingQueue() as never,
     });
 
-    const pending = service.handler({ callerId: "shell", callerKind: "shell" }, "connect", [
+    const pending = service.handler({ caller: verifiedTestCaller("shell", "shell") }, "connect", [
       {
         flow: {
           type: "oauth2-auth-code-pkce",
@@ -1391,11 +1394,15 @@ describe("credentialService", () => {
 
     await vi.waitFor(() => expect(emit).toHaveBeenCalled());
     const state = new URL(emit.mock.calls[0]![1].url).searchParams.get("state")!;
-    await service.handler({ callerId: "shell", callerKind: "shell" }, "forwardOAuthCallback", [
-      {
-        url: `https://evil.example.test/oauth/callback/example?code=code-1&state=${state}`,
-      },
-    ]);
+    await service.handler(
+      { caller: verifiedTestCaller("shell", "shell") },
+      "forwardOAuthCallback",
+      [
+        {
+          url: `https://evil.example.test/oauth/callback/example?code=code-1&state=${state}`,
+        },
+      ]
+    );
 
     await expect(pending).rejects.toMatchObject({ code: "redirect_mismatch" });
   });
@@ -1408,7 +1415,7 @@ describe("credentialService", () => {
     });
 
     await expect(
-      service.handler({ callerId: "panel:test", callerKind: "panel" }, "connect", [
+      service.handler({ caller: verifiedTestCaller("panel-test", "panel") }, "connect", [
         {
           flow: {
             type: "oauth2-auth-code-pkce",
@@ -1423,7 +1430,7 @@ describe("credentialService", () => {
           },
           browserHandoff: {
             openMode: "external",
-            targetCallerId: "panel:other",
+            targetCallerId: "panel-other",
             targetCallerKind: "panel",
           },
         },
@@ -1439,7 +1446,7 @@ describe("credentialService", () => {
     });
 
     await expect(
-      service.handler({ callerId: "panel:test", callerKind: "panel" }, "connect", [
+      service.handler({ caller: verifiedTestCaller("panel-test", "panel") }, "connect", [
         {
           spec: {
             flow: {
@@ -1455,7 +1462,7 @@ describe("credentialService", () => {
             },
           },
           handoffTarget: {
-            callerId: "panel:other",
+            callerId: "panel-other",
             callerKind: "panel",
           },
         },
@@ -1470,7 +1477,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue() as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
         type: "oauth2-auth-code-pkce",
@@ -1525,7 +1532,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue() as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
         type: "oauth2-auth-code-pkce",
@@ -1579,7 +1586,7 @@ describe("credentialService", () => {
       clientConfigStore: clientConfigStore as never,
       approvalQueue: approvalQueue as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
 
     const status = await service.handler(ctx, "configureClient", [
       {
@@ -1616,7 +1623,7 @@ describe("credentialService", () => {
       configId: "google-workspace",
       currentVersion: "v1",
       owner: {
-        callerId: "panel:owner",
+        callerId: "panel-owner",
         callerKind: "panel",
         repoPath: "/repo",
         effectiveVersion: "hash-1",
@@ -1636,23 +1643,21 @@ describe("credentialService", () => {
       credentialStore: new MemoryCredentialStore() as never,
       clientConfigStore: clientConfigStore as never,
       approvalQueue: approvalQueue as never,
-      codeIdentityResolver: {
-        resolveByCallerId: (callerId: string) =>
-          callerId === "panel:owner"
-            ? { callerId, callerKind: "panel", repoPath: "/repo", effectiveVersion: "hash-1" }
-            : { callerId, callerKind: "panel", repoPath: "/other", effectiveVersion: "hash-1" },
-      },
     });
 
     await expect(
-      service.handler({ callerId: "panel:other", callerKind: "panel" }, "getClientConfigStatus", [
-        { configId: "google-workspace" },
-      ])
+      service.handler(
+        { caller: verifiedTestCaller("panel-other", "panel") },
+        "getClientConfigStatus",
+        [{ configId: "google-workspace" }]
+      )
     ).rejects.toThrow("client_not_authorized");
 
-    await service.handler({ callerId: "panel:owner", callerKind: "panel" }, "deleteClientConfig", [
-      { configId: "google-workspace" },
-    ]);
+    await service.handler(
+      { caller: verifiedTestCaller("panel-owner", "panel") },
+      "deleteClientConfig",
+      [{ configId: "google-workspace" }]
+    );
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1678,7 +1683,7 @@ describe("credentialService", () => {
         listPending: vi.fn(() => []),
       } as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
     const baseRequest = {
       configId: "google-workspace",
       title: "Configure Google Workspace OAuth",
@@ -1736,7 +1741,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue() as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
 
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
@@ -1811,7 +1816,7 @@ describe("credentialService", () => {
     const started = await startOAuthConnection(
       service,
       emit,
-      { callerId: "panel:test", callerKind: "panel" },
+      { caller: verifiedTestCaller("panel-test", "panel") },
       {
         flow: {
           type: "oauth2-auth-code-pkce",
@@ -1874,7 +1879,7 @@ describe("credentialService", () => {
     const started = await startOAuthConnection(
       service,
       emit,
-      { callerId: "panel:test", callerKind: "panel" },
+      { caller: verifiedTestCaller("panel-test", "panel") },
       {
         flow: {
           type: "oauth2-auth-code-pkce",
@@ -1950,18 +1955,22 @@ describe("credentialService", () => {
     });
 
     await expect(
-      service.handler({ callerId: "panel:test", callerKind: "panel" as const }, "configureClient", [
-        {
-          configId: "google-workspace",
-          title: "Configure Google Workspace OAuth",
-          authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
-          tokenUrl: "https://evil.example.test/token",
-          fields: [
-            { name: "clientId", label: "Client ID", type: "text", required: true },
-            { name: "clientSecret", label: "Client secret", type: "secret", required: true },
-          ],
-        },
-      ])
+      service.handler(
+        { caller: verifiedTestCaller("panel-test", "panel" as const) },
+        "configureClient",
+        [
+          {
+            configId: "google-workspace",
+            title: "Configure Google Workspace OAuth",
+            authorizeUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+            tokenUrl: "https://evil.example.test/token",
+            fields: [
+              { name: "clientId", label: "Client ID", type: "text", required: true },
+              { name: "clientSecret", label: "Client secret", type: "secret", required: true },
+            ],
+          },
+        ]
+      )
     ).rejects.toThrow("tokenUrl is immutable");
   });
 
@@ -1982,7 +1991,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvalQueue as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
 
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
@@ -2036,7 +2045,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(vi.fn()) as never,
       approvalQueue: approvingQueue() as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
 
     await expect(
       service.handler(ctx, "connect", [
@@ -2066,7 +2075,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue() as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
         type: "oauth2-auth-code-pkce",
@@ -2115,7 +2124,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue() as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
         type: "oauth2-auth-code-pkce",
@@ -2170,7 +2179,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue() as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
         type: "oauth2-auth-code-pkce",
@@ -2234,7 +2243,7 @@ describe("credentialService", () => {
       eventService: targetedOpenEventService(emit) as never,
       approvalQueue: approvingQueue() as never,
     });
-    const ctx = { callerId: "panel:test", callerKind: "panel" as const };
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
     const started = await startOAuthConnection(service, emit, ctx, {
       flow: {
         type: "oauth2-auth-code-pkce",
@@ -2358,7 +2367,7 @@ describe("credentialService", () => {
       approvalQueue: approvingQueue("session") as never,
     });
     const stored = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "connect",
       [
         {
@@ -2436,7 +2445,7 @@ describe("credentialService", () => {
       approvalQueue: approvingQueue("session") as never,
     });
     const stored = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "connect",
       [
         {
@@ -2473,9 +2482,9 @@ describe("credentialService", () => {
       configId: "device-jwt",
       currentVersion: "v1",
       owner: {
-        callerId: "panel:test",
+        callerId: "panel-test",
         callerKind: "panel",
-        repoPath: "panel:test",
+        repoPath: "panel-test",
         effectiveVersion: "unknown",
       },
       authorizeUrl: "https://auth.example.test/device",
@@ -2531,7 +2540,7 @@ describe("credentialService", () => {
     });
 
     const stored = (await service.handler(
-      { callerId: "panel:test", callerKind: "panel" },
+      { caller: verifiedTestCaller("panel-test", "panel") },
       "connect",
       [
         {
@@ -2563,9 +2572,9 @@ describe("credentialService", () => {
       configId: "device-cancel",
       currentVersion: "v1",
       owner: {
-        callerId: "panel:test",
+        callerId: "panel-test",
         callerKind: "panel",
-        repoPath: "panel:test",
+        repoPath: "panel-test",
         effectiveVersion: "unknown",
       },
       authorizeUrl: "https://auth.example.test/device",
@@ -2624,22 +2633,26 @@ describe("credentialService", () => {
       approvalQueue: customQueue as never,
     });
 
-    const pending = service.handler({ callerId: "panel:test", callerKind: "panel" }, "connect", [
-      {
-        flow: {
-          type: "oauth2-device-code",
-          deviceAuthorizationUrl: "https://auth.example.test/device",
-          tokenUrl: "https://auth.example.test/token",
-          clientConfigId: "device-cancel",
-          pollIntervalSeconds: 1,
+    const pending = service.handler(
+      { caller: verifiedTestCaller("panel-test", "panel") },
+      "connect",
+      [
+        {
+          flow: {
+            type: "oauth2-device-code",
+            deviceAuthorizationUrl: "https://auth.example.test/device",
+            tokenUrl: "https://auth.example.test/token",
+            clientConfigId: "device-cancel",
+            pollIntervalSeconds: 1,
+          },
+          credential: {
+            label: "Device API",
+            audience: [{ url: "https://api.example.test/", match: "origin" }],
+            injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+          },
         },
-        credential: {
-          label: "Device API",
-          audience: [{ url: "https://api.example.test/", match: "origin" }],
-          injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
-        },
-      },
-    ]) as Promise<StoredCredentialSummary>;
+      ]
+    ) as Promise<StoredCredentialSummary>;
 
     await vi.waitFor(() => expect(presentDeviceCode).toHaveBeenCalled());
     const presented = presentDeviceCode.mock.calls[0]![0] as {
@@ -2671,7 +2684,7 @@ describe("credentialService", () => {
       approvalQueue: approvalQueue as never,
     });
     const stored = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "connect",
       [
         {
@@ -2698,7 +2711,7 @@ describe("credentialService", () => {
       approvalQueue: approvingQueue("session") as never,
     });
     const stored = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "connect",
       [
         {
@@ -2740,7 +2753,7 @@ describe("credentialService", () => {
       },
     });
     const stored = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "connect",
       [
         {
@@ -2794,7 +2807,7 @@ describe("credentialService", () => {
       },
     });
     const stored = (await service.handler(
-      { callerId: "worker:test", callerKind: "worker" },
+      { caller: verifiedTestCaller("worker:test", "worker") },
       "connect",
       [
         {
@@ -2850,9 +2863,11 @@ describe("credentialService", () => {
       } satisfies AuditEntry
     );
     const service = createCredentialService({ auditLog: auditLog as never });
-    const entries = (await service.handler({ callerId: "shell", callerKind: "shell" }, "audit", [
-      {},
-    ])) as AuditEntry[];
+    const entries = (await service.handler(
+      { caller: verifiedTestCaller("shell", "shell") },
+      "audit",
+      [{}]
+    )) as AuditEntry[];
     expect(entries).toHaveLength(1);
     expect(entries[0]?.method).toBe("GET");
   });

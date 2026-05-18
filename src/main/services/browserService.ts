@@ -40,7 +40,7 @@ export function createBrowserService(deps: {
       const viewManager = deps.getViewManager();
 
       const assertOwner = () => {
-        if (!cdpServer.panelOwnsBrowser(ctx.callerId, browserId)) {
+        if (!cdpServer.panelOwnsBrowser(ctx.caller.runtime.id, browserId)) {
           throw new Error("Access denied: you do not own this browser panel");
         }
       };
@@ -53,7 +53,7 @@ export function createBrowserService(deps: {
 
       switch (method) {
         case "getCdpEndpoint":
-          return getCdpEndpointForCaller(cdpServer, browserId, ctx.callerId);
+          return getCdpEndpointForCaller(cdpServer, browserId, ctx.caller.runtime.id);
 
         case "navigate": {
           const [, url] = args as [string, string];

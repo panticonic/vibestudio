@@ -71,7 +71,7 @@ export function broadcast(
   senderId: string,
 ): void {
   const participants = deps.sql.exec(
-    `SELECT id, transport, do_source, do_class, do_key FROM participants`,
+    `SELECT id, transport FROM participants`,
   ).toArray();
 
   const msg = channelEventToWsJson(event, envelope.kind);
@@ -120,7 +120,7 @@ export function broadcastConfigUpdate(
   const msg = { kind: "config-update" as const, channelConfig: config as ChannelConfig };
 
   const participants = deps.sql.exec(
-    `SELECT id, transport, do_source, do_class, do_key FROM participants`,
+    `SELECT id, transport FROM participants`,
   ).toArray();
 
   for (const p of participants) {

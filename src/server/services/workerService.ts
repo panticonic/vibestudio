@@ -4,43 +4,27 @@
  * Provides:
  * - listSources: available worker sources (durable.classes from manifests)
  * - listServices / resolveService: manifest-declared userland services
- * - getChannelWorkers: DOs subscribed to a channel (queries channel service)
- * - callDO: dispatch a method to a DO
  */
 
 import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { FsService } from "@natstack/shared/fsService";
-import type { DODispatch } from "../doDispatch.js";
+import type { CallerKind } from "@natstack/shared/serviceDispatcher";
 import type { BuildSystemV2 } from "../buildV2/index.js";
-import { createDevLogger } from "@natstack/dev-log";
-import { resolveUserlandService, toDORef } from "../userlandServices.js";
+import { resolveUserlandService } from "../userlandServices.js";
 import { assertPresent } from "../../lintHelpers";
+import { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 
-const log = createDevLogger("WorkerService");
-const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
-
-export function createWorkerService(deps: {
-  doDispatch: DODispatch;
-  buildSystem: BuildSystemV2;
-  fsService: FsService;
-}): ServiceDefinition {
-  const { doDispatch, buildSystem, fsService } = deps;
+export function createWorkerService(deps: { buildSystem: BuildSystemV2 }): ServiceDefinition {
+  const { buildSystem } = deps;
 
   return {
     name: "workers",
-    description: "Worker DO operations (call, list)",
-    // Service-level policy admits the read/list surface to all kinds.
-    // Mutating callDO is tightened per-method below.
+    description: "Worker discovery and userland service resolution",
     policy: { allowed: ["shell", "server", "panel", "worker", "extension"] },
     methods: {
       listSources: {
         description: "List available worker sources with durable object classes",
         args: z.tuple([]),
-      },
-      getChannelWorkers: {
-        description: "Get DOs subscribed to a channel",
-        args: z.tuple([z.string()]), // channelId
       },
       listServices: {
         description: "List manifest-declared userland services",
@@ -50,16 +34,9 @@ export function createWorkerService(deps: {
         description: "Resolve a userland service by name or protocol",
         args: z.tuple([z.string(), z.string().nullable().optional()]),
       },
-      callDO: {
-        description: "Call a method on a DO",
-        args: z
-          .tuple([
-            z.string(), // source
-            z.string(), // className
-            z.string(), // objectKey
-            z.string(), // method
-          ])
-          .rest(z.unknown()), // ...args
+      resolveDurableObject: {
+        description: "Resolve a Durable Object RPC target by source/class/key",
+        args: z.tuple([z.string(), z.string(), z.string()]),
       },
     },
     handler: async (ctx, method, args) => {
@@ -112,86 +89,22 @@ export function createWorkerService(deps: {
         }
 
         case "resolveService": {
-          return resolveUserlandService(
+          const service = resolveUserlandService(
             buildSystem,
             args[0] as string,
             (args[1] as string | null | undefined) ?? undefined
           );
+          assertUserlandServiceAccess(service.name, service.policy, ctx.caller.runtime.kind);
+          return service;
         }
 
-        case "getChannelWorkers": {
-          const channelId = args[0] as string;
-          const channelService = resolveUserlandService(
-            buildSystem,
-            CHANNEL_SERVICE_PROTOCOL,
-            channelId
-          );
-          // Query channel service for participants.
-          const participants = (await doDispatch.dispatch(
-            toDORef(channelService),
-            "getParticipants"
-          )) as Array<{ participantId: string; metadata: Record<string, unknown> }>;
-          return (participants ?? [])
-            .filter((p) => p.participantId.startsWith("do:"))
-            .map((p) => {
-              // Format: "do:{source}:{className}:{objectKey}"
-              // Source contains "/" but no ":", className has no ":"
-              const body = p.participantId.slice(3);
-              const slashIdx = body.indexOf("/");
-              const colonAfterSlash = slashIdx >= 0 ? body.indexOf(":", slashIdx) : -1;
-              if (colonAfterSlash === -1) return null;
-              const source = body.slice(0, colonAfterSlash);
-              const rest = body.slice(colonAfterSlash + 1);
-              const nextColon = rest.indexOf(":");
-              if (nextColon === -1) return null;
-              return {
-                participantId: p.participantId,
-                source,
-                className: rest.slice(0, nextColon),
-                objectKey: rest.slice(nextColon + 1),
-                channelId,
-              };
-            })
-            .filter(Boolean);
-        }
-
-        case "callDO": {
+        case "resolveDurableObject": {
           const source = args[0] as string;
           const className = args[1] as string;
           const objectKey = args[2] as string;
-          const doMethod = args[3] as string;
-          const doArgs = args.slice(4);
-
-          // Propagate the caller's registered fs context to the target DO so
-          // the DO's own `fs.bindContext` call inside methods like
-          // `subscribeChannel` resolves as an idempotent no-op rather than
-          // failing the audit's "caller has no host-registered context" check.
-          // Panels/workers cannot self-register a context, so without this
-          // propagation a DO spawned on-demand by workerd (via idFromName) has
-          // no fs access at all. Registering the DO's callerId to the caller's
-          // own contextId preserves the audit's cross-context-pivot protection
-          // (the DO cannot later re-bind to a different contextId).
-          const callerContext = fsService.getCallerContext(ctx.callerId);
-          if (callerContext) {
-            const doCallerId = `do:${source}:${className}:${objectKey}`;
-            fsService.registerCallerContext(doCallerId, callerContext);
-          }
-
-          log.info(`[callDO] ${source}:${className}/${objectKey}.${doMethod}`);
-          try {
-            const result = await doDispatch.dispatch(
-              { source, className, objectKey },
-              doMethod,
-              ...doArgs
-            );
-            log.info(`[callDO] ${source}:${className}/${objectKey}.${doMethod} => OK`);
-            return result;
-          } catch (err) {
-            log.warn(
-              `[callDO] ${source}:${className}/${objectKey}.${doMethod} => FAILED: ${err instanceof Error ? err.message : String(err)}`
-            );
-            throw err;
-          }
+          assertDurableObjectExists(buildSystem, source, className, ctx.caller.runtime.kind);
+          const targetId = `do:${source}:${className}:${objectKey}`;
+          return { kind: "durable-object", source, className, objectKey, targetId };
         }
 
         default:
@@ -199,4 +112,60 @@ export function createWorkerService(deps: {
       }
     },
   };
+}
+
+function assertDurableObjectExists(
+  buildSystem: BuildSystemV2,
+  source: string,
+  className: string,
+  callerKind: CallerKind
+): void {
+  if (
+    source === INTERNAL_DO_SOURCE &&
+    (INTERNAL_DO_CLASSES as readonly string[]).includes(className)
+  ) {
+    return;
+  }
+
+  const worker = buildSystem
+    .getGraph()
+    .allNodes()
+    .find((node) => node.kind === "worker" && node.relativePath === source);
+  const classes = worker?.manifest.durable?.classes ?? [];
+  if (classes.some((entry) => entry.className === className)) {
+    const services = worker?.manifest.services ?? [];
+    const backingPolicies = services
+      .filter(
+        (service) => "durableObject" in service && service.durableObject?.className === className
+      )
+      .map((service) => ({ name: service.name, policy: service.policy }));
+    for (const service of backingPolicies) {
+      assertUserlandServiceAccess(service.name, service.policy, callerKind);
+    }
+    return;
+  }
+
+  throw new Error(`No Durable Object class registered for ${source}:${className}`);
+}
+
+function assertUserlandServiceAccess(
+  serviceName: string,
+  policy: { allowed?: CallerKind[] } | undefined,
+  callerKind: CallerKind
+): void {
+  const allowed = policy?.allowed;
+  if (!allowed || allowed.length === 0) {
+    const err = new Error(
+      `Userland service '${serviceName}' has no access policy`
+    ) as NodeJS.ErrnoException;
+    err.code = "EACCES";
+    throw err;
+  }
+  if (!allowed.includes(callerKind)) {
+    const err = new Error(
+      `Caller kind '${callerKind}' cannot resolve userland service '${serviceName}'`
+    ) as NodeJS.ErrnoException;
+    err.code = "EACCES";
+    throw err;
+  }
 }

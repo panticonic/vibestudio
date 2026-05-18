@@ -3,7 +3,7 @@ import { WebSocket } from "ws";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { RpcServer } from "./rpcServer.js";
 import type { WsClientState } from "./rpcServer.js";
-import type { ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
 
 type MockDispatcher = ServiceDispatcher & {
   dispatch: ReturnType<typeof vi.fn>;
@@ -17,13 +17,34 @@ type TestRpcServer = {
     addClient(client: WsClientState): void;
     getCallerConnections(callerId: string): WsClientState[];
   };
-  connectionReconnectWaiters: Map<string, { resolve: (client: WsClientState) => void }>;
-  reconnectWaiters: Map<string, unknown>;
+  connectionReconnectWaiters: Map<string, { resolve: () => void; reject: (err: Error) => void }>;
+  reconnectWaiters: Map<
+    string,
+    { promise: Promise<void>; resolve: () => void; reject: (err: Error) => void }
+  >;
   handleAuth(ws: unknown, token: string | null, connectionId: string): void;
   handleRoute(client: WsClientState, targetId: string, message: unknown): Promise<void> | void;
   handleClose(client: WsClientState, code: number, reason: string): void;
   handleRpc(client: WsClientState, message: unknown): Promise<void>;
-  relayCall(sourceId: string, targetId: string, method: string, args: unknown[]): Promise<unknown>;
+  relayCall(
+    sourceId: string,
+    callerKind: string,
+    targetId: string,
+    method: string,
+    args: unknown[]
+  ): Promise<unknown>;
+  relayToDO(
+    callerId: string,
+    callerKind: string,
+    targetId: string,
+    method: string,
+    args: unknown[]
+  ): Promise<unknown>;
+  checkRelayAuth(
+    callerId: string,
+    callerKind: string,
+    targetId: string
+  ): { ok: boolean; reason?: string };
 };
 
 function testServer(server: RpcServer): TestRpcServer {
@@ -51,9 +72,8 @@ function createServer() {
 
 function createClient(callerId = "panel-a"): WsClientState {
   return {
-    callerId,
+    caller: createVerifiedCaller(callerId, "panel"),
     connectionId: "conn-1",
-    callerKind: "panel",
     authenticated: true,
     authenticatedAt: Date.now(),
     ws: {
@@ -73,11 +93,15 @@ function createClientWithConnection(callerId: string, connectionId: string): WsC
   return client;
 }
 
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
+function createSignalDeferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+  reject: (err: Error) => void;
+} {
+  let resolve!: () => void;
+  let reject!: (err: Error) => void;
+  const promise = new Promise<void>((res, rej) => {
+    resolve = () => res();
     reject = rej;
   });
   return { promise, resolve, reject };
@@ -108,6 +132,43 @@ function registerClient(server: RpcServer, client: WsClientState): void {
 }
 
 describe("RpcServer relay behavior", () => {
+  it("allows authenticated panels to relay to panel, DO, and worker targets", () => {
+    const { server } = createServer();
+
+    expect(testServer(server).checkRelayAuth("panel-a", "panel", "panel-b")).toEqual({ ok: true });
+
+    expect(
+      testServer(server).checkRelayAuth("panel-a", "panel", "do:workers/example:Store:key")
+    ).toEqual({ ok: true });
+
+    expect(testServer(server).checkRelayAuth("panel-a", "panel", "worker:workers/example")).toEqual(
+      { ok: true }
+    );
+  });
+
+  it("propagates caller fs context when relaying directly to a DO target", async () => {
+    const tokenManager = new TokenManager();
+    const dispatcher = {
+      dispatch: vi.fn(),
+      getPolicy: vi.fn(),
+      getMethodPolicy: vi.fn(),
+    } as unknown as MockDispatcher;
+    const fsService = {
+      getCallerContext: vi.fn(() => "ctx-1"),
+      registerCallerContext: vi.fn(),
+    };
+    const server = new RpcServer({ tokenManager, dispatcher, fsService });
+
+    await expect(
+      testServer(server).relayToDO("panel-a", "panel", "do:workers/example:Store:key", "ping", [])
+    ).rejects.toThrow("Cannot relay to DO");
+
+    expect(fsService.registerCallerContext).toHaveBeenCalledWith(
+      "do:workers/example:Store:key",
+      "ctx-1"
+    );
+  });
+
   it("keeps distinct connections for the same caller authenticated simultaneously", () => {
     const { server, tokenManager } = createServer();
     const token = tokenManager.getToken("panel-a");
@@ -262,8 +323,7 @@ describe("RpcServer relay behavior", () => {
   it("keeps routed response origins while the origin connection reconnects", async () => {
     vi.useFakeTimers();
     try {
-      const { server, tokenManager } = createServer();
-      tokenManager.setPanelParent("panel-b", "panel-a");
+      const { server } = createServer();
       const origin1 = createClientWithConnection("panel-a", "conn-1");
       const origin2 = createClientWithConnection("panel-a", "conn-2");
       const target = createClientWithConnection("panel-b", "target-conn");
@@ -290,8 +350,7 @@ describe("RpcServer relay behavior", () => {
       registerClient(server, reconnected);
       const waiter = testServer(server).connectionReconnectWaiters.get("panel-a:conn-2");
       expect(waiter).toBeTruthy();
-      if (!waiter) throw new Error("Missing reconnect waiter");
-      waiter.resolve(reconnected);
+      waiter?.resolve();
       await Promise.resolve();
       await Promise.resolve();
 
@@ -309,9 +368,11 @@ describe("RpcServer relay behavior", () => {
     }
   });
 
-  it("surfaces event relay auth failures with ws:routed-event-error", () => {
+  it("routes events between unrelated authenticated panels", () => {
     const { server } = createServer();
     const client = createClient();
+    const target = createClientWithConnection("panel-b", "target-conn");
+    registerClient(server, target);
 
     testServer(server).handleRoute(client, "panel-b", {
       type: "event",
@@ -320,23 +381,34 @@ describe("RpcServer relay behavior", () => {
       payload: { ok: true },
     });
 
-    expect(client.ws.send).toHaveBeenCalledTimes(1);
+    expect(client.ws.send).not.toHaveBeenCalled();
+    expect(target.ws.send).toHaveBeenCalledTimes(1);
     expect(
-      JSON.parse((client.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
+      JSON.parse((target.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
     ).toMatchObject({
-      type: "ws:routed-event-error",
-      targetId: "panel-b",
-      event: "test:event",
-      error: "Panel panel-a cannot relay to unrelated panel panel-b",
+      type: "ws:routed",
+      fromId: "panel-a",
+      message: { type: "event", event: "test:event", payload: { ok: true } },
+    });
+  });
+
+  it("throws TARGET_NOT_REACHABLE when a panel target is disconnected", async () => {
+    const { server } = createServer();
+
+    await expect(
+      testServer(server).relayCall("panel-a", "panel", "panel-b", "test.method", [])
+    ).rejects.toMatchObject({
+      message: "Target not reachable: panel-b",
+      code: "TARGET_NOT_REACHABLE",
     });
   });
 
   it("preserves reconnect grace expiry on relayCall", async () => {
     const { server } = createServer();
-    const deferred = createDeferred<undefined>();
+    const deferred = createSignalDeferred();
     testServer(server).reconnectWaiters.set("panel-b", { ...deferred });
 
-    const relay = testServer(server).relayCall("panel-a", "panel-b", "test.method", []);
+    const relay = testServer(server).relayCall("panel-a", "panel", "panel-b", "test.method", []);
     deferred.reject(
       Object.assign(new Error("Client did not reconnect within grace window"), {
         code: "RECONNECT_GRACE_EXPIRED",
@@ -351,10 +423,10 @@ describe("RpcServer relay behavior", () => {
 
   it("preserves server shutdown on relayCall", async () => {
     const { server } = createServer();
-    const deferred = createDeferred<undefined>();
+    const deferred = createSignalDeferred();
     testServer(server).reconnectWaiters.set("panel-b", { ...deferred });
 
-    const relay = testServer(server).relayCall("panel-a", "panel-b", "test.method", []);
+    const relay = testServer(server).relayCall("panel-a", "panel", "panel-b", "test.method", []);
     deferred.reject(
       Object.assign(new Error("Server shutting down"), {
         code: "SERVER_SHUTTING_DOWN",
@@ -367,24 +439,13 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
-  it("throws TARGET_NOT_REACHABLE when no reconnect waiter exists", async () => {
-    const { server } = createServer();
-
-    await expect(
-      testServer(server).relayCall("panel-a", "panel-b", "test.method", [])
-    ).rejects.toMatchObject({
-      message: "Target not reachable: panel-b",
-      code: "TARGET_NOT_REACHABLE",
-    });
-  });
-
   it("throws an invariant error when a reconnect waiter resolves without a client", async () => {
     const { server } = createServer();
-    const deferred = createDeferred<undefined>();
+    const deferred = createSignalDeferred();
     testServer(server).reconnectWaiters.set("panel-b", { ...deferred });
 
-    const relay = testServer(server).relayCall("panel-a", "panel-b", "test.method", []);
-    deferred.resolve(undefined);
+    const relay = testServer(server).relayCall("panel-a", "panel", "panel-b", "test.method", []);
+    deferred.resolve();
 
     await expect(relay).rejects.toThrow(
       "Invariant violated: reconnect waiter resolved for panel-b but no client found"
@@ -435,7 +496,7 @@ describe("RpcServer caller identity", () => {
   it("denies worker callers for shell-only methods", async () => {
     const { server } = createServer();
     const client = createClient("worker-1");
-    client.callerKind = "worker";
+    client.caller = createVerifiedCaller("worker-1", "worker");
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["server"] });
     testServer(server).dispatcher.getMethodPolicy.mockReturnValue({ allowed: ["shell"] });
 
@@ -448,7 +509,7 @@ describe("RpcServer caller identity", () => {
   it("dispatches server callers using their own server identity", async () => {
     const { server } = createServer();
     const client = createClient("server");
-    client.callerKind = "server";
+    client.caller = createVerifiedCaller("server", "server");
     const dispatched: unknown[] = [];
     testServer(server).dispatcher.getPolicy.mockReturnValue({ allowed: ["server"] });
     testServer(server).dispatcher.getMethodPolicy.mockReturnValue(undefined);
@@ -461,8 +522,7 @@ describe("RpcServer caller identity", () => {
 
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]).toMatchObject({
-      callerId: client.callerId,
-      callerKind: "server",
+      caller: { runtime: { id: client.caller.runtime.id, kind: "server" } },
     });
     expect(sentResponse(client).message.result).toEqual({ ok: true });
   });

@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createServer,
+  request as httpRequest,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
+import type { AddressInfo } from "node:net";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 
 import type { AuditEntry, Credential } from "../../../packages/shared/src/credentials/types.js";
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { EgressProxy } from "./egressProxy.js";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
 import { CredentialLifecycleError } from "./credentialLifecycle.js";
+import { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import type { ApprovalQueue } from "./approvalQueue.js";
 
 class MemoryCredentialStore {
   constructor(private readonly credentials = new Map<string, Credential>()) {}
@@ -23,6 +36,19 @@ class MemoryAuditLog {
   append(entry: AuditEntry): void {
     this.entries.push(entry);
   }
+}
+
+function tempStatePath(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-egress-"));
+}
+
+function workerCaller(callerId: string) {
+  return createVerifiedCaller(callerId, "worker", {
+    callerId,
+    callerKind: "worker",
+    repoPath: callerId.startsWith("do:") ? "/repo" : "/repo",
+    effectiveVersion: "hash-1",
+  });
 }
 
 function createCredential(overrides: Partial<Credential> = {}): Credential {
@@ -62,7 +88,8 @@ function createCredential(overrides: Partial<Credential> = {}): Credential {
 
 function createProxy(
   credential = createCredential(),
-  auditLog = new MemoryAuditLog()
+  auditLog = new MemoryAuditLog(),
+  extraDeps: Partial<ConstructorParameters<typeof EgressProxy>[0]> = {}
 ): EgressProxy {
   return new EgressProxy({
     credentialStore: new MemoryCredentialStore(
@@ -75,6 +102,63 @@ function createProxy(
           ? { callerId, callerKind: "worker", repoPath: "/repo", effectiveVersion: "hash-1" }
           : null,
     },
+    ...extraDeps,
+  });
+}
+
+function createApprovalQueueMock(
+  decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
+): ApprovalQueue {
+  return {
+    request: vi.fn(async () => decision),
+    requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+    requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
+    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
+    presentDeviceCode: vi.fn(() => ({
+      approvalId: "device-code-test",
+      cancelled: new AbortController().signal,
+      dispose: vi.fn(),
+    })),
+    resolve: vi.fn(),
+    resolveUserland: vi.fn(),
+    submitClientConfig: vi.fn(),
+    submitCredentialInput: vi.fn(),
+    listPending: vi.fn(() => []),
+  };
+}
+
+function requestThroughHttpProxy(params: {
+  proxyPort: number;
+  targetUrl: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+}): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      {
+        host: "127.0.0.1",
+        port: params.proxyPort,
+        method: params.method ?? "GET",
+        path: params.targetUrl,
+        headers: {
+          ...(params.body ? { "Content-Length": Buffer.byteLength(params.body) } : {}),
+          ...params.headers,
+        },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => {
+          resolve({
+            status: response.statusCode ?? 0,
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end(params.body);
   });
 }
 
@@ -105,6 +189,165 @@ describe("EgressProxy", () => {
     });
     expect(prepared.headers["x-api-key"]).toBeUndefined();
     expect(prepared.headers.connection).toBeUndefined();
+  });
+
+  it("allows authenticated loopback platform RPC callbacks through direct proxy", async () => {
+    let received: { url?: string; authorization?: string; runtimeId?: string; body?: string } = {};
+    const target = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        received = {
+          url: req.url,
+          authorization: req.headers.authorization,
+          runtimeId: req.headers["x-natstack-runtime-id"] as string | undefined,
+          body: Buffer.concat(chunks).toString("utf8"),
+        };
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ result: "ok" }));
+      });
+    });
+    const proxy = createProxy();
+    let proxyPort = 0;
+    let targetPort = 0;
+    try {
+      targetPort = await new Promise<number>((resolve, reject) => {
+        target.once("error", reject);
+        target.listen(0, "127.0.0.1", () => {
+          target.off("error", reject);
+          resolve((target.address() as AddressInfo).port);
+        });
+      });
+      proxyPort = await proxy.start();
+
+      const res = await requestThroughHttpProxy({
+        proxyPort,
+        targetUrl: `http://127.0.0.1:${targetPort}/rpc`,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer platform-token",
+          "X-Natstack-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+        },
+        body: JSON.stringify({ type: "emit" }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({ result: "ok" });
+      expect(received).toMatchObject({
+        url: "/rpc",
+        authorization: "Bearer platform-token",
+        runtimeId: "do:workers/agent-worker:AiChatWorker:agent-1",
+        body: JSON.stringify({ type: "emit" }),
+      });
+    } finally {
+      await proxy.stop();
+      await new Promise<void>((resolve) => target.close(() => resolve()));
+    }
+  });
+
+  it("rejects unauthenticated direct proxy HTTP forwarding", async () => {
+    const proxy = createProxy();
+    try {
+      const proxyPort = await proxy.start();
+      const res = await fetch(`http://127.0.0.1:${proxyPort}/anything`, {
+        headers: { Host: "example.test", "X-Forwarded-Proto": "https" },
+      });
+      expect(res.status).toBe(403);
+      await expect(res.text()).resolves.toContain(
+        "Direct egress proxy HTTP forwarding requires an attributed workerd service"
+      );
+    } finally {
+      await proxy.stop();
+    }
+  });
+
+  it("gates attributed raw workerd HTTP egress through capability approval", async () => {
+    const approvalQueue = createApprovalQueueMock("session");
+    const auditLog = new MemoryAuditLog();
+    const proxy = createProxy(createCredential({ bindings: [] }), auditLog, {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    });
+    const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("raw-ok");
+    });
+
+    try {
+      const targetPort = await new Promise<number>((resolve, reject) => {
+        target.once("error", reject);
+        target.listen(0, "127.0.0.1", () => {
+          target.off("error", reject);
+          resolve((target.address() as AddressInfo).port);
+        });
+      });
+      const proxyPort = await proxy.startForCaller(workerCaller("worker:test"));
+
+      const res = await requestThroughHttpProxy({
+        proxyPort,
+        targetUrl: `http://127.0.0.1:${targetPort}/raw`,
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toBe("raw-ok");
+      expect(approvalQueue.request).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "capability",
+          capability: "external-network-fetch",
+          callerId: "worker:test",
+          repoPath: "/repo",
+          resource: {
+            type: "url-origin",
+            label: "Target origin",
+            value: `http://127.0.0.1:${targetPort}`,
+          },
+        })
+      );
+      expect(auditLog.entries[0]).toMatchObject({
+        callerId: "worker:test",
+        workerId: "/repo",
+        providerId: "passthrough",
+        status: 200,
+      });
+    } finally {
+      await proxy.stop();
+      await new Promise<void>((resolve) => target.close(() => resolve()));
+    }
+  });
+
+  it("reuses raw workerd egress approvals by origin", async () => {
+    const approvalQueue = createApprovalQueueMock("session");
+    const proxy = createProxy(createCredential({ bindings: [] }), new MemoryAuditLog(), {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    });
+    const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("ok");
+    });
+
+    try {
+      const targetPort = await new Promise<number>((resolve, reject) => {
+        target.once("error", reject);
+        target.listen(0, "127.0.0.1", () => {
+          target.off("error", reject);
+          resolve((target.address() as AddressInfo).port);
+        });
+      });
+      const proxyPort = await proxy.startForCaller(workerCaller("worker:test"));
+      for (const path of ["/one", "/two"]) {
+        const res = await requestThroughHttpProxy({
+          proxyPort,
+          targetUrl: `http://127.0.0.1:${targetPort}${path}`,
+        });
+        expect(res.status).toBe(200);
+      }
+      expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    } finally {
+      await proxy.stop();
+      await new Promise<void>((resolve) => target.close(() => resolve()));
+    }
   });
 
   it("injects query-param credentials by replacing any incoming value", () => {
@@ -285,7 +528,7 @@ describe("EgressProxy", () => {
     );
 
     await proxy.forwardProxyFetch({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items?key=attacker&x=1",
       method: "GET",
@@ -311,7 +554,7 @@ describe("EgressProxy", () => {
     );
 
     const response = await proxy.forwardProxyFetch({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",
@@ -345,7 +588,7 @@ describe("EgressProxy", () => {
       })
     );
     const response = await proxy.forwardProxyFetch({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/login",
       method: "GET",
@@ -371,7 +614,7 @@ describe("EgressProxy", () => {
       })
     );
     const response = await proxy.forwardProxyFetch({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",
@@ -397,7 +640,7 @@ describe("EgressProxy", () => {
       )
     );
     const response = await proxy.forwardProxyFetch({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/doc.pdf",
       method: "GET",
@@ -423,7 +666,7 @@ describe("EgressProxy", () => {
       })
     );
     await proxy.forwardProxyFetch({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/upload",
       method: "POST",
@@ -469,7 +712,7 @@ describe("EgressProxy", () => {
     let aggregated = new Uint8Array(0);
     const result = await proxy.forwardProxyFetchStream(
       {
-        callerId: "worker:test",
+        caller: workerCaller("worker:test"),
         credentialId: "cred-1",
         url: "https://api.example.test/v1/stream",
         method: "GET",
@@ -516,7 +759,7 @@ describe("EgressProxy", () => {
     const frames: string[] = [];
     const result = await proxy.forwardProxyFetchStream(
       {
-        callerId: "worker:test",
+        caller: workerCaller("worker:test"),
         credentialId: "cred-1",
         url: "https://api.example.test/v1/stream",
         method: "GET",
@@ -575,7 +818,7 @@ describe("EgressProxy", () => {
     );
 
     await proxy.forwardProxyFetch({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",
@@ -612,7 +855,7 @@ describe("EgressProxy", () => {
 
     await expect(
       proxy.forwardProxyFetch({
-        callerId: "worker:test",
+        caller: workerCaller("worker:test"),
         credentialId: "cred-1",
         url: "https://api.example.test/v1/items",
         method: "GET",
@@ -664,7 +907,7 @@ describe("EgressProxy", () => {
     );
 
     const response = await proxy.forwardGitHttp({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://github.com/acme/project.git/git-upload-pack",
       method: "POST",
@@ -721,7 +964,7 @@ describe("EgressProxy", () => {
     );
 
     await proxy.forwardGitHttp({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://github.com/acme/project.git/git-receive-pack",
       method: "POST",
@@ -755,7 +998,7 @@ describe("EgressProxy", () => {
     );
 
     const response = await proxy.forwardProxyFetch({
-      callerId: "worker:test",
+      caller: workerCaller("worker:test"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",
@@ -772,7 +1015,7 @@ describe("EgressProxy", () => {
 
     await expect(
       proxy.forwardProxyFetch({
-        callerId: "worker:test",
+        caller: workerCaller("worker:test"),
         credentialId: "cred-1",
         url: "https://api.example.test/v2/items",
         method: "GET",
@@ -781,7 +1024,7 @@ describe("EgressProxy", () => {
 
     await expect(
       proxy.forwardProxyFetch({
-        callerId: "worker:other",
+        caller: workerCaller("worker:other"),
         credentialId: "cred-1",
         url: "https://api.example.test/v1/items",
         method: "GET",
@@ -824,13 +1067,13 @@ describe("EgressProxy", () => {
     );
 
     await proxy.forwardProxyFetch({
-      callerId: "worker:first",
+      caller: workerCaller("worker:first"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",
     });
     await proxy.forwardProxyFetch({
-      callerId: "do:worker:first",
+      caller: workerCaller("do:worker:first"),
       credentialId: "cred-1",
       url: "https://api.example.test/v1/items",
       method: "GET",
@@ -874,13 +1117,13 @@ describe("EgressProxy", () => {
       );
 
       await proxy.forwardProxyFetch({
-        callerId: "worker:first",
+        caller: workerCaller("worker:first"),
         credentialId: "cred-1",
         url: "https://api.example.test/v1/items",
         method: "GET",
       });
       await proxy.forwardProxyFetch({
-        callerId: "do:worker:first",
+        caller: workerCaller("do:worker:first"),
         credentialId: "cred-1",
         url: "https://api.example.test/v1/items",
         method: "GET",

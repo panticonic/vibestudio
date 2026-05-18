@@ -24,11 +24,6 @@ function getTransportBridge(): NatstackTransportBridge {
   return bridge;
 }
 
-const normalizeEndpointId = (id: string): string => {
-  if (id.startsWith("panel:")) return id.slice(6);
-  return id;
-};
-
 /** Services that live in Electron main. Everything else defaults to the server. */
 const electronLocalServices: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
 
@@ -50,12 +45,11 @@ export function createPanelTransport(): RpcTransport {
   bridge.onRecovery?.("cold-recover", () => recoveryCoordinator.run("cold-recover"));
 
   bridge.onMessage((fromId, message) => {
-    const sourceId = normalizeEndpointId(fromId);
     const msg = message as RpcMessage;
     if (!msg || typeof msg !== "object" || typeof (msg as { type?: unknown }).type !== "string") {
       return;
     }
-    registry.deliver(sourceId, msg);
+    registry.deliver(fromId, msg);
   });
 
   return {
@@ -109,11 +103,11 @@ export function createPanelTransport(): RpcTransport {
         }
       }
 
-      await bridge.send(normalizeEndpointId(targetId), message);
+      await bridge.send(targetId, message);
     },
 
     onMessage(sourceId: string, handler: (message: RpcMessage) => void): () => void {
-      return registry.onMessage(normalizeEndpointId(sourceId), handler);
+      return registry.onMessage(sourceId, handler);
     },
 
     onAnyMessage(handler: (sourceId: string, message: RpcMessage) => void): () => void {

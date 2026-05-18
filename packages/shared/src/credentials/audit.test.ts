@@ -129,7 +129,7 @@ describe("AuditLog", () => {
     const setupEntry: ConnectionCredentialAuditEvent = {
       type: "connection_credential.created",
       ts: atLocalNoon(),
-      callerId: "panel:test",
+      callerId: "panel-test",
       providerId: "url-bound",
       connectionId: "cred-1",
       storageKind: "connection-credential",

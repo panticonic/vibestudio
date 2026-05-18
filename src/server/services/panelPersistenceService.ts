@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { DODispatch } from "../doDispatch.js";
+import { doTargetId, type RpcCallerLike } from "@natstack/shared/userlandServiceRpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 
 const ref = (workspaceId: string) => ({
@@ -10,11 +10,11 @@ const ref = (workspaceId: string) => ({
 });
 
 export function createPanelPersistenceService(deps: {
-  doDispatch: DODispatch;
+  rpc: RpcCallerLike;
   workspaceId: string;
 }): ServiceDefinition {
   const dispatch = (method: string, args: unknown[]) =>
-    deps.doDispatch.dispatch(ref(deps.workspaceId), method, ...args);
+    deps.rpc.call(doTargetId(ref(deps.workspaceId)), method, ...args);
 
   const anyArgs = { args: z.array(z.unknown()) };
 

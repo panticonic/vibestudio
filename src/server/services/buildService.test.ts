@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 
 import { createBuildService } from "./buildService.js";
@@ -57,7 +58,9 @@ describe("build service extension diagnostics", () => {
     const service = createBuildService({ buildSystem });
 
     await expect(
-      service.handler({ callerId: "shell", callerKind: "shell" }, "getBuildMetadata", ["build-key"])
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getBuildMetadata", [
+        "build-key",
+      ])
     ).resolves.toMatchObject({
       kind: "extension",
       name: "@workspace-extensions/example",
@@ -70,7 +73,7 @@ describe("build service extension diagnostics", () => {
     const service = createBuildService({ buildSystem });
 
     await expect(
-      service.handler({ callerId: "shell", callerKind: "shell" }, "doctorExtension", [
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "doctorExtension", [
         "@workspace-extensions/example",
       ])
     ).resolves.toMatchObject({

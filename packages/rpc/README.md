@@ -33,7 +33,7 @@ const transport = {
 
 // 2. Create the bridge
 const rpc = createRpcBridge({
-  selfId: "panel:my-panel",
+  selfId: "my-panel",
   transport,
 });
 
@@ -44,10 +44,10 @@ rpc.exposeMethod("fetchData", async (id: string) => {
 });
 
 // 4. Call methods on other endpoints
-const result = await rpc.call<string>("panel:other", "greet", "World");
+const result = await rpc.call<string>("other-panel", "greet", "World");
 
 // 5. Emit events
-await rpc.emit("panel:other", "data-updated", { id: "123" });
+await rpc.emit("other-panel", "data-updated", { id: "123" });
 
 // 6. Listen for events
 const unsub = rpc.onEvent("data-updated", (fromId, payload) => {
@@ -63,7 +63,7 @@ Create an RPC bridge instance.
 
 ```typescript
 interface RpcBridgeConfig {
-  /** Unique ID for this endpoint (e.g., "panel:abc" or "worker:xyz") */
+  /** Unique runtime ID for this endpoint */
   selfId: string;
   /** Transport implementation for message delivery */
   transport: RpcTransport;
@@ -93,7 +93,7 @@ rpc.exposeMethod("asyncMethod", async (arg: string) => await doWork(arg));
 Call a method on another endpoint. Returns a promise that resolves with the result, rejects if the peer reports an error, or rejects if the transport's `send` fails. It does not time out on its own.
 
 ```typescript
-const result = await rpc.call<User>("panel:auth", "getUser", userId);
+const result = await rpc.call<User>("auth-panel", "getUser", userId);
 ```
 
 #### `rpc.emit(targetId, event, payload)`
@@ -101,7 +101,7 @@ const result = await rpc.call<User>("panel:auth", "getUser", userId);
 Send a one-way event to another endpoint.
 
 ```typescript
-await rpc.emit("panel:dashboard", "refresh", { reason: "data-changed" });
+await rpc.emit("dashboard-panel", "refresh", { reason: "data-changed" });
 ```
 
 #### `rpc.onEvent(event, listener)`
@@ -187,7 +187,7 @@ The RPC system uses three message types:
 {
   type: "request",
   requestId: "uuid",
-  fromId: "panel:sender",
+  fromId: "sender-panel",
   method: "methodName",
   args: [arg1, arg2]
 }
@@ -208,7 +208,7 @@ The RPC system uses three message types:
 ```typescript
 {
   type: "event",
-  fromId: "panel:sender",
+  fromId: "sender-panel",
   event: "eventName",
   payload: data
 }

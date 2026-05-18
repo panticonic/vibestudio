@@ -214,7 +214,7 @@ protected getParticipantInfo(channelId: string, config?: unknown): ParticipantDe
 
 ## 3. Direct Communication APIs
 
-DOs are autonomous — they call channel and server APIs directly. Channel operations go through `ChannelClient` (which wraps `callDO()` to talk directly to the Channel DO via `stub.fetch()`). Server operations go through `this.server`. All methods return void.
+DOs are autonomous — they call channel and server APIs directly. Channel operations go through `ChannelClient` over unified RPC to the Channel DO. Server operations go through `this.server`. All methods return void.
 
 ### Channel Operations — `this.createChannelClient(channelId)`
 

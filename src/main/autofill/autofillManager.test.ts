@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 
 // Mock Electron before importing AutofillManager
 vi.mock("electron", () => ({
@@ -242,11 +243,10 @@ describe("AutofillManager", () => {
         isUpdate: false,
       });
 
-      await serviceDef.handler!(
-        { callerId: "shell", callerKind: "shell" as const },
-        "confirmSave",
-        ["panel-1", "save"]
-      );
+      await serviceDef.handler!({ caller: createVerifiedCaller("shell", "shell") }, "confirmSave", [
+        "panel-1",
+        "save",
+      ]);
 
       expect(passwordStore.add).toHaveBeenCalledWith({
         url: "https://example.com",
@@ -267,11 +267,10 @@ describe("AutofillManager", () => {
         existingId: 42,
       });
 
-      await serviceDef.handler!(
-        { callerId: "shell", callerKind: "shell" as const },
-        "confirmSave",
-        ["panel-1", "save"]
-      );
+      await serviceDef.handler!({ caller: createVerifiedCaller("shell", "shell") }, "confirmSave", [
+        "panel-1",
+        "save",
+      ]);
 
       expect(passwordStore.update).toHaveBeenCalledWith(42, { password: "newpass" });
     });
@@ -287,11 +286,10 @@ describe("AutofillManager", () => {
         isUpdate: false,
       });
 
-      await serviceDef.handler!(
-        { callerId: "shell", callerKind: "shell" as const },
-        "confirmSave",
-        ["panel-1", "never"]
-      );
+      await serviceDef.handler!({ caller: createVerifiedCaller("shell", "shell") }, "confirmSave", [
+        "panel-1",
+        "never",
+      ]);
 
       expect(passwordStore.addNeverSave).toHaveBeenCalledWith("https://example.com");
       expect(passwordStore.add).not.toHaveBeenCalled();
@@ -317,11 +315,10 @@ describe("AutofillManager", () => {
         isUpdate: false,
       });
 
-      await serviceDef.handler!(
-        { callerId: "shell", callerKind: "shell" as const },
-        "confirmSave",
-        ["panel-1", "dismiss"]
-      );
+      await serviceDef.handler!({ caller: createVerifiedCaller("shell", "shell") }, "confirmSave", [
+        "panel-1",
+        "dismiss",
+      ]);
 
       expect(passwordStore.addNeverSave).not.toHaveBeenCalled();
       expect(state.dismissedAt).toBeGreaterThan(0);
@@ -338,11 +335,10 @@ describe("AutofillManager", () => {
         isUpdate: false,
       });
 
-      await serviceDef.handler!(
-        { callerId: "shell", callerKind: "shell" as const },
-        "confirmSave",
-        ["panel-1", "dismiss"]
-      );
+      await serviceDef.handler!({ caller: createVerifiedCaller("shell", "shell") }, "confirmSave", [
+        "panel-1",
+        "dismiss",
+      ]);
 
       expect(testManager(manager).pendingCredentials.has("panel-1")).toBe(false);
     });

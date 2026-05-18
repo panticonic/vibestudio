@@ -9,7 +9,7 @@ import {
   type WebhookDeliveryEvent,
   type WebhookIngressServiceDeps,
 } from "./webhookIngressService.js";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceContext } from "@natstack/shared/serviceDispatcher";
 import type {
   CreateWebhookIngressSubscriptionRequest,
   WebhookIngressSubscriptionSummary,
@@ -20,15 +20,29 @@ const RELAY_SECRET = "relay-secret-for-tests-only";
 const PUBLIC_BASE_URL = "https://hooks.test";
 
 function shellCtx(callerId = "shell-1"): ServiceContext {
-  return { callerId, callerKind: "shell" };
+  return { caller: createVerifiedCaller(callerId, "shell") };
 }
 
 function panelCtx(callerId: string): ServiceContext {
-  return { callerId, callerKind: "panel" };
+  return {
+    caller: createVerifiedCaller(callerId, "panel", {
+      callerId,
+      callerKind: "panel",
+      repoPath: TARGET.source,
+      effectiveVersion: "ev-test",
+    }),
+  };
 }
 
-function workerCtx(callerId: string): ServiceContext {
-  return { callerId, callerKind: "worker" };
+function _workerCtx(callerId: string): ServiceContext {
+  return {
+    caller: createVerifiedCaller(callerId, "worker", {
+      callerId,
+      callerKind: "worker",
+      repoPath: TARGET.source,
+      effectiveVersion: "ev-test",
+    }),
+  };
 }
 
 const TARGET: WebhookTarget = {
@@ -186,8 +200,8 @@ describe("webhookIngressService — RPC surface", () => {
         resolveByCallerId: () => ({ repoPath: TARGET.source }) as never,
       },
     });
-    const a = panelCtx("panel:a");
-    const b = panelCtx("panel:b");
+    const a = panelCtx("panel-a");
+    const b = panelCtx("panel-b");
 
     const subA = (await svc.definition.handler(a, "createSubscription", [
       {
@@ -216,13 +230,17 @@ describe("webhookIngressService — RPC surface", () => {
   });
 
   it("rejects targets that do not match the caller source for non-shell callers", async () => {
-    const { svc } = setup({
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({ repoPath: "workers/elsewhere" }) as never,
-      },
-    });
+    const { svc } = setup();
+    const wrongSourceCtx: ServiceContext = {
+      caller: createVerifiedCaller("worker:1", "worker", {
+        callerId: "worker:1",
+        callerKind: "worker",
+        repoPath: "workers/elsewhere",
+        effectiveVersion: "ev-test",
+      }),
+    };
     await expect(
-      svc.definition.handler(workerCtx("worker:1"), "createSubscription", [
+      svc.definition.handler(wrongSourceCtx, "createSubscription", [
         {
           target: TARGET,
           verifier: { type: "hmac-sha256", headerName: "X-Sig", secret: "s" },

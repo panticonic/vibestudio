@@ -11,15 +11,21 @@ import type { RunnerEvent, RunnerTurnInput } from "@natstack/harness";
 
 export interface TurnDispatcherRunner {
   subscribe(listener: (event: RunnerEvent) => void): () => void;
+  buildUserMessage(input: RunnerTurnInput): AgentMessage;
   prompt(input: RunnerTurnInput): Promise<void>;
   continueAgent(): Promise<void>;
-  steer(input: RunnerTurnInput): Promise<void>;
-  abort(): Promise<{ clearedSteer: AgentMessage[]; clearedFollowUp: AgentMessage[] }>;
+  steerMessage(message: AgentMessage): Promise<void>;
+  clearSteeringQueue(): Promise<void>;
 }
 
 type WorkItem =
   | { kind: "prompt"; input: RunnerTurnInput }
   | { kind: "continue" };
+
+interface PendingSteer {
+  input: RunnerTurnInput;
+  message: AgentMessage;
+}
 
 export interface TurnDispatcherProjector {
   closeAll(): Promise<void>;
@@ -34,9 +40,10 @@ export interface TurnDispatcherOptions {
 
 export class TurnDispatcher {
   private pending: WorkItem[] = [];
-  private pendingSteered: RunnerTurnInput[] = [];
+  private pendingSteered: PendingSteer[] = [];
   private running = false;
   private draining = false;
+  private drainGeneration = 0;
   private lastTypingOn = false;
   private disposed = false;
   private readonly unsub: () => void;
@@ -51,11 +58,12 @@ export class TurnDispatcher {
     if (this.disposed) return;
     const sequential = opts?.mode === "sequential";
     if (!sequential && this.running) {
-      this.pendingSteered.push(input);
+      const message = this.opts.runner.buildUserMessage(input);
+      this.pendingSteered.push({ input, message });
       this.notifyTyping();
-      void this.opts.runner.steer(input).catch((err) => {
+      void this.opts.runner.steerMessage(message).catch((err) => {
         this.log.warn("[TurnDispatcher] steer failed; routing as fresh prompt:", err);
-        this.pendingSteered = this.pendingSteered.filter((candidate) => candidate !== input);
+        this.pendingSteered = this.pendingSteered.filter((candidate) => candidate.message !== message);
         this.pending.push({ kind: "prompt", input });
         this.ensureDrain();
       });
@@ -77,10 +85,22 @@ export class TurnDispatcher {
     this.pending = [];
     this.pendingSteered = [];
     this.running = false;
-    void this.opts.runner.abort().catch((err) => {
-      this.log.warn("[TurnDispatcher] abort during reset failed:", err);
+    this.draining = false;
+    this.drainGeneration++;
+    void this.opts.runner.clearSteeringQueue().catch((err) => {
+      this.log.warn("[TurnDispatcher] clearSteeringQueue during reset failed:", err);
     });
     this.notifyTyping();
+  }
+
+  markCurrentTurnAborted(): void {
+    if (this.disposed) return;
+    if (!this.running && !this.draining) return;
+    this.running = false;
+    this.draining = false;
+    this.drainGeneration++;
+    this.notifyTyping();
+    if (this.pending.length > 0) this.ensureDrain();
   }
 
   dispose(): void {
@@ -89,6 +109,8 @@ export class TurnDispatcher {
     this.pending = [];
     this.pendingSteered = [];
     this.running = false;
+    this.draining = false;
+    this.drainGeneration++;
     this.unsub();
     this.notifyTyping();
   }
@@ -114,7 +136,7 @@ export class TurnDispatcher {
       case "message_start": {
         const msg = (event as { message?: unknown }).message;
         if (!isUserMessage(msg)) return;
-        const idx = this.pendingSteered.findIndex((input) => inputMatchesMessage(input, msg));
+        const idx = this.pendingSteered.findIndex((pending) => pending.message === msg);
         if (idx >= 0) this.pendingSteered.splice(idx, 1);
         return;
       }
@@ -123,10 +145,10 @@ export class TurnDispatcher {
         if (this.pendingSteered.length > 0) {
           const stranded = this.pendingSteered;
           this.pendingSteered = [];
-          void this.opts.runner.abort().catch((err) => {
-            this.log.warn("[TurnDispatcher] abort after stranded steer failed:", err);
+          void this.opts.runner.clearSteeringQueue().catch((err) => {
+            this.log.warn("[TurnDispatcher] clearSteeringQueue after stranded steer failed:", err);
           });
-          for (const input of stranded) this.pending.push({ kind: "prompt", input });
+          for (const item of stranded) this.pending.push({ kind: "prompt", input: item.input });
         }
         this.notifyTyping();
         if (this.pending.length > 0) this.ensureDrain();
@@ -138,16 +160,18 @@ export class TurnDispatcher {
   private ensureDrain(): void {
     if (this.draining) return;
     this.draining = true;
-    void this.drainLoop().catch((err) => {
+    const generation = ++this.drainGeneration;
+    void this.drainLoop(generation).catch((err) => {
+      if (generation !== this.drainGeneration) return;
       this.log.error("[TurnDispatcher] drainLoop crashed:", err);
       this.draining = false;
       this.notifyTyping();
     });
   }
 
-  private async drainLoop(): Promise<void> {
+  private async drainLoop(generation: number): Promise<void> {
     try {
-      while (!this.disposed && this.pending.length > 0) {
+      while (!this.disposed && generation === this.drainGeneration && this.pending.length > 0) {
         const work = this.pending.shift()!;
         this.running = true;
         this.notifyTyping();
@@ -157,7 +181,9 @@ export class TurnDispatcher {
           } else {
             await this.opts.runner.prompt(work.input);
           }
+          if (generation !== this.drainGeneration) return;
         } catch (err) {
+          if (generation !== this.drainGeneration) return;
           this.log.warn(
             `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} failed:`,
             err,
@@ -168,12 +194,12 @@ export class TurnDispatcher {
             this.log.warn("[TurnDispatcher] projector.closeAll failed:", closeErr);
           }
           if (this.pendingSteered.length > 0) {
-            for (const input of this.pendingSteered) this.pending.push({ kind: "prompt", input });
+            for (const item of this.pendingSteered) this.pending.push({ kind: "prompt", input: item.input });
             this.pendingSteered = [];
             try {
-              await this.opts.runner.abort();
+              await this.opts.runner.clearSteeringQueue();
             } catch (abortErr) {
-              this.log.warn("[TurnDispatcher] abort after prompt failure failed:", abortErr);
+              this.log.warn("[TurnDispatcher] clearSteeringQueue after prompt failure failed:", abortErr);
             }
           }
           this.running = false;
@@ -181,6 +207,7 @@ export class TurnDispatcher {
         }
       }
     } finally {
+      if (generation !== this.drainGeneration) return;
       this.draining = false;
       this.notifyTyping();
     }
@@ -189,16 +216,4 @@ export class TurnDispatcher {
 
 function isUserMessage(value: unknown): value is AgentMessage {
   return Boolean(value && typeof value === "object" && (value as { role?: string }).role === "user");
-}
-
-function inputMatchesMessage(input: RunnerTurnInput, message: AgentMessage): boolean {
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") return content === input.content;
-  if (!Array.isArray(content)) return false;
-  const text = content.find((block) => (
-    block &&
-    typeof block === "object" &&
-    (block as { type?: string }).type === "text"
-  )) as { text?: string } | undefined;
-  return text?.text === input.content;
 }

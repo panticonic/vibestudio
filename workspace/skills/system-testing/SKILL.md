@@ -113,7 +113,7 @@ if (fail.execution.snapshot) {
 | `filesystemTests` | 9 | All fs operations: read/write, dirs, stats, symlinks, handles |
 | `gitTests` | 6 | init, branch, diff, log, stash, push |
 | `panelTests` | 6 | Open, browser panels, navigate, screenshot, evaluate, list sources |
-| `workerTests` | 6 | Create, list, callDO, destroy, env bindings, list sources |
+| `workerTests` | 6 | Create, list, unified RPC DO calls, destroy, env bindings, list sources |
 | `buildTests` | 4 | Workspace + npm builds, build at ref, eval imports |
 | `oauthTests` | 3 | List providers/connections, error on missing connection |
 | `workspaceTests` | 3 | List, active, config |

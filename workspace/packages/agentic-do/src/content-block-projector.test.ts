@@ -212,9 +212,12 @@ function toolExecUpdate(toolCallId: string, consoleLine: string): AgentEvent {
   } as never);
 }
 
-function agentEnd(stopReason?: "stop" | "error" | "aborted" | "toolUse" | "length"): AgentEvent {
+function agentEnd(
+  stopReason?: "stop" | "error" | "aborted" | "toolUse" | "length",
+  errorMessage?: string,
+): AgentEvent {
   const messages = stopReason
-    ? [{ role: "assistant", content: [], stopReason }]
+    ? [{ role: "assistant", content: [], stopReason, ...(errorMessage ? { errorMessage } : {}) }]
     : [];
   return ev({ type: "agent_end", messages: messages as never });
 }
@@ -493,6 +496,23 @@ describe("ContentBlockProjector — error/abort auto-close", () => {
     // The open text block must receive a complete op despite no text_end event.
     const completes = sink.ops.filter((o) => o.kind === "complete");
     expect(completes.map((o) => o.msgId)).toContain("m1");
+  });
+
+  it("surfaces terminal run errors that have no streamed content block", async () => {
+    const sink = makeSink();
+    const projector = new ContentBlockProjector(sink, makeAllocator());
+
+    await projector.handleEvent(agentEnd("error", "model request failed"));
+
+    expect(sink.ops).toContainEqual({
+      kind: "send",
+      msgId: "m1",
+      content: "model request failed",
+      contentType: undefined,
+    });
+    expect(sink.errors).toEqual([
+      { msgId: "m1", message: "model request failed", code: "agent_turn_failed" },
+    ]);
   });
 
   it("auto-closes in-flight toolCall on agent_end with stopReason=aborted", async () => {

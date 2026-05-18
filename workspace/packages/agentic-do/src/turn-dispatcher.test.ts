@@ -60,6 +60,9 @@ function makeRunner(): FakeRunnerState {
         listener = null;
       };
     },
+    buildUserMessage(input) {
+      return input as AgentMessage;
+    },
     prompt(msg) {
       const d = deferred<void>();
       state.runTurnCalls.push({ msg: msg as AgentMessage & RunnerTurnInput, deferred: d });
@@ -70,13 +73,13 @@ function makeRunner(): FakeRunnerState {
       state.continueCalls.push(d);
       return d.promise;
     },
-    steer(msg) {
+    steerMessage(msg) {
       state.steerCalls.push(msg as AgentMessage & RunnerTurnInput);
       return Promise.resolve();
     },
-    abort() {
+    clearSteeringQueue() {
       state.clearSteerCount++;
-      return Promise.resolve({ clearedSteer: [], clearedFollowUp: [] });
+      return Promise.resolve();
     },
   };
   return state;
@@ -277,6 +280,33 @@ describe("TurnDispatcher — mid-run steer", () => {
     expect(runner.runTurnCalls).toHaveLength(1);
     expect(runner.clearSteerCount).toBe(0);
   });
+
+  it("does not treat a different user message with the same text as the absorbed steer", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector: makeProjector(),
+      notifyTyping: () => {},
+    });
+
+    const first = makeMsg("first");
+    d.submit(first);
+    await flush();
+    runner.emit(agentStart());
+
+    const steered = makeMsg("duplicate");
+    d.submit(steered);
+
+    runner.emit(messageStart(makeMsg("duplicate")));
+    runner.emit(messageStart(first));
+    runner.emit(agentEnd());
+    runner.runTurnCalls[0]!.deferred.resolve();
+    await flush();
+
+    expect(runner.runTurnCalls).toHaveLength(2);
+    expect(runner.runTurnCalls[1]!.msg).toBe(steered);
+    expect(runner.clearSteerCount).toBe(1);
+  });
 });
 
 describe("TurnDispatcher — self-healing sweep", () => {
@@ -430,6 +460,51 @@ describe("TurnDispatcher — runTurn failure", () => {
   });
 });
 
+describe("TurnDispatcher — external aborts", () => {
+  it("turns typing off and allows continue after an intentional dispatch abort", async () => {
+    const runner = makeRunner();
+    const typing: boolean[] = [];
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector: makeProjector(),
+      notifyTyping: (busy) => typing.push(busy),
+    });
+
+    d.submit(makeMsg("dispatches a participant method"));
+    await flush();
+    expect(runner.runTurnCalls).toHaveLength(1);
+
+    d.markCurrentTurnAborted();
+    expect(typing).toEqual([true, false]);
+
+    d.submitContinue();
+    await flush();
+
+    expect(runner.continueCalls).toHaveLength(1);
+    expect(typing).toEqual([true, false, true]);
+  });
+
+  it("ignores a stale prompt resolution after a replacement drain starts", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector: makeProjector(),
+      notifyTyping: () => {},
+    });
+
+    d.submit(makeMsg("first"));
+    await flush();
+    d.markCurrentTurnAborted();
+    d.submitContinue();
+    await flush();
+
+    runner.runTurnCalls[0]!.deferred.resolve();
+    await flush();
+
+    expect(runner.continueCalls).toHaveLength(1);
+  });
+});
+
 describe("TurnDispatcher — reset", () => {
   it("clears pending and pendingSteered, broadcasts typing off, clears pi queue", async () => {
     const runner = makeRunner();
@@ -554,7 +629,7 @@ describe("TurnDispatcher — reset edge paths", () => {
 
     d.reset();
     d.reset();
-    // Each reset calls abort unconditionally — that's fine,
+    // Each reset calls clearSteeringQueue unconditionally — that's fine,
     // the operation is idempotent, but this test documents the behavior.
     expect(runner.clearSteerCount).toBe(2);
   });

@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,6 +19,17 @@ function deferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function panelCtx(callerId = "panel-1") {
+  return {
+    caller: createVerifiedCaller(callerId, "panel", {
+      callerId,
+      callerKind: "panel",
+      repoPath: "panels/test",
+      effectiveVersion: "ev-test",
+    }),
+  };
 }
 
 function makeHost(overrides: {
@@ -149,8 +161,7 @@ describe("ExtensionHost source push authorization", () => {
   it("stores a four-hour dev-session grant for extension main pushes", async () => {
     const { host, approvalQueue, extensionNode } = makeHost({ approvalDecision: "session" });
     const request = {
-      callerId: "panel-1",
-      callerKind: "panel",
+      caller: panelCtx("panel-1").caller,
       repoPath: extensionNode.relativePath,
       branch: "main",
       commit: "def456",
@@ -176,8 +187,7 @@ describe("ExtensionHost source push authorization", () => {
     const { host, approvalQueue, extensionNode } = makeHost();
 
     await expect(host.authorizeSourcePush({
-      callerId: "panel-1",
-      callerKind: "panel",
+      caller: panelCtx("panel-1").caller,
       repoPath: extensionNode.relativePath,
       branch: "feature",
       commit: "def456",
@@ -248,7 +258,7 @@ describe("ExtensionHost built-in extension bootstrap", () => {
     });
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
-    await host.setEnabled({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, true);
+    await host.setEnabled(panelCtx("panel-1"), extensionNode.name, true);
 
     expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
     expect(start).toHaveBeenCalledWith(expect.objectContaining({
@@ -271,7 +281,7 @@ describe("ExtensionHost update", () => {
       depEv: "ev-runtime",
     });
 
-    await host.update({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name);
+    await host.update(panelCtx("panel-1"), extensionNode.name);
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(buildSystem.getBuild).not.toHaveBeenCalled();
@@ -287,7 +297,7 @@ describe("ExtensionHost update", () => {
     });
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
-    await host.update({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name);
+    await host.update(panelCtx("panel-1"), extensionNode.name);
 
     expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
       kind: "extension",
@@ -349,7 +359,7 @@ describe("ExtensionHost activation", () => {
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
-      host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "blame", ["README.md"]),
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"]),
     ).resolves.toBe("transport-result");
 
     expect(extensionTransport.call).toHaveBeenCalledWith(
@@ -372,7 +382,7 @@ describe("ExtensionHost activation", () => {
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
-      host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "blame", []),
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []),
     ).rejects.toThrow(`Extension ${extensionNode.name}.blame invocation failed: boom`);
 
     expect(host.listWorkspaceUnitLogs(extensionNode.name, { level: "error" })).toEqual([
@@ -402,7 +412,7 @@ describe("ExtensionHost activation", () => {
 
     await host.ensureBuiltInExtensions([extensionNode.name]);
     await expect(
-      host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "blame", ["README.md"]),
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"]),
     ).resolves.toBe("transport-result");
 
     expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
@@ -435,7 +445,7 @@ describe("ExtensionHost activation", () => {
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
-      host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "blame", ["README.md"]),
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"]),
     ).resolves.toBe("transport-result");
 
     expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
@@ -464,7 +474,7 @@ describe("ExtensionHost activation", () => {
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
-      host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "resize", []),
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "resize", []),
     ).resolves.toBe("transport-result");
 
     expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
@@ -498,9 +508,9 @@ describe("ExtensionHost activation", () => {
     });
 
     await host.ensureBuiltInExtensions([extensionNode.name]);
-    const first = host.invoke({ callerId: "panel-1", callerKind: "panel" }, extensionNode.name, "blame", ["a"]);
+    const first = host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["a"]);
     await approvalStarted;
-    const second = host.invoke({ callerId: "panel-2", callerKind: "panel" }, extensionNode.name, "blame", ["b"]);
+    const second = host.invoke(panelCtx("panel-2"), extensionNode.name, "blame", ["b"]);
     await Promise.resolve();
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
@@ -526,7 +536,7 @@ describe("ExtensionHost activation", () => {
         expect(typeof body?.id).toBe("string");
         while (true) {
           const next = await service.handler(
-            { callerId: extensionNode.name, callerKind: "extension" } as any,
+            { caller: createVerifiedCaller(extensionNode.name, "extension" ) } as any,
             "fetchRequestBodyChunk",
             [body!.id!],
           ) as { done: boolean; chunk?: { __bin: true; data: string } };
@@ -565,7 +575,7 @@ describe("ExtensionHost activation", () => {
       res as any,
       extensionNode.name,
       "/upload",
-      { callerId: "panel-1", callerKind: "panel" },
+      panelCtx("panel-1").caller,
     );
 
     expect(extensionTransport.call).toHaveBeenCalledWith(
@@ -641,7 +651,7 @@ describe("ExtensionHost activation", () => {
       res as any,
       extensionNode.name,
       "/download",
-      { callerId: "panel-1", callerKind: "panel" },
+      panelCtx("panel-1").caller,
     );
 
     expect(res.statusCode).toBe(200);
@@ -658,7 +668,7 @@ describe("ExtensionHost activation", () => {
   it("accepts extension event, health, log, and caller approval requests over RPC", async () => {
     const { host, extensionNode, eventService, approvalQueue, userlandApprovalGrantStore } = makeHost();
     const service = host.createServiceDefinition();
-    const extensionCtx = { callerId: extensionNode.name, callerKind: "extension" as const };
+    const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
     const invocation = {
       requestId: "req-1",
       extensionName: extensionNode.name,

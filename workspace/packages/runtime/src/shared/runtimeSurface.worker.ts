@@ -8,6 +8,8 @@ export const workerRuntimeSurface: RuntimeSurface = {
     id: valueEntry(),
     rpc: valueEntry(),
     fs: valueEntry(),
+    doTargetId: valueEntry("Build a unified RPC target ID for a Durable Object reference."),
+    createDurableObjectServiceClient: valueEntry("Resolve a Durable Object-backed service and call it through unified RPC."),
     workers: namespaceEntry([
       "create",
       "destroy",
@@ -17,6 +19,8 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "listInstanceSources",
       "listServices",
       "resolveService",
+      "resolveDurableObject",
+      "durableObjectService",
       "getPort",
       "restartAll",
       "cloneDO",

@@ -146,7 +146,7 @@ export interface RpcTransport {
 }
 
 export interface RpcBridgeConfig {
-  /** The ID of this endpoint (e.g., "panel:abc" or "worker:xyz") */
+  /** The canonical runtime ID of this endpoint. */
   selfId: string;
   /** The transport implementation */
   transport: RpcTransport;

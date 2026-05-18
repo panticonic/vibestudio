@@ -6,7 +6,7 @@ describe("panelPersistenceService", () => {
   it("is restricted to shell/server callers and is not panel-routable", () => {
     const service = createPanelPersistenceService({
       workspaceId: "workspace-1",
-      doDispatch: { dispatch: vi.fn() } as never,
+      rpc: { call: vi.fn() },
     });
 
     expect(service.policy.allowed).toEqual(["shell", "server"]);

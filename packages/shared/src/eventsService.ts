@@ -335,14 +335,14 @@ export class EventService {
   getOrCreateSubscriber(ctx: ServiceContext): Subscriber {
     const connectionId = this.getConnectionId(ctx.connectionId);
     // Allow pre-registered subscribers (e.g., IPC-backed shell subscriber)
-    const preRegistered = this.sessionsByCallerId.get(ctx.callerId)?.get(connectionId);
+    const preRegistered = this.sessionsByCallerId.get(ctx.caller.runtime.id)?.get(connectionId);
     if (preRegistered && preRegistered.isAlive) return preRegistered;
 
     if (!ctx.wsClient) {
       throw new Error("Event subscriptions require a WS connection or pre-registered subscriber");
     }
 
-    const existing = this.sessionsByCallerId.get(ctx.callerId)?.get(connectionId);
+    const existing = this.sessionsByCallerId.get(ctx.caller.runtime.id)?.get(connectionId);
     // Cast ws from WsClientInfo.ws (unknown) to WebSocket -- eventsService
     // is server-only code that always receives the concrete WS instance.
     const ws = ctx.wsClient.ws as WebSocket;
@@ -352,10 +352,10 @@ export class EventService {
 
     // Remove stale subscriber's event entries if it was replaced
     if (existing) {
-      this.removeSubscriber(ctx.callerId, connectionId, existing);
+      this.removeSubscriber(ctx.caller.runtime.id, connectionId, existing);
     }
 
-    const session = new WsEventSession(ws, ctx.callerKind, ctx.callerId, connectionId);
+    const session = new WsEventSession(ws, ctx.caller.runtime.kind, ctx.caller.runtime.id, connectionId);
     this.registerSession(session);
     return session;
   }
@@ -383,7 +383,7 @@ export function createEventsServiceDefinition(eventService: EventService): Servi
             throw new Error(`Unknown event: ${eventName}`);
           }
           const subscriber = eventService.getOrCreateSubscriber(ctx);
-          eventService.subscribe(eventName, ctx.callerId, subscriber, ctx.connectionId);
+          eventService.subscribe(eventName, ctx.caller.runtime.id, subscriber, ctx.connectionId);
           return;
         }
         case "unsubscribe": {
@@ -391,11 +391,11 @@ export function createEventsServiceDefinition(eventService: EventService): Servi
           if (!isValidEventName(eventName)) {
             throw new Error(`Unknown event: ${eventName}`);
           }
-          eventService.unsubscribe(eventName, ctx.callerId, ctx.connectionId);
+          eventService.unsubscribe(eventName, ctx.caller.runtime.id, ctx.connectionId);
           return;
         }
         case "unsubscribeAll": {
-          eventService.unsubscribeAll(ctx.callerId, ctx.connectionId);
+          eventService.unsubscribeAll(ctx.caller.runtime.id, ctx.connectionId);
           return;
         }
         default:

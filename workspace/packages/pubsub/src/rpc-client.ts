@@ -865,7 +865,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     name: opts.name,
     type: opts.type,
     handle: opts.handle,
-    transport: "rpc",
     [PARTICIPANT_SESSION_METADATA_KEY]: participantSessionId,
     contextId: opts.contextId,
     channelConfig: opts.channelConfig ? opts.channelConfig : undefined,

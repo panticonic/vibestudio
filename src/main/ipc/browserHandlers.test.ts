@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 /**
  * Tests for browser service.
  */
@@ -57,7 +58,7 @@ describe("browserService handler", () => {
     panelRegistry: panelManager as unknown as PanelRegistry,
   });
   const handler = svc.handler;
-  const ctx: ServiceContext = { callerId: "panel-1", callerKind: "panel" };
+  const ctx: ServiceContext = { caller: createVerifiedCaller("panel-1", "panel") };
 
   beforeEach(() => {
     vi.clearAllMocks();

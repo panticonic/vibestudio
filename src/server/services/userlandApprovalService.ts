@@ -13,7 +13,6 @@ import {
 import { ServiceError, type ServiceContext } from "@natstack/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
 import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
 
 const SERVICE_NAME = "userlandApproval";
@@ -21,10 +20,9 @@ const SERVICE_NAME = "userlandApproval";
 export function createUserlandApprovalService(deps: {
   approvalQueue: ApprovalQueue;
   grantStore: Pick<UserlandApprovalGrantStore, "lookup" | "record" | "revoke" | "list">;
-  codeIdentityResolver: Pick<CodeIdentityResolver, "resolveByCallerId">;
 }): ServiceDefinition {
   async function resolvePrincipal(ctx: ServiceContext, method: string): Promise<ApprovalPrincipal> {
-    if (ctx.callerKind !== "panel" && ctx.callerKind !== "worker") {
+    if (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker") {
       throw new ServiceError(
         SERVICE_NAME,
         method,
@@ -32,20 +30,20 @@ export function createUserlandApprovalService(deps: {
         "EACCES"
       );
     }
-    const identity = deps.codeIdentityResolver.resolveByCallerId(ctx.callerId);
+    const identity = ctx.caller.code;
     if (!identity) {
       throw new ServiceError(
         SERVICE_NAME,
         method,
-        `Unknown caller identity: ${ctx.callerId}`,
+        `Unknown caller identity: ${ctx.caller.runtime.id}`,
         "ENOENT"
       );
     }
-    if (identity.callerKind !== ctx.callerKind) {
+    if (identity.callerKind !== ctx.caller.runtime.kind) {
       throw new ServiceError(
         SERVICE_NAME,
         method,
-        `Caller identity kind mismatch for ${ctx.callerId}`,
+        `Caller identity kind mismatch for ${ctx.caller.runtime.id}`,
         "EACCES"
       );
     }

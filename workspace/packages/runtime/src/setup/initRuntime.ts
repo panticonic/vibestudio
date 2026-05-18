@@ -38,7 +38,7 @@ export function initRuntime(options: InitRuntimeOptions): InitRuntimeResult {
   options.setupGlobals?.();
 
   const runtime = createRuntime({
-    selfId: `${config.kind}:${config.id}`,
+    selfId: config.id,
     createTransport: options.createTransport,
     id: config.id,
     contextId: config.contextId,

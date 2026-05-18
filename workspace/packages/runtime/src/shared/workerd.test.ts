@@ -77,6 +77,33 @@ describe("createWorkerdClient", () => {
     expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.resolveService", "natstack.channel.v1", "chat-1");
   });
 
+  it("durableObjectService resolves then calls the service target through unified RPC", async () => {
+    mock.rpc.call.mockImplementation(async (target: string, method: string) => {
+      if (target === "main" && method === "workers.resolveService") {
+        return {
+          kind: "durable-object",
+          targetId: "do:workers/example:ExampleDO:key-1",
+        };
+      }
+      return "ok";
+    });
+
+    await expect(client.durableObjectService("example.service.v1", "key-1").call("ping")).resolves.toBe("ok");
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workers.resolveService", "example.service.v1", "key-1");
+    expect(mock.rpc.call).toHaveBeenCalledWith("do:workers/example:ExampleDO:key-1", "ping");
+  });
+
+  it("resolveDurableObject calls workers.resolveDurableObject", async () => {
+    await client.resolveDurableObject("workers/example", "ExampleDO", "key-1");
+    expect(mock.rpc.call).toHaveBeenCalledWith(
+      "main",
+      "workers.resolveDurableObject",
+      "workers/example",
+      "ExampleDO",
+      "key-1",
+    );
+  });
+
   it("getPort calls workerd.getPort", async () => {
     await client.getPort();
     expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.getPort");

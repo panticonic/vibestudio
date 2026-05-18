@@ -43,7 +43,9 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `gitConfig` | value |  | Git HTTP endpoint and token derived from the gateway config. |
 | `pubsubConfig` | value |  | PubSub WebSocket endpoint and token derived from the gateway config. |
 | `env` | value |  |  |
-| `workers` | namespace | `create`, `destroy`, `update`, `list`, `status`, `listInstanceSources`, `listServices`, `resolveService`, `getPort`, `restartAll`, `cloneDO`, `destroyDO` |  |
+| `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
+| `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
+| `workers` | namespace | `create`, `destroy`, `update`, `list`, `status`, `listInstanceSources`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService`, `getPort`, `restartAll`, `cloneDO`, `destroyDO` |  |
 | `normalizePath` | value |  |  |
 | `getFileName` | value |  |  |
 | `resolvePath` | value |  |  |

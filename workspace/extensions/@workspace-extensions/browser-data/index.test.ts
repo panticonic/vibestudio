@@ -24,7 +24,7 @@ vi.mock("@natstack/browser-data", async () => {
 import { activate } from "./index.js";
 
 function makeContext(callerKind = "shell") {
-  const callDO = vi.fn(async (_source: string, _className: string, _objectKey: string, method: string, ..._args: unknown[]) => {
+  const rpcCall = vi.fn(async (_targetId: string, method: string, ..._args: unknown[]) => {
     if (method === "addBookmarksBatch") return 1;
     if (method === "logImport") return undefined;
     if (method === "addBookmark") return 42;
@@ -37,15 +37,20 @@ function makeContext(callerKind = "shell") {
     degraded: vi.fn(),
     unhealthy: vi.fn(),
   };
+  const resolveDurableObject = vi.fn(async () => ({
+    targetId: "do:natstack/internal:BrowserDataDO:global",
+  }));
   return {
     ctx: {
-      workers: { callDO },
+      rpc: { call: rpcCall },
+      workers: { resolveDurableObject },
       invocation: { current: () => ({ caller: { callerKind } }) },
       log: { info: vi.fn() },
       health,
       emit,
     },
-    callDO,
+    rpcCall,
+    resolveDurableObject,
     emit,
     health,
   };
@@ -60,11 +65,12 @@ describe("@workspace-extensions/browser-data", () => {
   });
 
   it("routes shell calls to BrowserDataDO", async () => {
-    const { ctx, callDO } = makeContext();
+    const { ctx, rpcCall, resolveDurableObject } = makeContext();
     const api = await activate(ctx as never);
 
     await expect(api.getBookmarks()).resolves.toEqual([{ id: 1, title: "Example" }]);
-    expect(callDO).toHaveBeenCalledWith("natstack/internal", "BrowserDataDO", "global", "getBookmarks", "/");
+    expect(resolveDurableObject).toHaveBeenCalledWith("natstack/internal", "BrowserDataDO", "global");
+    expect(rpcCall).toHaveBeenCalledWith("do:natstack/internal:BrowserDataDO:global", "getBookmarks", "/");
   });
 
   it("emits change events for mutations", async () => {
@@ -76,7 +82,7 @@ describe("@workspace-extensions/browser-data", () => {
   });
 
   it("logs import results, emits import-complete, and reports healthy import status", async () => {
-    const { ctx, callDO, emit, health } = makeContext();
+    const { ctx, rpcCall, emit, health } = makeContext();
     const api = await activate(ctx as never);
 
     await expect(api.startImport({
@@ -85,17 +91,13 @@ describe("@workspace-extensions/browser-data", () => {
       dataTypes: ["bookmarks"],
     })).resolves.toMatchObject([{ dataType: "bookmarks", success: true }]);
 
-    expect(callDO).toHaveBeenCalledWith(
-      "natstack/internal",
-      "BrowserDataDO",
-      "global",
+    expect(rpcCall).toHaveBeenCalledWith(
+      "do:natstack/internal:BrowserDataDO:global",
       "addBookmarksBatch",
       [{ title: "Example", url: "https://example.com" }],
     );
-    expect(callDO).toHaveBeenCalledWith(
-      "natstack/internal",
-      "BrowserDataDO",
-      "global",
+    expect(rpcCall).toHaveBeenCalledWith(
+      "do:natstack/internal:BrowserDataDO:global",
       "logImport",
       expect.objectContaining({ dataType: "bookmarks", itemsImported: 1 }),
     );

@@ -8,7 +8,7 @@ type CreateInput = Omit<WebhookIngressSubscription, "subscriptionId" | "createdA
 function input(overrides: Partial<CreateInput> = {}): CreateInput {
   return {
     label: overrides.label ?? "GitHub push",
-    ownerCallerId: overrides.ownerCallerId ?? "panel:abc",
+    ownerCallerId: overrides.ownerCallerId ?? "panel-abc",
     ownerCallerKind: overrides.ownerCallerKind ?? "panel",
     target: overrides.target ?? {
       source: "workspace/workers/github",
@@ -39,7 +39,7 @@ describe("WebhookStoreDO", () => {
 
     const b = await call<WebhookIngressSubscription>(
       "create",
-      input({ label: "beta", ownerCallerId: "panel:other" })
+      input({ label: "beta", ownerCallerId: "panel-other" })
     );
     expect(b.subscriptionId).not.toBe(a.subscriptionId);
 
@@ -48,7 +48,7 @@ describe("WebhookStoreDO", () => {
 
     const all = await call<WebhookIngressSubscription[]>("list");
     expect(all).toHaveLength(2);
-    const ownerScoped = await call<WebhookIngressSubscription[]>("list", "panel:abc");
+    const ownerScoped = await call<WebhookIngressSubscription[]>("list", "panel-abc");
     expect(ownerScoped).toHaveLength(1);
     expect(ownerScoped[0]!.label).toBe("alpha");
 

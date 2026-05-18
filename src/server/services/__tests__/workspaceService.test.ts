@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 /**
  * Workspace service contract regression tests.
  *
@@ -111,19 +112,18 @@ function makeService(opts: { requestRelaunch?: (name: string) => void } = {}) {
     deleteWorkspaceDir: vi.fn(),
     requestRelaunch: opts.requestRelaunch,
     approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-    codeIdentityResolver: {
-      resolveByCallerId: vi.fn((callerId: string) => ({
-        callerId,
-        callerKind: "panel" as const,
-        repoPath: "panels/test",
-        effectiveVersion: "ev-test",
-      })),
-    },
   });
 }
 
-const panelCtx: ServiceContext = { callerId: "panel-1", callerKind: "panel" };
-const shellCtx: ServiceContext = { callerId: "shell-1", callerKind: "shell" };
+const panelCtx: ServiceContext = {
+  caller: createVerifiedCaller("panel-1", "panel", {
+    callerId: "panel-1",
+    callerKind: "panel",
+    repoPath: "panels/test",
+    effectiveVersion: "ev-test",
+  }),
+};
+const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell-1", "shell") };
 
 // ─── Contract: client/server method-name alignment ───────────────────────────
 
@@ -327,14 +327,6 @@ describe("workspace service handler", () => {
       createWorkspace: vi.fn(),
       deleteWorkspaceDir: vi.fn(),
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-      codeIdentityResolver: {
-        resolveByCallerId: vi.fn((callerId: string) => ({
-          callerId,
-          callerKind: "panel" as const,
-          repoPath: "panels/test",
-          effectiveVersion: "ev-test",
-        })),
-      },
     });
     await service.handler(panelCtx, "setInitPanels", [[{ source: "panels/chat" }]]);
     expect(setConfigField).toHaveBeenCalledWith("initPanels", [{ source: "panels/chat" }]);
@@ -350,14 +342,6 @@ describe("workspace service handler", () => {
       createWorkspace: vi.fn(),
       deleteWorkspaceDir: vi.fn(),
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-      codeIdentityResolver: {
-        resolveByCallerId: vi.fn((callerId: string) => ({
-          callerId,
-          callerKind: "panel" as const,
-          repoPath: "panels/test",
-          effectiveVersion: "ev-test",
-        })),
-      },
     });
     await service.handler(panelCtx, "setConfigField", ["title", "Test"]);
     expect(setConfigField).toHaveBeenCalledWith("title", "Test");
@@ -379,14 +363,6 @@ describe("workspace.select", () => {
       deleteWorkspaceDir: vi.fn(),
       requestRelaunch,
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-      codeIdentityResolver: {
-        resolveByCallerId: vi.fn((callerId: string) => ({
-          callerId,
-          callerKind: "panel" as const,
-          repoPath: "panels/test",
-          effectiveVersion: "ev-test",
-        })),
-      },
     });
 
     await service.handler(panelCtx, "select", ["other"]);
@@ -405,14 +381,6 @@ describe("workspace.select", () => {
       createWorkspace: vi.fn(),
       deleteWorkspaceDir: vi.fn(),
       approvalQueue: { requestUserland: vi.fn(async () => grantedApproval()) },
-      codeIdentityResolver: {
-        resolveByCallerId: vi.fn((callerId: string) => ({
-          callerId,
-          callerKind: "panel" as const,
-          repoPath: "panels/test",
-          effectiveVersion: "ev-test",
-        })),
-      },
       // No requestRelaunch — standalone server has no Electron app to relaunch.
     });
 

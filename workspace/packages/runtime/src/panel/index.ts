@@ -11,8 +11,13 @@ import { initRuntime } from "../setup/initRuntime.js";
 import { helpfulNamespace } from "../shared/helpfulNamespace.js";
 import { createGatewayFetch } from "../shared/gatewayFetch.js";
 import { createGadClient } from "../shared/gad.js";
+import {
+  createDurableObjectServiceClient as createDurableObjectServiceClientForRpc,
+  doTargetId,
+} from "../shared/workerd.js";
 export type { ThemeAppearance, RuntimeFs, FileStats, MkdirOptions, RmOptions } from "../types.js";
 export { createGatewayFetch } from "../shared/gatewayFetch.js";
+export type { DurableObjectServiceClient, ResolvedUserlandService, UserlandServiceInfo } from "../shared/workerd.js";
 export type { GatewayFetch, GatewayFetchConfig } from "../shared/gatewayFetch.js";
 export type * from "../shared/gad.js";
 export type {
@@ -92,6 +97,9 @@ export {
 const { workers } = runtime;
 const helpfulWorkers = helpfulNamespace("workers", workers);
 export { fs, gatewayConfig, gatewayFetch, gitConfig, pubsubConfig, env, helpfulWorkers as workers };
+export { doTargetId };
+export const createDurableObjectServiceClient = (query: string, objectKey?: string | null) =>
+  createDurableObjectServiceClientForRpc(rpc, query, objectKey);
 export const gad = helpfulNamespace("gad", createGadClient(rpc));
 
 // Path utilities for cross-platform path handling

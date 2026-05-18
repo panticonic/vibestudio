@@ -67,7 +67,7 @@ describe("approvalQueue", () => {
     const { queue } = createQueue();
     const promise = queue.request({
       kind: "capability",
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -95,7 +95,7 @@ describe("approvalQueue", () => {
     const unsubscribe = queue.onPendingChanged(listener);
     const promise = queue.request({
       kind: "capability",
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -117,7 +117,7 @@ describe("approvalQueue", () => {
     const { queue, emit } = createQueue();
     const promise = queue.request({
       kind: "capability",
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -139,7 +139,7 @@ describe("approvalQueue", () => {
     const first = queue.request({
       kind: "capability",
       dedupKey: null,
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -154,7 +154,7 @@ describe("approvalQueue", () => {
     const second = queue.request({
       kind: "capability",
       dedupKey: null,
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -182,7 +182,7 @@ describe("approvalQueue", () => {
     const { queue } = createQueue();
     const promise = queue.requestClientConfig({
       kind: "client-config",
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -227,7 +227,7 @@ describe("approvalQueue", () => {
     const { queue } = createQueue();
     const promise = queue.requestCredentialInput({
       kind: "credential-input",
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel",
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -268,7 +268,7 @@ describe("approvalQueue", () => {
     const { queue } = createQueue();
     const request = {
       kind: "credential-input" as const,
-      callerId: "panel:1",
+      callerId: "panel-1",
       callerKind: "panel" as const,
       repoPath: "panels/example",
       effectiveVersion: "hash-1",
@@ -391,9 +391,9 @@ describe("approvalQueue", () => {
     function makeDeviceCodeReq() {
       return {
         kind: "device-code" as const,
-        callerId: "panel:test",
+        callerId: "panel-test",
         callerKind: "panel" as const,
-        repoPath: "panel:test",
+        repoPath: "panel-test",
         effectiveVersion: "v1",
         credentialLabel: "GitHub CLI",
         userCode: "ABCD-EFGH",

@@ -4,9 +4,9 @@ import { DurableObjectBase, type DurableObjectContext } from "@workspace/runtime
  * Sample Durable Object showing the canonical userland storage primitive.
  *
  * Each instance owns a single SQLite-backed `visits` table addressed via
- * `this.sql`. Callers reach the DO through the server's dispatch path
- * (postToDOWithToken / DODispatch); the fetch handler below is an info
- * message — DOs aren't routed from a sibling worker's fetch handler.
+ * `this.sql`. Callers reach the DO through unified RPC target IDs; the fetch
+ * handler below is an info message — DOs aren't routed from a sibling worker's
+ * fetch handler.
  *
  * For an end-to-end demonstration that round-trips through `this.sql`, see
  * `workspace/workers/sample-do/sampleDo.test.ts`, which uses `createTestDO`
@@ -38,7 +38,7 @@ export class SampleDO extends DurableObjectBase {
 export default {
   async fetch(_request: Request) {
     return new Response(
-      "Sample Durable Object worker.\nMethods: SampleDO.recordVisit, SampleDO.visitCount.\nDispatch via the server's DODispatch path; see sampleDo.test.ts for an end-to-end example using createTestDO.",
+      "Sample Durable Object worker.\nMethods: SampleDO.recordVisit, SampleDO.visitCount.\nCall via unified RPC target IDs; see sampleDo.test.ts for an end-to-end example using createTestDO.",
       { headers: { "Content-Type": "text/plain" } },
     );
   },

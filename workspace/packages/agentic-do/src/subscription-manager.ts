@@ -1,7 +1,7 @@
 /**
  * SubscriptionManager — Channel subscriptions, participant identity.
  *
- * Uses ChannelClient (callDO) for subscribe/unsubscribe — no PubSubDOClient.
+ * Uses ChannelClient (callDoTarget) for subscribe/unsubscribe — no PubSubDOClient.
  * Owns the `subscriptions` table.
  */
 
@@ -56,10 +56,6 @@ export class SubscriptionManager {
       name: opts.descriptor.name,
       type: opts.descriptor.type,
       handle: opts.descriptor.handle,
-      transport: "do",
-      doSource: ref.source,
-      doClass: ref.className,
-      doKey: ref.objectKey,
       contextId: opts.contextId,
       ...opts.descriptor.metadata,
     };

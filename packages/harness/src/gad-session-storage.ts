@@ -29,6 +29,10 @@ import type {
   PiEntrySpec,
   PiEntryType,
 } from "./gad-types.js";
+import {
+  createGadServiceClient,
+  type DurableObjectServiceClient,
+} from "@natstack/shared/userlandServiceRpc";
 
 export type {
   GadEventSpec,
@@ -95,6 +99,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   private readonly onTranscriptShapeError?: (err: TranscriptShapeError) => void;
   private writeChain: Promise<void> = Promise.resolve();
   private metadataPromise: Promise<GadSessionMetadata> | null = null;
+  private readonly gad: DurableObjectServiceClient;
 
   constructor(opts: GadSessionStorageOptions) {
     this.rpc = opts.rpc;
@@ -103,6 +108,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
     this.channelId = opts.channelId ?? null;
     this.contextId = opts.contextId ?? null;
     this.onTranscriptShapeError = opts.onTranscriptShapeError;
+    this.gad = createGadServiceClient(this.rpc);
   }
 
   // ── SessionStorage<GadSessionMetadata> ───────────────────────────────────
@@ -131,7 +137,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
 
   async setLeafId(leafId: string | null): Promise<void> {
     await this.serialise(async () => {
-      await this.rpc.call("main", "gad.setBranchHead", {
+      await this.gad.call("setBranchHead", {
         branchId: this.branchId,
         entryId: leafId,
       });
@@ -148,7 +154,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   }
 
   async getEntry(id: string): Promise<SessionTreeEntry | undefined> {
-    const row = await this.rpc.call<PiEntryRow | null>("main", "gad.getEntryById", {
+    const row = await this.gad.call<PiEntryRow | null>("getEntryById", {
       entryId: id,
     });
     if (!row) return undefined;
@@ -159,9 +165,8 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
     type: TType,
   ): Promise<Array<Extract<SessionTreeEntry, { type: TType }>>> {
     if (type === "leaf") return [] as Array<Extract<SessionTreeEntry, { type: TType }>>;
-    const rows = await this.rpc.call<PiEntryRow[]>(
-      "main",
-      "gad.findEntries",
+    const rows = await this.gad.call<PiEntryRow[]>(
+      "findEntries",
       {
         branchId: this.branchId,
         entryType: type as PiEntryType,
@@ -173,9 +178,8 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   }
 
   async getLabel(id: string): Promise<string | undefined> {
-    const rows = await this.rpc.call<PiEntryRow[]>(
-      "main",
-      "gad.findEntries",
+    const rows = await this.gad.call<PiEntryRow[]>(
+      "findEntries",
       {
         branchId: this.branchId,
         entryType: "label" as PiEntryType,
@@ -190,7 +194,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   }
 
   async getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]> {
-    const rows = await this.rpc.call<PiEntryRow[]>("main", "gad.getBranchPath", {
+    const rows = await this.gad.call<PiEntryRow[]>("getBranchPath", {
       branchId: this.branchId,
       throughEntryId: leafId,
     });
@@ -221,7 +225,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   // ── Internals ────────────────────────────────────────────────────────────
 
   private async ensureBranch(): Promise<PiBranchHead> {
-    return this.rpc.call<PiBranchHead>("main", "gad.ensurePiBranch", {
+    return this.gad.call<PiBranchHead>("ensurePiBranch", {
       branchId: this.branchId,
       channelId: this.channelId,
       metadata: { contextId: this.contextId },
@@ -229,7 +233,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   }
 
   private async getHead(): Promise<PiBranchHead> {
-    return this.rpc.call<PiBranchHead>("main", "gad.getPiBranchHead", {
+    return this.gad.call<PiBranchHead>("getPiBranchHead", {
       branchId: this.branchId,
     });
   }
@@ -251,9 +255,8 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
         let head = await this.getHead();
         for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
           try {
-            await this.rpc.call<AppendPiEntryBatchResult>(
-              "main",
-              "gad.appendPiEntryBatch",
+            await this.gad.call<AppendPiEntryBatchResult>(
+              "appendPiEntryBatch",
               {
                 branchId: this.branchId,
                 expectedHeadEntryHash: head.headEntryHash,
@@ -269,7 +272,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
         }
       }
       if (events.length > 0) {
-        await this.rpc.call("main", "gad.appendGadEvents", { events });
+        await this.gad.call("appendGadEvents", { events });
       }
     });
   }

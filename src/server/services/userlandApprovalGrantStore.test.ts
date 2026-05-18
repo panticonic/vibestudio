@@ -31,14 +31,14 @@ describe("UserlandApprovalGrantStore", () => {
     const statePath = tempDir();
     const store = new UserlandApprovalGrantStore({ statePath });
     await store.record(
-      { callerId: "panel:one", callerKind: "panel" },
+      { callerId: "panel-one", callerKind: "panel" },
       { id: "subject-1" },
       "yes",
       20
     );
 
     const restarted = new UserlandApprovalGrantStore({ statePath });
-    expect(restarted.lookup("panel:one", "subject-1")).toMatchObject({ choice: "yes" });
+    expect(restarted.lookup("panel-one", "subject-1")).toMatchObject({ choice: "yes" });
 
     const raw = JSON.parse(
       fs.readFileSync(path.join(statePath, "userland-approval-grants.json"), "utf8")

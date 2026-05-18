@@ -1,7 +1,6 @@
 import type { GitWriteAuthorizer } from "@natstack/git-server";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 
 export const INTERNAL_GIT_WRITE_CAPABILITY = "internal-git-write";
@@ -9,14 +8,12 @@ export const INTERNAL_GIT_WRITE_CAPABILITY = "internal-git-write";
 export function createGitWriteAuthorizer(deps: {
   approvalQueue: ApprovalQueue;
   grantStore: CapabilityGrantStore;
-  codeIdentityResolver: Pick<CodeIdentityResolver, "resolveByCallerId">;
 }): GitWriteAuthorizer {
   return async (request) => {
     const repoPath = normalizeRepoPathForPermission(request.repoPath);
     const isMetaRepo = repoPath === "meta";
     return requestCapabilityPermission(deps, {
-      callerId: request.callerId,
-      callerKind: request.callerKind,
+      caller: request.caller,
       capability: INTERNAL_GIT_WRITE_CAPABILITY,
       dedupKey: null,
       title: isMetaRepo ? "Edit workspace config" : "Write project files",

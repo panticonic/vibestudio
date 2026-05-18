@@ -206,23 +206,23 @@ export class FsService {
     let contextId: string;
     let panelId: string;
 
-    if (ctx.callerKind === "panel" || ctx.callerKind === "worker") {
-      panelId = ctx.callerId;
+    if (ctx.caller.runtime.kind === "panel" || ctx.caller.runtime.kind === "worker") {
+      panelId = ctx.caller.runtime.id;
       const cid = this.callerContextMap.get(panelId);
       if (!cid) {
-        throw new Error(`No context registered for ${ctx.callerKind} ${panelId}`);
+        throw new Error(`No context registered for ${ctx.caller.runtime.kind} ${panelId}`);
       }
       contextId = cid;
-    } else if (ctx.callerKind === "extension") {
+    } else if (ctx.caller.runtime.kind === "extension") {
       return {
         root: "",
-        panelId: `extension:${ctx.callerId}`,
+        panelId: `extension:${ctx.caller.runtime.id}`,
         unrestricted: true,
       };
     } else {
       // Server-originated calls pass contextId as first arg
       contextId = args.shift() as string;
-      panelId = `server:${ctx.callerId}`;
+      panelId = `server:${ctx.caller.runtime.id}`;
       if (!contextId || typeof contextId !== "string") {
         throw new Error("Server fs calls must provide contextId as first argument");
       }
@@ -293,24 +293,24 @@ export class FsService {
       if (typeof contextId !== "string" || contextId.length === 0) {
         throw new Error("bindContext requires a non-empty contextId string");
       }
-      if (ctx.callerKind === "panel" || ctx.callerKind === "worker") {
-        const existing = this.callerContextMap.get(ctx.callerId);
+      if (ctx.caller.runtime.kind === "panel" || ctx.caller.runtime.kind === "worker") {
+        const existing = this.callerContextMap.get(ctx.caller.runtime.id);
         if (!existing) {
           throw new Error(
-            `bindContext denied: caller ${ctx.callerId} has no host-registered context. ` +
+            `bindContext denied: caller ${ctx.caller.runtime.id} has no host-registered context. ` +
               `Panels/workers cannot self-register a context.`,
           );
         }
         if (existing !== contextId) {
           throw new Error(
-            `bindContext denied: caller ${ctx.callerId} cannot re-bind from ` +
+            `bindContext denied: caller ${ctx.caller.runtime.id} cannot re-bind from ` +
               `context ${existing} to ${contextId} (cross-context pivot blocked).`,
           );
         }
         // Idempotent — no-op (already registered to the same contextId).
         return;
       }
-      this.registerCallerContext(ctx.callerId, contextId);
+      this.registerCallerContext(ctx.caller.runtime.id, contextId);
       return;
     }
 

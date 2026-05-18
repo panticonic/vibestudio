@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -113,9 +114,11 @@ describe("pushService", () => {
       metrics: createPushMetrics(),
     });
 
-    await service.definition.handler({ callerId: "shell", callerKind: "shell" }, "register", [
-      { clientId: "mobile-1", platform: "android", token: "dead-token" },
-    ]);
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "register",
+      [{ clientId: "mobile-1", platform: "android", token: "dead-token" }]
+    );
 
     await expect(
       service.internal.send({
@@ -144,12 +147,16 @@ describe("pushService", () => {
       metrics: createPushMetrics(),
     });
 
-    await service.definition.handler({ callerId: "shell", callerKind: "shell" }, "register", [
-      { clientId: "mobile-dead", platform: "android", token: "dead-token" },
-    ]);
-    await service.definition.handler({ callerId: "shell", callerKind: "shell" }, "register", [
-      { clientId: "mobile-good", platform: "ios", token: "good-token" },
-    ]);
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "register",
+      [{ clientId: "mobile-dead", platform: "android", token: "dead-token" }]
+    );
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "register",
+      [{ clientId: "mobile-good", platform: "ios", token: "good-token" }]
+    );
 
     const results = await service.internal.sendBatch({
       title: "Approve",
@@ -183,9 +190,11 @@ describe("pushService", () => {
       metrics: createPushMetrics(),
     });
 
-    await service.definition.handler({ callerId: "shell", callerKind: "shell" }, "register", [
-      { clientId: "mobile-1", platform: "ios", token: "token-1" },
-    ]);
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "register",
+      [{ clientId: "mobile-1", platform: "ios", token: "token-1" }]
+    );
 
     await expect(
       service.internal.send({
@@ -209,9 +218,11 @@ describe("pushService", () => {
       metrics: createPushMetrics(),
     });
 
-    await service.definition.handler({ callerId: "shell", callerKind: "shell" }, "register", [
-      { clientId: "mobile-1", platform: "android", token: "token-1" },
-    ]);
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "register",
+      [{ clientId: "mobile-1", platform: "android", token: "token-1" }]
+    );
 
     await service.internal.cancel("approval-1");
 

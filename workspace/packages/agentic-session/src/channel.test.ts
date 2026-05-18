@@ -12,8 +12,7 @@ import { subscribeHeadlessAgent, getRecommendedChannelConfig } from "./channel.j
 
 function makeRpcCall(captured: { config?: Record<string, unknown> }): (target: string, method: string, ...args: unknown[]) => Promise<unknown> {
   return vi.fn(async (_target: string, _method: string, ..._args: unknown[]) => {
-    // workers.callDO(source, className, objectKey, "subscribeChannel", payload)
-    const payload = _args[4] as { config?: Record<string, unknown> } | undefined;
+    const payload = _args[0] as { config?: Record<string, unknown> } | undefined;
     captured.config = payload?.config;
     return { ok: true, participantId: "agent-1" };
   });

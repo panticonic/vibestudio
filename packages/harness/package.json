@@ -32,6 +32,7 @@
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
     "@natstack/rpc": "workspace:*",
+    "@natstack/shared": "workspace:*",
     "linkedom": "^0.18.5",
     "unpdf": "^1.6.2",
     "ws": "^8.18.0",

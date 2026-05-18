@@ -11,7 +11,9 @@ import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function createTestSetup() {
+function createTestSetup(opts?: {
+  codeIdentityResolver?: ConstructorParameters<typeof RpcServer>[0]["codeIdentityResolver"];
+}) {
   const tokenManager = new TokenManager();
   const adminToken = "test-admin-token";
   tokenManager.setAdminToken(adminToken);
@@ -54,7 +56,11 @@ function createTestSetup() {
     initialized: true,
   } as unknown as ServiceDispatcher;
 
-  const server = new RpcServer({ tokenManager, dispatcher });
+  const server = new RpcServer({
+    tokenManager,
+    dispatcher,
+    ...(opts?.codeIdentityResolver ? { codeIdentityResolver: opts.codeIdentityResolver } : {}),
+  });
 
   return {
     server,
@@ -74,13 +80,15 @@ function createTestSetup() {
 async function postRpc(
   port: number,
   token: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  headers: Record<string, string> = {}
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(`http://127.0.0.1:${port}/rpc`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
+      ...headers,
     },
     body: JSON.stringify(body),
   });
@@ -150,6 +158,121 @@ describe("RpcServer HTTP POST /rpc", () => {
       });
       expect(status).toBe(200);
       expect(body["result"]).toBeDefined();
+    });
+  });
+
+  describe("verified runtime identity", () => {
+    it("uses a verified concrete DO caller for service dispatch", async () => {
+      const serviceToken = setup.tokenManager.ensureToken(
+        "do-service:workers/agent-worker:AiChatWorker",
+        "worker"
+      );
+
+      const res = await postRpc(
+        port,
+        serviceToken,
+        {
+          targetId: "main",
+          method: "build.status",
+          args: [],
+        },
+        {
+          "X-Natstack-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+        }
+      );
+
+      expect(res.status).toBe(200);
+      expect(res.body["error"]).toBeUndefined();
+      expect(setup.dispatched[setup.dispatched.length - 1]?.ctx).toMatchObject({
+        caller: {
+          runtime: {
+            id: "do:workers/agent-worker:AiChatWorker:agent-1",
+            kind: "worker",
+          },
+        },
+      });
+    });
+
+    it("attaches verified service code identity to a concrete DO caller", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+
+      const codeIdentityResolver = {
+        resolveByCallerId: vi.fn((callerId: string) =>
+          callerId === "do:workers/agent-worker:AiChatWorker:agent-1"
+            ? {
+                callerId: "do-service:workers/agent-worker:AiChatWorker",
+                callerKind: "worker" as const,
+                repoPath: "workers/agent-worker",
+                effectiveVersion: "hash-1",
+              }
+            : null
+        ),
+      };
+      setup = createTestSetup({ codeIdentityResolver });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+
+      const serviceToken = setup.tokenManager.ensureToken(
+        "do-service:workers/agent-worker:AiChatWorker",
+        "worker"
+      );
+
+      const res = await postRpc(
+        port,
+        serviceToken,
+        {
+          targetId: "main",
+          method: "build.status",
+          args: [],
+        },
+        {
+          "X-Natstack-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+        }
+      );
+
+      expect(res.status).toBe(200);
+      expect(setup.dispatched[0]!.ctx.caller).toEqual({
+        runtime: {
+          id: "do:workers/agent-worker:AiChatWorker:agent-1",
+          kind: "worker",
+        },
+        code: {
+          callerId: "do-service:workers/agent-worker:AiChatWorker",
+          callerKind: "worker",
+          repoPath: "workers/agent-worker",
+          effectiveVersion: "hash-1",
+        },
+      });
+    });
+
+    it("rejects runtime identities outside the authenticated service scope", async () => {
+      const serviceToken = setup.tokenManager.ensureToken(
+        "do-service:workers/agent-worker:AiChatWorker",
+        "worker"
+      );
+
+      const res = await postRpc(
+        port,
+        serviceToken,
+        {
+          targetId: "main",
+          method: "build.status",
+          args: [],
+        },
+        {
+          "X-Natstack-Runtime-Id": "do:workers/other-worker:OtherDO:agent-1",
+        }
+      );
+
+      expect(res.status).toBe(403);
+      expect(String(res.body["error"])).toContain("RPC runtime identity denied");
+      expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
     });
   });
 
@@ -251,9 +374,13 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
 
-      expect(setup.dispatched[0]!.ctx).toEqual({
-        callerId: "do:test:Worker:obj1",
-        callerKind: "worker",
+      expect(setup.dispatched[0]!.ctx).toMatchObject({
+        caller: {
+          runtime: {
+            id: "do:test:Worker:obj1",
+            kind: "worker",
+          },
+        },
       });
     });
 
@@ -264,9 +391,13 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
 
-      expect(setup.dispatched[0]!.ctx).toEqual({
-        callerId: "electron-shell",
-        callerKind: "shell",
+      expect(setup.dispatched[0]!.ctx).toMatchObject({
+        caller: {
+          runtime: {
+            id: "electron-shell",
+            kind: "shell",
+          },
+        },
       });
     });
 
@@ -357,7 +488,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(setup.dispatched).toHaveLength(1);
     });
 
-    it("rejects panel relay to an unrelated panel", async () => {
+    it("allows panel relay to an unrelated panel", async () => {
       const { body } = await postRpc(port, setup.childPanelToken, {
         type: "call",
         targetId: "panel-unrelated",
@@ -365,7 +496,8 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
 
-      expect(body["error"]).toContain("cannot relay to unrelated panel");
+      expect(body["error"]).toContain("Target not reachable");
+      expect(body["error"]).not.toContain("cannot relay to unrelated panel");
     });
 
     it("allows panel relay to an ancestor panel", async () => {
@@ -512,7 +644,7 @@ describe("RpcServer HTTP POST /rpc", () => {
       const stubEgress = {
         forwardProxyFetchStream: vi.fn(
           async (
-            _params: { callerId: string; url: string; method: string },
+            _params: { caller: unknown; url: string; method: string },
             sink: (frame: {
               kind: string;
               status?: number;

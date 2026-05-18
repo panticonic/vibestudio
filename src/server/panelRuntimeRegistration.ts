@@ -7,7 +7,7 @@
 
 import { z } from "zod";
 import type { ServiceContainer } from "@natstack/shared/serviceContainer";
-import type { ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, type ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
 import type { TokenManager } from "@natstack/shared/tokenManager";
 import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { CentralDataManager } from "@natstack/shared/centralData";
@@ -84,7 +84,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         const panelPersistenceRpc = {
           call: (service: string, method: string, args: unknown[]) =>
             dispatcher.dispatch(
-              { callerId: "server", callerKind: "server" },
+              { caller: createVerifiedCaller("server", "server") },
               service,
               method,
               args
@@ -149,7 +149,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           restartUnit: deps.restartWorkspaceUnit,
           listUnitLogs: deps.listWorkspaceUnitLogs,
           approvalQueue: deps.approvalQueue,
-          codeIdentityResolver: deps.codeIdentityResolver,
         })
       )
     );

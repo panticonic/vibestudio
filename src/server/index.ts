@@ -545,25 +545,6 @@ async function main() {
     console.warn(`[Server] Panel token recovery unavailable: ${msg}`);
   }
 
-  // Re-seed TokenManager from persisted DO state so DOs that wake from a
-  // restart-survived alarm don't 401 with a token issued by a previous
-  // server lifetime. See recoverPersistedDOTokens.ts for the rationale.
-  // Best-effort: if `node:sqlite` is unavailable (Node < 22.5) the recovery
-  // skips silently and the system falls back to pre-fix behavior.
-  try {
-    const { recoverPersistedDOTokens } = await import("./recoverPersistedDOTokens.js");
-    const summary = recoverPersistedDOTokens(tokenManager, statePath);
-    if (summary.recovered > 0 || summary.errors > 0) {
-      console.log(
-        `[Server] Recovered ${summary.recovered} persisted DO token(s)` +
-          (summary.errors > 0 ? ` (${summary.errors} unreadable)` : "")
-      );
-    }
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.warn(`[Server] DO token recovery unavailable: ${msg}`);
-  }
-
   const workerdGatewayToken = randomBytes(32).toString("hex");
   const { CredentialStore } = await import("../../packages/shared/src/credentials/store.js");
   const { ClientConfigStore } =
@@ -595,11 +576,10 @@ async function main() {
     auditLog,
     codeIdentityResolver,
     approvalQueue,
+    grantStore: capabilityGrantStore,
     sessionGrantStore: credentialSessionGrantStore,
     credentialLifecycle,
   });
-  const egressProxyPort = await egressProxy.start();
-
   // In pnpm dev mode, the app runs from a throwaway workspace copied from
   // `<appRoot>/workspace`. Mirror accepted pushes back to that template so
   // edits made in the generated workspace persist into the source checkout.
@@ -654,7 +634,6 @@ async function main() {
     writeAuthorizer: createGitWriteAuthorizer({
       approvalQueue,
       grantStore: capabilityGrantStore,
-      codeIdentityResolver,
     }),
     pushAuthorizer: (request) =>
       extensionHostForGateway?.authorizeSourcePush(request) ?? { allowed: true },
@@ -856,7 +835,6 @@ async function main() {
         egressProxy,
         approvalQueue,
         grantStore: capabilityGrantStore,
-        codeIdentityResolver,
       }),
       ["gitServer"]
     )
@@ -913,7 +891,6 @@ async function main() {
           eventService,
           approvalQueue,
           grantStore: capabilityGrantStore,
-          codeIdentityResolver,
         })
       )
     );
@@ -978,7 +955,6 @@ async function main() {
       createCorsApprovalService({
         approvalQueue,
         grantStore: capabilityGrantStore,
-        codeIdentityResolver,
       })
     )
   );
@@ -988,7 +964,6 @@ async function main() {
       createUserlandApprovalService({
         approvalQueue,
         grantStore: userlandApprovalGrantStore,
-        codeIdentityResolver,
       })
     )
   );
@@ -1020,7 +995,6 @@ async function main() {
       eventService,
       tokenManager,
       egressProxy,
-      codeIdentityResolver,
       approvalQueue,
       sessionGrantStore: credentialSessionGrantStore,
       credentialLifecycle,
@@ -1096,79 +1070,6 @@ async function main() {
     );
   }
 
-  // ── DODispatch (source-scoped HTTP dispatch to Durable Objects) ──
-
-  container.register({
-    name: "doDispatch",
-    dependencies: ["workerdManager"],
-    async start(resolve) {
-      const { DODispatch } = await import("./doDispatch.js");
-      const doDispatch = new DODispatch();
-
-      // Dispatch DO method calls via HTTP POST to the workerd /_w/ URL scheme.
-      const workerdManager = assertPresent(
-        resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
-      );
-      doDispatch.setDispatcher(async (urlPath, args) => {
-        const port = workerdManager.getPort();
-        if (!port) {
-          throw new Error(`workerd not running — cannot dispatch to ${urlPath}`);
-        }
-        const url = `http://127.0.0.1:${port}${urlPath}`;
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${workerdGatewayToken}`,
-            // Internal DO dispatches stamp the process-private secret. The
-            // router verifies this when present, but public gateway-routed DO
-            // routes intentionally do not require it.
-            "X-NatStack-Dispatch-Secret": workerdManager.getDispatchSecret(),
-          },
-          body: JSON.stringify(args),
-        });
-        if (!resp.ok) {
-          const body = await resp.text();
-          throw new Error(`DO dispatch failed (${resp.status}): ${body}`);
-        }
-        return await resp.json();
-      });
-
-      // Wire per-instance identity tokens into DO dispatch.
-      doDispatch.setTokenManager(tokenManager);
-      doDispatch.setBeforeDispatch(async (ref) => {
-        let identity = workerdManager.getDoCodeIdentity(ref.source, ref.className);
-        if (!identity) {
-          await workerdManager.ensureDOClass(ref.source, ref.className);
-          identity = workerdManager.getDoCodeIdentity(ref.source, ref.className);
-        }
-        if (!identity) {
-          return;
-        }
-        codeIdentityResolver.upsertCallerIdentity({
-          callerId: `do:${ref.source}:${ref.className}:${ref.objectKey}`,
-          callerKind: "worker",
-          repoPath: identity.repoPath,
-          effectiveVersion: identity.effectiveVersion,
-        });
-      });
-      doDispatch.setGetWorkerdUrl(() => {
-        const port = workerdManager.getPort();
-        if (!port) {
-          throw new Error("workerd not running — cannot build workerd URL");
-        }
-        return `http://127.0.0.1:${port}`;
-      });
-      // SECURITY (audit 4.8): stamp every postToDOWithToken-based dispatch
-      // with the dispatch secret. See WorkerdManager.dispatchSecret for the
-      // full rationale.
-      doDispatch.setGetDispatchSecret(() => workerdManager.getDispatchSecret());
-      doDispatch.setGetWorkerdGatewayToken(() => workerdGatewayToken);
-
-      return doDispatch;
-    },
-  });
-
   // ── Internal DO-backed services ──
   {
     const { createScopeService } = await import("./services/scopeService.js");
@@ -1176,12 +1077,17 @@ async function main() {
       null;
     container.register({
       name: "scope",
-      dependencies: ["doDispatch"],
+      dependencies: ["rpcServer"],
       async start(resolve) {
-        const doDispatch = assertPresent(
-          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        const rpcServer = assertPresent(
+          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
         );
-        scopeDefinition = createScopeService({ doDispatch });
+        scopeDefinition = createScopeService({
+          rpc: {
+            call: (targetId, method, ...args) =>
+              rpcServer.server.callTarget(targetId, method, ...args),
+          },
+        });
       },
       getServiceDefinition() {
         if (!scopeDefinition) throw new Error("scope service not initialized");
@@ -1197,13 +1103,16 @@ async function main() {
       | null = null;
     container.register({
       name: "panel-persistence",
-      dependencies: ["doDispatch"],
+      dependencies: ["rpcServer"],
       async start(resolve) {
-        const doDispatch = assertPresent(
-          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        const rpcServer = assertPresent(
+          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
         );
         panelPersistenceDefinition = createPanelPersistenceService({
-          doDispatch,
+          rpc: {
+            call: (targetId, method, ...args) =>
+              rpcServer.server.callTarget(targetId, method, ...args),
+          },
           workspaceId: workspace.config.id,
         });
       },
@@ -1218,7 +1127,7 @@ async function main() {
   // browser-data is now an extension at
   // workspace/extensions/@workspace-extensions/browser-data — callers reach it
   // through `extensions.invoke`. The extension proxies to the BrowserDataDO
-  // via workers.callDO, so storage stays in workerd unchanged.
+  // via unified RPC, so storage stays in workerd unchanged.
 
   // ── Generic public webhook ingress ──
   {
@@ -1226,23 +1135,22 @@ async function main() {
     let webhookIngress: ReturnType<typeof createWebhookIngressService> | null = null;
     container.register({
       name: "webhookIngress",
-      dependencies: ["doDispatch"],
+      dependencies: ["rpcServer"],
       async start(resolve) {
-        const doDispatch = assertPresent(
-          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        const rpcServer = assertPresent(
+          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
         );
         webhookIngress = createWebhookIngressService({
           relaySigningSecret: process.env["NATSTACK_RELAY_SIGNING_SECRET"],
           publicBaseUrl: process.env["NATSTACK_WEBHOOK_PUBLIC_URL"] ?? "https://hooks.snugenv.com",
-          doDispatch,
+          rpc: {
+            call: (targetId, method, ...args) =>
+              rpcServer.server.callTarget(targetId, method, ...args),
+          },
           codeIdentityResolver,
           dispatchToTarget: async (target, event) => {
-            await doDispatch.dispatch(
-              {
-                source: target.source,
-                className: target.className,
-                objectKey: target.objectKey,
-              },
+            await rpcServer.server.callTarget(
+              `do:${target.source}:${target.className}:${target.objectKey}`,
               target.method,
               event
             );
@@ -1259,34 +1167,6 @@ async function main() {
       getServiceDefinition() {
         if (!webhookIngress) throw new Error("webhookIngress service not initialized");
         return webhookIngress.definition;
-      },
-    });
-  }
-
-  // ── gad provenance store ──
-  {
-    const { createGadService } = await import("./services/gadService.js");
-    const { resolveUserlandService, toDORef } = await import("./userlandServices.js");
-    let gadDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null = null;
-    container.register({
-      name: "gad",
-      dependencies: ["doDispatch", "buildSystem"],
-      async start(resolve) {
-        const doDispatch = assertPresent(
-          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
-        );
-        const buildSystem = assertPresent(
-          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-        );
-        gadDefinition = createGadService({
-          doDispatch,
-          resolveStore: () =>
-            toDORef(resolveUserlandService(buildSystem, "natstack.gad.workspace.v1")),
-        });
-      },
-      getServiceDefinition() {
-        if (!gadDefinition) throw new Error("gad service not initialized");
-        return gadDefinition;
       },
     });
   }
@@ -1329,9 +1209,19 @@ async function main() {
 
   container.register({
     name: "rpcServer",
-    dependencies: ["tokenManager"],
-    async start() {
-      const server = new RpcServer({ tokenManager, dispatcher, eventService, egressProxy });
+    dependencies: ["tokenManager", "fsService"],
+    async start(resolve) {
+      const fsService = assertPresent(
+        resolve<import("@natstack/shared/fsService").FsService>("fsService")
+      );
+      const server = new RpcServer({
+        tokenManager,
+        dispatcher,
+        eventService,
+        egressProxy,
+        fsService,
+        codeIdentityResolver,
+      });
       server.initHandlers();
       rpcServerForGateway = server;
       return { server };
@@ -1399,21 +1289,13 @@ async function main() {
     let workerServiceDef: import("@natstack/shared/serviceDefinition").ServiceDefinition;
     container.register({
       name: "workersRpc",
-      dependencies: ["doDispatch", "buildSystem", "fsService"],
+      dependencies: ["buildSystem"],
       async start(resolve) {
-        const doDispatch = assertPresent(
-          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
-        );
         const buildSystemInst = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
-        const fsServiceInst = assertPresent(
-          resolve<import("@natstack/shared/fsService").FsService>("fsService")
-        );
         workerServiceDef = createWorkerService({
-          doDispatch,
           buildSystem: buildSystemInst,
-          fsService: fsServiceInst,
         });
       },
       getServiceDefinition() {
@@ -1481,7 +1363,7 @@ async function main() {
               | undefined;
             return manifest?.routes ?? [];
           },
-          getProxyPort: () => egressProxyPort,
+          getProxyPort: (caller) => egressProxy.startForCaller(caller),
           getWorkerdGatewayToken: () => workerdGatewayToken,
           codeIdentityResolver,
         });
@@ -1806,6 +1688,7 @@ async function main() {
     adminToken,
     workerdGatewayToken,
     tokenManager,
+    codeIdentityResolver,
     routeRegistry,
     getPublicUrl: () => {
       try {
@@ -1917,14 +1800,8 @@ async function main() {
   const { detectedVpn, serveProvision, publicUrlVerified, publicUrlReachabilityReason } =
     await vpnSetupPromise;
 
-  // Wire DODispatch to workerdManager for restart recovery
   const workerdManager =
     container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
-  const doDispatchInst = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-
-  doDispatchInst.setEnsureDO((source, className, objectKey) =>
-    workerdManager.ensureDO(source, className, objectKey)
-  );
 
   // Wire workerdUrl into rpcServer for HTTP relay to workers/DOs
   const rpcServerInstance = container.get<{
@@ -1936,6 +1813,9 @@ async function main() {
     rpcServerInstance.setWorkerdUrl(`http://127.0.0.1:${workerdPort}`);
   }
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);
+  rpcServerInstance.setEnsureDO((source, className, objectKey) =>
+    workerdManager.ensureDO(source, className, objectKey)
+  );
 
   const panelServiceData = container.get<{
     urlConfig: import("./services/panelService.js").PanelUrlConfig;

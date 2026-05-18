@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { describe, expect, it, vi } from "vitest";
 import { createGitService } from "./gitService.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -29,6 +30,15 @@ function createApprovalQueueMock(): ApprovalQueue {
   };
 }
 
+function panelSourceCaller() {
+  return createVerifiedCaller("panel-source", "panel", {
+    callerId: "panel-source",
+    callerKind: "panel",
+    repoPath: "panels/source",
+    effectiveVersion: "version-1",
+  });
+}
+
 describe("gitService", () => {
   it("gates panel-created repositories through git write permission", async () => {
     const approvalQueue = createApprovalQueueMock();
@@ -38,20 +48,10 @@ describe("gitService", () => {
       workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), "natstack-workspace-")),
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel",
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
     await expect(
-      service.handler({ callerId: "panel:source", callerKind: "panel" }, "createRepo", [
-        "panels/new",
-      ])
+      service.handler({ caller: panelSourceCaller() }, "createRepo", ["panels/new"])
     ).rejects.toThrow("Git write permission denied");
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
@@ -78,20 +78,10 @@ describe("gitService", () => {
       workspacePath: fs.mkdtempSync(path.join(os.tmpdir(), "natstack-workspace-")),
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel",
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
     await expect(
-      service.handler({ callerId: "panel:source", callerKind: "panel" }, "createRepo", [
-        "../outside",
-      ])
+      service.handler({ caller: panelSourceCaller() }, "createRepo", ["../outside"])
     ).rejects.toThrow("Invalid repo path: escapes workspace root");
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
@@ -106,18 +96,10 @@ describe("gitService", () => {
       workspaceConfig: { id: "test", git: {} },
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel",
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
     await expect(
-      service.handler({ callerId: "panel:source", callerKind: "panel" }, "setSharedRemote", [
+      service.handler({ caller: panelSourceCaller() }, "setSharedRemote", [
         "panels/chat",
         { name: "origin", url: "https://github.com/acme/chat.git" },
       ])
@@ -154,18 +136,10 @@ describe("gitService", () => {
       egressProxy: {} as never,
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel",
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
     await expect(
-      service.handler({ callerId: "panel:source", callerKind: "panel" }, "importProject", [
+      service.handler({ caller: panelSourceCaller() }, "importProject", [
         {
           path: "skills/example",
           remote: { name: "origin", url: "https://github.com/acme/example.git" },
@@ -203,18 +177,10 @@ describe("gitService", () => {
       egressProxy: {} as never,
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel",
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
     await expect(
-      service.handler({ callerId: "panel:source", callerKind: "panel" }, "importProject", [
+      service.handler({ caller: panelSourceCaller() }, "importProject", [
         {
           path: "random/example",
           remote: { name: "origin", url: "https://github.com/acme/example.git" },
@@ -266,18 +232,10 @@ describe("gitService", () => {
       egressProxy: {} as never,
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel",
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     });
 
     const result = await service.handler(
-      { callerId: "panel:source", callerKind: "panel" },
+      { caller: panelSourceCaller() },
       "completeWorkspaceDependencies",
       [{}]
     );

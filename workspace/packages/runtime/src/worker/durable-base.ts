@@ -126,6 +126,8 @@ export abstract class DurableObjectBase {
 
   private _schemaReady = false;
   private _rpc: (RpcBridge & { handleIncomingPost(body: unknown): Promise<unknown> }) | null = null;
+  protected _currentRpcCallerId: string | null = null;
+  protected _currentRpcCallerKind: string | null = null;
   private _credentials: CredentialClient | null = null;
   private _notifications: NotificationClient | null = null;
   private _fs: RuntimeFs | null = null;
@@ -197,45 +199,11 @@ export abstract class DurableObjectBase {
     this.sql.exec(`DELETE FROM state WHERE key = ?`, key);
   }
 
-  /** Persist identity fields from postToDOWithToken envelope. */
-  protected persistIdentity(instanceToken?: string, instanceId?: string, parentId?: string): void {
-    if (instanceToken) {
-      const existing = this.getStateValue("__instanceToken");
-      if (existing !== instanceToken) {
-        this.setStateValue("__instanceToken", instanceToken);
-        this._rpc = null;
-      }
-    }
-    if (parentId && !this.getStateValue("__parentId")) {
-      this.setStateValue("__parentId", parentId);
-    }
-    if (instanceId) {
-      this.setStateValue("__instanceId", instanceId);
-    }
-  }
-
-  /**
-   * Parse a POST body, handling the postToDOWithToken envelope format.
-   * Returns the extracted args and an optional error string if the envelope is malformed.
-   * On success, also calls persistIdentity() with the envelope fields.
-   */
+  /** Parse a POST body into positional method arguments. */
   protected parseRequestBody(body: string): { args: unknown[]; error?: string } {
     const parsed = JSON.parse(body);
     if (Array.isArray(parsed)) {
       return { args: parsed };
-    }
-    if (parsed && typeof parsed === "object" && "__instanceToken" in parsed) {
-      const args = Array.isArray(parsed.args) ? parsed.args : parsed.args !== undefined ? [parsed.args] : [];
-      const token = parsed.__instanceToken;
-      if (typeof token !== "string") {
-        return { args: [], error: "Invalid envelope: __instanceToken must be a string" };
-      }
-      this.persistIdentity(
-        token,
-        typeof parsed.__instanceId === "string" ? parsed.__instanceId : undefined,
-        typeof parsed.__parentId === "string" ? parsed.__parentId : undefined,
-      );
-      return { args };
     }
     return { args: [parsed] };
   }
@@ -245,17 +213,27 @@ export abstract class DurableObjectBase {
   /** RPC bridge for calling services and other workers/DOs */
   protected get rpc(): RpcBridge & { handleIncomingPost(body: unknown): Promise<unknown> } {
     if (!this._rpc) {
-      const token = this.getStateValue("__instanceToken");
+      const token = this.env["RPC_AUTH_TOKEN"];
+      if (typeof token !== "string" || token.length === 0) {
+        throw new Error("RPC not available: RPC_AUTH_TOKEN not configured");
+      }
+      const source = this.env["WORKER_SOURCE"];
+      const className = this.env["WORKER_CLASS_NAME"];
+      if (typeof source !== "string" || source.length === 0) {
+        throw new Error("RPC not available: WORKER_SOURCE not configured");
+      }
+      if (typeof className !== "string" || className.length === 0) {
+        throw new Error("RPC not available: WORKER_CLASS_NAME not configured");
+      }
       if (!token) {
-        throw new Error("RPC not available: no instance token. This DO has not been dispatched via postToDOWithToken yet.");
+        throw new Error("RPC not available: RPC_AUTH_TOKEN not configured");
       }
       const serverUrl = this.env["GATEWAY_URL"] as string;
       if (!serverUrl) {
         throw new Error("RPC not available: GATEWAY_URL not configured");
       }
-      const instanceId = this.getStateValue("__instanceId");
       this._rpc = createHttpRpcBridge({
-        selfId: instanceId ?? `do:unknown:${this.objectKey}`,
+        selfId: `do:${source}:${className}:${this.objectKey}`,
         serverUrl,
         authToken: token,
       });
@@ -285,10 +263,17 @@ export abstract class DurableObjectBase {
     return this._fs;
   }
 
+  protected get rpcCallerId(): string | null {
+    return this._currentRpcCallerId;
+  }
+
+  protected get rpcCallerKind(): string | null {
+    return this._currentRpcCallerKind;
+  }
+
   /** Get a handle to the parent (first dispatcher) */
   protected getParent() {
-    const parentId = this.getStateValue("__parentId");
-    return createParentHandle({ rpc: this.rpc, parentId: parentId ?? null });
+    return createParentHandle({ rpc: this.rpc, parentId: null });
   }
 
   // --- Object key identity ---
@@ -327,8 +312,6 @@ export abstract class DurableObjectBase {
   // --- HTTP dispatch + WebSocket upgrade ---
 
   async fetch(request: Request): Promise<Response> {
-    this.ensureReady();
-
     // Parse /{objectKey}/{method} — router includes objectKey in forwarded URL
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
@@ -338,6 +321,8 @@ export abstract class DurableObjectBase {
       try { this.sql.exec(`INSERT OR IGNORE INTO state (key, value) VALUES ('__objectKey', ?)`, this._objectKey); }
       catch { /* state table may not exist yet — ensureReady hasn't run */ }
     }
+
+    this.ensureReady();
 
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
       return this.handleWebSocketUpgrade(request);
@@ -392,10 +377,19 @@ export abstract class DurableObjectBase {
         });
       }
 
-      const result = await (fn as (...a: unknown[]) => Promise<unknown>).call(this, ...args);
-      return new Response(JSON.stringify(result ?? null), {
-        headers: { "Content-Type": "application/json" },
-      });
+      const previousCallerId = this._currentRpcCallerId;
+      const previousCallerKind = this._currentRpcCallerKind;
+      this._currentRpcCallerId = request.headers.get("X-Natstack-Rpc-Caller-Id");
+      this._currentRpcCallerKind = request.headers.get("X-Natstack-Rpc-Caller-Kind");
+      try {
+        const result = await (fn as (...a: unknown[]) => Promise<unknown>).call(this, ...args);
+        return new Response(JSON.stringify(result ?? null), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } finally {
+        this._currentRpcCallerId = previousCallerId;
+        this._currentRpcCallerKind = previousCallerKind;
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return new Response(JSON.stringify({ error: message }), {
@@ -429,11 +423,7 @@ export abstract class DurableObjectBase {
 
   // --- Clone support ---
 
-  /** Scrub RPC identity state after cloning so the clone gets fresh identity on next dispatch. */
-  protected scrubRpcIdentity(): void {
-    this.deleteStateValue("__instanceToken");
-    this.deleteStateValue("__parentId");
-    this.deleteStateValue("__instanceId");
+  protected resetRpcClients(): void {
     this._rpc = null;
     this._credentials = null;
     this._notifications = null;

@@ -46,7 +46,7 @@ function doTarget(ref: DORef): string {
   return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
 }
 
-async function callDO<T = unknown>(
+async function callDoTarget<T = unknown>(
   rpc: RpcCaller, ref: DORef, method: string, ...args: unknown[]
 ): Promise<T> {
   return rpc.call<T>(doTarget(ref), method, ...args);
@@ -77,8 +77,8 @@ export async function fork(runtime: ForkRuntime, opts: ForkOpts): Promise<ForkRe
 
   // 1. Fetch roster and contextId from channel
   const [roster, contextId] = await Promise.all([
-    callDO<ParticipantInfo[]>(rpc, sourceChannelRef, "getParticipants"),
-    callDO<string | null>(rpc, sourceChannelRef, "getContextId"),
+    callDoTarget<ParticipantInfo[]>(rpc, sourceChannelRef, "getParticipants"),
+    callDoTarget<string | null>(rpc, sourceChannelRef, "getContextId"),
   ]);
 
   if (!contextId) throw new Error(`Channel ${opts.channelId} has no contextId`);
@@ -101,11 +101,11 @@ export async function fork(runtime: ForkRuntime, opts: ForkOpts): Promise<ForkRe
   // 2. Preflight: clones need ≤1 sub, replacements need 0
   const preflightResults = await Promise.all([
     ...toClone.map(async (p) => {
-      const r = await callDO<{ ok: boolean; subscriptionCount: number; reason?: string }>(rpc, p.doRef!, "canFork");
+      const r = await callDoTarget<{ ok: boolean; subscriptionCount: number; reason?: string }>(rpc, p.doRef!, "canFork");
       return { participantId: p.participantId, ...r };
     }),
     ...toReplace.map(async ({ participantId, doRef }) => {
-      const r = await callDO<{ ok: boolean; subscriptionCount: number; reason?: string }>(rpc, doRef, "canFork");
+      const r = await callDoTarget<{ ok: boolean; subscriptionCount: number; reason?: string }>(rpc, doRef, "canFork");
       if (r.ok && r.subscriptionCount > 0) {
         return { participantId, ok: false as const, reason: "replacement DO already has subscriptions" };
       }
@@ -128,7 +128,7 @@ export async function fork(runtime: ForkRuntime, opts: ForkOpts): Promise<ForkRe
     // Clone channel
     await runtime.callMain("workerd.cloneDO", sourceChannelRef, forkedChannelId);
     clonedRefs.push(forkedChannelRef);
-    await callDO(rpc, forkedChannelRef, "postClone", opts.channelId, opts.forkPointPubsubId);
+    await callDoTarget(rpc, forkedChannelRef, "postClone", opts.channelId, opts.forkPointPubsubId);
 
     // Clone each agent DO
     for (const p of toClone) {
@@ -137,13 +137,13 @@ export async function fork(runtime: ForkRuntime, opts: ForkOpts): Promise<ForkRe
       await runtime.callMain("workerd.cloneDO", ref, forkedKey);
       const clonedRef: DORef = { source: ref.source, className: ref.className, objectKey: forkedKey };
       clonedRefs.push(clonedRef);
-      await callDO(rpc, clonedRef, "postClone", ref.objectKey, forkedChannelId, opts.channelId, opts.forkPointPubsubId);
+      await callDoTarget(rpc, clonedRef, "postClone", ref.objectKey, forkedChannelId, opts.channelId, opts.forkPointPubsubId);
       clonedParticipants.push(p.participantId);
     }
 
     // Subscribe replacement DOs
     for (const { participantId, doRef } of toReplace) {
-      await callDO(rpc, doRef, "subscribeChannel", { channelId: forkedChannelId, contextId });
+      await callDoTarget(rpc, doRef, "subscribeChannel", { channelId: forkedChannelId, contextId });
       replacedParticipants.push(participantId);
     }
   } catch (err) {
@@ -157,7 +157,7 @@ export async function fork(runtime: ForkRuntime, opts: ForkOpts): Promise<ForkRe
 
     // Best-effort rollback: unsubscribe replacements (safe — canFork verified 0 subs)
     for (const { doRef } of toReplace.filter((_, i) => i < replacedParticipants.length)) {
-      try { await callDO(rpc, doRef, "unsubscribeChannel", forkedChannelId); }
+      try { await callDoTarget(rpc, doRef, "unsubscribeChannel", forkedChannelId); }
       catch (e) { console.error(`[fork] Rollback unsubscribe failed for ${doRef.objectKey}:`, e); }
     }
 

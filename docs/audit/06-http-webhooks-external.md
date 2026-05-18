@@ -440,7 +440,6 @@ res.setHeader("X-Frame-Options", "DENY");
 - **Egress proxy HTTP path** (`egressProxy.ts:148–271`): full pipeline consent → capability → rate limit → circuit breaker → audit.
 - **Gateway route authorization enforcement** (`gateway.ts:308–318`): service-route and worker-route lookups respect the declared `auth: admin-token` attribute. (Timing-leak modulo F-01.)
 - **Per-caller token revocation** (`rpcServer.ts:189–194`): revoking a token force-closes the live WS with code `4001`.
-- **Panel-to-panel relay auth** (`rpcServer.ts:944–964`): panel callers can only relay to their parent/descendant panels, not arbitrary other panels.
 
 ---
 

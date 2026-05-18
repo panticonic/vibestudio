@@ -148,18 +148,17 @@ export interface ExtensionNotificationsLike {
 }
 
 export interface ExtensionWorkersLike {
-  /**
-   * Dispatch a method to a Durable Object. Mirrors the shell `worker.callDO`
-   * RPC. Useful for extensions that wrap an internal DO-backed store
-   * (e.g. browser-data).
-   */
-  callDO<T = unknown>(
-    source: string,
-    className: string,
-    objectKey: string,
-    method: string,
-    ...args: unknown[]
-  ): Promise<T>;
+  /** Resolve a manifest-declared userland service by name or protocol. */
+  resolveService(query: string, objectKey?: string | null): Promise<unknown>;
+  /** Resolve a concrete Durable Object target and grant this extension relay access. */
+  resolveDurableObject(source: string, className: string, objectKey: string): Promise<unknown>;
+  /** List manifest-declared userland services. */
+  listServices(): Promise<unknown[]>;
+}
+
+export interface ExtensionRpcLike {
+  /** Call any unified RPC target, including `main`, `worker:*`, and `do:*`. */
+  call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
 }
 
 export interface ExtensionContext {
@@ -175,6 +174,7 @@ export interface ExtensionContext {
   readonly fs: ExtensionFsClient;
   readonly git: ExtensionRpcSurface;
   readonly workspace: ExtensionWorkspaceLike;
+  readonly rpc: ExtensionRpcLike;
   readonly workers: ExtensionWorkersLike;
   readonly credentials: ExtensionRpcSurface;
   readonly webhooks: ExtensionRpcSurface;

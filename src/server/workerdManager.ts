@@ -17,6 +17,7 @@ import * as path from "path";
 import * as os from "os";
 import { pathToFileURL } from "url";
 import type { TokenManager } from "@natstack/shared/tokenManager";
+import { createVerifiedCaller, type VerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import type { FsService } from "@natstack/shared/fsService";
 import type { BuildResult } from "./buildV2/buildStore.js";
 import type { RouteRegistry, ManifestRouteDecl } from "./routeRegistry.js";
@@ -130,7 +131,7 @@ export interface WorkerdManagerDeps {
   routeRegistry?: RouteRegistry;
   /** Manifest-route lookup, keyed by source. Used alongside routeRegistry. */
   getManifestRoutes?: (source: string) => ManifestRouteDecl[];
-  getProxyPort: () => number | null;
+  getProxyPort: (caller: VerifiedCaller) => Promise<number | null> | number | null;
   getWorkerdGatewayToken: () => string;
   codeIdentityResolver: Pick<CodeIdentityResolver, "upsertCallerIdentity" | "unregisterCaller">;
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
@@ -168,7 +169,6 @@ export class WorkerdManager {
   >();
   /** Session ID — generated once per WorkerdManager lifetime, used for restart detection in bootstrap. */
   private sessionId = crypto.randomUUID();
-  private dispatchSecret = crypto.randomBytes(32).toString("base64url");
 
   constructor(deps: WorkerdManagerDeps) {
     this.deps = deps;
@@ -497,10 +497,6 @@ export class WorkerdManager {
     return hasInstance ? this.getInspectorUrl() : null;
   }
 
-  getDispatchSecret(): string {
-    return this.dispatchSecret;
-  }
-
   getWorkerdGatewayToken(): string {
     return this.deps.getWorkerdGatewayToken();
   }
@@ -563,6 +559,12 @@ export class WorkerdManager {
         repoPath: doService.source,
         effectiveVersion: doService.buildKey,
       });
+      const serviceCaller = createVerifiedCaller(serviceCallerId, "worker", {
+        callerId: serviceCallerId,
+        callerKind: "worker",
+        repoPath: doService.source,
+        effectiveVersion: doService.buildKey,
+      });
       const bindings: object[] = [
         { name: "RPC_AUTH_TOKEN", text: serviceToken },
         // Source-scoped class identity
@@ -581,7 +583,7 @@ export class WorkerdManager {
       fs.mkdirSync(doStoragePath, { recursive: true });
 
       const networkServiceName = `${doService.serviceName}_network`;
-      const proxyPort = this.deps.getProxyPort();
+      const proxyPort = await this.deps.getProxyPort(serviceCaller);
       if (!proxyPort) {
         throw new Error("Egress proxy port not available");
       }
@@ -678,7 +680,13 @@ export class WorkerdManager {
       }
 
       const networkServiceName = `${name}_network`;
-      const proxyPort = this.deps.getProxyPort();
+      const workerCaller = createVerifiedCaller(instance.callerId, "worker", {
+        callerId: instance.callerId,
+        callerKind: "worker",
+        repoPath: instance.source,
+        effectiveVersion: instance.buildKey ?? "unknown",
+      });
+      const proxyPort = await this.deps.getProxyPort(workerCaller);
       if (!proxyPort) {
         throw new Error("Egress proxy port not available");
       }
@@ -741,7 +749,6 @@ export class WorkerdManager {
       }
 
       const routerCode = this.generateRouterCode(instanceNames, doClassNames);
-      routerBindings.push({ name: "DISPATCH_SECRET", text: this.dispatchSecret });
       routerBindings.push({
         name: "WORKERD_GATEWAY_TOKEN",
         text: this.deps.getWorkerdGatewayToken(),
@@ -809,52 +816,35 @@ export class WorkerdManager {
       return `      ${JSON.stringify(lookupKey)}: env.${bindingName}`;
     });
 
-    // Generate DO routing block for /_w/{source0}/{source1}/{className}/{objectKey}/{method...}
-    // Source path is always exactly 2 segments (e.g., "workers/agent-worker")
+    // Generate DO routing block for /_w/{...source}/{className}/{objectKey}/{method...}.
+    // Source paths may have arbitrary depth. The router disambiguates by matching
+    // generated source:className keys rather than assuming a fixed segment count.
     let doBlock = "";
     if (doClassNames.length > 0) {
       doBlock = `
-    // /_w/{source0}/{source1}/{className}/{objectKey}/{...method} — source-scoped DO routes
+    // /_w/{...source}/{className}/{objectKey}/{...method} — source-scoped DO routes
     if (prefix === "_w") {
-      const presented = request.headers.get("x-natstack-dispatch-secret") || "";
-      const expected = env.DISPATCH_SECRET || "";
-      if (presented) {
-        if (!expected || presented.length !== expected.length) {
-          return new Response(JSON.stringify({ error: "unauthorized: invalid dispatch secret" }), {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-        let diff = 0;
-        for (let i = 0; i < expected.length; i++) {
-          diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
-        }
-        if (diff !== 0) {
-          return new Response(JSON.stringify({ error: "unauthorized: dispatch secret mismatch" }), {
-            status: 401,
-            headers: { "Content-Type": "application/json" },
-          });
-        }
-      }
-      const source = parts[1] + "/" + parts[2];
-      const doClass = parts[3] || "";
-      const objectKey = parts[4] || "";
-      const doRest = parts.slice(5);
-      if (!doClass || !objectKey) {
-        return new Response("Usage: /_w/{source0}/{source1}/{className}/{objectKey}/{method}", { status: 400 });
+      if (parts.length < 5) {
+        return new Response("Usage: /_w/{...source}/{className}/{objectKey}/{method}", { status: 400 });
       }
       const doLookup = {
 ${doLookupEntries.join(",\n")}
       };
-      const ns = doLookup[source + ":" + doClass];
-      if (ns) {
+      for (let classIndex = 2; classIndex <= parts.length - 3; classIndex++) {
+        const source = parts.slice(1, classIndex).map(decodeURIComponent).join("/");
+        const doClass = decodeURIComponent(parts[classIndex] || "");
+        const objectKey = decodeURIComponent(parts[classIndex + 1] || "");
+        const doRest = parts.slice(classIndex + 2);
+        if (!source || !doClass || !objectKey) continue;
+        const ns = doLookup[source + ":" + doClass];
+        if (!ns) continue;
         const id = ns.idFromName(objectKey);
         const stub = ns.get(id);
-        const doUrl = new URL("/" + objectKey + (doRest.length ? "/" + doRest.join("/") : ""), url.origin);
+        const doUrl = new URL("/" + encodeURIComponent(objectKey) + (doRest.length ? "/" + doRest.join("/") : ""), url.origin);
         doUrl.search = url.search;
         return stub.fetch(new Request(doUrl, strippedRequest));
       }
-      return new Response("DO class not found: " + doClass + " (source: " + source + ")", { status: 404 });
+      return new Response("DO class not found for route: " + parts.slice(1).join("/"), { status: 404 });
     }
 `;
     }
@@ -1177,9 +1167,8 @@ ${doBlock}${cases.join("\n")}
   /**
    * Ensure a Durable Object class is registered and workerd is running.
    * DOs self-bootstrap from env bindings on first request — no external bootstrap call needed.
-   * Used by the DODispatch retry path: when a dispatch fails with a retryable error
-   * (DO class not registered, workerd restarted, ECONNREFUSED), DODispatch calls
-   * this to (re-)register the class and restart workerd, then retries once.
+   * Used by the unified RPC relay retry path when a DO class is missing after
+   * a rebuild/restart race.
    */
   async ensureDO(source: string, className: string, _objectKey: string): Promise<void> {
     await this.ensureDOClass(source, className);

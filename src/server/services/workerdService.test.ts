@@ -1,3 +1,4 @@
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   ServiceDispatcher,
@@ -7,7 +8,7 @@ import { createWorkerdService } from "./workerdService.js";
 import type { WorkerdManager } from "../workerdManager.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 
-const workerCtx: ServiceContext = { callerId: "worker:test", callerKind: "worker" };
+const workerCtx: ServiceContext = { caller: createVerifiedCaller("worker:test", "worker") };
 
 function createDeps() {
   return {
@@ -74,14 +75,14 @@ describe("workerdService", () => {
       {
         source: "workers/hello",
         contextId: "ctx-1",
-        parentId: "panel:abc",
+        parentId: "panel-abc",
       },
     ]);
 
     expect(deps.workerdManager.createInstance).toHaveBeenCalledWith({
       source: "workers/hello",
       contextId: "ctx-1",
-      parentId: "panel:abc",
+      parentId: "panel-abc",
     });
   });
 

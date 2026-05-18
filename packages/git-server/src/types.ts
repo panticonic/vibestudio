@@ -1,7 +1,4 @@
-/**
- * Types used by the git-server package.
- * These mirror the types in the main app to avoid coupling.
- */
+import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
 
 export interface WorkspaceNode {
   name: string;
@@ -47,8 +44,7 @@ export interface GitWatcherLike {
 }
 
 export interface GitWriteAuthorizationRequest {
-  callerId: string;
-  callerKind: string;
+  caller: VerifiedCaller;
   repoPath: string;
 }
 
@@ -62,8 +58,7 @@ export type GitWriteAuthorizer = (
 ) => Promise<GitWriteAuthorizationResult> | GitWriteAuthorizationResult;
 
 export interface GitPushAuthorizationRequest {
-  callerId: string;
-  callerKind: string;
+  caller: VerifiedCaller;
   repoPath: string;
   branch: string;
   commit: string;

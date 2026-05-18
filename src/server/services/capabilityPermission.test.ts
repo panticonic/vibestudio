@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 
 function tempStatePath(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-capability-"));
@@ -37,18 +38,14 @@ describe("capabilityPermission", () => {
     const deps = {
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "panel:source",
-          callerKind: "panel" as const,
-          repoPath: "panels/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     };
     const request = {
-      callerId: "panel:source",
-      callerKind: "panel",
+      caller: createVerifiedCaller("panel-source", "panel", {
+        callerId: "panel-source",
+        callerKind: "panel",
+        repoPath: "panels/source",
+        effectiveVersion: "version-1",
+      }),
       capability: "example-capability",
       resource: {
         type: "example",
@@ -84,18 +81,14 @@ describe("capabilityPermission", () => {
     const deps = {
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "worker:source",
-          callerKind: "worker" as const,
-          repoPath: "workers/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     };
     const request = {
-      callerId: "worker:source",
-      callerKind: "worker",
+      caller: createVerifiedCaller("worker:source", "worker", {
+        callerId: "worker:source",
+        callerKind: "worker",
+        repoPath: "workers/source",
+        effectiveVersion: "version-1",
+      }),
       capability: "example-capability",
       resource: { type: "example", label: "Example", value: "stable-key" },
       title: "Example action",
@@ -113,18 +106,14 @@ describe("capabilityPermission", () => {
     const deps = {
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      codeIdentityResolver: {
-        resolveByCallerId: () => ({
-          callerId: "worker:source",
-          callerKind: "worker" as const,
-          repoPath: "workers/source",
-          effectiveVersion: "version-1",
-        }),
-      },
     };
     const request = {
-      callerId: "worker:source",
-      callerKind: "worker",
+      caller: createVerifiedCaller("worker:source", "worker", {
+        callerId: "worker:source",
+        callerKind: "worker",
+        repoPath: "workers/source",
+        effectiveVersion: "version-1",
+      }),
       capability: "example-capability",
       resource: { type: "example", label: "Example", value: "stable-key" },
       title: "Example action",

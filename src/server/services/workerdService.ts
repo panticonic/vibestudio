@@ -7,9 +7,9 @@
 
 import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { DORefParam } from "@natstack/shared/userlandServiceRpc";
 import type { WorkerdManager, WorkerCreateOptions } from "../workerdManager.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
-import type { DORef } from "../doDispatch.js";
 
 const createOptionsSchema = z
   .object({
@@ -107,9 +107,9 @@ export function createWorkerdService(deps: {
         case "restartAll":
           return wm.restartAll();
         case "cloneDO":
-          return wm.cloneDO(doRefSchema.parse(args[0]) as DORef, args[1] as string);
+          return wm.cloneDO(doRefSchema.parse(args[0]) as DORefParam, args[1] as string);
         case "destroyDO":
-          await wm.destroyDO(doRefSchema.parse(args[0]) as DORef);
+          await wm.destroyDO(doRefSchema.parse(args[0]) as DORefParam);
           return { ok: true };
         default:
           throw new Error(`Unknown workerd method: ${method}`);

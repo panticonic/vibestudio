@@ -4,7 +4,11 @@ import * as path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { ServiceError, type ServiceContext } from "@natstack/shared/serviceDispatcher";
+import {
+  ServiceError,
+  type ServiceContext,
+  type VerifiedCaller,
+} from "@natstack/shared/serviceDispatcher";
 import type { TokenManager } from "@natstack/shared/tokenManager";
 import type { EventName } from "@natstack/shared/events";
 import type { NotificationPayload } from "@natstack/shared/events";
@@ -404,7 +408,6 @@ export class ExtensionHost {
       entry.name,
       method,
       randomUUID(),
-      this.deps.codeIdentityResolver,
     );
     if (!this.processes.isRunning(entry.name)) {
       throw new ServiceError("extensions", "invoke", `Extension is not running: ${entry.name}`, "ENOEXT");
@@ -438,8 +441,8 @@ export class ExtensionHost {
         wrapped.message,
         {
           method,
-          callerId: ctx.callerId,
-          callerKind: ctx.callerKind,
+          callerId: ctx.caller.runtime.id,
+          callerKind: ctx.caller.runtime.kind,
           code: typeof code === "string" ? code : undefined,
           stack: wrapped.stack,
         },
@@ -466,7 +469,7 @@ export class ExtensionHost {
     // would otherwise await the same in-flight install/update promise that
     // its own activation is fulfilling. If the process is already running
     // and the registry entry is enabled, skip the availability gate.
-    if (ctx.callerKind === "extension" && ctx.callerId === node.name) {
+    if (ctx.caller.runtime.kind === "extension" && ctx.caller.runtime.id === node.name) {
       const entry = this.registry.get(node.name);
       if (entry?.enabled && this.processes.isRunning(node.name)) {
         return entry;
@@ -536,7 +539,7 @@ export class ExtensionHost {
     res: ServerResponse,
     name: string,
     remainderPath: string,
-    caller: { callerId: string; callerKind: string },
+    caller: VerifiedCaller,
   ): Promise<void> {
     const entry = this.registry.get(name);
     if (!entry || !entry.enabled) {
@@ -556,26 +559,14 @@ export class ExtensionHost {
 
     const method = "fetch";
     const ctx: ServiceContext = {
-      callerId: caller.callerId,
-      callerKind: caller.callerKind === "extension"
-        ? "extension"
-        : caller.callerKind === "worker"
-          ? "worker"
-          : caller.callerKind === "shell"
-            ? "shell"
-            : "panel",
+      caller,
     };
     const invocation = invocationFromServiceContext(
       ctx,
       name,
       method,
       randomUUID(),
-      this.deps.codeIdentityResolver,
     );
-    invocation.caller.callerKind = caller.callerKind === "panel" || caller.callerKind === "worker" || caller.callerKind === "shell" || caller.callerKind === "extension"
-      ? caller.callerKind
-      : "http";
-
     const originalUrl = req.url ?? "/";
     const query = originalUrl.includes("?") ? `?${originalUrl.split("?").slice(1).join("?")}` : "";
     const forwardedUrl = `${this.deps.getGatewayUrl()}/_r/ext/${encodeURIComponent(name)}${remainderPath}${query}`;
@@ -678,53 +669,53 @@ export class ExtensionHost {
   private subscribe(ctx: ServiceContext, name: string, event: string): null {
     const eventName = `extensions:${name}::${event}` as const;
     const subscriber = this.deps.eventService.getOrCreateSubscriber(ctx);
-    this.deps.eventService.subscribe(eventName, ctx.callerId, subscriber, ctx.connectionId);
+    this.deps.eventService.subscribe(eventName, ctx.caller.runtime.id, subscriber, ctx.connectionId);
     return null;
   }
 
   private emitFromExtension(ctx: ServiceContext, event: string, payload: unknown): null {
-    if (ctx.callerKind !== "extension") {
+    if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError("extensions", "emit", "Only extensions can emit extension events", "EACCES");
     }
-    this.deps.eventService.emit(`extensions:${ctx.callerId}::${event}` as EventName, payload);
+    this.deps.eventService.emit(`extensions:${ctx.caller.runtime.id}::${event}` as EventName, payload);
     return null;
   }
 
   private async fetchRequestBodyChunk(ctx: ServiceContext, streamId: string): Promise<StreamChunkEnvelope> {
-    if (ctx.callerKind !== "extension") {
+    if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError("extensions", "fetchRequestBodyChunk", "Only extensions can read extension fetch request bodies", "EACCES");
     }
     const stream = this.fetchRequestBodies.get(streamId);
-    if (!stream || stream.extensionName !== ctx.callerId) {
+    if (!stream || stream.extensionName !== ctx.caller.runtime.id) {
       throw new ServiceError("extensions", "fetchRequestBodyChunk", `Unknown extension fetch request body stream: ${streamId}`, "ENOENT");
     }
     return readNextBodyChunk(stream);
   }
 
   private async fetchRequestBodyClose(ctx: ServiceContext, streamId: string): Promise<null> {
-    if (ctx.callerKind !== "extension") {
+    if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError("extensions", "fetchRequestBodyClose", "Only extensions can close extension fetch request bodies", "EACCES");
     }
     const stream = this.fetchRequestBodies.get(streamId);
-    if (!stream || stream.extensionName !== ctx.callerId) return null;
+    if (!stream || stream.extensionName !== ctx.caller.runtime.id) return null;
     await this.closeFetchRequestBody(streamId);
     return null;
   }
 
   private readyFromExtension(ctx: ServiceContext, ready: { methods: string[]; hasFetch: boolean }): null {
-    if (ctx.callerKind !== "extension") {
+    if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError("extensions", "ready", "Only extensions can complete extension startup", "EACCES");
     }
-    this.processes.markReady(ctx.callerId, ready);
+    this.processes.markReady(ctx.caller.runtime.id, ready);
     return null;
   }
 
   private healthFromExtension(ctx: ServiceContext, state: ExtensionHealth["state"], detail: unknown): null {
-    if (ctx.callerKind !== "extension") {
+    if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError("extensions", "health", "Only extensions can report extension health", "EACCES");
     }
     const healthDetail = detail as { summary?: string; reasons?: string[]; retryAt?: number } | undefined;
-    this.reportExtensionHealth(ctx.callerId, {
+    this.reportExtensionHealth(ctx.caller.runtime.id, {
       state,
       summary: healthDetail?.summary ?? state,
       reasons: healthDetail?.reasons,
@@ -740,10 +731,10 @@ export class ExtensionHost {
     message: string,
     fields?: Record<string, unknown>,
   ): null {
-    if (ctx.callerKind !== "extension") {
+    if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError("extensions", "log", "Only extensions can write extension logs", "EACCES");
     }
-    this.recordExtensionLog(ctx.callerId, level, message, fields, "ctx.log");
+    this.recordExtensionLog(ctx.caller.runtime.id, level, message, fields, "ctx.log");
     return null;
   }
 
@@ -752,11 +743,11 @@ export class ExtensionHost {
     invocationValue: unknown,
     reqValue: unknown,
   ): Promise<unknown> {
-    if (ctx.callerKind !== "extension") {
+    if (ctx.caller.runtime.kind !== "extension") {
       throw new ServiceError("extensions", "approvalForCaller", "Only extensions can request caller approvals", "EACCES");
     }
     const invocation = invocationValue as ExtensionInvocation;
-    if (!invocation || invocation.extensionName !== ctx.callerId) {
+    if (!invocation || invocation.extensionName !== ctx.caller.runtime.id) {
       throw new ServiceError("extensions", "approvalForCaller", "Extension approval invocation mismatch", "EACCES");
     }
     // Enforce the same schema validation the direct panel/worker path applies
@@ -979,8 +970,7 @@ export class ExtensionHost {
   }
 
   async authorizeSourcePush(request: {
-    callerId: string;
-    callerKind: string;
+    caller: VerifiedCaller;
     repoPath: string;
     branch: string;
     commit: string;
@@ -993,7 +983,7 @@ export class ExtensionHost {
     // Trusted internal callers (CLI, server bootstrap) bypass the prompt.
     // The approval is meant to capture an interactive decision; shell/server
     // pushes are already authorized by their callerKind.
-    if (request.callerKind === "shell" || request.callerKind === "server") {
+    if (request.caller.runtime.kind === "shell" || request.caller.runtime.kind === "server") {
       return { allowed: true };
     }
 
@@ -1002,20 +992,20 @@ export class ExtensionHost {
       return { allowed: true };
     }
 
-    if (request.callerKind !== "panel" && request.callerKind !== "worker") {
+    if (request.caller.runtime.kind !== "panel" && request.caller.runtime.kind !== "worker") {
       return {
         allowed: false,
-        reason: `Extension source pushes from ${request.callerKind} callers are not supported`,
+        reason: `Extension source pushes from ${request.caller.runtime.kind} callers are not supported`,
       };
     }
-    const identity = this.deps.codeIdentityResolver.resolveByCallerId(request.callerId);
-    if (!identity || identity.callerKind !== request.callerKind) {
-      return { allowed: false, reason: `Unknown caller identity: ${request.callerId}` };
+    const identity = request.caller.code;
+    if (!identity || identity.callerKind !== request.caller.runtime.kind) {
+      return { allowed: false, reason: `Unknown caller identity: ${request.caller.runtime.id}` };
     }
     const decision = await this.deps.approvalQueue.request({
       kind: "extension",
-      callerId: request.callerId,
-      callerKind: request.callerKind,
+      callerId: request.caller.runtime.id,
+      callerKind: request.caller.runtime.kind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       action: "source-push",
@@ -1033,7 +1023,7 @@ export class ExtensionHost {
       extensionDiff: makeExtensionDiff(repoPath, installed.entry.activeSha, request.commit, {
         ref: request.branch,
         pushedAt: Date.now(),
-        pushedBy: identity.callerId,
+        pushedBy: request.caller.runtime.id,
       }),
       capabilities: extensionRuntimeCapabilities(),
       details: [
@@ -1255,18 +1245,18 @@ export class ExtensionHost {
     // caller kinds (e.g., `extension`) are rejected — extensions cannot
     // self-install other extensions in v1. `server` is not in the
     // dispatcher's allow list for `extensions`, so it never reaches here.
-    if (ctx.callerKind === "shell") return;
-    if (ctx.callerKind !== "panel" && ctx.callerKind !== "worker") {
+    if (ctx.caller.runtime.kind === "shell") return;
+    if (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker") {
       throw new ServiceError(
         "extensions",
         action,
-        `Extension management is not available to ${ctx.callerKind} callers`,
+        `Extension management is not available to ${ctx.caller.runtime.kind} callers`,
         "EACCES",
       );
     }
-    const identity = this.deps.codeIdentityResolver.resolveByCallerId(ctx.callerId);
-    if (!identity || identity.callerKind !== ctx.callerKind) {
-      throw new ServiceError("extensions", action, `Unknown caller identity: ${ctx.callerId}`, "ENOENT");
+    const identity = ctx.caller.code;
+    if (!identity || identity.callerKind !== ctx.caller.runtime.kind) {
+      throw new ServiceError("extensions", action, `Unknown caller identity: ${ctx.caller.runtime.id}`, "ENOENT");
     }
     const node = this.findExtensionNode(name);
     const entry = this.registry.get(node.name);
@@ -1291,8 +1281,8 @@ export class ExtensionHost {
     if (currentEv) details.push({ label: "Candidate EV", value: currentEv });
     const decision = await this.deps.approvalQueue.request({
       kind: "extension",
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      callerId: ctx.caller.runtime.id,
+      callerKind: ctx.caller.runtime.kind,
       repoPath: identity.repoPath,
       effectiveVersion: identity.effectiveVersion,
       action: approvalAction,
@@ -1300,7 +1290,7 @@ export class ExtensionHost {
       version,
       source,
       title: `${actionTitle(action)} extension`,
-      description: `Allow ${ctx.callerKind} ${ctx.callerId} to ${action} ${name}.`,
+      description: `Allow ${ctx.caller.runtime.kind} ${ctx.caller.runtime.id} to ${action} ${name}.`,
       ev: currentEv,
       previousEv: entry?.activeEv,
       previousSha: entry?.activeSha,

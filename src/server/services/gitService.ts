@@ -7,7 +7,7 @@ import { z } from "zod";
 import YAML from "yaml";
 import { GitClient } from "@natstack/git";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
+import type { ServiceContext, VerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import type { GitServer } from "@natstack/git-server";
 import type { TokenManager } from "@natstack/shared/tokenManager";
 import type { WorkspaceConfig, WorkspaceGitRemoteConfig } from "@natstack/shared/workspace/types";
@@ -26,7 +26,6 @@ import { WORKSPACE_IMPORT_PARENT_DIRS } from "@natstack/shared/workspace/sourceD
 import { execGitFileSync } from "@natstack/shared/gitRuntime";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
 import type { EgressProxy } from "./egressProxy.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import { INTERNAL_GIT_WRITE_CAPABILITY } from "./gitWritePermission.js";
@@ -52,7 +51,6 @@ type GitServiceDeps = {
   egressProxy?: Pick<EgressProxy, "forwardGitHttp">;
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
-  codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
 };
 
 type WorkspaceTreeNode = {
@@ -403,7 +401,7 @@ async function importWorkspaceRepo(
   await mkdir(dirname(absolutePath), { recursive: true });
   try {
     const client = new GitClient(fsPromises, {
-      http: createEgressGitHttpClient(deps.egressProxy, ctx.callerId, request.credentialId),
+      http: createEgressGitHttpClient(deps.egressProxy, ctx.caller, request.credentialId),
     });
     await client.clone({ url: normalizedRemote.url, dir: absolutePath });
     const nextConfig = setDeclaredRemoteInConfig(
@@ -429,29 +427,26 @@ async function ensureImportProjectPermission(
   deps: {
     approvalQueue?: ApprovalQueue;
     grantStore?: CapabilityGrantStore;
-    codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
   },
   repoPath: string,
   remote: WorkspaceGitRemoteConfig
 ): Promise<void> {
-  if (ctx.callerKind === "shell" || ctx.callerKind === "server") {
+  if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
     return;
   }
-  if (ctx.callerKind !== "panel" && ctx.callerKind !== "worker") {
+  if (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker") {
     throw new Error("Project import is unavailable for this caller");
   }
-  if (!deps.approvalQueue || !deps.grantStore || !deps.codeIdentityResolver) {
+  if (!deps.approvalQueue || !deps.grantStore) {
     throw new Error("Project import is unavailable");
   }
   const authorization = await requestCapabilityPermission(
     {
       approvalQueue: deps.approvalQueue,
       grantStore: deps.grantStore,
-      codeIdentityResolver: deps.codeIdentityResolver,
     },
     {
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      caller: ctx.caller,
       capability: PROJECT_IMPORT_CAPABILITY,
       dedupKey: null,
       resource: {
@@ -484,19 +479,18 @@ async function ensureSharedRemotePermission(
   deps: {
     approvalQueue?: ApprovalQueue;
     grantStore?: CapabilityGrantStore;
-    codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
   },
   repoPath: string,
   operation: "set" | "remove",
   remote: WorkspaceGitRemoteConfig | null
 ): Promise<void> {
-  if (ctx.callerKind === "shell" || ctx.callerKind === "server") {
+  if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
     return;
   }
-  if (ctx.callerKind !== "panel" && ctx.callerKind !== "worker") {
+  if (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker") {
     throw new Error("Shared remote configuration is unavailable for this caller");
   }
-  if (!deps.approvalQueue || !deps.grantStore || !deps.codeIdentityResolver) {
+  if (!deps.approvalQueue || !deps.grantStore) {
     throw new Error("Shared remote configuration is unavailable");
   }
   const details = [
@@ -516,11 +510,9 @@ async function ensureSharedRemotePermission(
     {
       approvalQueue: deps.approvalQueue,
       grantStore: deps.grantStore,
-      codeIdentityResolver: deps.codeIdentityResolver,
     },
     {
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      caller: ctx.caller,
       capability: SHARED_GIT_REMOTE_CAPABILITY,
       dedupKey: null,
       resource: {
@@ -589,7 +581,7 @@ async function propagateSharedRemote(
 
 function createEgressGitHttpClient(
   egressProxy: Pick<EgressProxy, "forwardGitHttp">,
-  callerId: string,
+  caller: VerifiedCaller,
   credentialId?: string
 ) {
   return {
@@ -601,7 +593,7 @@ function createEgressGitHttpClient(
     }) {
       const body = request.body ? await collectGitBody(request.body) : undefined;
       const response = await egressProxy.forwardGitHttp({
-        callerId,
+        caller,
         url: request.url,
         method: request.method ?? "GET",
         headers: request.headers ?? {},
@@ -664,29 +656,26 @@ async function ensureGitWritePermission(
   deps: {
     approvalQueue?: ApprovalQueue;
     grantStore?: CapabilityGrantStore;
-    codeIdentityResolver?: Pick<CodeIdentityResolver, "resolveByCallerId">;
   },
   repoPath: string,
   operation: string
 ): Promise<void> {
-  if (ctx.callerKind === "shell" || ctx.callerKind === "server") {
+  if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
     return;
   }
-  if (ctx.callerKind !== "panel" && ctx.callerKind !== "worker") {
+  if (ctx.caller.runtime.kind !== "panel" && ctx.caller.runtime.kind !== "worker") {
     throw new Error("Git write permission is unavailable for this caller");
   }
-  if (!deps.approvalQueue || !deps.grantStore || !deps.codeIdentityResolver) {
+  if (!deps.approvalQueue || !deps.grantStore) {
     throw new Error("Git write permission is unavailable");
   }
   const authorization = await requestCapabilityPermission(
     {
       approvalQueue: deps.approvalQueue,
       grantStore: deps.grantStore,
-      codeIdentityResolver: deps.codeIdentityResolver,
     },
     {
-      callerId: ctx.callerId,
-      callerKind: ctx.callerKind,
+      caller: ctx.caller,
       capability: INTERNAL_GIT_WRITE_CAPABILITY,
       dedupKey: null,
       resource: {
