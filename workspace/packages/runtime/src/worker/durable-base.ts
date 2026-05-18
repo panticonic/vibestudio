@@ -205,6 +205,14 @@ export abstract class DurableObjectBase {
     if (Array.isArray(parsed)) {
       return { args: parsed };
     }
+    if (
+      parsed &&
+      typeof parsed === "object" &&
+      ("__instanceToken" in parsed || "__instanceId" in parsed) &&
+      Array.isArray((parsed as { args?: unknown }).args)
+    ) {
+      return { args: (parsed as { args: unknown[] }).args };
+    }
     return { args: [parsed] };
   }
 
