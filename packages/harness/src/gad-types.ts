@@ -1,16 +1,6 @@
-/**
- * Gad envelope type definitions used by the harness package.
- *
- * These mirror the canonical contract in
- * `workspace/packages/runtime/src/shared/gad.ts`. They live here instead of
- * being imported from the workspace runtime because `@natstack/harness` must
- * remain free of workspace-runtime dependencies (the workspace runtime
- * imports the harness, not the other way round).
- */
-
 export type GadJsonRecord = Record<string, unknown>;
 
-export type GadTranscriptEntryType =
+export type PiEntryType =
   | "message"
   | "model_change"
   | "thinking_level_change"
@@ -19,81 +9,78 @@ export type GadTranscriptEntryType =
   | "custom"
   | "custom_message"
   | "label"
-  | "session_info"
-  | "leaf";
+  | "session_info";
 
-export type GadProvenanceEntryType =
-  | "message_block"
-  | "tool_call_requested"
-  | "tool_result_observed"
-  | "file_observed"
-  | "file_read"
-  | "file_mutation_intent"
+export type GadEventKind =
+  | "file_observation_recorded"
+  | "file_mutation_planned"
   | "file_mutation_observed"
-  | "workspace_observed"
+  | "dispatch_pending"
+  | "dispatch_resolved"
+  | "dispatch_abandoned"
   | "approval_requested"
   | "approval_resolved"
-  | "dispatch_abandoned"
-  | "branch_created"
-  | "snapshot_marked"
-  | "claim_asserted"
-  | "claim_revised"
-  | "contradiction_detected"
+  | "credential_interruption"
+  | "branch_event"
+  | "system_event"
+  | "claim_recorded"
   | "theory_updated"
-  | "system_event";
+  | "contradiction_recorded";
 
-export type GadEntryType = GadTranscriptEntryType | GadProvenanceEntryType;
-
-export interface GadTrajectoryItemSpec {
+export interface PiEntrySpec {
   entryId: string;
   parentEntryId: string | null;
-  entryType: GadEntryType;
+  entryType: PiEntryType;
   payload: GadJsonRecord;
+  preStateHash?: string | null;
+  postStateHash?: string | null;
   actor?: string | null;
   metadata?: GadJsonRecord | null;
 }
 
-export interface GadBranchHead {
-  workspaceId: string;
-  branchId: string;
-  headTrajectoryId: number | null;
-  headTrajectoryHash: string | null;
-  headEntryId: string | null;
-  headStateHash: string;
-  dirty: boolean;
+export interface GadEventSpec {
+  eventId: string;
+  kind: GadEventKind;
+  anchorKind?: string | null;
+  anchorId?: string | null;
+  payload: GadJsonRecord;
+  metadata?: GadJsonRecord | null;
 }
 
-export interface GadEntryRow {
-  trajectoryId: number;
-  trajectoryHash: string;
+export type GadJournalItemSpec = PiEntrySpec | GadEventSpec;
+
+export interface PiBranchHead {
+  branchId: string;
+  headEntryId: string | null;
+  headEntryHash: string | null;
+  headStateHash: string;
+}
+
+export interface PiEntryRow {
   entryId: string;
   parentEntryId: string | null;
-  entryType: GadEntryType;
+  entryType: PiEntryType;
   actor: string | null;
+  entryHash: string;
+  parentEntryHash: string | null;
+  preStateHash: string;
+  postStateHash: string;
   payload: GadJsonRecord;
   metadata: GadJsonRecord | null;
   createdAt: string;
 }
 
-export interface GadAppendTrajectoryBatchInput {
-  workspaceId?: string | null;
+export interface AppendPiEntryBatchInput {
   branchId: string;
-  expectedTrajectoryHash?: string | null;
+  expectedHeadEntryHash?: string | null;
   expectedStateHash?: string | null;
-  items: GadTrajectoryItemSpec[];
+  items: PiEntrySpec[];
 }
 
-export interface GadAppendTrajectoryBatchResult {
-  workspaceId: string;
-  branchId: string;
-  headTrajectoryId: number | null;
-  headTrajectoryHash: string | null;
-  headEntryId: string | null;
-  headStateHash: string;
+export interface AppendPiEntryBatchResult extends PiBranchHead {
   items: Array<{
-    id: number;
-    hash: string;
     entryId: string;
+    entryHash: string;
     parentEntryId: string | null;
   }>;
 }

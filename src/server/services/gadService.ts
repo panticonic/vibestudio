@@ -1,99 +1,106 @@
 import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
-import { ServiceError, type ServiceContext } from "@natstack/shared/serviceDispatcher";
-import type { ApprovalPrincipal, UserlandApprovalSubject } from "@natstack/shared/approvals";
+import { ServiceError } from "@natstack/shared/serviceDispatcher";
 import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "../doDispatch.js";
-import type { ApprovalQueue } from "./approvalQueue.js";
-import type { CodeIdentityResolver } from "./codeIdentityResolver.js";
-import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
-
-const SQL_WRITE_SUBJECT: UserlandApprovalSubject = {
-  id: "gad:raw-sql-write",
-  label: "gad raw SQL writes",
-};
 
 const JsonRecordSchema = z.record(z.unknown());
 const OptionalJsonRecordSchema = JsonRecordSchema.nullish();
 const JsonBindingsSchema = z.array(z.unknown()).optional();
 const ListOptsSchema = z.record(z.unknown()).optional();
 
-const EnsureGadBranchSchema = z
+const EnsurePiBranchSchema = z
   .object({
-    workspaceId: z.string().nullable().optional(),
     branchId: z.string(),
     channelId: z.string().nullable().optional(),
-    contextId: z.string().nullable().optional(),
     metadata: OptionalJsonRecordSchema,
   })
   .strict();
 
-const GadTrajectoryItemSchema = z
+const PiEntrySchema = z
   .object({
-    kind: z.enum([
-      "message_created",
-      "message_block_added",
-      "message_finalized",
-      "tool_call_requested",
-      "tool_result_observed",
-      "file_observed",
-      "file_read",
-      "file_mutation",
-      "workspace_observed",
-      "approval_requested",
-      "approval_resolved",
-      "dispatch_abandoned",
-      "branch_created",
-      "snapshot_marked",
-      "claim_asserted",
-      "claim_revised",
-      "contradiction_detected",
-      "theory_updated",
-      "system_event",
+    entryId: z.string(),
+    parentEntryId: z.string().nullable(),
+    entryType: z.enum([
+      "message",
+      "model_change",
+      "thinking_level_change",
+      "compaction",
+      "branch_summary",
+      "custom",
+      "custom_message",
+      "label",
+      "session_info",
     ]),
     actor: z.string().nullable().optional(),
-    payload: z.union([JsonRecordSchema, z.string()]).nullable().optional(),
-    messageId: z.string().nullable().optional(),
-    blockId: z.string().nullable().optional(),
-    toolCallId: z.string().nullable().optional(),
-    inputStateHash: z.string().nullable().optional(),
-    outputStateHash: z.string().nullable().optional(),
+    payload: JsonRecordSchema,
+    preStateHash: z.string().nullable().optional(),
+    postStateHash: z.string().nullable().optional(),
     metadata: OptionalJsonRecordSchema,
   })
   .strict();
 
-const AppendGadTrajectoryBatchSchema = z
+const AppendPiEntryBatchSchema = z
   .object({
-    workspaceId: z.string().nullable().optional(),
     branchId: z.string(),
-    expectedTrajectoryHash: z.string().nullable().optional(),
+    expectedHeadEntryHash: z.string().nullable().optional(),
     expectedStateHash: z.string().nullable().optional(),
-    items: z.array(GadTrajectoryItemSchema),
+    items: z.array(PiEntrySchema),
   })
   .strict();
+
+const GadEventSchema = z
+  .object({
+    eventId: z.string(),
+    kind: z.string(),
+    anchorKind: z.string().nullable().optional(),
+    anchorId: z.string().nullable().optional(),
+    payload: JsonRecordSchema,
+    metadata: OptionalJsonRecordSchema,
+  })
+  .strict();
+
+const AppendGadEventsSchema = z.object({ events: z.array(GadEventSchema) }).strict();
 
 const BranchHeadSchema = z
   .object({
-    workspaceId: z.string().nullable().optional(),
     branchId: z.string(),
   })
   .strict();
 
+const SetBranchHeadSchema = BranchHeadSchema.extend({
+  entryId: z.string().nullable(),
+  expectedHeadEntryHash: z.string().nullable().optional(),
+}).strict();
+
+const GetEntryByIdSchema = z
+  .object({
+    entryId: z.string(),
+  })
+  .strict();
+
+const GetBranchPathSchema = BranchHeadSchema.extend({
+  throughEntryId: z.string().nullable().optional(),
+}).strict();
+
+const FindBranchEntriesByTypeSchema = BranchHeadSchema.extend({
+  entryType: z.string(),
+  offset: z.number().int().nonnegative().nullable().optional(),
+  limit: z.number().int().positive().nullable().optional(),
+}).strict();
+
 const ForkGadBranchSchema = z
   .object({
-    workspaceId: z.string().nullable().optional(),
     sourceBranchId: z.string(),
     newBranchId: z.string().nullable().optional(),
-    trajectoryHash: z.string().nullable().optional(),
-    trajectoryId: z.number().int().nullable().optional(),
+    entryId: z.string().nullable().optional(),
+    stateHash: z.string().nullable().optional(),
     channelId: z.string().nullable().optional(),
-    contextId: z.string().nullable().optional(),
   })
   .strict();
 
 const BranchIdSchema = z
   .object({
-    workspaceId: z.string().nullable().optional(),
     branchId: z.string(),
   })
   .strict();
@@ -131,9 +138,6 @@ const IntegrityCheckSchema = z
 export interface GadServiceDeps {
   doDispatch: DODispatch;
   resolveStore: () => DORef;
-  approvalQueue: ApprovalQueue;
-  grantStore: Pick<UserlandApprovalGrantStore, "lookup" | "record" | "revoke">;
-  codeIdentityResolver: Pick<CodeIdentityResolver, "resolveByCallerId">;
 }
 
 function stripLeadingSqlTrivia(sql: string): string {
@@ -158,154 +162,9 @@ function isReadOnlySql(sql: string): boolean {
     .match(/^[A-Za-z]+/u)?.[0]
     ?.toUpperCase();
   // Keep this deliberately narrow. SQLite supports mutating statements with
-  // WITH/PRAGMA shapes, so arbitrary raw SQL gets approved unless it is a
-  // plain read/explain.
+  // WITH/PRAGMA shapes, so arbitrary raw SQL is blocked unless it is a plain
+  // read/explain.
   return first === "SELECT" || first === "EXPLAIN";
-}
-
-function summarizeSql(sql: string): string {
-  const compact = sql.replace(/\s+/gu, " ").trim();
-  return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
-}
-
-function sqlVerb(sql: string): string {
-  return (
-    stripLeadingSqlTrivia(sql)
-      .match(/^[A-Za-z]+/u)?.[0]
-      ?.toUpperCase() ?? "UNKNOWN"
-  );
-}
-
-function extractSqlTables(sql: string): string[] {
-  const compact = stripLeadingSqlTrivia(sql).replace(/\s+/gu, " ");
-  const names = new Set<string>();
-  const patterns = [
-    /\bUPDATE\s+["`[]?([A-Za-z_][\w]*)/giu,
-    /\bINTO\s+["`[]?([A-Za-z_][\w]*)/giu,
-    /\bFROM\s+["`[]?([A-Za-z_][\w]*)/giu,
-    /\bTABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?["`[]?([A-Za-z_][\w]*)/giu,
-  ];
-  for (const pattern of patterns) {
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(compact))) {
-      if (match[1]) names.add(match[1]);
-    }
-  }
-  return [...names].filter((name) => !name.startsWith("sqlite_")).slice(0, 8);
-}
-
-function classifySqlRisk(sql: string): "schema" | "delete" | "update" | "insert" | "unknown-write" {
-  const verb = sqlVerb(sql);
-  if (["DROP", "ALTER", "CREATE", "VACUUM", "REINDEX"].includes(verb)) return "schema";
-  if (verb === "DELETE" || verb === "TRUNCATE") return "delete";
-  if (verb === "UPDATE" || verb === "REPLACE") return "update";
-  if (verb === "INSERT") return "insert";
-  return "unknown-write";
-}
-
-async function describeSqlRisk(
-  deps: GadServiceDeps,
-  sql: string
-): Promise<Array<{ label: string; value: string }>> {
-  const details = [
-    { label: "Risk", value: classifySqlRisk(sql) },
-    { label: "SQL", value: summarizeSql(sql) },
-  ];
-  const tables = extractSqlTables(sql);
-  if (tables.length > 0) {
-    details.splice(1, 0, { label: "Tables", value: tables.join(", ") });
-  }
-  for (const table of tables.slice(0, 4)) {
-    try {
-      const result = await deps.doDispatch.dispatch(
-        deps.resolveStore(),
-        "rawSql",
-        `SELECT COUNT(*) AS count FROM "${table}"`,
-        []
-      );
-      const rows = (result as { rows?: Array<Record<string, unknown>> }).rows ?? [];
-      details.push({ label: `${table} rows`, value: String(rows[0]?.["count"] ?? "unknown") });
-    } catch {
-      details.push({ label: `${table} rows`, value: "unavailable" });
-    }
-  }
-  return details;
-}
-
-async function resolvePrincipal(
-  deps: GadServiceDeps,
-  ctx: ServiceContext
-): Promise<ApprovalPrincipal> {
-  if (ctx.callerKind !== "panel" && ctx.callerKind !== "worker") {
-    throw new ServiceError(
-      "gad",
-      "rawSql",
-      "Only panel/worker raw SQL writes use userland approval",
-      "EACCES"
-    );
-  }
-  const identity = deps.codeIdentityResolver.resolveByCallerId(ctx.callerId);
-  if (!identity) {
-    throw new ServiceError("gad", "rawSql", `Unknown caller identity: ${ctx.callerId}`, "ENOENT");
-  }
-  if (identity.callerKind !== ctx.callerKind) {
-    throw new ServiceError(
-      "gad",
-      "rawSql",
-      `Caller identity kind mismatch for ${ctx.callerId}`,
-      "EACCES"
-    );
-  }
-  return {
-    callerId: identity.callerId,
-    callerKind: identity.callerKind,
-    repoPath: identity.repoPath,
-    effectiveVersion: identity.effectiveVersion,
-  };
-}
-
-async function requireRawSqlWriteApproval(
-  deps: GadServiceDeps,
-  ctx: ServiceContext,
-  sql: string
-): Promise<void> {
-  if (ctx.callerKind !== "panel" && ctx.callerKind !== "worker") return;
-  const principal = await resolvePrincipal(deps, ctx);
-  const existing = deps.grantStore.lookup(principal.callerId, SQL_WRITE_SUBJECT.id);
-  if (existing?.choice === "allow") return;
-
-  const riskDetails = await describeSqlRisk(deps, sql);
-  const result = await deps.approvalQueue.requestUserland({
-    principal,
-    subject: SQL_WRITE_SUBJECT,
-    title: "Allow gad raw SQL write?",
-    summary:
-      "This panel or worker wants to execute a non-read-only SQL statement against the workspace gad provenance database.",
-    warning: "This can modify or delete tracked provenance, branch metadata, and semantic context.",
-    details: [{ label: "Caller", value: principal.callerId }, ...riskDetails],
-    options: [
-      {
-        value: "allow",
-        label: "Allow",
-        description: "Trust this caller for gad raw SQL writes.",
-        tone: "primary",
-      },
-      {
-        value: "deny",
-        label: "Deny",
-        description: "Block this SQL statement.",
-        tone: "danger",
-      },
-    ],
-  });
-  if (result.kind !== "choice" || result.choice !== "allow") {
-    throw new ServiceError("gad", "rawSql", "Raw SQL write was denied", "EACCES");
-  }
-  await deps.grantStore.record(
-    { callerId: principal.callerId, callerKind: principal.callerKind },
-    SQL_WRITE_SUBJECT,
-    "allow"
-  );
 }
 
 export function createGadService(deps: GadServiceDeps): ServiceDefinition {
@@ -323,14 +182,19 @@ export function createGadService(deps: GadServiceDeps): ServiceDefinition {
       ensureBlob: {
         args: z.tuple([z.string(), z.number().int().optional(), z.string().nullable().optional()]),
       },
-      ensureGadBranch: { args: z.tuple([EnsureGadBranchSchema]) },
-      getGadBranchHead: { args: z.tuple([BranchHeadSchema]) },
-      appendGadTrajectoryBatch: { args: z.tuple([AppendGadTrajectoryBatchSchema]) },
+      ensurePiBranch: { args: z.tuple([EnsurePiBranchSchema]) },
+      getPiBranchHead: { args: z.tuple([BranchHeadSchema]) },
+      appendPiEntryBatch: { args: z.tuple([AppendPiEntryBatchSchema]) },
+      appendGadEvents: { args: z.tuple([AppendGadEventsSchema]) },
+      listGadEvents: { args: z.tuple([ListOptsSchema]) },
+      setBranchHead: { args: z.tuple([SetBranchHeadSchema]) },
+      getEntryById: { args: z.tuple([GetEntryByIdSchema]) },
+      getBranchPath: { args: z.tuple([GetBranchPathSchema]) },
+      findEntries: { args: z.tuple([FindBranchEntriesByTypeSchema]) },
       materializePiMessages: { args: z.tuple([BranchHeadSchema]) },
-      listGadBranchTrajectory: { args: z.tuple([BranchListOptsSchema]) },
       listGadBranchToolCalls: { args: z.tuple([BranchListOptsSchema]) },
-      forkGadBranch: { args: z.tuple([ForkGadBranchSchema]) },
-      listGadBranches: { args: z.tuple([ListOptsSchema]) },
+      forkPiBranch: { args: z.tuple([ForkGadBranchSchema]) },
+      listPiBranches: { args: z.tuple([ListOptsSchema]) },
       listGadBranchFiles: { args: z.tuple([BranchIdSchema]) },
       diffGadStates: {
         args: z.tuple([
@@ -383,16 +247,21 @@ export function createGadService(deps: GadServiceDeps): ServiceDefinition {
       validateGadHashes: { args: z.tuple([ListOptsSchema]) },
       clearDirtyAfterValidation: { args: z.tuple([ListOptsSchema]) },
       checkGadIntegrity: { args: z.tuple([IntegrityCheckSchema.optional()]) },
-      revokeRawSqlWriteApproval: { args: z.tuple([]), policy: { allowed: ["panel", "worker"] } },
+      replayGadEvents: { args: z.tuple([ListOptsSchema.optional()]) },
     },
-    handler: async (ctx, method, args) => {
+    handler: async (_ctx, method, args) => {
       switch (method) {
         case "rawSql":
         case "query": {
           const sql = args[0] as string;
           const bindings = (args[1] as unknown[] | undefined) ?? [];
           if (!isReadOnlySql(sql)) {
-            await requireRawSqlWriteApproval(deps, ctx, sql);
+            throw new ServiceError(
+              "gad",
+              method,
+              "raw SQL writes are disabled for the clean GAD architecture",
+              "EACCES"
+            );
           }
           return dispatch("rawSql", [sql, bindings]);
         }
@@ -400,14 +269,19 @@ export function createGadService(deps: GadServiceDeps): ServiceDefinition {
           return dispatch("getStatus", []);
         case "ensureBlob":
           return dispatch("ensureBlob", args);
-        case "ensureGadBranch":
-        case "getGadBranchHead":
-        case "appendGadTrajectoryBatch":
+        case "ensurePiBranch":
+        case "getPiBranchHead":
+        case "appendPiEntryBatch":
+        case "appendGadEvents":
+        case "listGadEvents":
+        case "setBranchHead":
+        case "getEntryById":
+        case "getBranchPath":
+        case "findEntries":
         case "materializePiMessages":
-        case "listGadBranchTrajectory":
         case "listGadBranchToolCalls":
-        case "forkGadBranch":
-        case "listGadBranches":
+        case "forkPiBranch":
+        case "listPiBranches":
         case "listGadBranchFiles":
         case "diffGadStates":
         case "readGadFileAtState":
@@ -419,11 +293,8 @@ export function createGadService(deps: GadServiceDeps): ServiceDefinition {
         case "validateGadHashes":
         case "clearDirtyAfterValidation":
         case "checkGadIntegrity":
+        case "replayGadEvents":
           return dispatch(method, args);
-        case "revokeRawSqlWriteApproval": {
-          const principal = await resolvePrincipal(deps, ctx);
-          return deps.grantStore.revoke(principal.callerId, SQL_WRITE_SUBJECT.id);
-        }
         default:
           throw new ServiceError("gad", method, `Unknown gad method: ${method}`, "ENOSYS");
       }

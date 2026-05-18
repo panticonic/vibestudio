@@ -1282,9 +1282,6 @@ async function main() {
           doDispatch,
           resolveStore: () =>
             toDORef(resolveUserlandService(buildSystem, "natstack.gad.workspace.v1")),
-          approvalQueue,
-          grantStore: userlandApprovalGrantStore,
-          codeIdentityResolver,
         });
       },
       getServiceDefinition() {

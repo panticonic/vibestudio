@@ -5,35 +5,10 @@ type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 type JsonRecord = Record<string, JsonValue>;
 type SqlBinding = null | string | number | boolean | Uint8Array;
 
-const WORKSPACE_ID = "default";
 const EMPTY_MANIFEST_HASH = "manifest:48d1be9db5b498b22aa5db6ae3fa3b7f864bba5b4edf70dfc717cab0c5bea526";
 const EMPTY_STATE_HASH = "state:ffa8c21b351f3a31755c289c37c413d37f4494057cb724cc32ad5971de89d8a7";
 
-const AUTHORITATIVE_TABLES = new Set([
-  "gad_blobs",
-  "gad_payloads",
-  "gad_file_versions",
-  "gad_manifest_nodes",
-  "gad_manifest_entries",
-  "gad_state_roots",
-  "gad_trajectory_items",
-  "gad_state_transitions",
-  "gad_file_change_hunks",
-  "gad_claims",
-  "gad_claim_edges",
-  "gad_theories",
-  "gad_theory_versions",
-  "gad_contradictions",
-  "gad_branches",
-]);
-
-/**
- * Envelope-unified entry types. Mirrors `GadEntryType` in
- * `@workspace/runtime/shared/gad`. The union is duplicated here to keep
- * the gad-store DO self-contained at compile time.
- */
-export type GadEntryType =
-  // Transcript subset
+export type PiEntryType =
   | "message"
   | "model_change"
   | "thinking_level_change"
@@ -42,220 +17,128 @@ export type GadEntryType =
   | "custom"
   | "custom_message"
   | "label"
-  | "session_info"
-  | "leaf"
-  // Provenance subset
-  | "message_block"
-  | "tool_call_requested"
-  | "tool_result_observed"
-  | "file_observed"
-  | "file_read"
-  | "file_mutation_intent"
+  | "session_info";
+
+export type GadEventKind =
+  | "file_observation_recorded"
+  | "file_mutation_planned"
   | "file_mutation_observed"
-  | "workspace_observed"
+  | "dispatch_pending"
+  | "dispatch_resolved"
+  | "dispatch_abandoned"
   | "approval_requested"
   | "approval_resolved"
-  | "dispatch_abandoned"
-  | "branch_created"
-  | "snapshot_marked"
-  | "claim_asserted"
-  | "claim_revised"
-  | "contradiction_detected"
+  | "credential_interruption"
+  | "branch_event"
+  | "system_event"
+  | "claim_recorded"
   | "theory_updated"
-  | "system_event";
+  | "contradiction_recorded";
 
-const VALID_ENTRY_TYPES = new Set<GadEntryType>([
-  "message",
-  "model_change",
-  "thinking_level_change",
-  "compaction",
-  "branch_summary",
-  "custom",
-  "custom_message",
-  "label",
-  "session_info",
-  "leaf",
-  "message_block",
-  "tool_call_requested",
-  "tool_result_observed",
-  "file_observed",
-  "file_read",
-  "file_mutation_intent",
-  "file_mutation_observed",
-  "workspace_observed",
-  "approval_requested",
-  "approval_resolved",
-  "dispatch_abandoned",
-  "branch_created",
-  "snapshot_marked",
-  "claim_asserted",
-  "claim_revised",
-  "contradiction_detected",
-  "theory_updated",
-  "system_event",
-]);
-
-const STATE_MUTATING_ENTRY_TYPES = new Set<GadEntryType>([
-  "file_observed",
-  "file_mutation_observed",
-  "workspace_observed",
-]);
-
-const TOOL_CALL_ID_BEARING_TYPES = new Set<GadEntryType>([
-  "tool_call_requested",
-  "tool_result_observed",
-  "file_mutation_intent",
-  "file_mutation_observed",
-]);
-
-// Lightweight UUID shape check. We don't require strict UUIDv7 here — any
-// non-empty string that looks like a UUID is accepted. The actual UUIDv7
-// minting happens in the adapter; this is a defence against malformed input.
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
-
-function isLikelyEntryId(value: unknown): value is string {
-  return typeof value === "string" && UUID_RE.test(value);
-}
-
-export interface GadTrajectoryItemSpec {
+export interface PiEntrySpec {
   entryId: string;
   parentEntryId: string | null;
-  entryType: GadEntryType;
+  entryType: PiEntryType;
   payload: JsonRecord;
+  preStateHash?: string | null;
+  postStateHash?: string | null;
   actor?: string | null;
   metadata?: JsonRecord | null;
 }
 
-export interface AppendGadTrajectoryBatchInput {
-  workspaceId?: string | null;
-  branchId: string;
-  expectedTrajectoryHash?: string | null;
-  expectedStateHash?: string | null;
-  items: GadTrajectoryItemSpec[];
-}
-
-export interface EnsureGadBranchInput {
-  workspaceId?: string | null;
-  branchId: string;
-  channelId?: string | null;
-  contextId?: string | null;
+export interface GadEventSpec {
+  eventId: string;
+  kind: GadEventKind;
+  anchorKind?: string | null;
+  anchorId?: string | null;
+  payload: JsonRecord;
   metadata?: JsonRecord | null;
 }
 
-export interface ForkGadBranchInput {
-  workspaceId?: string | null;
-  sourceBranchId: string;
-  newBranchId?: string | null;
-  entryId?: string | null;
+export interface EnsurePiBranchInput {
+  branchId: string;
   channelId?: string | null;
-  contextId?: string | null;
+  metadata?: JsonRecord | null;
 }
 
-export interface SetBranchHeadInput {
-  workspaceId?: string | null;
+export interface PiBranchHead {
   branchId: string;
-  entryId: string | null;
-  expectedHeadTrajectoryHash?: string | null;
-}
-
-export interface GetEntryByIdInput {
-  workspaceId?: string | null;
-  entryId: string;
-}
-
-export interface GetBranchPathInput {
-  workspaceId?: string | null;
-  branchId: string;
-  throughEntryId?: string | null;
-}
-
-export interface FindBranchEntriesByTypeInput {
-  workspaceId?: string | null;
-  branchId: string;
-  entryType: GadEntryType;
-  offset?: number | null;
-  limit?: number | null;
-}
-
-export interface GadIntegrityError {
-  code: string;
-  message: string;
-  trajectoryId?: number;
-  trajectoryHash?: string;
-  entryId?: string;
-  branchId?: string;
-  stateHash?: string;
-  path?: string;
-  toolCallId?: string;
-}
-
-export interface GadBranchHead {
-  workspaceId: string;
-  branchId: string;
-  headTrajectoryId: number | null;
-  headTrajectoryHash: string | null;
   headEntryId: string | null;
+  headEntryHash: string | null;
   headStateHash: string;
-  dirty: boolean;
 }
 
-export interface GadEntryRow {
-  trajectoryId: number;
-  trajectoryHash: string;
+export interface AppendPiEntryBatchInput {
+  branchId: string;
+  expectedHeadEntryHash?: string | null;
+  expectedStateHash?: string | null;
+  items: PiEntrySpec[];
+}
+
+export interface AppendPiEntryBatchResult extends PiBranchHead {
+  items: Array<{ entryId: string; entryHash: string; parentEntryId: string | null }>;
+}
+
+export interface PiEntryRow {
   entryId: string;
   parentEntryId: string | null;
-  entryType: GadEntryType;
+  entryType: PiEntryType;
   actor: string | null;
+  entryHash: string;
+  parentEntryHash: string | null;
+  preStateHash: string;
+  postStateHash: string;
   payload: JsonRecord;
   metadata: JsonRecord | null;
   createdAt: string;
 }
 
-interface BranchTrajectoryOptions {
-  order?: "ASC" | "DESC";
-  limit?: number | null;
-  throughTrajectoryId?: number | null;
-  includePayload?: boolean;
+interface PiDbRow {
+  entry_id: string;
+  parent_entry_id: string | null;
+  entry_type: PiEntryType;
+  actor: string | null;
+  entry_hash: string;
+  parent_entry_hash: string | null;
+  pre_state_hash: string;
+  post_state_hash: string;
+  raw_entry_json: string;
+  metadata_json: string | null;
+  introduced_at: string;
 }
 
-interface ManifestFileEntry {
+interface FileEntry {
   path: string;
-  fileVersionId: number | null;
+  fileVersionId?: number;
   contentHash: string;
-  mode: number | null;
+  mode: number;
 }
 
 interface ManifestEntryPlan {
   parentHash: string;
   name: string;
   entryKind: "dir" | "file";
-  childManifestHash: string | null;
-  fileVersionId: number | null;
-  path: string | null;
+  childManifestHash?: string | null;
+  file?: FileEntry | null;
 }
 
-interface ManifestNodePlan {
-  hash: string;
-  entries: ManifestEntryPlan[];
-}
-
-interface StateTransitionPlan {
-  rootHash: string;
+interface WorktreeStatePlan {
   stateHash: string;
-  nodes: ManifestNodePlan[];
-  files: ManifestFileEntry[];
-  oldFile: ManifestFileEntry | null;
-  newFile: { path: string; contentHash: string; mode: number | null } | null;
-  newFileVersionId?: number | null;
+  manifestRootHash: string;
+  manifestNodes: string[];
+  manifestEntries: ManifestEntryPlan[];
+  files: FileEntry[];
 }
 
-interface PendingIntent {
+interface MutationObservedPlan {
+  inputStateHash: string;
+  outputStateHash: string;
   path: string;
-  beforeHash: string | null;
-  beforeSize: number | null;
-  toolCallId: string | null;
-  plannedTool: string | null;
-  plannedParams: JsonRecord | null;
+  operation: string;
+  contentHash: string | null;
+  status: string;
+  beforeFileVersionId: number | null;
+  statePlan: WorktreeStatePlan | null;
 }
 
 function nowIso(): string {
@@ -263,17 +146,25 @@ function nowIso(): string {
 }
 
 function json(value: unknown): string | null {
-  if (value == null) return null;
-  return JSON.stringify(value);
+  return value == null ? null : JSON.stringify(value);
 }
 
-function parseJsonRecord(value: unknown): JsonRecord {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-  return value as JsonRecord;
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
 }
 
-function stableJson(value: unknown): string {
-  return JSON.stringify(sortJson(value));
+function asNumber(value: unknown): number {
+  return typeof value === "number" ? value : Number(value ?? 0);
+}
+
+function parseRecord(value: string | null | undefined): JsonRecord {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as JsonRecord : {};
+  } catch {
+    return {};
+  }
 }
 
 function sortJson(value: unknown): unknown {
@@ -288,109 +179,38 @@ function sortJson(value: unknown): unknown {
 }
 
 async function sha256(domain: string, value: unknown): Promise<string> {
-  const bytes = new TextEncoder().encode(stableJson(value));
+  const bytes = new TextEncoder().encode(JSON.stringify(sortJson(value)));
   const digest = await crypto.subtle.digest("SHA-256", bytes);
   const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   return `${domain}:${hex}`;
 }
 
+function quoteIdentifier(identifier: string): string {
+  return `"${identifier.replace(/"/gu, "\"\"")}"`;
+}
+
 function normalizePath(path: string): string {
   const normalized = path.replace(/\\/gu, "/").replace(/\/+/gu, "/").replace(/^\.\//u, "");
-  if (!normalized || normalized.startsWith("/") || normalized.includes("..")) {
-    throw new Error(`Invalid workspace-relative path: ${path}`);
+  if (!normalized || normalized.startsWith("/") || normalized.split("/").includes("..")) {
+    throw new Error(`Invalid worktree-relative path: ${path}`);
   }
   return normalized;
 }
 
-function sqlVerb(sql: string): string {
-  const trimmed = sql.trimStart().replace(/^--.*(?:\n|$)/u, "").trimStart();
-  return trimmed.match(/^[A-Za-z]+/u)?.[0]?.toUpperCase() ?? "UNKNOWN";
+function readOnlySql(sql: string): boolean {
+  const verb = sql.trimStart().match(/^[A-Za-z]+/u)?.[0]?.toUpperCase();
+  return verb === "SELECT" || verb === "EXPLAIN" || verb === "PRAGMA";
 }
 
-function isReadOnlySql(sql: string): boolean {
-  const verb = sqlVerb(sql);
-  return verb === "SELECT" || verb === "EXPLAIN";
-}
-
-function extractSqlTables(sql: string): string[] {
-  const compact = sql.replace(/\s+/gu, " ");
-  const names = new Set<string>();
-  const patterns = [
-    /\bUPDATE\s+["`[]?([A-Za-z_][\w]*)/giu,
-    /\bINTO\s+["`[]?([A-Za-z_][\w]*)/giu,
-    /\bFROM\s+["`[]?([A-Za-z_][\w]*)/giu,
-    /\bTABLE\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?["`[]?([A-Za-z_][\w]*)/giu,
-  ];
-  for (const pattern of patterns) {
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(compact))) {
-      if (match[1]) names.add(match[1]);
-    }
-  }
-  return [...names].filter((name) => !name.startsWith("sqlite_"));
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function asNumber(value: unknown): number {
-  return typeof value === "number" ? value : Number(value ?? 0);
-}
-
-function quoteIdentifier(identifier: string): string {
-  return `"${identifier.replace(/"/g, "\"\"")}"`;
-}
-
-function textLineCount(text: string | null): number | null {
-  if (text == null) return null;
-  if (text.length === 0) return 0;
-  return text.split("\n").length;
-}
-
-function lineForSubstring(haystack: string | null, needle: string | null): number | null {
-  if (!haystack || !needle) return null;
-  const index = haystack.indexOf(needle);
-  if (index < 0) return null;
-  return haystack.slice(0, index).split("\n").length;
-}
-
-function byteLength(text: string | null): number | null {
-  return text == null ? null : new TextEncoder().encode(text).byteLength;
-}
-
-function lineRangeEnd(start: number | null, count: number | null): number | null {
-  if (start == null || count == null) return null;
-  return start + Math.max(count - 1, 0);
-}
-
-function hunkOverlapsLineRange(row: JsonRecord, startLine: number, endLine: number): boolean {
-  const hunkStart = row["new_start_line"] == null ? null : asNumber(row["new_start_line"]);
-  const hunkCount = row["new_line_count"] == null ? null : asNumber(row["new_line_count"]);
-  const hunkEnd = lineRangeEnd(hunkStart, hunkCount);
-  return hunkStart == null || hunkEnd == null || (hunkStart <= endLine && hunkEnd >= startLine);
-}
-
-function translateLineRangeBeforeHunk(row: JsonRecord, startLine: number, endLine: number): { startLine: number; endLine: number } | null {
-  const oldCount = row["old_line_count"] == null ? null : asNumber(row["old_line_count"]);
-  const newStart = row["new_start_line"] == null ? null : asNumber(row["new_start_line"]);
-  const newCount = row["new_line_count"] == null ? null : asNumber(row["new_line_count"]);
-  const newEnd = lineRangeEnd(newStart, newCount);
-  if (oldCount == null || newStart == null || newCount == null || newEnd == null) return null;
-  if (endLine < newStart) return { startLine, endLine };
-  if (startLine > newEnd) {
-    const delta = oldCount - newCount;
-    return { startLine: startLine + delta, endLine: endLine + delta };
-  }
-  return null;
-}
-
-function toolCallIdFromPayload(payload: JsonRecord): string | null {
-  return asString(payload["toolCallId"]);
+function contentBlocks(message: JsonRecord): JsonRecord[] {
+  const content = message["content"];
+  if (typeof content === "string") return [{ type: "text", text: content }];
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((block) => block && typeof block === "object" && !Array.isArray(block) ? [block as JsonRecord] : []);
 }
 
 export class GadWorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 9;
+  static override schemaVersion = 10;
 
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
@@ -398,187 +218,250 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   protected createTables(): void {
-    this.resetGadSchema();
-    this.createImmutableTables();
+    this.dropAllPersistenceTables();
+    this.createFreshSchema();
   }
 
-  private resetGadSchema(): void {
-    const staleViews = this.sql.exec(
+  private dropAllPersistenceTables(): void {
+    const rows = this.sql.exec(
       `SELECT name FROM sqlite_master
-       WHERE type = 'view'
-         AND (name LIKE 'gad_%' OR name IN ('pi_messages_view', 'pi_message_blocks_view'))`,
+       WHERE type IN ('table', 'view')
+         AND (name LIKE 'pi_%' OR name LIKE 'gad_%' OR name LIKE 'semantic_%'
+              OR name IN ('branches', 'sessions', 'conversation_turns', 'tool_calls',
+                          'file_versions', 'tracked_files', 'blobs'))`,
     ).toArray() as Array<{ name: string }>;
-    for (const view of staleViews) {
-      this.sql.exec(`DROP VIEW IF EXISTS ${quoteIdentifier(String(view.name))}`);
-    }
-    const staleTables = this.sql.exec(
-      `SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'gad_%'`,
-    ).toArray() as Array<{ name: string }>;
-    const legacyNonGadTables = [
-      "blob_policies",
-      "embedding_vectors",
-      "semantic_relations",
-      "semantic_chunk_mentions",
-      "semantic_chunks",
-      "parsed_structures",
-      "plans",
-      "branch_snapshot_files",
-      "branch_snapshots",
-      "tool_call_mutations",
-      "tool_call_reads",
-      "file_versions",
-      "tool_calls",
-      "conversation_turns",
-      "sessions",
-      "tracked_files",
-      "branches",
-      "blobs",
-      "pi_messages_view",
-      "pi_message_blocks_view",
-    ];
-    for (const table of [...legacyNonGadTables, ...staleTables.map((row) => String(row.name))]) {
-      this.sql.exec(`DROP TABLE IF EXISTS ${quoteIdentifier(table)}`);
+    for (const row of rows) {
+      this.sql.exec(`DROP TABLE IF EXISTS ${quoteIdentifier(String(row.name))}`);
+      this.sql.exec(`DROP VIEW IF EXISTS ${quoteIdentifier(String(row.name))}`);
     }
   }
 
-  private createImmutableTables(): void {
+  private createFreshSchema(): void {
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_blobs (
-        workspace_id TEXT NOT NULL,
-        hash TEXT NOT NULL,
-        size INTEGER NOT NULL DEFAULT 0,
-        mime_type TEXT,
-        policy_id TEXT,
+      CREATE TABLE pi_branches (
+        branch_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        channel_id TEXT,
+        head_entry_id TEXT,
+        head_entry_hash TEXT,
+        head_state_hash TEXT NOT NULL,
+        forked_from_branch_id TEXT,
+        forked_from_entry_id TEXT,
+        forked_from_state_hash TEXT,
+        metadata_json TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        PRIMARY KEY (workspace_id, hash)
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
+    this.sql.exec(`CREATE INDEX idx_pi_branches_channel ON pi_branches(channel_id)`);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_payloads (
-        workspace_id TEXT NOT NULL,
-        hash TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        json TEXT,
+      CREATE TABLE pi_session_entries (
+        entry_id TEXT PRIMARY KEY,
+        parent_entry_id TEXT,
+        entry_type TEXT NOT NULL,
+        actor TEXT,
+        entry_hash TEXT NOT NULL UNIQUE,
+        parent_entry_hash TEXT,
+        pre_state_hash TEXT NOT NULL,
+        post_state_hash TEXT NOT NULL,
+        role TEXT,
+        timestamp_ms INTEGER,
+        api TEXT,
+        provider TEXT,
+        model TEXT,
+        response_model TEXT,
+        response_id TEXT,
+        stop_reason TEXT,
+        error_message TEXT,
+        usage_input INTEGER,
+        usage_output INTEGER,
+        usage_cache_read INTEGER,
+        usage_cache_write INTEGER,
+        usage_total_tokens INTEGER,
+        usage_cost_input REAL,
+        usage_cost_output REAL,
+        usage_cost_cache_read REAL,
+        usage_cost_cache_write REAL,
+        usage_cost_total REAL,
+        tool_call_id TEXT,
+        tool_name TEXT,
+        is_error INTEGER,
+        tool_result_summary TEXT,
+        tool_result_details_hash TEXT,
+        model_change_provider TEXT,
+        model_change_model_id TEXT,
+        thinking_level TEXT,
+        compaction_first_kept_entry_id TEXT,
+        compaction_tokens_before INTEGER,
+        raw_entry_json TEXT NOT NULL,
+        metadata_json TEXT,
+        introduced_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`CREATE INDEX idx_pi_entries_parent ON pi_session_entries(parent_entry_id)`);
+    this.sql.exec(`CREATE INDEX idx_pi_entries_type ON pi_session_entries(entry_type)`);
+    this.sql.exec(`CREATE INDEX idx_pi_entries_tool_result ON pi_session_entries(tool_call_id) WHERE role = 'toolResult'`);
+    this.sql.exec(`CREATE INDEX idx_pi_entries_state ON pi_session_entries(post_state_hash)`);
+    this.sql.exec(`
+      CREATE TABLE pi_message_blocks (
+        block_id TEXT PRIMARY KEY,
+        message_entry_id TEXT NOT NULL,
+        block_index INTEGER NOT NULL,
+        block_type TEXT NOT NULL,
         text TEXT,
-        blob_hash TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        PRIMARY KEY (workspace_id, hash)
+        text_signature TEXT,
+        thinking TEXT,
+        thinking_signature TEXT,
+        thinking_redacted INTEGER,
+        image_blob_hash TEXT,
+        image_mime_type TEXT,
+        image_byte_size INTEGER,
+        tool_call_id TEXT,
+        tool_name TEXT,
+        tool_arguments_json TEXT,
+        tool_arguments_hash TEXT,
+        thought_signature TEXT,
+        UNIQUE (message_entry_id, block_index)
       )
     `);
+    this.sql.exec(`CREATE INDEX idx_pi_blocks_message ON pi_message_blocks(message_entry_id, block_index)`);
+    this.sql.exec(`CREATE INDEX idx_pi_blocks_tool_call ON pi_message_blocks(tool_call_id) WHERE tool_call_id IS NOT NULL`);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_file_versions (
-        id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        path TEXT NOT NULL,
-        content_hash TEXT NOT NULL,
-        mode INTEGER,
+      CREATE TABLE pi_tool_calls (
+        tool_call_id TEXT PRIMARY KEY,
+        assistant_entry_id TEXT NOT NULL,
+        block_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_file_versions_path ON gad_file_versions(workspace_id, path)`);
+    this.sql.exec(`CREATE INDEX idx_pi_tool_calls_assistant ON pi_tool_calls(assistant_entry_id)`);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_manifest_nodes (
-        workspace_id TEXT NOT NULL,
-        hash TEXT NOT NULL,
+      CREATE TABLE gad_events (
+        event_id TEXT NOT NULL UNIQUE,
+        event_seq INTEGER PRIMARY KEY,
+        event_hash TEXT NOT NULL UNIQUE,
+        prev_event_hash TEXT,
         kind TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        PRIMARY KEY (workspace_id, hash)
+        anchor_kind TEXT,
+        anchor_id TEXT,
+        payload_json TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`CREATE INDEX idx_gad_events_anchor ON gad_events(anchor_kind, anchor_id, event_seq)`);
+    this.sql.exec(`CREATE INDEX idx_gad_events_kind ON gad_events(kind, event_seq)`);
+    this.sql.exec(`
+      CREATE TABLE gad_blobs (
+        hash TEXT PRIMARY KEY,
+        size INTEGER NOT NULL DEFAULT 0,
+        mime_type TEXT,
+        policy_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_manifest_entries (
-        workspace_id TEXT NOT NULL,
+      CREATE TABLE gad_worktree_states (
+        state_hash TEXT PRIMARY KEY,
+        manifest_root_hash TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE gad_file_versions (
+        id INTEGER PRIMARY KEY,
+        path TEXT NOT NULL,
+        content_hash TEXT NOT NULL,
+        mode INTEGER NOT NULL DEFAULT 33188,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE (path, content_hash, mode)
+      )
+    `);
+    this.sql.exec(`CREATE INDEX idx_gad_file_versions_path ON gad_file_versions(path)`);
+    this.sql.exec(`
+      CREATE TABLE gad_manifest_nodes (
+        hash TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE gad_manifest_entries (
         parent_hash TEXT NOT NULL,
         name TEXT NOT NULL,
         entry_kind TEXT NOT NULL,
         child_manifest_hash TEXT,
         file_version_id INTEGER,
-        PRIMARY KEY (workspace_id, parent_hash, name)
+        PRIMARY KEY (parent_hash, name)
       )
     `);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_manifest_entries_child ON gad_manifest_entries(workspace_id, child_manifest_hash)`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_manifest_entries_file ON gad_manifest_entries(workspace_id, file_version_id)`);
+    this.sql.exec(`CREATE INDEX idx_gad_manifest_entries_file ON gad_manifest_entries(file_version_id)`);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_state_roots (
-        workspace_id TEXT NOT NULL,
-        state_hash TEXT NOT NULL,
-        manifest_root_hash TEXT NOT NULL,
-        produced_by_trajectory_id INTEGER,
-        metadata_json TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        PRIMARY KEY (workspace_id, state_hash)
-      )
-    `);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_state_roots_manifest ON gad_state_roots(workspace_id, manifest_root_hash)`);
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_branches (
-        workspace_id TEXT NOT NULL,
-        id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        parent_branch_id TEXT,
-        channel_id TEXT,
-        context_id TEXT,
-        forked_from_trajectory_id INTEGER,
-        forked_from_state_hash TEXT,
-        head_trajectory_id INTEGER,
-        head_trajectory_hash TEXT,
-        head_state_hash TEXT NOT NULL,
-        dirty INTEGER NOT NULL DEFAULT 0,
-        metadata_json TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        PRIMARY KEY (workspace_id, id)
-      )
-    `);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_branches_channel ON gad_branches(workspace_id, channel_id)`);
-    // Envelope schema: every row has `entry_id` (UUIDv7), `parent_entry_id`
-    // (logical parent), and `entry_type` (discriminator). `parent_id` /
-    // `parent_hash` keep the chain-internal hash linkage. `tool_call_id`
-    // stays as a denormalized lookup column populated at insert time from
-    // payloads that carry a `toolCallId`.
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_trajectory_items (
-        id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        hash TEXT NOT NULL,
-        parent_id INTEGER,
-        parent_hash TEXT,
-        introduced_on_branch_id TEXT,
-        entry_id TEXT NOT NULL,
-        parent_entry_id TEXT,
-        entry_type TEXT NOT NULL,
-        actor TEXT,
-        payload_hash TEXT,
-        tool_call_id TEXT,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        metadata_json TEXT,
-        UNIQUE (workspace_id, hash),
-        UNIQUE (workspace_id, entry_id)
-      )
-    `);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_introduced_branch ON gad_trajectory_items(workspace_id, introduced_on_branch_id, id)`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_parent ON gad_trajectory_items(workspace_id, parent_id)`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_tool_call ON gad_trajectory_items(workspace_id, tool_call_id)`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_parent_entry ON gad_trajectory_items(workspace_id, parent_entry_id)`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_trajectory_entry_type ON gad_trajectory_items(workspace_id, entry_type)`);
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_state_transitions (
-        id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        trajectory_id INTEGER NOT NULL,
+      CREATE TABLE gad_state_transitions (
+        event_id TEXT PRIMARY KEY,
         input_state_hash TEXT NOT NULL,
         output_state_hash TEXT NOT NULL,
-        created_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE (workspace_id, trajectory_id)
+        produced_by_tool_call_id TEXT,
+        produced_by_mutation_id TEXT,
+        summary TEXT,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_state_transitions_output ON gad_state_transitions(workspace_id, output_state_hash)`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_state_transitions_trajectory ON gad_state_transitions(workspace_id, trajectory_id)`);
+    this.sql.exec(`CREATE INDEX idx_gad_state_transitions_output ON gad_state_transitions(output_state_hash)`);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_file_change_hunks (
+      CREATE TABLE gad_file_mutations (
+        mutation_id TEXT PRIMARY KEY,
+        created_event_id TEXT NOT NULL,
+        latest_event_id TEXT NOT NULL,
+        anchor_kind TEXT NOT NULL,
+        anchor_id TEXT NOT NULL,
+        tool_call_id TEXT,
+        path TEXT NOT NULL,
+        operation TEXT NOT NULL,
+        status TEXT NOT NULL,
+        planned_tool TEXT,
+        planned_params_json TEXT,
+        before_hash TEXT,
+        before_size INTEGER,
+        after_hash TEXT,
+        after_size INTEGER,
+        input_state_hash TEXT,
+        output_state_hash TEXT,
+        state_transition_event_id TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`CREATE INDEX idx_gad_mutations_tool ON gad_file_mutations(tool_call_id)`);
+    this.sql.exec(`CREATE INDEX idx_gad_mutations_path ON gad_file_mutations(path, created_at)`);
+    this.sql.exec(`
+      CREATE TABLE gad_file_observations (
+        observation_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        anchor_kind TEXT NOT NULL,
+        anchor_id TEXT NOT NULL,
+        tool_call_id TEXT,
+        path TEXT NOT NULL,
+        observed_state_hash TEXT NOT NULL,
+        file_version_id INTEGER,
+        content_hash TEXT,
+        size INTEGER,
+        mime_type TEXT,
+        range_start_line INTEGER,
+        range_end_line INTEGER,
+        summary TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`CREATE INDEX idx_gad_observations_path ON gad_file_observations(path, created_at)`);
+    this.sql.exec(`
+      CREATE TABLE gad_file_change_hunks (
         id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        trajectory_id INTEGER NOT NULL,
+        mutation_id TEXT NOT NULL,
         path TEXT NOT NULL,
         before_file_version_id INTEGER,
         after_file_version_id INTEGER,
@@ -586,77 +469,152 @@ export class GadWorkspaceDO extends DurableObjectBase {
         old_line_count INTEGER,
         new_start_line INTEGER,
         new_line_count INTEGER,
-        old_start_byte INTEGER,
-        old_byte_count INTEGER,
-        new_start_byte INTEGER,
-        new_byte_count INTEGER,
         old_text_hash TEXT,
         new_text_hash TEXT
       )
     `);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_file_change_hunks_path ON gad_file_change_hunks(workspace_id, path, trajectory_id)`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_file_change_hunks_after ON gad_file_change_hunks(workspace_id, after_file_version_id)`);
-    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_gad_file_change_hunks_before ON gad_file_change_hunks(workspace_id, before_file_version_id)`);
+    this.sql.exec(`CREATE INDEX idx_gad_hunks_path ON gad_file_change_hunks(path, id)`);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_claims (
+      CREATE TABLE gad_dispatches (
+        dispatch_call_id TEXT PRIMARY KEY,
+        created_event_id TEXT NOT NULL,
+        latest_event_id TEXT NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provider_participant_id TEXT,
+        provider_handle TEXT,
+        method_name TEXT,
+        params_json TEXT,
+        result_entry_id TEXT,
+        resolved_event_id TEXT,
+        abandoned_reason TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE gad_approvals (
+        approval_id TEXT PRIMARY KEY,
+        requested_event_id TEXT NOT NULL,
+        latest_event_id TEXT NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        requested_by_entry_id TEXT NOT NULL,
+        approval_level INTEGER,
+        request_json TEXT,
+        decision TEXT,
+        resolved_event_id TEXT,
+        resolved_by TEXT,
+        resolved_at TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE gad_system_events (
+        system_event_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        anchor_kind TEXT,
+        anchor_id TEXT,
+        kind TEXT NOT NULL,
+        payload_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE gad_credential_interruptions (
+        interruption_id TEXT PRIMARY KEY,
+        created_event_id TEXT NOT NULL,
+        latest_event_id TEXT NOT NULL,
+        anchor_kind TEXT,
+        anchor_id TEXT,
+        provider_id TEXT NOT NULL,
+        model_base_url TEXT,
+        resume_entry_id TEXT,
+        resolved_event_id TEXT,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE gad_branch_events (
+        branch_event_id TEXT PRIMARY KEY,
+        event_id TEXT NOT NULL,
+        branch_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        source_branch_id TEXT,
+        source_entry_id TEXT,
+        source_state_hash TEXT,
+        payload_json TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE gad_claims (
         id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        claim_hash TEXT NOT NULL,
+        claim_hash TEXT NOT NULL UNIQUE,
+        created_event_id TEXT NOT NULL,
+        latest_event_id TEXT NOT NULL,
+        anchor_kind TEXT,
+        anchor_id TEXT,
         text TEXT NOT NULL,
         normalized_text TEXT,
         status TEXT NOT NULL DEFAULT 'active',
         confidence REAL,
-        created_trajectory_id INTEGER NOT NULL,
-        UNIQUE (workspace_id, claim_hash)
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_claim_edges (
+      CREATE TABLE gad_claim_edges (
         id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
         source_claim_id INTEGER NOT NULL,
-        target_type TEXT NOT NULL,
+        target_kind TEXT NOT NULL,
         target_id TEXT NOT NULL,
         relation TEXT NOT NULL,
-        trajectory_id INTEGER NOT NULL
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_theories (
+      CREATE TABLE gad_theories (
         id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        name TEXT NOT NULL,
-        current_version_id INTEGER,
-        UNIQUE (workspace_id, name)
+        name TEXT NOT NULL UNIQUE,
+        current_version_id INTEGER
       )
     `);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_theory_versions (
+      CREATE TABLE gad_theory_versions (
         id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
         theory_id INTEGER NOT NULL,
-        trajectory_id INTEGER NOT NULL,
+        event_id TEXT NOT NULL,
+        anchor_kind TEXT,
+        anchor_id TEXT,
         parent_version_id INTEGER,
         summary TEXT,
-        status TEXT NOT NULL DEFAULT 'active'
+        status TEXT NOT NULL DEFAULT 'active',
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )
     `);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_contradictions (
+      CREATE TABLE gad_contradictions (
         id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
+        created_event_id TEXT NOT NULL,
+        latest_event_id TEXT NOT NULL,
+        anchor_kind TEXT,
+        anchor_id TEXT,
         left_claim_id INTEGER,
         right_claim_id INTEGER,
-        detected_trajectory_id INTEGER NOT NULL,
-        resolved_trajectory_id INTEGER,
+        resolved_event_id TEXT,
         status TEXT NOT NULL DEFAULT 'open',
-        notes TEXT
+        notes TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        resolved_at TEXT
       )
     `);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS gad_index_jobs (
+      CREATE TABLE gad_index_jobs (
         id INTEGER PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
         source_hash TEXT NOT NULL,
         source_kind TEXT NOT NULL,
         job_kind TEXT NOT NULL,
@@ -664,1995 +622,1328 @@ export class GadWorkspaceDO extends DurableObjectBase {
         error TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-        UNIQUE (workspace_id, source_hash, job_kind)
+        UNIQUE (source_hash, job_kind)
       )
     `);
-    this.ensureEmptyStateRoot(WORKSPACE_ID);
+    this.ensureEmptyState();
   }
 
   rawSql(sql: string, bindings: SqlBinding[] = []): { rows: JsonRecord[] } {
     this.ensureReady();
-    if (!isReadOnlySql(sql) && extractSqlTables(sql).some((table) => AUTHORITATIVE_TABLES.has(table))) {
-      this.markDirty(WORKSPACE_ID);
-    }
-    const rows = this.sql.exec(sql, ...bindings).toArray() as JsonRecord[];
-    return { rows };
+    if (!readOnlySql(sql)) throw new Error("rawSql writes are disabled for the clean GAD architecture");
+    return { rows: this.sql.exec(sql, ...bindings).toArray() as JsonRecord[] };
   }
 
   query(sql: string, bindings: SqlBinding[] = []): { rows: JsonRecord[] } {
     return this.rawSql(sql, bindings);
   }
 
-  ensureBlob(hash: string, size = 0, mimeType?: string | null, workspaceId = WORKSPACE_ID): void {
+  ensureBlob(hash: string, size = 0, mimeType?: string | null): void {
     this.ensureReady();
     this.sql.exec(
-      `INSERT OR IGNORE INTO gad_blobs (workspace_id, hash, size, mime_type) VALUES (?, ?, ?, ?)`,
-      workspaceId,
+      `INSERT OR IGNORE INTO gad_blobs (hash, size, mime_type) VALUES (?, ?, ?)`,
       hash,
       size,
       mimeType ?? null,
     );
   }
 
-  ensureGadBranch(input: EnsureGadBranchInput): GadBranchHead {
+  ensurePiBranch(input: EnsurePiBranchInput): PiBranchHead {
     this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const branchId = input.branchId;
-    if (!branchId) throw new Error("ensureGadBranch requires branchId");
-    this.ensureEmptyStateRoot(workspaceId);
+    if (!input.branchId) throw new Error("ensurePiBranch requires branchId");
     this.sql.exec(
-      `INSERT INTO gad_branches (
-         workspace_id, id, name, channel_id, context_id, head_state_hash,
-         forked_from_state_hash, metadata_json, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(workspace_id, id) DO UPDATE SET
-         channel_id = COALESCE(excluded.channel_id, gad_branches.channel_id),
-         context_id = COALESCE(excluded.context_id, gad_branches.context_id),
-         metadata_json = COALESCE(excluded.metadata_json, gad_branches.metadata_json),
+      `INSERT INTO pi_branches (branch_id, name, channel_id, head_state_hash, forked_from_state_hash, metadata_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(branch_id) DO UPDATE SET
+         channel_id = COALESCE(excluded.channel_id, pi_branches.channel_id),
+         metadata_json = COALESCE(excluded.metadata_json, pi_branches.metadata_json),
          updated_at = excluded.updated_at`,
-      workspaceId,
-      branchId,
-      branchId,
+      input.branchId,
+      input.branchId,
       input.channelId ?? null,
-      input.contextId ?? null,
       EMPTY_STATE_HASH,
       EMPTY_STATE_HASH,
       json(input.metadata),
       nowIso(),
     );
-    return this.getGadBranchHead({ workspaceId, branchId });
+    return this.getPiBranchHead({ branchId: input.branchId });
   }
 
-  getGadBranchHead(input: { workspaceId?: string | null; branchId: string }): GadBranchHead {
+  getPiBranchHead(input: { branchId: string }): PiBranchHead {
     this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
     const row = this.sql.exec(
-      `SELECT b.*, ti.entry_id AS head_entry_id
-       FROM gad_branches b
-       LEFT JOIN gad_trajectory_items ti
-         ON ti.workspace_id = b.workspace_id AND ti.id = b.head_trajectory_id
-       WHERE b.workspace_id = ? AND b.id = ?`,
-      workspaceId,
+      `SELECT branch_id, head_entry_id, head_entry_hash, head_state_hash FROM pi_branches WHERE branch_id = ?`,
       input.branchId,
     ).toArray()[0] as JsonRecord | undefined;
-    if (!row) throw new Error(`Unknown gad branch: ${input.branchId}`);
+    if (!row) throw new Error(`Unknown Pi branch: ${input.branchId}`);
     return {
-      workspaceId,
       branchId: input.branchId,
-      headTrajectoryId: row["head_trajectory_id"] == null ? null : asNumber(row["head_trajectory_id"]),
-      headTrajectoryHash: asString(row["head_trajectory_hash"]),
       headEntryId: asString(row["head_entry_id"]),
+      headEntryHash: asString(row["head_entry_hash"]),
       headStateHash: asString(row["head_state_hash"]) ?? EMPTY_STATE_HASH,
-      dirty: row["dirty"] === 1,
     };
   }
 
-  async appendGadTrajectoryBatch(input: AppendGadTrajectoryBatchInput): Promise<{
-    workspaceId: string;
-    branchId: string;
-    headTrajectoryId: number | null;
-    headTrajectoryHash: string | null;
-    headEntryId: string | null;
-    headStateHash: string;
-    items: Array<{ id: number; hash: string; entryId: string; parentEntryId: string | null }>;
-  }> {
+  async appendPiEntryBatch(input: AppendPiEntryBatchInput): Promise<AppendPiEntryBatchResult> {
     this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const branch = this.getGadBranchHead({ workspaceId, branchId: input.branchId });
-    if (branch.dirty) throw new Error(`gad branch ${input.branchId} is dirty; validate before appending`);
-    const branchId = branch.branchId;
-    if ("expectedTrajectoryHash" in input && (input.expectedTrajectoryHash ?? null) !== branch.headTrajectoryHash) {
-      throw new Error("gad head conflict");
+    const branch = this.getPiBranchHead({ branchId: input.branchId });
+    if ("expectedHeadEntryHash" in input && (input.expectedHeadEntryHash ?? null) !== branch.headEntryHash) {
+      throw new Error("pi head conflict");
     }
     if ("expectedStateHash" in input && (input.expectedStateHash ?? null) !== branch.headStateHash) {
-      throw new Error("gad state conflict");
+      throw new Error("pi state conflict");
     }
-
-    let parentHash = branch.headTrajectoryHash;
-    let parentId = branch.headTrajectoryId;
-    let currentState = branch.headStateHash;
-    let currentFiles: ManifestFileEntry[] | null = null;
-
-    // Track entry ids appearing in this batch so parent_entry_id can
-    // reference items earlier in the same batch.
-    const batchEntryIds = new Set<string>();
-
-    const prepared: Array<{
-      hash: string;
-      payloadHash: string | null;
-      payloadKind: string | null;
-      payloadJson: string | null;
-      payloadText: string | null;
-      spec: GadTrajectoryItemSpec;
-      toolCallId: string | null;
-      inputStateHash: string | null;
-      outputStateHash: string | null;
-      parentHash: string | null;
-      parentId: number | null;
-      stateTransition?: StateTransitionPlan;
-      intentPayload?: PendingIntent | null;
-    }> = [];
-
+    let parentEntryId = branch.headEntryId;
+    let parentEntryHash = branch.headEntryHash;
+    let stateHash = branch.headStateHash;
+    const prepared: Array<PiEntrySpec & { entryHash: string; parentEntryHash: string | null; parentEntryId: string | null; preStateHash: string; postStateHash: string }> = [];
     for (const spec of input.items) {
-      // Envelope validation
-      if (!spec || typeof spec !== "object") throw new Error("Malformed GAD append: item is not an object");
-      if (!isLikelyEntryId(spec.entryId)) {
-        throw new Error(`Malformed GAD append: invalid entryId ${JSON.stringify(spec.entryId)}`);
-      }
-      if (!VALID_ENTRY_TYPES.has(spec.entryType)) {
-        throw new Error(`Malformed GAD append: unknown entryType ${spec.entryType}`);
-      }
-      if (!spec.payload || typeof spec.payload !== "object" || Array.isArray(spec.payload)) {
-        throw new Error(`Malformed GAD append: payload for ${spec.entryType} must be a JSON object`);
-      }
-      const parentEntryId = spec.parentEntryId ?? null;
-      if (parentEntryId != null) {
-        if (typeof parentEntryId !== "string" || !parentEntryId) {
-          throw new Error(`Malformed GAD append: parentEntryId must be a string`);
-        }
-        if (!batchEntryIds.has(parentEntryId)) {
-          // Allow forward references resolved against existing rows
-          const exists = this.sql.exec(
-            `SELECT 1 AS ok FROM gad_trajectory_items WHERE workspace_id = ? AND entry_id = ? LIMIT 1`,
-            workspaceId,
-            parentEntryId,
-          ).toArray()[0] as JsonRecord | undefined;
-          if (!exists) {
-            throw new Error(`Malformed GAD append: parentEntryId ${parentEntryId} not found`);
-          }
-        }
-      }
-      if (batchEntryIds.has(spec.entryId)) {
-        throw new Error(`Malformed GAD append: duplicate entryId ${spec.entryId} in batch`);
-      }
-      // Detect collisions with already-persisted rows.
-      const collision = this.sql.exec(
-        `SELECT 1 AS ok FROM gad_trajectory_items WHERE workspace_id = ? AND entry_id = ? LIMIT 1`,
-        workspaceId,
-        spec.entryId,
-      ).toArray()[0] as JsonRecord | undefined;
-      if (collision) throw new Error(`Malformed GAD append: entryId ${spec.entryId} already exists`);
-
-      const payload = spec.payload;
-      const itemToolCallId = TOOL_CALL_ID_BEARING_TYPES.has(spec.entryType)
-        ? toolCallIdFromPayload(payload)
-        : null;
-
-      const stateTransition = await this.prepareStateTransition(workspaceId, currentState, spec, currentFiles ?? undefined);
-      const effectiveStateTransition = stateTransition && stateTransition.stateHash === currentState ? null : stateTransition;
-      const itemInputState = currentState;
-      const itemOutputState = effectiveStateTransition ? effectiveStateTransition.stateHash : null;
-
-      const payloadKind = spec.entryType;
-      const payloadHash = await sha256("payload", { kind: payloadKind, payload });
-
-      const hash = await sha256("trajectory", {
-        parentHash,
+      const preStateHash = spec.preStateHash ?? stateHash;
+      const postStateHash = spec.postStateHash ?? preStateHash;
+      this.requireState(preStateHash);
+      this.requireState(postStateHash);
+      const rawEntry = {
         entryId: spec.entryId,
-        parentEntryId: parentEntryId,
+        parentEntryId,
         entryType: spec.entryType,
         actor: spec.actor ?? null,
-        payloadHash,
+        payload: spec.payload,
         metadata: spec.metadata ?? null,
+      };
+      const entryHash = await sha256("pi-entry-v1", {
+        entryId: spec.entryId,
+        parentEntryHash,
+        entryType: spec.entryType,
+        preStateHash,
+        postStateHash,
+        rawEntryJsonCanonical: rawEntry,
       });
-
-      // For file_mutation_observed we may need to expose the intent payload
-      // to recordFileProvenance. Resolve it now (intent is either in-batch
-      // earlier or already persisted).
-      let intentPayload: PendingIntent | null = null;
-      if (spec.entryType === "file_mutation_observed" && parentEntryId) {
-        intentPayload = this.lookupIntentForObserved(workspaceId, parentEntryId, prepared) ?? null;
-      }
-
-      prepared.push({
-        hash,
-        payloadHash,
-        payloadKind,
-        payloadJson: json(payload),
-        payloadText: null,
-        spec,
-        toolCallId: itemToolCallId,
-        inputStateHash: itemInputState,
-        outputStateHash: itemOutputState,
-        parentHash,
-        parentId,
-        stateTransition: effectiveStateTransition ?? undefined,
-        intentPayload,
-      });
-      batchEntryIds.add(spec.entryId);
-      parentHash = hash;
-      parentId = null;
-      if (itemOutputState) currentState = itemOutputState;
-      if (effectiveStateTransition) currentFiles = effectiveStateTransition.files;
+      prepared.push({ ...spec, entryHash, parentEntryHash, parentEntryId, preStateHash, postStateHash });
+      parentEntryId = spec.entryId;
+      parentEntryHash = entryHash;
+      stateHash = postStateHash;
     }
-
-    const created: Array<{ id: number; hash: string; entryId: string; parentEntryId: string | null }> = [];
     this.transaction(() => {
-      const currentBranch = this.sql.exec(
-        `SELECT head_trajectory_hash, head_state_hash FROM gad_branches WHERE workspace_id = ? AND id = ?`,
-        workspaceId,
-        branchId,
-      ).toArray()[0] as JsonRecord | undefined;
-      if (!currentBranch) throw new Error(`gad branch not found: ${branchId}`);
-      const currentHeadHash = asString(currentBranch["head_trajectory_hash"]);
-      const currentStateHash = asString(currentBranch["head_state_hash"]) ?? EMPTY_STATE_HASH;
-      if (currentHeadHash !== branch.headTrajectoryHash) throw new Error("gad head conflict");
-      if (currentStateHash !== branch.headStateHash) throw new Error("gad state conflict");
-
-      const pendingFileVersionIds = new Map<string, number>();
-      for (const item of prepared) {
-        if (item.payloadHash) {
-          this.sql.exec(
-            `INSERT OR IGNORE INTO gad_payloads (workspace_id, hash, kind, json, text)
-             VALUES (?, ?, ?, ?, ?)`,
-            workspaceId,
-            item.payloadHash,
-            item.payloadKind,
-            item.payloadJson,
-            item.payloadText,
-          );
-        }
-        if (item.stateTransition) {
-          let newFileVersionId: number | null = null;
-          if (item.stateTransition.newFile) {
-            this.sql.exec(
-              `INSERT INTO gad_file_versions (workspace_id, path, content_hash, mode)
-               VALUES (?, ?, ?, ?)`,
-              workspaceId,
-              item.stateTransition.newFile.path,
-              item.stateTransition.newFile.contentHash,
-              item.stateTransition.newFile.mode,
-            );
-            newFileVersionId = asNumber(this.sql.exec(`SELECT last_insert_rowid() AS id`).one()["id"]);
-            item.stateTransition.newFileVersionId = newFileVersionId;
-            pendingFileVersionIds.set(item.stateTransition.newFile.path, newFileVersionId);
-            this.ensureBlob(item.stateTransition.newFile.contentHash, 0, null, workspaceId);
-          }
-          for (const node of item.stateTransition.nodes) {
-            this.sql.exec(
-              `INSERT OR IGNORE INTO gad_manifest_nodes (workspace_id, hash, kind) VALUES (?, ?, 'dir')`,
-              workspaceId,
-              node.hash,
-            );
-            for (const entry of node.entries) {
-              let fileVersionId = entry.fileVersionId;
-              if (entry.entryKind === "file" && fileVersionId == null && entry.path) {
-                fileVersionId = pendingFileVersionIds.get(entry.path) ?? null;
-              }
-              this.sql.exec(
-                `INSERT OR IGNORE INTO gad_manifest_entries (
-                   workspace_id, parent_hash, name, entry_kind, child_manifest_hash, file_version_id
-                 ) VALUES (?, ?, ?, ?, ?, ?)`,
-                workspaceId,
-                entry.parentHash,
-                entry.name,
-                entry.entryKind,
-                entry.childManifestHash,
-                fileVersionId,
-              );
-            }
-          }
-        }
-        const parentRow = item.parentId == null && item.parentHash
-          ? this.sql.exec(
-            `SELECT id FROM gad_trajectory_items WHERE workspace_id = ? AND hash = ?`,
-            workspaceId,
-            item.parentHash,
-          ).toArray()[0] as JsonRecord | undefined
-          : undefined;
-        const resolvedParentId = item.parentId ?? (parentRow?.["id"] == null ? null : asNumber(parentRow["id"]));
+      const current = this.getPiBranchHead({ branchId: input.branchId });
+      if (current.headEntryHash !== branch.headEntryHash) throw new Error("pi head conflict");
+      if (current.headStateHash !== branch.headStateHash) throw new Error("pi state conflict");
+      for (const item of prepared) this.insertPiEntry(item);
+      const last = prepared[prepared.length - 1];
+      if (last) {
         this.sql.exec(
-          `INSERT INTO gad_trajectory_items (
-             workspace_id, hash, parent_id, parent_hash, introduced_on_branch_id,
-             entry_id, parent_entry_id, entry_type, actor, payload_hash, tool_call_id, metadata_json
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          workspaceId,
-          item.hash,
-          resolvedParentId,
-          item.parentHash,
-          branchId,
-          item.spec.entryId,
-          item.spec.parentEntryId ?? null,
-          item.spec.entryType,
-          item.spec.actor ?? null,
-          item.payloadHash,
-          item.toolCallId,
-          json(item.spec.metadata),
+          `UPDATE pi_branches
+           SET head_entry_id = ?, head_entry_hash = ?, head_state_hash = ?, updated_at = ?
+           WHERE branch_id = ?`,
+          last.entryId,
+          last.entryHash,
+          stateHash,
+          nowIso(),
+          input.branchId,
         );
-        const id = asNumber(this.sql.exec(`SELECT last_insert_rowid() AS id`).one()["id"]);
-        parentId = id;
-        created.push({ id, hash: item.hash, entryId: item.spec.entryId, parentEntryId: item.spec.parentEntryId ?? null });
-        if (item.stateTransition) {
-          this.sql.exec(
-            `INSERT OR IGNORE INTO gad_state_roots (
-               workspace_id, state_hash, manifest_root_hash, produced_by_trajectory_id, metadata_json
-             ) VALUES (?, ?, ?, ?, ?)`,
-            workspaceId,
-            item.stateTransition.stateHash,
-            item.stateTransition.rootHash,
-            id,
-            JSON.stringify({ source: "trajectory", entryType: item.spec.entryType }),
-          );
-        }
-        this.applyTrajectorySidecars(workspaceId, item, id);
       }
-      const final = created.length > 0 ? created[created.length - 1] : undefined;
-      const finalHeadId = final?.id ?? branch.headTrajectoryId;
-      const finalHeadHash = final?.hash ?? branch.headTrajectoryHash;
-      this.sql.exec(
-        `UPDATE gad_branches
-         SET head_trajectory_id = ?, head_trajectory_hash = ?,
-             head_state_hash = ?, updated_at = ?
-         WHERE workspace_id = ? AND id = ? AND head_trajectory_hash IS ? AND head_state_hash = ?`,
-        finalHeadId,
-        finalHeadHash,
-        currentState,
-        nowIso(),
-        workspaceId,
-        branchId,
-        branch.headTrajectoryHash,
-        branch.headStateHash,
-      );
-      const changed = asNumber(this.sql.exec(`SELECT changes() AS changes`).one()["changes"]);
-      if (changed !== 1) throw new Error("gad head conflict");
-      for (const item of created) this.enqueueIndexJob(workspaceId, item.hash, "trajectory", "trajectory-sidecars");
     });
-
-    const last = created.length > 0 ? created[created.length - 1] : undefined;
+    const final = prepared[prepared.length - 1];
     return {
-      workspaceId,
-      branchId,
-      headTrajectoryId: last?.id ?? branch.headTrajectoryId,
-      headTrajectoryHash: last?.hash ?? branch.headTrajectoryHash,
-      headEntryId: last?.entryId ?? branch.headEntryId,
-      headStateHash: currentState,
-      items: created,
+      branchId: input.branchId,
+      headEntryId: final?.entryId ?? branch.headEntryId,
+      headEntryHash: final?.entryHash ?? branch.headEntryHash,
+      headStateHash: stateHash,
+      items: prepared.map((item) => ({ entryId: item.entryId, entryHash: item.entryHash, parentEntryId: item.parentEntryId })),
     };
   }
 
-  /** Move the branch head to point at an existing entry, or detach to null.
-   *  Recomputes head_state_hash by reading the state-root chain at the target.
-   *  CAS-protected via the optional `expectedHeadTrajectoryHash`. */
-  setBranchHead(input: SetBranchHeadInput): GadBranchHead {
+  setBranchHead(input: { branchId: string; entryId: string | null; expectedHeadEntryHash?: string | null }): PiBranchHead {
     this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const branch = this.getGadBranchHead({ workspaceId, branchId: input.branchId });
-    if ("expectedHeadTrajectoryHash" in input && input.expectedHeadTrajectoryHash !== undefined &&
-        (input.expectedHeadTrajectoryHash ?? null) !== branch.headTrajectoryHash) {
-      throw new Error("gad head conflict");
+    const branch = this.getPiBranchHead({ branchId: input.branchId });
+    if ("expectedHeadEntryHash" in input && input.expectedHeadEntryHash !== undefined &&
+        (input.expectedHeadEntryHash ?? null) !== branch.headEntryHash) {
+      throw new Error("pi head conflict");
     }
-
     if (input.entryId == null) {
-      this.transaction(() => {
-        this.sql.exec(
-          `UPDATE gad_branches
-           SET head_trajectory_id = NULL,
-               head_trajectory_hash = NULL,
-               head_state_hash = ?,
-               updated_at = ?
-           WHERE workspace_id = ? AND id = ?`,
-          EMPTY_STATE_HASH,
-          nowIso(),
-          workspaceId,
-          input.branchId,
-        );
-      });
-      return this.getGadBranchHead({ workspaceId, branchId: input.branchId });
-    }
-
-    // Locate the trajectory row for this entry_id and verify it belongs
-    // to this branch's chain.
-    const target = this.sql.exec(
-      `SELECT id, hash FROM gad_trajectory_items WHERE workspace_id = ? AND entry_id = ?`,
-      workspaceId,
-      input.entryId,
-    ).toArray()[0] as JsonRecord | undefined;
-    if (!target) throw new Error(`Unknown entryId for setBranchHead: ${input.entryId}`);
-    const targetTrajId = asNumber(target["id"]);
-    const targetTrajHash = asString(target["hash"]);
-
-    const chain = this.branchTrajectoryRows(workspaceId, input.branchId, { order: "ASC" });
-    const inChain = chain.some((row) => asNumber(row["trajectory_id"]) === targetTrajId);
-    if (!inChain) {
-      throw new Error(`entryId ${input.entryId} is not on branch ${input.branchId}`);
-    }
-
-    const stateHash = this.stateHashAtTrajectory(workspaceId, targetTrajId, chain);
-
-    this.transaction(() => {
       this.sql.exec(
-        `UPDATE gad_branches
-         SET head_trajectory_id = ?,
-             head_trajectory_hash = ?,
-             head_state_hash = ?,
-             updated_at = ?
-         WHERE workspace_id = ? AND id = ?`,
-        targetTrajId,
-        targetTrajHash,
-        stateHash,
+        `UPDATE pi_branches SET head_entry_id = NULL, head_entry_hash = NULL, head_state_hash = ?, updated_at = ? WHERE branch_id = ?`,
+        EMPTY_STATE_HASH,
         nowIso(),
-        workspaceId,
         input.branchId,
       );
-    });
-    return this.getGadBranchHead({ workspaceId, branchId: input.branchId });
-  }
-
-  getEntryById(input: GetEntryByIdInput): GadEntryRow | null {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const row = this.sql.exec(
-      `SELECT ti.id AS trajectory_id, ti.hash AS trajectory_hash, ti.entry_id, ti.parent_entry_id,
-              ti.entry_type, ti.actor, ti.payload_hash, ti.metadata_json, ti.created_at,
-              p.json AS payload_json
-       FROM gad_trajectory_items ti
-       LEFT JOIN gad_payloads p ON p.workspace_id = ti.workspace_id AND p.hash = ti.payload_hash
-       WHERE ti.workspace_id = ? AND ti.entry_id = ?`,
-      workspaceId,
+      return this.getPiBranchHead({ branchId: input.branchId });
+    }
+    const target = this.sql.exec(
+      `SELECT entry_hash, post_state_hash FROM pi_session_entries WHERE entry_id = ?`,
       input.entryId,
     ).toArray()[0] as JsonRecord | undefined;
-    if (!row) return null;
-    return this.mapEntryRow(row);
-  }
-
-  getBranchPath(input: GetBranchPathInput): GadEntryRow[] {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const rows = this.branchTrajectoryRows(workspaceId, input.branchId, {
-      order: "ASC",
-      includePayload: true,
-    });
-    let filtered = rows;
-    if (input.throughEntryId != null) {
-      const idx = rows.findIndex((row) => asString(row["entry_id"]) === input.throughEntryId);
-      if (idx < 0) return [];
-      filtered = rows.slice(0, idx + 1);
+    if (!target) throw new Error(`Unknown Pi entry: ${input.entryId}`);
+    const chain = this.piBranchRows(input.branchId, null, true);
+    if (!chain.some((row) => row.entry_id === input.entryId)) {
+      throw new Error(`entryId ${input.entryId} is not on branch ${input.branchId}`);
     }
-    return filtered.map((row) => this.mapEntryRow(row));
+    this.sql.exec(
+      `UPDATE pi_branches
+       SET head_entry_id = ?, head_entry_hash = ?, head_state_hash = ?, updated_at = ?
+       WHERE branch_id = ?`,
+      input.entryId,
+      asString(target["entry_hash"]),
+      asString(target["post_state_hash"]) ?? EMPTY_STATE_HASH,
+      nowIso(),
+      input.branchId,
+    );
+    return this.getPiBranchHead({ branchId: input.branchId });
   }
 
-  findBranchEntriesByType(input: FindBranchEntriesByTypeInput): GadEntryRow[] {
+  getEntryById(input: { entryId: string }): PiEntryRow | null {
     this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const rows = this.branchTrajectoryRows(workspaceId, input.branchId, {
-      order: "ASC",
-      includePayload: true,
-    });
-    const filtered = rows.filter((row) => asString(row["entry_type"]) === input.entryType);
+    const row = this.sql.exec(`SELECT * FROM pi_session_entries WHERE entry_id = ?`, input.entryId).toArray()[0] as unknown as PiDbRow | undefined;
+    return row ? this.mapPiRow(row) : null;
+  }
+
+  getBranchPath(input: { branchId: string; throughEntryId?: string | null; raw?: boolean | null }): PiEntryRow[] {
+    this.ensureReady();
+    return this.piBranchRows(input.branchId, input.throughEntryId ?? null, input.raw === true).map((row) => this.mapPiRow(row));
+  }
+
+  findEntries(input: { branchId: string; entryType: PiEntryType; offset?: number | null; limit?: number | null; raw?: boolean | null }): PiEntryRow[] {
+    const rows = this.piBranchRows(input.branchId, null, input.raw === true).filter((row) => row.entry_type === input.entryType);
     const offset = input.offset ?? 0;
-    const sliced = input.limit != null ? filtered.slice(offset, offset + input.limit) : filtered.slice(offset);
-    return sliced.map((row) => this.mapEntryRow(row));
+    return (input.limit == null ? rows.slice(offset) : rows.slice(offset, offset + input.limit)).map((row) => this.mapPiRow(row));
   }
 
-  materializePiMessages(input: { workspaceId?: string | null; branchId: string }): { messages: JsonRecord[] } {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const rows = this.branchTrajectoryRows(workspaceId, input.branchId, { order: "ASC" });
-    return { messages: this.materializePiMessagesFromTrajectory(workspaceId, rows) };
-  }
-
-  listGadBranchTrajectory(input: { workspaceId?: string | null; branchId: string; limit?: number | null }): JsonRecord[] {
-    this.ensureReady();
-    return this.branchTrajectoryRows(input.workspaceId ?? WORKSPACE_ID, input.branchId, { order: "DESC", limit: input.limit ?? null });
-  }
-
-  forkGadBranch(input: ForkGadBranchInput): GadBranchHead {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const sourceBranch = this.getGadBranchHead({ workspaceId, branchId: input.sourceBranchId });
-
-    let forkTrajectoryId: number | null = sourceBranch.headTrajectoryId;
-    let forkTrajectoryHash: string | null = sourceBranch.headTrajectoryHash;
-    let stateHash = sourceBranch.headStateHash;
-
-    if (input.entryId != null) {
-      const chain = this.branchTrajectoryRows(workspaceId, input.sourceBranchId, { order: "ASC" });
-      const row = chain.find((r) => asString(r["entry_id"]) === input.entryId);
-      if (!row) throw new Error(`Unknown fork entryId: ${input.entryId}`);
-      forkTrajectoryId = asNumber(row["trajectory_id"]);
-      forkTrajectoryHash = asString(row["trajectory_hash"]);
-      stateHash = this.stateHashAtTrajectory(workspaceId, forkTrajectoryId, chain);
+  materializePiMessages(input: { branchId: string }): { messages: JsonRecord[] } {
+    const rows = this.piBranchRows(input.branchId, null, false);
+    const messages: JsonRecord[] = [];
+    for (const row of rows) {
+      if (row.entry_type !== "message") continue;
+      const payload = parseRecord(row.raw_entry_json)["payload"];
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        const message = (payload as JsonRecord)["message"];
+        if (message && typeof message === "object" && !Array.isArray(message)) messages.push(message as JsonRecord);
+      }
     }
+    return { messages };
+  }
 
+  forkPiBranch(input: { sourceBranchId: string; newBranchId?: string | null; entryId?: string | null; stateHash?: string | null; channelId?: string | null }): PiBranchHead {
+    const source = this.getPiBranchHead({ branchId: input.sourceBranchId });
+    let headEntryId = source.headEntryId;
+    let headEntryHash = source.headEntryHash;
+    let headStateHash = source.headStateHash;
+    if (input.entryId != null) {
+      const row = this.sql.exec(`SELECT entry_hash, post_state_hash FROM pi_session_entries WHERE entry_id = ?`, input.entryId).toArray()[0] as JsonRecord | undefined;
+      if (!row) throw new Error(`Unknown fork entryId: ${input.entryId}`);
+      headEntryId = input.entryId;
+      headEntryHash = asString(row["entry_hash"]);
+      headStateHash = asString(row["post_state_hash"]) ?? EMPTY_STATE_HASH;
+    } else if (input.stateHash != null) {
+      this.requireState(input.stateHash);
+      headEntryId = null;
+      headEntryHash = null;
+      headStateHash = input.stateHash;
+    }
     const branchId = input.newBranchId ?? `${input.sourceBranchId}:fork:${Date.now()}`;
     this.sql.exec(
-      `INSERT INTO gad_branches (
-         workspace_id, id, name, parent_branch_id, channel_id, context_id,
-         forked_from_trajectory_id, forked_from_state_hash,
-         head_trajectory_id, head_trajectory_hash, head_state_hash
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      workspaceId,
+      `INSERT INTO pi_branches (
+         branch_id, name, channel_id, head_entry_id, head_entry_hash, head_state_hash,
+         forked_from_branch_id, forked_from_entry_id, forked_from_state_hash, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       branchId,
       branchId,
-      input.sourceBranchId,
       input.channelId ?? null,
-      input.contextId ?? null,
-      forkTrajectoryId,
-      stateHash,
-      forkTrajectoryId,
-      forkTrajectoryHash,
-      stateHash,
+      headEntryId,
+      headEntryHash,
+      headStateHash,
+      input.sourceBranchId,
+      headEntryId,
+      headStateHash,
+      nowIso(),
     );
-    return this.getGadBranchHead({ workspaceId, branchId });
+    return this.getPiBranchHead({ branchId });
   }
 
-  listGadBranches(input: { workspaceId?: string | null } = {}): JsonRecord[] {
-    this.ensureReady();
-    return this.sql.exec(
-      `SELECT * FROM gad_branches WHERE workspace_id = ? ORDER BY updated_at DESC`,
-      input.workspaceId ?? WORKSPACE_ID,
-    ).toArray() as JsonRecord[];
+  listPiBranches(): JsonRecord[] {
+    return this.sql.exec(`SELECT * FROM pi_branches ORDER BY updated_at DESC`).toArray() as JsonRecord[];
   }
 
-  listGadBranchFiles(input: { workspaceId?: string | null; branchId: string }): JsonRecord[] {
+  async appendGadEvents(input: { events: GadEventSpec[] }): Promise<{ eventIds: string[] }> {
     this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const branch = this.sql.exec(
-      `SELECT head_state_hash FROM gad_branches WHERE workspace_id = ? AND id = ?`,
-      workspaceId,
-      input.branchId,
-    ).toArray()[0] as JsonRecord | undefined;
-    if (!branch) return [];
-    return this.filesForState(workspaceId, asString(branch["head_state_hash"]) ?? EMPTY_STATE_HASH);
+    for (const event of input.events) {
+      await this.appendGadEvent(event);
+    }
+    return { eventIds: input.events.map((event) => event.eventId) };
   }
 
-  diffGadStates(input: { workspaceId?: string | null; leftStateHash: string; rightStateHash: string }): {
-    added: JsonRecord[];
-    removed: JsonRecord[];
-    changed: JsonRecord[];
-  } {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
+  listGadEvents(input: { anchorKind?: string | null; anchorId?: string | null; kind?: string | null; limit?: number | null } = {}): JsonRecord[] {
+    const limit = input.limit ?? 200;
+    if (input.anchorKind && input.anchorId) {
+      return this.sql.exec(
+        `SELECT * FROM gad_events WHERE anchor_kind = ? AND anchor_id = ? ORDER BY event_seq ASC LIMIT ?`,
+        input.anchorKind,
+        input.anchorId,
+        limit,
+      ).toArray() as JsonRecord[];
+    }
+    if (input.kind) {
+      return this.sql.exec(`SELECT * FROM gad_events WHERE kind = ? ORDER BY event_seq ASC LIMIT ?`, input.kind, limit).toArray() as JsonRecord[];
+    }
+    return this.sql.exec(`SELECT * FROM gad_events ORDER BY event_seq ASC LIMIT ?`, limit).toArray() as JsonRecord[];
+  }
+
+  listGadBranchToolCalls(input: { branchId: string; limit?: number | null }): JsonRecord[] {
+    const entryIds = new Set(this.piBranchRows(input.branchId, null, true).map((row) => row.entry_id));
+    const rows = this.sql.exec(`SELECT * FROM pi_tool_calls ORDER BY created_at DESC`).toArray() as JsonRecord[];
+    const filtered = rows.filter((row) => entryIds.has(String(row["assistant_entry_id"])));
+    return input.limit == null ? filtered : filtered.slice(0, input.limit);
+  }
+
+  getGadToolProvenance(input: { toolCallId: string }): JsonRecord | null {
+    const mutations = this.sql.exec(`SELECT * FROM gad_file_mutations WHERE tool_call_id = ? ORDER BY created_at`, input.toolCallId).toArray() as JsonRecord[];
+    const observations = this.sql.exec(`SELECT * FROM gad_file_observations WHERE tool_call_id = ? ORDER BY created_at`, input.toolCallId).toArray() as JsonRecord[];
+    const dispatch = this.sql.exec(`SELECT * FROM gad_dispatches WHERE tool_call_id = ? ORDER BY created_at DESC LIMIT 1`, input.toolCallId).toArray()[0] as JsonRecord | undefined;
+    return mutations.length || observations.length || dispatch ? { toolCallId: input.toolCallId, mutations, observations, dispatch: dispatch ?? null } : null;
+  }
+
+  listGadBranchFiles(input: { branchId: string }): JsonRecord[] {
+    const branch = this.getPiBranchHead({ branchId: input.branchId });
+    return this.filesForState(branch.headStateHash);
+  }
+
+  diffGadStates(input: { leftStateHash: string; rightStateHash: string }): { added: JsonRecord[]; removed: JsonRecord[]; changed: JsonRecord[] } {
+    const left = new Map(this.filesForState(input.leftStateHash).map((row) => [String(row["path"]), row]));
+    const right = new Map(this.filesForState(input.rightStateHash).map((row) => [String(row["path"]), row]));
     const added: JsonRecord[] = [];
     const removed: JsonRecord[] = [];
     const changed: JsonRecord[] = [];
-    const leftRoot = this.manifestRootForState(workspaceId, input.leftStateHash);
-    const rightRoot = this.manifestRootForState(workspaceId, input.rightStateHash);
-    this.diffManifestNodes(workspaceId, leftRoot, rightRoot, "", added, removed, changed);
+    for (const [path, row] of right) {
+      const before = left.get(path);
+      if (!before) added.push(row);
+      else if (before["content_hash"] !== row["content_hash"] || before["mode"] !== row["mode"]) {
+        changed.push({ path, before: before["content_hash"] ?? null, after: row["content_hash"] ?? null });
+      }
+    }
+    for (const [path, row] of left) {
+      if (!right.has(path)) removed.push(row);
+    }
     return { added, removed, changed };
   }
 
-  readGadFileAtState(input: { workspaceId?: string | null; stateHash: string; path: string }): JsonRecord | null {
-    this.ensureReady();
+  readGadFileAtState(input: { stateHash: string; path: string }): JsonRecord | null {
     const path = normalizePath(input.path);
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const root = this.manifestRootForState(workspaceId, input.stateHash);
-    if (!root) return null;
-    return this.readManifestFile(workspaceId, root, path);
+    return this.filesForState(input.stateHash).find((row) => row["path"] === path) ?? null;
   }
 
-  async validateGadHashes(input: { workspaceId?: string | null } = {}): Promise<{ ok: boolean; errors: string[] }> {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const errors: string[] = [];
-    const manifests = this.sql.exec(
-      `SELECT hash FROM gad_manifest_nodes WHERE workspace_id = ? ORDER BY hash`,
-      workspaceId,
-    ).toArray() as JsonRecord[];
-    for (const manifest of manifests) {
-      const hash = asString(manifest["hash"]);
-      if (!hash) {
-        errors.push("invalid manifest node row");
-        continue;
-      }
-      const entries = this.manifestEntryRows(workspaceId, hash);
-      const hashEntries: JsonRecord[] = [];
-      for (const entry of entries) {
-        const name = asString(entry["name"]);
-        const kind = asString(entry["entry_kind"]);
-        if (!name || (kind !== "dir" && kind !== "file")) {
-          errors.push(`invalid manifest entry in ${hash}`);
-          continue;
-        }
-        if (kind === "dir") {
-          const childManifestHash = asString(entry["child_manifest_hash"]);
-          if (!childManifestHash) errors.push(`directory entry ${name} in ${hash} has no child hash`);
-          hashEntries.push({ name, kind, childManifestHash });
-        } else {
-          const file = this.fileRecordForEntry(workspaceId, entry, name);
-          if (!file) {
-            errors.push(`file entry ${name} in ${hash} has no file version`);
-            continue;
-          }
-          hashEntries.push({
-            name,
-            kind,
-            contentHash: asString(file["content_hash"]),
-            mode: typeof file["mode"] === "number" ? file["mode"] : null,
-          });
-        }
-      }
-      const expected = await sha256("manifest", { kind: "dir", entries: hashEntries.sort((a, b) => String(a["name"]).localeCompare(String(b["name"]))) });
-      if (expected !== hash) errors.push(`manifest hash mismatch: ${hash} expected ${expected}`);
-    }
-    const states = this.sql.exec(
-      `SELECT state_hash, manifest_root_hash FROM gad_state_roots WHERE workspace_id = ?`,
-      workspaceId,
-    ).toArray() as JsonRecord[];
-    for (const state of states) {
-      const stateHash = asString(state["state_hash"]);
-      const manifestRootHash = asString(state["manifest_root_hash"]);
-      if (!stateHash || !manifestRootHash) {
-        errors.push("invalid state row");
-        continue;
-      }
-      const expected = await sha256("state", { manifestRootHash });
-      if (expected !== stateHash) errors.push(`state hash mismatch: ${stateHash} expected ${expected}`);
-    }
-    if (errors.length === 0) {
-      this.sql.exec(`UPDATE gad_branches SET dirty = 0 WHERE workspace_id = ?`, workspaceId);
-    }
-    return { ok: errors.length === 0, errors };
-  }
-
-  async clearDirtyAfterValidation(input: { workspaceId?: string | null } = {}): Promise<{ ok: boolean; errors: string[] }> {
-    return this.validateGadHashes(input);
-  }
-
-  async checkGadIntegrity(input: { workspaceId?: string | null; branchId?: string | null } = {}): Promise<{ ok: boolean; errors: GadIntegrityError[] }> {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const errors: GadIntegrityError[] = [];
-    const add = (error: GadIntegrityError) => errors.push(error);
-    const trajectories = this.sql.exec(
-      `SELECT * FROM gad_trajectory_items WHERE workspace_id = ? ORDER BY id`,
-      workspaceId,
-    ).toArray() as JsonRecord[];
-    const trajectoryById = new Map<number, JsonRecord>();
-    for (const row of trajectories) trajectoryById.set(asNumber(row["id"]), row);
-
-    const stateRows = this.sql.exec(
-      `SELECT state_hash, manifest_root_hash FROM gad_state_roots WHERE workspace_id = ?`,
-      workspaceId,
-    ).toArray() as JsonRecord[];
-    const stateHashes = new Set(stateRows.flatMap((row) => {
-      const hash = asString(row["state_hash"]);
-      return hash ? [hash] : [];
-    }));
-    const fileVersionIds = new Set((this.sql.exec(
-      `SELECT id FROM gad_file_versions WHERE workspace_id = ?`,
-      workspaceId,
-    ).toArray() as JsonRecord[]).map((row) => asNumber(row["id"])));
-
-    for (const row of trajectories) {
-      const id = asNumber(row["id"]);
-      const hash = asString(row["hash"]) ?? undefined;
-      const parentId = row["parent_id"] == null ? null : asNumber(row["parent_id"]);
-      const parentHash = asString(row["parent_hash"]);
-      if (parentId == null) {
-        if (parentHash) {
-          add({
-            code: "parent_hash_without_parent_id",
-            message: `Trajectory ${id} has parent_hash but no parent_id`,
-            trajectoryId: id,
-            trajectoryHash: hash,
-          });
-        }
-        continue;
-      }
-      const parent = trajectoryById.get(parentId);
-      if (!parent) {
-        add({
-          code: "missing_parent",
-          message: `Trajectory ${id} points at missing parent ${parentId}`,
-          trajectoryId: id,
-          trajectoryHash: hash,
-        });
-        continue;
-      }
-      if (parentHash && parentHash !== asString(parent["hash"])) {
-        add({
-          code: "parent_hash_mismatch",
-          message: `Trajectory ${id} parent_hash does not match parent row`,
-          trajectoryId: id,
-          trajectoryHash: hash,
-        });
-      }
-    }
-
-    const branches = this.sql.exec(
-      `SELECT * FROM gad_branches
-       WHERE workspace_id = ?
-         AND (? IS NULL OR id = ?)
-       ORDER BY id`,
-      workspaceId,
-      input.branchId ?? null,
-      input.branchId ?? null,
-    ).toArray() as JsonRecord[];
-
-    const traceBranchRows = (branch: JsonRecord): { rows: JsonRecord[]; ids: Set<number>; cycle: boolean } => {
-      const rows: JsonRecord[] = [];
-      const ids = new Set<number>();
-      let id = branch["head_trajectory_id"] == null ? null : asNumber(branch["head_trajectory_id"]);
-      let cycle = false;
-      while (id != null) {
-        if (ids.has(id)) {
-          cycle = true;
-          break;
-        }
-        ids.add(id);
-        const row = trajectoryById.get(id);
-        if (!row) break;
-        rows.push(row);
-        id = row["parent_id"] == null ? null : asNumber(row["parent_id"]);
-      }
-      rows.reverse();
-      return { rows, ids, cycle };
-    };
-
-    for (const branch of branches) {
-      const branchId = asString(branch["id"]) ?? undefined;
-      const headId = branch["head_trajectory_id"] == null ? null : asNumber(branch["head_trajectory_id"]);
-      const headHash = asString(branch["head_trajectory_hash"]);
-      const headStateHash = asString(branch["head_state_hash"]);
-      if (headStateHash && !stateHashes.has(headStateHash)) {
-        add({
-          code: "branch_head_state_missing",
-          message: `Branch ${branchId ?? "(unknown)"} points at missing state root`,
-          branchId,
-          stateHash: headStateHash,
-        });
-      }
-      if (headId != null) {
-        const head = trajectoryById.get(headId);
-        if (!head) {
-          add({
-            code: "branch_head_missing",
-            message: `Branch ${branchId ?? "(unknown)"} points at missing trajectory ${headId}`,
-            branchId,
-            trajectoryId: headId,
-          });
-        } else if (headHash && headHash !== asString(head["hash"])) {
-          add({
-            code: "branch_head_hash_mismatch",
-            message: `Branch ${branchId ?? "(unknown)"} head hash does not match head trajectory`,
-            branchId,
-            trajectoryId: headId,
-            trajectoryHash: headHash,
-          });
-        }
-      } else if (headHash) {
-        add({
-          code: "branch_head_hash_without_id",
-          message: `Branch ${branchId ?? "(unknown)"} has a head hash but no head trajectory id`,
-          branchId,
-          trajectoryHash: headHash,
-        });
-      }
-      const traced = traceBranchRows(branch);
-      if (traced.cycle) {
-        add({
-          code: "branch_trajectory_cycle",
-          message: `Branch ${branchId ?? "(unknown)"} reaches a trajectory parent cycle`,
-          branchId,
-        });
-      }
-      const requested = new Map<string, number>();
-      for (const row of traced.rows) {
-        const entryType = asString(row["entry_type"]);
-        const toolCallId = asString(row["tool_call_id"]);
-        if (!toolCallId) continue;
-        if (entryType === "tool_call_requested") {
-          const count = requested.get(toolCallId) ?? 0;
-          if (count > 0) {
-            add({
-              code: "duplicate_tool_request",
-              message: `Branch ${branchId ?? "(unknown)"} has duplicate request rows for tool call ${toolCallId}`,
-              branchId,
-              trajectoryId: asNumber(row["id"]),
-              trajectoryHash: asString(row["hash"]) ?? undefined,
-              toolCallId,
-            });
-          }
-          requested.set(toolCallId, count + 1);
-        }
-        if (entryType === "tool_result_observed" && !requested.has(toolCallId)) {
-          add({
-            code: "tool_result_without_request",
-            message: `Branch ${branchId ?? "(unknown)"} has a tool result without an earlier request for ${toolCallId}`,
-            branchId,
-            trajectoryId: asNumber(row["id"]),
-            trajectoryHash: asString(row["hash"]) ?? undefined,
-            toolCallId,
-          });
-        }
-      }
-    }
-
-    const transitions = this.sql.exec(
-      `SELECT * FROM gad_state_transitions WHERE workspace_id = ? ORDER BY id`,
-      workspaceId,
-    ).toArray() as JsonRecord[];
-    for (const transition of transitions) {
-      const trajectoryId = asNumber(transition["trajectory_id"]);
-      const trajectory = trajectoryById.get(trajectoryId);
-      const outputStateHash = asString(transition["output_state_hash"]) ?? undefined;
-      if (!trajectory) {
-        add({
-          code: "state_transition_missing_trajectory",
-          message: `State transition points at missing trajectory ${trajectoryId}`,
-          trajectoryId,
-          stateHash: outputStateHash,
-        });
-        continue;
-      }
-      const entryType = asString(trajectory["entry_type"]) as GadEntryType | null;
-      if (!entryType || !STATE_MUTATING_ENTRY_TYPES.has(entryType)) {
-        add({
-          code: "state_transition_non_mutating_kind",
-          message: `State transition trajectory ${trajectoryId} has non-mutating entry_type ${entryType ?? "(unknown)"}`,
-          trajectoryId,
-          trajectoryHash: asString(trajectory["hash"]) ?? undefined,
-          stateHash: outputStateHash,
-        });
-      }
-      if (transition["input_state_hash"] === transition["output_state_hash"]) {
-        add({
-          code: "state_transition_noop",
-          message: `State transition ${transition["id"]} does not change state`,
-          trajectoryId,
-          trajectoryHash: asString(trajectory["hash"]) ?? undefined,
-          stateHash: outputStateHash,
-        });
-      }
-      if (outputStateHash && !stateHashes.has(outputStateHash)) {
-        add({
-          code: "state_transition_missing_output_state",
-          message: `State transition output state ${outputStateHash} is missing`,
-          trajectoryId,
-          trajectoryHash: asString(trajectory["hash"]) ?? undefined,
-          stateHash: outputStateHash,
-        });
-      }
-    }
-
-    const hunks = this.sql.exec(
-      `SELECT * FROM gad_file_change_hunks WHERE workspace_id = ? ORDER BY id`,
-      workspaceId,
-    ).toArray() as JsonRecord[];
-    const hunksByAfterVersion = new Map<string, JsonRecord[]>();
-    for (const hunk of hunks) {
-      const trajectoryId = asNumber(hunk["trajectory_id"]);
-      const trajectory = trajectoryById.get(trajectoryId);
-      const path = asString(hunk["path"]) ?? undefined;
-      if (!trajectory) {
-        add({
-          code: "file_hunk_missing_trajectory",
-          message: `File hunk ${hunk["id"]} points at missing trajectory ${trajectoryId}`,
-          trajectoryId,
-          path,
-        });
-      }
-      for (const column of ["before_file_version_id", "after_file_version_id"] as const) {
-        if (hunk[column] == null) continue;
-        const fileVersionId = asNumber(hunk[column]);
-        if (!fileVersionIds.has(fileVersionId)) {
-          add({
-            code: "file_hunk_missing_file_version",
-            message: `File hunk ${hunk["id"]} references missing ${column} ${fileVersionId}`,
-            trajectoryId,
-            trajectoryHash: trajectory ? asString(trajectory["hash"]) ?? undefined : undefined,
-            path,
-          });
-        }
-      }
-      const afterFileVersionId = hunk["after_file_version_id"] == null ? null : asNumber(hunk["after_file_version_id"]);
-      if (path && afterFileVersionId != null) {
-        const key = `${path}\0${afterFileVersionId}`;
-        const existing = hunksByAfterVersion.get(key) ?? [];
-        existing.push(hunk);
-        hunksByAfterVersion.set(key, existing);
-      }
-    }
-    for (const [key, lineageHunks] of hunksByAfterVersion) {
-      for (const hunk of lineageHunks) {
-        const seen = new Set<number>();
-        let current: JsonRecord | undefined = hunk;
-        while (current) {
-          const id = asNumber(current["id"]);
-          if (seen.has(id)) {
-            add({
-              code: "file_hunk_lineage_cycle",
-              message: `File hunk lineage cycles at hunk ${id}`,
-              trajectoryId: asNumber(current["trajectory_id"]),
-              path: asString(current["path"]) ?? key.split("\0")[0],
-            });
-            break;
-          }
-          seen.add(id);
-          const beforeFileVersionId: number | null = current["before_file_version_id"] == null
-            ? null
-            : asNumber(current["before_file_version_id"]);
-          if (beforeFileVersionId == null) break;
-          current = hunksByAfterVersion.get(`${asString(current["path"])}\0${beforeFileVersionId}`)?.[0];
-        }
-      }
-    }
-
-    const manifestRows = this.sql.exec(
-      `SELECT hash FROM gad_manifest_nodes WHERE workspace_id = ? ORDER BY hash`,
-      workspaceId,
-    ).toArray() as JsonRecord[];
-    const manifestHashes = new Set(manifestRows.flatMap((row) => {
-      const hash = asString(row["hash"]);
-      return hash ? [hash] : [];
-    }));
-    for (const manifest of manifestRows) {
-      const hash = asString(manifest["hash"]);
-      if (!hash) {
-        add({ code: "invalid_manifest_node", message: "Manifest node row is missing a hash" });
-        continue;
-      }
-      const entries = this.manifestEntryRows(workspaceId, hash);
-      const hashEntries: JsonRecord[] = [];
-      for (const entry of entries) {
-        const name = asString(entry["name"]);
-        const kind = asString(entry["entry_kind"]);
-        if (!name || (kind !== "dir" && kind !== "file")) {
-          add({ code: "invalid_manifest_entry", message: `Manifest ${hash} has an invalid entry` });
-          continue;
-        }
-        if (kind === "dir") {
-          const childManifestHash = asString(entry["child_manifest_hash"]);
-          if (!childManifestHash || !manifestHashes.has(childManifestHash)) {
-            add({
-              code: "manifest_missing_child",
-              message: `Manifest ${hash} directory ${name} points at a missing child manifest`,
-            });
-          }
-          hashEntries.push({ name, kind, childManifestHash });
-        } else {
-          const file = this.fileRecordForEntry(workspaceId, entry, name);
-          if (!file) {
-            add({
-              code: "manifest_missing_file_version",
-              message: `Manifest ${hash} file ${name} points at a missing file version`,
-              path: name,
-            });
-            continue;
-          }
-          hashEntries.push({
-            name,
-            kind,
-            contentHash: asString(file["content_hash"]),
-            mode: typeof file["mode"] === "number" ? file["mode"] : null,
-          });
-        }
-      }
-      const expected = await sha256("manifest", { kind: "dir", entries: hashEntries.sort((a, b) => String(a["name"]).localeCompare(String(b["name"]))) });
-      if (expected !== hash) {
-        add({
-          code: "manifest_hash_mismatch",
-          message: `Manifest hash ${hash} does not match its entries`,
-        });
-      }
-    }
-
-    for (const state of stateRows) {
-      const stateHash = asString(state["state_hash"]);
-      const manifestRootHash = asString(state["manifest_root_hash"]);
-      if (!stateHash || !manifestRootHash) {
-        add({ code: "invalid_state_root", message: "State root row is missing hash data", stateHash: stateHash ?? undefined });
-        continue;
-      }
-      if (!manifestHashes.has(manifestRootHash)) {
-        add({
-          code: "state_root_missing_manifest",
-          message: `State root ${stateHash} points at a missing manifest`,
-          stateHash,
-        });
-      }
-      const expected = await sha256("state", { manifestRootHash });
-      if (expected !== stateHash) {
-        add({
-          code: "state_hash_mismatch",
-          message: `State hash ${stateHash} does not match manifest root`,
-          stateHash,
-        });
-      }
-    }
-
-    return { ok: errors.length === 0, errors };
-  }
-
-  private branchTrajectoryRows(workspaceId: string, branchId: string, options: BranchTrajectoryOptions = {}): JsonRecord[] {
-    const direction = options.order === "DESC" ? "DESC" : "ASC";
-    const includePayload = options.includePayload === true;
-    const limitClause = options.limit == null ? "" : " LIMIT ?";
-    const throughClause = options.throughTrajectoryId == null ? "" : " WHERE trajectory_id <= ?";
-    const payloadJoin = includePayload
-      ? "LEFT JOIN gad_payloads p ON p.workspace_id = branch_rows.workspace_id AND p.hash = branch_rows.payload_hash"
-      : "";
-    const payloadSelect = includePayload ? ", p.kind AS payload_kind, p.json AS payload_json, p.text AS payload_text" : "";
-    const bindings: SqlBinding[] = [workspaceId, branchId];
-    if (options.throughTrajectoryId != null) bindings.push(options.throughTrajectoryId);
-    if (options.limit != null) bindings.push(options.limit);
+  getGadStateProducer(input: { stateHash: string }): JsonRecord | null {
     return this.sql.exec(
-      `WITH RECURSIVE branch_chain AS (
-         SELECT ti.*
-         FROM gad_branches b
-         JOIN gad_trajectory_items ti
-           ON ti.workspace_id = b.workspace_id AND ti.id = b.head_trajectory_id
-         WHERE b.workspace_id = ? AND b.id = ? AND b.head_trajectory_id IS NOT NULL
-
-         UNION ALL
-
-         SELECT parent.*
-         FROM gad_trajectory_items parent
-         JOIN branch_chain child
-           ON parent.workspace_id = child.workspace_id AND parent.id = child.parent_id
-       ),
-       branch_rows AS (
-       SELECT id AS trajectory_id, hash AS trajectory_hash, workspace_id,
-              parent_id, parent_hash, introduced_on_branch_id, entry_id, parent_entry_id,
-              entry_type, actor, payload_hash, tool_call_id, created_at, metadata_json
-       FROM branch_chain
-       )
-       SELECT branch_rows.*${payloadSelect}
-       FROM branch_rows
-       ${payloadJoin}
-       ${throughClause}
-       ORDER BY trajectory_id ${direction}${limitClause}`,
-      ...bindings,
-    ).toArray() as JsonRecord[];
+      `SELECT st.*, e.kind, e.anchor_kind, e.anchor_id, e.payload_json
+       FROM gad_state_transitions st
+       JOIN gad_events e ON e.event_id = st.event_id
+       WHERE st.output_state_hash = ?
+       ORDER BY e.event_seq DESC LIMIT 1`,
+      input.stateHash,
+    ).toArray()[0] as JsonRecord | undefined ?? null;
   }
 
-  private branchTrajectoryIdSet(workspaceId: string, branchId: string): Set<number> {
-    return new Set(this.branchTrajectoryRows(workspaceId, branchId, { order: "ASC" }).map((row) => asNumber(row["trajectory_id"])));
-  }
-
-  private fileLineageRows(workspaceId: string, path: string, fileVersionId: number): JsonRecord[] {
+  blameGadFileSnippet(input: { stateHash?: string | null; fileVersionId?: number | null; path: string }): JsonRecord[] {
+    const path = normalizePath(input.path);
+    let fileVersionId = input.fileVersionId ?? null;
+    if (fileVersionId == null && input.stateHash) {
+      const file = this.readGadFileAtState({ stateHash: input.stateHash, path });
+      fileVersionId = typeof file?.["file_version_id"] === "number" ? file["file_version_id"] : null;
+    }
+    if (fileVersionId == null) return [];
     return this.sql.exec(
-      `WITH RECURSIVE file_lineage AS (
-         SELECT h.*, 0 AS depth
-         FROM gad_file_change_hunks h
-         WHERE h.workspace_id = ?
-           AND h.path = ?
-           AND h.after_file_version_id = ?
-
-         UNION ALL
-
-         SELECT parent.*, file_lineage.depth + 1 AS depth
-         FROM gad_file_change_hunks parent
-         JOIN file_lineage
-           ON parent.workspace_id = file_lineage.workspace_id
-          AND parent.path = file_lineage.path
-          AND parent.after_file_version_id = file_lineage.before_file_version_id
-       )
-       SELECT file_lineage.*, ti.hash AS origin_trajectory_hash, ti.entry_type, ti.actor,
-              ti.entry_id AS origin_entry_id, ti.parent_entry_id AS origin_parent_entry_id,
-              ti.tool_call_id AS origin_tool_call_id
-       FROM file_lineage
-       JOIN gad_trajectory_items ti
-         ON ti.workspace_id = file_lineage.workspace_id
-        AND ti.id = file_lineage.trajectory_id
-       ORDER BY file_lineage.depth ASC, file_lineage.id DESC`,
-      workspaceId,
+      `SELECT h.*, m.tool_call_id, m.anchor_kind, m.anchor_id, st.input_state_hash, st.output_state_hash
+       FROM gad_file_change_hunks h
+       JOIN gad_file_mutations m ON m.mutation_id = h.mutation_id
+       LEFT JOIN gad_state_transitions st ON st.event_id = m.state_transition_event_id
+       WHERE h.path = ? AND h.after_file_version_id = ?
+       ORDER BY h.id DESC LIMIT 1`,
       path,
       fileVersionId,
     ).toArray() as JsonRecord[];
   }
 
-  private toolCallRowsFromTrajectory(workspaceId: string, branchId: string, toolCallId?: string | null): JsonRecord[] {
-    const rows = this.branchTrajectoryRows(workspaceId, branchId, { order: "ASC" });
-    const calls = this.materializeToolCallsFromTrajectory(workspaceId, branchId, rows);
-    return toolCallId ? calls.filter((row) => row["tool_call_id"] === toolCallId) : calls;
-  }
-
-  enqueueGadIndexJob(input: { workspaceId?: string | null; sourceHash: string; sourceKind: string; jobKind: string }): { id: number } {
-    this.ensureReady();
-    this.enqueueIndexJob(input.workspaceId ?? WORKSPACE_ID, input.sourceHash, input.sourceKind, input.jobKind);
-    const row = this.sql.exec(
-      `SELECT id FROM gad_index_jobs WHERE workspace_id = ? AND source_hash = ? AND job_kind = ?`,
-      input.workspaceId ?? WORKSPACE_ID,
+  enqueueGadIndexJob(input: { sourceHash: string; sourceKind: string; jobKind: string }): { id: number } {
+    this.sql.exec(
+      `INSERT OR IGNORE INTO gad_index_jobs (source_hash, source_kind, job_kind) VALUES (?, ?, ?)`,
       input.sourceHash,
+      input.sourceKind,
       input.jobKind,
-    ).one();
+    );
+    const row = this.sql.exec(`SELECT id FROM gad_index_jobs WHERE source_hash = ? AND job_kind = ?`, input.sourceHash, input.jobKind).one();
     return { id: asNumber(row["id"]) };
   }
 
-  processGadIndexJobs(input: { workspaceId?: string | null; limit?: number } = {}): { processed: number } {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const rows = this.sql.exec(
-      `SELECT id FROM gad_index_jobs WHERE workspace_id = ? AND status = 'queued' ORDER BY id LIMIT ?`,
-      workspaceId,
-      input.limit ?? 100,
-    ).toArray() as JsonRecord[];
-    for (const row of rows) {
-      this.sql.exec(`UPDATE gad_index_jobs SET status = 'complete', updated_at = ? WHERE id = ?`, nowIso(), row["id"]);
-    }
+  processGadIndexJobs(input: { limit?: number | null } = {}): { processed: number } {
+    const rows = this.sql.exec(`SELECT id FROM gad_index_jobs WHERE status = 'queued' ORDER BY id LIMIT ?`, input.limit ?? 100).toArray() as JsonRecord[];
+    for (const row of rows) this.sql.exec(`UPDATE gad_index_jobs SET status = 'complete', updated_at = ? WHERE id = ?`, nowIso(), row["id"] as SqlBinding);
     return { processed: rows.length };
   }
 
-  listGadBranchToolCalls(input: { workspaceId?: string | null; branchId: string; limit?: number | null }): JsonRecord[] {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const rows = this.toolCallRowsFromTrajectory(workspaceId, input.branchId)
-      .sort((a, b) => asNumber(b["source_trajectory_id"]) - asNumber(a["source_trajectory_id"]));
-    return input.limit == null ? rows : rows.slice(0, input.limit);
+  async validateGadHashes(): Promise<{ ok: boolean; errors: string[] }> {
+    const integrity = await this.checkGadIntegrity();
+    return {
+      ok: integrity.ok,
+      errors: integrity.errors.map((error) => `${String(error["type"] ?? "integrity")}: ${String(error["message"] ?? JSON.stringify(error))}`),
+    };
   }
 
-  getGadToolProvenance(input: { workspaceId?: string | null; branchId: string; toolCallId: string }): JsonRecord | null {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    return this.toolCallRowsFromTrajectory(workspaceId, input.branchId, input.toolCallId)[0] ?? null;
+  clearDirtyAfterValidation(): Promise<{ ok: boolean; errors: string[] }> {
+    return this.validateGadHashes();
   }
 
-  getGadStateProducer(input: { workspaceId?: string | null; stateHash: string; branchId?: string | null }): JsonRecord | null {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    const branchIds = input.branchId ? this.branchTrajectoryIdSet(workspaceId, input.branchId) : null;
-    const rows = this.sql.exec(
-      `SELECT st.*, ti.hash AS trajectory_hash, ti.entry_type, ti.actor,
-              ti.entry_id, ti.parent_entry_id, ti.tool_call_id, ti.payload_hash
-       FROM gad_state_transitions st
-       JOIN gad_trajectory_items ti
-         ON ti.workspace_id = st.workspace_id AND ti.id = st.trajectory_id
-       WHERE st.workspace_id = ? AND st.output_state_hash = ?
-       ORDER BY st.trajectory_id DESC`,
-      workspaceId,
-      input.stateHash,
-    ).toArray() as JsonRecord[];
-    return rows.find((row) => !branchIds || branchIds.has(asNumber(row["trajectory_id"]))) ?? null;
-  }
+  async checkGadIntegrity(): Promise<{ ok: boolean; errors: JsonRecord[] }> {
+    const errors: JsonRecord[] = [];
+    const addError = (type: string, message: string, details: JsonRecord = {}) => errors.push({ type, message, ...details });
 
-  blameGadFileSnippet(input: {
-    workspaceId?: string | null;
-    stateHash?: string | null;
-    fileVersionId?: number | null;
-    path: string;
-    startLine?: number | null;
-    endLine?: number | null;
-  }): JsonRecord[] {
-    this.ensureReady();
-    const workspaceId = input.workspaceId ?? WORKSPACE_ID;
-    let fileVersionId = input.fileVersionId ?? null;
-    const path = normalizePath(input.path);
-    if (fileVersionId == null && input.stateHash) {
-      const file = this.readGadFileAtState({ workspaceId, stateHash: input.stateHash, path });
-      fileVersionId = typeof file?.["file_version_id"] === "number" ? file["file_version_id"] : null;
+    for (const row of this.sql.exec(`SELECT * FROM pi_session_entries ORDER BY introduced_at, entry_id`).toArray() as unknown as PiDbRow[]) {
+      if (row.parent_entry_id == null && row.parent_entry_hash != null) {
+        addError("pi-entry", "root Pi entry has a parent hash", { entryId: row.entry_id });
+      }
+      if (row.parent_entry_id != null) {
+        const parent = this.sql.exec(`SELECT entry_hash FROM pi_session_entries WHERE entry_id = ?`, row.parent_entry_id).toArray()[0] as JsonRecord | undefined;
+        if (!parent) {
+          addError("pi-entry", "Pi entry parent is missing", { entryId: row.entry_id, parentEntryId: row.parent_entry_id });
+        } else if (asString(parent["entry_hash"]) !== row.parent_entry_hash) {
+          addError("pi-entry", "Pi entry parent hash does not match parent entry", { entryId: row.entry_id, parentEntryId: row.parent_entry_id });
+        }
+      }
+      if (!this.stateExists(row.pre_state_hash)) addError("pi-entry", "Pi entry pre-state is missing", { entryId: row.entry_id, stateHash: row.pre_state_hash });
+      if (!this.stateExists(row.post_state_hash)) addError("pi-entry", "Pi entry post-state is missing", { entryId: row.entry_id, stateHash: row.post_state_hash });
+      const rawEntry = parseRecord(row.raw_entry_json);
+      const expectedHash = await sha256("pi-entry-v1", {
+        entryId: row.entry_id,
+        parentEntryHash: row.parent_entry_hash,
+        entryType: row.entry_type,
+        preStateHash: row.pre_state_hash,
+        postStateHash: row.post_state_hash,
+        rawEntryJsonCanonical: rawEntry,
+      });
+      if (expectedHash !== row.entry_hash) addError("pi-entry", "Pi entry hash mismatch", { entryId: row.entry_id, expectedHash, actualHash: row.entry_hash });
     }
-    if (fileVersionId == null) return [];
-    let startLine = input.startLine ?? 1;
-    let endLine = input.endLine ?? startLine;
-    const lineage = this.fileLineageRows(workspaceId, path, fileVersionId);
-    for (const row of lineage) {
-      if (hunkOverlapsLineRange(row, startLine, endLine)) return [row];
-      const previousRange = translateLineRangeBeforeHunk(row, startLine, endLine);
-      if (!previousRange) return [];
-      startLine = previousRange.startLine;
-      endLine = previousRange.endLine;
+
+    for (const row of this.sql.exec(`SELECT * FROM pi_branches ORDER BY branch_id`).toArray() as JsonRecord[]) {
+      const branchId = asString(row["branch_id"]) ?? "";
+      const headEntryId = asString(row["head_entry_id"]);
+      const headEntryHash = asString(row["head_entry_hash"]);
+      const headStateHash = asString(row["head_state_hash"]) ?? "";
+      if (!this.stateExists(headStateHash)) addError("pi-branch", "Pi branch head state is missing", { branchId, stateHash: headStateHash });
+      if (headEntryId == null && headEntryHash != null) addError("pi-branch", "Pi branch has head hash without head entry", { branchId });
+      if (headEntryId != null) {
+        const entry = this.sql.exec(`SELECT entry_hash, post_state_hash FROM pi_session_entries WHERE entry_id = ?`, headEntryId).toArray()[0] as JsonRecord | undefined;
+        if (!entry) {
+          addError("pi-branch", "Pi branch head entry is missing", { branchId, headEntryId });
+        } else {
+          if (asString(entry["entry_hash"]) !== headEntryHash) addError("pi-branch", "Pi branch head hash mismatch", { branchId, headEntryId });
+          if (asString(entry["post_state_hash"]) !== headStateHash) addError("pi-branch", "Pi branch head state does not match head entry", { branchId, headEntryId });
+        }
+      }
     }
-    return [];
+
+    let previousEventHash: string | null = null;
+    for (const row of this.sql.exec(`SELECT * FROM gad_events ORDER BY event_seq ASC`).toArray() as JsonRecord[]) {
+      const payload = parseRecord(asString(row["payload_json"]));
+      const metadata = row["metadata_json"] == null ? null : parseRecord(asString(row["metadata_json"]));
+      const expectedPrev = previousEventHash;
+      if ((asString(row["prev_event_hash"]) ?? null) !== expectedPrev) {
+        addError("gad-event", "GAD event previous hash mismatch", { eventId: row["event_id"] as JsonValue, expectedPrev, actualPrev: asString(row["prev_event_hash"]) });
+      }
+      const expectedHash = await sha256("gad-event-v1", {
+        prevEventHash: expectedPrev,
+        eventId: row["event_id"],
+        kind: row["kind"],
+        anchorKind: row["anchor_kind"],
+        anchorId: row["anchor_id"],
+        payloadCanonical: payload,
+        metadataCanonical: metadata,
+      });
+      if (expectedHash !== row["event_hash"]) addError("gad-event", "GAD event hash mismatch", { eventId: row["event_id"] as JsonValue, expectedHash, actualHash: row["event_hash"] as JsonValue });
+      previousEventHash = asString(row["event_hash"]);
+    }
+
+    for (const state of this.sql.exec(`SELECT state_hash, manifest_root_hash FROM gad_worktree_states`).toArray() as JsonRecord[]) {
+      const rootHash = asString(state["manifest_root_hash"]) ?? "";
+      const expectedStateHash = await sha256("state", { manifestRootHash: rootHash });
+      if (expectedStateHash !== state["state_hash"]) {
+        addError("worktree-state", "worktree state hash mismatch", { stateHash: state["state_hash"] as JsonValue, expectedStateHash });
+      }
+      const expectedRootHash = await this.recomputeManifestHash(rootHash);
+      if (expectedRootHash == null) {
+        addError("manifest", "worktree state references a missing manifest root", { stateHash: state["state_hash"] as JsonValue, manifestRootHash: rootHash });
+      } else if (expectedRootHash !== rootHash) {
+        addError("manifest", "manifest hash mismatch", { manifestRootHash: rootHash, expectedRootHash });
+      }
+    }
+
+    for (const transition of this.sql.exec(`SELECT * FROM gad_state_transitions`).toArray() as JsonRecord[]) {
+      if (!this.stateExists(String(transition["input_state_hash"]))) addError("state-transition", "transition input state is missing", { eventId: transition["event_id"] as JsonValue });
+      if (!this.stateExists(String(transition["output_state_hash"]))) addError("state-transition", "transition output state is missing", { eventId: transition["event_id"] as JsonValue });
+      if (!this.eventExists(String(transition["event_id"]))) addError("state-transition", "transition event is missing", { eventId: transition["event_id"] as JsonValue });
+    }
+    for (const mutation of this.sql.exec(`SELECT * FROM gad_file_mutations WHERE state_transition_event_id IS NOT NULL`).toArray() as JsonRecord[]) {
+      const transition = this.sql.exec(`SELECT 1 AS ok FROM gad_state_transitions WHERE event_id = ?`, mutation["state_transition_event_id"] as SqlBinding).toArray()[0];
+      if (!transition) addError("file-mutation", "mutation references a missing state transition", { mutationId: mutation["mutation_id"] as JsonValue });
+    }
+    return { ok: errors.length === 0, errors };
+  }
+
+  async replayGadEvents(): Promise<{ replayed: number }> {
+    const rows = this.sql.exec(`SELECT * FROM gad_events ORDER BY event_seq ASC`).toArray() as JsonRecord[];
+    this.clearGadProjections();
+    this.ensureEmptyState();
+    let replayed = 0;
+    for (const row of rows) {
+      const event: GadEventSpec = {
+        eventId: String(row["event_id"]),
+        kind: String(row["kind"]) as GadEventKind,
+        anchorKind: asString(row["anchor_kind"]),
+        anchorId: asString(row["anchor_id"]),
+        payload: parseRecord(asString(row["payload_json"])),
+        metadata: row["metadata_json"] == null ? null : parseRecord(asString(row["metadata_json"])),
+      };
+      const projection = await this.prepareGadProjection(event);
+      this.applyGadProjection(event, projection);
+      replayed += 1;
+    }
+    return { replayed };
   }
 
   getStatus(): { metric: string; value: number }[] {
-    this.ensureReady();
     const count = (table: string) => asNumber(this.sql.exec(`SELECT COUNT(*) AS value FROM ${table}`).one()["value"]);
     return [
-      { metric: "Branches", value: count("gad_branches") },
-      { metric: "Trajectory items", value: count("gad_trajectory_items") },
+      { metric: "Pi branches", value: count("pi_branches") },
+      { metric: "Pi entries", value: count("pi_session_entries") },
+      { metric: "GAD events", value: count("gad_events") },
+      { metric: "Worktree states", value: count("gad_worktree_states") },
       { metric: "State transitions", value: count("gad_state_transitions") },
-      { metric: "File change hunks", value: count("gad_file_change_hunks") },
-      { metric: "Payloads", value: count("gad_payloads") },
-      { metric: "Blobs", value: count("gad_blobs") },
-      { metric: "File versions", value: count("gad_file_versions") },
-      { metric: "State roots", value: count("gad_state_roots") },
-      { metric: "Index jobs", value: count("gad_index_jobs") },
+      { metric: "File mutations", value: count("gad_file_mutations") },
     ];
   }
 
-  private mapEntryRow(row: JsonRecord): GadEntryRow {
-    const payloadJson = asString(row["payload_json"]);
-    let payload: JsonRecord = {};
-    if (payloadJson) {
-      try {
-        const parsed = JSON.parse(payloadJson);
-        payload = parseJsonRecord(parsed);
-      } catch {
-        payload = {};
-      }
-    }
-    const metadataJson = asString(row["metadata_json"]);
-    let metadata: JsonRecord | null = null;
-    if (metadataJson) {
-      try {
-        const parsed = JSON.parse(metadataJson);
-        metadata = parseJsonRecord(parsed);
-      } catch {
-        metadata = null;
-      }
-    }
-    return {
-      trajectoryId: asNumber(row["trajectory_id"] ?? row["id"]),
-      trajectoryHash: asString(row["trajectory_hash"] ?? row["hash"]) ?? "",
-      entryId: asString(row["entry_id"]) ?? "",
-      parentEntryId: asString(row["parent_entry_id"]),
-      entryType: (asString(row["entry_type"]) as GadEntryType) ?? "system_event",
-      actor: asString(row["actor"]),
-      payload,
-      metadata,
-      createdAt: asString(row["created_at"]) ?? "",
-    };
-  }
-
-  private stateHashAtTrajectory(workspaceId: string, trajectoryId: number, chain: JsonRecord[]): string {
-    // Walk forward through gad_state_transitions, finding the last
-    // transition trajectory at or before targetTrajId in the chain order.
-    let stateHash = EMPTY_STATE_HASH;
-    for (const row of chain) {
-      const trajId = asNumber(row["trajectory_id"]);
-      const transition = this.sql.exec(
-        `SELECT output_state_hash FROM gad_state_transitions WHERE workspace_id = ? AND trajectory_id = ?`,
-        workspaceId,
-        trajId,
-      ).toArray()[0] as JsonRecord | undefined;
-      if (transition) {
-        const outHash = asString(transition["output_state_hash"]);
-        if (outHash) stateHash = outHash;
-      }
-      if (trajId === trajectoryId) return stateHash;
-    }
-    return stateHash;
-  }
-
-  private lookupIntentForObserved(
-    workspaceId: string,
-    intentEntryId: string,
-    prepared: Array<{ spec: GadTrajectoryItemSpec }>,
-  ): PendingIntent | null {
-    // Look in the in-progress batch first.
-    for (const item of prepared) {
-      if (item.spec.entryId === intentEntryId && item.spec.entryType === "file_mutation_intent") {
-        return this.intentFromPayload(item.spec.payload);
-      }
-    }
-    // Then fall back to a persisted row.
-    const row = this.sql.exec(
-      `SELECT ti.entry_type, p.json AS payload_json
-       FROM gad_trajectory_items ti
-       LEFT JOIN gad_payloads p ON p.workspace_id = ti.workspace_id AND p.hash = ti.payload_hash
-       WHERE ti.workspace_id = ? AND ti.entry_id = ?`,
-      workspaceId,
-      intentEntryId,
-    ).toArray()[0] as JsonRecord | undefined;
-    if (!row) return null;
-    if (asString(row["entry_type"]) !== "file_mutation_intent") return null;
-    const payloadJson = asString(row["payload_json"]);
-    if (!payloadJson) return null;
-    try {
-      return this.intentFromPayload(parseJsonRecord(JSON.parse(payloadJson)));
-    } catch {
-      return null;
-    }
-  }
-
-  private intentFromPayload(payload: JsonRecord): PendingIntent {
-    const plannedParamsRaw = payload["plannedParams"];
-    const plannedParams = plannedParamsRaw && typeof plannedParamsRaw === "object" && !Array.isArray(plannedParamsRaw)
-      ? plannedParamsRaw as JsonRecord
+  private insertPiEntry(item: PiEntrySpec & { entryHash: string; parentEntryHash: string | null; parentEntryId: string | null; preStateHash: string; postStateHash: string }): void {
+    const message = item.payload["message"] && typeof item.payload["message"] === "object" && !Array.isArray(item.payload["message"])
+      ? item.payload["message"] as JsonRecord
       : null;
-    return {
-      path: asString(payload["path"]) ?? "",
-      beforeHash: asString(payload["beforeHash"]),
-      beforeSize: typeof payload["beforeSize"] === "number" ? payload["beforeSize"] : null,
-      toolCallId: asString(payload["toolCallId"]),
-      plannedTool: asString(payload["plannedTool"]),
-      plannedParams,
-    };
+    const usage = message?.["usage"] && typeof message["usage"] === "object" && !Array.isArray(message["usage"])
+      ? message["usage"] as JsonRecord
+      : null;
+    const rawEntry = { entryId: item.entryId, parentEntryId: item.parentEntryId, entryType: item.entryType, actor: item.actor ?? null, payload: item.payload, metadata: item.metadata ?? null };
+    this.sql.exec(
+      `INSERT INTO pi_session_entries (
+         entry_id, parent_entry_id, entry_type, actor, entry_hash, parent_entry_hash,
+         pre_state_hash, post_state_hash, role, timestamp_ms, api, provider, model,
+         response_model, response_id, stop_reason, error_message, usage_input,
+         usage_output, usage_cache_read, usage_cache_write, usage_total_tokens,
+         usage_cost_input, usage_cost_output, usage_cost_cache_read, usage_cost_cache_write,
+         usage_cost_total, tool_call_id, tool_name, is_error, tool_result_summary,
+         model_change_provider, model_change_model_id, thinking_level,
+         compaction_first_kept_entry_id, compaction_tokens_before,
+         raw_entry_json, metadata_json, introduced_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      item.entryId,
+      item.parentEntryId,
+      item.entryType,
+      item.actor ?? null,
+      item.entryHash,
+      item.parentEntryHash,
+      item.preStateHash,
+      item.postStateHash,
+      message ? asString(message["role"]) : null,
+      typeof message?.["timestamp"] === "number" ? message["timestamp"] : null,
+      asString(message?.["api"]),
+      asString(message?.["provider"]),
+      asString(message?.["model"]),
+      asString(message?.["responseModel"]),
+      asString(message?.["responseId"]),
+      asString(message?.["stopReason"]),
+      asString(message?.["errorMessage"]),
+      typeof usage?.["inputTokens"] === "number" ? usage["inputTokens"] : null,
+      typeof usage?.["outputTokens"] === "number" ? usage["outputTokens"] : null,
+      typeof usage?.["cacheReadTokens"] === "number" ? usage["cacheReadTokens"] : null,
+      typeof usage?.["cacheWriteTokens"] === "number" ? usage["cacheWriteTokens"] : null,
+      typeof usage?.["totalTokens"] === "number" ? usage["totalTokens"] : null,
+      typeof usage?.["costInput"] === "number" ? usage["costInput"] : null,
+      typeof usage?.["costOutput"] === "number" ? usage["costOutput"] : null,
+      typeof usage?.["costCacheRead"] === "number" ? usage["costCacheRead"] : null,
+      typeof usage?.["costCacheWrite"] === "number" ? usage["costCacheWrite"] : null,
+      typeof usage?.["costTotal"] === "number" ? usage["costTotal"] : null,
+      asString(message?.["toolCallId"]),
+      asString(message?.["toolName"]),
+      message?.["isError"] === true ? 1 : null,
+      message && asString(message["role"]) === "toolResult" ? this.messageTextSummary(message) : null,
+      item.entryType === "model_change" ? asString(item.payload["provider"]) : null,
+      item.entryType === "model_change" ? asString(item.payload["modelId"]) : null,
+      item.entryType === "thinking_level_change" ? asString(item.payload["thinkingLevel"]) : null,
+      item.entryType === "compaction" ? asString(item.payload["firstKeptEntryId"]) : null,
+      item.entryType === "compaction" && typeof item.payload["tokensBefore"] === "number" ? item.payload["tokensBefore"] : null,
+      JSON.stringify(rawEntry),
+      json(item.metadata),
+      nowIso(),
+    );
+    if (message) this.insertBlocks(item.entryId, message);
   }
 
-  private applyTrajectorySidecars(workspaceId: string, item: {
-    hash: string;
-    payloadHash: string | null;
-    spec: GadTrajectoryItemSpec;
-    inputStateHash: string | null;
-    outputStateHash: string | null;
-    stateTransition?: StateTransitionPlan;
-    intentPayload?: PendingIntent | null;
-  }, trajectoryId: number): void {
-    const payload = item.payloadHash ? this.payloadFor(workspaceId, item.payloadHash) : {};
-    if (item.stateTransition && item.inputStateHash && item.outputStateHash && item.inputStateHash !== item.outputStateHash) {
+  private insertBlocks(entryId: string, message: JsonRecord): void {
+    contentBlocks(message).forEach((block, blockIndex) => {
+      const blockType = asString(block["type"]) ?? "text";
+      const toolCallId = asString(block["id"]) ?? asString(block["toolCallId"]);
+      const toolName = asString(block["name"]) ?? asString(block["toolName"]);
+      const blockId = toolCallId ? `block:${entryId}:${toolCallId}` : `block:${entryId}:${blockIndex}`;
+      const args = block["input"] ?? block["arguments"] ?? block["args"];
       this.sql.exec(
-        `INSERT OR IGNORE INTO gad_state_transitions (
-           workspace_id, trajectory_id, input_state_hash, output_state_hash
-         ) VALUES (?, ?, ?, ?)`,
-        workspaceId,
-        trajectoryId,
-        item.inputStateHash,
-        item.outputStateHash,
+        `INSERT INTO pi_message_blocks (
+           block_id, message_entry_id, block_index, block_type, text, text_signature,
+           thinking, thinking_signature, thinking_redacted, image_blob_hash,
+           image_mime_type, image_byte_size, tool_call_id, tool_name,
+           tool_arguments_json, tool_arguments_hash, thought_signature
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        blockId,
+        entryId,
+        blockIndex,
+        blockType,
+        asString(block["text"]),
+        asString(block["signature"]),
+        asString(block["thinking"]),
+        asString(block["thinkingSignature"]),
+        block["redacted"] === true ? 1 : 0,
+        asString(block["imageBlobHash"]) ?? asString(block["blobHash"]),
+        asString(block["mimeType"]),
+        typeof block["byteSize"] === "number" ? block["byteSize"] : null,
+        toolCallId,
+        toolName,
+        args == null ? null : JSON.stringify(args),
+        null,
+        asString(block["thoughtSignature"]),
       );
-      this.recordFileProvenance(workspaceId, item, payload, trajectoryId);
-    }
-    const entryType = item.spec.entryType;
-    if (entryType === "claim_asserted" || entryType === "claim_revised") {
-      this.recordSemanticClaim(workspaceId, item, payload, trajectoryId);
-    }
-    if (entryType === "theory_updated") {
-      this.recordTheoryUpdate(workspaceId, payload, trajectoryId);
-    }
-    if (entryType === "contradiction_detected") {
-      this.recordContradiction(workspaceId, payload, trajectoryId);
-    }
-    void trajectoryId;
+      if (blockType === "toolCall" && toolCallId && toolName) {
+        this.sql.exec(
+          `INSERT INTO pi_tool_calls (tool_call_id, assistant_entry_id, block_id, tool_name) VALUES (?, ?, ?, ?)`,
+          toolCallId,
+          entryId,
+          blockId,
+          toolName,
+        );
+      }
+    });
   }
 
-  private recordSemanticClaim(workspaceId: string, item: { hash: string }, payload: JsonRecord, trajectoryId: number): void {
-    const text = asString(payload["text"]);
+  private async appendGadEvent(event: GadEventSpec): Promise<void> {
+    const prev = this.sql.exec(`SELECT event_hash FROM gad_events ORDER BY event_seq DESC LIMIT 1`).toArray()[0] as JsonRecord | undefined;
+    const eventHash = await sha256("gad-event-v1", {
+      prevEventHash: asString(prev?.["event_hash"]),
+      eventId: event.eventId,
+      kind: event.kind,
+      anchorKind: event.anchorKind ?? null,
+      anchorId: event.anchorId ?? null,
+      payloadCanonical: event.payload,
+      metadataCanonical: event.metadata ?? null,
+    });
+    const projection = await this.prepareGadProjection(event);
+    this.transaction(() => {
+      this.sql.exec(
+        `INSERT INTO gad_events (event_id, event_hash, prev_event_hash, kind, anchor_kind, anchor_id, payload_json, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        event.eventId,
+        eventHash,
+        asString(prev?.["event_hash"]),
+        event.kind,
+        event.anchorKind ?? null,
+        event.anchorId ?? null,
+        JSON.stringify(event.payload),
+        json(event.metadata),
+      );
+      this.applyGadProjection(event, projection);
+    });
+  }
+
+  private async prepareGadProjection(event: GadEventSpec): Promise<MutationObservedPlan | null> {
+    return event.kind === "file_mutation_observed" ? this.prepareMutationObserved(event) : null;
+  }
+
+  private applyGadProjection(event: GadEventSpec, projection: MutationObservedPlan | null = null): void {
+    switch (event.kind) {
+      case "file_observation_recorded":
+        this.recordObservation(event);
+        break;
+      case "file_mutation_planned":
+        this.recordMutationPlanned(event);
+        break;
+      case "file_mutation_observed":
+        if (!projection) throw new Error(`Missing projection plan for GAD event ${event.eventId}`);
+        this.recordMutationObserved(event, projection);
+        break;
+      case "dispatch_pending":
+      case "dispatch_resolved":
+      case "dispatch_abandoned":
+        this.recordDispatch(event);
+        break;
+      case "approval_requested":
+      case "approval_resolved":
+        this.recordApproval(event);
+        break;
+      case "credential_interruption":
+        this.recordCredentialInterruption(event);
+        break;
+      case "branch_event":
+        this.recordBranchEvent(event);
+        break;
+      case "system_event":
+        this.sql.exec(
+          `INSERT INTO gad_system_events (system_event_id, event_id, anchor_kind, anchor_id, kind, payload_json)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          event.eventId,
+          event.eventId,
+          event.anchorKind ?? null,
+          event.anchorId ?? null,
+          asString(event.payload["kind"]) ?? event.kind,
+          JSON.stringify(event.payload),
+        );
+        break;
+      case "claim_recorded":
+        this.recordClaim(event);
+        break;
+      case "theory_updated":
+        this.recordTheory(event);
+        break;
+      case "contradiction_recorded":
+        this.recordContradiction(event);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private recordObservation(event: GadEventSpec): void {
+    const path = normalizePath(String(event.payload["path"] ?? ""));
+    const stateHash = asString(event.payload["observedStateHash"]) ?? EMPTY_STATE_HASH;
+    const file = this.readGadFileAtState({ stateHash, path });
+    this.sql.exec(
+      `INSERT INTO gad_file_observations (
+         observation_id, event_id, anchor_kind, anchor_id, tool_call_id, path,
+         observed_state_hash, file_version_id, content_hash, size, mime_type, summary, error_message
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      event.eventId,
+      event.eventId,
+      event.anchorKind ?? "system",
+      event.anchorId ?? event.eventId,
+      asString(event.payload["toolCallId"]),
+      path,
+      stateHash,
+      typeof file?.["file_version_id"] === "number" ? file["file_version_id"] : null,
+      asString(event.payload["contentHash"]) ?? asString(file?.["content_hash"]),
+      typeof event.payload["size"] === "number" ? event.payload["size"] : null,
+      asString(event.payload["mimeType"]),
+      asString(event.payload["summary"]),
+      asString(event.payload["errorMessage"]),
+    );
+  }
+
+  private recordMutationPlanned(event: GadEventSpec): void {
+    const path = normalizePath(String(event.payload["path"] ?? ""));
+    this.sql.exec(
+      `INSERT INTO gad_file_mutations (
+         mutation_id, created_event_id, latest_event_id, anchor_kind, anchor_id,
+         tool_call_id, path, operation, status, planned_tool, planned_params_json,
+         before_hash, before_size
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?, ?)`,
+      asString(event.payload["mutationId"]) ?? event.eventId,
+      event.eventId,
+      event.eventId,
+      event.anchorKind ?? "tool_call",
+      event.anchorId ?? asString(event.payload["toolCallId"]) ?? event.eventId,
+      asString(event.payload["toolCallId"]),
+      path,
+      asString(event.payload["operation"]) ?? asString(event.payload["plannedTool"]) ?? "write",
+      asString(event.payload["plannedTool"]),
+      json(event.payload["plannedParams"]),
+      asString(event.payload["beforeHash"]),
+      typeof event.payload["beforeSize"] === "number" ? event.payload["beforeSize"] : null,
+    );
+  }
+
+  private async prepareMutationObserved(event: GadEventSpec): Promise<MutationObservedPlan> {
+    const path = normalizePath(String(event.payload["path"] ?? ""));
+    const operation = asString(event.payload["operation"]) ?? "write";
+    const inputStateHash = asString(event.payload["inputStateHash"]) ?? this.latestStateHash();
+    this.requireState(inputStateHash);
+    const contentHash = asString(event.payload["afterHash"]) ?? asString(event.payload["contentHash"]);
+    const status = asString(event.payload["outcome"]) === "error" ? "error" : "ok";
+    const oldFile = this.readGadFileAtState({ stateHash: inputStateHash, path });
+    const beforeFileVersionId = typeof oldFile?.["file_version_id"] === "number" ? oldFile["file_version_id"] : null;
+    if (status !== "ok") {
+      return { inputStateHash, outputStateHash: inputStateHash, path, operation, contentHash, status, beforeFileVersionId, statePlan: null };
+    }
+    const statePlan = await this.buildWorktreeStatePlan(
+      inputStateHash,
+      path,
+      operation,
+      contentHash,
+      typeof event.payload["mode"] === "number" ? event.payload["mode"] : 33188,
+    );
+    return { inputStateHash, outputStateHash: statePlan.stateHash, path, operation, contentHash, status, beforeFileVersionId, statePlan };
+  }
+
+  private recordMutationObserved(event: GadEventSpec, projection: MutationObservedPlan): void {
+    const path = projection.path;
+    const mutationId = asString(event.payload["mutationId"]) ?? asString(event.payload["plannedEventId"]) ?? event.eventId;
+    const operation = projection.operation;
+    const inputState = projection.inputStateHash;
+    const afterHash = projection.contentHash;
+    const status = projection.status;
+    const outputState = projection.outputStateHash;
+    let afterFileVersionId: number | null = null;
+    if (status === "ok") {
+      if (!projection.statePlan) throw new Error(`Missing worktree state plan for mutation ${mutationId}`);
+      this.applyWorktreeStatePlan(projection.statePlan);
+      const newFile = this.readGadFileAtState({ stateHash: outputState, path });
+      afterFileVersionId = typeof newFile?.["file_version_id"] === "number" ? newFile["file_version_id"] : null;
+      this.sql.exec(
+        `INSERT INTO gad_state_transitions (
+           event_id, input_state_hash, output_state_hash, produced_by_tool_call_id,
+           produced_by_mutation_id, summary, metadata_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        event.eventId,
+        inputState,
+        outputState,
+        asString(event.payload["toolCallId"]),
+        mutationId,
+        asString(event.payload["summary"]),
+        json(event.metadata),
+      );
+      this.sql.exec(
+        `INSERT INTO gad_file_change_hunks (
+           mutation_id, path, before_file_version_id, after_file_version_id,
+           old_start_line, old_line_count, new_start_line, new_line_count,
+           old_text_hash, new_text_hash
+         ) VALUES (?, ?, ?, ?, 1, NULL, 1, NULL, ?, ?)`,
+        mutationId,
+        path,
+        projection.beforeFileVersionId,
+        afterFileVersionId,
+        asString(event.payload["beforeHash"]),
+        afterHash,
+      );
+    }
+    const existing = this.sql.exec(`SELECT mutation_id FROM gad_file_mutations WHERE mutation_id = ?`, mutationId).toArray()[0];
+    if (existing) {
+      this.sql.exec(
+        `UPDATE gad_file_mutations
+         SET latest_event_id = ?, status = ?, after_hash = ?, after_size = ?,
+             input_state_hash = ?, output_state_hash = ?, state_transition_event_id = ?,
+             error_message = ?
+         WHERE mutation_id = ?`,
+        event.eventId,
+        status,
+        afterHash,
+        typeof event.payload["afterSize"] === "number" ? event.payload["afterSize"] : null,
+        inputState,
+        outputState,
+        status === "ok" ? event.eventId : null,
+        asString(event.payload["errorMessage"]),
+        mutationId,
+      );
+    } else {
+      this.sql.exec(
+        `INSERT INTO gad_file_mutations (
+           mutation_id, created_event_id, latest_event_id, anchor_kind, anchor_id,
+           tool_call_id, path, operation, status, after_hash, after_size,
+           input_state_hash, output_state_hash, state_transition_event_id, error_message
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        mutationId,
+        event.eventId,
+        event.eventId,
+        event.anchorKind ?? "tool_call",
+        event.anchorId ?? asString(event.payload["toolCallId"]) ?? event.eventId,
+        asString(event.payload["toolCallId"]),
+        path,
+        operation,
+        status,
+        afterHash,
+        typeof event.payload["afterSize"] === "number" ? event.payload["afterSize"] : null,
+        inputState,
+        outputState,
+        status === "ok" ? event.eventId : null,
+        asString(event.payload["errorMessage"]),
+      );
+    }
+  }
+
+  private recordDispatch(event: GadEventSpec): void {
+    const id = asString(event.payload["dispatchCallId"]) ?? event.eventId;
+    if (event.kind === "dispatch_pending") {
+      this.sql.exec(
+        `INSERT INTO gad_dispatches (
+           dispatch_call_id, created_event_id, latest_event_id, tool_call_id,
+           kind, status, provider_participant_id, provider_handle, method_name, params_json
+         ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+        id,
+        event.eventId,
+        event.eventId,
+        asString(event.payload["toolCallId"]) ?? "",
+        asString(event.payload["dispatchKind"]) ?? "channel-tool",
+        asString(event.payload["providerParticipantId"]),
+        asString(event.payload["providerHandle"]),
+        asString(event.payload["methodName"]),
+        json(event.payload["params"]),
+      );
+      return;
+    }
+    const existing = this.sql.exec(`SELECT 1 AS ok FROM gad_dispatches WHERE dispatch_call_id = ?`, id).toArray()[0];
+    if (!existing) throw new Error(`Cannot ${event.kind.replace("dispatch_", "")} unknown dispatch: ${id}`);
+    this.sql.exec(
+      `UPDATE gad_dispatches
+       SET latest_event_id = ?, status = ?, result_entry_id = ?, resolved_event_id = ?,
+           abandoned_reason = ?, error_message = ?, resolved_at = ?
+       WHERE dispatch_call_id = ?`,
+      event.eventId,
+      event.kind === "dispatch_resolved" ? "resolved" : "abandoned",
+      asString(event.payload["resultEntryId"]),
+      event.kind === "dispatch_resolved" ? event.eventId : null,
+      asString(event.payload["abandonedReason"]),
+      asString(event.payload["errorMessage"]),
+      nowIso(),
+      id,
+    );
+  }
+
+  private recordApproval(event: GadEventSpec): void {
+    const approvalId = asString(event.payload["approvalId"]) ?? event.eventId;
+    if (event.kind === "approval_requested") {
+      this.sql.exec(
+        `INSERT INTO gad_approvals (
+           approval_id, requested_event_id, latest_event_id, tool_call_id,
+           requested_by_entry_id, approval_level, request_json
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        approvalId,
+        event.eventId,
+        event.eventId,
+        asString(event.payload["toolCallId"]) ?? "",
+        asString(event.payload["requestedByEntryId"]) ?? "",
+        typeof event.payload["approvalLevel"] === "number" ? event.payload["approvalLevel"] : null,
+        json(event.payload["request"]),
+      );
+      return;
+    }
+    const existing = this.sql.exec(`SELECT 1 AS ok FROM gad_approvals WHERE approval_id = ?`, approvalId).toArray()[0];
+    if (!existing) throw new Error(`Cannot resolve unknown approval: ${approvalId}`);
+    this.sql.exec(
+      `UPDATE gad_approvals
+       SET latest_event_id = ?, decision = ?, resolved_event_id = ?, resolved_by = ?, resolved_at = ?
+       WHERE approval_id = ?`,
+      event.eventId,
+      asString(event.payload["decision"]),
+      event.eventId,
+      asString(event.payload["resolvedBy"]),
+      nowIso(),
+      approvalId,
+    );
+  }
+
+  private recordClaim(event: GadEventSpec): void {
+    const text = asString(event.payload["text"]);
     if (!text) return;
-    const claimHash = asString(payload["claimHash"]) ?? item.hash.replace(/^trajectory:/u, "claim:");
+    const claimHash = asString(event.payload["claimHash"]) ?? `claim:${event.eventId}`;
     this.sql.exec(
       `INSERT INTO gad_claims (
-         workspace_id, claim_hash, text, normalized_text, status, confidence, created_trajectory_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(workspace_id, claim_hash) DO UPDATE SET
+         claim_hash, created_event_id, latest_event_id, anchor_kind, anchor_id,
+         text, normalized_text, status, confidence
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(claim_hash) DO UPDATE SET
+         latest_event_id = excluded.latest_event_id,
          text = excluded.text,
          normalized_text = excluded.normalized_text,
          status = excluded.status,
          confidence = excluded.confidence`,
-      workspaceId,
       claimHash,
+      event.eventId,
+      event.eventId,
+      event.anchorKind ?? null,
+      event.anchorId ?? null,
       text,
-      asString(payload["normalizedText"]) ?? text.toLowerCase(),
-      asString(payload["status"]) ?? "active",
-      typeof payload["confidence"] === "number" ? payload["confidence"] : null,
-      trajectoryId,
+      asString(event.payload["normalizedText"]) ?? text.toLowerCase(),
+      asString(event.payload["status"]) ?? "active",
+      typeof event.payload["confidence"] === "number" ? event.payload["confidence"] : null,
     );
-    const claimId = asNumber(this.sql.exec(
-      `SELECT id FROM gad_claims WHERE workspace_id = ? AND claim_hash = ?`,
-      workspaceId,
-      claimHash,
-    ).one()["id"]);
-    const edges = Array.isArray(payload["edges"]) ? payload["edges"] : [];
+    const claimId = asNumber(this.sql.exec(`SELECT id FROM gad_claims WHERE claim_hash = ?`, claimHash).one()["id"]);
+    const edges = Array.isArray(event.payload["edges"]) ? event.payload["edges"] : [];
     for (const edge of edges) {
-      if (!edge || typeof edge !== "object") continue;
+      if (!edge || typeof edge !== "object" || Array.isArray(edge)) continue;
       const row = edge as JsonRecord;
-      const targetType = asString(row["targetType"]);
+      const targetKind = asString(row["targetKind"]) ?? asString(row["targetType"]);
       const targetId = asString(row["targetId"]);
       const relation = asString(row["relation"]);
-      if (!targetType || !targetId || !relation) continue;
+      if (!targetKind || !targetId || !relation) continue;
       this.sql.exec(
-        `INSERT INTO gad_claim_edges (
-           workspace_id, source_claim_id, target_type, target_id, relation, trajectory_id
-         ) VALUES (?, ?, ?, ?, ?, ?)`,
-        workspaceId,
+        `INSERT INTO gad_claim_edges (event_id, source_claim_id, target_kind, target_id, relation)
+         VALUES (?, ?, ?, ?, ?)`,
+        event.eventId,
         claimId,
-        targetType,
+        targetKind,
         targetId,
         relation,
-        trajectoryId,
       );
     }
   }
 
-  private recordTheoryUpdate(workspaceId: string, payload: JsonRecord, trajectoryId: number): void {
-    const name = asString(payload["name"]);
-    if (!name) return;
+  private recordCredentialInterruption(event: GadEventSpec): void {
     this.sql.exec(
-      `INSERT INTO gad_theories (workspace_id, name) VALUES (?, ?)
-       ON CONFLICT(workspace_id, name) DO NOTHING`,
-      workspaceId,
-      name,
+      `INSERT INTO gad_credential_interruptions (
+         interruption_id, created_event_id, latest_event_id, anchor_kind, anchor_id,
+         provider_id, model_base_url, resume_entry_id, resolved_event_id, status, resolved_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      asString(event.payload["interruptionId"]) ?? event.eventId,
+      event.eventId,
+      event.eventId,
+      event.anchorKind ?? null,
+      event.anchorId ?? null,
+      asString(event.payload["providerId"]) ?? "",
+      asString(event.payload["modelBaseUrl"]),
+      asString(event.payload["resumeEntryId"]),
+      asString(event.payload["resolvedEventId"]),
+      asString(event.payload["status"]) ?? "pending",
+      asString(event.payload["resolvedAt"]),
     );
-    const theoryId = asNumber(this.sql.exec(
-      `SELECT id FROM gad_theories WHERE workspace_id = ? AND name = ?`,
-      workspaceId,
-      name,
-    ).one()["id"]);
+  }
+
+  private recordBranchEvent(event: GadEventSpec): void {
     this.sql.exec(
-      `INSERT INTO gad_theory_versions (
-         workspace_id, theory_id, trajectory_id, parent_version_id, summary, status
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
-      workspaceId,
+      `INSERT INTO gad_branch_events (
+         branch_event_id, event_id, branch_id, event_type, source_branch_id,
+         source_entry_id, source_state_hash, payload_json
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      asString(event.payload["branchEventId"]) ?? event.eventId,
+      event.eventId,
+      asString(event.payload["branchId"]) ?? asString(event.anchorId) ?? "",
+      asString(event.payload["eventType"]) ?? "created",
+      asString(event.payload["sourceBranchId"]),
+      asString(event.payload["sourceEntryId"]),
+      asString(event.payload["sourceStateHash"]),
+      JSON.stringify(event.payload),
+    );
+  }
+
+  private recordTheory(event: GadEventSpec): void {
+    const name = asString(event.payload["name"]);
+    if (!name) return;
+    this.sql.exec(`INSERT OR IGNORE INTO gad_theories (name) VALUES (?)`, name);
+    const theoryId = asNumber(this.sql.exec(`SELECT id FROM gad_theories WHERE name = ?`, name).one()["id"]);
+    this.sql.exec(
+      `INSERT INTO gad_theory_versions (theory_id, event_id, anchor_kind, anchor_id, parent_version_id, summary, status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       theoryId,
-      trajectoryId,
-      typeof payload["parentVersionId"] === "number" ? payload["parentVersionId"] : null,
-      asString(payload["summary"]),
-      asString(payload["status"]) ?? "active",
+      event.eventId,
+      event.anchorKind ?? null,
+      event.anchorId ?? null,
+      typeof event.payload["parentVersionId"] === "number" ? event.payload["parentVersionId"] : null,
+      asString(event.payload["summary"]),
+      asString(event.payload["status"]) ?? "active",
     );
     const versionId = asNumber(this.sql.exec(`SELECT last_insert_rowid() AS id`).one()["id"]);
-    this.sql.exec(
-      `UPDATE gad_theories SET current_version_id = ? WHERE workspace_id = ? AND id = ?`,
-      versionId,
-      workspaceId,
-      theoryId,
-    );
+    this.sql.exec(`UPDATE gad_theories SET current_version_id = ? WHERE id = ?`, versionId, theoryId);
   }
 
-  private recordContradiction(workspaceId: string, payload: JsonRecord, trajectoryId: number): void {
+  private recordContradiction(event: GadEventSpec): void {
     this.sql.exec(
       `INSERT INTO gad_contradictions (
-         workspace_id, left_claim_id, right_claim_id, detected_trajectory_id, status, notes
-       ) VALUES (?, ?, ?, ?, ?, ?)`,
-      workspaceId,
-      typeof payload["leftClaimId"] === "number" ? payload["leftClaimId"] : null,
-      typeof payload["rightClaimId"] === "number" ? payload["rightClaimId"] : null,
-      trajectoryId,
-      asString(payload["status"]) ?? "open",
-      asString(payload["notes"]),
+         created_event_id, latest_event_id, anchor_kind, anchor_id,
+         left_claim_id, right_claim_id, status, notes
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      event.eventId,
+      event.eventId,
+      event.anchorKind ?? null,
+      event.anchorId ?? null,
+      typeof event.payload["leftClaimId"] === "number" ? event.payload["leftClaimId"] : null,
+      typeof event.payload["rightClaimId"] === "number" ? event.payload["rightClaimId"] : null,
+      asString(event.payload["status"]) ?? "open",
+      asString(event.payload["notes"]),
     );
   }
 
-  private recordFileProvenance(workspaceId: string, item: {
-    hash: string;
-    spec: GadTrajectoryItemSpec;
-    stateTransition?: StateTransitionPlan;
-    intentPayload?: PendingIntent | null;
-  }, payload: JsonRecord, trajectoryId: number): void {
-    const transition = item.stateTransition;
-    if (!transition) return;
-    if (!transition.newFile && asString(payload["operation"]) !== "delete") return;
-    const path = transition.newFile?.path ?? asString(payload["path"]);
-    if (!path) return;
-
-    // For file_mutation_observed, pull oldString/newString/beforeText/afterText
-    // out of the intent's plannedParams when present (so existing edit/write
-    // semantics still produce hunk records). For non-observed mutations
-    // (file_observed, workspace_observed) read from payload directly.
-    const intentParams = item.intentPayload?.plannedParams ?? null;
-    const readFromIntent = (key: string): string | null => intentParams ? asString(intentParams[key]) : null;
-    const oldString = asString(payload["oldString"]) ?? readFromIntent("oldString");
-    const newString = asString(payload["newString"]) ?? readFromIntent("newString");
-    const beforeText = asString(payload["beforeText"]) ?? readFromIntent("beforeText");
-    const afterText = asString(payload["afterText"]) ?? readFromIntent("afterText");
-    const beforeHash = asString(payload["beforeHash"])
-      ?? (item.intentPayload?.beforeHash ?? null);
-    const afterHash = asString(payload["afterHash"]) ?? asString(payload["contentHash"]);
-
-    const oldStartLine = lineForSubstring(beforeText, oldString) ?? (oldString != null ? 1 : null);
-    const newStartLine = lineForSubstring(afterText, newString) ?? (newString != null ? 1 : null);
-    const oldLineCount = textLineCount(oldString);
-    const newLineCount = textLineCount(newString);
-    this.sql.exec(
-      `INSERT INTO gad_file_change_hunks (
-         workspace_id, trajectory_id, path, before_file_version_id, after_file_version_id,
-         old_start_line, old_line_count, new_start_line, new_line_count,
-         old_start_byte, old_byte_count, new_start_byte, new_byte_count,
-         old_text_hash, new_text_hash
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      workspaceId,
-      trajectoryId,
-      path,
-      transition.oldFile?.fileVersionId ?? null,
-      transition.newFileVersionId ?? null,
-      oldStartLine,
-      oldLineCount,
-      newStartLine,
-      newLineCount,
-      null,
-      byteLength(oldString),
-      null,
-      byteLength(newString),
-      beforeHash,
-      afterHash,
-    );
+  private piBranchRows(branchId: string, throughEntryId: string | null, raw: boolean): PiDbRow[] {
+    const rows = this.sql.exec(
+      `WITH RECURSIVE chain(entry_id, depth) AS (
+         SELECT head_entry_id, 0 FROM pi_branches WHERE branch_id = ? AND head_entry_id IS NOT NULL
+         UNION ALL
+         SELECT e.parent_entry_id, chain.depth + 1
+         FROM pi_session_entries e
+         JOIN chain ON e.entry_id = chain.entry_id
+         WHERE e.parent_entry_id IS NOT NULL
+       )
+       SELECT e.*
+       FROM chain
+       JOIN pi_session_entries e ON e.entry_id = chain.entry_id
+       ORDER BY chain.depth DESC`,
+      branchId,
+    ).toArray() as unknown as PiDbRow[];
+    const scoped = throughEntryId == null ? rows : rows.slice(0, rows.findIndex((row) => row.entry_id === throughEntryId) + 1);
+    return raw ? scoped : this.applyCompactionBoundary(scoped);
   }
 
-  private payloadFor(workspaceId: string, payloadHash: string | null): JsonRecord {
-    if (!payloadHash) return {};
-    const row = this.sql.exec(
-      `SELECT kind, json, text FROM gad_payloads WHERE workspace_id = ? AND hash = ?`,
-      workspaceId,
-      payloadHash,
-    ).toArray()[0] as JsonRecord | undefined;
-    if (!row) return {};
-    if (row["json"]) return parseJsonRecord(JSON.parse(row["json"] as string));
-    if (row["text"]) return { text: row["text"] as string };
-    return {};
+  private applyCompactionBoundary(rows: PiDbRow[]): PiDbRow[] {
+    let compactionIndex = -1;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (rows[i]!.entry_type === "compaction") {
+        compactionIndex = i;
+        break;
+      }
+    }
+    if (compactionIndex < 0) return rows;
+    const compaction = rows[compactionIndex]!;
+    const raw = parseRecord(compaction.raw_entry_json);
+    const payload = raw["payload"] && typeof raw["payload"] === "object" && !Array.isArray(raw["payload"]) ? raw["payload"] as JsonRecord : {};
+    const firstKept = asString(payload["firstKeptEntryId"]);
+    const after = rows.slice(compactionIndex + 1);
+    if (!firstKept) return [compaction, ...after];
+    const keepIndex = rows.findIndex((row) => row.entry_id === firstKept);
+    return [...(keepIndex < 0 ? [] : rows.slice(keepIndex, compactionIndex)), compaction, ...after];
   }
 
-  /**
-   * One `message` envelope entry → one materialized message. The envelope
-   * payload `{ message: AgentMessage }` is the single source of truth for
-   * transcript content. We do not reassemble blocks from `message_block`
-   * entries — those are pure addressability handles.
-   *
-   * For `tool_result_observed` entries: emit a `toolResult` message only
-   * when a matching prior `tool_call_requested` exists on the chain (we
-   * still surface a tool result from the chain context, sourcing the body
-   * from the parent `message` entry of role "toolResult" when present, or
-   * synthesised from the payload summary otherwise).
-   */
-  private materializePiMessagesFromTrajectory(workspaceId: string, rows: JsonRecord[]): JsonRecord[] {
-    const output: JsonRecord[] = [];
-    const requestedToolCallIds = new Set<string>();
-
-    // First pass: collect tool-call ids that were actually requested.
-    for (const row of rows) {
-      const entryType = asString(row["entry_type"]);
-      if (entryType !== "tool_call_requested") continue;
-      const toolCallId = asString(row["tool_call_id"])
-        ?? asString(this.payloadFor(workspaceId, asString(row["payload_hash"]))["toolCallId"]);
-      if (toolCallId) requestedToolCallIds.add(toolCallId);
-    }
-
-    // Index tool_result_observed rows whose payload carries a toolResult
-    // message body, keyed by their parent `message` entry id. Falls back
-    // to the payload's own toolName/content/isError when the payload
-    // already encodes the full toolResult shape (the standard observed
-    // payload includes content + toolCallId + summary).
-    for (const row of rows) {
-      const entryType = asString(row["entry_type"]);
-      if (entryType === "message") {
-        const payload = this.payloadFor(workspaceId, asString(row["payload_hash"]));
-        const inner = payload["message"];
-        if (!inner || typeof inner !== "object" || Array.isArray(inner)) {
-          // Skip malformed message entries — readers shouldn't crash on bad
-          // payload shape.
-          continue;
-        }
-        const msg = inner as JsonRecord;
-        if (asString(msg["role"]) === "toolResult") {
-          const toolCallId = asString(msg["toolCallId"]);
-          if (!toolCallId) {
-            throw new Error(`Malformed GAD transcript: toolResult message ${asString(row["entry_id"]) ?? ""} is missing toolCallId`);
-          }
-          if (!requestedToolCallIds.has(toolCallId)) {
-            throw new Error(`Malformed GAD transcript: tool_result_observed for ${toolCallId} has no matching tool call`);
-          }
-          output.push({ ...msg });
-        } else {
-          output.push({ ...msg });
-        }
-        continue;
-      }
-      if (entryType === "tool_result_observed") {
-        // Synthesize a toolResult message from the observed payload
-        // when the chain does not include a separate `message` entry
-        // for it. This preserves prior behaviour where some flows
-        // record only the observed event.
-        const payload = this.payloadFor(workspaceId, asString(row["payload_hash"]));
-        const toolCallId = asString(row["tool_call_id"]) ?? asString(payload["toolCallId"]);
-        if (!toolCallId) {
-          throw new Error("Malformed GAD transcript: tool_result_observed is missing toolCallId");
-        }
-        if (!requestedToolCallIds.has(toolCallId)) {
-          throw new Error(`Malformed GAD transcript: tool_result_observed for ${toolCallId} has no matching tool call`);
-        }
-        // Skip synthesis if there's already a parent `message` entry that
-        // will produce the toolResult message itself.
-        const parentEntryId = asString(row["parent_entry_id"]);
-        let hasParentMessage = false;
-        if (parentEntryId) {
-          for (const candidate of rows) {
-            if (asString(candidate["entry_id"]) === parentEntryId &&
-                asString(candidate["entry_type"]) === "message") {
-              hasParentMessage = true;
-              break;
-            }
-          }
-        }
-        if (hasParentMessage) continue;
-        const content = Array.isArray(payload["content"])
-          ? payload["content"] as JsonValue[]
-          : [{ type: "text", text: asString(payload["summary"]) ?? "" }];
-        const message: JsonRecord = {
-          role: "toolResult",
-          toolCallId,
-          toolName: asString(payload["toolName"]) ?? "unknown",
-          content,
-          isError: payload["isError"] === true,
-        };
-        if (typeof payload["timestamp"] === "number") message["timestamp"] = payload["timestamp"];
-        if (payload["details"] != null) message["details"] = payload["details"];
-        output.push(message);
-      }
-    }
-    return output;
-  }
-
-  private materializeToolCallsFromTrajectory(workspaceId: string, branchId: string, rows: JsonRecord[]): JsonRecord[] {
-    const calls = new Map<string, JsonRecord>();
-    for (const row of rows) {
-      const entryType = asString(row["entry_type"]);
-      if (entryType !== "tool_call_requested" && entryType !== "tool_result_observed") continue;
-      const payload = this.payloadFor(workspaceId, asString(row["payload_hash"]));
-      const toolCallId = asString(row["tool_call_id"]) ?? asString(payload["toolCallId"]);
-      if (!toolCallId) continue;
-      const existing = calls.get(toolCallId) ?? {
-        workspace_id: workspaceId,
-        branch_id: branchId,
-        tool_call_id: toolCallId,
-        request_trajectory_id: null,
-        request_trajectory_hash: null,
-        result_trajectory_id: null,
-        result_trajectory_hash: null,
-        entry_id: null,
-        parent_entry_id: null,
-        tool_name: null,
-        provider_handle: null,
-        parameters_json: null,
-        status: "observed",
-        result_summary: null,
-        started_at: null,
-        completed_at: null,
-        source_trajectory_id: null,
-      };
-
-      if (entryType === "tool_call_requested") {
-        existing["request_trajectory_id"] = row["trajectory_id"] ?? null;
-        existing["request_trajectory_hash"] = row["trajectory_hash"] ?? null;
-        existing["entry_id"] = row["entry_id"] ?? existing["entry_id"] ?? null;
-        existing["parent_entry_id"] = row["parent_entry_id"] ?? existing["parent_entry_id"] ?? null;
-        existing["tool_name"] = asString(payload["toolName"]) ?? existing["tool_name"] ?? null;
-        existing["provider_handle"] = asString(payload["providerHandle"]) ?? existing["provider_handle"] ?? null;
-        existing["parameters_json"] = json(payload["parameters"] ?? null);
-        existing["status"] = "requested";
-        existing["started_at"] = row["created_at"] ?? null;
-      } else {
-        existing["result_trajectory_id"] = row["trajectory_id"] ?? null;
-        existing["result_trajectory_hash"] = row["trajectory_hash"] ?? null;
-        existing["entry_id"] = row["entry_id"] ?? existing["entry_id"] ?? null;
-        existing["parent_entry_id"] = row["parent_entry_id"] ?? existing["parent_entry_id"] ?? null;
-        existing["tool_name"] = asString(payload["toolName"]) ?? existing["tool_name"] ?? null;
-        existing["status"] = payload["isError"] === true ? "error" : "complete";
-        existing["result_summary"] = asString(payload["summary"]);
-        existing["completed_at"] = row["created_at"] ?? null;
-      }
-      existing["source_trajectory_id"] = existing["result_trajectory_id"] ?? existing["request_trajectory_id"] ?? null;
-      calls.set(toolCallId, existing);
-    }
-    return [...calls.values()];
-  }
-
-  private async prepareStateTransition(
-    workspaceId: string,
-    currentStateHash: string,
-    spec: GadTrajectoryItemSpec,
-    baseFiles?: ManifestFileEntry[],
-  ): Promise<StateTransitionPlan | null> {
-    const entryType = spec.entryType;
-    if (entryType !== "file_observed" && entryType !== "file_mutation_observed" && entryType !== "workspace_observed") {
-      return null;
-    }
-    const payload = spec.payload;
-
-    // For file_mutation_observed: payload carries {path, afterHash, afterSize,
-    // outcome}. The path is denormalized from intent.
-    // For file_observed / workspace_observed: payload carries path + contentHash/afterHash.
-    const rawPath = asString(payload["path"]);
-    if (!rawPath) return null;
-    const path = normalizePath(rawPath);
-
-    let operation: string;
-    let contentHash: string | null;
-    let mode: number | null = typeof payload["mode"] === "number" ? payload["mode"] : null;
-
-    if (entryType === "file_mutation_observed") {
-      const outcome = asString(payload["outcome"]);
-      // Only successful observed mutations affect state.
-      if (outcome && outcome !== "ok") return null;
-      operation = asString(payload["operation"]) ?? "write";
-      contentHash = asString(payload["afterHash"]);
-    } else {
-      operation = asString(payload["operation"]) ?? entryType;
-      contentHash = asString(payload["afterHash"]) ?? asString(payload["contentHash"]);
-    }
-
-    const files: ManifestFileEntry[] = baseFiles ?? this.filesForState(workspaceId, currentStateHash).flatMap((file) => {
-      const existingContentHash = asString(file["content_hash"]);
-      if (!existingContentHash) return [];
-      return [{
-        path: String(file["path"]),
-        fileVersionId: typeof file["file_version_id"] === "number" ? file["file_version_id"] : null,
-        contentHash: existingContentHash,
-        mode: typeof file["mode"] === "number" ? file["mode"] : null,
-      }];
-    });
-    const next = new Map<string, ManifestFileEntry>();
-    for (const file of files) {
-      next.set(file.path, file);
-    }
-    const oldFile = next.get(path) ?? null;
-    let newFile: { path: string; contentHash: string; mode: number | null } | null = null;
-    if (operation === "delete") {
-      next.delete(path);
-    } else if (contentHash) {
-      newFile = { path, contentHash, mode };
-      next.set(path, { path, fileVersionId: null, contentHash, mode });
-    } else {
-      return null;
-    }
-    const entries: ManifestFileEntry[] = [...next.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([, value]) => value);
-    const tree = await this.buildManifestTree(entries);
-    const rootHash = tree.rootHash;
-    const stateHash = await sha256("state", { manifestRootHash: rootHash });
-    return { rootHash, stateHash, nodes: tree.nodes, files: entries, oldFile, newFile };
-  }
-
-  private filesForState(workspaceId: string, stateHash: string): JsonRecord[] {
-    const rootHash = this.manifestRootForState(workspaceId, stateHash);
-    if (!rootHash) return [];
-    const out: JsonRecord[] = [];
-    this.collectManifestFiles(workspaceId, rootHash, "", out, new Set());
-    return out.sort((a, b) => String(a["path"]).localeCompare(String(b["path"])));
-  }
-
-  private manifestRootForState(workspaceId: string, stateHash: string): string | null {
-    const state = this.sql.exec(
-      `SELECT manifest_root_hash FROM gad_state_roots WHERE workspace_id = ? AND state_hash = ?`,
-      workspaceId,
-      stateHash,
-    ).toArray()[0] as JsonRecord | undefined;
-    return asString(state?.["manifest_root_hash"]);
-  }
-
-  private readManifestFile(workspaceId: string, rootHash: string, path: string): JsonRecord | null {
-    const parts = path.split("/");
-    let parentHash = rootHash;
-    for (let i = 0; i < parts.length; i++) {
-      const name = parts[i]!;
-      const entry = this.sql.exec(
-        `SELECT name, entry_kind, child_manifest_hash, file_version_id
-         FROM gad_manifest_entries
-         WHERE workspace_id = ? AND parent_hash = ? AND name = ?`,
-        workspaceId,
-        parentHash,
-        name,
-      ).toArray()[0] as JsonRecord | undefined;
-      if (!entry) return null;
-      const last = i === parts.length - 1;
-      if (last) {
-        return entry["entry_kind"] === "file" ? this.fileRecordForEntry(workspaceId, entry, path) : null;
-      }
-      if (entry["entry_kind"] !== "dir") return null;
-      const childHash = asString(entry["child_manifest_hash"]);
-      if (!childHash) return null;
-      parentHash = childHash;
-    }
-    return null;
-  }
-
-  private diffManifestNodes(
-    workspaceId: string,
-    leftHash: string | null,
-    rightHash: string | null,
-    prefix: string,
-    added: JsonRecord[],
-    removed: JsonRecord[],
-    changed: JsonRecord[],
-  ): void {
-    if (leftHash === rightHash) return;
-    if (!leftHash && rightHash) {
-      this.collectManifestFiles(workspaceId, rightHash, prefix, added, new Set());
-      return;
-    }
-    if (leftHash && !rightHash) {
-      this.collectManifestFiles(workspaceId, leftHash, prefix, removed, new Set());
-      return;
-    }
-    if (!leftHash || !rightHash) return;
-
-    const left = new Map(this.manifestEntryRows(workspaceId, leftHash).map((row) => [String(row["name"]), row]));
-    const right = new Map(this.manifestEntryRows(workspaceId, rightHash).map((row) => [String(row["name"]), row]));
-    const names = [...new Set([...left.keys(), ...right.keys()])].sort();
-    for (const name of names) {
-      const path = prefix ? `${prefix}/${name}` : name;
-      const l = left.get(name);
-      const r = right.get(name);
-      if (!l && r) {
-        if (r["entry_kind"] === "dir") this.diffManifestNodes(workspaceId, null, asString(r["child_manifest_hash"]), path, added, removed, changed);
-        else {
-          const file = this.fileRecordForEntry(workspaceId, r, path);
-          if (file) added.push(file);
-        }
-        continue;
-      }
-      if (l && !r) {
-        if (l["entry_kind"] === "dir") this.diffManifestNodes(workspaceId, asString(l["child_manifest_hash"]), null, path, added, removed, changed);
-        else {
-          const file = this.fileRecordForEntry(workspaceId, l, path);
-          if (file) removed.push(file);
-        }
-        continue;
-      }
-      if (!l || !r) continue;
-      if (l["entry_kind"] !== r["entry_kind"]) {
-        if (l["entry_kind"] === "dir") this.diffManifestNodes(workspaceId, asString(l["child_manifest_hash"]), null, path, added, removed, changed);
-        else {
-          const file = this.fileRecordForEntry(workspaceId, l, path);
-          if (file) removed.push(file);
-        }
-        if (r["entry_kind"] === "dir") this.diffManifestNodes(workspaceId, null, asString(r["child_manifest_hash"]), path, added, removed, changed);
-        else {
-          const file = this.fileRecordForEntry(workspaceId, r, path);
-          if (file) added.push(file);
-        }
-        continue;
-      }
-      if (l["entry_kind"] === "dir") {
-        this.diffManifestNodes(
-          workspaceId,
-          asString(l["child_manifest_hash"]),
-          asString(r["child_manifest_hash"]),
-          path,
-          added,
-          removed,
-          changed,
-        );
-      } else {
-        const leftFile = this.fileRecordForEntry(workspaceId, l, path);
-        const rightFile = this.fileRecordForEntry(workspaceId, r, path);
-        if (leftFile && rightFile && (
-          leftFile["content_hash"] !== rightFile["content_hash"] ||
-          leftFile["mode"] !== rightFile["mode"]
-        )) {
-          changed.push({
-            path,
-            before: leftFile["content_hash"] ?? null,
-            after: rightFile["content_hash"] ?? null,
-            beforeMode: leftFile["mode"] ?? null,
-            afterMode: rightFile["mode"] ?? null,
-          });
-        }
-      }
-    }
-  }
-
-  private async buildManifestTree(files: ManifestFileEntry[]): Promise<{ rootHash: string; nodes: ManifestNodePlan[] }> {
-    interface MutableDir {
-      dirs: Map<string, MutableDir>;
-      files: Map<string, ManifestFileEntry>;
-    }
-    const root: MutableDir = { dirs: new Map(), files: new Map() };
-    for (const file of files) {
-      const parts = file.path.split("/");
-      let dir = root;
-      for (const part of parts.slice(0, -1)) {
-        let child = dir.dirs.get(part);
-        if (!child) {
-          child = { dirs: new Map(), files: new Map() };
-          dir.dirs.set(part, child);
-        }
-        dir = child;
-      }
-      dir.files.set(parts[parts.length - 1]!, file);
-    }
-
-    const nodes: ManifestNodePlan[] = [];
-    const build = async (dir: MutableDir, prefix: string): Promise<string> => {
-      const childDirs: Array<{ name: string; hash: string }> = [];
-      for (const [name, child] of [...dir.dirs.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-        childDirs.push({ name, hash: await build(child, prefix ? `${prefix}/${name}` : name) });
-      }
-      const fileEntries = [...dir.files.entries()].sort(([a], [b]) => a.localeCompare(b));
-      const hashEntries = [
-        ...childDirs.map((entry) => ({ name: entry.name, kind: "dir", childManifestHash: entry.hash })),
-        ...fileEntries.map(([name, file]) => ({
-          name,
-          kind: "file",
-          contentHash: file.contentHash,
-          mode: file.mode,
-        })),
-      ].sort((a, b) => a.name.localeCompare(b.name));
-      const hash = await sha256("manifest", { kind: "dir", entries: hashEntries });
-      const nodeEntries: ManifestEntryPlan[] = [
-        ...childDirs.map((entry) => ({
-          parentHash: hash,
-          name: entry.name,
-          entryKind: "dir" as const,
-          childManifestHash: entry.hash,
-          fileVersionId: null,
-          path: null,
-        })),
-        ...fileEntries.map(([name, file]) => ({
-          parentHash: hash,
-          name,
-          entryKind: "file" as const,
-          childManifestHash: null,
-          fileVersionId: file.fileVersionId,
-          path: file.path,
-        })),
-      ].sort((a, b) => a.name.localeCompare(b.name));
-      nodes.push({ hash, entries: nodeEntries });
-      void prefix;
-      return hash;
+  private mapPiRow(row: PiDbRow): PiEntryRow {
+    const raw = parseRecord(row.raw_entry_json);
+    const payload = raw["payload"] && typeof raw["payload"] === "object" && !Array.isArray(raw["payload"]) ? raw["payload"] as JsonRecord : {};
+    return {
+      entryId: row.entry_id,
+      parentEntryId: row.parent_entry_id,
+      entryType: row.entry_type,
+      actor: row.actor,
+      entryHash: row.entry_hash,
+      parentEntryHash: row.parent_entry_hash,
+      preStateHash: row.pre_state_hash,
+      postStateHash: row.post_state_hash,
+      payload,
+      metadata: parseRecord(row.metadata_json),
+      createdAt: row.introduced_at,
     };
-
-    const rootHash = await build(root, "");
-    return { rootHash, nodes };
   }
 
-  private collectManifestFiles(
-    workspaceId: string,
-    manifestHash: string,
-    prefix: string,
-    out: JsonRecord[],
-    seen: Set<string>,
-  ): void {
-    if (seen.has(manifestHash)) return;
-    seen.add(manifestHash);
-    for (const entry of this.manifestEntryRows(workspaceId, manifestHash)) {
-      const name = String(entry["name"]);
-      const path = prefix ? `${prefix}/${name}` : name;
-      if (entry["entry_kind"] === "dir") {
-        const childHash = asString(entry["child_manifest_hash"]);
-        if (childHash) this.collectManifestFiles(workspaceId, childHash, path, out, seen);
-      } else if (entry["entry_kind"] === "file") {
-        const file = this.fileRecordForEntry(workspaceId, entry, path);
-        if (file) out.push(file);
-      }
-    }
-    seen.delete(manifestHash);
+  private messageTextSummary(message: JsonRecord): string | null {
+    const text = contentBlocks(message).flatMap((block) => typeof block["text"] === "string" ? [block["text"]] : []).join("\n");
+    return text ? text.slice(0, 500) : null;
   }
 
-  private manifestEntryRows(workspaceId: string, parentHash: string): JsonRecord[] {
-    return this.sql.exec(
-      `SELECT name, entry_kind, child_manifest_hash, file_version_id
-       FROM gad_manifest_entries
-       WHERE workspace_id = ? AND parent_hash = ?
-       ORDER BY name`,
-      workspaceId,
-      parentHash,
-    ).toArray() as JsonRecord[];
-  }
-
-  private fileRecordForEntry(workspaceId: string, entry: JsonRecord, path: string): JsonRecord | null {
-    const fileVersionId = entry["file_version_id"];
-    if (typeof fileVersionId !== "number") return null;
-    const row = this.sql.exec(
-      `SELECT id AS file_version_id, path, content_hash, mode, created_at
-       FROM gad_file_versions
-       WHERE workspace_id = ? AND id = ?`,
-      workspaceId,
-      fileVersionId,
-    ).toArray()[0] as JsonRecord | undefined;
-    if (!row) return null;
-    return { ...row, path };
-  }
-
-  private ensureEmptyStateRoot(workspaceId: string): void {
+  private ensureEmptyState(): void {
+    this.sql.exec(`INSERT OR IGNORE INTO gad_manifest_nodes (hash, kind) VALUES (?, 'dir')`, EMPTY_MANIFEST_HASH);
     this.sql.exec(
-      `INSERT OR IGNORE INTO gad_manifest_nodes (workspace_id, hash, kind) VALUES (?, ?, 'dir')`,
-      workspaceId,
-      EMPTY_MANIFEST_HASH,
-    );
-    this.sql.exec(
-      `INSERT OR IGNORE INTO gad_state_roots (workspace_id, state_hash, manifest_root_hash, metadata_json)
-       VALUES (?, ?, ?, ?)`,
-      workspaceId,
+      `INSERT OR IGNORE INTO gad_worktree_states (state_hash, manifest_root_hash, metadata_json)
+       VALUES (?, ?, ?)`,
       EMPTY_STATE_HASH,
       EMPTY_MANIFEST_HASH,
       JSON.stringify({ empty: true }),
     );
   }
 
-  private enqueueIndexJob(workspaceId: string, sourceHash: string, sourceKind: string, jobKind: string): void {
+  private requireState(stateHash: string): void {
+    const row = this.sql.exec(`SELECT 1 AS ok FROM gad_worktree_states WHERE state_hash = ?`, stateHash).toArray()[0];
+    if (!row) throw new Error(`Unknown worktree state: ${stateHash}`);
+  }
+
+  private stateExists(stateHash: string): boolean {
+    return Boolean(this.sql.exec(`SELECT 1 AS ok FROM gad_worktree_states WHERE state_hash = ?`, stateHash).toArray()[0]);
+  }
+
+  private eventExists(eventId: string): boolean {
+    return Boolean(this.sql.exec(`SELECT 1 AS ok FROM gad_events WHERE event_id = ?`, eventId).toArray()[0]);
+  }
+
+  private latestStateHash(): string {
+    const row = this.sql.exec(`SELECT head_state_hash FROM pi_branches ORDER BY updated_at DESC LIMIT 1`).toArray()[0] as JsonRecord | undefined;
+    return asString(row?.["head_state_hash"]) ?? EMPTY_STATE_HASH;
+  }
+
+  private filesForState(stateHash: string): JsonRecord[] {
+    const state = this.sql.exec(`SELECT manifest_root_hash FROM gad_worktree_states WHERE state_hash = ?`, stateHash).toArray()[0] as JsonRecord | undefined;
+    const root = asString(state?.["manifest_root_hash"]);
+    if (!root) return [];
+    return this.sql.exec(
+      `WITH RECURSIVE tree(parent_hash, prefix) AS (
+         SELECT ? AS parent_hash, '' AS prefix
+         UNION ALL
+         SELECT me.child_manifest_hash, tree.prefix || me.name || '/'
+         FROM gad_manifest_entries me
+         JOIN tree ON tree.parent_hash = me.parent_hash
+         WHERE me.entry_kind = 'dir' AND me.child_manifest_hash IS NOT NULL
+       )
+       SELECT fv.id AS file_version_id, fv.path, fv.content_hash, fv.mode, fv.created_at
+       FROM tree
+       JOIN gad_manifest_entries me ON me.parent_hash = tree.parent_hash
+       JOIN gad_file_versions fv ON fv.id = me.file_version_id
+       WHERE me.entry_kind = 'file'
+       ORDER BY fv.path`,
+      root,
+    ).toArray() as JsonRecord[];
+  }
+
+  private async buildWorktreeStatePlan(inputStateHash: string, path: string, operation: string, contentHash: string | null, mode: number): Promise<WorktreeStatePlan> {
+    const files = new Map<string, FileEntry>(this.filesForState(inputStateHash).map((row) => [String(row["path"]), {
+      path: String(row["path"]),
+      fileVersionId: asNumber(row["file_version_id"]),
+      contentHash: String(row["content_hash"]),
+      mode: asNumber(row["mode"]),
+    } satisfies FileEntry]));
+    if (operation === "delete") {
+      files.delete(path);
+    } else {
+      if (!contentHash) throw new Error("file mutation requires afterHash/contentHash");
+      files.set(path, { path, contentHash, mode });
+    }
+    const entries = [...files.values()].sort((a, b) => a.path.localeCompare(b.path));
+    const built = await this.buildManifestTree(entries);
+    const stateHash = await sha256("state", { manifestRootHash: built.rootHash });
+    return {
+      stateHash,
+      manifestRootHash: built.rootHash,
+      manifestNodes: built.nodes,
+      manifestEntries: built.manifestEntries,
+      files: entries,
+    };
+  }
+
+  private async buildManifestTree(files: FileEntry[]): Promise<{ rootHash: string; nodes: string[]; manifestEntries: ManifestEntryPlan[] }> {
+    type DirNode = { dirs: Map<string, DirNode>; files: Map<string, FileEntry> };
+    const root: DirNode = { dirs: new Map(), files: new Map() };
+    for (const file of files) {
+      const parts = file.path.split("/");
+      let cursor = root;
+      for (const part of parts.slice(0, -1)) {
+        const existing = cursor.dirs.get(part);
+        if (existing) {
+          cursor = existing;
+        } else {
+          const next: DirNode = { dirs: new Map(), files: new Map() };
+          cursor.dirs.set(part, next);
+          cursor = next;
+        }
+      }
+      cursor.files.set(parts[parts.length - 1]!, file);
+    }
+    const nodes: string[] = [];
+    const manifestEntries: ManifestEntryPlan[] = [];
+    const visit = async (node: DirNode): Promise<string> => {
+      const childDirs: Array<{ name: string; hash: string }> = [];
+      for (const [name, child] of [...node.dirs.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+        childDirs.push({ name, hash: await visit(child) });
+      }
+      const childFiles = [...node.files.entries()].sort(([a], [b]) => a.localeCompare(b));
+      const hash = await sha256("manifest", {
+        kind: "dir",
+        entries: [
+          ...childDirs.map((entry) => ({ name: entry.name, kind: "dir", hash: entry.hash })),
+          ...childFiles.map(([name, file]) => ({ name, kind: "file", contentHash: file.contentHash, mode: file.mode })),
+        ],
+      });
+      nodes.push(hash);
+      for (const entry of childDirs) {
+        manifestEntries.push({ parentHash: hash, name: entry.name, entryKind: "dir", childManifestHash: entry.hash });
+      }
+      for (const [name, file] of childFiles) {
+        manifestEntries.push({ parentHash: hash, name, entryKind: "file", file });
+      }
+      return hash;
+    };
+    const rootHash = await visit(root);
+    return { rootHash, nodes, manifestEntries };
+  }
+
+  private applyWorktreeStatePlan(plan: WorktreeStatePlan): void {
+    for (const file of plan.files) {
+      this.ensureBlob(file.contentHash, 0, null);
+      this.sql.exec(
+        `INSERT OR IGNORE INTO gad_file_versions (path, content_hash, mode) VALUES (?, ?, ?)`,
+        file.path,
+        file.contentHash,
+        file.mode,
+      );
+    }
+    for (const hash of plan.manifestNodes) {
+      this.sql.exec(`INSERT OR IGNORE INTO gad_manifest_nodes (hash, kind) VALUES (?, 'dir')`, hash);
+    }
+    for (const entry of plan.manifestEntries) {
+      let fileVersionId: number | null = null;
+      if (entry.file) {
+        const version = this.sql.exec(
+          `SELECT id FROM gad_file_versions WHERE path = ? AND content_hash = ? AND mode = ?`,
+          entry.file.path,
+          entry.file.contentHash,
+          entry.file.mode,
+        ).one();
+        fileVersionId = asNumber(version["id"]);
+      }
+      this.sql.exec(
+        `INSERT OR IGNORE INTO gad_manifest_entries (parent_hash, name, entry_kind, child_manifest_hash, file_version_id)
+         VALUES (?, ?, ?, ?, ?)`,
+        entry.parentHash,
+        entry.name,
+        entry.entryKind,
+        entry.childManifestHash ?? null,
+        fileVersionId,
+      );
+    }
     this.sql.exec(
-      `INSERT OR IGNORE INTO gad_index_jobs (workspace_id, source_hash, source_kind, job_kind)
-       VALUES (?, ?, ?, ?)`,
-      workspaceId,
-      sourceHash,
-      sourceKind,
-      jobKind,
+      `INSERT OR IGNORE INTO gad_worktree_states (state_hash, manifest_root_hash, metadata_json)
+       VALUES (?, ?, ?)`,
+      plan.stateHash,
+      plan.manifestRootHash,
+      JSON.stringify({ generatedBy: "gad-event" }),
     );
   }
 
-  private markDirty(workspaceId: string): void {
-    this.sql.exec(`UPDATE gad_branches SET dirty = 1 WHERE workspace_id = ?`, workspaceId);
+  private async recomputeManifestHash(manifestHash: string, stack = new Set<string>()): Promise<string | null> {
+    const node = this.sql.exec(`SELECT kind FROM gad_manifest_nodes WHERE hash = ?`, manifestHash).toArray()[0] as JsonRecord | undefined;
+    if (!node) return null;
+    if (stack.has(manifestHash)) return null;
+    stack.add(manifestHash);
+    const rows = this.sql.exec(
+      `SELECT me.name, me.entry_kind, me.child_manifest_hash, fv.content_hash, fv.mode
+       FROM gad_manifest_entries me
+       LEFT JOIN gad_file_versions fv ON fv.id = me.file_version_id
+       WHERE me.parent_hash = ?
+       ORDER BY me.name`,
+      manifestHash,
+    ).toArray() as JsonRecord[];
+    const entries: JsonRecord[] = [];
+    for (const row of rows) {
+      const name = asString(row["name"]);
+      const kind = asString(row["entry_kind"]);
+      if (!name || !kind) return null;
+      if (kind === "dir") {
+        const childHash = asString(row["child_manifest_hash"]);
+        if (!childHash) return null;
+        const expectedChildHash = await this.recomputeManifestHash(childHash, new Set(stack));
+        if (expectedChildHash !== childHash) return null;
+        entries.push({ name, kind: "dir", hash: childHash });
+      } else if (kind === "file") {
+        const contentHash = asString(row["content_hash"]);
+        if (!contentHash || typeof row["mode"] !== "number") return null;
+        entries.push({ name, kind: "file", contentHash, mode: row["mode"] });
+      } else {
+        return null;
+      }
+    }
+    return sha256("manifest", { kind: "dir", entries });
+  }
+
+  private clearGadProjections(): void {
+    const tables = [
+      "gad_index_jobs",
+      "gad_contradictions",
+      "gad_theory_versions",
+      "gad_theories",
+      "gad_claim_edges",
+      "gad_claims",
+      "gad_branch_events",
+      "gad_credential_interruptions",
+      "gad_system_events",
+      "gad_approvals",
+      "gad_dispatches",
+      "gad_file_change_hunks",
+      "gad_file_observations",
+      "gad_file_mutations",
+      "gad_state_transitions",
+      "gad_manifest_entries",
+      "gad_manifest_nodes",
+      "gad_file_versions",
+      "gad_worktree_states",
+    ];
+    this.transaction(() => {
+      for (const table of tables) this.sql.exec(`DELETE FROM ${table}`);
+    });
   }
 
   private transaction<T>(fn: () => T): T {
@@ -2662,7 +1953,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
 export default {
   async fetch(_request: Request) {
-    return new Response("gad immutable workspace durable-object service", {
+    return new Response("gad workspace durable-object service", {
       headers: { "Content-Type": "text/plain" },
     });
   },

@@ -50,13 +50,14 @@ function App() {
   const stateArgs = useStateArgs<StateArgs>();
   const [branches, setBranches] = useState<Row[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(stateArgs.branchId ?? null);
-  const [trajectory, setTrajectory] = useState<Row[]>([]);
+  const [entries, setEntries] = useState<Row[]>([]);
+  const [events, setEvents] = useState<Row[]>([]);
   const [files, setFiles] = useState<Row[]>([]);
   const [toolCalls, setToolCalls] = useState<Row[]>([]);
   const [status, setStatus] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
   const selectedBranch = useMemo(
-    () => branches.find((branch) => asText(branch["id"]) === selectedBranchId) ?? null,
+    () => branches.find((branch) => asText(branch["branch_id"]) === selectedBranchId) ?? null,
     [branches, selectedBranchId],
   );
 
@@ -65,23 +66,26 @@ function App() {
     try {
       const [nextStatus, nextBranches] = await Promise.all([
         gad.status(),
-        gad.listGadBranches(),
+        gad.listPiBranches(),
       ]);
       setStatus(nextStatus as unknown as Row[]);
       setBranches(nextBranches);
-      const branchId = (selectedBranchId ?? asText(nextBranches[0]?.["id"])) || null;
+      const branchId = (selectedBranchId ?? asText(nextBranches[0]?.["branch_id"])) || null;
       setSelectedBranchId(branchId);
       if (branchId) {
-        const [nextTrajectory, nextFiles, nextToolCalls] = await Promise.all([
-          gad.listGadBranchTrajectory({ branchId }),
+        const [nextEntries, nextEvents, nextFiles, nextToolCalls] = await Promise.all([
+          gad.getBranchPath({ branchId, raw: true }),
+          gad.listGadEvents({ limit: 200 }),
           gad.listGadBranchFiles({ branchId }),
           gad.listGadBranchToolCalls({ branchId }),
         ]);
-        setTrajectory(nextTrajectory);
+        setEntries(nextEntries as unknown as Row[]);
+        setEvents(nextEvents);
         setFiles(nextFiles);
         setToolCalls(nextToolCalls);
       } else {
-        setTrajectory([]);
+        setEntries([]);
+        setEvents([]);
         setFiles([]);
         setToolCalls([]);
       }
@@ -97,7 +101,8 @@ function App() {
   useEffect(() => {
     if (!selectedBranchId) return;
     void Promise.all([
-      gad.listGadBranchTrajectory({ branchId: selectedBranchId }).then(setTrajectory),
+      gad.getBranchPath({ branchId: selectedBranchId, raw: true }).then((rows) => setEntries(rows as unknown as Row[])),
+      gad.listGadEvents({ limit: 200 }).then(setEvents),
       gad.listGadBranchFiles({ branchId: selectedBranchId }).then(setFiles),
       gad.listGadBranchToolCalls({ branchId: selectedBranchId }).then(setToolCalls),
     ]);
@@ -121,7 +126,7 @@ function App() {
             <ScrollArea type="auto" scrollbars="vertical">
               <Flex direction="column" gap="2" pr="2">
                 {branches.map((branch) => {
-                  const id = asText(branch["id"]);
+                  const id = asText(branch["branch_id"]);
                   return (
                     <Button
                       key={id}
@@ -130,7 +135,7 @@ function App() {
                       onClick={() => setSelectedBranchId(id)}
                       style={{ justifyContent: "flex-start" }}
                     >
-                      {asText(branch["name"] || branch["id"])}
+                      {asText(branch["name"] || branch["branch_id"])}
                     </Button>
                   );
                 })}
@@ -140,7 +145,8 @@ function App() {
             <Tabs.Root defaultValue="files" style={{ minWidth: 0 }}>
               <Tabs.List>
                 <Tabs.Trigger value="branches">Branches</Tabs.Trigger>
-                <Tabs.Trigger value="trajectory">Trajectory</Tabs.Trigger>
+                <Tabs.Trigger value="entries">Pi Entries</Tabs.Trigger>
+                <Tabs.Trigger value="events">GAD Events</Tabs.Trigger>
                 <Tabs.Trigger value="files">Files</Tabs.Trigger>
                 <Tabs.Trigger value="tool-calls">Tool Calls</Tabs.Trigger>
                 <Tabs.Trigger value="status">Status</Tabs.Trigger>
@@ -148,16 +154,19 @@ function App() {
               <Box pt="3" style={{ height: "calc(100vh - 130px)" }}>
                 <ScrollArea type="auto" scrollbars="both" style={{ height: "100%" }}>
                   <Tabs.Content value="branches">
-                    <DataTable rows={branches} columns={["id", "parent_branch_id", "head_trajectory_hash", "head_state_hash", "dirty", "updated_at"]} />
+                    <DataTable rows={branches} columns={["branch_id", "forked_from_branch_id", "head_entry_id", "head_entry_hash", "head_state_hash", "updated_at"]} />
                   </Tabs.Content>
-                  <Tabs.Content value="trajectory">
-                    <DataTable rows={trajectory} columns={["trajectory_id", "trajectory_hash", "parent_hash", "introduced_on_branch_id", "kind", "actor", "message_id", "tool_call_id", "input_state_hash", "output_state_hash", "created_at"]} />
+                  <Tabs.Content value="entries">
+                    <DataTable rows={entries} columns={["entryId", "parentEntryId", "entryType", "entryHash", "preStateHash", "postStateHash", "createdAt"]} />
+                  </Tabs.Content>
+                  <Tabs.Content value="events">
+                    <DataTable rows={events} columns={["event_seq", "event_id", "event_hash", "prev_event_hash", "kind", "anchor_kind", "anchor_id", "created_at"]} />
                   </Tabs.Content>
                   <Tabs.Content value="files">
                     <DataTable rows={files} columns={["path", "content_hash", "mode", "created_at"]} />
                   </Tabs.Content>
                   <Tabs.Content value="tool-calls">
-                    <DataTable rows={toolCalls} columns={["tool_call_id", "tool_name", "status", "result_summary", "request_trajectory_id", "request_trajectory_hash", "result_trajectory_id", "result_trajectory_hash"]} />
+                    <DataTable rows={toolCalls} columns={["tool_call_id", "assistant_entry_id", "block_id", "tool_name", "created_at"]} />
                   </Tabs.Content>
                   <Tabs.Content value="status">
                     <DataTable rows={status} columns={["metric", "value"]} />

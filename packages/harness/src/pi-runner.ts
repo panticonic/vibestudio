@@ -61,7 +61,7 @@ import {
   type GadSessionMetadata,
   type TranscriptShapeError,
 } from "./gad-session-storage.js";
-import type { GadEntryType, GadJsonRecord, GadTrajectoryItemSpec } from "./gad-types.js";
+import type { GadEventSpec, GadJsonRecord } from "./gad-types.js";
 import { buildTurnSnapshot, type TurnSnapshot } from "./turn-snapshot.js";
 import { HookBus, type EventListener, type TransformContextListener } from "./hook-bus.js";
 import { CompactionTrigger, type CompactionTriggerOptions } from "./compaction-trigger.js";
@@ -167,7 +167,7 @@ export class PiRunner {
   private storage: GadSessionStorage | null = null;
   private currentResources: NatStackResources | null = null;
   private resolvedModel: Model<any> | null = null;
-  private provenanceQueue: GadTrajectoryItemSpec[] = [];
+  private provenanceQueue: GadEventSpec[] = [];
   private readonly pendingMutations = new Map<string, PendingMutation>();
   private running = false;
 
@@ -433,30 +433,20 @@ export class PiRunner {
   private queueMessageProvenance(message: AgentMessage, messageEntryId: string): void {
     const role = (message as { role?: string }).role;
     for (const [blockIndex, block] of this.messageBlocks(message).entries()) {
-      const blockEntryId = uuidv7();
-      const blockKind = this.classifyBlock(block);
       const toolCallId = this.toolCallIdFromBlock(block);
-      this.provenanceQueue.push({
-        entryId: blockEntryId,
-        parentEntryId: messageEntryId,
-        entryType: "message_block",
-        payload: {
-          blockIndex,
-          blockKind,
-          ...(toolCallId ? { toolCallId } : {}),
-        },
-        actor: role ?? "unknown",
-      });
       if (toolCallId) {
         this.provenanceQueue.push({
-          entryId: uuidv7(),
-          parentEntryId: blockEntryId,
-          entryType: "tool_call_requested",
+          eventId: uuidv7(),
+          kind: "dispatch_pending",
+          anchorKind: "tool_call",
+          anchorId: toolCallId,
           payload: {
-            toolName: this.toolNameFromBlock(block) ?? "unknown",
             toolCallId,
+            dispatchKind: "model-tool-call",
+            methodName: this.toolNameFromBlock(block) ?? "unknown",
+            blockIndex,
           },
-          actor: "assistant",
+          metadata: { messageEntryId, role: role ?? "unknown" },
         });
       }
     }
@@ -466,19 +456,21 @@ export class PiRunner {
       const toolName = (message as { toolName?: unknown }).toolName;
       if (typeof toolCallId === "string" && toolCallId.length > 0) {
         this.provenanceQueue.push({
-          entryId: uuidv7(),
-          parentEntryId: messageEntryId,
-          entryType: "tool_result_observed",
+          eventId: uuidv7(),
+          kind: "dispatch_resolved",
+          anchorKind: "tool_call",
+          anchorId: toolCallId,
           payload: {
-            toolName: typeof toolName === "string" ? toolName : "unknown",
             toolCallId,
+            dispatchCallId: toolCallId,
+            resultEntryId: messageEntryId,
             isError: (message as { isError?: boolean }).isError === true,
+            toolName: typeof toolName === "string" ? toolName : "unknown",
             summary: this.summarizeToolResult({
               content: (message as { content?: unknown }).content ?? [],
               details: null,
             } as AgentToolResult<unknown>),
           },
-          actor: "tool",
         });
       }
     }
@@ -550,19 +542,22 @@ export class PiRunner {
 
     const before = await this.snapshotMutationTarget(absPath);
     const intentEntryId = uuidv7();
-    const intent: GadTrajectoryItemSpec = {
-      entryId: intentEntryId,
-      parentEntryId: await this.currentLeafEntryId(),
-      entryType: "file_mutation_intent",
+    const intent: GadEventSpec = {
+      eventId: intentEntryId,
+      kind: "file_mutation_planned",
+      anchorKind: "tool_call",
+      anchorId: toolCallId,
       payload: {
+        mutationId: intentEntryId,
         path: relativePathString,
         beforeHash: before?.digest ?? null,
         beforeSize: before?.size ?? null,
         toolCallId,
+        operation: toolName,
         plannedTool: toolName,
         plannedParams: this.asJsonRecord(params) ?? {},
       },
-      actor: "tool",
+      metadata: { parentEntryId: await this.currentLeafEntryId() },
     };
 
     await this.storage.appendBatch([intent]);
@@ -587,17 +582,20 @@ export class PiRunner {
     const absPath = this.absolutePathFromGadRelative(pending.path);
     const after = absPath ? await this.snapshotMutationTarget(absPath) : null;
     this.provenanceQueue.push({
-      entryId: uuidv7(),
-      parentEntryId: pending.intentEntryId,
-      entryType: "file_mutation_observed",
+      eventId: uuidv7(),
+      kind: "file_mutation_observed",
+      anchorKind: "tool_call",
+      anchorId: toolCallId,
       payload: {
+        mutationId: pending.intentEntryId,
         path: pending.path,
         afterHash: after?.digest ?? null,
         afterSize: after?.size ?? null,
         outcome,
+        toolCallId,
+        operation: pending.toolName,
         ...(errorMessage ? { errorMessage } : {}),
       },
-      actor: "tool",
     });
   }
 
@@ -619,31 +617,36 @@ export class PiRunner {
     const parentEntryId = await this.currentLeafEntryId();
     if (toolName === "read") {
       this.provenanceQueue.push({
-        entryId: uuidv7(),
-        parentEntryId,
-        entryType: "file_observed",
+        eventId: uuidv7(),
+        kind: "file_observation_recorded",
+        anchorKind: "tool_call",
+        anchorId: toolCallId,
         payload: {
           path,
           contentHash: blob.digest,
-          contentSize: blob.size,
+          size: blob.size,
           toolName,
+          toolCallId,
+          observedStateHash: undefined,
         },
-        actor: "tool",
+        metadata: { parentEntryId },
       });
     }
     this.provenanceQueue.push({
-      entryId: uuidv7(),
-      parentEntryId,
-      entryType: toolName === "read" ? "file_read" : "workspace_observed",
+      eventId: uuidv7(),
+      kind: "file_observation_recorded",
+      anchorKind: "tool_call",
+      anchorId: toolCallId,
       payload: {
         path,
         contentHash: blob.digest,
-        contentSize: blob.size,
+        size: blob.size,
         readType: toolName === "read" ? "file" : toolName,
         summary: this.summarizeToolResult(result),
+        toolCallId,
       },
-      actor: "tool",
       metadata: {
+        parentEntryId,
         toolName,
         parameters: this.asJsonRecord(params),
         toolCallId,
@@ -679,56 +682,59 @@ export class PiRunner {
 
   private async surfaceOrphanMutationIntents(): Promise<void> {
     if (!this.storage || !this.options.gad) return;
-    const gad = this.options.gad;
-    let intents: Array<{ entryId: string; payload: GadJsonRecord }> = [];
-    let observed: Array<{ parentEntryId: string | null }> = [];
+    let intents: Array<{ event_id: string; payload_json: string }> = [];
+    let observed: Array<{ payload_json: string }> = [];
     try {
-      intents = await this.options.rpc.call<Array<{ entryId: string; payload: GadJsonRecord }>>(
+      const intentResult = await this.options.rpc.call<{ rows: Array<{ event_id: string; payload_json: string }> }>(
         "main",
-        "gad.findBranchEntriesByType",
-        {
-          workspaceId: gad.workspaceId ?? null,
-          branchId: gad.branchId,
-          entryType: "file_mutation_intent" as GadEntryType,
-        },
+        "gad.query",
+        "SELECT event_id, payload_json FROM gad_events WHERE kind = 'file_mutation_planned'",
+        [],
       );
-      observed = await this.options.rpc.call<Array<{ parentEntryId: string | null }>>(
+      const observedResult = await this.options.rpc.call<{ rows: Array<{ payload_json: string }> }>(
         "main",
-        "gad.findBranchEntriesByType",
-        {
-          workspaceId: gad.workspaceId ?? null,
-          branchId: gad.branchId,
-          entryType: "file_mutation_observed" as GadEntryType,
-        },
+        "gad.query",
+        "SELECT payload_json FROM gad_events WHERE kind = 'file_mutation_observed'",
+        [],
       );
+      intents = intentResult.rows;
+      observed = observedResult.rows;
     } catch (err) {
       console.warn("[PiRunner] orphan-intent scan failed:", err);
       return;
     }
 
     const observedParents = new Set(
-      observed.map((o) => o.parentEntryId).filter((id): id is string => typeof id === "string"),
+      observed.map((o) => {
+        try {
+          const payload = JSON.parse(o.payload_json) as { mutationId?: unknown };
+          return typeof payload.mutationId === "string" ? payload.mutationId : null;
+        } catch {
+          return null;
+        }
+      }).filter((id): id is string => typeof id === "string"),
     );
-    const orphans = intents.filter((intent) => !observedParents.has(intent.entryId));
+    const orphans = intents.filter((intent) => !observedParents.has(intent.event_id));
     for (const orphan of orphans) {
-      const path = (orphan.payload as { path?: string } | undefined)?.path ?? null;
+      const payload = JSON.parse(orphan.payload_json) as { path?: string };
+      const path = payload.path ?? null;
       const event = {
         type: "system_event" as const,
         kind: "orphan_file_mutation_intent" as const,
-        intentEntryId: orphan.entryId,
+        intentEntryId: orphan.event_id,
         path,
       };
       await this.hooks.emitEvent(event);
       await this.storage.appendBatch([{
-        entryId: uuidv7(),
-        parentEntryId: orphan.entryId,
-        entryType: "system_event",
+        eventId: uuidv7(),
+        kind: "system_event",
+        anchorKind: "system",
+        anchorId: orphan.event_id,
         payload: {
           kind: event.kind,
           intentEntryId: event.intentEntryId,
           path,
         },
-        actor: "system",
       }]);
     }
   }

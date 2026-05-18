@@ -13,10 +13,10 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `rpc` | value |  |  |
 | `fs` | value |  |  |
 | `workers` | namespace | `create`, `destroy`, `update`, `list`, `status`, `listInstanceSources`, `listServices`, `resolveService`, `getPort`, `restartAll`, `cloneDO`, `destroyDO` |  |
-| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `setInitPanels`, `switchTo`, `units` |  |
+| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `units` |  |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp` |  |
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote`, `client` |  |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `ensureGadBranch`, `getGadBranchHead`, `appendGadTrajectoryBatch`, `materializePiMessages`, `listGadBranchTrajectory`, `listGadBranchToolCalls`, `forkGadBranch`, `listGadBranches`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadToolProvenance`, `getGadStateProducer`, `blameGadFileSnippet`, `enqueueGadIndexJob`, `processGadIndexJobs`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `revokeRawSqlWriteApproval` |  |
+| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `ensurePiBranch`, `getPiBranchHead`, `appendPiEntryBatch`, `appendGadEvents`, `listGadEvents`, `setBranchHead`, `getEntryById`, `getBranchPath`, `findEntries`, `materializePiMessages`, `listGadBranchToolCalls`, `forkPiBranch`, `listPiBranches`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadToolProvenance`, `getGadStateProducer`, `blameGadFileSnippet`, `enqueueGadIndexJob`, `processGadIndexJobs`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `replayGadEvents` |  |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
 | `extensions` | namespace | `use`, `on`, `list`, `install`, `uninstall`, `setEnabled`, `update`, `reload` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |

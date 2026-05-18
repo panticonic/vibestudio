@@ -1055,7 +1055,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     const existing = this.runners.get(channelId);
     if (existing) return existing.runner;
 
-    await this.ensureGadBranch(channelId);
+    await this.ensurePiBranch(channelId);
 
     // Build the GadSessionStorage adapter (Phase 1). The runner owns its
     // own `Session<GadSessionMetadata>` backed by this adapter; the worker
@@ -1287,12 +1287,14 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     };
   }
 
-  private async ensureGadBranch(channelId: string): Promise<void> {
-    await this.rpc.call("main", "gad.ensureGadBranch", {
+  private async ensurePiBranch(channelId: string): Promise<void> {
+    await this.rpc.call("main", "gad.ensurePiBranch", {
       branchId: gadBranchIdForChannel(channelId),
       channelId,
-      contextId: this.subscriptions.getContextId(channelId),
-      metadata: { workerRef: this.identity.refOrNull },
+      metadata: {
+        workerRef: this.identity.refOrNull,
+        contextId: this.subscriptions.getContextId(channelId),
+      },
     });
   }
 
@@ -2233,7 +2235,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     this.sql.exec(`DELETE FROM delivery_cursor`);
     this.sql.exec(`DELETE FROM dispatched_calls`);
 
-    await this.forkGadTrajectoryForClone(oldChannelId, newChannelId, forkAtMessageIndex);
+    await this.forkPiBranchForClone(oldChannelId, newChannelId, forkAtMessageIndex);
 
     // Rename approvalLevel state key.
     const oldApprovalKey = `approvalLevel:${oldChannelId}`;
@@ -2279,27 +2281,24 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     // Default: no-op
   }
 
-  private async forkGadTrajectoryForClone(
+  private async forkPiBranchForClone(
     oldChannelId: string,
     newChannelId: string,
     forkAtMessageIndex: number | null,
   ): Promise<void> {
     try {
-      await this.ensureGadBranch(oldChannelId);
+      await this.ensurePiBranch(oldChannelId);
       const oldBranchId = gadBranchIdForChannel(oldChannelId);
       const newBranchId = gadBranchIdForChannel(newChannelId);
 
-      // Phase 1: fork-point resolution uses the envelope-aware
-      // `gad.findBranchEntriesByType` RPC. The legacy `message_id` /
-      // `kind` columns are gone — we now address messages by their
-      // logical chain position (offset within the `message` entries on
-      // this branch's path).
+      // Fork-point resolution uses canonical Pi entries, addressed by
+      // logical chain position within visible message entries.
       let entryId: string | null = null;
       if (forkAtMessageIndex != null) {
         const offset = Math.max(0, forkAtMessageIndex - 1);
         const rows = await this.rpc.call<Array<Record<string, unknown>>>(
           "main",
-          "gad.findBranchEntriesByType",
+          "gad.findEntries",
           {
             branchId: oldBranchId,
             entryType: "message",
@@ -2317,16 +2316,15 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         }
       }
 
-      await this.rpc.call("main", "gad.forkGadBranch", {
+      await this.rpc.call("main", "gad.forkPiBranch", {
         sourceBranchId: oldBranchId,
         newBranchId,
         entryId,
         channelId: newChannelId,
-        contextId: this.subscriptions.getContextId(oldChannelId),
       });
     } catch (err) {
       console.warn(`[AgentWorkerBase] gad fork failed:`, err);
-      await this.ensureGadBranch(newChannelId);
+      await this.ensurePiBranch(newChannelId);
     }
   }
 

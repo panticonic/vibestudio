@@ -2,15 +2,12 @@
  * GadSessionStorage — `SessionStorage<GadSessionMetadata>` adapter over the
  * gad-store RPC surface.
  *
- * The adapter is the only thing that translates between upstream `Session`'s
- * `SessionTreeEntry` vocabulary and the gad envelope (`entryId`,
- * `parentEntryId`, `entryType`, `payload`). The two vocabularies are
- * isomorphic by design — see `Phase 1` of the plan and the payload-discipline
- * table — so each mapping function is a few lines.
+ * The adapter translates upstream `SessionTreeEntry` values into canonical
+ * Pi entry rows. Runtime/world facts are appended separately as GAD events.
  *
  * Concurrency model: every append goes through a per-instance promise chain
  * so concurrent `appendEntry`/`appendBatch` calls serialise. CAS conflicts
- * raised by `gad.appendGadTrajectoryBatch` are retried up to three times by
+ * raised by `gad.appendPiEntryBatch` are retried up to three times by
  * refreshing the branch head between attempts.
  */
 
@@ -22,20 +19,24 @@ import {
 } from "@earendil-works/pi-agent-core";
 
 import type {
-  GadAppendTrajectoryBatchInput,
-  GadAppendTrajectoryBatchResult,
-  GadBranchHead,
-  GadEntryRow,
-  GadEntryType,
+  AppendPiEntryBatchInput,
+  AppendPiEntryBatchResult,
+  GadEventSpec,
+  GadJournalItemSpec,
   GadJsonRecord,
-  GadTrajectoryItemSpec,
+  PiBranchHead,
+  PiEntryRow,
+  PiEntrySpec,
+  PiEntryType,
 } from "./gad-types.js";
 
 export type {
-  GadEntryRow,
-  GadEntryType,
+  GadEventSpec,
+  GadJournalItemSpec,
   GadJsonRecord,
-  GadTrajectoryItemSpec,
+  PiEntryRow,
+  PiEntrySpec,
+  PiEntryType,
 } from "./gad-types.js";
 
 /** RPC caller signature accepted by the adapter. */
@@ -74,13 +75,13 @@ export class TranscriptShapeError extends Error {
 }
 
 /**
- * Predicate identifying CAS conflicts thrown by `gad.appendGadTrajectoryBatch`
+ * Predicate identifying CAS conflicts thrown by `gad.appendPiEntryBatch`
  * so the adapter can refresh-and-retry. Matches the messages the gad-store
  * raises today ("gad head conflict" / "gad state conflict").
  */
 function isCasConflict(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  return /gad (head|state) conflict/i.test(err.message);
+  return /pi (head|state) conflict/i.test(err.message);
 }
 
 const MAX_CAS_RETRIES = 3;
@@ -113,7 +114,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
         return {
           id: this.branchId,
           createdAt: new Date().toISOString(),
-          workspaceId: head.workspaceId,
+          workspaceId: this.workspaceId ?? "default",
           branchId: head.branchId,
           channelId: this.channelId,
           contextId: this.contextId,
@@ -131,7 +132,6 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   async setLeafId(leafId: string | null): Promise<void> {
     await this.serialise(async () => {
       await this.rpc.call("main", "gad.setBranchHead", {
-        workspaceId: this.workspaceId,
         branchId: this.branchId,
         entryId: leafId,
       });
@@ -148,25 +148,23 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   }
 
   async getEntry(id: string): Promise<SessionTreeEntry | undefined> {
-    const row = await this.rpc.call<GadEntryRow | null>("main", "gad.getEntryById", {
-      workspaceId: this.workspaceId,
+    const row = await this.rpc.call<PiEntryRow | null>("main", "gad.getEntryById", {
       entryId: id,
     });
     if (!row) return undefined;
-    if (!isTranscriptEntryType(row.entryType)) return undefined;
     return this.rowToSessionEntryOrThrow(row);
   }
 
   async findEntries<TType extends SessionTreeEntry["type"]>(
     type: TType,
   ): Promise<Array<Extract<SessionTreeEntry, { type: TType }>>> {
-    const rows = await this.rpc.call<GadEntryRow[]>(
+    if (type === "leaf") return [] as Array<Extract<SessionTreeEntry, { type: TType }>>;
+    const rows = await this.rpc.call<PiEntryRow[]>(
       "main",
-      "gad.findBranchEntriesByType",
+      "gad.findEntries",
       {
-        workspaceId: this.workspaceId,
         branchId: this.branchId,
-        entryType: type as GadEntryType,
+        entryType: type as PiEntryType,
       },
     );
     return rows.map((row) => this.rowToSessionEntryOrThrow(row)) as Array<
@@ -175,13 +173,12 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   }
 
   async getLabel(id: string): Promise<string | undefined> {
-    const rows = await this.rpc.call<GadEntryRow[]>(
+    const rows = await this.rpc.call<PiEntryRow[]>(
       "main",
-      "gad.findBranchEntriesByType",
+      "gad.findEntries",
       {
-        workspaceId: this.workspaceId,
         branchId: this.branchId,
-        entryType: "label" as GadEntryType,
+        entryType: "label" as PiEntryType,
       },
     );
     // Latest-wins by chain order; rows come in ASC, so walk in reverse.
@@ -193,14 +190,12 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
   }
 
   async getPathToRoot(leafId: string | null): Promise<SessionTreeEntry[]> {
-    const rows = await this.rpc.call<GadEntryRow[]>("main", "gad.getBranchPath", {
-      workspaceId: this.workspaceId,
+    const rows = await this.rpc.call<PiEntryRow[]>("main", "gad.getBranchPath", {
       branchId: this.branchId,
       throughEntryId: leafId,
     });
     const out: SessionTreeEntry[] = [];
     for (const row of rows) {
-      if (!isTranscriptEntryType(row.entryType)) continue;
       out.push(this.rowToSessionEntryOrThrow(row));
     }
     return out;
@@ -217,26 +212,24 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
    * call; CAS conflicts auto-retried up to 3 times. Used by `PiRunner`'s
    * dual-queue recorder.
    */
-  async appendBatch(items: GadTrajectoryItemSpec[]): Promise<{ entryIds: string[] }> {
+  async appendBatch(items: GadJournalItemSpec[]): Promise<{ entryIds: string[] }> {
     if (items.length === 0) return { entryIds: [] };
     await this.appendBatchInternal(items);
-    return { entryIds: items.map((it) => it.entryId) };
+    return { entryIds: items.map((it) => "entryId" in it ? it.entryId : it.eventId) };
   }
 
   // ── Internals ────────────────────────────────────────────────────────────
 
-  private async ensureBranch(): Promise<GadBranchHead> {
-    return this.rpc.call<GadBranchHead>("main", "gad.ensureGadBranch", {
-      workspaceId: this.workspaceId,
+  private async ensureBranch(): Promise<PiBranchHead> {
+    return this.rpc.call<PiBranchHead>("main", "gad.ensurePiBranch", {
       branchId: this.branchId,
       channelId: this.channelId,
-      contextId: this.contextId,
+      metadata: { contextId: this.contextId },
     });
   }
 
-  private async getHead(): Promise<GadBranchHead> {
-    return this.rpc.call<GadBranchHead>("main", "gad.getGadBranchHead", {
-      workspaceId: this.workspaceId,
+  private async getHead(): Promise<PiBranchHead> {
+    return this.rpc.call<PiBranchHead>("main", "gad.getPiBranchHead", {
       branchId: this.branchId,
     });
   }
@@ -250,33 +243,38 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
     return next;
   }
 
-  private async appendBatchInternal(items: GadTrajectoryItemSpec[]): Promise<void> {
+  private async appendBatchInternal(items: GadJournalItemSpec[]): Promise<void> {
     return this.serialise(async () => {
-      let head = await this.getHead();
-      for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
-        try {
-          await this.rpc.call<GadAppendTrajectoryBatchResult>(
-            "main",
-            "gad.appendGadTrajectoryBatch",
-            {
-              workspaceId: this.workspaceId,
-              branchId: this.branchId,
-              expectedTrajectoryHash: head.headTrajectoryHash,
-              expectedStateHash: head.headStateHash,
-              items,
-            } satisfies GadAppendTrajectoryBatchInput,
-          );
-          return;
-        } catch (err) {
-          if (!isCasConflict(err) || attempt === MAX_CAS_RETRIES - 1) throw err;
-          head = await this.getHead();
+      const piItems = items.filter((item): item is PiEntrySpec => "entryId" in item);
+      const events = items.filter((item): item is GadEventSpec => "eventId" in item);
+      if (piItems.length > 0) {
+        let head = await this.getHead();
+        for (let attempt = 0; attempt < MAX_CAS_RETRIES; attempt++) {
+          try {
+            await this.rpc.call<AppendPiEntryBatchResult>(
+              "main",
+              "gad.appendPiEntryBatch",
+              {
+                branchId: this.branchId,
+                expectedHeadEntryHash: head.headEntryHash,
+                expectedStateHash: head.headStateHash,
+                items: piItems,
+              } satisfies AppendPiEntryBatchInput,
+            );
+            break;
+          } catch (err) {
+            if (!isCasConflict(err) || attempt === MAX_CAS_RETRIES - 1) throw err;
+            head = await this.getHead();
+          }
         }
       }
-      throw new Error(`gad-session-storage: append failed after ${MAX_CAS_RETRIES} retries`);
+      if (events.length > 0) {
+        await this.rpc.call("main", "gad.appendGadEvents", { events });
+      }
     });
   }
 
-  private rowToSessionEntryOrThrow(row: GadEntryRow): SessionTreeEntry {
+  private rowToSessionEntryOrThrow(row: PiEntryRow): SessionTreeEntry {
     try {
       return rowToSessionEntry(row);
     } catch (err) {
@@ -290,7 +288,7 @@ export class GadSessionStorage implements SessionStorage<GadSessionMetadata> {
 
 // ── Mapping: SessionTreeEntry ↔ envelope ──────────────────────────────────
 
-const TRANSCRIPT_ENTRY_TYPES = new Set<GadEntryType>([
+const TRANSCRIPT_ENTRY_TYPES = new Set<PiEntryType>([
   "message",
   "model_change",
   "thinking_level_change",
@@ -300,10 +298,9 @@ const TRANSCRIPT_ENTRY_TYPES = new Set<GadEntryType>([
   "custom_message",
   "label",
   "session_info",
-  "leaf",
 ]);
 
-function isTranscriptEntryType(type: GadEntryType): boolean {
+function isTranscriptEntryType(type: PiEntryType): boolean {
   return TRANSCRIPT_ENTRY_TYPES.has(type);
 }
 
@@ -313,7 +310,7 @@ function isTranscriptEntryType(type: GadEntryType): boolean {
  * The mapping is 1:1 because the envelope was designed to carry exactly
  * upstream's discriminated-union shape.
  */
-export function sessionEntryToSpec(entry: SessionTreeEntry): GadTrajectoryItemSpec {
+export function sessionEntryToSpec(entry: SessionTreeEntry): PiEntrySpec {
   const base = {
     entryId: entry.id,
     parentEntryId: entry.parentId,
@@ -383,7 +380,7 @@ export function sessionEntryToSpec(entry: SessionTreeEntry): GadTrajectoryItemSp
         payload: { ...(entry.name !== undefined ? { name: entry.name } : {}) },
       };
     case "leaf":
-      return { ...base, entryType: "leaf", payload: { targetId: entry.targetId } };
+      throw new Error("leaf entries are branch head state and are not stored as Pi entries");
   }
 }
 
@@ -408,7 +405,7 @@ function readOptionalString(payload: GadJsonRecord, key: string): string | undef
  * upstream type expects. Non-transcript entry types must be filtered before
  * calling this.
  */
-export function rowToSessionEntry(row: GadEntryRow): SessionTreeEntry {
+export function rowToSessionEntry(row: PiEntryRow): SessionTreeEntry {
   const payload = row.payload;
   const metadata = row.metadata ?? {};
   const timestamp =
@@ -496,15 +493,7 @@ export function rowToSessionEntry(row: GadEntryRow): SessionTreeEntry {
         type: "session_info",
         ...(payload["name"] !== undefined ? { name: readString(payload, "name") } : {}),
       };
-    case "leaf": {
-      const targetId = payload["targetId"];
-      if (targetId !== null && typeof targetId !== "string") {
-        throw new Error("leaf payload.targetId must be string | null");
-      }
-      return { ...base, type: "leaf", targetId: targetId as string | null };
-    }
     default:
       throw new Error(`rowToSessionEntry: non-transcript entryType ${row.entryType}`);
   }
 }
-

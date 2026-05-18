@@ -173,17 +173,15 @@ describe("internal storage DOs under workerd", () => {
       className: "GadWorkspaceDO",
       objectKey: "workspace-gad",
     };
-    const head = (await harness.dispatch.dispatch(ref, "ensureGadBranch", {
+    const head = (await harness.dispatch.dispatch(ref, "ensurePiBranch", {
       branchId: "branch-live",
       channelId: "channel-live",
-      contextId: "context-live",
-    })) as { branchId: string; headTrajectoryHash: string | null; headStateHash: string };
+      metadata: { contextId: "context-live" },
+    })) as { branchId: string; headEntryHash: string | null; headStateHash: string };
     const userMessageId = "01900000-0000-7000-8000-000000000001";
-    const intentId = "01900000-0000-7000-8000-000000000002";
-    const observedId = "01900000-0000-7000-8000-000000000003";
-    await harness.dispatch.dispatch(ref, "appendGadTrajectoryBatch", {
+    await harness.dispatch.dispatch(ref, "appendPiEntryBatch", {
       branchId: head.branchId,
-      expectedTrajectoryHash: head.headTrajectoryHash,
+      expectedHeadEntryHash: head.headEntryHash,
       expectedStateHash: head.headStateHash,
       items: [
         {
@@ -199,14 +197,20 @@ describe("internal storage DOs under workerd", () => {
             },
           },
         },
+      ],
+    });
+    await harness.dispatch.dispatch(ref, "appendGadEvents", {
+      events: [
         {
-          entryId: intentId,
-          parentEntryId: userMessageId,
-          entryType: "file_mutation_intent",
-          actor: "tool",
+          eventId: "01900000-0000-7000-8000-000000000002",
+          kind: "file_mutation_planned",
+          anchorKind: "tool_call",
+          anchorId: "tool-live",
           payload: {
+            mutationId: "mutation-live",
             toolCallId: "tool-live",
             path: "src/live.ts",
+            operation: "write",
             plannedTool: "write",
             beforeHash: null,
             beforeSize: null,
@@ -214,11 +218,12 @@ describe("internal storage DOs under workerd", () => {
           },
         },
         {
-          entryId: observedId,
-          parentEntryId: intentId,
-          entryType: "file_mutation_observed",
-          actor: "tool",
+          eventId: "01900000-0000-7000-8000-000000000003",
+          kind: "file_mutation_observed",
+          anchorKind: "tool_call",
+          anchorId: "tool-live",
           payload: {
+            mutationId: "mutation-live",
             toolCallId: "tool-live",
             path: "src/live.ts",
             afterHash: "d".repeat(64),
@@ -232,8 +237,9 @@ describe("internal storage DOs under workerd", () => {
       metric: string;
       value: number;
     }>;
-    expect(status.find((row) => row.metric === "Branches")?.value).toBe(1);
-    expect(status.find((row) => row.metric === "Trajectory items")?.value).toBe(3);
+    expect(status.find((row) => row.metric === "Pi branches")?.value).toBe(1);
+    expect(status.find((row) => row.metric === "Pi entries")?.value).toBe(1);
+    expect(status.find((row) => row.metric === "GAD events")?.value).toBe(2);
   }, 30_000);
 
   it("records BrowserDataDO history visits and title updates without double-counting", async () => {

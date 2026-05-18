@@ -45,7 +45,7 @@ function createOptions(overrides: Partial<PiRunnerOptions> = {}): PiRunnerOption
     call: vi.fn(async (_target: string, method: string) => {
       if (method === "workspace.getAgentsMd") return "workspace prompt";
       if (method === "workspace.listSkills") return [];
-      if (method === "gad.findBranchEntriesByType") return [];
+      if (method === "gad.query") return { rows: [] };
       throw new Error(`unexpected rpc method ${method}`);
     }),
   };
