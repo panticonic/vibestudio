@@ -203,11 +203,8 @@ export class EgressProxy {
     body: Uint8Array;
   }> {
     const body = params.body;
-    const bytesOut = body === undefined
-      ? 0
-      : typeof body === "string"
-        ? Buffer.byteLength(body)
-        : body.byteLength;
+    const bytesOut =
+      body === undefined ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
     return this.executeAuthorizedRequest({
       callerId: params.callerId,
       method: params.method.toUpperCase(),
@@ -271,14 +268,11 @@ export class EgressProxy {
       credentialId?: string;
     },
     sink: (frame: StreamFrame) => Promise<void> | void,
-    abortSignal?: AbortSignal,
+    abortSignal?: AbortSignal
   ): Promise<{ status: number; bytesIn: number }> {
     const body = params.body;
-    const bytesOut = body === undefined
-      ? 0
-      : typeof body === "string"
-        ? Buffer.byteLength(body)
-        : body.byteLength;
+    const bytesOut =
+      body === undefined ? 0 : typeof body === "string" ? Buffer.byteLength(body) : body.byteLength;
 
     let bytesInTotal = 0;
 

@@ -293,7 +293,10 @@ export class RpcServer {
        * fetch with a streaming response body. Without this, the streaming
        * endpoint returns 503.
        */
-      egressProxy?: Pick<import("./services/egressProxy.js").EgressProxy, "forwardProxyFetchStream">;
+      egressProxy?: Pick<
+        import("./services/egressProxy.js").EgressProxy,
+        "forwardProxyFetchStream"
+      >;
     }
   ) {
     this.dispatcher = deps.dispatcher;
@@ -585,7 +588,7 @@ export class RpcServer {
       // Look up by the full {callerId, connectionId, requestId}
       // triple — a peer can only cancel streams it owns.
       const controller = this.wsStreamAborts.get(
-        this.wsStreamKey(client.callerId, client.connectionId, message.requestId),
+        this.wsStreamKey(client.callerId, client.connectionId, message.requestId)
       );
       if (controller) controller.abort();
       return;
@@ -1258,10 +1261,7 @@ export class RpcServer {
   }):
     | {
         ok: true;
-        egress: Pick<
-          import("./services/egressProxy.js").EgressProxy,
-          "forwardProxyFetchStream"
-        >;
+        egress: Pick<import("./services/egressProxy.js").EgressProxy, "forwardProxyFetchStream">;
         proxyParams: {
           url: string;
           method: string;
@@ -1327,7 +1327,7 @@ export class RpcServer {
 
   private async handleStreamingProxyFetch(
     req: import("http").IncomingMessage,
-    res: import("http").ServerResponse,
+    res: import("http").ServerResponse
   ): Promise<void> {
     // Auth — same flow as `POST /rpc`.
     const authHeader = req.headers["authorization"];
@@ -1339,9 +1339,12 @@ export class RpcServer {
     }
     if (this.deps.tokenManager.validateAdminToken(token)) {
       res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        error: "Admin token cannot authenticate RPC; issue a device credential and refresh a shell token first.",
-      }));
+      res.end(
+        JSON.stringify({
+          error:
+            "Admin token cannot authenticate RPC; issue a device credential and refresh a shell token first.",
+        })
+      );
       return;
     }
     const entry = this.deps.tokenManager.validateToken(token);
@@ -1411,7 +1414,7 @@ export class RpcServer {
     // HTTP encodes frames as raw binary on the chunked response —
     // no base64 overhead since the response IS a binary stream.
     const emitFrame = async (
-      frame: import("./services/egressProxy.js").StreamFrame,
+      frame: import("./services/egressProxy.js").StreamFrame
     ): Promise<void> => {
       if (frame.kind === "head") {
         await writeBytes(
@@ -1420,7 +1423,7 @@ export class RpcServer {
             statusText: frame.statusText,
             headerPairs: frame.headerPairs,
             finalUrl: frame.finalUrl,
-          }),
+          })
         );
       } else if (frame.kind === "chunk") {
         await writeBytes(codec.encodeDataFrame(frame.bytes));
@@ -1432,7 +1435,7 @@ export class RpcServer {
             status: frame.status,
             message: frame.message,
             code: frame.code,
-          }),
+          })
         );
       }
     };
@@ -1448,7 +1451,7 @@ export class RpcServer {
       await check.egress.forwardProxyFetchStream(
         { callerId, ...check.proxyParams },
         emitFrame,
-        abortController.signal,
+        abortController.signal
       );
     } catch (err) {
       try {
@@ -1476,7 +1479,7 @@ export class RpcServer {
    */
   private async handleWsStreamRequest(
     client: WsClientState,
-    request: import("@natstack/rpc").RpcStreamRequest,
+    request: import("@natstack/rpc").RpcStreamRequest
   ): Promise<void> {
     const sendFrame = (frameType: number, payload: string): void => {
       this.sendToWs(client.ws, {
@@ -1494,9 +1497,7 @@ export class RpcServer {
     // WS encodes DATA frames as base64 in JSON (the `ws:rpc`
     // envelope is JSON-serialized). The HTTP endpoint avoids this
     // overhead by writing raw bytes to the chunked response.
-    const emitFrame = (
-      frame: import("./services/egressProxy.js").StreamFrame,
-    ): void => {
+    const emitFrame = (frame: import("./services/egressProxy.js").StreamFrame): void => {
       if (frame.kind === "head") {
         sendFrame(
           0x01,
@@ -1505,7 +1506,7 @@ export class RpcServer {
             statusText: frame.statusText,
             headerPairs: frame.headerPairs,
             finalUrl: frame.finalUrl,
-          }),
+          })
         );
       } else if (frame.kind === "chunk") {
         let binary = "";
@@ -1520,7 +1521,7 @@ export class RpcServer {
             status: frame.status,
             message: frame.message,
             code: frame.code,
-          }),
+          })
         );
       }
     };
@@ -1539,18 +1540,14 @@ export class RpcServer {
     }
 
     const abortController = new AbortController();
-    const streamKey = this.wsStreamKey(
-      client.callerId,
-      client.connectionId,
-      request.requestId,
-    );
+    const streamKey = this.wsStreamKey(client.callerId, client.connectionId, request.requestId);
     this.wsStreamAborts.set(streamKey, abortController);
 
     try {
       await check.egress.forwardProxyFetchStream(
         { callerId: client.callerId, ...check.proxyParams },
         emitFrame,
-        abortController.signal,
+        abortController.signal
       );
     } catch (err) {
       try {

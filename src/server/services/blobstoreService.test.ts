@@ -278,16 +278,12 @@ describe("blobstoreService", () => {
         { callerId: "w1", callerKind: "worker" },
         "blobstore",
         "putText",
-        [body],
+        [body]
       )) as { digest: string };
       expect(result.digest).toBe(digest);
     }
 
-    function dispatchGetRange(
-      digest: string,
-      offset: number,
-      length: number,
-    ): Promise<unknown> {
+    function dispatchGetRange(digest: string, offset: number, length: number): Promise<unknown> {
       const service = createBlobstoreService({ blobsDir });
       const dispatcher = new ServiceDispatcher();
       dispatcher.registerService(service.definition);
@@ -296,7 +292,7 @@ describe("blobstoreService", () => {
         { callerId: "w1", callerKind: "worker" },
         "blobstore",
         "getRange",
-        [digest, offset, length],
+        [digest, offset, length]
       );
     }
 
@@ -354,13 +350,13 @@ describe("blobstoreService", () => {
         { callerId: "w1", callerKind: "worker" },
         "blobstore",
         "putBase64",
-        [bytes.toString("base64")],
+        [bytes.toString("base64")]
       );
       const result = (await dispatcher.dispatch(
         { callerId: "w1", callerKind: "worker" },
         "blobstore",
         "getRangeBytes",
-        [digest, 0, 8],
+        [digest, 0, 8]
       )) as { bytesBase64: string };
       const decoded = Buffer.from(result.bytesBase64, "base64");
       expect(Array.from(decoded)).toEqual(Array.from(bytes));
@@ -378,7 +374,7 @@ describe("blobstoreService", () => {
         { callerId: "w1", callerKind: "worker" },
         "blobstore",
         "putText",
-        [body],
+        [body]
       )) as { digest: string };
       return result.digest;
     }
@@ -386,7 +382,7 @@ describe("blobstoreService", () => {
     function dispatchGrep(
       digest: string,
       pattern: string,
-      opts?: { caseInsensitive?: boolean; contextLines?: number; maxMatches?: number },
+      opts?: { caseInsensitive?: boolean; contextLines?: number; maxMatches?: number }
     ): Promise<unknown> {
       const service = createBlobstoreService({ blobsDir });
       const dispatcher = new ServiceDispatcher();
@@ -396,7 +392,7 @@ describe("blobstoreService", () => {
         { callerId: "w1", callerKind: "worker" },
         "blobstore",
         "grep",
-        opts === undefined ? [digest, pattern] : [digest, pattern, opts],
+        opts === undefined ? [digest, pattern] : [digest, pattern, opts]
       );
     }
 

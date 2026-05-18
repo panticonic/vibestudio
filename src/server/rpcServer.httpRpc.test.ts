@@ -510,34 +510,36 @@ describe("RpcServer HTTP POST /rpc", () => {
       const tokenManager = new TokenManager();
       const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
       const stubEgress = {
-        forwardProxyFetchStream: vi.fn(async (
-          _params: { callerId: string; url: string; method: string },
-          sink: (frame: {
-            kind: string;
-            status?: number;
-            statusText?: string;
-            headerPairs?: Array<[string, string]>;
-            finalUrl?: string;
-            bytes?: Uint8Array;
-            bytesIn?: number;
-          }) => Promise<void> | void,
-        ) => {
-          await sink({
-            kind: "head",
-            status: 200,
-            statusText: "OK",
-            headerPairs: [
-              ["content-type", "text/plain"],
-              ["set-cookie", "a=1"],
-              ["set-cookie", "b=2"],
-            ],
-            finalUrl: "https://example.com/landing",
-          });
-          await sink({ kind: "chunk", bytes: new Uint8Array([0x68, 0x65]) });
-          await sink({ kind: "chunk", bytes: new Uint8Array([0x6c, 0x6c, 0x6f]) });
-          await sink({ kind: "end", bytesIn: 5 });
-          return { status: 200, bytesIn: 5 };
-        }),
+        forwardProxyFetchStream: vi.fn(
+          async (
+            _params: { callerId: string; url: string; method: string },
+            sink: (frame: {
+              kind: string;
+              status?: number;
+              statusText?: string;
+              headerPairs?: Array<[string, string]>;
+              finalUrl?: string;
+              bytes?: Uint8Array;
+              bytesIn?: number;
+            }) => Promise<void> | void
+          ) => {
+            await sink({
+              kind: "head",
+              status: 200,
+              statusText: "OK",
+              headerPairs: [
+                ["content-type", "text/plain"],
+                ["set-cookie", "a=1"],
+                ["set-cookie", "b=2"],
+              ],
+              finalUrl: "https://example.com/landing",
+            });
+            await sink({ kind: "chunk", bytes: new Uint8Array([0x68, 0x65]) });
+            await sink({ kind: "chunk", bytes: new Uint8Array([0x6c, 0x6c, 0x6f]) });
+            await sink({ kind: "end", bytesIn: 5 });
+            return { status: 200, bytesIn: 5 };
+          }
+        ),
       };
       const dispatcher = {
         dispatch: vi.fn(),
@@ -578,14 +580,8 @@ describe("RpcServer HTTP POST /rpc", () => {
         expect(res.status).toBe(200);
         const buf = new Uint8Array(await res.arrayBuffer());
 
-        const {
-          FrameDecoder,
-          FRAME_HEAD,
-          FRAME_DATA,
-          FRAME_END,
-          parseHeadFrame,
-          parseEndFrame,
-        } = await import("../../packages/shared/src/credentials/streamFraming.js");
+        const { FrameDecoder, FRAME_HEAD, FRAME_DATA, FRAME_END, parseHeadFrame, parseEndFrame } =
+          await import("../../packages/shared/src/credentials/streamFraming.js");
 
         const frames: Array<{ type: number; payload: Uint8Array }> = [];
         const decoder = new FrameDecoder((type, payload) => {
@@ -597,9 +593,12 @@ describe("RpcServer HTTP POST /rpc", () => {
         const head = parseHeadFrame(frames[0]!.payload);
         expect(head.status).toBe(200);
         expect(head.finalUrl).toBe("https://example.com/landing");
-        expect(head.headerPairs.filter(([k]) => k === "set-cookie").map(([, v]) => v)).toEqual(["a=1", "b=2"]);
+        expect(head.headerPairs.filter(([k]) => k === "set-cookie").map(([, v]) => v)).toEqual([
+          "a=1",
+          "b=2",
+        ]);
         const bodyBytes = new Uint8Array(
-          frames[1]!.payload.byteLength + frames[2]!.payload.byteLength,
+          frames[1]!.payload.byteLength + frames[2]!.payload.byteLength
         );
         bodyBytes.set(frames[1]!.payload, 0);
         bodyBytes.set(frames[2]!.payload, frames[1]!.payload.byteLength);

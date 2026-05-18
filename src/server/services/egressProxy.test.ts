@@ -342,7 +342,7 @@ describe("EgressProxy", () => {
         headers.append("set-cookie", "b=2; Path=/");
         headers.append("content-type", "text/plain");
         return new Response("ok", { status: 200, statusText: "OK", headers });
-      }),
+      })
     );
     const response = await proxy.forwardProxyFetch({
       callerId: "worker:test",
@@ -350,9 +350,7 @@ describe("EgressProxy", () => {
       url: "https://api.example.test/v1/login",
       method: "GET",
     });
-    const cookieEntries = response.headerPairs.filter(
-      ([k]) => k.toLowerCase() === "set-cookie",
-    );
+    const cookieEntries = response.headerPairs.filter(([k]) => k.toLowerCase() === "set-cookie");
     expect(cookieEntries.map(([, v]) => v)).toEqual(["a=1; Path=/", "b=2; Path=/"]);
   });
 
@@ -370,7 +368,7 @@ describe("EgressProxy", () => {
         // Most runtimes set Response.url to "" for synthetically constructed
         // Responses; the proxy must fall back to the requested URL.
         return r;
-      }),
+      })
     );
     const response = await proxy.forwardProxyFetch({
       callerId: "worker:test",
@@ -389,13 +387,14 @@ describe("EgressProxy", () => {
     const pdfMagic = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x37]); // "%PDF-1.7"
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        new Response(pdfMagic, {
-          status: 200,
-          statusText: "OK",
-          headers: { "content-type": "application/pdf" },
-        }),
-      ),
+      vi.fn(
+        async () =>
+          new Response(pdfMagic, {
+            status: 200,
+            statusText: "OK",
+            headers: { "content-type": "application/pdf" },
+          })
+      )
     );
     const response = await proxy.forwardProxyFetch({
       callerId: "worker:test",
@@ -406,9 +405,7 @@ describe("EgressProxy", () => {
     expect(response.status).toBe(200);
     expect(response.body).toBeInstanceOf(Uint8Array);
     expect(Array.from(response.body)).toEqual(Array.from(pdfMagic));
-    const contentType = response.headerPairs.find(
-      ([k]) => k.toLowerCase() === "content-type",
-    )?.[1];
+    const contentType = response.headerPairs.find(([k]) => k.toLowerCase() === "content-type")?.[1];
     expect(contentType).toBe("application/pdf");
   });
 
@@ -423,7 +420,7 @@ describe("EgressProxy", () => {
         const ab = await new Response(init?.body as BodyInit).arrayBuffer();
         receivedBody = new Uint8Array(ab);
         return new Response(null, { status: 204 });
-      }),
+      })
     );
     await proxy.forwardProxyFetch({
       callerId: "worker:test",
@@ -465,7 +462,7 @@ describe("EgressProxy", () => {
           statusText: "OK",
           headers: { "content-type": "text/plain" },
         });
-      }),
+      })
     );
 
     const observed: Array<{ kind: string; size?: number; status?: number; finalUrl?: string }> = [];
@@ -489,12 +486,16 @@ describe("EgressProxy", () => {
         } else if (frame.kind === "end") {
           observed.push({ kind: "end" });
         }
-      },
+      }
     );
 
     expect(result.status).toBe(200);
     expect(result.bytesIn).toBe(11);
-    expect(observed[0]).toEqual({ kind: "head", status: 200, finalUrl: "https://api.example.test/v1/stream" });
+    expect(observed[0]).toEqual({
+      kind: "head",
+      status: 200,
+      finalUrl: "https://api.example.test/v1/stream",
+    });
     expect(observed.filter((o) => o.kind === "chunk")).toHaveLength(3);
     expect(observed[observed.length - 1]!.kind).toBe("end");
     expect(new TextDecoder().decode(aggregated)).toBe("hello world");

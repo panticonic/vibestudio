@@ -3436,9 +3436,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       throw new Error("Egress proxy is unavailable");
     }
     const requestBody: string | Uint8Array | undefined =
-      params.bodyBase64 !== undefined
-        ? Buffer.from(params.bodyBase64, "base64")
-        : params.body;
+      params.bodyBase64 !== undefined ? Buffer.from(params.bodyBase64, "base64") : params.body;
     const result = await egressProxy.forwardProxyFetch({
       callerId: ctx.callerId,
       url: params.url,

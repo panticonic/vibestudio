@@ -195,11 +195,11 @@ async function getByteRange(
   blobsDir: string,
   digest: string,
   offset: number,
-  length: number,
+  length: number
 ): Promise<Buffer | null> {
   if (length > MAX_GET_RANGE_BYTES) {
     throw new Error(
-      `blobstore.getRange length too large (${length} > ${MAX_GET_RANGE_BYTES} bytes); page the request`,
+      `blobstore.getRange length too large (${length} > ${MAX_GET_RANGE_BYTES} bytes); page the request`
     );
   }
   const filePath = blobPath(blobsDir, digest);
@@ -253,7 +253,7 @@ function assertSafeGrepPattern(pattern: string): void {
   // `(...*...)*`, `(...{N,}...)+`, etc.
   if (/\([^)]*[+*][^)]*\)\s*[+*?{]/u.test(pattern)) {
     throw new Error(
-      "grep pattern contains nested quantifiers (catastrophic-backtracking risk); rewrite to avoid `(...+...)+` or `(...*...)*` shapes",
+      "grep pattern contains nested quantifiers (catastrophic-backtracking risk); rewrite to avoid `(...+...)+` or `(...*...)*` shapes"
     );
   }
   // Alternation of overlapping single-char classes inside a
@@ -263,7 +263,7 @@ function assertSafeGrepPattern(pattern: string): void {
     // Allow only if the inner branches don't share a leading char —
     // hard to check without a parser. Conservative: reject.
     throw new Error(
-      "grep pattern uses quantified alternation (catastrophic-backtracking risk); rewrite without `(a|b)*` style",
+      "grep pattern uses quantified alternation (catastrophic-backtracking risk); rewrite without `(a|b)*` style"
     );
   }
 }
@@ -272,7 +272,7 @@ async function grepBlob(
   blobsDir: string,
   digest: string,
   pattern: string,
-  opts: { caseInsensitive?: boolean; contextLines?: number; maxMatches?: number },
+  opts: { caseInsensitive?: boolean; contextLines?: number; maxMatches?: number }
 ): Promise<GrepMatch[] | null> {
   const bytes = await getBytes(blobsDir, digest);
   if (!bytes) return null;
@@ -410,11 +410,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
        * `getRangeBytes` if you need a raw binary slice.
        */
       getRange: {
-        args: z.tuple([
-          DigestSchema,
-          z.number().int().nonnegative(),
-          z.number().int().positive(),
-        ]),
+        args: z.tuple([DigestSchema, z.number().int().nonnegative(), z.number().int().positive()]),
         returns: z.string().nullable(),
         policy: READ_POLICY,
       },
@@ -424,11 +420,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
        * `Buffer.from(result.bytesBase64, "base64")` (or equivalent).
        */
       getRangeBytes: {
-        args: z.tuple([
-          DigestSchema,
-          z.number().int().nonnegative(),
-          z.number().int().positive(),
-        ]),
+        args: z.tuple([DigestSchema, z.number().int().nonnegative(), z.number().int().positive()]),
         returns: z.object({ bytesBase64: z.string() }).nullable(),
         policy: READ_POLICY,
       },
@@ -451,7 +443,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
               line: z.string(),
               before: z.array(z.string()),
               after: z.array(z.string()),
-            }),
+            })
           )
           .nullable(),
         policy: READ_POLICY,
@@ -491,7 +483,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
             deps.blobsDir,
             args[0] as string,
             args[1] as number,
-            args[2] as number,
+            args[2] as number
           );
           return bytes ? bytes.toString("utf8") : null;
         }
@@ -500,7 +492,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
             deps.blobsDir,
             args[0] as string,
             args[1] as number,
-            args[2] as number,
+            args[2] as number
           );
           return bytes ? { bytesBase64: bytes.toString("base64") } : null;
         }
@@ -513,7 +505,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
               caseInsensitive?: boolean;
               contextLines?: number;
               maxMatches?: number;
-            }) ?? {},
+            }) ?? {}
           );
         }
         case "putBase64":
