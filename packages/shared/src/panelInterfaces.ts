@@ -73,6 +73,7 @@ export interface PanelViewLike {
   createViewForPanel(panelId: string, url: string, contextId?: string): Promise<void>;
   createViewForBrowser?(panelId: string, url: string, contextId: string): Promise<void>;
   hasView(panelId: string): boolean;
+  setViewVisible?(panelId: string, visible: boolean): void;
   destroyView(panelId: string): void;
   reloadView(panelId: string): boolean;
   navigateView(panelId: string, url: string): Promise<void>;

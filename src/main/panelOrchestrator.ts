@@ -425,7 +425,9 @@ export class PanelOrchestrator implements BridgePanelManager {
     // Persist to server
     void this.shellCore.notifyFocused(targetPanelId).catch(() => {});
 
-    if (this.getPanelView()?.hasView(targetPanelId)) {
+    const view = this.getPanelView();
+    if (view?.hasView(targetPanelId)) {
+      view.setViewVisible?.(targetPanelId, true);
       this.sendPanelEvent(targetPanelId, { type: "focus" });
     }
 
@@ -611,10 +613,6 @@ export class PanelOrchestrator implements BridgePanelManager {
     },
     opts: { focus?: boolean; browserUrl?: string } = {}
   ): Promise<void> {
-    if (opts.focus) {
-      this.focusPanel(result.panelId);
-    }
-
     const panel = this.registry.getPanel(result.panelId);
     const contextId = result.contextId ?? (panel ? getPanelContextId(panel) : undefined);
     const source = result.source ?? (panel ? getPanelSource(panel) : undefined);
@@ -629,6 +627,9 @@ export class PanelOrchestrator implements BridgePanelManager {
         buildState: "ready",
       });
       this.registry.notifyPanelTreeUpdate();
+      if (opts.focus) {
+        this.focusPanel(result.panelId);
+      }
       return;
     }
 
@@ -647,6 +648,9 @@ export class PanelOrchestrator implements BridgePanelManager {
       buildProgress: buildCached ? undefined : "Waiting for build...",
     });
     this.registry.notifyPanelTreeUpdate();
+    if (opts.focus) {
+      this.focusPanel(result.panelId);
+    }
   }
 
   private async loadSnapshotIntoView(panelId: string, snapshot: PanelSnapshot): Promise<void> {

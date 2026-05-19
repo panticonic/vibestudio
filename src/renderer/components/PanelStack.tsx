@@ -32,6 +32,7 @@ import { LazyPanelTreeSidebar } from "./LazyPanelTreeSidebar";
 import { useShellEvent } from "../shell/useShellEvent";
 import { SavePasswordBar } from "./SavePasswordBar";
 import { assertPresent } from "../../lintHelpers";
+import { shouldShowPanelView } from "./PanelStackVisibility";
 
 interface PanelStackProps {
   onTitleChange?: (title: string) => void;
@@ -379,7 +380,6 @@ export function PanelStack({
   // Main process calculates bounds based on layout state
   useEffect(() => {
     const panelId = visiblePanel?.id;
-    const htmlPath = visiblePanel?.artifacts?.htmlPath;
 
     if (!panelId) {
       return;
@@ -393,12 +393,10 @@ export function PanelStack({
     }
     previousVisiblePanelId.current = panelId;
 
-    // Only interact with view if it exists (htmlPath set after build)
-    // Panels with errors, still building, or unloaded (pending) have no view to show
-    const buildState = visiblePanel?.artifacts?.buildState;
-    const isUnloaded =
-      buildState === "pending" || buildState === "building" || buildState === "error";
-    if (!isUnloaded && htmlPath) {
+    // htmlPath is assigned when the native WebContentsView exists. The build
+    // can still be marked "building" while the panel is already loading and
+    // able to render, so visibility is keyed to view existence, not readiness.
+    if (shouldShowPanelView(visiblePanel?.artifacts)) {
       // Show current panel's view - main process handles bounds calculation
       void view
         .setVisible(panelId, true)

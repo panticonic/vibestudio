@@ -20,8 +20,22 @@ function makePanel(id: string, children: Panel[] = []): Panel {
 
 function createOrchestrator(registry: PanelRegistry, emit = vi.fn()) {
   const closedIds: string[] = [];
+  const panelView = {
+    createViewForPanel: vi.fn(async () => {}),
+    hasView: vi.fn(() => false),
+    setViewVisible: vi.fn(),
+    destroyView: vi.fn(),
+  };
   const shellCore = {
     close: vi.fn(async (panelId: string) => ({ closedIds: [panelId, ...closedIds] })),
+    create: vi.fn(async () => ({
+      panelId: "created-panel",
+      title: "created-panel",
+      contextId: "ctx-created-panel",
+      source: "panels/created-panel",
+      options: {},
+    })),
+    notifyFocused: vi.fn(async () => {}),
   };
   const orchestrator = new PanelOrchestrator({
     registry,
@@ -29,19 +43,15 @@ function createOrchestrator(registry: PanelRegistry, emit = vi.fn()) {
     serverClient: {} as never,
     shellCore: shellCore as never,
     cdpServer: { cleanupPanelAccess: vi.fn() },
-    panelHttpServer: {} as never,
+    panelHttpServer: { hasBuild: vi.fn(() => false), invalidateBuild: vi.fn(), getPort: vi.fn() },
     externalHost: "localhost",
     protocol: "http",
     gatewayPort: 1234,
     sendPanelEvent: vi.fn(),
-    getPanelView: () =>
-      ({
-        hasView: vi.fn(() => false),
-        destroyView: vi.fn(),
-      }) as never,
+    getPanelView: () => panelView as never,
   });
 
-  return { orchestrator, emit, shellCore, closedIds };
+  return { orchestrator, emit, shellCore, closedIds, panelView };
 }
 
 describe("PanelOrchestrator.closePanel", () => {
@@ -78,5 +88,47 @@ describe("PanelOrchestrator.closePanel", () => {
     await orchestrator.closePanel(sibling.id);
 
     expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
+  });
+});
+
+describe("PanelOrchestrator.focusPanel", () => {
+  it("shows an existing native panel view from main when focusing", () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel-1");
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView, emit } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValue(true);
+
+    orchestrator.focusPanel(panel.id);
+
+    expect(panelView.setViewVisible).toHaveBeenCalledWith(panel.id, true);
+    expect(emit).toHaveBeenCalledWith("navigate-to-panel", { panelId: panel.id });
+  });
+});
+
+describe("PanelOrchestrator.createPanel", () => {
+  it("focuses after creating the native view for focused panels", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const caller = makePanel("caller");
+    const createdPanel = makePanel("created-panel");
+    registry.addPanel(caller, null, { addAsRoot: true });
+    registry.addPanel(createdPanel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView, emit } = createOrchestrator(registry);
+    panelView.hasView.mockReturnValue(true);
+
+    await orchestrator.createPanel(caller.id, "panels/created-panel", { focus: true });
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+      createdPanel.id,
+      expect.stringContaining("/panels/created-panel/"),
+      "ctx-created-panel"
+    );
+    expect(panelView.setViewVisible).toHaveBeenCalledWith(createdPanel.id, true);
+    expect(emit).toHaveBeenCalledWith("navigate-to-panel", { panelId: createdPanel.id });
+    expect(panelView.createViewForPanel.mock.invocationCallOrder[0]).toBeLessThan(
+      panelView.setViewVisible.mock.invocationCallOrder[0] ?? 0
+    );
   });
 });

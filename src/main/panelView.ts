@@ -164,6 +164,10 @@ export class PanelView implements PanelViewLike {
     this.setupLinkInterception(panelId, view.webContents);
   }
 
+  setViewVisible(panelId: string, visible: boolean): void {
+    this.viewManager.setViewVisible(panelId, visible);
+  }
+
   hasView(panelId: string): boolean {
     return this.viewManager.hasView(panelId);
   }
