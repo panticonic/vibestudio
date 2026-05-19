@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { RpcServer } from "./rpcServer.js";
+import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import type { WsClientState } from "./rpcServer.js";
 import { createVerifiedCaller, type ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
 import { PrincipalRegistry } from "@natstack/shared/principalRegistry";
@@ -65,13 +66,30 @@ function createServer() {
     getPolicy: vi.fn(),
     getMethodPolicy: vi.fn(),
   } as unknown as MockDispatcher;
+  const runtimeCoordinator = new PanelRuntimeCoordinator();
+  runtimeCoordinator.registerClient({
+    clientSessionId: "test-desktop",
+    label: "Desktop",
+    platform: "desktop",
+  });
+  runtimeCoordinator.acquire("panel-a", {
+    clientSessionId: "test-desktop",
+    connectionId: "conn-1",
+  });
 
   return {
     tokenManager,
     principalRegistry,
     connectionGrants,
+    runtimeCoordinator,
     grantPanel: (panelId: string) => connectionGrants.grant(panelId, "shell:test").token,
-    server: new RpcServer({ tokenManager, dispatcher, principalRegistry, connectionGrants }),
+    server: new RpcServer({
+      tokenManager,
+      dispatcher,
+      principalRegistry,
+      connectionGrants,
+      runtimeCoordinator,
+    }),
   };
 }
 
@@ -170,7 +188,7 @@ describe("RpcServer relay behavior", () => {
     expect(principalRegistry.resolveContext("do:workers/example:Store:key")).toBe("ctx-1");
   });
 
-  it("keeps distinct connections for the same caller authenticated simultaneously", () => {
+  it("rejects distinct live panel runtime connections for the same caller", () => {
     const { server, grantPanel } = createServer();
     const ws1 = {
       readyState: WebSocket.OPEN,
@@ -191,8 +209,8 @@ describe("RpcServer relay behavior", () => {
     testServer(server).handleAuth(ws2, grantPanel("panel-a"), "conn-2");
 
     expect(ws1.close).not.toHaveBeenCalled();
-    expect(ws2.close).not.toHaveBeenCalled();
-    expect(testServer(server).connections.getCallerConnections("panel-a")).toHaveLength(2);
+    expect(ws2.close).toHaveBeenCalledWith(4090, "Panel runtime lease denied");
+    expect(testServer(server).connections.getCallerConnections("panel-a")).toHaveLength(1);
     expect(JSON.parse(ws1.send.mock.calls[0]![0])).toMatchObject({
       type: "ws:auth-result",
       success: true,
@@ -201,9 +219,8 @@ describe("RpcServer relay behavior", () => {
     });
     expect(JSON.parse(ws2.send.mock.calls[0]![0])).toMatchObject({
       type: "ws:auth-result",
-      success: true,
-      connectionId: "conn-2",
-      serverBootId: expect.any(String),
+      success: false,
+      error: expect.stringContaining("Panel runtime is leased by"),
     });
   });
 
@@ -319,7 +336,7 @@ describe("RpcServer relay behavior", () => {
   it("keeps routed response origins while the origin connection reconnects", async () => {
     vi.useFakeTimers();
     try {
-      const { server } = createServer();
+      const { server, grantPanel, runtimeCoordinator } = createServer();
       const origin1 = createClientWithConnection("panel-a", "conn-1");
       const origin2 = createClientWithConnection("panel-a", "conn-2");
       const target = createClientWithConnection("panel-b", "target-conn");
@@ -342,19 +359,20 @@ describe("RpcServer relay behavior", () => {
       });
       await Promise.resolve();
 
-      const reconnected = createClientWithConnection("panel-a", "conn-2");
-      registerClient(server, reconnected);
-      const waiter = testServer(server).connectionReconnectWaiters.get("panel-a:conn-2");
-      expect(waiter).toBeTruthy();
-      waiter?.resolve();
+      const reconnectedWs = createTestWs();
+      runtimeCoordinator.takeOver("panel-a", {
+        clientSessionId: "test-desktop",
+        connectionId: "conn-2",
+      });
+      testServer(server).handleAuth(reconnectedWs, grantPanel("panel-a"), "conn-2");
       await Promise.resolve();
       await Promise.resolve();
 
       expect(origin1.ws.send).not.toHaveBeenCalled();
-      expect(reconnected.ws.send).toHaveBeenCalledTimes(1);
-      expect(
-        JSON.parse((reconnected.ws.send as ReturnType<typeof vi.fn>).mock.calls[0]![0])
-      ).toMatchObject({
+      const routedCall = reconnectedWs.send.mock.calls
+        .map(([raw]) => JSON.parse(raw as string))
+        .find((msg) => msg.type === "ws:routed");
+      expect(routedCall).toMatchObject({
         type: "ws:routed",
         fromId: "panel-b",
         message: { type: "response", requestId: "req-reconnect", result: { ok: true } },

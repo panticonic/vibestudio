@@ -36,6 +36,7 @@ import { handleExternalOpenPayload, type ExternalOpenPayload } from "./oauthLoop
 import { CdpServer } from "./cdpServer.js";
 import { EventService } from "@natstack/shared/eventsService";
 import { isValidEventName, type EventName } from "@natstack/shared/events";
+import type { PanelRuntimeLeaseChangedEvent } from "@natstack/shared/panel/panelLease";
 import { installPinnedTlsForAllPartitions } from "./tlsPinning.js";
 import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
 
@@ -983,6 +984,23 @@ app.on("ready", async () => {
             });
         }
       }
+      if (bareEvent === "panel:runtimeLeaseChanged" && panelRegistry) {
+        const leaseEvent = payload as PanelRuntimeLeaseChangedEvent;
+        panelRegistry.applyRuntimeLeaseChanged(leaseEvent);
+        const localSessionId = panelOrchestrator?.getRuntimeClientSessionId();
+        if (
+          localSessionId &&
+          leaseEvent.next &&
+          leaseEvent.next.clientSessionId !== localSessionId
+        ) {
+          void panelOrchestrator?.unloadPanel(leaseEvent.panelId).catch((err: unknown) => {
+            log.warn(
+              `[panelRuntime] failed to unload stolen panel ${leaseEvent.panelId}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          });
+        }
+        panelRegistry.notifyPanelTreeUpdate();
+      }
       if (isValidEventName(bareEvent)) {
         (eventService.emit as (e: EventName, d: unknown) => void)(bareEvent, payload);
       }
@@ -1378,7 +1396,7 @@ app.on("ready", async () => {
 
     ipcMain.handle("natstack:getPanelInit", async (event) => {
       const callerId = resolveCallerId(event);
-      return shellCore?.panelManager.getPanelInit(callerId);
+      return panelOrchestrator?.getBootstrapConfig(callerId);
     });
 
     // Panel lifecycle
@@ -1413,7 +1431,7 @@ app.on("ready", async () => {
     );
     ipcMain.handle("natstack:getBootstrapConfig", async (event) => {
       const callerId = resolveCallerId(event);
-      return shellCore?.panelManager.getPanelInit(callerId);
+      return panelOrchestrator?.getBootstrapConfig(callerId);
     });
 
     // Electron-native

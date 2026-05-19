@@ -37,10 +37,17 @@ function createOrchestrator(registry: PanelRegistry, emit = vi.fn()) {
     })),
     notifyFocused: vi.fn(async () => {}),
   };
+  const serverClient = {
+    call: vi.fn(async (_service: string, method: string) => {
+      if (method === "registerClient") return undefined;
+      if (method === "acquire" || method === "takeOver") return { acquired: true };
+      return undefined;
+    }),
+  };
   const orchestrator = new PanelOrchestrator({
     registry,
     eventService: { emit } as never,
-    serverClient: {} as never,
+    serverClient: serverClient as never,
     shellCore: shellCore as never,
     cdpServer: { cleanupPanelAccess: vi.fn() },
     panelHttpServer: { hasBuild: vi.fn(() => false), invalidateBuild: vi.fn(), getPort: vi.fn() },
@@ -51,7 +58,7 @@ function createOrchestrator(registry: PanelRegistry, emit = vi.fn()) {
     getPanelView: () => panelView as never,
   });
 
-  return { orchestrator, emit, shellCore, closedIds, panelView };
+  return { orchestrator, emit, shellCore, closedIds, panelView, serverClient };
 }
 
 describe("PanelOrchestrator.closePanel", () => {

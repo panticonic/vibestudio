@@ -1185,6 +1185,8 @@ async function main() {
   }
   tokenManager.setAdminToken(adminToken);
   let gatewayPortResolved: number | null = null;
+  const { PanelRuntimeCoordinator } = await import("./panelRuntimeCoordinator.js");
+  const panelRuntimeCoordinator = new PanelRuntimeCoordinator({ eventService });
 
   // ── RPC server (always present) ──
   let rpcServerForGateway: import("./rpcServer.js").RpcServer | null = null;
@@ -1204,6 +1206,7 @@ async function main() {
         fsService,
         principalRegistry,
         connectionGrants,
+        runtimeCoordinator: panelRuntimeCoordinator,
       });
       server.initHandlers();
       rpcServerForGateway = server;
@@ -1213,6 +1216,24 @@ async function main() {
       await instance?.server?.stop();
     },
   });
+
+  {
+    const { createPanelRuntimeService } = await import("./services/panelRuntimeService.js");
+    let panelRuntimeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
+    container.register({
+      name: "panelRuntime",
+      async start() {
+        panelRuntimeDefinition = createPanelRuntimeService({
+          coordinator: panelRuntimeCoordinator,
+        });
+        return panelRuntimeDefinition;
+      },
+      getServiceDefinition() {
+        if (!panelRuntimeDefinition) throw new Error("panelRuntime service not initialized");
+        return panelRuntimeDefinition;
+      },
+    });
+  }
 
   // ── Extension host RPC service ──
   container.register({
