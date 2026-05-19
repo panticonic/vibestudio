@@ -53,7 +53,6 @@ export function initRuntime(options: InitRuntimeOptions): InitRuntimeResult {
     setupGlobals: options.setupGlobals,
     gatewayConfig: config.gatewayConfig,
     gitConfig: config.gitConfig,
-    pubsubConfig: config.pubsubConfig,
   });
 
   // Initialize RPC-backed fs with the runtime's RPC bridge

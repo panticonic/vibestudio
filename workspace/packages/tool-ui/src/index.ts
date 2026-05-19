@@ -26,7 +26,7 @@ export type {
 } from "./types";
 
 // Re-export from pubsub for convenience
-export type { FeedbackFormArgs } from "@natstack/pubsub";
+export type { FeedbackFormArgs } from "@workspace/pubsub";
 
 // ============================================================================
 // Components

@@ -1,4 +1,4 @@
-import type { MethodResultValue } from "@natstack/pubsub";
+import type { MethodResultValue } from "@workspace/pubsub";
 
 export type ChatMethodResult = MethodResultValue;
 

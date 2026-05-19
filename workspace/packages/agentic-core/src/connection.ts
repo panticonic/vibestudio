@@ -5,7 +5,7 @@
  * Manages connect/disconnect, event loop, roster, reconnect.
  */
 
-import { connectViaRpc, isAggregatedEvent } from "@natstack/pubsub";
+import { connectViaRpc, isAggregatedEvent } from "@workspace/pubsub";
 import type {
   PubSubClient,
   RosterUpdate,
@@ -13,7 +13,7 @@ import type {
   AggregatedEvent,
   MethodDefinition,
   ChannelConfig,
-} from "@natstack/pubsub";
+} from "@workspace/pubsub";
 import type { ChatParticipantMetadata, ConnectionConfig } from "./types.js";
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
@@ -98,6 +98,7 @@ export class ConnectionManager {
         type: this.metadata.type,
         reconnect: true,
         clientId: this.config.clientId,
+        protocol: this.config.protocol,
         metadata: this.metadata,
         methods,
         replayMode: "stream",

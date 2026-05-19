@@ -23,9 +23,9 @@ export type {
   ToolProvider,
 } from "./types.js";
 
-// Re-exported from @natstack/pubsub for convenience — canonical role-based
+// Re-exported from @workspace/pubsub for convenience — canonical role-based
 // predicates for distinguishing agent participants from client participants.
-export { isAgentParticipantType, isClientParticipantType } from "@natstack/pubsub";
+export { isAgentParticipantType, isClientParticipantType } from "@workspace/pubsub";
 
 // --- Typed Event Emitter ---
 export { TypedEmitter } from "./emitter.js";

@@ -1,6 +1,6 @@
 import React, { useMemo } from "react";
 import { Badge, Box, Code, Flex, Spinner, Text } from "@radix-ui/themes";
-import { prettifyToolName } from "@natstack/pubsub";
+import { prettifyToolName } from "@workspace/pubsub";
 import type { ToolCallPayload } from "@workspace/agentic-core";
 import { ExpandableChevron } from "./shared/Chevron";
 import { CollapsibleSection } from "./shared/CollapsibleSection";

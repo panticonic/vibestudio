@@ -10,7 +10,7 @@
  * event objects; extra fields are ignored.
  */
 
-import type { Attachment } from "@natstack/pubsub";
+import type { Attachment } from "@workspace/pubsub";
 import type { ChatMessage } from "./derived-types.js";
 import { parseToolCallPayload } from "./tool-call-payload.js";
 

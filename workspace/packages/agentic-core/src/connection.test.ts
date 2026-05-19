@@ -16,8 +16,6 @@ function createConfig(): ConnectionConfig {
     return Promise.resolve(undefined);
   }) as NonNullable<ConnectionConfig["rpc"]>["call"];
   return {
-    serverUrl: "ws://unused",
-    token: "token",
     clientId: "panel:panel-1",
     rpc: {
       selfId: "panel:panel-1",

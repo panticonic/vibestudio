@@ -134,7 +134,6 @@
     "@natstack/harness": "workspace:*",
     "@natstack/port-utils": "workspace:*",
     "@natstack/process-adapter": "workspace:*",
-    "@natstack/pubsub": "workspace:*",
     "@natstack/rpc": "workspace:*",
     "@natstack/shared": "workspace:*",
     "@natstack/typecheck": "workspace:*",

@@ -6,17 +6,17 @@
  */
 import type { ChannelEvent, SendMessageOptions } from "@natstack/harness/types";
 import type { RpcCaller } from "@natstack/rpc";
-const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
+const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
 interface ResolvedService {
     kind: "durable-object" | "worker";
     targetId?: string;
 }
 export class ChannelClient {
     private targetPromise: Promise<string> | null = null;
-    constructor(private rpc: RpcCaller, private channelId: string) { }
+    constructor(private rpc: RpcCaller, private channelId: string, private protocol: string = DEFAULT_CHANNEL_SERVICE_PROTOCOL) { }
     private async target(): Promise<string> {
         this.targetPromise ??= this.rpc
-            .call<ResolvedService>("main", "workers.resolveService", [CHANNEL_SERVICE_PROTOCOL, this.channelId])
+            .call<ResolvedService>("main", "workers.resolveService", [this.protocol, this.channelId])
             .then((service) => {
             if (service.kind !== "durable-object" || !service.targetId) {
                 throw new Error("Channel service must resolve to a Durable Object service");

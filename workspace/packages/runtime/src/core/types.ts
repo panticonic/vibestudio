@@ -60,8 +60,6 @@ export interface GitConfig {
   gitRef?: string;
 }
 
-// PubSubConfig canonical source: @natstack/types
-export type { PubSubConfig } from "@natstack/types";
 
 /**
  * Information about a panel or worker.

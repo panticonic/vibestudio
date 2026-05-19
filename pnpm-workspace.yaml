@@ -1,6 +1,8 @@
 packages:
   - 'packages/*'
   - 'workspace/packages/*'
+  - 'workspace/panels/*'
+  - 'workspace/workers/*'
   - 'workspace/extensions/*'
   - 'workspace/extensions/*/*'
   - 'apps/*'

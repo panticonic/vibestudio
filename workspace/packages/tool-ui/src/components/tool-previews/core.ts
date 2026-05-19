@@ -28,4 +28,4 @@ export {
   type ExitPlanModeArgs,
   type AllowedPrompt,
   type RichPreviewToolName,
-} from "@natstack/pubsub";
+} from "@workspace/pubsub";

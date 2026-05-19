@@ -22,8 +22,8 @@ import type {
   IncomingMethodResult,
   IncomingEvent,
   MethodDefinition,
-} from "@natstack/pubsub";
-import { isAgentParticipantType } from "@natstack/pubsub";
+} from "@workspace/pubsub";
+import { isAgentParticipantType } from "@workspace/pubsub";
 import {
   ConnectionManager,
   type ConnectionConfig,

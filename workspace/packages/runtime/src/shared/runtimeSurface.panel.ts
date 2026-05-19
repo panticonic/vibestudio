@@ -38,7 +38,6 @@ export const panelRuntimeSurface: RuntimeSurface = {
     gatewayConfig: valueEntry("Gateway base URL and bearer token for NatStack service routes."),
     gatewayFetch: valueEntry("Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."),
     gitConfig: valueEntry("Git HTTP endpoint and token derived from the gateway config."),
-    pubsubConfig: valueEntry("PubSub WebSocket endpoint and token derived from the gateway config."),
     env: valueEntry(),
     doTargetId: valueEntry("Build a unified RPC target ID for a Durable Object reference."),
     createDurableObjectServiceClient: valueEntry("Resolve a Durable Object-backed service and call it through unified RPC."),

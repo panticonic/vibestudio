@@ -9,16 +9,16 @@
  * `AgentMessage` is re-exported from `index.ts` for downstream consumers.
  */
 
-import type { MethodDefinition } from "@natstack/pubsub";
+import type { MethodDefinition } from "@workspace/pubsub";
 import type { RecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordinator";
 import type { ScopesApi } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult } from "@workspace/eval";
 import type { ChatMethodResult } from "./method-result.js";
 
-// The canonical participant metadata shape lives in @natstack/pubsub so that
+// The canonical participant metadata shape lives in @workspace/pubsub so that
 // lower-level packages (like @workspace/agentic-do, which can't depend on
 // agentic-core) and higher-level chat consumers see exactly the same type.
-export type { ChatParticipantMetadata } from "@natstack/pubsub";
+export type { ChatParticipantMetadata } from "@workspace/pubsub";
 
 // ===========================================================================
 // Injection Interfaces
@@ -26,14 +26,13 @@ export type { ChatParticipantMetadata } from "@natstack/pubsub";
 
 /** Inject connection config instead of importing from runtime */
 export interface ConnectionConfig {
-  serverUrl: string;
-  token: string;
   clientId: string;
-  rpc?: {
+  rpc: {
     call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;
     onEvent(event: string, listener: (fromId: string, payload: unknown) => void): () => void;
     selfId: string;
   };
+  protocol?: string;
   recoveryCoordinator?: Pick<RecoveryCoordinator, "registerColdRecoverHandler">;
 }
 

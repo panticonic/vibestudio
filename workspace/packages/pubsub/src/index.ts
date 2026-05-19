@@ -1,16 +1,16 @@
 /**
- * `@natstack/pubsub` — stateful pub/sub channels with structured
+ * `@workspace/pubsub` — stateful pub/sub channels with structured
  * method calls, participant presence, missed-context replay, and
  * chat-shaped binary attachments. For point-to-point fetch-shaped
  * RPC (with streaming bodies) use `@natstack/rpc` instead. See
- * `docs/architecture/rpc-vs-pubsub.md` for the boundary.
+ * `docs/architecture/rpc-and-services.md` for the boundary.
  *
  * Provides real-time messaging between panels and workers via RPC
  * with Durable Object message history.
  *
  * @example Basic usage
  * ```typescript
- * import { connectViaRpc } from "@natstack/pubsub";
+ * import { connectViaRpc } from "@workspace/pubsub";
  *
  * const client = connectViaRpc({
  *   rpc,
@@ -130,4 +130,3 @@ export {
   createApprovalSchema,
   type CreateApprovalSchemaParams,
 } from "./approval-schema.js";
-

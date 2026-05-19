@@ -19,9 +19,6 @@ export type {
   FormSchema,
 } from "./form-schema.js";
 
-// Config types
-export type { PubSubConfig } from "./config-types.js";
-
 // AI types
 export type {
   AIModelInfo,
@@ -56,8 +53,3 @@ export type {
   ChildCreationResult,
   ChildSpec,
 } from "./runtime-types.js";
-
-// PubSub types
-export type {
-  AgentBuildError,
-} from "./pubsub-types.js";

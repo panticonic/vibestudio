@@ -7,7 +7,7 @@
 
 import { useRef, useEffect } from "react";
 import { Box, Button, Dialog, Flex, ScrollArea, Text } from "@radix-ui/themes";
-import type { AgentDebugPayload } from "@natstack/pubsub";
+import type { AgentDebugPayload } from "@workspace/pubsub";
 
 export interface AgentDebugConsoleProps {
   open: boolean;

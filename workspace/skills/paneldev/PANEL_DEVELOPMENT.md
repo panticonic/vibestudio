@@ -256,18 +256,21 @@ for the full design.
 
 ---
 
-## PubSub
+## Channel Services
 
-Real-time messaging between panels via `@natstack/pubsub`:
+Real-time messaging between panels via `@workspace/pubsub`:
 
 ```typescript
-import { pubsubConfig } from "@workspace/runtime";
-import { connectWithConfig } from "@natstack/pubsub";
+import { contextId, rpc } from "@workspace/runtime";
+import { connectViaRpc } from "@workspace/pubsub";
 
-const client = connectWithConfig(pubsubConfig, {
+const client = connectViaRpc({
+  rpc,
   channel: "my-channel",
   contextId,
   handle: "my-panel",
+  name: "My Panel",
+  type: "panel",
   reconnect: true,
 });
 

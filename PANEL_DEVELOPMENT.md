@@ -458,30 +458,13 @@ right approval and trust-scope behavior.
 
 ---
 
-## PubSub
+## Channel Services
 
-Real-time messaging between panels via `@natstack/pubsub`:
+Real-time panel messaging is implemented as a workspace-owned userland service.
+Use the workspace-local panel development docs for the current client package
+and examples.
 
-```typescript
-import { pubsubConfig } from "@workspace/runtime";
-import { connectWithConfig } from "@natstack/pubsub";
-
-const client = connectWithConfig(pubsubConfig, {
-  channel: "my-channel",
-  contextId,
-  handle: "my-panel",
-  reconnect: true,
-});
-
-await client.ready();
-await client.publish("chat", { text: "Hello!" });
-
-for await (const msg of client.messages()) {
-  console.log(msg.type, msg.payload);
-}
-```
-
-Key PubSub client APIs:
+Key channel client APIs:
 - `publish(type, payload)` -- Send a message
 - `messages()` -- Async iterator for incoming messages
 - `onRoster(handler)` -- Track connected participants

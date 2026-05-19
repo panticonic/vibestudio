@@ -30,7 +30,7 @@ export const DEFAULT_MAX_STEPS = 10;
 
 /**
  * Build a permissive CSP for panels and workers.
- * Allows connections to localhost services (git, pubsub) and external APIs.
+ * Allows connections to localhost services and external APIs.
  * When externalHost is provided, also allows connections to that host.
  */
 export function buildPanelCsp(externalHost?: string): string {

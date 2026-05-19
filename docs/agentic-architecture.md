@@ -24,7 +24,7 @@ Panel (browser)          Channel DO (workerd)     Worker DO (workerd, embeds Pi)
      │                        │                        │
 ```
 
-- **Channel DO** — `workspace/workers/pubsub-channel/channel-do.ts`. Forkable
+- **Channel DO** — workspace-owned userland service. Forkable
   history, `this.sql`-backed message storage, participant roster, ephemeral and
   persisted message routing. Enforces participant handle uniqueness so the
   channel-tools extension can use bare method names without collision.
@@ -193,7 +193,7 @@ NatStack-bound.
 | Package | Location | Contents |
 |---------|----------|----------|
 | `@natstack/harness` | `packages/harness/` | `PiRunner`, `NatStackExtensionUIContext`, three extension factories, channel boundary types |
-| `@natstack/pubsub` | `workspace/packages/pubsub/` | PubSubClient (panel-side), protocol types |
+| Channel client package | workspace package | Panel-side channel client and protocol types |
 | `@workspace/runtime` | `workspace/packages/runtime/` | DurableObjectBase, HttpRpcBridge |
 | `@workspace/agentic-do` | `workspace/packages/agentic-do/` | AgentWorkerBase, ChannelClient, ContinuationStore, SubscriptionManager |
 | `@workspace/agentic-core` | `workspace/packages/agentic-core/` | EphemeralEventEnvelope, derivePiSnapshot, derived UI types, ConnectionManager |

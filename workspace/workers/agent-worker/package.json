@@ -10,14 +10,14 @@
     },
     "exposeModules": [
       "@workspace/runtime",
-      "@natstack/pubsub",
+      "@workspace/pubsub",
       "zod"
     ]
   },
   "dependencies": {
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
-    "@natstack/pubsub": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
     "@natstack/harness": "workspace:*",
     "zod": "^3.24.0"
   }

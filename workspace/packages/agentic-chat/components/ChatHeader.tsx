@@ -1,7 +1,7 @@
 import React, { useRef } from "react";
 import { Badge, Button, Card, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
 import { PlusIcon } from "@radix-ui/react-icons";
-import type { Participant } from "@natstack/pubsub";
+import type { Participant } from "@workspace/pubsub";
 import type { ToolApprovalProps } from "@workspace/tool-ui";
 import { useIsMobile } from "@workspace/react";
 import { useChatContext } from "../context/ChatContext";

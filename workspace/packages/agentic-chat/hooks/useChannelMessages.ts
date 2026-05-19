@@ -22,8 +22,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import type { PubSubClient, ParticipantMetadata, Attachment } from "@natstack/pubsub";
-import { isClientParticipantType } from "@natstack/pubsub";
+import type { PubSubClient, ParticipantMetadata, Attachment } from "@workspace/pubsub";
+import { isClientParticipantType } from "@workspace/pubsub";
 import {
   type ChatMessage,
   createChatMessageFromWire,

@@ -8,7 +8,7 @@
  * because no panel is connected to advertise them.
  */
 
-import type { ChannelConfig } from "@natstack/pubsub";
+import type { ChannelConfig } from "@workspace/pubsub";
 
 /** Recommended channel config for headless sessions: full-auto approval (level 2). */
 export function getRecommendedChannelConfig(): Partial<ChannelConfig> {

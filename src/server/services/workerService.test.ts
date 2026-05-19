@@ -15,15 +15,15 @@ const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "p
 function createDeps() {
   const workspaceDecls: WorkspaceDeclarations = {
     singletons: new SingletonRegistry([
-      { source: "workers/pubsub-channel", className: "PubSubChannel", key: "channel" },
+      { source: "workers/example-store", className: "ExampleStoreDO", key: "channel" },
     ]),
     services: [
       {
-        source: "workers/pubsub-channel",
+        source: "workers/example-store",
         name: "channel",
-        protocols: ["natstack.channel.v1"],
+        protocols: ["example.store.v1"],
         policy: { allowed: ["panel", "worker", "shell"] },
-        durableObject: { className: "PubSubChannel" },
+        durableObject: { className: "ExampleStoreDO" },
       },
       {
         source: "workers/stateless-api",
@@ -48,10 +48,10 @@ function createDeps() {
         allNodes: () => [
           {
             kind: "worker",
-            name: "pubsub-channel",
-            relativePath: "workers/pubsub-channel",
+            name: "example-store",
+            relativePath: "workers/example-store",
             manifest: {
-              durable: { classes: [{ className: "PubSubChannel" }] },
+              durable: { classes: [{ className: "ExampleStoreDO" }] },
             },
           },
           {
@@ -78,9 +78,9 @@ describe("workerService userland service resolution", () => {
       expect.objectContaining({
         name: "channel",
         kind: "durable-object",
-        protocols: ["natstack.channel.v1"],
-        source: "workers/pubsub-channel",
-        className: "PubSubChannel",
+        protocols: ["example.store.v1"],
+        source: "workers/example-store",
+        className: "ExampleStoreDO",
       }),
       expect.objectContaining({
         name: "stateless-api",
@@ -92,14 +92,14 @@ describe("workerService userland service resolution", () => {
     ]);
 
     await expect(
-      dispatcher.dispatch(panelCtx, "workers", "resolveService", ["natstack.channel.v1", "chat-1"])
+      dispatcher.dispatch(panelCtx, "workers", "resolveService", ["example.store.v1", "chat-1"])
     ).resolves.toMatchObject({
       kind: "durable-object",
       name: "channel",
-      source: "workers/pubsub-channel",
-      className: "PubSubChannel",
+      source: "workers/example-store",
+      className: "ExampleStoreDO",
       objectKey: "chat-1",
-      targetId: "do:workers/pubsub-channel:PubSubChannel:chat-1",
+      targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
     });
 
     await expect(
@@ -130,16 +130,16 @@ describe("workerService userland service resolution", () => {
 
     await expect(
       dispatcher.dispatch(panelCtx, "workers", "resolveDurableObject", [
-        "workers/pubsub-channel",
-        "PubSubChannel",
+        "workers/example-store",
+        "ExampleStoreDO",
         "chat-1",
       ])
     ).resolves.toMatchObject({
       kind: "durable-object",
-      source: "workers/pubsub-channel",
-      className: "PubSubChannel",
+      source: "workers/example-store",
+      className: "ExampleStoreDO",
       objectKey: "chat-1",
-      targetId: "do:workers/pubsub-channel:PubSubChannel:chat-1",
+      targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
     });
 
     await expect(
@@ -165,16 +165,16 @@ describe("workerService userland service resolution", () => {
         { caller: createVerifiedCaller("do:workers/agent-worker:AiChatWorker:agent-1", "do") },
         "workers",
         "resolveService",
-        ["natstack.channel.v1", "chat-1"]
+        ["example.store.v1", "chat-1"]
       )
     ).resolves.toMatchObject({
       kind: "durable-object",
-      targetId: "do:workers/pubsub-channel:PubSubChannel:chat-1",
+      targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
     });
 
     expect(activateDurableObject).toHaveBeenCalledWith({
-      source: "workers/pubsub-channel",
-      className: "PubSubChannel",
+      source: "workers/example-store",
+      className: "ExampleStoreDO",
       objectKey: "chat-1",
     });
   });

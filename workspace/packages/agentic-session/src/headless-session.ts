@@ -48,7 +48,7 @@ import type {
   Attachment,
   IncomingEvent,
   IncomingMethodResultEvent,
-} from "@natstack/pubsub";
+} from "@workspace/pubsub";
 import { z } from "zod";
 import { ScopeManager, RpcScopePersistence } from "@workspace/eval";
 import {

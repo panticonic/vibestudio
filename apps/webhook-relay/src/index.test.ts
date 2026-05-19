@@ -84,7 +84,7 @@ describe("webhook relay", () => {
 
     for (const url of [
       "https://hooks.snugenv.com/calendar/lease-1",
-      "https://hooks.snugenv.com/pubsub/google",
+      "https://hooks.snugenv.com/provider/google",
     ]) {
       const response = await worker.fetch(
         new Request(url, { method: "POST", body: "{}" }),

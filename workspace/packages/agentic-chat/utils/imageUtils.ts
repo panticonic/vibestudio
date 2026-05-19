@@ -2,14 +2,14 @@
  * Browser-side image utilities for the chat UI
  */
 
-import type { AttachmentInput, Attachment } from "@natstack/pubsub";
+import type { AttachmentInput, Attachment } from "@workspace/pubsub";
 import {
   SUPPORTED_IMAGE_TYPES,
   MAX_IMAGE_BYTES,
   MAX_TOTAL_BYTES,
   isImageMimeType,
   formatBytes,
-} from "@natstack/pubsub";
+} from "@workspace/pubsub";
 
 // Re-export constants and utilities from pubsub
 export { SUPPORTED_IMAGE_TYPES, MAX_IMAGE_BYTES, MAX_TOTAL_BYTES, isImageMimeType, formatBytes };

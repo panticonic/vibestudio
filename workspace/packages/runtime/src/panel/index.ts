@@ -37,13 +37,12 @@ export const id = config.entityId;
 const gatewayConfig = config.gatewayConfig;
 const gatewayFetch = createGatewayFetch(gatewayConfig);
 const gitConfig = config.gitConfig;
-const pubsubConfig = config.pubsubConfig;
 const env = config.env;
 const { parentId: runtimeParentId, rpc, parent, getParent, getParentWithContract, onConnectionError, getInfo, closeSelf, focusPanel, getWorkspaceTree, listBranches, listCommits, getTheme, onThemeChange, onFocus, exposeMethod, contextId, } = runtime;
 export { rpc, parent, getParent, getParentWithContract, onConnectionError, getInfo, closeSelf, focusPanel, getWorkspaceTree, listBranches, listCommits, getTheme, onThemeChange, onFocus, exposeMethod, contextId, recoveryCoordinator, runtimeParentId as parentId, };
 const { workers } = runtime;
 const helpfulWorkers = helpfulNamespace("workers", workers);
-export { fs, gatewayConfig, gatewayFetch, gitConfig, pubsubConfig, env, helpfulWorkers as workers };
+export { fs, gatewayConfig, gatewayFetch, gitConfig, env, helpfulWorkers as workers };
 export { doTargetId };
 export const createDurableObjectServiceClient = (query: string, objectKey?: string | null) =>
   createDurableObjectServiceClientForRpc(rpc, query, objectKey);

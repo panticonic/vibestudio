@@ -1,7 +1,7 @@
 /**
  * natstack-server — Headless and IPC entry point for NatStack.
  *
- * Starts all headless-capable services (Build V2, Git, PubSub, RPC).
+ * Starts all headless-capable services (Build V2, Git, workspace services, RPC).
  *
  * Two runtime modes:
  * - **IPC mode** (utilityProcess or child_process.fork): receives config via

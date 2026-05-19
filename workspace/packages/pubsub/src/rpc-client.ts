@@ -58,7 +58,7 @@ import { z } from "zod";
 import type { PubSubClient } from "./client.js";
 import type { RecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordinator";
 
-const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
+const DEFAULT_CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
 /** Wire attachment shape — base64 data string, not Uint8Array. */
 interface WireAttachment {
   id: string;
@@ -157,6 +157,7 @@ export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMe
   replayMessageLimit?: number;
   reconnect?: boolean;
   metadata?: T;
+  protocol?: string;
   clientId?: string;
   name?: string;
   type?: string;
@@ -170,11 +171,12 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   opts: RpcConnectOptions<T>,
 ): PubSubClient<T> {
   const { rpc, channel, replayMode = "stream", methods: providedMethods } = opts;
+  const protocol = opts.protocol ?? DEFAULT_CHANNEL_SERVICE_PROTOCOL;
   const pid = opts.clientId ?? rpc.selfId;
   let doTargetPromise: Promise<string> | null = null;
   const getDoTarget = () => {
     doTargetPromise ??= rpc
-      .call<ResolvedService>("main", "workers.resolveService", [CHANNEL_SERVICE_PROTOCOL, channel])
+      .call<ResolvedService>("main", "workers.resolveService", [protocol, channel])
       .then((service) => {
         if (service.kind !== "durable-object" || !service.targetId) {
           throw new Error("Channel service must resolve to a Durable Object service");

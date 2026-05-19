@@ -5,8 +5,8 @@
  * feedback lifecycle, and dismiss/error handling.
  */
 import { useCallback, useRef, useEffect } from "react";
-import type { MethodDefinition, MethodExecutionContext, FeedbackFormArgs, FeedbackCustomArgs, PubSubClient, } from "@natstack/pubsub";
-import { FeedbackFormArgsSchema, FeedbackCustomArgsSchema, } from "@natstack/pubsub";
+import type { MethodDefinition, MethodExecutionContext, FeedbackFormArgs, FeedbackCustomArgs, PubSubClient, } from "@workspace/pubsub";
+import { FeedbackFormArgsSchema, FeedbackCustomArgsSchema, } from "@workspace/pubsub";
 import { useFeedbackManager, type FeedbackResult, type ActiveFeedbackTsx, type ActiveFeedbackSchema, type ActiveFeedback, } from "@workspace/tool-ui";
 import { compileComponent } from "@workspace/eval";
 import type { SandboxOptions } from "@workspace/eval";

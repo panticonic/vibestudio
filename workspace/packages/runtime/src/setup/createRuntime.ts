@@ -11,7 +11,6 @@ import {
   type PanelContract,
   type EndpointInfo,
   type GitConfig,
-  type PubSubConfig,
   type Rpc,
 } from "../core/index.js";
 import type { GatewayConfig } from "../shared/globals.js";
@@ -33,7 +32,6 @@ export interface RuntimeDeps {
   setupGlobals?: () => void;
   gatewayConfig?: GatewayConfig | null;
   gitConfig?: GitConfig | null;
-  pubsubConfig?: PubSubConfig | null;
 }
 
 export function createRuntime(deps: RuntimeDeps) {
@@ -99,7 +97,6 @@ export function createRuntime(deps: RuntimeDeps) {
     exposeMethod: base.exposeMethod,
 
     gitConfig: base.gitConfig,
-    pubsubConfig: base.pubsubConfig,
     contextId: base.contextId,
   };
 }

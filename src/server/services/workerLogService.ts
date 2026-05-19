@@ -12,7 +12,7 @@
  * calling the original console, fires a fire-and-forget `workerLog.write`
  * RPC to the server. This service logs through `dev-log` with the caller's
  * DO identity as the prefix, so logs appear in the main terminal as:
- *   [server] [workerLog] [do:workers/pubsub-channel:PubSubChannel:ctx-…] warn: <message>
+ *   [server] [workerLog] [do:workers/example-store:ExampleStoreDO:ctx-...] warn: <message>
  */
 
 import { z } from "zod";
@@ -24,7 +24,7 @@ const log = createDevLogger("workerLog");
 type Level = "log" | "info" | "warn" | "error";
 
 export interface WorkerLogRecord {
-  /** Worker source path (e.g. "workers/pubsub-channel"). May be null if unparseable. */
+  /** Worker source path (e.g. "workers/example-store"). May be null if unparseable. */
   source: string | null;
   /** Full caller id ("do:workers/foo:Klass:ctx-…" or a regular worker id). */
   callerId: string;

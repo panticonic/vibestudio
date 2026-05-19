@@ -31,7 +31,7 @@ export type {
 // ===========================================================================
 // UI-only types
 // ===========================================================================
-import type { AgentDebugPayload, Participant, AttachmentInput, SandboxSource } from "@natstack/pubsub";
+import type { AgentDebugPayload, Participant, AttachmentInput, SandboxSource } from "@workspace/pubsub";
 import type { ActiveFeedback, ToolApprovalProps } from "@workspace/tool-ui";
 import type { PendingImage } from "./utils/imageUtils";
 import type { ComponentType } from "react";

@@ -90,7 +90,7 @@ Follow-up TODOs:
   reused blindly for webhook targets.
 - TODO: Add delivery audit entries and end-to-end provider tests.
 - TODO: Verify no deployed provider still points at deleted legacy
-  `/calendar/:leaseId` or `/pubsub/:providerId` URLs.
+  provider-shaped relay URLs.
 
 ## Human Tasks
 
@@ -230,7 +230,7 @@ Done:
    - provider delivery ID dedupe when available
    - payload hash dedupe fallback with a short TTL
 7. Verified events are delivered to userland through a worker method.
-8. Tests prove old calendar/pubsub relay paths are no longer exposed.
+8. Tests prove old provider-shaped relay paths are no longer exposed.
 
 Follow-up:
 
