@@ -178,6 +178,67 @@ describe("approvalQueue", () => {
     await expect(second).resolves.toBe("deny");
   });
 
+  it("does not deduplicate capability approvals across concrete callers", async () => {
+    const { queue } = createQueue();
+    const first = queue.request({
+      kind: "capability",
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      capability: "external-browser-open",
+      title: "Open external browser",
+      resource: { type: "url-origin", label: "Origin", value: "https://example.com" },
+    });
+    const second = queue.request({
+      kind: "capability",
+      callerId: "panel-2",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      capability: "external-browser-open",
+      title: "Open external browser",
+      resource: { type: "url-origin", label: "Origin", value: "https://example.com" },
+    });
+
+    const pending = queue.listPending();
+    expect(pending).toHaveLength(2);
+
+    queue.resolve(pending[0]!.approvalId, "session");
+    queue.resolve(pending[1]!.approvalId, "deny");
+    await expect(first).resolves.toBe("session");
+    await expect(second).resolves.toBe("deny");
+  });
+
+  it("does not deduplicate credential approvals across concrete callers", async () => {
+    const { queue } = createQueue();
+    const request = {
+      callerKind: "worker" as const,
+      repoPath: "/repo",
+      effectiveVersion: "hash-1",
+      credentialId: "cred-1",
+      credentialLabel: "GitHub",
+      audience: [{ url: "https://api.github.com/", match: "origin" as const }],
+      injection: {
+        type: "header" as const,
+        name: "authorization",
+        valueTemplate: "Bearer {token}",
+      },
+      accountIdentity: { providerUserId: "user-1" },
+      scopes: ["repo"],
+    };
+    const first = queue.request({ ...request, callerId: "worker:one" });
+    const second = queue.request({ ...request, callerId: "worker:two" });
+
+    const pending = queue.listPending();
+    expect(pending).toHaveLength(2);
+
+    queue.resolve(pending[0]!.approvalId, "session");
+    queue.resolve(pending[1]!.approvalId, "deny");
+    await expect(first).resolves.toBe("session");
+    await expect(second).resolves.toBe("deny");
+  });
+
   it("supports client config approvals with submitted field values", async () => {
     const { queue } = createQueue();
     const promise = queue.requestClientConfig({

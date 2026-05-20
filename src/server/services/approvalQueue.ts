@@ -263,10 +263,11 @@ export function createApprovalQueue(deps: {
         return ["capability-isolated", randomUUID()].join("\x00");
       }
       if (req.dedupKey) {
-        return ["capability-custom", req.dedupKey].join("\x00");
+        return ["capability-custom", req.callerId, req.dedupKey].join("\x00");
       }
       return [
         "capability",
+        req.callerId,
         req.repoPath,
         req.effectiveVersion,
         req.capability,
@@ -277,9 +278,14 @@ export function createApprovalQueue(deps: {
       if (req.dedupKey === null) {
         return ["extension-isolated", randomUUID()].join("\x00");
       }
-      return ["extension", req.action, req.extensionName, req.source.repo, req.source.ref].join(
-        "\x00"
-      );
+      return [
+        "extension",
+        req.callerId,
+        req.action,
+        req.extensionName,
+        req.source.repo,
+        req.source.ref,
+      ].join("\x00");
     }
     if (req.kind === "client-config") {
       return [
@@ -303,7 +309,7 @@ export function createApprovalQueue(deps: {
       // the polling loop is tied to a specific outstanding request.
       return ["device-code", randomUUID()].join("\x00");
     }
-    return `${req.repoPath}\x00${req.effectiveVersion}\x00${req.credentialId}`;
+    return `${req.callerId}\x00${req.repoPath}\x00${req.effectiveVersion}\x00${req.credentialId}`;
   }
 
   function userlandDedupKeyFor(req: UserlandApprovalQueueRequest): string {

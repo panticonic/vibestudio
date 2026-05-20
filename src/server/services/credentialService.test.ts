@@ -484,7 +484,7 @@ describe("credentialService", () => {
     expect((await store.loadUrlBound(stored.id))?.revokedAt).toBeUndefined();
   });
 
-  it("keeps session approvals process-local but stable across caller instances for the same version", async () => {
+  it("keeps session approvals process-local and scoped to the concrete caller", async () => {
     const store = new MemoryCredentialStore();
     const approvalQueue = {
       request: vi.fn(async () => "session" as const),

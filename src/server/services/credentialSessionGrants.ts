@@ -1,5 +1,5 @@
 export interface CredentialSessionGrantScope {
-  callerId?: string;
+  callerId: string;
   repoPath?: string;
   effectiveVersion?: string;
 }
@@ -59,17 +59,5 @@ function sessionGrantKey(
   const resourceParts = resource
     ? [resource.bindingId, resource.resource, resource.action]
     : ["*", "*", "*"];
-  if (scope.repoPath) {
-    if (scope.callerId) {
-      return JSON.stringify([credentialId, ...resourceParts, "caller", scope.callerId]);
-    }
-    return JSON.stringify([
-      credentialId,
-      ...resourceParts,
-      "version",
-      scope.repoPath,
-      scope.effectiveVersion ?? "",
-    ]);
-  }
-  return JSON.stringify([credentialId, ...resourceParts, "caller", scope.callerId ?? ""]);
+  return JSON.stringify([credentialId, ...resourceParts, "caller", scope.callerId]);
 }
