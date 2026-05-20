@@ -104,6 +104,14 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     lowestPubsubIdRef.current = null;
     replayTrimmedRef.current = false;
 
+    console.info("[ChatReloadDebug] useChannelMessages attached", {
+      clientId: client.clientId ?? null,
+      connected: client.connected,
+      chatMessageCount: client.chatMessageCount ?? null,
+      totalMessageCount: client.totalMessageCount ?? null,
+      firstChatMessageId: client.firstChatMessageId ?? null,
+    });
+
     const consume = async () => {
       try {
         for await (const event of client.events({ includeReplay: true, includeEphemeral: true })) {
@@ -131,7 +139,29 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
             const isEphemeral = wire.kind === "ephemeral";
             const isFromClient = isClientParticipantType(wire.senderMetadata?.type);
 
-            if (!isTranscriptWireMessage(wire)) continue;
+            if (!isTranscriptWireMessage(wire)) {
+              if (isReplay) {
+                console.info("[ChatReloadDebug] dropped replay message from transcript", {
+                  id: wire.id,
+                  pubsubId: wire.pubsubId ?? null,
+                  contentType: wire.contentType ?? null,
+                  senderId: wire.senderId ?? null,
+                  senderType: wire.senderMetadata?.type ?? null,
+                });
+              }
+              continue;
+            }
+
+            if (isReplay) {
+              console.info("[ChatReloadDebug] accepted replay message into transcript", {
+                id: wire.id,
+                pubsubId: wire.pubsubId ?? null,
+                contentType: wire.contentType ?? null,
+                senderId: wire.senderId ?? null,
+                senderType: wire.senderMetadata?.type ?? null,
+                contentLength: wire.content?.length ?? 0,
+              });
+            }
 
             const msg = createChatMessageFromWire(wire as WireNewMessage, {
               isReplay,
@@ -156,12 +186,25 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
             if (existing) {
               byId.set(wire.id, applyChatMessageUpdate(existing, wire as WireUpdateMessage));
               flush();
+            } else if (wire.kind === "replay") {
+              console.info("[ChatReloadDebug] replay update without transcript base message", {
+                id: wire.id,
+                pubsubId: wire.pubsubId ?? null,
+                contentLength: wire.content?.length ?? 0,
+                complete: wire.complete ?? null,
+              });
             }
           } else if (wire.type === "error" && wire.id) {
             const existing = byId.get(wire.id);
             if (existing) {
               byId.set(wire.id, applyChatMessageError(existing, wire as WireErrorMessage));
               flush();
+            } else if (wire.kind === "replay") {
+              console.info("[ChatReloadDebug] replay error without transcript base message", {
+                id: wire.id,
+                pubsubId: wire.pubsubId ?? null,
+                error: wire.error ?? null,
+              });
             }
           } else if (wire.type === "execution-pause") {
             const targetId = wire.messageId ?? wire.id;

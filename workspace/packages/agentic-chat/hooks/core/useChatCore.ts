@@ -620,9 +620,23 @@ export function useChatCore({
     const prompt = initialPromptCaptured.current;
     if (!prompt || !connected || !client || initialPromptSentRef.current) return;
     initialPromptSentRef.current = true;
-    inputRef.current = prompt;
-    sendMessage().catch((err) => console.warn("[Chat] Failed to send initial prompt:", err));
-  }, [connected, client, sendMessage]);
+    const hasPriorMessages =
+      hasTranscriptMessagesRef.current || ((client.chatMessageCount ?? 0) > 0);
+    if (hasPriorMessages) return;
+
+    const defaultTitle = !defaultTitleSetRef.current
+      ? titleFromFirstUserMessage(prompt)
+      : null;
+    if (defaultTitle) {
+      defaultTitleSetRef.current = true;
+      document.title = defaultTitle;
+      void client.updateChannelConfig({ title: defaultTitle }).catch(() => {});
+    }
+
+    client.send(prompt, {
+      idempotencyKey: `initial-prompt:${channelName}`,
+    }).catch((err) => console.warn("[Chat] Failed to send initial prompt:", err));
+  }, [connected, client, channelName]);
 
   // --- Load earlier messages (delegates to useChannelMessages pagination) ---
   const loadEarlierMessages = channelLoadEarlier;

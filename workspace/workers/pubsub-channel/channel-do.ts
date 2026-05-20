@@ -584,6 +584,20 @@ export class PubSubChannel extends DurableObjectBase {
       return []; // No replay requested
     }
 
+    console.log("[ChatReloadDebug] channel message replay query", {
+      channelId: this.objectKey,
+      subscriberId,
+      sinceId: sinceId ?? null,
+      replayMessageLimit: replayMessageLimit ?? null,
+      rowCount: rows.length,
+      rows: rows.slice(0, 20).map((row) => ({
+        id: row["id"],
+        type: row["type"],
+        senderId: row["sender_id"],
+        messageId: row["message_id"],
+      })),
+    });
+
     const onFatal = (err: { code?: string }) => {
       if (err?.code === "TARGET_NOT_REACHABLE" || err?.code === "RECONNECT_GRACE_EXPIRED") {
         this.sql.exec(`DELETE FROM participants WHERE id = ?`, subscriberId);

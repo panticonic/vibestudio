@@ -667,6 +667,18 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   }
 
   function applySubscribeAckFallback(result: SubscribeResult | undefined): void {
+    console.info("[ChatReloadDebug] pubsub subscribe ack", {
+      channel,
+      participantId: pid,
+      hasReady: Boolean(result?.ready),
+      initialReplayCount: result?.initialReplay?.length ?? null,
+      initialReplayKinds: result?.initialReplay?.reduce<Record<string, number>>((acc, msg) => {
+        const key = `${msg.kind}:${msg.type ?? "unknown"}`;
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {}),
+      initialReplayComplete,
+    });
     if (!result?.ready || !Array.isArray(result.initialReplay) || initialReplayComplete) {
       return;
     }
@@ -876,6 +888,16 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     ...(opts.metadata ? opts.metadata : {}),
   };
   if (methodAdvertisements) subscribeMetadata["methods"] = methodAdvertisements;
+  console.info("[ChatReloadDebug] pubsub subscribe request", {
+    channel,
+    participantId: pid,
+    replay: subscribeMetadata["replay"],
+    replayMessageLimit: subscribeMetadata["replayMessageLimit"],
+    sinceId: subscribeMetadata["sinceId"],
+    contextId: subscribeMetadata["contextId"],
+    handle: subscribeMetadata["handle"],
+    type: subscribeMetadata["type"],
+  });
 
   // Heartbeat to prevent stale participant eviction
   const TOUCH_INTERVAL_MS = 60_000; // 1 minute
@@ -1220,6 +1242,23 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       if (includeReplay && replayMode !== "skip") {
         const replaySeed: EventStreamItem[] =
           replayMode === "stream" ? streamReplayEvents : aggregatedReplay;
+        console.info("[ChatReloadDebug] pubsub event subscriber replay seed", {
+          channel,
+          participantId: pid,
+          replayMode,
+          includeReplay,
+          includeEphemeral,
+          replaySeedCount: replaySeed.length,
+          replaySeedKinds: replaySeed.reduce<Record<string, number>>((acc, item) => {
+            if (isIncomingEvent(item)) {
+              const key = `${item.kind}:${item.type}`;
+              acc[key] = (acc[key] ?? 0) + 1;
+            } else {
+              acc["aggregated"] = (acc["aggregated"] ?? 0) + 1;
+            }
+            return acc;
+          }, {}),
+        });
         for (const item of replaySeed) {
           if (isIncomingEvent(item)) {
             if (!includeEphemeral && item.kind === "ephemeral") continue;
