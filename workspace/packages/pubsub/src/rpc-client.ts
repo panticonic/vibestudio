@@ -870,6 +870,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     [PARTICIPANT_SESSION_METADATA_KEY]: participantSessionId,
     contextId: opts.contextId,
     channelConfig: opts.channelConfig ? opts.channelConfig : undefined,
+    replay: replayMode !== "skip",
     replayMessageLimit: opts.replayMessageLimit ?? 200,
     sinceId: opts.sinceId,
     ...(opts.metadata ? opts.metadata : {}),

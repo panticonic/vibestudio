@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { PanelRegistry } from "@natstack/shared/panelRegistry";
 import type { Panel } from "@natstack/shared/types";
+import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 
 function makePanel(id: string, children: Panel[] = []): Panel {
@@ -35,6 +36,13 @@ function createOrchestrator(registry: PanelRegistry, emit = vi.fn()) {
       source: "panels/created-panel",
       options: {},
     })),
+    updateStateArgs: vi.fn(async (panelId: string, updates: Record<string, unknown>) => {
+      const panel = registry.getPanel(panelId);
+      const current = panel
+        ? ((getCurrentSnapshot(panel).stateArgs ?? {}) as Record<string, unknown>)
+        : {};
+      return { ...current, ...updates };
+    }),
     notifyFocused: vi.fn(async () => {}),
     getCurrentEntityId: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
   };
@@ -138,5 +146,48 @@ describe("PanelOrchestrator.createPanel", () => {
     expect(panelView.createViewForPanel.mock.invocationCallOrder[0]).toBeLessThan(
       panelView.setViewVisible.mock.invocationCallOrder[0] ?? 0
     );
+  });
+});
+
+describe("PanelOrchestrator.handleSetStateArgs", () => {
+  it("serializes concurrent updates for the same panel", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel-1");
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, shellCore } = createOrchestrator(registry);
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+
+    shellCore.updateStateArgs.mockImplementationOnce(
+      async (panelId: string, updates: Record<string, unknown>) => {
+        await firstGate;
+        const current = (getCurrentSnapshot(registry.getPanel(panelId)!).stateArgs ?? {}) as Record<
+          string,
+          unknown
+        >;
+        return { ...current, ...updates };
+      }
+    );
+
+    const first = orchestrator.handleSetStateArgs(panel.id, { channelName: "chat-1" });
+    const second = orchestrator.handleSetStateArgs(panel.id, {
+      actionBarFile: "panels/chat/Bar.tsx",
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(shellCore.updateStateArgs).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(shellCore.updateStateArgs).toHaveBeenCalledTimes(2);
+    expect(getCurrentSnapshot(registry.getPanel(panel.id)!).stateArgs).toEqual({
+      channelName: "chat-1",
+      actionBarFile: "panels/chat/Bar.tsx",
+    });
   });
 });

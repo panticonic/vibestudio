@@ -404,6 +404,11 @@ function terminalErrorMessage(event: AgentEvent & { type: "agent_end" }): string
   return null;
 }
 
+function isCredentialRequiredTerminalError(message: string | null): boolean {
+  return !!message &&
+    /^No URL-bound model credential is configured for model provider: /.test(message);
+}
+
 function addToMap<K, V>(map: ReadonlyMap<K, V>, key: K, value: V): ReadonlyMap<K, V> {
   const next = new Map(map);
   next.set(key, value);
@@ -490,7 +495,7 @@ export class ContentBlockProjector {
       const openMsgIds = this.collectOpenMsgIds();
       if (openMsgIds.length === 0) {
         const message = terminalErrorMessage(event);
-        if (message) {
+        if (message && !isCredentialRequiredTerminalError(message)) {
           const msgId = this.allocMsgId();
           this.dispatch({ kind: "send", msgId, content: message });
           this.dispatch({ kind: "error", msgId, message, code: "agent_turn_failed" });

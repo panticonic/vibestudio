@@ -124,6 +124,8 @@ describe("connectViaRpc", () => {
           SELF_ID,
           expect.objectContaining({
             __participantSessionId: expect.any(String),
+            replay: true,
+            replayMessageLimit: 200,
           }),
         ],
       );
@@ -176,7 +178,7 @@ describe("connectViaRpc", () => {
                 kind: "replay",
                 id: 201,
                 type: "message",
-                payload: { id: "msg-201", content: "from replay" },
+                payload: { id: "00000000-0000-4000-8000-000000000201", content: "from replay" },
                 senderId: "agent-1",
                 ts: Date.now(),
               },
@@ -231,6 +233,37 @@ describe("connectViaRpc", () => {
       });
       await Promise.resolve();
       expect(readyHandler).toHaveBeenCalledTimes(1);
+
+      client.close();
+    });
+
+    it("seeds late event subscribers with streamed replay after ready", async () => {
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      emit({
+        kind: "replay",
+        id: 201,
+        type: "message",
+        payload: { id: "00000000-0000-4000-8000-000000000201", content: "from replay" },
+        senderId: "agent-1",
+        ts: Date.now(),
+      });
+      emit({
+        kind: "ready",
+        contextId: "ctx-from-subscribe",
+        totalCount: 1,
+        chatMessageCount: 1,
+      });
+      await client.ready();
+
+      const iter = client.events({ includeReplay: true });
+      await expect(iter.next()).resolves.toMatchObject({
+        value: {
+          kind: "replay",
+          type: "message",
+          id: "00000000-0000-4000-8000-000000000201",
+          content: "from replay",
+        },
+      });
 
       client.close();
     });

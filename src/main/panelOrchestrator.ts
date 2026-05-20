@@ -61,6 +61,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   private readonly runtimeClientSessionId = `desktop-${randomUUID()}`;
   private runtimeClientRegistered = false;
   private readonly runtimeConnectionBySlot = new Map<string, string>();
+  private readonly stateArgsUpdateQueues = new Map<string, Promise<unknown>>();
 
   constructor(deps: PanelOrchestratorDeps) {
     this.deps = deps;
@@ -392,9 +393,22 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   // =========================================================================
 
   async handleSetStateArgs(panelId: string, updates: Record<string, unknown>): Promise<unknown> {
-    const validated = await this.shellCore.updateStateArgs(panelId, updates);
-    this.registry.updateStateArgs(panelId, validated as Record<string, unknown>);
-    return validated;
+    const previous = this.stateArgsUpdateQueues.get(panelId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        const validated = await this.shellCore.updateStateArgs(panelId, updates);
+        this.registry.updateStateArgs(panelId, validated as Record<string, unknown>);
+        return validated;
+      });
+    this.stateArgsUpdateQueues.set(panelId, next);
+    try {
+      return await next;
+    } finally {
+      if (this.stateArgsUpdateQueues.get(panelId) === next) {
+        this.stateArgsUpdateQueues.delete(panelId);
+      }
+    }
   }
 
   async replaceCurrentSnapshot(
