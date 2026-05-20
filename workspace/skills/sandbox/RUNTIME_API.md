@@ -146,6 +146,23 @@ const result = await requestApproval({
     { label: "Team", value: "Team X" },
     { label: "Operation", value: "Create calendar events" },
   ],
+});
+
+if (result.kind === "choice" && result.choice === "allow") {
+  // Continue with the gated action.
+}
+```
+
+By default the prompt shows **Allow once**, **Allow this session**, **Trust version**, and **Deny**. Positive choices return `choice: "allow"`; deny returns `choice: "deny"`.
+
+For a custom prompt, opt into `promptOptions: "choices"` and supply options.
+If you omit `options`, the host shows a simple allow/deny prompt.
+
+```ts
+const result = await requestApproval({
+  subject: { id: "team-x:calendar-write", label: "Team X calendar write access" },
+  title: "Allow calendar writes?",
+  promptOptions: "choices",
   options: [
     { value: "allow", label: "Allow", tone: "primary" },
     { value: "deny", label: "Deny", tone: "danger" },
@@ -157,9 +174,11 @@ if (result.kind === "choice" && result.choice === "allow") {
 }
 ```
 
-Decision caching is server-managed. Every non-dismiss choice is remembered for
-the verified issuer and `subject.id`; the next identical request resolves
-immediately with the stored choice and no prompt. Dismissal is not remembered.
+Decision caching is server-managed. Scoped prompts remember session and version
+choices according to the selected scope. Custom `choices` prompts remember every
+non-dismiss choice for the verified issuer and `subject.id`; the next identical
+request resolves immediately with the stored choice and no prompt. Dismissal is
+not remembered.
 
 ```ts
 const grants = await listApprovals();

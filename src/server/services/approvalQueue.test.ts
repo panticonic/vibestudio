@@ -374,6 +374,7 @@ describe("approvalQueue", () => {
       },
       subject: { id: "team-x:foo", label: "Team X foo" },
       title: "Allow foo?",
+      promptOptions: "choices" as const,
       options: [
         { value: "allow", label: "Allow", tone: "primary" as const },
         { value: "deny", label: "Deny", tone: "danger" as const },

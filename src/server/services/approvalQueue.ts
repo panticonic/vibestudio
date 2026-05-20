@@ -131,6 +131,7 @@ export interface UserlandApprovalQueueRequest {
   summary?: string;
   warning?: string;
   details?: PendingUserlandApproval["details"];
+  promptOptions: PendingUserlandApproval["promptOptions"];
   options: UserlandApprovalOption[];
   signal?: AbortSignal;
 }
@@ -672,6 +673,7 @@ export function createApprovalQueue(deps: {
           summary: req.summary,
           warning: req.warning,
           details: req.details,
+          promptOptions: req.promptOptions,
           options: req.options,
         } satisfies PendingUserlandApproval;
         entry = {

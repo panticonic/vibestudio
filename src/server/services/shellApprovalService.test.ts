@@ -54,6 +54,7 @@ describe("shellApprovalService", () => {
             kind: "userland" as const,
             subject: { id: "team-x:foo" },
             title: "Allow foo?",
+            promptOptions: "choices" as const,
             options: [{ value: "allow", label: "Allow" }],
           },
         ]),

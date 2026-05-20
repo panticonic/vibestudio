@@ -180,6 +180,7 @@ describe("approvalCopy", () => {
         subject: { id: "team-x:foo", label: "Foo" },
         title: "Allow foo?",
         summary: "Team X is requesting access to foo.",
+        promptOptions: "choices",
         options: [{ value: "allow", label: "Allow", tone: "primary" }],
       },
       category: "Worker request",

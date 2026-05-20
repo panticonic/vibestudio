@@ -189,7 +189,7 @@ Works with any configured provider. Check `await credentials.listStoredCredentia
 
 Use `requestApproval()` for a domain-specific decision owned by your panel or
 worker. NatStack verifies the issuer, shows the user a shell consent prompt,
-and remembers every non-dismiss choice for the same issuer and `subject.id`.
+and manages any remembered decision for the same issuer and `subject.id`.
 
 ```
 eval({
@@ -200,6 +200,27 @@ eval({
       subject: { id: "demo:send-report", label: "Send report" },
       title: "Send this report?",
       summary: "This panel wants permission to send the generated report.",
+    });
+
+    console.log(decision);
+  `
+})
+```
+
+The default prompt lets the user allow once, allow for the current session,
+trust the current code version, or deny. If you need a custom choice set, opt
+into `promptOptions: "choices"`:
+
+```
+eval({
+  code: `
+    import { requestApproval } from "@workspace/runtime";
+
+    const decision = await requestApproval({
+      subject: { id: "demo:send-report", label: "Send report" },
+      title: "Send this report?",
+      summary: "This panel wants permission to send the generated report.",
+      promptOptions: "choices",
       options: [
         { value: "allow", label: "Send", tone: "primary" },
         { value: "deny", label: "Cancel", tone: "danger" },

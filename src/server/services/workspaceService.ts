@@ -283,6 +283,7 @@ async function requireWorkspaceApproval(
       { label: "Target", value: truncateApprovalValue(approval.target) },
       ...(approval.details ?? []),
     ].slice(0, 8),
+    promptOptions: "choices",
     options: [
       {
         value: "allow",
