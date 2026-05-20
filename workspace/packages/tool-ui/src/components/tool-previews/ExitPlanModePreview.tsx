@@ -11,7 +11,7 @@
 import { Box, Text, Flex, Badge, Card, Code, Heading, ScrollArea } from "@radix-ui/themes";
 import { CheckCircledIcon, LightningBoltIcon, FileTextIcon } from "@radix-ui/react-icons";
 import Markdown from "react-markdown";
-import type { AllowedPrompt } from "@natstack/pubsub";
+import type { AllowedPrompt } from "@workspace/pubsub";
 
 export interface ExitPlanModePreviewProps {
   /** The plan content (Markdown) */

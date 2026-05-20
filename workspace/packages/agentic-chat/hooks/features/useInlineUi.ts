@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useRef } from "react";
-import { CONTENT_TYPE_INLINE_UI } from "@natstack/pubsub";
+import { CONTENT_TYPE_INLINE_UI } from "@workspace/pubsub";
 import { compileComponent } from "@workspace/eval";
 import type { LoadSourceFile, SandboxOptions } from "@workspace/eval";
 import { parseInlineUiData } from "../../components/InlineUiMessage";

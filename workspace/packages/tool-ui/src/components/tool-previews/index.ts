@@ -21,4 +21,4 @@ export {
   // Types
   type BashArgs,
   type RichPreviewToolName,
-} from "@natstack/pubsub";
+} from "@workspace/pubsub";

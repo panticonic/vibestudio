@@ -8,7 +8,7 @@
  */
 import { createRpcBridge, type RpcTransport } from "@natstack/rpc";
 import { createWorkerdClient } from "../shared/workerd.js";
-import type { GitConfig, PubSubConfig, WorkspaceTree, BranchInfo, CommitInfo, } from "../core/index.js";
+import type { GitConfig, WorkspaceTree, BranchInfo, CommitInfo, } from "../core/index.js";
 import type { GatewayConfig } from "../shared/globals.js";
 import type { RuntimeFs, ThemeAppearance } from "../types.js";
 export interface BaseRuntimeDeps {
@@ -22,7 +22,6 @@ export interface BaseRuntimeDeps {
     setupGlobals?: () => void;
     gatewayConfig?: GatewayConfig | null;
     gitConfig?: GitConfig | null;
-    pubsubConfig?: PubSubConfig | null;
 }
 export function createBaseRuntime(deps: BaseRuntimeDeps) {
     deps.setupGlobals?.();
@@ -148,7 +147,6 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
         exposeMethod: rpc.exposeMethod.bind(rpc),
         gatewayConfig: deps.gatewayConfig ?? null,
         gitConfig: deps.gitConfig ?? null,
-        pubsubConfig: deps.pubsubConfig ?? null,
         contextId: deps.contextId,
         destroy,
     };

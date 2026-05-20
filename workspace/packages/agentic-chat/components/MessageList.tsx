@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from "react";
 import { Box, Button, Flex, ScrollArea, Text } from "@radix-ui/themes";
-import type { Participant } from "@natstack/pubsub";
+import type { Participant } from "@workspace/pubsub";
 import { useStickToBottom } from "use-stick-to-bottom";
 import { InlineGroup, type InlineItem } from "./InlineGroup";
 import { NewContentIndicator } from "./NewContentIndicator";

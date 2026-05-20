@@ -1,4 +1,4 @@
-import type { ChannelConfig } from "@natstack/pubsub";
+import type { ChannelConfig } from "@workspace/pubsub";
 import { Theme } from "@radix-ui/themes";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ChatLayout } from "./ChatLayout";

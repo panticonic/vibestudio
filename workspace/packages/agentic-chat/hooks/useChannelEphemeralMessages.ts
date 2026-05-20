@@ -13,7 +13,7 @@
  */
 
 import { useState, useEffect } from "react";
-import type { PubSubClient, ParticipantMetadata } from "@natstack/pubsub";
+import type { PubSubClient, ParticipantMetadata } from "@workspace/pubsub";
 
 export interface EphemeralWireMessage {
   ts: number;

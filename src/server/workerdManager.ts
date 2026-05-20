@@ -1318,7 +1318,7 @@ ${doBlock}${cases.join("\n")}
 
   /**
    * Ensure a DO class is registered and workerd is running. Does NOT bootstrap any instance.
-   * Use for infrastructure DOs (like PubSubChannel) that don't need DOIdentity.
+   * Use for infrastructure DOs that don't need DOIdentity.
    */
   async ensureDOClass(source: string, className: string): Promise<void> {
     const serviceKey = `${source}:${className}`;

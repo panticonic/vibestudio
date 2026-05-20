@@ -55,7 +55,7 @@ import {
   rpc,
 
   // Services
-  db, fs, ai, workers, workspace, gitConfig, pubsubConfig, env,
+  db, fs, ai, workers, workspace, gitConfig, env,
 
   // Lifecycle
   closeSelf, focusPanel, getInfo, getTheme, onThemeChange, onFocus, exposeMethod,

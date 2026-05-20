@@ -162,10 +162,10 @@ customization is via `getModel()` / `getThinkingLevel()` /
 
 Filter which channel events trigger an AI turn. Default: `message` events from
 client participants (panels and headless clients), as classified by
-`isClientParticipantType` from `@natstack/pubsub`.
+`isClientParticipantType` from `@workspace/pubsub`.
 
 ```typescript
-import { isClientParticipantType } from '@natstack/pubsub';
+import { isClientParticipantType } from '@workspace/pubsub';
 
 protected shouldProcess(event: ChannelEvent): boolean {
   if (event.type !== 'message') return false;

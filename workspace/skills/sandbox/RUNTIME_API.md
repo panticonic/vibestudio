@@ -42,7 +42,6 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
 | `gitConfig` | value |  | Git HTTP endpoint and token derived from the gateway config. |
-| `pubsubConfig` | value |  | PubSub WebSocket endpoint and token derived from the gateway config. |
 | `env` | value |  |  |
 | `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |

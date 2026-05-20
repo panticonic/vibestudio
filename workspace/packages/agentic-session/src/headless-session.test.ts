@@ -1,14 +1,22 @@
 import { describe, it, expect, vi } from "vitest";
 import { HeadlessSession } from "./headless-session.js";
+import type { ConnectionConfig } from "@workspace/agentic-core";
+
+function createConfig(): ConnectionConfig {
+  return {
+    clientId: "headless-test",
+    rpc: {
+      selfId: "headless-test",
+      call: vi.fn(),
+      onEvent: vi.fn(() => vi.fn()),
+    },
+  };
+}
 
 describe("HeadlessSession", () => {
   it("constructs without connecting", () => {
     const session = HeadlessSession.create({
-      config: {
-        serverUrl: "http://test.invalid",
-        token: "test-token",
-        clientId: "headless-test",
-      },
+      config: createConfig(),
     });
 
     expect(session.connected).toBe(false);
@@ -19,11 +27,7 @@ describe("HeadlessSession", () => {
 
   it("snapshot returns initial state for an unconnected session", () => {
     const session = HeadlessSession.create({
-      config: {
-        serverUrl: "http://test.invalid",
-        token: "test-token",
-        clientId: "headless-test",
-      },
+      config: createConfig(),
     });
 
     const snap = session.snapshot();
@@ -35,11 +39,7 @@ describe("HeadlessSession", () => {
 
   it("dispose is idempotent", () => {
     const session = HeadlessSession.create({
-      config: {
-        serverUrl: "http://test.invalid",
-        token: "test-token",
-        clientId: "headless-test",
-      },
+      config: createConfig(),
     });
 
     expect(() => {
@@ -50,11 +50,7 @@ describe("HeadlessSession", () => {
 
   it("callMethod returns the provider payload and callMethodResult returns the full envelope", async () => {
     const session = HeadlessSession.create({
-      config: {
-        serverUrl: "http://test.invalid",
-        token: "test-token",
-        clientId: "headless-test",
-      },
+      config: createConfig(),
     });
     const envelope = {
       content: { ok: true },
@@ -70,11 +66,7 @@ describe("HeadlessSession", () => {
 
   it("sandbox callMethod follows the same raw-payload contract", async () => {
     const session = HeadlessSession.create({
-      config: {
-        serverUrl: "http://test.invalid",
-        token: "test-token",
-        clientId: "headless-test",
-      },
+      config: createConfig(),
     });
     (session as any)._client = {
       callMethod: vi.fn(() => ({

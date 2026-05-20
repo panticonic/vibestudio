@@ -8,7 +8,7 @@
  *
  * This is the single source of truth for "which name maps to which on-disk
  * directory" — used by the TypeCheckService's module resolver to bypass
- * scope-prefix guessing (which broke when packages like @natstack/pubsub
+ * scope-prefix guessing (which broke when packages like @vendor/shared-utils
  * lived under workspace/packages/ instead of the obvious packages/).
  *
  * Also hosts the `resolveExportSubpath` helper for walking package.json
@@ -114,7 +114,7 @@ export interface WorkspacePackageInfo {
 export interface WorkspaceContext {
   /** Absolute path to the monorepo root (directory containing the workspace manifest) */
   monorepoRoot: string;
-  /** Map from package name (e.g. "@natstack/pubsub") to package info */
+  /** Map from package name (e.g. "@vendor/shared-utils") to package info */
   packages: Map<string, WorkspacePackageInfo>;
 }
 

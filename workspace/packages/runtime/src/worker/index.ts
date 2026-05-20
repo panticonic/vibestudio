@@ -146,7 +146,6 @@ export interface WorkerRuntime {
   readonly gitConfig: { serverUrl: string; token: string } | null;
   readonly git: RuntimeGitApi;
   readonly gad: GadClient;
-  readonly pubsubConfig: null;
 
   /** Call a server-side service method via RPC. */
   callMain<T>(method: string, ...args: unknown[]): Promise<T>;
@@ -262,7 +261,6 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     gatewayConfig,
     gatewayFetch,
     gitConfig,
-    pubsubConfig: null,
 
     callMain,
     openExternal: (url: string, options?: OpenExternalOptions) => callMain<OpenExternalResult>("externalOpen.openExternal", url, options),

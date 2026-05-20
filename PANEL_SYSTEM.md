@@ -82,7 +82,6 @@ import {
 
   // Configuration
   gitConfig,             // Git server config
-  pubsubConfig,          // PubSub config
   env,                   // Environment variables (Record<string, string>)
 
   // Lifecycle

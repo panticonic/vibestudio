@@ -10,7 +10,7 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from "react";
-import type { ChannelConfig } from "@natstack/pubsub";
+import type { ChannelConfig } from "@workspace/pubsub";
 import type {
   ApprovalLevel,
   ToolApprovalSettings,

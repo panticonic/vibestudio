@@ -7,13 +7,13 @@
  */
 
 import { useCallback, useMemo } from "react";
-import type { MethodDefinition } from "@natstack/pubsub";
+import type { MethodDefinition } from "@workspace/pubsub";
 import {
   useToolApproval,
 } from "@workspace/tool-ui";
 import type { ToolApprovalProps } from "@workspace/tool-ui";
 import type { SandboxOptions, SandboxResult } from "@workspace/eval";
-import type { PubSubClient } from "@natstack/pubsub";
+import type { PubSubClient } from "@workspace/pubsub";
 import type { ToolProvider, ChatSandboxValue } from "../../types";
 import type { ScopesApi } from "@workspace/eval";
 import type { ChatParticipantMetadata } from "@workspace/agentic-core";

@@ -90,11 +90,11 @@ singletonObjects:
 
 services:
   # Factory service: no singleton row → caller MUST pass objectKey.
-  - source: workers/pubsub-channel
-    name: channel
-    protocols: [natstack.channel.v1]
+  - source: workers/example-store
+    name: example-store
+    protocols: [example.store.v1]
     durableObject:
-      className: PubSubChannel
+      className: ExampleStoreDO
 
   # Stateless worker-backed service.
   - source: workers/stateless-api
@@ -113,7 +113,7 @@ routes:
 Resolve services through the runtime:
 
 ```ts
-const channel = await workers.resolveService("natstack.channel.v1", "chat-1");
+const store = await workers.resolveService("example.store.v1", "key-1");
 // { kind: "durable-object", targetId: "do:..." }
 
 const api = await workers.resolveService("example.stateless.v1");

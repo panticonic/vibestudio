@@ -12,7 +12,7 @@
  */
 import { useCallback, useMemo, useRef, useEffect, useState } from "react";
 import { z } from "zod";
-import type { ChannelConfig, MethodDefinition, MethodExecutionContext } from "@natstack/pubsub";
+import type { ChannelConfig, MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
 import { executeSandbox, ScopeManager, RpcScopePersistence } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult, HydrateResult } from "@workspace/eval";
 import type { ActiveFeedbackSchema, FeedbackResult } from "@workspace/tool-ui";
@@ -330,7 +330,7 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
     chatToolsRef.current = chatTools;
     // --- Connect to channel on mount ---
     useEffect(() => {
-        if (!channelName || !config.serverUrl)
+        if (!channelName || !config.rpc)
             return;
         if (core.hasConnectedRef.current)
             return;
@@ -692,7 +692,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
         channelConfig,
         contextId,
         core.connectToChannel,
-        config.serverUrl,
+        config.rpc,
         core.hasConnectedRef,
         core.selfIdRef,
         core.clientRef,

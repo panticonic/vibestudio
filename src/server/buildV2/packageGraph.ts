@@ -396,7 +396,7 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
   }
 
   // The template workspace may contain packages whose real package name is not
-  // under an @workspace/* scope, e.g. @natstack/pubsub. Treat any dependency
+  // under an @workspace/* scope, e.g. @vendor/shared-utils. Treat any dependency
   // whose package name is present in the graph as internal so source extraction,
   // EV computation, and esbuild resolution all see the same workspace graph.
   for (const node of graph.allNodes()) {

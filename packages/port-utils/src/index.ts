@@ -11,7 +11,6 @@ export const PORT_RANGES = {
   git: { start: 49152, end: 49252 },
   cdp: { start: 49252, end: 49352 },
   rpc: { start: 49352, end: 49452 },
-  pubsub: { start: 49452, end: 49552 },
   workerd: { start: 49552, end: 49652 },
   workerdInspector: { start: 49652, end: 49752 },
 } as const;

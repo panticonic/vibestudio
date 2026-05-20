@@ -27,7 +27,6 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
 | `gitConfig` | value |  | Git HTTP endpoint and token derived from the gateway config. |
-| `pubsubConfig` | value |  | Always null in worker runtime; PubSub access goes through service routes. |
 | `callMain` | value |  |  |
 | `openExternal` | value |  |  |
 | `getWorkspaceTree` | value |  |  |

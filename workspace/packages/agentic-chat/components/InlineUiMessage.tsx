@@ -9,7 +9,7 @@ import { Box, Button, Card, Callout, Flex, Spinner, Text } from "@radix-ui/theme
 import { ExclamationTriangleIcon, ChevronDownIcon, ChevronUpIcon, ComponentInstanceIcon } from "@radix-ui/react-icons";
 import { EventErrorBoundary } from "@workspace/tool-ui/components/EventErrorBoundary";
 import { wrapChatForErrorReporting, wrapScopesForErrorReporting } from "../utils/wrapSandboxApis";
-import type { InlineUiData } from "@natstack/pubsub";
+import type { InlineUiData } from "@workspace/pubsub";
 import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { useChatContext } from "../context/ChatContext";
 

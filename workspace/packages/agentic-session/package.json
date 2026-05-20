@@ -9,7 +9,7 @@
   "dependencies": {
     "@workspace/agentic-core": "workspace:*",
     "@workspace/eval": "workspace:*",
-    "@natstack/pubsub": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
     "zod": "^3.24.1"
   }
 }

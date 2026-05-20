@@ -4,7 +4,7 @@
  * Both environments receive the same global names.
  */
 
-import type { GitConfig, PubSubConfig } from "../core/index.js";
+import type { GitConfig } from "../core/index.js";
 
 export interface GatewayConfig {
   serverUrl: string;
@@ -29,7 +29,7 @@ declare global {
   var __natstackParentId: string | null | undefined;
   /** Initial theme appearance */
   var __natstackInitialTheme: "light" | "dark" | undefined;
-  /** Single gateway configuration for HTTP, RPC-derived clients, git and pubsub */
+  /** Single gateway configuration for HTTP, RPC-derived clients, and git */
   var __natstackGatewayConfig: GatewayConfig | undefined;
   /** Source repo path for this endpoint */
   var __natstackSourceRepo: string | undefined;
@@ -47,7 +47,6 @@ export interface InjectedConfig {
   initialTheme: "light" | "dark";
   gatewayConfig: GatewayConfig;
   gitConfig: GitConfig | null;
-  pubsubConfig: PubSubConfig | null;
   env: Record<string, string>;
 }
 
@@ -64,15 +63,8 @@ const g = globalThis as unknown as {
   __natstackGatewayConfig?: GatewayConfig;
   __natstackSourceRepo?: string;
   __natstackGitConfig?: unknown;
-  __natstackPubSubConfig?: unknown;
   __natstackEnv?: Record<string, string>;
 };
-
-function toWebSocketUrl(serverUrl: string): string {
-  const url = new URL(serverUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString().replace(/\/$/, "");
-}
 
 /**
  * Get the injected configuration from globals.
@@ -84,7 +76,7 @@ export function getInjectedConfig(): InjectedConfig {
       "NatStack runtime globals not found. Expected __natstackEntityId to be defined."
     );
   }
-  if (typeof g.__natstackGitConfig !== "undefined" || typeof g.__natstackPubSubConfig !== "undefined") {
+  if (typeof g.__natstackGitConfig !== "undefined") {
     throw new Error(
       "Legacy NatStack runtime globals are not supported. Expected __natstackGatewayConfig only."
     );
@@ -101,10 +93,6 @@ export function getInjectedConfig(): InjectedConfig {
     token: g.__natstackGatewayConfig.token,
     sourceRepo,
   };
-  const pubsubConfig: PubSubConfig = {
-    serverUrl: toWebSocketUrl(g.__natstackGatewayConfig.serverUrl),
-    token: g.__natstackGatewayConfig.token,
-  };
 
   return {
     entityId,
@@ -119,7 +107,6 @@ export function getInjectedConfig(): InjectedConfig {
     initialTheme: g.__natstackInitialTheme === "dark" ? "dark" : "light",
     gatewayConfig: g.__natstackGatewayConfig,
     gitConfig,
-    pubsubConfig,
     env: g.__natstackEnv ?? {},
   };
 }

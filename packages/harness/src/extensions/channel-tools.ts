@@ -7,7 +7,7 @@
  *
  * Tool names are bare method names (no participant prefix). Collisions are
  * prevented by participant handle uniqueness enforced at the channel level
- * (see workspace/workers/pubsub-channel/channel-do.ts subscribe method).
+ * by the channel implementation.
  *
  * Pi has no `unregisterTool`, so once a tool is registered for a session it
  * stays registered. Reconcile uses `pi.setActiveTools` to control which tools
@@ -22,7 +22,7 @@ import type { PiExtensionAPI, PiExtensionFactory } from "../pi-extension-api.js"
  * Tool name validation. We require names to start with a letter, contain
  * only ASCII letters/digits/`_`/`-`, and not collide with Pi's built-in
  * tool names. The channel itself enforces the same regex at subscribe
- * time (see workspace/workers/pubsub-channel/channel-do.ts), so this
+ * time, so this
  * check is defense-in-depth: if it ever fires, the channel-side validation
  * has been bypassed and we should investigate.
  */

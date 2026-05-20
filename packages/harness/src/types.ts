@@ -41,7 +41,7 @@ export interface ChannelEvent {
   attachments?: Attachment[];
 }
 
-/** Options for sending a channel message (used by DO clients and PubSub server). */
+/** Options for sending a channel message through a Durable Object-backed service. */
 export interface SendMessageOptions {
   contentType?: string;
   persist?: boolean;
@@ -59,7 +59,7 @@ export interface TurnInput {
   attachments?: Attachment[];
 }
 
-/** Pubsub participant identity — returned by subscribeChannel(). */
+/** Channel participant identity — returned by subscribeChannel(). */
 export interface ParticipantDescriptor {
   /** Stable, unique-within-channel handle. */
   handle: string;

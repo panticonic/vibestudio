@@ -7,7 +7,7 @@
 import { z } from "zod";
 import { executeSandbox as defaultExecuteSandbox } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult, ScopeManager } from "@workspace/eval";
-import type { MethodDefinition, MethodExecutionContext } from "@natstack/pubsub";
+import type { MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
 import type { SandboxConfig, ChatSandboxValue } from "./types.js";
 export interface BuildEvalToolOptions {
     sandbox: SandboxConfig;

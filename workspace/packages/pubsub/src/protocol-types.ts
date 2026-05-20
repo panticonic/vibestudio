@@ -15,8 +15,18 @@ import type {
   AttachmentInput,
   ChannelConfig,
 } from "./types.js";
-import type { AgentBuildError } from "@natstack/types";
 import type { z } from "zod";
+
+export interface AgentBuildError {
+  message: string;
+  agentId?: string;
+  agentName?: string;
+  handle?: string;
+  type?: string;
+  code?: string;
+  stack?: string;
+  details?: unknown;
+}
 
 // Re-export types from pubsub for convenience
 export type {
@@ -26,7 +36,6 @@ export type {
   RosterUpdate,
   RosterChange,
   LeaveReason,
-  AgentBuildError,
 };
 
 /** JSON Schema representation for method parameters/returns. */

@@ -4,7 +4,7 @@
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
-import type { WsMessageEntry } from "@natstack/pubsub";
+import type { WsMessageEntry } from "@workspace/pubsub";
 import { parseRowToChannelEvent } from "./broadcast.js";
 
 /**

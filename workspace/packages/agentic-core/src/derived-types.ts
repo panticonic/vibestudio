@@ -9,7 +9,7 @@
  * `useChatCore` builds `ChatMessage[]` from the channel message stream.
  */
 
-import type { Attachment } from "@natstack/pubsub";
+import type { Attachment } from "@workspace/pubsub";
 import type { ToolCallPayload } from "./tool-call-payload.js";
 
 // ===========================================================================

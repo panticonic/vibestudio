@@ -1,6 +1,6 @@
 import { Checkbox, Flex, Select, Text, TextField } from "@radix-ui/themes";
-import { jsonSchemaToZod } from "@natstack/pubsub";
-import type { JsonSchema } from "@natstack/pubsub";
+import { jsonSchemaToZod } from "@workspace/pubsub";
+import type { JsonSchema } from "@workspace/pubsub";
 
 export interface JsonSchemaFormProps {
   schema: JsonSchema;

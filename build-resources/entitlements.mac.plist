@@ -22,7 +22,7 @@
     <key>com.apple.security.network.client</key>
     <true/>
 
-    <!-- Listen for incoming network connections (for git server, CDP, pubsub) -->
+    <!-- Listen for incoming network connections (for git server and CDP) -->
     <key>com.apple.security.network.server</key>
     <true/>
 

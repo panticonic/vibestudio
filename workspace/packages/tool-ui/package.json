@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@natstack/types": "workspace:*",
-    "@natstack/pubsub": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
     "@workspace/react": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@radix-ui/react-icons": "^1.3.2",

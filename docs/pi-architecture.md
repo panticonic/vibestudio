@@ -77,7 +77,7 @@ just by calling `runner.setApprovalLevel(newLevel)` — no extension reload.
 ### 2. channel-tools.ts
 
 Registers each channel participant's advertised methods as Pi tools with
-**bare method names** (no `pubsub_<id>_<method>` prefix). Tool name
+**bare method names** (no participant-specific method prefix). Tool name
 collisions are prevented at the channel level: `channel-do.ts` rejects any
 subscribe whose participant handle is already in use by another participant.
 

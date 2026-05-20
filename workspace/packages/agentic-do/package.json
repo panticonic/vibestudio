@@ -10,7 +10,7 @@
   "dependencies": {
     "@workspace/runtime": "workspace:*",
     "@natstack/harness": "workspace:*",
-    "@natstack/pubsub": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
     "@natstack/shared": "workspace:*"
   }
 }

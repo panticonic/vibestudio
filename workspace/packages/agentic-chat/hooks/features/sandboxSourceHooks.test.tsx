@@ -3,7 +3,7 @@
 import React, { useEffect } from "react";
 import { render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CONTENT_TYPE_INLINE_UI } from "@natstack/pubsub";
+import { CONTENT_TYPE_INLINE_UI } from "@workspace/pubsub";
 import { useActionBar } from "./useActionBar";
 import { useInlineUi } from "./useInlineUi";
 import type { ActionBarHookState } from "./useActionBar";

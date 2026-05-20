@@ -72,9 +72,6 @@ importers:
       '@natstack/process-adapter':
         specifier: workspace:*
         version: link:packages/process-adapter
-      '@natstack/pubsub':
-        specifier: workspace:*
-        version: link:workspace/packages/pubsub
       '@natstack/rpc':
         specifier: workspace:*
         version: link:packages/rpc
@@ -696,9 +693,6 @@ importers:
       '@mdx-js/mdx':
         specifier: ^3.1.0
         version: 3.1.1
-      '@natstack/pubsub':
-        specifier: workspace:*
-        version: link:../pubsub
       '@radix-ui/react-icons':
         specifier: ^1.3.2
         version: 1.3.2(react@19.2.4)
@@ -711,6 +705,9 @@ importers:
       '@workspace/eval':
         specifier: workspace:*
         version: link:../eval
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../pubsub
       '@workspace/tool-ui':
         specifier: workspace:*
         version: link:../tool-ui
@@ -747,39 +744,39 @@ importers:
 
   workspace/packages/agentic-core:
     dependencies:
-      '@natstack/pubsub':
-        specifier: workspace:*
-        version: link:../pubsub
       '@workspace/eval':
         specifier: workspace:*
         version: link:../eval
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../pubsub
 
   workspace/packages/agentic-do:
     dependencies:
       '@natstack/harness':
         specifier: workspace:*
         version: link:../../../packages/harness
-      '@natstack/pubsub':
-        specifier: workspace:*
-        version: link:../pubsub
       '@natstack/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../pubsub
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime
 
   workspace/packages/agentic-session:
     dependencies:
-      '@natstack/pubsub':
-        specifier: workspace:*
-        version: link:../pubsub
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../agentic-core
       '@workspace/eval':
         specifier: workspace:*
         version: link:../eval
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../pubsub
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -1040,9 +1037,6 @@ importers:
 
   workspace/packages/tool-ui:
     dependencies:
-      '@natstack/pubsub':
-        specifier: workspace:*
-        version: link:../pubsub
       '@natstack/types':
         specifier: workspace:*
         version: link:../../../packages/types
@@ -1055,6 +1049,9 @@ importers:
       '@workspace/git-ui':
         specifier: workspace:*
         version: link:../git-ui
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../pubsub
       '@workspace/react':
         specifier: workspace:*
         version: link:../react
@@ -1080,6 +1077,158 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+
+  workspace/panels/chat:
+    dependencies:
+      '@radix-ui/react-icons':
+        specifier: ^1.3.2
+        version: 1.3.2(react@19.2.4)
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@workspace/agentic-chat':
+        specifier: workspace:*
+        version: link:../../packages/agentic-chat
+      '@workspace/eval':
+        specifier: workspace:*
+        version: link:../../packages/eval
+      '@workspace/panel-browser':
+        specifier: workspace:*
+        version: link:../../packages/panel-browser
+      '@workspace/playwright-client':
+        specifier: workspace:*
+        version: link:../../packages/playwright-client
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../../packages/pubsub
+      '@workspace/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
+
+  workspace/panels/gad-browser:
+    dependencies:
+      '@radix-ui/react-icons':
+        specifier: ^1.3.2
+        version: 1.3.2(react@19.2.4)
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@workspace/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
+  workspace/panels/terminal:
+    dependencies:
+      '@radix-ui/react-icons':
+        specifier: ^1.3.2
+        version: 1.3.2(react@19.2.4)
+      '@radix-ui/themes':
+        specifier: ^3.2.1
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+      '@workspace/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      xterm:
+        specifier: ^5.3.0
+        version: 5.3.0
+      xterm-addon-canvas:
+        specifier: ^0.5.0
+        version: 0.5.0(xterm@5.3.0)
+      xterm-addon-fit:
+        specifier: ^0.8.0
+        version: 0.8.0(xterm@5.3.0)
+      xterm-addon-search:
+        specifier: ^0.13.0
+        version: 0.13.0(xterm@5.3.0)
+      xterm-addon-unicode11:
+        specifier: ^0.6.0
+        version: 0.6.0(xterm@5.3.0)
+      xterm-addon-web-links:
+        specifier: ^0.9.0
+        version: 0.9.0(xterm@5.3.0)
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
+
+  workspace/workers/agent-worker:
+    dependencies:
+      '@natstack/harness':
+        specifier: workspace:*
+        version: link:../../../packages/harness
+      '@workspace/agentic-do':
+        specifier: workspace:*
+        version: link:../../packages/agentic-do
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../../packages/pubsub
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+
+  workspace/workers/email-sync:
+    dependencies:
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
+  workspace/workers/fork:
+    dependencies:
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
+  workspace/workers/gad-store:
+    dependencies:
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
+  workspace/workers/hello:
+    dependencies:
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
+  workspace/workers/pubsub-channel:
+    dependencies:
+      '@natstack/harness':
+        specifier: workspace:*
+        version: link:../../../packages/harness
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../../packages/pubsub
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
+  workspace/workers/sample-do: {}
+
+  workspace/workers/test-agent:
+    dependencies:
+      '@natstack/harness':
+        specifier: workspace:*
+        version: link:../../../packages/harness
+      '@workspace/agentic-do':
+        specifier: workspace:*
+        version: link:../../packages/agentic-do
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
 
 packages:
 

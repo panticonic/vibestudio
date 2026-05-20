@@ -31,8 +31,6 @@ export class HeadlessRunner {
   }): Promise<HeadlessSession> {
     return HeadlessSession.createWithAgent({
       config: {
-        serverUrl: "",
-        token: "",
         clientId: rpcConfig.selfId,
         rpc: rpcConfig,
       },

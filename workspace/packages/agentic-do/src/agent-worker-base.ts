@@ -42,7 +42,7 @@ import type {
   TurnInput,
   UnsubscribeResult,
 } from "@natstack/harness/types";
-import { isClientParticipantType } from "@natstack/pubsub";
+import { isClientParticipantType } from "@workspace/pubsub";
 import {
   PiRunner,
   type ChannelToolMethod,

@@ -12,7 +12,7 @@
  * end-to-end back-pressure.
  */
 
-import { getDetailedActionDescription } from "@natstack/pubsub";
+import { getDetailedActionDescription } from "@workspace/pubsub";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import type { RunnerEvent } from "@natstack/harness";
 import type { ToolCallPayload, ToolExecutionState } from "@workspace/agentic-core";
