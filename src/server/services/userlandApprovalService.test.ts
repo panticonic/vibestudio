@@ -17,11 +17,11 @@ function createDeps() {
     choice: "allow",
   }));
   const lookup = vi.fn<
-    (callerId: string, subjectId: string, issuer?: unknown) => UserlandApprovalGrant | null
+    (principal: unknown, subjectId: string, issuer?: unknown) => UserlandApprovalGrant | null
   >(() => null);
   const record = vi.fn(async () => {});
   const revoke = vi.fn(async () => true);
-  const list = vi.fn<(callerId: string, issuer?: unknown) => UserlandApprovalGrant[]>(() => []);
+  const list = vi.fn<(principal: unknown, issuer?: unknown) => UserlandApprovalGrant[]>(() => []);
   const service = createUserlandApprovalService({
     approvalQueue: { requestUserland: queued } as Partial<ApprovalQueue> as ApprovalQueue,
     grantStore: { lookup, record, revoke, list },
@@ -58,6 +58,7 @@ const validRequest = {
   subject: { id: "team-x:foo", label: "Team X foo" },
   title: "Allow foo?",
   summary: "Caller wants foo.",
+  promptOptions: "choices" as const,
   options: [
     { value: "allow", label: "Allow", tone: "primary" as const },
     { value: "deny", label: "Deny", tone: "danger" as const },
@@ -149,7 +150,12 @@ describe("userlandApprovalService", () => {
   it("short-circuits queue prompts on cache hit", async () => {
     const { service, lookup, queued } = createDeps();
     lookup.mockReturnValueOnce({
-      principal: { callerId: "worker:alpha", callerKind: "worker" as const },
+      principal: {
+        callerId: "worker:alpha",
+        callerKind: "worker" as const,
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
       subject: { id: "team-x:foo" },
       choice: "allow",
       grantedAt: 10,
@@ -165,7 +171,12 @@ describe("userlandApprovalService", () => {
   it("revokes stale cached choices and prompts when the current options changed", async () => {
     const { service, lookup, revoke, queued } = createDeps();
     lookup.mockReturnValueOnce({
-      principal: { callerId: "worker:alpha", callerKind: "worker" as const },
+      principal: {
+        callerId: "worker:alpha",
+        callerKind: "worker" as const,
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
       subject: { id: "team-x:foo" },
       choice: "old-choice",
       grantedAt: 10,
@@ -176,14 +187,28 @@ describe("userlandApprovalService", () => {
       kind: "choice",
       choice: "allow",
     });
-    expect(revoke).toHaveBeenCalledWith("worker:alpha", "team-x:foo", undefined);
+    expect(revoke).toHaveBeenCalledWith(
+      {
+        callerId: "worker:alpha",
+        callerKind: "worker",
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
+      "team-x:foo",
+      undefined
+    );
     expect(queued).toHaveBeenCalledTimes(1);
   });
 
   it("continues to prompt if stale-grant revocation fails", async () => {
     const { service, lookup, revoke, queued } = createDeps();
     lookup.mockReturnValueOnce({
-      principal: { callerId: "worker:alpha", callerKind: "worker" as const },
+      principal: {
+        callerId: "worker:alpha",
+        callerKind: "worker" as const,
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
       subject: { id: "team-x:foo" },
       choice: "old-choice",
       grantedAt: 10,
@@ -209,11 +234,17 @@ describe("userlandApprovalService", () => {
       choice: "allow",
     });
     expect(record).toHaveBeenCalledWith(
-      { callerId: "worker:alpha", callerKind: "worker" },
+      {
+        callerId: "worker:alpha",
+        callerKind: "worker",
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
       validRequest.subject,
       "allow",
       expect.any(Number),
-      undefined
+      undefined,
+      "caller"
     );
 
     record.mockClear();
@@ -236,11 +267,76 @@ describe("userlandApprovalService", () => {
     warn.mockRestore();
   });
 
+  it("defaults to scoped allow options and records trust-version choices as allow", async () => {
+    const { service, queued, record } = createDeps();
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "version" });
+    const scopedRequest = {
+      subject: { id: "team-x:scoped", label: "Team X scoped" },
+      title: "Allow scoped action?",
+    };
+
+    await expect(service.handler(workerCtx, "request", [scopedRequest])).resolves.toEqual({
+      kind: "choice",
+      choice: "allow",
+    });
+    expect(queued).toHaveBeenCalledWith(
+      expect.objectContaining({
+        promptOptions: "scoped",
+        options: expect.arrayContaining([
+          expect.objectContaining({ value: "once" }),
+          expect.objectContaining({ value: "session" }),
+          expect.objectContaining({ value: "version" }),
+          expect.objectContaining({ value: "deny" }),
+        ]),
+      })
+    );
+    expect(record).toHaveBeenCalledWith(
+      {
+        callerId: "worker:alpha",
+        callerKind: "worker",
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
+      scopedRequest.subject,
+      "allow",
+      expect.any(Number),
+      undefined,
+      "version"
+    );
+  });
+
+  it("does not record scoped allow-once or deny choices", async () => {
+    const { service, queued, record } = createDeps();
+    const scopedRequest = {
+      subject: { id: "team-x:once", label: "Team X once" },
+      title: "Allow once?",
+    };
+
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "once" });
+    await expect(service.handler(workerCtx, "request", [scopedRequest])).resolves.toEqual({
+      kind: "choice",
+      choice: "allow",
+    });
+
+    queued.mockResolvedValueOnce({ kind: "choice", choice: "deny" });
+    await expect(service.handler(workerCtx, "request", [scopedRequest])).resolves.toEqual({
+      kind: "choice",
+      choice: "deny",
+    });
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it("revokes and lists only the calling issuer grants", async () => {
     const { service, revoke, list } = createDeps();
     list.mockReturnValueOnce([
       {
-        principal: { callerId: "worker:alpha", callerKind: "worker" as const },
+        principal: {
+          callerId: "worker:alpha",
+          callerKind: "worker" as const,
+          repoPath: "workers/alpha",
+          effectiveVersion: "hash-1",
+        },
         subject: { id: "team-x:foo" },
         choice: "allow",
         grantedAt: 10,
@@ -248,9 +344,26 @@ describe("userlandApprovalService", () => {
     ]);
 
     await expect(service.handler(workerCtx, "revoke", ["team-x:foo"])).resolves.toBe(true);
-    expect(revoke).toHaveBeenCalledWith("worker:alpha", "team-x:foo", undefined);
+    expect(revoke).toHaveBeenCalledWith(
+      {
+        callerId: "worker:alpha",
+        callerKind: "worker",
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
+      "team-x:foo",
+      undefined
+    );
     await expect(service.handler(workerCtx, "list", [])).resolves.toHaveLength(1);
-    expect(list).toHaveBeenCalledWith("worker:alpha", undefined);
+    expect(list).toHaveBeenCalledWith(
+      {
+        callerId: "worker:alpha",
+        callerKind: "worker",
+        repoPath: "workers/alpha",
+        effectiveVersion: "hash-1",
+      },
+      undefined
+    );
   });
 
   it("returns uncallable for unattributed extension callers", async () => {
@@ -281,7 +394,7 @@ describe("userlandApprovalService", () => {
       choice: "allow",
     });
     const issuer = { kind: "extension", id: "@workspace-extensions/shell" };
-    expect(lookup).toHaveBeenCalledWith("panel:alpha", "team-x:foo", issuer);
+    expect(lookup).toHaveBeenCalledWith(extensionCtx.chainCaller, "team-x:foo", issuer);
     expect(queued).toHaveBeenCalledWith(
       expect.objectContaining({
         principal: extensionCtx.chainCaller,
@@ -292,16 +405,17 @@ describe("userlandApprovalService", () => {
       })
     );
     expect(record).toHaveBeenCalledWith(
-      { callerId: "panel:alpha", callerKind: "panel" },
+      extensionCtx.chainCaller,
       validRequest.subject,
       "allow",
       expect.any(Number),
-      issuer
+      issuer,
+      "caller"
     );
     await service.handler(extensionCtx, "revoke", ["team-x:foo"]);
-    expect(revoke).toHaveBeenCalledWith("panel:alpha", "team-x:foo", issuer);
+    expect(revoke).toHaveBeenCalledWith(extensionCtx.chainCaller, "team-x:foo", issuer);
     await service.handler(extensionCtx, "list", []);
-    expect(list).toHaveBeenCalledWith("panel:alpha", issuer);
+    expect(list).toHaveBeenCalledWith(extensionCtx.chainCaller, issuer);
   });
 
   it("throws ServiceError for unknown methods", async () => {

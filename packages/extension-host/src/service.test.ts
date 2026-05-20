@@ -166,8 +166,13 @@ describe("ExtensionHost source push authorization", () => {
 
     await expect(host.authorizeSourcePush(request)).resolves.toEqual({ allowed: true });
     await expect(host.authorizeSourcePush({ ...request, commit: "def457" })).resolves.toEqual({ allowed: true });
+    await expect(host.authorizeSourcePush({
+      ...request,
+      caller: panelCtx("panel-2").caller,
+      commit: "def458",
+    })).resolves.toEqual({ allowed: true });
 
-    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
     expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
       extensionDiff: expect.objectContaining({
         previousSha: "abc123",

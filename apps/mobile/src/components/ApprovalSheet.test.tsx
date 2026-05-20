@@ -67,6 +67,7 @@ const userland: PendingApproval = {
   title: "Allow foo?",
   summary: "Team X is requesting access to foo.",
   details: [{ label: "Reason", value: "continue work" }],
+  promptOptions: "choices",
   options: [
     { value: "allow", label: "Allow", tone: "primary" },
     { value: "deny", label: "Deny", tone: "danger" },

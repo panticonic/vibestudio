@@ -64,6 +64,7 @@ type TestRpcServer = {
     method: string,
     args: unknown[]
   ): Promise<unknown>;
+  streamCallTarget(targetId: string, method: string, ...args: unknown[]): Promise<Response>;
   checkRelayAuth(
     callerId: string,
     callerKind: string,
@@ -154,6 +155,7 @@ function createSignalDeferred(): {
 function createTestWs() {
   const handlers = new Map<string, (...args: unknown[]) => void>();
   return {
+    OPEN: WebSocket.OPEN as number,
     readyState: WebSocket.OPEN as number,
     send: vi.fn(),
     close: vi.fn(),
@@ -288,6 +290,69 @@ describe("RpcServer relay behavior", () => {
     await Promise.resolve();
 
     expect(testServer(server).dispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("routes server-initiated stream frames from a connected extension back to the pending stream", async () => {
+    const { server, tokenManager } = createServer();
+    const extensionToken = tokenManager.ensureToken("@workspace-extensions/shell", "extension");
+    const ws = createTestWs();
+
+    testServer(server).handleAuth(ws, extensionToken, "ext-conn-1");
+
+    const responsePromise = testServer(server).streamCallTarget(
+      "@workspace-extensions/shell",
+      "extension.invokeStream",
+      "attach",
+      ["session-1"],
+      { caller: { callerId: "panel-a", callerKind: "panel" } }
+    );
+    const sent = ws.send.mock.calls
+      .map((call) => JSON.parse(String(call[0])))
+      .find((message) => message.type === "ws:rpc" && message.message?.type === "stream-request");
+    expect(sent).toBeTruthy();
+    const requestId = sent.message.requestId as string;
+
+    ws.emitMessage({
+      type: "ws:rpc",
+      message: {
+        type: "stream-frame",
+        requestId,
+        fromId: "@workspace-extensions/shell",
+        frameType: 0x01,
+        payload: JSON.stringify({
+          status: 200,
+          statusText: "OK",
+          headerPairs: [["content-type", "text/plain"]],
+          finalUrl: "",
+        }),
+      },
+    });
+    const response = await responsePromise;
+
+    ws.emitMessage({
+      type: "ws:rpc",
+      message: {
+        type: "stream-frame",
+        requestId,
+        fromId: "@workspace-extensions/shell",
+        frameType: 0x02,
+        payload: Buffer.from("hello").toString("base64"),
+      },
+    });
+    ws.emitMessage({
+      type: "ws:rpc",
+      message: {
+        type: "stream-frame",
+        requestId,
+        fromId: "@workspace-extensions/shell",
+        frameType: 0x03,
+        payload: JSON.stringify({ bytesIn: 5 }),
+      },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-type")).toBe("text/plain");
+    await expect(response.text()).resolves.toBe("hello");
   });
 
   it("fans routed events out to every live connection for the target caller", () => {

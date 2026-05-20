@@ -84,7 +84,13 @@ initPanels:
             });
             const results = await tester.runSuite(smokeTests);
             scope.results = results;
-            return { total: results.total, passed: results.passed, failed: results.failed };
+            return {
+              total: results.total,
+              passed: results.passed,
+              failed: results.failed,
+              errored: results.errored,
+              skipped: results.skipped,
+            };
           `,
         })
         ```

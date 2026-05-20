@@ -973,7 +973,12 @@ export class ExtensionHost {
       return { allowed: true };
     }
 
-    const sessionGrantKey = extensionPushSessionGrantKey(installed.entry.name, repoPath, request.branch);
+    const sessionGrantKey = extensionPushSessionGrantKey(
+      request.caller.runtime.id,
+      installed.entry.name,
+      repoPath,
+      request.branch
+    );
     if (this.sourcePushGrants.hasActive(sessionGrantKey)) {
       return { allowed: true };
     }
@@ -1460,8 +1465,13 @@ function normalizeRepoPath(repoPath: string): string {
 
 const EXTENSION_DEV_SESSION_TTL_MS = 4 * 60 * 60 * 1000;
 
-function extensionPushSessionGrantKey(extensionName: string, repoPath: string, branch: string): string {
-  return `${extensionName}\x00${repoPath}\x00${branch}`;
+function extensionPushSessionGrantKey(
+  callerId: string,
+  extensionName: string,
+  repoPath: string,
+  branch: string
+): string {
+  return `${callerId}\x00${extensionName}\x00${repoPath}\x00${branch}`;
 }
 
 function extensionManagementAction(

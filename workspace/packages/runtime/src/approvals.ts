@@ -7,12 +7,19 @@ export type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalOpt
  * revocation. If you think you need a local allowlist, you are about to
  * introduce a bug.
  *
- * The host persists the user's choice keyed on `(callerId, subject.id)`.
+ * By default the host presents scoped allow choices: allow once, allow for this
+ * caller session, trust this code version, or deny. Positive scoped choices
+ * return `choice: "allow"`; deny returns `choice: "deny"`.
+ *
+ * Pass `promptOptions: "choices"` for a simple allow/deny prompt or to show
+ * your own option list. In that mode the host persists the selected option
+ * keyed on `(callerId, subject.id)`.
  * Subsequent calls with the same `subject.id` return the prior choice without
  * prompting until you call `revokeUserlandApproval(subject.id)`.
  *
- * If a stored choice is no longer in the current `options[].value` set (e.g. you
- * changed your option list), the host revokes the stale grant and re-prompts.
+ * If a stored custom choice is no longer in the current `options[].value` set
+ * (e.g. you changed your option list), the host revokes the stale grant and
+ * re-prompts.
  *
  * Concurrent calls from the same caller with the same `subject.id` collapse
  * onto the first prompt; the user's single choice is returned to all callers.

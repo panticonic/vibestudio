@@ -32,7 +32,13 @@ eval({
     });
     const results = await tester.runSuite(smokeTests);
     scope.results = results;
-    return { total: results.total, passed: results.passed, failed: results.failed };
+    return {
+      total: results.total,
+      passed: results.passed,
+      failed: results.failed,
+      errored: results.errored,
+      skipped: results.skipped,
+    };
   `,
 })
 ```
@@ -109,7 +115,7 @@ if (fail.execution.snapshot) {
 
 | Suite | Tests | What it covers |
 |-------|-------|---------------|
-| `smokeTests` | 3 | Basic sanity: eval, fs, package import |
+| `smokeTests` | 4 | Basic sanity: eval, fs, package import, file tools |
 | `filesystemTests` | 9 | All fs operations: read/write, dirs, stats, symlinks, handles |
 | `gitTests` | 6 | init, branch, diff, log, stash, push |
 | `panelTests` | 6 | Open, browser panels, navigate, screenshot, evaluate, list sources |

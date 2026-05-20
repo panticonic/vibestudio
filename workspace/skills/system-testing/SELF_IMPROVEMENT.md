@@ -31,7 +31,13 @@ eval({
 
     const results = await tester.runSuite(allTests());
     scope.results = results;
-    return { total: results.total, passed: results.passed, failed: results.failed };
+    return {
+      total: results.total,
+      passed: results.passed,
+      failed: results.failed,
+      errored: results.errored,
+      skipped: results.skipped,
+    };
   `,
 })
 ```

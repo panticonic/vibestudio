@@ -392,6 +392,10 @@ const rendererConfig = {
 
 function copyAssets() {
   fs.copyFileSync("src/renderer/index.html", "dist/index.html");
+  copyDirectoryRecursive(
+    "workspace/extensions/@workspace-extensions/shell/vscode-shell-integration",
+    "dist/vscode-shell-integration"
+  );
 }
 
 function copyDirectoryRecursive(srcDir, destDir) {

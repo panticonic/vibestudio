@@ -455,7 +455,9 @@ function UserlandApprovalActions({
         </Tooltip>
       </Flex>
       <Text size="1" color="gray">
-        Remembered until revoked.
+        {approval.promptOptions === "scoped"
+          ? "Use Trust version to remember this approval."
+          : "Remembered until revoked."}
       </Text>
     </Flex>
   );

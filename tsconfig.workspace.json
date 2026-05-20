@@ -202,6 +202,12 @@
       "@workspace/panel-browser": [
         "workspace/packages/panel-browser/src/index.ts"
       ],
+      "@workspace/pubsub": [
+        "workspace/packages/pubsub/src/index.ts"
+      ],
+      "@workspace/pubsub/internal-constants": [
+        "workspace/packages/pubsub/src/internal-constants.ts"
+      ],
       "@workspace/react": [
         "workspace/packages/react/src/index.ts"
       ],
@@ -247,6 +253,7 @@
     "node_modules",
     "**/dist",
     "**/node_modules",
+    "workspace/panels/terminal/vscode-upstream",
     "workspace/packages/playwright-*"
   ]
 }

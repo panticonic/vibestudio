@@ -309,7 +309,7 @@ export function ApprovalSheet({
                   open={detailsOpen}
                   onToggle={() => setDetailsOpen((open) => !open)}
                 />
-                {current.kind === "userland" ? <RememberedHint issuer={current.callerId} /> : null}
+                {current.kind === "userland" ? <RememberedHint approval={current} /> : null}
               </ScrollView>
 
               <View
@@ -1146,13 +1146,19 @@ function Pill({ children, tone }: { children: React.ReactNode; tone?: "warning" 
   );
 }
 
-function RememberedHint({ issuer }: { issuer: string }) {
+function RememberedHint({ approval }: { approval: PendingUserlandApproval }) {
   const colors = useAtomValue(themeColorsAtom);
   return (
     <View style={styles.rememberedHint}>
       <Info size={14} color={colors.textSecondary} />
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-        Remembered for <IdCode value={issuer} /> until revoked.
+        {approval.promptOptions === "scoped" ? (
+          "Use Trust version to remember this approval."
+        ) : (
+          <>
+            Remembered for <IdCode value={approval.callerId} /> until revoked.
+          </>
+        )}
       </Text>
     </View>
   );

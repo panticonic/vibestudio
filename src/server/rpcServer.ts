@@ -340,10 +340,11 @@ export class RpcServer {
        */
       eventService?: EventService;
       /**
-       * Optional: the EgressProxy. When provided, the server exposes a
-       * `POST /rpc/stream` endpoint that performs a credentialed upstream
-       * fetch with a streaming response body. Without this, the streaming
-       * endpoint returns 503.
+       * Optional: the EgressProxy. When provided, `POST /rpc/stream`
+       * can serve the `credentials.proxyFetch` fast path with a
+       * credentialed upstream response body. Other streaming service
+       * methods are dispatched through the normal service dispatcher and
+       * do not require this dependency.
        */
       egressProxy?: Pick<
         import("./services/egressProxy.js").EgressProxy,
@@ -356,6 +357,10 @@ export class RpcServer {
         extensionName: string,
         invocationToken: string
       ) => {
+        caller?: {
+          callerId: string;
+          callerKind: "panel" | "worker" | "do" | "shell" | "shell-remote" | "extension" | "http";
+        };
         chainCaller?: {
           callerId: string;
           callerKind: "panel" | "worker" | "do";
@@ -417,6 +422,21 @@ export class RpcServer {
     );
     if (invocation?.chainCaller) {
       ctx.chainCaller = invocation.chainCaller;
+    } else {
+      const caller = invocation?.caller;
+      if (
+        caller?.callerKind !== "panel" &&
+        caller?.callerKind !== "worker" &&
+        caller?.callerKind !== "do"
+      ) {
+        return ctx;
+      }
+      ctx.chainCaller = {
+        callerId: caller.callerId,
+        callerKind: caller.callerKind,
+        repoPath: "",
+        effectiveVersion: "",
+      };
     }
     return ctx;
   }
@@ -767,18 +787,21 @@ export class RpcServer {
 
     switch (msg.type) {
       case "ws:rpc":
-        // If the message is a response or event, it may be for a server-initiated
-        // call via the client's RPC bridge. Route it to the bridge transport.
-        if (msg.message.type === "response" || msg.message.type === "event") {
+        // If the message belongs to a server-initiated call via the client's RPC bridge,
+        // route it to the bridge transport. Streaming responses use `stream-frame`; without
+        // this branch, server -> extension streamCall callers wait forever for HEAD.
+        if (
+          msg.message.type === "response" ||
+          msg.message.type === "event" ||
+          msg.message.type === "stream-frame"
+        ) {
           const transport = this.connections.getTransport(
             client.caller.runtime.id,
             client.connectionId
           );
           if (transport) {
             transport.deliver(client.caller.runtime.id, msg.message);
-            // For responses, we're done — don't also process as a new request.
-            // For events, deliver to bridge and also fall through would be harmless,
-            // but there's no server-side event handling for client events currently.
+            // Bridge-delivered messages are not new service requests.
             return;
           }
         }
@@ -1437,14 +1460,11 @@ export class RpcServer {
   }
 
   /**
-   * `POST /rpc/stream` — credentialed upstream fetch with a streaming
-   * response body. Request body is the same shape as the regular
-   * `credentials.proxyFetch` RPC args; response is a chunked binary
-   * stream framed by `packages/shared/src/credentials/streamFraming.ts`.
+   * `POST /rpc/stream` — service RPC with a streaming Response body.
    *
-   * Only `credentials.proxyFetch` is exposed here: a service+method
-   * allow-list keeps the streaming surface deliberately narrow, since
-   * arbitrary RPC methods aren't designed for incremental delivery.
+   * `credentials.proxyFetch` keeps its egress-proxy fast path so policy failures can still return
+   * normal HTTP statuses before any frame is emitted. Other service methods dispatch through the
+   * normal service-policy layer and must return a `Response`.
    */
   /**
    * Pre-flight validation for streaming proxy fetch — runs the
@@ -1593,13 +1613,88 @@ export class RpcServer {
 
     const method = body["method"] as string | undefined;
     const args = (body["args"] as unknown[]) ?? [];
+    const targetId = body["targetId"] as string | undefined;
     const effectiveCaller = this.verifiedCallerFor(callerId, callerKind);
+
+    if (targetId && targetId !== "main") {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({ error: "HTTP RPC streaming currently supports targetId 'main' only" })
+      );
+      return;
+    }
+
+    if (!method) {
+      res.writeHead(400, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Missing method" }));
+      return;
+    }
+
+    if (method !== "credentials.proxyFetch") {
+      const parsed = parseServiceMethod(method);
+      if (!parsed) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `Invalid method format: "${method}"` }));
+        return;
+      }
+      try {
+        checkServiceAccess(parsed.service, callerKind, this.dispatcher, parsed.method);
+      } catch (err) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err instanceof Error ? err.message : String(err) }));
+        return;
+      }
+
+      let response: Response;
+      try {
+        const ctx = this.serviceContextFor(callerId, callerKind);
+        const result = await this.dispatcher.dispatch(ctx, parsed.service, parsed.method, args);
+        if (!(result instanceof Response)) {
+          res.writeHead(500, { "Content-Type": "application/json" });
+          res.end(
+            JSON.stringify({ error: `Streaming service ${method} did not return a Response` })
+          );
+          return;
+        }
+        response = result;
+      } catch (err) {
+        const code = err instanceof Error ? (err as NodeJS.ErrnoException).code : undefined;
+        res.writeHead(200, {
+          "Content-Type": "application/vnd.natstack.credentialed-fetch+binary",
+          "Cache-Control": "no-store",
+          "X-Accel-Buffering": "no",
+        });
+        const codec = await import("../../packages/shared/src/credentials/streamFraming.js");
+        await this.writeHttpStreamBytes(
+          res,
+          codec.encodeErrorFrame({
+            status: 502,
+            message: err instanceof Error ? err.message : String(err),
+            code: typeof code === "string" ? code : undefined,
+          })
+        ).catch(() => {});
+        res.end();
+        return;
+      }
+
+      res.writeHead(200, {
+        "Content-Type": "application/vnd.natstack.credentialed-fetch+binary",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+      });
+      try {
+        await this.pipeResponseToHttpFrames(response, res);
+      } finally {
+        res.end();
+      }
+      return;
+    }
 
     // Run validation BEFORE committing to a 200 response, so policy
     // failures (wrong method, no egress proxy, missing params,
     // policy violation) come back as proper HTTP error statuses.
     const check = this.validateStreamingProxyFetch({
-      method: method ?? "",
+      method,
       callerKind,
       args,
     });
@@ -1615,22 +1710,14 @@ export class RpcServer {
     res.on("close", () => abortController.abort());
 
     const codec = await import("../../packages/shared/src/credentials/streamFraming.js");
-    const writeBytes = (bytes: Uint8Array): Promise<void> =>
-      new Promise<void>((resolve, reject) => {
-        const ok = res.write(bytes, (err) => {
-          if (err) reject(err);
-        });
-        if (ok) resolve();
-        else res.once("drain", () => resolve());
-      });
-
     // HTTP encodes frames as raw binary on the chunked response —
     // no base64 overhead since the response IS a binary stream.
     const emitFrame = async (
       frame: import("./services/egressProxy.js").StreamFrame
     ): Promise<void> => {
       if (frame.kind === "head") {
-        await writeBytes(
+        await this.writeHttpStreamBytes(
+          res,
           codec.encodeHeadFrame({
             status: frame.status,
             statusText: frame.statusText,
@@ -1639,11 +1726,12 @@ export class RpcServer {
           })
         );
       } else if (frame.kind === "chunk") {
-        await writeBytes(codec.encodeDataFrame(frame.bytes));
+        await this.writeHttpStreamBytes(res, codec.encodeDataFrame(frame.bytes));
       } else if (frame.kind === "end") {
-        await writeBytes(codec.encodeEndFrame({ bytesIn: frame.bytesIn }));
+        await this.writeHttpStreamBytes(res, codec.encodeEndFrame({ bytesIn: frame.bytesIn }));
       } else if (frame.kind === "error") {
-        await writeBytes(
+        await this.writeHttpStreamBytes(
+          res,
           codec.encodeErrorFrame({
             status: frame.status,
             message: frame.message,
@@ -1681,14 +1769,66 @@ export class RpcServer {
     }
   }
 
+  private writeHttpStreamBytes(
+    res: import("http").ServerResponse,
+    bytes: Uint8Array
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const ok = res.write(bytes, (err) => {
+        if (err) reject(err);
+      });
+      if (ok) resolve();
+      else res.once("drain", () => resolve());
+    });
+  }
+
+  private async pipeResponseToHttpFrames(
+    response: Response,
+    res: import("http").ServerResponse
+  ): Promise<void> {
+    const codec = await import("../../packages/shared/src/credentials/streamFraming.js");
+    await this.writeHttpStreamBytes(
+      res,
+      codec.encodeHeadFrame({
+        status: response.status,
+        statusText: response.statusText,
+        headerPairs: Array.from(response.headers.entries()),
+        finalUrl: response.url,
+      })
+    );
+    let bytesIn = 0;
+    if (response.body) {
+      const reader = response.body.getReader();
+      try {
+        while (true) {
+          const next = await reader.read();
+          if (next.done) break;
+          bytesIn += next.value.byteLength;
+          await this.writeHttpStreamBytes(res, codec.encodeDataFrame(next.value));
+        }
+      } catch (err) {
+        await this.writeHttpStreamBytes(
+          res,
+          codec.encodeErrorFrame({
+            status: 502,
+            message: err instanceof Error ? err.message : String(err),
+          })
+        );
+        return;
+      } finally {
+        reader.releaseLock();
+      }
+    }
+    await this.writeHttpStreamBytes(res, codec.encodeEndFrame({ bytesIn }));
+  }
+
   /**
-   * Handle a WS-delivered `stream-request`. Mirrors the HTTP
-   * `/rpc/stream` route's policy (method allow-list,
-   * `credentials.proxyFetch` only) but pipes frames back as
-   * `stream-frame` messages wrapped in the `ws:rpc` envelope. WS is
-   * the panel/shell transport, so this is the path that gives panel
-   * `credentials.fetch` real streaming — no more synthetic-buffered
-   * fallback.
+   * Handle a WS-delivered `stream-request`. This mirrors the HTTP
+   * `/rpc/stream` route's policy: generic `service.method` requests go
+   * through service policy checks and must return a `Response`, while
+   * `credentials.proxyFetch` keeps its dedicated egress validation and
+   * forwarding path. Frames are wrapped in the `ws:rpc` envelope because
+   * WS is the panel/shell transport.
    */
   private async handleWsStreamRequest(
     client: WsClientState,

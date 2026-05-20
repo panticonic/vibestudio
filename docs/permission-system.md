@@ -43,15 +43,19 @@ host capability. Examples: a worker exposes a workspace-local service and wants
 the user to decide whether a provider-supplied subject may access it, or a panel
 has a domain-specific "allow/deny" decision for one of its own resources.
 
-Userland approvals intentionally do **not** use `once` / `session` / `version`
-/ `repo`. They return provider-defined choices:
+Userland approvals default to scoped host choices: allow once, allow for this
+concrete caller session, trust the current source version, or deny. Positive
+scoped choices return `choice: "allow"` to userland; deny returns
+`choice: "deny"`. Callers can opt into `promptOptions: "choices"` to present
+provider-defined buttons such as a simple allow/deny pair.
 
 ```ts
 { kind: "choice", choice: "allow" }
 { kind: "dismissed" }
 ```
 
-Every non-dismiss choice is persisted server-side under a flat key:
+Scoped userland grants are stored according to their selected scope. Custom
+`choices` grants persist server-side under a flat key:
 
 ```text
 (verified issuer callerId, provider subject.id)

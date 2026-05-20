@@ -53,7 +53,9 @@ import { z } from "zod";
 import { ScopeManager, RpcScopePersistence } from "@workspace/eval";
 import {
   getRecommendedChannelConfig,
+  retireHeadlessAgent,
   subscribeHeadlessAgent,
+  unsubscribeHeadlessAgent,
 } from "./channel.js";
 
 // ===========================================================================
@@ -129,6 +131,9 @@ export class HeadlessSession {
   private _clientId: string;
   private _createdAt = Date.now();
   private _config: HeadlessSessionConfig;
+  private _agentEntityId: string | null = null;
+  private _agentTargetId: string | null = null;
+  private _agentRpcCall: HeadlessWithAgentConfig["rpcCall"] | null = null;
 
   // Channel message state (derived from persisted + live channel messages)
   private _chatMessages = new Map<string, ChatMessage>();
@@ -184,7 +189,7 @@ export class HeadlessSession {
     const objectKey = config.objectKey ?? `headless-${crypto.randomUUID()}`;
     const session = new HeadlessSession(config, channelId);
 
-    await subscribeHeadlessAgent({
+    const subscription = await subscribeHeadlessAgent({
       rpcCall: config.rpcCall,
       source: config.source,
       className: config.className,
@@ -193,6 +198,9 @@ export class HeadlessSession {
       contextId: config.contextId,
       extraConfig: config.extraConfig,
     });
+    session._agentEntityId = subscription.entityId;
+    session._agentTargetId = subscription.targetId;
+    session._agentRpcCall = config.rpcCall;
 
     if (session._scopeManager) {
       await session._scopeManager.hydrate();
@@ -561,7 +569,20 @@ export class HeadlessSession {
   }
 
   async close(): Promise<void> {
+    const entityId = this._agentEntityId;
+    const targetId = this._agentTargetId;
+    const channelId = this._channelId;
+    const rpcCall = this._agentRpcCall;
+    this._agentEntityId = null;
+    this._agentTargetId = null;
+    this._agentRpcCall = null;
+    if (targetId && channelId && rpcCall) {
+      await unsubscribeHeadlessAgent({ rpcCall, targetId, channelId }).catch(() => {});
+    }
     this.dispose();
+    if (entityId && rpcCall) {
+      await retireHeadlessAgent({ rpcCall, entityId }).catch(() => {});
+    }
   }
 
   async [Symbol.asyncDispose](): Promise<void> {

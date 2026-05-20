@@ -11,6 +11,18 @@ const validRequest = {
 };
 
 describe("userland approval validation", () => {
+  it("accepts default scoped prompts without custom options", () => {
+    expect(
+      userlandApprovalRequestSchema.parse({
+        subject: { id: "team-x:foo", label: "Team X foo" },
+        title: "Allow foo?",
+      })
+    ).toEqual({
+      subject: { id: "team-x:foo", label: "Team X foo" },
+      title: "Allow foo?",
+    });
+  });
+
   it("strips zero-width characters before reserved-prefix and duplicate checks", () => {
     expect(() => userlandApprovalSubjectIdSchema.parse("shell\u200B:foo")).toThrow(/reserved/);
     expect(() => userlandApprovalRequestSchema.parse({

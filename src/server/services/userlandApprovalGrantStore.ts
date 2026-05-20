@@ -4,6 +4,8 @@ import * as path from "node:path";
 import { canonicalKey } from "@natstack/shared/canonicalKey";
 import { writeJsonFileAtomic } from "./atomicFile.js";
 import type {
+  ApprovalPrincipal,
+  UserlandApprovalGrantScope,
   UserlandApprovalGrant,
   UserlandApprovalIssuer,
   UserlandApprovalSubject,
@@ -18,12 +20,16 @@ function defaultIssuer(principal: UserlandApprovalGrant["principal"]): UserlandA
 }
 
 function effectiveIssuer(grant: UserlandApprovalGrant): UserlandApprovalIssuer {
+  if (!grant.issuer && grant.scope === "version" && grant.principal.repoPath) {
+    return { kind: grant.principal.callerKind, id: grant.principal.repoPath };
+  }
   return grant.issuer ?? defaultIssuer(grant.principal);
 }
 
 export class UserlandApprovalGrantStore {
   private readonly filePath: string;
   private persistent: UserlandApprovalGrantFile = { grants: [] };
+  private readonly sessionGrants: UserlandApprovalGrant[] = [];
 
   constructor(opts: { statePath: string }) {
     this.filePath = path.join(opts.statePath, "userland-approval-grants.json");
@@ -36,87 +42,90 @@ export class UserlandApprovalGrantStore {
    * panel/worker call shape, where the issuer is the principal itself.
    */
   lookup(
-    callerId: string,
+    principal: ApprovalPrincipal,
     subjectId: string,
     issuer?: UserlandApprovalIssuer
   ): UserlandApprovalGrant | null {
-    return (
-      this.persistent.grants.find((grant) => {
-        if (grant.principal.callerId !== callerId) return false;
-        if (grant.subject.id !== subjectId) return false;
-        const grantIssuer = effectiveIssuer(grant);
-        if (issuer) return grantIssuer.kind === issuer.kind && grantIssuer.id === issuer.id;
-        return (
-          grantIssuer.kind === grant.principal.callerKind &&
-          grantIssuer.id === grant.principal.callerId
-        );
-      }) ?? null
-    );
+    const matches = (grant: UserlandApprovalGrant): boolean =>
+      grant.subject.id === subjectId &&
+      grantAppliesToPrincipal(grant, principal) &&
+      issuerMatches(grant, principal, issuer);
+    return this.sessionGrants.find(matches) ?? this.persistent.grants.find(matches) ?? null;
   }
 
   // `record`/`revoke` are `async` even though `save()` is sync today: the
   // service awaits them, and keeping the API async lets us swap in
   // temp-file+rename later without touching callers.
   async record(
-    principal: UserlandApprovalGrant["principal"],
+    principal: ApprovalPrincipal,
     subject: UserlandApprovalSubject,
     choice: string,
     now = Date.now(),
-    issuer?: UserlandApprovalIssuer
+    issuer?: UserlandApprovalIssuer,
+    scope: UserlandApprovalGrantScope = "caller"
   ): Promise<void> {
     const next: UserlandApprovalGrant = {
       principal: {
         callerId: principal.callerId,
         callerKind: principal.callerKind,
+        repoPath: principal.repoPath,
+        effectiveVersion: principal.effectiveVersion,
       },
       ...(issuer ? { issuer } : {}),
       subject,
       choice,
       grantedAt: now,
+      scope,
     };
     const nextIssuer = effectiveIssuer(next);
-    const key = keyFor(next.principal.callerId, nextIssuer, next.subject.id);
-    this.persistent.grants = [
-      ...this.persistent.grants.filter(
-        (grant) =>
-          keyFor(grant.principal.callerId, effectiveIssuer(grant), grant.subject.id) !== key
-      ),
-      next,
-    ];
+    const key = keyFor(next.principal, nextIssuer, next.subject.id, scope);
+    const current = scope === "session" ? this.sessionGrants : this.persistent.grants;
+    const filtered = current.filter(
+      (grant) =>
+        keyFor(
+          grant.principal,
+          effectiveIssuer(grant),
+          grant.subject.id,
+          grant.scope ?? "caller"
+        ) !== key
+    );
+    if (scope === "session") {
+      this.sessionGrants.splice(0, this.sessionGrants.length, ...filtered, next);
+      return;
+    }
+    this.persistent.grants = [...filtered, next];
     this.save();
   }
 
   async revoke(
-    callerId: string,
+    principal: ApprovalPrincipal,
     subjectId: string,
     issuer?: UserlandApprovalIssuer
   ): Promise<boolean> {
-    const before = this.persistent.grants.length;
-    this.persistent.grants = this.persistent.grants.filter((grant) => {
-      if (grant.principal.callerId !== callerId) return true;
-      if (grant.subject.id !== subjectId) return true;
-      const grantIssuer = effectiveIssuer(grant);
-      if (issuer) return !(grantIssuer.kind === issuer.kind && grantIssuer.id === issuer.id);
-      return !(
-        grantIssuer.kind === grant.principal.callerKind &&
-        grantIssuer.id === grant.principal.callerId
+    const shouldKeep = (grant: UserlandApprovalGrant): boolean =>
+      !(
+        grant.subject.id === subjectId &&
+        grantAppliesToPrincipal(grant, principal) &&
+        issuerMatches(grant, principal, issuer)
       );
-    });
-    const removed = this.persistent.grants.length !== before;
-    if (removed) this.save();
-    return removed;
+    const persistentBefore = this.persistent.grants.length;
+    const sessionBefore = this.sessionGrants.length;
+    this.persistent.grants = this.persistent.grants.filter(shouldKeep);
+    this.sessionGrants.splice(
+      0,
+      this.sessionGrants.length,
+      ...this.sessionGrants.filter(shouldKeep)
+    );
+    const persistentRemoved = this.persistent.grants.length !== persistentBefore;
+    const sessionRemoved = this.sessionGrants.length !== sessionBefore;
+    if (persistentRemoved) this.save();
+    return persistentRemoved || sessionRemoved;
   }
 
-  list(callerId: string, issuer?: UserlandApprovalIssuer): UserlandApprovalGrant[] {
-    return this.persistent.grants.filter((grant) => {
-      if (grant.principal.callerId !== callerId) return false;
-      const grantIssuer = effectiveIssuer(grant);
-      if (issuer) return grantIssuer.kind === issuer.kind && grantIssuer.id === issuer.id;
-      return (
-        grantIssuer.kind === grant.principal.callerKind &&
-        grantIssuer.id === grant.principal.callerId
-      );
-    });
+  list(principal: ApprovalPrincipal, issuer?: UserlandApprovalIssuer): UserlandApprovalGrant[] {
+    const matches = (grant: UserlandApprovalGrant): boolean =>
+      grantAppliesToPrincipal(grant, principal) && issuerMatches(grant, principal, issuer);
+    return [...this.sessionGrants.filter(matches), ...this.persistent.grants.filter(matches)];
   }
 
   private load(): void {
@@ -141,11 +150,50 @@ export class UserlandApprovalGrantStore {
 }
 
 export function keyFor(
-  callerId: string,
+  principal: UserlandApprovalGrant["principal"],
   issuer: UserlandApprovalIssuer,
-  subjectId: string
+  subjectId: string,
+  scope: UserlandApprovalGrantScope = "caller"
 ): string {
-  return canonicalKey(["userland-grant", callerId, issuer.kind, issuer.id, subjectId]);
+  return canonicalKey([
+    "userland-grant",
+    scope,
+    scope === "version" ? (principal.repoPath ?? "") : principal.callerId,
+    scope === "version" ? (principal.effectiveVersion ?? "") : "",
+    issuer.kind,
+    issuer.id,
+    subjectId,
+  ]);
+}
+
+function grantAppliesToPrincipal(
+  grant: UserlandApprovalGrant,
+  principal: ApprovalPrincipal
+): boolean {
+  const scope = grant.scope ?? "caller";
+  if (scope === "version") {
+    return (
+      grant.principal.callerKind === principal.callerKind &&
+      grant.principal.repoPath === principal.repoPath &&
+      grant.principal.effectiveVersion === principal.effectiveVersion
+    );
+  }
+  return grant.principal.callerId === principal.callerId;
+}
+
+function issuerMatches(
+  grant: UserlandApprovalGrant,
+  principal: ApprovalPrincipal,
+  issuer?: UserlandApprovalIssuer
+): boolean {
+  const grantIssuer = effectiveIssuer(grant);
+  if (issuer) return grantIssuer.kind === issuer.kind && grantIssuer.id === issuer.id;
+  if ((grant.scope ?? "caller") === "version") {
+    return grantIssuer.kind === principal.callerKind && grantIssuer.id === principal.repoPath;
+  }
+  return (
+    grantIssuer.kind === grant.principal.callerKind && grantIssuer.id === grant.principal.callerId
+  );
 }
 
 function isGrant(value: unknown): value is UserlandApprovalGrant {
@@ -170,6 +218,10 @@ function isGrant(value: unknown): value is UserlandApprovalGrant {
     (grant.principal.callerKind === "panel" ||
       grant.principal.callerKind === "worker" ||
       grant.principal.callerKind === "do") &&
+    (grant.scope === undefined ||
+      grant.scope === "caller" ||
+      grant.scope === "session" ||
+      grant.scope === "version") &&
     !!grant.subject &&
     typeof grant.subject.id === "string" &&
     (grant.subject.label === undefined || typeof grant.subject.label === "string")

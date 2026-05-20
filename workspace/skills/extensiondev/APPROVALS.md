@@ -78,7 +78,9 @@ The returned `UserlandApprovalChoice` is either:
 { kind: "uncallable", reason: "no-user-context" } // no panel/worker caller to ask
 ```
 
-The `choice` string is whatever option `value` you defined. The host records it as a grant; subsequent same-subject requests skip the prompt.
+By default, the host shows scoped choices: allow once, allow this session, trust version, or deny. Positive scoped choices return `choice: "allow"` and are remembered according to the selected scope; deny returns `choice: "deny"` and is not remembered.
+
+Pass `promptOptions: "choices"` when you need a simple allow/deny prompt, or add an `options` array for custom domain-specific choices. In that mode, the `choice` string is the selected option value. The host records it as a caller-scoped grant; subsequent same-subject requests skip the prompt.
 
 ### Subject conventions
 

@@ -555,9 +555,15 @@ export class ContentBlockProjector {
     for (const op of ops) this.dispatch(op);
     if (event.type === "agent_end") {
       this.enqueueMissingFinalContent(event);
-      const openMsgIds = this.collectOpenMsgIds();
-      if (openMsgIds.length > 0) {
-        this.enqueueCloseAll();
+      if (this.hasOpenBlocks()) {
+        if (isTerminatedByError(event)) {
+          this.enqueueCloseAll({
+            toolStatus: "error",
+            toolResult: terminalErrorMessage(event) ?? "Tool call ended before a result was emitted",
+          });
+        } else {
+          this.enqueueCloseAll({ toolStatus: "complete" });
+        }
       } else if (isTerminatedByError(event)) {
         const message = terminalErrorMessage(event);
         if (message && !isCredentialRequiredTerminalError(message)) {
@@ -605,22 +611,48 @@ export class ContentBlockProjector {
     }
   }
 
-  private enqueueCloseAll(): void {
-    const openMsgIds = this.collectOpenMsgIds();
-    for (const msgId of openMsgIds) this.dispatch({ kind: "complete", msgId });
+  private enqueueCloseAll(opts: {
+    toolStatus?: "complete" | "error";
+    toolResult?: unknown;
+  } = {}): void {
+    for (const msgId of this.state.textMsgIdByIndex.values()) {
+      this.dispatch({ kind: "complete", msgId });
+    }
+    for (const msgId of this.state.thinkingMsgIdByIndex.values()) {
+      this.dispatch({ kind: "complete", msgId });
+    }
+    for (const record of this.state.toolCalls.values()) {
+      const status = record.payload.execution.status;
+      if (status !== "complete" && status !== "error") {
+        const terminalStatus = opts.toolStatus ?? "error";
+        const payload: ToolCallPayload = {
+          ...record.payload,
+          execution: {
+            ...record.payload.execution,
+            status: terminalStatus,
+            ...(terminalStatus === "error"
+              ? {
+                  isError: true,
+                  result: opts.toolResult ?? "Tool call ended before a result was emitted",
+                }
+              : {}),
+          },
+        };
+        this.dispatch({ kind: "update", msgId: record.msgId, content: JSON.stringify(payload) });
+      }
+      this.dispatch({ kind: "complete", msgId: record.msgId });
+    }
     this.state = createInitialProjectorState();
   }
 
-  private collectOpenMsgIds(): string[] {
-    const ids: string[] = [
-      ...this.state.textMsgIdByIndex.values(),
-      ...this.state.thinkingMsgIdByIndex.values(),
-    ];
+  private hasOpenBlocks(): boolean {
+    if (this.state.textMsgIdByIndex.size > 0) return true;
+    if (this.state.thinkingMsgIdByIndex.size > 0) return true;
     for (const record of this.state.toolCalls.values()) {
       const status = record.payload.execution.status;
-      if (status !== "complete" && status !== "error") ids.push(record.msgId);
+      if (status !== "complete" && status !== "error") return true;
     }
-    return ids;
+    return false;
   }
 
   /**
@@ -633,6 +665,40 @@ export class ContentBlockProjector {
   async closeAll(): Promise<void> {
     this.enqueueCloseAll();
     await this.pendingOp;
+  }
+
+  /**
+   * Terminalize one in-flight tool call from an external completion source.
+   *
+   * Channel-backed tools resolve through PubSub `method-result` before Pi
+   * later emits `tool_execution_end`. If that later event is lost or never
+   * emitted, the chat UI would otherwise keep rendering the action payload's
+   * `execution.status: "pending"` indefinitely.
+   */
+  async completeToolCall(
+    toolCallId: string,
+    result: unknown,
+    isError: boolean,
+  ): Promise<boolean> {
+    const record = this.state.toolCalls.get(toolCallId);
+    if (!record) return false;
+    const { value: truncatedResult, truncated } = truncateResult(result);
+    const resultImages = extractImages(result);
+    const execution: ToolExecutionState = {
+      status: isError ? "error" : "complete",
+      description: record.payload.execution.description,
+      consoleOutput: record.payload.execution.consoleOutput,
+      result: truncatedResult,
+      isError: isError || undefined,
+      resultTruncated: truncated || undefined,
+      resultImages: resultImages.length > 0 ? resultImages : undefined,
+    };
+    const payload: ToolCallPayload = { ...record.payload, execution };
+    this.state = removeToolCall(this.state, toolCallId);
+    this.dispatch({ kind: "update", msgId: record.msgId, content: JSON.stringify(payload) });
+    this.dispatch({ kind: "complete", msgId: record.msgId });
+    await this.pendingOp;
+    return true;
   }
 
   /** msgIds for which a preceding op already failed. Further ops for the

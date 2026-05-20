@@ -5,6 +5,7 @@ import { initRuntime } from "./initRuntime.js";
 const g = globalThis as typeof globalThis & {
   __natstackEntityId?: string;
   __natstackId?: string;
+  __natstackSlotId?: string;
   __natstackContextId?: string;
   __natstackKind?: "panel" | "shell";
   __natstackParentId?: string | null;
@@ -26,6 +27,7 @@ describe("initRuntime", () => {
   afterEach(() => {
     delete g.__natstackEntityId;
     delete g.__natstackId;
+    delete g.__natstackSlotId;
     delete g.__natstackContextId;
     delete g.__natstackKind;
     delete g.__natstackParentId;
@@ -37,6 +39,7 @@ describe("initRuntime", () => {
 
   it("uses the injected canonical panel id as the RPC self id", () => {
     g.__natstackEntityId = "panel:panel-1";
+    g.__natstackSlotId = "slot-1";
     g.__natstackContextId = "ctx-1";
     g.__natstackKind = "panel";
     g.__natstackGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
@@ -54,6 +57,7 @@ describe("initRuntime", () => {
 
     expect(config.entityId).toBe("panel:panel-1");
     expect(config.id).toBe("panel:panel-1");
+    expect(config.slotId).toBe("slot-1");
     expect(runtime.rpc.selfId).toBe("panel:panel-1");
   });
 });

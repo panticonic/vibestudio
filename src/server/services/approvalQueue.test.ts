@@ -178,6 +178,113 @@ describe("approvalQueue", () => {
     await expect(second).resolves.toBe("deny");
   });
 
+  it("does not deduplicate capability approvals across concrete callers", async () => {
+    const { queue } = createQueue();
+    const first = queue.request({
+      kind: "capability",
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      capability: "external-browser-open",
+      title: "Open external browser",
+      resource: { type: "url-origin", label: "Origin", value: "https://example.com" },
+    });
+    const second = queue.request({
+      kind: "capability",
+      callerId: "panel-2",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      capability: "external-browser-open",
+      title: "Open external browser",
+      resource: { type: "url-origin", label: "Origin", value: "https://example.com" },
+    });
+
+    const pending = queue.listPending();
+    expect(pending).toHaveLength(2);
+
+    queue.resolve(pending[0]!.approvalId, "session");
+    queue.resolve(pending[1]!.approvalId, "deny");
+    await expect(first).resolves.toBe("session");
+    await expect(second).resolves.toBe("deny");
+  });
+
+  it("does not deduplicate credential approvals across concrete callers", async () => {
+    const { queue } = createQueue();
+    const request = {
+      callerKind: "worker" as const,
+      repoPath: "/repo",
+      effectiveVersion: "hash-1",
+      credentialId: "cred-1",
+      credentialLabel: "GitHub",
+      audience: [{ url: "https://api.github.com/", match: "origin" as const }],
+      injection: {
+        type: "header" as const,
+        name: "authorization",
+        valueTemplate: "Bearer {token}",
+      },
+      accountIdentity: { providerUserId: "user-1" },
+      scopes: ["repo"],
+    };
+    const first = queue.request({ ...request, callerId: "worker:one" });
+    const second = queue.request({ ...request, callerId: "worker:two" });
+
+    const pending = queue.listPending();
+    expect(pending).toHaveLength(2);
+
+    queue.resolve(pending[0]!.approvalId, "session");
+    queue.resolve(pending[1]!.approvalId, "deny");
+    await expect(first).resolves.toBe("session");
+    await expect(second).resolves.toBe("deny");
+  });
+
+  it("can resolve pending credential approvals that match a newly stored grant", async () => {
+    const { queue } = createQueue();
+    const request = {
+      callerKind: "worker" as const,
+      repoPath: "/repo",
+      effectiveVersion: "hash-1",
+      credentialId: "cred-1",
+      credentialLabel: "GitHub",
+      audience: [{ url: "https://api.github.com/", match: "origin" as const }],
+      injection: {
+        type: "header" as const,
+        name: "authorization",
+        valueTemplate: "Bearer {token}",
+      },
+      accountIdentity: { providerUserId: "user-1" },
+      scopes: ["repo"],
+      grantResource: {
+        bindingId: "binding-1",
+        resource: "https://api.github.com/",
+        action: "use" as const,
+      },
+    };
+    const first = queue.request({ ...request, callerId: "worker:one" });
+    const second = queue.request({ ...request, callerId: "worker:two" });
+
+    const pending = queue.listPending();
+    queue.resolve(pending[0]!.approvalId, "version");
+    await expect(first).resolves.toBe("version");
+
+    const resolved = queue.resolveMatching(
+      (approval) =>
+        approval.kind === "credential" &&
+        approval.credentialId === "cred-1" &&
+        approval.repoPath === "/repo" &&
+        approval.effectiveVersion === "hash-1" &&
+        approval.grantResource?.bindingId === "binding-1" &&
+        approval.grantResource.resource === "https://api.github.com/" &&
+        approval.grantResource.action === "use",
+      "once"
+    );
+
+    expect(resolved).toBe(1);
+    await expect(second).resolves.toBe("once");
+    expect(queue.listPending()).toEqual([]);
+  });
+
   it("supports client config approvals with submitted field values", async () => {
     const { queue } = createQueue();
     const promise = queue.requestClientConfig({
@@ -313,6 +420,7 @@ describe("approvalQueue", () => {
       },
       subject: { id: "team-x:foo", label: "Team X foo" },
       title: "Allow foo?",
+      promptOptions: "choices" as const,
       options: [
         { value: "allow", label: "Allow", tone: "primary" as const },
         { value: "deny", label: "Deny", tone: "danger" as const },
@@ -383,6 +491,32 @@ describe("approvalQueue", () => {
       ac.abort();
 
       await expect(promise).resolves.toEqual({ kind: "dismissed" });
+      expect(queue.listPending()).toEqual([]);
+    });
+
+    it("can resolve pending userland prompts after a scoped grant is recorded", async () => {
+      const { queue } = createQueue();
+      const first = queue.requestUserland(userlandRequest);
+      const second = queue.requestUserland({
+        ...userlandRequest,
+        principal: {
+          ...userlandRequest.principal,
+          callerId: "worker:beta",
+        },
+      });
+      const pending = queue.listPending();
+      expect(pending).toHaveLength(2);
+
+      queue.resolveUserland(pending[0]!.approvalId, "allow");
+      await expect(first).resolves.toEqual({ kind: "choice", choice: "allow" });
+
+      const resolved = queue.resolveMatchingUserland(
+        (approval) => approval.kind === "userland" && approval.subject.id === "team-x:foo",
+        "allow"
+      );
+
+      expect(resolved).toBe(1);
+      await expect(second).resolves.toEqual({ kind: "choice", choice: "allow" });
       expect(queue.listPending()).toEqual([]);
     });
   });

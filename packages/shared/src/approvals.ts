@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   AccountIdentity,
+  CredentialGrantAction,
   CredentialBindingUse,
   CredentialInjection,
   UrlAudience,
@@ -63,10 +64,11 @@ export const userlandApprovalRequestSchema = z.object({
   summary: approvalCleanString("summary", { max: 1000 }).optional(),
   warning: approvalCleanString("warning", { max: 200 }).optional(),
   details: z.array(userlandApprovalDetailSchema).max(8).optional(),
-  options: z.array(userlandApprovalOptionSchema).min(1).max(6),
+  promptOptions: z.enum(["scoped", "choices"]).optional(),
+  options: z.array(userlandApprovalOptionSchema).min(1).max(6).optional(),
 }).strict().superRefine((req, ctx) => {
   const values = new Set<string>();
-  for (const [index, option] of req.options.entries()) {
+  for (const [index, option] of (req.options ?? []).entries()) {
     if (values.has(option.value)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -105,11 +107,17 @@ export interface UserlandApprovalIssuer {
 
 /** A persisted decision for one flat (principal, subject) pair. */
 export interface UserlandApprovalGrant {
-  principal: { callerId: string; callerKind: "panel" | "worker" | "do" };
+  principal: {
+    callerId: string;
+    callerKind: "panel" | "worker" | "do";
+    repoPath?: string;
+    effectiveVersion?: string;
+  };
   issuer?: UserlandApprovalIssuer;
   subject: UserlandApprovalSubject;
   choice: string;
   grantedAt: number;
+  scope?: UserlandApprovalGrantScope;
 }
 
 export interface PendingApprovalBase {
@@ -137,6 +145,11 @@ export interface PendingCredentialApproval extends PendingApprovalBase {
     remote: string;
     service?: string;
   };
+  grantResource?: {
+    bindingId: string;
+    resource: string;
+    action: CredentialGrantAction;
+  };
   oauthAuthorizeOrigin?: string;
   oauthTokenOrigin?: string;
   oauthUserinfoOrigin?: string;
@@ -147,6 +160,7 @@ export interface PendingCredentialApproval extends PendingApprovalBase {
 export interface PendingCapabilityApproval extends PendingApprovalBase {
   kind: "capability";
   capability: string;
+  grantResourceKey?: string;
   title: string;
   description?: string;
   resource?: {
@@ -281,6 +295,9 @@ export interface UserlandApprovalOption {
   tone?: "primary" | "danger" | "neutral";
 }
 
+export type UserlandApprovalPromptOptions = "scoped" | "choices";
+export type UserlandApprovalGrantScope = "caller" | "session" | "version";
+
 export interface PendingUserlandApproval extends PendingApprovalBase {
   kind: "userland";
   /** Issuer of the request — the panel/worker/extension that asked. */
@@ -293,6 +310,7 @@ export interface PendingUserlandApproval extends PendingApprovalBase {
     label: string;
     value: string;
   }>;
+  promptOptions: UserlandApprovalPromptOptions;
   options: UserlandApprovalOption[];
 }
 
@@ -341,7 +359,14 @@ export interface UserlandApprovalRequest {
     label: string;
     value: string;
   }>;
-  options: UserlandApprovalOption[];
+  /**
+   * `scoped` (default) shows host-managed Allow once / Session / Trust version
+   * choices and returns `choice: "allow"` or `choice: "deny"`.
+   * `choices` shows the supplied `options` and persists the selected choice
+   * for this concrete caller until revoked.
+   */
+  promptOptions?: UserlandApprovalPromptOptions;
+  options?: UserlandApprovalOption[];
 }
 
 export type UserlandApprovalChoice =

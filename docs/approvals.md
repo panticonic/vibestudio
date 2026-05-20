@@ -94,15 +94,19 @@ notification because they require in-app UI.
 
 Userland code calls `requestApproval()` from `@workspace/runtime` (panel) or
 `runtime.requestApproval()` from a worker runtime. The request supplies a
-provider-owned `subject.id`, user-facing copy, and 1-6 option buttons. The
-server ignores any caller identity in the payload; it uses `ServiceContext` and
-`CodeIdentityResolver` to attach the verified panel/worker issuer.
+provider-owned `subject.id` and user-facing copy. By default the prompt shows
+scoped host choices: `Allow once`, `Allow this session`, `Trust version`, and
+`Deny`. Positive scoped choices return `{ kind: "choice", choice: "allow" }`;
+deny returns `{ kind: "choice", choice: "deny" }`. A caller can opt into
+`promptOptions: "choices"` for a simple allow/deny prompt or supply 1-6 custom
+option buttons.
 
-The service checks the persisted grant store before showing the prompt. A grant
-hit returns `{ kind: "choice", choice }` immediately. If there is no grant, the
-approval queue shows one prompt per `(issuer.callerId, subject.id)` and
-coalesces concurrent waiters. When the user chooses an option, the choice is
-persisted under that flat key. Dismissals return `{ kind: "dismissed" }` and
+The server ignores any caller identity in the payload; it uses `ServiceContext`
+and `CodeIdentityResolver` to attach the verified panel/worker issuer. The
+service checks the grant store before showing the prompt. A grant hit returns
+`{ kind: "choice", choice }` immediately. If there is no grant, the approval
+queue shows one prompt per concrete caller, issuer, and `subject.id`, then
+coalesces concurrent waiters. Dismissals return `{ kind: "dismissed" }` and
 are not persisted.
 
 Userland prompt copy is untrusted provider text. UI surfaces must keep the

@@ -1989,6 +1989,13 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     const breadcrumb = this.dispatches.peek(callId);
     const waiter = this.methodResultWaiters.get(callId);
     if (waiter) {
+      if (breadcrumb?.kind === "tool-call") {
+        await this.getOrCreateProjector(waiter.channelId).completeToolCall(
+          breadcrumb.toolCallId,
+          result,
+          isError
+        );
+      }
       waiter.resolve({ result, isError });
       return;
     }

@@ -3,8 +3,10 @@ import { z } from "zod";
 import type {
   ApprovalPrincipal,
   UserlandApprovalChoice,
+  UserlandApprovalGrantScope,
   UserlandApprovalGrant,
   UserlandApprovalIssuer,
+  UserlandApprovalOption,
   UserlandApprovalRequest,
 } from "@natstack/shared/approvals";
 import {
@@ -17,6 +19,31 @@ import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
 
 const SERVICE_NAME = "userlandApproval";
+const SCOPED_ALLOW_OPTIONS: UserlandApprovalOption[] = [
+  {
+    value: "once",
+    label: "Allow once",
+    description: "Allow this request only.",
+    tone: "neutral",
+  },
+  {
+    value: "session",
+    label: "Allow this session",
+    description: "Remember for this caller until NatStack restarts.",
+    tone: "neutral",
+  },
+  {
+    value: "version",
+    label: "Trust version",
+    description: "Remember for this exact code version.",
+    tone: "primary",
+  },
+  { value: "deny", label: "Deny", description: "Do not allow this request.", tone: "danger" },
+];
+const BINARY_OPTIONS: UserlandApprovalOption[] = [
+  { value: "allow", label: "Allow", tone: "primary" },
+  { value: "deny", label: "Deny", tone: "danger" },
+];
 
 export function createUserlandApprovalService(deps: {
   approvalQueue: ApprovalQueue;
@@ -97,31 +124,64 @@ export function createUserlandApprovalService(deps: {
     if (!principal) return { kind: "uncallable", reason: "no-user-context" };
     const issuer = extensionIssuer(ctx);
     const decoratedReq = decorateForIssuer(req, issuer);
-    const hit = deps.grantStore.lookup(principal.callerId, decoratedReq.subject.id, issuer);
+    const promptOptions = decoratedReq.promptOptions ?? "scoped";
+    const options =
+      promptOptions === "scoped" ? SCOPED_ALLOW_OPTIONS : (decoratedReq.options ?? BINARY_OPTIONS);
+    const hit = deps.grantStore.lookup(principal, decoratedReq.subject.id, issuer);
     if (hit) {
-      if (decoratedReq.options.some((option) => option.value === hit.choice)) {
+      if (isCachedChoiceValid(promptOptions, options, hit.choice)) {
         return { kind: "choice", choice: hit.choice };
       }
       try {
-        await deps.grantStore.revoke(principal.callerId, decoratedReq.subject.id, issuer);
+        await deps.grantStore.revoke(principal, decoratedReq.subject.id, issuer);
       } catch (err) {
         console.warn("[UserlandApprovalService] Failed to revoke stale approval grant:", err);
       }
     }
 
-    const result = await deps.approvalQueue.requestUserland({ principal, issuer, ...decoratedReq });
+    const result = await deps.approvalQueue.requestUserland({
+      principal,
+      issuer,
+      ...decoratedReq,
+      promptOptions,
+      options,
+    });
     if (result.kind === "choice") {
+      const resolved = resolvePromptChoice(promptOptions, result.choice);
+      if (!resolved.record) return { kind: "choice", choice: resolved.choice };
       try {
         await deps.grantStore.record(
-          { callerId: principal.callerId, callerKind: principal.callerKind },
+          principal,
           decoratedReq.subject,
-          result.choice,
+          resolved.choice,
           Date.now(),
-          issuer
+          issuer,
+          resolved.scope
         );
+        if (typeof deps.approvalQueue.resolveMatchingUserland === "function") {
+          deps.approvalQueue.resolveMatchingUserland((approval) => {
+            if (approval.kind !== "userland") return false;
+            if (approval.promptOptions !== "scoped") return false;
+            if (!approval.options.some((option) => option.value === result.choice)) return false;
+            const hit = deps.grantStore.lookup(
+              {
+                callerId: approval.callerId,
+                callerKind: approval.callerKind,
+                repoPath: approval.repoPath,
+                effectiveVersion: approval.effectiveVersion,
+              },
+              approval.subject.id,
+              approval.issuer
+            );
+            return (
+              !!hit && isCachedChoiceValid(approval.promptOptions, approval.options, hit.choice)
+            );
+          }, result.choice);
+        }
       } catch (err) {
         console.warn("[UserlandApprovalService] Failed to persist approval grant:", err);
       }
+      return { kind: "choice", choice: resolved.choice };
     }
     return result;
   }
@@ -144,15 +204,12 @@ export function createUserlandApprovalService(deps: {
           if (!principal) return { kind: "uncallable", reason: "no-user-context" };
           // Re-parse for transform application — see comment in `request`.
           const subjectId = userlandApprovalSubjectIdSchema.parse(args[0]);
-          return await deps.grantStore.revoke(principal.callerId, subjectId, extensionIssuer(ctx));
+          return await deps.grantStore.revoke(principal, subjectId, extensionIssuer(ctx));
         }
         case "list": {
           const principal = await resolvePrincipal(ctx, "list");
           if (!principal) return [];
-          return deps.grantStore.list(
-            principal.callerId,
-            extensionIssuer(ctx)
-          ) as UserlandApprovalGrant[];
+          return deps.grantStore.list(principal, extensionIssuer(ctx)) as UserlandApprovalGrant[];
         }
         default:
           throw new ServiceError(
@@ -164,4 +221,28 @@ export function createUserlandApprovalService(deps: {
       }
     },
   };
+}
+
+function isCachedChoiceValid(
+  promptOptions: UserlandApprovalRequest["promptOptions"] | undefined,
+  options: UserlandApprovalOption[],
+  choice: string
+): boolean {
+  if ((promptOptions ?? "scoped") === "scoped") return choice === "allow";
+  return options.some((option) => option.value === choice);
+}
+
+function resolvePromptChoice(
+  promptOptions: UserlandApprovalRequest["promptOptions"] | undefined,
+  choice: string
+):
+  | { choice: string; record: false }
+  | { choice: string; record: true; scope: UserlandApprovalGrantScope } {
+  if ((promptOptions ?? "scoped") !== "scoped") {
+    return { choice, record: true, scope: "caller" };
+  }
+  if (choice === "once") return { choice: "allow", record: false };
+  if (choice === "session") return { choice: "allow", record: true, scope: "session" };
+  if (choice === "version") return { choice: "allow", record: true, scope: "version" };
+  return { choice: "deny", record: false };
 }
