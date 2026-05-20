@@ -34,6 +34,7 @@ export interface TerminalFrontend {
   onShellIntegrationEvent?(cb: (event: VscodeShellIntegrationEvent) => void): { dispose(): void };
   onLineData?(cb: (line: string) => void): { dispose(): void };
   fit(): void;
+  refresh(): void;
   focus(): void;
   setTheme(theme: XtermTheme): void;
   getSelection(): string;

@@ -129,6 +129,10 @@ export class VscodeTerminalFrontend implements TerminalFrontend {
     this.fitAddon.fit();
   }
 
+  refresh(): void {
+    this.raw.refresh(0, Math.max(0, this.raw.rows - 1));
+  }
+
   focus(): void {
     this.raw.focus();
   }

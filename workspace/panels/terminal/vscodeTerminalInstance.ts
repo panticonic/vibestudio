@@ -115,6 +115,7 @@ export class VscodeTerminalInstance {
         },
         onData: () => {
           if (this.autoScroll) this.frontend?.scrollToBottom();
+          this.frontend?.refresh();
           this.updateScrollState();
         },
       });
@@ -163,6 +164,8 @@ export class VscodeTerminalInstance {
   }
 
   focus(): void {
+    this.frontend?.fit();
+    this.frontend?.refresh();
     this.frontend?.focus();
   }
 

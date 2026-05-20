@@ -51,6 +51,7 @@ describe("VscodeTerminalInstance", () => {
     await vi.advanceTimersByTimeAsync(8);
 
     expect(textFromWrites(frontend.writes)).toContain("ready");
+    expect(frontend.refresh).toHaveBeenCalled();
     expect(onNotification).toHaveBeenCalledWith(
       expect.objectContaining({ severity: "done", message: "complete" })
     );
@@ -64,12 +65,14 @@ describe("VscodeTerminalInstance", () => {
 
     await instance.attach(hostElement());
     instance.fit();
+    instance.focus();
     instance.setTheme(theme("next"));
     instance.findNext("abc", { caseSensitive: true });
     instance.selectAll();
 
-    expect(frontend.focus).toHaveBeenCalledTimes(1);
-    expect(frontend.fit).toHaveBeenCalledTimes(1);
+    expect(frontend.focus).toHaveBeenCalledTimes(2);
+    expect(frontend.fit).toHaveBeenCalledTimes(2);
+    expect(frontend.refresh).toHaveBeenCalledTimes(1);
     expect(frontend.setTheme).toHaveBeenCalledWith(theme("next"));
     expect(frontend.findNext).toHaveBeenCalledWith("abc", { caseSensitive: true });
     expect(frontend.selectAll).toHaveBeenCalledTimes(1);
@@ -190,6 +193,7 @@ type FakeFrontend = TerminalFrontend & {
   emitLineData(line: string): void;
   focus: ReturnType<typeof vi.fn>;
   fit: ReturnType<typeof vi.fn>;
+  refresh: ReturnType<typeof vi.fn>;
   setTheme: ReturnType<typeof vi.fn>;
   findNext: ReturnType<typeof vi.fn>;
   selectAll: ReturnType<typeof vi.fn>;
@@ -227,6 +231,7 @@ function createFakeFrontend(): FakeFrontend {
       return { dispose: vi.fn() };
     }),
     fit: vi.fn(),
+    refresh: vi.fn(),
     focus: vi.fn(),
     setTheme: vi.fn(),
     getSelection: vi.fn(() => "selection"),
