@@ -1,7 +1,23 @@
-import { describe, expect, it } from "vitest";
+import os from "node:os";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectDeepLink, isTrustedCleartextHost, parseConnectLink } from "./connect";
 
+function ipv4(address: string): os.NetworkInterfaceInfo {
+  return {
+    family: "IPv4",
+    address,
+    internal: false,
+    netmask: "255.255.255.0",
+    mac: "00:00:00:00:00:00",
+    cidr: `${address}/24`,
+  };
+}
+
 describe("connect deep links", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("round-trips a pairing link", () => {
     const link = createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24));
     expect(parseConnectLink(link)).toEqual({
@@ -55,5 +71,45 @@ describe("connect deep links", () => {
     for (const fixture of fixtures) {
       expect(script.parseConnectLink(fixture)).toEqual(parseConnectLink(fixture));
     }
+  });
+
+  it("requires an actual Tailscale interface when the script selector is tailscale", async () => {
+    const scriptUrl = new URL("../../../scripts/connect-utils.mjs", import.meta.url);
+    const script = (await import(scriptUrl.href)) as {
+      pickMobileHost: (
+        preference: string,
+        options?: { includeTunnel?: boolean }
+      ) => {
+        address: string;
+      };
+    };
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      eth0: [ipv4("192.168.1.20")],
+    });
+
+    expect(() => script.pickMobileHost("tailscale", { includeTunnel: true })).toThrow(
+      "Could not detect a Tailscale IPv4 interface"
+    );
+    expect(script.pickMobileHost("vpn", { includeTunnel: true }).address).toBe("192.168.1.20");
+  });
+
+  it("selects a Tailscale address for the script tailscale selector", async () => {
+    const scriptUrl = new URL("../../../scripts/connect-utils.mjs", import.meta.url);
+    const script = (await import(scriptUrl.href)) as {
+      pickMobileHost: (
+        preference: string,
+        options?: { includeTunnel?: boolean }
+      ) => {
+        address: string;
+      };
+    };
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      eth0: [ipv4("192.168.1.20")],
+      tailscale0: [ipv4("100.75.165.121")],
+    });
+
+    expect(script.pickMobileHost("tailscale", { includeTunnel: true }).address).toBe(
+      "100.75.165.121"
+    );
   });
 });

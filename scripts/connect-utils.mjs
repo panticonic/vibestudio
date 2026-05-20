@@ -46,7 +46,7 @@ export function parseConnectLink(rawUrl) {
   return { kind: "ok", url: parsedUrl.url, code };
 }
 
-function parseConnectServerUrl(rawUrl) {
+export function parseConnectServerUrl(rawUrl) {
   let server;
   try {
     server = new URL(rawUrl);
@@ -132,7 +132,7 @@ export function pickMobileHost(preference, options = {}) {
 
   const effectivePreference =
     requested === "auto" ? (options.defaultPreference ?? "lan") : requested;
-  const candidates = listIPv4Interfaces()
+  let candidates = listIPv4Interfaces()
     .filter(({ name }) => !ignoredInterfacePattern.test(name))
     .filter(({ name }) => options.includeTunnel || !tunnelInterfacePattern.test(name))
     .map((iface) => ({
@@ -141,7 +141,16 @@ export function pickMobileHost(preference, options = {}) {
     }))
     .sort((a, b) => a.priority - b.priority);
 
+  if (requested === "tailscale") {
+    candidates = candidates.filter((iface) => isTailscaleAddress(iface.address, iface.name));
+  }
+
   if (candidates.length === 0) {
+    if (requested === "tailscale") {
+      throw new Error(
+        "Could not detect a Tailscale IPv4 interface. Start Tailscale or pass --host <tailscale-ip-or-hostname>."
+      );
+    }
     throw new Error(
       "Could not detect any non-internal IPv4 interface. Pass --host <vpn-ip-or-hostname>."
     );

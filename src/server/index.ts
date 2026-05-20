@@ -160,6 +160,7 @@ interface CliArgs {
   tlsKey?: string;
   printCredentials?: boolean;
   publicUrl?: string;
+  requirePublicUrl?: boolean;
   noVpnDetect?: boolean;
   help?: boolean;
 }
@@ -195,6 +196,7 @@ Options:
                            When set, OAuth flows default to redirecting through this
                            URL — register <public-url>/_r/s/credentials/oauth/callback
                            with each OAuth provider as the allowed redirect URI.
+  --require-public-url     Fail startup unless the advertised public URL is verified reachable.
   --no-vpn-detect          Skip auto-detection and auto-configuration of the VPN-based
                            public URL (Tailscale today). Useful if you manage
                            tailscale serve yourself or use --public-url.
@@ -288,6 +290,7 @@ function parseArgs(argv: string[]): CliArgs {
     "tls-key",
     "print-credentials",
     "public-url",
+    "require-public-url",
     "no-vpn-detect",
     "help",
   ]);
@@ -297,6 +300,7 @@ function parseArgs(argv: string[]): CliArgs {
     "ephemeral",
     "init",
     "print-credentials",
+    "require-public-url",
     "no-vpn-detect",
     "help",
   ]);
@@ -391,6 +395,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "public-url":
         args.publicUrl = value;
+        break;
+      case "require-public-url":
+        args.requirePublicUrl = true;
         break;
       case "no-vpn-detect":
         args.noVpnDetect = true;
@@ -1960,6 +1967,62 @@ async function main() {
   // sees the auto-detected Mobile URL line if one is available).
   const { detectedVpn, serveProvision, publicUrlVerified, publicUrlReachabilityReason } =
     await vpnSetupPromise;
+  const requirePublicUrl =
+    args.requirePublicUrl || process.env["NATSTACK_REQUIRE_PUBLIC_URL"] === "1";
+  let requiredPublicUrlVerified = publicUrlVerified;
+  let requiredPublicUrlReachabilityReason = publicUrlReachabilityReason;
+  if (requirePublicUrl && explicitOverride) {
+    if (!explicitOverride.startsWith("https://")) {
+      requiredPublicUrlVerified = false;
+      requiredPublicUrlReachabilityReason = "required public URL must use https://";
+    } else {
+      const { probeHttpsReachable } = await import("./tailscaleServe.js");
+      const reachability = await probeHttpsReachable(explicitOverride).catch((error) => ({
+        ok: false,
+        reason: error instanceof Error ? error.message : String(error),
+      }));
+      requiredPublicUrlVerified = reachability.ok;
+      requiredPublicUrlReachabilityReason = reachability.ok ? undefined : reachability.reason;
+      markPublicUrlVerified(reachability.ok);
+    }
+  }
+  if (requirePublicUrl && !requiredPublicUrlVerified) {
+    const publicUrl = explicitOverride ?? detectedVpn?.url;
+    const lines = [
+      "This server was started with a required public pairing URL, but NatStack",
+      "could not verify one. Refusing to continue so clients do not pair against",
+      "a fallback URL by mistake.",
+      "",
+      publicUrl ? `Public URL: ${publicUrl}` : "Public URL: not detected",
+      requiredPublicUrlReachabilityReason
+        ? `Last check: ${requiredPublicUrlReachabilityReason}`
+        : "",
+      explicitOverride
+        ? "Use a reachable https:// public URL, or remove --require-public-url."
+        : "",
+      serveProvision?.kind === "permission-denied"
+        ? "Tailscale denied Serve configuration. Run:"
+        : "",
+      serveProvision?.kind === "permission-denied" ? "  sudo tailscale set --operator=$USER" : "",
+      serveProvision?.kind === "permission-denied"
+        ? `  sudo tailscale serve --bg ${gatewayPort}`
+        : "",
+      serveProvision?.kind === "serve-feature-disabled"
+        ? "Enable Tailscale Serve, then restart this command."
+        : "",
+      serveProvision?.kind === "https-feature-disabled"
+        ? "Enable Tailscale HTTPS certificates, then restart this command."
+        : "",
+      serveProvision?.kind === "skipped-conflict"
+        ? `Existing Serve config conflicts: ${serveProvision.reason}`
+        : "",
+      serveProvision?.kind === "error" ? `Tailscale error: ${serveProvision.message}` : "",
+      "",
+      "After fixing Tailscale Serve, restart the pair command.",
+    ].filter((line) => line !== "");
+    printReadinessActionBlock("Required public URL is not ready", lines);
+    process.exit(1);
+  }
 
   const workerdManager =
     container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");

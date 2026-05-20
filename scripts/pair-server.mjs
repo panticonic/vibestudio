@@ -27,6 +27,7 @@ export function parsePairArgs(argv, config) {
     publicUrl: process.env.NATSTACK_PUBLIC_URL ?? null,
     dev: process.env[config.devEnv] === "1",
     noInit: false,
+    requirePublicUrl: false,
     help: false,
     serverArgs: [],
   };
@@ -40,6 +41,7 @@ export function parsePairArgs(argv, config) {
     "--workspace-dir",
     "--app-root",
     "--public-url",
+    "--require-public-url",
     "--dev",
     "--ephemeral",
     "--no-init",
@@ -70,6 +72,8 @@ export function parsePairArgs(argv, config) {
       options.appRoot = argv[++i] ?? "";
     } else if (arg === "--public-url") {
       options.publicUrl = argv[++i] ?? "";
+    } else if (arg === "--require-public-url") {
+      options.requirePublicUrl = true;
     } else if (arg === "--dev" || arg === "--ephemeral") {
       options.dev = true;
     } else if (arg === "--no-init") {
@@ -97,10 +101,11 @@ export function parsePairArgs(argv, config) {
 export function printPairHelp(config) {
   console.log(`${config.commandName}
 
-If Tailscale is running and \`tailscale serve\` is configured (or can be configured —
-the server attempts it automatically), the QR/deep link points at the MagicDNS
-HTTPS URL and OAuth, panel chrome, and pairing all use the same URL. Otherwise
-it falls back to the IP+HTTP gateway address.
+If Tailscale is running and \`tailscale serve --bg <port>\` has been configured
+on the server, the QR/deep link points at the MagicDNS HTTPS URL and OAuth,
+panel chrome, and pairing all use the same URL. Otherwise it falls back to the
+IP+HTTP gateway address. Explicit \`--host tailscale\` requires the Tailscale
+HTTPS URL and exits if it cannot be verified.
 
 Usage:
 ${config.usage.map((line) => `  ${line}`).join("\n")}
@@ -121,6 +126,9 @@ Options:
       Application root passed to the server.
   --public-url <url>
       Override the externally reachable URL used by OAuth/webhook routes.
+  --require-public-url
+      Exit nonzero unless the server can advertise a verified public URL.
+      This is implied by --host tailscale.
   --dev, --ephemeral
       Use a disposable dev workspace copied fresh from the template and deleted
       when the server exits.
@@ -145,12 +153,16 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
     defaultPreference: "vpn",
     includeTunnel: true,
   });
+  const requirePublicUrl = options.requirePublicUrl || options.host === "tailscale";
   const serverArgs = buildServerArgs(options, selectedHost.address);
 
   console.log(
     `[${config.logPrefix}] Host: ${selectedHost.address}${selectedHost.interfaceName ? ` (${selectedHost.interfaceName})` : ""}`
   );
   console.log(`[${config.logPrefix}] Gateway port: ${options.port}`);
+  if (requirePublicUrl) {
+    console.log(`[${config.logPrefix}] Tailscale HTTPS pairing URL required`);
+  }
   if (options.dev) {
     console.log(`[${config.logPrefix}] Dev workspace: fresh template copy, deleted on exit`);
   }
@@ -164,6 +176,7 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
       NATSTACK_HOST: selectedHost.address,
       NATSTACK_GATEWAY_PORT: String(options.port),
       NATSTACK_PROTOCOL: options.protocol,
+      ...(requirePublicUrl ? { NATSTACK_REQUIRE_PUBLIC_URL: "1" } : {}),
       ...(options.dev ? { NODE_ENV: "development", NATSTACK_WORKSPACE_EPHEMERAL: "1" } : {}),
     },
   });
@@ -175,12 +188,16 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
   let buffer = "";
   let pendingServeActivationUrl = null;
   let publicUrlNotReachable = null;
+  let strictPublicUrlFailure = false;
   const serveActionLines = [];
   let pendingTimer = null;
   let waitElapsed = false;
 
   const printServeActionFollowup = () => {
-    if (!pendingServeActivationUrl && !publicUrlNotReachable && serveActionLines.length === 0) {
+    if (
+      requirePublicUrl ||
+      (!pendingServeActivationUrl && !publicUrlNotReachable && serveActionLines.length === 0)
+    ) {
       return;
     }
     const divider = "=".repeat(72);
@@ -214,6 +231,21 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
         waitElapsed = true;
         tryPrintBanner();
       }, 500);
+      return;
+    }
+    if (requirePublicUrl && !mobileUrl) {
+      strictPublicUrlFailure = true;
+      const divider = "=".repeat(72);
+      console.error(`\n${divider}`);
+      console.error("  ERROR — Required Tailscale HTTPS pairing URL is not ready");
+      console.error(divider);
+      if (publicUrlNotReachable) console.error(`  Public URL: ${publicUrlNotReachable}`);
+      console.error("  Refusing to print an HTTP fallback pairing QR for --host tailscale.");
+      console.error("");
+      console.error("  Fix Tailscale Serve, then restart this command:");
+      console.error(`    ${config.restartCommand}`);
+      console.error(`${divider}\n`);
+      child.kill("SIGTERM");
       return;
     }
     bannerPrinted = true;
@@ -269,6 +301,7 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
   });
 
   child.on("exit", (code, signal) => {
+    if (strictPublicUrlFailure) process.exit(1);
     if (signal) process.kill(process.pid, signal);
     else process.exit(code ?? 0);
   });
