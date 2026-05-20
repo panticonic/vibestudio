@@ -26,6 +26,7 @@ import type {
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingDeviceCodeApproval,
+  PendingExtensionApproval,
   PendingUserlandApproval,
   UserlandApprovalOption,
 } from "@natstack/shared/approvals";
@@ -95,11 +96,8 @@ type PendingAction =
 
 type ButtonVariant = "primary" | "surface" | "danger" | "outline";
 
-const GRANT_DECISIONS: Array<Exclude<ApprovalDecision, "deny" | "dismiss">> = [
-  "once",
+const SECONDARY_GRANT_DECISIONS: Array<Exclude<ApprovalDecision, "once" | "version" | "repo" | "deny" | "dismiss">> = [
   "session",
-  "version",
-  "repo",
 ];
 
 export function ApprovalSheet({
@@ -482,6 +480,8 @@ function ApprovalDetails({
             <UserlandDetails approval={approval} />
           ) : approval.kind === "device-code" ? (
             <DeviceCodeDetails approval={approval} />
+          ) : approval.kind === "extension" ? (
+            <ExtensionDetails approval={approval} />
           ) : (
             <CapabilityDetails approval={approval} />
           )}
@@ -545,6 +545,19 @@ function CapabilityDetails({ approval }: { approval: PendingCapabilityApproval }
   return (
     <>
       {approval.resource ? <DetailRow icon={Globe} label={approval.resource.label} value={approval.resource.value} code /> : null}
+      {(approval.details ?? []).map((detail) => (
+        <DetailRow key={detail.label} icon={Lock} label={detail.label} value={detail.value} code />
+      ))}
+    </>
+  );
+}
+
+function ExtensionDetails({ approval }: { approval: PendingExtensionApproval }) {
+  return (
+    <>
+      <DetailRow icon={Lock} label="Extension" value={approval.extensionName} code />
+      <DetailRow icon={Lock} label="Action" value={approval.action} code />
+      <DetailRow icon={Globe} label="Source" value={`${approval.source.repo}@${approval.source.ref}`} code />
       {(approval.details ?? []).map((detail) => (
         <DetailRow key={detail.label} icon={Lock} label={detail.label} value={detail.value} code />
       ))}
@@ -659,21 +672,31 @@ function StandardActions({
   pendingAction,
   onChoose,
 }: {
-  approval: PendingCredentialApproval | PendingCapabilityApproval;
+  approval: PendingCredentialApproval | PendingCapabilityApproval | PendingExtensionApproval;
   busy: boolean;
   pendingAction: PendingAction | null;
   onChoose: (decision: ApprovalDecision) => void;
 }) {
   const copy = getStandardActionCopy(approval);
+  if (approval.kind === "extension") {
+    return (
+      <View style={styles.actionGroups}>
+        <View style={styles.actionRow}>
+          <DecisionButton label={copy.once.label} description={copy.once.description} variant="primary" disabled={busy} loading={pendingAction === "once"} onPress={() => onChoose("once")} testID="approval-action-once" />
+          <DecisionButton label="Deny" description={copy.denyDescription} variant="danger" disabled={busy} loading={pendingAction === "deny"} icon={XCircle} onPress={() => onChoose("deny")} testID="approval-action-deny" />
+        </View>
+      </View>
+    );
+  }
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
         <DecisionButton label={copy.once.label} description={copy.once.description} variant="surface" disabled={busy} loading={pendingAction === "once"} onPress={() => onChoose("once")} testID="approval-action-once" />
-        <DecisionButton label={copy.session.label} description={copy.session.description} variant="primary" disabled={busy} loading={pendingAction === "session"} onPress={() => onChoose("session")} testID="approval-action-session" />
+        <DecisionButton label={copy.version.label} description={copy.version.description} variant="primary" disabled={busy} loading={pendingAction === "version"} onPress={() => onChoose("version")} testID="approval-action-version" />
         <DecisionButton label="Deny" description={copy.denyDescription} variant="danger" disabled={busy} loading={pendingAction === "deny"} icon={XCircle} onPress={() => onChoose("deny")} testID="approval-action-deny" />
       </View>
       <View style={styles.actionRow}>
-        {GRANT_DECISIONS.slice(2).map((decision) => (
+        {SECONDARY_GRANT_DECISIONS.map((decision) => (
           <DecisionButton
             key={decision}
             label={copy[decision].label}
