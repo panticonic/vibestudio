@@ -217,12 +217,19 @@ accessed by clicking their link on the index page.
 ### Android phone over VPN
 
 For trusted phone testing over a VPN/LAN, build the internal Android app and
-start a stable QR-pairing server:
+start a stable QR-pairing server. If you use the Tailscale HTTPS route, first
+configure Serve on the server machine once:
+
+```bash
+sudo tailscale serve --bg 3030
+```
+
+Then start pairing:
 
 ```bash
 pnpm mobile:install:internal --launch
 pnpm build
-pnpm pair
+pnpm pair --host tailscale --port 3030
 ```
 
 See [docs/mobile-vpn.md](docs/mobile-vpn.md) for host selection, workspace

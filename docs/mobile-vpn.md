@@ -10,16 +10,21 @@ The workflow uses:
 - a **stable gateway port** so the phone can keep using the same server URL;
 - a **QR/deep-link pairing command** that saves the server URL and durable
   device credential in the app;
-- **automatic Tailscale serve setup** so the phone connects over HTTPS via
-  MagicDNS and OAuth callbacks land on the same URL — no per-machine setup
-  beyond a one-time `tailscale set --operator=$USER`.
+- **Tailscale Serve over HTTPS** so the phone connects via MagicDNS and OAuth
+  callbacks land on the same URL.
 
 ## Auto-detected Tailscale path (recommended)
 
-If Tailscale is running on the server machine, `pnpm mobile:pair` will detect
-the MagicDNS hostname (e.g. `pop-os.tailnet-xyz.ts.net`), provision
-`tailscale serve` to forward HTTPS → the local gateway, verify the URL is
-actually reachable, and use it as the QR target. The phone connects via
+If Tailscale is running on the server machine, first configure Serve once on
+that server:
+
+```bash
+sudo tailscale serve --bg 3030
+```
+
+Then `pnpm mobile:pair --host tailscale --port 3030` detects the MagicDNS
+hostname (e.g. `pop-os.tailnet-xyz.ts.net`), verifies the HTTPS URL is actually
+reachable, and uses it as the QR target. The phone connects via
 `https://<host>.<tailnet>.ts.net`, panel chrome and OAuth callbacks share the
 same URL, and registering OAuth providers becomes a one-time copy-paste of
 `https://<host>.<tailnet>.ts.net/_r/s/credentials/oauth/callback`.
@@ -38,11 +43,10 @@ First-time requirements:
 - HTTPS Certificates feature enabled in your tailnet admin console
   (https://login.tailscale.com/admin/dns). Provisioned `tailscale serve`
   uses Let's Encrypt certs minted via this feature.
-- Either run the natstack server as the Tailscale operator
-  (`sudo tailscale set --operator=$USER` once, then logout/login or restart),
-  or run `sudo tailscale serve --bg <gateway-port>` once manually. Without one
-  of these, the auto-provision step prints `permission-denied` and falls back
-  to the IP+HTTP gateway URL.
+- Run `sudo tailscale serve --bg <gateway-port>` once manually on the server.
+  The `--bg` Serve configuration persists across NatStack restarts and normal
+  machine reboots. If it disappears after reboot, check Tailscale state
+  persistence with `tailscale serve status` and `systemctl status tailscaled`.
 
 The readiness banner reports what's happening:
 
@@ -58,7 +62,7 @@ natstack-server ready:
              Persistent across reboots; remove with `tailscale serve reset`.
 ```
 
-To skip auto-detection (you manage `tailscale serve` yourself, or use a
+To skip auto-detection (you use a
 reverse proxy / Cloudflare Tunnel), pass `--no-vpn-detect` or set
 `NATSTACK_NO_VPN_DETECT=1`. Setting `--public-url` also implicitly skips
 detection.
@@ -83,20 +87,25 @@ bordered block during startup and again right after the QR banner:
 ```
 
 The activation URL is per-tailnet and is extracted from the daemon's own
-"Serve is not enabled" message — open it in a browser, click **Enable**, then
-restart `pnpm mobile:pair`. The next run will:
+"Serve is not enabled" message. Open it in a browser, click **Enable**, then
+run the server-side Serve command and restart pairing:
 
-1. provision `tailscale serve --bg <port>` automatically,
-2. verify `https://<host>.<tailnet>.ts.net/healthz` returns `{ ok: true }`,
-3. mark the public URL as **verified reachable**,
-4. switch OAuth redirects to `https://<host>.<tailnet>.ts.net/_r/s/credentials/oauth/callback`
+```bash
+sudo tailscale serve --bg 3030
+pnpm mobile:pair --host tailscale --port 3030
+```
+
+The next run will:
+
+1. verify `https://<host>.<tailnet>.ts.net/healthz` returns `{ ok: true }`,
+2. mark the public URL as **verified reachable**,
+3. switch OAuth redirects to `https://<host>.<tailnet>.ts.net/_r/s/credentials/oauth/callback`
    so logins from the phone complete.
 
 **For agents driving this setup:** treat the `ACTION NEEDED` block as a hard
-stop on the OAuth path. Pairing and the chat agent still work over the IP+HTTP
-gateway, but any OAuth flow the user starts from mobile will redirect to
-`http://localhost:<port>/...` and hang. Surface the activation URL to the
-operator before encouraging them to try mobile OAuth.
+stop on the Tailscale HTTPS path. Do not continue with `--host tailscale` until
+`sudo tailscale serve --bg <gateway-port>` has been run successfully on the
+server and the pair command verifies the HTTPS URL.
 
 ## 1. Build and install the phone app
 
@@ -150,7 +159,8 @@ Make sure the server machine and phone are both connected to the VPN, then run:
 
 ```bash
 pnpm build
-pnpm mobile:pair
+sudo tailscale serve --bg 3030
+pnpm mobile:pair --host tailscale --port 3030
 ```
 
 `mobile:pair` starts `dist/server.mjs` with:
@@ -159,7 +169,7 @@ pnpm mobile:pair
 - `--init`
 - `--print-credentials`
 - `--gateway-port 3030`
-- a VPN/Tailscale host when one is detected, otherwise a LAN host
+- the requested VPN/Tailscale host, or a LAN host when no strict host is passed
 
 The command prints a `natstack://connect?...` deep link and QR code. Scan it
 with the Android camera and accept the app's connection prompt.
@@ -189,7 +199,8 @@ Use `--device <adb-serial>` if more than one Android target is connected.
 ## Host selection
 
 By default, `mobile:pair` prefers a Tailscale/VPN interface and falls back to a
-LAN address. You can be explicit:
+LAN address. Be explicit when you need a particular route. `--host tailscale`
+is strict: it requires a Tailscale interface and a verified HTTPS Serve URL.
 
 ```bash
 pnpm mobile:pair --host tailscale

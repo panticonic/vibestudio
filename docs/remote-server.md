@@ -174,6 +174,22 @@ On the laptop, click the `Pair URL` or open Connection Settings and paste the
 code on the **Pair with code** tab. Electron exchanges the code for a durable
 device credential; the admin token does not need to leave the server.
 
+From a source checkout, the quickest laptop flow is:
+
+```bash
+pnpm build
+pnpm start:remote --pair "natstack://connect?url=...&code=..."
+```
+
+Later launches can reuse the saved device credential:
+
+```bash
+pnpm start:remote
+```
+
+Plain `pnpm start` still starts local mode unless remote credentials have been
+saved in Electron's own credential store from Connection Settings.
+
 Admin-token bootstrap is still available for headless or scripted setups. On
 each launch, credentials resolve in this order:
 
@@ -188,27 +204,11 @@ each launch, credentials resolve in this order:
 Use the default **Pair with code** tab. Paste the `Pair URL` or enter the URL
 and code shown by `pnpm pair`, then **Save & relaunch**.
 
-### Laptop-orchestrated pairing over SSH
-
-When the server is a headless/home machine but the phone is plugged into the
-laptop, run the pairing server over SSH while building/installing the internal
-Android APK locally:
+For terminal-driven pairing, run:
 
 ```bash
-pnpm pair:remote \
-  --ssh user@home-server \
-  --repo ~/natstack \
-  --workspace my-workspace \
-  --remote-pull \
-  --remote-build
+pnpm start:remote --pair "natstack://connect?url=...&code=..."
 ```
-
-The SSH session streams the server's QR code and `Pair URL` into the laptop
-terminal. Keep that terminal open; `Ctrl-C` stops the remote pairing server.
-By default the command also runs `pnpm mobile:install:internal --launch` on the
-laptop, so the phone can scan the QR or enter the displayed URL/code. Add
-`--no-mobile-install` when the app is already installed, or `--device <serial>`
-when `adb` sees multiple devices.
 
 ### Option B: Environment variables (advanced)
 
@@ -360,11 +360,12 @@ in this order:
    register `${NATSTACK_PUBLIC_URL}/_r/s/credentials/oauth/callback` with
    each OAuth provider.
 2. **Auto-detected Tailscale MagicDNS URL.** When Tailscale is running on
-   the server, the bootstrap detects the MagicDNS hostname, attempts
-   `tailscale serve --bg <gateway-port>` (idempotent; refuses to clobber a
-   non-empty serve config that points elsewhere), and runs a `/healthz`
-   reachability check before promising the URL works. If verified, OAuth
-   flows default to it without each callsite having to know.
+   the server, configure Serve once on that server with
+   `sudo tailscale serve --bg <gateway-port>`. The bootstrap detects the
+   MagicDNS hostname and runs a `/healthz` reachability check before promising
+   the URL works. If verified, OAuth flows default to it without each callsite
+   having to know. Explicit `--host tailscale` fails fast when this check does
+   not pass.
 3. **Loopback fallback.** When neither of the above is available, OAuth
    defaults to a loopback HTTP server on the natstack machine — works for
    desktop in-process flows, fails (correctly) for mobile/remote.
