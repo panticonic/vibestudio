@@ -38,8 +38,11 @@ export interface SubscribeHeadlessAgentOptions {
   extraConfig?: Record<string, unknown>;
 }
 
-function doTargetId(source: string, className: string, objectKey: string): string {
-  return `do:${source}:${className}:${objectKey}`;
+export interface HeadlessAgentSubscription {
+  ok: boolean;
+  participantId?: string;
+  entityId: string;
+  targetId: string;
 }
 
 /**
@@ -50,7 +53,9 @@ function doTargetId(source: string, className: string, objectKey: string): strin
  * prompt as it does for panel-hosted sessions; only the runtime environment
  * differs (no panel → no UI tools advertised → naturally absent from discovery).
  */
-export async function subscribeHeadlessAgent(opts: SubscribeHeadlessAgentOptions): Promise<{ ok: boolean; participantId?: string }> {
+export async function subscribeHeadlessAgent(
+  opts: SubscribeHeadlessAgentOptions,
+): Promise<HeadlessAgentSubscription> {
   const channelConfig = getRecommendedChannelConfig();
 
   const subscriptionConfig: Record<string, unknown> = {
@@ -58,13 +63,38 @@ export async function subscribeHeadlessAgent(opts: SubscribeHeadlessAgentOptions
     ...opts.extraConfig,
   };
 
-  return opts.rpcCall(
-    doTargetId(opts.source, opts.className, opts.objectKey),
-    "subscribeChannel",
-    [{
-      channelId: opts.channelId,
+  const entity = (await opts.rpcCall("main", "runtime.createEntity", [
+    {
+      kind: "do",
+      source: opts.source,
+      className: opts.className,
+      key: opts.objectKey,
       contextId: opts.contextId,
-      config: subscriptionConfig,
-    }],
-  ) as Promise<{ ok: boolean; participantId?: string }>;
+    },
+  ])) as { id: string; targetId: string };
+
+  try {
+    const result = (await opts.rpcCall(
+      entity.targetId,
+      "subscribeChannel",
+      [
+        {
+          channelId: opts.channelId,
+          contextId: opts.contextId,
+          config: subscriptionConfig,
+        },
+      ],
+    )) as { ok: boolean; participantId?: string };
+    return { ...result, entityId: entity.id, targetId: entity.targetId };
+  } catch (err) {
+    await opts.rpcCall("main", "runtime.retireEntity", [{ id: entity.id }]).catch(() => {});
+    throw err;
+  }
+}
+
+export async function retireHeadlessAgent(opts: {
+  rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
+  entityId: string;
+}): Promise<void> {
+  await opts.rpcCall("main", "runtime.retireEntity", [{ id: opts.entityId }]);
 }

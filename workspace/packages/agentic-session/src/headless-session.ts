@@ -53,6 +53,7 @@ import { z } from "zod";
 import { ScopeManager, RpcScopePersistence } from "@workspace/eval";
 import {
   getRecommendedChannelConfig,
+  retireHeadlessAgent,
   subscribeHeadlessAgent,
 } from "./channel.js";
 
@@ -129,6 +130,8 @@ export class HeadlessSession {
   private _clientId: string;
   private _createdAt = Date.now();
   private _config: HeadlessSessionConfig;
+  private _agentEntityId: string | null = null;
+  private _agentRpcCall: HeadlessWithAgentConfig["rpcCall"] | null = null;
 
   // Channel message state (derived from persisted + live channel messages)
   private _chatMessages = new Map<string, ChatMessage>();
@@ -184,7 +187,7 @@ export class HeadlessSession {
     const objectKey = config.objectKey ?? `headless-${crypto.randomUUID()}`;
     const session = new HeadlessSession(config, channelId);
 
-    await subscribeHeadlessAgent({
+    const subscription = await subscribeHeadlessAgent({
       rpcCall: config.rpcCall,
       source: config.source,
       className: config.className,
@@ -193,6 +196,8 @@ export class HeadlessSession {
       contextId: config.contextId,
       extraConfig: config.extraConfig,
     });
+    session._agentEntityId = subscription.entityId;
+    session._agentRpcCall = config.rpcCall;
 
     if (session._scopeManager) {
       await session._scopeManager.hydrate();
@@ -561,7 +566,14 @@ export class HeadlessSession {
   }
 
   async close(): Promise<void> {
+    const entityId = this._agentEntityId;
+    const rpcCall = this._agentRpcCall;
+    this._agentEntityId = null;
+    this._agentRpcCall = null;
     this.dispose();
+    if (entityId && rpcCall) {
+      await retireHeadlessAgent({ rpcCall, entityId }).catch(() => {});
+    }
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
