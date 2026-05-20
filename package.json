@@ -18,6 +18,7 @@
     "server": "node dist/server.mjs",
     "server:dev": "NODE_ENV=development node dist/server.mjs",
     "pair": "node scripts/pair.mjs",
+    "pair:remote": "node scripts/pair-remote.mjs",
     "dev:mobile-server": "node scripts/dev-mobile-server.mjs",
     "mobile:pair": "node scripts/mobile-pair.mjs",
     "mobile:pair:dev": "node scripts/mobile-pair.mjs --dev",

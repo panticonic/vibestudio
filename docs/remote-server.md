@@ -188,6 +188,28 @@ each launch, credentials resolve in this order:
 Use the default **Pair with code** tab. Paste the `Pair URL` or enter the URL
 and code shown by `pnpm pair`, then **Save & relaunch**.
 
+### Laptop-orchestrated pairing over SSH
+
+When the server is a headless/home machine but the phone is plugged into the
+laptop, run the pairing server over SSH while building/installing the internal
+Android APK locally:
+
+```bash
+pnpm pair:remote \
+  --ssh user@home-server \
+  --repo ~/natstack \
+  --workspace my-workspace \
+  --remote-pull \
+  --remote-build
+```
+
+The SSH session streams the server's QR code and `Pair URL` into the laptop
+terminal. Keep that terminal open; `Ctrl-C` stops the remote pairing server.
+By default the command also runs `pnpm mobile:install:internal --launch` on the
+laptop, so the phone can scan the QR or enter the displayed URL/code. Add
+`--no-mobile-install` when the app is already installed, or `--device <serial>`
+when `adb` sees multiple devices.
+
 ### Option B: Environment variables (advanced)
 
 ```bash
