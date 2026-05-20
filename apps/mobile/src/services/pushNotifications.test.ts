@@ -1,10 +1,10 @@
 import { AppState } from "react-native";
-import {
-  registerForPushNotifications,
-  reconcilePushNotifications,
-} from "./pushNotifications";
+import { registerForPushNotifications, reconcilePushNotifications } from "./pushNotifications";
 import { handleBackgroundNotifeeEvent } from "./backgroundHandlers";
-import { backgroundActionQueueStorageKeys, SYNCING_NOTIFICATION_BODY } from "./backgroundActionQueue";
+import {
+  backgroundActionQueueStorageKeys,
+  SYNCING_NOTIFICATION_BODY,
+} from "./backgroundActionQueue";
 
 type MockShellClient = {
   transport: {
@@ -60,16 +60,20 @@ jest.mock(
     default: mockNotifee,
     EventType: { ACTION_PRESS: 1, PRESS: 2 },
   }),
-  { virtual: true },
+  { virtual: true }
 );
 jest.mock(
   "@react-native-async-storage/async-storage",
   () => ({
     getItem: jest.fn(async (key: string) => mockStorage.get(key) ?? null),
-    setItem: jest.fn(async (key: string, value: string) => { mockStorage.set(key, value); }),
-    removeItem: jest.fn(async (key: string) => { mockStorage.delete(key); }),
+    setItem: jest.fn(async (key: string, value: string) => {
+      mockStorage.set(key, value);
+    }),
+    removeItem: jest.fn(async (key: string) => {
+      mockStorage.delete(key);
+    }),
   }),
-  { virtual: true },
+  { virtual: true }
 );
 jest.mock("react-native-keychain", () => ({
   ACCESSIBLE: { WHEN_UNLOCKED_THIS_DEVICE_ONLY: "WHEN_UNLOCKED_THIS_DEVICE_ONLY" },
@@ -77,12 +81,16 @@ jest.mock("react-native-keychain", () => ({
   setGenericPassword: jest.fn(async () => true),
 }));
 
-const appStateSpy = jest.spyOn(AppState, "addEventListener").mockImplementation((_event, callback) => {
-  mockListeners.appState = callback as (state: string) => void;
-  return { remove: jest.fn() };
-});
+const appStateSpy = jest
+  .spyOn(AppState, "addEventListener")
+  .mockImplementation((_event, callback) => {
+    mockListeners.appState = callback as (state: string) => void;
+    return { remove: jest.fn() };
+  });
 
-function createShellClient(status: MockShellClient["transport"]["status"] = "connected"): MockShellClient {
+function createShellClient(
+  status: MockShellClient["transport"]["status"] = "connected"
+): MockShellClient {
   return {
     transport: {
       status,
@@ -126,16 +134,18 @@ describe("pushNotifications", () => {
     mockListeners.tokenRefresh?.("token-2");
     await Promise.resolve();
 
-    expect(shellClient.transport.call).toHaveBeenCalledWith(
-      "main",
-      "push.register",
-      expect.objectContaining({ token: "token-1", platform: expect.stringMatching(/^(android|ios)$/) }),
-    );
-    expect(shellClient.transport.call).toHaveBeenCalledWith(
-      "main",
-      "push.register",
-      expect.objectContaining({ token: "token-2", platform: expect.stringMatching(/^(android|ios)$/) }),
-    );
+    expect(shellClient.transport.call).toHaveBeenCalledWith("main", "push.register", [
+      expect.objectContaining({
+        token: "token-1",
+        platform: expect.stringMatching(/^(android|ios)$/),
+      }),
+    ]);
+    expect(shellClient.transport.call).toHaveBeenCalledWith("main", "push.register", [
+      expect.objectContaining({
+        token: "token-2",
+        platform: expect.stringMatching(/^(android|ios)$/),
+      }),
+    ]);
   });
 
   it("resolves foreground deny actions immediately and cancels notification", async () => {
@@ -150,12 +160,10 @@ describe("pushNotifications", () => {
       },
     });
 
-    expect(shellClient.transport.call).toHaveBeenCalledWith(
-      "main",
-      "shellApproval.resolve",
+    expect(shellClient.transport.call).toHaveBeenCalledWith("main", "shellApproval.resolve", [
       "approval-1",
       "deny",
-    );
+    ]);
     expect(mockNotifee.cancelNotification).toHaveBeenCalledWith("approval-1");
   });
 
@@ -172,11 +180,15 @@ describe("pushNotifications", () => {
     });
 
     expect(mockNotifee.cancelNotification).not.toHaveBeenCalledWith("approval-1");
-    expect(mockNotifee.displayNotification).toHaveBeenCalledWith(expect.objectContaining({
-      id: "approval-1",
-      body: SYNCING_NOTIFICATION_BODY,
-    }));
-    expect(mockStorage.get(backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY)).toContain("approval-1");
+    expect(mockNotifee.displayNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "approval-1",
+        body: SYNCING_NOTIFICATION_BODY,
+      })
+    );
+    expect(mockStorage.get(backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY)).toContain(
+      "approval-1"
+    );
   });
 
   it("queues background deny actions without cancelling the notification", async () => {
@@ -189,38 +201,47 @@ describe("pushNotifications", () => {
       {
         type: 1,
         detail: {
-          notification: { id: "approval-bg", title: "Approval", data: { approvalId: "approval-bg" } },
+          notification: {
+            id: "approval-bg",
+            title: "Approval",
+            data: { approvalId: "approval-bg" },
+          },
           pressAction: { id: "deny" },
         },
       },
       backgroundNotifee,
-      { ACTION_PRESS: 1, PRESS: 2 },
+      { ACTION_PRESS: 1, PRESS: 2 }
     );
 
     expect(backgroundNotifee.cancelNotification).not.toHaveBeenCalled();
-    expect(backgroundNotifee.displayNotification).toHaveBeenCalledWith(expect.objectContaining({
-      id: "approval-bg",
-      body: SYNCING_NOTIFICATION_BODY,
-    }));
-    expect(mockStorage.get(backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY)).toContain("approval-bg");
+    expect(backgroundNotifee.displayNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "approval-bg",
+        body: SYNCING_NOTIFICATION_BODY,
+      })
+    );
+    expect(mockStorage.get(backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY)).toContain(
+      "approval-bg"
+    );
   });
 
   it("drains queued actions on reconnect with resolve then cancel", async () => {
-    mockStorage.set(backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY, JSON.stringify({
-      version: 1,
-      actions: [{ approvalId: "approval-1", decision: "session", queuedAt: Date.now() }],
-    }));
+    mockStorage.set(
+      backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY,
+      JSON.stringify({
+        version: 1,
+        actions: [{ approvalId: "approval-1", decision: "session", queuedAt: Date.now() }],
+      })
+    );
     const shellClient = createShellClient();
     await registerForPushNotifications(shellClient as never);
 
     await mockListeners.reconnect?.();
 
-    expect(shellClient.transport.call).toHaveBeenCalledWith(
-      "main",
-      "shellApproval.resolve",
+    expect(shellClient.transport.call).toHaveBeenCalledWith("main", "shellApproval.resolve", [
       "approval-1",
       "session",
-    );
+    ]);
     expect(mockNotifee.cancelNotification).toHaveBeenCalledWith("approval-1");
     expect(mockStorage.has(backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY)).toBe(false);
   });

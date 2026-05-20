@@ -34,6 +34,8 @@ export function createMobileShellCore(deps: {
 
   const call = <T>(method: string, args: unknown[]) =>
     deps.transport.call("main", method, args) as Promise<T>;
+  const callVoid = (method: string, args: unknown[]) =>
+    call<unknown>(method, args).then(() => undefined);
 
   const workspaceState: WorkspaceStateClient = {
     listSlots: () => call<SlotRow[]>("workspace-state.slot.list", []),
@@ -41,40 +43,39 @@ export function createMobileShellCore(deps: {
     getSlotHistory: (slotId) => call<SlotHistoryRow[]>("workspace-state.slot.history", [slotId]),
     resolveActiveEntity: (id) =>
       call<EntityRecord | null>("workspace-state.entity.resolveActive", [id]),
-    createSlot: (input: SlotCreateInput) => call<void>("workspace-state.slot.create", [input]),
+    createSlot: (input: SlotCreateInput) => callVoid("workspace-state.slot.create", [input]),
     appendSlotHistory: (slotId, entry: SlotHistoryEntryInput) =>
       call<number>("workspace-state.slot.appendHistory", [slotId, entry]),
     setSlotCurrent: (slotId, entryKey) =>
-      call<void>("workspace-state.slot.setCurrent", [slotId, entryKey]),
+      callVoid("workspace-state.slot.setCurrent", [slotId, entryKey]),
     updateCurrentStateArgs: (slotId, stateArgs) =>
-      call<void>("workspace-state.slot.updateCurrentStateArgs", [slotId, stateArgs]),
+      callVoid("workspace-state.slot.updateCurrentStateArgs", [slotId, stateArgs]),
     replaceSlotHistory: (slotId, entries, cursor) =>
-      call<void>("workspace-state.slot.replaceHistory", [slotId, entries, cursor]),
+      callVoid("workspace-state.slot.replaceHistory", [slotId, entries, cursor]),
     setSlotParent: (slotId, parentSlotId) =>
-      call<void>("workspace-state.slot.setParent", [slotId, parentSlotId]),
+      callVoid("workspace-state.slot.setParent", [slotId, parentSlotId]),
     setSlotPosition: (slotId, positionId) =>
-      call<void>("workspace-state.slot.setPosition", [slotId, positionId]),
+      callVoid("workspace-state.slot.setPosition", [slotId, positionId]),
     moveSlot: (slotId, parentSlotId, positionId) =>
-      call<void>("workspace-state.slot.move", [slotId, parentSlotId, positionId]),
-    closeSlot: (slotId) => call<void>("workspace-state.slot.close", [slotId]),
+      callVoid("workspace-state.slot.move", [slotId, parentSlotId, positionId]),
+    closeSlot: (slotId) => callVoid("workspace-state.slot.close", [slotId]),
   };
 
   const runtime: RuntimeClient = {
     createEntity: (spec: RuntimeEntityCreateSpec) =>
       call<RuntimeEntityHandle>("runtime.createEntity", [spec]),
-    retireEntity: (id) => call<void>("runtime.retireEntity", [{ id }]),
+    retireEntity: (id) => callVoid("runtime.retireEntity", [{ id }]),
   };
 
   const searchIndex: PanelSearchIndex = {
-    indexPanel: (panel: IndexablePanel) =>
-      call<void>("workspace-state.panel.index", [panel]),
+    indexPanel: (panel: IndexablePanel) => callVoid("workspace-state.panel.index", [panel]),
     search: (query: string, limit?: number) =>
       call<PanelSearchResult[]>("workspace-state.panel.search", [query, limit]),
     incrementAccessCount: (panelId: string) =>
-      call<void>("workspace-state.panel.incrementAccess", [panelId]),
+      callVoid("workspace-state.panel.incrementAccess", [panelId]),
     updateTitle: (panelId: string, title: string) =>
-      call<void>("workspace-state.panel.updateTitle", [panelId, title]),
-    rebuildIndex: () => call<void>("workspace-state.panel.rebuildIndex", []),
+      callVoid("workspace-state.panel.updateTitle", [panelId, title]),
+    rebuildIndex: () => callVoid("workspace-state.panel.rebuildIndex", []),
   };
 
   const panelManager = new PanelManager({
@@ -83,7 +84,7 @@ export function createMobileShellCore(deps: {
     runtime,
     searchIndex,
     activationClient: {
-      markPanelActive: (panelId) => call<void>("presence.markPanelActive", [panelId]),
+      markPanelActive: (panelId) => callVoid("presence.markPanelActive", [panelId]),
     },
     viewState: createMobileLocalViewStateStore(deps.workspaceId),
     workspacePath: "",

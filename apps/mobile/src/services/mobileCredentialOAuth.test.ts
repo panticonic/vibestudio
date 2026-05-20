@@ -20,7 +20,7 @@ afterEach(() => {
 describe("mobileCredentialOAuth", () => {
   it("builds snugenv universal-link redirect URIs", () => {
     expect(buildMobileOAuthRedirectUri("openai-codex")).toBe(
-      "https://auth.snugenv.com/oauth/callback/openai-codex",
+      "https://auth.snugenv.com/oauth/callback/openai-codex"
     );
     expect(() => buildMobileOAuthRedirectUri("../bad")).toThrow(/Invalid OAuth provider id/);
   });
@@ -40,7 +40,7 @@ describe("mobileCredentialOAuth", () => {
 
   it("rejects authorize URLs that do not carry the expected state", async () => {
     await expect(
-      waitForMobileOAuthCode("https://auth.example.test/oauth?state=wrong", "state-1", 1),
+      waitForMobileOAuthCode("https://auth.example.test/oauth?state=wrong", "state-1", 1)
     ).rejects.toThrow(/OAuth state mismatch/);
     expect(mockOpenURL).not.toHaveBeenCalled();
   });
@@ -59,33 +59,41 @@ describe("mobileCredentialOAuth", () => {
       },
     };
 
-    await expect(connectMobileOAuthCredential(shellClient as never, {
-      providerId: "example",
-      flow: {
-        type: "oauth2-auth-code-pkce",
-        authorizeUrl: "https://auth.example.test/oauth",
-        tokenUrl: "https://auth.example.test/token",
-        clientId: "client",
-      },
-      credential: {
-        label: "Example",
-        audience: [{ url: "https://api.example.test/", match: "origin" }],
-        injection: {
-          type: "header",
-          name: "Authorization",
-          valueTemplate: "Bearer {token}",
+    await expect(
+      connectMobileOAuthCredential(shellClient as never, {
+        providerId: "example",
+        flow: {
+          type: "oauth2-auth-code-pkce",
+          authorizeUrl: "https://auth.example.test/oauth",
+          tokenUrl: "https://auth.example.test/token",
+          clientId: "client",
         },
-      },
-    })).resolves.toEqual({ id: "cred-1" });
+        credential: {
+          label: "Example",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: {
+            type: "header",
+            name: "Authorization",
+            valueTemplate: "Bearer {token}",
+          },
+        },
+      })
+    ).resolves.toEqual({ id: "cred-1" });
     expect(mockOpenURL).not.toHaveBeenCalled();
     expect(calls[0]).toMatchObject({
       method: "credentials.connect",
-      args: [expect.objectContaining({
-        flow: expect.objectContaining({ clientId: "client" }),
-        browser: "external",
-      })],
+      args: [
+        [
+          expect.objectContaining({
+            flow: expect.objectContaining({ clientId: "client" }),
+            browser: "external",
+          }),
+        ],
+      ],
     });
-    expect((calls[0]!.args[0] as { redirect?: unknown }).redirect).toBeUndefined();
+    expect(
+      ((calls[0]!.args[0] as unknown[])[0] as { redirect?: unknown }).redirect
+    ).toBeUndefined();
   });
 
   it("opts into client-forwarded redirect when callbackOrigin is supplied", async () => {
@@ -122,12 +130,16 @@ describe("mobileCredentialOAuth", () => {
       },
     });
     expect(calls[0]).toMatchObject({
-      args: [expect.objectContaining({
-        redirect: {
-          type: "client-forwarded",
-          callbackUri: "https://auth.snugenv.com/oauth/callback/example",
-        },
-      })],
+      args: [
+        [
+          expect.objectContaining({
+            redirect: {
+              type: "client-forwarded",
+              callbackUri: "https://auth.snugenv.com/oauth/callback/example",
+            },
+          }),
+        ],
+      ],
     });
   });
 });

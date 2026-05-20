@@ -37,9 +37,11 @@ describe("oauthLoopback", () => {
   });
 
   it("rejects OpenAI public-callback OAuth handoffs on mobile", async () => {
-    await expect(handleExternalOpen({ transport: { call: mockCall } } as never, {
-      url: "https://auth.openai.com/oauth/authorize?redirect_uri=https%3A%2F%2Fexample.test%2F_r%2Fs%2Fcredentials%2Foauth%2Fcallback",
-    })).rejects.toThrow(/Android loopback callback/);
+    await expect(
+      handleExternalOpen({ transport: { call: mockCall } } as never, {
+        url: "https://auth.openai.com/oauth/authorize?redirect_uri=https%3A%2F%2Fexample.test%2F_r%2Fs%2Fcredentials%2Foauth%2Fcallback",
+      })
+    ).rejects.toThrow(/Android loopback callback/);
 
     expect(mockOpenURL).not.toHaveBeenCalled();
     expect(mockStart).not.toHaveBeenCalled();
@@ -87,29 +89,33 @@ describe("oauthLoopback", () => {
       expectedState: "state-1",
       timeoutMs: 60_000,
     });
-    expect(mockCall).toHaveBeenCalledWith("main", "credentials.forwardOAuthCallback", {
-      transactionId: "tx-1",
-      url: "http://localhost:1455/auth/callback?code=code-1&state=state-1",
-      state: "state-1",
-    });
+    expect(mockCall).toHaveBeenCalledWith("main", "credentials.forwardOAuthCallback", [
+      {
+        transactionId: "tx-1",
+        url: "http://localhost:1455/auth/callback?code=code-1&state=state-1",
+        state: "state-1",
+      },
+    ]);
     expect(mockStop).not.toHaveBeenCalled();
   });
 
   it("stops listener when browser open fails", async () => {
     mockOpenURL.mockRejectedValueOnce(new Error("browser unavailable"));
 
-    await expect(handleExternalOpen({ transport: { call: mockCall } } as never, {
-      url: "https://auth.example.test/oauth",
-      oauthLoopback: {
-        transactionId: "tx-1",
-        redirectUri: "http://localhost:1455/auth/callback",
-        host: "localhost",
-        port: 1455,
-        callbackPath: "/auth/callback",
-        state: "state-1",
-        timeoutMs: 60_000,
-      },
-    })).rejects.toThrow(/browser unavailable/);
+    await expect(
+      handleExternalOpen({ transport: { call: mockCall } } as never, {
+        url: "https://auth.example.test/oauth",
+        oauthLoopback: {
+          transactionId: "tx-1",
+          redirectUri: "http://localhost:1455/auth/callback",
+          host: "localhost",
+          port: 1455,
+          callbackPath: "/auth/callback",
+          state: "state-1",
+          timeoutMs: 60_000,
+        },
+      })
+    ).rejects.toThrow(/browser unavailable/);
 
     expect(mockStop).toHaveBeenCalled();
     expect(mockCall).not.toHaveBeenCalled();

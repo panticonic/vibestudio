@@ -304,7 +304,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
         JSON.stringify({
           status: 404,
           message: `No streaming handler for method "${request.method}"`,
-        }),
+        })
       ).catch(() => {});
       return;
     }
@@ -321,7 +321,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
             statusText: frame.statusText,
             headerPairs: frame.headerPairs,
             finalUrl: frame.finalUrl,
-          }),
+          })
         );
       } else if (frame.kind === "chunk") {
         await sendFrame(FRAME_DATA, bytesToBase64(frame.bytes));
@@ -334,7 +334,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
             status: frame.status,
             message: frame.message,
             code: frame.code,
-          }),
+          })
         );
       }
     };
@@ -347,8 +347,8 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
           JSON.stringify({
             status: 502,
             message: err instanceof Error ? err.message : String(err),
-          }),
-        ).catch(() => {}),
+          })
+        ).catch(() => {})
       )
       .finally(() => {
         activeStreamingHandlers.delete(request.requestId);
@@ -381,7 +381,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
       targetId: string,
       method: string,
       args: unknown[],
-      options?: RpcCallOptions,
+      options?: RpcCallOptions
     ): Promise<T> {
       if (options?.signal?.aborted) {
         throw new Error("RPC call aborted by caller");
@@ -454,7 +454,7 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
       targetId: string,
       method: string,
       args: unknown[],
-      options?: { signal?: AbortSignal },
+      options?: { signal?: AbortSignal }
     ): Promise<Response> {
       // Fast-path: if the caller's signal is already aborted, fail
       // immediately instead of opening a stream the caller has
@@ -559,11 +559,14 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
       // `cleanup` hook in `clearPendingStream` when the stream
       // terminates (END/ERROR/idle timeout/cancel).
       const head = await headPromise;
-      const response = new Response(stream as ConstructorParameters<typeof Response>[0], {
-        status: head.status,
-        statusText: head.statusText,
-        headers: new Headers(head.headerPairs),
-      });
+      const response = new Response(
+        stream as unknown as ConstructorParameters<typeof Response>[0],
+        {
+          status: head.status,
+          statusText: head.statusText,
+          headers: new Headers(head.headerPairs),
+        }
+      );
       if (head.finalUrl) {
         try {
           Object.defineProperty(response, "url", {

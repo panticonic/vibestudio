@@ -1,4 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+} from "react";
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -26,6 +33,7 @@ import type {
   PendingCredentialApproval,
   PendingCredentialInputApproval,
   PendingDeviceCodeApproval,
+  PendingExtensionApproval,
   PendingUserlandApproval,
   UserlandApprovalOption,
 } from "@natstack/shared/approvals";
@@ -82,8 +90,14 @@ const XCircle = icon("XCircle", "x");
 export interface ApprovalSheetProps {
   approvals: PendingApproval[];
   onResolve: (approvalId: string, decision: ApprovalDecision) => Promise<void> | void;
-  onSubmitClientConfig: (approvalId: string, values: Record<string, string>) => Promise<void> | void;
-  onSubmitCredentialInput: (approvalId: string, values: Record<string, string>) => Promise<void> | void;
+  onSubmitClientConfig: (
+    approvalId: string,
+    values: Record<string, string>
+  ) => Promise<void> | void;
+  onSubmitCredentialInput: (
+    approvalId: string,
+    values: Record<string, string>
+  ) => Promise<void> | void;
   onResolveUserland: (approvalId: string, choice: string | "dismiss") => Promise<void> | void;
 }
 
@@ -132,7 +146,10 @@ export function ApprovalSheet({
     setValues({});
     setError(null);
     setPendingAction(null);
-    setDetailsOpen(shouldOpenApprovalDetails(current) || (current.kind === "credential" && !!current.oauthAudienceDomainMismatch));
+    setDetailsOpen(
+      shouldOpenApprovalDetails(current) ||
+        (current.kind === "credential" && !!current.oauthAudienceDomainMismatch)
+    );
     ReactNativeHapticFeedback.trigger("impactLight");
     Animated.parallel([
       Animated.spring(translateY, {
@@ -150,28 +167,33 @@ export function ApprovalSheet({
       }),
     ]).start();
     if (copy) {
-      AccessibilityInfo.announceForAccessibility(`${categoryLabel}. ${copy.title}. ${copy.summary}`);
+      AccessibilityInfo.announceForAccessibility(
+        `${categoryLabel}. ${copy.title}. ${copy.summary}`
+      );
     }
   }, [currentApprovalId]);
 
-  const runAction = useCallback(async (action: PendingAction, task: () => Promise<void> | void) => {
-    if (isBusy) return;
-    setError(null);
-    setPendingAction(action);
-    if (action === "deny") {
-      ReactNativeHapticFeedback.trigger("notificationWarning");
-    } else {
-      ReactNativeHapticFeedback.trigger("impactMedium");
-    }
-    try {
-      await task();
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Couldn't resolve. Try again.";
-      setError(message || "Couldn't resolve. Try again.");
-    } finally {
-      setPendingAction(null);
-    }
-  }, [isBusy]);
+  const runAction = useCallback(
+    async (action: PendingAction, task: () => Promise<void> | void) => {
+      if (isBusy) return;
+      setError(null);
+      setPendingAction(action);
+      if (action === "deny") {
+        ReactNativeHapticFeedback.trigger("notificationWarning");
+      } else {
+        ReactNativeHapticFeedback.trigger("impactMedium");
+      }
+      try {
+        await task();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Couldn't resolve. Try again.";
+        setError(message || "Couldn't resolve. Try again.");
+      } finally {
+        setPendingAction(null);
+      }
+    },
+    [isBusy]
+  );
 
   const dismiss = useCallback(() => {
     if (!current || isBusy) return;
@@ -184,28 +206,33 @@ export function ApprovalSheet({
     });
   }, [current, isBusy, onResolve, onResolveUserland, runAction]);
 
-  const panResponder = useMemo(() => PanResponder.create({
-    onMoveShouldSetPanResponder: (_event, gesture) => !isBusy && gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
-    onPanResponderMove: (_event, gesture) => {
-      const next = Math.max(0, gesture.dy);
-      dragOffset.current = next;
-      translateY.setValue(next);
-    },
-    onPanResponderRelease: (_event, gesture) => {
-      if (gesture.dy > 120 || gesture.vy > 0.8) {
-        ReactNativeHapticFeedback.trigger("impactLight");
-        dismiss();
-        return;
-      }
-      dragOffset.current = 0;
-      Animated.spring(translateY, {
-        toValue: 0,
-        useNativeDriver: true,
-        stiffness: 220,
-        damping: 28,
-      }).start();
-    },
-  }), [dismiss, isBusy, translateY]);
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onMoveShouldSetPanResponder: (_event, gesture) =>
+          !isBusy && gesture.dy > 8 && Math.abs(gesture.dy) > Math.abs(gesture.dx),
+        onPanResponderMove: (_event, gesture) => {
+          const next = Math.max(0, gesture.dy);
+          dragOffset.current = next;
+          translateY.setValue(next);
+        },
+        onPanResponderRelease: (_event, gesture) => {
+          if (gesture.dy > 120 || gesture.vy > 0.8) {
+            ReactNativeHapticFeedback.trigger("impactLight");
+            dismiss();
+            return;
+          }
+          dragOffset.current = 0;
+          Animated.spring(translateY, {
+            toValue: 0,
+            useNativeDriver: true,
+            stiffness: 220,
+            damping: 28,
+          }).start();
+        },
+      }),
+    [dismiss, isBusy, translateY]
+  );
 
   if (!current || !copy) return null;
 
@@ -263,30 +290,48 @@ export function ApprovalSheet({
                   extraCount={extraCount}
                 />
                 <Text style={[styles.title, { color: colors.text }]}>{copy.title}</Text>
-                <Text style={[styles.summary, { color: colors.textSecondary }]}>{copy.summary}</Text>
+                <Text style={[styles.summary, { color: colors.textSecondary }]}>
+                  {copy.summary}
+                </Text>
                 {copy.warning ? <WarningBand message={copy.warning} /> : null}
                 {current.kind === "userland" ? <IssuerPanel approval={current} /> : null}
                 {current.kind === "device-code" ? <DeviceCodePanel approval={current} /> : null}
                 {error ? <InlineError message={error} /> : null}
-                {(current.kind === "client-config" || current.kind === "credential-input") ? (
+                {current.kind === "client-config" || current.kind === "credential-input" ? (
                   <SecretConfigFields
                     approval={current}
                     values={values}
-                    onChange={(name, value) => setValues((previous) => ({ ...previous, [name]: value }))}
+                    onChange={(name, value) =>
+                      setValues((previous) => ({ ...previous, [name]: value }))
+                    }
                   />
                 ) : null}
-                <ApprovalDetails approval={current} callerLabel={callerLabel} open={detailsOpen} onToggle={() => setDetailsOpen((open) => !open)} />
+                <ApprovalDetails
+                  approval={current}
+                  callerLabel={callerLabel}
+                  open={detailsOpen}
+                  onToggle={() => setDetailsOpen((open) => !open)}
+                />
                 {current.kind === "userland" ? <RememberedHint issuer={current.callerId} /> : null}
               </ScrollView>
 
-              <View style={[styles.actionBar, { borderTopColor: colors.border, backgroundColor: colors.surface }]}>
+              <View
+                style={[
+                  styles.actionBar,
+                  { borderTopColor: colors.border, backgroundColor: colors.surface },
+                ]}
+              >
                 {current.kind === "client-config" ? (
                   <ClientConfigActions
                     approval={current}
                     values={values}
                     busy={isBusy}
                     pendingAction={pendingAction}
-                    onSubmit={() => runAction("submit-client-config", () => onSubmitClientConfig(current.approvalId, values))}
+                    onSubmit={() =>
+                      runAction("submit-client-config", () =>
+                        onSubmitClientConfig(current.approvalId, values)
+                      )
+                    }
                     onDeny={() => runAction("deny", () => onResolve(current.approvalId, "deny"))}
                   />
                 ) : current.kind === "credential-input" ? (
@@ -295,7 +340,11 @@ export function ApprovalSheet({
                     values={values}
                     busy={isBusy}
                     pendingAction={pendingAction}
-                    onSubmit={() => runAction("submit-credential-input", () => onSubmitCredentialInput(current.approvalId, values))}
+                    onSubmit={() =>
+                      runAction("submit-credential-input", () =>
+                        onSubmitCredentialInput(current.approvalId, values)
+                      )
+                    }
                     onDeny={() => runAction("deny", () => onResolve(current.approvalId, "deny"))}
                   />
                 ) : current.kind === "userland" ? (
@@ -303,20 +352,37 @@ export function ApprovalSheet({
                     approval={current}
                     busy={isBusy}
                     pendingAction={pendingAction}
-                    onChoose={(choice) => runAction(`userland:${choice}`, () => onResolveUserland(current.approvalId, choice))}
+                    onChoose={(choice) =>
+                      runAction(`userland:${choice}`, () =>
+                        onResolveUserland(current.approvalId, choice)
+                      )
+                    }
                   />
                 ) : current.kind === "device-code" ? (
                   <DeviceCodeActions
                     busy={isBusy}
                     pendingAction={pendingAction}
-                    onCancel={() => runAction("dismiss", () => onResolve(current.approvalId, "dismiss"))}
+                    onCancel={() =>
+                      runAction("dismiss", () => onResolve(current.approvalId, "dismiss"))
+                    }
+                  />
+                ) : current.kind === "extension" ? (
+                  <StandardActions
+                    approval={current}
+                    busy={isBusy}
+                    pendingAction={pendingAction}
+                    onChoose={(decision) =>
+                      runAction(decision, () => onResolve(current.approvalId, decision))
+                    }
                   />
                 ) : (
                   <StandardActions
                     approval={current}
                     busy={isBusy}
                     pendingAction={pendingAction}
-                    onChoose={(decision) => runAction(decision, () => onResolve(current.approvalId, decision))}
+                    onChoose={(decision) =>
+                      runAction(decision, () => onResolve(current.approvalId, decision))
+                    }
                   />
                 )}
               </View>
@@ -354,7 +420,8 @@ function ApprovalHeader({
 function getCategoryIcon(approval: PendingApproval): IconComponent {
   if (approval.kind === "capability") return ExternalLink;
   if (approval.kind === "client-config" || approval.kind === "credential-input") return Settings2;
-  if (approval.kind === "userland") return approval.callerKind === "worker" ? Workflow : LayoutPanelTop;
+  if (approval.kind === "userland")
+    return approval.callerKind === "worker" ? Workflow : LayoutPanelTop;
   if (approval.kind === "device-code") return ExternalLink;
   return Lock;
 }
@@ -364,7 +431,10 @@ function WarningBand({ message }: { message: string }) {
   return (
     <View
       accessibilityRole="alert"
-      style={[styles.warningBand, { backgroundColor: colors.dangerSoft, borderColor: colors.danger }]}
+      style={[
+        styles.warningBand,
+        { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+      ]}
     >
       <AlertTriangle size={14} color={colors.danger} />
       <Text style={[styles.warningText, { color: colors.danger }]}>{message}</Text>
@@ -375,7 +445,12 @@ function WarningBand({ message }: { message: string }) {
 function InlineError({ message }: { message: string }) {
   const colors = useAtomValue(themeColorsAtom);
   return (
-    <View style={[styles.warningBand, { backgroundColor: colors.dangerSoft, borderColor: colors.danger }]}>
+    <View
+      style={[
+        styles.warningBand,
+        { backgroundColor: colors.dangerSoft, borderColor: colors.danger },
+      ]}
+    >
       <AlertTriangle size={14} color={colors.danger} />
       <Text style={[styles.warningText, { color: colors.danger }]}>{message}</Text>
     </View>
@@ -385,7 +460,12 @@ function InlineError({ message }: { message: string }) {
 function IssuerPanel({ approval }: { approval: PendingUserlandApproval }) {
   const colors = useAtomValue(themeColorsAtom);
   return (
-    <View style={[styles.issuerPanel, { backgroundColor: colors.background, borderColor: colors.border }]}>
+    <View
+      style={[
+        styles.issuerPanel,
+        { backgroundColor: colors.background, borderColor: colors.border },
+      ]}
+    >
       <View style={styles.issuerHeader}>
         <User size={14} color={colors.textSecondary} />
         <Text style={[styles.helperText, { color: colors.textSecondary }]}>
@@ -398,7 +478,9 @@ function IssuerPanel({ approval }: { approval: PendingUserlandApproval }) {
         {approval.subject.label ? ` ${approval.subject.label}` : ""}
       </Text>
       {approval.warning ? <WarningBand message={approval.warning} /> : null}
-      {approval.summary ? <Text style={[styles.providerSummary, { color: colors.text }]}>{approval.summary}</Text> : null}
+      {approval.summary ? (
+        <Text style={[styles.providerSummary, { color: colors.text }]}>{approval.summary}</Text>
+      ) : null}
     </View>
   );
 }
@@ -416,7 +498,8 @@ function SecretConfigFields({
   return (
     <View style={styles.fields}>
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-        Secrets are entered in NatStack's shell UI, not exposed to panels or workers, and stored encrypted after submission.
+        Secrets are entered in NatStack's shell UI, not exposed to panels or workers, and stored
+        encrypted after submission.
       </Text>
       {approval.fields.map((field) => (
         <View key={field.name} style={styles.fieldBlock}>
@@ -433,11 +516,22 @@ function SecretConfigFields({
             placeholder={field.label}
             placeholderTextColor={colors.textSecondary}
             secureTextEntry={field.type === "secret"}
-            style={[styles.input, { backgroundColor: colors.background, borderColor: colors.border, color: colors.text }]}
+            style={[
+              styles.input,
+              {
+                backgroundColor: colors.background,
+                borderColor: colors.border,
+                color: colors.text,
+              },
+            ]}
             testID={`approval-field-${field.name}`}
             value={values[field.name] ?? ""}
           />
-          {field.description ? <Text style={[styles.helperText, { color: colors.textSecondary }]}>{field.description}</Text> : null}
+          {field.description ? (
+            <Text style={[styles.helperText, { color: colors.textSecondary }]}>
+              {field.description}
+            </Text>
+          ) : null}
         </View>
       ))}
     </View>
@@ -465,7 +559,9 @@ function ApprovalDetails({
         style={styles.detailsSummary}
       >
         <ChevronDown size={14} color={colors.textSecondary} />
-        <Text style={[styles.detailsSummaryText, { color: colors.textSecondary }]}>Request details</Text>
+        <Text style={[styles.detailsSummaryText, { color: colors.textSecondary }]}>
+          Request details
+        </Text>
       </Pressable>
       {open ? (
         <View style={styles.detailRows}>
@@ -482,6 +578,8 @@ function ApprovalDetails({
             <UserlandDetails approval={approval} />
           ) : approval.kind === "device-code" ? (
             <DeviceCodeDetails approval={approval} />
+          ) : approval.kind === "extension" ? (
+            <ExtensionDetails approval={approval} />
           ) : (
             <CapabilityDetails approval={approval} />
           )}
@@ -507,10 +605,32 @@ function CredentialDetails({ approval }: { approval: PendingCredentialApproval }
           <DetailRow icon={Globe} label="Remote" value={approval.gitOperation.remote} code />
         </>
       ) : null}
-      <DetailRow icon={Globe} label="Audience" value={approval.audience.map((audience) => `${audience.match}: ${audience.url}`).join("\n")} code />
-      {oauthOrigins.length > 0 ? <DetailRow icon={Globe} label="OAuth" value={oauthOrigins.join("\n")} danger={!!approval.oauthAudienceDomainMismatch} code /> : null}
-      {approval.oauthAudienceDomainMismatch ? <DetailRow icon={AlertTriangle} label="Warning" value="OAuth domain differs from audience" danger /> : null}
-      {approval.scopes.length > 0 ? <DetailRow icon={Lock} label="Scopes" value={approval.scopes.join(", ")} code /> : null}
+      <DetailRow
+        icon={Globe}
+        label="Audience"
+        value={approval.audience.map((audience) => `${audience.match}: ${audience.url}`).join("\n")}
+        code
+      />
+      {oauthOrigins.length > 0 ? (
+        <DetailRow
+          icon={Globe}
+          label="OAuth"
+          value={oauthOrigins.join("\n")}
+          danger={!!approval.oauthAudienceDomainMismatch}
+          code
+        />
+      ) : null}
+      {approval.oauthAudienceDomainMismatch ? (
+        <DetailRow
+          icon={AlertTriangle}
+          label="Warning"
+          value="OAuth domain differs from audience"
+          danger
+        />
+      ) : null}
+      {approval.scopes.length > 0 ? (
+        <DetailRow icon={Lock} label="Scopes" value={approval.scopes.join(", ")} code />
+      ) : null}
     </>
   );
 }
@@ -523,8 +643,19 @@ function ClientConfigDetails({ approval }: { approval: PendingClientConfigApprov
       <DetailRow icon={Lock} label="Client" value={approval.configId} code />
       <DetailRow icon={Globe} label="Authorize" value={approval.authorizeUrl} code />
       <DetailRow icon={Globe} label="Token URL" value={approval.tokenUrl} code />
-      <DetailRow icon={Lock} label="Binding" value={`Secret use limited to ${tokenOrigin}${authorizeOrigin !== tokenOrigin ? `\nSign-in starts at ${authorizeOrigin}` : ""}`} />
-      <DetailRow icon={Lock} label="Fields" value={approval.fields.map((field) => `${field.name}${field.type === "secret" ? " (secret)" : ""}`).join(", ")} code />
+      <DetailRow
+        icon={Lock}
+        label="Binding"
+        value={`Secret use limited to ${tokenOrigin}${authorizeOrigin !== tokenOrigin ? `\nSign-in starts at ${authorizeOrigin}` : ""}`}
+      />
+      <DetailRow
+        icon={Lock}
+        label="Fields"
+        value={approval.fields
+          .map((field) => `${field.name}${field.type === "secret" ? " (secret)" : ""}`)
+          .join(", ")}
+        code
+      />
     </>
   );
 }
@@ -534,9 +665,23 @@ function CredentialInputDetails({ approval }: { approval: PendingCredentialInput
     <>
       <DetailRow icon={Lock} label="Service" value={approval.credentialLabel} code />
       <DetailRow icon={Lock} label="Injects as" value={formatInjection(approval)} code />
-      <DetailRow icon={Globe} label="Audience" value={formatCredentialInputAudienceSummary(approval)} code />
-      <DetailRow icon={Lock} label="Fields" value={approval.fields.map((field) => `${field.name}${field.type === "secret" ? " (secret)" : ""}`).join(", ")} code />
-      {approval.scopes.length > 0 ? <DetailRow icon={Lock} label="Scopes" value={approval.scopes.join(", ")} code /> : null}
+      <DetailRow
+        icon={Globe}
+        label="Audience"
+        value={formatCredentialInputAudienceSummary(approval)}
+        code
+      />
+      <DetailRow
+        icon={Lock}
+        label="Fields"
+        value={approval.fields
+          .map((field) => `${field.name}${field.type === "secret" ? " (secret)" : ""}`)
+          .join(", ")}
+        code
+      />
+      {approval.scopes.length > 0 ? (
+        <DetailRow icon={Lock} label="Scopes" value={approval.scopes.join(", ")} code />
+      ) : null}
     </>
   );
 }
@@ -544,7 +689,14 @@ function CredentialInputDetails({ approval }: { approval: PendingCredentialInput
 function CapabilityDetails({ approval }: { approval: PendingCapabilityApproval }) {
   return (
     <>
-      {approval.resource ? <DetailRow icon={Globe} label={approval.resource.label} value={approval.resource.value} code /> : null}
+      {approval.resource ? (
+        <DetailRow
+          icon={Globe}
+          label={approval.resource.label}
+          value={approval.resource.value}
+          code
+        />
+      ) : null}
       {(approval.details ?? []).map((detail) => (
         <DetailRow key={detail.label} icon={Lock} label={detail.label} value={detail.value} code />
       ))}
@@ -556,7 +708,9 @@ function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
   return (
     <>
       <DetailRow icon={Lock} label="Subject" value={approval.subject.id} code />
-      {approval.subject.label ? <DetailRow icon={Lock} label="Label" value={approval.subject.label} code /> : null}
+      {approval.subject.label ? (
+        <DetailRow icon={Lock} label="Label" value={approval.subject.label} code />
+      ) : null}
       {(approval.details ?? []).map((detail) => (
         <DetailRow key={detail.label} icon={Lock} label={detail.label} value={detail.value} code />
       ))}
@@ -569,7 +723,45 @@ function DeviceCodeDetails({ approval }: { approval: PendingDeviceCodeApproval }
     <>
       <DetailRow icon={Lock} label="Service" value={approval.credentialLabel} code />
       <DetailRow icon={Globe} label="Verify at" value={approval.verificationUri} code />
-      <DetailRow icon={Lock} label="Provider" value={originForUrl(approval.oauthTokenOrigin)} code />
+      <DetailRow
+        icon={Lock}
+        label="Provider"
+        value={originForUrl(approval.oauthTokenOrigin)}
+        code
+      />
+    </>
+  );
+}
+
+function ExtensionDetails({ approval }: { approval: PendingExtensionApproval }) {
+  const diff = approval.extensionDiff?.stat;
+  return (
+    <>
+      <DetailRow icon={Lock} label="Extension" value={approval.extensionName} code />
+      <DetailRow
+        icon={Globe}
+        label="Source"
+        value={`${approval.source.repo}@${approval.source.ref}`}
+        code
+      />
+      {approval.version ? (
+        <DetailRow icon={Lock} label="Version" value={approval.version} code />
+      ) : null}
+      {approval.sha ? <DetailRow icon={Lock} label="SHA" value={approval.sha} code /> : null}
+      {diff ? (
+        <DetailRow
+          icon={Lock}
+          label="Diff"
+          value={`${diff.filesChanged} files, +${diff.insertions} -${diff.deletions}`}
+          code
+        />
+      ) : null}
+      {approval.capabilities.length > 0 ? (
+        <DetailRow icon={Lock} label="Capabilities" value={approval.capabilities.join(", ")} code />
+      ) : null}
+      {(approval.details ?? []).map((detail) => (
+        <DetailRow key={detail.label} icon={Lock} label={detail.label} value={detail.value} code />
+      ))}
     </>
   );
 }
@@ -577,7 +769,12 @@ function DeviceCodeDetails({ approval }: { approval: PendingDeviceCodeApproval }
 function DeviceCodePanel({ approval }: { approval: PendingDeviceCodeApproval }) {
   const colors = useAtomValue(themeColorsAtom);
   return (
-    <View style={[styles.issuerPanel, { backgroundColor: colors.background, borderColor: colors.border }]}>
+    <View
+      style={[
+        styles.issuerPanel,
+        { backgroundColor: colors.background, borderColor: colors.border },
+      ]}
+    >
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>Enter this code:</Text>
       <Text
         accessibilityLabel={`Device code ${approval.userCode}`}
@@ -587,10 +784,14 @@ function DeviceCodePanel({ approval }: { approval: PendingDeviceCodeApproval }) 
         {approval.userCode}
       </Text>
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-        at <Text style={[styles.codeText, { color: colors.text }]}>{originForUrl(approval.verificationUri)}</Text>
+        at{" "}
+        <Text style={[styles.codeText, { color: colors.text }]}>
+          {originForUrl(approval.verificationUri)}
+        </Text>
       </Text>
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-        The browser was opened to the verification page. The connection will complete automatically once you approve there.
+        The browser was opened to the verification page. The connection will complete automatically
+        once you approve there.
       </Text>
     </View>
   );
@@ -639,14 +840,16 @@ function DetailRow({
     <View accessibilityLabel={`${label}: ${value}`} style={styles.detailRow}>
       <RowIcon size={14} color={danger ? colors.danger : colors.textSecondary} />
       <Text style={[styles.detailLabel, { color: colors.textSecondary }]}>{label}</Text>
-      <Text style={[
-        styles.detailValue,
-        code ? styles.codeText : null,
-        {
-          color: danger ? colors.danger : colors.text,
-          backgroundColor: code ? colors.codeBackground : "transparent",
-        },
-      ]}>
+      <Text
+        style={[
+          styles.detailValue,
+          code ? styles.codeText : null,
+          {
+            color: danger ? colors.danger : colors.text,
+            backgroundColor: code ? colors.codeBackground : "transparent",
+          },
+        ]}
+      >
         {value}
       </Text>
     </View>
@@ -659,7 +862,7 @@ function StandardActions({
   pendingAction,
   onChoose,
 }: {
-  approval: PendingCredentialApproval | PendingCapabilityApproval;
+  approval: PendingCredentialApproval | PendingCapabilityApproval | PendingExtensionApproval;
   busy: boolean;
   pendingAction: PendingAction | null;
   onChoose: (decision: ApprovalDecision) => void;
@@ -668,9 +871,34 @@ function StandardActions({
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
-        <DecisionButton label={copy.once.label} description={copy.once.description} variant="surface" disabled={busy} loading={pendingAction === "once"} onPress={() => onChoose("once")} testID="approval-action-once" />
-        <DecisionButton label={copy.session.label} description={copy.session.description} variant="primary" disabled={busy} loading={pendingAction === "session"} onPress={() => onChoose("session")} testID="approval-action-session" />
-        <DecisionButton label="Deny" description={copy.denyDescription} variant="danger" disabled={busy} loading={pendingAction === "deny"} icon={XCircle} onPress={() => onChoose("deny")} testID="approval-action-deny" />
+        <DecisionButton
+          label={copy.once.label}
+          description={copy.once.description}
+          variant="surface"
+          disabled={busy}
+          loading={pendingAction === "once"}
+          onPress={() => onChoose("once")}
+          testID="approval-action-once"
+        />
+        <DecisionButton
+          label={copy.session.label}
+          description={copy.session.description}
+          variant="primary"
+          disabled={busy}
+          loading={pendingAction === "session"}
+          onPress={() => onChoose("session")}
+          testID="approval-action-session"
+        />
+        <DecisionButton
+          label="Deny"
+          description={copy.denyDescription}
+          variant="danger"
+          disabled={busy}
+          loading={pendingAction === "deny"}
+          icon={XCircle}
+          onPress={() => onChoose("deny")}
+          testID="approval-action-deny"
+        />
       </View>
       <View style={styles.actionRow}>
         {GRANT_DECISIONS.slice(2).map((decision) => (
@@ -729,11 +957,30 @@ function InputApprovalActions({
   onDeny: () => void;
   submitAction: PendingAction;
 }) {
-  const missingRequired = approval.fields.some((field) => field.required && !values[field.name]?.trim());
+  const missingRequired = approval.fields.some(
+    (field) => field.required && !values[field.name]?.trim()
+  );
   return (
     <View style={styles.actionRow}>
-      <DecisionButton label="Save service" description="Save this connected service." variant="primary" disabled={busy || missingRequired} loading={pendingAction === submitAction} onPress={onSubmit} testID="approval-submit" />
-      <DecisionButton label="Deny" description="Do not save this connected service." variant="danger" disabled={busy} loading={pendingAction === "deny"} icon={XCircle} onPress={onDeny} testID="approval-action-deny" />
+      <DecisionButton
+        label="Save service"
+        description="Save this connected service."
+        variant="primary"
+        disabled={busy || missingRequired}
+        loading={pendingAction === submitAction}
+        onPress={onSubmit}
+        testID="approval-submit"
+      />
+      <DecisionButton
+        label="Deny"
+        description="Do not save this connected service."
+        variant="danger"
+        disabled={busy}
+        loading={pendingAction === "deny"}
+        icon={XCircle}
+        onPress={onDeny}
+        testID="approval-action-deny"
+      />
     </View>
   );
 }
@@ -775,7 +1022,8 @@ function UserlandButton({
   loading: boolean;
   onPress: () => void;
 }) {
-  const variant: ButtonVariant = option.tone === "primary" ? "primary" : option.tone === "danger" ? "danger" : "surface";
+  const variant: ButtonVariant =
+    option.tone === "primary" ? "primary" : option.tone === "danger" ? "danger" : "surface";
   return (
     <DecisionButton
       label={option.label}
@@ -826,8 +1074,14 @@ function DecisionButton({
       ]}
       testID={testID}
     >
-      {loading ? <ActivityIndicator color={style.text.color} size="small" /> : <ButtonIcon size={16} color={style.text.color} />}
-      <Text numberOfLines={2} adjustsFontSizeToFit style={[styles.decisionText, style.text]}>{label}</Text>
+      {loading ? (
+        <ActivityIndicator color={style.text.color} size="small" />
+      ) : (
+        <ButtonIcon size={16} color={style.text.color} />
+      )}
+      <Text numberOfLines={2} adjustsFontSizeToFit style={[styles.decisionText, style.text]}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -840,7 +1094,7 @@ function buttonStyle(
     primary: string;
     text: string;
   },
-  variant: ButtonVariant,
+  variant: ButtonVariant
 ) {
   if (variant === "primary") {
     return {
@@ -869,14 +1123,16 @@ function buttonStyle(
 function Pill({ children, tone }: { children: React.ReactNode; tone?: "warning" }) {
   const colors = useAtomValue(themeColorsAtom);
   return (
-    <Text style={[
-      styles.pill,
-      {
-        color: tone === "warning" ? colors.warning : colors.textSecondary,
-        borderColor: tone === "warning" ? colors.warning : colors.border,
-        backgroundColor: colors.background,
-      },
-    ]}>
+    <Text
+      style={[
+        styles.pill,
+        {
+          color: tone === "warning" ? colors.warning : colors.textSecondary,
+          borderColor: tone === "warning" ? colors.warning : colors.border,
+          backgroundColor: colors.background,
+        },
+      ]}
+    >
       {children}
     </Text>
   );

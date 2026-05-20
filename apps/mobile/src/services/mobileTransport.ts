@@ -44,19 +44,19 @@ class BrowserWsLike implements WsLike {
     return this.ws.onmessage as ((event: { data: unknown }) => void) | null;
   }
   set onmessage(handler: ((event: { data: unknown }) => void) | null) {
-    this.ws.onmessage = handler as ((event: MessageEvent) => void) | null;
+    this.ws.onmessage = handler as unknown as WebSocket["onmessage"];
   }
   get onclose(): ((event: { code?: number; reason?: string }) => void) | null {
     return this.ws.onclose as ((event: { code?: number; reason?: string }) => void) | null;
   }
   set onclose(handler: ((event: { code?: number; reason?: string }) => void) | null) {
-    this.ws.onclose = handler as ((event: CloseEvent) => void) | null;
+    this.ws.onclose = handler as unknown as WebSocket["onclose"];
   }
   get onerror(): ((event: unknown) => void) | null {
     return this.ws.onerror as ((event: unknown) => void) | null;
   }
   set onerror(handler: ((event: unknown) => void) | null) {
-    this.ws.onerror = handler as ((event: Event) => void) | null;
+    this.ws.onerror = handler as unknown as WebSocket["onerror"];
   }
   send(data: string): void {
     this.ws.send(data);
@@ -110,7 +110,7 @@ export class MobileTransport implements RpcBridge {
     targetId: string,
     method: string,
     args: unknown[],
-    options?: RpcCallOptions,
+    options?: RpcCallOptions
   ): Promise<T> {
     return this.transport.call<T>(targetId, method, args, options);
   }
@@ -133,7 +133,7 @@ export class MobileTransport implements RpcBridge {
 
   exposeMethod<TArgs extends unknown[], TReturn>(
     _method: string,
-    _handler: (...args: TArgs) => TReturn | Promise<TReturn>,
+    _handler: (...args: TArgs) => TReturn | Promise<TReturn>
   ): void {
     // Mobile shell does not expose methods to the server.
   }
@@ -169,10 +169,13 @@ export class MobileTransport implements RpcBridge {
           this.lastCloseInfo = null;
           const ws = new WebSocket(url);
           const wrapped = new BrowserWsLike(ws);
-          const originalClose = Object.getOwnPropertyDescriptor(BrowserWsLike.prototype, "onclose")?.set;
+          const originalClose = Object.getOwnPropertyDescriptor(
+            BrowserWsLike.prototype,
+            "onclose"
+          )?.set;
           Object.defineProperty(wrapped, "onclose", {
             set: (handler: ((event: { code?: number; reason?: string }) => void) | null) => {
-              originalClose?.call(wrapped, (event) => {
+              originalClose?.call(wrapped, (event: { code?: number; reason?: string }) => {
                 this.lastCloseInfo = { code: event.code, reason: event.reason };
                 handler?.(event);
               });

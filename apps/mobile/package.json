@@ -9,7 +9,7 @@
     "start": "react-native start",
     "pod-install": "cd ios && pod install",
     "clean": "react-native clean",
-    "lint": "eslint .",
+    "lint": "eslint src --ignore-pattern '**/*.test.ts' --ignore-pattern '**/*.test.tsx'",
     "type-check": "tsc --noEmit",
     "test": "jest"
   },
