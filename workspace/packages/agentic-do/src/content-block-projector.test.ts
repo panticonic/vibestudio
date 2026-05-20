@@ -515,6 +515,18 @@ describe("ContentBlockProjector — error/abort auto-close", () => {
     ]);
   });
 
+  it("does not surface URL-bound model credential interruptions as chat errors", async () => {
+    const sink = makeSink();
+    const projector = new ContentBlockProjector(sink, makeAllocator());
+
+    await projector.handleEvent(
+      agentEnd("error", "No URL-bound model credential is configured for model provider: openai-codex"),
+    );
+
+    expect(sink.ops).toEqual([]);
+    expect(sink.errors).toEqual([]);
+  });
+
   it("auto-closes in-flight toolCall on agent_end with stopReason=aborted", async () => {
     const sink = makeSink();
     const projector = new ContentBlockProjector(sink, makeAllocator());
