@@ -49,6 +49,7 @@ describe("AgentWorkerBase dispatched method results", () => {
       };
       runners: Map<string, { runner: { abort: ReturnType<typeof vi.fn> } }>;
       createChannelClient: ReturnType<typeof vi.fn>;
+      getOrCreateProjector: ReturnType<typeof vi.fn>;
       handleIncomingChannelEvent(channelId: string, event: unknown): Promise<void>;
       invokeChannelMethod(
         channelId: string,
@@ -61,6 +62,8 @@ describe("AgentWorkerBase dispatched method results", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    const completeToolCall = vi.fn().mockResolvedValue(true);
+    worker.getOrCreateProjector = vi.fn().mockReturnValue({ completeToolCall });
     worker.createChannelClient = vi.fn().mockReturnValue({
       getParticipants: vi.fn().mockResolvedValue([
         {
@@ -100,6 +103,7 @@ describe("AgentWorkerBase dispatched method results", () => {
     expect(abort).not.toHaveBeenCalled();
     expect(capturedCallId).toEqual(expect.any(String));
     expect(worker.dispatches.peek(capturedCallId)).toBeNull();
+    expect(completeToolCall).toHaveBeenCalledWith("tool-1", { ok: true }, false);
   });
 
   it("cancels the channel pending call when an in-flight method call aborts", async () => {

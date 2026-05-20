@@ -667,6 +667,40 @@ export class ContentBlockProjector {
     await this.pendingOp;
   }
 
+  /**
+   * Terminalize one in-flight tool call from an external completion source.
+   *
+   * Channel-backed tools resolve through PubSub `method-result` before Pi
+   * later emits `tool_execution_end`. If that later event is lost or never
+   * emitted, the chat UI would otherwise keep rendering the action payload's
+   * `execution.status: "pending"` indefinitely.
+   */
+  async completeToolCall(
+    toolCallId: string,
+    result: unknown,
+    isError: boolean,
+  ): Promise<boolean> {
+    const record = this.state.toolCalls.get(toolCallId);
+    if (!record) return false;
+    const { value: truncatedResult, truncated } = truncateResult(result);
+    const resultImages = extractImages(result);
+    const execution: ToolExecutionState = {
+      status: isError ? "error" : "complete",
+      description: record.payload.execution.description,
+      consoleOutput: record.payload.execution.consoleOutput,
+      result: truncatedResult,
+      isError: isError || undefined,
+      resultTruncated: truncated || undefined,
+      resultImages: resultImages.length > 0 ? resultImages : undefined,
+    };
+    const payload: ToolCallPayload = { ...record.payload, execution };
+    this.state = removeToolCall(this.state, toolCallId);
+    this.dispatch({ kind: "update", msgId: record.msgId, content: JSON.stringify(payload) });
+    this.dispatch({ kind: "complete", msgId: record.msgId });
+    await this.pendingOp;
+    return true;
+  }
+
   /** msgIds for which a preceding op already failed. Further ops for the
    *  same msgId are dropped so we don't emit a cascade of failures on the
    *  same already-errored channel message. */
