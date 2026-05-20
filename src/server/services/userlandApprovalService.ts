@@ -158,6 +158,26 @@ export function createUserlandApprovalService(deps: {
           issuer,
           resolved.scope
         );
+        if (typeof deps.approvalQueue.resolveMatchingUserland === "function") {
+          deps.approvalQueue.resolveMatchingUserland((approval) => {
+            if (approval.kind !== "userland") return false;
+            if (approval.promptOptions !== "scoped") return false;
+            if (!approval.options.some((option) => option.value === result.choice)) return false;
+            const hit = deps.grantStore.lookup(
+              {
+                callerId: approval.callerId,
+                callerKind: approval.callerKind,
+                repoPath: approval.repoPath,
+                effectiveVersion: approval.effectiveVersion,
+              },
+              approval.subject.id,
+              approval.issuer
+            );
+            return (
+              !!hit && isCachedChoiceValid(approval.promptOptions, approval.options, hit.choice)
+            );
+          }, result.choice);
+        }
       } catch (err) {
         console.warn("[UserlandApprovalService] Failed to persist approval grant:", err);
       }

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   AccountIdentity,
+  CredentialGrantAction,
   CredentialBindingUse,
   CredentialInjection,
   UrlAudience,
@@ -144,6 +145,11 @@ export interface PendingCredentialApproval extends PendingApprovalBase {
     remote: string;
     service?: string;
   };
+  grantResource?: {
+    bindingId: string;
+    resource: string;
+    action: CredentialGrantAction;
+  };
   oauthAuthorizeOrigin?: string;
   oauthTokenOrigin?: string;
   oauthUserinfoOrigin?: string;
@@ -154,6 +160,7 @@ export interface PendingCredentialApproval extends PendingApprovalBase {
 export interface PendingCapabilityApproval extends PendingApprovalBase {
   kind: "capability";
   capability: string;
+  grantResourceKey?: string;
   title: string;
   description?: string;
   resource?: {

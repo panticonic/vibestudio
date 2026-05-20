@@ -1,3 +1,5 @@
+import type { CredentialGrantAction } from "@natstack/shared/credentials/types";
+
 export interface CredentialSessionGrantScope {
   callerId: string;
   repoPath?: string;
@@ -7,7 +9,7 @@ export interface CredentialSessionGrantScope {
 export interface CredentialSessionGrantResource {
   bindingId: string;
   resource: string;
-  action: string;
+  action: CredentialGrantAction;
 }
 
 export class CredentialSessionGrantStore {

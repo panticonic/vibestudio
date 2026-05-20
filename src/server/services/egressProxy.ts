@@ -973,6 +973,7 @@ export class EgressProxy {
         "credential-caller-not-granted"
       );
     }
+    const usage = credentialUseResource(binding, operation.targetUrl, operation.method);
     const decision = await this.deps.approvalQueue.request({
       callerId,
       callerKind: attribution.callerKind,
@@ -985,6 +986,7 @@ export class EgressProxy {
       accountIdentity: credential.accountIdentity,
       scopes: credential.scopes,
       credentialUse: binding.use,
+      grantResource: usage.sessionResource,
       gitOperation:
         binding.use === "git-http" || binding.use === "git-ssh"
           ? describeGitHttpOperation(operation.targetUrl, operation.method)
@@ -1006,9 +1008,9 @@ export class EgressProxy {
     if (decision === "once") {
       return;
     }
-    const usage = credentialUseResource(binding, operation.targetUrl, operation.method);
     if (decision === "session") {
       this.sessionGrantStore.grant(credential.id, attribution, usage.sessionResource);
+      this.resolvePendingCredentialUseGrants(credential.id, attribution, decision, usage);
       return;
     }
     const saveUrlBound = this.deps.credentialStore.saveUrlBound;
@@ -1027,7 +1029,35 @@ export class EgressProxy {
           },
         } as Credential & { id: string })
       );
+      this.resolvePendingCredentialUseGrants(credential.id, attribution, decision, usage);
     }
+  }
+
+  private resolvePendingCredentialUseGrants(
+    credentialId: string,
+    attribution: RequestAttribution,
+    decision: Exclude<GrantedDecision, "deny" | "once">,
+    usage: ReturnType<typeof credentialUseResource>
+  ): void {
+    if (typeof this.deps.approvalQueue?.resolveMatching !== "function") return;
+    this.deps.approvalQueue.resolveMatching((approval) => {
+      if (approval.kind !== "credential") return false;
+      if (approval.credentialId !== credentialId) return false;
+      if (!approval.grantResource) return false;
+      if (
+        approval.grantResource.bindingId !== usage.sessionResource.bindingId ||
+        approval.grantResource.resource !== usage.sessionResource.resource ||
+        approval.grantResource.action !== usage.sessionResource.action
+      ) {
+        return false;
+      }
+      if (decision === "session") return approval.callerId === attribution.callerId;
+      if (decision === "repo") return approval.repoPath === attribution.repoPath;
+      return (
+        approval.repoPath === attribution.repoPath &&
+        approval.effectiveVersion === attribution.effectiveVersion
+      );
+    }, "once");
   }
 
   private resolveAttribution(

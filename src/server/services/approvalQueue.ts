@@ -53,6 +53,7 @@ export interface CredentialApprovalQueueRequest extends ApprovalQueueRequestBase
   scopes: string[];
   credentialUse?: PendingCredentialApproval["credentialUse"];
   gitOperation?: PendingCredentialApproval["gitOperation"];
+  grantResource?: PendingCredentialApproval["grantResource"];
   oauthAuthorizeOrigin?: string;
   oauthTokenOrigin?: string;
   oauthUserinfoOrigin?: string;
@@ -72,6 +73,7 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   title: string;
   description?: string;
   resource?: PendingCapabilityApproval["resource"];
+  grantResourceKey?: string;
   details?: PendingCapabilityApproval["details"];
 }
 
@@ -219,6 +221,14 @@ export interface ApprovalQueue {
   onPendingChanged?(listener: (pending: PendingApproval[]) => void): () => void;
   resolve(approvalId: string, decision: ApprovalDecision): void;
   resolveUserland(approvalId: string, choice: string): void;
+  resolveMatching?(
+    predicate: (approval: PendingApproval) => boolean,
+    decision: GrantedDecision
+  ): number;
+  resolveMatchingUserland?(
+    predicate: (approval: PendingApproval) => boolean,
+    choice: string
+  ): number;
   submitClientConfig(approvalId: string, values: Record<string, string>): void;
   submitCredentialInput(approvalId: string, values: Record<string, string>): void;
   listPending(): PendingApproval[];
@@ -228,6 +238,14 @@ export interface ApprovalQueue {
 
 export interface ApprovalQueueWithListeners extends ApprovalQueue {
   onPendingChanged(listener: (pending: PendingApproval[]) => void): () => void;
+  resolveMatching(
+    predicate: (approval: PendingApproval) => boolean,
+    decision: GrantedDecision
+  ): number;
+  resolveMatchingUserland(
+    predicate: (approval: PendingApproval) => boolean,
+    choice: string
+  ): number;
 }
 
 export type SensitiveActionQueue = ApprovalQueue;
@@ -341,6 +359,7 @@ export function createApprovalQueue(deps: {
         ...base,
         kind: "capability",
         capability: req.capability,
+        grantResourceKey: req.grantResourceKey,
         title: req.title,
         description: req.description,
         resource: req.resource,
@@ -427,6 +446,7 @@ export function createApprovalQueue(deps: {
       scopes: req.scopes,
       credentialUse: req.credentialUse,
       gitOperation: req.gitOperation,
+      grantResource: req.grantResource,
       oauthAuthorizeOrigin: req.oauthAuthorizeOrigin,
       oauthTokenOrigin: req.oauthTokenOrigin,
       oauthUserinfoOrigin: req.oauthUserinfoOrigin,
@@ -535,6 +555,64 @@ export function createApprovalQueue(deps: {
     entry.userlandWaiters.clear();
 
     emitPendingChanged();
+  }
+
+  function settleDecisionEntry(entry: QueueEntry, decision: GrantedDecision): void {
+    removeEntry(entry);
+    for (const waiter of entry.waiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve(decision);
+    }
+    entry.waiters.clear();
+    for (const waiter of entry.fieldInputWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ decision: "deny" });
+    }
+    entry.fieldInputWaiters.clear();
+    for (const waiter of entry.userlandWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ kind: "dismissed" });
+    }
+    entry.userlandWaiters.clear();
+    for (const waiter of entry.deviceCodeWaiters.values()) {
+      waiter.cancel();
+    }
+    entry.deviceCodeWaiters.clear();
+  }
+
+  function settleUserlandEntry(entry: QueueEntry, choice: string): void {
+    removeEntry(entry);
+    for (const waiter of entry.userlandWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ kind: "choice", choice });
+    }
+    entry.userlandWaiters.clear();
+    for (const waiter of entry.waiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve("deny");
+    }
+    entry.waiters.clear();
+    for (const waiter of entry.fieldInputWaiters.values()) {
+      if (waiter.signal && waiter.onAbort) {
+        waiter.signal.removeEventListener("abort", waiter.onAbort);
+      }
+      waiter.resolve({ decision: "deny" });
+    }
+    entry.fieldInputWaiters.clear();
+    for (const waiter of entry.deviceCodeWaiters.values()) {
+      waiter.cancel();
+    }
+    entry.deviceCodeWaiters.clear();
   }
 
   return {
@@ -744,35 +822,8 @@ export function createApprovalQueue(deps: {
       const entry = entriesById.get(approvalId);
       if (!entry) return;
 
-      removeEntry(entry);
-
       const granted: GrantedDecision = decision === "dismiss" ? "deny" : decision;
-
-      for (const waiter of entry.waiters.values()) {
-        if (waiter.signal && waiter.onAbort) {
-          waiter.signal.removeEventListener("abort", waiter.onAbort);
-        }
-        waiter.resolve(granted);
-      }
-      entry.waiters.clear();
-      for (const waiter of entry.fieldInputWaiters.values()) {
-        if (waiter.signal && waiter.onAbort) {
-          waiter.signal.removeEventListener("abort", waiter.onAbort);
-        }
-        waiter.resolve({ decision: "deny" });
-      }
-      entry.fieldInputWaiters.clear();
-      for (const waiter of entry.userlandWaiters.values()) {
-        if (waiter.signal && waiter.onAbort) {
-          waiter.signal.removeEventListener("abort", waiter.onAbort);
-        }
-        waiter.resolve({ kind: "dismissed" });
-      }
-      entry.userlandWaiters.clear();
-      for (const waiter of entry.deviceCodeWaiters.values()) {
-        waiter.cancel();
-      }
-      entry.deviceCodeWaiters.clear();
+      settleDecisionEntry(entry, granted);
 
       emitPendingChanged();
     },
@@ -785,31 +836,31 @@ export function createApprovalQueue(deps: {
         throw new Error(`Unknown userland approval choice: ${choice}`);
       }
 
-      removeEntry(entry);
-
-      for (const waiter of entry.userlandWaiters.values()) {
-        if (waiter.signal && waiter.onAbort) {
-          waiter.signal.removeEventListener("abort", waiter.onAbort);
-        }
-        waiter.resolve({ kind: "choice", choice });
-      }
-      entry.userlandWaiters.clear();
-      for (const waiter of entry.waiters.values()) {
-        if (waiter.signal && waiter.onAbort) {
-          waiter.signal.removeEventListener("abort", waiter.onAbort);
-        }
-        waiter.resolve("deny");
-      }
-      entry.waiters.clear();
-      for (const waiter of entry.fieldInputWaiters.values()) {
-        if (waiter.signal && waiter.onAbort) {
-          waiter.signal.removeEventListener("abort", waiter.onAbort);
-        }
-        waiter.resolve({ decision: "deny" });
-      }
-      entry.fieldInputWaiters.clear();
+      settleUserlandEntry(entry, choice);
 
       emitPendingChanged();
+    },
+
+    resolveMatching(predicate, decision) {
+      const matching = Array.from(entriesById.values()).filter((entry) =>
+        predicate(entry.approval)
+      );
+      for (const entry of matching) {
+        settleDecisionEntry(entry, decision);
+      }
+      if (matching.length > 0) emitPendingChanged();
+      return matching.length;
+    },
+
+    resolveMatchingUserland(predicate, choice) {
+      const matching = Array.from(entriesById.values()).filter(
+        (entry) => entry.approval.kind === "userland" && predicate(entry.approval)
+      );
+      for (const entry of matching) {
+        settleUserlandEntry(entry, choice);
+      }
+      if (matching.length > 0) emitPendingChanged();
+      return matching.length;
     },
 
     submitClientConfig(approvalId, values) {

@@ -3847,6 +3847,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       scopes: credential.scopes,
       credentialUse: usage.binding.use,
       gitOperation: usage.gitOperation,
+      grantResource: usage.sessionResource,
       oauthAuthorizeOrigin: credential.metadata?.["oauthAuthorizeOrigin"],
       oauthTokenOrigin: credential.metadata?.["oauthTokenOrigin"],
       oauthUserinfoOrigin: credential.metadata?.["oauthUserinfoOrigin"],
@@ -3864,6 +3865,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const now = Date.now();
     if (decision === "session") {
       grantSessionCredentialUse(credential.id, identity, usage.sessionResource);
+      resolvePendingCredentialUseGrants(credential.id, identity, decision, usage);
       return;
     }
     await credentialStore.saveUrlBound({
@@ -3877,6 +3879,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         updatedAt: String(now),
       },
     } as Credential & { id: string });
+    resolvePendingCredentialUseGrants(credential.id, identity, decision, usage);
   }
 
   function canCallerSeeStoredCredential(ctx: ServiceContext, credential: Credential): boolean {
@@ -3923,6 +3926,33 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     resource: CredentialSessionGrantResource
   ): void {
     sessionGrantStore.grant(credentialId, identity, resource);
+  }
+
+  function resolvePendingCredentialUseGrants(
+    credentialId: string,
+    identity: { callerId?: string; repoPath: string; effectiveVersion: string },
+    decision: Exclude<GrantedDecision, "deny" | "once">,
+    usage: CredentialUseContext
+  ): void {
+    if (typeof approvalQueue?.resolveMatching !== "function") return;
+    approvalQueue.resolveMatching((approval) => {
+      if (approval.kind !== "credential") return false;
+      if (approval.credentialId !== credentialId) return false;
+      if (!approval.grantResource) return false;
+      if (
+        approval.grantResource.bindingId !== usage.sessionResource.bindingId ||
+        approval.grantResource.resource !== usage.sessionResource.resource ||
+        approval.grantResource.action !== usage.sessionResource.action
+      ) {
+        return false;
+      }
+      if (decision === "session") return approval.callerId === identity.callerId;
+      if (decision === "repo") return approval.repoPath === identity.repoPath;
+      return (
+        approval.repoPath === identity.repoPath &&
+        approval.effectiveVersion === identity.effectiveVersion
+      );
+    }, "once");
   }
 
   function applyPreapprovedCredentialUseGrants(

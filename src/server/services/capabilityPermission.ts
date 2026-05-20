@@ -80,6 +80,7 @@ export async function requestCapabilityPermission(
       label: request.resource.label,
       value: request.resource.value,
     },
+    grantResourceKey: resourceKey,
     details: request.details,
   });
   if (decision === "deny") {
@@ -87,6 +88,21 @@ export async function requestCapabilityPermission(
   }
   if (decision !== "once") {
     deps.grantStore.grant(request.capability, resourceKey, identity, decision);
+    if (typeof deps.approvalQueue.resolveMatching === "function") {
+      deps.approvalQueue.resolveMatching((approval) => {
+        if (approval.kind !== "capability") return false;
+        const pendingResourceKey = approval.grantResourceKey ?? approval.resource?.value;
+        if (approval.capability !== request.capability || pendingResourceKey !== resourceKey) {
+          return false;
+        }
+        if (decision === "session") return approval.callerId === request.caller.runtime.id;
+        if (decision === "repo") return approval.repoPath === identity.repoPath;
+        return (
+          approval.repoPath === identity.repoPath &&
+          approval.effectiveVersion === identity.effectiveVersion
+        );
+      }, "once");
+    }
   }
   return { allowed: true, decision };
 }
