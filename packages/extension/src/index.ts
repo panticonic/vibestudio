@@ -64,7 +64,14 @@ export interface RegistryEntry {
 }
 
 export interface ExtensionsClient {
-  use<T extends object>(name: string): T;
+  /**
+   * Create a typed extension client. Methods default to ordinary unary RPC.
+   * Declare Response/ReadableStream-returning methods in `streamingMethods` so the proxy routes
+   * them through `extensions.invokeStream` and preserves incremental response bodies.
+   */
+  use<T extends object>(name: string, options?: { streamingMethods?: Iterable<string> }): T;
+  /** Convenience alias for `use(name, { streamingMethods })`. */
+  useWithStreams<T extends object>(name: string, streamingMethods: Iterable<string>): T;
   streamCall(name: string, method: string, args: unknown[]): Promise<Response>;
   on(name: string, event: string, cb: (payload: unknown) => void): Disposable;
   list(): Promise<RegistryEntry[]>;

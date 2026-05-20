@@ -20,12 +20,7 @@ const workerAlpha = {
 describe("UserlandApprovalGrantStore", () => {
   it("records, looks up, lists, and revokes grants", async () => {
     const store = new UserlandApprovalGrantStore({ statePath: tempDir() });
-    await store.record(
-      workerAlpha,
-      { id: "team-x:foo", label: "Foo" },
-      "allow",
-      10
-    );
+    await store.record(workerAlpha, { id: "team-x:foo", label: "Foo" }, "allow", 10);
 
     expect(store.lookup(workerAlpha, "team-x:foo")).toMatchObject({ choice: "allow" });
     expect(store.list(workerAlpha)).toHaveLength(1);
@@ -43,12 +38,7 @@ describe("UserlandApprovalGrantStore", () => {
       repoPath: "panels/one",
       effectiveVersion: "hash-1",
     };
-    await store.record(
-      panelOne,
-      { id: "subject-1" },
-      "yes",
-      20
-    );
+    await store.record(panelOne, { id: "subject-1" }, "yes", 20);
 
     const restarted = new UserlandApprovalGrantStore({ statePath });
     expect(restarted.lookup(panelOne, "subject-1")).toMatchObject({ choice: "yes" });
@@ -90,9 +80,7 @@ describe("UserlandApprovalGrantStore", () => {
 
   it("uses the documented flat key shape", () => {
     expect(
-      parseCanonicalKey(
-        keyFor(workerAlpha, { kind: "worker", id: "worker:alpha" }, "team-x:foo")
-      )
+      parseCanonicalKey(keyFor(workerAlpha, { kind: "worker", id: "worker:alpha" }, "team-x:foo"))
     ).toEqual([
       "userland-grant",
       "caller",

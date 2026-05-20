@@ -82,8 +82,12 @@ export class UserlandApprovalGrantStore {
     const current = scope === "session" ? this.sessionGrants : this.persistent.grants;
     const filtered = current.filter(
       (grant) =>
-        keyFor(grant.principal, effectiveIssuer(grant), grant.subject.id, grant.scope ?? "caller") !==
-        key
+        keyFor(
+          grant.principal,
+          effectiveIssuer(grant),
+          grant.subject.id,
+          grant.scope ?? "caller"
+        ) !== key
     );
     if (scope === "session") {
       this.sessionGrants.splice(0, this.sessionGrants.length, ...filtered, next);
@@ -107,7 +111,11 @@ export class UserlandApprovalGrantStore {
     const persistentBefore = this.persistent.grants.length;
     const sessionBefore = this.sessionGrants.length;
     this.persistent.grants = this.persistent.grants.filter(shouldKeep);
-    this.sessionGrants.splice(0, this.sessionGrants.length, ...this.sessionGrants.filter(shouldKeep));
+    this.sessionGrants.splice(
+      0,
+      this.sessionGrants.length,
+      ...this.sessionGrants.filter(shouldKeep)
+    );
     const persistentRemoved = this.persistent.grants.length !== persistentBefore;
     const sessionRemoved = this.sessionGrants.length !== sessionBefore;
     if (persistentRemoved) this.save();
@@ -158,7 +166,10 @@ export function keyFor(
   ]);
 }
 
-function grantAppliesToPrincipal(grant: UserlandApprovalGrant, principal: ApprovalPrincipal): boolean {
+function grantAppliesToPrincipal(
+  grant: UserlandApprovalGrant,
+  principal: ApprovalPrincipal
+): boolean {
   const scope = grant.scope ?? "caller";
   if (scope === "version") {
     return (
@@ -180,7 +191,9 @@ function issuerMatches(
   if ((grant.scope ?? "caller") === "version") {
     return grantIssuer.kind === principal.callerKind && grantIssuer.id === principal.repoPath;
   }
-  return grantIssuer.kind === grant.principal.callerKind && grantIssuer.id === grant.principal.callerId;
+  return (
+    grantIssuer.kind === grant.principal.callerKind && grantIssuer.id === grant.principal.callerId
+  );
 }
 
 function isGrant(value: unknown): value is UserlandApprovalGrant {

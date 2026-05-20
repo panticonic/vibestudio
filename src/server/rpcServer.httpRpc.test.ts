@@ -687,15 +687,20 @@ describe("RpcServer HTTP POST /rpc", () => {
       }
     });
 
-    it("rejects methods other than credentials.proxyFetch", async () => {
+    it("rejects non-Response service methods on the generic streaming endpoint", async () => {
       const tokenManager = new TokenManager();
       const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
       const stubEgress = {
         forwardProxyFetchStream: vi.fn(),
       };
       const dispatcher = {
-        dispatch: vi.fn(),
-        getPolicy: vi.fn(),
+        dispatch: vi.fn(async () => ({ ok: true })),
+        getPolicy: vi.fn((service: string) => {
+          if (service === "credentials") {
+            return { allowed: ["worker"] as CallerKind[] };
+          }
+          return undefined;
+        }),
         getMethodPolicy: vi.fn(() => undefined),
         initialized: true,
       } as unknown as ServiceDispatcher;
@@ -724,10 +729,78 @@ describe("RpcServer HTTP POST /rpc", () => {
             args: [],
           }),
         });
-        expect(res.status).toBe(400);
+        expect(res.status).toBe(500);
         const body = (await res.json()) as { error: string };
-        expect(body.error).toContain("not exposed on the streaming endpoint");
+        expect(body.error).toContain("did not return a Response");
         expect(stubEgress.forwardProxyFetchStream).not.toHaveBeenCalled();
+      } finally {
+        await gw.stop();
+        await server.stop();
+      }
+    });
+
+    it("streams generic service Response methods over HTTP", async () => {
+      const tokenManager = new TokenManager();
+      const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
+      const dispatcher = {
+        dispatch: vi.fn(
+          async () =>
+            new Response("hello stream", {
+              status: 201,
+              statusText: "Created",
+              headers: { "content-type": "text/plain" },
+            })
+        ),
+        getPolicy: vi.fn((service: string) => {
+          if (service === "extensions") {
+            return { allowed: ["worker"] as CallerKind[] };
+          }
+          return undefined;
+        }),
+        getMethodPolicy: vi.fn(() => undefined),
+        initialized: true,
+      } as unknown as ServiceDispatcher;
+      const server = new RpcServer({
+        tokenManager,
+        dispatcher,
+      });
+      server.initHandlers();
+      const gw = new Gateway({
+        tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => server,
+      });
+      const p = await gw.start(0);
+      try {
+        const res = await fetch(`http://127.0.0.1:${p}/rpc/stream`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${workerToken}`,
+          },
+          body: JSON.stringify({
+            targetId: "main",
+            method: "extensions.invokeStream",
+            args: ["@workspace-extensions/shell", "attach", ["session-1"]],
+          }),
+        });
+        expect(res.status).toBe(200);
+        const { decodeFramedResponseToStreaming } =
+          await import("../../packages/shared/src/credentials/streamFraming.js");
+        const decoded = await decodeFramedResponseToStreaming(res.body!, "");
+        expect(decoded.status).toBe(201);
+        expect(decoded.headers.get("content-type")).toContain("text/plain");
+        expect(await decoded.text()).toBe("hello stream");
+        expect(dispatcher.dispatch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            caller: expect.objectContaining({
+              runtime: expect.objectContaining({ kind: "worker" }),
+            }),
+          }),
+          "extensions",
+          "invokeStream",
+          ["@workspace-extensions/shell", "attach", ["session-1"]]
+        );
       } finally {
         await gw.stop();
         await server.stop();

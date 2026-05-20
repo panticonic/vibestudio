@@ -189,10 +189,7 @@ export function createUserlandApprovalService(deps: {
         case "list": {
           const principal = await resolvePrincipal(ctx, "list");
           if (!principal) return [];
-          return deps.grantStore.list(
-            principal,
-            extensionIssuer(ctx)
-          ) as UserlandApprovalGrant[];
+          return deps.grantStore.list(principal, extensionIssuer(ctx)) as UserlandApprovalGrant[];
         }
         default:
           throw new ServiceError(

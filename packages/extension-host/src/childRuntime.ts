@@ -136,22 +136,34 @@ function serviceProxy(service: string): Record<string, (...args: unknown[]) => P
 }
 
 function createExtensionsClient() {
-  return {
-    use<T extends object>(extensionName: string): T {
-      return new Proxy(Object.create(null), {
-        get(_target, prop) {
-          if (
-            typeof prop !== "string"
-            || prop === "then"
-            || prop === "toJSON"
-            || prop === "inspect"
-          ) {
-            return undefined;
-          }
+  const createExtensionProxy = <T extends object>(
+    extensionName: string,
+    streamingMethods: ReadonlySet<string> = new Set()
+  ): T =>
+    new Proxy(Object.create(null), {
+      get(_target, prop) {
+        if (
+          typeof prop !== "string"
+          || prop === "then"
+          || prop === "toJSON"
+          || prop === "inspect"
+        ) {
+          return undefined;
+        }
+        if (streamingMethods.has(prop)) {
           return (...args: unknown[]) =>
-            rpcCall("extensions.invoke", [extensionName, prop, args]);
-        },
-      }) as T;
+            getRuntimeBridge().streamCall("main", "extensions.invokeStream", [extensionName, prop, args]);
+        }
+        return (...args: unknown[]) =>
+          rpcCall("extensions.invoke", [extensionName, prop, args]);
+      },
+    }) as T;
+  return {
+    use<T extends object>(extensionName: string, options?: { streamingMethods?: Iterable<string> }): T {
+      return createExtensionProxy<T>(extensionName, new Set(options?.streamingMethods ?? []));
+    },
+    useWithStreams<T extends object>(extensionName: string, streamingMethods: Iterable<string>): T {
+      return createExtensionProxy<T>(extensionName, new Set(streamingMethods));
     },
     streamCall(name: string, method: string, args: unknown[]) {
       return getRuntimeBridge().streamCall("main", "extensions.invokeStream", [name, method, args]);

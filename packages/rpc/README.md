@@ -96,6 +96,33 @@ Call a method on another endpoint. Returns a promise that resolves with the resu
 const result = await rpc.call<User>("auth-panel", "getUser", userId);
 ```
 
+#### `rpc.exposeStreamingMethod(method, handler)`
+
+Register a method that returns a streaming `Response`. The handler receives the original args, a frame sink, and an `AbortSignal`.
+
+```typescript
+rpc.exposeStreamingMethod("logs.tail", async ([path], sink, signal) => {
+  await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+  for await (const bytes of tailFile(path, { signal })) {
+    await sink({ kind: "chunk", bytes });
+  }
+  await sink({ kind: "end", bytesIn: 0 });
+});
+```
+
+#### `rpc.streamCall(targetId, method, args, options?)`
+
+Call a streaming method. The returned promise resolves when the HEAD frame arrives, and the `Response.body` continues to drain as DATA frames arrive. Cancellation through `options.signal` or `response.body.cancel()` sends a `stream-cancel` message to the peer.
+
+```typescript
+const response = await rpc.streamCall("worker:logs", "logs.tail", ["/tmp/app.log"]);
+for await (const chunk of response.body!) {
+  processChunk(chunk);
+}
+```
+
+The frame protocol is HEAD, zero or more DATA frames, then END or ERROR. JSON transports carry DATA as base64 in `stream-frame` messages. HTTP `/rpc/stream` uses the same frame codec on a binary response stream and supports generic Response-returning service methods plus the dedicated `credentials.proxyFetch` fast path.
+
 #### `rpc.emit(targetId, event, payload)`
 
 Send a one-way event to another endpoint.

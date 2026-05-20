@@ -114,6 +114,23 @@ Available via `import { ... } from "@workspace/runtime"` and `import { ... } fro
 
 `extensions.use(name).method(...)` prompts automatically when the named extension is present in the workspace but not installed or enabled. If you need to prompt explicitly before invoking it, call `extensions.install` for a missing extension or `extensions.setEnabled(name, true)` for an installed disabled extension.
 
+Extension methods normally use unary RPC and must return JSON-serializable values. If an extension method returns a `Response` or `ReadableStream`, declare it when creating the client so the runtime uses streaming RPC end-to-end:
+
+```ts
+import { extensions } from "@workspace/runtime";
+
+type ShellApi = {
+  attach(sessionId: string): Promise<Response>;
+  write(sessionId: string, data: string): Promise<void>;
+};
+
+const shell = extensions.use<ShellApi>("@workspace-extensions/shell", {
+  streamingMethods: ["attach"],
+});
+```
+
+`extensions.useWithStreams(name, methods)` is an alias for the same option. Prefer `extensions.use(name, { streamingMethods })` in new code so unary and streaming methods live on one typed client.
+
 ```
 eval({ code: `
   import { extensions } from "@workspace/runtime";
