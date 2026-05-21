@@ -812,14 +812,20 @@ export class PanelManager {
         roots.push(panel);
       }
     }
-    const byPosition = (a: Panel, b: Panel) =>
-      (a.positionId ?? "").localeCompare(b.positionId ?? "");
+    const byPosition = (a: Panel, b: Panel) => {
+      const position = (a.positionId ?? "").localeCompare(b.positionId ?? "");
+      if (position !== 0) return position;
+      const aSlot = slotById.get(a.id);
+      const bSlot = slotById.get(b.id);
+      const createdAt = (aSlot?.created_at ?? 0) - (bSlot?.created_at ?? 0);
+      if (createdAt !== 0) return createdAt;
+      return a.id.localeCompare(b.id);
+    };
     const sortRecursive = (items: Panel[]) => {
       items.sort(byPosition);
       for (const item of items) sortRecursive(item.children);
     };
     sortRecursive(roots);
-    void slotById;
     return roots;
   }
 

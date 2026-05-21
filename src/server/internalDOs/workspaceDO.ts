@@ -594,7 +594,7 @@ export class WorkspaceDO extends DurableObjectBase {
 
   slotListOpen(): DbSlotRow[] {
     return this.sql
-      .exec(`SELECT * FROM slots WHERE closed_at IS NULL ORDER BY position_id`)
+      .exec(`SELECT * FROM slots WHERE closed_at IS NULL ORDER BY position_id, created_at, slot_id`)
       .toArray() as unknown as DbSlotRow[];
   }
 

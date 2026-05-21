@@ -448,6 +448,52 @@ describe("PanelManager", () => {
     expect(registry.getPanel(root.panelId)?.selectedChildId).toBe(first.panelId);
   });
 
+  it("restores roots with duplicate persisted ranks in creation order", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    for (const name of ["first-root", "second-root"]) {
+      const panelDir = path.join(workspacePath, "panels", name);
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({ name, natstack: { title: `${name} Panel` } })
+      );
+    }
+
+    const seedRegistry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps(workspacePath);
+    const seedManager = new PanelManager({ registry: seedRegistry, ...deps });
+
+    const first = await seedManager.create("panels/first-root", {
+      isRoot: true,
+      addAsRoot: true,
+    });
+    const second = await seedManager.create("panels/second-root", {
+      isRoot: true,
+      addAsRoot: true,
+    });
+    const firstSlot = mem.state.slots.get(first.panelId);
+    const secondSlot = mem.state.slots.get(second.panelId);
+    if (firstSlot) {
+      firstSlot.position_id = "000001000000";
+      firstSlot.created_at = 100;
+    }
+    if (secondSlot) {
+      secondSlot.position_id = "000001000000";
+      secondSlot.created_at = 200;
+    }
+
+    const restoredRegistry = new PanelRegistry({});
+    const restoredManager = new PanelManager({ registry: restoredRegistry, ...deps });
+    await restoredManager.syncSnapshot();
+
+    expect(restoredRegistry.getRootPanels().map((panel) => panel.id)).toEqual([
+      first.panelId,
+      second.panelId,
+    ]);
+  });
+
   it("persists focused panel and cached titles in local view state", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
     tempDirs.push(workspacePath);
