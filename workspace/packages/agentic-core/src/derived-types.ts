@@ -134,6 +134,7 @@ export interface ChatMessage {
   kind?: "message" | "method" | "system";
   complete?: boolean;
   replyTo?: string;
+  mentions?: string[];
   error?: string;
   pending?: boolean;
   attachments?: Attachment[];

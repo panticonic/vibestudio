@@ -1,0 +1,25 @@
+{
+  "name": "@workspace-workers/silent-agent-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "natstack": {
+    "entry": "index.ts",
+    "durable": {
+      "classes": [{ "className": "SilentAgentWorker" }]
+    },
+    "exposeModules": [
+      "@workspace/runtime",
+      "@workspace/pubsub",
+      "zod"
+    ]
+  },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*",
+    "@workspace/agentic-do": "workspace:*",
+    "@workspace/pubsub": "workspace:*",
+    "@workspace-workers/agent-worker": "workspace:*",
+    "@natstack/harness": "workspace:*",
+    "zod": "^3.24.0"
+  }
+}

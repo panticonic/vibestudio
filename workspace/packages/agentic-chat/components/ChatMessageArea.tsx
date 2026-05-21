@@ -1,7 +1,10 @@
 import { useMemo } from "react";
 import type { ReactNode } from "react";
+import { Flex } from "@radix-ui/themes";
 import { useChatContext } from "../context/ChatContext";
+import { useChatInputContext } from "../context/ChatInputContext";
 import { MessageList } from "./MessageList";
+import { SignalPills } from "./SignalPills";
 
 export interface ChatMessageAreaProps {
   /** Override default message card rendering */
@@ -31,34 +34,40 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     chat,
     scope,
     scopes,
+    clientRef,
   } = useChatContext();
+  const { setReplyTo } = useChatInputContext();
 
   const mdxActions = useMemo(() => ({
     publishMessage: async (content: string) => {
-      await chat.publish("message", { content });
+      await chat.send(content);
     },
   }), [chat]);
 
   return (
-    <MessageList
-      messages={messages}
-      participants={participants}
-      selfId={selfId}
-      allParticipants={allParticipants}
-      inlineUiComponents={inlineUiComponents}
-      messageTypeComponents={messageTypeComponents}
-      chat={chat as unknown as Record<string, unknown>}
-      scope={scope}
-      scopes={scopes as unknown as Record<string, unknown>}
-      hasMoreHistory={hasMoreHistory}
-      loadingMore={loadingMore}
-      onLoadEarlierMessages={onLoadEarlierMessages}
-      onInterrupt={onInterrupt}
-      onFocusPanel={onFocusPanel}
-      onReloadPanel={onReloadPanel}
-      mdxActions={mdxActions}
-      renderMessage={renderMessage}
-      renderInlineGroup={renderInlineGroup}
-    />
+    <Flex direction="column" gap="1" style={{ minHeight: 0, flexGrow: 1 }}>
+      <SignalPills client={clientRef.current} />
+      <MessageList
+        messages={messages}
+        participants={participants}
+        selfId={selfId}
+        allParticipants={allParticipants}
+        inlineUiComponents={inlineUiComponents}
+        messageTypeComponents={messageTypeComponents}
+        chat={chat as unknown as Record<string, unknown>}
+        scope={scope}
+        scopes={scopes as unknown as Record<string, unknown>}
+        hasMoreHistory={hasMoreHistory}
+        loadingMore={loadingMore}
+        onLoadEarlierMessages={onLoadEarlierMessages}
+        onInterrupt={onInterrupt}
+        onFocusPanel={onFocusPanel}
+        onReloadPanel={onReloadPanel}
+        onReply={setReplyTo}
+        mdxActions={mdxActions}
+        renderMessage={renderMessage}
+        renderInlineGroup={renderInlineGroup}
+      />
+    </Flex>
   );
 }

@@ -50,8 +50,8 @@ export function useChannelSignalMessages<T extends ParticipantMetadata = Partici
             content?: string;
           };
           if (wire.delivery !== "signal") continue;
-          // Pubsub wire shape: IncomingNewMessage has top-level
-          // content/contentType; raw protocol may nest them in payload.
+          // Signal events may arrive as normalized top-level fields or as the
+          // raw protocol payload.
           const content =
             wire.content ?? wire.payload?.content ?? "";
           const contentType =

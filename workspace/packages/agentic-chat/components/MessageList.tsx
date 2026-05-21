@@ -11,7 +11,7 @@ import type { MdxActionHandlers } from "./markdownComponents";
 // Grouped item types produced by the grouping logic
 type GroupedItem =
   | { type: "inline-group"; items: Array<{ msg: ChatMessage; index: number }>; inlineItems: InlineItem[]; key: string }
-  | { type: "message"; msg: ChatMessage; index: number };
+  | { type: "chat-message"; msg: ChatMessage; index: number };
 
 // --- Grouping helper functions (module-level for reuse by fast paths) ---
 
@@ -113,7 +113,7 @@ function fullGroupComputation(
         pushInlineGroup(result, currentInlineGroup);
         currentInlineGroup = [];
       }
-      result.push({ type: "message", msg, index });
+      result.push({ type: "chat-message", msg, index });
     }
   });
 
@@ -176,6 +176,7 @@ export interface MessageListProps {
   onInterrupt?: (agentId: string, messageId?: string, agentHandle?: string) => void;
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => void;
+  onReply?: (messageId: string) => void;
   mdxActions?: MdxActionHandlers;
   /** Override default message card rendering */
   renderMessage?: (msg: ChatMessage, senderInfo: SenderInfo) => React.ReactNode;
@@ -212,6 +213,7 @@ export const MessageList = React.memo(function MessageList({
   onInterrupt,
   onFocusPanel,
   onReloadPanel,
+  onReply,
   mdxActions,
   renderMessage: customRenderMessage,
   renderInlineGroup: customRenderInlineGroup,
@@ -382,9 +384,9 @@ export const MessageList = React.memo(function MessageList({
         const lastMsgInlineType = getInlineItemType(lastMsg);
         // If the last grouped item is a regular message with the same id, swap it in-place.
         // Also verify the message hasn't transitioned to an inline type.
-        if (lastItem?.type === "message" && lastItem.msg.id === lastMsg.id && lastMsgInlineType === null) {
+        if (lastItem?.type === "chat-message" && lastItem.msg.id === lastMsg.id && lastMsgInlineType === null) {
           const result = cache.result.slice(); // shallow copy
-          result[result.length - 1] = { type: "message", msg: lastMsg, index: messages.length - 1 };
+          result[result.length - 1] = { type: "chat-message", msg: lastMsg, index: messages.length - 1 };
           prevGroupCacheRef.current = { messages, result };
           return result;
         }
@@ -452,7 +454,7 @@ export const MessageList = React.memo(function MessageList({
               pushInlineGroup(result, tailInlineGroup);
               tailInlineGroup = null;
             }
-            result.push({ type: "message", msg, index: i });
+            result.push({ type: "chat-message", msg, index: i });
           }
         }
 
@@ -469,6 +471,11 @@ export const MessageList = React.memo(function MessageList({
     const result = fullGroupComputation(messages);
     prevGroupCacheRef.current = { messages, result };
     return result;
+  }, [messages]);
+  const messagesById = useMemo(() => {
+    const byId = new Map<string, ChatMessage>();
+    for (const message of messages) byId.set(message.id, message);
+    return byId;
   }, [messages]);
 
   const hasDurableTypingMessages = messages.some((msg) => msg.contentType === "typing");
@@ -501,6 +508,19 @@ export const MessageList = React.memo(function MessageList({
 
     const { msg, index: msgIndex } = item;
     const sender = getSenderInfo(msg.senderId, msg);
+    const mentionLabels = (msg.mentions ?? []).map((participantId) => {
+      const participant = allParticipants[participantId];
+      return participant?.metadata.handle ?? participant?.metadata.name ?? participantId;
+    });
+    const repliedTo = msg.replyTo ? messagesById.get(msg.replyTo) : undefined;
+    const replySender = repliedTo ? getSenderInfo(repliedTo.senderId, repliedTo) : null;
+    const replyContext = repliedTo && replySender
+      ? {
+          id: repliedTo.id,
+          senderName: replySender.name,
+          snippet: repliedTo.content.slice(0, 120),
+        }
+      : undefined;
 
     if (customRenderMessage) {
       return <Flex className="message-item" direction="column">{customRenderMessage(msg, sender as SenderInfo)}</Flex>;
@@ -515,6 +535,9 @@ export const MessageList = React.memo(function MessageList({
           msg={msg}
           index={msgIndex}
           senderType={sender.type}
+          senderInfo={sender as SenderInfo}
+          mentionLabels={mentionLabels}
+          replyContext={replyContext}
           isStreaming={isStreaming}
           isCopied={copiedMessageIdRef.current === msg.id}
           inlineUiComponents={inlineUiComponents}
@@ -525,13 +548,14 @@ export const MessageList = React.memo(function MessageList({
           onInterrupt={handleInterruptMessage}
           onCopy={handleCopyMessage}
           onClearCopied={handleClearCopiedMessage}
+          onReply={onReply}
           onFocusPanel={onFocusPanel}
           onReloadPanel={onReloadPanel}
           mdxActions={mdxActions}
         />
       </Flex>
     );
-  }, [getSenderInfo, inlineUiComponents, messageTypeComponents, chat, scope, scopes, mdxActions,
+  }, [getSenderInfo, inlineUiComponents, messageTypeComponents, chat, scope, scopes, mdxActions, allParticipants, messagesById, onReply,
       handleInterruptMessage, handleCopyMessage, handleClearCopiedMessage, handleTypingInterrupt, onFocusPanel, onReloadPanel,
       customRenderMessage, customRenderInlineGroup]);
 

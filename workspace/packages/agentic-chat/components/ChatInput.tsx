@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Box, Callout, Card, Flex, IconButton, TextArea } from "@radix-ui/themes";
-import { PaperPlaneIcon, ImageIcon } from "@radix-ui/react-icons";
+import { Box, Callout, Card, Flex, IconButton, Text, TextArea } from "@radix-ui/themes";
+import { PaperPlaneIcon, ImageIcon, Cross2Icon } from "@radix-ui/react-icons";
 import { useIsMobile, useTouchDevice, useViewportHeight } from "@workspace/react";
 import { useChatContext } from "../context/ChatContext";
-import { useChatInputContext } from "../context/ChatInputContext";
+import { getMentionsFromInput, useChatInputContext } from "../context/ChatInputContext";
 import { ImageInput, getAttachmentInputsFromPendingImages } from "./ImageInput";
+import { MentionAutocomplete } from "./MentionAutocomplete";
+import { useMentionAutocomplete, type MentionCandidate } from "../hooks/useMentionAutocomplete";
 import { getImagesFromClipboard, createPendingImage, validateImageFiles, type PendingImage } from "../utils/imageUtils";
 
 const MAX_IMAGE_COUNT = 10;
@@ -14,8 +16,17 @@ const MAX_IMAGE_COUNT = 10;
  * Reads from ChatContext.
  */
 export function ChatInput() {
-  const { connected } = useChatContext();
-  const { input, pendingImages, onInputChange, onSendMessage, onImagesChange } = useChatInputContext();
+  const { connected, allParticipants } = useChatContext();
+  const {
+    input,
+    pendingImages,
+    onInputChange,
+    onSendMessage,
+    onImagesChange,
+    replyTo,
+    replyToMessage,
+    setReplyTo,
+  } = useChatInputContext();
   const isMobile = useIsMobile();
   const isTouch = useTouchDevice();
   const viewportHeight = useViewportHeight();
@@ -23,6 +34,8 @@ export function ChatInput() {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const [showImageInput, setShowImageInput] = useState(false);
+  const [selectedMentionIds, setSelectedMentionIds] = useState<Record<string, string>>({});
+  const mentions = useMentionAutocomplete(allParticipants);
 
   // Auto-resize textarea: use rAF-coalesced onInput handler
   const resizeRafRef = useRef(0);
@@ -38,6 +51,10 @@ export function ChatInput() {
   useEffect(() => {
     return () => cancelAnimationFrame(resizeRafRef.current);
   }, []);
+
+  useEffect(() => {
+    if (replyTo) textAreaRef.current?.focus();
+  }, [replyTo]);
 
   // Handle paste for images
   useEffect(() => {
@@ -89,9 +106,14 @@ export function ChatInput() {
       const attachments = pendingImages.length > 0
         ? getAttachmentInputsFromPendingImages(pendingImages)
         : undefined;
-      await onSendMessage(attachments);
+      await onSendMessage(attachments, {
+        mentions: getMentionsFromInput(input, allParticipants, selectedMentionIds),
+        replyTo: replyTo ?? undefined,
+      });
       onImagesChange([]);
       setShowImageInput(false);
+      setSelectedMentionIds({});
+      mentions.close();
       if (textAreaRef.current) {
         textAreaRef.current.style.height = "auto";
       }
@@ -100,12 +122,37 @@ export function ChatInput() {
       setSendError(message);
       console.error("Failed to send message:", error);
     }
-  }, [onSendMessage, pendingImages, onImagesChange]);
+  }, [onSendMessage, pendingImages, onImagesChange, input, allParticipants, selectedMentionIds, replyTo, mentions]);
 
   const handleInputChange = useCallback((value: string) => {
     if (sendError) setSendError(null);
     onInputChange(value);
-  }, [onInputChange, sendError]);
+    const textArea = textAreaRef.current;
+    if (textArea) mentions.updateFromTextArea(textArea, value);
+  }, [onInputChange, sendError, mentions]);
+
+  const insertMention = useCallback((candidate: MentionCandidate) => {
+    const textArea = textAreaRef.current;
+    if (!textArea) return;
+    const caret = textArea.selectionStart ?? input.length;
+    const start = mentions.triggerStart >= 0 ? mentions.triggerStart : caret;
+    const before = input.slice(0, start);
+    const after = input.slice(caret);
+    const spacer = after.startsWith(" ") ? "" : " ";
+    const next = `${before}@${candidate.handle}${spacer}${after}`;
+    const nextCaret = before.length + candidate.handle.length + 1 + spacer.length;
+    onInputChange(next);
+    setSelectedMentionIds((current) => ({
+      ...current,
+      [candidate.handle.toLowerCase()]: candidate.participantId,
+    }));
+    mentions.close();
+    requestAnimationFrame(() => {
+      textArea.focus();
+      textArea.setSelectionRange(nextCaret, nextCaret);
+      handleTextAreaInput();
+    });
+  }, [input, mentions, onInputChange, handleTextAreaInput]);
 
   const handleImagesChange = useCallback((images: PendingImage[]) => {
     if (sendError) setSendError(null);
@@ -113,11 +160,34 @@ export function ChatInput() {
   }, [onImagesChange, sendError]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (mentions.open) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        mentions.setSelectedIndex(mentions.selectedIndex + 1);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        mentions.setSelectedIndex(Math.max(0, mentions.selectedIndex - 1));
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        mentions.close();
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const candidate = mentions.candidates[mentions.selectedIndex];
+        if (candidate) insertMention(candidate);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void handleSendMessage();
     }
-  }, [handleSendMessage]);
+  }, [handleSendMessage, mentions, insertMention]);
 
   const toggleImageInput = useCallback(() => {
     if (sendError) setSendError(null);
@@ -155,19 +225,41 @@ export function ChatInput() {
 
       {/* Input */}
       <Card className="chat-surface-card chat-input-card" size="1" variant="surface" style={{ flexShrink: 0 }}>
+        {replyTo && (
+          <Flex align="center" justify="between" gap="2" mb="2">
+            <Text size="1" color="gray" truncate>
+              Replying to {replyToMessage?.senderMetadata?.name ?? replyToMessage?.senderId ?? "message"}
+              {replyToMessage?.content ? `: ${replyToMessage.content.slice(0, 80)}` : ""}
+            </Text>
+            <IconButton size="1" variant="ghost" color="gray" onClick={() => setReplyTo(null)} title="Cancel reply">
+              <Cross2Icon />
+            </IconButton>
+          </Flex>
+        )}
         <Flex align="end" gap="1">
-          <TextArea
-            ref={textAreaRef}
-            size="2"
-            variant="surface"
-            style={{ flex: 1, minHeight: isMobile ? 38 : 42, maxHeight: isMobile ? Math.min(120, viewportHeight * 0.22) : 180, resize: "none" }}
-            placeholder={isMobile ? "Type a message..." : "Type a message... (Enter to send, Shift+Enter for new line)"}
-            value={input}
-            onChange={(e) => handleInputChange(e.target.value)}
-            onInput={handleTextAreaInput}
-            onKeyDown={handleKeyDown}
-            disabled={!connected}
-          />
+          <Box style={{ position: "relative", flex: 1 }}>
+            {mentions.open && (
+              <MentionAutocomplete
+                candidates={mentions.candidates}
+                selectedIndex={mentions.selectedIndex}
+                position={mentions.caretPosition}
+                onHighlight={mentions.setSelectedIndex}
+                onSelect={insertMention}
+              />
+            )}
+            <TextArea
+              ref={textAreaRef}
+              size="2"
+              variant="surface"
+              style={{ width: "100%", minHeight: isMobile ? 38 : 42, maxHeight: isMobile ? Math.min(120, viewportHeight * 0.22) : 180, resize: "none" }}
+              placeholder={isMobile ? "Type a message..." : "Type a message... (Enter to send, Shift+Enter for new line)"}
+              value={input}
+              onChange={(e) => handleInputChange(e.target.value)}
+              onInput={handleTextAreaInput}
+              onKeyDown={handleKeyDown}
+              disabled={!connected}
+            />
+          </Box>
           <Flex direction="column" gap="1">
             <IconButton
               variant="ghost"

@@ -128,6 +128,8 @@ function projectedMessageToChatMessage(message: ProjectedMessage): ChatMessage {
     content: message.content,
     kind: "message",
     complete: message.status === "completed" || message.status === "failed",
+    replyTo: message.replyTo,
+    mentions: message.mentions,
     error: message.status === "failed" ? "Message failed" : undefined,
     senderMetadata: {
       name: message.actor.displayName ?? message.actor.id,

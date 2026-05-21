@@ -1,5 +1,39 @@
 import { createContext, useContext } from "react";
-import type { ChatInputContextValue } from "../types";
+import type { Participant } from "@workspace/pubsub";
+import type { ChatInputContextValue, ChatParticipantMetadata } from "../types";
+
+const MENTION_TOKEN_RE = /(^|[\s([{])@([A-Za-z0-9_.-]+)/g;
+
+export function getMentionsFromInput(
+  text: string,
+  roster: Record<string, Participant<ChatParticipantMetadata>>,
+  selectedMentions?: Record<string, string>,
+): string[] {
+  const handleToIds = new Map<string, string[]>();
+  for (const [participantId, participant] of Object.entries(roster)) {
+    const handle = participant.metadata.handle;
+    if (!handle) continue;
+    const key = handle.toLowerCase();
+    const ids = handleToIds.get(key) ?? [];
+    ids.push(participantId);
+    handleToIds.set(key, ids);
+  }
+
+  const mentions = new Set<string>();
+  for (const match of text.matchAll(MENTION_TOKEN_RE)) {
+    const handle = match[2]?.toLowerCase();
+    if (!handle) continue;
+    const ids = handleToIds.get(handle);
+    if (!ids) continue;
+    const selectedId = selectedMentions?.[handle];
+    if (selectedId && ids.includes(selectedId)) {
+      mentions.add(selectedId);
+      continue;
+    }
+    for (const id of ids) mentions.add(id);
+  }
+  return [...mentions];
+}
 
 export const ChatInputContext = createContext<ChatInputContextValue | null>(null);
 

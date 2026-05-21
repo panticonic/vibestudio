@@ -15,6 +15,7 @@ function createEvalTool() {
     runtimeTarget: "panel",
     getChatSandboxValue: () => ({
       publish: async () => ({}),
+      send: async () => ({}),
       callMethod: async () => ({}),
       callMethodResult: async () => ({ content: {} }),
       contextId: "ctx-test",

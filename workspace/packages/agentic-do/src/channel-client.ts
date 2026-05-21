@@ -8,12 +8,13 @@ import type { RpcCaller } from "@natstack/rpc";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 import {
     AGENTIC_EVENT_PAYLOAD_KIND,
+    AGENTIC_PROTOCOL_VERSION,
     type AgenticEvent,
 } from "@workspace/agentic-protocol";
 interface ChannelSendOptions {
-    contentType?: string;
     senderMetadata?: Record<string, unknown>;
     replyTo?: string;
+    mentions?: string[];
     idempotencyKey?: string;
     attachments?: Array<{ id?: string; data: string; mimeType: string; name?: string; size?: number }>;
 }
@@ -40,7 +41,32 @@ export class ChannelClient {
         return this.rpc.call<T>(await this.target(), method, [...args]);
     }
     async send(participantId: string, messageId: string, content: string, opts?: ChannelSendOptions): Promise<void> {
-        await this.call("send", participantId, messageId, content, opts);
+        const senderMetadata = opts?.senderMetadata ?? {};
+        const participantType = typeof senderMetadata["type"] === "string" ? senderMetadata["type"] : undefined;
+        const displayName = typeof senderMetadata["name"] === "string" ? senderMetadata["name"] : participantId;
+        const event: AgenticEvent = {
+            kind: "message.completed",
+            actor: {
+                kind: participantType === "agent" ? "agent" : participantType === "headless" ? "user" : "panel",
+                id: participantId,
+                displayName,
+                metadata: senderMetadata,
+            },
+            causality: { messageId: messageId as never },
+            payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                role: participantType === "agent" ? "assistant" : "user",
+                content,
+                blocks: [{ type: "text", content }],
+                mentions: opts?.mentions,
+                replyTo: opts?.replyTo as never,
+            },
+            createdAt: new Date().toISOString(),
+        };
+        await this.publishAgenticEvent(participantId, event, {
+            idempotencyKey: opts?.idempotencyKey,
+            senderMetadata,
+        });
     }
     async publishAgenticEvent(participantId: string, event: AgenticEvent, opts?: {
         idempotencyKey?: string;

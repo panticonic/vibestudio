@@ -23,7 +23,6 @@ import {
 } from "@workspace/agentic-protocol";
 import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-constants";
 import type {
-  SendOpts,
   SubscribeResult,
   ChannelConfig,
   PresencePayload,
@@ -973,57 +972,6 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /**
-   * Send a new message (from any participant).
-   */
-  async send(
-    participantId: string,
-    messageId: string,
-    content: string,
-    opts?: SendOpts
-  ): Promise<void> {
-    this.assertParticipantCaller(participantId, "send");
-    // Phase 0B: Idempotency check
-    const idempotencyKey = opts?.idempotencyKey;
-    if (idempotencyKey) {
-      const existing = this.sql
-        .exec(`SELECT result_id FROM dedup_keys WHERE key = ?`, idempotencyKey)
-        .toArray();
-      if (existing.length > 0) {
-        return;
-      }
-    }
-
-    const contentType = opts?.contentType;
-    const replyTo = opts?.replyTo;
-
-    const senderMetadata = this.getSenderMetadata(participantId) ?? opts?.senderMetadata;
-
-    // Build payload (match PubSub server format)
-    const payload: Record<string, unknown> = {
-      id: messageId,
-      content,
-    };
-    if (contentType) payload["contentType"] = contentType;
-    if (replyTo) payload["replyTo"] = replyTo;
-    const payloadJson = JSON.stringify(payload);
-
-    const event = await this.appendLogEvent("message", payload, participantId, senderMetadata, {
-      messageId,
-    });
-
-    if (idempotencyKey) {
-      this.sql.exec(
-        `INSERT OR IGNORE INTO dedup_keys (key, result_id, created_at) VALUES (?, ?, ?)`,
-        idempotencyKey,
-        event.id,
-        Date.now()
-      );
-      this.scheduleDedupCleanup();
-    }
-    broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, participantId);
-  }
-
-  /**
    * Publish a typed message (from any participant).
    * This is the generic publish method used by panel clients for all message types.
    */
@@ -1114,13 +1062,8 @@ export class PubSubChannel extends DurableObjectBase {
       return { id: event.id };
     }
 
-    // Extract messageId from payload
-    const payloadObj =
-      typeof payload === "object" && payload !== null ? (payload as Record<string, unknown>) : null;
-    const messageId = (payloadObj?.["id"] as string) ?? crypto.randomUUID();
-
     const event = await this.appendLogEvent(type, payload, participantId, senderMetadata, {
-      messageId: type === "message" ? messageId : undefined,
+      messageId: undefined,
       attachments,
     });
 
@@ -1186,18 +1129,16 @@ export class PubSubChannel extends DurableObjectBase {
   async sendSignal(participantId: string, content: string, contentType?: string): Promise<void> {
     this.assertParticipantCaller(participantId, "sendSignal");
     const ts = Date.now();
-    const messageId = `sig_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-
     const senderMetadata = this.getSenderMetadata(participantId);
 
-    const payload: Record<string, unknown> = { id: messageId, content };
+    const payload: Record<string, unknown> = { content };
     if (contentType) payload["contentType"] = contentType;
     const payloadJson = JSON.stringify(payload);
 
     const event = buildChannelEvent(
       0,
-      messageId,
-      "message",
+      `sig_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      "signal",
       payloadJson,
       participantId,
       senderMetadata,

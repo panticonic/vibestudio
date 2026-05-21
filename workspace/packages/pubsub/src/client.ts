@@ -150,7 +150,7 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
       replyTo?: string;
       attachments?: import("./types.js").AttachmentInput[];
       contentType?: string;
-      at?: string[];
+      mentions?: string[];
       metadata?: Record<string, unknown>;
       idempotencyKey?: string;
     }

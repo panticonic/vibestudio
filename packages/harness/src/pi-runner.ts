@@ -157,6 +157,9 @@ export interface PiRunnerOptions {
   onPrepareNextTurn?: (
     snapshot: TurnSnapshot
   ) => Promise<TurnSnapshot | void> | TurnSnapshot | void;
+  publicationPolicy?: (input: { event: AgenticEvent; publishToChannel?: boolean }) => boolean;
+  extraTools?: AgentTool<any>[];
+  toolFilter?: (toolName: string) => boolean;
   compactionPolicy?: CompactionTriggerOptions;
   /**
    * Optional probe asking whether the credentials runtime holds a credential
@@ -535,9 +538,12 @@ export class PiRunner {
   }
 
   private computeActiveTools(): AgentTool<any>[] {
-    return this.extensionRuntime!.getActiveTools(this.builtinTools).map((tool) =>
-      this.wrapTool(tool)
-    );
+    const base = this.extensionRuntime!.getActiveTools(this.builtinTools);
+    const combined = [...base, ...(this.options.extraTools ?? [])];
+    const filtered = this.options.toolFilter
+      ? combined.filter((tool) => this.options.toolFilter!(tool.name))
+      : combined;
+    return filtered.map((tool) => this.wrapTool(tool));
   }
 
   private wrapTool(tool: AgentTool<any>): AgentTool<any> {
@@ -927,13 +933,19 @@ export class PiRunner {
       trajectoryId: this.gadTrajectoryId(),
       branchId: this.options.gad.branchId,
       owner: this.agentActor(),
-        events: items.map((item) => ({
-          event: this.withCurrentTurnId(item.event),
+      events: items.map((item) => {
+        const event = this.withCurrentTurnId(item.event);
+        const publishToChannel = this.options.publicationPolicy
+          ? this.options.publicationPolicy({ event, publishToChannel: item.publishToChannel })
+          : item.publishToChannel;
+        return {
+          event,
           ...(item.eventId ? { eventId: item.eventId } : {}),
-        ...(this.options.gad?.channelId && item.publishToChannel === true
-          ? { publish: { channelIds: [this.options.gad.channelId] } }
-          : {}),
-      })),
+          ...(this.options.gad?.channelId && publishToChannel === true
+            ? { publish: { channelIds: [this.options.gad.channelId] } }
+            : {}),
+        };
+      }),
     });
     await this.broadcastPublishedChannelEnvelopes(result?.published ?? []);
   }

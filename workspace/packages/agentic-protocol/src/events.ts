@@ -89,9 +89,9 @@ export interface EventCausality {
 export type MessageRole = "user" | "assistant" | "system" | "tool" | "panel";
 
 export type MessagePayload =
-  | { protocol: "agentic.trajectory.v1"; role: MessageRole; content?: string; blocks?: MessageBlockInput[] }
+  | { protocol: "agentic.trajectory.v1"; role: MessageRole; content?: string; blocks?: MessageBlockInput[]; mentions?: string[]; replyTo?: MessageId }
   | { protocol: "agentic.trajectory.v1"; delta: string; replace?: boolean; block?: MessageBlockInput }
-  | { protocol: "agentic.trajectory.v1"; role?: MessageRole; content: string; blocks?: MessageBlockInput[]; usage?: UsagePayload }
+  | { protocol: "agentic.trajectory.v1"; role?: MessageRole; content: string; blocks?: MessageBlockInput[]; usage?: UsagePayload; mentions?: string[]; replyTo?: MessageId }
   | { protocol: "agentic.trajectory.v1"; reason: string; recoverable?: boolean };
 
 export interface MessageBlockInput {

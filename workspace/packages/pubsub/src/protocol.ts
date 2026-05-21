@@ -6,17 +6,6 @@
 
 import { z } from "zod";
 
-export const NewMessageSchema = z.object({
-  id: z.string().uuid(),
-  content: z.string(),
-  contentType: z.string().optional(),
-  replyTo: z.string().uuid().optional(),
-  /** IDs of intended recipients (empty = broadcast to all) */
-  at: z.array(z.string()).optional(),
-  /** Arbitrary metadata (e.g., SDK session/message UUIDs for recovery) */
-  metadata: z.record(z.unknown()).optional(),
-});
-
 export const UpdateMessageSchema = z.object({
   id: z.string().uuid(),
   content: z.string().optional(),
@@ -30,6 +19,11 @@ export const ErrorMessageSchema = z.object({
   id: z.string().uuid(),
   error: z.string(),
   code: z.string().optional(),
+});
+
+export const SignalMessageSchema = z.object({
+  content: z.string(),
+  contentType: z.string().optional(),
 });
 
 export const MethodCallSchema = z.object({
@@ -68,9 +62,9 @@ export const ExecutionPauseSchema = z.object({
   reason: z.string().optional(),
 });
 
-export type NewMessage = z.infer<typeof NewMessageSchema>;
 export type UpdateMessage = z.infer<typeof UpdateMessageSchema>;
 export type ErrorMessage = z.infer<typeof ErrorMessageSchema>;
+export type SignalMessage = z.infer<typeof SignalMessageSchema>;
 export type MethodCall = z.infer<typeof MethodCallSchema>;
 export type MethodResult = z.infer<typeof MethodResultSchema>;
 export type MethodCancel = z.infer<typeof MethodCancelSchema>;

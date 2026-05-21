@@ -31,6 +31,8 @@ export type { ChatProviderProps } from "./context/ChatProvider";
 // --- Hooks ---
 export { useAgenticChat } from "./hooks/useAgenticChat";
 export type { UseAgenticChatOptions } from "./hooks/useAgenticChat";
+export { useChannelSignals } from "./hooks/useChannelSignals";
+export type { ChannelSignal, UseChannelSignalsOptions } from "./hooks/useChannelSignals";
 
 // Core hook (minimum viable chat — delegates to SessionManager)
 export { useChatCore } from "./hooks/core/useChatCore";
@@ -76,6 +78,7 @@ export { ThinkingPill, ExpandedThinking, PREVIEW_MAX_LENGTH } from "./components
 export { ActionPill, ExpandedAction } from "./components/ActionMessage";
 export { MethodArgumentsModal } from "./components/MethodArgumentsModal";
 export { TypingPill } from "./components/TypingMessage";
+export { SignalPills } from "./components/SignalPills";
 export { TypingIndicator } from "./components/TypingIndicator";
 export type { TypingIndicatorData } from "./types";
 export { InlineUiMessage, parseInlineUiData } from "./components/InlineUiMessage";

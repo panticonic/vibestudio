@@ -1,6 +1,6 @@
 import React, { useCallback } from "react";
 import { Badge, Box, Card, Code, Flex, IconButton, Text } from "@radix-ui/themes";
-import { CopyIcon, CheckIcon } from "@radix-ui/react-icons";
+import { CopyIcon, CheckIcon, ChatBubbleIcon } from "@radix-ui/react-icons";
 import { CONTENT_TYPE_INLINE_UI, isClientParticipantType } from "@workspace/pubsub";
 import { TypingIndicator } from "./TypingIndicator";
 import { MessageContent } from "./MessageContent";
@@ -9,12 +9,16 @@ import { InlineUiMessage, parseInlineUiData } from "./InlineUiMessage";
 import { AgentDisconnectedMessage } from "./AgentDisconnectedMessage";
 import { CustomMessageCard } from "./CustomMessage";
 import type { ChatMessage, InlineUiComponentEntry, MessageTypeComponentEntry } from "../types";
+import type { SenderInfo } from "./MessageList";
 import type { MdxActionHandlers } from "./markdownComponents";
 
 interface MessageCardProps {
   msg: ChatMessage;
   index: number;
   senderType: string;
+  senderInfo: SenderInfo;
+  mentionLabels: string[];
+  replyContext?: { id: string; senderName: string; snippet: string };
   isStreaming: boolean;
   /** Whether this specific message was just copied (shows checkmark icon) */
   isCopied: boolean;
@@ -26,6 +30,7 @@ interface MessageCardProps {
   onInterrupt: (msgId: string, senderId: string) => void;
   onCopy: (msgId: string, content: string) => void;
   onClearCopied: (msgId: string) => void;
+  onReply?: (msgId: string) => void;
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => void;
   mdxActions?: MdxActionHandlers;
@@ -45,6 +50,9 @@ export const MessageCard = React.memo(function MessageCard({
   msg,
   index,
   senderType,
+  senderInfo,
+  mentionLabels,
+  replyContext,
   isStreaming,
   isCopied,
   inlineUiComponents,
@@ -55,6 +63,7 @@ export const MessageCard = React.memo(function MessageCard({
   onInterrupt,
   onCopy,
   onClearCopied,
+  onReply,
   onFocusPanel,
   onReloadPanel,
   mdxActions,
@@ -72,6 +81,9 @@ export const MessageCard = React.memo(function MessageCard({
   const handleClearCopied = useCallback(() => {
     onClearCopied(msg.id);
   }, [onClearCopied, msg.id]);
+  const handleReply = useCallback(() => {
+    onReply?.(msg.id);
+  }, [onReply, msg.id]);
 
   // Handle inline_ui messages
   if (msg.contentType === CONTENT_TYPE_INLINE_UI) {
@@ -176,6 +188,7 @@ export const MessageCard = React.memo(function MessageCard({
 
   return (
     <Box
+      id={`message-${msg.id}`}
       className={classNames("message-row", isClient ? "message-row-client" : "message-row-agent")}
     >
       <Card
@@ -189,6 +202,52 @@ export const MessageCard = React.memo(function MessageCard({
         }}
       >
         <Flex className="message-card-body" direction="column" gap="2">
+          <Flex align="center" justify="between" gap="2">
+            <Box style={{ minWidth: 0 }}>
+              <Text size="1" weight="medium" truncate>
+                {senderInfo.name}
+              </Text>
+              <Text as="span" size="1" color="gray" style={{ marginLeft: 6 }}>
+                @{senderInfo.handle}
+              </Text>
+            </Box>
+            {onReply && hasContent && !isStreaming && (
+              <IconButton
+                size="1"
+                variant="ghost"
+                color="gray"
+                onClick={handleReply}
+                title="Reply"
+              >
+                <ChatBubbleIcon />
+              </IconButton>
+            )}
+          </Flex>
+          {replyContext && (
+            <Box
+              asChild
+              style={{
+                borderLeft: "2px solid var(--gray-a7)",
+                paddingLeft: 8,
+                cursor: "pointer",
+              }}
+            >
+              <a href={`#message-${replyContext.id}`}>
+                <Text size="1" color="gray" truncate>
+                  Replying to {replyContext.senderName}: {replyContext.snippet}
+                </Text>
+              </a>
+            </Box>
+          )}
+          {mentionLabels.length > 0 && (
+            <Flex gap="1" wrap="wrap">
+              {mentionLabels.map((label) => (
+                <Badge key={label} size="1" variant="soft" color="blue">
+                  @{label}
+                </Badge>
+              ))}
+            </Flex>
+          )}
           {hasContent && (
             <Box className="message-content">
               <MessageContent

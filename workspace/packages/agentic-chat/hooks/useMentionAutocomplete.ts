@@ -1,0 +1,135 @@
+import { useCallback, useMemo, useState } from "react";
+import type { Participant } from "@workspace/pubsub";
+import type { ChatParticipantMetadata } from "../types";
+
+const HANDLE_CHARS = /^[A-Za-z0-9_.-]*$/;
+
+export interface MentionCandidate {
+  participantId: string;
+  handle: string;
+  name: string;
+  type: string;
+}
+
+export interface MentionAutocompleteState {
+  open: boolean;
+  query: string;
+  selectedIndex: number;
+  candidates: MentionCandidate[];
+  triggerStart: number;
+  caretPosition: { left: number; top: number } | null;
+  setSelectedIndex: (index: number) => void;
+  updateFromTextArea: (textArea: HTMLTextAreaElement, text: string) => void;
+  close: () => void;
+}
+
+export function useMentionAutocomplete(
+  roster: Record<string, Participant<ChatParticipantMetadata>>,
+): MentionAutocompleteState {
+  const [query, setQuery] = useState("");
+  const [triggerStart, setTriggerStart] = useState(-1);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [caretPosition, setCaretPosition] = useState<{ left: number; top: number } | null>(null);
+
+  const candidates = useMemo(() => {
+    const q = query.toLowerCase();
+    return Object.entries(roster)
+      .flatMap(([participantId, participant]): MentionCandidate[] => {
+        const handle = participant.metadata.handle;
+        if (!handle) return [];
+        const name = participant.metadata.name ?? handle;
+        const type = participant.metadata.type ?? "unknown";
+        if (q && !handle.toLowerCase().includes(q) && !name.toLowerCase().includes(q)) return [];
+        return [{ participantId, handle, name, type }];
+      })
+      .sort((a, b) => a.handle.localeCompare(b.handle))
+      .slice(0, 8);
+  }, [query, roster]);
+
+  const close = useCallback(() => {
+    setTriggerStart(-1);
+    setQuery("");
+    setSelectedIndex(0);
+    setCaretPosition(null);
+  }, []);
+
+  const updateFromTextArea = useCallback((textArea: HTMLTextAreaElement, text: string) => {
+    const caret = textArea.selectionStart ?? text.length;
+    const beforeCaret = text.slice(0, caret);
+    const at = beforeCaret.lastIndexOf("@");
+    if (at < 0) {
+      close();
+      return;
+    }
+    const prefix = at === 0 ? "" : beforeCaret[at - 1] ?? "";
+    const token = beforeCaret.slice(at + 1);
+    if ((prefix && !/[\s([{]/.test(prefix)) || token.includes(" ") || !HANDLE_CHARS.test(token)) {
+      close();
+      return;
+    }
+    setTriggerStart(at);
+    setQuery(token);
+    setSelectedIndex(0);
+    setCaretPosition(measureCaretPosition(textArea, at));
+  }, [close]);
+
+  return {
+    open: triggerStart >= 0 && candidates.length > 0,
+    query,
+    selectedIndex: Math.min(selectedIndex, Math.max(0, candidates.length - 1)),
+    candidates,
+    triggerStart,
+    caretPosition,
+    setSelectedIndex,
+    updateFromTextArea,
+    close,
+  };
+}
+
+function measureCaretPosition(
+  textArea: HTMLTextAreaElement,
+  caretIndex: number,
+): { left: number; top: number } {
+  const style = window.getComputedStyle(textArea);
+  const mirror = document.createElement("div");
+  const span = document.createElement("span");
+  const properties = [
+    "boxSizing",
+    "width",
+    "borderTopWidth",
+    "borderRightWidth",
+    "borderBottomWidth",
+    "borderLeftWidth",
+    "paddingTop",
+    "paddingRight",
+    "paddingBottom",
+    "paddingLeft",
+    "fontFamily",
+    "fontSize",
+    "fontWeight",
+    "fontStyle",
+    "letterSpacing",
+    "lineHeight",
+    "textTransform",
+    "wordSpacing",
+  ] as const;
+
+  mirror.style.position = "absolute";
+  mirror.style.visibility = "hidden";
+  mirror.style.whiteSpace = "pre-wrap";
+  mirror.style.overflowWrap = "break-word";
+  mirror.style.top = "0";
+  mirror.style.left = "-9999px";
+  for (const property of properties) {
+    mirror.style[property] = style[property];
+  }
+
+  mirror.textContent = textArea.value.slice(0, caretIndex);
+  span.textContent = textArea.value.slice(caretIndex, caretIndex + 1) || ".";
+  mirror.appendChild(span);
+  document.body.appendChild(mirror);
+  const left = span.offsetLeft - textArea.scrollLeft;
+  const top = span.offsetTop - textArea.scrollTop;
+  mirror.remove();
+  return { left, top };
+}

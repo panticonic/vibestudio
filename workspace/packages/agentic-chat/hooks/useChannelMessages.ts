@@ -101,14 +101,26 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     const byId = byIdRef.current;
     const order = orderRef.current;
     const previousById = new Map(byId);
-    for (const id of agenticMessageIdsRef.current) {
+    const projected = chatMessagesFromChannelView(channelStateRef.current);
+    const projectedIds = new Set(projected.map((message) => message.id));
+    for (const id of [...agenticMessageIdsRef.current]) {
+      if (projectedIds.has(id)) continue;
       byId.delete(id);
       const index = order.indexOf(id);
       if (index >= 0) order.splice(index, 1);
+      agenticMessageIdsRef.current.delete(id);
     }
-    agenticMessageIdsRef.current.clear();
-    for (const msg of chatMessagesFromChannelView(channelStateRef.current)) {
-      if (!byId.has(msg.id)) order.push(msg.id);
+
+    let prependIndex = 0;
+    for (const msg of projected) {
+      if (!byId.has(msg.id)) {
+        if (trimTail) {
+          order.splice(prependIndex, 0, msg.id);
+          prependIndex += 1;
+        } else {
+          order.push(msg.id);
+        }
+      }
       const existing = previousById.get(msg.id);
       byId.set(msg.id, existing && sameChatMessage(existing, msg) ? existing : msg);
       agenticMessageIdsRef.current.add(msg.id);
@@ -153,7 +165,7 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
               senderId: wire.senderId,
               ts: wire.ts,
               senderMetadata: wire.senderMetadata,
-              payload: wire.payload,
+              payload: wire.payload as AgenticEvent,
             });
             channelStateRef.current = reduceChannelView(channelStateRef.current, envelope);
             if (wire.pubsubId !== undefined) {
@@ -228,17 +240,18 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
       const result = await c.getReplayAfter(cursor);
       for (const raw of result.logEvents) {
         const payload = raw.payload as Record<string, unknown> | undefined;
-        if (raw.type !== AGENTIC_EVENT_PAYLOAD_KIND || !payload) continue;
-        const envelope = pubsubAgenticEventToEnvelope(c.channelId, {
-          pubsubId: raw.id,
-          senderId: raw.senderId,
-          ts: raw.ts,
-          senderMetadata: raw.senderMetadata as { name?: string; type?: string; handle?: string } | undefined,
-          payload: payload as unknown as AgenticEvent,
-        });
-        channelStateRef.current = reduceChannelView(channelStateRef.current, envelope);
-        if (raw.id < (oldestRootIdRef.current ?? Infinity)) oldestRootIdRef.current = raw.id;
-        if (newestSeqRef.current === null || raw.id > newestSeqRef.current) newestSeqRef.current = raw.id;
+        if (raw.type === AGENTIC_EVENT_PAYLOAD_KIND && payload) {
+          const envelope = pubsubAgenticEventToEnvelope(c.channelId, {
+            pubsubId: raw.id,
+            senderId: raw.senderId,
+            ts: raw.ts,
+            senderMetadata: raw.senderMetadata as { name?: string; type?: string; handle?: string } | undefined,
+            payload: payload as unknown as AgenticEvent,
+          });
+          channelStateRef.current = reduceChannelView(channelStateRef.current, envelope);
+          if (raw.id < (oldestRootIdRef.current ?? Infinity)) oldestRootIdRef.current = raw.id;
+          if (newestSeqRef.current === null || raw.id > newestSeqRef.current) newestSeqRef.current = raw.id;
+        }
       }
       rebuildFromChannelState();
     } catch (err) {
@@ -258,10 +271,12 @@ function sameChatMessage(a: ChatMessage, b: ChatMessage): boolean {
     a.kind !== b.kind ||
     a.complete !== b.complete ||
     a.error !== b.error ||
-    a.pending !== b.pending
+    a.pending !== b.pending ||
+    a.replyTo !== b.replyTo
   ) {
     return false;
   }
+  if (JSON.stringify(a.mentions ?? []) !== JSON.stringify(b.mentions ?? [])) return false;
   if (a.invocation !== b.invocation && JSON.stringify(a.invocation) !== JSON.stringify(b.invocation)) return false;
   if (a.approval !== b.approval && JSON.stringify(a.approval) !== JSON.stringify(b.approval)) return false;
   if (a.inlineUi !== b.inlineUi && JSON.stringify(a.inlineUi) !== JSON.stringify(b.inlineUi)) return false;

@@ -26,8 +26,8 @@ import type { RpcChannelMessage } from "./protocol-wire.js";
 import { PubSubError } from "./types.js";
 import type {
   IncomingEvent,
-  IncomingNewMessage,
   IncomingErrorMessage,
+  IncomingSignalEvent,
   IncomingInvocationCallEvent,
   IncomingInvocationResultEvent,
   IncomingPresenceEventWithType,
@@ -52,8 +52,8 @@ import {
 } from "@workspace/agentic-protocol";
 import { AgenticError } from "./protocol-types.js";
 import {
-  NewMessageSchema,
   ErrorMessageSchema,
+  SignalMessageSchema,
 } from "./protocol.js";
 import { createFanout } from "./async-queue.js";
 import { PARTICIPANT_SESSION_METADATA_KEY } from "./internal-constants.js";
@@ -320,24 +320,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     } = pubsubMsg;
     const normalizedSender = normalizeSenderMetadata(senderMetadata);
 
-    if (msgType === "message") {
-      const parsed = NewMessageSchema.safeParse(payload);
-      if (!parsed.success) return null;
-      return {
-        type: "message",
-        delivery, phase, senderId, ts,
-        attachments: msgAttachments,
-        pubsubId,
-        senderMetadata: normalizedSender,
-        id: parsed.data.id,
-        content: parsed.data.content,
-        replyTo: parsed.data.replyTo,
-        contentType: parsed.data.contentType,
-        at: parsed.data.at,
-        metadata: parsed.data.metadata,
-      } as IncomingNewMessage;
-    }
-
     if (msgType === "error") {
       const parsed = ErrorMessageSchema.safeParse(payload);
       if (!parsed.success) return null;
@@ -351,6 +333,20 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
         error: parsed.data.error,
         code: parsed.data.code,
       } as IncomingErrorMessage;
+    }
+
+    if (msgType === "signal") {
+      const parsed = SignalMessageSchema.safeParse(payload);
+      if (!parsed.success) return null;
+      return {
+        type: "signal",
+        delivery, phase, senderId, ts,
+        attachments: msgAttachments,
+        pubsubId,
+        senderMetadata: normalizedSender,
+        content: parsed.data.content,
+        contentType: parsed.data.contentType,
+      } as IncomingSignalEvent;
     }
 
     if (msgType === AGENTIC_EVENT_PAYLOAD_KIND) {
@@ -1172,7 +1168,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       replyTo?: string;
       attachments?: AttachmentInput[];
       contentType?: string;
-      at?: string[];
+      mentions?: string[];
       metadata?: Record<string, unknown>;
       idempotencyKey?: string;
     },
@@ -1201,6 +1197,8 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
             },
           })) ?? []),
         ],
+        mentions: sendOptions?.mentions,
+        replyTo: sendOptions?.replyTo as never,
       },
       createdAt: new Date().toISOString(),
     };

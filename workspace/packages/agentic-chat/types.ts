@@ -30,10 +30,10 @@ export type {
 // ===========================================================================
 // UI-only types
 // ===========================================================================
-import type { AgentDebugPayload, Participant, AttachmentInput, SandboxSource } from "@workspace/pubsub";
+import type { AgentDebugPayload, Participant, AttachmentInput, SandboxSource, PubSubClient } from "@workspace/pubsub";
 import type { ActiveFeedback, ToolApprovalProps } from "@workspace/tool-ui";
 import type { PendingImage } from "./utils/imageUtils";
-import type { ComponentType } from "react";
+import type { ComponentType, RefObject } from "react";
 import type { ScopeManager, ScopesApi } from "@workspace/eval";
 import type {
   ChatParticipantMetadata,
@@ -97,8 +97,11 @@ export interface ChatInputContextValue {
   input: string;
   pendingImages: PendingImage[];
   onInputChange: (value: string) => void;
-  onSendMessage: (attachments?: AttachmentInput[]) => Promise<void>;
+  onSendMessage: (attachments?: AttachmentInput[], options?: { mentions?: string[]; replyTo?: string }) => Promise<void>;
   onImagesChange: (images: PendingImage[]) => void;
+  replyTo: string | null;
+  replyToMessage: ChatMessage | null;
+  setReplyTo: (messageId: string | null) => void;
 }
 
 // ===========================================================================
@@ -123,6 +126,7 @@ export interface ChatContextValue {
 
   /** Chat API for sandboxed code */
   chat: ChatSandboxValue;
+  clientRef: RefObject<PubSubClient<ChatParticipantMetadata> | null>;
 
   /** Current REPL scope (Proxy) */
   scope: Record<string, unknown>;

@@ -11,6 +11,8 @@ export interface ProjectedMessage {
   turnId?: TurnId;
   role: string;
   content: string;
+  mentions?: string[];
+  replyTo?: MessageId;
   status: MessageStatus;
   startedAt?: string;
   completedAt?: string;
@@ -123,6 +125,8 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
     const payload = event.payload;
     const role = ("role" in payload ? payload.role : undefined) ?? existing.role;
     const content = ("content" in payload ? payload.content : undefined) ?? existing.content;
+    const mentions = "mentions" in payload ? payload.mentions : existing.mentions;
+    const replyTo = "replyTo" in payload ? payload.replyTo : existing.replyTo;
     return {
       ...messages,
       [messageId]: {
@@ -131,6 +135,8 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
         turnId: existing.turnId ?? event.turnId,
         role,
         content,
+        mentions,
+        replyTo,
         status: "started",
         startedAt: event.createdAt,
         updatedAt: event.createdAt,
@@ -159,6 +165,8 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
     const payload = event.payload;
     const role = ("role" in payload ? payload.role : undefined) ?? existing.role;
     const content = ("content" in payload ? payload.content : undefined) ?? existing.content;
+    const mentions = "mentions" in payload ? payload.mentions : existing.mentions;
+    const replyTo = "replyTo" in payload ? payload.replyTo : existing.replyTo;
     return {
       ...messages,
       [messageId]: {
@@ -167,6 +175,8 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
         turnId: existing.turnId ?? event.turnId,
         role,
         content,
+        mentions,
+        replyTo,
         status: "completed",
         completedAt: event.createdAt,
         updatedAt: event.createdAt,

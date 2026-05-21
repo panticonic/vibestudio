@@ -134,7 +134,6 @@ export class ValidationError extends Error {
  * Union type for all incoming message types.
  */
 export type IncomingMessage =
-  | IncomingNewMessage
   | IncomingErrorMessage;
 
 /**
@@ -142,8 +141,8 @@ export type IncomingMessage =
  * Use the `type` field to discriminate between event types.
  */
 export type IncomingEvent =
-  | IncomingNewMessage
   | IncomingErrorMessage
+  | IncomingSignalEvent
   | IncomingInvocationCallEvent
   | IncomingInvocationResultEvent
   | IncomingPresenceEventWithType
@@ -269,25 +268,6 @@ export interface IncomingBase {
 }
 
 /**
- * A new message in the conversation.
- */
-export interface IncomingNewMessage extends IncomingBase {
-  type: "message";
-  /** Unique message ID */
-  id: string;
-  /** Message content */
-  content: string;
-  /** ID of message being replied to */
-  replyTo?: string;
-  /** MIME type for attachment */
-  contentType?: string;
-  /** IDs of intended recipients (empty/undefined = broadcast to all) */
-  at?: string[];
-  /** Arbitrary metadata (e.g., SDK session/message UUIDs for recovery) */
-  metadata?: Record<string, unknown>;
-}
-
-/**
  * An error marker for a message.
  */
 export interface IncomingErrorMessage extends IncomingBase {
@@ -298,6 +278,13 @@ export interface IncomingErrorMessage extends IncomingBase {
   error: string;
   /** Machine-readable error code */
   code?: string;
+}
+
+export interface IncomingSignalEvent extends IncomingBase {
+  type: "signal";
+  delivery: "signal";
+  content: string;
+  contentType?: string;
 }
 
 /**
@@ -658,7 +645,7 @@ export interface AgenticClient<T extends AgenticParticipantMetadata = AgenticPar
       attachments?: AttachmentInput[];
       contentType?: string;
       /** IDs of intended recipients (omit for broadcast to all) */
-      at?: string[];
+      mentions?: string[];
       /** Resolve @handle mentions to participant IDs */
       resolveHandles?: boolean;
     }

@@ -5,14 +5,6 @@
 import type { ChannelEvent, SendMessageOptions } from "@natstack/harness/types";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 
-/** Options for sending a message via the channel DO. */
-export interface SendOpts {
-  contentType?: string;
-  senderMetadata?: Record<string, unknown>;
-  replyTo?: string;
-  idempotencyKey?: string;
-}
-
 /** Result from subscribing a DO participant. */
 export interface SubscribeResult {
   ok: boolean;

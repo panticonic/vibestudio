@@ -192,43 +192,14 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
     }, [pendingAgentInfos, core.setPendingAgentInfos]);
     // --- Build chat sandbox value (stale-ref safe — dereferences clientRef at call time) ---
     const chat: ChatSandboxValue = useMemo(() => ({
+        send: (content: string, opts?: { idempotencyKey?: string }) => {
+            return core.clientRef.current!.send(content, {
+                idempotencyKey: opts?.idempotencyKey ?? crypto.randomUUID(),
+            }).then((result) => result.pubsubId) as Promise<unknown>;
+        },
         publish: (eventType: string, payload: unknown, opts?: {
             idempotencyKey?: string;
         }) => {
-            if (eventType === "message" && typeof payload === "object" && payload !== null) {
-                const record = payload as Record<string, unknown>;
-                const content = record["content"];
-                if (typeof content === "string") {
-                    if (record["contentType"] === "inline_ui") {
-                        const data = parseInlineUiPayload(content);
-                        if (data) {
-                            const eventPayload: AgenticEvent<"ui.inline_rendered">["payload"] = {
-                                protocol: AGENTIC_PROTOCOL_VERSION,
-                                uiType: "inline",
-                                id: data.id,
-                                source: data.source,
-                            };
-                            if (data.imports !== undefined) eventPayload.imports = data.imports;
-                            if (data.props !== undefined) eventPayload.props = data.props;
-                            return publishTypedAgenticEvent({
-                                kind: "ui.inline_rendered",
-                                actor: actorForClient(core.clientRef.current!.clientId, metadata),
-                                payload: eventPayload,
-                                createdAt: new Date().toISOString(),
-                            }, { idempotencyKey: opts?.idempotencyKey ?? `ui:inline:${data.id}` }) as Promise<unknown>;
-                        }
-                    }
-                    return core.clientRef.current!.send(content, {
-                        contentType: typeof record["contentType"] === "string" ? record["contentType"] : undefined,
-                        metadata: typeof record["kind"] === "string" ? { kind: record["kind"] } : undefined,
-                        idempotencyKey: opts?.idempotencyKey ?? crypto.randomUUID(),
-                    }).then((result) => result.pubsubId) as Promise<unknown>;
-                }
-            }
-            // Auto-generate id for message payloads (required by PubSub protocol)
-            if (eventType === "message" && typeof payload === "object" && payload !== null && !("id" in payload)) {
-                (payload as Record<string, unknown>)["id"] = crypto.randomUUID();
-            }
             return core.clientRef.current!.publish(eventType, payload, {
                 ...opts,
                 idempotencyKey: opts?.idempotencyKey ?? crypto.randomUUID(),
@@ -503,8 +474,9 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
 - scope: REPL scope — shared read+write state that persists across eval calls
 - scopes: scope management API — call scopes.save() after modifying scope from component handlers
 - chat: full chat API for interacting with the conversation:
-  - chat.publish(type, payload, options?) — send a message to the conversation.
-    Example: chat.publish("message", { content: "User clicked Deploy" })
+  - chat.send(content, options?) — send a visible message to the conversation.
+    Example: chat.send("User clicked Deploy")
+  - chat.publish(type, payload, options?) — publish a typed non-message event.
   - chat.rpc.call(target, method, ...args) — call runtime services directly.
     Example: chat.rpc.call("main", "fs.readFile", "/src/config.ts")
   - chat.contextId, chat.channelId — current identifiers
@@ -553,7 +525,7 @@ export default function App({ props, chat }) {
         <Button size="1" variant="soft" onClick={handleCopy}>
           {copied ? <><CheckIcon /> Copied</> : <><CopyIcon /> Copy as JSON</>}
         </Button>
-        <Button size="1" variant="soft" onClick={() => chat.publish("message", { content: "User requested data refresh" })}>
+        <Button size="1" variant="soft" onClick={() => chat.send("User requested data refresh")}>
           Refresh
         </Button>
       </Flex>
@@ -864,6 +836,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
         connectionError: core.connectionError,
         dismissConnectionError: core.dismissConnectionError,
         chat,
+        clientRef: core.clientRef,
         scope: scopeProxy,
         scopes: scopesApi,
         scopeManager: scopeManagerRef.current,
@@ -898,7 +871,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
         toolApproval: chatTools.toolApprovalValue,
     }), [
         core.connected, core.status, core.connectionError, core.dismissConnectionError,
-        channelName, sessionEnabled, chat,
+        channelName, sessionEnabled, chat, core.clientRef,
         core.messages, inlineUi.inlineUiComponents, messageTypes.messageTypeComponents, actionBar.actionBar, updateActionBarMaxHeight, core.hasMoreHistory, core.loadingMore,
         core.participants, core.allParticipants,
         core.debugEvents, debug.debugConsoleAgent, core.dirtyRepoWarnings, core.pendingAgents,

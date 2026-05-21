@@ -255,7 +255,7 @@ const channel = this.createChannelClient(channelId);
 
 | Method | Description |
 |--------|-------------|
-| `channel.send(participantId, messageId, content, opts?)` | Send a new message |
+| `channel.send(participantId, messageId, content, opts?)` | Publish a canonical agentic `message.completed` event |
 | `channel.update(participantId, messageId, content)` | Update a streaming message |
 | `channel.complete(participantId, messageId)` | Mark a message as complete |
 | `channel.sendSignal(participantId, content, contentType?)` | Send signal event |
@@ -359,9 +359,19 @@ describe("MyWorker", () => {
     await instance.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1" });
 
     const event = {
-      id: 1, messageId: "msg-1", type: "message",
-      payload: { content: "Hello" }, senderId: "user-1",
-      senderType: "panel", ts: Date.now(),
+      id: 1,
+      messageId: "msg-1",
+      type: "agentic.trajectory.v1/event",
+      payload: {
+        kind: "message.completed",
+        actor: { kind: "panel", id: "user-1" },
+        causality: { messageId: "msg-1" },
+        payload: { protocol: "agentic.trajectory.v1", role: "user", content: "Hello" },
+        createdAt: new Date().toISOString(),
+      },
+      senderId: "user-1",
+      senderType: "panel",
+      ts: Date.now(),
     };
 
     // processChannelEvent returns void — side effects happen via direct calls to Channel DO and server

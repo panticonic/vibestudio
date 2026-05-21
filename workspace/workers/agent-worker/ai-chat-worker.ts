@@ -3,6 +3,19 @@ import type { ParticipantDescriptor } from "@natstack/harness/types";
 
 const OPENAI_CODEX_ACCOUNT_CLAIM = "https://api.openai.com/auth";
 
+type ChatAgentConfig = {
+  handle?: string;
+  name?: string;
+  systemPrompt?: string;
+  systemPromptMode?: "replace" | "append";
+  respondPolicy?: "all" | "mentioned" | "from-participants";
+  respondFrom?: string[];
+};
+
+function asChatAgentConfig(config: unknown): ChatAgentConfig {
+  return config && typeof config === "object" ? config as ChatAgentConfig : {};
+}
+
 /**
  * AiChatWorker — The default AI chat Durable Object.
  *
@@ -79,10 +92,10 @@ export class AiChatWorker extends AgentWorkerBase {
     _channelId: string,
     config?: unknown,
   ): ParticipantDescriptor {
-    const cfg = config as Record<string, unknown> | undefined;
+    const cfg = asChatAgentConfig(config);
     return {
-      handle: (cfg?.["handle"] as string) ?? "ai-chat",
-      name: "AI Chat",
+      handle: cfg.handle ?? "ai-chat",
+      name: cfg.name ?? "AI Chat",
       type: "agent",
       metadata: {},
       methods: [
@@ -91,6 +104,16 @@ export class AiChatWorker extends AgentWorkerBase {
         { name: "credentialConnected", description: "Resume after model credential connection" },
       ],
     };
+  }
+
+  protected override getRespondPolicy(channelId: string): "all" | "mentioned" | "from-participants" {
+    const policy = asChatAgentConfig(this.subscriptions.getConfig(channelId)).respondPolicy;
+    return policy === "mentioned" || policy === "from-participants" ? policy : "all";
+  }
+
+  protected override getRespondFrom(channelId: string): string[] {
+    const respondFrom = asChatAgentConfig(this.subscriptions.getConfig(channelId)).respondFrom;
+    return Array.isArray(respondFrom) ? respondFrom.filter((id): id is string => typeof id === "string") : [];
   }
 
   override async onMethodCall(

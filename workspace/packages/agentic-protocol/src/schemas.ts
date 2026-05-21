@@ -58,6 +58,8 @@ const messageStartedPayloadSchema = z.object({
   role: z.enum(["user", "assistant", "system", "tool", "panel"]),
   content: z.string().optional(),
   blocks: z.array(messageBlockInputSchema).optional(),
+  mentions: z.array(idSchema).optional(),
+  replyTo: idSchema.optional(),
 }).strict();
 
 const messageDeltaPayloadSchema = z.object({
@@ -73,6 +75,8 @@ const messageCompletedPayloadSchema = z.object({
   content: z.string(),
   blocks: z.array(messageBlockInputSchema).optional(),
   usage: usagePayloadSchema.optional(),
+  mentions: z.array(idSchema).optional(),
+  replyTo: idSchema.optional(),
 }).strict();
 
 const failurePayloadSchema = z.object({

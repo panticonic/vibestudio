@@ -33,7 +33,7 @@ export function InlineUiErrorCallout({
       `[Inline UI Error] Component "${componentId}" encountered an error ` +
       `during user interaction:\n\n\`\`\`\n${error.message}\n\`\`\`\n\n` +
       `${error.stack ? `Stack trace:\n\`\`\`\n${error.stack}\n\`\`\`` : ""}`;
-    chat.publish("message", { content: message }).catch((err) => {
+    chat.send(message).catch((err) => {
       console.error("[InlineUiMessage] Failed to report error to agent:", err);
     });
     setReported(true);

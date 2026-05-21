@@ -290,6 +290,11 @@ export class HeadlessSession {
 
   private buildChatSandboxValue() {
     return {
+      send: async (content: string, options?: { idempotencyKey?: string }) => {
+        if (!this._client) throw new Error("Not connected");
+        const result = await this._client.send(content, options);
+        return result.pubsubId;
+      },
       publish: async (eventType: string, payload: unknown, options?: { idempotencyKey?: string }) => {
         if (!this._client) throw new Error("Not connected");
         return this._client.publish(eventType, payload, options);

@@ -42,6 +42,7 @@ import { isClientParticipantType } from "@workspace/pubsub";
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 import {
   PiRunner,
+  type PiRunnerOptions,
   type ChannelToolMethod,
   type NatStackScopedUiContext,
   type AskUserParams,
@@ -69,6 +70,8 @@ const URL_BOUND_MODEL_CREDENTIAL_SENTINEL = "natstack-url-bound-model-credential
 const URL_BOUND_MODEL_CREDENTIAL_SENTINEL_CLAIM =
   "https://natstack.local/url-bound-model-credential";
 const IMAGE_SERVICE_EXTENSION = "@workspace-extensions/image-service";
+type RespondPolicy = "all" | "mentioned" | "from-participants";
+type CachedParticipant = Awaited<ReturnType<ChannelClient["getParticipants"]>>[number];
 
 function gadBranchIdForChannel(channelId: string): string {
   return `branch:channel:${channelId}`;
@@ -812,30 +815,47 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   }
 
   protected shouldProcess(event: ChannelEvent): boolean {
-    if (event.type !== "message" && event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return false;
-    if (event.type === "message" && event.contentType) return false;
+    if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return false;
     const senderType = event.senderMetadata?.["type"] as string | undefined;
     if (!isClientParticipantType(senderType)) return false;
-    if (event.type === AGENTIC_EVENT_PAYLOAD_KIND) {
-      const agentic = this.agenticEventFromChannelEvent(event);
-      return agentic?.kind === "message.completed";
-    }
-    return true;
+    const agentic = this.agenticEventFromChannelEvent(event);
+    return agentic?.kind === "message.completed";
+  }
+
+  protected getRespondPolicy(_channelId: string): RespondPolicy {
+    return "all";
+  }
+
+  protected getRespondFrom(_channelId: string): string[] {
+    return [];
+  }
+
+  protected async shouldRespond(channelId: string, event: ChannelEvent): Promise<boolean> {
+    const policy = this.getRespondPolicy(channelId);
+    if (policy === "all") return true;
+    if (policy === "from-participants") return this.getRespondFrom(channelId).includes(event.senderId);
+
+    const selfParticipantId = this.subscriptions.getParticipantId(channelId);
+    if (!selfParticipantId) return false;
+    const meta = this.extractMessageMeta(event);
+    if (meta.mentions?.includes(selfParticipantId)) return true;
+
+    const participants = this.cachedParticipants.get(channelId) ?? [];
+    const nonSenders = participants.filter((participant) => participant.participantId !== event.senderId);
+    return nonSenders.length === 1 && nonSenders[0]?.participantId === selfParticipantId;
+  }
+
+  private extractMessageMeta(event: ChannelEvent): { mentions?: string[]; replyTo?: string } {
+    const agentic = this.agenticEventFromChannelEvent(event);
+    const payload = (agentic?.payload ?? {}) as { mentions?: string[]; replyTo?: string };
+    return { mentions: payload.mentions, replyTo: payload.replyTo };
   }
 
   protected buildTurnInput(event: ChannelEvent): TurnInput {
-    const agentic = event.type === AGENTIC_EVENT_PAYLOAD_KIND ? this.agenticEventFromChannelEvent(event) : null;
-    if (agentic?.kind === "message.completed") {
-      const payload = agentic.payload as { content?: unknown };
-      return {
-        content: typeof payload.content === "string" ? payload.content : "",
-        senderId: event.senderId,
-        attachments: event.attachments,
-      };
-    }
-    const payload = event.payload as { content?: string; attachments?: Attachment[] };
+    const agentic = this.agenticEventFromChannelEvent(event);
+    const payload = agentic?.payload as { content?: unknown } | undefined;
     return {
-      content: payload.content ?? "",
+      content: typeof payload?.content === "string" ? payload.content : "",
       senderId: event.senderId,
       attachments: event.attachments,
     };
@@ -1155,7 +1175,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
 
     // Build options as a strongly-typed PiRunnerOptions object. The runner is
     // responsible for materializing Pi session state from trajectory events.
-    const runnerOptions = {
+    const runnerOptions: PiRunnerOptions = {
       rpc: {
         call: <T = unknown>(target: string, method: string, args: unknown[]): Promise<T> => {
           return this.rpc.call<T>(target, method, args);
@@ -1251,7 +1271,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
         },
       },
     };
-    const runner = new PiRunner({
+    const runner = this.createRunner(channelId, {
       ...runnerOptions,
       onPrepareNextTurn: async (snapshot) => {
         await this.prepareNextTurnHook(channelId, snapshot);
@@ -1278,6 +1298,10 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     // (which expects to hand messages to it).
     this.getOrCreateDispatcher(channelId, runner);
     return runner;
+  }
+
+  protected createRunner(_channelId: string, opts: PiRunnerOptions): PiRunner {
+    return new PiRunner(opts);
   }
 
   private agentActorForChannel(channelId: string) {
@@ -1326,10 +1350,16 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
 
     this.transcriptPoisonNotified.add(channelId);
     const channel = this.createChannelClient(channelId);
+    const descriptor = this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId));
     const messageId = crypto.randomUUID();
     await channel
       .send(participantId, messageId, `Transcript error: ${detail}`, {
-        contentType: "error",
+        senderMetadata: {
+          ...descriptor.metadata,
+          name: descriptor.name,
+          type: descriptor.type,
+          handle: descriptor.handle,
+        },
         idempotencyKey: `transcript-shape-error:${channelId}`,
       })
       .catch((err) => {
@@ -1529,11 +1559,13 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   }
 
   private cachedRoster = new Map<string, ChannelToolMethod[]>();
+  private cachedParticipants = new Map<string, CachedParticipant[]>();
 
   /** Refresh the cached roster for a channel. Called before each turn. */
   protected async refreshRoster(channelId: string): Promise<void> {
     const channel = this.createChannelClient(channelId);
     const participants = await channel.getParticipants();
+    this.cachedParticipants.set(channelId, participants);
     const selfId = this.subscriptions.getParticipantId(channelId);
     const roster: ChannelToolMethod[] = [];
     for (const p of participants) {
@@ -1957,6 +1989,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
   ): Promise<void> {
     if (!this.shouldProcess(event)) return;
     await this.ensureChannelContext(channelId);
+    if (!(await this.shouldRespond(channelId, event))) return;
 
     const runner = this.runners.get(channelId)!.runner;
     const input = this.buildTurnInput(event);

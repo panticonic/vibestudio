@@ -112,7 +112,7 @@ export interface ChatCoreState {
   messageTypes: MessageTypeDefinition[];
 
   // Actions
-  sendMessage: (attachments?: AttachmentInput[]) => Promise<void>;
+  sendMessage: (attachments?: AttachmentInput[], options?: { mentions?: string[]; replyTo?: string }) => Promise<void>;
   handleInterruptAgent: (agentId: string, messageId?: string, agentHandle?: string) => Promise<void>;
   handleCallMethod: (providerId: string, methodName: string, args: unknown) => void;
   stopTyping: () => Promise<void>;
@@ -254,6 +254,7 @@ export function useChatCore({
 
   // --- Input state ---
   const [input, setInput] = useState("");
+  const [replyTo, setReplyTo] = useState<string | null>(null);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
 
   // --- Cleanup pending images on unmount ---
@@ -450,19 +451,26 @@ export function useChatCore({
   }, [stopTyping]);
 
   // --- Send message ---
-  const sendMessage = useCallback(async (attachments?: AttachmentInput[]): Promise<void> => {
+  const sendMessage = useCallback(async (
+    attachments?: AttachmentInput[],
+    options?: { mentions?: string[]; replyTo?: string },
+  ): Promise<void> => {
     const currentInput = inputRef.current;
     const hasText = currentInput.trim().length > 0;
     const hasAttachments = attachments && attachments.length > 0;
     if ((!hasText && !hasAttachments) || !clientRef.current) return;
     const text = currentInput.trim();
+    const previousReplyTo = options?.replyTo ?? null;
     setInput("");
     inputRef.current = "";
+    setReplyTo(null);
     void stopTyping().catch(() => {});
     try {
       const hadPriorTranscriptMessages = hasTranscriptMessagesRef.current;
       const { pubsubId } = await clientRef.current.send(text || "", {
         attachments: hasAttachments ? attachments : undefined,
+        mentions: options?.mentions && options.mentions.length > 0 ? options.mentions : undefined,
+        replyTo: options?.replyTo,
       });
       await backfillAfterLocalPublish(pubsubId);
       const defaultTitle = !defaultTitleSetRef.current && !hadPriorTranscriptMessages
@@ -476,6 +484,7 @@ export function useChatCore({
     } catch (err) {
       setInput(text);
       inputRef.current = text;
+      setReplyTo(previousReplyTo);
       console.error("[Chat] Send failed, draft restored:", err);
       throw err;
     }
@@ -600,7 +609,10 @@ export function useChatCore({
     onInputChange: handleInputChange,
     onSendMessage: sendMessage,
     onImagesChange: setPendingImages,
-  }), [input, pendingImages, handleInputChange, sendMessage]);
+    replyTo,
+    replyToMessage: replyTo ? messages.find((message) => message.id === replyTo) ?? null : null,
+    setReplyTo,
+  }), [input, pendingImages, handleInputChange, sendMessage, replyTo, messages]);
 
   return {
     messages,

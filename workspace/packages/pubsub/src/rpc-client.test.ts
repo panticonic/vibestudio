@@ -31,6 +31,20 @@ function invocationEvent(kind: string, callId: string, payload: Record<string, u
   };
 }
 
+function messageEvent(id: string, content: string, actorId = "agent-1") {
+  return {
+    kind: "message.completed",
+    actor: { kind: "agent", id: actorId, displayName: actorId },
+    causality: { messageId: id },
+    payload: {
+      protocol: "agentic.trajectory.v1",
+      role: "assistant",
+      content,
+    },
+    createdAt: new Date().toISOString(),
+  };
+}
+
 interface MockRpc {
   call: ReturnType<typeof vi.fn>;
   onEvent: ReturnType<typeof vi.fn>;
@@ -146,8 +160,8 @@ async function emitReplayAndReady(
     emit({
       stream: "log", phase: "replay",
       id: m.id,
-      type: "message",
-      payload: { id: `msg-${m.id}`, content: m.content },
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: messageEvent(`msg-${m.id}`, m.content, m.senderId),
       senderId: m.senderId,
       ts: Date.now(),
     });
@@ -248,8 +262,8 @@ describe("connectViaRpc", () => {
               {
                 id: 201,
                 messageId: "msg-201",
-                type: "message",
-                payload: { id: "00000000-0000-4000-8000-000000000201", content: "from replay" },
+                type: AGENTIC_EVENT_PAYLOAD_KIND,
+                payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
                 senderId: "agent-1",
                 ts: Date.now(),
               },
@@ -281,7 +295,7 @@ describe("connectViaRpc", () => {
       expect(readyHandler).toHaveBeenCalledTimes(1);
 
       let replayed = await events.next();
-      while (!replayed.done && replayed.value.type !== "message") {
+      while (!replayed.done && replayed.value.type !== AGENTIC_EVENT_PAYLOAD_KIND) {
         replayed = await events.next();
       }
       expect(replayed).toMatchObject({
@@ -289,8 +303,11 @@ describe("connectViaRpc", () => {
           delivery: "log",
           phase: "replay",
           pubsubId: 201,
-          type: "message",
-          id: "00000000-0000-4000-8000-000000000201",
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload: {
+            kind: "message.completed",
+            causality: { messageId: "00000000-0000-4000-8000-000000000201" },
+          },
         },
       });
 
@@ -299,8 +316,8 @@ describe("connectViaRpc", () => {
       emit({
         stream: "log", phase: "replay",
         id: 201,
-        type: "message",
-        payload: { id: "msg-201", content: "from replay" },
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("msg-201", "from replay"),
         senderId: "agent-1",
         ts: Date.now(),
       });
@@ -331,8 +348,8 @@ describe("connectViaRpc", () => {
                 {
                   id: 201,
                   messageId: "msg-201",
-                  type: "message",
-                  payload: { id: "00000000-0000-4000-8000-000000000201", content: "from replay" },
+                  type: AGENTIC_EVENT_PAYLOAD_KIND,
+                  payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
                   senderId: "agent-1",
                   ts: Date.now(),
                 },
@@ -374,8 +391,8 @@ describe("connectViaRpc", () => {
       emit({
         stream: "log", phase: "replay",
         id: 201,
-        type: "message",
-        payload: { id: "00000000-0000-4000-8000-000000000201", content: "from replay" },
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
         senderId: "agent-1",
         ts: Date.now(),
       });
@@ -392,9 +409,11 @@ describe("connectViaRpc", () => {
         value: {
           delivery: "log",
           phase: "replay",
-          type: "message",
-          id: "00000000-0000-4000-8000-000000000201",
-          content: "from replay",
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload: {
+            kind: "message.completed",
+            causality: { messageId: "00000000-0000-4000-8000-000000000201" },
+          },
         },
       });
 
@@ -409,8 +428,8 @@ describe("connectViaRpc", () => {
       emit({
         stream: "log", phase: "replay",
         id: 201,
-        type: "message",
-        payload: { id: "00000000-0000-4000-8000-000000000201", content: "from replay" },
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
         senderId: "agent-1",
         ts: Date.now(),
       });
@@ -426,9 +445,11 @@ describe("connectViaRpc", () => {
         value: {
           delivery: "log",
           phase: "replay",
-          type: "message",
-          id: "00000000-0000-4000-8000-000000000201",
-          content: "from replay",
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload: {
+            kind: "message.completed",
+            causality: { messageId: "00000000-0000-4000-8000-000000000201" },
+          },
         },
       });
 
@@ -443,8 +464,8 @@ describe("connectViaRpc", () => {
       emit({
         stream: "log", phase: "replay",
         id: 201,
-        type: "message",
-        payload: { id: "00000000-0000-4000-8000-000000000201", content: "from replay" },
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
         senderId: "agent-1",
         ts: Date.now(),
       });
@@ -459,8 +480,8 @@ describe("connectViaRpc", () => {
       emit({
         stream: "log", phase: "live",
         id: 202,
-        type: "message",
-        payload: { id: "00000000-0000-4000-8000-000000000202", content: "from live" },
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("00000000-0000-4000-8000-000000000202", "from live"),
         senderId: "agent-1",
         ts: Date.now(),
       });
@@ -469,9 +490,11 @@ describe("connectViaRpc", () => {
         value: {
           delivery: "log",
           phase: "live",
-          type: "message",
-          id: "00000000-0000-4000-8000-000000000202",
-          content: "from live",
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload: {
+            kind: "message.completed",
+            causality: { messageId: "00000000-0000-4000-8000-000000000202" },
+          },
         },
       });
 
@@ -517,7 +540,7 @@ describe("connectViaRpc", () => {
     });
 
     it("publish() calls rpc.call with correct arguments", async () => {
-      const pubsubId = await client.publish("message", { id: "m1", content: "hello" });
+      const pubsubId = await client.publish("custom.event", { id: "m1", content: "hello" });
 
       expect(pubsubId).toBe(42);
       expect(mockRpc.call).toHaveBeenCalledWith(
@@ -525,7 +548,7 @@ describe("connectViaRpc", () => {
         "publish",
         [
           SELF_ID,
-          "message",
+          "custom.event",
           { id: "m1", content: "hello" },
           expect.objectContaining({}),
         ],
@@ -535,7 +558,7 @@ describe("connectViaRpc", () => {
     it("send() publishes a typed agentic event envelope payload", async () => {
       const result = await client.send("hello", {
         replyTo: "msg-parent",
-        at: ["agent:one"],
+        mentions: ["agent:one"],
         metadata: { source: "test" },
         idempotencyKey: "send-1",
       });
@@ -564,6 +587,8 @@ describe("connectViaRpc", () => {
         protocol: "agentic.trajectory.v1",
         role: "user",
         content: "hello",
+        mentions: ["agent:one"],
+        replyTo: "msg-parent",
       });
     });
 
@@ -573,8 +598,8 @@ describe("connectViaRpc", () => {
       emit({
         stream: "log", phase: "live",
         id: 50,
-        type: "message",
-        payload: { id: "00000000-0000-4000-8000-000000000050", content: "world" },
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("00000000-0000-4000-8000-000000000050", "world"),
         senderId: "agent-1",
         ts: Date.now(),
       });
@@ -585,9 +610,11 @@ describe("connectViaRpc", () => {
         delivery: "log",
         phase: "live",
         pubsubId: 50,
-        type: "message",
-        id: "00000000-0000-4000-8000-000000000050",
-        content: "world",
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: {
+          kind: "message.completed",
+          causality: { messageId: "00000000-0000-4000-8000-000000000050" },
+        },
         senderId: "agent-1",
       });
 
