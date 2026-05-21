@@ -86,6 +86,7 @@ export interface PanelViewLike {
  */
 export interface PanelHttpServerLike {
   hasBuild(source: string, ref?: string): boolean;
+  getBuildRevision?(source: string, ref?: string): number | undefined;
   invalidateBuild(source: string): void;
   getPort(): number;
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { PanelRegistry } from "./panelRegistry.js";
-import type { Panel } from "./types.js";
+import { asPanelEntityId, asPanelSlotId } from "./panel/ids.js";
+import type { Panel, PanelTreeSnapshot } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -22,7 +23,7 @@ function makePanel(id: string, overrides?: Partial<Panel>): Panel {
   };
 }
 
-function makeRegistry(onTreeUpdated?: (tree: Panel[]) => void) {
+function makeRegistry(onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void) {
   return new PanelRegistry({
     onTreeUpdated: onTreeUpdated ?? vi.fn(),
   });
@@ -80,25 +81,27 @@ describe("PanelRegistry", () => {
 
     it("throws when adding a child to a nonexistent parent", () => {
       const child = makePanel("child");
-      expect(() => registry.addPanel(child, "no-such-parent")).toThrow(
-        "Parent panel not found",
-      );
+      expect(() => registry.addPanel(child, "no-such-parent")).toThrow("Parent panel not found");
     });
   });
 
   describe("repopulate", () => {
     it("preserves runtime artifacts and navigation for unchanged panels", () => {
-      registry.addPanel(makePanel("root", {
-        artifacts: {
-          htmlPath: "http://localhost:1234/panels/chat/",
-          buildState: "ready",
-        },
-        navigation: {
-          url: "http://localhost:1234/panels/chat/",
-          isLoading: false,
-          canGoBack: true,
-        },
-      }), null, { addAsRoot: true });
+      registry.addPanel(
+        makePanel("root", {
+          artifacts: {
+            htmlPath: "http://localhost:1234/panels/chat/",
+            buildState: "ready",
+          },
+          navigation: {
+            url: "http://localhost:1234/panels/chat/",
+            isLoading: false,
+            canGoBack: true,
+          },
+        }),
+        null,
+        { addAsRoot: true }
+      );
 
       registry.repopulate([
         makePanel("root", {
@@ -120,12 +123,16 @@ describe("PanelRegistry", () => {
     });
 
     it("does not preserve runtime artifacts when the panel source changes", () => {
-      registry.addPanel(makePanel("root", {
-        artifacts: {
-          htmlPath: "http://localhost:1234/panels/chat/",
-          buildState: "ready",
-        },
-      }), null, { addAsRoot: true });
+      registry.addPanel(
+        makePanel("root", {
+          artifacts: {
+            htmlPath: "http://localhost:1234/panels/chat/",
+            buildState: "ready",
+          },
+        }),
+        null,
+        { addAsRoot: true }
+      );
 
       registry.repopulate([
         makePanel("root", {
@@ -139,6 +146,61 @@ describe("PanelRegistry", () => {
       ]);
 
       expect(registry.getPanel("root")?.artifacts).toEqual({});
+    });
+  });
+
+  describe("explicit state", () => {
+    it("derives build and view state from artifacts", () => {
+      registry.addPanel(makePanel("root"), null, { addAsRoot: true });
+
+      registry.updateArtifacts("root", {
+        buildState: "ready",
+        htmlPath: "http://localhost:1234/panels/root/",
+      });
+
+      expect(registry.getPanel("root")?.state).toMatchObject({
+        build: {
+          state: "ready",
+          artifactUrl: "http://localhost:1234/panels/root/",
+        },
+        view: {
+          exists: true,
+          url: "http://localhost:1234/panels/root/",
+        },
+        runtime: {
+          leased: false,
+        },
+      });
+    });
+
+    it("applies runtime leases by slot id while preserving runtime entity id", () => {
+      registry.addPanel(makePanel("slot-a"), null, { addAsRoot: true });
+
+      registry.applyRuntimeLeaseSnapshot({
+        version: { epoch: "test", counter: 1 },
+        leases: [
+          {
+            slotId: asPanelSlotId("slot-a"),
+            runtimeEntityId: asPanelEntityId("panel:nav-entity-a"),
+            clientSessionId: "desktop-a",
+            connectionId: "conn-a",
+            holderLabel: "Desktop A",
+            platform: "desktop",
+            acquiredAt: 1,
+          },
+        ],
+      });
+
+      expect(registry.getRuntimeLease("slot-a")).toMatchObject({
+        slotId: "slot-a",
+        runtimeEntityId: "panel:nav-entity-a",
+      });
+      expect(registry.getPanel("slot-a")?.state?.runtime).toMatchObject({
+        leased: true,
+        holderLabel: "Desktop A",
+        clientSessionId: "desktop-a",
+        connectionId: "conn-a",
+      });
     });
   });
 
@@ -280,7 +342,7 @@ describe("PanelRegistry", () => {
       registry.addPanel(child, "parent");
 
       expect(() => registry.movePanel("parent", "child", 0)).toThrow(
-        "Cannot move panel into its own subtree",
+        "Cannot move panel into its own subtree"
       );
     });
 
@@ -291,9 +353,7 @@ describe("PanelRegistry", () => {
     it("throws when new parent not found", () => {
       const p = makePanel("p");
       registry.addPanel(p, null, { addAsRoot: true });
-      expect(() => registry.movePanel("p", "no-parent", 0)).toThrow(
-        "New parent panel not found",
-      );
+      expect(() => registry.movePanel("p", "no-parent", 0)).toThrow("New parent panel not found");
     });
 
     it("clamps target position to valid range", () => {
@@ -379,6 +439,26 @@ describe("PanelRegistry", () => {
 
       // Should be a copy, not the same reference
       expect(tree[0]).not.toBe(root);
+    });
+
+    it("exposes monotonically increasing tree revisions", async () => {
+      const updates: PanelTreeSnapshot[] = [];
+      registry = makeRegistry((snapshot) => updates.push(snapshot));
+
+      expect(registry.getTreeRevision()).toBe(0);
+      registry.addPanel(makePanel("root"), null, { addAsRoot: true });
+      const afterAdd = registry.getTreeRevision();
+      registry.updateTitle("root", "Root");
+      const afterTitle = registry.getTreeRevision();
+
+      expect(afterAdd).toBeGreaterThan(0);
+      expect(afterTitle).toBeGreaterThan(afterAdd);
+
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      expect(updates[updates.length - 1]).toMatchObject({
+        revision: afterTitle,
+        rootPanels: [expect.objectContaining({ id: "root", title: "Root" })],
+      });
     });
   });
 

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createEventsServiceDefinition, EventService } from "./eventsService.js";
 import { createVerifiedCaller, type CallerKind, type ServiceContext } from "./serviceDispatcher.js";
+import type { PanelTreeSnapshot } from "./types.js";
+
+const emptyPanelTreeSnapshot: PanelTreeSnapshot = { revision: 1, rootPanels: [] };
 
 function makeWsClient(callerId: string, callerKind: CallerKind, connectionId: string) {
   const ws = {
@@ -36,14 +39,16 @@ describe("EventService", () => {
 
     await service.handler(conn1.ctx, "unsubscribeAll", []);
 
-    eventService.emit("panel-tree-updated", []);
+    eventService.emit("panel-tree-updated", emptyPanelTreeSnapshot);
 
     expect(conn1.ws.send).not.toHaveBeenCalled();
-    expect(conn2.ws.send).toHaveBeenCalledWith(JSON.stringify({
-      type: "ws:event",
-      event: "event:panel-tree-updated",
-      payload: [],
-    }));
+    expect(conn2.ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "ws:event",
+        event: "event:panel-tree-updated",
+        payload: emptyPanelTreeSnapshot,
+      })
+    );
   });
 
   it("unsubscribeAll does not remove direct-address reachability", async () => {
@@ -59,14 +64,18 @@ describe("EventService", () => {
     const delivered = eventService.emitToCaller("panel-one", "focus-address-bar");
 
     expect(delivered).toBe(true);
-    expect(conn1.ws.send).toHaveBeenCalledWith(JSON.stringify({
-      type: "ws:event",
-      event: "event:focus-address-bar",
-    }));
-    expect(conn2.ws.send).toHaveBeenCalledWith(JSON.stringify({
-      type: "ws:event",
-      event: "event:focus-address-bar",
-    }));
+    expect(conn1.ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "ws:event",
+        event: "event:focus-address-bar",
+      })
+    );
+    expect(conn2.ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "ws:event",
+        event: "event:focus-address-bar",
+      })
+    );
   });
 
   it("can direct-address exactly one live connection", async () => {
@@ -82,9 +91,11 @@ describe("EventService", () => {
 
     expect(delivered).toBe(true);
     expect(conn1.ws.send).not.toHaveBeenCalled();
-    expect(conn2.ws.send).toHaveBeenCalledWith(JSON.stringify({
-      type: "ws:event",
-      event: "event:focus-address-bar",
-    }));
+    expect(conn2.ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "ws:event",
+        event: "event:focus-address-bar",
+      })
+    );
   });
 });

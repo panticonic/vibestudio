@@ -1,20 +1,10 @@
 // Shared types used across main, renderer, server, and preload
 
-import type {
-  CreateChildOptions,
-  ChildCreationResult,
-  ChildSpec,
-} from "@natstack/types";
+import type { CreateChildOptions, ChildCreationResult, ChildSpec } from "@natstack/types";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 
 // Re-export types for consumers of this module
-export type {
-  CreateChildOptions,
-  ChildCreationResult,
-  ChildSpec,
-  StateArgsSchema,
-  StateArgsValue,
-};
+export type { CreateChildOptions, ChildCreationResult, ChildSpec, StateArgsSchema, StateArgsValue };
 
 // =============================================================================
 // Package Manifest
@@ -122,12 +112,74 @@ export interface PanelArtifacts {
   htmlPath?: string;
   bundlePath?: string;
   error?: string;
+  buildRevision?: number;
   /** Build state for async main-process builds */
   buildState?: PanelBuildState;
   /** Human-readable progress message (e.g., "Installing dependencies...") */
   buildProgress?: string;
   /** Detailed build log (esbuild output, errors, etc.) */
   buildLog?: string;
+}
+
+export interface PanelBuildStatus {
+  state?: PanelBuildState;
+  revision?: number;
+  artifactUrl?: string;
+  bundlePath?: string;
+  error?: string;
+  progress?: string;
+  log?: string;
+}
+
+export interface PanelViewStatus {
+  exists: boolean;
+  url?: string;
+  visible?: boolean;
+}
+
+export interface PanelRuntimeStatus {
+  leased: boolean;
+  holderLabel?: string;
+  platform?: "desktop" | "mobile";
+  clientSessionId?: string;
+  connectionId?: string;
+}
+
+export interface PanelExplicitState {
+  build: PanelBuildStatus;
+  view: PanelViewStatus;
+  runtime?: PanelRuntimeStatus;
+}
+
+export type PanelFocusStatus =
+  | "missing"
+  | "focused"
+  | "loaded"
+  | "leased_elsewhere"
+  | "build_failed"
+  | "view_creation_failed";
+
+export interface PanelFocusResult {
+  panelId: string;
+  status: PanelFocusStatus;
+  focused: boolean;
+  loaded: boolean;
+  message?: string;
+  holderLabel?: string;
+}
+
+export interface PanelTreeSnapshot {
+  revision: number;
+  rootPanels: Panel[];
+}
+
+export interface PanelRecoverySnapshot {
+  revision: number;
+  viewRevision: number;
+  rootPanels: Panel[];
+  collapsedIds: string[];
+  focusedPanelId: string | null;
+  focus?: PanelFocusResult;
 }
 
 // =============================================================================
@@ -205,13 +257,13 @@ export interface Panel {
 
   // Runtime only (not in snapshot)
   artifacts: PanelArtifacts;
+  state?: PanelExplicitState;
   navigation?: PanelNavigationState;
 }
 
 // =============================================================================
 // Workspace & Settings Types
 // =============================================================================
-
 
 export interface WorkspaceEntry {
   name: string;

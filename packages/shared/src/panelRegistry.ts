@@ -13,13 +13,14 @@
  */
 
 import { createDevLogger } from "@natstack/dev-log";
-import type { Panel, PanelArtifacts, PanelInfo, PanelSummary } from "./types.js";
+import type { Panel, PanelArtifacts, PanelInfo, PanelSummary, PanelTreeSnapshot } from "./types.js";
 import type {
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
   RuntimeLeaseVersion,
 } from "./panel/panelLease.js";
+import { explicitStateFromArtifacts } from "./panel/state.js";
 import {
   getCurrentSnapshot,
   getPanelSource,
@@ -45,7 +46,7 @@ export interface PanelListItem {
 }
 
 export interface PanelRegistryOptions {
-  onTreeUpdated?: (tree: Panel[]) => void;
+  onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
 }
 
 // ============================================================================
@@ -61,13 +62,14 @@ export class PanelRegistry implements PanelRelationshipProvider {
   private currentTheme: "light" | "dark" = "light";
   private runtimeLeases: Map<string, PanelRuntimeLease> = new Map();
   private runtimeLeaseVersion: RuntimeLeaseVersion | null = null;
+  private treeRevision = 0;
 
   // Debounce state for panel tree update notifications
   private treeUpdatePending = false;
   private treeUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly TREE_UPDATE_DEBOUNCE_MS = 16; // ~1 frame at 60fps
 
-  private readonly onTreeUpdated?: (tree: Panel[]) => void;
+  private readonly onTreeUpdated?: (snapshot: PanelTreeSnapshot) => void;
 
   constructor(opts: PanelRegistryOptions) {
     this.onTreeUpdated = opts.onTreeUpdated;
@@ -87,6 +89,17 @@ export class PanelRegistry implements PanelRelationshipProvider {
 
   getSerializablePanelTree(): Panel[] {
     return this.rootPanels.map((panel) => this.serializePanel(panel));
+  }
+
+  getTreeRevision(): number {
+    return this.treeRevision;
+  }
+
+  getPanelTreeSnapshot(): PanelTreeSnapshot {
+    return {
+      revision: this.treeRevision,
+      rootPanels: this.getSerializablePanelTree(),
+    };
   }
 
   /**
@@ -177,7 +190,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
   getChildrenPaginated(
     parentId: string,
     offset: number,
-    limit: number,
+    limit: number
   ): { children: PanelSummary[]; total: number; hasMore: boolean } {
     const parent = this.panels.get(parentId);
     if (!parent) return { children: [], total: 0, hasMore: false };
@@ -204,7 +217,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
    */
   getRootPanelsPaginated(
     offset: number,
-    limit: number,
+    limit: number
   ): { panels: PanelSummary[]; total: number; hasMore: boolean } {
     const total = this.rootPanels.length;
     const sliced = this.rootPanels.slice(offset, offset + limit);
@@ -235,11 +248,8 @@ export class PanelRegistry implements PanelRelationshipProvider {
    *   without clearing the existing tree. When false (default) and parentId is
    *   null, the tree is replaced with this single panel.
    */
-  addPanel(
-    panel: Panel,
-    parentId: string | null,
-    opts?: { addAsRoot?: boolean },
-  ): void {
+  addPanel(panel: Panel, parentId: string | null, opts?: { addAsRoot?: boolean }): void {
+    this.ensureExplicitState(panel);
     if (parentId) {
       const parent = this.panels.get(parentId);
       if (!parent) {
@@ -264,6 +274,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
     if (this.panels.has(panel.id)) {
       throw new Error(`Panel already exists: ${panel.id}`);
     }
+    this.ensureExplicitState(panel);
 
     if (parentId) {
       const parent = this.panels.get(parentId);
@@ -422,7 +433,11 @@ export class PanelRegistry implements PanelRelationshipProvider {
     this.replaceCurrentSnapshot(panelId, snapshot);
   }
 
-  replaceCurrentSnapshot(panelId: string, snapshot: ReturnType<typeof getCurrentSnapshot>, history?: Panel["history"]): void {
+  replaceCurrentSnapshot(
+    panelId: string,
+    snapshot: ReturnType<typeof getCurrentSnapshot>,
+    history?: Panel["history"]
+  ): void {
     const panel = this.panels.get(panelId);
     if (!panel) {
       throw new Error(`Panel not found: ${panelId}`);
@@ -441,6 +456,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       throw new Error(`Panel not found: ${panelId}`);
     }
     panel.artifacts = artifacts;
+    panel.state = explicitStateFromArtifacts(artifacts, this.getRuntimeLease(panelId));
     // Artifacts are runtime-only — not persisted to DB
   }
 
@@ -478,18 +494,25 @@ export class PanelRegistry implements PanelRelationshipProvider {
   }
 
   applyRuntimeLeaseSnapshot(snapshot: RuntimeLeaseSnapshot): void {
-    this.runtimeLeases = new Map(snapshot.leases.map((lease) => [lease.panelId, lease]));
+    this.runtimeLeases = new Map(snapshot.leases.map((lease) => [lease.slotId, lease]));
     this.runtimeLeaseVersion = snapshot.version;
+    for (const panel of this.panels.values()) {
+      panel.state = explicitStateFromArtifacts(panel.artifacts, this.getRuntimeLease(panel.id));
+    }
     this.notifyPanelTreeUpdate();
   }
 
   applyRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
     if (event.next) {
-      this.runtimeLeases.set(event.panelId, event.next);
+      this.runtimeLeases.set(event.slotId, event.next);
     } else {
-      this.runtimeLeases.delete(event.panelId);
+      this.runtimeLeases.delete(event.slotId);
     }
     this.runtimeLeaseVersion = event.version;
+    const panel = this.panels.get(event.slotId);
+    if (panel) {
+      panel.state = explicitStateFromArtifacts(panel.artifacts, this.getRuntimeLease(panel.id));
+    }
     this.notifyPanelTreeUpdate();
   }
 
@@ -519,6 +542,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
    */
   notifyPanelTreeUpdate(): void {
     this.treeUpdatePending = true;
+    this.treeRevision += 1;
 
     if (this.treeUpdateTimer) {
       return;
@@ -528,8 +552,7 @@ export class PanelRegistry implements PanelRelationshipProvider {
       this.treeUpdateTimer = null;
       if (this.treeUpdatePending) {
         this.treeUpdatePending = false;
-        const tree = this.getSerializablePanelTree();
-        this.onTreeUpdated?.(tree);
+        this.onTreeUpdated?.(this.getPanelTreeSnapshot());
       }
     }, this.TREE_UPDATE_DEBOUNCE_MS);
   }
@@ -598,7 +621,9 @@ export class PanelRegistry implements PanelRelationshipProvider {
   }
 
   // Collapsed state accessors
-  getCollapsedIds(): string[] { return [...this.collapsedIds]; }
+  getCollapsedIds(): string[] {
+    return [...this.collapsedIds];
+  }
   setCollapsed(panelId: string, collapsed: boolean): void {
     if (collapsed) this.collapsedIds.add(panelId);
     else this.collapsedIds.delete(panelId);
@@ -612,10 +637,15 @@ export class PanelRegistry implements PanelRelationshipProvider {
   // ==========================================================================
 
   private serializePanel(panel: Panel): Panel {
+    this.ensureExplicitState(panel);
     return {
       ...panel,
       children: panel.children.map((child) => this.serializePanel(child)),
     };
+  }
+
+  private ensureExplicitState(panel: Panel): void {
+    panel.state ??= explicitStateFromArtifacts(panel.artifacts, this.getRuntimeLease(panel.id));
   }
 
   private preserveRuntimeState(panels: Panel[], previousPanels: Map<string, Panel>): void {
@@ -635,9 +665,11 @@ export class PanelRegistry implements PanelRelationshipProvider {
     try {
       const previousSnapshot = getCurrentSnapshot(previous);
       const nextSnapshot = getCurrentSnapshot(next);
-      return previousSnapshot.source === nextSnapshot.source &&
+      return (
+        previousSnapshot.source === nextSnapshot.source &&
         previousSnapshot.contextId === nextSnapshot.contextId &&
-        previousSnapshot.options.ref === nextSnapshot.options.ref;
+        previousSnapshot.options.ref === nextSnapshot.options.ref
+      );
     } catch {
       return false;
     }

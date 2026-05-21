@@ -142,6 +142,8 @@ export interface InitPanelEntry {
   stateArgs?: Record<string, unknown>;
 }
 
+export type PanelRestorePolicy = "focused" | "none";
+
 /**
  * Caller kinds permitted in workspace `services[].policy.allowed`.
  * Kept inline (rather than re-imported from serviceDispatcher) so this types
@@ -212,6 +214,12 @@ export interface WorkspaceConfig {
    */
   initPanels?: InitPanelEntry[];
   /**
+   * Startup/reconnect view restoration policy.
+   * - "focused" (default): restore/load only the focused panel view.
+   * - "none": restore tree state only; views load when selected.
+   */
+  panelRestorePolicy?: PanelRestorePolicy;
+  /**
    * Stable DO singletons. Any `services[]` / `routes[]` entry referencing a
    * `durableObject.className` MUST have a matching `(source, className)` row
    * here. Workspace load fails otherwise.
@@ -274,10 +282,7 @@ export interface CentralConfigPaths {
 // =============================================================================
 
 // Re-export shared IPC types for convenience
-export type {
-  WorkspaceEntry,
-  SettingsData,
-} from "../types.js";
+export type { WorkspaceEntry, SettingsData } from "../types.js";
 
 // Import for use in CentralData
 import type { WorkspaceEntry } from "../types.js";

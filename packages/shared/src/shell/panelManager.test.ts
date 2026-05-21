@@ -6,10 +6,7 @@ import { PanelRegistry } from "../panelRegistry.js";
 import { getCurrentSnapshot } from "../panel/accessors.js";
 import { PanelManager } from "./panelManager.js";
 import { canonicalEntityId } from "../runtime/entitySpec.js";
-import type {
-  RuntimeEntityCreateSpec,
-  RuntimeEntityHandle,
-} from "../runtime/entitySpec.js";
+import type { RuntimeEntityCreateSpec, RuntimeEntityHandle } from "../runtime/entitySpec.js";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -163,7 +160,7 @@ function createWorkspaceMemory() {
           context_id: entry.contextId,
           state_args: stringifyStateArgs(entry.stateArgs),
           recorded_at: Date.now(),
-        })),
+        }))
       );
       const slot = slots.get(slotId);
       const row = entries[cursor];
@@ -279,7 +276,7 @@ describe("PanelManager", () => {
             properties: { greeting: { type: "string" } },
           },
         },
-      }),
+      })
     );
 
     const registry = new PanelRegistry({});
@@ -323,7 +320,7 @@ describe("PanelManager", () => {
     expect(mem.state.entities.size).toBe(1);
     expect(mem.state.slots.get(created.panelId)?.current_entity_id).toBe(currentEntityId);
     expect(mem.state.history.get(created.panelId)?.[0]?.state_args).toBe(
-      JSON.stringify({ greeting: "updated" }),
+      JSON.stringify({ greeting: "updated" })
     );
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).stateArgs).toEqual({
       greeting: "updated",
@@ -349,7 +346,7 @@ describe("PanelManager", () => {
     fs.mkdirSync(panelDir, { recursive: true });
     fs.writeFileSync(
       path.join(panelDir, "package.json"),
-      JSON.stringify({ name: "remote", natstack: { title: "Remote Panel" } }),
+      JSON.stringify({ name: "remote", natstack: { title: "Remote Panel" } })
     );
 
     const { mem, deps } = makeManagerDeps(workspacePath);
@@ -385,7 +382,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, natstack: { title: `${name} Panel` } }),
+        JSON.stringify({ name, natstack: { title: `${name} Panel` } })
       );
     }
 
@@ -427,7 +424,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, natstack: { title: `${name} Panel` } }),
+        JSON.stringify({ name, natstack: { title: `${name} Panel` } })
       );
     }
 
@@ -451,6 +448,115 @@ describe("PanelManager", () => {
     expect(registry.getPanel(root.panelId)?.selectedChildId).toBe(first.panelId);
   });
 
+  it("persists focused panel and cached titles in local view state", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "chat");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "chat", natstack: { title: "Actual Chat Title" } })
+    );
+
+    const savedStates: unknown[] = [];
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      viewState: {
+        load: () => null,
+        save: (state) => {
+          savedStates.push(state);
+        },
+      },
+    });
+
+    const created = await manager.create("panels/chat", { isRoot: true, addAsRoot: true });
+    await manager.notifyFocused(created.panelId);
+
+    expect(savedStates[savedStates.length - 1]).toMatchObject({
+      focusedPanelId: created.panelId,
+      panelTitles: {
+        [created.panelId]: { source: "panels/chat", title: "Actual Chat Title" },
+      },
+    });
+  });
+
+  it("restores focused panel and title from local view state when manifests are unavailable", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const seedRegistry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const seedManager = new PanelManager({
+      registry: seedRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await seedManager.create("panels/chat", {
+      isRoot: true,
+      addAsRoot: true,
+      name: "chat-root",
+    });
+
+    const registry = new PanelRegistry({});
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+      viewState: {
+        load: () => ({
+          collapsedIds: [],
+          focusedPanelId: created.panelId,
+          panelTitles: {
+            [created.panelId]: { source: "panels/chat", title: "Actual Chat Title" },
+          },
+        }),
+        save: () => {},
+      },
+    });
+
+    await manager.syncSnapshot();
+
+    expect(registry.getFocusedPanelId()).toBe(created.panelId);
+    expect(registry.getPanel(created.panelId)?.title).toBe("Actual Chat Title");
+  });
+
+  it("restores panel titles from server metadata when local manifests are unavailable", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const seedRegistry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const seedManager = new PanelManager({
+      registry: seedRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await seedManager.create("panels/chat", {
+      isRoot: true,
+      addAsRoot: true,
+      name: "chat-root",
+    });
+
+    const registry = new PanelRegistry({});
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+      metadataResolver: {
+        getPanelMetadata: async (source) =>
+          source === "panels/chat" ? { title: "Server Chat Title" } : null,
+      },
+    });
+
+    await manager.syncSnapshot();
+
+    expect(registry.getPanel(created.panelId)?.title).toBe("Server Chat Title");
+  });
+
   it("closes parent subtrees with one workspace close and retires every panel entity", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
     tempDirs.push(workspacePath);
@@ -460,7 +566,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, natstack: { title: `${name} Panel` } }),
+        JSON.stringify({ name, natstack: { title: `${name} Panel` } })
       );
     }
 
@@ -491,7 +597,7 @@ describe("PanelManager", () => {
       fs.mkdirSync(panelDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
-        JSON.stringify({ name, natstack: { title: `${name} Panel` } }),
+        JSON.stringify({ name, natstack: { title: `${name} Panel` } })
       );
     }
 

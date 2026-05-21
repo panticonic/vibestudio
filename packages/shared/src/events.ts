@@ -8,6 +8,7 @@
 import type { PendingApproval } from "./approvals.js";
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
+import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
 
 /**
  * Known event names that can be subscribed to.
@@ -18,6 +19,7 @@ export type EventName =
   | "workspace:revision-bumped"
   | "presence:panel-active"
   | "panel:runtimeLeaseChanged"
+  | "panel:snapshot"
   | "system-theme-changed"
   | "panel-tree-updated"
   | "open-workspace-switcher"
@@ -86,13 +88,14 @@ export interface NotificationPayload {
  */
 export interface EventPayloads {
   "system-theme-changed": "light" | "dark";
-  "panel-tree-updated": unknown[]; // Panel tree array
+  "panel-tree-updated": PanelTreeSnapshot;
   "panel:runtimeLeaseChanged": PanelRuntimeLeaseChangedEvent;
-  "open-workspace-switcher": void;
-  "toggle-address-bar": void;
-  "focus-address-bar": void;
+  "panel:snapshot": PanelRecoverySnapshot;
+  "open-workspace-switcher": undefined;
+  "toggle-address-bar": undefined;
+  "focus-address-bar": undefined;
   "panel-chrome-command": { command: PanelCommandId };
-  "toggle-panel-devtools": void;
+  "toggle-panel-devtools": undefined;
   "panel-initialization-error": { path: string; error: string };
   "navigate-about": { page: string };
   "navigate-to-panel": { panelId: string };
@@ -182,6 +185,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "system-theme-changed",
   "panel-tree-updated",
   "panel:runtimeLeaseChanged",
+  "panel:snapshot",
   "open-workspace-switcher",
   "toggle-address-bar",
   "focus-address-bar",
@@ -214,5 +218,6 @@ export function isValidEventName(name: string): name is EventName {
   if (name === "workspace:revision-bumped") return true;
   if (name === "presence:panel-active") return true;
   if (name === "panel:runtimeLeaseChanged") return true;
+  if (name === "panel:snapshot") return true;
   return VALID_EVENT_NAMES.includes(name as EventName);
 }

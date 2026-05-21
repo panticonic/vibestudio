@@ -1,3 +1,5 @@
+import type { PanelEntityId, PanelSlotId } from "./ids.js";
+
 export type ClientPlatform = "desktop" | "mobile";
 
 export interface ClientSession {
@@ -14,7 +16,8 @@ export interface RuntimeLeaseVersion {
 }
 
 export interface PanelRuntimeLease {
-  panelId: string;
+  slotId: PanelSlotId;
+  runtimeEntityId: PanelEntityId;
   clientSessionId: string;
   connectionId: string;
   holderLabel: string;
@@ -32,12 +35,14 @@ export type PanelRuntimeLeaseChangedReason =
   | "acquired"
   | "released"
   | "revoked"
-  | "expired";
+  | "expired"
+  | "retired";
 
 export interface PanelRuntimeLeaseChangedEvent {
   type: "panel:runtimeLeaseChanged";
   version: RuntimeLeaseVersion;
-  panelId: string;
+  slotId: PanelSlotId;
+  runtimeEntityId: PanelEntityId;
   previous: PanelRuntimeLease | null;
   next: PanelRuntimeLease | null;
   reason: PanelRuntimeLeaseChangedReason;
