@@ -55,5 +55,10 @@ export function knownJsxDescriptors(): DescriptorWithoutEditor[] {
     inline("Code", ["size"]),
     inline("Link", ["href"]),
     inline("Button", ["variant", "size"]),
+    inline("WikiLink", ["target"]),
+    // Wildcard catch-all so unknown JSX still routes through LiveJsxEditor
+    // (instead of MDXEditor throwing). LiveJsxEditor's compile-or-fallback
+    // path is what we want for arbitrary user JSX.
+    { name: "*", kind: "flow", source: undefined, props: [], hasChildren: true } as DescriptorWithoutEditor,
   ];
 }

@@ -21,7 +21,7 @@ import { useEffect, useMemo, useState, type ComponentType } from "react";
 import { Box, Card, Code, Flex, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import * as runtime from "react/jsx-runtime";
-import { mdxComponents } from "@workspace/agentic-chat";
+import { spectroliteMdxComponents } from "../mdx/components";
 import {
   compileComponent,
   type SandboxOptions,
@@ -91,7 +91,7 @@ async function compileMdxDoc(content: string): Promise<ComponentType | null> {
     ...runtime,
     development: false,
     useMDXComponents: () => ({
-      ...(mdxComponents as Record<string, unknown>),
+      ...spectroliteMdxComponents,
       runtime: runtimeComponents,
     }) as never,
   });

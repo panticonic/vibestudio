@@ -7,13 +7,25 @@
  *   - `codeBlockPlugin` + `codeMirrorPlugin` for fenced code
  *   - `diffSourcePlugin` — toggle between WYSIWYG and raw source (= the
  *     whole-doc "break open" escape hatch)
- *   - `jsxPlugin` + `GenericJsxEditor` — per-component WYSIWYG, with the
- *     generic editor as the fallback (= per-component "break open" hatch)
+ *   - `jsxPlugin` + `LiveJsxEditor` — per-component live render via
+ *     `compileComponent`, falls back to GenericJsxEditor on errors via the
+ *     LiveJsxEditor itself
  *   - `frontmatterPlugin` so `---` YAML at the top is preserved
  *   - `toolbarPlugin` with the diff/source toggle button
  *
+ * Wikilink bridge: on read, `[[Page]]` becomes `<WikiLink target="Page" />`;
+ * on flush (Workspace.tsx calls writeBufferToDisk), JSX wikilinks become
+ * `[[Page]]` again. This keeps the on-disk format Obsidian-compatible
+ * while letting MDXEditor render wikilinks as proper JSX with our
+ * `WikiLink` component.
+ *
+ * Mention autocomplete: `MentionAutocomplete` attaches a DOM keydown
+ * listener to the editor's contenteditable root, opens a popover on `@`,
+ * and inserts the chosen handle as plain text via execCommand. Lexical
+ * observes the contenteditable mutations and updates its state.
+ *
  * Owns:
- *   - reading the file on open
+ *   - reading the file on open (and applying wikilink read-transform)
  *   - propagating in-memory edits to disk on flush
  *   - notifying parent of dirty state for the flush controller
  */
@@ -22,7 +34,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { promises as fs } from "fs";
 import { Box, Button, Flex, SegmentedControl, Text } from "@radix-ui/themes";
 import { LightningBoltIcon, ReloadIcon, EyeOpenIcon, Pencil1Icon } from "@radix-ui/react-icons";
-import { PreviewPane } from "./PreviewPane";
 import {
   MDXEditor,
   type MDXEditorMethods,
@@ -38,7 +49,6 @@ import {
   frontmatterPlugin,
   jsxPlugin,
   toolbarPlugin,
-  GenericJsxEditor,
   DiffSourceToggleWrapper,
   UndoRedo,
   BoldItalicUnderlineToggles,
@@ -48,29 +58,22 @@ import {
   BlockTypeSelect,
 } from "@mdxeditor/editor";
 import "@mdxeditor/editor/style.css";
+import { PreviewPane } from "./PreviewPane";
+import { MentionAutocomplete, type MentionCandidate } from "./MentionAutocomplete";
 import { knownJsxDescriptors } from "../mdx/runtime";
+import { LiveJsxEditor } from "../mdx/LiveJsxEditor";
+import { wikilinksFromJsx, wikilinksToJsx } from "../mdx/wikilink";
 
 export interface DocumentEditorProps {
-  /** Absolute repo root — paths are stored relative to this. */
   repoRoot: string;
-  /** Relative path inside the repo root. */
   relPath: string;
-  /** Editor theme — drives MDXEditor's `contentEditableClassName`. */
   theme: "light" | "dark";
-  /**
-   * Called on every change with the *current* markdown text. Used by the
-   * flush controller to debounce quiescence.
-   */
   onChange: (path: string, markdown: string) => void;
-  /**
-   * Called when the file is reloaded from disk (initial open OR after the
-   * agent writes to it). Lets the parent update its in-memory `savedMdx`.
-   */
   onReload: (path: string, markdown: string) => void;
-  /** Trigger manual flush — wired to the "Flush" toolbar button. */
   onFlushClick: (path: string) => void;
-  /** True when there are user-side edits since the last flush. */
   hasUnflushedChanges: boolean;
+  /** Mention candidates from the channel roster. */
+  mentionCandidates: MentionCandidate[];
 }
 
 const POLL_MS = 1500;
@@ -83,6 +86,7 @@ export function DocumentEditor({
   onReload,
   onFlushClick,
   hasUnflushedChanges,
+  mentionCandidates,
 }: DocumentEditorProps) {
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,20 +94,22 @@ export function DocumentEditor({
   const editorRef = useRef<MDXEditorMethods | null>(null);
   const lastDiskRef = useRef<string | null>(null);
   const inFlightWriteRef = useRef(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [contentEditableEl, setContentEditableEl] = useState<HTMLElement | null>(null);
 
   const fullPath = `${repoRoot}/${relPath}`;
 
-  // Read on open + when the path changes
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setError(null);
       try {
-        const buf = await fs.readFile(fullPath, "utf-8");
+        const raw = await fs.readFile(fullPath, "utf-8");
         if (cancelled) return;
-        lastDiskRef.current = buf;
-        setMarkdown(buf);
-        onReload(relPath, buf);
+        const transformed = wikilinksToJsx(raw);
+        lastDiskRef.current = raw;
+        setMarkdown(transformed);
+        onReload(relPath, transformed);
       } catch (err) {
         if (cancelled) return;
         setError(`Failed to read ${relPath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -112,24 +118,21 @@ export function DocumentEditor({
     return () => { cancelled = true; };
   }, [fullPath, relPath, onReload]);
 
-  // Poll for external (agent) writes. If the file changed on disk and the
-  // user has no unflushed in-memory edits, reload. If there are unflushed
-  // edits, skip — the user keeps editing; conflict resolution happens via
-  // the diff/source view.
   useEffect(() => {
     const handle = setInterval(async () => {
       if (inFlightWriteRef.current) return;
       try {
-        const buf = await fs.readFile(fullPath, "utf-8");
-        if (buf === lastDiskRef.current) return;
-        lastDiskRef.current = buf;
+        const raw = await fs.readFile(fullPath, "utf-8");
+        if (raw === lastDiskRef.current) return;
+        lastDiskRef.current = raw;
         if (hasUnflushedChanges) {
           console.info(`[Spectrolite] ${relPath} changed on disk while user has unflushed edits — keeping buffer`);
           return;
         }
-        setMarkdown(buf);
-        editorRef.current?.setMarkdown(buf);
-        onReload(relPath, buf);
+        const transformed = wikilinksToJsx(raw);
+        setMarkdown(transformed);
+        editorRef.current?.setMarkdown(transformed);
+        onReload(relPath, transformed);
       } catch {
         /* file may have been deleted; ignore for v1 */
       }
@@ -145,8 +148,25 @@ export function DocumentEditor({
     onFlushClick(relPath);
   }, [onFlushClick, relPath]);
 
+  // Locate the contenteditable root for the mention autocomplete keylistener
+  useEffect(() => {
+    if (!containerRef.current) return;
+    if (mode !== "edit") {
+      setContentEditableEl(null);
+      return;
+    }
+    const find = () => {
+      const el = containerRef.current?.querySelector<HTMLElement>("[contenteditable=\"true\"]");
+      if (el && el !== contentEditableEl) setContentEditableEl(el);
+    };
+    find();
+    const observer = new MutationObserver(find);
+    observer.observe(containerRef.current, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [mode, contentEditableEl]);
+
   const descriptors = useMemo(() => {
-    return knownJsxDescriptors().map((d) => ({ ...d, Editor: GenericJsxEditor }));
+    return knownJsxDescriptors().map((d) => ({ ...d, Editor: LiveJsxEditor }));
   }, []);
 
   const plugins = useMemo(() => [
@@ -196,6 +216,14 @@ export function DocumentEditor({
     }),
   ], [descriptors, hasUnflushedChanges, flushNow]);
 
+  const handleMentionAccept = useCallback((_handle: string) => {
+    // The MentionAutocomplete adapter already performed the contenteditable
+    // mutation via execCommand. Trigger a synthetic change so Lexical's
+    // editorState picks up the new text via getMarkdown.
+    const md = editorRef.current?.getMarkdown();
+    if (md != null) onChange(relPath, md);
+  }, [onChange, relPath]);
+
   if (error) {
     return (
       <Flex direction="column" gap="2" p="3">
@@ -234,7 +262,7 @@ export function DocumentEditor({
           </SegmentedControl.Item>
         </SegmentedControl.Root>
       </Flex>
-      <Box style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+      <Box ref={containerRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
         {mode === "edit" ? (
           <Box style={{ height: "100%", overflow: "auto" }}>
             <MDXEditor
@@ -243,6 +271,11 @@ export function DocumentEditor({
               onChange={handleChange}
               plugins={plugins}
               contentEditableClassName={`spectrolite-content ${theme === "dark" ? "spectrolite-content--dark" : ""}`}
+            />
+            <MentionAutocomplete
+              container={contentEditableEl}
+              candidates={mentionCandidates}
+              onAccept={handleMentionAccept}
             />
           </Box>
         ) : (
@@ -255,8 +288,8 @@ export function DocumentEditor({
 
 /**
  * Write the in-memory buffer to disk. Called by the flush pipeline.
- * Exposed as a helper rather than a method on DocumentEditor so the flush
- * controller can write on its own schedule.
+ * Applies the inverse wikilink transformation (`<WikiLink>` → `[[Page]]`)
+ * so the on-disk format stays Obsidian-compatible.
  */
 export async function writeBufferToDisk(repoRoot: string, relPath: string, content: string): Promise<void> {
   const full = `${repoRoot}/${relPath}`;
@@ -264,5 +297,5 @@ export async function writeBufferToDisk(repoRoot: string, relPath: string, conte
   if (lastSlash > 0) {
     await fs.mkdir(full.slice(0, lastSlash), { recursive: true });
   }
-  await fs.writeFile(full, content);
+  await fs.writeFile(full, wikilinksFromJsx(content));
 }

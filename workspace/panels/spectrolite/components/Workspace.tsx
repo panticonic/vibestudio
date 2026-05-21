@@ -32,10 +32,14 @@ import { DocumentEditor, writeBufferToDisk } from "./DocumentEditor";
 import { ChannelDrawer } from "./ChannelDrawer";
 import { CommitStrip } from "./CommitStrip";
 import { AgentRoster, type RosterAgent } from "./AgentRoster";
+import { BacklinksPanel } from "./BacklinksPanel";
+import type { MentionCandidate } from "./MentionAutocomplete";
 import { createFlushController } from "../flush/flush-controller";
 import { buildFlushPayload } from "../flush/diff";
 import { createBufferEntry, hasUnflushedChanges, type FileBufferEntry } from "../state/fileBuffer";
 import { KB_USER_EDIT_TYPE, registerSpectroliteMessageTypes } from "../messages/register";
+import { WikilinkContext } from "../mdx/components";
+import { resolveWikilinkTarget, wikilinksFromJsx } from "../mdx/wikilink";
 
 export interface WorkspaceProps {
   channelName: string;
@@ -78,9 +82,12 @@ export function Workspace({
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([]);
   const [roster, setRoster] = useState<RosterAgent[]>([]);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
 
   const buffersRef = useRef(buffers);
   buffersRef.current = buffers;
+  const pathsRef = useRef(workspacePaths);
+  pathsRef.current = workspacePaths;
 
   // Connect to the channel
   useEffect(() => {
@@ -146,7 +153,12 @@ export function Workspace({
     const knownHandles = Object.values(c.roster)
       .map((p) => (p.metadata as { handle?: string }).handle)
       .filter((h): h is string => Boolean(h) && h !== PANEL_METADATA.handle);
-    const payload = buildFlushPayload({ path: relPath, before, after, knownHandles });
+    // Compute the diff against the wikilink-form (on-disk shape) of both
+    // sides so observers see Obsidian-style `[[Page]]` syntax in the
+    // kb.user_edit payload rather than `<WikiLink>` JSX.
+    const beforeOnDisk = wikilinksFromJsx(before);
+    const afterOnDisk = wikilinksFromJsx(after);
+    const payload = buildFlushPayload({ path: relPath, before: beforeOnDisk, after: afterOnDisk, knownHandles });
     if (!payload) return;
 
     setBuffers((prev) => {
@@ -223,65 +235,90 @@ export function Workspace({
   const activeBuffer = activePath ? buffers[activePath] : undefined;
   const activeDirty = activeBuffer ? hasUnflushedChanges(activeBuffer) : false;
 
+  // Mention candidates derived from the channel roster minus the panel itself.
+  const mentionCandidates: MentionCandidate[] = useMemo(() => {
+    return roster.map((a) => ({ handle: a.handle }));
+  }, [roster]);
+
+  // Wikilink context — resolves [[Page]] to a workspace-relative path and
+  // opens it in the editor.
+  const wikilinkContext = useMemo(() => ({
+    resolve: (target: string) => resolveWikilinkTarget(target, pathsRef.current),
+    open: (path: string) => setActivePath(path),
+  }), []);
+
   return (
     <Theme appearance={theme} radius="medium" style={{ height: "100dvh" }}>
-      <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
-        <Flex
-          align="center"
-          justify="between"
-          gap="3"
-          px="3"
-          py="2"
-          style={{ borderBottom: "1px solid var(--gray-5)", flexShrink: 0 }}
-        >
-          <Flex align="center" gap="2">
-            <Heading size="3">Spectrolite</Heading>
-            {activePath ? <Text size="1" color="gray">/ {activePath}</Text> : null}
-          </Flex>
-          <AgentRoster
-            agents={roster}
-            availableAgents={availableAgents}
-            onAdd={async (id) => { await onAddAgent(id); }}
-            onRemove={async (handle) => { await onRemoveAgent(handle); }}
-          />
-        </Flex>
-        <Flex style={{ flex: 1, minHeight: 0 }}>
-          <Box style={{ width: 240, borderRight: "1px solid var(--gray-5)", flexShrink: 0 }}>
-            <FileTree
-              root={repoRoot}
-              activePath={activePath}
-              onOpen={setActivePath}
-              refreshNonce={refreshNonce}
+      <WikilinkContext.Provider value={wikilinkContext}>
+        <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
+          <Flex
+            align="center"
+            justify="between"
+            gap="3"
+            px="3"
+            py="2"
+            style={{ borderBottom: "1px solid var(--gray-5)", flexShrink: 0 }}
+          >
+            <Flex align="center" gap="2">
+              <Heading size="3">Spectrolite</Heading>
+              {activePath ? <Text size="1" color="gray">/ {activePath}</Text> : null}
+            </Flex>
+            <AgentRoster
+              agents={roster}
+              availableAgents={availableAgents}
+              onAdd={async (id) => { await onAddAgent(id); }}
+              onRemove={async (handle) => { await onRemoveAgent(handle); }}
             />
-          </Box>
-          <Box style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
-            {activePath ? (
-              <DocumentEditor
-                repoRoot={repoRoot}
-                relPath={activePath}
-                theme={theme}
-                onChange={handleEditorChange}
-                onReload={handleEditorReload}
-                onFlushClick={handleFlushClick}
-                hasUnflushedChanges={activeDirty}
+          </Flex>
+          <Flex style={{ flex: 1, minHeight: 0 }}>
+            <Flex direction="column" style={{ width: 260, borderRight: "1px solid var(--gray-5)", flexShrink: 0 }}>
+              <Box style={{ flex: 1, minHeight: 0 }}>
+                <FileTree
+                  root={repoRoot}
+                  activePath={activePath}
+                  onOpen={setActivePath}
+                  refreshNonce={refreshNonce}
+                  onPathsRefreshed={setWorkspacePaths}
+                />
+              </Box>
+              <BacklinksPanel
+                root={repoRoot}
+                activePath={activePath}
+                paths={workspacePaths}
+                refreshKey={refreshNonce}
+                onOpen={setActivePath}
               />
-            ) : (
-              <Flex align="center" justify="center" style={{ height: "100%" }}>
-                <Text size="2" color="gray">
-                  Select or create a file to start editing.
-                </Text>
-              </Flex>
-            )}
-          </Box>
+            </Flex>
+            <Box style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+              {activePath ? (
+                <DocumentEditor
+                  repoRoot={repoRoot}
+                  relPath={activePath}
+                  theme={theme}
+                  onChange={handleEditorChange}
+                  onReload={handleEditorReload}
+                  onFlushClick={handleFlushClick}
+                  hasUnflushedChanges={activeDirty}
+                  mentionCandidates={mentionCandidates}
+                />
+              ) : (
+                <Flex align="center" justify="center" style={{ height: "100%" }}>
+                  <Text size="2" color="gray">
+                    Select or create a file to start editing.
+                  </Text>
+                </Flex>
+              )}
+            </Box>
+          </Flex>
+          <CommitStrip
+            repoRoot={repoRoot}
+            client={client}
+            primaryAgentHandle={primaryAgentHandle ?? roster[0]?.handle}
+            onCommitted={() => setRefreshNonce((n) => n + 1)}
+          />
+          <ChannelDrawer client={client} />
         </Flex>
-        <CommitStrip
-          repoRoot={repoRoot}
-          client={client}
-          primaryAgentHandle={primaryAgentHandle ?? roster[0]?.handle}
-          onCommitted={() => setRefreshNonce((n) => n + 1)}
-        />
-        <ChannelDrawer client={client} />
-      </Flex>
+      </WikilinkContext.Provider>
     </Theme>
   );
 }

@@ -10,35 +10,18 @@ import { useCallback, useEffect, useState } from "react";
 import { promises as fs } from "fs";
 import { Box, Button, Code, Flex, ScrollArea, Text, TextField } from "@radix-ui/themes";
 import { FileTextIcon, PlusIcon, ReloadIcon } from "@radix-ui/react-icons";
+import { listMdxPaths } from "../state/workspacePaths";
 
 export interface FileTreeProps {
   root: string;
   activePath: string | null;
   onOpen: (path: string) => void;
   refreshNonce?: number;
+  /** Optional: notify parent when the path list refreshes (so wikilink resolution caches stay in sync). */
+  onPathsRefreshed?: (paths: string[]) => void;
 }
 
-async function walkMdx(root: string, dir: string): Promise<string[]> {
-  let entries: { name: string; isDirectory: () => boolean }[] = [];
-  try {
-    entries = (await fs.readdir(dir, { withFileTypes: true })) as unknown as { name: string; isDirectory: () => boolean }[];
-  } catch {
-    return [];
-  }
-  const out: string[] = [];
-  for (const entry of entries) {
-    if (entry.name.startsWith(".")) continue;
-    const full = `${dir}/${entry.name}`;
-    if (entry.isDirectory()) {
-      out.push(...(await walkMdx(root, full)));
-    } else if (entry.name.endsWith(".mdx")) {
-      out.push(full.startsWith(`${root}/`) ? full.slice(root.length + 1) : full);
-    }
-  }
-  return out.sort();
-}
-
-export function FileTree({ root, activePath, onOpen, refreshNonce }: FileTreeProps) {
+export function FileTree({ root, activePath, onOpen, refreshNonce, onPathsRefreshed }: FileTreeProps) {
   const [files, setFiles] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState("");
@@ -46,12 +29,13 @@ export function FileTree({ root, activePath, onOpen, refreshNonce }: FileTreePro
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await walkMdx(root, root);
+      const list = await listMdxPaths(root);
       setFiles(list);
+      onPathsRefreshed?.(list);
     } finally {
       setLoading(false);
     }
-  }, [root]);
+  }, [root, onPathsRefreshed]);
 
   useEffect(() => { void refresh(); }, [refresh, refreshNonce]);
 
