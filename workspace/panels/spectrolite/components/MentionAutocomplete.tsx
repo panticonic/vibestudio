@@ -4,26 +4,27 @@
  * MDXEditor wraps Lexical, which renders into a contenteditable. Rather
  * than write a custom Lexical plugin (which would require deep MDXEditor
  * realm/gurx integration), we attach a DOM-level keydown listener to the
- * editor's contenteditable root and drive a popover from there. The
- * approach is robust because the contenteditable's text + selection are
- * the source of truth for both Lexical and the DOM.
+ * editor's contenteditable root and drive a popover from there.
  *
- * Trigger: typing `@` while the caret is on whitespace/start-of-text.
- *   - Listens for subsequent keystrokes to refine the `@<query>` filter.
- *   - Popover renders next to the caret rect.
- *   - ArrowUp/ArrowDown navigate, Enter/Tab accept, Esc dismisses.
- *   - On accept, we remove the typed `@<query>` chars using
- *     `document.execCommand('delete')` (works inside contenteditable —
- *     Lexical observes the change) and then call `editor.insertMarkdown`
- *     to drop in the chosen handle as plain text.
+ * Trigger: typing `@` while the caret is at a word boundary
+ * (whitespace/start-of-text/punctuation).
  *
- * Limitations: cross-paragraph or mid-word triggers may have edge cases;
- * v1 is conservative — we require the previous char to be whitespace or
- * start-of-document. Lexical's own SELECTION_CHANGE events aren't read;
- * we rely on the browser's caret rect via `getSelection().getRangeAt(0)`.
+ * Acceptance flow (single-shot, atomic):
+ *  - Compute a Range covering the `@<query>` text already in the buffer.
+ *  - Set that range as the selection.
+ *  - Call `document.execCommand("insertText", false, "@<handle> ")` —
+ *    a single operation that *replaces* the selection. Lexical's
+ *    contenteditable observer sees one `input` event with inputType
+ *    "insertText" and updates its state accordingly.
+ *  - If execCommand returns false (browser doesn't support it), fall back
+ *    to manual Range.deleteContents + Range.insertNode + a dispatched
+ *    `input` event so Lexical still picks up the mutation.
+ *
+ * Popover follows the caret on scroll/resize via a layout-effect that
+ * recomputes the caret rect each frame while the popover is open.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Box, Card, Code, Flex, Text } from "@radix-ui/themes";
 import { PersonIcon } from "@radix-ui/react-icons";
 
@@ -33,31 +34,56 @@ export interface MentionCandidate {
 }
 
 export interface MentionAutocompleteProps {
-  /** Container DOM element whose keydown events we listen to (the editor root). */
   container: HTMLElement | null;
-  /** All known mention handles. */
   candidates: MentionCandidate[];
-  /** Called after the user accepts a candidate; the trigger text has already been removed. */
   onAccept: (handle: string) => void;
 }
 
 interface OpenState {
+  /** Characters typed AFTER `@`. */
   query: string;
-  triggerRect: DOMRect;
-  triggerStart: number;
+  /** TextNode that contains the `@` trigger. */
   triggerNode: Node;
+  /** Offset of the `@` itself inside `triggerNode`. */
+  triggerStart: number;
 }
 
 function isTriggerableContext(node: Node, offset: number): boolean {
   if (node.nodeType !== Node.TEXT_NODE) return offset === 0;
   if (offset === 0) return true;
   const prev = node.textContent?.[offset - 1];
-  return !prev || /\s/.test(prev);
+  return !prev || /[\s(.,;:!?[{<>]/.test(prev);
+}
+
+function tryReplaceSelection(replacement: string): boolean {
+  // execCommand returns true on success in browsers that still support it.
+  try {
+    const ok = document.execCommand("insertText", false, replacement);
+    if (ok) return true;
+  } catch {
+    /* fallthrough */
+  }
+  // Manual fallback: delete the selection contents and insert a new text
+  // node, then dispatch an `input` event so Lexical observes the change.
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return false;
+  const range = sel.getRangeAt(0);
+  const target = range.startContainer.parentElement ?? range.startContainer;
+  range.deleteContents();
+  const node = document.createTextNode(replacement);
+  range.insertNode(node);
+  range.setStartAfter(node);
+  range.setEndAfter(node);
+  sel.removeAllRanges();
+  sel.addRange(range);
+  (target as HTMLElement).dispatchEvent?.(new InputEvent("input", { bubbles: true, inputType: "insertText", data: replacement }));
+  return true;
 }
 
 export function MentionAutocomplete({ container, candidates, onAccept }: MentionAutocompleteProps) {
   const [open, setOpen] = useState<OpenState | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [caretRect, setCaretRect] = useState<DOMRect | null>(null);
   const openRef = useRef(open);
   openRef.current = open;
 
@@ -75,6 +101,62 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
   useEffect(() => {
     if (open && selectedIndex >= filtered.length) setSelectedIndex(0);
   }, [filtered.length, open, selectedIndex]);
+
+  // Reposition the popover to follow the caret. Recompute on every render
+  // while open, plus react to scroll/resize events.
+  useLayoutEffect(() => {
+    if (!open) {
+      setCaretRect(null);
+      return;
+    }
+    const recompute = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.rangeCount === 0) return;
+      const range = sel.getRangeAt(0);
+      const r = range.getBoundingClientRect();
+      // Some browsers return all-zero rects for collapsed ranges; insert a
+      // temp text node and re-measure if so.
+      if (r.top === 0 && r.left === 0 && r.bottom === 0) return;
+      setCaretRect(r);
+    };
+    recompute();
+    const onScroll = () => recompute();
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [open]);
+
+  const accept = (handle: string) => {
+    const sel = window.getSelection();
+    const current = openRef.current;
+    if (!sel || !current) {
+      onAccept(handle);
+      setOpen(null);
+      return;
+    }
+    // Build a range spanning [triggerStart .. current caret].
+    const range = document.createRange();
+    try {
+      range.setStart(current.triggerNode, Math.max(0, current.triggerStart));
+      const endNode = sel.focusNode ?? current.triggerNode;
+      const endOffset = sel.focusOffset ?? current.triggerStart + 1 + current.query.length;
+      range.setEnd(endNode, endOffset);
+    } catch {
+      // Trigger node may have been split/detached; fall back to inserting
+      // at the current caret without deleting prefix.
+      setOpen(null);
+      onAccept(handle);
+      return;
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+    tryReplaceSelection(`@${handle} `);
+    setOpen(null);
+    onAccept(handle);
+  };
 
   useEffect(() => {
     if (!container) return;
@@ -106,48 +188,22 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
         if ((event.key === "Enter" || event.key === "Tab") && filtered.length > 0) {
           event.preventDefault();
           const chosen = filtered[selectedIndex] ?? filtered[0]!;
-          // Remove `@<query>` using execCommand("delete") — works in contenteditable.
-          const toDelete = current.query.length + 1; // +1 for the `@`
-          const editorRoot = container as HTMLElement;
-          // Set selection to a range covering the @ trigger
-          const r = document.createRange();
-          const node = current.triggerNode;
-          const startOffset = Math.max(0, current.triggerStart);
-          r.setStart(node, startOffset);
-          // current selection position is end of typed @query
-          const endNode = range.startContainer;
-          const endOffset = range.startOffset;
-          r.setEnd(endNode, endOffset);
-          sel.removeAllRanges();
-          sel.addRange(r);
-          editorRoot.focus();
-          document.execCommand("delete");
-          // After deletion, insert via standard input event so Lexical observes the change.
-          // We dispatch a beforeinput event with `insertText`; if that's unavailable, fall back to execCommand.
-          const inserted = `@${chosen.handle} `;
-          try {
-            document.execCommand("insertText", false, inserted);
-          } catch {
-            /* ignore */
-          }
-          onAccept(chosen.handle);
-          setOpen(null);
-          // toDelete computed for documentation; not used directly
-          void toDelete;
+          accept(chosen.handle);
           return;
         }
       }
 
-      // Open on @ keypress
+      // Open on `@` keypress at a word boundary
       if (event.key === "@") {
         const node = range.startContainer;
         const offset = range.startOffset;
         if (!isTriggerableContext(node, offset)) return;
-        const rect = range.getBoundingClientRect();
+        // Don't preventDefault — let the browser insert `@` so the
+        // contenteditable text and Lexical stay in sync. We track the
+        // position so we can later select [trigger..caret] for replacement.
         setOpen({
           query: "",
-          triggerStart: offset, // position WHERE the @ will be inserted (before)
-          triggerRect: rect,
+          triggerStart: offset,
           triggerNode: node,
         });
         setSelectedIndex(0);
@@ -167,7 +223,7 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
         });
         return;
       }
-      // Any other key closes the popover
+      // Whitespace or other punctuation closes the popover without action
       if (current && event.key !== "Shift" && event.key !== "Meta" && event.key !== "Control" && event.key !== "Alt") {
         setOpen(null);
       }
@@ -176,10 +232,10 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
     return () => container.removeEventListener("keydown", onKeyDown, true);
   }, [container, filtered, selectedIndex, onAccept]);
 
-  if (!open || filtered.length === 0) return null;
+  if (!open || filtered.length === 0 || !caretRect) return null;
 
-  const top = open.triggerRect.bottom + 4;
-  const left = open.triggerRect.left;
+  const top = caretRect.bottom + 4;
+  const left = caretRect.left;
   return (
     <Box
       style={{
@@ -187,7 +243,7 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
         top,
         left,
         zIndex: 9999,
-        minWidth: 200,
+        minWidth: 220,
         maxWidth: 320,
         pointerEvents: "auto",
       }}
@@ -210,8 +266,7 @@ export function MentionAutocomplete({ container, candidates, onAccept }: Mention
                 }}
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  onAccept(c.handle);
-                  setOpen(null);
+                  accept(c.handle);
                 }}
                 onMouseEnter={() => setSelectedIndex(idx)}
               >

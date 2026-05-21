@@ -25,28 +25,80 @@ const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 const WIKILINK_JSX_RE_SELF = /<WikiLink\s+target=("([^"]+)"|'([^']+)')\s*\/>/g;
 const WIKILINK_JSX_RE_WITH_TEXT = /<WikiLink\s+target=("([^"]+)"|'([^']+)')\s*>([\s\S]*?)<\/WikiLink>/g;
 
-/** Transform on read: `[[X]]` → `<WikiLink target="X" />`. */
-export function wikilinksToJsx(markdown: string): string {
-  return markdown.replace(WIKILINK_RE, (_match, target: string, alias: string | undefined) => {
-    const t = target.trim();
-    if (!alias) return `<WikiLink target="${escapeAttr(t)}" />`;
-    return `<WikiLink target="${escapeAttr(t)}">${alias.trim()}</WikiLink>`;
-  });
+/**
+ * Split a markdown document into [code-fenced, non-code-fenced] segments
+ * so we can apply transforms only outside code blocks. Supports both ```
+ * fenced and `~~~` fenced (and inline `code` is left alone — the
+ * wikilink regex requires `[[` which doesn't occur in inline code we want
+ * to transform anyway).
+ */
+function splitByCodeBlocks(markdown: string): Array<{ code: boolean; text: string }> {
+  const out: Array<{ code: boolean; text: string }> = [];
+  const lines = markdown.split("\n");
+  let inFence = false;
+  let fenceMarker = "";
+  let buf: string[] = [];
+  const flush = (code: boolean) => {
+    if (buf.length === 0) return;
+    out.push({ code, text: buf.join("\n") });
+    buf = [];
+  };
+  for (const line of lines) {
+    const fenceMatch = /^(\s*)(```+|~~~+)/.exec(line);
+    if (fenceMatch) {
+      if (!inFence) {
+        flush(false);
+        inFence = true;
+        fenceMarker = fenceMatch[2]!;
+        buf.push(line);
+      } else if (line.includes(fenceMarker)) {
+        buf.push(line);
+        flush(true);
+        inFence = false;
+        fenceMarker = "";
+      } else {
+        buf.push(line);
+      }
+    } else {
+      buf.push(line);
+    }
+  }
+  flush(inFence);
+  return out;
 }
 
-/** Transform on write: `<WikiLink ...>` → `[[X]]` / `[[X|Y]]`. */
+function transformOutsideCode(markdown: string, fn: (segment: string) => string): string {
+  return splitByCodeBlocks(markdown)
+    .map((seg) => (seg.code ? seg.text : fn(seg.text)))
+    .join("\n");
+}
+
+/** Transform on read: `[[X]]` → `<WikiLink target="X" />`, but only outside code blocks. */
+export function wikilinksToJsx(markdown: string): string {
+  return transformOutsideCode(markdown, (segment) =>
+    segment.replace(WIKILINK_RE, (_match, target: string, alias: string | undefined) => {
+      const t = target.trim();
+      if (!alias) return `<WikiLink target="${escapeAttr(t)}" />`;
+      return `<WikiLink target="${escapeAttr(t)}">${alias.trim()}</WikiLink>`;
+    }),
+  );
+}
+
+/** Transform on write: `<WikiLink ...>` → `[[X]]` / `[[X|Y]]`, but only outside code blocks. */
 export function wikilinksFromJsx(markdown: string): string {
-  let out = markdown.replace(WIKILINK_JSX_RE_WITH_TEXT, (_match, _full, dq, sq, text: string) => {
-    const target = (dq ?? sq ?? "").trim();
-    const inner = text.trim();
-    if (!inner || inner === target) return `[[${target}]]`;
-    return `[[${target}|${inner}]]`;
+  return transformOutsideCode(markdown, (segment) => {
+    let out = segment.replace(WIKILINK_JSX_RE_WITH_TEXT, (_match, _full, dq, sq, text: string) => {
+      const target = (dq ?? sq ?? "").trim();
+      const inner = text.trim();
+      if (!inner || inner === target) return `[[${target}]]`;
+      return `[[${target}|${inner}]]`;
+    });
+    out = out.replace(WIKILINK_JSX_RE_SELF, (_match, _full, dq, sq) => {
+      const target = (dq ?? sq ?? "").trim();
+      return `[[${target}]]`;
+    });
+    return out;
   });
-  out = out.replace(WIKILINK_JSX_RE_SELF, (_match, _full, dq, sq) => {
-    const target = (dq ?? sq ?? "").trim();
-    return `[[${target}]]`;
-  });
-  return out;
 }
 
 function escapeAttr(value: string): string {
@@ -66,17 +118,20 @@ export function resolveWikilinkTarget(target: string, allPaths: string[]): strin
   return matches[0]!;
 }
 
-/** Find every wikilink target in a markdown document (post-JSX or raw). */
+/** Find every wikilink target in a markdown document (post-JSX or raw), skipping code blocks. */
 export function extractWikilinks(markdown: string): string[] {
   const out = new Set<string>();
-  for (const m of markdown.matchAll(WIKILINK_RE)) {
-    out.add(m[1]!.trim());
-  }
-  for (const m of markdown.matchAll(WIKILINK_JSX_RE_SELF)) {
-    out.add((m[2] ?? m[3] ?? "").trim());
-  }
-  for (const m of markdown.matchAll(WIKILINK_JSX_RE_WITH_TEXT)) {
-    out.add((m[2] ?? m[3] ?? "").trim());
+  for (const seg of splitByCodeBlocks(markdown)) {
+    if (seg.code) continue;
+    for (const m of seg.text.matchAll(WIKILINK_RE)) {
+      out.add(m[1]!.trim());
+    }
+    for (const m of seg.text.matchAll(WIKILINK_JSX_RE_SELF)) {
+      out.add((m[2] ?? m[3] ?? "").trim());
+    }
+    for (const m of seg.text.matchAll(WIKILINK_JSX_RE_WITH_TEXT)) {
+      out.add((m[2] ?? m[3] ?? "").trim());
+    }
   }
   return [...out];
 }

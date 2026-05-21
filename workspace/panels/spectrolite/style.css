@@ -33,3 +33,40 @@
   z-index: 2;
   border-bottom: 1px solid var(--gray-5);
 }
+
+/* Dark-theme overrides for MDXEditor's toolbar, dialogs, and popovers.
+   MDXEditor's default styles assume a light background; on dark themes we
+   re-map its CSS variables to Radix dark tokens so the toolbar and dialogs
+   blend in. */
+[data-is-root-theme] [data-accent-color] .spectrolite-mdx .mdxeditor.dark-theme,
+.dark-theme .spectrolite-mdx .mdxeditor,
+.spectrolite-mdx.dark-theme .mdxeditor {
+  --baseBg: var(--color-panel);
+  --basePageBg: var(--color-background);
+  --baseBgSubtle: var(--gray-2);
+  --baseBgHover: var(--gray-4);
+  --baseBgActive: var(--gray-5);
+  --baseBorder: var(--gray-6);
+  --baseBorderHover: var(--gray-7);
+  --baseText: var(--gray-12);
+  --baseTextContrast: var(--gray-12);
+  --baseSolid: var(--accent-9);
+  --baseSolidHover: var(--accent-10);
+  --accentBase: var(--accent-3);
+  --accentBgSubtle: var(--accent-3);
+  --accentBg: var(--accent-4);
+  --accentBgHover: var(--accent-5);
+  --accentBgActive: var(--accent-6);
+  --accentLine: var(--accent-7);
+  --accentBorder: var(--accent-8);
+  --accentBorderHover: var(--accent-9);
+  --accentSolid: var(--accent-9);
+  --accentSolidHover: var(--accent-10);
+  --accentText: var(--accent-11);
+  --accentTextContrast: var(--accent-12);
+}
+
+/* Live JSX components inside the editor breathe a bit */
+.spectrolite-mdx .mdxeditor [data-lexical-decorator] {
+  margin: var(--space-2) 0;
+}

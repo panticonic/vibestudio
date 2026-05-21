@@ -28,6 +28,9 @@ export interface CommitStripProps {
   primaryAgentHandle?: string;
   /** Bumped after every successful commit so consumers can refresh status. */
   onCommitted?: (sha: string) => void;
+  /** External setter for the message field — lets the drawer's "Use as commit msg" land here. */
+  message: string;
+  onMessageChange: (next: string) => void;
 }
 
 interface DirtyStatus {
@@ -42,9 +45,8 @@ function makeClient(): GitClient {
   });
 }
 
-export function CommitStrip({ repoRoot, client, primaryAgentHandle, onCommitted }: CommitStripProps) {
+export function CommitStrip({ repoRoot, client, primaryAgentHandle, onCommitted, message, onMessageChange }: CommitStripProps) {
   const [status, setStatus] = useState<DirtyStatus>({ dirty: [], branch: undefined });
-  const [message, setMessage] = useState("");
   const [committing, setCommitting] = useState(false);
   const [nonce, setNonce] = useState(0);
 
@@ -104,7 +106,7 @@ export function CommitStrip({ repoRoot, client, primaryAgentHandle, onCommitted 
           displayMode: "row",
         }).catch((err) => console.warn("[Spectrolite] kb.commit publish failed:", err));
       }
-      setMessage("");
+      onMessageChange("");
       setNonce((n) => n + 1);
       onCommitted?.(shaStr);
     } catch (err) {
@@ -134,7 +136,7 @@ export function CommitStrip({ repoRoot, client, primaryAgentHandle, onCommitted 
         size="1"
         placeholder="commit subject — newline + body optional"
         value={message}
-        onChange={(e) => setMessage(e.target.value)}
+        onChange={(e) => onMessageChange(e.target.value)}
         style={{ flex: 1 }}
       />
       <Button size="1" variant="soft" disabled={!message.trim() || committing || status.dirty.length === 0} onClick={() => void handleCommit()}>

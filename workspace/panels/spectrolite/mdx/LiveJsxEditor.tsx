@@ -1,20 +1,25 @@
 /**
- * Live JSX editor — replaces `GenericJsxEditor` for known components.
+ * Live JSX editor — replaces `GenericJsxEditor` for every JSX descriptor.
  *
  * MDXEditor's JSX descriptor `Editor` receives the mdast node of the JSX
- * element. We reconstruct the JSX source from that node (attrs + children)
- * and compile-and-render it via `compileComponent` from `@workspace/eval`
+ * element. We serialize the full subtree (including nested JSX, paragraphs,
+ * lists, etc.) back to MDX source via `mdast-util-to-markdown` +
+ * `mdast-util-mdx-jsx`, then compile-and-render it via `compileComponent`
  * with `createPanelSandboxConfig(rpc)` bindings — so live JSX in the
  * document has full access to the panel runtime (rpc, fs, GitClient, …),
  * which is the "MDX eval environment with full runtime access" goal.
  *
- * On compile failure we fall back to the small "broken" placeholder UI
- * with the error message; the user can switch to source view via the
- * `diffSourcePlugin` toggle and fix the JSX by hand.
+ * Works for the wildcard `name: "*"` descriptor too: we read the actual
+ * tag name from `mdastNode.name` rather than `descriptor.name`.
  *
- * Children for flow components are kept editable as Lexical text via
- * `NestedEditor` from MDXEditor so prose inside a `<Callout>` is still
- * inline-editable while the surrounding component shell renders live.
+ * The compiled module imports every Radix/component from
+ * `@workspace/agentic-chat` so all of the panel's MDX surface is available
+ * unconditionally. `WikiLink` is provided as a local shim (clickable
+ * navigation is handled by Preview mode, which uses the real WikiLink
+ * component with its context).
+ *
+ * On compile failure we surface a small error card pointing the user to
+ * the diff/source toggle so they can edit the JSX by hand.
  */
 
 import { useEffect, useMemo, useState, type ComponentType } from "react";
@@ -25,69 +30,51 @@ import { compileComponent } from "@workspace/eval";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import { rpc } from "@workspace/runtime";
 import { mdxComponents } from "@workspace/agentic-chat";
+import { nodeToMdxSource } from "./mdastSerialize";
 
 const sandbox = createPanelSandboxConfig(rpc);
 
-interface MdxAttribute {
-  type: string;
-  name?: string;
-  value?: unknown;
-}
+// PascalCase component names exported by @workspace/agentic-chat that we
+// inject unconditionally into the live-compile wrapper. The set mirrors
+// the chat panel's MDX component surface so docs are portable.
+const importedNames = Object.keys(mdxComponents as Record<string, unknown>)
+  .filter((n) => /^[A-Z]/.test(n));
+const importList = importedNames.join(", ");
 
-interface JsxNode {
+interface MdastJsxLike {
   type: string;
   name?: string | null;
-  attributes?: MdxAttribute[];
-  children?: Array<{ type: string; value?: string }>;
 }
-
-/** Render a JSX attribute as a TSX source snippet. */
-function renderAttribute(attr: MdxAttribute): string {
-  if (attr.type !== "mdxJsxAttribute" || !attr.name) return "";
-  const value = attr.value;
-  if (value == null) return ` ${attr.name}`;
-  if (typeof value === "string") {
-    return ` ${attr.name}="${value.replace(/"/g, "&quot;")}"`;
-  }
-  if (typeof value === "object" && value !== null && "value" in value) {
-    const exprValue = (value as { value?: string }).value ?? "";
-    return ` ${attr.name}={${exprValue}}`;
-  }
-  return "";
-}
-
-function nodeToSource(node: JsxNode): string {
-  const name = node.name ?? "Fragment";
-  const attrs = (node.attributes ?? []).map(renderAttribute).join("");
-  const childText = (node.children ?? [])
-    .map((c) => (c.type === "text" ? (c.value ?? "") : ""))
-    .join("");
-  if (!childText) return `<${name}${attrs} />`;
-  return `<${name}${attrs}>${childText}</${name}>`;
-}
-
-const componentImports = Object.keys(mdxComponents);
-const componentList = componentImports.join(", ");
 
 function wrapForSandbox(source: string): string {
-  // Inject mdxComponents and runtime.Eval as locals so any JSX tag in the
-  // user's source resolves. Live runtime bindings (rpc, fs, …) come from
-  // the sandbox `bindings`/`scope` injection.
   return `
 import * as React from "react";
-import { ${componentList} } from "@workspace/agentic-chat";
+import { ${importList} } from "@workspace/agentic-chat";
+
+function WikiLink({ target, children }) {
+  return (
+    <a
+      href="#"
+      style={{ textDecoration: "underline dotted" }}
+      onClick={(e) => { e.preventDefault(); }}
+    >
+      {children ?? target}
+    </a>
+  );
+}
 
 export default function LiveJsx() {
-  return (
+  return (<>
     ${source}
-  );
+  </>);
 }
 `;
 }
 
 export function LiveJsxEditor(props: JsxEditorProps) {
   const { mdastNode, descriptor } = props;
-  const source = useMemo(() => nodeToSource(mdastNode as unknown as JsxNode), [mdastNode]);
+  const tagName = (mdastNode as unknown as MdastJsxLike).name ?? descriptor.name ?? "Fragment";
+  const source = useMemo(() => nodeToMdxSource(mdastNode), [mdastNode]);
   const wrapped = useMemo(() => wrapForSandbox(source), [source]);
   const [Component, setComponent] = useState<ComponentType | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -96,9 +83,15 @@ export function LiveJsxEditor(props: JsxEditorProps) {
     let cancelled = false;
     setError(null);
     setComponent(null);
+    if (!source.trim()) {
+      // Empty serialization — nothing to render. This happens e.g. when
+      // MDXEditor first inserts an empty JSX node before the user adds
+      // attributes.
+      return () => { cancelled = true; };
+    }
     void compileComponent(wrapped, {
       loadImport: sandbox.loadImport,
-      sourcePath: `workspace/panels/spectrolite/inline-jsx-${(descriptor.name ?? "x")}.tsx`,
+      sourcePath: `workspace/panels/spectrolite/inline-jsx-${tagName === "*" ? "wild" : tagName}.tsx`,
     }).then((result) => {
       if (cancelled) return;
       if (result.success && result.Component) {
@@ -108,7 +101,7 @@ export function LiveJsxEditor(props: JsxEditorProps) {
       }
     });
     return () => { cancelled = true; };
-  }, [wrapped, descriptor.name]);
+  }, [wrapped, tagName, source]);
 
   if (error) {
     return (
@@ -116,7 +109,7 @@ export function LiveJsxEditor(props: JsxEditorProps) {
         <Flex direction="column" gap="1">
           <Flex align="center" gap="1">
             <ExclamationTriangleIcon color="red" />
-            <Text size="1" color="red" weight="medium">{descriptor.name}</Text>
+            <Text size="1" color="red" weight="medium">&lt;{tagName}&gt;</Text>
             <Text size="1" color="gray">— preview failed</Text>
           </Flex>
           <Code size="1" style={{ whiteSpace: "pre-wrap" }}>{error}</Code>
@@ -131,7 +124,7 @@ export function LiveJsxEditor(props: JsxEditorProps) {
   if (!Component) {
     return (
       <Box style={{ opacity: 0.6 }}>
-        <Text size="1" color="gray">Rendering &lt;{descriptor.name ?? "?"}&gt;…</Text>
+        <Text size="1" color="gray">Rendering &lt;{tagName}&gt;…</Text>
       </Box>
     );
   }

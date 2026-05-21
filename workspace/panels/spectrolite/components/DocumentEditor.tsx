@@ -76,7 +76,7 @@ export interface DocumentEditorProps {
   mentionCandidates: MentionCandidate[];
 }
 
-const POLL_MS = 1500;
+const POLL_MS = 600;
 
 export function DocumentEditor({
   repoRoot,

@@ -1,51 +1,42 @@
 /**
  * Minimal chat drawer for talking to resident agents OUTSIDE the document.
  *
- * Spectrolite's primary surface is the editor; this drawer is a small
- * collapsible strip at the bottom for free-form requests (e.g. "summarise
- * the doc", "what changed last hour") and for receiving brief agent
- * replies. Most of the back-and-forth happens via `kb.user_edit` messages
- * and agent file edits — this drawer is the escape hatch.
+ * Subscribes to the PubSubClient's event stream and filters for completed
+ * agentic-trajectory messages (`kind: "message.completed"`). Most of the
+ * back-and-forth happens via `kb.user_edit` messages and agent file edits —
+ * this drawer is the escape hatch for free-form chat and for receiving
+ * agent replies to prompts like "suggest a commit message".
  *
- * Subscribes directly to the PubSubClient's event stream rather than going
- * through `useChannelMessages` from `@workspace/agentic-chat` because that
- * hook isn't exposed at the package root. The drawer only renders plain
- * text messages — custom messages (kb.user_edit / kb.commit) show up in
- * proper chat panels that observe this channel.
+ * When an agent message is displayed, a "Use as commit msg" action is
+ * surfaced if the parent provided `onUseAsCommitMessage` — closing the
+ * commit-suggestion loop without copy-paste.
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PubSubClient } from "@workspace/pubsub";
 import { Box, Button, Card, Flex, ScrollArea, Text, TextArea } from "@radix-ui/themes";
-import { ChevronUpIcon, ChevronDownIcon, PaperPlaneIcon } from "@radix-ui/react-icons";
+import { ChevronUpIcon, ChevronDownIcon, PaperPlaneIcon, CommitIcon } from "@radix-ui/react-icons";
 
 interface DrawerMessage {
   id: string;
   senderId: string;
   senderHandle?: string;
   senderName?: string;
+  senderType?: string;
   content: string;
   ts: number;
 }
 
 const MAX_DRAWER_MESSAGES = 50;
 
-function readContent(payload: unknown): string | null {
-  if (typeof payload === "string") return payload;
-  if (payload && typeof payload === "object") {
-    const p = payload as Record<string, unknown>;
-    if (typeof p["content"] === "string") return p["content"] as string;
-    if (typeof p["text"] === "string") return p["text"] as string;
-  }
-  return null;
-}
-
 export interface ChannelDrawerProps {
   client: PubSubClient | null;
   onSend?: (content: string) => void;
+  /** When provided, agent messages get a "Use as commit msg" button. */
+  onUseAsCommitMessage?: (content: string) => void;
 }
 
-export function ChannelDrawer({ client, onSend }: ChannelDrawerProps) {
+export function ChannelDrawer({ client, onSend, onUseAsCommitMessage }: ChannelDrawerProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -60,27 +51,36 @@ export function ChannelDrawer({ client, onSend }: ChannelDrawerProps) {
         for await (const event of client.events({ includeReplay: true, includeSignals: false })) {
           if (cancelled) return;
           const wire = event as unknown as {
-            messageId?: string;
             type?: string;
+            messageId?: string;
             senderId?: string;
-            senderMetadata?: { handle?: string; name?: string };
+            senderMetadata?: { handle?: string; name?: string; type?: string };
             ts?: number;
-            payload?: unknown;
+            payload?: { kind?: string; payload?: { content?: string; role?: string } };
           };
-          if (wire.type !== "message" && wire.type !== "agentic.trajectory.v1/event") continue;
-          const content = readContent(wire.payload);
-          if (!content) continue;
+          if (wire.type !== "agentic.trajectory.v1/event") continue;
+          const evt = wire.payload;
+          if (!evt) continue;
+          // We render only completed messages so partial streaming chunks
+          // don't flicker into the drawer.
+          if (evt.kind !== "message.completed") continue;
+          const content = evt.payload?.content;
+          if (typeof content !== "string" || !content) continue;
           const id = wire.messageId ?? `${wire.senderId ?? "?"}-${wire.ts ?? Date.now()}`;
           setMessages((prev) => {
             if (prev.some((m) => m.id === id)) return prev;
-            const next = [...prev, {
-              id,
-              senderId: wire.senderId ?? "?",
-              senderHandle: wire.senderMetadata?.handle,
-              senderName: wire.senderMetadata?.name,
-              content,
-              ts: wire.ts ?? Date.now(),
-            }];
+            const next: DrawerMessage[] = [
+              ...prev,
+              {
+                id,
+                senderId: wire.senderId ?? "?",
+                senderHandle: wire.senderMetadata?.handle,
+                senderName: wire.senderMetadata?.name,
+                senderType: wire.senderMetadata?.type,
+                content,
+                ts: wire.ts ?? Date.now(),
+              },
+            ];
             return next.slice(-MAX_DRAWER_MESSAGES);
           });
         }
@@ -92,6 +92,13 @@ export function ChannelDrawer({ client, onSend }: ChannelDrawerProps) {
   }, [client]);
 
   const recent = useMemo(() => messages.slice(-MAX_DRAWER_MESSAGES), [messages]);
+  const newestAgentMessage = useMemo(() => {
+    for (let i = recent.length - 1; i >= 0; i -= 1) {
+      const m = recent[i]!;
+      if (m.senderType && m.senderType !== "panel") return m;
+    }
+    return null;
+  }, [recent]);
 
   useEffect(() => {
     if (!open) return;
@@ -147,16 +154,32 @@ export function ChannelDrawer({ client, onSend }: ChannelDrawerProps) {
                 {recent.length === 0 ? (
                   <Text size="1" color="gray">No messages yet.</Text>
                 ) : (
-                  recent.map((m) => (
-                    <Card key={m.id} size="1">
-                      <Flex direction="column" gap="1">
-                        <Text size="1" color="gray" weight="medium">
-                          @{m.senderHandle ?? m.senderName ?? m.senderId}
-                        </Text>
-                        <Text size="1" style={{ whiteSpace: "pre-wrap" }}>{m.content}</Text>
-                      </Flex>
-                    </Card>
-                  ))
+                  recent.map((m) => {
+                    const isAgent = m.senderType && m.senderType !== "panel";
+                    const isNewestAgentMsg = isAgent && newestAgentMessage?.id === m.id;
+                    return (
+                      <Card key={m.id} size="1">
+                        <Flex direction="column" gap="1">
+                          <Flex align="center" justify="between" gap="2">
+                            <Text size="1" color="gray" weight="medium">
+                              @{m.senderHandle ?? m.senderName ?? m.senderId}
+                            </Text>
+                            {isNewestAgentMsg && onUseAsCommitMessage ? (
+                              <Button
+                                size="1"
+                                variant="ghost"
+                                onClick={() => onUseAsCommitMessage(m.content)}
+                                title="Copy this reply into the commit message field"
+                              >
+                                <CommitIcon /> Use as commit msg
+                              </Button>
+                            ) : null}
+                          </Flex>
+                          <Text size="1" style={{ whiteSpace: "pre-wrap" }}>{m.content}</Text>
+                        </Flex>
+                      </Card>
+                    );
+                  })
                 )}
               </Flex>
             </ScrollArea>

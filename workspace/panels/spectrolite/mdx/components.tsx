@@ -8,8 +8,8 @@
  *     so the component itself stays purely declarative.
  */
 
-import { createContext, useContext, type ReactNode } from "react";
-import { Link, Text } from "@radix-ui/themes";
+import React, { createContext, useContext, type ReactNode } from "react";
+import { Link } from "@radix-ui/themes";
 import { mdxComponents as chatMdxComponents } from "@workspace/agentic-chat";
 
 export interface WikilinkContextValue {
@@ -17,6 +17,8 @@ export interface WikilinkContextValue {
   resolve: (target: string) => string | null;
   /** Open a workspace-relative path in the editor. */
   open: (path: string) => void;
+  /** Open the target if it exists, otherwise create a stub MDX file and open it. */
+  openOrCreate: (target: string) => void | Promise<void>;
 }
 
 export const WikilinkContext = createContext<WikilinkContextValue | null>(null);
@@ -30,21 +32,24 @@ export function WikiLink({ target, children }: WikiLinkProps) {
   const ctx = useContext(WikilinkContext);
   const resolved = ctx?.resolve(target) ?? null;
   const label = children ?? target;
+  const onClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    void ctx?.openOrCreate(target);
+  };
   if (!resolved) {
     return (
-      <Text style={{ color: "var(--gray-9)", textDecoration: "underline dashed" }} title={`No file matches [[${target}]]`}>
+      <Link
+        href="#"
+        onClick={onClick}
+        style={{ color: "var(--gray-10)", textDecoration: "underline dashed" }}
+        title={`Click to create [[${target}]]`}
+      >
         {label}
-      </Text>
+      </Link>
     );
   }
   return (
-    <Link
-      href="#"
-      onClick={(e) => {
-        e.preventDefault();
-        ctx?.open(resolved);
-      }}
-    >
+    <Link href="#" onClick={onClick} title={resolved}>
       {label}
     </Link>
   );

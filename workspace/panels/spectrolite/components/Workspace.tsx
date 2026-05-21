@@ -2,11 +2,10 @@
  * Top-level layout for Spectrolite.
  *
  *   ┌────────────────────────────────────────────────────────────────┐
- *   │ Header: title + agent roster                                   │
+ *   │ Header: title + flush status + agent roster                    │
  *   ├──────────┬─────────────────────────────────────────────────────┤
- *   │ FileTree │ DocumentEditor                                      │
- *   │          │                                                     │
- *   │          │                                                     │
+ *   │ FileTree │ DocumentEditor (Edit ↔ Preview)                     │
+ *   │ Backlnks │                                                     │
  *   ├──────────┴─────────────────────────────────────────────────────┤
  *   │ CommitStrip                                                    │
  *   ├────────────────────────────────────────────────────────────────┤
@@ -17,13 +16,19 @@
  *   - active-file state + file-buffer map
  *   - PubSubClient lifecycle
  *   - flush controller
- *   - publishing kb.user_edit messages
+ *   - publishing kb.user_edit messages (+ enriched parallel send on mention)
+ *   - commit-message state shared between drawer and CommitStrip
+ *   - wikilink resolution + create-on-click
+ *   - frontmatter title extraction for the breadcrumb
+ *   - empty-state onboarding (creates a starter doc)
  */
 
+import { promises as fs } from "fs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Flex, Heading, Text, Theme } from "@radix-ui/themes";
+import { Box, Button, Flex, Heading, Text, Theme } from "@radix-ui/themes";
+import { CheckCircledIcon, FilePlusIcon, LightningBoltIcon } from "@radix-ui/react-icons";
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
-import { rpc, recoveryCoordinator, contextId as runtimeContextId, useStateArgs, setStateArgs } from "@workspace/runtime";
+import { rpc, recoveryCoordinator, useStateArgs, setStateArgs } from "@workspace/runtime";
 import { usePanelTheme } from "@workspace/react";
 import type { AvailableAgent } from "../bootstrap";
 import { listAvailableAgents } from "../bootstrap";
@@ -44,11 +49,8 @@ import { resolveWikilinkTarget, wikilinksFromJsx } from "../mdx/wikilink";
 export interface WorkspaceProps {
   channelName: string;
   channelContextId: string;
-  /** Workspace root (= the context's filesystem root for this panel). */
   repoRoot: string;
-  /** Handle of the resident agent we ask for commit messages. */
   primaryAgentHandle?: string;
-  /** Handlers for adding/removing agents — wired to bootstrap helpers. */
   onAddAgent: (agentId: string) => Promise<void>;
   onRemoveAgent: (handle: string) => Promise<void>;
 }
@@ -64,6 +66,61 @@ interface SpectroliteStateArgs {
   channelName?: string;
   contextId?: string;
   pendingAgents?: Array<{ handle: string }>;
+}
+
+const SAMPLE_DOC_NAME = "Welcome.mdx";
+
+const SAMPLE_DOC = `---
+title: Welcome to Spectrolite
+---
+
+# Welcome to Spectrolite
+
+This is an **MDX** knowledge base backed by a git repo. Try the following:
+
+1. **Edit prose** like you would in any rich-text editor.
+2. **@-mention an agent** to ask for help — type \`@\` to bring up the
+   autocomplete. The agent sees the diff after you click **Flush** (or
+   1.5 s of inactivity) and edits the file in-place.
+3. **Link between notes** with double brackets — for example,
+   [[Another Note]] (click to create it).
+4. **Commit** dirty files from the strip at the bottom; click
+   "Suggest message" to have the agent draft a commit message.
+
+<Callout color="blue">
+  <Callout.Icon><Icons.InfoCircledIcon /></Callout.Icon>
+  <Callout.Text>
+    Components like this Callout render live inline. Switch to **Preview**
+    mode (top-right) to see the page rendered with full runtime access.
+  </Callout.Text>
+</Callout>
+
+Delete this file or replace its contents when you're ready.
+`;
+
+const FRONTMATTER_TITLE_RE = /^---\s*\n([\s\S]*?)\n---\s*\n/;
+const TITLE_LINE_RE = /^title:\s*(?:"([^"]+)"|'([^']+)'|(.+))$/m;
+
+function readFrontmatterTitle(markdown: string): string | null {
+  const m = FRONTMATTER_TITLE_RE.exec(markdown);
+  if (!m) return null;
+  const titleMatch = TITLE_LINE_RE.exec(m[1] ?? "");
+  if (!titleMatch) return null;
+  return (titleMatch[1] ?? titleMatch[2] ?? titleMatch[3] ?? "").trim() || null;
+}
+
+function pathToTitle(relPath: string): string {
+  const name = relPath.split("/").pop() ?? relPath;
+  return name.replace(/\.mdx$/, "");
+}
+
+function formatTimeAgo(ts: number, now: number): string {
+  const diff = now - ts;
+  if (diff < 0) return "just now";
+  if (diff < 5_000) return "just now";
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  return `${Math.floor(diff / 3_600_000)}h ago`;
 }
 
 export function Workspace({
@@ -83,11 +140,20 @@ export function Workspace({
   const [roster, setRoster] = useState<RosterAgent[]>([]);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
+  const [commitMessage, setCommitMessage] = useState("");
+  const [lastFlushedAt, setLastFlushedAt] = useState<Record<string, number>>({});
+  const [nowTick, setNowTick] = useState(() => Date.now());
 
   const buffersRef = useRef(buffers);
   buffersRef.current = buffers;
   const pathsRef = useRef(workspacePaths);
   pathsRef.current = workspacePaths;
+
+  // Tick every 5s so "flushed Ns ago" stays fresh
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(Date.now()), 5_000);
+    return () => clearInterval(t);
+  }, []);
 
   // Connect to the channel
   useEffect(() => {
@@ -109,7 +175,6 @@ export function Workspace({
     };
   }, [channelName, channelContextId]);
 
-  // Roster — subscribe to participants and surface non-panel agents
   useEffect(() => {
     if (!client) return;
     const unsubscribe = client.onRoster(() => {
@@ -127,7 +192,6 @@ export function Workspace({
 
   useEffect(() => { void listAvailableAgents().then(setAvailableAgents).catch(() => {}); }, []);
 
-  // Persist active file in stateArgs so reload reopens it
   useEffect(() => {
     if (activePath && activePath !== stateArgs.openPath) {
       void setStateArgs({ openPath: activePath });
@@ -135,6 +199,8 @@ export function Workspace({
   }, [activePath, stateArgs.openPath]);
 
   // Flush: write buffer to disk, compute diff vs lastFlushedMdx, publish
+  // kb.user_edit, then if @-mentions resolved send a parallel chat message
+  // with the diff inlined so the agent has full context for its response.
   const flush = useCallback(async (relPath: string) => {
     const c = client;
     const entry = buffersRef.current[relPath];
@@ -153,9 +219,6 @@ export function Workspace({
     const knownHandles = Object.values(c.roster)
       .map((p) => (p.metadata as { handle?: string }).handle)
       .filter((h): h is string => Boolean(h) && h !== PANEL_METADATA.handle);
-    // Compute the diff against the wikilink-form (on-disk shape) of both
-    // sides so observers see Obsidian-style `[[Page]]` syntax in the
-    // kb.user_edit payload rather than `<WikiLink>` JSX.
     const beforeOnDisk = wikilinksFromJsx(before);
     const afterOnDisk = wikilinksFromJsx(after);
     const payload = buildFlushPayload({ path: relPath, before: beforeOnDisk, after: afterOnDisk, knownHandles });
@@ -166,6 +229,7 @@ export function Workspace({
       if (!cur) return prev;
       return { ...prev, [relPath]: { ...cur, savedMdx: after, lastFlushedMdx: after } };
     });
+    setLastFlushedAt((prev) => ({ ...prev, [relPath]: payload.at }));
 
     try {
       await c.publishCustomMessage({
@@ -185,14 +249,19 @@ export function Workspace({
       console.warn("[Spectrolite] kb.user_edit publish failed:", err);
     }
 
-    // If the user explicitly @-mentioned someone in the diff, send a normal
-    // chat message too so the agent's mention-respond policy fires.
+    // Mentioned-agent fast path: send a normal chat message with the diff
+    // inlined so the agent's mention-respond policy fires AND it has full
+    // context without having to re-read the file.
     if (payload.mentions.length > 0) {
       try {
-        await c.send(
-          `@${payload.mentions.join(" @")} please look at the edit I just made to \`${relPath}\`.`,
-          { mentions: payload.mentions },
-        );
+        const handles = payload.mentions.map((h) => `@${h}`).join(" ");
+        const message = [
+          `${handles} I just edited \`${relPath}\`. Diff:`,
+          "```diff",
+          payload.unifiedDiff,
+          "```",
+        ].join("\n");
+        await c.send(message, { mentions: payload.mentions });
       } catch (err) {
         console.warn("[Spectrolite] mention send failed:", err);
       }
@@ -218,9 +287,6 @@ export function Workspace({
       if (!cur) {
         return { ...prev, [relPath]: createBufferEntry(relPath, content) };
       }
-      // Disk content changed (e.g. agent wrote to it). Reset both saved and
-      // lastFlushedMdx so subsequent user edits diff cleanly against what's
-      // now on disk.
       return {
         ...prev,
         [relPath]: { ...cur, savedMdx: content, currentMdx: content, lastFlushedMdx: content },
@@ -232,20 +298,52 @@ export function Workspace({
     flushController.flushNow(relPath);
   }, [flushController]);
 
+  // Create-on-click for unresolved wikilinks: create a stub MDX file at the
+  // repo root, refresh the path index, and open the new file.
+  const createFileAt = useCallback(async (relPath: string, initialContent: string): Promise<string | null> => {
+    const finalPath = relPath.endsWith(".mdx") ? relPath : `${relPath}.mdx`;
+    const full = `${repoRoot}/${finalPath}`;
+    const lastSlash = full.lastIndexOf("/");
+    if (lastSlash > 0) {
+      try { await fs.mkdir(full.slice(0, lastSlash), { recursive: true }); } catch { /* ignore */ }
+    }
+    try {
+      await fs.writeFile(full, initialContent);
+      setRefreshNonce((n) => n + 1);
+      return finalPath;
+    } catch (err) {
+      console.warn(`[Spectrolite] create failed for ${finalPath}:`, err);
+      return null;
+    }
+  }, [repoRoot]);
+
   const activeBuffer = activePath ? buffers[activePath] : undefined;
   const activeDirty = activeBuffer ? hasUnflushedChanges(activeBuffer) : false;
+  const activeTitle = activeBuffer ? (readFrontmatterTitle(activeBuffer.currentMdx) ?? (activePath ? pathToTitle(activePath) : null)) : null;
+  const activeLastFlushed = activePath ? lastFlushedAt[activePath] : undefined;
 
-  // Mention candidates derived from the channel roster minus the panel itself.
-  const mentionCandidates: MentionCandidate[] = useMemo(() => {
-    return roster.map((a) => ({ handle: a.handle }));
-  }, [roster]);
+  const mentionCandidates: MentionCandidate[] = useMemo(() => roster.map((a) => ({ handle: a.handle })), [roster]);
 
-  // Wikilink context — resolves [[Page]] to a workspace-relative path and
-  // opens it in the editor.
+  // Wikilink context — resolves [[Page]] to a path, opens it, OR creates
+  // a stub when no match exists (Obsidian-style click-to-create).
   const wikilinkContext = useMemo(() => ({
     resolve: (target: string) => resolveWikilinkTarget(target, pathsRef.current),
     open: (path: string) => setActivePath(path),
-  }), []);
+    openOrCreate: async (target: string) => {
+      const resolved = resolveWikilinkTarget(target, pathsRef.current);
+      if (resolved) {
+        setActivePath(resolved);
+        return;
+      }
+      const created = await createFileAt(target, `# ${target}\n\n`);
+      if (created) setActivePath(created);
+    },
+  }), [createFileAt]);
+
+  const handleCreateWelcomeDoc = useCallback(async () => {
+    const created = await createFileAt(SAMPLE_DOC_NAME, SAMPLE_DOC);
+    if (created) setActivePath(created);
+  }, [createFileAt]);
 
   return (
     <Theme appearance={theme} radius="medium" style={{ height: "100dvh" }}>
@@ -261,7 +359,18 @@ export function Workspace({
           >
             <Flex align="center" gap="2">
               <Heading size="3">Spectrolite</Heading>
-              {activePath ? <Text size="1" color="gray">/ {activePath}</Text> : null}
+              {activeTitle ? <Text size="1" color="gray">/ {activeTitle}</Text> : null}
+              {activeDirty ? (
+                <Flex align="center" gap="1" title="Unflushed edits">
+                  <LightningBoltIcon color="orange" />
+                  <Text size="1" color="amber">unflushed</Text>
+                </Flex>
+              ) : activeLastFlushed ? (
+                <Flex align="center" gap="1" title={`Last flushed at ${new Date(activeLastFlushed).toLocaleString()}`}>
+                  <CheckCircledIcon color="green" />
+                  <Text size="1" color="gray">flushed {formatTimeAgo(activeLastFlushed, nowTick)}</Text>
+                </Flex>
+              ) : null}
             </Flex>
             <AgentRoster
               agents={roster}
@@ -301,10 +410,12 @@ export function Workspace({
                   hasUnflushedChanges={activeDirty}
                   mentionCandidates={mentionCandidates}
                 />
+              ) : workspacePaths.length === 0 ? (
+                <EmptyState onCreateWelcomeDoc={handleCreateWelcomeDoc} agentHandle={roster[0]?.handle ?? primaryAgentHandle} />
               ) : (
                 <Flex align="center" justify="center" style={{ height: "100%" }}>
                   <Text size="2" color="gray">
-                    Select or create a file to start editing.
+                    Select a file from the sidebar to start editing.
                   </Text>
                 </Flex>
               )}
@@ -315,10 +426,40 @@ export function Workspace({
             client={client}
             primaryAgentHandle={primaryAgentHandle ?? roster[0]?.handle}
             onCommitted={() => setRefreshNonce((n) => n + 1)}
+            message={commitMessage}
+            onMessageChange={setCommitMessage}
           />
-          <ChannelDrawer client={client} />
+          <ChannelDrawer
+            client={client}
+            onUseAsCommitMessage={setCommitMessage}
+          />
         </Flex>
       </WikilinkContext.Provider>
     </Theme>
+  );
+}
+
+function EmptyState({ onCreateWelcomeDoc, agentHandle }: { onCreateWelcomeDoc: () => void; agentHandle?: string }) {
+  return (
+    <Flex align="center" justify="center" style={{ height: "100%" }} p="6">
+      <Flex direction="column" align="center" gap="3" style={{ maxWidth: 520, textAlign: "center" }}>
+        <Heading size="4">Welcome to Spectrolite</Heading>
+        <Text size="2" color="gray">
+          A live MDX knowledge base with a resident editing agent
+          {agentHandle ? <> — <Text weight="medium">@{agentHandle}</Text> is already in the room.</> : ""}
+        </Text>
+        <Text size="2" color="gray">
+          Edit prose inline, @-mention the agent in the document, click <strong>Flush</strong>
+          (or pause for 1.5 s) to share the diff. The agent edits the file
+          directly — you see the changes appear in the editor.
+        </Text>
+        <Button onClick={onCreateWelcomeDoc} variant="solid">
+          <FilePlusIcon /> Create starter note
+        </Button>
+        <Text size="1" color="gray">
+          Or use the <strong>+ New</strong> field in the sidebar to make your own.
+        </Text>
+      </Flex>
+    </Flex>
   );
 }
