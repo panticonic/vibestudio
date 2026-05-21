@@ -299,6 +299,15 @@ for await (const event of client.events({ includeReplay: true, includeSignals: t
 }
 ```
 
+To publish typed agentic chat messages, use `client.send(content, options)`.
+For panels that need to register and publish their own message shapes (custom
+cards, badges, sensor readouts), use the channel's custom message registry:
+`client.registerMessageType(...)`, `client.publishCustomMessage(...)`,
+`client.updateCustomMessage(...)`, and `client.clearMessageType(...)`. A
+working example lives at `workspace/panels/chat/examples/weather-message-type.tsx`;
+the full feature reference is in
+[`workspace/skills/sandbox/CUSTOM_MESSAGES.md`](../sandbox/CUSTOM_MESSAGES.md).
+
 ---
 
 ## Package Scopes
