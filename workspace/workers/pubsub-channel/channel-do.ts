@@ -1534,7 +1534,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   /**
    * Called after cloneDO() copies the parent's SQLite.
-   * Trims post-fork envelopes, clears roster and pending calls.
+   * Forks the durable GAD channel log prefix, then clears signal-only state.
    */
   async postClone(parentChannelId: string, forkPointId: number): Promise<void> {
     // Fix identity: cloneDO copies parent's __objectKey; overwrite with our actual key
@@ -1547,6 +1547,7 @@ export class PubSubChannel extends DurableObjectBase {
     // and fetch() always overwrites identity from headers.
     this.setStateValue("forkedFrom", parentChannelId);
     this.setStateValue("forkPointId", String(forkPointId));
+    await this.channelLog.forkFrom(parentChannelId, forkPointId);
     // Clear roster
     this.sql.exec(`DELETE FROM participants`);
     // Clear pending calls

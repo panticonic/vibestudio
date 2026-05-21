@@ -29,6 +29,7 @@ export interface ChannelReplayContext {
 
 export interface ChannelLogStore {
   append(input: AppendChannelLogInput): Promise<ChannelEvent>;
+  forkFrom(parentChannelId: string, throughSeq: number | null): Promise<void>;
   hasEnvelope(envelopeId: string): Promise<boolean>;
   getEventByEnvelopeId(envelopeId: string): Promise<ChannelEvent | null>;
   replayAfter(sinceId: number, context: ChannelReplayContext): Promise<ChannelReplayEnvelope>;
@@ -117,6 +118,7 @@ function replayFromGadWindow(
 
 export class GadChannelLogStore implements ChannelLogStore {
   private readonly gad: DurableObjectServiceClient;
+  private static readonly REPLAY_AFTER_LIMIT = 500;
 
   constructor(
     rpc: RpcCallerLike,
@@ -138,6 +140,14 @@ export class GadChannelLogStore implements ChannelLogStore {
     return eventFromGadEnvelope(envelope);
   }
 
+  async forkFrom(parentChannelId: string, throughSeq: number | null): Promise<void> {
+    await this.gad.call("forkChannelLog", {
+      fromChannelId: parentChannelId,
+      toChannelId: this.channelId,
+      throughSeq,
+    });
+  }
+
   async hasEnvelope(envelopeId: string): Promise<boolean> {
     const envelope = await this.gad.call<ChannelEnvelope | null>("getChannelEnvelope", { envelopeId });
     return envelope != null;
@@ -154,6 +164,7 @@ export class GadChannelLogStore implements ChannelLogStore {
       channelId: this.channelId,
       mode: "after",
       sinceSeq: sinceId,
+      limit: GadChannelLogStore.REPLAY_AFTER_LIMIT,
     });
     return replayFromGadWindow("after", window, context);
   }

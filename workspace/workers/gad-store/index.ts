@@ -86,6 +86,59 @@ export interface ChannelReplayWindow {
   hasMoreBefore?: boolean;
 }
 
+export interface ForkChannelLogInput {
+  fromChannelId: string;
+  toChannelId: string;
+  throughSeq?: number | null;
+}
+
+export interface ForkChannelLogResult {
+  fromChannelId: string;
+  toChannelId: string;
+  throughSeq: number | null;
+  copied: number;
+  firstSeq?: number;
+  lastSeq?: number;
+  lineage: Array<{
+    sourceEnvelopeId: string;
+    forkEnvelopeId: string;
+    sourceSeq: number;
+    forkSeq: number;
+  }>;
+}
+
+export interface ForkTrajectoryBranchInput {
+  fromTrajectoryId: string;
+  fromBranchId: string;
+  toTrajectoryId: string;
+  toBranchId: string;
+  throughSeq?: number | null;
+  throughEventHash?: string | null;
+  throughPublishedChannelId?: string | null;
+  throughPublishedChannelSeq?: number | null;
+  toPublishedChannelId?: string | null;
+  owner?: { kind: "agent"; id: string } | null;
+}
+
+export interface ForkTrajectoryBranchResult {
+  fromTrajectoryId: string;
+  fromBranchId: string;
+  toTrajectoryId: string;
+  toBranchId: string;
+  copied: number;
+  headEventId: string | null;
+  headEventHash: string | null;
+  headStateHash: string | null;
+  lineage: Array<{
+    sourceEventId: string;
+    forkEventId: string;
+    sourceSeq: number;
+    forkSeq: number;
+    sourceEventHash: string;
+    forkEventHash: string;
+  }>;
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -345,6 +398,42 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.sql.exec(`
       CREATE INDEX idx_trajectory_channel_publications_channel
         ON trajectory_channel_publications(channel_id, channel_seq)
+    `);
+    this.sql.exec(`
+      CREATE TABLE channel_envelope_forks (
+        from_channel_id TEXT NOT NULL,
+        to_channel_id TEXT NOT NULL,
+        source_envelope_id TEXT NOT NULL,
+        fork_envelope_id TEXT NOT NULL UNIQUE,
+        source_seq INTEGER NOT NULL,
+        fork_seq INTEGER NOT NULL,
+        forked_at TEXT NOT NULL,
+        PRIMARY KEY (to_channel_id, fork_seq)
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX idx_channel_envelope_forks_source
+        ON channel_envelope_forks(from_channel_id, source_seq)
+    `);
+    this.sql.exec(`
+      CREATE TABLE trajectory_event_forks (
+        from_trajectory_id TEXT NOT NULL,
+        from_branch_id TEXT NOT NULL,
+        to_trajectory_id TEXT NOT NULL,
+        to_branch_id TEXT NOT NULL,
+        source_event_id TEXT NOT NULL,
+        fork_event_id TEXT NOT NULL UNIQUE,
+        source_seq INTEGER NOT NULL,
+        fork_seq INTEGER NOT NULL,
+        source_event_hash TEXT NOT NULL,
+        fork_event_hash TEXT NOT NULL,
+        forked_at TEXT NOT NULL,
+        PRIMARY KEY (to_trajectory_id, to_branch_id, fork_seq)
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX idx_trajectory_event_forks_source
+        ON trajectory_event_forks(from_trajectory_id, from_branch_id, source_seq)
     `);
     this.sql.exec(`
       CREATE TABLE channel_roster (
@@ -799,6 +888,302 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return envelope;
   }
 
+  forkChannelLog(input: ForkChannelLogInput): ForkChannelLogResult {
+    this.ensureReady();
+    if (!input.fromChannelId) throw new Error("forkChannelLog requires fromChannelId");
+    if (!input.toChannelId) throw new Error("forkChannelLog requires toChannelId");
+    if (input.fromChannelId === input.toChannelId) throw new Error("forkChannelLog requires distinct channels");
+
+    const targetCount = asNumber(
+      this.sql
+        .exec(`SELECT COUNT(*) AS cnt FROM channel_envelopes WHERE channel_id = ?`, input.toChannelId)
+        .one()["cnt"],
+    );
+    if (targetCount > 0) throw new Error(`target channel log already exists: ${input.toChannelId}`);
+
+    const sourceRows = this.sql
+      .exec(
+        `SELECT * FROM channel_envelopes
+         WHERE channel_id = ? AND (? IS NULL OR seq <= ?)
+         ORDER BY seq ASC`,
+        input.fromChannelId,
+        input.throughSeq ?? null,
+        input.throughSeq ?? null,
+      )
+      .toArray() as JsonRecord[];
+    const forkedAt = nowIso();
+    const prepared = sourceRows.map((row) => {
+      const source = this.mapChannelEnvelope(row);
+      const fork = {
+        ...source,
+        envelopeId: brandId<EnvelopeId>(crypto.randomUUID()),
+        channelId: brandId<ChannelId>(input.toChannelId),
+      } as ChannelEnvelope;
+      channelEnvelopeSchema.parse(fork);
+      return { source, fork };
+    });
+
+    this.transaction(() => {
+      for (const item of prepared) {
+        this.insertChannelEnvelope(item.fork);
+        this.sql.exec(
+          `INSERT INTO channel_envelope_forks (
+             from_channel_id, to_channel_id, source_envelope_id, fork_envelope_id,
+             source_seq, fork_seq, forked_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          input.fromChannelId,
+          input.toChannelId,
+          item.source.envelopeId,
+          item.fork.envelopeId,
+          item.source.seq,
+          item.fork.seq,
+          forkedAt,
+        );
+      }
+    });
+
+    return {
+      fromChannelId: input.fromChannelId,
+      toChannelId: input.toChannelId,
+      throughSeq: input.throughSeq ?? null,
+      copied: prepared.length,
+      firstSeq: prepared[0]?.fork.seq,
+      lastSeq: prepared[prepared.length - 1]?.fork.seq,
+      lineage: prepared.map((item) => ({
+        sourceEnvelopeId: String(item.source.envelopeId),
+        forkEnvelopeId: String(item.fork.envelopeId),
+        sourceSeq: item.source.seq,
+        forkSeq: item.fork.seq,
+      })),
+    };
+  }
+
+  async forkTrajectoryBranch(input: ForkTrajectoryBranchInput): Promise<ForkTrajectoryBranchResult> {
+    this.ensureReady();
+    if (!input.fromTrajectoryId) throw new Error("forkTrajectoryBranch requires fromTrajectoryId");
+    if (!input.fromBranchId) throw new Error("forkTrajectoryBranch requires fromBranchId");
+    if (!input.toTrajectoryId) throw new Error("forkTrajectoryBranch requires toTrajectoryId");
+    if (!input.toBranchId) throw new Error("forkTrajectoryBranch requires toBranchId");
+    if (input.fromTrajectoryId === input.toTrajectoryId && input.fromBranchId === input.toBranchId) {
+      throw new Error("forkTrajectoryBranch requires distinct source and target");
+    }
+
+    const targetCount = asNumber(
+      this.sql
+        .exec(
+          `SELECT COUNT(*) AS cnt FROM trajectory_events WHERE trajectory_id = ? AND branch_id = ?`,
+          input.toTrajectoryId,
+          input.toBranchId,
+        )
+        .one()["cnt"],
+    );
+    if (targetCount > 0) throw new Error(`target trajectory branch already exists: ${input.toBranchId}`);
+
+    let throughSeq = input.throughSeq ?? null;
+    let copyNone = false;
+    if (input.throughEventHash) {
+      const row = this.sql
+        .exec(
+          `SELECT seq FROM trajectory_events
+           WHERE trajectory_id = ? AND branch_id = ? AND event_hash = ?
+           LIMIT 1`,
+          input.fromTrajectoryId,
+          input.fromBranchId,
+          input.throughEventHash,
+        )
+        .toArray()[0] as JsonRecord | undefined;
+      if (!row) throw new Error("forkTrajectoryBranch throughEventHash not found");
+      throughSeq = asNumber(row["seq"]);
+    }
+    if (input.throughPublishedChannelId && input.throughPublishedChannelSeq != null) {
+      const row = this.sql
+        .exec(
+          `SELECT MAX(e.seq) AS seq
+           FROM trajectory_channel_publications p
+           JOIN trajectory_events e ON e.event_id = p.event_id
+           WHERE p.trajectory_id = ?
+             AND p.branch_id = ?
+             AND p.channel_id = ?
+             AND p.channel_seq <= ?`,
+          input.fromTrajectoryId,
+          input.fromBranchId,
+          input.throughPublishedChannelId,
+          input.throughPublishedChannelSeq,
+        )
+        .toArray()[0] as JsonRecord | undefined;
+      if (row?.["seq"] == null) {
+        copyNone = true;
+      } else {
+        throughSeq = asNumber(row["seq"]);
+      }
+    }
+
+    const sourceHead = this.getTrajectoryBranchHead({
+      trajectoryId: input.fromTrajectoryId,
+      branchId: input.fromBranchId,
+    });
+    const owner = input.owner ?? (parseJson(asString(sourceHead?.["owner_json"])) as { kind: "agent"; id: string } | null) ?? {
+      kind: "agent" as const,
+      id: "unknown",
+    };
+    const sourceRows = copyNone
+      ? []
+      : this.sql
+          .exec(
+            `SELECT * FROM trajectory_events
+             WHERE trajectory_id = ? AND branch_id = ? AND (? IS NULL OR seq <= ?)
+             ORDER BY seq ASC`,
+            input.fromTrajectoryId,
+            input.fromBranchId,
+            throughSeq,
+            throughSeq,
+          )
+          .toArray() as JsonRecord[];
+
+    let prevEventHash = GENESIS_EVENT_HASH;
+    const forkedAt = nowIso();
+    const prepared: Array<{ source: TrajectoryEvent; fork: TrajectoryEvent }> = [];
+    for (const row of sourceRows) {
+      const source = this.mapTrajectoryEvent(row);
+      const eventForHash = agenticEventSchema.parse({
+        kind: source.kind,
+        actor: source.actor,
+        turnId: source.turnId,
+        causality: source.causality,
+        payload: source.payload,
+        createdAt: source.createdAt,
+      }) as AgenticEvent;
+      const eventHash = await computeEventHash({
+        prevEventHash,
+        branchId: input.toBranchId,
+        seq: source.seq,
+        event: eventForHash,
+      });
+      const fork = {
+        ...eventForHash,
+        eventId: crypto.randomUUID(),
+        trajectoryId: input.toTrajectoryId,
+        branchId: input.toBranchId,
+        seq: source.seq,
+        prevEventHash,
+        eventHash,
+      } as unknown as TrajectoryEvent;
+      trajectoryEventSchema.parse(fork);
+      prepared.push({ source, fork });
+      prevEventHash = eventHash;
+    }
+
+    this.transaction(() => {
+      this.sql.exec(
+        `INSERT INTO trajectory_branches (
+           trajectory_id, branch_id, owner_json, head_state_hash, parent_branch_id,
+           fork_event_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        input.toTrajectoryId,
+        input.toBranchId,
+        JSON.stringify(owner),
+        EMPTY_STATE_HASH,
+        input.fromBranchId,
+        prepared[prepared.length - 1]?.source.eventId ?? null,
+        forkedAt,
+        forkedAt,
+      );
+
+      for (const item of prepared) {
+        this.insertTrajectoryEvent(item.fork);
+        this.applyTrajectoryProjection(item.fork);
+        this.sql.exec(
+          `INSERT INTO trajectory_event_forks (
+             from_trajectory_id, from_branch_id, to_trajectory_id, to_branch_id,
+             source_event_id, fork_event_id, source_seq, fork_seq,
+             source_event_hash, fork_event_hash, forked_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          input.fromTrajectoryId,
+          input.fromBranchId,
+          input.toTrajectoryId,
+          input.toBranchId,
+          item.source.eventId,
+          item.fork.eventId,
+          item.source.seq,
+          item.fork.seq,
+          item.source.eventHash,
+          item.fork.eventHash,
+          forkedAt,
+        );
+        if (input.throughPublishedChannelId && input.toPublishedChannelId) {
+          const publicationRows = this.sql
+            .exec(
+              `SELECT
+                 f.to_channel_id AS to_channel_id,
+                 f.fork_envelope_id AS fork_envelope_id,
+                 f.fork_seq AS fork_seq,
+                 e.published_at AS fork_published_at
+               FROM trajectory_channel_publications p
+               JOIN channel_envelope_forks f
+                 ON f.from_channel_id = p.channel_id
+                AND f.source_envelope_id = p.envelope_id
+                AND f.to_channel_id = ?
+               JOIN channel_envelopes e ON e.envelope_id = f.fork_envelope_id
+               WHERE p.event_id = ? AND p.channel_id = ?`,
+              input.toPublishedChannelId,
+              item.source.eventId,
+              input.throughPublishedChannelId,
+            )
+            .toArray() as JsonRecord[];
+          for (const row of publicationRows) {
+            const forkEnvelopeId = asString(row["fork_envelope_id"]);
+            if (!forkEnvelopeId) throw new Error("forked channel envelope missing for trajectory publication");
+            this.insertChannelPublication({
+              eventId: item.fork.eventId,
+              trajectoryId: input.toTrajectoryId,
+              branchId: input.toBranchId,
+              channelId: asString(row["to_channel_id"]) ?? input.toPublishedChannelId,
+              channelSeq: asNumber(row["fork_seq"]),
+              envelopeId: forkEnvelopeId,
+              publishedAt: asString(row["fork_published_at"]) ?? forkedAt,
+            });
+          }
+        }
+      }
+
+      const last = prepared[prepared.length - 1]?.fork;
+      this.sql.exec(
+        `UPDATE trajectory_branches
+         SET head_event_id = ?, head_event_hash = ?, head_state_hash = ?, updated_at = ?
+         WHERE trajectory_id = ? AND branch_id = ?`,
+        last?.eventId ?? null,
+        last?.eventHash ?? null,
+        this.latestStateHash(input.toBranchId),
+        forkedAt,
+        input.toTrajectoryId,
+        input.toBranchId,
+      );
+    });
+
+    const head = this.getTrajectoryBranchHead({
+      trajectoryId: input.toTrajectoryId,
+      branchId: input.toBranchId,
+    });
+    return {
+      fromTrajectoryId: input.fromTrajectoryId,
+      fromBranchId: input.fromBranchId,
+      toTrajectoryId: input.toTrajectoryId,
+      toBranchId: input.toBranchId,
+      copied: prepared.length,
+      headEventId: asString(head?.["head_event_id"]),
+      headEventHash: asString(head?.["head_event_hash"]),
+      headStateHash: asString(head?.["head_state_hash"]) ?? EMPTY_STATE_HASH,
+      lineage: prepared.map((item) => ({
+        sourceEventId: String(item.source.eventId),
+        forkEventId: String(item.fork.eventId),
+        sourceSeq: item.source.seq,
+        forkSeq: item.fork.seq,
+        sourceEventHash: item.source.eventHash,
+        forkEventHash: item.fork.eventHash,
+      })),
+    };
+  }
+
   getChannelEnvelope(input: { envelopeId: string }): ChannelEnvelope | null {
     this.ensureReady();
     const row = this.sql
@@ -820,9 +1205,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     if (input.mode === "after") {
       rows = this.sql
         .exec(
-          `SELECT * FROM channel_envelopes WHERE channel_id = ? AND seq > ? ORDER BY seq ASC`,
+          `SELECT * FROM channel_envelopes WHERE channel_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?`,
           input.channelId,
           input.sinceSeq ?? 0,
+          limit,
         )
         .toArray() as JsonRecord[];
     } else if (input.mode === "before") {

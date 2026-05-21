@@ -2231,7 +2231,7 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     _newChannelId: string,
     _forkAtMessageIndex: number | null
   ): Promise<void> {
-    // Trajectory branch forking is handled by the trajectory append layer.
+    // Extension hook for subclasses that maintain additional forkable state.
   }
 
   private async forkPiBranchForClone(
@@ -2239,6 +2239,16 @@ export abstract class AgentWorkerBase extends DurableObjectBase {
     newChannelId: string,
     forkAtMessageIndex: number | null
   ): Promise<void> {
+    await this.gad.call("forkTrajectoryBranch", {
+      fromTrajectoryId: gadBranchIdForChannel(oldChannelId),
+      fromBranchId: gadBranchIdForChannel(oldChannelId),
+      toTrajectoryId: gadBranchIdForChannel(newChannelId),
+      toBranchId: gadBranchIdForChannel(newChannelId),
+      throughPublishedChannelId: forkAtMessageIndex == null ? null : oldChannelId,
+      throughPublishedChannelSeq: forkAtMessageIndex,
+      toPublishedChannelId: newChannelId,
+      owner: { kind: "agent", id: this.getOwnCanonicalId() },
+    });
     await this.onForkRequested(oldChannelId, newChannelId, forkAtMessageIndex);
   }
 

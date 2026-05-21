@@ -4,6 +4,8 @@ import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 import { GadWorkspaceDO } from "../gad-store/index.js";
 import { PubSubChannel } from "./channel-do.js";
 
+type TestDO<T> = Awaited<ReturnType<typeof createTestDO<T>>>;
+
 function setRpcCaller(instance: PubSubChannel, callerId: string | null, callerKind: string | null): void {
   (instance as unknown as { _currentRpcCallerId: string | null })._currentRpcCallerId = callerId;
   (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind = callerKind;
@@ -19,9 +21,13 @@ function agenticEvent(kind = "message.completed") {
   };
 }
 
-async function createGadBackedChannel(options: { emitted?: unknown[] } = {}) {
-  const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
-  const channel = await createTestDO(PubSubChannel, { __objectKey: "channel-1" });
+async function createGadBackedChannel(options: {
+  emitted?: unknown[];
+  channelKey?: string;
+  gad?: TestDO<GadWorkspaceDO>;
+} = {}) {
+  const gad = options.gad ?? await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
+  const channel = await createTestDO(PubSubChannel, { __objectKey: options.channelKey ?? "channel-1" });
   const gadTarget = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
   (channel.instance as unknown as {
     _rpc: {
@@ -149,6 +155,44 @@ describe("PubSubChannel", () => {
     });
   });
 
+  it("forks the GAD-backed channel log during postClone", async () => {
+    const parent = await createGadBackedChannel({ channelKey: "channel-parent" });
+    setRpcCaller(parent.instance, "panel:user", "panel");
+    await parent.instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+    await parent.instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent("message.completed"));
+    await parent.instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, {
+      ...agenticEvent("message.completed"),
+      causality: { messageId: "msg-2" },
+    });
+
+    const fork = await createGadBackedChannel({
+      channelKey: "channel-fork",
+      gad: parent.gad,
+    });
+    await fork.instance.postClone("channel-parent", 3);
+
+    const replay = await fork.instance.getReplayAfter(0);
+    expect(replay.logEvents.map((event) => event.id)).toEqual([1, 2, 3]);
+    const messages = replay.logEvents.filter((event) => event.type === AGENTIC_EVENT_PAYLOAD_KIND);
+    expect(messages.map((event) => (event.payload as { causality: { messageId: string } }).causality.messageId)).toEqual([
+      "msg-1",
+      "msg-2",
+    ]);
+    expect(replay.ready).toMatchObject({
+      totalCount: 3,
+      envelopeCount: 3,
+      firstEnvelopeSeq: 1,
+    });
+
+    setRpcCaller(fork.instance, "panel:user", "panel");
+    await fork.instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, {
+      ...agenticEvent("message.completed"),
+      causality: { messageId: "msg-fork" },
+    });
+    const afterForkAppend = await fork.instance.getReplayAfter(3);
+    expect(afterForkAppend.logEvents.map((event) => event.id)).toEqual([4]);
+  });
+
   it("routes by transport id but publishes terminal events under the canonical invocation id", async () => {
     const { instance, gad } = await createGadBackedChannel();
 
@@ -173,9 +217,9 @@ describe("PubSubChannel", () => {
       `SELECT payload_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
       AGENTIC_EVENT_PAYLOAD_KIND,
     ).toArray();
-    const events = rows.map((row) => JSON.parse(row["payload_json"] as string));
-    const started = events.find((event) => event.kind === "invocation.started");
-    const cancelled = events.find((event) => event.kind === "invocation.cancelled");
+    const events = rows.map((row: Record<string, unknown>) => JSON.parse(row["payload_json"] as string));
+    const started = events.find((event: { kind?: string }) => event.kind === "invocation.started");
+    const cancelled = events.find((event: { kind?: string }) => event.kind === "invocation.cancelled");
 
     expect(started).toMatchObject({
       turnId: "turn-1",

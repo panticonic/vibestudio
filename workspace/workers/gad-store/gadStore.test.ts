@@ -3,6 +3,7 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
+  checkTrajectoryIntegrity,
   type AgenticEvent,
 } from "@workspace/agentic-protocol";
 import { GadWorkspaceDO } from "./index.js";
@@ -264,6 +265,203 @@ describe("GadWorkspaceDO trajectory persistence", () => {
       hasMoreBefore: true,
       envelopes: [expect.objectContaining({ envelopeId: "env-2" })],
     });
+  });
+
+  it("bounds replay-after windows and forks channel logs with preserved sequence lineage", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    for (const value of [1, 2, 3]) {
+      await call("appendChannelEnvelope", {
+        channelId: "channel-parent",
+        envelopeId: `env-${value}`,
+        from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+        payloadKind: "custom.kind",
+        payload: { value },
+        publishedAt: `2026-05-20T12:00:0${value}.000Z`,
+      });
+    }
+
+    const limited = await call<any>("getChannelReplayWindow", {
+      channelId: "channel-parent",
+      mode: "after",
+      sinceSeq: 1,
+      limit: 1,
+    });
+    expect(limited.envelopes.map((envelope: any) => envelope.seq)).toEqual([2]);
+
+    const result = await call<any>("forkChannelLog", {
+      fromChannelId: "channel-parent",
+      toChannelId: "channel-fork",
+      throughSeq: 2,
+    });
+    expect(result).toMatchObject({
+      fromChannelId: "channel-parent",
+      toChannelId: "channel-fork",
+      copied: 2,
+      firstSeq: 1,
+      lastSeq: 2,
+    });
+    expect(result.lineage).toHaveLength(2);
+    expect(result.lineage[0]).toMatchObject({ sourceEnvelopeId: "env-1", sourceSeq: 1, forkSeq: 1 });
+    expect(result.lineage[0].forkEnvelopeId).not.toBe("env-1");
+
+    const forked = await call<any[]>("listChannelEnvelopesAfter", {
+      channelId: "channel-fork",
+      seq: 0,
+      limit: 10,
+    });
+    expect(forked.map((envelope) => [envelope.seq, envelope.payload.value])).toEqual([
+      [1, 1],
+      [2, 2],
+    ]);
+    expect(forked.map((envelope) => envelope.envelopeId)).not.toContain("env-1");
+
+    await call("appendChannelEnvelope", {
+      channelId: "channel-fork",
+      envelopeId: "env-fork-new",
+      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      payloadKind: "custom.kind",
+      payload: { value: 4 },
+    });
+    const afterForkAppend = await call<any[]>("listChannelEnvelopesAfter", {
+      channelId: "channel-fork",
+      seq: 2,
+      limit: 10,
+    });
+    expect(afterForkAppend).toEqual([expect.objectContaining({ envelopeId: "env-fork-new", seq: 3 })]);
+
+    const lineageRows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT source_envelope_id, fork_envelope_id, source_seq, fork_seq FROM channel_envelope_forks ORDER BY fork_seq",
+      [],
+    );
+    expect(lineageRows.rows).toEqual(result.lineage.map((row: any) => ({
+      source_envelope_id: row.sourceEnvelopeId,
+      fork_envelope_id: row.forkEnvelopeId,
+      source_seq: row.sourceSeq,
+      fork_seq: row.forkSeq,
+    })));
+  });
+
+  it("forks trajectory branches through a published channel sequence without copying later private state", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const result = await call<any>("appendTrajectoryBatch", {
+      trajectoryId: "branch:channel:parent",
+      branchId: "branch:channel:parent",
+      owner,
+      events: [
+        {
+          eventId: "event-private-before",
+          event: event("system.event", {
+            turnId: "turn-1" as never,
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              kind: "private-before",
+              details: { value: 1 },
+            },
+          }),
+        },
+        {
+          eventId: "event-public-message",
+          event: event("message.completed", {
+            turnId: "turn-1" as never,
+            causality: { messageId: "msg-public" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              role: "assistant",
+              content: "visible at fork point",
+            },
+          }),
+          publish: { channelIds: ["channel-parent"] },
+        },
+        {
+          eventId: "event-private-after",
+          event: event("system.event", {
+            turnId: "turn-2" as never,
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              kind: "private-after",
+              details: { value: 2 },
+            },
+          }),
+        },
+      ],
+    });
+    const publishedSeq = (await call<any[]>("listChannelEnvelopesAfter", {
+      channelId: "channel-parent",
+      seq: 0,
+      limit: 10,
+    }))[0].seq;
+    const channelFork = await call<any>("forkChannelLog", {
+      fromChannelId: "channel-parent",
+      toChannelId: "channel-fork",
+      throughSeq: publishedSeq,
+    });
+
+    const fork = await call<any>("forkTrajectoryBranch", {
+      fromTrajectoryId: "branch:channel:parent",
+      fromBranchId: "branch:channel:parent",
+      toTrajectoryId: "branch:channel:fork",
+      toBranchId: "branch:channel:fork",
+      throughPublishedChannelId: "channel-parent",
+      throughPublishedChannelSeq: publishedSeq,
+      toPublishedChannelId: "channel-fork",
+      owner,
+    });
+    expect(fork.copied).toBe(2);
+    expect(fork.lineage.map((row: any) => row.sourceEventId)).toEqual([
+      "event-private-before",
+      "event-public-message",
+    ]);
+    expect(fork.headEventHash).toBe(fork.lineage[1].forkEventHash);
+
+    const events = await call<any[]>("listTrajectoryEvents", {
+      trajectoryId: "branch:channel:fork",
+      branchId: "branch:channel:fork",
+      limit: 0,
+    });
+    expect(events.map((row) => row.kind)).toEqual(["system.event", "message.completed"]);
+    expect(events.map((row) => row.eventId)).not.toContain("event-private-after");
+    expect(() => checkTrajectoryIntegrity(events)).not.toThrow();
+
+    const messages = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT message_id, body_assembled, status FROM trajectory_messages WHERE branch_id = ?",
+      ["branch:channel:fork"],
+    );
+    expect(messages.rows).toEqual([
+      expect.objectContaining({
+        message_id: "msg-public",
+        body_assembled: "visible at fork point",
+        status: "completed",
+      }),
+    ]);
+
+    const head = await call<any>("getTrajectoryBranchHead", {
+      trajectoryId: "branch:channel:fork",
+      branchId: "branch:channel:fork",
+    });
+    expect(head).toMatchObject({
+      parent_branch_id: "branch:channel:parent",
+      fork_event_id: "event-public-message",
+      head_event_hash: fork.headEventHash,
+    });
+    const forkedPublicLineage = await call<any>("getTrajectoryForEnvelope", {
+      envelopeId: channelFork.lineage[0].forkEnvelopeId,
+    });
+    expect(forkedPublicLineage).toMatchObject({
+      publication: {
+        eventId: fork.lineage[1].forkEventId,
+        trajectoryId: "branch:channel:fork",
+        branchId: "branch:channel:fork",
+        channelId: "channel-fork",
+        channelSeq: publishedSeq,
+      },
+      trajectoryEvent: {
+        eventId: fork.lineage[1].forkEventId,
+        kind: "message.completed",
+      },
+    });
+    expect(result.events.map((row: any) => row.eventId)).toContain("event-private-after");
   });
 
   it("keeps side trajectory events private while joining a published summary back to downstream consumers", async () => {
