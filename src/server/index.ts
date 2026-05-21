@@ -587,6 +587,47 @@ async function main() {
     sessionGrantStore: credentialSessionGrantStore,
     credentialLifecycle,
   });
+  let panelRuntimeCoordinatorForCleanup:
+    | import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator
+    | null = null;
+  const cleanupRuntimeEntityRecord = async (
+    record: import("@natstack/shared/runtime/entitySpec").EntityRecord
+  ) => {
+    const { cleanupRuntimeEntity } = await import("./runtimeEntityCleanup.js");
+    await cleanupRuntimeEntity(record, {
+      panelRuntimeCoordinator: panelRuntimeCoordinatorForCleanup,
+      egressProxy,
+      approvalQueue,
+      credentialSessionGrantStore,
+      tokenManager,
+      connectionGrants,
+      getFsService: () => {
+        try {
+          return container.get<import("@natstack/shared/fsService").FsService>("fsService");
+        } catch {
+          return null;
+        }
+      },
+      getWebhookIngress: () => {
+        try {
+          return container.get<{
+            internal?: {
+              revokeForCaller?: (callerId: string) => Promise<number>;
+            };
+          }>("webhookIngress");
+        } catch {
+          return null;
+        }
+      },
+      getWorkerdManager: () => {
+        try {
+          return container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
+        } catch {
+          return null;
+        }
+      },
+    });
+  };
   // In pnpm dev mode, the app runs from a throwaway workspace copied from
   // `<appRoot>/workspace`. Mirror accepted pushes back to that template so
   // edits made in the generated workspace persist into the source checkout.
@@ -1157,33 +1198,7 @@ async function main() {
               return buildSystem.getEffectiveVersion(source) ?? "";
             },
             onRetire: async (record) => {
-              await egressProxy.dropCaller(record.id).catch(() => {});
-              approvalQueue.cancelForCaller(record.id);
-              credentialSessionGrantStore.dropForCaller(record.id);
-              try {
-                const fsServiceInst =
-                  container.get<import("@natstack/shared/fsService").FsService>("fsService");
-                fsServiceInst?.closeHandlesForCaller(record.id);
-              } catch {
-                // fsService not started yet at retire time — safe to skip
-              }
-              try {
-                const webhookHolder = container.get<{
-                  internal?: {
-                    revokeForCaller?: (callerId: string) => Promise<number>;
-                  };
-                }>("webhookIngress");
-                await webhookHolder?.internal?.revokeForCaller?.(record.id);
-              } catch {
-                // webhookIngress not registered (eg. tests) — safe to skip
-              }
-              tokenManager.revokeToken(record.id);
-              if (record.kind === "worker") {
-                await workerdManager.stopWorker(record.id).catch(() => {});
-              }
-              if (record.kind === "do") {
-                await workerdManager.destroyDOEntity(record.id).catch(() => {});
-              }
+              await cleanupRuntimeEntityRecord(record);
             },
           },
           capability: {
@@ -1281,6 +1296,7 @@ async function main() {
   let gatewayPortResolved: number | null = null;
   const { PanelRuntimeCoordinator } = await import("./panelRuntimeCoordinator.js");
   const panelRuntimeCoordinator = new PanelRuntimeCoordinator({ eventService });
+  panelRuntimeCoordinatorForCleanup = panelRuntimeCoordinator;
 
   // ── RPC server (always present) ──
   let rpcServerForGateway: import("./rpcServer.js").RpcServer | null = null;
@@ -2133,33 +2149,7 @@ async function main() {
     doDispatch: doDispatchForBootstrap,
     workspaceDORef: workspaceDORefForBootstrap,
     onRetire: async (record) => {
-      await egressProxy.dropCaller(record.id).catch(() => {});
-      approvalQueue.cancelForCaller(record.id);
-      credentialSessionGrantStore.dropForCaller(record.id);
-      try {
-        const fsServiceInst =
-          container.get<import("@natstack/shared/fsService").FsService>("fsService");
-        fsServiceInst?.closeHandlesForCaller(record.id);
-      } catch {
-        // fsService gone at reaper time — safe to skip
-      }
-      try {
-        const webhookHolder = container.get<{
-          internal?: {
-            revokeForCaller?: (callerId: string) => Promise<number>;
-          };
-        }>("webhookIngress");
-        await webhookHolder?.internal?.revokeForCaller?.(record.id);
-      } catch {
-        // webhookIngress not present — skip
-      }
-      tokenManager.revokeToken(record.id);
-      if (record.kind === "worker") {
-        await workerdManager.stopWorker(record.id).catch(() => {});
-      }
-      if (record.kind === "do") {
-        await workerdManager.destroyDOEntity(record.id).catch(() => {});
-      }
+      await cleanupRuntimeEntityRecord(record);
     },
     logger: { warn: (msg, ...args) => console.warn(msg, ...args) },
   });

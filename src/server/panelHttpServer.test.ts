@@ -118,6 +118,18 @@ describe("PanelHttpServer build cache", () => {
     expect(server.hasBuild("panels/my-app", "feature")).toBe(false);
   });
 
+  it("assigns monotonically increasing build revisions by cache entry", () => {
+    const server = new PanelHttpServer();
+    server.storeBuild("panels/my-app", buildResult);
+    const firstRevision = server.getBuildRevision("panels/my-app");
+    server.storeBuild("panels/my-app", buildResult, "feature");
+    const secondRevision = server.getBuildRevision("panels/my-app", "feature");
+
+    expect(firstRevision).toBeGreaterThan(0);
+    expect(secondRevision).toBeGreaterThan(firstRevision ?? 0);
+    expect(server.getBuildRevision("panels/other")).toBeUndefined();
+  });
+
   it("invalidateBuild removes cached build", () => {
     const server = new PanelHttpServer();
     server.storeBuild("panels/my-app", buildResult);

@@ -8,11 +8,13 @@ import type {
   RuntimeLeaseSnapshot,
   RuntimeLeaseVersion,
 } from "@natstack/shared/panel/panelLease";
+import { asPanelEntityId, asPanelSlotId } from "@natstack/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@natstack/shared/panel/ids";
 
 const LEASE_RECONNECT_GRACE_MS = 3000;
 
 export type RuntimeLeaseClose = (
-  panelId: string,
+  runtimeEntityId: string,
   connectionId: string,
   code: number,
   reason: string
@@ -21,7 +23,7 @@ export type RuntimeLeaseClose = (
 export class PanelRuntimeCoordinator {
   private readonly epoch = randomUUID();
   private counter = 0;
-  private leases = new Map<string, PanelRuntimeLease>();
+  private leases = new Map<PanelEntityId, PanelRuntimeLease>();
   private clients = new Map<string, ClientSession>();
   private expiryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private closeConnection: RuntimeLeaseClose | null = null;
@@ -55,53 +57,77 @@ export class PanelRuntimeCoordinator {
     };
   }
 
-  getLease(panelId: string): PanelRuntimeLease | null {
-    return this.leases.get(panelId) ?? null;
+  getLease(runtimeEntityId: string): PanelRuntimeLease | null {
+    return this.leases.get(asPanelEntityId(runtimeEntityId)) ?? null;
   }
 
   acquire(
-    panelId: string,
-    input: { clientSessionId: string; connectionId: string }
+    runtimeEntityId: string,
+    input: { slotId: string; clientSessionId: string; connectionId: string }
   ): PanelRuntimeAcquireResult {
-    const existing = this.leases.get(panelId);
-    if (existing && existing.connectionId !== input.connectionId) {
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const existing = this.leases.get(entityId);
+    if (
+      existing &&
+      existing.connectionId !== input.connectionId &&
+      existing.clientSessionId !== input.clientSessionId
+    ) {
       return { acquired: false, lease: existing };
     }
-    return { acquired: true, lease: this.writeLease(panelId, input, "acquired") };
+    return { acquired: true, lease: this.writeLease(entityId, input, "acquired") };
   }
 
   takeOver(
-    panelId: string,
-    input: { clientSessionId: string; connectionId: string }
+    runtimeEntityId: string,
+    input: { slotId: string; clientSessionId: string; connectionId: string }
   ): PanelRuntimeAcquireResult {
-    const existing = this.leases.get(panelId);
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const existing = this.leases.get(entityId);
     if (existing && existing.connectionId !== input.connectionId) {
-      this.closeConnection?.(panelId, existing.connectionId, 4091, "Panel runtime lease revoked");
-      this.emitChange(panelId, existing, null, "revoked");
+      this.closeConnection?.(
+        runtimeEntityId,
+        existing.connectionId,
+        4091,
+        "Panel runtime lease revoked"
+      );
+      this.emitChange(entityId, existing.slotId, existing, null, "revoked");
     }
-    return { acquired: true, lease: this.writeLease(panelId, input, "acquired") };
+    return { acquired: true, lease: this.writeLease(entityId, input, "acquired") };
   }
 
   release(
-    panelId: string,
+    runtimeEntityId: string,
     connectionId: string,
     reason: PanelRuntimeLeaseChangedReason = "released"
   ): void {
-    const existing = this.leases.get(panelId);
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const existing = this.leases.get(entityId);
     if (!existing || existing.connectionId !== connectionId) return;
-    this.clearExpiry(panelId);
-    this.leases.delete(panelId);
-    this.emitChange(panelId, existing, null, reason);
+    this.clearExpiry(entityId);
+    this.leases.delete(entityId);
+    this.emitChange(entityId, existing.slotId, existing, null, reason);
+  }
+
+  retireRuntimeEntity(runtimeEntityId: string): void {
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const existing = this.leases.get(entityId);
+    if (!existing) return;
+    this.clearExpiry(entityId);
+    this.leases.delete(entityId);
+    this.closeConnection?.(
+      runtimeEntityId,
+      existing.connectionId,
+      4093,
+      "Panel runtime entity retired"
+    );
+    this.emitChange(entityId, existing.slotId, existing, null, "retired");
   }
 
   authorizePanelConnection(
-    panelId: string,
+    runtimeEntityId: string,
     connectionId: string
   ): { ok: true } | { ok: false; reason: string } {
-    // `panelId` is the WS callerId — the panel ENTITY id under the entity
-    // model — and the lease is keyed by the same entity id (the orchestrator
-    // resolves slotId → entityId before calling panelRuntime.acquire).
-    const lease = this.leases.get(panelId);
+    const lease = this.leases.get(asPanelEntityId(runtimeEntityId));
     if (!lease) return { ok: false, reason: "Panel runtime has no active lease" };
     if (lease.connectionId !== connectionId) {
       return { ok: false, reason: `Panel runtime is leased by ${lease.holderLabel}` };
@@ -109,66 +135,70 @@ export class PanelRuntimeCoordinator {
     return { ok: true };
   }
 
-  markConnected(panelId: string, connectionId: string): void {
-    const lease = this.leases.get(panelId);
+  markConnected(runtimeEntityId: string, connectionId: string): void {
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) return;
-    this.clearExpiry(panelId);
+    this.clearExpiry(entityId);
     if (lease.expiresAt !== undefined) {
       const next = { ...lease };
       delete next.expiresAt;
-      this.leases.set(panelId, next);
-      this.emitChange(panelId, lease, next, "acquired");
+      this.leases.set(entityId, next);
+      this.emitChange(entityId, lease.slotId, lease, next, "acquired");
     }
   }
 
-  markDisconnected(panelId: string, connectionId: string): void {
-    const lease = this.leases.get(panelId);
+  markDisconnected(runtimeEntityId: string, connectionId: string): void {
+    const entityId = asPanelEntityId(runtimeEntityId);
+    const lease = this.leases.get(entityId);
     if (!lease || lease.connectionId !== connectionId) return;
-    this.clearExpiry(panelId);
+    this.clearExpiry(entityId);
     const expiresAt = Date.now() + LEASE_RECONNECT_GRACE_MS;
     const next = { ...lease, expiresAt };
-    this.leases.set(panelId, next);
-    this.emitChange(panelId, lease, next, "released");
+    this.leases.set(entityId, next);
+    this.emitChange(entityId, lease.slotId, lease, next, "released");
     this.expiryTimers.set(
-      panelId,
+      entityId,
       setTimeout(() => {
-        this.release(panelId, connectionId, "expired");
+        this.release(runtimeEntityId, connectionId, "expired");
       }, LEASE_RECONNECT_GRACE_MS)
     );
   }
 
-  resolveRouteConnection(panelId: string): string | null {
-    return this.leases.get(panelId)?.connectionId ?? null;
+  resolveRouteConnection(runtimeEntityId: string): string | null {
+    return this.leases.get(asPanelEntityId(runtimeEntityId))?.connectionId ?? null;
   }
 
   private writeLease(
-    panelId: string,
-    input: { clientSessionId: string; connectionId: string },
+    runtimeEntityId: PanelEntityId,
+    input: { slotId: string; clientSessionId: string; connectionId: string },
     reason: PanelRuntimeLeaseChangedReason
   ): PanelRuntimeLease {
     const client = this.clients.get(input.clientSessionId);
     if (!client) {
       throw new Error(`Unknown runtime client session: ${input.clientSessionId}`);
     }
-    const previous = this.leases.get(panelId) ?? null;
-    this.clearExpiry(panelId);
+    const slotId = asPanelSlotId(input.slotId);
+    const previous = this.leases.get(runtimeEntityId) ?? null;
+    this.clearExpiry(runtimeEntityId);
     const lease: PanelRuntimeLease = {
-      panelId,
+      slotId,
+      runtimeEntityId,
       clientSessionId: input.clientSessionId,
       connectionId: input.connectionId,
       holderLabel: client.label,
       platform: client.platform,
       acquiredAt: Date.now(),
     };
-    this.leases.set(panelId, lease);
-    this.emitChange(panelId, previous, lease, reason);
+    this.leases.set(runtimeEntityId, lease);
+    this.emitChange(runtimeEntityId, slotId, previous, lease, reason);
     return lease;
   }
 
-  private clearExpiry(panelId: string): void {
-    const timer = this.expiryTimers.get(panelId);
+  private clearExpiry(runtimeEntityId: PanelEntityId): void {
+    const timer = this.expiryTimers.get(runtimeEntityId);
     if (timer) clearTimeout(timer);
-    this.expiryTimers.delete(panelId);
+    this.expiryTimers.delete(runtimeEntityId);
   }
 
   private currentVersion(): RuntimeLeaseVersion {
@@ -181,7 +211,8 @@ export class PanelRuntimeCoordinator {
   }
 
   private emitChange(
-    panelId: string,
+    runtimeEntityId: PanelEntityId,
+    slotId: PanelSlotId,
     previous: PanelRuntimeLease | null,
     next: PanelRuntimeLease | null,
     reason: PanelRuntimeLeaseChangedReason
@@ -189,7 +220,8 @@ export class PanelRuntimeCoordinator {
     this.deps.eventService?.emit("panel:runtimeLeaseChanged", {
       type: "panel:runtimeLeaseChanged",
       version: this.nextVersion(),
-      panelId,
+      slotId,
+      runtimeEntityId,
       previous,
       next,
       reason,

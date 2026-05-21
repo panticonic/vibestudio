@@ -95,6 +95,7 @@ function createServer() {
     platform: "desktop",
   });
   runtimeCoordinator.acquire("panel-a", {
+    slotId: "slot-a",
     clientSessionId: "test-desktop",
     connectionId: "conn-1",
   });
@@ -444,6 +445,7 @@ describe("RpcServer relay behavior", () => {
 
       const reconnectedWs = createTestWs();
       runtimeCoordinator.takeOver("panel-a", {
+        slotId: "slot-a",
         clientSessionId: "test-desktop",
         connectionId: "conn-2",
       });

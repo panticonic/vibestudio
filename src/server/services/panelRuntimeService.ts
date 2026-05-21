@@ -11,6 +11,7 @@ const registerClientSchema = z.object({
 });
 
 const leaseRequestSchema = z.object({
+  slotId: z.string().min(1),
   clientSessionId: z.string().min(1),
   connectionId: z.string().min(1),
 });

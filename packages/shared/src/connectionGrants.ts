@@ -22,7 +22,7 @@ export class ConnectionGrantService {
   grant(
     principalId: string,
     issuedBy: string,
-    ttlMs: number = 60_000,
+    ttlMs: number = 60_000
   ): { token: string; expiresAt: number } {
     if (!this.entityCache.resolveActive(principalId)) {
       throw new Error(`Cannot grant connection for unregistered principal: ${principalId}`);
@@ -39,6 +39,17 @@ export class ConnectionGrantService {
     this.grants.delete(token);
     if (grant.expiresAt <= Date.now()) return null;
     return { principalId: grant.principalId, issuedBy: grant.issuedBy };
+  }
+
+  revokeForPrincipal(principalId: string): number {
+    let revoked = 0;
+    for (const [token, grant] of this.grants) {
+      if (grant.principalId === principalId) {
+        this.grants.delete(token);
+        revoked++;
+      }
+    }
+    return revoked;
   }
 
   stop(): void {

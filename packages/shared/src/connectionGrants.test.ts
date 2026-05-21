@@ -44,4 +44,20 @@ describe("ConnectionGrantService", () => {
     expect(grants.redeem(token)).toBeNull();
     grants.stop();
   });
+
+  it("revokes pending grants for a retired principal", () => {
+    const entityCache = new EntityCache();
+    entityCache._onActivate(makePanelRecord("panel:one"));
+    entityCache._onActivate(makePanelRecord("panel:two"));
+    const grants = new ConnectionGrantService({ entityCache });
+    const first = grants.grant("panel:one", "shell:test").token;
+    const second = grants.grant("panel:one", "shell:test").token;
+    const other = grants.grant("panel:two", "shell:test").token;
+
+    expect(grants.revokeForPrincipal("panel:one")).toBe(2);
+    expect(grants.redeem(first)).toBeNull();
+    expect(grants.redeem(second)).toBeNull();
+    expect(grants.redeem(other)).toEqual({ principalId: "panel:two", issuedBy: "shell:test" });
+    grants.stop();
+  });
 });

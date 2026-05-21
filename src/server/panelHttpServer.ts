@@ -79,6 +79,7 @@ interface CachedBuild {
   css?: string;
   assets?: Record<string, { content: string; encoding?: string }>;
   metadata: BuildMetadata;
+  revision: number;
 }
 
 /** MIME types for serving panel assets */
@@ -146,6 +147,7 @@ export class PanelHttpServer {
 
   /** Build errors: source -> error message (surface to next request) */
   private buildErrors = new Map<string, string>();
+  private buildRevisionCounter = 0;
 
   private port: number | null = null;
   private host: string;
@@ -257,12 +259,14 @@ export class PanelHttpServer {
       throw new Error(`Build result for ${source} missing HTML or bundle`);
     }
 
+    const revision = ++this.buildRevisionCounter;
     this.servingCache.set(this.buildCacheKey(source, ref), {
       html: buildResult.html,
       bundle: buildResult.bundle,
       css: buildResult.css,
       assets: buildResult.assets,
       metadata: buildResult.metadata,
+      revision,
     });
 
     log.info(`Stored build: ${this.buildCacheKey(source, ref)}`);
@@ -293,6 +297,10 @@ export class PanelHttpServer {
    */
   hasBuild(source: string, ref?: string): boolean {
     return this.servingCache.has(this.buildCacheKey(source, ref));
+  }
+
+  getBuildRevision(source: string, ref?: string): number | undefined {
+    return this.servingCache.get(this.buildCacheKey(source, ref))?.revision;
   }
 
   async stop(): Promise<void> {
@@ -695,6 +703,7 @@ export class PanelHttpServer {
       res.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
+        "X-NatStack-Build-Revision": String(build.revision),
       });
       res.end(build.html);
       return;
@@ -705,6 +714,7 @@ export class PanelHttpServer {
       res.writeHead(200, {
         "Content-Type": "application/javascript; charset=utf-8",
         "Cache-Control": "no-store",
+        "X-NatStack-Build-Revision": String(build.revision),
       });
       res.end(build.bundle);
       return;
@@ -715,6 +725,7 @@ export class PanelHttpServer {
       res.writeHead(200, {
         "Content-Type": "text/css; charset=utf-8",
         "Cache-Control": "no-store",
+        "X-NatStack-Build-Revision": String(build.revision),
       });
       res.end(build.css);
       return;
@@ -734,12 +745,14 @@ export class PanelHttpServer {
             "Content-Type": contentType,
             "Content-Length": buf.length,
             "Cache-Control": "public, max-age=31536000, immutable",
+            "X-NatStack-Build-Revision": String(build.revision),
           });
           res.end(buf);
         } else {
           res.writeHead(200, {
             "Content-Type": contentType,
             "Cache-Control": "public, max-age=31536000, immutable",
+            "X-NatStack-Build-Revision": String(build.revision),
           });
           res.end(asset.content);
         }
@@ -753,6 +766,7 @@ export class PanelHttpServer {
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
+      "X-NatStack-Build-Revision": String(build.revision),
     });
     res.end(build.html);
   }

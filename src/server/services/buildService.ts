@@ -34,6 +34,7 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
       gc: { args: z.tuple([z.array(z.string())]) },
       getAboutPages: { args: z.tuple([]) },
       hasUnit: { args: z.tuple([z.string()]) },
+      getPanelMetadata: { args: z.tuple([z.string()]) },
       listSkills: {
         description:
           "List available workspace skill packages that can be loaded via the eval imports parameter.",
@@ -69,6 +70,16 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
           return bs.getAboutPages();
         case "hasUnit":
           return bs.hasUnit(args[0] as string);
+        case "getPanelMetadata": {
+          const node = bs.getGraph().tryGet(args[0] as string);
+          if (!node || node.kind !== "panel") return null;
+          return {
+            source: node.relativePath,
+            title: node.manifest.title ?? node.name,
+            description: node.manifest.description,
+            hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
+          };
+        }
         case "listSkills":
           return bs
             .getGraph()
