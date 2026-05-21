@@ -19,6 +19,8 @@ import type {
   ChannelReplayEnvelope,
   ServerLogEvent,
   BootstrapSnapshot,
+  MessageTypeDefinition,
+  RegisterMessageTypeInput,
 } from "./types.js";
 import type { RpcChannelMessage } from "./protocol-wire.js";
 import { PubSubError } from "./types.js";
@@ -46,6 +48,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   type AgenticEvent,
   type InvocationId,
+  type MessageId,
 } from "@workspace/agentic-protocol";
 import { AgenticError } from "./protocol-types.js";
 import {
@@ -1363,6 +1366,106 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     // No-op for RPC transport
   }
 
+  function localActor() {
+    return {
+      kind: opts.type === "agent" || opts.type === "system" || opts.type === "panel" || opts.type === "external"
+        ? opts.type
+        : "user",
+      id: pid,
+      displayName: opts.name ?? pid,
+      metadata: subscribeMetadata,
+    } as const;
+  }
+
+  async function getMessageTypes(): Promise<MessageTypeDefinition[]> {
+    return callChannel<MessageTypeDefinition[]>("getMessageTypes");
+  }
+
+  async function getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
+    return callChannel<MessageTypeDefinition | null>("getMessageType", typeId);
+  }
+
+  async function registerMessageType(
+    input: RegisterMessageTypeInput,
+    options?: { idempotencyKey?: string },
+  ): Promise<number | undefined> {
+    const event: AgenticEvent<"messageType.registered"> = {
+      kind: "messageType.registered",
+      actor: localActor(),
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        typeId: input.typeId,
+        displayMode: input.displayMode,
+        source: input.source,
+        registeredBy: localActor(),
+      },
+      createdAt: new Date().toISOString(),
+    };
+    if (input.imports !== undefined) event.payload.imports = input.imports;
+    if (input.schemaSourceOrPath !== undefined) event.payload.schemaSourceOrPath = input.schemaSourceOrPath;
+    return publish(AGENTIC_EVENT_PAYLOAD_KIND, event, options?.idempotencyKey
+      ? { idempotencyKey: options.idempotencyKey }
+      : undefined);
+  }
+
+  async function clearMessageType(typeId: string, options?: { idempotencyKey?: string }): Promise<number | undefined> {
+    const event: AgenticEvent<"messageType.cleared"> = {
+      kind: "messageType.cleared",
+      actor: localActor(),
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, typeId },
+      createdAt: new Date().toISOString(),
+    };
+    return publish(AGENTIC_EVENT_PAYLOAD_KIND, event, options?.idempotencyKey
+      ? { idempotencyKey: options.idempotencyKey }
+      : undefined);
+  }
+
+  async function publishCustomMessage(
+    input: { typeId: string; initialState?: unknown; displayMode?: "inline" | "row" },
+    options?: { idempotencyKey?: string },
+  ): Promise<{ messageId: string; pubsubId: number | undefined }> {
+    const messageId = crypto.randomUUID();
+    const event: AgenticEvent<"custom.started"> = {
+      kind: "custom.started",
+      actor: localActor(),
+      causality: { messageId: messageId as MessageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        messageId: messageId as MessageId,
+        typeId: input.typeId,
+        by: localActor(),
+      },
+      createdAt: new Date().toISOString(),
+    };
+    if (input.displayMode !== undefined) event.payload.displayMode = input.displayMode;
+    if (input.initialState !== undefined) event.payload.initialState = input.initialState;
+    const pubsubId = await publish(AGENTIC_EVENT_PAYLOAD_KIND, event, {
+      idempotencyKey: options?.idempotencyKey ?? `custom:start:${messageId}`,
+    });
+    return { messageId, pubsubId };
+  }
+
+  async function updateCustomMessage(
+    messageId: string,
+    update: unknown,
+    options?: { idempotencyKey?: string },
+  ): Promise<number | undefined> {
+    const event: AgenticEvent<"custom.updated"> = {
+      kind: "custom.updated",
+      actor: localActor(),
+      causality: { messageId: messageId as MessageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        messageId: messageId as MessageId,
+        update,
+      },
+      createdAt: new Date().toISOString(),
+    };
+    return publish(AGENTIC_EVENT_PAYLOAD_KIND, event, {
+      idempotencyKey: options?.idempotencyKey ?? `custom:update:${messageId}:${crypto.randomUUID()}`,
+    });
+  }
+
   return {
     publish,
     updateMetadata,
@@ -1374,6 +1477,12 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     send: sendMessage,
     error: errorMessage,
     callMethod,
+    getMessageTypes,
+    getMessageType,
+    registerMessageType,
+    clearMessageType,
+    publishCustomMessage,
+    updateCustomMessage,
     get clientId() { return pid; },
     get channelId() { return channel; },
     get connected() { return !closed && replayComplete; },

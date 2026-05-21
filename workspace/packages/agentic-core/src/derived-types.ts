@@ -33,6 +33,47 @@ export interface ActionBarPayload {
   result?: { ok: boolean; error?: string };
 }
 
+export type CustomMessageDisplayMode = "inline" | "row";
+
+interface BaseMessageTypeDefinition {
+  typeId: string;
+  imports?: Record<string, string>;
+  schemaSourceOrPath?: unknown;
+  registeredBy?: { kind: string; id: string; displayName?: string; metadata?: Record<string, unknown> };
+  updatedAtSeq: number;
+}
+
+export interface ActiveMessageTypeDefinition extends BaseMessageTypeDefinition {
+  displayMode: CustomMessageDisplayMode;
+  source: SandboxSource;
+  clearedAtSeq?: number;
+  cleared?: false;
+}
+
+export interface ClearedMessageTypeDefinition extends BaseMessageTypeDefinition {
+  displayMode?: CustomMessageDisplayMode;
+  source?: SandboxSource;
+  clearedAtSeq: number;
+  cleared: true;
+}
+
+export type MessageTypeDefinition = ActiveMessageTypeDefinition | ClearedMessageTypeDefinition;
+export type ProjectedMessageTypeDefinition = MessageTypeDefinition;
+
+export interface CustomMessageUpdatePayload {
+  update: unknown;
+  seq: number;
+}
+
+export interface CustomMessageCardPayload {
+  messageId: string;
+  typeId: string;
+  displayMode: CustomMessageDisplayMode;
+  initialState?: unknown;
+  updates: CustomMessageUpdatePayload[];
+  lastSeq: number;
+}
+
 export interface ApprovalCardPayload {
   id: string;
   invocationId?: string;
@@ -106,4 +147,5 @@ export interface ChatMessage {
   invocation?: InvocationCardPayload;
   inlineUi?: InlineUiCardPayload;
   approval?: ApprovalCardPayload;
+  custom?: CustomMessageCardPayload;
 }

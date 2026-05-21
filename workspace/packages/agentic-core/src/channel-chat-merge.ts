@@ -10,10 +10,18 @@
  * event objects; extra fields are ignored.
  */
 
-import type { ActionBarPayload, ApprovalCardPayload, ChatMessage, InlineUiCardPayload } from "./derived-types.js";
+import type {
+  ActionBarPayload,
+  ApprovalCardPayload,
+  ChatMessage,
+  CustomMessageCardPayload,
+  InlineUiCardPayload,
+  MessageTypeDefinition,
+} from "./derived-types.js";
 import type {
   ChannelViewState,
   ProjectedApproval,
+  ProjectedCustomMessage,
   ProjectedInvocation,
   ProjectedMessage,
   ProjectedTurn,
@@ -36,7 +44,10 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   const inlineUi = Object.entries(state.inlineUi).flatMap(([participantId, map]) =>
     Object.values(map).map((item) => projectedInlineUiToChatMessage(participantId, item)),
   );
-  return [...messages, ...invocations, ...approvals, ...turns, ...inlineUi].sort((a, b) =>
+  const custom = Object.values(state.customMessages).flatMap((item) =>
+    projectedCustomMessageToChatMessage(item, state.messageTypes[item.typeId ?? ""]),
+  );
+  return [...messages, ...invocations, ...approvals, ...turns, ...inlineUi, ...custom].sort((a, b) =>
     Number((a as ChatMessage & { sortTime?: number }).sortTime ?? 0) -
       Number((b as ChatMessage & { sortTime?: number }).sortTime ?? 0) ||
     a.id.localeCompare(b.id)
@@ -44,6 +55,35 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
     const { sortTime: _sortTime, ...rest } = message as ChatMessage & { sortTime?: number };
     return rest;
   });
+}
+
+export function messageTypeDefinitionsFromChannelView(state: ChannelViewState): MessageTypeDefinition[] {
+  return Object.values(state.messageTypes)
+    .flatMap((item) => {
+      const isCleared = item.updatedAtSeq <= (item.clearedAtSeq ?? -1);
+      if (!isCleared && (!item.source || !item.displayMode)) return [];
+      const definition: MessageTypeDefinition = isCleared
+        ? {
+            typeId: item.typeId,
+            updatedAtSeq: item.updatedAtSeq,
+            clearedAtSeq: item.clearedAtSeq ?? -1,
+            cleared: true,
+          }
+        : {
+            typeId: item.typeId,
+            displayMode: item.displayMode!,
+            source: item.source!,
+            updatedAtSeq: item.updatedAtSeq,
+            cleared: false,
+          };
+      if (item.displayMode !== undefined && definition.cleared) definition.displayMode = item.displayMode;
+      if (item.source !== undefined && definition.cleared) definition.source = item.source;
+      if (item.imports !== undefined) definition.imports = item.imports;
+      if (item.schemaSourceOrPath !== undefined) definition.schemaSourceOrPath = item.schemaSourceOrPath;
+      if (item.registeredBy !== undefined) definition.registeredBy = item.registeredBy;
+      if (item.clearedAtSeq !== undefined) definition.clearedAtSeq = item.clearedAtSeq;
+      return [definition];
+    });
 }
 
 export function actionBarPayloadFromChannelView(state: ChannelViewState): ActionBarPayload | null {
@@ -199,6 +239,40 @@ function projectedInlineUiToChatMessage(
     },
     sortTime: Date.parse(inlineUi.renderedAt) || 0,
   } as ChatMessage & { sortTime: number };
+}
+
+function projectedCustomMessageToChatMessage(
+  custom: ProjectedCustomMessage,
+  registeredType: ChannelViewState["messageTypes"][string] | undefined,
+): ChatMessage[] {
+  if (!custom.typeId) return [];
+  const typeIsReady = registeredType?.source && registeredType.updatedAtSeq > (registeredType.clearedAtSeq ?? -1);
+  const displayMode = custom.displayMode ?? (typeIsReady ? registeredType.displayMode : undefined) ?? "row";
+  const payload: CustomMessageCardPayload = {
+    messageId: custom.messageId,
+    typeId: custom.typeId,
+    displayMode,
+    initialState: custom.initialState,
+    updates: custom.updates,
+    lastSeq: custom.lastSeq,
+  };
+  return [{
+    id: `custom:${custom.messageId}`,
+    senderId: custom.by?.id ?? custom.typeId,
+    content: JSON.stringify(payload),
+    contentType: "custom",
+    kind: "message",
+    complete: true,
+    custom: payload,
+    senderMetadata: custom.by
+      ? {
+          name: custom.by.displayName ?? custom.by.id,
+          type: custom.by.kind,
+          handle: custom.by.id,
+        }
+      : undefined,
+    sortTime: Date.parse(custom.updatedAt ?? custom.startedAt ?? "") || custom.lastSeq,
+  } as ChatMessage & { sortTime: number }];
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {

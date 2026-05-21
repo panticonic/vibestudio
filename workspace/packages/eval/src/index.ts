@@ -38,11 +38,13 @@ export type {
 export {
   executeSandbox,
   compileComponent,
+  compileModule,
 } from "./sandbox.js";
 export type {
   SandboxOptions,
   SandboxResult,
   CompileResult,
+  CompileModuleResult,
   CompileComponentOptions,
 } from "./sandbox.js";
 

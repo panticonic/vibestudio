@@ -20,6 +20,7 @@ export type { AgentMessage, AgentEvent } from "@workspace/agentic-core";
 // ===========================================================================
 export type {
   ChatMessage,
+  MessageTypeDefinition,
   PendingAgent,
   PendingAgentStatus,
   DisconnectedAgentInfo,
@@ -40,6 +41,7 @@ import type {
 } from "@workspace/agentic-core";
 import type {
   ChatMessage,
+  MessageTypeDefinition,
   PendingAgent,
   DirtyRepoDetails,
 } from "@workspace/agentic-core";
@@ -134,6 +136,7 @@ export interface ChatContextValue {
   // Messages
   messages: ChatMessage[];
   inlineUiComponents: Map<string, InlineUiComponentEntry>;
+  messageTypeComponents: Map<string, MessageTypeComponentEntry>;
   actionBar: ActionBarState | null;
   onActionBarMaxHeightChange?: (maxHeight: number, options?: { saveState?: boolean }) => void;
   hasMoreHistory: boolean;
@@ -176,3 +179,10 @@ export interface ChatContextValue {
   // Tool approval (optional)
   toolApproval?: ToolApprovalProps;
 }
+
+export type MessageTypeRegistryEntry =
+  | { status: "ready"; definition: MessageTypeDefinition; module: import("@workspace/agentic-core").MessageTypeModule; cacheKey: string }
+  | { status: "loading" }
+  | { status: "error"; message: string };
+
+export type MessageTypeComponentEntry = MessageTypeRegistryEntry;

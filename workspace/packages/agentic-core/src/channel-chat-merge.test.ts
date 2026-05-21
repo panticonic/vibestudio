@@ -14,7 +14,11 @@ import {
   type MessageId,
   type TurnId,
 } from "@workspace/agentic-protocol";
-import { actionBarPayloadFromChannelView, chatMessagesFromChannelView } from "./channel-chat-merge.js";
+import {
+  actionBarPayloadFromChannelView,
+  chatMessagesFromChannelView,
+  messageTypeDefinitionsFromChannelView,
+} from "./channel-chat-merge.js";
 
 const agent = { kind: "agent" as const, id: "agent-1", displayName: "Agent One" };
 const participant = { ...agent, participantId: "participant-agent-1" };
@@ -32,6 +36,38 @@ function envelope(payload: AgenticEvent, seq: number): ChannelEnvelope<AgenticEv
 }
 
 describe("chatMessagesFromChannelView", () => {
+  it("projects cleared message type definitions so registry consumers can invalidate compiled modules", () => {
+    const registered: AgenticEvent<"messageType.registered"> = {
+      kind: "messageType.registered",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        typeId: "weather",
+        displayMode: "inline",
+        source: { type: "code", code: "export default function Weather() { return null; }" },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const cleared: AgenticEvent<"messageType.cleared"> = {
+      kind: "messageType.cleared",
+      actor: agent,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, typeId: "weather" },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+
+    const state = [envelope(registered, 1), envelope(cleared, 2)]
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(messageTypeDefinitionsFromChannelView(state)).toEqual([
+      expect.objectContaining({
+        typeId: "weather",
+        cleared: true,
+        updatedAtSeq: 1,
+        clearedAtSeq: 2,
+      }),
+    ]);
+  });
+
   it("projects typed channel events into transcript chat messages", () => {
     const message: AgenticEvent<"message.completed"> = {
       kind: "message.completed",

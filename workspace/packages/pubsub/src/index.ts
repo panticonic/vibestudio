@@ -78,8 +78,14 @@ export {
   RequiredMethodSpecSchema,
   MethodAdvertisementSchema,
   AgentTypeAdvertisementSchema,
+  RegisterMessageTypeArgsSchema,
+  PublishCustomMessageArgsSchema,
+  UpdateCustomMessageArgsSchema,
   type FeedbackFormArgs,
   type FeedbackCustomArgs,
+  type RegisterMessageTypeArgs,
+  type PublishCustomMessageArgs,
+  type UpdateCustomMessageArgs,
 } from "./protocol-schemas.js";
 
 // JSON Schema to Zod conversion

@@ -30,6 +30,7 @@ import { useChatTools } from "./features/useChatTools";
 import { useChatDebug } from "./features/useChatDebug";
 import { useInlineUi } from "./features/useInlineUi";
 import { useActionBar } from "./features/useActionBar";
+import { useMessageTypeRegistry } from "./features/useMessageTypeRegistry";
 import type { ConnectionConfig, AgenticChatActions, ToolProvider, SandboxConfig, ChatSandboxValue, ChatParticipantMetadata, ChatContextValue, ChatInputContextValue, ActionBarData, } from "../types";
 import { unwrapChatMethodResult } from "@workspace/agentic-core";
 import type { ChatMethodResult } from "@workspace/agentic-core";
@@ -290,6 +291,13 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
     });
     const debug = useChatDebug();
     const inlineUi = useInlineUi({ messages: core.messages, loadSourceFile, loadImport });
+    const messageTypes = useMessageTypeRegistry({
+        client: core.client,
+        messages: core.messages,
+        definitions: core.messageTypes,
+        loadSourceFile,
+        loadImport,
+    });
     const [actionBarData, setActionBarData] = useState<ActionBarData | null>(null);
     const actionBar = useActionBar({ data: actionBarData, loadSourceFile, loadImport });
     const lastLoadedActionBarKeyRef = useRef<string | null>(null);
@@ -861,6 +869,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
         scopeManager: scopeManagerRef.current,
         messages: core.messages,
         inlineUiComponents: inlineUi.inlineUiComponents,
+        messageTypeComponents: messageTypes.messageTypeComponents,
         actionBar: actionBar.actionBar,
         onActionBarMaxHeightChange: updateActionBarMaxHeight,
         hasMoreHistory: core.hasMoreHistory,
@@ -890,7 +899,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
     }), [
         core.connected, core.status, core.connectionError, core.dismissConnectionError,
         channelName, sessionEnabled, chat,
-        core.messages, inlineUi.inlineUiComponents, actionBar.actionBar, updateActionBarMaxHeight, core.hasMoreHistory, core.loadingMore,
+        core.messages, inlineUi.inlineUiComponents, messageTypes.messageTypeComponents, actionBar.actionBar, updateActionBarMaxHeight, core.hasMoreHistory, core.loadingMore,
         core.participants, core.allParticipants,
         core.debugEvents, debug.debugConsoleAgent, core.dirtyRepoWarnings, core.pendingAgents,
         feedback.activeFeedbacks, theme,

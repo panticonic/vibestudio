@@ -5,7 +5,7 @@ import { useStickToBottom } from "use-stick-to-bottom";
 import { InlineGroup, type InlineItem } from "./InlineGroup";
 import { NewContentIndicator } from "./NewContentIndicator";
 import { MessageCard } from "./MessageCard";
-import type { ChatMessage, ChatParticipantMetadata, InlineUiComponentEntry } from "../types";
+import type { ChatMessage, ChatParticipantMetadata, InlineUiComponentEntry, MessageTypeComponentEntry } from "../types";
 import type { MdxActionHandlers } from "./markdownComponents";
 
 // Grouped item types produced by the grouping logic
@@ -15,12 +15,13 @@ type GroupedItem =
 
 // --- Grouping helper functions (module-level for reuse by fast paths) ---
 
-type InlineItemType = "thinking" | "invocation" | "typing";
+type InlineItemType = "thinking" | "invocation" | "typing" | "custom";
 
 function getInlineItemType(msg: ChatMessage): InlineItemType | null {
   if (msg.contentType === "thinking") return "thinking";
   if (msg.contentType === "invocation") return "invocation";
   if (msg.contentType === "typing") return "typing";
+  if (msg.contentType === "custom" && msg.custom?.displayMode === "inline") return "custom";
   return null;
 }
 
@@ -52,6 +53,14 @@ function buildInlineItems(
           senderType: msg.senderMetadata?.type,
         },
         senderId: msg.senderId,
+      };
+    }
+    if (msg.contentType === "custom") {
+      if (!msg.custom || msg.custom.displayMode !== "inline") return [];
+      return {
+        type: "custom" as const,
+        id: msg.id,
+        payload: msg.custom,
       };
     }
     return {
@@ -157,6 +166,10 @@ export interface MessageListProps {
   selfId: string | null;
   allParticipants: Record<string, Participant<ChatParticipantMetadata>>;
   inlineUiComponents?: Map<string, InlineUiComponentEntry>;
+  messageTypeComponents?: Map<string, MessageTypeComponentEntry>;
+  chat?: Record<string, unknown>;
+  scope?: Record<string, unknown>;
+  scopes?: Record<string, unknown>;
   hasMoreHistory?: boolean;
   loadingMore?: boolean;
   onLoadEarlierMessages?: () => void;
@@ -189,6 +202,10 @@ export const MessageList = React.memo(function MessageList({
   selfId,
   allParticipants,
   inlineUiComponents,
+  messageTypeComponents,
+  chat,
+  scope,
+  scopes,
   hasMoreHistory,
   loadingMore,
   onLoadEarlierMessages,
@@ -479,7 +496,7 @@ export const MessageList = React.memo(function MessageList({
       if (customRenderInlineGroup) {
         return <Flex className="message-item" direction="column">{customRenderInlineGroup(item.inlineItems)}</Flex>;
       }
-      return <Flex className="message-item" direction="column"><InlineGroup key={item.key} items={item.inlineItems} onInterrupt={handleTypingInterrupt} /></Flex>;
+      return <Flex className="message-item" direction="column"><InlineGroup key={item.key} items={item.inlineItems} messageTypeComponents={messageTypeComponents} chat={chat} scope={scope} scopes={scopes} onInterrupt={handleTypingInterrupt} /></Flex>;
     }
 
     const { msg, index: msgIndex } = item;
@@ -501,6 +518,10 @@ export const MessageList = React.memo(function MessageList({
           isStreaming={isStreaming}
           isCopied={copiedMessageIdRef.current === msg.id}
           inlineUiComponents={inlineUiComponents}
+          messageTypeComponents={messageTypeComponents}
+          chat={chat}
+          scope={scope}
+          scopes={scopes}
           onInterrupt={handleInterruptMessage}
           onCopy={handleCopyMessage}
           onClearCopied={handleClearCopiedMessage}
@@ -510,7 +531,7 @@ export const MessageList = React.memo(function MessageList({
         />
       </Flex>
     );
-  }, [getSenderInfo, inlineUiComponents, mdxActions,
+  }, [getSenderInfo, inlineUiComponents, messageTypeComponents, chat, scope, scopes, mdxActions,
       handleInterruptMessage, handleCopyMessage, handleClearCopiedMessage, handleTypingInterrupt, onFocusPanel, onReloadPanel,
       customRenderMessage, customRenderInlineGroup]);
 
@@ -564,7 +585,7 @@ export const MessageList = React.memo(function MessageList({
                   <Flex className="message-item" direction="column">
                     {customRenderInlineGroup
                       ? customRenderInlineGroup(activeTypingItems)
-                      : <InlineGroup items={activeTypingItems} onInterrupt={handleTypingInterrupt} />}
+                      : <InlineGroup items={activeTypingItems} messageTypeComponents={messageTypeComponents} chat={chat} scope={scope} scopes={scopes} onInterrupt={handleTypingInterrupt} />}
                   </Flex>
                 </div>
               )}

@@ -173,6 +173,38 @@ const uiActionBarUpdatedPayloadSchema = z.object({
   }).strict().optional(),
 }).strict();
 
+const customMessageDisplayModeSchema = z.enum(["inline", "row"]);
+
+const messageTypeRegisteredPayloadSchema = z.object({
+  protocol: protocolSchema,
+  typeId: z.string().min(1),
+  displayMode: customMessageDisplayModeSchema,
+  source: sandboxSourceSchema,
+  imports: z.record(z.string()).optional(),
+  schemaSourceOrPath: z.unknown().optional(),
+  registeredBy: actorRefSchema.optional(),
+}).strict();
+
+const messageTypeClearedPayloadSchema = z.object({
+  protocol: protocolSchema,
+  typeId: z.string().min(1),
+}).strict();
+
+const customStartedPayloadSchema = z.object({
+  protocol: protocolSchema,
+  messageId: idSchema,
+  typeId: z.string().min(1),
+  displayMode: customMessageDisplayModeSchema.optional(),
+  initialState: z.unknown().optional(),
+  by: actorRefSchema.optional(),
+}).strict();
+
+const customUpdatedPayloadSchema = z.object({
+  protocol: protocolSchema,
+  messageId: idSchema,
+  update: z.unknown(),
+}).strict();
+
 const externalEnvelopePublishedPayloadSchema = z.object({
   protocol: protocolSchema,
   publications: z.array(z.object({
@@ -297,6 +329,10 @@ export const eventKindSchemas = {
   "approval.resolved": eventSchema("approval.resolved", approvalResolvedPayloadSchema),
   "ui.inline_rendered": eventSchema("ui.inline_rendered", uiInlineRenderedPayloadSchema),
   "ui.action_bar.updated": eventSchema("ui.action_bar.updated", uiActionBarUpdatedPayloadSchema),
+  "messageType.registered": eventSchema("messageType.registered", messageTypeRegisteredPayloadSchema),
+  "messageType.cleared": eventSchema("messageType.cleared", messageTypeClearedPayloadSchema),
+  "custom.started": eventSchema("custom.started", customStartedPayloadSchema),
+  "custom.updated": eventSchema("custom.updated", customUpdatedPayloadSchema),
   "state.file_observed": eventSchema("state.file_observed", statePayloadSchema),
   "state.file_mutation_intended": eventSchema("state.file_mutation_intended", statePayloadSchema),
   "state.file_mutation_applied": eventSchema("state.file_mutation_applied", statePayloadSchema),

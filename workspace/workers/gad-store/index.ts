@@ -139,6 +139,25 @@ export interface ForkTrajectoryBranchResult {
   }>;
 }
 
+export interface ChannelMessageTypeDefinition {
+  typeId: string;
+  displayMode: "inline" | "row";
+  source: { type: "code"; code: string } | { type: "file"; path: string };
+  imports?: Record<string, string>;
+  schemaSourceOrPath?: unknown;
+  registeredBy?: Record<string, unknown>;
+  updatedAtSeq: number;
+  clearedAtSeq?: number;
+}
+
+export type RegistryMutationInput =
+  | {
+      kind: "upsertMessageType";
+      typeId: string;
+      row: Omit<ChannelMessageTypeDefinition, "typeId" | "updatedAtSeq" | "clearedAtSeq">;
+    }
+  | { kind: "clearMessageType"; typeId: string };
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -375,6 +394,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX idx_channel_envelopes_kind ON channel_envelopes(payload_kind, channel_id, seq)`);
+    this.sql.exec(`
+      CREATE TABLE channel_message_types (
+        channel_id TEXT NOT NULL,
+        type_id TEXT NOT NULL,
+        display_mode TEXT,
+        source_json TEXT,
+        imports_json TEXT,
+        schema_json TEXT,
+        registered_by_json TEXT,
+        updated_at_seq INTEGER NOT NULL DEFAULT -1,
+        cleared_at_seq INTEGER,
+        PRIMARY KEY (channel_id, type_id)
+      )
+    `);
     this.sql.exec(`
       CREATE TABLE trajectory_channel_publications (
         event_id TEXT NOT NULL,
@@ -886,6 +919,60 @@ export class GadWorkspaceDO extends DurableObjectBase {
     channelEnvelopeSchema.parse(envelope);
     this.insertChannelEnvelope(envelope);
     return envelope;
+  }
+
+  appendChannelEnvelopeWithRegistryMutation(input: Omit<ChannelEnvelope, "seq" | "envelopeId" | "publishedAt"> & {
+    envelopeId?: string | null;
+    publishedAt?: string | null;
+    registryMutation: RegistryMutationInput;
+  }): ChannelEnvelope {
+    this.ensureReady();
+    this.ensureMessageTypesTable();
+    return this.transaction(() => {
+      const { registryMutation, ...envelopeInput } = input;
+      const envelope = {
+        ...envelopeInput,
+        envelopeId: brandId<EnvelopeId>(envelopeInput.envelopeId ?? crypto.randomUUID()),
+        seq: this.nextChannelSeq(String(envelopeInput.channelId)),
+        publishedAt: envelopeInput.publishedAt ?? nowIso(),
+      } as ChannelEnvelope;
+      channelEnvelopeSchema.parse(envelope);
+      this.insertChannelEnvelope(envelope);
+      this.applyRegistryMutation(String(envelopeInput.channelId), envelope.seq, registryMutation);
+      return envelope;
+    });
+  }
+
+  listMessageTypes(input: { channelId: string }): ChannelMessageTypeDefinition[] {
+    this.ensureReady();
+    this.ensureMessageTypesTable();
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM channel_message_types
+         WHERE channel_id = ? AND source_json IS NOT NULL
+           AND updated_at_seq > COALESCE(cleared_at_seq, -1)
+         ORDER BY type_id ASC`,
+        input.channelId,
+      )
+      .toArray() as JsonRecord[];
+    return rows.map((row) => this.mapMessageType(row));
+  }
+
+  getMessageType(input: { channelId: string; typeId: string }): ChannelMessageTypeDefinition | null {
+    this.ensureReady();
+    this.ensureMessageTypesTable();
+    const row = this.sql
+      .exec(
+        `SELECT * FROM channel_message_types
+         WHERE channel_id = ? AND type_id = ?
+           AND source_json IS NOT NULL
+           AND updated_at_seq > COALESCE(cleared_at_seq, -1)
+         LIMIT 1`,
+        input.channelId,
+        input.typeId,
+      )
+      .toArray()[0] as JsonRecord | undefined;
+    return row ? this.mapMessageType(row) : null;
   }
 
   forkChannelLog(input: ForkChannelLogInput): ForkChannelLogResult {
@@ -2148,6 +2235,86 @@ export class GadWorkspaceDO extends DurableObjectBase {
       envelope.attachments ? JSON.stringify(envelope.attachments) : null,
       envelope.publishedAt
     );
+  }
+
+  private applyRegistryMutation(channelId: string, seq: number, mutation: RegistryMutationInput): void {
+    this.ensureMessageTypesTable();
+    if (mutation.kind === "upsertMessageType") {
+      this.sql.exec(
+        `INSERT INTO channel_message_types (
+           channel_id, type_id, display_mode, source_json, imports_json, schema_json,
+           registered_by_json, updated_at_seq, cleared_at_seq
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+         ON CONFLICT(channel_id, type_id) DO UPDATE SET
+           display_mode = excluded.display_mode,
+           source_json = excluded.source_json,
+           imports_json = excluded.imports_json,
+           schema_json = excluded.schema_json,
+           registered_by_json = excluded.registered_by_json,
+           updated_at_seq = excluded.updated_at_seq,
+           cleared_at_seq = CASE
+             WHEN channel_message_types.cleared_at_seq IS NOT NULL
+              AND channel_message_types.cleared_at_seq > excluded.updated_at_seq
+             THEN channel_message_types.cleared_at_seq
+             ELSE NULL
+           END
+         WHERE excluded.updated_at_seq > channel_message_types.updated_at_seq
+           AND excluded.updated_at_seq > COALESCE(channel_message_types.cleared_at_seq, -1)`,
+        channelId,
+        mutation.typeId,
+        mutation.row.displayMode,
+        JSON.stringify(mutation.row.source),
+        mutation.row.imports ? JSON.stringify(mutation.row.imports) : null,
+        mutation.row.schemaSourceOrPath !== undefined ? JSON.stringify(mutation.row.schemaSourceOrPath) : null,
+        mutation.row.registeredBy ? JSON.stringify(mutation.row.registeredBy) : null,
+        seq,
+      );
+      return;
+    }
+
+    this.sql.exec(
+      `INSERT INTO channel_message_types (
+         channel_id, type_id, updated_at_seq, cleared_at_seq
+       ) VALUES (?, ?, -1, ?)
+       ON CONFLICT(channel_id, type_id) DO UPDATE SET
+         cleared_at_seq = MAX(COALESCE(channel_message_types.cleared_at_seq, -1), excluded.cleared_at_seq)`,
+      channelId,
+      mutation.typeId,
+      seq,
+    );
+  }
+
+  private mapMessageType(row: JsonRecord): ChannelMessageTypeDefinition {
+    const result: ChannelMessageTypeDefinition = {
+      typeId: String(row["type_id"]),
+      displayMode: String(row["display_mode"]) === "inline" ? "inline" : "row",
+      source: parseRecord(asString(row["source_json"])) as ChannelMessageTypeDefinition["source"],
+      updatedAtSeq: asNumber(row["updated_at_seq"]),
+    };
+    if (row["imports_json"]) result.imports = parseRecord(asString(row["imports_json"])) as Record<string, string>;
+    if (row["schema_json"]) result.schemaSourceOrPath = parseJson(asString(row["schema_json"]));
+    if (row["registered_by_json"]) result.registeredBy = parseRecord(asString(row["registered_by_json"]));
+    if (row["cleared_at_seq"] !== null && row["cleared_at_seq"] !== undefined) {
+      result.clearedAtSeq = asNumber(row["cleared_at_seq"]);
+    }
+    return result;
+  }
+
+  private ensureMessageTypesTable(): void {
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_message_types (
+        channel_id TEXT NOT NULL,
+        type_id TEXT NOT NULL,
+        display_mode TEXT,
+        source_json TEXT,
+        imports_json TEXT,
+        schema_json TEXT,
+        registered_by_json TEXT,
+        updated_at_seq INTEGER NOT NULL DEFAULT -1,
+        cleared_at_seq INTEGER,
+        PRIMARY KEY (channel_id, type_id)
+      )
+    `);
   }
 
   private insertChannelPublication(publication: ChannelPublication): void {

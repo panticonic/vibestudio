@@ -12,6 +12,8 @@ import {
   type ActionBarPayload,
   type ChatMessage,
   chatMessagesFromChannelView,
+  messageTypeDefinitionsFromChannelView,
+  type MessageTypeDefinition,
 } from "@workspace/agentic-core";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
@@ -30,6 +32,7 @@ const PAGE_SIZE = 100;
 export interface UseChannelMessagesResult {
   messages: ChatMessage[];
   actionBar: ActionBarPayload | null;
+  messageTypes: MessageTypeDefinition[];
   hasMoreHistory: boolean;
   loadingMore: boolean;
   loadEarlierMessages: () => Promise<void>;
@@ -45,6 +48,7 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
 ): UseChannelMessagesResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [actionBar, setActionBar] = useState<ActionBarPayload | null>(null);
+  const [messageTypes, setMessageTypes] = useState<MessageTypeDefinition[]>([]);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
@@ -57,6 +61,7 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
   const clientRef = useRef(client);
   const channelStateRef = useRef<ChannelViewState>(createInitialChannelViewState());
   const agenticMessageIdsRef = useRef(new Set<string>());
+  const messageTypesSignatureRef = useRef("[]");
   const newestSeqRef = useRef<number | null>(null);
   clientRef.current = client;
 
@@ -84,11 +89,18 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     }
     setMessages(order.map((id) => byId.get(id)!));
     setActionBar(actionBarPayloadFromChannelView(channelStateRef.current));
+    const nextMessageTypes = messageTypeDefinitionsFromChannelView(channelStateRef.current);
+    const nextSignature = messageTypeDefinitionsSignature(nextMessageTypes);
+    if (nextSignature !== messageTypesSignatureRef.current) {
+      messageTypesSignatureRef.current = nextSignature;
+      setMessageTypes(nextMessageTypes);
+    }
   }, []);
 
   const rebuildFromChannelState = useCallback((trimTail = false) => {
     const byId = byIdRef.current;
     const order = orderRef.current;
+    const previousById = new Map(byId);
     for (const id of agenticMessageIdsRef.current) {
       byId.delete(id);
       const index = order.indexOf(id);
@@ -97,7 +109,8 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     agenticMessageIdsRef.current.clear();
     for (const msg of chatMessagesFromChannelView(channelStateRef.current)) {
       if (!byId.has(msg.id)) order.push(msg.id);
-      byId.set(msg.id, msg);
+      const existing = previousById.get(msg.id);
+      byId.set(msg.id, existing && sameChatMessage(existing, msg) ? existing : msg);
       agenticMessageIdsRef.current.add(msg.id);
     }
     flush(trimTail);
@@ -114,6 +127,8 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     newestSeqRef.current = null;
     channelStateRef.current = createInitialChannelViewState();
     agenticMessageIdsRef.current = new Set();
+    messageTypesSignatureRef.current = "[]";
+    setMessageTypes([]);
     setHasMoreHistory(Boolean(client.hasMoreBefore));
 
     const consume = async () => {
@@ -231,7 +246,53 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     }
   }, [rebuildFromChannelState]);
 
-  return { messages, actionBar, hasMoreHistory, loadingMore, loadEarlierMessages, backfillAfterLocalPublish };
+  return { messages, actionBar, messageTypes, hasMoreHistory, loadingMore, loadEarlierMessages, backfillAfterLocalPublish };
+}
+
+function sameChatMessage(a: ChatMessage, b: ChatMessage): boolean {
+  if (
+    a.id !== b.id ||
+    a.senderId !== b.senderId ||
+    a.content !== b.content ||
+    a.contentType !== b.contentType ||
+    a.kind !== b.kind ||
+    a.complete !== b.complete ||
+    a.error !== b.error ||
+    a.pending !== b.pending
+  ) {
+    return false;
+  }
+  if (a.invocation !== b.invocation && JSON.stringify(a.invocation) !== JSON.stringify(b.invocation)) return false;
+  if (a.approval !== b.approval && JSON.stringify(a.approval) !== JSON.stringify(b.approval)) return false;
+  if (a.inlineUi !== b.inlineUi && JSON.stringify(a.inlineUi) !== JSON.stringify(b.inlineUi)) return false;
+  if (a.custom !== b.custom) {
+    if (!a.custom || !b.custom) return false;
+    if (
+      a.custom.messageId !== b.custom.messageId ||
+      a.custom.typeId !== b.custom.typeId ||
+      a.custom.displayMode !== b.custom.displayMode ||
+      a.custom.lastSeq !== b.custom.lastSeq ||
+      a.custom.updates !== b.custom.updates ||
+      a.custom.initialState !== b.custom.initialState
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function messageTypeDefinitionsSignature(definitions: MessageTypeDefinition[]): string {
+  return JSON.stringify(definitions.map((definition) => ({
+    typeId: definition.typeId,
+    displayMode: definition.displayMode,
+    source: definition.source,
+    imports: definition.imports,
+    schemaSourceOrPath: definition.schemaSourceOrPath,
+    registeredBy: definition.registeredBy,
+    updatedAtSeq: definition.updatedAtSeq,
+    clearedAtSeq: definition.clearedAtSeq,
+    cleared: definition.cleared,
+  })));
 }
 
 function pubsubAgenticEventToEnvelope(

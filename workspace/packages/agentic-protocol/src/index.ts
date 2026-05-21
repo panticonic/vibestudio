@@ -31,6 +31,9 @@ export type {
   ApprovalPayload,
   BranchPayload,
   CompactionPayload,
+  CustomMessageDisplayMode,
+  CustomStartedPayload,
+  CustomUpdatedPayload,
   EventCausality,
   EventKind,
   ExternalEnvelopeObservedPayload,
@@ -42,6 +45,8 @@ export type {
   MessageBlockInput,
   MessagePayload,
   MessageRole,
+  MessageTypeClearedPayload,
+  MessageTypeRegisteredPayload,
   ParticipantRef,
   ParticipantSelector,
   PayloadFor,
@@ -101,7 +106,13 @@ export {
   userVisibleTrajectoryProjection,
 } from "./reducer-trajectory.js";
 
-export type { ChannelTimelineEntry, ChannelViewState } from "./reducer-channel.js";
+export type {
+  ChannelTimelineEntry,
+  ChannelViewState,
+  ProjectedCustomMessage,
+  ProjectedCustomMessageUpdate,
+  ProjectedMessageTypeDefinition,
+} from "./reducer-channel.js";
 export {
   createInitialChannelViewState,
   reduceChannelView,

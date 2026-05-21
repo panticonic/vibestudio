@@ -21,6 +21,31 @@ export interface AppendChannelLogInput {
   attachments?: StoredAttachment[];
 }
 
+export type RegistryMutationInput =
+  | {
+      kind: "upsertMessageType";
+      typeId: string;
+      row: {
+        displayMode: "inline" | "row";
+        source: { type: "code"; code: string } | { type: "file"; path: string };
+        imports?: Record<string, string>;
+        schemaSourceOrPath?: unknown;
+        registeredBy?: Record<string, unknown>;
+      };
+    }
+  | { kind: "clearMessageType"; typeId: string };
+
+export interface MessageTypeDefinition {
+  typeId: string;
+  displayMode: "inline" | "row";
+  source: { type: "code"; code: string } | { type: "file"; path: string };
+  imports?: Record<string, string>;
+  schemaSourceOrPath?: unknown;
+  registeredBy?: Record<string, unknown>;
+  updatedAtSeq: number;
+  clearedAtSeq?: number;
+}
+
 export interface ChannelReplayContext {
   contextId?: string;
   channelConfig?: Record<string, unknown>;
@@ -30,6 +55,9 @@ export interface ChannelReplayContext {
 export interface ChannelLogStore {
   append(input: AppendChannelLogInput): Promise<ChannelEvent>;
   forkFrom(parentChannelId: string, throughSeq: number | null): Promise<void>;
+  appendWithRegistryMutation(input: AppendChannelLogInput, mutation: RegistryMutationInput): Promise<ChannelEvent>;
+  listMessageTypes(): Promise<MessageTypeDefinition[]>;
+  getMessageType(typeId: string): Promise<MessageTypeDefinition | null>;
   hasEnvelope(envelopeId: string): Promise<boolean>;
   getEventByEnvelopeId(envelopeId: string): Promise<ChannelEvent | null>;
   replayAfter(sinceId: number, context: ChannelReplayContext): Promise<ChannelReplayEnvelope>;
@@ -146,6 +174,28 @@ export class GadChannelLogStore implements ChannelLogStore {
       toChannelId: this.channelId,
       throughSeq,
     });
+  }
+
+  async appendWithRegistryMutation(input: AppendChannelLogInput, mutation: RegistryMutationInput): Promise<ChannelEvent> {
+    const envelope = await this.gad.call<ChannelEnvelope>("appendChannelEnvelopeWithRegistryMutation", {
+      channelId: brandId<ChannelId>(this.channelId),
+      envelopeId: brandId<EnvelopeId>(input.messageId ?? crypto.randomUUID()),
+      from: participantRefForSender(input.senderId, input.senderMetadata),
+      payload: input.payload,
+      payloadKind: input.type,
+      metadata: input.senderMetadata,
+      attachments: input.attachments,
+      registryMutation: mutation,
+    });
+    return eventFromGadEnvelope(envelope);
+  }
+
+  async listMessageTypes(): Promise<MessageTypeDefinition[]> {
+    return this.gad.call<MessageTypeDefinition[]>("listMessageTypes", { channelId: this.channelId });
+  }
+
+  async getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
+    return this.gad.call<MessageTypeDefinition | null>("getMessageType", { channelId: this.channelId, typeId });
   }
 
   async hasEnvelope(envelopeId: string): Promise<boolean> {

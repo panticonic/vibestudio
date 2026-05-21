@@ -8,6 +8,34 @@
 import { z } from "zod";
 import type { FieldDefinition, FieldValue } from "@natstack/types";
 
+const SandboxSourceSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("code"), code: z.string() }).strict(),
+  z.object({ type: z.literal("file"), path: z.string().min(1) }).strict(),
+]);
+
+export const RegisterMessageTypeArgsSchema = z.object({
+  typeId: z.string().min(1),
+  displayMode: z.enum(["inline", "row"]),
+  source: SandboxSourceSchema,
+  imports: z.record(z.string(), z.string()).optional(),
+  schemaSourceOrPath: z.unknown().optional(),
+}).strict();
+
+export const PublishCustomMessageArgsSchema = z.object({
+  typeId: z.string().min(1),
+  initialState: z.unknown().optional(),
+  displayMode: z.enum(["inline", "row"]).optional(),
+}).strict();
+
+export const UpdateCustomMessageArgsSchema = z.object({
+  messageId: z.string().min(1),
+  update: z.unknown(),
+}).strict();
+
+export type RegisterMessageTypeArgs = z.infer<typeof RegisterMessageTypeArgsSchema>;
+export type PublishCustomMessageArgs = z.infer<typeof PublishCustomMessageArgsSchema>;
+export type UpdateCustomMessageArgs = z.infer<typeof UpdateCustomMessageArgsSchema>;
+
 /**
  * Schema for required method specification in agent type advertisements.
  */

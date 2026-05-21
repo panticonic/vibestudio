@@ -9,7 +9,7 @@ import {
   type AgenticEvent,
   type MessageId,
 } from "@workspace/agentic-protocol";
-import type { PubSubClient } from "@workspace/pubsub";
+import type { IncomingEvent, PubSubClient } from "@workspace/pubsub";
 
 import { useChannelMessages, type UseChannelMessagesResult } from "./useChannelMessages";
 
@@ -26,6 +26,23 @@ function messageCompleted(
       protocol: AGENTIC_PROTOCOL_VERSION,
       role: "user",
       content,
+    },
+    createdAt,
+  };
+}
+
+function messageTypeRegistered(
+  typeId: string,
+  createdAt = "2026-05-21T08:00:00.000Z",
+): AgenticEvent<"messageType.registered"> {
+  return {
+    kind: "messageType.registered",
+    actor: { kind: "panel", id: "panel:user" },
+    payload: {
+      protocol: AGENTIC_PROTOCOL_VERSION,
+      typeId,
+      displayMode: "inline",
+      source: { type: "code", code: "export default function Demo() { return null; }" },
     },
     createdAt,
   };
@@ -148,5 +165,37 @@ describe("useChannelMessages", () => {
       expect(latest!.messages.map((message) => message.id)).toEqual(["older", "current"]);
       expect(latest!.hasMoreHistory).toBe(false);
     });
+  });
+
+  it("preserves message type array identity when only transcript messages change", async () => {
+    let latest: UseChannelMessagesResult | undefined;
+    const registryEvent = messageTypeRegistered("weather", "2026-05-21T08:00:00.000Z");
+    const firstMessage = messageCompleted("msg-1", "First", "2026-05-21T08:01:00.000Z");
+    const secondMessage = messageCompleted("msg-2", "Second", "2026-05-21T08:02:00.000Z");
+    let resumeEvents: ((event: IncomingEvent) => void) | undefined;
+    const client = createClient([], {
+      events: vi.fn(async function* () {
+        yield pubsubAgenticEvent(1, registryEvent) as IncomingEvent;
+        yield pubsubAgenticEvent(2, firstMessage) as IncomingEvent;
+        yield await new Promise<IncomingEvent>((resolve) => { resumeEvents = resolve; });
+      }),
+    });
+
+    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+
+    await waitFor(() => {
+      expect(latest!.messages.map((message) => message.id)).toEqual(["msg-1"]);
+      expect(latest!.messageTypes).toHaveLength(1);
+    });
+    const registryProjection = latest!.messageTypes;
+
+    act(() => {
+      resumeEvents!(pubsubAgenticEvent(3, secondMessage) as IncomingEvent);
+    });
+
+    await waitFor(() => {
+      expect(latest!.messages.map((message) => message.id)).toEqual(["msg-1", "msg-2"]);
+    });
+    expect(latest!.messageTypes).toBe(registryProjection);
   });
 });

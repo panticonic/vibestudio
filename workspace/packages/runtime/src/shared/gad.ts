@@ -75,6 +75,25 @@ export interface ChannelReplayWindow {
   hasMoreBefore?: boolean;
 }
 
+export interface ChannelMessageTypeDefinition {
+  typeId: string;
+  displayMode: "inline" | "row";
+  source: { type: "code"; code: string } | { type: "file"; path: string };
+  imports?: Record<string, string>;
+  schemaSourceOrPath?: unknown;
+  registeredBy?: Record<string, unknown>;
+  updatedAtSeq: number;
+  clearedAtSeq?: number;
+}
+
+export type RegistryMutationInput =
+  | {
+      kind: "upsertMessageType";
+      typeId: string;
+      row: Omit<ChannelMessageTypeDefinition, "typeId" | "updatedAtSeq" | "clearedAtSeq">;
+    }
+  | { kind: "clearMessageType"; typeId: string };
+
 export interface GadClient {
   rawSql(sql: string, bindings?: GadSqlBinding[]): Promise<GadSqlResult>;
   query(sql: string, bindings?: GadSqlBinding[]): Promise<GadSqlResult>;
@@ -87,6 +106,13 @@ export interface GadClient {
     envelopeId?: string | null;
     publishedAt?: string | null;
   }): Promise<ChannelEnvelope>;
+  appendChannelEnvelopeWithRegistryMutation(input: Omit<ChannelEnvelope, "seq" | "envelopeId" | "publishedAt"> & {
+    envelopeId?: string | null;
+    publishedAt?: string | null;
+    registryMutation: RegistryMutationInput;
+  }): Promise<ChannelEnvelope>;
+  listMessageTypes(input: { channelId: string }): Promise<ChannelMessageTypeDefinition[]>;
+  getMessageType(input: { channelId: string; typeId: string }): Promise<ChannelMessageTypeDefinition | null>;
   getChannelEnvelope(input: { envelopeId: string }): Promise<ChannelEnvelope | null>;
   getTrajectoryForEnvelope(input: { envelopeId: string }): Promise<EnvelopeLineage | null>;
   listPublishedEnvelopesForTrajectory(input: {
@@ -147,6 +173,9 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     appendTrajectoryBatch: (input) => call("appendTrajectoryBatch", input),
     listTrajectoryEvents: (input) => call("listTrajectoryEvents", input),
     appendChannelEnvelope: (input) => call("appendChannelEnvelope", input),
+    appendChannelEnvelopeWithRegistryMutation: (input) => call("appendChannelEnvelopeWithRegistryMutation", input),
+    listMessageTypes: (input) => call("listMessageTypes", input),
+    getMessageType: (input) => call("getMessageType", input),
     getChannelEnvelope: (input) => call("getChannelEnvelope", input),
     getTrajectoryForEnvelope: (input) => call("getTrajectoryForEnvelope", input),
     listPublishedEnvelopesForTrajectory: (input) => call("listPublishedEnvelopesForTrajectory", input),

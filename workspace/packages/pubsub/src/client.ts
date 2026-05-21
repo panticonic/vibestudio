@@ -13,6 +13,8 @@ import type {
   Attachment,
   ChannelConfig,
   ChannelReplayEnvelope,
+  MessageTypeDefinition,
+  RegisterMessageTypeInput,
 } from "./types.js";
 import type {
   EventStreamItem,
@@ -95,6 +97,28 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
 
   /** Get durable log rows after a sequence ID. */
   getReplayAfter(sinceId: number): Promise<ChannelReplayEnvelope>;
+
+  /** Fetch registered custom message types for this channel. */
+  getMessageTypes(): Promise<MessageTypeDefinition[]>;
+
+  /** Fetch one registered custom message type for this channel. */
+  getMessageType(typeId: string): Promise<MessageTypeDefinition | null>;
+
+  /** Register or replace a custom message type. */
+  registerMessageType(input: RegisterMessageTypeInput, options?: { idempotencyKey?: string }): Promise<number | undefined>;
+
+  /** Clear a custom message type registration. */
+  clearMessageType(typeId: string, options?: { idempotencyKey?: string }): Promise<number | undefined>;
+
+  /** Publish a custom message instance and return its message id and pubsub id. */
+  publishCustomMessage(input: {
+    typeId: string;
+    initialState?: unknown;
+    displayMode?: "inline" | "row";
+  }, options?: { idempotencyKey?: string }): Promise<{ messageId: string; pubsubId: number | undefined }>;
+
+  /** Publish an update for a custom message instance. */
+  updateCustomMessage(messageId: string, update: unknown, options?: { idempotencyKey?: string }): Promise<number | undefined>;
 
   /**
    * Async iterator for typed protocol events.

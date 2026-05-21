@@ -2,6 +2,7 @@
  * Types for the PubSub client.
  */
 
+import type { SandboxSource } from "./tracker-types.js";
 
 /**
  * Channel configuration persisted with the channel.
@@ -82,6 +83,27 @@ export interface ChannelReplayEnvelope {
   logEvents: ServerLogEvent[];
   snapshots: BootstrapSnapshot[];
   ready: ReplayReady;
+}
+
+export type CustomMessageDisplayMode = "inline" | "row";
+
+export interface MessageTypeDefinition {
+  typeId: string;
+  displayMode: CustomMessageDisplayMode;
+  source: SandboxSource;
+  imports?: Record<string, string>;
+  schemaSourceOrPath?: unknown;
+  registeredBy?: { kind: string; id: string; displayName?: string; metadata?: Record<string, unknown> };
+  updatedAtSeq: number;
+  clearedAtSeq?: number;
+}
+
+export interface RegisterMessageTypeInput {
+  typeId: string;
+  displayMode: CustomMessageDisplayMode;
+  source: SandboxSource;
+  imports?: Record<string, string>;
+  schemaSourceOrPath?: unknown;
 }
 
 /**

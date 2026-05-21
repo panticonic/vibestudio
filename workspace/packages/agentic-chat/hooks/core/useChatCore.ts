@@ -28,6 +28,7 @@ import {
   type ConnectionConfig,
   type ChatParticipantMetadata,
   type ChatMessage,
+  type MessageTypeDefinition,
   type PendingAgent,
   type DirtyRepoDetails,
   type DisconnectedAgentInfo,
@@ -87,6 +88,7 @@ export interface ChatCoreState {
    *  Surfaced via `ConnectionManager.onError`. Cleared by `dismissConnectionError`. */
   connectionError: { message: string; at: number } | null;
   dismissConnectionError: () => void;
+  client: PubSubClient<ChatParticipantMetadata> | null;
   clientRef: React.RefObject<PubSubClient<ChatParticipantMetadata> | null>;
   connectToChannel: (options: { channelId: string; methods: Record<string, MethodDefinition>; channelConfig?: ChannelConfig; contextId?: string }) => Promise<PubSubClient<ChatParticipantMetadata>>;
   hasConnectedRef: React.MutableRefObject<boolean>;
@@ -107,6 +109,7 @@ export interface ChatCoreState {
   loadingMore: boolean;
   loadEarlierMessages: () => Promise<void>;
   canonicalActionBar: ActionBarPayload | null;
+  messageTypes: MessageTypeDefinition[];
 
   // Actions
   sendMessage: (attachments?: AttachmentInput[]) => Promise<void>;
@@ -266,6 +269,7 @@ export function useChatCore({
   const {
     messages: channelMessages,
     actionBar: channelActionBar,
+    messageTypes,
     hasMoreHistory: channelHasMore,
     loadingMore: channelLoadingMore,
     loadEarlierMessages: channelLoadEarlier,
@@ -604,6 +608,7 @@ export function useChatCore({
     status,
     connectionError,
     dismissConnectionError,
+    client,
     clientRef,
     connectToChannel,
     hasConnectedRef,
@@ -618,6 +623,7 @@ export function useChatCore({
     loadingMore: channelLoadingMore,
     loadEarlierMessages,
     canonicalActionBar: channelActionBar,
+    messageTypes,
     sendMessage,
     handleInterruptAgent,
     handleCallMethod,

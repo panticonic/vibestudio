@@ -82,6 +82,13 @@ export interface CompileResult<T> {
   error?: string;
 }
 
+export interface CompileModuleResult<T extends Record<string, unknown> = Record<string, unknown>> {
+  success: boolean;
+  module?: T;
+  cacheKey?: string;
+  error?: string;
+}
+
 export interface CompileComponentOptions {
   /** Packages to build and load before compilation. Same semantics as eval imports. */
   imports?: Record<string, string>;
@@ -467,6 +474,60 @@ export async function compileComponent<T = ComponentType<Record<string, unknown>
     const cacheKey = transformed.code;
     const Component = executeDefault<T>(cacheKey);
     return { success: true, Component, cacheKey };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
+ * Compile TSX code and return the complete CommonJS module exports object.
+ *
+ * Custom message type modules use named exports (`reduce`, `Pill`, `schema`) in
+ * addition to their default component, so callers need the full module rather
+ * than just the default export.
+ */
+export async function compileModule<T extends Record<string, unknown> = Record<string, unknown>>(
+  code: string,
+  options: CompileComponentOptions = {},
+): Promise<CompileModuleResult<T>> {
+  try {
+    if (options.imports && Object.keys(options.imports).length > 0) {
+      if (!options.loadImport) {
+        throw new Error("loadImport callback required when imports are specified");
+      }
+      await loadImports(options.imports, options.loadImport);
+    }
+
+    const prepared = await prepareSourceCode(code, {
+      syntax: "tsx",
+      sourcePath: options.sourcePath,
+      sourceFiles: options.sourceFiles,
+      loadSourceFile: options.loadSourceFile,
+    }, (requires, context) => ensureRequires(requires, {
+      loadImport: options.loadImport,
+      loadSourceFile: options.loadSourceFile,
+      sourcePath: options.sourcePath,
+      imports: options.imports,
+    }, context));
+
+    const transformed = await transformCode(prepared.code, { syntax: "tsx" });
+
+    await ensureRequires(
+      transformed.requires.filter((specifier) => !prepared.localModuleIds.has(specifier)),
+      {
+        loadImport: options.loadImport,
+        loadSourceFile: options.loadSourceFile,
+        sourcePath: options.sourcePath,
+        imports: options.imports,
+      },
+    );
+
+    const cacheKey = transformed.code;
+    const result = execute(cacheKey);
+    return { success: true, module: result.exports as T, cacheKey };
   } catch (err) {
     return {
       success: false,

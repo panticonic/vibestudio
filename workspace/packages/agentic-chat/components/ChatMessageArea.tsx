@@ -21,6 +21,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     selfId,
     allParticipants,
     inlineUiComponents,
+    messageTypeComponents,
     hasMoreHistory,
     loadingMore,
     onLoadEarlierMessages,
@@ -28,6 +29,8 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     onFocusPanel,
     onReloadPanel,
     chat,
+    scope,
+    scopes,
   } = useChatContext();
 
   const mdxActions = useMemo(() => ({
@@ -43,6 +46,10 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
       selfId={selfId}
       allParticipants={allParticipants}
       inlineUiComponents={inlineUiComponents}
+      messageTypeComponents={messageTypeComponents}
+      chat={chat as unknown as Record<string, unknown>}
+      scope={scope}
+      scopes={scopes as unknown as Record<string, unknown>}
       hasMoreHistory={hasMoreHistory}
       loadingMore={loadingMore}
       onLoadEarlierMessages={onLoadEarlierMessages}

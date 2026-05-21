@@ -38,7 +38,12 @@ import {
   type BroadcastDeps,
   cleanupDeliveryChain,
 } from "./broadcast.js";
-import { GadChannelLogStore, type ChannelLogStore } from "./channel-log-store.js";
+import {
+  GadChannelLogStore,
+  type ChannelLogStore,
+  type MessageTypeDefinition,
+  type RegistryMutationInput,
+} from "./channel-log-store.js";
 import {
   storeCall,
   consumeCall,
@@ -66,8 +71,10 @@ function parseDOParticipantId(
 }
 
 export class PubSubChannel extends DurableObjectBase {
-  static override schemaVersion = 102;
+  static override schemaVersion = 103;
   private _channelLog: ChannelLogStore | null = null;
+  private _registryHydrated = false;
+  private _registryHydrationPromise: Promise<void> | null = null;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -117,6 +124,14 @@ export class PubSubChannel extends DurableObjectBase {
         created_at INTEGER NOT NULL
       )
     `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS message_types (
+        type_id TEXT PRIMARY KEY,
+        definition_json TEXT,
+        updated_at_seq INTEGER NOT NULL DEFAULT -1,
+        cleared_at_seq INTEGER
+      )
+    `);
   }
 
   protected override migrate(_fromVersion: number, _toVersion: number): void {
@@ -128,6 +143,7 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DROP TABLE IF EXISTS participants`);
     this.sql.exec(`DROP TABLE IF EXISTS pending_calls`);
     this.sql.exec(`DROP TABLE IF EXISTS dedup_keys`);
+    this.sql.exec(`DROP TABLE IF EXISTS message_types`);
     this.createTables();
   }
 
@@ -285,6 +301,48 @@ export class PubSubChannel extends DurableObjectBase {
     return { transportCallId, invocationId, turnId, content: eventObj.payload, isError: false, complete: false };
   }
 
+  private registryMutationFromPublishedPayload(type: string, payload: unknown): RegistryMutationInput | null {
+    if (type !== AGENTIC_EVENT_PAYLOAD_KIND || !payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    const event = payload as AgenticEvent;
+    if (event.kind === "messageType.registered") {
+      const body = event.payload as Record<string, unknown>;
+      const typeId = typeof body["typeId"] === "string" ? body["typeId"] : "";
+      const displayMode = body["displayMode"] === "inline" ? "inline" : body["displayMode"] === "row" ? "row" : null;
+      const source = body["source"];
+      if (!typeId || !displayMode || !source || typeof source !== "object" || Array.isArray(source)) return null;
+      const sourceRecord = source as Record<string, unknown>;
+      const normalizedSource =
+        sourceRecord["type"] === "code" && typeof sourceRecord["code"] === "string"
+          ? { type: "code" as const, code: sourceRecord["code"] }
+          : sourceRecord["type"] === "file" && typeof sourceRecord["path"] === "string"
+            ? { type: "file" as const, path: sourceRecord["path"] }
+            : null;
+      if (!normalizedSource) return null;
+      const row: RegistryMutationInput & { kind: "upsertMessageType" } = {
+        kind: "upsertMessageType",
+        typeId,
+        row: {
+          displayMode,
+          source: normalizedSource,
+        },
+      };
+      if (body["imports"] && typeof body["imports"] === "object" && !Array.isArray(body["imports"])) {
+        row.row.imports = body["imports"] as Record<string, string>;
+      }
+      if (body["schemaSourceOrPath"] !== undefined) row.row.schemaSourceOrPath = body["schemaSourceOrPath"];
+      if (body["registeredBy"] && typeof body["registeredBy"] === "object" && !Array.isArray(body["registeredBy"])) {
+        row.row.registeredBy = body["registeredBy"] as Record<string, unknown>;
+      }
+      return row;
+    }
+    if (event.kind === "messageType.cleared") {
+      const body = event.payload as Record<string, unknown>;
+      const typeId = typeof body["typeId"] === "string" ? body["typeId"] : "";
+      return typeId ? { kind: "clearMessageType", typeId } : null;
+    }
+    return null;
+  }
+
   private async appendLogEvent(
     type: string,
     payload: unknown,
@@ -303,6 +361,105 @@ export class PubSubChannel extends DurableObjectBase {
       messageId: opts?.messageId,
       attachments: opts?.attachments,
     });
+  }
+
+  private async appendRegistryEvent(
+    type: string,
+    payload: AgenticEvent,
+    senderId: string,
+    senderMetadata: Record<string, unknown> | undefined,
+    mutation: RegistryMutationInput,
+  ): Promise<ChannelEvent> {
+    await this.ensureRegistryHydrated();
+    const event = await this.channelLog.appendWithRegistryMutation({
+      type,
+      payload,
+      senderId,
+      senderMetadata,
+    }, mutation);
+    this.cacheMessageTypeMutation(event.id, mutation);
+    return event;
+  }
+
+  private cacheMessageTypeMutation(seq: number, mutation: RegistryMutationInput): void {
+    if (mutation.kind === "upsertMessageType") {
+      const definition: MessageTypeDefinition = {
+        typeId: mutation.typeId,
+        displayMode: mutation.row.displayMode,
+        source: mutation.row.source,
+        updatedAtSeq: seq,
+      };
+      if (mutation.row.imports !== undefined) definition.imports = mutation.row.imports;
+      if (mutation.row.schemaSourceOrPath !== undefined) definition.schemaSourceOrPath = mutation.row.schemaSourceOrPath;
+      if (mutation.row.registeredBy !== undefined) definition.registeredBy = mutation.row.registeredBy;
+      this.sql.exec(
+        `INSERT INTO message_types (type_id, definition_json, updated_at_seq, cleared_at_seq)
+         VALUES (?, ?, ?, NULL)
+         ON CONFLICT(type_id) DO UPDATE SET
+           definition_json = excluded.definition_json,
+           updated_at_seq = excluded.updated_at_seq,
+           cleared_at_seq = NULL
+         WHERE excluded.updated_at_seq > message_types.updated_at_seq
+           AND excluded.updated_at_seq > COALESCE(message_types.cleared_at_seq, -1)`,
+        mutation.typeId,
+        JSON.stringify(definition),
+        seq,
+      );
+      return;
+    }
+    this.sql.exec(
+      `INSERT INTO message_types (type_id, updated_at_seq, cleared_at_seq)
+       VALUES (?, -1, ?)
+       ON CONFLICT(type_id) DO UPDATE SET
+         cleared_at_seq = MAX(COALESCE(message_types.cleared_at_seq, -1), excluded.cleared_at_seq)`,
+      mutation.typeId,
+      seq,
+    );
+  }
+
+  private cacheMessageTypes(definitions: MessageTypeDefinition[]): void {
+    for (const definition of definitions) {
+      this.sql.exec(
+        `INSERT INTO message_types (type_id, definition_json, updated_at_seq, cleared_at_seq)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(type_id) DO UPDATE SET
+           definition_json = excluded.definition_json,
+           updated_at_seq = excluded.updated_at_seq,
+           cleared_at_seq = excluded.cleared_at_seq`,
+        definition.typeId,
+        JSON.stringify(definition),
+        definition.updatedAtSeq,
+        definition.clearedAtSeq ?? null,
+      );
+    }
+  }
+
+  private localMessageTypes(): MessageTypeDefinition[] {
+    const rows = this.sql
+      .exec(`SELECT definition_json FROM message_types WHERE definition_json IS NOT NULL AND updated_at_seq > COALESCE(cleared_at_seq, -1)`)
+      .toArray();
+    return rows.flatMap((row) => {
+      try {
+        return [JSON.parse(row["definition_json"] as string) as MessageTypeDefinition];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  private async ensureRegistryHydrated(): Promise<void> {
+    if (this._registryHydrated) return;
+    if (!this._registryHydrationPromise) {
+      this._registryHydrationPromise = (async () => {
+        const definitions = await this.channelLog.listMessageTypes();
+        this.sql.exec(`DELETE FROM message_types`);
+        this.cacheMessageTypes(definitions);
+        this._registryHydrated = true;
+      })().finally(() => {
+        this._registryHydrationPromise = null;
+      });
+    }
+    await this._registryHydrationPromise;
   }
 
   private currentReplayContext(): {
@@ -924,6 +1081,38 @@ export class PubSubChannel extends DurableObjectBase {
     }
 
     const senderMetadata = this.getSenderMetadata(participantId) ?? opts?.senderMetadata;
+    const registryMutation = this.registryMutationFromPublishedPayload(type, payload);
+    if (
+      type === AGENTIC_EVENT_PAYLOAD_KIND &&
+      payload &&
+      typeof payload === "object" &&
+      !Array.isArray(payload) &&
+      (((payload as AgenticEvent).kind === "messageType.registered") ||
+        ((payload as AgenticEvent).kind === "messageType.cleared")) &&
+      !registryMutation
+    ) {
+      throw new Error(`Invalid registry payload for ${(payload as AgenticEvent).kind}`);
+    }
+    if (registryMutation) {
+      const event = await this.appendRegistryEvent(
+        type,
+        payload as AgenticEvent,
+        participantId,
+        senderMetadata,
+        registryMutation,
+      );
+      if (idempotencyKey) {
+        this.sql.exec(
+          `INSERT OR IGNORE INTO dedup_keys (key, result_id, created_at) VALUES (?, ?, ?)`,
+          idempotencyKey,
+          event.id,
+          Date.now()
+        );
+        this.scheduleDedupCleanup();
+      }
+      broadcast(this.broadcastDeps, event, { kind: "log", phase: "live", ref }, participantId);
+      return { id: event.id };
+    }
 
     // Extract messageId from payload
     const payloadObj =
@@ -1126,13 +1315,54 @@ export class PubSubChannel extends DurableObjectBase {
     return this.channelLog.replayBefore(beforeSeq, limit ?? 100, this.currentReplayContext());
   }
 
+  async getMessageTypes(): Promise<MessageTypeDefinition[]> {
+    await this.ensureRegistryHydrated();
+    return this.localMessageTypes();
+  }
+
+  async getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
+    await this.ensureRegistryHydrated();
+    const cachedState = this.sql
+      .exec(
+        `SELECT updated_at_seq, cleared_at_seq FROM message_types WHERE type_id = ? LIMIT 1`,
+        typeId,
+      )
+      .toArray()[0];
+    if (
+      cachedState &&
+      typeof cachedState["cleared_at_seq"] === "number" &&
+      Number(cachedState["cleared_at_seq"]) >= Number(cachedState["updated_at_seq"] ?? -1)
+    ) {
+      return null;
+    }
+    const rows = this.sql
+      .exec(
+        `SELECT definition_json FROM message_types
+         WHERE type_id = ? AND definition_json IS NOT NULL
+           AND updated_at_seq > COALESCE(cleared_at_seq, -1)
+         LIMIT 1`,
+        typeId,
+      )
+      .toArray();
+    if (rows.length > 0) {
+      try {
+        return JSON.parse(rows[0]!["definition_json"] as string) as MessageTypeDefinition;
+      } catch {
+        /* fall through */
+      }
+    }
+    const definition = await this.channelLog.getMessageType(typeId);
+    if (definition) this.cacheMessageTypes([definition]);
+    return definition;
+  }
+
   async adminInspectSchema() {
     this.assertAdminCaller("adminInspectSchema");
-    const tables = ["participants", "pending_calls", "dedup_keys"].map((table) => ({
+    const tables = ["participants", "pending_calls", "dedup_keys", "message_types"].map((table) => ({
       table,
       columns: this.sql.exec(`PRAGMA table_info(${table})`).toArray(),
     }));
-    const indexes = ["participants", "pending_calls", "dedup_keys"].flatMap((table) => {
+    const indexes = ["participants", "pending_calls", "dedup_keys", "message_types"].flatMap((table) => {
       const list = this.sql.exec(`PRAGMA index_list(${table})`).toArray();
       return list.map((idx) => ({
         table,

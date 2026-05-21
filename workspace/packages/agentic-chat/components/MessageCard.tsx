@@ -7,7 +7,8 @@ import { MessageContent } from "./MessageContent";
 import { ImageGallery } from "./ImageGallery";
 import { InlineUiMessage, parseInlineUiData } from "./InlineUiMessage";
 import { AgentDisconnectedMessage } from "./AgentDisconnectedMessage";
-import type { ChatMessage, ChatParticipantMetadata, InlineUiComponentEntry } from "../types";
+import { CustomMessageCard } from "./CustomMessage";
+import type { ChatMessage, InlineUiComponentEntry, MessageTypeComponentEntry } from "../types";
 import type { MdxActionHandlers } from "./markdownComponents";
 
 interface MessageCardProps {
@@ -18,6 +19,10 @@ interface MessageCardProps {
   /** Whether this specific message was just copied (shows checkmark icon) */
   isCopied: boolean;
   inlineUiComponents?: Map<string, InlineUiComponentEntry>;
+  messageTypeComponents?: Map<string, MessageTypeComponentEntry>;
+  chat?: Record<string, unknown>;
+  scope?: Record<string, unknown>;
+  scopes?: Record<string, unknown>;
   onInterrupt: (msgId: string, senderId: string) => void;
   onCopy: (msgId: string, content: string) => void;
   onClearCopied: (msgId: string) => void;
@@ -43,6 +48,10 @@ export const MessageCard = React.memo(function MessageCard({
   isStreaming,
   isCopied,
   inlineUiComponents,
+  messageTypeComponents,
+  chat = {},
+  scope = {},
+  scopes = {},
   onInterrupt,
   onCopy,
   onClearCopied,
@@ -136,6 +145,24 @@ export const MessageCard = React.memo(function MessageCard({
             )}
           </Flex>
         </Card>
+      </Box>
+    );
+  }
+
+  const custom = msg.contentType === "custom" ? msg.custom : undefined;
+  if (custom && custom.displayMode !== "inline") {
+    return (
+      <Box
+        key={key}
+        className="message-row message-row-agent"
+      >
+        <CustomMessageCard
+          payload={custom}
+          entry={messageTypeComponents?.get(custom.typeId)}
+          chat={chat}
+          scope={scope}
+          scopes={scopes}
+        />
       </Box>
     );
   }

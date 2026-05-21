@@ -25,4 +25,8 @@ export const CONTENT_TYPE_ACTION = "action" as const;
  */
 export const CONTENT_TYPE_INLINE_UI = "inline_ui" as const;
 
+/**
+ * Content type constant for runtime-registered custom message renderers.
+ */
+export const CONTENT_TYPE_CUSTOM = "custom" as const;
 

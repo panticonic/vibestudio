@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
 import { GadWorkspaceDO } from "../gad-store/index.js";
 import { PubSubChannel } from "./channel-do.js";
 
@@ -17,6 +17,20 @@ function agenticEvent(kind = "message.completed") {
     actor: { kind: "user", id: "panel:user" },
     causality: { messageId: "msg-1" },
     payload: { protocol: "agentic.trajectory.v1", role: "user", content: "hello" },
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function messageTypeRegisteredEvent(typeId: string, code = "export default function App() { return null; }") {
+  return {
+    kind: "messageType.registered",
+    actor: { kind: "panel", id: "panel:user" },
+    payload: {
+      protocol: AGENTIC_PROTOCOL_VERSION,
+      typeId,
+      displayMode: "row",
+      source: { type: "code", code },
+    },
     createdAt: new Date().toISOString(),
   };
 }
@@ -230,5 +244,83 @@ describe("PubSubChannel", () => {
       turnId: "turn-1",
       causality: { invocationId: "invocation-1", transportCallId: "transport-1" },
     });
+  });
+
+  it("hydrates the message type registry from GAD instead of trusting a partial local cache", async () => {
+    const { instance, gad } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+
+    (instance as unknown as {
+      cacheMessageTypeMutation: (seq: number, mutation: {
+        kind: "upsertMessageType";
+        typeId: string;
+        row: { displayMode: "row"; source: { type: "code"; code: string } };
+      }) => void;
+    }).cacheMessageTypeMutation(1, {
+      kind: "upsertMessageType",
+      typeId: "weather",
+      row: {
+        displayMode: "row",
+        source: { type: "code", code: "export default function Weather() { return null; }" },
+      },
+    });
+    await gad.instance.appendChannelEnvelopeWithRegistryMutation({
+      channelId: "channel-1" as never,
+      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      payload: messageTypeRegisteredEvent("weather"),
+      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      registryMutation: {
+        kind: "upsertMessageType",
+        typeId: "weather",
+        row: {
+          displayMode: "row",
+          source: { type: "code", code: "export default function Weather() { return null; }" },
+        },
+      },
+    });
+    await gad.instance.appendChannelEnvelopeWithRegistryMutation({
+      channelId: "channel-1" as never,
+      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      payload: messageTypeRegisteredEvent("calendar"),
+      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      registryMutation: {
+        kind: "upsertMessageType",
+        typeId: "calendar",
+        row: {
+          displayMode: "row",
+          source: { type: "code", code: "export default function Calendar() { return null; }" },
+        },
+      },
+    });
+
+    await expect(instance.getMessageTypes()).resolves.toEqual([
+      expect.objectContaining({ typeId: "calendar" }),
+      expect.objectContaining({ typeId: "weather" }),
+    ]);
+  });
+
+  it("rejects malformed message type registry events instead of persisting plain log rows", async () => {
+    const { instance, gad } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+
+    await expect(instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, {
+      kind: "messageType.registered",
+      actor: { kind: "panel", id: "panel:user" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        typeId: "broken",
+        displayMode: "bad",
+        source: { type: "code", code: "export default function Broken() { return null; }" },
+      },
+      createdAt: new Date().toISOString(),
+    })).rejects.toThrow(/Invalid registry payload/);
+
+    const rows = gad.sql.exec(
+      `SELECT payload_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
+      AGENTIC_EVENT_PAYLOAD_KIND,
+    ).toArray();
+    expect(rows.map((row) => JSON.parse(row["payload_json"] as string).kind)).not.toContain("messageType.registered");
   });
 });

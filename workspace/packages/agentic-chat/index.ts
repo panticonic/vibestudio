@@ -47,6 +47,8 @@ export { useInlineUi } from "./hooks/features/useInlineUi";
 export type { InlineUiState } from "./hooks/features/useInlineUi";
 export { useActionBar, parseActionBarData } from "./hooks/features/useActionBar";
 export type { ActionBarHookState } from "./hooks/features/useActionBar";
+export { useMessageTypeRegistry } from "./hooks/features/useMessageTypeRegistry";
+export type { MessageTypeRegistryState } from "./hooks/features/useMessageTypeRegistry";
 
 // --- High-level components ---
 export { AgenticChat } from "./components/AgenticChat";

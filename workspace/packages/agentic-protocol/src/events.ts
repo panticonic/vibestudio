@@ -47,6 +47,10 @@ export type EventKind =
   | "approval.resolved"
   | "ui.inline_rendered"
   | "ui.action_bar.updated"
+  | "messageType.registered"
+  | "messageType.cleared"
+  | "custom.started"
+  | "custom.updated"
   | "state.file_observed"
   | "state.file_mutation_intended"
   | "state.file_mutation_applied"
@@ -146,6 +150,38 @@ export type ApprovalPayload =
 export type SandboxSourcePayload =
   | { type: "code"; code: string }
   | { type: "file"; path: string };
+
+export type CustomMessageDisplayMode = "inline" | "row";
+
+export interface MessageTypeRegisteredPayload {
+  protocol: "agentic.trajectory.v1";
+  typeId: string;
+  displayMode: CustomMessageDisplayMode;
+  source: SandboxSourcePayload;
+  imports?: Record<string, string>;
+  schemaSourceOrPath?: unknown;
+  registeredBy?: ActorRef;
+}
+
+export interface MessageTypeClearedPayload {
+  protocol: "agentic.trajectory.v1";
+  typeId: string;
+}
+
+export interface CustomStartedPayload {
+  protocol: "agentic.trajectory.v1";
+  messageId: MessageId;
+  typeId: string;
+  displayMode?: CustomMessageDisplayMode;
+  initialState?: unknown;
+  by?: ActorRef;
+}
+
+export interface CustomUpdatedPayload {
+  protocol: "agentic.trajectory.v1";
+  messageId: MessageId;
+  update: unknown;
+}
 
 export type UiPayload =
   | {
@@ -270,6 +306,10 @@ export type PayloadFor<K extends EventKind> =
   K extends `invocation.${string}` ? InvocationPayload :
   K extends `approval.${string}` ? ApprovalPayload :
   K extends `ui.${string}` ? UiPayload :
+  K extends "messageType.registered" ? MessageTypeRegisteredPayload :
+  K extends "messageType.cleared" ? MessageTypeClearedPayload :
+  K extends "custom.started" ? CustomStartedPayload :
+  K extends "custom.updated" ? CustomUpdatedPayload :
   K extends "external.envelope_published" ? ExternalEnvelopePublishedPayload :
   K extends "external.envelope_observed" ? ExternalEnvelopeObservedPayload :
   K extends "external.participant_observed" ? ExternalParticipantObservedPayload :

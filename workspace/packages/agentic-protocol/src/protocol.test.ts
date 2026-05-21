@@ -297,6 +297,146 @@ describe("@workspace/agentic-protocol reducers", () => {
     expect(state.inlineUi["participant-agent-1"]?.["inline-1"]?.props).toEqual({ ok: true });
     expect(state.actionBars["participant-agent-1"]?.source).toEqual({ type: "file", path: "ActionBar.tsx" });
   });
+
+  it("merges custom message updates before starts and keeps updates sorted by seq", () => {
+    const update2: AgenticEvent<"custom.updated"> = {
+      kind: "custom.updated",
+      actor: agent,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, messageId: brandId<MessageId>("custom-1"), update: { tempF: 72 } },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const duplicateUpdate2: AgenticEvent<"custom.updated"> = {
+      ...update2,
+      payload: { ...update2.payload, update: { tempF: 999 } },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+    const started: AgenticEvent<"custom.started"> = {
+      kind: "custom.started",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        messageId: brandId<MessageId>("custom-1"),
+        typeId: "weather",
+        initialState: { tempF: 70 },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const update1: AgenticEvent<"custom.updated"> = {
+      kind: "custom.updated",
+      actor: agent,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, messageId: brandId<MessageId>("custom-1"), update: { tempF: 71 } },
+      createdAt: "2026-05-20T12:00:01.500Z",
+    };
+
+    const state = [
+      envelope(update2, 3),
+      envelope(started, 1),
+      envelope(update1, 2),
+      {
+        ...envelope(duplicateUpdate2, 3),
+        envelopeId: brandId<EnvelopeId>("env-duplicate-seq"),
+      },
+    ].reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(state.customMessages["custom-1"]).toMatchObject({
+      messageId: "custom-1",
+      typeId: "weather",
+      startedAtSeq: 1,
+      lastSeq: 3,
+      updatedAt: "2026-05-20T12:00:02.000Z",
+    });
+    expect(state.customMessages["custom-1"]?.updates).toEqual([
+      { seq: 2, update: { tempF: 71 } },
+      { seq: 3, update: { tempF: 72 } },
+    ]);
+  });
+
+  it("does not resurrect a cleared message type from older registration replay", () => {
+    const oldRegister: AgenticEvent<"messageType.registered"> = {
+      kind: "messageType.registered",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        typeId: "weather",
+        displayMode: "row",
+        source: { type: "code", code: "export default function Weather() { return null; }" },
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const currentRegister: AgenticEvent<"messageType.registered"> = {
+      ...oldRegister,
+      payload: {
+        ...oldRegister.payload,
+        source: { type: "code", code: "export default function CurrentWeather() { return null; }" },
+      },
+      createdAt: "2026-05-20T12:00:10.000Z",
+    };
+    const clear: AgenticEvent<"messageType.cleared"> = {
+      kind: "messageType.cleared",
+      actor: agent,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, typeId: "weather" },
+      createdAt: "2026-05-20T12:00:20.000Z",
+    };
+    const replayedAfterRegister: AgenticEvent<"messageType.registered"> = {
+      ...oldRegister,
+      payload: {
+        ...oldRegister.payload,
+        source: { type: "code", code: "export default function ReplayedWeather() { return null; }" },
+      },
+      createdAt: "2026-05-20T12:00:15.000Z",
+    };
+
+    const state = [
+      envelope(currentRegister, 10),
+      envelope(clear, 20),
+      envelope(replayedAfterRegister, 15),
+      envelope(oldRegister, 5),
+    ].reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(state.messageTypes["weather"]?.updatedAtSeq).toBe(10);
+    expect(state.messageTypes["weather"]?.clearedAtSeq).toBe(20);
+    expect(state.messageTypes["weather"]?.source).toEqual(currentRegister.payload.source);
+  });
+
+  it("does not let older custom.started envelopes clobber an existing start", () => {
+    const newerStarted: AgenticEvent<"custom.started"> = {
+      kind: "custom.started",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        messageId: brandId<MessageId>("custom-start-order"),
+        typeId: "weather.v2",
+        initialState: { city: "Berlin" },
+        displayMode: "row",
+      },
+      createdAt: "2026-05-20T12:00:10.000Z",
+    };
+    const olderStarted: AgenticEvent<"custom.started"> = {
+      kind: "custom.started",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        messageId: brandId<MessageId>("custom-start-order"),
+        typeId: "weather.v1",
+        initialState: { city: "Paris" },
+        displayMode: "inline",
+      },
+      createdAt: "2026-05-20T12:00:05.000Z",
+    };
+
+    const state = [
+      envelope(newerStarted, 10),
+      envelope(olderStarted, 5),
+    ].reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(state.customMessages["custom-start-order"]).toMatchObject({
+      typeId: "weather.v2",
+      initialState: { city: "Berlin" },
+      displayMode: "row",
+      startedAtSeq: 10,
+      lastSeq: -1,
+    });
+  });
 });
 
 describe("@workspace/agentic-protocol hash helpers", () => {

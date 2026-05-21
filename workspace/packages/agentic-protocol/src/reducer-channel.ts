@@ -1,5 +1,14 @@
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "./constants.js";
-import type { AgenticEvent } from "./events.js";
+import type {
+  ActorRef,
+  AgenticEvent,
+  CustomStartedPayload,
+  CustomUpdatedPayload,
+  CustomMessageDisplayMode,
+  MessageTypeClearedPayload,
+  MessageTypeRegisteredPayload,
+  SandboxSourcePayload,
+} from "./events.js";
 import type { ChannelEnvelope, ChannelRosterEntry } from "./envelopes.js";
 import type { ApprovalMap, InlineUiMap, InvocationMap, MessageMap, ProjectedActionBar, TurnMap } from "./handlers.js";
 import {
@@ -19,6 +28,35 @@ export interface ChannelTimelineEntry {
   createdAt: string;
 }
 
+export interface ProjectedMessageTypeDefinition {
+  typeId: string;
+  displayMode?: CustomMessageDisplayMode;
+  source?: SandboxSourcePayload;
+  imports?: Record<string, string>;
+  schemaSourceOrPath?: unknown;
+  registeredBy?: ActorRef;
+  updatedAtSeq: number;
+  clearedAtSeq?: number;
+}
+
+export interface ProjectedCustomMessageUpdate {
+  update: unknown;
+  seq: number;
+}
+
+export interface ProjectedCustomMessage {
+  messageId: string;
+  typeId?: string;
+  displayMode?: CustomMessageDisplayMode;
+  initialState?: unknown;
+  by?: ActorRef;
+  startedAtSeq?: number;
+  startedAt?: string;
+  updatedAt?: string;
+  updates: ProjectedCustomMessageUpdate[];
+  lastSeq: number;
+}
+
 export interface ChannelViewState {
   channelId?: string;
   cursor?: number;
@@ -27,6 +65,8 @@ export interface ChannelViewState {
   approvals: ApprovalMap;
   inlineUi: Record<string, InlineUiMap>;
   actionBars: Record<string, ProjectedActionBar | undefined>;
+  messageTypes: Record<string, ProjectedMessageTypeDefinition>;
+  customMessages: Record<string, ProjectedCustomMessage>;
   turns: TurnMap;
   roster: Record<string, ChannelRosterEntry>;
   timeline: ChannelTimelineEntry[];
@@ -41,6 +81,8 @@ export function createInitialChannelViewState(): ChannelViewState {
     approvals: {},
     inlineUi: {},
     actionBars: {},
+    messageTypes: {},
+    customMessages: {},
     turns: {},
     roster: {},
     timeline: [],
@@ -127,6 +169,100 @@ export function reduceChannelView(
         [participantId]: actionBar,
       },
     };
+  } else if (event.kind === "messageType.registered") {
+    const payload = event.payload as MessageTypeRegisteredPayload;
+    const existing = next.messageTypes[payload.typeId];
+    const clearedAtSeq = existing?.clearedAtSeq;
+    if (parsed.seq > (existing?.updatedAtSeq ?? -1) && parsed.seq > (clearedAtSeq ?? -1)) {
+      next = {
+        ...next,
+        messageTypes: {
+          ...next.messageTypes,
+          [payload.typeId]: {
+            typeId: payload.typeId,
+            displayMode: payload.displayMode,
+            source: payload.source,
+            imports: payload.imports,
+            schemaSourceOrPath: payload.schemaSourceOrPath,
+            registeredBy: payload.registeredBy,
+            updatedAtSeq: parsed.seq,
+            ...(clearedAtSeq !== undefined ? { clearedAtSeq } : {}),
+          },
+        },
+      };
+    }
+  } else if (event.kind === "messageType.cleared") {
+    const payload = event.payload as MessageTypeClearedPayload;
+    const existing = next.messageTypes[payload.typeId];
+    const clearedAtSeq = Math.max(existing?.clearedAtSeq ?? -1, parsed.seq);
+    const cleared = existing
+      ? { ...existing, clearedAtSeq }
+      : { typeId: payload.typeId, updatedAtSeq: -1, clearedAtSeq };
+    next = {
+      ...next,
+      messageTypes: {
+        ...next.messageTypes,
+        [payload.typeId]: cleared,
+      },
+    };
+  } else if (event.kind === "custom.started") {
+    const payload = event.payload as CustomStartedPayload;
+    const existing: ProjectedCustomMessage = next.customMessages[payload.messageId] ?? {
+      messageId: payload.messageId,
+      updates: [],
+      lastSeq: -1,
+    };
+    const shouldFillStart = existing.startedAtSeq === undefined;
+    if (shouldFillStart) {
+      next = {
+        ...next,
+        customMessages: {
+          ...next.customMessages,
+          [payload.messageId]: {
+            ...existing,
+            typeId: payload.typeId,
+            displayMode: payload.displayMode,
+            initialState: payload.initialState,
+            by: payload.by ?? event.actor,
+            startedAtSeq: parsed.seq,
+            startedAt: event.createdAt,
+            updatedAt: existing.updatedAt ?? event.createdAt,
+            lastSeq: existing.lastSeq,
+          },
+        },
+      };
+    }
+  } else if (event.kind === "custom.updated") {
+    const payload = event.payload as CustomUpdatedPayload;
+    const existing: ProjectedCustomMessage = next.customMessages[payload.messageId] ?? {
+      messageId: payload.messageId,
+      updates: [],
+      lastSeq: -1,
+    };
+    if (existing.updates.some((update) => update.seq === parsed.seq)) {
+      next = next.customMessages[payload.messageId] ? next : {
+        ...next,
+        customMessages: {
+          ...next.customMessages,
+          [payload.messageId]: existing,
+        },
+      };
+    } else {
+      const updates = [...existing.updates, { update: payload.update, seq: parsed.seq }]
+        .sort((a, b) => a.seq - b.seq);
+      next = {
+        ...next,
+        customMessages: {
+          ...next.customMessages,
+          [payload.messageId]: {
+            ...existing,
+            updates,
+            updatedAt: parsed.seq >= existing.lastSeq ? event.createdAt : existing.updatedAt,
+            lastSeq: Math.max(existing.lastSeq, parsed.seq),
+          },
+        },
+      };
+    }
   } else if (event.kind === "turn.opened" || event.kind === "turn.closed") {
     const turnId = event.turnId;
     if (turnId) {

@@ -58,7 +58,24 @@ export type {
   InlineUiCardPayload,
   ActionBarPayload,
   ApprovalCardPayload,
+  CustomMessageCardPayload,
+  CustomMessageDisplayMode,
+  CustomMessageUpdatePayload,
+  ActiveMessageTypeDefinition,
+  ClearedMessageTypeDefinition,
+  MessageTypeDefinition,
+  ProjectedMessageTypeDefinition,
 } from "./derived-types.js";
+
+export {
+  compileMessageTypeModule,
+  foldCustomMessageState,
+} from "./custom-message-types.js";
+export type {
+  CustomMessageComponentProps,
+  CustomMessagePillProps,
+  MessageTypeModule,
+} from "./custom-message-types.js";
 
 // --- Invocation card payload (derived UI shape for invocation events) ---
 export type { InvocationCardPayload, ToolExecutionState } from "./invocation-card-payload.js";
@@ -68,6 +85,7 @@ export { parseInvocationCardPayload } from "./invocation-card-payload.js";
 export {
   actionBarPayloadFromChannelView,
   chatMessagesFromChannelView,
+  messageTypeDefinitionsFromChannelView,
 } from "./channel-chat-merge.js";
 
 // --- Invocation result helpers ---
