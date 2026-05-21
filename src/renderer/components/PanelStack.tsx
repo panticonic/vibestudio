@@ -907,7 +907,14 @@ export function PanelStack({
       style={{ flex: 1, minHeight: 0 }}
       ref={containerRef}
     >
-      <Flex gap="0" flexGrow="1" minHeight="0">
+      <Flex
+        gap="0"
+        style={{
+          flex: 1,
+          minHeight: 0,
+          alignItems: "stretch",
+        }}
+      >
         {isTreeNavigation && (
           <Card
             className="app-shell-panel-card"
@@ -916,11 +923,13 @@ export function PanelStack({
               width: `${sidebarWidth}px`,
               minWidth: "200px",
               flexShrink: 0,
-              height: "100%",
+              alignSelf: "stretch",
               overflow: "hidden",
+              display: "flex",
+              flexDirection: "column",
             }}
           >
-            <Flex direction="column" height="100%" gap="2">
+            <Flex direction="column" gap="2" style={{ flex: 1, minHeight: 0 }}>
               <Flex align="center" justify="between" px="1" pt="1">
                 <Heading size="2" weight="medium">
                   Panel tree
@@ -949,7 +958,7 @@ export function PanelStack({
               cursor: "col-resize",
               flexShrink: 0,
               width: 8,
-              height: "100%",
+              alignSelf: "stretch",
               touchAction: "none",
               backgroundColor:
                 isResizingSidebar || isResizeHover ? "var(--gray-8)" : "var(--gray-6)",
@@ -959,7 +968,7 @@ export function PanelStack({
         )}
 
         {/* Current Panel Content */}
-        <Flex direction="column" flexGrow="1" gap="0" minHeight="0">
+        <Flex direction="column" gap="0" style={{ flex: 1, minHeight: 0 }}>
           <SavePasswordBar visiblePanelId={visiblePanelId} />
           <Card
             className="app-shell-panel-card"

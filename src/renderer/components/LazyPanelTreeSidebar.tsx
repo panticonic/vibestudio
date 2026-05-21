@@ -490,7 +490,7 @@ export function LazyPanelTreeSidebar({
 
   if (flattenedItems.length === 0) {
     return (
-      <Flex direction="column" height="100%">
+      <Flex direction="column" style={{ flex: 1, minHeight: 0 }}>
         <Flex style={{ flex: 1 }} align="center" justify="center">
           <Text color="gray">No panels yet</Text>
         </Flex>
