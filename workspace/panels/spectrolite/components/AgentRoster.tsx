@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { Badge, Button, DropdownMenu, Flex, Text } from "@radix-ui/themes";
 import { PersonIcon, PlusIcon, Cross2Icon } from "@radix-ui/react-icons";
+import { useIsMobile } from "@workspace/react";
 import type { AvailableAgent } from "../bootstrap";
 
 export interface RosterAgent {
@@ -26,7 +27,77 @@ export interface AgentRosterProps {
 }
 
 export function AgentRoster({ agents, availableAgents, onAdd, onRemove, disabled }: AgentRosterProps) {
+  const isMobile = useIsMobile();
   const [busy, setBusy] = useState(false);
+
+  // On mobile, stack agents vertically with full-width rows; the
+  // horizontal-strip layout (designed for the desktop header) becomes
+  // unreadable on narrow screens.
+  if (isMobile) {
+    return (
+      <Flex direction="column" gap="2">
+        {agents.map((agent) => (
+          <Flex
+            key={agent.handle}
+            align="center"
+            justify="between"
+            gap="2"
+            px="2"
+            style={{
+              minHeight: 48,
+              border: "1px solid var(--gray-5)",
+              borderRadius: "var(--radius-2)",
+              background: agent.status === "live" ? "var(--blue-2)" : "var(--gray-2)",
+            }}
+          >
+            <Flex align="center" gap="2">
+              <PersonIcon />
+              <Text size="2" weight="medium">@{agent.handle}</Text>
+              {agent.status !== "live" ? <Text size="1" color="gray">pending</Text> : null}
+            </Flex>
+            <Button
+              size="2"
+              variant="ghost"
+              color="gray"
+              disabled={disabled || busy}
+              onClick={async () => {
+                setBusy(true);
+                try { await onRemove(agent.handle); } finally { setBusy(false); }
+              }}
+              aria-label={`Remove @${agent.handle}`}
+              style={{ minHeight: 40, minWidth: 40 }}
+            >
+              <Cross2Icon />
+            </Button>
+          </Flex>
+        ))}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            <Button size="3" variant="soft" color="gray" disabled={disabled || busy || availableAgents.length === 0} style={{ minHeight: 48 }}>
+              <PlusIcon /> Add agent
+            </Button>
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content>
+            {availableAgents.length === 0 ? (
+              <DropdownMenu.Item disabled>(no agents available)</DropdownMenu.Item>
+            ) : (
+              availableAgents.map((a) => (
+                <DropdownMenu.Item
+                  key={`${a.id}-${a.className}`}
+                  onSelect={async () => {
+                    setBusy(true);
+                    try { await onAdd(a.id); } finally { setBusy(false); }
+                  }}
+                >
+                  {a.name} <Text color="gray" size="1">({a.className})</Text>
+                </DropdownMenu.Item>
+              ))
+            )}
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      </Flex>
+    );
+  }
 
   return (
     <Flex align="center" gap="2">

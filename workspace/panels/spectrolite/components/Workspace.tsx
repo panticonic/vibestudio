@@ -25,7 +25,7 @@
 
 import { promises as fs } from "fs";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, DropdownMenu, Flex, Heading, IconButton, Text, Theme } from "@radix-ui/themes";
+import { Box, Button, Flex, Heading, IconButton, Text, Theme } from "@radix-ui/themes";
 import { CheckCircledIcon, DotsHorizontalIcon, FilePlusIcon, HamburgerMenuIcon, LightningBoltIcon } from "@radix-ui/react-icons";
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
 import { rpc, recoveryCoordinator, useStateArgs, setStateArgs } from "@workspace/runtime";
@@ -53,6 +53,7 @@ import { VaultPicker } from "./VaultPicker";
 import { MobileSidebar } from "./mobile/MobileSidebar";
 import { BottomSheet } from "./mobile/BottomSheet";
 import { MobileCommitButton } from "./mobile/MobileCommitButton";
+import { WorkspaceSettingsSheet } from "./mobile/WorkspaceSettingsSheet";
 import type { MentionCandidate } from "./MentionAutocomplete";
 import { createFlushController } from "../flush/flush-controller";
 import { buildFlushPayload } from "../flush/diff";
@@ -177,11 +178,12 @@ export function Workspace({
   const [drawerOpenSignal, setDrawerOpenSignal] = useState(0);
   const requestDrawerOpen = useCallback(() => setDrawerOpenSignal((n) => n + 1), []);
 
-  // Mobile UI state: slide-in sidebar (file tree) + commit bottom sheet.
-  // Closing the sidebar when a file is picked is the natural "I'm done
-  // browsing, take me to the doc" handoff.
+  // Mobile UI state: slide-in sidebar (file tree), commit bottom sheet,
+  // workspace-settings bottom sheet (vault/branch/agents). Each opens
+  // independently; tapping a file in the sidebar closes it.
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [commitSheetOpen, setCommitSheetOpen] = useState(false);
+  const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
   const closeMobileSidebar = useCallback(() => setMobileSidebarOpen(false), []);
   const handleOpenInSidebar = useCallback((path: string) => {
     setActivePath(path);
@@ -611,39 +613,15 @@ export function Workspace({
                   <Text size="1" color="gray" truncate as="div">{repoRoot.replace(/^\//, "")}</Text>
                 )}
               </Box>
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger>
-                  <IconButton size="3" variant="ghost" color="gray" aria-label="Workspace settings">
-                    <DotsHorizontalIcon />
-                  </IconButton>
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Content>
-                  <DropdownMenu.Item onSelect={onSwitchVault}>Switch vault…</DropdownMenu.Item>
-                  <DropdownMenu.Sub>
-                    <DropdownMenu.SubTrigger>Branch</DropdownMenu.SubTrigger>
-                    <DropdownMenu.SubContent>
-                      <DropdownMenu.Item asChild>
-                        <Box p="2"><BranchPicker repoRoot={repoRoot} refreshNonce={refreshNonce} /></Box>
-                      </DropdownMenu.Item>
-                    </DropdownMenu.SubContent>
-                  </DropdownMenu.Sub>
-                  <DropdownMenu.Sub>
-                    <DropdownMenu.SubTrigger>Agents ({roster.length})</DropdownMenu.SubTrigger>
-                    <DropdownMenu.SubContent>
-                      <DropdownMenu.Item asChild>
-                        <Box p="2">
-                          <AgentRoster
-                            agents={roster}
-                            availableAgents={availableAgents}
-                            onAdd={async (id) => { await onAddAgent(id); }}
-                            onRemove={async (handle) => { await onRemoveAgent(handle); }}
-                          />
-                        </Box>
-                      </DropdownMenu.Item>
-                    </DropdownMenu.SubContent>
-                  </DropdownMenu.Sub>
-                </DropdownMenu.Content>
-              </DropdownMenu.Root>
+              <IconButton
+                size="3"
+                variant="ghost"
+                color="gray"
+                aria-label="Workspace settings"
+                onClick={() => setSettingsSheetOpen(true)}
+              >
+                <DotsHorizontalIcon />
+              </IconButton>
             </Flex>
 
             {/* Editor — full width. */}
@@ -744,6 +722,19 @@ export function Workspace({
                 onMessageChange={setCommitMessage}
               />
             </BottomSheet>
+
+            {/* Workspace-settings bottom sheet (vault + branch + agents). */}
+            <WorkspaceSettingsSheet
+              open={settingsSheetOpen}
+              onOpenChange={setSettingsSheetOpen}
+              repoRoot={repoRoot}
+              refreshNonce={refreshNonce}
+              onSwitchVault={onSwitchVault}
+              roster={roster}
+              availableAgents={availableAgents}
+              onAddAgent={onAddAgent}
+              onRemoveAgent={onRemoveAgent}
+            />
           </Flex>
         </WikilinkContext.Provider>
       </Theme>

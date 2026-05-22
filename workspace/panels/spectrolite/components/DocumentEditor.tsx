@@ -342,16 +342,19 @@ export function DocumentEditor({
     setState: handleDocStateChange,
   }), [docState, handleDocStateChange]);
 
-  // Expose useDocState + the runtime namespace to sandbox-compiled JSX
-  // (LiveJsxEditor wrapper and runtime.Eval blocks) via globalThis
-  // backdoors. The sandbox can't `import` panel-local modules, so we
-  // publish the hooks/components alongside the panel's other globals.
-  // The hooks use React context, so they pick up the active providers
-  // that we render below.
+  // Expose useDocState + the runtime namespace + the panel-aware
+  // responsive hooks to sandbox-compiled JSX (LiveJsxEditor wrapper and
+  // runtime.Eval blocks) via globalThis backdoors. The sandbox can't
+  // `import` panel-local modules, so we publish the hooks/components
+  // alongside the panel's other globals. The hooks use React context,
+  // so they pick up the active providers below.
   useEffect(() => {
     const g = globalThis as Record<string, unknown>;
     g["__spectroliteUseDocState__"] = useDocState;
     g["__spectroliteRuntime__"] = runtimeNamespace;
+    g["__spectroliteUseIsMobile__"] = runtimeNamespace["useIsMobile"];
+    g["__spectroliteUseTouchDevice__"] = runtimeNamespace["useTouchDevice"];
+    g["__spectroliteUseViewportHeight__"] = runtimeNamespace["useViewportHeight"];
   }, []);
 
   // (Whole-doc compile pipeline lives above, near the top of the

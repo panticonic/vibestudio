@@ -95,10 +95,19 @@ const useDocState = (globalThis.__spectroliteUseDocState__) ||
     return React.useState(initial);
   };
 
-// runtime — the panel's MDX runtime namespace (Eval, useDocState…),
-// shared with the whole-doc compile so <runtime.Eval/> works the same
-// way in both Edit and (former) Preview surfaces.
-const runtime = globalThis.__spectroliteRuntime__ || { useDocState };
+// Responsive hooks — same as @workspace/react's exports. Available so
+// MDX-defined inline components can render mobile-aware UI without
+// importing anything the sandbox can't resolve.
+const useIsMobile = (globalThis.__spectroliteUseIsMobile__) || (() => false);
+const useTouchDevice = (globalThis.__spectroliteUseTouchDevice__) || (() => false);
+const useViewportHeight = (globalThis.__spectroliteUseViewportHeight__) ||
+  (() => (typeof window === "undefined" ? 800 : window.innerHeight));
+
+// runtime — the panel's MDX runtime namespace (Eval, useDocState,
+// useIsMobile, …), shared with the whole-doc compile so <runtime.Eval/>
+// works the same way both inline and at the doc level.
+const runtime = globalThis.__spectroliteRuntime__ ||
+  { useDocState, useIsMobile, useTouchDevice, useViewportHeight };
 
 // Doc-level exports: destructured by name so a node like <Counter/>
 // (where Counter is an export const declared elsewhere in the same

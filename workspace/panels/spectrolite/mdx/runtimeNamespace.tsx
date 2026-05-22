@@ -28,6 +28,7 @@ import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { compileComponent, type SandboxOptions } from "@workspace/eval";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import { rpc } from "@workspace/runtime";
+import { useIsMobile, useTouchDevice, useViewportHeight } from "@workspace/react";
 import { useDocState } from "./docState";
 
 const sandbox = createPanelSandboxConfig(rpc);
@@ -42,14 +43,21 @@ interface EvalProps {
 
 /**
  * Prelude prepended to every Eval block. Exposes Spectrolite hooks
- * without requiring an import the sandbox can't resolve; falls back to
- * vanilla React when the panel isn't around so the same MDX renders in
- * other hosts (e.g. chat panel inline_ui).
+ * (useDocState + responsive hooks) without requiring imports the
+ * sandbox can't resolve; falls back to plain values when the panel
+ * isn't around so the same MDX renders in other hosts (e.g. chat
+ * panel inline_ui).
  */
 const EVAL_PRELUDE = `
 import * as __spectrolite_react__ from "react";
 const useDocState = (typeof globalThis !== "undefined" && globalThis.__spectroliteUseDocState__) ||
   ((_k, init) => __spectrolite_react__.useState(init));
+const useIsMobile = (typeof globalThis !== "undefined" && globalThis.__spectroliteUseIsMobile__) ||
+  (() => false);
+const useTouchDevice = (typeof globalThis !== "undefined" && globalThis.__spectroliteUseTouchDevice__) ||
+  (() => false);
+const useViewportHeight = (typeof globalThis !== "undefined" && globalThis.__spectroliteUseViewportHeight__) ||
+  (() => (typeof window === "undefined" ? 800 : window.innerHeight));
 `;
 
 export function LiveEval({ code, imports }: EvalProps) {
@@ -97,8 +105,26 @@ export function LiveEval({ code, imports }: EvalProps) {
   return <Component />;
 }
 
-/** The `runtime` namespace handed to MDX via `useMDXComponents`. */
+/**
+ * The `runtime` namespace handed to MDX via `useMDXComponents`. MDX
+ * documents (and inline JSX inside them) reach the panel-aware hooks
+ * via `runtime.*`:
+ *
+ *   - `runtime.useDocState(key, initial)`  — persisted into frontmatter
+ *   - `runtime.useIsMobile()`               — viewport < 768 px
+ *   - `runtime.useTouchDevice()`            — coarse pointer
+ *   - `runtime.useViewportHeight()`         — visual viewport height,
+ *                                              keyboard-aware
+ *   - `<runtime.Eval code="…" />`           — sandboxed TSX runner
+ *
+ * Components author mobile-aware behavior using the responsive hooks
+ * directly — same API and semantics as `@workspace/react`'s top-level
+ * exports, since these ARE those exports.
+ */
 export const runtimeNamespace = {
   Eval: LiveEval,
   useDocState,
+  useIsMobile,
+  useTouchDevice,
+  useViewportHeight,
 } as Record<string, unknown>;

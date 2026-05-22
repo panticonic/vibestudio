@@ -42,8 +42,13 @@ future you opening this file) sees the same value.
 ```mdx
 export const Greeter = () => {
   const [clicks, setClicks] = runtime.useDocState("greetingClicks", 0);
+  const isMobile = runtime.useIsMobile();
   return (
-    <Button onClick={() => setClicks(clicks + 1)}>
+    <Button
+      size={isMobile ? "3" : "2"}
+      style={isMobile ? { minHeight: 44, width: "100%" } : undefined}
+      onClick={() => setClicks(clicks + 1)}
+    >
       Hello — clicked {clicks} times
     </Button>
   );
@@ -51,6 +56,11 @@ export const Greeter = () => {
 
 <Greeter />
 ```
+
+The `runtime.use*` hooks (`useDocState`, `useIsMobile`, `useTouchDevice`,
+`useViewportHeight`) are all available inside MDX-defined components AND
+in inline JSX expressions without imports. Use them to author docs that
+look right on both phone and desktop.
 
 The button renders live in the editor. The current value lives in this
 doc's frontmatter under `state.greetingClicks`.

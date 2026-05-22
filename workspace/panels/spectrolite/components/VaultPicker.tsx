@@ -20,6 +20,7 @@ import { Box, Button, Callout, Card, Code, Flex, Heading, Spinner, Text, TextFie
 import { ExclamationTriangleIcon, FilePlusIcon, FileTextIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { GitClient, initAndPush, type FsPromisesLike } from "@natstack/git";
 import { gitConfig } from "@workspace/runtime";
+import { useIsMobile } from "@workspace/react";
 import { discoverVaults, vaultContextPath, validateVaultName, type VaultEntry } from "../state/vaultDiscovery";
 
 const WELCOME_BODY = `---
@@ -52,6 +53,7 @@ export interface VaultPickerProps {
 }
 
 export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
+  const isMobile = useIsMobile();
   const [vaults, setVaults] = useState<VaultEntry[] | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [newName, setNewName] = useState("");
@@ -121,7 +123,7 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
   }, [newName, duplicateName, onSelect]);
 
   return (
-    <Flex align="center" justify="center" style={{ height: "100%" }} p="6">
+    <Flex align={isMobile ? "start" : "center"} justify="center" style={{ minHeight: "100%" }} p={isMobile ? "3" : "6"}>
       <Flex direction="column" gap="4" style={{ maxWidth: 640, width: "100%" }}>
         <Box>
           <Heading size="4">Spectrolite</Heading>
@@ -146,19 +148,21 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
             ) : vaults.length === 0 ? (
               <Text size="1" color="gray">No vaults yet. Create one below.</Text>
             ) : (
-              <Flex direction="column" gap="0">
+              <Flex direction="column" gap={isMobile ? "1" : "0"}>
                 {vaults.map((v) => (
                   <Button
                     key={v.relPath}
+                    size={isMobile ? "3" : "2"}
                     variant="ghost"
                     color="gray"
                     onClick={() => onSelect(v.contextPath)}
-                    style={{ justifyContent: "flex-start" }}
+                    style={{ justifyContent: "flex-start", minHeight: isMobile ? 56 : undefined }}
                   >
                     <FileTextIcon />
-                    <Text size="2" weight="medium">{v.name}</Text>
-                    <Text size="1" color="gray">— {v.relPath}</Text>
-                    {!v.isGitRepo ? <Text size="1" color="amber">(not a git repo yet)</Text> : null}
+                    <Flex direction="column" align="start" style={{ flex: 1, textAlign: "left" }}>
+                      <Text size={isMobile ? "3" : "2"} weight="medium">{v.name}</Text>
+                      <Text size="1" color="gray">{v.relPath}{!v.isGitRepo ? " · not a git repo yet" : ""}</Text>
+                    </Flex>
                   </Button>
                 ))}
               </Flex>

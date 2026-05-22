@@ -21,8 +21,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { PubSubClient } from "@workspace/pubsub";
-import { Badge, Box, Button, Card, Flex, ScrollArea, Text, TextArea } from "@radix-ui/themes";
-import { ChevronUpIcon, ChevronDownIcon, PaperPlaneIcon, CommitIcon } from "@radix-ui/react-icons";
+import { Badge, Box, Button, Card, Flex, IconButton, ScrollArea, Text, TextArea } from "@radix-ui/themes";
+import { ChevronUpIcon, ChevronDownIcon, Cross2Icon, PaperPlaneIcon, CommitIcon } from "@radix-ui/react-icons";
+import { useIsMobile, useViewportHeight } from "@workspace/react";
 
 interface DrawerMessage {
   id: string;
@@ -46,6 +47,8 @@ export interface ChannelDrawerProps {
 }
 
 export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal }: ChannelDrawerProps) {
+  const isMobile = useIsMobile();
+  const viewportHeight = useViewportHeight();
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -166,7 +169,7 @@ export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal
         justify="between"
         gap="2"
         px="3"
-        py="1"
+        py={isMobile ? "2" : "1"}
         role="button"
         tabIndex={0}
         aria-expanded={open}
@@ -182,14 +185,15 @@ export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal
           cursor: "pointer",
           borderBottom: open ? "1px solid var(--gray-5)" : "none",
           outline: "none",
+          minHeight: isMobile ? 44 : undefined,
         }}
         className="spectrolite-drawer-toggle"
       >
         <Flex align="center" gap="2">
           {open ? <ChevronDownIcon /> : <ChevronUpIcon />}
-          <Text size="1" color="gray" weight="medium">Channel</Text>
+          <Text size={isMobile ? "2" : "1"} color="gray" weight="medium">Channel</Text>
           {!open && unreadCount > 0 ? (
-            <Badge color="amber" variant="soft" size="1">
+            <Badge color="amber" variant="soft" size={isMobile ? "2" : "1"}>
               {unreadCount} new
             </Badge>
           ) : null}
@@ -197,10 +201,27 @@ export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal
             <Text size="1" color="gray">· {recent.length} messages</Text>
           ) : null}
         </Flex>
+        {open && isMobile ? (
+          <IconButton size="2" variant="ghost" color="gray" aria-label="Close channel" onClick={(e) => { e.stopPropagation(); setOpen(false); }}>
+            <Cross2Icon />
+          </IconButton>
+        ) : null}
       </Flex>
       {open ? (
-        <Flex id="spectrolite-channel-drawer-body" direction="column" gap="2" p="2" style={{ maxHeight: "30vh" }}>
-          <Box ref={scrollRef} style={{ maxHeight: "20vh", overflowY: "auto" }}>
+        // On mobile, give the drawer most of the available viewport
+        // height (clamped so it doesn't cover the editor entirely);
+        // useViewportHeight makes this shrink when the virtual keyboard
+        // is up so the textarea + send button stay on-screen.
+        <Flex
+          id="spectrolite-channel-drawer-body"
+          direction="column"
+          gap="2"
+          p="2"
+          style={{
+            maxHeight: isMobile ? Math.min(viewportHeight * 0.6, 480) : "30vh",
+          }}
+        >
+          <Box ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
             <ScrollArea>
               <Flex direction="column" gap="1">
                 {recent.length === 0 ? (
@@ -236,9 +257,9 @@ export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal
               </Flex>
             </ScrollArea>
           </Box>
-          <Flex gap="1" align="end">
+          <Flex gap="2" align="end" style={{ flexShrink: 0 }}>
             <TextArea
-              size="1"
+              size={isMobile ? "2" : "1"}
               placeholder="Talk to the agents…"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
@@ -246,9 +267,16 @@ export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal
                 if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); }
               }}
               style={{ flex: 1 }}
-              rows={2}
+              rows={isMobile ? 2 : 2}
             />
-            <Button size="1" variant="soft" disabled={!draft.trim() || sending || !client} onClick={() => void send()}>
+            <Button
+              size={isMobile ? "3" : "1"}
+              variant="soft"
+              disabled={!draft.trim() || sending || !client}
+              onClick={() => void send()}
+              aria-label="Send"
+              style={isMobile ? { minHeight: 44, minWidth: 44 } : undefined}
+            >
               <PaperPlaneIcon />
             </Button>
           </Flex>
