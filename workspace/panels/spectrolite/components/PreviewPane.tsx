@@ -22,6 +22,7 @@ import { Box, Card, Code, Flex, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import * as runtime from "react/jsx-runtime";
 import { spectroliteMdxComponents } from "../mdx/components";
+import { useDocState } from "../mdx/docState";
 import {
   compileComponent,
   type SandboxOptions,
@@ -43,6 +44,20 @@ const sandbox = createPanelSandboxConfig(rpc);
  */
 const DepsContext = createContext<Record<string, string>>({});
 
+/**
+ * Prelude prepended to every `<runtime.Eval>` block. Exposes the
+ * Spectrolite-specific hooks (currently just `useDocState`) without
+ * requiring an import the sandbox can't resolve. The fallback to
+ * `React.useState` keeps the code authorable when this MDX is rendered
+ * outside the Spectrolite panel — state goes ephemeral instead of
+ * throwing.
+ */
+const EVAL_PRELUDE = `
+import * as __spectrolite_react__ from "react";
+const useDocState = (typeof globalThis !== "undefined" && globalThis.__spectroliteUseDocState__) ||
+  ((_k, init) => __spectrolite_react__.useState(init));
+`;
+
 function LiveEval({ code, imports }: EvalProps) {
   const docDeps = useContext(DepsContext);
   const mergedImports = useMemo(() => {
@@ -60,7 +75,8 @@ function LiveEval({ code, imports }: EvalProps) {
       imports: mergedImports,
       loadImport: sandbox.loadImport,
     };
-    void compileComponent(code, opts as Parameters<typeof compileComponent>[1]).then((result) => {
+    const wrapped = EVAL_PRELUDE + code;
+    void compileComponent(wrapped, opts as Parameters<typeof compileComponent>[1]).then((result) => {
       if (cancelled) return;
       if (result.success && result.Component) {
         setComponent(() => result.Component as ComponentType);
@@ -87,7 +103,14 @@ function LiveEval({ code, imports }: EvalProps) {
   return <Component />;
 }
 
-const runtimeComponents = { Eval: LiveEval };
+// `runtime` namespace exposed to MDX. Lowercase entries (hooks) can be
+// called from inside MDX-defined components like
+// `runtime.useDocState("k", 0)`. Capitalized entries (Eval) are usable
+// as JSX tags.
+const runtimeComponents = {
+  Eval: LiveEval,
+  useDocState,
+} as Record<string, unknown>;
 
 let mdxModule: typeof import("@mdx-js/mdx") | null = null;
 async function getMdx() {

@@ -63,6 +63,16 @@ function WikiLink({ target, children }) {
   );
 }
 
+// Spectrolite publishes \`useDocState\` on globalThis (see
+// DocumentEditor.tsx) so the sandbox-compiled component can persist
+// state into the active doc's frontmatter without an import we can't
+// resolve. Falls back to plain React.useState if the panel hasn't
+// mounted (e.g. server-side preview).
+const useDocState = (globalThis.__spectroliteUseDocState__) ||
+  function useDocStateFallback(_key, initial) {
+    return React.useState(initial);
+  };
+
 export default function LiveJsx() {
   return (<>
     ${source}

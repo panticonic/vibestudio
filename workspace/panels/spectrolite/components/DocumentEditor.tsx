@@ -63,6 +63,8 @@ import { MentionAutocomplete, type MentionCandidate } from "./MentionAutocomplet
 import { knownJsxDescriptors } from "../mdx/runtime";
 import { LiveJsxEditor } from "../mdx/LiveJsxEditor";
 import { wikilinksFromJsx, wikilinksToJsx } from "../mdx/wikilink";
+import { DocStateContext, type DocStateContextValue, useDocState } from "../mdx/docState";
+import { parseFrontmatter, replaceFrontmatterState } from "../mdx/frontmatter";
 import { joinSafe, parentDir } from "../state/safePath";
 
 export interface DocumentEditorProps {
@@ -80,6 +82,14 @@ export interface DocumentEditorProps {
 }
 
 const POLL_MS = 600;
+/**
+ * Debounce window for merging in-memory `state:` mutations back into the
+ * MDX frontmatter. Short enough that the user sees state changes
+ * reflected in the diff/source view on a glance; long enough that
+ * dragging a slider doesn't rewrite the frontmatter on every animation
+ * frame.
+ */
+const DOC_STATE_MERGE_MS = 600;
 
 export function DocumentEditor({
   repoRoot,
@@ -101,6 +111,20 @@ export function DocumentEditor({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [contentEditableEl, setContentEditableEl] = useState<HTMLElement | null>(null);
 
+  // In-memory state map mirrors the doc's frontmatter `state:` block.
+  // Mutations from `useDocState` setters land here immediately so that
+  // every other consumer re-renders, but the merge into the markdown
+  // buffer is debounced — we don't want to rewrite the frontmatter on
+  // every slider tick.
+  const [docState, setDocState] = useState<Record<string, unknown>>({});
+  const docStateRef = useRef(docState);
+  docStateRef.current = docState;
+  const mergeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const relPathRef = useRef(relPath);
+  relPathRef.current = relPath;
+
   // Resolved + traversal-checked. Defensive even though the panel's fs is
   // RPC-scoped to the context root.
   const fullPath = useMemo(() => joinSafe(repoRoot, relPath), [repoRoot, relPath]);
@@ -117,6 +141,12 @@ export function DocumentEditor({
       lastDiskRef.current = raw;
       setMarkdown(transformed);
       setError(null);
+      // Cancel any in-flight state merge; the on-disk content is authoritative.
+      if (mergeTimerRef.current) {
+        clearTimeout(mergeTimerRef.current);
+        mergeTimerRef.current = null;
+      }
+      setDocState(parseFrontmatter(transformed).state);
       editorRef.current?.setMarkdown(transformed);
       onReload(relPath, transformed);
     } catch (err) {
@@ -150,6 +180,15 @@ export function DocumentEditor({
         const transformed = wikilinksToJsx(raw);
         setMarkdown(transformed);
         setError(null);
+        // Disk wrote a new version (e.g. the agent edited it); refresh
+        // our local docState from the fresh frontmatter so consumers see
+        // any state the agent updated. Cancel any pending merge — the
+        // disk content takes precedence.
+        if (mergeTimerRef.current) {
+          clearTimeout(mergeTimerRef.current);
+          mergeTimerRef.current = null;
+        }
+        setDocState(parseFrontmatter(transformed).state);
         editorRef.current?.setMarkdown(transformed);
         onReload(relPath, transformed);
       } catch {
@@ -166,6 +205,76 @@ export function DocumentEditor({
   const flushNow = useCallback(() => {
     onFlushClick(relPath);
   }, [onFlushClick, relPath]);
+
+  // useDocState setter — invoked by inline JSX components. The update
+  // happens in two steps:
+  //   1. We update the in-memory state map immediately so the React
+  //      context re-renders and every other useDocState consumer sees
+  //      the new value within the same tick.
+  //   2. We schedule a debounced merge into the editor buffer. After
+  //      DOC_STATE_MERGE_MS of no further state changes, we rewrite the
+  //      frontmatter's `state:` block and push the new markdown into
+  //      the editor via setMarkdown. The editor's onChange fires and
+  //      routes through handleEditorChange in the usual way, so the
+  //      flush pipeline picks the doc up as dirty.
+  const handleDocStateChange = useCallback((key: string, value: unknown) => {
+    setDocState((prev) => {
+      // Skip the update if the new value is structurally equal — common
+      // when controlled inputs re-emit the same value on focus changes.
+      const current = prev[key];
+      if (Object.is(current, value)) return prev;
+      try {
+        if (JSON.stringify(current) === JSON.stringify(value)) return prev;
+      } catch { /* fallthrough */ }
+      return { ...prev, [key]: value };
+    });
+    if (mergeTimerRef.current) clearTimeout(mergeTimerRef.current);
+    mergeTimerRef.current = setTimeout(() => {
+      mergeTimerRef.current = null;
+      const editor = editorRef.current;
+      if (!editor) return;
+      const current = editor.getMarkdown();
+      const newMdx = replaceFrontmatterState(current, docStateRef.current);
+      if (newMdx === current) return;
+      // Set the inFlightWrite flag briefly so the disk-poll doesn't
+      // think the editor's content drifted from disk while we're still
+      // mutating it.
+      inFlightWriteRef.current = true;
+      try {
+        editor.setMarkdown(newMdx);
+        // MDXEditor's onChange will fire and call handleChange →
+        // onChange(relPath, newMdx). That's exactly what we want.
+        // Also nudge in case the editor swallows the change event for
+        // a setMarkdown that only differs in frontmatter.
+        onChangeRef.current(relPathRef.current, newMdx);
+      } finally {
+        // Release on the next tick so any synchronous onChange has a
+        // chance to land first.
+        setTimeout(() => { inFlightWriteRef.current = false; }, 0);
+      }
+    }, DOC_STATE_MERGE_MS);
+  }, []);
+
+  // Drop the pending merge timer on unmount so we don't fire after the
+  // editor ref is null.
+  useEffect(() => () => {
+    if (mergeTimerRef.current) clearTimeout(mergeTimerRef.current);
+  }, []);
+
+  const docStateContextValue: DocStateContextValue = useMemo(() => ({
+    state: docState,
+    setState: handleDocStateChange,
+  }), [docState, handleDocStateChange]);
+
+  // Expose useDocState to sandbox-compiled JSX (LiveJsxEditor wrapper and
+  // PreviewPane's evaluated MDX) via a globalThis backdoor. The sandbox
+  // can't `import` a panel-local module, so we publish the hook
+  // alongside the panel's other globals. The hook itself uses React
+  // context, so it picks up the active <DocStateContext.Provider> that
+  // we render below.
+  useEffect(() => {
+    (globalThis as Record<string, unknown>)["__spectroliteUseDocState__"] = useDocState;
+  }, []);
 
   // Locate the contenteditable root for the mention autocomplete keylistener
   useEffect(() => {
@@ -274,45 +383,47 @@ export function DocumentEditor({
   }
 
   return (
-    <Flex direction="column" className={`spectrolite-mdx ${theme === "dark" ? "dark-theme" : ""}`} style={{ height: "100%" }}>
-      <Flex
-        align="center"
-        justify="end"
-        gap="2"
-        px="2"
-        py="1"
-        style={{ borderBottom: "1px solid var(--gray-5)", flexShrink: 0 }}
-      >
-        <SegmentedControl.Root size="1" value={mode} onValueChange={(v) => setMode(v as "edit" | "preview")}>
-          <SegmentedControl.Item value="edit">
-            <Flex align="center" gap="1"><Pencil1Icon /> Edit</Flex>
-          </SegmentedControl.Item>
-          <SegmentedControl.Item value="preview">
-            <Flex align="center" gap="1"><EyeOpenIcon /> Preview</Flex>
-          </SegmentedControl.Item>
-        </SegmentedControl.Root>
+    <DocStateContext.Provider value={docStateContextValue}>
+      <Flex direction="column" className={`spectrolite-mdx ${theme === "dark" ? "dark-theme" : ""}`} style={{ height: "100%" }}>
+        <Flex
+          align="center"
+          justify="end"
+          gap="2"
+          px="2"
+          py="1"
+          style={{ borderBottom: "1px solid var(--gray-5)", flexShrink: 0 }}
+        >
+          <SegmentedControl.Root size="1" value={mode} onValueChange={(v) => setMode(v as "edit" | "preview")}>
+            <SegmentedControl.Item value="edit">
+              <Flex align="center" gap="1"><Pencil1Icon /> Edit</Flex>
+            </SegmentedControl.Item>
+            <SegmentedControl.Item value="preview">
+              <Flex align="center" gap="1"><EyeOpenIcon /> Preview</Flex>
+            </SegmentedControl.Item>
+          </SegmentedControl.Root>
+        </Flex>
+        <Box ref={containerRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
+          {mode === "edit" ? (
+            <Box style={{ height: "100%", overflow: "auto" }}>
+              <MDXEditor
+                ref={editorRef}
+                markdown={markdown}
+                onChange={handleChange}
+                plugins={plugins}
+                contentEditableClassName={`spectrolite-content ${theme === "dark" ? "spectrolite-content--dark" : ""}`}
+              />
+              <MentionAutocomplete
+                container={contentEditableEl}
+                candidates={mentionCandidates}
+                onAccept={handleMentionAccept}
+              />
+            </Box>
+          ) : (
+            <PreviewPane markdown={markdown} dependencies={dependencies} />
+          )}
+        </Box>
       </Flex>
-      <Box ref={containerRef} style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
-        {mode === "edit" ? (
-          <Box style={{ height: "100%", overflow: "auto" }}>
-            <MDXEditor
-              ref={editorRef}
-              markdown={markdown}
-              onChange={handleChange}
-              plugins={plugins}
-              contentEditableClassName={`spectrolite-content ${theme === "dark" ? "spectrolite-content--dark" : ""}`}
-            />
-            <MentionAutocomplete
-              container={contentEditableEl}
-              candidates={mentionCandidates}
-              onAccept={handleMentionAccept}
-            />
-          </Box>
-        ) : (
-          <PreviewPane markdown={markdown} dependencies={dependencies} />
-        )}
-      </Box>
-    </Flex>
+    </DocStateContext.Provider>
   );
 }
 

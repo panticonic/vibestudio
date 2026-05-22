@@ -1,93 +1,108 @@
 /**
- * Tiny YAML frontmatter parser for the limited shape Spectrolite cares about.
+ * YAML frontmatter parsing + targeted rewriting.
  *
- * Supports:
- *   title: My Note
- *   title: "Quoted Title"
- *   dependencies:
- *     lodash: "npm:^4.17.21"
- *     "date-fns": "npm:2"
- *     "@workspace/agentic-chat": latest
+ * Uses the `yaml` package so nested objects, arrays, and quoted strings
+ * all work (the earlier hand-rolled flat parser couldn't represent
+ * structured `state:` payloads — which is what `useDocState` needs).
  *
- * Not a general YAML parser — multi-line strings, arrays, anchors, etc.
- * are not supported. Anything that looks unfamiliar is silently ignored.
+ * Shape of fields we care about:
+ *   - `title`     — string, used for the header breadcrumb
+ *   - `dependencies` — Record<package-name, version-or-ref>, used by the
+ *     dep prefetcher
+ *   - `state`     — Record<string, unknown>, used by the `useDocState`
+ *     hook so inline JSX components can persist values into the doc
+ *
+ * `replaceFrontmatterState(md, state)` rewrites ONLY the `state:` key,
+ * preserving every other top-level frontmatter entry. We round-trip
+ * through `yaml.parse` / `yaml.stringify`, so comments inside the
+ * frontmatter are not preserved — acceptable trade-off for v1.
  */
+
+import * as YAML from "yaml";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 
 export interface ParsedFrontmatter {
   title: string | null;
   dependencies: Record<string, string>;
-  /** Raw YAML body (between the `---` fences) for downstream tools. */
+  state: Record<string, unknown>;
   raw: string | null;
 }
 
-/**
- * Returns a fresh empty ParsedFrontmatter on every call. We intentionally
- * do NOT cache a singleton — callers commonly read `dependencies` and pass
- * it to downstream consumers that may mutate or merge into it, so handing
- * out a shared mutable object would let one caller poison every other
- * caller's result.
- */
 function emptyParsed(): ParsedFrontmatter {
-  return { title: null, dependencies: {}, raw: null };
-}
-
-function stripQuotes(value: string): string {
-  const trimmed = value.trim();
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
+  return { title: null, dependencies: {}, state: {}, raw: null };
 }
 
 export function parseFrontmatter(markdown: string): ParsedFrontmatter {
   const m = FRONTMATTER_RE.exec(markdown);
   if (!m) return emptyParsed();
   const raw = m[1] ?? "";
-  const lines = raw.split("\n");
-
-  let title: string | null = null;
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(raw);
+  } catch {
+    return { ...emptyParsed(), raw };
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ...emptyParsed(), raw };
+  }
+  const obj = parsed as Record<string, unknown>;
+  const title = typeof obj["title"] === "string" ? (obj["title"] as string) : null;
   const dependencies: Record<string, string> = {};
-  let inDeps = false;
-  let depsIndent = -1;
-
-  for (const rawLine of lines) {
-    if (rawLine.trim() === "" || rawLine.trimStart().startsWith("#")) continue;
-
-    const indent = rawLine.length - rawLine.trimStart().length;
-    const line = rawLine.trimEnd();
-
-    if (inDeps) {
-      if (indent <= depsIndent) {
-        inDeps = false;
-        depsIndent = -1;
-        // fall through to process this line at top level
-      } else {
-        const kv = /^\s*([A-Za-z0-9_@/.-]+|"[^"]+"|'[^']+')\s*:\s*(.+)\s*$/.exec(line);
-        if (kv) {
-          const key = stripQuotes(kv[1] ?? "");
-          const value = stripQuotes(kv[2] ?? "");
-          if (key) dependencies[key] = value;
-        }
-        continue;
-      }
-    }
-
-    // Top-level entry
-    if (/^\s*title\s*:/.test(line)) {
-      const titleMatch = /^\s*title\s*:\s*(.+)$/.exec(line);
-      if (titleMatch) title = stripQuotes(titleMatch[1] ?? "") || null;
-      continue;
-    }
-    if (/^\s*dependencies\s*:\s*$/.test(line)) {
-      inDeps = true;
-      depsIndent = indent;
-      continue;
+  const depsField = obj["dependencies"];
+  if (depsField && typeof depsField === "object" && !Array.isArray(depsField)) {
+    for (const [k, v] of Object.entries(depsField as Record<string, unknown>)) {
+      if (typeof v === "string") dependencies[k] = v;
     }
   }
+  const state: Record<string, unknown> = {};
+  const stateField = obj["state"];
+  if (stateField && typeof stateField === "object" && !Array.isArray(stateField)) {
+    Object.assign(state, stateField as Record<string, unknown>);
+  }
+  return { title, dependencies, state, raw };
+}
 
-  return { title, dependencies, raw };
+/**
+ * Replace the `state:` key in the markdown's frontmatter with `newState`,
+ * preserving every other field. If `newState` is empty, the `state:`
+ * key is dropped. If the document has no frontmatter and `newState` is
+ * non-empty, a minimal frontmatter is prepended.
+ *
+ * Idempotent: passing the same `newState` twice produces the same string.
+ */
+export function replaceFrontmatterState(markdown: string, newState: Record<string, unknown>): string {
+  const m = FRONTMATTER_RE.exec(markdown);
+  let frontmatterObj: Record<string, unknown> = {};
+  let body: string;
+  if (m) {
+    try {
+      const parsed = YAML.parse(m[1] ?? "");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        frontmatterObj = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Malformed frontmatter — start fresh so we don't propagate errors.
+    }
+    body = markdown.slice(m[0].length);
+  } else {
+    body = markdown;
+  }
+
+  if (Object.keys(newState).length === 0) {
+    delete frontmatterObj["state"];
+  } else {
+    frontmatterObj["state"] = newState;
+  }
+
+  if (Object.keys(frontmatterObj).length === 0) {
+    // No frontmatter needed; ensure the body still starts with content.
+    return body.startsWith("---") || body.length === 0 ? body : body;
+  }
+  const newYaml = YAML.stringify(frontmatterObj).trimEnd();
+  // Ensure exactly one blank line between the frontmatter and the body.
+  const trimmedBody = body.replace(/^\n+/, "");
+  return `---\n${newYaml}\n---\n\n${trimmedBody}`;
 }
 
 /** Diff two dependency maps; returns { added: pkgs newly present, changed: pkgs whose ref changed, removed: pkgs no longer present }. */
@@ -106,4 +121,23 @@ export function diffDependencies(
     if (!(k in after)) removed.push(k);
   }
   return { added, changed, removed };
+}
+
+/** Shallow-equal compare two state maps. */
+export function statesEqual(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const ak = Object.keys(a);
+  const bk = Object.keys(b);
+  if (ak.length !== bk.length) return false;
+  for (const k of ak) {
+    if (!(k in b)) return false;
+    if (!Object.is(a[k], b[k])) {
+      // Deep-equal by JSON serialization for non-primitive values.
+      try {
+        if (JSON.stringify(a[k]) !== JSON.stringify(b[k])) return false;
+      } catch {
+        return false;
+      }
+    }
+  }
+  return true;
 }

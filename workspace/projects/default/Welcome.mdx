@@ -1,6 +1,8 @@
 ---
 title: Welcome to your default vault
 dependencies: {}
+state:
+  greetingClicks: 0
 ---
 
 # Welcome to your default vault
@@ -27,6 +29,29 @@ ready to edit out of the box.
 
 Click the vault name in the top-left header to switch. Create new vaults
 from the picker — they live as siblings under `projects/`.
+
+## Stateful components
+
+Components in the doc can persist their own state into the frontmatter
+via `useDocState`. The value is read on open and merged back into the
+`state:` block ~600 ms after the last change, so the agent (and a
+future you opening this file) sees the same value.
+
+```mdx
+export const Greeter = () => {
+  const [clicks, setClicks] = runtime.useDocState("greetingClicks", 0);
+  return (
+    <Button onClick={() => setClicks(clicks + 1)}>
+      Hello — clicked {clicks} times
+    </Button>
+  );
+};
+
+<Greeter />
+```
+
+Switch to **Preview** mode to try it. The current value lives in this
+doc's frontmatter under `state.greetingClicks`.
 
 ## Declaring dependencies
 
