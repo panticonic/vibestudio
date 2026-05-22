@@ -32,8 +32,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { promises as fs } from "fs";
-import { Box, Button, Flex, Text } from "@radix-ui/themes";
-import { LightningBoltIcon, ReloadIcon } from "@radix-ui/react-icons";
+import { Box, Button, Callout, Flex, Text } from "@radix-ui/themes";
+import { ExclamationTriangleIcon, LightningBoltIcon, ReloadIcon } from "@radix-ui/react-icons";
 import {
   MDXEditor,
   type MDXEditorMethods,
@@ -113,7 +113,6 @@ export function DocumentEditor({
   const [error, setError] = useState<string | null>(null);
   const editorRef = useRef<MDXEditorMethods | null>(null);
   const lastDiskRef = useRef<string | null>(null);
-  const inFlightWriteRef = useRef(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [contentEditableEl, setContentEditableEl] = useState<HTMLElement | null>(null);
 
@@ -140,6 +139,16 @@ export function DocumentEditor({
   onChangeRef.current = onChange;
   const relPathRef = useRef(relPath);
   relPathRef.current = relPath;
+  const hasUnflushedChangesRef = useRef(hasUnflushedChanges);
+  hasUnflushedChangesRef.current = hasUnflushedChanges;
+
+  // Conflict banner: set when the agent writes the file while the user
+  // has unflushed in-buffer changes. The user picks which side wins.
+  const [diskConflict, setDiskConflict] = useState<{ disk: string } | null>(null);
+  // Set when the file no longer exists on disk (deleted out from
+  // under us). Editor keeps the in-memory buffer; user can choose to
+  // recreate or discard.
+  const [fileMissing, setFileMissing] = useState(false);
 
   // Resolved + traversal-checked. Defensive even though the panel's fs is
   // RPC-scoped to the context root.
@@ -171,8 +180,11 @@ export function DocumentEditor({
     }
   }, [fullPath, relPath, onReload]);
 
-  // Read on open + when the path changes
+  // Read on open + when the path changes. Also clear the globalThis
+  // doc-export stash so a previous doc's `Counter` etc. can't briefly
+  // resolve in the new doc's inline JSX before our compile catches up.
   useEffect(() => {
+    (globalThis as Record<string, unknown>)["__spectroliteDocExports__"] = {};
     const signal = { cancelled: false };
     void loadFromDisk(signal);
     return () => { signal.cancelled = true; };
@@ -184,35 +196,76 @@ export function DocumentEditor({
   useEffect(() => {
     if (!fullPath) return;
     const handle = setInterval(async () => {
-      if (inFlightWriteRef.current) return;
       try {
         const raw = await fs.readFile(fullPath, "utf-8");
         if (raw === lastDiskRef.current) return;
         lastDiskRef.current = raw;
-        if (hasUnflushedChanges) {
-          console.info(`[Spectrolite] ${relPath} changed on disk while user has unflushed edits — keeping buffer`);
+        if (fileMissing) setFileMissing(false);
+        if (hasUnflushedChangesRef.current) {
+          // Don't silently drop the user's in-buffer work — surface a
+          // conflict banner instead so they pick the winner.
+          setDiskConflict({ disk: raw });
           return;
         }
+        // Safe reload path: merge our in-memory state map into the new
+        // disk content's frontmatter so component-state updates the
+        // user just made aren't lost when the agent's write arrives.
         const transformed = wikilinksToJsx(raw);
-        setMarkdown(transformed);
+        const merged = Object.keys(docStateRef.current).length > 0
+          ? replaceFrontmatterState(transformed, docStateRef.current)
+          : transformed;
+        setMarkdown(merged);
         setError(null);
-        // Disk wrote a new version (e.g. the agent edited it); refresh
-        // our local docState from the fresh frontmatter so consumers see
-        // any state the agent updated. Cancel any pending merge — the
-        // disk content takes precedence.
+        // Frontmatter from disk wins for state keys the user hasn't
+        // touched; keys the user updated locally are preserved by the
+        // `merged` re-application above. Refresh docState from the
+        // *merged* version so future renders read the same source of
+        // truth as the buffer.
         if (mergeTimerRef.current) {
           clearTimeout(mergeTimerRef.current);
           mergeTimerRef.current = null;
         }
-        setDocState(parseFrontmatter(transformed).state);
-        editorRef.current?.setMarkdown(transformed);
-        onReload(relPath, transformed);
-      } catch {
-        /* file may have been deleted; ignore for v1 */
+        setDocState(parseFrontmatter(merged).state);
+        editorRef.current?.setMarkdown(merged);
+        onReload(relPath, merged);
+      } catch (err) {
+        // ENOENT means the file disappeared — likely deleted by the
+        // agent or out-of-band. Surface a banner; the in-memory buffer
+        // is the user's only copy now.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (/enoent/i.test(msg) || /no such file/i.test(msg)) {
+          if (!fileMissing) setFileMissing(true);
+        }
+        /* ignore other transient read errors */
       }
     }, POLL_MS);
     return () => clearInterval(handle);
-  }, [fullPath, relPath, hasUnflushedChanges, onReload]);
+  }, [fullPath, relPath, onReload, fileMissing]);
+
+  // Conflict resolution actions. "Keep mine" preserves the buffer (next
+  // flush will overwrite the disk version). "Take agent's" reloads from
+  // disk (the user's unflushed prose changes are lost; their `state:`
+  // map is merged into the agent's content).
+  const resolveConflictKeepMine = useCallback(() => {
+    setDiskConflict(null);
+  }, []);
+  const resolveConflictTakeDisk = useCallback(() => {
+    const conflict = diskConflict;
+    if (!conflict) return;
+    setDiskConflict(null);
+    const transformed = wikilinksToJsx(conflict.disk);
+    const merged = Object.keys(docStateRef.current).length > 0
+      ? replaceFrontmatterState(transformed, docStateRef.current)
+      : transformed;
+    if (mergeTimerRef.current) {
+      clearTimeout(mergeTimerRef.current);
+      mergeTimerRef.current = null;
+    }
+    setMarkdown(merged);
+    setDocState(parseFrontmatter(merged).state);
+    editorRef.current?.setMarkdown(merged);
+    onReload(relPath, merged);
+  }, [diskConflict, onReload, relPath]);
 
   // Whole-doc compile pipeline. Each meaningful markdown change kicks a
   // debounced re-compile. We keep last-good export bodies installed on
@@ -273,9 +326,19 @@ export function DocumentEditor({
     if (docCompileTimerRef.current) clearTimeout(docCompileTimerRef.current);
   }, []);
 
+  // MDXEditor doesn't know about our in-memory state map, so its
+  // emitted markdown has the stale-frontmatter version. Merge state in
+  // here so the buffer (and disk, on flush) always reflects the latest
+  // state map. The editor's own Lexical state stays as-is — we never
+  // call setMarkdown during normal editing, so the user's cursor
+  // doesn't jump on state changes.
   const handleChange = useCallback((next: string) => {
-    onChange(relPath, next);
-    scheduleDocCompile(next);
+    const stateMap = docStateRef.current;
+    const merged = Object.keys(stateMap).length > 0
+      ? replaceFrontmatterState(next, stateMap)
+      : next;
+    onChange(relPath, merged);
+    scheduleDocCompile(merged);
   }, [onChange, relPath, scheduleDocCompile]);
 
   const flushNow = useCallback(() => {
@@ -312,24 +375,20 @@ export function DocumentEditor({
       const current = editor.getMarkdown();
       const newMdx = replaceFrontmatterState(current, docStateRef.current);
       if (newMdx === current) return;
-      // Set the inFlightWrite flag briefly so the disk-poll doesn't
-      // think the editor's content drifted from disk while we're still
-      // mutating it.
-      inFlightWriteRef.current = true;
-      try {
-        editor.setMarkdown(newMdx);
-        // MDXEditor's onChange will fire and call handleChange →
-        // onChange(relPath, newMdx). That's exactly what we want.
-        // Also nudge in case the editor swallows the change event for
-        // a setMarkdown that only differs in frontmatter.
-        onChangeRef.current(relPathRef.current, newMdx);
-      } finally {
-        // Release on the next tick so any synchronous onChange has a
-        // chance to land first.
-        setTimeout(() => { inFlightWriteRef.current = false; }, 0);
-      }
+      // CRITICAL: don't call setMarkdown here. That would replace
+      // Lexical's editor state and jump the user's cursor — annoying
+      // when they're mid-prose and a JSX button updates state. Instead
+      // route the merged markdown straight to the parent buffer via
+      // onChange. The editor's view of the frontmatter stays slightly
+      // stale (the source-view toggle would show old state values),
+      // but the on-disk + in-buffer truth is current, and the user's
+      // editing focus is preserved. Next time the editor fires an
+      // onChange (user types), handleChange re-merges state into its
+      // emitted markdown so the buffer stays correct.
+      onChangeRef.current(relPathRef.current, newMdx);
+      scheduleDocCompile(newMdx);
     }, DOC_STATE_MERGE_MS);
-  }, []);
+  }, [scheduleDocCompile]);
 
   // Drop the pending merge timer on unmount so we don't fire after the
   // editor ref is null.
@@ -473,6 +532,30 @@ export function DocumentEditor({
     <DocStateContext.Provider value={docStateContextValue}>
       <DepsContext.Provider value={dependencies}>
         <Flex direction="column" className={`spectrolite-mdx ${theme === "dark" ? "dark-theme" : ""}`} style={{ height: "100%" }}>
+          {diskConflict ? (
+            <Callout.Root color="amber" size="1" style={{ borderRadius: 0, borderLeft: 0, borderRight: 0 }}>
+              <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+              <Callout.Text size="2">
+                This file was changed on disk while you have unflushed edits.
+              </Callout.Text>
+              <Flex gap="2" mt="2">
+                <Button size="2" variant="solid" color="amber" onClick={resolveConflictTakeDisk}>
+                  Reload from disk
+                </Button>
+                <Button size="2" variant="soft" color="gray" onClick={resolveConflictKeepMine}>
+                  Keep my edits
+                </Button>
+              </Flex>
+            </Callout.Root>
+          ) : null}
+          {fileMissing ? (
+            <Callout.Root color="red" size="1" style={{ borderRadius: 0, borderLeft: 0, borderRight: 0 }}>
+              <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+              <Callout.Text size="2">
+                This file no longer exists on disk. Your in-memory buffer is the only copy. Flush to recreate, or pick another file.
+              </Callout.Text>
+            </Callout.Root>
+          ) : null}
           {docCompileError ? (
             <Flex align="center" gap="2" px="2" py="1" style={{ background: "var(--amber-3)", borderBottom: "1px solid var(--amber-6)", flexShrink: 0 }}>
               <Text size="1" color="amber">{docCompileError}</Text>

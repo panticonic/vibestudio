@@ -351,17 +351,19 @@ export function Workspace({
     }
   }, [activePath, buffers, sandbox]);
 
-  // Flush: write buffer to disk, compute diff vs lastFlushedMdx, publish
-  // kb.user_edit, then if @-mentions resolved send a parallel chat message
-  // with the diff inlined so the agent has full context for its response.
+  // Flush: write buffer to disk (always — disk is the source of truth),
+  // then if a PubSub client is connected compute the diff vs the last
+  // flushed snapshot, publish kb.user_edit, and on @-mention send a
+  // parallel chat message with the diff inlined for the agent.
   const flush = useCallback(async (relPath: string) => {
-    const c = client;
     const entry = buffersRef.current[relPath];
-    if (!entry || !c || !repoRoot) return;
+    if (!entry || !repoRoot) return;
     if (!hasUnflushedChanges(entry)) return;
 
     const before = entry.lastFlushedMdx;
     const after = entry.currentMdx;
+    // Disk write is unconditional — losing the file write because the
+    // channel isn't connected yet (or has dropped) would be data loss.
     try {
       await writeBufferToDisk(repoRoot, relPath, after);
     } catch (err) {
@@ -369,9 +371,12 @@ export function Workspace({
       return;
     }
 
-    const knownHandles = Object.values(c.roster)
-      .map((p) => (p.metadata as { handle?: string }).handle)
-      .filter((h): h is string => Boolean(h) && h !== PANEL_METADATA.handle);
+    const c = client;
+    const knownHandles = c
+      ? Object.values(c.roster)
+        .map((p) => (p.metadata as { handle?: string }).handle)
+        .filter((h): h is string => Boolean(h) && h !== PANEL_METADATA.handle)
+      : [];
     const beforeOnDisk = wikilinksFromJsx(before);
     const afterOnDisk = wikilinksFromJsx(after);
     const payload = buildFlushPayload({ path: relPath, before: beforeOnDisk, after: afterOnDisk, knownHandles });
@@ -388,7 +393,7 @@ export function Workspace({
     });
     setLastFlushedAt((prev) => ({ ...prev, [relPath]: flushedAt }));
 
-    if (!payload) return;
+    if (!payload || !c) return;
 
     try {
       await c.publishCustomMessage({

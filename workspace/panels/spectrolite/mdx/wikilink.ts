@@ -24,6 +24,17 @@
 const WIKILINK_RE = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 const WIKILINK_JSX_RE_SELF = /<WikiLink\s+target=("([^"]+)"|'([^']+)')\s*\/>/g;
 const WIKILINK_JSX_RE_WITH_TEXT = /<WikiLink\s+target=("([^"]+)"|'([^']+)')\s*>([\s\S]*?)<\/WikiLink>/g;
+const FRONTMATTER_RE = /^(---\s*\n[\s\S]*?\n---\s*\n)/;
+
+/** Strip the YAML frontmatter (if any) off the front of the doc and
+ *  return [frontmatter, body]. Wikilink transforms should NEVER touch
+ *  the frontmatter — a `title: "My [[Foo]] note"` would be silently
+ *  rewritten to invalid YAML otherwise. */
+function splitFrontmatter(markdown: string): { frontmatter: string; body: string } {
+  const m = FRONTMATTER_RE.exec(markdown);
+  if (!m) return { frontmatter: "", body: markdown };
+  return { frontmatter: m[1] ?? "", body: markdown.slice((m[1] ?? "").length) };
+}
 
 /**
  * Split a markdown document into [code-fenced, non-code-fenced] segments
@@ -83,22 +94,28 @@ function transformOutsideCode(markdown: string, fn: (segment: string) => string)
     .join("\n");
 }
 
-/** Transform on read: `[[X]]` → `<WikiLink target="X" />`, but only outside code blocks. */
+/** Transform on read: `[[X]]` → `<WikiLink target="X" />`, but only
+ *  outside code blocks AND outside the YAML frontmatter (a wikilink in
+ *  `title:` is a literal string, not a doc link). */
 export function wikilinksToJsx(markdown: string): string {
-  return transformOutsideCode(markdown, (segment) =>
+  const { frontmatter, body } = splitFrontmatter(markdown);
+  const transformed = transformOutsideCode(body, (segment) =>
     segment.replace(WIKILINK_RE, (_match, target: string, alias: string | undefined) => {
       const t = target.trim();
       if (!alias) return `<WikiLink target="${escapeAttr(t)}" />`;
       return `<WikiLink target="${escapeAttr(t)}">${alias.trim()}</WikiLink>`;
     }),
   );
+  return frontmatter + transformed;
 }
 
-/** Transform on write: `<WikiLink ...>` → `[[X]]` / `[[X|Y]]`, but only outside code blocks.
- *  Decodes the HTML entity escapes that `wikilinksToJsx` introduced so
- *  the target text round-trips verbatim across flushes. */
+/** Transform on write: `<WikiLink ...>` → `[[X]]` / `[[X|Y]]`, but only
+ *  outside code blocks AND outside the YAML frontmatter. Decodes the
+ *  HTML entity escapes that `wikilinksToJsx` introduced so the target
+ *  text round-trips verbatim across flushes. */
 export function wikilinksFromJsx(markdown: string): string {
-  return transformOutsideCode(markdown, (segment) => {
+  const { frontmatter, body } = splitFrontmatter(markdown);
+  const transformed = transformOutsideCode(body, (segment) => {
     let out = segment.replace(WIKILINK_JSX_RE_WITH_TEXT, (_match, _full, dq, sq, text: string) => {
       const target = unescapeAttr((dq ?? sq ?? "").trim());
       const inner = text.trim();
@@ -111,6 +128,7 @@ export function wikilinksFromJsx(markdown: string): string {
     });
     return out;
   });
+  return frontmatter + transformed;
 }
 
 /**
