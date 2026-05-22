@@ -6,6 +6,7 @@ import { PanelRegistry } from "../panelRegistry.js";
 import { getCurrentSnapshot } from "../panel/accessors.js";
 import { PanelManager } from "./panelManager.js";
 import { canonicalEntityId } from "../runtime/entitySpec.js";
+import type { PanelEntityId, PanelSlotId } from "../panel/ids.js";
 import type { RuntimeEntityCreateSpec, RuntimeEntityHandle } from "../runtime/entitySpec.js";
 import type {
   RuntimeClient,
@@ -23,17 +24,17 @@ import type {
  */
 function createWorkspaceMemory() {
   interface MemSlot {
-    slot_id: string;
-    parent_slot_id: string | null;
+    slot_id: PanelSlotId;
+    parent_slot_id: PanelSlotId | null;
     position_id: string;
     created_at: number;
     closed_at: number | null;
-    current_entity_id: string | null;
+    current_entity_id: PanelEntityId | null;
     current_entry_key: string | null;
   }
   interface MemHistoryEntry {
     entry_key: string;
-    entity_id: string;
+    entity_id: PanelEntityId;
     source: string;
     context_id: string;
     state_args: string | null;
@@ -48,8 +49,8 @@ function createWorkspaceMemory() {
     key: string;
   }
 
-  const slots = new Map<string, MemSlot>();
-  const history = new Map<string, MemHistoryEntry[]>();
+  const slots = new Map<PanelSlotId, MemSlot>();
+  const history = new Map<PanelSlotId, MemHistoryEntry[]>();
   const entities = new Map<string, MemEntity>();
 
   const retired: string[] = [];
@@ -244,7 +245,7 @@ function makeManagerDeps(workspacePath: string) {
       runtime: mem.runtime,
       workspacePath,
       serverInfo: { gatewayConfig: { serverUrl: "http://127.0.0.1:42773" } },
-      grantConnection: vi.fn(async (panelId: string) => ({ token: `rpc-${panelId}` })),
+      grantConnection: vi.fn(async (panelId: PanelEntityId) => ({ token: `rpc-${panelId}` })),
     } as const,
   };
 }

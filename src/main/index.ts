@@ -57,6 +57,7 @@ installEarlyOpenUrlBuffer();
 enqueueFirstArgvLink(process.argv);
 
 import { PanelRegistry } from "@natstack/shared/panelRegistry";
+import { asPanelSlotId } from "@natstack/shared/panel/ids";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { PanelView } from "./panelView.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
@@ -1445,7 +1446,7 @@ app.on("ready", async () => {
     });
     ipcMain.handle("natstack:bridge.getInfo", async (event) => {
       const callerId = resolveCallerId(event);
-      return shellCore?.panelManager.getInfo(callerId);
+      return shellCore?.panelManager.getInfo(asPanelSlotId(callerId));
     });
     ipcMain.handle(
       "natstack:bridge.setStateArgs",
@@ -1453,7 +1454,7 @@ app.on("ready", async () => {
         const callerId = resolveCallerId(event);
         return panelOrchestrator
           ? panelOrchestrator.handleSetStateArgs(callerId, updates)
-          : shellCore?.panelManager.updateStateArgs(callerId, updates);
+          : shellCore?.panelManager.updateStateArgs(asPanelSlotId(callerId), updates);
       }
     );
     ipcMain.handle("natstack:panel.getStateArgs", async (_event, panelId: string) => {
@@ -1711,7 +1712,7 @@ app.on("will-quit", (event) => {
 
       const cleanupThenClose = (async () => {
         if (panelRegistry && shellCore) {
-          const livePanelIds = panelRegistry.listPanels().map((p) => p.panelId);
+          const livePanelIds = panelRegistry.listPanels().map((p) => asPanelSlotId(p.panelId));
           await shellCore.panelManager
             .shutdownCleanup(livePanelIds)
             .catch((e: unknown) => console.error("[App] Failed to run shutdown cleanup:", e));
@@ -1768,7 +1769,7 @@ app.on("activate", () => {
   }
   const focusedPanelId = panelRegistry?.getFocusedPanelId();
   if (focusedPanelId) {
-    void shellCore?.panelManager.notifyFocused(focusedPanelId).catch(() => {});
+    void shellCore?.panelManager.notifyFocused(asPanelSlotId(focusedPanelId)).catch(() => {});
   }
 });
 

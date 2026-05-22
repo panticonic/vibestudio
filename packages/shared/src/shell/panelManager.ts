@@ -24,6 +24,8 @@ import {
 } from "../panel/accessors.js";
 import { between as rankBetween, first as firstRank } from "../lexorank.js";
 import { canonicalEntityId } from "../runtime/entitySpec.js";
+import { asPanelEntityId, asPanelSlotId } from "../panel/ids.js";
+import type { PanelEntityId, PanelSlotId } from "../panel/ids.js";
 import type {
   RuntimeClient,
   SlotHistoryEntryInput,
@@ -43,7 +45,7 @@ export interface PanelManagerServerInfo {
 }
 
 export interface CreatePanelOptions {
-  parentId?: string;
+  parentId?: PanelSlotId;
   name?: string;
   contextId?: string;
   env?: Record<string, string>;
@@ -55,7 +57,7 @@ export interface CreatePanelOptions {
 }
 
 export interface CreatePanelResult {
-  panelId: string;
+  panelId: PanelSlotId;
   contextId: string;
   source: string;
   title: string;
@@ -72,7 +74,7 @@ export interface NavigatePanelOptions {
 }
 
 export interface ActivationClient {
-  markPanelActive(panelId: string): Promise<void>;
+  markPanelActive(panelId: PanelSlotId): Promise<void>;
 }
 
 export interface LocalPanelViewState {
@@ -111,7 +113,7 @@ export interface PanelManagerDeps {
    * building the bootstrap config delivered to a freshly mounted view.
    * Implementations should call into the shell's auth service.
    */
-  grantConnection?(panelId: string): Promise<{ token: string }>;
+  grantConnection?(panelId: PanelEntityId): Promise<{ token: string }>;
 }
 
 // =============================================================================
@@ -142,7 +144,7 @@ export class PanelManager {
   private readonly searchIndex: PanelSearchIndex | null;
   private readonly workspaceConfig?: WorkspaceConfig;
   private readonly allowMissingManifests: boolean;
-  private readonly grantConnectionImpl?: (panelId: string) => Promise<{ token: string }>;
+  private readonly grantConnectionImpl?: (panelId: PanelEntityId) => Promise<{ token: string }>;
 
   private readonly collapsedIds = new Set<string>();
   private readonly localPanelTitles = new Map<string, { source: string; title: string }>();
@@ -153,7 +155,7 @@ export class PanelManager {
    * active* panel entity per slot — what gets retired on the next navigation.
    * Kept in sync with the local registry after every navigation / sync.
    */
-  private readonly currentEntityBySlot = new Map<string, string>();
+  private readonly currentEntityBySlot = new Map<PanelSlotId, PanelEntityId>();
   /**
    * Per-slot navigation history of {entryKey -> options} so back/forward
    * navigation can reconstruct snapshots with their original options. The
@@ -161,7 +163,10 @@ export class PanelManager {
    * detail (matches the prior op-log behaviour, which never persisted them
    * across restart either).
    */
-  private readonly slotOptionsByEntryKey = new Map<string, Map<string, PanelSnapshot["options"]>>();
+  private readonly slotOptionsByEntryKey = new Map<
+    PanelSlotId,
+    Map<string, PanelSnapshot["options"]>
+  >();
 
   constructor(deps: PanelManagerDeps) {
     this.registry = deps.registry;
@@ -215,12 +220,14 @@ export class PanelManager {
       opts?.stateArgs
     );
 
-    const slotId = computePanelId({
-      relativePath,
-      parent: opts?.parentId ? { id: opts.parentId } : null,
-      requestedId: opts?.name,
-      isRoot: opts?.isRoot,
-    });
+    const slotId = asPanelSlotId(
+      computePanelId({
+        relativePath,
+        parent: opts?.parentId ? { id: opts.parentId } : null,
+        requestedId: opts?.name,
+        isRoot: opts?.isRoot,
+      })
+    );
     const contextId = opts?.contextId ?? generateContextId(slotId);
     const historyEntryKey = mintHistoryEntryKey();
     const stateArgsPayload = validatedStateArgs ?? {};
@@ -243,6 +250,7 @@ export class PanelManager {
       contextId,
       stateArgs: stateArgsPayload,
     });
+    const entityId = asPanelEntityId(handle.id);
 
     try {
       await this.workspaceState.createSlot({
@@ -251,7 +259,7 @@ export class PanelManager {
         positionId,
         initialEntry: {
           entryKey: historyEntryKey,
-          entityId: handle.id,
+          entityId,
           source: relativePath,
           contextId,
           stateArgs: stateArgsPayload,
@@ -264,7 +272,7 @@ export class PanelManager {
     }
 
     this.recordOptionsForEntry(slotId, historyEntryKey, snapshot.options);
-    this.currentEntityBySlot.set(slotId, handle.id);
+    this.currentEntityBySlot.set(slotId, entityId);
 
     const panel: Panel = {
       id: slotId,
@@ -291,7 +299,7 @@ export class PanelManager {
   }
 
   async createBrowser(
-    parentId: string | null,
+    parentId: PanelSlotId | null,
     url: string,
     opts?: { name?: string; addAsRoot?: boolean }
   ): Promise<CreatePanelResult & { url: string }> {
@@ -300,12 +308,14 @@ export class PanelManager {
     }
     const parsed = new URL(url);
     const normalizedSource = browserSourceFromHostname(parsed.hostname);
-    const slotId = computePanelId({
-      relativePath: normalizedSource,
-      parent: parentId ? { id: parentId } : null,
-      requestedId: opts?.name,
-      isRoot: parentId == null,
-    });
+    const slotId = asPanelSlotId(
+      computePanelId({
+        relativePath: normalizedSource,
+        parent: parentId ? { id: parentId } : null,
+        requestedId: opts?.name,
+        isRoot: parentId == null,
+      })
+    );
     const contextId = generateContextId(slotId);
     const historyEntryKey = mintHistoryEntryKey();
     const browserSource = `browser:${url}`;
@@ -319,6 +329,7 @@ export class PanelManager {
       key: historyEntryKey,
       contextId,
     });
+    const entityId = asPanelEntityId(handle.id);
 
     try {
       await this.workspaceState.createSlot({
@@ -327,7 +338,7 @@ export class PanelManager {
         positionId,
         initialEntry: {
           entryKey: historyEntryKey,
-          entityId: handle.id,
+          entityId,
           source: browserSource,
           contextId,
           stateArgs: {},
@@ -339,7 +350,7 @@ export class PanelManager {
     }
 
     this.recordOptionsForEntry(slotId, historyEntryKey, snapshot.options);
-    this.currentEntityBySlot.set(slotId, handle.id);
+    this.currentEntityBySlot.set(slotId, entityId);
 
     const title = opts?.name ?? parsed.hostname;
     const panel: Panel = {
@@ -390,7 +401,7 @@ export class PanelManager {
   // Close
   // ===========================================================================
 
-  async close(slotId: string): Promise<{ closedIds: string[] }> {
+  async close(slotId: PanelSlotId): Promise<{ closedIds: PanelSlotId[] }> {
     const closedIds = this.collectSubtree(slotId);
 
     // Retire each current panel entity (deepest-first to match cleanup ordering).
@@ -425,12 +436,12 @@ export class PanelManager {
   // Mutate (state-args / snapshot / navigate / history)
   // ===========================================================================
 
-  getInfo(slotId: string): unknown {
+  getInfo(slotId: PanelSlotId): unknown {
     return this.registry.getInfo(slotId);
   }
 
   onStateArgsChanged(
-    slotId: string,
+    slotId: PanelSlotId,
     callback: (stateArgs: Record<string, unknown>) => void
   ): () => void {
     const subscribers = this.stateArgsSubscribers.get(slotId) ?? new Set();
@@ -443,7 +454,7 @@ export class PanelManager {
   }
 
   async updateStateArgs(
-    slotId: string,
+    slotId: PanelSlotId,
     updates: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
     const panel = await this.requireStoredPanel(slotId);
@@ -478,7 +489,10 @@ export class PanelManager {
     return nextStateArgs;
   }
 
-  private notifyStateArgsSubscribers(slotId: string, stateArgs: Record<string, unknown>): void {
+  private notifyStateArgsSubscribers(
+    slotId: PanelSlotId,
+    stateArgs: Record<string, unknown>
+  ): void {
     for (const callback of this.stateArgsSubscribers.get(slotId) ?? []) {
       callback(stateArgs);
     }
@@ -490,7 +504,7 @@ export class PanelManager {
    * in-place (overwrite, do not append).
    */
   async replaceCurrentSnapshot(
-    slotId: string,
+    slotId: PanelSlotId,
     updates: { contextId?: string; source?: string; stateArgs?: Record<string, unknown> }
   ): Promise<void> {
     const panel = await this.requireStoredPanel(slotId);
@@ -518,7 +532,7 @@ export class PanelManager {
   }
 
   async navigate(
-    slotId: string,
+    slotId: PanelSlotId,
     source: string,
     opts?: NavigatePanelOptions
   ): Promise<CreatePanelResult> {
@@ -550,10 +564,11 @@ export class PanelManager {
       stateArgs: stateArgsPayload,
       ref: nextSnapshot.options.ref,
     });
+    const entityId = asPanelEntityId(handle.id);
 
     await this.workspaceState.appendSlotHistory(slotId, {
       entryKey: historyEntryKey,
-      entityId: handle.id,
+      entityId,
       source: nextSnapshot.source,
       contextId: nextSnapshot.contextId,
       stateArgs: stateArgsPayload,
@@ -561,7 +576,7 @@ export class PanelManager {
     await this.workspaceState.setSlotCurrent(slotId, historyEntryKey);
 
     this.recordOptionsForEntry(slotId, historyEntryKey, nextSnapshot.options);
-    this.currentEntityBySlot.set(slotId, handle.id);
+    this.currentEntityBySlot.set(slotId, entityId);
 
     const livePanel = this.registry.getPanel(slotId);
     const nextHistory = this.pushHistory(panel, nextSnapshot);
@@ -583,7 +598,7 @@ export class PanelManager {
     };
   }
 
-  async navigateHistory(slotId: string, delta: -1 | 1): Promise<Panel | null> {
+  async navigateHistory(slotId: PanelSlotId, delta: -1 | 1): Promise<Panel | null> {
     const before = await this.requireStoredPanel(slotId);
     const history = before.history;
     if (!history) return before;
@@ -604,7 +619,7 @@ export class PanelManager {
     }
     const targetEntityId =
       slotHistory[targetIndex]?.entity_id ??
-      canonicalEntityId({ kind: "panel", key: targetEntryKey });
+      asPanelEntityId(canonicalEntityId({ kind: "panel", key: targetEntryKey }));
     const currentEntityId =
       this.currentEntityBySlot.get(slotId) ?? this.deriveEntityIdFromPanel(before);
     if (currentEntityId && currentEntityId !== targetEntityId) {
@@ -628,7 +643,7 @@ export class PanelManager {
       ref: targetSnapshot.options.ref,
     });
     await this.workspaceState.setSlotCurrent(slotId, targetEntryKey);
-    this.currentEntityBySlot.set(slotId, handle.id);
+    this.currentEntityBySlot.set(slotId, asPanelEntityId(handle.id));
 
     const livePanel = this.registry.getPanel(slotId);
     const nextHistoryState = {
@@ -641,7 +656,7 @@ export class PanelManager {
     return this.registry.getPanel(slotId) ?? null;
   }
 
-  async updateTitle(slotId: string, title: string): Promise<void> {
+  async updateTitle(slotId: PanelSlotId, title: string): Promise<void> {
     await this.ensureViewStateLoaded();
     const livePanel = this.registry.getPanel(slotId);
     if (livePanel) livePanel.title = title;
@@ -651,8 +666,8 @@ export class PanelManager {
   }
 
   async movePanel(
-    slotId: string,
-    newParentId: string | null,
+    slotId: PanelSlotId,
+    newParentId: PanelSlotId | null,
     targetPosition: number
   ): Promise<void> {
     const positionId = this.rankForPosition(newParentId, targetPosition, slotId);
@@ -669,8 +684,8 @@ export class PanelManager {
    * server shutdown to clean up panels that died with the shell. The new
    * model: close the slot via workspace-state and let cleanup hooks fire.
    */
-  async shutdownCleanup(livePanelIds: string[]): Promise<void> {
-    const liveSet = new Set(livePanelIds);
+  async shutdownCleanup(livePanelIds: PanelSlotId[]): Promise<void> {
+    const liveSet = new Set<PanelSlotId>(livePanelIds);
     const slots = await this.workspaceState.listSlots();
     for (const slot of slots) {
       if (slot.closed_at != null) continue;
@@ -683,7 +698,7 @@ export class PanelManager {
     }
   }
 
-  async setCollapsed(slotId: string, collapsed: boolean): Promise<void> {
+  async setCollapsed(slotId: PanelSlotId, collapsed: boolean): Promise<void> {
     await this.ensureViewStateLoaded();
     if (collapsed) this.collapsedIds.add(slotId);
     else this.collapsedIds.delete(slotId);
@@ -703,7 +718,7 @@ export class PanelManager {
     return [...this.collapsedIds];
   }
 
-  async notifyFocused(slotId: string): Promise<void> {
+  async notifyFocused(slotId: PanelSlotId): Promise<void> {
     await this.ensureViewStateLoaded();
     this.registry.updateSelectedPath(slotId);
     await this.persistViewState();
@@ -729,11 +744,15 @@ export class PanelManager {
     return this.registry.listPanels();
   }
 
-  async getPanelInit(slotId: string): Promise<unknown> {
+  async getPanelInit(slotId: PanelSlotId): Promise<unknown> {
     const panel = this.registry.getPanel(slotId) ?? (await this.requireStoredPanel(slotId));
-    const parentId = this.registry.findParentId(slotId) ?? this.findParentIdInRegistry(slotId);
+    const registryParentId = this.registry.findParentId(slotId);
+    const parentId = registryParentId
+      ? asPanelSlotId(registryParentId)
+      : this.findParentIdInRegistry(slotId);
     const parentEntityId = parentId
-      ? this.currentEntityBySlot.get(parentId) ?? (await this.resolveCurrentEntityIdForSlot(parentId))
+      ? (this.currentEntityBySlot.get(parentId) ??
+        (await this.resolveCurrentEntityIdForSlot(parentId)))
       : null;
     // The grant is bound to the panel's current ENTITY id (panel:<historyEntryKey>),
     // not the slotId — that's what `connectionGrants` validates against the
@@ -761,7 +780,7 @@ export class PanelManager {
     });
   }
 
-  async getCurrentEntityId(slotId: string): Promise<string> {
+  async getCurrentEntityId(slotId: PanelSlotId): Promise<PanelEntityId> {
     return this.resolveCurrentEntityIdForSlot(slotId);
   }
 
@@ -772,7 +791,7 @@ export class PanelManager {
   private async fetchPanelTree(): Promise<Panel[]> {
     const slots = await this.workspaceState.listSlots();
     const openSlots = slots.filter((s) => s.closed_at == null);
-    const histories = new Map<string, SlotHistoryRow[]>();
+    const histories = new Map<PanelSlotId, SlotHistoryRow[]>();
     for (const slot of openSlots) {
       const rows = await this.workspaceState.getSlotHistory(slot.slot_id);
       histories.set(slot.slot_id, rows);
@@ -811,7 +830,7 @@ export class PanelManager {
     };
 
     // Build all panels then attach children by parent_slot_id.
-    const panels = new Map<string, Panel>();
+    const panels = new Map<PanelSlotId, Panel>();
     for (const slot of openSlots) {
       const panel = buildPanel(slot);
       if (panel) panels.set(slot.slot_id, panel);
@@ -830,8 +849,8 @@ export class PanelManager {
     const byPosition = (a: Panel, b: Panel) => {
       const position = (a.positionId ?? "").localeCompare(b.positionId ?? "");
       if (position !== 0) return position;
-      const aSlot = slotById.get(a.id);
-      const bSlot = slotById.get(b.id);
+      const aSlot = slotById.get(asPanelSlotId(a.id));
+      const bSlot = slotById.get(asPanelSlotId(b.id));
       const createdAt = (aSlot?.created_at ?? 0) - (bSlot?.created_at ?? 0);
       if (createdAt !== 0) return createdAt;
       return a.id.localeCompare(b.id);
@@ -844,7 +863,7 @@ export class PanelManager {
     return roots;
   }
 
-  private snapshotFromHistoryRow(slotId: string, row: SlotHistoryRow): PanelSnapshot {
+  private snapshotFromHistoryRow(slotId: PanelSlotId, row: SlotHistoryRow): PanelSnapshot {
     const stateArgs = row.state_args ? this.safeParseJson(row.state_args) : undefined;
     const options = this.optionsForEntry(slotId, row.entry_key) ?? {};
     return {
@@ -869,7 +888,7 @@ export class PanelManager {
     return idx >= 0 ? idx : null;
   }
 
-  private titleFor(slotId: string, source: string, metadata?: PanelMetadata): string {
+  private titleFor(slotId: PanelSlotId, source: string, metadata?: PanelMetadata): string {
     const manifest = this.tryResolveManifestForSource(source);
     if (manifest?.title) return manifest.title;
     if (metadata?.title) return metadata.title;
@@ -886,7 +905,7 @@ export class PanelManager {
   }
 
   private async fetchPanelMetadataForHistories(
-    histories: Map<string, SlotHistoryRow[]>
+    histories: Map<PanelSlotId, SlotHistoryRow[]>
   ): Promise<Map<string, PanelMetadata>> {
     const metadataResolver = this.metadataResolver;
     if (!metadataResolver) return new Map();
@@ -914,7 +933,7 @@ export class PanelManager {
   }
 
   private recordOptionsForEntry(
-    slotId: string,
+    slotId: PanelSlotId,
     entryKey: string,
     options: PanelSnapshot["options"]
   ): void {
@@ -926,7 +945,10 @@ export class PanelManager {
     map.set(entryKey, options);
   }
 
-  private optionsForEntry(slotId: string, entryKey: string): PanelSnapshot["options"] | undefined {
+  private optionsForEntry(
+    slotId: PanelSlotId,
+    entryKey: string
+  ): PanelSnapshot["options"] | undefined {
     return this.slotOptionsByEntryKey.get(slotId)?.get(entryKey);
   }
 
@@ -939,14 +961,14 @@ export class PanelManager {
     return null;
   }
 
-  private deriveEntityIdFromPanel(panel: Panel): string | null {
-    const tracked = this.currentEntityBySlot.get(panel.id);
+  private deriveEntityIdFromPanel(panel: Panel): PanelEntityId | null {
+    const tracked = this.currentEntityBySlot.get(asPanelSlotId(panel.id));
     if (tracked) return tracked;
     return null;
   }
 
   private async replaceHistoryAtCurrent(
-    slotId: string,
+    slotId: PanelSlotId,
     panel: Panel,
     nextSnapshot: PanelSnapshot
   ): Promise<void> {
@@ -964,6 +986,7 @@ export class PanelManager {
       stateArgs: stateArgsPayload,
       ref: nextSnapshot.options.ref,
     });
+    const entityId = asPanelEntityId(handle.id);
 
     // Replace history at the current cursor (overwrite, not append).
     const existing = await this.workspaceState.getSlotHistory(slotId);
@@ -972,7 +995,7 @@ export class PanelManager {
       idx === cursor
         ? {
             entryKey: newEntryKey,
-            entityId: handle.id,
+            entityId,
             source: nextSnapshot.source,
             contextId: nextSnapshot.contextId,
             stateArgs: stateArgsPayload,
@@ -988,7 +1011,7 @@ export class PanelManager {
     if (nextEntries.length === 0) {
       nextEntries.push({
         entryKey: newEntryKey,
-        entityId: handle.id,
+        entityId,
         source: nextSnapshot.source,
         contextId: nextSnapshot.contextId,
         stateArgs: stateArgsPayload,
@@ -997,7 +1020,7 @@ export class PanelManager {
     await this.workspaceState.replaceSlotHistory(slotId, nextEntries, cursor);
 
     this.recordOptionsForEntry(slotId, newEntryKey, nextSnapshot.options);
-    this.currentEntityBySlot.set(slotId, handle.id);
+    this.currentEntityBySlot.set(slotId, entityId);
 
     const livePanel = this.registry.getPanel(slotId);
     if (livePanel) {
@@ -1099,7 +1122,7 @@ export class PanelManager {
     }
   }
 
-  private async requireStoredPanel(slotId: string): Promise<Panel> {
+  private async requireStoredPanel(slotId: PanelSlotId): Promise<Panel> {
     let panel = this.registry.getPanel(slotId) ?? null;
     if (!panel) {
       await this.syncSnapshot();
@@ -1115,7 +1138,7 @@ export class PanelManager {
    * been populated yet — e.g. just after a fresh app boot, before
    * `syncSnapshot` runs.
    */
-  private async resolveCurrentEntityIdForSlot(slotId: string): Promise<string> {
+  private async resolveCurrentEntityIdForSlot(slotId: PanelSlotId): Promise<PanelEntityId> {
     const fromCache = this.currentEntityBySlot.get(slotId);
     if (fromCache) return fromCache;
     const slot = await this.workspaceState.getSlot(slotId);
@@ -1126,14 +1149,14 @@ export class PanelManager {
     return slot.current_entity_id;
   }
 
-  private collectSubtree(slotId: string): string[] {
+  private collectSubtree(slotId: PanelSlotId): PanelSlotId[] {
     const panel = this.registry.getPanel(slotId);
     if (!panel) {
       throw new Error(`Panel not found: ${slotId}`);
     }
-    const ids = [slotId];
+    const ids: PanelSlotId[] = [slotId];
     for (const child of panel.children) {
-      ids.push(...this.collectSubtree(child.id));
+      ids.push(...this.collectSubtree(asPanelSlotId(child.id)));
     }
     return ids;
   }
@@ -1170,9 +1193,9 @@ export class PanelManager {
   }
 
   private rankForPosition(
-    parentId: string | null,
+    parentId: PanelSlotId | null,
     targetPosition: number,
-    excludeSlotId?: string
+    excludeSlotId?: PanelSlotId
   ): string {
     const siblings = parentId
       ? (this.registry.getPanel(parentId)?.children ?? [])
@@ -1185,18 +1208,19 @@ export class PanelManager {
     return rankBetween(filtered[clamped - 1]?.positionId, filtered[clamped]?.positionId);
   }
 
-  private rankForAppend(parentId: string | null): string {
+  private rankForAppend(parentId: PanelSlotId | null): string {
     const siblings = parentId
       ? (this.registry.getPanel(parentId)?.children ?? [])
       : this.registry.getRootPanels();
     return this.rankForPosition(parentId, siblings.length);
   }
 
-  private findParentIdInRegistry(slotId: string): string | null {
-    return this.registry.findParentId(slotId);
+  private findParentIdInRegistry(slotId: PanelSlotId): PanelSlotId | null {
+    const parentId = this.registry.findParentId(slotId);
+    return parentId ? asPanelSlotId(parentId) : null;
   }
 
-  private indexPanel(slotId: string, title: string, panelPath: string): void {
+  private indexPanel(slotId: PanelSlotId, title: string, panelPath: string): void {
     if (!this.searchIndex) return;
     Promise.resolve(this.searchIndex.indexPanel({ id: slotId, title, path: panelPath })).catch(
       (error) => {

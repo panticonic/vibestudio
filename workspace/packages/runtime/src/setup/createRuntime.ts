@@ -19,16 +19,17 @@ import type { ParentHandle, ParentHandleFromContract } from "../core/index.js";
 import type { RuntimeFs, ThemeAppearance } from "../types.js";
 import { _applyStateArgsFromHost, _initStateArgsRuntime } from "../panel/stateArgs.js";
 import { registerAgentApi } from "../panel/agentApi.js";
+import type { PanelEntityId, PanelSlotId } from "@natstack/shared/panel/ids";
 
 export interface RuntimeDeps {
-  selfId: string;
+  selfId: PanelEntityId;
   createTransport: () => RpcTransport;
-  entityId: string;
-  id?: string;
-  slotId?: string;
+  entityId: PanelEntityId;
+  id?: PanelEntityId;
+  slotId?: PanelSlotId;
   contextId: string;
-  parentId: string | null;
-  parentEntityId?: string | null;
+  parentId: PanelSlotId | null;
+  parentEntityId?: PanelEntityId | null;
   initialTheme: ThemeAppearance;
   fs: RuntimeFs;
   setupGlobals?: () => void;
@@ -38,7 +39,7 @@ export interface RuntimeDeps {
 
 export function createRuntime(deps: RuntimeDeps) {
   const entityId = deps.entityId;
-  const slotId = deps.slotId ?? entityId;
+  const slotId = deps.slotId ?? (entityId as unknown as PanelSlotId);
   const parentRuntimeId = deps.parentEntityId ?? deps.parentId;
   const base = createBaseRuntime({ ...deps, id: entityId });
   const shell = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
@@ -53,18 +54,22 @@ export function createRuntime(deps: RuntimeDeps) {
     });
   }
 
-  const parentHandleOrNull = parentRuntimeId ? createParentHandle({ rpc: base.rpc, parentId: parentRuntimeId }) : null;
+  const parentHandleOrNull = parentRuntimeId
+    ? createParentHandle({ rpc: base.rpc, parentId: parentRuntimeId })
+    : null;
   const parent: ParentHandle = parentHandleOrNull ?? noopParent;
 
   const getParent = <
     T extends Rpc.ExposedMethods = Rpc.ExposedMethods,
     E extends Rpc.RpcEventMap = Rpc.RpcEventMap,
-    EmitE extends Rpc.RpcEventMap = Rpc.RpcEventMap
+    EmitE extends Rpc.RpcEventMap = Rpc.RpcEventMap,
   >(): ParentHandle<T, E, EmitE> | null => {
     return parentHandleOrNull as ParentHandle<T, E, EmitE> | null;
   };
 
-  const getParentWithContract = <C extends PanelContract>(contract: C): ParentHandleFromContract<C> | null => {
+  const getParentWithContract = <C extends PanelContract>(
+    contract: C
+  ): ParentHandleFromContract<C> | null => {
     return createParentHandleFromContract(getParent(), contract);
   };
 

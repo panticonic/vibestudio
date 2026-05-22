@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { applyStateArgsSnapshot } from "@natstack/shared/panel/applyStateArgsSnapshot";
+import type { PanelSlotId } from "@natstack/shared/panel/ids";
 
 // Global injected by preload via --natstack-state-args command line arg
 declare global {
@@ -8,17 +9,15 @@ declare global {
   }
 }
 
-let selfSlotId: string | null = null;
-let rpcCall:
-  | (<T>(service: string, method: string, args: unknown[]) => Promise<T>)
-  | null = null;
+let selfSlotId: PanelSlotId | null = null;
+let rpcCall: (<T>(service: string, method: string, args: unknown[]) => Promise<T>) | null = null;
 
 function getShell() {
   return (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
 }
 
 export function _initStateArgsRuntime(
-  slotId: string,
+  slotId: PanelSlotId,
   call: <T>(service: string, method: string, args: unknown[]) => Promise<T>
 ): void {
   selfSlotId = slotId;
@@ -91,7 +90,9 @@ async function setStateArgsForPanelRaw(
   throw new Error("setStateArgs requires a host shell bridge");
 }
 
-export async function getStateArgsForPanel<T = Record<string, unknown>>(panelId: string): Promise<T> {
+export async function getStateArgsForPanel<T = Record<string, unknown>>(
+  panelId: string
+): Promise<T> {
   const shell = getShell();
   if (shell?.panel?.getStateArgs) return shell.panel.getStateArgs(panelId) as Promise<T>;
   throw new Error("getStateArgsForPanel requires a host shell bridge");
