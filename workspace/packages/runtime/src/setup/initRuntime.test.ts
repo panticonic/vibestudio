@@ -46,7 +46,6 @@ describe("initRuntime", () => {
     g.__natstackShell = {
       setStateArgs: vi.fn(),
       getInfo: vi.fn(),
-      closeSelf: vi.fn(),
       focusPanel: vi.fn(),
     };
 

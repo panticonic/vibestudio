@@ -502,7 +502,7 @@ async function handleCredentialSessionCaptureRequest(
       return { error: "internal browser is unavailable" };
     }
 
-    const panel = await panelOrchestrator.createBrowserPanel("shell", signInUrl.href, {
+    const panel = await panelOrchestrator.createBrowserUrlPanel("shell", signInUrl.href, {
       name: "Credential sign-in",
       focus: true,
     });
@@ -1400,24 +1400,26 @@ app.on("ready", async () => {
     });
 
     // Panel lifecycle
-    ipcMain.handle("natstack:closeSelf", async (event) => {
-      const callerId = resolveCallerId(event);
-      return assertPresent(panelOrchestrator).closePanel(callerId);
-    });
-    ipcMain.handle("natstack:closeChild", async (event, childId: string) => {
-      const callerId = resolveCallerId(event);
-      return assertPresent(panelOrchestrator).closeChild(callerId, childId);
+    ipcMain.handle("natstack:panel.close", async (_event, panelId: string) => {
+      return assertPresent(panelOrchestrator).closePanel(panelId);
     });
     ipcMain.handle("natstack:focusPanel", async (_event, panelId: string) => {
       assertPresent(panelOrchestrator).focusPanel(panelId);
     });
     ipcMain.handle(
-      "natstack:createBrowserPanel",
-      async (event, url: string, opts?: { name?: string; focus?: boolean }) => {
+      "natstack:panel.create",
+      async (
+        event,
+        source: string,
+        opts?: { name?: string; focus?: boolean; stateArgs?: Record<string, unknown> }
+      ) => {
         const callerId = resolveCallerId(event);
-        return assertPresent(panelOrchestrator).createBrowserPanel(callerId, url, opts);
+        return assertPresent(panelOrchestrator).createRuntimePanel(callerId, source, opts);
       }
     );
+    ipcMain.handle("natstack:panel.list", async (_event, parentId?: string | null) => {
+      return assertPresent(panelOrchestrator).listRuntimePanels(parentId);
+    });
     ipcMain.handle("natstack:bridge.getInfo", async (event) => {
       const callerId = resolveCallerId(event);
       return shellCore?.panelManager.getInfo(callerId);
@@ -1429,6 +1431,43 @@ app.on("ready", async () => {
         return panelOrchestrator
           ? panelOrchestrator.handleSetStateArgs(callerId, updates)
           : shellCore?.panelManager.updateStateArgs(callerId, updates);
+      }
+    );
+    ipcMain.handle("natstack:panel.getStateArgs", async (_event, panelId: string) => {
+      return assertPresent(panelOrchestrator).getStateArgs(panelId);
+    });
+    ipcMain.handle(
+      "natstack:panel.setStateArgs",
+      async (_event, panelId: string, updates: Record<string, unknown>) => {
+        return assertPresent(panelOrchestrator).handleSetStateArgs(panelId, updates);
+      }
+    );
+    ipcMain.handle("natstack:panel.reload", async (_event, panelId: string) => {
+      return assertPresent(panelOrchestrator).reloadPanel(panelId);
+    });
+    ipcMain.handle("natstack:panel.snapshot", async (_event, panelId: string) => {
+      return assertPresent(panelOrchestrator).snapshot(panelId);
+    });
+    ipcMain.handle(
+      "natstack:panel.callAgent",
+      async (
+        _event,
+        panelId: string,
+        method: string,
+        args?: unknown[],
+        options?: { timeoutMs?: number }
+      ) => {
+        return assertPresent(panelOrchestrator).callAgent(panelId, method, args ?? [], options);
+      }
+    );
+    ipcMain.on(
+      "natstack:panel.callAgent.response",
+      (
+        _event,
+        requestId: number,
+        response: { ok: boolean; value?: unknown; error?: { code?: string; message?: string } }
+      ) => {
+        panelOrchestrator?.resolveAgentCallResponse(requestId, _event.sender.id, response);
       }
     );
     ipcMain.handle("natstack:getBootstrapConfig", async (event) => {
