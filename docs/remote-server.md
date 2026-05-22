@@ -194,6 +194,55 @@ pnpm start:remote
 Plain `pnpm start` still starts local mode unless remote credentials have been
 saved in Electron's own credential store from Connection Settings.
 
+### Dogfood server mode
+
+From a NatStack source checkout, use dogfood mode when you want a paired client
+to edit NatStack itself and have accepted pushes flow back into the host
+checkout:
+
+```bash
+pnpm dev:self:server
+```
+
+This starts the normal pairing server, but with a managed workspace whose
+`projects/natstack` checkout pushes through the NatStack Git gateway instead of
+directly to the host `.git` directory. Successful userland pushes are mirrored
+back into the host checkout with git fast-forward semantics. Server-relevant
+changes rebuild `dist/server.mjs` and restart the paired server on the same
+gateway port, so existing paired clients can reconnect using their saved device
+credentials.
+
+Dogfood mode is intentionally stricter than ordinary pairing:
+
+- The host checkout must be clean before startup and before each mirror apply.
+- The gateway port is fixed across restarts; if that port is unavailable, the
+  supervisor refuses to continue and prints recovery instructions.
+- Dirty or non-fast-forward mirror targets are skipped instead of overwritten.
+- The supervisor stops restart storms instead of repeatedly rebuilding a broken
+  server.
+
+The dogfood workspace writes `meta/dogfood.json` so userland code can detect
+that it is running inside the self-editing loop:
+
+```js
+import fs from "node:fs/promises";
+import path from "node:path";
+
+export async function readDogfoodInfo(workspaceDir = process.cwd()) {
+  try {
+    const text = await fs.readFile(path.join(workspaceDir, "meta/dogfood.json"), "utf8");
+    return JSON.parse(text);
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+```
+
+`pnpm dev:self:server --help` shows the supported pairing flags. It deliberately
+rejects flags that would break the managed workspace contract, such as
+`--workspace-dir`, `--dev`, and `--no-init`.
+
 Admin-token bootstrap is still available for headless or scripted setups. On
 each launch, credentials resolve in this order:
 

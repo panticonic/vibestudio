@@ -14,6 +14,8 @@ export interface WorkerEnv {
   CONTEXT_ID: string;
   /** HTTP base URL for gateway server (e.g., "http://127.0.0.1:8080") */
   GATEWAY_URL: string;
+  /** Additional gateway URLs that should use the internal bearer token. */
+  GATEWAY_URL_ALIASES?: string | string[];
   /** Parent panel/worker ID for parent handle */
   PARENT_ID?: string;
   /** Initial state args (parsed object from JSON binding, if provided at instance creation) */

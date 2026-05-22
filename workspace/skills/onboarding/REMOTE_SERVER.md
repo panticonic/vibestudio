@@ -29,6 +29,24 @@ On first boot the server generates an admin token (if `NATSTACK_ADMIN_TOKEN` isn
 
 The server prints its URL and `/healthz` is available for liveness checks (e.g., `curl https://my-home-server.local:3000/healthz`).
 
+### Dogfood mode from a source checkout
+
+When the remote server is meant to edit NatStack itself, start it with:
+
+```
+pnpm dev:self:server
+```
+
+This is a source-checkout workflow layered on top of normal pairing. It creates
+a managed workspace with `projects/natstack`, routes userland pushes through
+the NatStack Git gateway, mirrors accepted pushes back into the host checkout
+only when the host is clean and fast-forwardable, then rebuilds and restarts the
+server on the same gateway port for server-relevant changes.
+
+Userland code can detect the mode by checking for `meta/dogfood.json` in the
+workspace. See `docs/remote-server.md` for the JSON marker and recovery
+behavior.
+
 ## 2. Point a client at it
 
 ### Desktop (Electron)

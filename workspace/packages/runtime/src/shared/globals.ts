@@ -10,6 +10,7 @@ import type { PanelEntityId, PanelSlotId } from "@natstack/shared/panel/ids";
 export interface GatewayConfig {
   serverUrl: string;
   token: string;
+  aliases?: readonly string[];
 }
 
 /**
@@ -95,6 +96,9 @@ export function getInjectedConfig(): InjectedConfig {
   const sourceRepo = g.__natstackSourceRepo ?? g.__natstackEnv?.["__NATSTACK_SOURCE_REPO"] ?? "";
   const gitConfig: GitConfig = {
     serverUrl: `${g.__natstackGatewayConfig.serverUrl.replace(/\/$/, "")}/_git`,
+    internalOrigins: g.__natstackGatewayConfig.aliases?.map(
+      (url) => `${url.replace(/\/$/, "")}/_git`
+    ),
     token: g.__natstackGatewayConfig.token,
     sourceRepo,
   };

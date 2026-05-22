@@ -137,12 +137,13 @@ Options:
   --help
       Show this help message.
 
+${config.additionalHelp ? `${config.additionalHelp}\n\n` : ""}\
 When invoking the script directly with node, everything after '--' is forwarded
 to dist/server.mjs.
 `);
 }
 
-export function runPairServer(config, argv = process.argv.slice(2)) {
+export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) {
   const options = parsePairArgs(argv, config);
   if (options.help) {
     printPairHelp(config);
@@ -154,7 +155,11 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
     includeTunnel: true,
   });
   const requirePublicUrl = options.requirePublicUrl || options.host === "tailscale";
-  const serverArgs = buildServerArgs(options, selectedHost.address);
+  const serverArgs = hooks.buildServerArgs
+    ? hooks.buildServerArgs(options, selectedHost.address)
+    : buildServerArgs(options, selectedHost.address);
+
+  hooks.beforeStart?.({ options, selectedHost, requirePublicUrl, serverArgs });
 
   console.log(
     `[${config.logPrefix}] Host: ${selectedHost.address}${selectedHost.interfaceName ? ` (${selectedHost.interfaceName})` : ""}`
@@ -168,30 +173,60 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
   }
   if (config.startupHint) console.log(`${config.startupHint}\n`);
 
-  const child = spawn(process.execPath, serverArgs, {
-    cwd: repoRoot,
-    stdio: ["inherit", "pipe", "inherit"],
-    env: {
-      ...process.env,
-      NATSTACK_HOST: selectedHost.address,
-      NATSTACK_GATEWAY_PORT: String(options.port),
-      NATSTACK_PROTOCOL: options.protocol,
-      ...(requirePublicUrl ? { NATSTACK_REQUIRE_PUBLIC_URL: "1" } : {}),
-      ...(options.dev ? { NODE_ENV: "development", NATSTACK_WORKSPACE_EPHEMERAL: "1" } : {}),
-    },
-  });
+  let child = null;
+  let restarting = false;
+  let buffer = "";
+  let stderrBuffer = "";
+  const stderrLines = [];
+  let strictPublicUrlFailure = false;
+  let hasSpawned = false;
+  const baseEnv = {
+    ...process.env,
+    NATSTACK_HOST: selectedHost.address,
+    NATSTACK_GATEWAY_PORT: String(options.port),
+    NATSTACK_PROTOCOL: options.protocol,
+    ...(requirePublicUrl ? { NATSTACK_REQUIRE_PUBLIC_URL: "1" } : {}),
+    ...(options.dev ? { NODE_ENV: "development", NATSTACK_WORKSPACE_EPHEMERAL: "1" } : {}),
+  };
+  const env = hooks.buildEnv
+    ? hooks.buildEnv(baseEnv, { options, selectedHost, requirePublicUrl, serverArgs })
+    : baseEnv;
 
   let gatewayUrl = null;
   let mobileUrl = null;
   let pairingCode = null;
   let bannerPrinted = false;
-  let buffer = "";
   let pendingServeActivationUrl = null;
   let publicUrlNotReachable = null;
-  let strictPublicUrlFailure = false;
   const serveActionLines = [];
   let pendingTimer = null;
   let waitElapsed = false;
+
+  const spawnChild = () => {
+    buffer = "";
+    stderrBuffer = "";
+    if (hasSpawned) {
+      gatewayUrl = null;
+      mobileUrl = null;
+      pairingCode = null;
+      bannerPrinted = false;
+      waitElapsed = false;
+      if (pendingTimer !== null) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+    }
+    hasSpawned = true;
+    child = hooks.spawnServer
+      ? hooks.spawnServer({ serverArgs, env, repoRoot })
+      : spawn(process.execPath, serverArgs, {
+          cwd: repoRoot,
+          stdio: ["inherit", "pipe", "inherit"],
+          env,
+        });
+    wireChild(child);
+    return child;
+  };
 
   const printServeActionFollowup = () => {
     if (
@@ -245,7 +280,7 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
       console.error("  Fix Tailscale Serve, then restart this command:");
       console.error(`    ${config.restartCommand}`);
       console.error(`${divider}\n`);
-      child.kill("SIGTERM");
+      child?.kill("SIGTERM");
       return;
     }
     bannerPrinted = true;
@@ -263,51 +298,131 @@ export function runPairServer(config, argv = process.argv.slice(2)) {
     printServeActionFollowup();
   };
 
-  child.stdout.setEncoding("utf8");
-  child.stdout.on("data", (chunk) => {
-    process.stdout.write(chunk);
-    buffer += chunk;
-    let newlineIdx;
-    while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
-      const line = buffer.slice(0, newlineIdx);
-      buffer = buffer.slice(newlineIdx + 1);
-
-      const mobileMatch = line.match(/Mobile URL:\s+(\S+)/);
-      if (mobileMatch) mobileUrl = mobileMatch[1];
-      const gatewayMatch = line.match(/Gateway:\s+(\S+)/);
-      if (gatewayMatch) gatewayUrl = gatewayMatch[1];
-      const publicUrlMatch = line.match(/Public URL:\s+(\S+).*\(not yet reachable/);
-      if (publicUrlMatch) publicUrlNotReachable = publicUrlMatch[1];
-      const pairingMatch = line.match(
-        /(?:NATSTACK_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/
-      );
-      if (pairingMatch) pairingCode = pairingMatch[1];
-      const serveActivationMatch = line.match(/(https:\/\/login\.tailscale\.com\/f\/serve\?\S+)/);
-      if (serveActivationMatch) pendingServeActivationUrl = serveActivationMatch[1];
-      if (isServeActionLine(line)) {
-        const cleaned = line.trim();
-        if (
-          cleaned &&
-          !cleaned.startsWith("Tailscale:") &&
-          !cleaned.startsWith("Persistent across reboots") &&
-          !serveActionLines.includes(cleaned)
-        ) {
-          serveActionLines.push(cleaned);
-        }
+  const control = {
+    get child() {
+      return child;
+    },
+    get options() {
+      return options;
+    },
+    get selectedHost() {
+      return selectedHost;
+    },
+    get requirePublicUrl() {
+      return requirePublicUrl;
+    },
+    get serverArgs() {
+      return serverArgs;
+    },
+    get env() {
+      return env;
+    },
+    async restart(beforeRestart) {
+      if (restarting) return false;
+      restarting = true;
+      try {
+        await beforeRestart?.();
+        await new Promise((resolve) => {
+          const current = child;
+          if (!current || current.killed) {
+            resolve(undefined);
+            return;
+          }
+          let done = false;
+          const finish = () => {
+            if (done) return;
+            done = true;
+            clearTimeout(termTimer);
+            clearTimeout(killTimer);
+            resolve(undefined);
+          };
+          const termTimer = setTimeout(() => {
+            current.kill("SIGKILL");
+          }, hooks.shutdownTimeoutMs ?? 5_000);
+          const killTimer = setTimeout(finish, (hooks.shutdownTimeoutMs ?? 5_000) + 2_000);
+          current.once("exit", finish);
+          current.kill("SIGTERM");
+        });
+        restarting = false;
+        spawnChild();
+        return true;
+      } catch (error) {
+        restarting = false;
+        hooks.onRestartError?.(error, control);
+        return false;
       }
+    },
+  };
 
-      tryPrintBanner();
+  const handleLine = (line) => {
+    const handled = hooks.onServerLine?.(line, control);
+    if (handled) return;
+    if (hooks.onServerLine) process.stdout.write(`${line}\n`);
+
+    const mobileMatch = line.match(/Mobile URL:\s+(\S+)/);
+    if (mobileMatch) mobileUrl = mobileMatch[1];
+    const gatewayMatch = line.match(/Gateway:\s+(\S+)/);
+    if (gatewayMatch) gatewayUrl = gatewayMatch[1];
+    const publicUrlMatch = line.match(/Public URL:\s+(\S+).*\(not yet reachable/);
+    if (publicUrlMatch) publicUrlNotReachable = publicUrlMatch[1];
+    const pairingMatch = line.match(/(?:NATSTACK_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/);
+    if (pairingMatch) pairingCode = pairingMatch[1];
+    const serveActivationMatch = line.match(/(https:\/\/login\.tailscale\.com\/f\/serve\?\S+)/);
+    if (serveActivationMatch) pendingServeActivationUrl = serveActivationMatch[1];
+    if (isServeActionLine(line)) {
+      const cleaned = line.trim();
+      if (
+        cleaned &&
+        !cleaned.startsWith("Tailscale:") &&
+        !cleaned.startsWith("Persistent across reboots") &&
+        !serveActionLines.includes(cleaned)
+      ) {
+        serveActionLines.push(cleaned);
+      }
     }
-  });
 
-  child.on("exit", (code, signal) => {
-    if (strictPublicUrlFailure) process.exit(1);
-    if (signal) process.kill(process.pid, signal);
-    else process.exit(code ?? 0);
-  });
+    tryPrintBanner();
+  };
+
+  const wireChild = (childProcess) => {
+    childProcess.stdout?.setEncoding("utf8");
+    childProcess.stdout?.on("data", (chunk) => {
+      if (!hooks.onServerLine) process.stdout.write(chunk);
+      buffer += chunk;
+      let newlineIdx;
+      while ((newlineIdx = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, newlineIdx);
+        buffer = buffer.slice(newlineIdx + 1);
+        handleLine(line);
+      }
+    });
+    childProcess.stderr?.on("data", (chunk) => {
+      process.stderr.write(chunk);
+      stderrBuffer += chunk;
+      let newlineIdx;
+      while ((newlineIdx = stderrBuffer.indexOf("\n")) !== -1) {
+        const line = stderrBuffer.slice(0, newlineIdx);
+        stderrBuffer = stderrBuffer.slice(newlineIdx + 1);
+        stderrLines.push(line);
+        if (stderrLines.length > 50) stderrLines.shift();
+      }
+    });
+
+    childProcess.on("exit", (code, signal) => {
+      if (restarting) return;
+      if (stderrBuffer) stderrLines.push(stderrBuffer);
+      if (hooks.onChildExit?.({ code, signal, strictPublicUrlFailure, stderrLines }, control))
+        return;
+      if (strictPublicUrlFailure) process.exit(1);
+      if (signal) process.kill(process.pid, signal);
+      else process.exit(code ?? 0);
+    });
+  };
+
+  spawnChild();
 
   for (const sig of ["SIGINT", "SIGTERM"]) {
-    process.on(sig, () => child.kill(sig));
+    process.on(sig, () => child?.kill(sig));
   }
 }
 

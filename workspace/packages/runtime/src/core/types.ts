@@ -52,6 +52,8 @@ export type InferEventMap<T extends EventSchemaMap> = {
 export interface GitConfig {
   /** Git server base URL (e.g., http://localhost:63524) */
   serverUrl: string;
+  /** Additional NatStack gateway URLs that should use the internal bearer token. */
+  internalOrigins?: readonly string[];
   /** Bearer token for authentication */
   token: string;
   /** This endpoint's source repo path (e.g., "panels/my-panel") */

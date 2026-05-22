@@ -5,7 +5,8 @@
  * so we focus on the exported GitAuthError class which is cleanly testable.
  */
 
-import { GitAuthError } from "./client.js";
+import type { HttpClient } from "isomorphic-git";
+import { createRoutingHttpClient, GitAuthError } from "./client.js";
 
 describe("GitAuthError", () => {
   it("has correct name and message", () => {
@@ -26,5 +27,60 @@ describe("GitAuthError", () => {
 
     const errorWithoutCode = new GitAuthError("No code");
     expect(errorWithoutCode.statusCode).toBeUndefined();
+  });
+});
+
+describe("createRoutingHttpClient", () => {
+  function mockHttpClient(name: string): HttpClient {
+    return {
+      request: vi.fn(async (request) => ({
+        url: request.url,
+        method: request.method ?? "GET",
+        statusCode: 200,
+        statusMessage: name,
+        headers: {},
+        body: (async function* () {})(),
+      })),
+    };
+  }
+
+  it("routes configured NatStack gateway aliases to the internal client", async () => {
+    const internal = mockHttpClient("internal");
+    const external = mockHttpClient("external");
+    const http = createRoutingHttpClient({
+      internalOrigin: "http://127.0.0.1:3030/_git",
+      internalOrigins: ["http://100.90.80.70:3030/_git", "https://natstack.example.test/_git"],
+      internal,
+      external,
+    });
+
+    await http.request({
+      url: "http://100.90.80.70:3030/_git/projects/natstack/info/refs?service=git-upload-pack",
+    });
+    await http.request({
+      url: "https://natstack.example.test/_git/projects/natstack/git-receive-pack",
+      method: "POST",
+    });
+
+    expect(internal.request).toHaveBeenCalledTimes(2);
+    expect(external.request).not.toHaveBeenCalled();
+  });
+
+  it("leaves non-alias remotes on the external client", async () => {
+    const internal = mockHttpClient("internal");
+    const external = mockHttpClient("external");
+    const http = createRoutingHttpClient({
+      internalOrigin: "http://127.0.0.1:3030/_git",
+      internalOrigins: ["http://100.90.80.70:3030/_git"],
+      internal,
+      external,
+    });
+
+    await http.request({
+      url: "https://github.com/example/repo.git/info/refs?service=git-upload-pack",
+    });
+
+    expect(internal.request).not.toHaveBeenCalled();
+    expect(external.request).toHaveBeenCalledTimes(1);
   });
 });

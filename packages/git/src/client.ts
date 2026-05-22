@@ -189,14 +189,17 @@ export function createBearerHttpClient(token: string): HttpClient {
 
 export function createRoutingHttpClient(options: {
   internalOrigin: string;
+  internalOrigins?: readonly string[];
   internal: HttpClient;
   external: HttpClient;
 }): HttpClient {
-  const internalOrigin = new URL(options.internalOrigin).origin;
+  const internalOrigins = new Set(
+    [options.internalOrigin, ...(options.internalOrigins ?? [])].map((origin) => new URL(origin).origin)
+  );
   return {
     request(request) {
       const origin = new URL(request.url).origin;
-      return origin === internalOrigin
+      return internalOrigins.has(origin)
         ? options.internal.request(request)
         : options.external.request(request);
     },

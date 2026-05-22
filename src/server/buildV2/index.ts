@@ -135,7 +135,8 @@ export interface BuildSystemV2 {
 export async function initBuildSystemV2(
   workspaceRoot: string,
   gitServer: GitServer,
-  appNodeModules: string | string[]
+  appNodeModules: string | string[],
+  mirroredRepos: ReadonlySet<string> = new Set()
 ): Promise<BuildSystemV2> {
   console.log("[BuildV2] Initializing...");
   const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
@@ -217,7 +218,8 @@ export async function initBuildSystemV2(
     graph,
     initResult.evMap,
     initResult.contentHashes,
-    workspaceRoot
+    workspaceRoot,
+    mirroredRepos
   );
   pushTrigger.subscribeTo(gitServer);
   console.log("[BuildV2] Push trigger started");

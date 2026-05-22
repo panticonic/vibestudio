@@ -41,7 +41,7 @@ const log = createDevLogger("PanelManager");
 // =============================================================================
 
 export interface PanelManagerServerInfo {
-  gatewayConfig: { serverUrl: string; token?: string };
+  gatewayConfig: { serverUrl: string; token?: string; aliases?: readonly string[] };
 }
 
 export interface CreatePanelOptions {
@@ -774,6 +774,7 @@ export class PanelManager {
       gatewayConfig: {
         serverUrl: this.serverInfo.gatewayConfig.serverUrl,
         token,
+        aliases: this.serverInfo.gatewayConfig.aliases,
       },
       env: (getPanelOptions(panel).env ?? {}) as Record<string, string>,
       stateArgs: (getPanelStateArgs(panel) ?? {}) as Record<string, unknown>,

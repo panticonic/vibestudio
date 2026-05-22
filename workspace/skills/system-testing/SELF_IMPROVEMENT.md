@@ -150,17 +150,73 @@ internal git server. These repos are live build inputs.
 
 If the bug is in the NatStack application itself, such as `src/server/`,
 `src/main/`, `packages/git/`, or `packages/git-server/`, use a plain project
-checkout under `projects/natstack`. Plain projects are editable repos, not
-runtime units; changing them prepares a branch/patch, but it does not hot-patch
-the running NatStack server. Verification may require restarting NatStack from
-that checkout or handing the branch to a developer.
+checkout under `projects/natstack`.
+
+#### Dogfood Server Mode
+
+When the operator launched NatStack with:
+
+```bash
+pnpm dev:self:server
+```
+
+the active workspace is a managed dogfood workspace. The launcher creates or
+reuses `~/.config/natstack/workspaces/dogfood/source/projects/natstack`, writes
+`meta/dogfood.json`, and configures the running server to mirror pushes from
+`projects/natstack` back to the launching checkout with a git fast-forward.
+
+In this mode, `projects/natstack` is still a plain project, not a Build V2
+runtime unit, but it is a **self-edit target**:
+
+- Commit and push from `projects/natstack` to the internal git server.
+- If the host checkout is clean and fast-forwardable, the server mirrors the
+  commit back to the launching checkout.
+- Server-relevant changes rebuild `dist/server.mjs` and restart the standalone
+  dogfood server on the same gateway port.
+- Docs/mobile/Electron-only changes may mirror without restarting the server.
+- If the host checkout is dirty, propagation is refused. Do not try to work
+  around that from userland; ask the operator to clean or commit the host
+  checkout.
+- If the dogfood project clone is dirty or diverged at startup, the launcher
+  warns and does not force it. Resolve that git state before expecting
+  fast-forward propagation.
+
+Userland code can detect this mode by reading `meta/dogfood.json`:
+
+```typescript
+import { fs } from "@workspace/runtime";
+
+async function getDogfoodInfo() {
+  try {
+    return JSON.parse(await fs.readFile("meta/dogfood.json", "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+const dogfood = await getDogfoodInfo();
+if (dogfood?.schemaVersion === 1 && dogfood.project === "projects/natstack") {
+  console.log("Dogfood server mode:", dogfood.sourceRoot);
+}
+```
+
+Do not rely on `NATSTACK_DOGFOOD` from userland. That environment variable is a
+server launcher detail; `meta/dogfood.json` is the workspace-visible marker.
+
+#### Normal Project Mode
+
+When the server is not running in dogfood mode, plain projects are editable
+repos, not runtime units. Changing `projects/natstack` prepares a branch/patch,
+but it does not hot-patch the running NatStack server. Verification may require
+restarting NatStack from that checkout or handing the branch to a developer.
 
 Prefer an existing `projects/natstack` workspace repo when it exists. If it
-does not exist yet, import it with `git.importProject()`. That uses targeted
-approval copy, clones into canonical workspace source, records the shared
-remote in `meta/natstack.yml`, and propagates the repo into contexts. The same
-API can import panels, packages, skills, workers, agents, templates, about
-pages, and plain projects by choosing the destination path.
+does not exist yet and the workspace is not dogfood-managed, import it with
+`git.importProject()`. That uses targeted approval copy, clones into canonical
+workspace source, records the shared remote in `meta/natstack.yml`, and
+propagates the repo into contexts. The same API can import panels, packages,
+skills, workers, agents, templates, about pages, and plain projects by choosing
+the destination path.
 
 ```
 eval({
@@ -223,12 +279,19 @@ await scope.git.addAll(scope.checkoutDir);
 await scope.git.commit(scope.checkoutDir, `fix: describe the change`);
 await scope.git.push(scope.checkoutDir, { remote: "origin", ref: branchName });
 
-// Then rebuild if the fix touched workspace runtime repos.
-// Plain projects such as projects/natstack are not live build inputs.
+// Then rebuild if the fix touched workspace runtime repos. Plain projects
+// such as projects/natstack are not Build V2 live inputs.
 if (!scope.checkoutDir.startsWith("projects/")) {
   const buildResult = await chat.rpc.call("main", "build.recompute", []);
   console.log("Build recomputed:", buildResult);
 }
+
+// If this is dogfood mode and checkoutDir is projects/natstack, the push
+// mirrors to the host checkout. Watch the operator logs for [mirror] events:
+//   applied       -> host fast-forwarded; server may rebuild/restart
+//   skipped-dirty -> host checkout is dirty; propagation refused
+//   branch-created -> non-fast-forward; host HEAD unchanged
+// Reconnect/retry the test after the dogfood server restarts.
 
 // Check types
 const typecheck = await chat.rpc.call(

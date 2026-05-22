@@ -160,9 +160,13 @@ See `meta/natstack.yml` for the current testing agent configuration.
 **Workspace packages are built from git, not from the working tree.** When fixing bugs in workspace source files (`packages/`, `panels/`, `workers`, `skills/`), you must **commit and push** changes before they take effect. Editing a file alone does nothing — the build system extracts source from git commits.
 
 For NatStack application source (`src/server/`, `src/main/`, root
-`packages/*`), use a plain checkout under `projects/natstack`. That prepares a
-branch/patch but does not hot-patch the running server. See
-[SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) for the full workflow.
+`packages/*`), use a plain checkout under `projects/natstack`. In normal mode
+that prepares a branch/patch but does not hot-patch the running server. In
+dogfood server mode (`pnpm dev:self:server`), the workspace contains
+`meta/dogfood.json`; pushes from `projects/natstack` mirror back to the
+launching checkout and server-relevant changes rebuild/restart the standalone
+server. See [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) for the full workflow
+and the userland detection snippet.
 
 ## Environment Compatibility
 

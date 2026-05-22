@@ -58,19 +58,22 @@ export class PushTrigger extends EventEmitter {
   private evMap: EffectiveVersionMap;
   private contentHashes: ContentHashMap;
   private workspaceRoot: string;
+  private mirroredRepos: ReadonlySet<string>;
   private unsubscribe: (() => void) | null = null;
 
   constructor(
     graph: PackageGraph,
     evMap: EffectiveVersionMap,
     contentHashes: ContentHashMap,
-    workspaceRoot: string
+    workspaceRoot: string,
+    mirroredRepos: ReadonlySet<string> = new Set()
   ) {
     super();
     this.graph = graph;
     this.evMap = evMap;
     this.contentHashes = contentHashes;
     this.workspaceRoot = workspaceRoot;
+    this.mirroredRepos = mirroredRepos;
   }
 
   /** Subscribe to push events from the git server. */
@@ -97,6 +100,12 @@ export class PushTrigger extends EventEmitter {
   }
 
   private handlePush(event: GitPushEvent): void {
+    if (this.mirroredRepos.has(event.repo)) {
+      // Repo is a dogfood mirror target; mirroring is handled by GitServer.
+      // Skip BuildV2 rediscovery because it is not a build unit by configuration.
+      return;
+    }
+
     const nodeName = this.findNodeByRepoPath(event.repo);
     if (!nodeName) {
       // Unknown repo — likely a newly created project not yet in the package graph.

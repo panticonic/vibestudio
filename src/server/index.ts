@@ -636,10 +636,30 @@ async function main() {
   const hasDevTemplate = fs.existsSync(path.join(templateDir, "meta", "natstack.yml"));
   const templateDiffersFromActive =
     templateDir !== workspacePath && !workspacePath.startsWith(templateDir + path.sep);
-  const devTargetDir =
-    isPnpmDevMode && workspaceIsEphemeral && hasDevTemplate && templateDiffersFromActive
-      ? templateDir
-      : undefined;
+  const devMirrors: import("@natstack/git-server").GitServerConfig["devMirrors"] = {};
+  let defaultDevMirror: import("@natstack/git-server").GitServerConfig["defaultDevMirror"];
+  const buildV2IgnoredRepos = new Set<string>();
+  if (isPnpmDevMode && workspaceIsEphemeral && hasDevTemplate && templateDiffersFromActive) {
+    defaultDevMirror = {
+      targetDir: templateDir,
+      mode: "rsync-delete",
+    };
+  }
+  if (process.env["NATSTACK_DOGFOOD"] === "1") {
+    const project = process.env["NATSTACK_DOGFOOD_PROJECT"];
+    const sourceRoot = process.env["NATSTACK_DOGFOOD_SOURCE_ROOT"];
+    if (project && sourceRoot) {
+      devMirrors[project] = {
+        targetDir: sourceRoot,
+        mode: "git-fast-forward",
+      };
+      buildV2IgnoredRepos.add(project);
+    } else {
+      console.warn(
+        "[Dogfood] NATSTACK_DOGFOOD requires NATSTACK_DOGFOOD_PROJECT and NATSTACK_DOGFOOD_SOURCE_ROOT"
+      );
+    }
+  }
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("NATSTACK_GATEWAY_PORT");
   const configuredProtocol = (process.env["NATSTACK_PROTOCOL"] ?? args.protocol ?? "http") as
     | "http"
@@ -658,7 +678,8 @@ async function main() {
   const gitServer = new GitServer({
     reposPath: workspacePath,
     initPatterns: [...WORKSPACE_GIT_INIT_PATTERNS],
-    devTargetDir,
+    devMirrors,
+    defaultDevMirror,
     getSourceForCaller: (callerId) => resolveCodeIdentity(entityCache, callerId)?.repoPath ?? null,
     getAllowedOrigins: () => {
       const port = gatewayPortResolved ?? requestedGatewayPort ?? 0;
@@ -781,7 +802,8 @@ async function main() {
       return await initBuildSystemV2(
         workspacePath,
         gitServer,
-        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")]
+        appNodeModules.length > 0 ? appNodeModules : [path.join(appRoot, "node_modules")],
+        buildV2IgnoredRepos
       );
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
@@ -1514,6 +1536,20 @@ async function main() {
               throw new Error("Gateway port not finalized before workerd startup");
             }
             return `http://127.0.0.1:${gatewayPortResolved}`;
+          },
+          getServerAliasUrls: () => {
+            if (!gatewayPortResolved) return [];
+            const aliases = new Set<string>();
+            const configuredAliases = process.env["NATSTACK_GATEWAY_ALIASES"];
+            if (configuredAliases) {
+              for (const alias of parseGatewayAliases(configuredAliases)) {
+                aliases.add(alias);
+              }
+            }
+            aliases.add(
+              `${configuredProtocol}://${hostConfig.externalHost}:${gatewayPortResolved}`
+            );
+            return [...aliases];
           },
           getBuild: (unitPath, ref) => assertPresent(buildSystemForWorkerd).getBuild(unitPath, ref),
           workspacePath,
@@ -2488,6 +2524,23 @@ function replaceWorkspaceConfig<T extends object>(target: T, next: T): void {
     deleteDynamicProperty(mutableTarget, key);
   }
   Object.assign(target, next);
+}
+
+function parseGatewayAliases(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter(
+        (entry): entry is string => typeof entry === "string" && entry.length > 0
+      );
+    }
+  } catch {
+    // Fall through to comma-separated env syntax.
+  }
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 main().catch((err) => {

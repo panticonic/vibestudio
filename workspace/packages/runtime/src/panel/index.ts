@@ -151,6 +151,7 @@ const gitApi = {
             serverUrl: gitConfig.serverUrl,
             http: createRoutingHttpClient({
                 internalOrigin: gitConfig.serverUrl,
+                internalOrigins: gitConfig.internalOrigins,
                 internal: createBearerHttpClient(gitConfig.token),
                 external: credentialGitHttp({ credentialId: options.credentialId }),
             }),

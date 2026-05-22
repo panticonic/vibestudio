@@ -141,9 +141,9 @@ export interface WorkerRuntime {
     list(): Promise<UserlandApprovalGrant[]>;
   };
   readonly contextId: string;
-  readonly gatewayConfig: { serverUrl: string; token: string };
+  readonly gatewayConfig: { serverUrl: string; token: string; aliases?: readonly string[] };
   readonly gatewayFetch: GatewayFetch;
-  readonly gitConfig: { serverUrl: string; token: string } | null;
+  readonly gitConfig: { serverUrl: string; token: string; internalOrigins?: readonly string[] } | null;
   readonly git: RuntimeGitApi;
   readonly gad: GadClient;
 
@@ -195,9 +195,14 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   const workers = helpfulNamespace("workers", createWorkerdClient(rpc));
   const workspaceApi = helpfulNamespace("workspace", createWorkspaceClient(rpc));
   const credentials = helpfulNamespace("credentials", createCredentialClient(rpc));
-  const gatewayConfig = { serverUrl, token: env.RPC_AUTH_TOKEN };
+  const gatewayAliases = parseGatewayAliases(env.GATEWAY_URL_ALIASES);
+  const gatewayConfig = { serverUrl, token: env.RPC_AUTH_TOKEN, aliases: gatewayAliases };
   const gatewayFetch = createGatewayFetch(gatewayConfig);
-  const gitConfig = { serverUrl: `${serverUrl}/_git`, token: env.RPC_AUTH_TOKEN };
+  const gitConfig = {
+    serverUrl: `${serverUrl}/_git`,
+    token: env.RPC_AUTH_TOKEN,
+    internalOrigins: gatewayAliases.map((url) => `${url.replace(/\/$/, "")}/_git`),
+  };
   const git = helpfulNamespace("git", {
     http: credentials.gitHttp,
     importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo> {
@@ -220,6 +225,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
         serverUrl: gitConfig.serverUrl,
         http: createRoutingHttpClient({
           internalOrigin: gitConfig.serverUrl,
+          internalOrigins: gitConfig.internalOrigins,
           internal: createBearerHttpClient(gitConfig.token),
           external: credentials.gitHttp({ credentialId: options.credentialId }),
         }),
@@ -286,6 +292,25 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   cachedWorkerId = workerId;
 
   return runtime;
+}
+
+function parseGatewayAliases(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+  }
+  if (typeof value !== "string" || value.length === 0) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (Array.isArray(parsed)) {
+      return parsed.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+    }
+  } catch {
+    // Fall through to comma-separated env syntax.
+  }
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 /**
  * Handle incoming RPC POST requests for a worker.

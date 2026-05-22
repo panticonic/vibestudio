@@ -78,6 +78,12 @@ export interface GitPushEvent {
   commit: string;
 }
 
+export interface DevMirrorConfig {
+  targetDir: string;
+  mode: "rsync-delete" | "git-fast-forward";
+  branchPrefix?: string;
+}
+
 /**
  * Configuration options for the git server
  */
@@ -86,11 +92,10 @@ export interface GitServerConfig {
   reposPath?: string;
   /** Glob patterns for directories to initialize as git repos (e.g., ["panels/*"]) */
   initPatterns?: string[];
-  /**
-   * When set, every push mirrors the updated working tree (excluding .git)
-   * to `<devTargetDir>/<repo>/`, keeping a dev template directory in sync.
-   */
-  devTargetDir?: string;
+  /** Optional post-push mirrors keyed by normalized repo path. */
+  devMirrors?: Record<string, DevMirrorConfig>;
+  /** Optional fallback mirror for repos without an explicit `devMirrors` entry. */
+  defaultDevMirror?: DevMirrorConfig;
   /**
    * Host permission gate for pushes. Authentication identifies the caller;
    * this authorizer decides whether that caller may write this repo. Pushes
@@ -122,15 +127,18 @@ export class GitServer {
   // Push event listeners
   private pushListeners: Set<(event: GitPushEvent) => void> = new Set();
 
-  // Dev target directory for mirroring pushes
-  private devTargetDir: string | null;
+  // Dev mirror configuration for post-push propagation
+  private devMirrors: Map<string, DevMirrorConfig>;
+  private defaultDevMirror: DevMirrorConfig | null;
+  private devMirrorQueues = new Map<string, Promise<void>>();
   private writeAuthorizer: GitWriteAuthorizer | null;
   private pushAuthorizer: GitPushAuthorizer | null;
 
   constructor(config?: GitServerConfig) {
     this.configuredReposPath = config?.reposPath ?? null;
     this.initPatterns = config?.initPatterns ?? ["panels/*", "packages/*", "projects/*"];
-    this.devTargetDir = config?.devTargetDir ?? null;
+    this.devMirrors = new Map(Object.entries(config?.devMirrors ?? {}));
+    this.defaultDevMirror = config?.defaultDevMirror ?? null;
     this.writeAuthorizer = config?.writeAuthorizer ?? null;
     this.pushAuthorizer = config?.pushAuthorizer ?? null;
     this.authManager = new GitAuthManager(config?.getSourceForCaller);
@@ -170,69 +178,77 @@ export class GitServer {
     this.git = new Git(
       (dir?: string): string => {
         const cleaned = dir ? dir.replace(/\.git$/, "") : dir;
-        return path.normalize(
-          cleaned ? path.join(reposPath, cleaned) : reposPath
-        );
+        return path.normalize(cleaned ? path.join(reposPath, cleaned) : reposPath);
       },
       {
-      autoCreate: true,
-      checkout: true, // Use working directories instead of bare repos
-      authenticate: ({ type, repo }, next) => {
-        const identity = this.identityStore.getStore();
-        if (!identity) {
-          next(new Error("Authenticated caller identity missing"));
-          return;
-        }
+        autoCreate: true,
+        checkout: true, // Use working directories instead of bare repos
+        authenticate: ({ type, repo }, next) => {
+          const identity = this.identityStore.getStore();
+          if (!identity) {
+            next(new Error("Authenticated caller identity missing"));
+            return;
+          }
 
-        // Map git operation type to our fetch/push model
-        const operation: "fetch" | "push" = type === "push" ? "push" : "fetch";
-        const result = this.authManager.canAccess(
-          identity.runtime.id,
-          identity.runtime.kind,
-          repo,
-          operation
-        );
+          // Map git operation type to our fetch/push model
+          const operation: "fetch" | "push" = type === "push" ? "push" : "fetch";
+          const result = this.authManager.canAccess(
+            identity.runtime.id,
+            identity.runtime.kind,
+            repo,
+            operation
+          );
 
-        if (!result.allowed) {
-          log.verbose(` Auth failed for ${operation} on ${repo}: ${result.reason}`);
-          next(new Error(result.reason || "Authentication failed"));
-          return;
-        }
+          if (!result.allowed) {
+            log.verbose(` Auth failed for ${operation} on ${repo}: ${result.reason}`);
+            next(new Error(result.reason || "Authentication failed"));
+            return;
+          }
 
-        if (operation !== "push") {
-          next();
-          return;
-        }
-        if (!this.writeAuthorizer) {
-          next(new Error("Git write permission unavailable"));
-          return;
-        }
+          if (operation !== "push") {
+            next();
+            return;
+          }
+          if (!this.writeAuthorizer) {
+            next(new Error("Git write permission unavailable"));
+            return;
+          }
 
-        const repoPath = this.normalizePath(repo);
-        Promise.resolve(this.writeAuthorizer({
-          caller: identity,
-          repoPath,
-        }))
-          .then((authorization) => {
-            if (authorization.allowed) {
-              next();
-              return;
-            }
-            const reason = authorization.reason || "Git write permission denied";
-            log.verbose(` Write permission denied for ${identity.runtime.id} on ${repoPath}: ${reason}`);
-            next(new Error(reason));
-          })
-          .catch((error: unknown) => {
-            const reason = error instanceof Error ? error.message : String(error);
-            log.verbose(` Write permission check failed for ${identity.runtime.id} on ${repoPath}: ${reason}`);
-            next(new Error(reason || "Git write permission check failed"));
-          });
-      },
-    });
+          const repoPath = this.normalizePath(repo);
+          Promise.resolve(
+            this.writeAuthorizer({
+              caller: identity,
+              repoPath,
+            })
+          )
+            .then((authorization) => {
+              if (authorization.allowed) {
+                next();
+                return;
+              }
+              const reason = authorization.reason || "Git write permission denied";
+              log.verbose(
+                ` Write permission denied for ${identity.runtime.id} on ${repoPath}: ${reason}`
+              );
+              next(new Error(reason));
+            })
+            .catch((error: unknown) => {
+              const reason = error instanceof Error ? error.message : String(error);
+              log.verbose(
+                ` Write permission check failed for ${identity.runtime.id} on ${repoPath}: ${reason}`
+              );
+              next(new Error(reason || "Git write permission check failed"));
+            });
+        },
+      }
+    );
 
     // Handle push events
     this.git.on("push", (push) => {
-      const pushRepo = push.repo.replace(/^\/+/, "").replace(/\.git(\/.*)?$/, "").replace(/\/+$/, "");
+      const pushRepo = push.repo
+        .replace(/^\/+/, "")
+        .replace(/\.git(\/.*)?$/, "")
+        .replace(/\/+$/, "");
       const branch = push.branch.replace(/^refs\/heads\//, "");
       const identity = this.identityStore.getStore();
 
@@ -267,12 +283,14 @@ export class GitServer {
       // until accept/reject is called, so awaiting here back-pressures the
       // client without losing the request.
       const runPushAuthorization = this.pushAuthorizer
-        ? Promise.resolve().then(() => this.pushAuthorizer!({
-            caller: identity,
-            repoPath: this.normalizePath(pushRepo),
-            branch,
-            commit: push.commit,
-          }))
+        ? Promise.resolve().then(() =>
+            this.pushAuthorizer!({
+              caller: identity,
+              repoPath: this.normalizePath(pushRepo),
+              branch,
+              commit: push.commit,
+            })
+          )
         : Promise.resolve({ allowed: true } satisfies GitPushAuthorizationResult);
 
       runPushAuthorization
@@ -293,7 +311,10 @@ export class GitServer {
       // git-receive-pack runs asynchronously. The "exit" event fires after
       // the process completes and refs are on disk.
       push.on("exit", () => {
-        const repo = push.repo.replace(/^\/+/, "").replace(/\.git(\/.*)?$/, "").replace(/\/+$/, "");
+        const repo = push.repo
+          .replace(/^\/+/, "")
+          .replace(/\.git(\/.*)?$/, "")
+          .replace(/\/+$/, "");
         log.verbose(` Push to ${repo}/${branch} (${push.commit})`);
 
         // Update working tree: node-git-server creates repos with `git init`
@@ -311,9 +332,12 @@ export class GitServer {
             }
 
             // Mirror working tree to dev target directory (if configured)
-            if (this.devTargetDir) {
-              this.syncToDevTarget(repo, repoDir);
-            }
+            this.syncToDevTarget({
+              repo,
+              repoDir,
+              branch,
+              commit: push.commit,
+            });
 
             // Emit push event after checkout so listeners see the updated working tree
             const event: GitPushEvent = { repo, branch, commit: push.commit };
@@ -340,7 +364,7 @@ export class GitServer {
   async handleHttpRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
-    caller: VerifiedCaller | null,
+    caller: VerifiedCaller | null
   ): Promise<void> {
     const corsHandled = this.handleCors(req, res);
     if (corsHandled) return;
@@ -397,7 +421,9 @@ export class GitServer {
    */
   onPush(handler: (event: GitPushEvent) => void): () => void {
     this.pushListeners.add(handler);
-    return () => { this.pushListeners.delete(handler); };
+    return () => {
+      this.pushListeners.delete(handler);
+    };
   }
 
   /**
@@ -501,7 +527,9 @@ export class GitServer {
           stdio: "ignore",
         });
       }
-    } catch { /* ignore — non-critical */ }
+    } catch {
+      /* ignore — non-critical */
+    }
   }
 
   // ===========================================================================
@@ -509,30 +537,206 @@ export class GitServer {
   // ===========================================================================
 
   /**
-   * Mirror a repo's working tree to the dev target directory, excluding .git
-   * and runtime artifacts. Runs async — errors are logged but don't block.
+   * Mirror a repo's working tree to its configured dev target. Runs async —
+   * errors are logged and emitted as structured mirror events, but don't block.
    */
-  private syncToDevTarget(repo: string, repoDir: string): void {
-    const targetDir = path.join(this.devTargetDir!, repo);
+  private syncToDevTarget(args: {
+    repo: string;
+    repoDir: string;
+    branch: string;
+    commit: string;
+  }): void {
+    const mirror = this.devMirrors.get(args.repo) ?? this.defaultDevMirror;
+    if (!mirror) return;
+
+    const targetDir =
+      mirror.mode === "rsync-delete" ? path.join(mirror.targetDir, args.repo) : mirror.targetDir;
+    const previous = this.devMirrorQueues.get(targetDir) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(() => this.runDevMirror({ ...args, mirror, targetDir }))
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        this.emitMirrorEvent({
+          event: "error",
+          repo: args.repo,
+          target: targetDir,
+          message,
+        });
+      });
+
+    this.devMirrorQueues.set(targetDir, next);
+    next.finally(() => {
+      if (this.devMirrorQueues.get(targetDir) === next) {
+        this.devMirrorQueues.delete(targetDir);
+      }
+    });
+  }
+
+  private async runDevMirror(args: {
+    repo: string;
+    repoDir: string;
+    branch: string;
+    commit: string;
+    mirror: DevMirrorConfig;
+    targetDir: string;
+  }): Promise<void> {
+    if (args.mirror.mode === "rsync-delete") {
+      await this.syncRsyncDelete(args.repo, args.repoDir, args.targetDir);
+      return;
+    }
+    await this.syncGitFastForward(args);
+  }
+
+  private async syncRsyncDelete(repo: string, repoDir: string, targetDir: string): Promise<void> {
     fs.mkdirSync(targetDir, { recursive: true });
 
-    // rsync with --delete so removed files are reflected; trailing slashes
-    // ensure we sync contents, not the directory itself.
-    execFile(
-      "rsync",
-      ["-a", "--delete",
-       "--exclude", ".git",
-       "--exclude", "node_modules",
-       "--exclude", ".cache",
-       `${repoDir}/`, `${targetDir}/`],
-      (err) => {
-        if (err) {
-          log.verbose(` Dev-target sync failed for ${repo}: ${err.message}`);
-        } else {
+    await new Promise<void>((resolve) => {
+      // rsync with --delete so removed files are reflected; trailing slashes
+      // ensure we sync contents, not the directory itself.
+      execFile(
+        "rsync",
+        [
+          "-a",
+          "--delete",
+          "--exclude",
+          ".git",
+          "--exclude",
+          "node_modules",
+          "--exclude",
+          ".cache",
+          `${repoDir}/`,
+          `${targetDir}/`,
+        ],
+        (err) => {
+          if (err) {
+            log.verbose(` Dev-target sync failed for ${repo}: ${err.message}`);
+            resolve();
+            return;
+          }
           log.verbose(` Synced ${repo} -> ${targetDir}`);
+          resolve();
         }
-      }
+      );
+    });
+  }
+
+  private async syncGitFastForward(args: {
+    repo: string;
+    repoDir: string;
+    branch: string;
+    commit: string;
+    mirror: DevMirrorConfig;
+    targetDir: string;
+  }): Promise<void> {
+    await this.runGitInTarget(["rev-parse", "--git-dir"], args.targetDir);
+    assertSafeGitRef(args.branch, "mirror source branch");
+
+    const status = await this.runGitInTarget(["status", "--porcelain"], args.targetDir);
+    const dirtyPaths = status
+      .split("\n")
+      .map((line) => line.slice(3).trim())
+      .filter(Boolean);
+    if (dirtyPaths.length > 0) {
+      this.emitMirrorEvent({
+        event: "skipped-dirty",
+        repo: args.repo,
+        target: args.targetDir,
+        dirtyPaths,
+      });
+      return;
+    }
+
+    await this.runGitInTarget(["fetch", args.repoDir, args.commit], args.targetDir);
+    const fetchedSha = (
+      await this.runGitInTarget(["rev-parse", "FETCH_HEAD"], args.targetDir)
+    ).trim();
+    if (fetchedSha !== args.commit) {
+      throw new Error(`Fetched ${fetchedSha} for mirror commit ${args.commit}`);
+    }
+    const prevSha = (await this.runGitInTarget(["rev-parse", "HEAD"], args.targetDir)).trim();
+    const canFastForward = await this.canFastForward(args.targetDir);
+    if (!canFastForward) {
+      const shortSha = args.commit.slice(0, 12);
+      const branchName = `${args.mirror.branchPrefix ?? "dogfood/"}${shortSha}`;
+      assertSafeGitRef(branchName, "mirror branch");
+      await this.runGitInTarget(["branch", "-f", branchName, "FETCH_HEAD"], args.targetDir);
+      this.emitMirrorEvent({
+        event: "branch-created",
+        repo: args.repo,
+        target: args.targetDir,
+        sha: args.commit,
+        branch: branchName,
+      });
+      return;
+    }
+
+    await this.runGitInTarget(["merge", "--ff-only", "FETCH_HEAD"], args.targetDir);
+    const newSha = (await this.runGitInTarget(["rev-parse", "HEAD"], args.targetDir)).trim();
+    const changedPathsOutput = await this.runGitInTarget(
+      ["diff", "--name-only", prevSha, newSha],
+      args.targetDir
     );
+    const changedPaths = changedPathsOutput.split("\n").filter(Boolean);
+    this.writeDogfoodSentinel(args.targetDir, newSha);
+    this.emitMirrorEvent({
+      event: "applied",
+      repo: args.repo,
+      target: args.targetDir,
+      sha: newSha,
+      branch: args.branch,
+      changedPaths,
+    });
+  }
+
+  private async canFastForward(targetDir: string): Promise<boolean> {
+    return new Promise((resolve, reject) => {
+      execGitFile(
+        ["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"],
+        { cwd: targetDir },
+        (error) => {
+          if (!error) {
+            resolve(true);
+            return;
+          }
+          const code =
+            typeof error === "object" && error && "code" in error
+              ? (error as { code?: unknown }).code
+              : undefined;
+          if (code === 1) {
+            resolve(false);
+            return;
+          }
+          reject(error);
+        }
+      );
+    });
+  }
+
+  private async runGitInTarget(args: readonly string[], targetDir: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      execGitFile(args, { cwd: targetDir, encoding: "utf-8" }, (error, stdout, stderr) => {
+        if (error) {
+          const detail = typeof stderr === "string" && stderr.trim() ? `: ${stderr.trim()}` : "";
+          reject(new Error(`${error.message}${detail}`));
+          return;
+        }
+        resolve(typeof stdout === "string" ? stdout : stdout.toString("utf-8"));
+      });
+    });
+  }
+
+  private writeDogfoodSentinel(targetDir: string, sha: string): void {
+    const sentinelDir = path.join(targetDir, ".git", "natstack");
+    fs.mkdirSync(sentinelDir, { recursive: true });
+    const sentinelPath = path.join(sentinelDir, "dogfood-last-applied");
+    const tmpPath = `${sentinelPath}.tmp`;
+    fs.writeFileSync(tmpPath, `${sha}\n`, "utf-8");
+    fs.renameSync(tmpPath, sentinelPath);
+  }
+
+  private emitMirrorEvent(payload: Record<string, unknown>): void {
+    console.log(`[mirror] ${JSON.stringify(payload)}`);
   }
 
   // ===========================================================================
@@ -598,10 +802,7 @@ export class GitServer {
 
     const absolutePath = this.toAbsolutePath(repoPath);
 
-    const stdout = await this.runGit(
-      ["branch", "--format=%(HEAD) %(refname:short)"],
-      absolutePath
-    );
+    const stdout = await this.runGit(["branch", "--format=%(HEAD) %(refname:short)"], absolutePath);
 
     const branches: BranchInfo[] = [];
 
@@ -632,12 +833,14 @@ export class GitServer {
       this.runGit(["status", "--porcelain=v1"], absolutePath),
     ]);
 
-    const branch = branchResult.status === "fulfilled" && branchResult.value.trim()
-      ? branchResult.value.trim()
-      : null;
-    const commit = commitResult.status === "fulfilled" && commitResult.value.trim()
-      ? commitResult.value.trim()
-      : null;
+    const branch =
+      branchResult.status === "fulfilled" && branchResult.value.trim()
+        ? branchResult.value.trim()
+        : null;
+    const commit =
+      commitResult.status === "fulfilled" && commitResult.value.trim()
+        ? commitResult.value.trim()
+        : null;
     const statusOutput = porcelain.status === "fulfilled" ? porcelain.value : "";
     const files = statusOutput
       .split("\n")
@@ -663,7 +866,11 @@ export class GitServer {
    * @param ref - Branch/tag/commit to show log for (default: HEAD)
    * @param limit - Max commits to return (default: 30)
    */
-  async listCommits(repoPath: string, ref: string = "HEAD", limit: number = 30): Promise<CommitInfo[]> {
+  async listCommits(
+    repoPath: string,
+    ref: string = "HEAD",
+    limit: number = 30
+  ): Promise<CommitInfo[]> {
     // Ensure tree is built so we have discovered paths
     await this.getWorkspaceTree();
 
@@ -675,9 +882,8 @@ export class GitServer {
     // Strict ref validation + `--` separator: a ref beginning with `-` would
     // otherwise be consumed as a git option.
     assertSafeGitRef(ref, "ref");
-    const safeLimit = Number.isFinite(limit) && limit > 0 && limit <= 10000
-      ? Math.floor(limit)
-      : 30;
+    const safeLimit =
+      Number.isFinite(limit) && limit > 0 && limit <= 10000 ? Math.floor(limit) : 30;
 
     const absolutePath = this.toAbsolutePath(repoPath);
 
@@ -727,7 +933,10 @@ export class GitServer {
     assertSafeGitRef(targetRef, "ref");
 
     try {
-      const result = await this.runGit(["rev-parse", "--verify", "--end-of-options", targetRef], absolutePath);
+      const result = await this.runGit(
+        ["rev-parse", "--verify", "--end-of-options", targetRef],
+        absolutePath
+      );
       return result.trim();
     } catch (error) {
       // Try fallback refs for common branch name variations
@@ -745,7 +954,10 @@ export class GitServer {
         try {
           // candidates are derived from the (already validated) targetRef plus
           // hard-coded prefixes — they cannot start with `-`.
-          const result = await this.runGit(["rev-parse", "--verify", "--end-of-options", candidate], absolutePath);
+          const result = await this.runGit(
+            ["rev-parse", "--verify", "--end-of-options", candidate],
+            absolutePath
+          );
           return result.trim();
         } catch {
           // continue to next candidate

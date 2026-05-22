@@ -52,7 +52,7 @@ export interface PanelRelationshipProvider {
  * generic server info surface.
  */
 export interface ServerInfoLike {
-  gatewayConfig: { serverUrl: string; token?: string };
+  gatewayConfig: { serverUrl: string; token?: string; aliases?: readonly string[] };
   workerdPort: number;
   /** Protocol for panel-facing URLs */
   protocol: "http" | "https";

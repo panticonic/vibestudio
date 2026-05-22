@@ -35,7 +35,7 @@ export interface BuildBootstrapConfigOpts {
   parentId: PanelSlotId | null;
   parentEntityId?: PanelEntityId | null;
   theme: "light" | "dark";
-  gatewayConfig: { serverUrl: string; token: string };
+  gatewayConfig: { serverUrl: string; token: string; aliases?: readonly string[] };
   env?: Record<string, string>;
   stateArgs?: Record<string, unknown>;
 }
@@ -53,6 +53,7 @@ export interface BuildPanelUrlOpts {
 export interface BuildPanelEnvOpts {
   panelId: string;
   gatewayToken: string | null;
+  gatewayAliases?: readonly string[];
   contextId: string;
   sourceRepo: string;
   externalHost: string;
@@ -132,6 +133,7 @@ export function buildPanelEnv(opts: BuildPanelEnvOpts): Record<string, string> {
     ? JSON.stringify({
         serverUrl: gatewayServerUrl,
         token: opts.gatewayToken ?? "",
+        aliases: opts.gatewayAliases,
       })
     : "";
   // Pass critical environment variables that Node.js APIs depend on

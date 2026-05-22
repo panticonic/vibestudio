@@ -118,6 +118,8 @@ export interface WorkerdManagerDeps {
    * this URL is deliberately distinct from it.
    */
   getServerUrl: () => string;
+  /** Additional externally advertised gateway URLs that map to this server. */
+  getServerAliasUrls?: () => readonly string[];
   getBuild: (unitPath: string, ref?: string) => Promise<BuildResult>;
   /** Workspace source root — used for WORKER_SOURCE binding. */
   workspacePath: string;
@@ -741,6 +743,10 @@ export class WorkerdManager {
 
       // Gateway URL for RPC bridge (DOs use HttpRpcBridge via POST /rpc)
       bindings.push({ name: "GATEWAY_URL", text: this.deps.getServerUrl() });
+      const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
+      if (gatewayAliases.length > 0) {
+        bindings.push({ name: "GATEWAY_URL_ALIASES", json: JSON.stringify(gatewayAliases) });
+      }
 
       // DO storage: create a disk service and reference it by name
       const diskServiceName = `${doService.serviceName}_disk`;
@@ -808,6 +814,10 @@ export class WorkerdManager {
         { name: "CONTEXT_ID", text: instance.contextId },
         { name: "GATEWAY_URL", text: this.deps.getServerUrl() },
       ];
+      const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
+      if (gatewayAliases.length > 0) {
+        bindings.push({ name: "GATEWAY_URL_ALIASES", json: JSON.stringify(gatewayAliases) });
+      }
       // Inject stateArgs as a JSON binding so workers can access initial state
       if (instance.stateArgs && Object.keys(instance.stateArgs).length > 0) {
         bindings.push({ name: "STATE_ARGS", json: JSON.stringify(instance.stateArgs) });
