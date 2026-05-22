@@ -403,7 +403,7 @@
   max-inline-size: min(100%, 34rem);
   display: inline-flex !important;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .inline-status-pill {
@@ -421,13 +421,12 @@
 }
 
 .inline-action-pill .inline-pill-label {
-  flex: 0 1 auto;
-  min-inline-size: min-content;
-  max-inline-size: 100%;
-  overflow: visible;
-  text-overflow: clip;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  flex: 0 0 auto;
+  min-inline-size: 0;
+  max-inline-size: min(70%, 24rem);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .inline-pill-summary,
