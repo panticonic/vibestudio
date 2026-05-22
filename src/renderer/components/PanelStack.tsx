@@ -943,6 +943,7 @@ export function PanelStack({
         gap="0"
         style={{
           flex: 1,
+          height: "100%",
           minHeight: 0,
           alignItems: "stretch",
         }}
@@ -955,6 +956,7 @@ export function PanelStack({
               width: `${effectiveSidebarWidth}px`,
               minWidth: isMobile ? `${effectiveSidebarWidth}px` : "200px",
               flexShrink: 0,
+              height: "100%",
               alignSelf: "stretch",
               overflow: "hidden",
               display: "flex",
@@ -1015,7 +1017,7 @@ export function PanelStack({
         )}
 
         {/* Current Panel Content */}
-        <Flex direction="column" gap="0" style={{ flex: 1, minHeight: 0 }}>
+        <Flex direction="column" gap="0" style={{ flex: 1, height: "100%", minHeight: 0 }}>
           <SavePasswordBar visiblePanelId={visiblePanelId} />
           <Card
             className="app-shell-panel-card"
