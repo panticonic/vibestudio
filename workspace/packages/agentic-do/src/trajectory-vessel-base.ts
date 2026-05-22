@@ -72,6 +72,7 @@ const URL_BOUND_MODEL_CREDENTIAL_SENTINEL_CLAIM =
 const IMAGE_SERVICE_EXTENSION = "@workspace-extensions/image-service";
 export type RespondPolicy = "all" | "mentioned" | "mentioned-strict" | "from-participants";
 type CachedParticipant = Awaited<ReturnType<ChannelClient["getParticipants"]>>[number];
+type AgentSettingSource = "state" | "config" | "default";
 export type CustomMessageReducer = (state: unknown, update: unknown) => unknown;
 
 function gadBranchIdForChannel(channelId: string): string {
@@ -101,14 +102,35 @@ export interface ModelCredentialSummary {
 export type ModelCredentialSetupProps = Record<string, unknown>;
 
 interface ModelCredentialOAuthConfig {
-  type: "oauth2-auth-code-pkce";
-  authorizeUrl: string;
+  type: "oauth2-auth-code-pkce" | "oauth2-auth-code" | "oauth2-device-code";
+  authorizeUrl?: string;
   tokenUrl: string;
-  clientId: string;
+  clientId?: string;
   scopes?: string[];
   extraAuthorizeParams?: Record<string, string>;
   allowMissingExpiry?: boolean;
+  [key: string]: unknown;
 }
+
+interface ModelCredentialApiKeyConfig {
+  type: "api-key";
+  title?: string;
+  description?: string;
+  fields: Array<{
+    name: string;
+    label: string;
+    type: "text" | "secret";
+    required?: boolean;
+    description?: string;
+  }>;
+  materialTemplate: {
+    type: "bearer-token" | "api-key";
+    valueTemplate: string;
+  };
+  accountValidation?: "http-probe" | "none";
+}
+
+type ModelCredentialConnectFlow = ModelCredentialOAuthConfig | ModelCredentialApiKeyConfig;
 
 interface ModelCredentialRedirectConfig {
   type?: "loopback" | "public" | "client-forwarded" | "client-loopback";
@@ -126,6 +148,23 @@ interface ConnectModelCredentialOAuthArgs {
   browserHandoffCallerId?: unknown;
   browserHandoffCallerKind?: unknown;
   browserHandoffPlatform?: unknown;
+}
+
+function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return value === "minimal" || value === "low" || value === "medium" || value === "high";
+}
+
+function isApprovalLevel(value: unknown): value is ApprovalLevel {
+  return value === 0 || value === 1 || value === 2;
+}
+
+function isRespondPolicy(value: unknown): value is RespondPolicy {
+  return (
+    value === "all" ||
+    value === "mentioned" ||
+    value === "mentioned-strict" ||
+    value === "from-participants"
+  );
 }
 
 const MODEL_CREDENTIAL_REQUIRED_CARD_TSX = `
@@ -155,7 +194,7 @@ export default function ModelCredentialRequiredCard({ props, chat }) {
         throw new Error("Missing agent participant for credential setup");
       }
       setStatus("waiting");
-      await chat.callMethod(props.agentParticipantId, "connectModelCredentialOAuth", {
+      await chat.callMethod(props.agentParticipantId, "connectModelCredential", {
         providerId,
         browserOpenMode: openMode,
         browserHandoffCallerId: props.browserHandoffCallerId,
@@ -262,10 +301,12 @@ function isModelCredentialOAuthConfig(value: unknown): value is ModelCredentialO
   if (!value || typeof value !== "object") return false;
   const config = value as Record<string, unknown>;
   return (
-    config["type"] === "oauth2-auth-code-pkce" &&
-    typeof config["authorizeUrl"] === "string" &&
+    (config["type"] === "oauth2-auth-code-pkce" ||
+      config["type"] === "oauth2-auth-code" ||
+      config["type"] === "oauth2-device-code") &&
+    (config["authorizeUrl"] === undefined || typeof config["authorizeUrl"] === "string") &&
     typeof config["tokenUrl"] === "string" &&
-    typeof config["clientId"] === "string" &&
+    (config["clientId"] === undefined || typeof config["clientId"] === "string") &&
     (config["scopes"] === undefined ||
       (Array.isArray(config["scopes"]) &&
         config["scopes"].every((scope) => typeof scope === "string"))) &&
@@ -278,6 +319,33 @@ function isModelCredentialOAuthConfig(value: unknown): value is ModelCredentialO
     (config["allowMissingExpiry"] === undefined ||
       typeof config["allowMissingExpiry"] === "boolean")
   );
+}
+
+function isModelCredentialApiKeyConfig(value: unknown): value is ModelCredentialApiKeyConfig {
+  if (!value || typeof value !== "object") return false;
+  const config = value as Record<string, unknown>;
+  const materialTemplate = config["materialTemplate"] as Record<string, unknown> | undefined;
+  return (
+    config["type"] === "api-key" &&
+    Array.isArray(config["fields"]) &&
+    config["fields"].every((field) => {
+      if (!field || typeof field !== "object") return false;
+      const f = field as Record<string, unknown>;
+      return (
+        typeof f["name"] === "string" &&
+        typeof f["label"] === "string" &&
+        (f["type"] === "text" || f["type"] === "secret") &&
+        (f["required"] === undefined || typeof f["required"] === "boolean")
+      );
+    }) &&
+    !!materialTemplate &&
+    (materialTemplate["type"] === "bearer-token" || materialTemplate["type"] === "api-key") &&
+    typeof materialTemplate["valueTemplate"] === "string"
+  );
+}
+
+function isModelCredentialConnectFlow(value: unknown): value is ModelCredentialConnectFlow {
+  return isModelCredentialOAuthConfig(value) || isModelCredentialApiKeyConfig(value);
 }
 
 function isModelCredentialRedirectConfig(value: unknown): value is ModelCredentialRedirectConfig {
@@ -547,27 +615,59 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
    * Concrete agent workers must pick their own model.
    * PiRunner passes this directly to `pi-ai.getModel(provider, modelId)`.
    */
-  protected getModel(): string {
+  protected getDefaultModel(): string {
     throw new AgentWorkerError(
       "invalid_state",
-      "TrajectoryVesselBase subclasses must override getModel()"
+      "TrajectoryVesselBase subclasses must override getDefaultModel()"
     );
   }
 
-  protected getThinkingLevel(): ThinkingLevel {
+  protected getDefaultThinkingLevel(): ThinkingLevel {
     return "medium";
   }
 
-  protected getModelProviderId(): string {
-    const model = this.getModel();
+  protected getDefaultApprovalLevel(): ApprovalLevel {
+    return 2;
+  }
+
+  protected getDefaultRespondPolicy(): RespondPolicy {
+    return "all";
+  }
+
+  protected getDefaultRespondFrom(): string[] {
+    return [];
+  }
+
+  protected getModel(channelId: string): string {
+    const config = this.subscriptions.getConfig(channelId);
+    return typeof config?.model === "string" && config.model.length > 0
+      ? config.model
+      : this.getDefaultModel();
+  }
+
+  protected getThinkingLevel(channelId: string): ThinkingLevel {
+    const stateValue = this.getStateValue(`thinkingLevel:${channelId}`);
+    if (isThinkingLevel(stateValue)) return stateValue;
+    const config = this.subscriptions.getConfig(channelId);
+    return isThinkingLevel(config?.thinkingLevel)
+      ? config.thinkingLevel
+      : this.getDefaultThinkingLevel();
+  }
+
+  protected setThinkingLevel(channelId: string, level: ThinkingLevel): void {
+    this.setStateValue(`thinkingLevel:${channelId}`, level);
+  }
+
+  protected getModelProviderId(channelId: string): string {
+    const model = this.getModel(channelId);
     const colonIdx = model.indexOf(":");
     return colonIdx >= 0 ? model.slice(0, colonIdx) : model;
   }
 
   protected getApiKeyForChannel(channelId: string): () => Promise<string> {
-    const providerId = this.getModelProviderId();
+    const providerId = this.getModelProviderId(channelId);
     return async () => {
-      const modelBaseUrl = this.getModelBaseUrl();
+      const modelBaseUrl = this.getModelBaseUrl(channelId);
       this.installUrlBoundModelFetchProxy(modelBaseUrl);
       const credential = await this.rpc.call<ModelCredentialSummary | null>(
         "main",
@@ -598,40 +698,44 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   }
 
   protected async handleModelCredentialMethodCall(
+    channelId: string,
     methodName: string,
     args: unknown
   ): Promise<{ result: unknown; isError?: boolean } | null> {
     switch (methodName) {
       case "connectModelCredentialOAuth":
+      case "connectModelCredential":
         return {
-          result: await this.connectModelCredentialOAuth(args as ConnectModelCredentialOAuthArgs),
+          result: await this.connectModelCredential(channelId, args as ConnectModelCredentialOAuthArgs),
         };
       default:
         return null;
     }
   }
 
-  private getModelCredentialOAuthConfig(providerId: string): {
-    flow: ModelCredentialOAuthConfig & { type: "oauth2-auth-code-pkce" };
+  private getModelCredentialConnectSpec(channelId: string, providerId: string): {
+    flow: ModelCredentialConnectFlow;
     redirect?: ModelCredentialRedirectConfig;
     clientLoopbackRedirect?: ModelCredentialRedirectConfig;
     redirectPolicy?: ModelCredentialRedirectPolicy;
+    credential?: Record<string, unknown>;
     credentialLabel: string;
     accountIdentityJwtClaimRoot: string;
     accountIdentityJwtClaimField: string;
   } {
-    if (providerId !== this.getModelProviderId()) {
+    if (providerId !== this.getModelProviderId(channelId)) {
       throw new Error(`Model credential provider mismatch: ${providerId}`);
     }
     const setup = this.getModelCredentialSetupProps(providerId);
     const flow = setup?.["flow"];
-    if (!isModelCredentialOAuthConfig(flow)) {
-      throw new Error(`No OAuth setup is available for model provider: ${providerId}`);
+    if (!isModelCredentialConnectFlow(flow)) {
+      throw new Error(`No credential setup is available for model provider: ${providerId}`);
     }
     const credentialLabel = setup?.["credentialLabel"];
     const redirect = setup?.["redirect"];
     const clientLoopbackRedirect = setup?.["clientLoopbackRedirect"];
     const redirectPolicy = setup?.["redirectPolicy"];
+    const credential = setup?.["credential"];
     const accountIdentityJwtClaimRoot = setup?.["accountIdentityJwtClaimRoot"];
     const accountIdentityJwtClaimField = setup?.["accountIdentityJwtClaimField"];
     return {
@@ -641,6 +745,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         ? { clientLoopbackRedirect }
         : {}),
       ...(redirectPolicy === "loopback-required" ? { redirectPolicy } : {}),
+      ...(credential && typeof credential === "object" ? { credential: credential as Record<string, unknown> } : {}),
       credentialLabel:
         typeof credentialLabel === "string" ? credentialLabel : `Model credential: ${providerId}`,
       accountIdentityJwtClaimRoot:
@@ -650,11 +755,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     };
   }
 
-  private async connectModelCredentialOAuth(
+  private async connectModelCredential(
+    channelId: string,
     args: ConnectModelCredentialOAuthArgs
   ): Promise<ModelCredentialSummary> {
     if (typeof args?.providerId !== "string") {
-      throw new Error("connectModelCredentialOAuth requires providerId");
+      throw new Error("connectModelCredential requires providerId");
     }
     const browserOpenMode = args.browserOpenMode === "external" ? "external" : "internal";
     const browserHandoffCallerId =
@@ -662,37 +768,58 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const browserHandoffCallerKind = args.browserHandoffCallerKind === "shell" ? "shell" : "panel";
     const browserHandoffPlatform =
       typeof args.browserHandoffPlatform === "string" ? args.browserHandoffPlatform : undefined;
-    const modelBaseUrl = this.getModelBaseUrl();
-    const setup = this.getModelCredentialOAuthConfig(args.providerId);
+    const modelBaseUrl = this.getModelBaseUrl(channelId);
+    const setup = this.getModelCredentialConnectSpec(channelId, args.providerId);
     const redirect =
       (browserOpenMode === "external" || browserHandoffPlatform === "mobile") &&
       setup.clientLoopbackRedirect
         ? setup.clientLoopbackRedirect
         : setup.redirect;
     if (
+      isModelCredentialOAuthConfig(setup.flow) &&
       setup.redirectPolicy === "loopback-required" &&
       (!redirect || (redirect.type !== "loopback" && redirect.type !== "client-loopback"))
     ) {
       throw new Error(`Model provider ${args.providerId} requires a loopback OAuth redirect`);
     }
+    const defaultCredential = {
+      label: setup.credentialLabel,
+      audience: [{ url: modelBaseUrl, match: "path-prefix" }],
+      injection: {
+        type: "header",
+        name: "Authorization",
+        valueTemplate: "Bearer {token}",
+        stripIncoming: ["authorization"],
+      },
+      scopes: isModelCredentialOAuthConfig(setup.flow) ? setup.flow.scopes ?? [] : [],
+      metadata: {
+        modelProviderId: args.providerId,
+        accountIdentityJwtClaimRoot: setup.accountIdentityJwtClaimRoot,
+        accountIdentityJwtClaimField: setup.accountIdentityJwtClaimField,
+      },
+    };
     const spec = {
       flow: {
         ...setup.flow,
       },
       credential: {
-        label: setup.credentialLabel,
-        audience: [{ url: modelBaseUrl, match: "path-prefix" }],
-        injection: {
-          type: "header",
-          name: "Authorization",
-          valueTemplate: "Bearer {token}",
-          stripIncoming: ["authorization"],
-        },
-        scopes: setup.flow.scopes ?? [],
+        ...defaultCredential,
+        ...(setup.credential ?? {}),
+        label:
+          typeof setup.credential?.["label"] === "string"
+            ? setup.credential["label"]
+            : defaultCredential.label,
+        audience: Array.isArray(setup.credential?.["audience"])
+          ? setup.credential["audience"]
+          : defaultCredential.audience,
         metadata: {
-          modelProviderId: args.providerId,
-          accountIdentityJwtClaimRoot: setup.accountIdentityJwtClaimRoot,
-          accountIdentityJwtClaimField: setup.accountIdentityJwtClaimField,
+          ...defaultCredential.metadata,
+          ...(
+            setup.credential?.["metadata"] &&
+            typeof setup.credential["metadata"] === "object"
+              ? setup.credential["metadata"] as Record<string, string>
+              : {}
+          ),
         },
       },
       browser: browserOpenMode,
@@ -729,8 +856,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     ].join(".");
   }
 
-  private getModelBaseUrl(): string {
-    const model = this.getModel();
+  private getModelBaseUrl(channelId: string): string {
+    const model = this.getModel(channelId);
     const colonIdx = model.indexOf(":");
     if (colonIdx < 0) {
       throw new Error(`Model must be "provider:model", got: ${model}`);
@@ -803,10 +930,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   protected getApprovalLevel(channelId: string): ApprovalLevel {
     const value = this.getStateValue(`approvalLevel:${channelId}`);
-    if (!value) return 2; // Default: full auto
-    const parsed = parseInt(value, 10);
+    const parsed = value ? parseInt(value, 10) : undefined;
     if (parsed === 0 || parsed === 1 || parsed === 2) return parsed;
-    return 2;
+    const config = this.subscriptions.getConfig(channelId);
+    return isApprovalLevel(config?.approvalLevel)
+      ? config.approvalLevel
+      : this.getDefaultApprovalLevel();
   }
 
   protected setApprovalLevel(channelId: string, level: ApprovalLevel): void {
@@ -823,12 +952,115 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     return agentic?.kind === "message.completed";
   }
 
-  protected getRespondPolicy(_channelId: string): RespondPolicy {
-    return "all";
+  protected getRespondPolicy(channelId: string): RespondPolicy {
+    const stateValue = this.getStateValue(`respondPolicy:${channelId}`);
+    if (isRespondPolicy(stateValue)) return stateValue;
+    const config = this.subscriptions.getConfig(channelId);
+    return isRespondPolicy(config?.respondPolicy)
+      ? config.respondPolicy
+      : this.getDefaultRespondPolicy();
   }
 
-  protected getRespondFrom(_channelId: string): string[] {
-    return [];
+  protected getRespondFrom(channelId: string): string[] {
+    const stateValue = this.getStateValue(`respondFrom:${channelId}`);
+    if (stateValue) {
+      try {
+        const parsed = JSON.parse(stateValue);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((id): id is string => typeof id === "string");
+        }
+      } catch {
+        /* ignore malformed state */
+      }
+    }
+    const config = this.subscriptions.getConfig(channelId);
+    return Array.isArray(config?.respondFrom)
+      ? config.respondFrom.filter((id): id is string => typeof id === "string")
+      : this.getDefaultRespondFrom();
+  }
+
+  protected setRespondPolicy(
+    channelId: string,
+    policy: RespondPolicy,
+    respondFrom?: readonly string[]
+  ): void {
+    this.setStateValue(`respondPolicy:${channelId}`, policy);
+    if (respondFrom !== undefined) {
+      this.setStateValue(
+        `respondFrom:${channelId}`,
+        JSON.stringify(respondFrom.filter((id): id is string => typeof id === "string"))
+      );
+    } else if (policy !== "from-participants") {
+      this.setStateValue(`respondFrom:${channelId}`, JSON.stringify([]));
+    }
+  }
+
+  protected getAgentSettings(channelId: string): {
+    model: { value: string; source: AgentSettingSource };
+    thinkingLevel: { value: ThinkingLevel; source: AgentSettingSource };
+    approvalLevel: { value: ApprovalLevel; source: AgentSettingSource };
+    respondPolicy: { value: RespondPolicy; source: AgentSettingSource };
+    respondFrom: { value: string[]; source: AgentSettingSource };
+  } {
+    const config = this.subscriptions.getConfig(channelId);
+    const thinkingState = this.getStateValue(`thinkingLevel:${channelId}`);
+    const approvalState = this.getStateValue(`approvalLevel:${channelId}`);
+    const approvalParsed = approvalState ? parseInt(approvalState, 10) : undefined;
+    const respondPolicyState = this.getStateValue(`respondPolicy:${channelId}`);
+    const respondFromState = this.getStateValue(`respondFrom:${channelId}`);
+    const parseRespondFromState = (): string[] | null => {
+      if (!respondFromState) return null;
+      try {
+        const parsed = JSON.parse(respondFromState);
+        return Array.isArray(parsed)
+          ? parsed.filter((id): id is string => typeof id === "string")
+          : null;
+      } catch {
+        return null;
+      }
+    };
+    const stateRespondFrom = parseRespondFromState();
+    const configRespondFrom = Array.isArray(config?.respondFrom)
+      ? config.respondFrom.filter((id): id is string => typeof id === "string")
+      : null;
+    return {
+      model: {
+        value: this.getModel(channelId),
+        source: typeof config?.model === "string" && config.model.length > 0 ? "config" : "default",
+      },
+      thinkingLevel: {
+        value: this.getThinkingLevel(channelId),
+        source: isThinkingLevel(thinkingState)
+          ? "state"
+          : isThinkingLevel(config?.thinkingLevel)
+            ? "config"
+            : "default",
+      },
+      approvalLevel: {
+        value: this.getApprovalLevel(channelId),
+        source: isApprovalLevel(approvalParsed)
+          ? "state"
+          : isApprovalLevel(config?.approvalLevel)
+            ? "config"
+            : "default",
+      },
+      respondPolicy: {
+        value: this.getRespondPolicy(channelId),
+        source: isRespondPolicy(respondPolicyState)
+          ? "state"
+          : isRespondPolicy(config?.respondPolicy)
+            ? "config"
+            : "default",
+      },
+      respondFrom: {
+        value: this.getRespondFrom(channelId),
+        source: stateRespondFrom
+          ? "state"
+          : configRespondFrom
+            ? "config"
+            : "default",
+      },
+    };
   }
 
   protected async shouldRespond(channelId: string, event: ChannelEvent): Promise<boolean> {
@@ -1322,7 +1554,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         signal: AbortSignal | undefined,
         turnId?: string
       ) => this.askUser(channelId, toolCallId, params, signal, turnId),
-      model: this.getModel(),
+      model: this.getModel(channelId),
       getApiKey: this.getApiKeyForChannel(channelId),
       hasCredentialForOrigin: async (originUrl: string) => {
         try {
@@ -1336,7 +1568,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           // credentials are detected.
           let probeUrl = originUrl;
           try {
-            const modelBaseUrl = this.getModelBaseUrl();
+            const modelBaseUrl = this.getModelBaseUrl(channelId);
             if (new URL(modelBaseUrl).origin === new URL(originUrl).origin) {
               probeUrl = modelBaseUrl;
             }
@@ -1362,7 +1594,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       // real streaming and other transports synthesize a Response
       // uniformly. The harness never sees credential values.
       fetcher: this.credentials.fetch.bind(this.credentials) as typeof fetch,
-      thinkingLevel: this.getThinkingLevel(),
+      thinkingLevel: this.getThinkingLevel(channelId),
       ...this.getRunnerPromptConfig(channelId),
       ...(extraTools ? { extraTools } : {}),
       ...(toolFilter ? { toolFilter } : {}),
@@ -1442,8 +1674,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     // Re-evaluating `getModel`/`getThinkingLevel` is implicit: the runner
     // picks up new values via the standard getters on its next prompt.
     // Subclasses that cache may override this hook to invalidate.
-    void this.getModel();
-    void this.getThinkingLevel();
+    void this.getModel(channelId);
+    void this.getThinkingLevel(channelId);
   }
 
   private transcriptShapeErrorMessage(error: unknown): string {
@@ -2203,7 +2435,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       return false;
     }
 
-    const providerId = opts?.providerId ?? this.getModelProviderId();
+    const providerId = opts?.providerId ?? this.getModelProviderId(channelId);
     const interruption = this.getModelCredentialInterruption(
       channelId,
       providerId,
@@ -2327,13 +2559,15 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
     await this.forkPiBranchForClone(oldChannelId, newChannelId, forkAtMessageIndex);
 
-    // Rename approvalLevel state key.
-    const oldApprovalKey = `approvalLevel:${oldChannelId}`;
-    const newApprovalKey = `approvalLevel:${newChannelId}`;
-    const approvalValue = this.getStateValue(oldApprovalKey);
-    if (approvalValue) {
-      this.setStateValue(newApprovalKey, approvalValue);
-      this.deleteStateValue(oldApprovalKey);
+    // Rename channel-scoped live setting state keys.
+    for (const key of ["approvalLevel", "thinkingLevel", "respondPolicy", "respondFrom"]) {
+      const oldKey = `${key}:${oldChannelId}`;
+      const newKey = `${key}:${newChannelId}`;
+      const value = this.getStateValue(oldKey);
+      if (value) {
+        this.setStateValue(newKey, value);
+        this.deleteStateValue(oldKey);
+      }
     }
 
     // Resubscribe to the forked channel.

@@ -22,6 +22,12 @@ export type {
   ToolProviderDeps,
   ToolProvider,
 } from "./types.js";
+export type {
+  AgentApprovalLevel,
+  AgentRespondPolicy,
+  AgentSubscriptionConfig,
+  AgentThinkingLevel,
+} from "./agent-subscription-config.js";
 
 // Re-exported from @workspace/pubsub for convenience — canonical role-based
 // predicates for distinguishing agent participants from client participants.

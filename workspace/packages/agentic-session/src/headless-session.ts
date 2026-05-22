@@ -25,6 +25,7 @@ import {
   isAgentParticipantType,
   chatMessagesFromChannelView,
   type ConnectionConfig,
+  type AgentSubscriptionConfig,
   type ChatParticipantMetadata,
   type ChatMessage,
   type SandboxConfig,
@@ -102,7 +103,7 @@ export interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
    * `thinkingLevel`, `approvalLevel`, `systemPrompt`, and
    * `systemPromptMode`.
    */
-  extraConfig?: Record<string, unknown>;
+  extraConfig?: AgentSubscriptionConfig;
 }
 
 // ===========================================================================

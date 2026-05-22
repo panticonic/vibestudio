@@ -11,7 +11,7 @@ import type { PiRunner } from "@natstack/harness";
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 
 class TestAgentWorker extends AgentWorkerBase {
-  protected override getModel(): string {
+  protected override getDefaultModel(): string {
     return "test:model";
   }
 
