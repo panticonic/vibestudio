@@ -24,6 +24,10 @@ Use this order:
 4. If `stage === "connected"`, run `verifyGoogleConnection(connectionId)`.
 5. If `stage === "verified"`, continue onboarding.
 
+When the user is setting up Gmail specifically, continue with
+`workspace/skills/gmail/ONBOARDING.md` after Google Workspace reaches
+`verified`.
+
 Never skip the Production publishing step. Testing-mode refresh tokens for
 Gmail, Calendar, and Drive expire after 7 days.
 
@@ -97,3 +101,9 @@ actions, warnings, and checklist state.
 | [TESTING.md](TESTING.md) | Runtime verification snippets |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | Common errors and fixes |
 | [index.ts](index.ts) | Importable onboarding helpers |
+
+## Related Follow-Up
+
+| Skill | When to use |
+|-------|-------------|
+| `gmail` | Set up the Gmail channel agent, custom message pills, action bar, and Gmail-specific workflows after Google Workspace is verified |

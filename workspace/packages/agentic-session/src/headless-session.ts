@@ -299,6 +299,21 @@ export class HeadlessSession {
         if (!this._client) throw new Error("Not connected");
         return this._client.publish(eventType, payload, options);
       },
+      publishCustomMessage: async (
+        input: { typeId: string; initialState?: unknown; displayMode?: "inline" | "row" },
+        options?: { idempotencyKey?: string }
+      ) => {
+        if (!this._client) throw new Error("Not connected");
+        return this._client.publishCustomMessage(input, options);
+      },
+      updateCustomMessage: async (
+        messageId: string,
+        update: unknown,
+        options?: { idempotencyKey?: string }
+      ) => {
+        if (!this._client) throw new Error("Not connected");
+        return this._client.updateCustomMessage(messageId, update, options);
+      },
       callMethod: async (participantId: string, method: string, args: unknown) => {
         if (!this._client) throw new Error("Not connected");
         const handle = this._client.callMethod(participantId, method, args);
@@ -309,6 +324,31 @@ export class HeadlessSession {
         if (!this._client) throw new Error("Not connected");
         const handle = this._client.callMethod(participantId, method, args);
         return (handle as { result: Promise<ChatMethodResult> }).result;
+      },
+      participantByHandle: (rawHandle: string) => {
+        if (!this._client) return null;
+        const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
+        return Object.values(this._client.roster).find((participant) => {
+          const metadataHandle = participant.metadata?.handle;
+          return typeof metadataHandle === "string" && metadataHandle === handle;
+        }) ?? null;
+      },
+      callMethodByHandle: async (rawHandle: string, method: string, args: unknown) => {
+        if (!this._client) throw new Error("Not connected");
+        const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
+        const participant = Object.values(this._client.roster).find((item) => item.metadata?.handle === handle);
+        if (!participant) throw new Error(`No participant with handle @${handle}`);
+        const methodHandle = this._client.callMethod(participant.id, method, args);
+        const result = await (methodHandle as { result: Promise<ChatMethodResult> }).result;
+        return unwrapChatMethodResult(result);
+      },
+      callMethodResultByHandle: async (rawHandle: string, method: string, args: unknown) => {
+        if (!this._client) throw new Error("Not connected");
+        const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
+        const participant = Object.values(this._client.roster).find((item) => item.metadata?.handle === handle);
+        if (!participant) throw new Error(`No participant with handle @${handle}`);
+        const methodHandle = this._client.callMethod(participant.id, method, args);
+        return (methodHandle as { result: Promise<ChatMethodResult> }).result;
       },
       contextId: "",
       channelId: this._channelId,

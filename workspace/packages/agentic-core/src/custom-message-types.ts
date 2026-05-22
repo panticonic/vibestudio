@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { compileModule, type CompileComponentOptions } from "@workspace/eval";
 
 export interface CustomMessageComponentProps {
+  messageId: string;
   typeId: string;
   state: unknown;
   expanded: boolean;

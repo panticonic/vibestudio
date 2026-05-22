@@ -41,6 +41,7 @@ function CustomRenderer({
   }
   return (
     <Component
+      messageId={payload.messageId}
       typeId={payload.typeId}
       state={state}
       expanded={expanded}

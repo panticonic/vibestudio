@@ -87,10 +87,23 @@ See the working example in:
 - `workspace/panels/chat/examples/weather-message-type.tsx` — the renderer (default, `reduce`).
 - `workspace/panels/chat/examples/weather-message-demo.ts` — registers + publishes + updates.
 
-## From sandbox code (eval / inline_ui / feedback_custom)
+## From sandbox code (eval / inline_ui / action_bar / feedback_custom)
 
-The `chat` sandbox value exposes `publish` but not the typed registry helpers.
-Publish the raw agentic events through `chat.publish("agentic.trajectory.v1/event", event)`:
+The `chat` sandbox value exposes typed helpers for publishing and updating
+instances once the type is registered:
+
+```ts
+const { messageId } = await chat.publishCustomMessage({
+  typeId: "weather",
+  initialState: { city: "San Francisco", tempF: 64, condition: "Cloudy" },
+  displayMode: "inline",
+});
+
+await chat.updateCustomMessage(messageId, { tempF: 66, condition: "Clearing" });
+```
+
+Registry operations still publish typed agentic events through
+`chat.publish("agentic.trajectory.v1/event", event)`:
 
 ```ts
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
@@ -110,33 +123,12 @@ await chat.publish(AGENTIC_EVENT_PAYLOAD_KIND, {
   createdAt: new Date().toISOString(),
 });
 
-// 2. Publish an instance. Generate the messageId so updates can target it.
-const messageId = crypto.randomUUID();
-await chat.publish(AGENTIC_EVENT_PAYLOAD_KIND, {
-  kind: "custom.started",
-  actor: { kind: "agent", id: "agent" },
-  causality: { messageId },
-  payload: {
-    protocol: "agentic.trajectory.v1",
-    messageId,
-    typeId,
-    initialState: { city: "San Francisco", tempF: 64, condition: "Cloudy" },
-  },
-  createdAt: new Date().toISOString(),
+// 2. Publish and update instances through the typed helpers.
+const { messageId } = await chat.publishCustomMessage({
+  typeId,
+  initialState: { city: "San Francisco", tempF: 64, condition: "Cloudy" },
 });
-
-// 3. Stream updates against the same messageId.
-await chat.publish(AGENTIC_EVENT_PAYLOAD_KIND, {
-  kind: "custom.updated",
-  actor: { kind: "agent", id: "agent" },
-  causality: { messageId },
-  payload: {
-    protocol: "agentic.trajectory.v1",
-    messageId,
-    update: { tempF: 66, condition: "Clearing" },
-  },
-  createdAt: new Date().toISOString(),
-});
+await chat.updateCustomMessage(messageId, { tempF: 66, condition: "Clearing" });
 ```
 
 Clearing a type:
