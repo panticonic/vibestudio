@@ -34,6 +34,70 @@ export interface WorkspaceSettingsSheetProps {
   agentVaultNotice?: AgentVaultNotice | null;
 }
 
+export type WorkspaceSettingsContentProps = Omit<WorkspaceSettingsSheetProps, "open" | "onOpenChange">;
+
+export function WorkspaceSettingsContent({
+  repoRoot,
+  refreshNonce,
+  onSwitchVault,
+  roster,
+  availableAgents,
+  onAddAgent,
+  onRemoveAgent,
+  agentVaultNotice,
+}: WorkspaceSettingsContentProps) {
+  return (
+    <Flex direction="column" gap="4">
+      <Section title="Vault">
+        <Button
+          size="3"
+          variant="soft"
+          color="gray"
+          onClick={onSwitchVault}
+          style={{ justifyContent: "space-between", width: "100%", minHeight: 48 }}
+          data-testid="spectrolite-settings-switch-vault"
+        >
+          <Flex direction="column" align="start" style={{ flex: 1, textAlign: "left" }}>
+            <Text size="2" weight="medium">{repoRoot.replace(/^\//, "")}</Text>
+            <Text size="1" color="gray">Tap to switch</Text>
+          </Flex>
+          <ChevronRightIcon />
+        </Button>
+      </Section>
+
+      <Separator size="4" />
+
+      <Section title="Branch">
+        <BranchPicker repoRoot={repoRoot} refreshNonce={refreshNonce} />
+      </Section>
+
+      <Separator size="4" />
+
+      <Section title={`Agents (${roster.length})`}>
+        {agentVaultNotice ? (
+          <Text
+            size="1"
+            color={agentVaultNotice.state === "failed" ? "red" : agentVaultNotice.state === "pending" ? "amber" : "gray"}
+            data-testid="spectrolite-agent-vault-status"
+          >
+            {agentVaultNotice.state === "pending"
+              ? `Updating agents for ${agentVaultNotice.repoRoot.replace(/^\//, "")}`
+              : agentVaultNotice.state === "failed"
+                ? `Agent vault update failed for ${agentVaultNotice.repoRoot.replace(/^\//, "")}`
+                : `Agents using ${agentVaultNotice.repoRoot.replace(/^\//, "")}`}
+          </Text>
+        ) : null}
+        <AgentRoster
+          agents={roster}
+          availableAgents={availableAgents}
+          onAdd={async (id) => { await onAddAgent(id); }}
+          onRemove={async (handle) => { await onRemoveAgent(handle); }}
+        />
+      </Section>
+    </Flex>
+  );
+}
+
 export function WorkspaceSettingsSheet({
   open,
   onOpenChange,
@@ -48,53 +112,16 @@ export function WorkspaceSettingsSheet({
 }: WorkspaceSettingsSheetProps) {
   return (
     <BottomSheet open={open} onOpenChange={onOpenChange} title="Workspace">
-      <Flex direction="column" gap="4">
-        <Section title="Vault">
-          <Button
-            size="3"
-            variant="soft"
-            color="gray"
-            onClick={() => { onSwitchVault(); onOpenChange(false); }}
-            style={{ justifyContent: "space-between", width: "100%", minHeight: 48 }}
-          >
-            <Flex direction="column" align="start" style={{ flex: 1, textAlign: "left" }}>
-              <Text size="2" weight="medium">{repoRoot.replace(/^\//, "")}</Text>
-              <Text size="1" color="gray">Tap to switch</Text>
-            </Flex>
-            <ChevronRightIcon />
-          </Button>
-        </Section>
-
-        <Separator size="4" />
-
-        <Section title="Branch">
-          <BranchPicker repoRoot={repoRoot} refreshNonce={refreshNonce} />
-        </Section>
-
-        <Separator size="4" />
-
-        <Section title={`Agents (${roster.length})`}>
-          {agentVaultNotice ? (
-            <Text
-              size="1"
-              color={agentVaultNotice.state === "failed" ? "red" : agentVaultNotice.state === "pending" ? "amber" : "gray"}
-              data-testid="spectrolite-agent-vault-status"
-            >
-              {agentVaultNotice.state === "pending"
-                ? `Updating agents for ${agentVaultNotice.repoRoot.replace(/^\//, "")}`
-                : agentVaultNotice.state === "failed"
-                  ? `Agent vault update failed for ${agentVaultNotice.repoRoot.replace(/^\//, "")}`
-                  : `Agents using ${agentVaultNotice.repoRoot.replace(/^\//, "")}`}
-            </Text>
-          ) : null}
-          <AgentRoster
-            agents={roster}
-            availableAgents={availableAgents}
-            onAdd={async (id) => { await onAddAgent(id); }}
-            onRemove={async (handle) => { await onRemoveAgent(handle); }}
-          />
-        </Section>
-      </Flex>
+      <WorkspaceSettingsContent
+        repoRoot={repoRoot}
+        refreshNonce={refreshNonce}
+        onSwitchVault={() => { onSwitchVault(); onOpenChange(false); }}
+        roster={roster}
+        availableAgents={availableAgents}
+        onAddAgent={onAddAgent}
+        onRemoveAgent={onRemoveAgent}
+        agentVaultNotice={agentVaultNotice}
+      />
     </BottomSheet>
   );
 }
@@ -102,7 +129,7 @@ export function WorkspaceSettingsSheet({
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <Flex direction="column" gap="2">
-      <Heading size="2" color="gray" style={{ textTransform: "uppercase", letterSpacing: "0.05em" }}>
+      <Heading size="2" color="gray" style={{ textTransform: "uppercase", letterSpacing: 0 }}>
         {title}
       </Heading>
       <Box>{children}</Box>

@@ -2,11 +2,11 @@
  * Top-level layout for Spectrolite.
  *
  *   ┌────────────────────────────────────────────────────────────────┐
- *   │ Header: title + flush status + agent roster                    │
- *   ├──────────┬─────────────────────────────────────────────────────┤
- *   │ FileTree │ DocumentEditor (Edit ↔ Preview)                     │
- *   │ Backlnks │                                                     │
- *   ├──────────┴─────────────────────────────────────────────────────┤
+ *   │ Header: title + vault/branch/status + navigation actions       │
+ *   ├────────────────────────────────────────────────────────────────┤
+ *   │ DocumentEditor (Edit ↔ Preview)                                │
+ *   │ Files/Backlinks/Workspace open as temporary drawers            │
+ *   ├────────────────────────────────────────────────────────────────┤
  *   │ CommitStrip                                                    │
  *   ├────────────────────────────────────────────────────────────────┤
  *   │ ChannelDrawer (collapsed by default)                           │
@@ -24,11 +24,11 @@
  */
 
 import { promises as fs } from "fs";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Button, Flex, Heading, IconButton, Text, Theme } from "@radix-ui/themes";
-import { CheckCircledIcon, DotsHorizontalIcon, FilePlusIcon, HamburgerMenuIcon, LightningBoltIcon } from "@radix-ui/react-icons";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Box, Button, Dialog, Flex, Heading, IconButton, Text, Theme } from "@radix-ui/themes";
+import { CheckCircledIcon, Cross2Icon, DotsHorizontalIcon, FilePlusIcon, HamburgerMenuIcon, LightningBoltIcon, Link2Icon } from "@radix-ui/react-icons";
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
-import { rpc, recoveryCoordinator, useStateArgs, setStateArgs } from "@workspace/runtime";
+import { rpc, recoveryCoordinator, useStateArgs, setStateArgs, listBranches } from "@workspace/runtime";
 import { useIsMobile, usePanelTheme } from "@workspace/react";
 import {
   buildEvalTool,
@@ -53,7 +53,7 @@ import { VaultPicker } from "./VaultPicker";
 import { MobileSidebar } from "./mobile/MobileSidebar";
 import { BottomSheet } from "./mobile/BottomSheet";
 import { MobileCommitButton } from "./mobile/MobileCommitButton";
-import { WorkspaceSettingsSheet } from "./mobile/WorkspaceSettingsSheet";
+import { WorkspaceSettingsContent, WorkspaceSettingsSheet } from "./mobile/WorkspaceSettingsSheet";
 import type { MentionCandidate } from "./MentionAutocomplete";
 import { createFlushController } from "../flush/flush-controller";
 import { buildFlushPayload } from "../flush/diff";
@@ -65,6 +65,7 @@ import { resolveWikilinkTarget, wikilinksFromJsx } from "../mdx/wikilink";
 import { parseFrontmatter, diffDependencies, isStateOnlyChange } from "../mdx/frontmatter";
 import { prefetchDependencies } from "../mdx/depPrefetch";
 import { joinSafe, parentDir } from "../state/safePath";
+import { listMdxPaths } from "../state/workspacePaths";
 
 export interface WorkspaceProps {
   channelName: string;
@@ -183,6 +184,7 @@ export function Workspace({
   const [optimisticallyRemovedAgents, setOptimisticallyRemovedAgents] = useState<Set<string>>(() => new Set());
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [workspacePaths, setWorkspacePaths] = useState<string[]>([]);
+  const [workspacePathsLoading, setWorkspacePathsLoading] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [lastFlushedAt, setLastFlushedAt] = useState<Record<string, number>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -197,10 +199,20 @@ export function Workspace({
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [commitSheetOpen, setCommitSheetOpen] = useState(false);
   const [settingsSheetOpen, setSettingsSheetOpen] = useState(false);
+  const [filesDrawerOpen, setFilesDrawerOpen] = useState(false);
+  const [backlinksDrawerOpen, setBacklinksDrawerOpen] = useState(false);
   const closeMobileSidebar = useCallback(() => setMobileSidebarOpen(false), []);
   const handleOpenInSidebar = useCallback((path: string) => {
     setActivePath(path);
     setMobileSidebarOpen(false);
+  }, []);
+  const handleOpenInFilesDrawer = useCallback((path: string) => {
+    setActivePath(path);
+    setFilesDrawerOpen(false);
+  }, []);
+  const handleOpenInBacklinksDrawer = useCallback((path: string) => {
+    setActivePath(path);
+    setBacklinksDrawerOpen(false);
   }, []);
 
   const buffersRef = useRef(buffers);
@@ -259,6 +271,27 @@ export function Workspace({
     setActiveDeps({});
     lastDepsRef.current = {};
   }, [repoRoot, stateArgs.openPath]);
+
+  useEffect(() => {
+    if (!repoRoot) {
+      setWorkspacePaths([]);
+      setWorkspacePathsLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setWorkspacePathsLoading(true);
+    void listMdxPaths(repoRoot)
+      .then((paths) => {
+        if (!cancelled) setWorkspacePaths(paths);
+      })
+      .catch(() => {
+        if (!cancelled) setWorkspacePaths([]);
+      })
+      .finally(() => {
+        if (!cancelled) setWorkspacePathsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [repoRoot, refreshNonce]);
 
   // Sandbox config + scope manager — same primitives the chat panel uses
   // for its eval tool. Recreated whenever the channel name changes so the
@@ -841,6 +874,10 @@ export function Workspace({
                   mentionCandidates={mentionCandidates}
                   dependencies={activeDeps}
                 />
+              ) : workspacePathsLoading ? (
+                <Flex align="center" justify="center" style={{ height: "100%" }}>
+                  <Text size="2" color="gray">Loading files...</Text>
+                </Flex>
               ) : workspacePaths.length === 0 ? (
                 <EmptyVault onCreateWelcomeDoc={handleCreateWelcomeDoc} />
               ) : (
@@ -959,7 +996,7 @@ export function Workspace({
             py="2"
             style={{ borderBottom: "1px solid var(--gray-5)", flexShrink: 0 }}
           >
-            <Flex align="center" gap="2">
+            <Flex align="center" gap="2" style={{ minWidth: 0, flex: 1 }}>
               <Heading size="3">Spectrolite</Heading>
               <Button
                 size="1"
@@ -967,12 +1004,16 @@ export function Workspace({
                 color="gray"
                 onClick={handleSwitchVaultWithFlush}
                 title="Switch to a different vault"
-                data-testid="spectrolite-switch-vault"
+                data-testid="spectrolite-toolbar-switch-vault"
               >
                 {repoRoot.replace(/^\//, "")}
               </Button>
-              <BranchPicker repoRoot={repoRoot} refreshNonce={refreshNonce} />
-              {activeTitle ? <Text size="1" color="gray">/ {activeTitle}</Text> : null}
+              <BranchStatus repoRoot={repoRoot} refreshNonce={refreshNonce} />
+              {activeTitle ? (
+                <Text size="1" color="gray" truncate title={activePath ?? activeTitle}>
+                  / {activeTitle}
+                </Text>
+              ) : null}
               {activeDirty ? (
                 <Flex align="center" gap="1" title="Unflushed edits">
                   <LightningBoltIcon color="orange" />
@@ -985,59 +1026,79 @@ export function Workspace({
                 </Flex>
               ) : null}
             </Flex>
-            <AgentRoster
-              agents={visibleRoster}
-              availableAgents={availableAgents}
-              onAdd={async (id) => { await onAddAgent(id); }}
-              onRemove={handleRemoveVisibleAgent}
-            />
-            <AgentVaultStatus notice={agentVaultNotice} compact />
-            <MentionDeliveryStatus notice={mentionDeliveryNotice} compact />
-          </Flex>
-          <Flex style={{ flex: 1, minHeight: 0 }}>
-            <Flex direction="column" style={{ width: 260, borderRight: "1px solid var(--gray-5)", flexShrink: 0 }}>
-              <Box style={{ flex: 1, minHeight: 0 }}>
-                <FileTree
-                  root={repoRoot}
-                  activePath={activePath}
-                  onOpen={setActivePath}
-                  refreshNonce={refreshNonce}
-                  onPathsRefreshed={setWorkspacePaths}
-                />
-              </Box>
-              <BacklinksPanel
-                root={repoRoot}
-                activePath={activePath}
-                paths={workspacePaths}
-                refreshKey={refreshNonce}
-                onOpen={setActivePath}
-              />
-            </Flex>
-            <Box style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+            <Flex align="center" gap="2" style={{ flexShrink: 0 }}>
+              <AgentVaultStatus notice={agentVaultNotice} compact />
+              <MentionDeliveryStatus notice={mentionDeliveryNotice} compact />
+              <Button
+                size="1"
+                variant="soft"
+                color="gray"
+                onClick={() => setFilesDrawerOpen(true)}
+                data-testid="spectrolite-files-trigger"
+              >
+                <HamburgerMenuIcon /> Files
+              </Button>
               {activePath ? (
-                <DocumentEditor
-                  key={activePath}
-                  repoRoot={repoRoot}
-                  relPath={activePath}
-                  theme={theme}
-                  onChange={handleEditorChange}
-                  onReload={handleEditorReload}
-                  onFlushClick={handleFlushClick}
-                  hasUnflushedChanges={activeDirty}
-                  mentionCandidates={mentionCandidates}
-                  dependencies={activeDeps}
-                />
-              ) : workspacePaths.length === 0 ? (
-                <EmptyVault onCreateWelcomeDoc={handleCreateWelcomeDoc} />
-              ) : (
-                <Flex align="center" justify="center" style={{ height: "100%" }}>
-                  <Text size="2" color="gray">
-                    Select a file from the sidebar to start editing.
-                  </Text>
-                </Flex>
-              )}
-            </Box>
+                <Button
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  onClick={() => setBacklinksDrawerOpen(true)}
+                  data-testid="spectrolite-backlinks-trigger"
+                >
+                  <Link2Icon /> Backlinks
+                </Button>
+              ) : null}
+              <IconButton
+                size="2"
+                variant="ghost"
+                color="gray"
+                aria-label="Workspace settings"
+                onClick={() => setSettingsSheetOpen(true)}
+                data-testid="spectrolite-workspace-settings"
+              >
+                <DotsHorizontalIcon />
+              </IconButton>
+            </Flex>
           </Flex>
+          <Box style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+            {activePath ? (
+              <DocumentEditor
+                key={activePath}
+                repoRoot={repoRoot}
+                relPath={activePath}
+                theme={theme}
+                onChange={handleEditorChange}
+                onReload={handleEditorReload}
+                onFlushClick={handleFlushClick}
+                hasUnflushedChanges={activeDirty}
+                mentionCandidates={mentionCandidates}
+                dependencies={activeDeps}
+              />
+            ) : workspacePathsLoading ? (
+              <Flex align="center" justify="center" style={{ height: "100%" }}>
+                <Text size="2" color="gray">Loading files...</Text>
+              </Flex>
+            ) : workspacePaths.length === 0 ? (
+              <EmptyVault onCreateWelcomeDoc={handleCreateWelcomeDoc} />
+            ) : (
+              <Flex align="center" justify="center" style={{ height: "100%" }} p="4">
+                <Flex direction="column" align="center" gap="3">
+                  <Text size="2" color="gray" align="center">
+                    Open a file to start editing.
+                  </Text>
+                  <Flex gap="2">
+                    <Button size="3" onClick={() => setFilesDrawerOpen(true)} data-testid="spectrolite-empty-open-files">
+                      <HamburgerMenuIcon /> Open files
+                    </Button>
+                    <Button size="3" variant="soft" color="gray" onClick={handleCreateWelcomeDoc}>
+                      <FilePlusIcon /> Create note
+                    </Button>
+                  </Flex>
+                </Flex>
+              </Flex>
+            )}
+          </Box>
           <CommitStrip
             repoRoot={repoRoot}
             client={client}
@@ -1057,6 +1118,40 @@ export function Workspace({
             onOpenDrawer={requestDrawerOpen}
             selfHandle={PANEL_METADATA.handle}
           />
+          <FilesDrawer
+            open={filesDrawerOpen}
+            onOpenChange={setFilesDrawerOpen}
+            repoRoot={repoRoot}
+            activePath={activePath}
+            refreshNonce={refreshNonce}
+            onOpenPath={handleOpenInFilesDrawer}
+            onPathsRefreshed={setWorkspacePaths}
+          />
+          <BacklinksDrawer
+            open={backlinksDrawerOpen}
+            onOpenChange={setBacklinksDrawerOpen}
+            repoRoot={repoRoot}
+            activePath={activePath}
+            activeTitle={activeTitle}
+            paths={workspacePaths}
+            refreshNonce={refreshNonce}
+            onOpenPath={handleOpenInBacklinksDrawer}
+          />
+          <DesktopWorkspaceSettingsDrawer
+            open={settingsSheetOpen}
+            onOpenChange={setSettingsSheetOpen}
+            repoRoot={repoRoot}
+            refreshNonce={refreshNonce}
+            onSwitchVault={() => {
+              setSettingsSheetOpen(false);
+              handleSwitchVaultWithFlush();
+            }}
+            roster={visibleRoster}
+            availableAgents={availableAgents}
+            onAddAgent={onAddAgent}
+            onRemoveAgent={handleRemoveVisibleAgent}
+            agentVaultNotice={agentVaultNotice}
+          />
         </Flex>
       </WikilinkContext.Provider>
     </Theme>
@@ -1069,14 +1164,257 @@ function EmptyVault({ onCreateWelcomeDoc }: { onCreateWelcomeDoc: () => void }) 
       <Flex direction="column" align="center" gap="3" style={{ maxWidth: 480, textAlign: "center" }}>
         <Heading size="3">This vault is empty</Heading>
         <Text size="2" color="gray">
-          Create your first note to get started — or use the <strong>+ New</strong> field
-          in the sidebar to name your own.
+          Create your first note to get started.
         </Text>
         <Button onClick={onCreateWelcomeDoc} variant="solid">
           <FilePlusIcon /> Create starter note
         </Button>
       </Flex>
     </Flex>
+  );
+}
+
+function VisuallyHidden({ children }: { children: ReactNode }) {
+  return (
+    <span
+      style={{
+        position: "absolute",
+        border: 0,
+        width: 1,
+        height: 1,
+        padding: 0,
+        margin: -1,
+        overflow: "hidden",
+        clip: "rect(0, 0, 0, 0)",
+        whiteSpace: "nowrap",
+        wordWrap: "normal",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function DrawerHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <Flex align="center" justify="between" px="3" py="2" style={{ borderBottom: "1px solid var(--gray-5)", flexShrink: 0 }}>
+      <Heading size="2" truncate>{title}</Heading>
+      <Dialog.Close>
+        <IconButton size="2" variant="ghost" color="gray" aria-label="Close" onClick={onClose}>
+          <Cross2Icon />
+        </IconButton>
+      </Dialog.Close>
+    </Flex>
+  );
+}
+
+function FilesDrawer({
+  open,
+  onOpenChange,
+  repoRoot,
+  activePath,
+  refreshNonce,
+  onOpenPath,
+  onPathsRefreshed,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  repoRoot: string;
+  activePath: string | null;
+  refreshNonce: number;
+  onOpenPath: (path: string) => void;
+  onPathsRefreshed: (paths: string[]) => void;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Content
+        maxWidth="100vw"
+        data-testid="spectrolite-files-drawer"
+        style={{
+          position: "fixed",
+          top: 0,
+          left: 0,
+          bottom: 0,
+          right: "auto",
+          width: "min(38vw, 360px)",
+          minWidth: 300,
+          maxWidth: "100vw",
+          margin: 0,
+          padding: 0,
+          borderRadius: 0,
+          borderRight: "1px solid var(--gray-5)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        <VisuallyHidden>
+          <Dialog.Title>Files</Dialog.Title>
+        </VisuallyHidden>
+        <DrawerHeader title="Files" onClose={() => onOpenChange(false)} />
+        <Box style={{ flex: 1, minHeight: 0 }}>
+          <FileTree
+            root={repoRoot}
+            activePath={activePath}
+            onOpen={onOpenPath}
+            refreshNonce={refreshNonce}
+            onPathsRefreshed={onPathsRefreshed}
+          />
+        </Box>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+function BacklinksDrawer({
+  open,
+  onOpenChange,
+  repoRoot,
+  activePath,
+  activeTitle,
+  paths,
+  refreshNonce,
+  onOpenPath,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  repoRoot: string;
+  activePath: string | null;
+  activeTitle: string | null;
+  paths: string[];
+  refreshNonce: number;
+  onOpenPath: (path: string) => void;
+}) {
+  const title = activeTitle || activePath || "Current document";
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Content
+        maxWidth="100vw"
+        data-testid="spectrolite-backlinks-drawer"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: "auto",
+          width: "min(34vw, 380px)",
+          minWidth: 320,
+          maxWidth: "100vw",
+          margin: 0,
+          padding: 0,
+          borderRadius: 0,
+          borderLeft: "1px solid var(--gray-5)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        <VisuallyHidden>
+          <Dialog.Title>Backlinks for {title}</Dialog.Title>
+        </VisuallyHidden>
+        <DrawerHeader title={`Backlinks: ${title}`} onClose={() => onOpenChange(false)} />
+        <Box style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
+          <BacklinksPanel
+            root={repoRoot}
+            activePath={activePath}
+            paths={paths}
+            refreshKey={refreshNonce}
+            onOpen={onOpenPath}
+          />
+        </Box>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+function DesktopWorkspaceSettingsDrawer({
+  open,
+  onOpenChange,
+  repoRoot,
+  refreshNonce,
+  onSwitchVault,
+  roster,
+  availableAgents,
+  onAddAgent,
+  onRemoveAgent,
+  agentVaultNotice,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  repoRoot: string;
+  refreshNonce: number;
+  onSwitchVault: () => void;
+  roster: RosterAgent[];
+  availableAgents: AvailableAgent[];
+  onAddAgent: (agentId: string) => void | Promise<void>;
+  onRemoveAgent: (handle: string) => void | Promise<void>;
+  agentVaultNotice: AgentVaultNotice | null;
+}) {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Content
+        maxWidth="100vw"
+        data-testid="spectrolite-workspace-settings-drawer"
+        style={{
+          position: "fixed",
+          top: 0,
+          right: 0,
+          bottom: 0,
+          left: "auto",
+          width: "min(36vw, 420px)",
+          minWidth: 340,
+          maxWidth: "100vw",
+          margin: 0,
+          padding: 0,
+          borderRadius: 0,
+          borderLeft: "1px solid var(--gray-5)",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+        }}
+      >
+        <VisuallyHidden>
+          <Dialog.Title>Workspace settings</Dialog.Title>
+        </VisuallyHidden>
+        <DrawerHeader title="Workspace" onClose={() => onOpenChange(false)} />
+        <Box style={{ flex: 1, minHeight: 0, overflowY: "auto" }} p="4">
+          <WorkspaceSettingsContent
+            repoRoot={repoRoot}
+            refreshNonce={refreshNonce}
+            onSwitchVault={onSwitchVault}
+            roster={roster}
+            availableAgents={availableAgents}
+            onAddAgent={onAddAgent}
+            onRemoveAgent={onRemoveAgent}
+            agentVaultNotice={agentVaultNotice}
+          />
+        </Box>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
+function BranchStatus({ repoRoot, refreshNonce }: { repoRoot: string; refreshNonce: number }) {
+  const [branch, setBranch] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const rel = repoRoot.replace(/^\/+/, "");
+    void listBranches(rel)
+      .then((branches) => {
+        if (cancelled) return;
+        setBranch(branches.find((candidate) => candidate.current)?.name ?? "detached");
+      })
+      .catch(() => {
+        if (!cancelled) setBranch(null);
+      });
+    return () => { cancelled = true; };
+  }, [repoRoot, refreshNonce]);
+
+  return (
+    <Text size="1" color="gray" truncate title={branch ? `Current branch: ${branch}` : "Current branch unavailable"} data-testid="spectrolite-branch-status">
+      {branch ?? "branch unavailable"}
+    </Text>
   );
 }
 

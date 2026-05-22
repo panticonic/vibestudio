@@ -30,9 +30,9 @@
  *   - notifying parent of dirty state for the flush controller
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Component as ReactComponent, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { promises as fs } from "fs";
-import { Box, Button, Callout, Flex, Text } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, Text, TextArea } from "@radix-ui/themes";
 import { ExclamationTriangleIcon, LightningBoltIcon, ReloadIcon } from "@radix-ui/react-icons";
 import {
   MDXEditor,
@@ -64,7 +64,7 @@ import { LiveJsxEditor } from "../mdx/LiveJsxEditor";
 import { wikilinksFromJsx, wikilinksToJsx } from "../mdx/wikilink";
 import { DocStateContext, type DocStateContextValue, useDocState } from "../mdx/docState";
 import { parseFrontmatter, replaceFrontmatterState } from "../mdx/frontmatter";
-import { compileDocModule, exportNamesFromSource, type CompiledDocModule } from "../mdx/docModule";
+import { compileDocModule, type CompiledDocModule } from "../mdx/docModule";
 import { DepsContext, runtimeNamespace } from "../mdx/runtimeNamespace";
 import { joinSafe, parentDir } from "../state/safePath";
 
@@ -103,6 +103,10 @@ function isMissingFileError(err: unknown): boolean {
   return /enoent/i.test(msg) || /no such file/i.test(msg);
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export function DocumentEditor({
   repoRoot,
   relPath,
@@ -116,6 +120,8 @@ export function DocumentEditor({
 }: DocumentEditorProps) {
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [sourceRecoveryError, setSourceRecoveryError] = useState<string | null>(null);
+  const [richEditorKey, setRichEditorKey] = useState(0);
   const editorRef = useRef<MDXEditorMethods | null>(null);
   const lastDiskRef = useRef<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -199,6 +205,8 @@ export function DocumentEditor({
     (globalThis as Record<string, unknown>)["__spectroliteDocExports__"] = {};
     setMarkdown(null);
     setError(null);
+    setSourceRecoveryError(null);
+    setRichEditorKey((n) => n + 1);
     setDiskConflict(null);
     setFileMissing(false);
     lastDiskRef.current = null;
@@ -373,9 +381,24 @@ export function DocumentEditor({
     scheduleDocCompile(merged);
   }, [onChange, relPath, scheduleDocCompile]);
 
+  const handleSourceRecoveryChange = useCallback((next: string) => {
+    setMarkdown(next);
+    onChange(relPath, next);
+    scheduleDocCompile(next);
+  }, [onChange, relPath, scheduleDocCompile]);
+
   const flushNow = useCallback(() => {
     onFlushClick(relPath);
   }, [onFlushClick, relPath]);
+
+  const enterSourceRecovery = useCallback((reason: string) => {
+    setSourceRecoveryError(reason);
+  }, []);
+
+  const tryRichEditor = useCallback(() => {
+    setSourceRecoveryError(null);
+    setRichEditorKey((n) => n + 1);
+  }, []);
 
   // useDocState setter — invoked by inline JSX components. The update
   // happens in two steps:
@@ -558,6 +581,25 @@ export function DocumentEditor({
     if (md != null) onChange(relPath, md);
   }, [onChange, relPath]);
 
+  useEffect(() => {
+    if (markdown === null || sourceRecoveryError) return;
+    const root = containerRef.current;
+    if (!root) return;
+    const detectParseError = () => {
+      const text = containerRef.current?.textContent ?? "";
+      if (/error parsing markdown/i.test(text)) {
+        enterSourceRecovery("Rich editor could not parse this document. Source recovery keeps the original text editable.");
+      }
+    };
+    const id = setTimeout(detectParseError, 0);
+    const observer = new MutationObserver(detectParseError);
+    observer.observe(root, { childList: true, subtree: true, characterData: true });
+    return () => {
+      clearTimeout(id);
+      observer.disconnect();
+    };
+  }, [enterSourceRecovery, markdown, richEditorKey, sourceRecoveryError]);
+
   if (error) {
     return (
       <Flex direction="column" gap="2" p="3">
@@ -624,24 +666,123 @@ export function DocumentEditor({
           ) : null}
           <Box ref={containerRef} data-testid="spectrolite-editor" style={{ flex: 1, minHeight: 0, overflow: "hidden", position: "relative" }}>
             <Box style={{ height: "100%", overflow: "auto" }}>
-              <MDXEditor
-                ref={editorRef}
-                markdown={markdown}
-                onChange={handleChange}
-                plugins={plugins}
-                contentEditableClassName={`spectrolite-content ${theme === "dark" ? "spectrolite-content--dark" : ""}`}
-              />
-              <MentionAutocomplete
-                container={contentEditableEl}
-                candidates={mentionCandidates}
-                onAccept={handleMentionAccept}
-              />
+              {sourceRecoveryError ? (
+                <SourceRecoveryEditor
+                  markdown={markdown}
+                  error={sourceRecoveryError}
+                  hasUnflushedChanges={hasUnflushedChanges}
+                  onChange={handleSourceRecoveryChange}
+                  onTryRichEditor={tryRichEditor}
+                  onFlush={flushNow}
+                />
+              ) : (
+                <RichEditorBoundary
+                  key={richEditorKey}
+                  onError={(err) => enterSourceRecovery(`Rich editor failed: ${errorMessage(err)}`)}
+                >
+                  <MDXEditor
+                    ref={editorRef}
+                    markdown={markdown}
+                    onChange={handleChange}
+                    plugins={plugins}
+                    contentEditableClassName={`spectrolite-content ${theme === "dark" ? "spectrolite-content--dark" : ""}`}
+                  />
+                  <MentionAutocomplete
+                    container={contentEditableEl}
+                    candidates={mentionCandidates}
+                    onAccept={handleMentionAccept}
+                  />
+                </RichEditorBoundary>
+              )}
             </Box>
           </Box>
         </Flex>
       </DepsContext.Provider>
     </DocStateContext.Provider>
   );
+}
+
+function SourceRecoveryEditor({
+  markdown,
+  error,
+  hasUnflushedChanges,
+  onChange,
+  onTryRichEditor,
+  onFlush,
+}: {
+  markdown: string;
+  error: string;
+  hasUnflushedChanges: boolean;
+  onChange: (next: string) => void;
+  onTryRichEditor: () => void;
+  onFlush: () => void;
+}) {
+  return (
+    <Flex
+      direction="column"
+      gap="2"
+      p="3"
+      style={{ minHeight: "100%", boxSizing: "border-box" }}
+      data-testid="spectrolite-source-recovery"
+    >
+      <Callout.Root color="amber" size="1">
+        <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+        <Callout.Text size="2">
+          Source recovery mode. The rich editor could not safely render this document, so the original MDX source is editable here.
+        </Callout.Text>
+      </Callout.Root>
+      <Text size="1" color="gray" data-testid="spectrolite-source-recovery-error">
+        {error}
+      </Text>
+      <Flex gap="2" wrap="wrap">
+        <Button size="2" variant="soft" color="gray" onClick={onTryRichEditor} data-testid="spectrolite-try-rich-editor">
+          <ReloadIcon /> Try rich editor
+        </Button>
+        <Button
+          size="2"
+          variant={hasUnflushedChanges ? "solid" : "soft"}
+          color={hasUnflushedChanges ? "amber" : "gray"}
+          disabled={!hasUnflushedChanges}
+          onClick={onFlush}
+        >
+          <LightningBoltIcon /> Flush
+        </Button>
+      </Flex>
+      <TextArea
+        value={markdown}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label="Source recovery editor"
+        data-testid="spectrolite-source-recovery-editor"
+        style={{
+          flex: 1,
+          minHeight: 360,
+          fontFamily: "var(--font-mono)",
+          lineHeight: 1.5,
+          resize: "none",
+        }}
+      />
+    </Flex>
+  );
+}
+
+class RichEditorBoundary extends ReactComponent<
+  { children: ReactNode; onError: (error: unknown) => void },
+  { failed: boolean }
+> {
+  state: { failed: boolean } = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  override componentDidCatch(error: unknown): void {
+    this.props.onError(error);
+  }
+
+  override render() {
+    if (this.state.failed) return null;
+    return this.props.children;
+  }
 }
 
 /**
