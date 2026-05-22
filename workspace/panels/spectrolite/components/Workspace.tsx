@@ -46,7 +46,10 @@ import { DocumentEditor, writeBufferToDisk } from "./DocumentEditor";
 import { ChannelDrawer } from "./ChannelDrawer";
 import { CommitStrip } from "./CommitStrip";
 import { AgentRoster, type RosterAgent } from "./AgentRoster";
+import { AgentMessageNotifier } from "./AgentMessageNotifier";
 import { BacklinksPanel } from "./BacklinksPanel";
+import { BranchPicker } from "./BranchPicker";
+import { VaultPicker } from "./VaultPicker";
 import type { MentionCandidate } from "./MentionAutocomplete";
 import { createFlushController } from "../flush/flush-controller";
 import { buildFlushPayload } from "../flush/diff";
@@ -61,10 +64,15 @@ import { joinSafe, parentDir } from "../state/safePath";
 export interface WorkspaceProps {
   channelName: string;
   channelContextId: string;
-  repoRoot: string;
+  /** Path to the currently-selected vault, or null when the user hasn't picked one yet. */
+  repoRoot: string | null;
   primaryAgentHandle?: string;
   onAddAgent: (agentId: string) => Promise<void>;
   onRemoveAgent: (handle: string) => Promise<void>;
+  /** Persist a newly-picked vault path. */
+  onSelectVault: (contextPath: string) => void;
+  /** Forget the current vault selection so the picker shows again. */
+  onSwitchVault: () => void;
 }
 
 const PANEL_METADATA = {
@@ -147,6 +155,8 @@ export function Workspace({
   primaryAgentHandle,
   onAddAgent,
   onRemoveAgent,
+  onSelectVault,
+  onSwitchVault,
 }: WorkspaceProps) {
   const theme = usePanelTheme();
   const stateArgs = useStateArgs<SpectroliteStateArgs>();
@@ -160,6 +170,8 @@ export function Workspace({
   const [commitMessage, setCommitMessage] = useState("");
   const [lastFlushedAt, setLastFlushedAt] = useState<Record<string, number>>({});
   const [nowTick, setNowTick] = useState(() => Date.now());
+  const [drawerOpenSignal, setDrawerOpenSignal] = useState(0);
+  const requestDrawerOpen = useCallback(() => setDrawerOpenSignal((n) => n + 1), []);
 
   const buffersRef = useRef(buffers);
   buffersRef.current = buffers;
@@ -328,7 +340,7 @@ export function Workspace({
   const flush = useCallback(async (relPath: string) => {
     const c = client;
     const entry = buffersRef.current[relPath];
-    if (!entry || !c) return;
+    if (!entry || !c || !repoRoot) return;
     if (!hasUnflushedChanges(entry)) return;
 
     const before = entry.lastFlushedMdx;
@@ -432,6 +444,7 @@ export function Workspace({
   // (rejects `../` escapes), refuses to clobber existing files, then
   // refreshes the path index so backlinks pick up the new file.
   const createFileAt = useCallback(async (relPath: string, initialContent: string): Promise<string | null> => {
+    if (!repoRoot) return null;
     const finalPath = relPath.endsWith(".mdx") ? relPath : `${relPath}.mdx`;
     const full = joinSafe(repoRoot, finalPath);
     if (!full) {
@@ -497,6 +510,46 @@ export function Workspace({
     if (created) setActivePath(created);
   }, [createFileAt]);
 
+  // No vault selected yet — show the picker. Channel + agent are already
+  // connected (so the user can chat about which vault to open), but we
+  // don't render the editor surface until the user has picked.
+  if (!repoRoot) {
+    return (
+      <Theme appearance={theme} radius="medium" style={{ height: "100dvh" }}>
+        <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
+          <Flex
+            align="center"
+            justify="between"
+            gap="3"
+            px="3"
+            py="2"
+            style={{ borderBottom: "1px solid var(--gray-5)", flexShrink: 0 }}
+          >
+            <Heading size="3">Spectrolite</Heading>
+            <AgentRoster
+              agents={roster}
+              availableAgents={availableAgents}
+              onAdd={async (id) => { await onAddAgent(id); }}
+              onRemove={async (handle) => { await onRemoveAgent(handle); }}
+            />
+          </Flex>
+          <Box style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+            <VaultPicker
+              agentHandle={roster[0]?.handle ?? primaryAgentHandle}
+              onSelect={onSelectVault}
+            />
+          </Box>
+          <ChannelDrawer
+            client={client}
+            onUseAsCommitMessage={setCommitMessage}
+            openSignal={drawerOpenSignal}
+          />
+          <AgentMessageNotifier client={client} onOpenDrawer={requestDrawerOpen} />
+        </Flex>
+      </Theme>
+    );
+  }
+
   return (
     <Theme appearance={theme} radius="medium" style={{ height: "100dvh" }}>
       <WikilinkContext.Provider value={wikilinkContext}>
@@ -511,6 +564,16 @@ export function Workspace({
           >
             <Flex align="center" gap="2">
               <Heading size="3">Spectrolite</Heading>
+              <Button
+                size="1"
+                variant="ghost"
+                color="gray"
+                onClick={onSwitchVault}
+                title="Switch to a different vault"
+              >
+                {repoRoot.replace(/^\//, "")}
+              </Button>
+              <BranchPicker repoRoot={repoRoot} refreshNonce={refreshNonce} />
               {activeTitle ? <Text size="1" color="gray">/ {activeTitle}</Text> : null}
               {activeDirty ? (
                 <Flex align="center" gap="1" title="Unflushed edits">
@@ -564,7 +627,7 @@ export function Workspace({
                   dependencies={activeDeps}
                 />
               ) : workspacePaths.length === 0 ? (
-                <EmptyState onCreateWelcomeDoc={handleCreateWelcomeDoc} agentHandle={roster[0]?.handle ?? primaryAgentHandle} />
+                <EmptyVault onCreateWelcomeDoc={handleCreateWelcomeDoc} />
               ) : (
                 <Flex align="center" justify="center" style={{ height: "100%" }}>
                   <Text size="2" color="gray">
@@ -585,33 +648,27 @@ export function Workspace({
           <ChannelDrawer
             client={client}
             onUseAsCommitMessage={setCommitMessage}
+            openSignal={drawerOpenSignal}
           />
+          <AgentMessageNotifier client={client} onOpenDrawer={requestDrawerOpen} />
         </Flex>
       </WikilinkContext.Provider>
     </Theme>
   );
 }
 
-function EmptyState({ onCreateWelcomeDoc, agentHandle }: { onCreateWelcomeDoc: () => void; agentHandle?: string }) {
+function EmptyVault({ onCreateWelcomeDoc }: { onCreateWelcomeDoc: () => void }) {
   return (
     <Flex align="center" justify="center" style={{ height: "100%" }} p="6">
-      <Flex direction="column" align="center" gap="3" style={{ maxWidth: 520, textAlign: "center" }}>
-        <Heading size="4">Welcome to Spectrolite</Heading>
+      <Flex direction="column" align="center" gap="3" style={{ maxWidth: 480, textAlign: "center" }}>
+        <Heading size="3">This vault is empty</Heading>
         <Text size="2" color="gray">
-          A live MDX knowledge base with a resident editing agent
-          {agentHandle ? <> — <Text weight="medium">@{agentHandle}</Text> is already in the room.</> : ""}
-        </Text>
-        <Text size="2" color="gray">
-          Edit prose inline, @-mention the agent in the document, click <strong>Flush</strong>
-          (or pause for 1.5 s) to share the diff. The agent edits the file
-          directly — you see the changes appear in the editor.
+          Create your first note to get started — or use the <strong>+ New</strong> field
+          in the sidebar to name your own.
         </Text>
         <Button onClick={onCreateWelcomeDoc} variant="solid">
           <FilePlusIcon /> Create starter note
         </Button>
-        <Text size="1" color="gray">
-          Or use the <strong>+ New</strong> field in the sidebar to make your own.
-        </Text>
       </Flex>
     </Flex>
   );

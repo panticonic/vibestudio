@@ -36,25 +36,28 @@ import { Workspace } from "./components/Workspace";
 import { spectroliteAgentSystemPrompt } from "./agent-prompt";
 import "./style.css";
 
-const DEFAULT_WORKER_SOURCE = "workers/agent-worker";
-const DEFAULT_CLASS_NAME = "AiChatWorker";
+// Silent agent worker is the default companion: it only sends a chat
+// message when it explicitly calls its `say` tool, so the channel stays
+// quiet during routine file edits. Spectrolite's primary signal channel
+// is the kb.user_edit / file-edit loop, not chat.
+const DEFAULT_WORKER_SOURCE = "workers/silent-agent-worker";
+const DEFAULT_CLASS_NAME = "SilentAgentWorker";
 const DEFAULT_HANDLE = "scribe";
-const DEFAULT_WORKSPACE_ROOT = "/workspace";
 
 interface SpectroliteStateArgs {
   channelName?: string;
   contextId?: string;
   pendingAgents?: PendingAgentRecord[];
   openPath?: string;
-  /** Absolute repo root inside the panel's context filesystem. */
+  /** Context-fs path of the currently selected vault (e.g. `/projects/default`). */
   repoRoot?: string;
 }
 
-function buildAgentConfig(opts: { handle: string; repoRoot: string }): Record<string, unknown> {
+function buildAgentConfig(opts: { handle: string; repoRoot: string | null }): Record<string, unknown> {
   return {
     handle: opts.handle,
     systemPrompt: spectroliteAgentSystemPrompt({
-      workspaceRoot: opts.repoRoot,
+      workspaceRoot: opts.repoRoot ?? "/projects/<not-selected-yet>",
       handle: opts.handle,
     }),
     systemPromptMode: "append",
@@ -65,7 +68,19 @@ export default function SpectrolitePanel() {
   const theme = usePanelTheme();
   const stateArgs = useStateArgs<SpectroliteStateArgs>();
   const resolvedContextId = resolveContextId(stateArgs.contextId, runtimeContextId);
-  const repoRoot = stateArgs.repoRoot ?? DEFAULT_WORKSPACE_ROOT;
+  // No default — until the user picks a vault, repoRoot is null and the
+  // Workspace renders the VaultPicker instead of the editor. (The picker
+  // surfaces `projects/default` as a pre-init'd option if it exists in
+  // the workspace; that's the closest thing to a "default vault".)
+  const repoRoot = stateArgs.repoRoot ?? null;
+
+  const handleSelectVault = useCallback((contextPath: string) => {
+    void setStateArgs({ repoRoot: contextPath, openPath: undefined });
+  }, []);
+
+  const handleSwitchVault = useCallback(() => {
+    void setStateArgs({ repoRoot: undefined, openPath: undefined });
+  }, []);
 
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
   const [bootstrapPending, setBootstrapPending] = useState<PendingAgentRecord[] | null>(null);
@@ -231,6 +246,8 @@ export default function SpectrolitePanel() {
         primaryAgentHandle={pending[0]?.handle}
         onAddAgent={handleAddAgent}
         onRemoveAgent={handleRemoveAgent}
+        onSelectVault={handleSelectVault}
+        onSwitchVault={handleSwitchVault}
       />
     </ErrorBoundary>
   );

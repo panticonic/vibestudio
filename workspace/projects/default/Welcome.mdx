@@ -1,0 +1,51 @@
+---
+title: Welcome to your default vault
+dependencies: {}
+---
+
+# Welcome to your default vault
+
+This is the **default Spectrolite vault** — a folder of MDX files backed by a
+local git repo. It lives at `projects/default/` in your workspace and is
+ready to edit out of the box.
+
+## What you can do
+
+1. **Edit prose** in this rich-text view; switch to **Preview** (top-right of
+   the editor) to render the full MDX with components.
+2. **@-mention the resident agent** by typing `@` — it stays quiet by
+   default and only speaks when it has something to say. Mention it in a
+   sentence describing what you want changed, then click **Flush** (or
+   pause for 1.5 seconds). The agent reads your diff and edits the file
+   in-place.
+3. **Link** to other notes with `[[Wikilink Syntax]]`. Click an unresolved
+   link to create the note.
+4. **Commit** any time from the strip at the bottom. The "Suggest message"
+   button asks the agent to draft a commit message from the diff.
+
+## Add another vault
+
+Click the vault name in the top-left header to switch. Create new vaults
+from the picker — they live as siblings under `projects/`.
+
+## Declaring dependencies
+
+Add npm or workspace packages to the YAML frontmatter and they get loaded
+into the sandbox automatically:
+
+```yaml
+dependencies:
+  "date-fns": "npm:^2.30.0"
+  lodash: "npm:^4.17.21"
+```
+
+Inline JSX in this doc — and the agent's `eval` calls in the context of
+this doc — can use those packages without redeclaring imports.
+
+<Callout color="blue">
+  <Callout.Icon><Icons.InfoCircledIcon /></Callout.Icon>
+  <Callout.Text>
+    Replace this file with your own content when you're ready. Or delete it
+    and create new notes from the **+ New** field in the sidebar.
+  </Callout.Text>
+</Callout>

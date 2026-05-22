@@ -34,9 +34,11 @@ export interface ChannelDrawerProps {
   onSend?: (content: string) => void;
   /** When provided, agent messages get a "Use as commit msg" button. */
   onUseAsCommitMessage?: (content: string) => void;
+  /** Bump to programmatically open the drawer (e.g. from a notification click). */
+  openSignal?: number;
 }
 
-export function ChannelDrawer({ client, onSend, onUseAsCommitMessage }: ChannelDrawerProps) {
+export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal }: ChannelDrawerProps) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -108,6 +110,13 @@ export function ChannelDrawer({ client, onSend, onUseAsCommitMessage }: ChannelD
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [open, recent.length]);
+
+  // External "please open" signal — wired to AgentMessageNotifier so
+  // clicking the toast opens the drawer where the user can read more.
+  useEffect(() => {
+    if (openSignal === undefined || openSignal === 0) return;
+    setOpen(true);
+  }, [openSignal]);
 
   const send = async () => {
     const content = draft.trim();
