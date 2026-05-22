@@ -8,17 +8,20 @@ declare global {
   }
 }
 
-let selfId: string | null = null;
+let selfSlotId: string | null = null;
 let rpcCall:
   | (<T>(service: string, method: string, args: unknown[]) => Promise<T>)
   | null = null;
-const shell = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
+
+function getShell() {
+  return (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
+}
 
 export function _initStateArgsRuntime(
-  id: string,
+  slotId: string,
   call: <T>(service: string, method: string, args: unknown[]) => Promise<T>
 ): void {
-  selfId = id;
+  selfSlotId = slotId;
   rpcCall = call;
 }
 
@@ -59,10 +62,15 @@ export function useStateArgs<T = Record<string, unknown>>(): T {
  * 5. Updates the local runtime snapshot and triggers useStateArgs re-render
  */
 export async function setStateArgs(updates: Record<string, unknown>): Promise<void> {
-  if (!selfId) {
+  if (!selfSlotId) {
     throw new Error("setStateArgs called before runtime initialization");
   }
-  await setStateArgsForPanel(selfId, updates);
+  const shell = getShell();
+  if (shell?.setStateArgs) {
+    await shell.setStateArgs(updates);
+    return;
+  }
+  await setStateArgsForPanel(selfSlotId, updates);
 }
 
 export async function setStateArgsForPanel(
@@ -76,6 +84,7 @@ async function setStateArgsForPanelRaw(
   panelId: string,
   updates: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
+  const shell = getShell();
   if (shell?.panel?.setStateArgs) {
     return shell.panel.setStateArgs(panelId, updates) as Promise<Record<string, unknown>>;
   }
@@ -83,6 +92,7 @@ async function setStateArgsForPanelRaw(
 }
 
 export async function getStateArgsForPanel<T = Record<string, unknown>>(panelId: string): Promise<T> {
+  const shell = getShell();
   if (shell?.panel?.getStateArgs) return shell.panel.getStateArgs(panelId) as Promise<T>;
   throw new Error("getStateArgsForPanel requires a host shell bridge");
 }

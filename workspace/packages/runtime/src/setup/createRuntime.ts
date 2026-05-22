@@ -28,6 +28,7 @@ export interface RuntimeDeps {
   slotId?: string;
   contextId: string;
   parentId: string | null;
+  parentEntityId?: string | null;
   initialTheme: ThemeAppearance;
   fs: RuntimeFs;
   setupGlobals?: () => void;
@@ -37,10 +38,12 @@ export interface RuntimeDeps {
 
 export function createRuntime(deps: RuntimeDeps) {
   const entityId = deps.entityId;
+  const slotId = deps.slotId ?? entityId;
+  const parentRuntimeId = deps.parentEntityId ?? deps.parentId;
   const base = createBaseRuntime({ ...deps, id: entityId });
   const shell = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
 
-  _initStateArgsRuntime(entityId, (service, method, args) => base.rpc.call(service, method, args));
+  _initStateArgsRuntime(slotId, (service, method, args) => base.rpc.call(service, method, args));
   registerAgentApi(shell);
   if (typeof shell?.addEventListener === "function") {
     shell.addEventListener((event: string, payload: unknown) => {
@@ -50,7 +53,7 @@ export function createRuntime(deps: RuntimeDeps) {
     });
   }
 
-  const parentHandleOrNull = deps.parentId ? createParentHandle({ rpc: base.rpc, parentId: deps.parentId }) : null;
+  const parentHandleOrNull = parentRuntimeId ? createParentHandle({ rpc: base.rpc, parentId: parentRuntimeId }) : null;
   const parent: ParentHandle = parentHandleOrNull ?? noopParent;
 
   const getParent = <
@@ -68,8 +71,9 @@ export function createRuntime(deps: RuntimeDeps) {
   return {
     id: base.id,
     entityId: base.id,
-    slotId: deps.slotId ?? base.id,
+    slotId,
     parentId: deps.parentId,
+    parentEntityId: deps.parentEntityId ?? null,
 
     rpc: base.rpc,
     fs: base.fs,

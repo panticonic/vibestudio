@@ -732,6 +732,9 @@ export class PanelManager {
   async getPanelInit(slotId: string): Promise<unknown> {
     const panel = this.registry.getPanel(slotId) ?? (await this.requireStoredPanel(slotId));
     const parentId = this.registry.findParentId(slotId) ?? this.findParentIdInRegistry(slotId);
+    const parentEntityId = parentId
+      ? this.currentEntityBySlot.get(parentId) ?? (await this.resolveCurrentEntityIdForSlot(parentId))
+      : null;
     // The grant is bound to the panel's current ENTITY id (panel:<historyEntryKey>),
     // not the slotId — that's what `connectionGrants` validates against the
     // entity cache, and what the panel uses as its RPC `caller.runtime.id`.
@@ -746,6 +749,7 @@ export class PanelManager {
       slotId,
       contextId: getPanelContextId(panel),
       parentId,
+      parentEntityId,
       source: getPanelSource(panel),
       theme: this.currentTheme,
       gatewayConfig: {

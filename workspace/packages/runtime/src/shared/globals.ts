@@ -27,6 +27,8 @@ declare global {
   var __natstackKind: "panel" | "shell" | undefined;
   /** Parent panel ID if this is a child panel/worker */
   var __natstackParentId: string | null | undefined;
+  /** Runtime entity ID for the parent panel, used for child-to-parent RPC. */
+  var __natstackParentEntityId: string | null | undefined;
   /** Initial theme appearance */
   var __natstackInitialTheme: "light" | "dark" | undefined;
   /** Single gateway configuration for HTTP, RPC-derived clients, and git */
@@ -44,6 +46,7 @@ export interface InjectedConfig {
   contextId: string;
   kind: "panel" | "shell";
   parentId: string | null;
+  parentEntityId: string | null;
   initialTheme: "light" | "dark";
   gatewayConfig: GatewayConfig;
   gitConfig: GitConfig | null;
@@ -59,6 +62,7 @@ const g = globalThis as unknown as {
   __natstackContextId?: string;
   __natstackKind?: "panel" | "shell";
   __natstackParentId?: string | null;
+  __natstackParentEntityId?: string | null;
   __natstackInitialTheme?: "light" | "dark";
   __natstackGatewayConfig?: GatewayConfig;
   __natstackSourceRepo?: string;
@@ -103,6 +107,10 @@ export function getInjectedConfig(): InjectedConfig {
     parentId:
       typeof g.__natstackParentId === "string" && g.__natstackParentId.length > 0
         ? g.__natstackParentId
+        : null,
+    parentEntityId:
+      typeof g.__natstackParentEntityId === "string" && g.__natstackParentEntityId.length > 0
+        ? g.__natstackParentEntityId
         : null,
     initialTheme: g.__natstackInitialTheme === "dark" ? "dark" : "light",
     gatewayConfig: g.__natstackGatewayConfig,

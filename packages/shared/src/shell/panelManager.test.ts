@@ -382,6 +382,33 @@ describe("PanelManager", () => {
     });
   });
 
+  it("includes both parent slot and parent entity ids in child bootstrap config", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    for (const name of ["root", "child"]) {
+      const panelDir = path.join(workspacePath, "panels", name);
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({ name, natstack: { title: `${name} Panel` } })
+      );
+    }
+
+    const { mem, deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry: new PanelRegistry({}), ...deps });
+
+    const root = await manager.create("panels/root", { isRoot: true, addAsRoot: true });
+    const child = await manager.create("panels/child", { parentId: root.panelId });
+    const init = (await manager.getPanelInit(child.panelId)) as {
+      parentId: string | null;
+      parentEntityId: string | null;
+    };
+
+    expect(init.parentId).toBe(root.panelId);
+    expect(init.parentEntityId).toBe(mem.state.slots.get(root.panelId)?.current_entity_id);
+  });
+
   it("pushes navigation into history and traverses it via back/forward", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
     tempDirs.push(workspacePath);

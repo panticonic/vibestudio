@@ -32,6 +32,7 @@ export interface BuildBootstrapConfigOpts {
   contextId: string;
   source: string;
   parentId: string | null;
+  parentEntityId?: string | null;
   theme: "light" | "dark";
   gatewayConfig: { serverUrl: string; token: string };
   env?: Record<string, string>;
@@ -88,6 +89,7 @@ export function buildBootstrapConfig(opts: BuildBootstrapConfigOpts): unknown {
     slotId: opts.slotId,
     contextId: opts.contextId,
     parentId: opts.parentId,
+    parentEntityId: opts.parentEntityId ?? null,
     theme: opts.theme,
     sourceRepo: opts.source,
     gatewayConfig: opts.gatewayConfig,
