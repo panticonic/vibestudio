@@ -315,8 +315,12 @@ describe("PanelManager", () => {
     });
     expect(init.stateArgs).toEqual({ greeting: "hello" });
 
+    const onStateArgsChanged = vi.fn();
+    const unsubscribe = manager.onStateArgsChanged(created.panelId, onStateArgsChanged);
+
     const nextStateArgs = await manager.updateStateArgs(created.panelId, { greeting: "updated" });
     expect(nextStateArgs).toEqual({ greeting: "updated" });
+    expect(onStateArgsChanged).toHaveBeenCalledWith({ greeting: "updated" });
     expect(mem.state.entities.size).toBe(1);
     expect(mem.state.slots.get(created.panelId)?.current_entity_id).toBe(currentEntityId);
     expect(mem.state.history.get(created.panelId)?.[0]?.state_args).toBe(
@@ -328,9 +332,14 @@ describe("PanelManager", () => {
 
     const clearedStateArgs = await manager.updateStateArgs(created.panelId, { greeting: null });
     expect(clearedStateArgs).toEqual({});
+    expect(onStateArgsChanged).toHaveBeenCalledWith({});
     expect(mem.state.entities.size).toBe(1);
     expect(mem.state.slots.get(created.panelId)?.current_entity_id).toBe(currentEntityId);
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).stateArgs).toEqual({});
+
+    unsubscribe();
+    await manager.updateStateArgs(created.panelId, { greeting: "ignored" });
+    expect(onStateArgsChanged).toHaveBeenCalledTimes(2);
 
     await manager.close(created.panelId);
     expect(registry.getPanel(created.panelId)).toBeUndefined();

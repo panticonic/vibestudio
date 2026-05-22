@@ -58,7 +58,10 @@ follow-up instruction such as "refresh", "deploy", or "continue".
 Do not publish transcript UI by hand as raw `"message"` records. Use the
 `inline_ui`, `load_action_bar`, `feedback_form`, and `feedback_custom` tools;
 the host records their durable UI/invocation events and preserves the expected
-rendering.
+rendering. For custom message types — a registered React renderer that backs
+many updatable instances over time — see [CUSTOM_MESSAGES.md](CUSTOM_MESSAGES.md);
+those events are also published through `chat.publish` but use the
+`agentic.trajectory.v1/event` payload kind.
 
 For provenance queries, use `gad.getTrajectoryForEnvelope()` or
 `gad.listPublishedEnvelopesForTrajectory()` rather than reading private

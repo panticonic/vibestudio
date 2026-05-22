@@ -14,6 +14,7 @@ How to use the chat panel's code execution sandbox — the eval tool, inline UI 
 | [EVAL.md](EVAL.md) | Eval tool — run code, stream console, dynamic imports |
 | [INLINE_UI.md](INLINE_UI.md) | Inline UI — persistent interactive components in chat |
 | [ACTION_BAR.md](ACTION_BAR.md) | Action bar — file-backed compact UI pinned above chat history |
+| [CUSTOM_MESSAGES.md](CUSTOM_MESSAGES.md) | Custom message types — register a renderer, publish typed instances with reducer updates |
 | [MDX.md](MDX.md) | Normal rich chat messages — callouts, badges, tables, ActionButton |
 | [FEEDBACK.md](FEEDBACK.md) | Feedback forms — block until user responds |
 | [RUNTIME_API.md](RUNTIME_API.md) | Full runtime API reference — fs, db, workers, ai, git, browser data, userland approval prompts |

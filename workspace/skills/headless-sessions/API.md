@@ -66,6 +66,16 @@ Invocation/tool-call diagnostics are exposed through `messages`: entries with
 `contentType: "invocation"` have a parsed `message.invocation` payload with
 name, arguments, progress/output, result, and error state.
 
+Custom message types are visible through `messages` as entries with
+`contentType: "custom"` and a populated `message.custom` payload (typeId,
+displayMode, initialState, folded updates). To register or publish custom
+message types from a headless session, use the underlying `manager.client`
+(PubSubClient) escape hatch — `registerMessageType`, `publishCustomMessage`,
+`updateCustomMessage`, `clearMessageType`. The full reference lives in
+[`workspace/skills/sandbox/CUSTOM_MESSAGES.md`](../sandbox/CUSTOM_MESSAGES.md).
+Note that headless sessions don't render React, so they only emit and observe
+the events; the panel side does the rendering.
+
 ### Events
 
 Subscribe with `manager.on(event, handler)` — returns an unsubscribe function.

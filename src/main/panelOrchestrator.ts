@@ -35,10 +35,25 @@ import {
   getPanelSource,
   getPanelContextId,
   getPanelRef,
+  getPanelStateArgs,
 } from "@natstack/shared/panel/accessors";
 import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("PanelOrchestrator");
+
+export interface RuntimePanelCreateResult {
+  id: string;
+  kind: "workspace" | "browser";
+  title: string;
+}
+
+interface PendingAgentCall {
+  panelId: string;
+  webContentsId: number;
+  resolve(value: unknown): void;
+  reject(error: Error): void;
+  timer: ReturnType<typeof setTimeout>;
+}
 
 export interface PanelOrchestratorDeps {
   registry: PanelRegistry;
@@ -50,6 +65,7 @@ export interface PanelOrchestratorDeps {
   cdpServer: {
     cleanupPanelAccess(panelId: string): void;
     unregisterBrowser?(panelId: string): void;
+    getAccessibilityTree?(panelId: string): Promise<unknown[]>;
   };
   panelHttpServer: PanelHttpServerLike;
   externalHost: string;
@@ -71,6 +87,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   private runtimeClientRegistered = false;
   private readonly runtimeConnectionBySlot = new Map<string, string>();
   private readonly stateArgsUpdateQueues = new Map<string, Promise<unknown>>();
+  private readonly pendingAgentCalls = new Map<number, PendingAgentCall>();
+  private readonly stateArgsPushUnsubs = new Map<string, () => void>();
+  private nextAgentRequestId = 1;
   private viewRevision = 0;
   private readonly restorePolicy: PanelRestorePolicy;
 
@@ -221,7 +240,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     }
   }
 
-  async createBrowserPanel(
+  async createBrowserUrlPanel(
     callerId: string,
     url: string,
     options?: { name?: string; focus?: boolean }
@@ -249,6 +268,26 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       }
       throw err;
     }
+  }
+
+  async createRuntimePanel(
+    callerId: string,
+    source: string,
+    options?: PanelCreateOptions & {
+      name?: string;
+      focus?: boolean;
+      stateArgs?: Record<string, unknown>;
+    }
+  ): Promise<RuntimePanelCreateResult> {
+    if (/^https?:\/\//i.test(source)) {
+      const result = await this.createBrowserUrlPanel(callerId, source, {
+        name: options?.name,
+        focus: options?.focus,
+      });
+      return { ...result, kind: "browser" };
+    }
+    const result = await this.createPanel(callerId, source, options, options?.stateArgs);
+    return { ...result, kind: "workspace" };
   }
 
   // =========================================================================
@@ -284,6 +323,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
 
     // Destroy views and remove from in-memory tree
     for (const id of closedIds) {
+      this.rejectAgentCallsForPanel(id, new Error("panel-closed"));
+      this.stateArgsPushUnsubs.get(id)?.();
+      this.stateArgsPushUnsubs.delete(id);
       this.releaseLocalPanelRuntime(id, "close");
       this.registry.removePanel(id);
     }
@@ -293,19 +335,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     }
   }
 
-  async closeChild(callerId: string, childId: string): Promise<void> {
-    const parentId = this.registry.findParentId(childId);
-    if (parentId !== callerId) {
-      throw new Error(`Panel ${callerId} is not the parent of ${childId}`);
-    }
-    await this.closePanel(childId);
-  }
-
   // =========================================================================
   // Build lifecycle
   // =========================================================================
 
   async reloadPanel(panelId: string): Promise<void> {
+    this.rejectAgentCallsForPanel(panelId, new Error("target-reloading"));
     const view = this.getPanelView();
     if (view?.hasView(panelId)) {
       view.reloadView(panelId);
@@ -437,6 +472,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   // =========================================================================
 
   async handleSetStateArgs(panelId: string, updates: Record<string, unknown>): Promise<unknown> {
+    this.ensureStateArgsPush(panelId);
     const previous = this.stateArgsUpdateQueues.get(panelId) ?? Promise.resolve();
     const next = previous
       .catch(() => undefined)
@@ -453,6 +489,105 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
         this.stateArgsUpdateQueues.delete(panelId);
       }
     }
+  }
+
+  getStateArgs(panelId: string): Record<string, unknown> {
+    const panel = this.registry.getPanel(panelId);
+    if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    return (getPanelStateArgs(panel) ?? {}) as Record<string, unknown>;
+  }
+
+  listRuntimePanels(parentId?: string | null) {
+    return parentId ? this.registry.getChildren(parentId) : this.registry.listPanels();
+  }
+
+  async snapshot(panelId: string): Promise<unknown> {
+    await this.ensurePanelLoadedForAgent(panelId);
+    if (!this.cdpServer.getAccessibilityTree) {
+      return this.callAgent(panelId, "_agent.snapshot", []);
+    }
+    const nodes = await this.cdpServer.getAccessibilityTree(panelId);
+    return {
+      kind: "ax",
+      text: summarizeAxNodes(nodes),
+      structure: nodes,
+    };
+  }
+
+  async callAgent(
+    panelId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: { timeoutMs?: number }
+  ): Promise<unknown> {
+    const wc = (await this.ensurePanelLoadedForAgent(panelId)) as
+      | { id?: number; isDestroyed?: () => boolean; send(channel: string, payload: unknown): void }
+      | null
+      | undefined;
+    if (!wc || wc.isDestroyed?.()) {
+      throw new Error(`target-not-loaded: ${panelId}`);
+    }
+    if (typeof wc.id !== "number") {
+      throw new Error(`target-not-loaded: ${panelId}`);
+    }
+    const webContentsId = wc.id;
+    const requestId = this.nextAgentRequestId++;
+    const timeoutMs = options?.timeoutMs ?? 5000;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingAgentCalls.delete(requestId);
+        reject(new Error(`AgentCallTimeoutError: ${method} timed out for ${panelId}`));
+        try {
+          wc.send("natstack:panel.callAgent.request", { type: "cancel", requestId });
+        } catch {
+          // Ignore best-effort cancel failures.
+        }
+      }, timeoutMs);
+      this.pendingAgentCalls.set(requestId, { panelId, webContentsId, resolve, reject, timer });
+      wc.send("natstack:panel.callAgent.request", { requestId, method, args });
+    });
+  }
+
+  resolveAgentCallResponse(
+    requestId: number,
+    senderWebContentsId: number,
+    response: { ok: boolean; value?: unknown; error?: { code?: string; message?: string } }
+  ): void {
+    const pending = this.pendingAgentCalls.get(requestId);
+    if (!pending) return;
+    if (pending.webContentsId !== senderWebContentsId) return;
+    clearTimeout(pending.timer);
+    this.pendingAgentCalls.delete(requestId);
+    if (response.ok) {
+      pending.resolve(response.value);
+    } else {
+      pending.reject(new Error(response.error?.message ?? response.error?.code ?? "panel-error"));
+    }
+  }
+
+  private rejectAgentCallsForPanel(panelId: string, error: Error): void {
+    for (const [requestId, pending] of this.pendingAgentCalls) {
+      if (pending.panelId !== panelId) continue;
+      clearTimeout(pending.timer);
+      this.pendingAgentCalls.delete(requestId);
+      pending.reject(error);
+    }
+  }
+
+  private async ensurePanelLoadedForAgent(panelId: string): Promise<unknown | null> {
+    const panel = this.registry.getPanel(panelId);
+    if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    const view = this.getPanelView();
+    let wc = view?.getWebContents(panelId) as { isDestroyed?: () => boolean } | null | undefined;
+    if (wc && !wc.isDestroyed?.()) return wc;
+
+    await this.loadPanelIntoView(panelId);
+    wc = this.getPanelView()?.getWebContents(panelId) as
+      | { isDestroyed?: () => boolean }
+      | null
+      | undefined;
+    if (wc && !wc.isDestroyed?.()) return wc;
+    throw new Error(`target-not-loaded: ${panelId}`);
   }
 
   async replaceCurrentSnapshot(
@@ -858,6 +993,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     },
     opts: { focus?: boolean; browserUrl?: string } = {}
   ): Promise<void> {
+    this.ensureStateArgsPush(result.panelId);
     const panel = this.registry.getPanel(result.panelId);
     const contextId = result.contextId ?? (panel ? getPanelContextId(panel) : undefined);
     const source = result.source ?? (panel ? getPanelSource(panel) : undefined);
@@ -900,6 +1036,16 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     if (opts.focus) {
       await this.focusPanel(result.panelId);
     }
+  }
+
+  private ensureStateArgsPush(panelId: string): void {
+    if (this.stateArgsPushUnsubs.has(panelId)) return;
+    this.stateArgsPushUnsubs.set(
+      panelId,
+      this.shellCore.onStateArgsChanged(panelId, (stateArgs) => {
+        this.deps.sendPanelEvent(panelId, "runtime:stateArgsChanged", stateArgs);
+      })
+    );
   }
 
   private async loadPanelIntoView(
@@ -1074,4 +1220,21 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       buildProgress: "Panel unloaded - will rebuild when focused",
     });
   }
+}
+
+function summarizeAxNodes(nodes: unknown[]): string {
+  const labels: string[] = [];
+  for (const node of nodes.slice(0, 200)) {
+    const record = node as {
+      role?: { value?: unknown };
+      name?: { value?: unknown };
+      value?: { value?: unknown };
+    };
+    const role = typeof record.role?.value === "string" ? record.role.value : "";
+    const name = typeof record.name?.value === "string" ? record.name.value : "";
+    const value = typeof record.value?.value === "string" ? record.value.value : "";
+    const line = [role, name || value].filter(Boolean).join(": ");
+    if (line) labels.push(line);
+  }
+  return labels.join("\n");
 }

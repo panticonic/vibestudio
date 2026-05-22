@@ -127,6 +127,10 @@ function mintHistoryEntryKey(): string {
 // =============================================================================
 
 export class PanelManager {
+  private readonly stateArgsSubscribers = new Map<
+    string,
+    Set<(stateArgs: Record<string, unknown>) => void>
+  >();
   private readonly registry: PanelRegistry;
   private readonly workspaceState: WorkspaceStateClient;
   private readonly runtime: RuntimeClient;
@@ -417,19 +421,25 @@ export class PanelManager {
     return { closedIds };
   }
 
-  async closeChild(callerId: string, childId: string): Promise<void> {
-    if (this.registry.findParentId(childId) !== callerId) {
-      throw new Error(`Panel ${callerId} is not the parent of ${childId}`);
-    }
-    await this.close(childId);
-  }
-
   // ===========================================================================
   // Mutate (state-args / snapshot / navigate / history)
   // ===========================================================================
 
   getInfo(slotId: string): unknown {
     return this.registry.getInfo(slotId);
+  }
+
+  onStateArgsChanged(
+    slotId: string,
+    callback: (stateArgs: Record<string, unknown>) => void
+  ): () => void {
+    const subscribers = this.stateArgsSubscribers.get(slotId) ?? new Set();
+    subscribers.add(callback);
+    this.stateArgsSubscribers.set(slotId, subscribers);
+    return () => {
+      subscribers.delete(callback);
+      if (subscribers.size === 0) this.stateArgsSubscribers.delete(slotId);
+    };
   }
 
   async updateStateArgs(
@@ -464,7 +474,14 @@ export class PanelManager {
         index: history.index,
       });
     }
+    this.notifyStateArgsSubscribers(slotId, nextStateArgs);
     return nextStateArgs;
+  }
+
+  private notifyStateArgsSubscribers(slotId: string, stateArgs: Record<string, unknown>): void {
+    for (const callback of this.stateArgsSubscribers.get(slotId) ?? []) {
+      callback(stateArgs);
+    }
   }
 
   /**

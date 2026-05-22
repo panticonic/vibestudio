@@ -17,7 +17,8 @@ import type { GatewayConfig } from "../shared/globals.js";
 import { createParentHandle, createParentHandleFromContract } from "../shared/handles.js";
 import type { ParentHandle, ParentHandleFromContract } from "../core/index.js";
 import type { RuntimeFs, ThemeAppearance } from "../types.js";
-import { _initStateArgsBridge } from "../panel/stateArgs.js";
+import { _applyStateArgsFromHost, _initStateArgsRuntime } from "../panel/stateArgs.js";
+import { registerAgentApi } from "../panel/agentApi.js";
 
 export interface RuntimeDeps {
   selfId: string;
@@ -39,17 +40,15 @@ export function createRuntime(deps: RuntimeDeps) {
   const base = createBaseRuntime({ ...deps, id: entityId });
   const shell = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
 
-  // Initialize the stateArgs bridge for setStateArgs() function
-  _initStateArgsBridge((updates) => {
-    if (typeof shell?.setStateArgs === "function") {
-      return shell.setStateArgs(updates) as Promise<Record<string, unknown>>;
-    }
-    return base.rpc.call<Record<string, unknown>>(
-      "main",
-      "panel.updateStateArgs",
-      [entityId, updates],
-    );
-  });
+  _initStateArgsRuntime(entityId, (service, method, args) => base.rpc.call(service, method, args));
+  registerAgentApi(shell);
+  if (typeof shell?.addEventListener === "function") {
+    shell.addEventListener((event: string, payload: unknown) => {
+      if (event === "runtime:stateArgsChanged") {
+        _applyStateArgsFromHost((payload ?? {}) as Record<string, unknown>);
+      }
+    });
+  }
 
   const parentHandleOrNull = deps.parentId ? createParentHandle({ rpc: base.rpc, parentId: deps.parentId }) : null;
   const parent: ParentHandle = parentHandleOrNull ?? noopParent;
@@ -83,7 +82,6 @@ export function createRuntime(deps: RuntimeDeps) {
     onConnectionError: base.onConnectionError,
 
     getInfo: () => shell.getInfo() as Promise<EndpointInfo>,
-    closeSelf: () => shell.closeSelf(),
     focusPanel: (panelId: string) => shell.focusPanel(panelId),
     getWorkspaceTree: base.getWorkspaceTree,
     listBranches: base.listBranches,

@@ -8,18 +8,18 @@ declare global {
   }
 }
 
-// Internal bridge function set up by runtime initialization
-// This allows setStateArgs to call main process without direct dependency on runtime
-let _setStateArgsBridge: ((updates: Record<string, unknown>) => Promise<Record<string, unknown>>) | null = null;
+let selfId: string | null = null;
+let rpcCall:
+  | (<T>(service: string, method: string, args: unknown[]) => Promise<T>)
+  | null = null;
+const shell = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
 
-/**
- * Internal: Set up the bridge for setStateArgs.
- * Called by createRuntime during initialization.
- */
-export function _initStateArgsBridge(
-  bridge: (updates: Record<string, unknown>) => Promise<Record<string, unknown>>
+export function _initStateArgsRuntime(
+  id: string,
+  call: <T>(service: string, method: string, args: unknown[]) => Promise<T>
 ): void {
-  _setStateArgsBridge = bridge;
+  selfId = id;
+  rpcCall = call;
 }
 
 /**
@@ -59,9 +59,34 @@ export function useStateArgs<T = Record<string, unknown>>(): T {
  * 5. Updates the local runtime snapshot and triggers useStateArgs re-render
  */
 export async function setStateArgs(updates: Record<string, unknown>): Promise<void> {
-  if (!_setStateArgsBridge) {
+  if (!selfId) {
     throw new Error("setStateArgs called before runtime initialization");
   }
-  const nextStateArgs = await _setStateArgsBridge(updates);
+  await setStateArgsForPanel(selfId, updates);
+}
+
+export async function setStateArgsForPanel(
+  panelId: string,
+  updates: Record<string, unknown>
+): Promise<void> {
+  await setStateArgsForPanelRaw(panelId, updates);
+}
+
+async function setStateArgsForPanelRaw(
+  panelId: string,
+  updates: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  if (shell?.panel?.setStateArgs) {
+    return shell.panel.setStateArgs(panelId, updates) as Promise<Record<string, unknown>>;
+  }
+  throw new Error("setStateArgs requires a host shell bridge");
+}
+
+export async function getStateArgsForPanel<T = Record<string, unknown>>(panelId: string): Promise<T> {
+  if (shell?.panel?.getStateArgs) return shell.panel.getStateArgs(panelId) as Promise<T>;
+  throw new Error("getStateArgsForPanel requires a host shell bridge");
+}
+
+export function _applyStateArgsFromHost(nextStateArgs: Record<string, unknown>): void {
   applyStateArgsSnapshot(nextStateArgs);
 }
