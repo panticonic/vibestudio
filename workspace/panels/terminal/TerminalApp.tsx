@@ -9,6 +9,7 @@ import {
 } from "@workspace/runtime";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CommandLauncher } from "./CommandLauncher.js";
+import { documentTitleForSession } from "./documentTitle.js";
 import { NotificationCenter } from "./NotificationCenter.js";
 import { Settings } from "./Settings.js";
 import { SessionStore, sessionIdsConnectKey, useAllSessions } from "./SessionStore.js";
@@ -788,17 +789,6 @@ type ShellUnitStatus = WorkspaceUnitStatus & {
 
 function normalizeShellUnit(unit: WorkspaceUnitStatus): ShellUnitStatus {
   return unit as ShellUnitStatus;
-}
-
-function documentTitleForSession(session: SessionInfo | undefined): string {
-  if (!session) return "Terminal";
-  const cwd = liveSessionCwd(session) ?? session.command.cwd;
-  const label = session.label.trim();
-  const argvLabel = session.command.argv.join(" ").trim();
-  if (label && label !== session.sessionId && label !== "Shell" && label !== argvLabel) {
-    return label;
-  }
-  return cwd || label || "Terminal";
 }
 
 function markSessionRead(state: TerminalState, sessionId: string): TerminalState {

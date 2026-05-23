@@ -1,7 +1,6 @@
 import { extensions } from "@workspace/runtime";
 import { useEffect, useMemo } from "react";
 import { SessionStore, sessionIdsConnectKey, useAllSessions } from "./SessionStore.js";
-export { attachWithScrollback } from "./shellAttach.js";
 import type { SessionInfo, ShellApi } from "./types.js";
 
 const SHELL_EXTENSION = "@workspace-extensions/shell";

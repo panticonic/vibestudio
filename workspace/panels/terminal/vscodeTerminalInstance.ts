@@ -47,7 +47,6 @@ export class VscodeTerminalInstance {
   private writeScheduler: VscodeTerminalWriteScheduler | null = null;
   private disposables: Disposable[] = [];
   private resizeTimer: ReturnType<typeof setTimeout> | null = null;
-  private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
   private readonly notificationParser = new NotificationStreamParser();
   private autoScroll = true;
@@ -120,7 +119,6 @@ export class VscodeTerminalInstance {
         onData: () => {
           if (this.autoScroll) this.frontend?.scrollToBottom();
           this.frontend?.refresh();
-          this.scheduleRefresh();
           this.updateScrollState();
         },
       });
@@ -148,7 +146,7 @@ export class VscodeTerminalInstance {
         frontend.onInput((data) => {
           void this.process?.write(data).catch((err) => {
             this.onError(err instanceof Error ? err.message : "Terminal input failed");
-          }).finally(() => this.scheduleRefresh());
+          });
         }),
         frontend.onResize(({ cols, rows }) => {
           this.resizeDebouncer?.resize(cols, rows, false);
@@ -174,7 +172,6 @@ export class VscodeTerminalInstance {
   focus(): void {
     this.frontend?.fit();
     this.frontend?.refresh();
-    this.scheduleRefresh();
     this.frontend?.focus();
   }
 
@@ -219,7 +216,6 @@ export class VscodeTerminalInstance {
   dispose(): void {
     this.disposed = true;
     if (this.resizeTimer) clearTimeout(this.resizeTimer);
-    if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.resizeObserver?.disconnect();
     this.resizeDebouncer?.flush();
     this.resizeDebouncer?.dispose();
@@ -243,16 +239,6 @@ export class VscodeTerminalInstance {
     if (!this.disposed) this.options.onScrollStateChange?.(scrolledUp);
   }
 
-  private scheduleRefresh(): void {
-    if (this.disposed || this.refreshTimer) return;
-    this.refreshTimer = setTimeout(() => {
-      this.refreshTimer = null;
-      if (this.disposed) return;
-      if (this.autoScroll) this.frontend?.scrollToBottom();
-      this.frontend?.refresh();
-      this.updateScrollState();
-    }, 32);
-  }
 }
 
 const noopDisposable = { dispose() {} };

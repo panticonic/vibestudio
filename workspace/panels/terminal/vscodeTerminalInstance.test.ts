@@ -5,16 +5,9 @@ import type { TerminalFrontend, TerminalFrontendFactory } from "./terminalFronte
 import type { ShellApi } from "./types.js";
 import type { VscodeShellIntegrationEvent } from "./vscodeShellIntegration.js";
 
-const attachWithScrollback = vi.fn();
-
-vi.mock("./shellAttach.js", () => ({
-  attachWithScrollback: (...args: unknown[]) => attachWithScrollback(...args),
-}));
-
 describe("VscodeTerminalInstance", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    attachWithScrollback.mockReset();
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
       cb(0);
       return 1;
@@ -28,7 +21,6 @@ describe("VscodeTerminalInstance", () => {
   it("routes frontend input to the owning shell session", async () => {
     const frontend = createFakeFrontend();
     const shell = createShell();
-    attachWithScrollback.mockResolvedValue(responseFromChunks([]));
     const instance = createInstance({ frontend, shell, sessionId: "session-a" });
 
     await instance.attach(hostElement());
@@ -42,9 +34,7 @@ describe("VscodeTerminalInstance", () => {
     const frontend = createFakeFrontend();
     const shell = createShell();
     const onNotification = vi.fn();
-    attachWithScrollback.mockResolvedValue(
-      responseFromChunks([encoder.encode("ready\x1b]9;[done] complete\x07\n")])
-    );
+    setScrollback(shell, "ready\x1b]9;[done] complete\x07\n");
     const instance = createInstance({ frontend, shell, onNotification });
 
     await instance.attach(hostElement());
@@ -57,27 +47,25 @@ describe("VscodeTerminalInstance", () => {
     );
   });
 
-  it("coalesces a delayed refresh after parsed output to nudge stale renderers", async () => {
+  it("refreshes after parsed output", async () => {
     vi.useFakeTimers();
     const frontend = createFakeFrontend();
     const shell = createShell();
-    attachWithScrollback.mockResolvedValue(responseFromChunks([encoder.encode("ready")]));
+    setScrollback(shell, "ready");
     const instance = createInstance({ frontend, shell });
 
     await instance.attach(hostElement());
     await vi.advanceTimersByTimeAsync(8);
+
     expect(frontend.refresh).toHaveBeenCalledTimes(1);
-
-    await vi.advanceTimersByTimeAsync(32);
-
-    expect(frontend.refresh).toHaveBeenCalledTimes(2);
+    expect(frontend.fit).not.toHaveBeenCalled();
   });
 
   it("acknowledges parsed output back to the shell for flow control", async () => {
     vi.useFakeTimers();
     const frontend = createFakeFrontend();
     const shell = createShell();
-    attachWithScrollback.mockResolvedValue(responseFromChunks([encoder.encode("x".repeat(5001))]));
+    setScrollback(shell, "x".repeat(5001));
     const instance = createInstance({ frontend, shell });
 
     await instance.attach(hostElement());
@@ -89,7 +77,6 @@ describe("VscodeTerminalInstance", () => {
   it("keeps focus, fit, theme, find, and selection behind the frontend boundary", async () => {
     const frontend = createFakeFrontend();
     const shell = createShell();
-    attachWithScrollback.mockResolvedValue(responseFromChunks([]));
     const instance = createInstance({ frontend, shell, focused: true });
 
     await instance.attach(hostElement());
@@ -114,7 +101,6 @@ describe("VscodeTerminalInstance", () => {
       throw new Error("dispose failed");
     });
     const shell = createShell();
-    attachWithScrollback.mockResolvedValue(responseFromChunks([]));
     const instance = createInstance({ frontend, shell });
 
     await instance.attach(hostElement());
@@ -128,7 +114,6 @@ describe("VscodeTerminalInstance", () => {
     const frontend = createFakeFrontend();
     const shell = createShell();
     const onShellIntegrationEvent = vi.fn();
-    attachWithScrollback.mockResolvedValue(responseFromChunks([]));
     const instance = createInstance({ frontend, shell, onShellIntegrationEvent });
 
     await instance.attach(hostElement());
@@ -145,7 +130,6 @@ describe("VscodeTerminalInstance", () => {
     const frontend = createFakeFrontend();
     const shell = createShell();
     const onLineData = vi.fn();
-    attachWithScrollback.mockResolvedValue(responseFromChunks([]));
     const instance = createInstance({ frontend, shell, onLineData });
 
     await instance.attach(hostElement());
@@ -158,7 +142,6 @@ describe("VscodeTerminalInstance", () => {
     const frontend = createFakeFrontend();
     const shell = createShell();
     const onTitleChange = vi.fn();
-    attachWithScrollback.mockResolvedValue(responseFromChunks([]));
     const instance = createInstance({ frontend, shell, onTitleChange });
 
     await instance.attach(hostElement());
@@ -222,12 +205,19 @@ function createShell(): ShellApi {
     kill: vi.fn(),
     list: vi.fn(),
     get: vi.fn(),
-    getSessionInfo: vi.fn(),
+    getSessionInfo: vi.fn(async () => ({ alive: true })),
     watchSessionInfo: vi.fn(),
-    attach: vi.fn(),
+    attach: vi.fn(async () => responseFromChunks([])),
     awaitExit: vi.fn(),
-    getScrollback: vi.fn(),
+    getScrollback: vi.fn(async () => ({ text: "", cursor: "0" })),
   } as unknown as ShellApi;
+}
+
+function setScrollback(shell: ShellApi, text: string): void {
+  vi.mocked(shell.getScrollback).mockResolvedValue({
+    text,
+    cursor: String(new TextEncoder().encode(text).byteLength),
+  });
 }
 
 type FakeFrontend = TerminalFrontend & {

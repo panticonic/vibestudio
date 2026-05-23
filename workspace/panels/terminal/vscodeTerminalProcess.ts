@@ -3,7 +3,6 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { attachWithScrollback } from "./shellAttach.js";
 import type { ShellApi } from "./types.js";
 
 export const enum VscodeFlowControlConstants {
@@ -63,6 +62,9 @@ export type VscodeTerminalProcessBridgeOptions = {
 export class VscodeTerminalProcessBridge {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private disposed = false;
+  private generation = 0;
+  private lastCursor = 0;
+  private cursorWatchdog: ReturnType<typeof setTimeout> | null = null;
   private readonly ackBufferer = new VscodeAckDataBufferer(() => {
     void this.options.shell
       .acknowledgeDataEvent?.(
@@ -75,27 +77,19 @@ export class VscodeTerminalProcessBridge {
   constructor(private readonly options: VscodeTerminalProcessBridgeOptions) {}
 
   async start(): Promise<void> {
+    await this.replayScrollback();
+    if (!this.disposed) this.connectLiveStream();
+  }
+
+  private async replayScrollback(): Promise<void> {
     try {
-      const response = await attachWithScrollback(this.options.shell, this.options.sessionId);
+      const { text, cursor } = await this.options.shell.getScrollback(this.options.sessionId);
       if (this.disposed) return;
-      this.reader = response.body?.getReader() ?? null;
-      const decoder = new TextDecoder();
-      while (!this.disposed && this.reader) {
-        const next = await this.reader.read();
-        if (next.done) {
-          const tail = decoder.decode();
-          if (tail) {
-            this.options.onData({
-              bytes: new Uint8Array(0),
-              data: tail,
-              trackCommit: false,
-            });
-          }
-          break;
-        }
+      this.lastCursor = cursorFrom(cursor);
+      if (text) {
         this.options.onData({
-          bytes: next.value,
-          data: decoder.decode(next.value, { stream: true }),
+          bytes: new TextEncoder().encode(text),
+          data: text,
           trackCommit: false,
         });
       }
@@ -106,8 +100,62 @@ export class VscodeTerminalProcessBridge {
     }
   }
 
-  write(data: string): Promise<void> {
-    return this.options.shell.write(this.options.sessionId, data);
+  private connectLiveStream(): void {
+    const generation = ++this.generation;
+    void this.reader?.cancel().catch(() => {});
+    this.reader = null;
+    void this.readLiveStream(generation);
+  }
+
+  private async readLiveStream(generation: number): Promise<void> {
+    while (!this.disposed && generation === this.generation) {
+      try {
+        const response = await this.options.shell.attach(this.options.sessionId, {
+          after: String(this.lastCursor),
+        });
+        if (this.disposed || generation !== this.generation) return;
+        const reader = response.body?.getReader() ?? null;
+        this.reader = reader;
+        if (!reader) {
+          await delay(250);
+          continue;
+        }
+        const decoder = new TextDecoder();
+        while (!this.disposed && generation === this.generation) {
+          const next = await reader.read();
+          if (next.done) {
+            const tail = decoder.decode();
+            if (tail) {
+              this.options.onData({
+                bytes: new Uint8Array(0),
+                data: tail,
+                trackCommit: false,
+              });
+            }
+            break;
+          }
+          this.lastCursor += next.value.byteLength;
+          this.options.onData({
+            bytes: next.value,
+            data: decoder.decode(next.value, { stream: true }),
+            trackCommit: false,
+          });
+        }
+      } catch (err) {
+        if (!this.disposed && generation === this.generation) {
+          this.options.onError(err instanceof Error ? err.message : "Terminal output failed");
+        }
+      } finally {
+        if (generation === this.generation) this.reader = null;
+      }
+      if (this.disposed || generation !== this.generation || !(await this.sessionAlive())) return;
+      await delay(250);
+    }
+  }
+
+  async write(data: string): Promise<void> {
+    await this.options.shell.write(this.options.sessionId, data);
+    this.scheduleCursorWatchdog();
   }
 
   resize(cols: number, rows: number): Promise<void> {
@@ -120,7 +168,48 @@ export class VscodeTerminalProcessBridge {
 
   dispose(): void {
     this.disposed = true;
+    this.generation += 1;
+    if (this.cursorWatchdog) clearTimeout(this.cursorWatchdog);
     void this.reader?.cancel().catch(() => {});
     this.reader = null;
   }
+
+  private scheduleCursorWatchdog(): void {
+    if (this.cursorWatchdog) clearTimeout(this.cursorWatchdog);
+    this.cursorWatchdog = setTimeout(() => {
+      this.cursorWatchdog = null;
+      void this.reconnectIfScrollbackAdvanced();
+    }, 150);
+  }
+
+  private async reconnectIfScrollbackAdvanced(): Promise<void> {
+    if (this.disposed) return;
+    try {
+      const { cursor } = await this.options.shell.getScrollback(this.options.sessionId, 1024);
+      const remoteCursor = cursorFrom(cursor);
+      if (remoteCursor > this.lastCursor) {
+        this.connectLiveStream();
+      }
+    } catch {
+      // The live reader reports stream errors; this watchdog is best-effort recovery.
+    }
+  }
+
+  private async sessionAlive(): Promise<boolean> {
+    try {
+      return (await this.options.shell.getSessionInfo(this.options.sessionId)).alive;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function cursorFrom(value: string | undefined): number {
+  if (!value) return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
