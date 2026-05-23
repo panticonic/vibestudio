@@ -1,1 +1,2 @@
-export { createProject, commitAndPush } from "./create-project.js";
+export { createProject, commitAndPush, forkProject, forkPanel, forkWorker } from "./create-project.js";
+export type { ForkProjectOptions, ForkProjectResult } from "./create-project.js";

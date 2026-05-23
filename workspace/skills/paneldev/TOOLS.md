@@ -3,6 +3,7 @@
 Your working directory is the **context folder** — an isolated copy of the workspace.
 
 **CRITICAL RULES:**
+
 - All file paths are **relative to your working directory** (e.g., `panels/my-app/index.tsx`)
 - **NEVER** use absolute paths (e.g., `/home/.../workspace/panels/...`)
 - **NEVER** use `Bash` for git operations, file listing, or file creation — use the structured tools
@@ -90,6 +91,7 @@ eval({ code: `
 Execute TypeScript/JavaScript code in the panel runtime. Runtime APIs are available via static imports from `@workspace/runtime`.
 
 **IMPORTANT:**
+
 - Use static `import` syntax, NOT dynamic `await import(...)`.
 
 **Parameters:**
@@ -103,12 +105,12 @@ Execute TypeScript/JavaScript code in the panel runtime. Runtime APIs are availa
 
 Available via `import { ... } from "@workspace/runtime"` and `import { ... } from "@workspace/panel-browser"`:
 
-| API | Description |
-|-----|-------------|
-| `rpc` | RPC bridge for calling services via `rpc.call(target, method, args)` |
-| `openPanel(source, opts?)` | Open any panel — URLs become browser panels, source paths open workspace panels |
-| `buildPanelLink(source, opts)` | Build a URL for panel navigation (low-level — prefer `openPanel`) |
-| `focusPanel(panelId)` | Focus an existing panel by ID (does NOT open new panels) |
+| API                            | Description                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------- |
+| `rpc`                          | RPC bridge for calling services via `rpc.call(target, method, args)`            |
+| `openPanel(source, opts?)`     | Open any panel — URLs become browser panels, source paths open workspace panels |
+| `buildPanelLink(source, opts)` | Build a URL for panel navigation (low-level — prefer `openPanel`)               |
+| `focusPanel(panelId)`          | Focus an existing panel by ID (does NOT open new panels)                        |
 
 ### Extension Install / Enable Prompts
 
@@ -151,8 +153,8 @@ The shell will show the user an extension-management approval prompt. If the use
 
 **Pre-injected** (use directly, do NOT import):
 
-| Variable | Description |
-|----------|-------------|
+| Variable    | Description                                    |
+| ----------- | ---------------------------------------------- |
 | `contextId` | Current agent context ID for scoped operations |
 
 ### RPC Services
@@ -209,9 +211,35 @@ eval({ code: `
 
 **`commitAndPush(dir, message)`** — stages all changes, commits, and pushes. Auto-initializes git if the directory doesn't have `.git` yet.
 
+**`forkProject(options)`** — copies an existing workspace repo into a new repo, rewrites safe metadata, initializes git, and pushes it to the internal server.
+
+```ts
+import { forkProject } from "@workspace-skills/paneldev";
+
+await forkProject({
+  from: "panels/chat",
+  to: "panels/chat-experiment",
+  title: "Chat Experiment",
+});
+
+const workerPlan = await forkProject({
+  from: "workers/agent-worker",
+  to: "workers/agent-worker-v2",
+  title: "Agent Worker V2",
+  dryRun: true,
+});
+console.log(workerPlan.warnings);
+```
+
+Dry runs return the planned file list, metadata rewrites, and warnings without writing files or pushing. Worker forks rewrite package metadata, obvious worker file names, source strings, and Durable Object class names; pass `classMap` when a worker has more than one class.
+
+New repos are synced into existing contexts after push. Existing context working trees are not reset after unrelated pushes; pull, fetch, rebase, or reset explicitly when you want a context to move.
+
+Git object storage is shared across contexts through a validated `.git/objects` symlink. Contexts may add immutable loose objects before push; approval gates canonical ref updates and source working tree changes.
+
 #### @workspace-extensions/typecheck-service.checkPanel (recommended)
 
-Type-check a panel. Pass the panel source path, or omit it to auto-detect from the caller's context.
+Type-check a panel. The extension infers the current eval/agent context and checks that context folder, not canonical workspace source. Pass `{ contextId }` only when intentionally checking a different context. Pass the panel source path, or omit it to auto-detect from a panel caller ID.
 
 Returns `{ diagnostics, errorCount, warningCount }` where each diagnostic has `{ file, line, column, message, severity, code }`.
 
@@ -264,32 +292,32 @@ import { browserData } from "@workspace/panel-browser";
 
 Available methods:
 
-| Method | Description |
-|--------|-------------|
-| `browserData.detectBrowsers()` | Detect all installed browsers and their profiles |
-| `browserData.startImport(request)` | Import data from a browser profile |
-| `browserData.getImportHistory()` | Get log of past imports |
-| `browserData.getBookmarks(folderPath?)` | Get bookmarks in a folder |
-| `browserData.searchBookmarks(query)` | Search bookmarks by title/URL |
-| `browserData.addBookmark(bookmark)` | Add a bookmark |
-| `browserData.deleteBookmark(id)` | Delete a bookmark |
-| `browserData.getHistory(query)` | Query browsing history (search, time range, limit) |
-| `browserData.searchHistory(query, limit?)` | Full-text search history |
-| `browserData.clearAllHistory()` | Clear all history |
-| `browserData.getPasswords()` | Get all stored passwords |
-| `browserData.getPasswordForSite(url)` | Get passwords for a specific site |
-| `browserData.addPassword(pw)` | Add a password |
-| `browserData.getCookies(domain?)` | Get cookies, optionally filtered by domain |
-| `browserData.clearCookies(domain?)` | Clear cookies |
-| `browserData.getSearchEngines()` | Get configured search engines |
-| `browserData.setDefaultEngine(id)` | Set the default search engine |
-| `browserData.getAutofillSuggestions(field, prefix?)` | Get autofill suggestions |
-| `browserData.getPermissions(origin?)` | Get site permissions |
-| `browserData.setPermission(origin, perm, setting)` | Set a site permission |
-| `browserData.exportBookmarks(format)` | Export bookmarks (`"html"`, `"json"`, `"chrome-json"`) |
-| `browserData.exportPasswords(format)` | Export passwords (`"csv-chrome"`, `"csv-firefox"`, `"json"`) |
-| `browserData.exportCookies(format)` | Export cookies (`"json"`, `"netscape-txt"`) |
-| `browserData.exportAll()` | Full JSON export of all data |
+| Method                                               | Description                                                  |
+| ---------------------------------------------------- | ------------------------------------------------------------ |
+| `browserData.detectBrowsers()`                       | Detect all installed browsers and their profiles             |
+| `browserData.startImport(request)`                   | Import data from a browser profile                           |
+| `browserData.getImportHistory()`                     | Get log of past imports                                      |
+| `browserData.getBookmarks(folderPath?)`              | Get bookmarks in a folder                                    |
+| `browserData.searchBookmarks(query)`                 | Search bookmarks by title/URL                                |
+| `browserData.addBookmark(bookmark)`                  | Add a bookmark                                               |
+| `browserData.deleteBookmark(id)`                     | Delete a bookmark                                            |
+| `browserData.getHistory(query)`                      | Query browsing history (search, time range, limit)           |
+| `browserData.searchHistory(query, limit?)`           | Full-text search history                                     |
+| `browserData.clearAllHistory()`                      | Clear all history                                            |
+| `browserData.getPasswords()`                         | Get all stored passwords                                     |
+| `browserData.getPasswordForSite(url)`                | Get passwords for a specific site                            |
+| `browserData.addPassword(pw)`                        | Add a password                                               |
+| `browserData.getCookies(domain?)`                    | Get cookies, optionally filtered by domain                   |
+| `browserData.clearCookies(domain?)`                  | Clear cookies                                                |
+| `browserData.getSearchEngines()`                     | Get configured search engines                                |
+| `browserData.setDefaultEngine(id)`                   | Set the default search engine                                |
+| `browserData.getAutofillSuggestions(field, prefix?)` | Get autofill suggestions                                     |
+| `browserData.getPermissions(origin?)`                | Get site permissions                                         |
+| `browserData.setPermission(origin, perm, setting)`   | Set a site permission                                        |
+| `browserData.exportBookmarks(format)`                | Export bookmarks (`"html"`, `"json"`, `"chrome-json"`)       |
+| `browserData.exportPasswords(format)`                | Export passwords (`"csv-chrome"`, `"csv-firefox"`, `"json"`) |
+| `browserData.exportCookies(format)`                  | Export cookies (`"json"`, `"netscape-txt"`)                  |
+| `browserData.exportAll()`                            | Full JSON export of all data                                 |
 
 #### Detect and import
 

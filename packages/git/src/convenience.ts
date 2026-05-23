@@ -8,7 +8,10 @@ import type { GitClient, FsPromisesLike } from "./client.js";
 
 // Inline posix path helpers to avoid Node.js `path` dependency (breaks in browser bundles)
 function posixJoin(...segments: string[]): string {
-  return segments.map(s => s.replace(/\/+$/, "")).join("/").replace(/\/+/g, "/");
+  return segments
+    .map((s) => s.replace(/\/+$/, ""))
+    .join("/")
+    .replace(/\/+/g, "/");
 }
 function posixDirname(p: string): string {
   const lastSlash = p.lastIndexOf("/");
@@ -23,7 +26,7 @@ export interface InitAndPushOptions {
   /** Branch name (default: "main") */
   branch?: string;
   /** Initial files to create (path -> content) */
-  initialFiles?: Record<string, string>;
+  initialFiles?: Record<string, string | Uint8Array>;
   /** Commit message (default: "Initial commit") */
   message?: string;
 }
@@ -70,9 +73,7 @@ export async function initAndPush(
 
   // 4. git commit (skip if nothing to commit)
   const status = await client.status(dir);
-  const hasChanges = status.files.some(
-    (f) => f.status !== "unmodified" && f.status !== "ignored"
-  );
+  const hasChanges = status.files.some((f) => f.status !== "unmodified" && f.status !== "ignored");
 
   let didCommit = false;
   if (hasChanges) {

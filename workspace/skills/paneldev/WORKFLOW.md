@@ -76,3 +76,33 @@ Browser automation lives under `handle.browser`. Workspace handles expose the sa
 ## Verification
 
 Use `handle.snapshot()` for an agent-readable view of the running panel. Use `handle.tree()`, `handle.state()`, and `handle.routes()` for deeper workspace-panel inspection. Use typecheck before launch when the change is more than a small text edit.
+
+## Forking Existing Projects
+
+For panels, inspect the source, dry-run if the source is unfamiliar, then fork:
+
+```ts
+import { forkProject } from "@workspace-skills/paneldev";
+
+await forkProject({
+  from: "panels/source-panel",
+  to: "panels/new-panel",
+  title: "New Panel",
+});
+```
+
+For workers, always start with a dry run and review warnings because Durable Object class names and workspace config references may need explicit mapping:
+
+```ts
+import { forkProject } from "@workspace-skills/paneldev";
+
+const plan = await forkProject({
+  from: "workers/source-worker",
+  to: "workers/new-worker",
+  title: "New Worker",
+  dryRun: true,
+});
+console.log(plan);
+```
+
+If the worker has multiple Durable Object classes, apply with an explicit `classMap`. After the fork, typecheck, launch the panel or worker, then use `commitAndPush` for follow-up edits.

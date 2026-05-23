@@ -9,15 +9,15 @@ Documentation for developing NatStack panels.
 
 ## Files
 
-| Document | Content |
-|----------|---------|
-| [WORKFLOW.md](WORKFLOW.md) | Canonical agent workflow: scaffold, open, inspect, edit, push, reload, close |
-| [PANEL_API.md](PANEL_API.md) | Runtime panel API reference |
-| [WORKERS.md](WORKERS.md) | Workers & Durable Objects: AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, approval continuations, runtime approval prompts |
-| [RPC.md](RPC.md) | Typed parent-child contracts |
-| [BROWSER.md](BROWSER.md) | Browser automation (Playwright/CDP) |
-| [TOOLS.md](TOOLS.md) | Agent tools reference |
-| [create-project.ts](create-project.ts) | Project scaffolding and git helpers (importable via eval `imports` parameter) |
+| Document                               | Content                                                                                                                                           |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [WORKFLOW.md](WORKFLOW.md)             | Canonical agent workflow: scaffold, open, inspect, edit, push, reload, close                                                                      |
+| [PANEL_API.md](PANEL_API.md)           | Runtime panel API reference                                                                                                                       |
+| [WORKERS.md](WORKERS.md)               | Workers & Durable Objects: AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, approval continuations, runtime approval prompts |
+| [RPC.md](RPC.md)                       | Typed parent-child contracts                                                                                                                      |
+| [BROWSER.md](BROWSER.md)               | Browser automation (Playwright/CDP)                                                                                                               |
+| [TOOLS.md](TOOLS.md)                   | Agent tools reference                                                                                                                             |
+| [create-project.ts](create-project.ts) | Project scaffolding and git helpers (importable via eval `imports` parameter)                                                                     |
 
 ## Interaction Patterns
 
@@ -57,22 +57,24 @@ eval({ code: `
 
 ## Common Tasks
 
-| Task | How |
-|------|-----|
-| Create project | `eval` — `import { createProject } from "@workspace-skills/paneldev"` then `createProject({ projectType, name, title })` |
-| Commit & push | `eval` — `import { commitAndPush } from "@workspace-skills/paneldev"` then `commitAndPush("panels/my-app", "message")` |
-| Launch panel | `eval` — `commitAndPush(...)` + `scope.handle = await openPanel(source)` |
-| Launch worker | `eval` — `workers.create({ source: "workers/my-worker", contextId })` |
-| Read a file | `Read({ file_path: "panels/my-app/index.tsx" })` |
-| Edit a file | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })` |
-| Check types | `eval` — `extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/my-app")` |
-| Run tests | Not available from panel context — `test.run` is server-only (see TOOLS.md) |
-| Git status | `eval` with `imports` — `import { GitClient } from "@natstack/git"` (see TOOLS.md) |
-| List workspaces | `eval` — `workspace.list()` |
-| Get workspace config | `eval` — `workspace.getConfig()` |
-| Create workspace | `eval` — `workspace.create("name", { forkFrom: "default" })` |
-| Set init panels | `eval` — `workspace.setInitPanels([{ source: "panels/my-app" }])` |
-| Switch workspace | `eval` — `workspace.switchTo("name")` |
+| Task                 | How                                                                                                                                                  |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Create project       | `eval` — `import { createProject } from "@workspace-skills/paneldev"` then `createProject({ projectType, name, title })`                             |
+| Fork panel           | `eval` — `import { forkProject } from "@workspace-skills/paneldev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })` |
+| Fork worker          | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                         |
+| Commit & push        | `eval` — `import { commitAndPush } from "@workspace-skills/paneldev"` then `commitAndPush("panels/my-app", "message")`                               |
+| Launch panel         | `eval` — `commitAndPush(...)` + `scope.handle = await openPanel(source)`                                                                             |
+| Launch worker        | `eval` — `workers.create({ source: "workers/my-worker", contextId })`                                                                                |
+| Read a file          | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                     |
+| Edit a file          | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                               |
+| Check types          | `eval` — `extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/my-app")`                                                     |
+| Run tests            | Not available from panel context — `test.run` is server-only (see TOOLS.md)                                                                          |
+| Git status           | `eval` with `imports` — `import { GitClient } from "@natstack/git"` (see TOOLS.md)                                                                   |
+| List workspaces      | `eval` — `workspace.list()`                                                                                                                          |
+| Get workspace config | `eval` — `workspace.getConfig()`                                                                                                                     |
+| Create workspace     | `eval` — `workspace.create("name", { forkFrom: "default" })`                                                                                         |
+| Set init panels      | `eval` — `workspace.setInitPanels([{ source: "panels/my-app" }])`                                                                                    |
+| Switch workspace     | `eval` — `workspace.switchTo("name")`                                                                                                                |
 
 ## Environment Compatibility
 
