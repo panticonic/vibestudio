@@ -57,6 +57,35 @@ describe("VscodeTerminalInstance", () => {
     );
   });
 
+  it("coalesces a delayed refresh after parsed output to nudge stale renderers", async () => {
+    vi.useFakeTimers();
+    const frontend = createFakeFrontend();
+    const shell = createShell();
+    attachWithScrollback.mockResolvedValue(responseFromChunks([encoder.encode("ready")]));
+    const instance = createInstance({ frontend, shell });
+
+    await instance.attach(hostElement());
+    await vi.advanceTimersByTimeAsync(8);
+    expect(frontend.refresh).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(32);
+
+    expect(frontend.refresh).toHaveBeenCalledTimes(2);
+  });
+
+  it("acknowledges parsed output back to the shell for flow control", async () => {
+    vi.useFakeTimers();
+    const frontend = createFakeFrontend();
+    const shell = createShell();
+    attachWithScrollback.mockResolvedValue(responseFromChunks([encoder.encode("x".repeat(5001))]));
+    const instance = createInstance({ frontend, shell });
+
+    await instance.attach(hostElement());
+    await vi.advanceTimersByTimeAsync(8);
+
+    expect(shell.acknowledgeDataEvent).toHaveBeenCalledWith("session-1", 5000);
+  });
+
   it("keeps focus, fit, theme, find, and selection behind the frontend boundary", async () => {
     const frontend = createFakeFrontend();
     const shell = createShell();
@@ -173,6 +202,7 @@ function createShell(): ShellApi {
     exec: vi.fn(),
     open: vi.fn(),
     write: vi.fn(async () => {}),
+    acknowledgeDataEvent: vi.fn(async () => {}),
     resize: vi.fn(async () => {}),
     kill: vi.fn(),
     list: vi.fn(),

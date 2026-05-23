@@ -10,6 +10,8 @@ type PtyProcess = {
   onExit(cb: (event: { exitCode: number; signal?: number }) => void): void;
   write(data: string): void;
   resize(cols: number, rows: number): void;
+  pause(): void;
+  resume(): void;
   kill(signal?: string): void;
 };
 
@@ -38,6 +40,8 @@ interface Session {
   meta: Record<string, unknown>;
   listeners: Set<Listener>;
   exitWaiters: Array<(value: { exitCode: number | null; signal?: string }) => void>;
+  unacknowledgedChars: number;
+  flowPaused: boolean;
 }
 
 export interface SessionManagerHooks {
@@ -58,6 +62,8 @@ const EXITED_SESSION_TTL_MS = 60 * 60_000;
 const JANITOR_INTERVAL_MS = 30 * 60_000;
 const WATCH_ALL_HEARTBEAT_MS = 15_000;
 const CLEAR_SCREEN = new TextEncoder().encode("\x1b[2J\x1b[H");
+const FLOW_CONTROL_HIGH_WATERMARK_CHARS = 100000;
+const FLOW_CONTROL_LOW_WATERMARK_CHARS = 5000;
 
 type Watcher = {
   ownerCallerId: string;
@@ -122,6 +128,8 @@ export class SessionManager {
       meta: {},
       listeners: new Set(),
       exitWaiters: [],
+      unacknowledgedChars: 0,
+      flowPaused: false,
     };
 
     const pty = this.pty.spawn(command, args, {
@@ -277,24 +285,39 @@ export class SessionManager {
     let listener: Listener | null = null;
     const stream = new ReadableStream<Uint8Array>({
       start: (controller) => {
+        this.resetFlowControl(session);
         for (const bytes of replay) controller.enqueue(bytes);
         if (!session.alive) {
           controller.close();
           return;
         }
         listener = (chunk) => {
-          if (chunk) controller.enqueue(chunk);
-          else controller.close();
+          if (chunk) {
+            this.noteAttachedOutput(session, chunk.byteLength);
+            controller.enqueue(chunk);
+          } else {
+            controller.close();
+          }
         };
         session.listeners.add(listener);
       },
       cancel: () => {
         if (listener) session.listeners.delete(listener);
+        if (session.listeners.size === 0) this.resetFlowControl(session);
       },
     });
     return new Response(stream, {
       headers: { "content-type": "application/octet-stream" },
     });
+  }
+
+  acknowledgeDataEvent(session: Session, charCount: number): void {
+    if (!Number.isFinite(charCount) || charCount <= 0) return;
+    session.unacknowledgedChars = Math.max(0, session.unacknowledgedChars - Math.floor(charCount));
+    if (session.flowPaused && session.unacknowledgedChars <= FLOW_CONTROL_LOW_WATERMARK_CHARS) {
+      session.flowPaused = false;
+      session.pty?.resume();
+    }
   }
 
   awaitExit(session: Session): Promise<{ exitCode: number | null; signal?: string }> {
@@ -412,6 +435,21 @@ export class SessionManager {
     scanChunk(session.detection, chunk);
     for (const listener of session.listeners) listener(chunk);
     this.emitSnapshot(session);
+  }
+
+  private noteAttachedOutput(session: Session, charCount: number): void {
+    if (!session.listeners.size || session.flowPaused) return;
+    session.unacknowledgedChars += charCount;
+    if (session.unacknowledgedChars <= FLOW_CONTROL_HIGH_WATERMARK_CHARS) return;
+    session.flowPaused = true;
+    session.pty?.pause();
+  }
+
+  private resetFlowControl(session: Session): void {
+    session.unacknowledgedChars = 0;
+    if (!session.flowPaused) return;
+    session.flowPaused = false;
+    session.pty?.resume();
   }
 
   private markExit(session: Session, code: number | null, signal?: string): void {

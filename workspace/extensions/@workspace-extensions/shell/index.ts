@@ -261,6 +261,13 @@ export async function activate(ctx: ExtensionContext) {
       sessions.write(sessions.requireOwner(sessionId, currentOwner(ctx).callerId), data);
     },
 
+    async acknowledgeDataEvent(sessionId: string, charCount: number) {
+      sessions.acknowledgeDataEvent(
+        sessions.requireOwner(sessionId, currentOwner(ctx).callerId),
+        charCount
+      );
+    },
+
     async resize(sessionId: string, cols: number, rows: number) {
       sessions.resize(sessions.requireOwner(sessionId, currentOwner(ctx).callerId), cols, rows);
     },

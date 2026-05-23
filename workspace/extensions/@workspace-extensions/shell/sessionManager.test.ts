@@ -82,6 +82,40 @@ describe("SessionManager janitor", () => {
     manager.dispose(session);
   });
 
+  it("pauses attached PTY output until the frontend acknowledges parsed data", async () => {
+    const manager = new SessionManager({}, { janitorIntervalMs: 60 * 60_000 });
+    const fakePty = new FakePty();
+    (
+      manager as unknown as {
+        pty: { spawn: () => FakePty };
+      }
+    ).pty = { spawn: () => fakePty };
+    const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
+    const owner = { callerId: "panel:test", callerKind: "panel" };
+    const opened = manager.open({
+      command: process.execPath,
+      args: [],
+      cwd: root,
+      env: {},
+      cols: 80,
+      rows: 24,
+    }, owner);
+    const session = manager.requireOwner(opened.sessionId, owner.callerId);
+    const response = manager.attach(session);
+    const reader = response.body!.getReader();
+
+    fakePty.emitData("x".repeat(100001));
+
+    expect(fakePty.pause).toHaveBeenCalledTimes(1);
+
+    manager.acknowledgeDataEvent(session, 95001);
+
+    expect(fakePty.resume).toHaveBeenCalledTimes(1);
+
+    await reader.cancel();
+    manager.dispose(session);
+  });
+
   it("emits coalesced watch-all snapshots for plain output activity and resize changes", async () => {
     const manager = new SessionManager({}, { janitorIntervalMs: 60 * 60_000 });
     const response = manager.watchAllInfo("panel:test");
@@ -156,4 +190,31 @@ async function readEvent(reader: ReadableStreamDefaultReader<Uint8Array>, timeou
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+class FakePty {
+  pid = 123;
+  private dataHandler: ((data: string) => void) | undefined;
+  private exitHandler: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+  pause = vi.fn();
+  resume = vi.fn();
+  write = vi.fn();
+  resize = vi.fn();
+  kill = vi.fn();
+
+  onData(cb: (data: string) => void): void {
+    this.dataHandler = cb;
+  }
+
+  onExit(cb: (event: { exitCode: number; signal?: number }) => void): void {
+    this.exitHandler = cb;
+  }
+
+  emitData(data: string): void {
+    this.dataHandler?.(data);
+  }
+
+  emitExit(exitCode = 0): void {
+    this.exitHandler?.({ exitCode });
+  }
 }

@@ -64,9 +64,12 @@ export class VscodeTerminalProcessBridge {
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private disposed = false;
   private readonly ackBufferer = new VscodeAckDataBufferer(() => {
-    // Our shell extension transport does not currently expose acknowledgeDataEvent. Keeping the
-    // bufferer in the bridge preserves the VS Code client-side contract and makes the backend
-    // upgrade straightforward when we add pause/resume support to ShellApi.
+    void this.options.shell
+      .acknowledgeDataEvent?.(
+        this.options.sessionId,
+        VscodeFlowControlConstants.CharCountAckSize
+      )
+      .catch(() => {});
   });
 
   constructor(private readonly options: VscodeTerminalProcessBridgeOptions) {}

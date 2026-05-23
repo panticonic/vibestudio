@@ -4,6 +4,7 @@ export interface ShellApi {
   exec(req: { command: string; args?: string[]; cwd?: string; shell?: boolean }): Promise<{ exitCode: number | null; stdout: string; stderr: string }>;
   open(req: { command?: string; args?: string[]; cwd?: string; cols?: number; rows?: number; label?: string }): Promise<{ sessionId: string }>;
   write(sessionId: string, data: string): Promise<void>;
+  acknowledgeDataEvent?(sessionId: string, charCount: number): Promise<void>;
   resize(sessionId: string, cols: number, rows: number): Promise<void>;
   kill(sessionId: string, signal?: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP"): Promise<void>;
   list(): Promise<SessionInfo[]>;
