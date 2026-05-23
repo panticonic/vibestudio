@@ -29,7 +29,7 @@ describe("command sources", () => {
       throw new Error("missing");
     });
 
-    const suggestions = await loadCommandSuggestions({ query: "hello", cwd: "/repo", history: [], layouts: [] });
+    const suggestions = await loadCommandSuggestions({ query: "hello", cwd: "/repo", history: [] });
 
     expect(suggestions).toContainEqual(expect.objectContaining({
       kind: "project",
@@ -55,7 +55,7 @@ describe("command sources", () => {
       throw new Error("missing");
     });
 
-    const suggestions = await loadCommandSuggestions({ query: "test", cwd: "/repo", history: [], layouts: [] });
+    const suggestions = await loadCommandSuggestions({ query: "test", cwd: "/repo", history: [] });
 
     expect(suggestions).toContainEqual(expect.objectContaining({
       id: "custom:test-down",
@@ -77,7 +77,7 @@ describe("command sources", () => {
       throw new Error("missing");
     });
 
-    const suggestions = await loadCommandSuggestions({ query: "", cwd: "/repo", history: [], layouts: [] });
+    const suggestions = await loadCommandSuggestions({ query: "", cwd: "/repo", history: [] });
 
     expect(suggestions).toContainEqual(expect.objectContaining({
       id: "custom:workspace",
@@ -96,7 +96,7 @@ describe("command sources", () => {
       throw new Error("missing");
     });
 
-    const suggestions = await loadCommandSuggestions({ query: "dev", cwd: "/repo", history: [], layouts: [] });
+    const suggestions = await loadCommandSuggestions({ query: "dev", cwd: "/repo", history: [] });
 
     expect(suggestions).toContainEqual(expect.objectContaining({
       id: "script:dev",
@@ -116,7 +116,7 @@ describe("command sources", () => {
       throw new Error("missing");
     });
 
-    const suggestions = await loadCommandSuggestions({ query: "", cwd: "/repo/packages/app", history: [], layouts: [] });
+    const suggestions = await loadCommandSuggestions({ query: "", cwd: "/repo/packages/app", history: [] });
 
     expect(suggestions).toContainEqual(expect.objectContaining({
       id: "custom:lint",
@@ -131,8 +131,8 @@ describe("command sources", () => {
   });
 
   it("adds raw command fallback only when the user typed a query", async () => {
-    const empty = await loadCommandSuggestions({ query: "", cwd: "/repo", history: [], layouts: [] });
-    const queried = await loadCommandSuggestions({ query: "npm test -- --watch", cwd: "/repo", history: [], layouts: [] });
+    const empty = await loadCommandSuggestions({ query: "", cwd: "/repo", history: [] });
+    const queried = await loadCommandSuggestions({ query: "npm test -- --watch", cwd: "/repo", history: [] });
 
     expect(empty.some((item) => item.kind === "raw")).toBe(false);
     expect(queried).toContainEqual(expect.objectContaining({
@@ -143,7 +143,7 @@ describe("command sources", () => {
   });
 
   it("includes launcher builtins for core pane actions", async () => {
-    const suggestions = await loadCommandSuggestions({ query: "toggle", cwd: "/repo", history: [], layouts: [] });
+    const suggestions = await loadCommandSuggestions({ query: "toggle", cwd: "/repo", history: [] });
 
     expect(suggestions).toContainEqual(expect.objectContaining({
       id: "builtin:toggleFind",
@@ -165,7 +165,7 @@ describe("command sources", () => {
       throw new Error("missing");
     });
 
-    const suggestions = await loadCommandSuggestions({ query: "", cwd: "/repo", history: [], layouts: [] });
+    const suggestions = await loadCommandSuggestions({ query: "", cwd: "/repo", history: [] });
 
     expect(suggestions.filter((item) => item.kind === "project")).toHaveLength(80);
   });

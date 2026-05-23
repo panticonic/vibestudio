@@ -25,56 +25,30 @@ describe("terminal state migration", () => {
     expect(migrated.paletteHistory.every((item) => typeof item === "string")).toBe(true);
   });
 
-  it("defaults malformed booleans and caps saved layouts", () => {
+  it("defaults malformed booleans", () => {
     const migrated = migrateState({
       notificationCenterOpen: "true",
-      sidebarCollapsed: 1,
       imagePasteRelative: "yes",
-      savedLayouts: Array.from({ length: 40 }, (_, index) => ({
-        id: `layout-${index}`,
-        name: `Layout ${index}`,
-        tree: { kind: "leaf", sessionId: "s1" },
-        cwds: {},
-        labels: {},
-        updatedAt: index,
-      })),
     });
 
     expect(migrated.notificationCenterOpen).toBe(false);
-    expect(migrated.sidebarCollapsed).toBe(false);
     expect(migrated.imagePasteRelative).toBe(false);
-    expect(migrated.savedLayouts).toHaveLength(32);
-    expect(migrated.savedLayouts[0]?.id).toBe("layout-39");
-    expect(migrated.savedLayouts[migrated.savedLayouts.length - 1]?.id).toBe("layout-8");
   });
 
-  it("drops malformed tabs and sanitizes nested tab fields", () => {
+  it("sanitizes the current split tree and focused session", () => {
     const migrated = migrateState({
-      tabs: [
-        { tabId: "bad", label: "Bad", tree: { kind: "leaf", sessionId: "" }, focusedSessionId: "" },
-        {
-          tabId: "good",
-          label: "",
-          tree: {
-            kind: "split",
-            direction: "diagonal",
-            ratio: 99,
-            a: { kind: "leaf", sessionId: "s1", stale: true },
-            b: { kind: "leaf", sessionId: "" },
-          },
-          badge: { text: "3", severity: "approval", extra: "drop" },
-          unknown: "drop",
-        },
-      ],
+      focusedSessionId: "missing",
+      tree: {
+        kind: "split",
+        direction: "diagonal",
+        ratio: 99,
+        a: { kind: "leaf", sessionId: "s1", stale: true },
+        b: { kind: "leaf", sessionId: "" },
+      },
     });
 
-    expect(migrated.tabs).toEqual([{
-      tabId: "good",
-      label: "Terminal",
-      tree: { kind: "leaf", sessionId: "s1" },
-      focusedSessionId: "s1",
-      badge: { text: "3", severity: "approval" },
-    }]);
+    expect(migrated.tree).toEqual({ kind: "leaf", sessionId: "s1" });
+    expect(migrated.focusedSessionId).toBe("s1");
   });
 
   it("sanitizes per-session restore state", () => {
@@ -92,49 +66,7 @@ describe("terminal state migration", () => {
     });
   });
 
-  it("drops malformed saved layouts and sanitizes valid layouts", () => {
-    const migrated = migrateState({
-      savedLayouts: [
-        { id: "bad", name: "Bad", tree: { kind: "split", a: null, b: null }, cwds: {}, labels: {}, updatedAt: 10 },
-        {
-          id: "good",
-          name: "",
-          tree: {
-            kind: "split",
-            direction: "column",
-            ratio: 0.9,
-            a: { kind: "leaf", sessionId: "slot-1" },
-            b: { kind: "leaf", sessionId: "slot-2" },
-          },
-          cwds: { "slot-1": "/repo", "slot-2": 42 },
-          labels: { "slot-1": "Shell", "slot-2": null },
-          icon: "T",
-          accent: "blue",
-          updatedAt: 1,
-          extra: "drop",
-        },
-      ],
-    });
-
-    expect(migrated.savedLayouts).toEqual([{
-      id: "good",
-      name: "Saved layout",
-      tree: {
-        kind: "split",
-        direction: "column",
-        ratio: 0.85,
-        a: { kind: "leaf", sessionId: "slot-1" },
-        b: { kind: "leaf", sessionId: "slot-2" },
-      },
-      cwds: { "slot-1": "/repo" },
-      labels: { "slot-1": "Shell" },
-      icon: "T",
-      accent: "blue",
-      updatedAt: 1,
-    }]);
-  });
-
-  it("normalizes legacy notifications", () => {
+  it("normalizes minimal notifications", () => {
     const migrated = migrateState({
       notifications: [{
         sessionId: "s1",
@@ -180,7 +112,7 @@ describe("terminal state migration", () => {
 
   it("sanitizes unsafe keybinding overrides", () => {
     const migrated = migrateState({
-      keybindings: { palette: "Ctrl+K", newTab: "Mod+T" },
+      keybindings: { palette: "Ctrl+K", newPane: "Mod+T" },
     });
 
     expect(migrated.keybindings).toEqual({});
@@ -188,7 +120,7 @@ describe("terminal state migration", () => {
 
   it("drops unknown persisted fields instead of carrying them forward", () => {
     const migrated = migrateState({
-      tabs: [],
+      tree: undefined,
       unexpected: "stale",
       nested: { value: true },
     }) as unknown as Record<string, unknown>;

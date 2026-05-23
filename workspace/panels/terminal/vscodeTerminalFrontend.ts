@@ -126,6 +126,10 @@ export class VscodeTerminalFrontend implements TerminalFrontend {
     return this.lineDataEventAddon.onLineData(cb);
   }
 
+  onTitleChange(cb: (title: string) => void): Disposable {
+    return this.raw.onTitleChange(cb);
+  }
+
   fit(): void {
     this.fitAddon.fit();
   }

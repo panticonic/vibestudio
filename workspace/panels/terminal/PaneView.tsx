@@ -1,6 +1,7 @@
 import { Box, Button, ContextMenu, Flex, IconButton, Text } from "@radix-ui/themes";
 import { ArrowDownIcon } from "@radix-ui/react-icons";
 import { focusPanel, notifications, openExternal, slotId as runtimeSlotId } from "@workspace/runtime";
+import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { DropOverlay } from "./DropOverlay.js";
 import { FindBar } from "./FindBar.js";
@@ -50,6 +51,7 @@ export function PaneView(props: {
   resizeKey?: number;
   focused: boolean;
   severity: NotificationSeverity;
+  settingsControl?: ReactNode;
   onFocus(): void;
   onClose(): void;
   onSplitRight(): void;
@@ -72,6 +74,7 @@ export function PaneView(props: {
   const [dragDepth, setDragDepth] = useState(0);
   const sessionShellRef = useRef(props.shell);
   const notificationRef = useRef(props.onNotification);
+  const labelRef = useRef(props.session.label);
   const shellIntegrationMetaRef = useRef<VscodeShellIntegrationMeta | undefined>(
     readShellIntegrationMeta(props.session)
   );
@@ -98,6 +101,7 @@ export function PaneView(props: {
 
   useEffect(() => {
     shellIntegrationMetaRef.current = readShellIntegrationMeta(props.session);
+    labelRef.current = props.session.label;
   }, [props.session]);
 
   useEffect(() => {
@@ -123,6 +127,7 @@ export function PaneView(props: {
         setShowJumpToBottom(scrolledUp);
       },
       onShellIntegrationEvent: (event) => handleShellIntegrationEvent(event, sessionId),
+      onTitleChange: (title) => handleTitleChange(title, sessionId),
     });
     terminalRef.current = terminal;
     window.__natstackTerminalPaneTestRegistry ??= {};
@@ -268,6 +273,15 @@ export function PaneView(props: {
     void sessionShellRef.current
       .setMeta?.(sessionId, VSCODE_SHELL_INTEGRATION_META_KEY, next)
       .catch((err) => console.warn("Failed to update terminal shell integration metadata", err));
+  }
+
+  function handleTitleChange(title: string, sessionId: string): void {
+    const next = title.trim();
+    if (!next || next === labelRef.current) return;
+    labelRef.current = next;
+    void sessionShellRef.current
+      .setLabel?.(sessionId, next)
+      .catch((err) => console.warn("Failed to update terminal title", err));
   }
 
   async function copyAll() {
@@ -480,6 +494,7 @@ export function PaneView(props: {
         session={props.session}
         focused={props.focused}
         severity={props.severity}
+        settingsControl={props.settingsControl}
         onSplitRight={props.onSplitRight}
         onSplitDown={props.onSplitDown}
         onOpenPort={props.onOpenPort}

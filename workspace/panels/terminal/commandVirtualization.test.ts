@@ -9,8 +9,7 @@ import {
 } from "./commandVirtualization.js";
 
 function suggestion(id: string, kind: CommandSuggestion["kind"]): CommandSuggestion {
-  if (kind === "builtin") return { id, kind, label: id, action: "newTab" };
-  if (kind === "layout") return { id, kind, label: id, layoutId: id };
+  if (kind === "builtin") return { id, kind, label: id, action: "newPane" };
   return { id, kind, label: id, command: id };
 }
 

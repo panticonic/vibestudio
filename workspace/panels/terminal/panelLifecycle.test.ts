@@ -3,7 +3,7 @@ import { collectPanelSessionIds, disposePanelSessions } from "./panelLifecycle.j
 import type { ShellApi, TerminalState } from "./types.js";
 
 describe("terminal panel lifecycle", () => {
-  it("collects unique session ids across tab split trees", () => {
+  it("collects unique session ids across the split tree", () => {
     const state = stateWithSessions();
 
     expect(collectPanelSessionIds(state)).toEqual(["a", "b", "c"]);
@@ -22,33 +22,20 @@ describe("terminal panel lifecycle", () => {
   });
 });
 
-function stateWithSessions(): Pick<TerminalState, "tabs"> {
+function stateWithSessions(): Pick<TerminalState, "tree"> {
   return {
-    tabs: [
-      {
-        tabId: "tab-1",
-        label: "One",
-        focusedSessionId: "a",
-        tree: {
-          kind: "split",
-          direction: "row",
-          ratio: 0.5,
-          a: { kind: "leaf", sessionId: "a" },
-          b: { kind: "leaf", sessionId: "b" },
-        },
+    tree: {
+      kind: "split",
+      direction: "row",
+      ratio: 0.5,
+      a: {
+        kind: "split",
+        direction: "column",
+        ratio: 0.5,
+        a: { kind: "leaf", sessionId: "a" },
+        b: { kind: "leaf", sessionId: "b" },
       },
-      {
-        tabId: "tab-2",
-        label: "Two",
-        focusedSessionId: "c",
-        tree: {
-          kind: "split",
-          direction: "column",
-          ratio: 0.5,
-          a: { kind: "leaf", sessionId: "b" },
-          b: { kind: "leaf", sessionId: "c" },
-        },
-      },
-    ],
+      b: { kind: "leaf", sessionId: "c" },
+    },
   };
 }

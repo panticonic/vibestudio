@@ -1,12 +1,12 @@
 import type { ShellApi, SplitNode, TerminalState } from "./types.js";
 
-export function collectPanelSessionIds(state: Pick<TerminalState, "tabs">): string[] {
+export function collectPanelSessionIds(state: Pick<TerminalState, "tree">): string[] {
   const ids = new Set<string>();
-  for (const tab of state.tabs) collectSessionIds(tab.tree, ids);
+  if (state.tree) collectSessionIds(state.tree, ids);
   return [...ids];
 }
 
-export function disposePanelSessions(shell: ShellApi, state: Pick<TerminalState, "tabs">): void {
+export function disposePanelSessions(shell: ShellApi, state: Pick<TerminalState, "tree">): void {
   for (const sessionId of collectPanelSessionIds(state)) {
     void shell.dispose?.(sessionId).catch(() => {});
   }

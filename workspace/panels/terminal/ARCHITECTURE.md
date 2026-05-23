@@ -2,12 +2,20 @@
 
 The terminal panel uses a vendored VS Code xterm layer for browser-side terminal behavior and keeps Natstack-specific process connectivity at the edge.
 
+## Product Shape
+
+The panel owns one terminal split tree. It does not maintain a terminal-local sidebar, tab strip, saved-layout registry, or tab badge layer; workspace panels provide the outer navigation model. Inside the terminal panel, new shells are added as panes in the split tree, and the focused pane is tracked by `focusedSessionId`.
+
+Pane headers carry the compact controls that belong to an individual terminal surface: split, zoom, settings, ports, preview, find, restart, and close. Global overlays are limited to the command launcher and notification center so the terminal output area remains the dominant surface on desktop and mobile.
+
 ## Boundaries
 
 - `vscode-upstream/` stores the upstream VS Code source snapshots used while porting behavior.
 - `vscodeTerminalFrontend.ts` owns the xterm instance, addons, renderer lifecycle, clipboard, search, serialization, unicode mode, shell integration events, and line-data events.
 - `vscodeTerminalInstance.ts` owns lifecycle wiring between the frontend, process bridge, resize handling, scrollback bootstrap, and panel events.
 - `vscodeTerminalProcess.ts` and `shellAttach.ts` are the Natstack connectivity boundary. They adapt the shell extension RPC API to the frontend without importing VS Code process management or workbench services.
+- `TerminalApp.tsx` owns the single split-tree state, startup/restore flow, command launcher, settings, and notification center.
+- `SplitTree.tsx`, `PaneView.tsx`, and `PaneHeader.tsx` render the active terminal tree and pane-level controls.
 
 ## Streaming Path
 

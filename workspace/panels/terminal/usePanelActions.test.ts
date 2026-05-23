@@ -5,11 +5,11 @@ import type { SessionInfo, ShellApi, TerminalState } from "./types.js";
 import { VSCODE_SHELL_INTEGRATION_META_KEY } from "./vscodeShellIntegrationMeta.js";
 
 describe("panel actions", () => {
-  it("applies the configured scrollback limit to newly opened tabs", async () => {
+  it("applies the configured scrollback limit to newly opened sessions", async () => {
     const shell = makeShell();
     const harness = makeHarness(shell);
 
-    const sessionId = await harness.actions.openTab();
+    const sessionId = await harness.actions.openSession();
 
     expect(sessionId).toBe("new-1");
     expect(shell.setScrollbackLimit).toHaveBeenCalledWith("new-1", 1024 * 1024);
@@ -18,13 +18,8 @@ describe("panel actions", () => {
   it("applies the configured scrollback limit to split and restarted sessions", async () => {
     const shell = makeShell();
     const harness = makeHarness(shell, {
-      tabs: [{
-        tabId: "tab-1",
-        label: "Shell",
-        tree: { kind: "leaf", sessionId: "old-1" },
-        focusedSessionId: "old-1",
-      }],
-      activeTabId: "tab-1",
+      tree: { kind: "leaf", sessionId: "old-1" },
+      focusedSessionId: "old-1",
       perSession: {
         "old-1": { cwd: "/repo", originalArgv: ["/bin/sh"], readCursor: 0, lastSeenAt: 0 },
       },
@@ -43,13 +38,8 @@ describe("panel actions", () => {
   it("returns the spawned session id when running a command", async () => {
     const shell = makeShell();
     const harness = makeHarness(shell, {
-      tabs: [{
-        tabId: "tab-1",
-        label: "Shell",
-        tree: { kind: "leaf", sessionId: "old-1" },
-        focusedSessionId: "old-1",
-      }],
-      activeTabId: "tab-1",
+      tree: { kind: "leaf", sessionId: "old-1" },
+      focusedSessionId: "old-1",
     }, { "old-1": session("old-1", "/repo") });
 
     const sessionId = await harness.actions.runCommand("pnpm dev");
@@ -66,13 +56,8 @@ describe("panel actions", () => {
   it("uses live shell integration cwd when splitting or running a command", async () => {
     const shell = makeShell();
     const harness = makeHarness(shell, {
-      tabs: [{
-        tabId: "tab-1",
-        label: "Shell",
-        tree: { kind: "leaf", sessionId: "old-1" },
-        focusedSessionId: "old-1",
-      }],
-      activeTabId: "tab-1",
+      tree: { kind: "leaf", sessionId: "old-1" },
+      focusedSessionId: "old-1",
     }, { "old-1": session("old-1", "/launch", { liveCwd: "/repo/live" }) });
 
     await harness.actions.runCommand("pnpm dev");
@@ -88,13 +73,8 @@ describe("panel actions", () => {
   it("restarts the remembered command in the live shell integration cwd", async () => {
     const shell = makeShell();
     const harness = makeHarness(shell, {
-      tabs: [{
-        tabId: "tab-1",
-        label: "Shell",
-        tree: { kind: "leaf", sessionId: "old-1" },
-        focusedSessionId: "old-1",
-      }],
-      activeTabId: "tab-1",
+      tree: { kind: "leaf", sessionId: "old-1" },
+      focusedSessionId: "old-1",
       perSession: {
         "old-1": {
           cwd: "/persisted",
@@ -120,7 +100,7 @@ describe("panel actions", () => {
     const shell = makeShell();
     const harness = makeHarness(shell);
 
-    const sessionId = await harness.actions.openTab();
+    const sessionId = await harness.actions.openSession();
 
     expect(harness.state.perSession[sessionId]?.label).toBe("Label new-1");
   });
@@ -128,13 +108,8 @@ describe("panel actions", () => {
   it("reopens the remembered original command in place", async () => {
     const shell = makeShell();
     const harness = makeHarness(shell, {
-      tabs: [{
-        tabId: "tab-1",
-        label: "Shell",
-        tree: { kind: "leaf", sessionId: "old-1" },
-        focusedSessionId: "old-1",
-      }],
-      activeTabId: "tab-1",
+      tree: { kind: "leaf", sessionId: "old-1" },
+      focusedSessionId: "old-1",
       perSession: {
         "old-1": {
           cwd: "/repo",
@@ -154,8 +129,8 @@ describe("panel actions", () => {
       cwd: "/repo",
       label: "/bin/sh -c pnpm dev",
     });
-    expect(harness.state.tabs[0]?.tree).toEqual({ kind: "leaf", sessionId: "new-1" });
-    expect(harness.state.tabs[0]?.focusedSessionId).toBe("new-1");
+    expect(harness.state.tree).toEqual({ kind: "leaf", sessionId: "new-1" });
+    expect(harness.state.focusedSessionId).toBe("new-1");
     expect(shell.dispose).toHaveBeenCalledWith("old-1");
     expect(harness.sessions["old-1"]).toBeUndefined();
     expect(harness.state.perSession["old-1"]).toBeUndefined();
@@ -164,13 +139,8 @@ describe("panel actions", () => {
   it("removes exited panes without sending another kill signal", () => {
     const shell = makeShell();
     const harness = makeHarness(shell, {
-      tabs: [{
-        tabId: "tab-1",
-        label: "Shell",
-        tree: { kind: "leaf", sessionId: "old-1" },
-        focusedSessionId: "old-1",
-      }],
-      activeTabId: "tab-1",
+      tree: { kind: "leaf", sessionId: "old-1" },
+      focusedSessionId: "old-1",
       perSession: {
         "old-1": { cwd: "/repo", readCursor: 0, lastSeenAt: 0 },
       },
@@ -182,7 +152,8 @@ describe("panel actions", () => {
     expect(shell.dispose).toHaveBeenCalledWith("old-1");
     expect(harness.sessions["old-1"]).toBeUndefined();
     expect(harness.state.perSession["old-1"]).toBeUndefined();
-    expect(harness.state.tabs).toEqual([]);
+    expect(harness.state.tree).toBeUndefined();
+    expect(harness.state.focusedSessionId).toBeUndefined();
   });
 });
 

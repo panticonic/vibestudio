@@ -36,6 +36,7 @@ export type VscodeTerminalInstanceOptions = {
   onScrollStateChange?(scrolledUp: boolean): void;
   onShellIntegrationEvent?(event: VscodeShellIntegrationEvent): void;
   onLineData?(line: string): void;
+  onTitleChange?(title: string): void;
 };
 
 export class VscodeTerminalInstance {
@@ -64,6 +65,7 @@ export class VscodeTerminalInstance {
     onScrollStateChange?: (scrolledUp: boolean) => void;
     onShellIntegrationEvent?: (event: VscodeShellIntegrationEvent) => void;
     onLineData?: (line: string) => void;
+    onTitleChange?: (title: string) => void;
   }): void {
     if (callbacks.onError) this.onError = callbacks.onError;
     if (callbacks.onNotification) this.onNotification = callbacks.onNotification;
@@ -75,6 +77,7 @@ export class VscodeTerminalInstance {
       this.options.onShellIntegrationEvent = callbacks.onShellIntegrationEvent;
     }
     if (callbacks.onLineData) this.options.onLineData = callbacks.onLineData;
+    if (callbacks.onTitleChange) this.options.onTitleChange = callbacks.onTitleChange;
   }
 
   async attach(host: HTMLElement): Promise<void> {
@@ -156,6 +159,9 @@ export class VscodeTerminalInstance {
         ) ?? noopDisposable,
         frontend.onLineData?.((line) =>
           this.options.onLineData?.(line)
+        ) ?? noopDisposable,
+        frontend.onTitleChange?.((title) =>
+          this.options.onTitleChange?.(title)
         ) ?? noopDisposable
       );
 

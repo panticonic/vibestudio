@@ -1,22 +1,19 @@
 import { fs } from "@workspace/runtime";
 import { customCommandsFileSchema, type CustomCommand } from "./customCommands.js";
 import type { CommandRunTarget } from "./commandLauncherModel.js";
-import type { SavedLayout } from "./types.js";
 
 export type CommandSuggestion =
   | { id: string; kind: "recent"; label: string; command: string; subtitle?: string; defaultTarget?: CommandRunTarget }
   | { id: string; kind: "project"; label: string; command: string; subtitle?: string; defaultTarget?: CommandRunTarget }
-  | { id: string; kind: "layout"; label: string; layoutId: string; subtitle?: string }
   | { id: string; kind: "builtin"; label: string; action: BuiltinAction; subtitle?: string }
   | { id: string; kind: "raw"; label: string; command: string; subtitle?: string; defaultTarget?: CommandRunTarget };
 
-export type BuiltinAction = "newTab" | "splitRight" | "splitDown" | "clear" | "toggleFind" | "toggleNotifications";
+export type BuiltinAction = "newPane" | "splitRight" | "splitDown" | "clear" | "toggleFind" | "toggleNotifications";
 
 export async function loadCommandSuggestions(args: {
   query: string;
   cwd?: string;
   history: string[];
-  layouts: SavedLayout[];
 }): Promise<CommandSuggestion[]> {
   const query = args.query.trim();
   const suggestions: CommandSuggestion[] = [];
@@ -28,15 +25,8 @@ export async function loadCommandSuggestions(args: {
     subtitle: "Recent",
   })));
   suggestions.push(...await loadProjectCommands(args.cwd));
-  suggestions.push(...args.layouts.map((layout) => ({
-    id: `layout:${layout.id}`,
-    kind: "layout" as const,
-    label: layout.name,
-    layoutId: layout.id,
-    subtitle: "Saved layout",
-  })));
   suggestions.push(
-    { id: "builtin:newTab", kind: "builtin", label: "New tab", action: "newTab", subtitle: "Open a shell" },
+    { id: "builtin:newPane", kind: "builtin", label: "New pane", action: "newPane", subtitle: "Open a shell beside this pane" },
     { id: "builtin:splitRight", kind: "builtin", label: "Split right", action: "splitRight", subtitle: "Open a shell beside this pane" },
     { id: "builtin:splitDown", kind: "builtin", label: "Split down", action: "splitDown", subtitle: "Open a shell below this pane" },
     { id: "builtin:clear", kind: "builtin", label: "Clear scrollback", action: "clear", subtitle: "Clear the focused pane" },

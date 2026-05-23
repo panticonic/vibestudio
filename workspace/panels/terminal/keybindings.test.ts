@@ -10,7 +10,7 @@ import {
 describe("terminal keybindings", () => {
   it("resolves Mod to Ctrl+Shift outside macOS", () => {
     expect(buildResolvedKeymap({}, "Linux")["Ctrl+Shift+K"]).toBe("palette");
-    expect(buildResolvedKeymap({}, "Linux")["Ctrl+Shift+P"]).toBe("sessionSearch");
+    expect(buildResolvedKeymap({}, "Linux")["Ctrl+Shift+T"]).toBe("newPane");
   });
 
   it("resolves Mod to Meta on macOS", () => {
@@ -54,7 +54,7 @@ describe("terminal keybindings", () => {
     const issues = validateKeybindingOverrides({ palette: "Mod+T" }, "Linux");
     expect(issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ action: "palette", message: expect.stringContaining("Conflicts") }),
-      expect.objectContaining({ action: "newTab", message: expect.stringContaining("Conflicts") }),
+      expect.objectContaining({ action: "newPane", message: expect.stringContaining("Conflicts") }),
     ]));
     expect(sanitizeKeybindingOverrides({ palette: "Mod+T" }, "Linux")).toEqual({});
   });

@@ -1,12 +1,12 @@
 import { useMemo } from "react";
-import type { SessionInfo, ShellApi, SplitNode, TerminalState, TerminalTab } from "./types.js";
+import type { SessionInfo, ShellApi, SplitNode, TerminalState } from "./types.js";
 import { liveSessionCwd } from "./vscodeShellIntegrationMeta.js";
 
 type SetState = (updater: (state: TerminalState) => TerminalState) => void;
 type SetSessions = (updater: (sessions: Record<string, SessionInfo>) => Record<string, SessionInfo>) => void;
 
 export interface PanelActions {
-  openTab(command?: string): Promise<string>;
+  openSession(command?: string): Promise<string>;
   closeSession(sessionId: string): void;
   splitFocused(direction: "row" | "column", command?: string): Promise<string | undefined>;
   splitSession(sessionId: string, direction: "row" | "column", command?: string): Promise<string | undefined>;
@@ -78,35 +78,24 @@ export function createPanelActions(args: {
       await shell.dispose?.(sessionId).catch(() => {});
     };
 
-    const openTab = async (command?: string): Promise<string> => {
+    const openSession = async (command?: string): Promise<string> => {
       const req = command ? { command: "/bin/sh", args: ["-c", command], label: command } : {};
       const { sessionId } = await shell.open(req);
       const info = await shell.get(sessionId);
       await applyScrollbackLimit(sessionId);
       rememberSession(info);
-      const tab: TerminalTab = {
-        tabId: crypto.randomUUID(),
-        label: info.label || "Shell",
+      setState((prev) => ({
+        ...prev,
         tree: { kind: "leaf", sessionId },
         focusedSessionId: sessionId,
-      };
-      setState((prev) => prev.tabs.length ? {
-        ...prev,
-        tabs: [...prev.tabs, tab],
-        activeTabId: tab.tabId,
-      } : {
-        ...prev,
-        tabs: [tab],
-        activeTabId: tab.tabId,
-      });
+      }));
       return sessionId;
     };
 
     const focusSession = (sessionId: string) => {
       setState((prev) => ({
         ...prev,
-        tabs: prev.tabs.map((tab) => containsSession(tab.tree, sessionId) ? { ...tab, focusedSessionId: sessionId } : tab),
-        activeTabId: prev.tabs.find((tab) => containsSession(tab.tree, sessionId))?.tabId ?? prev.activeTabId,
+        focusedSessionId: containsSession(prev.tree, sessionId) ? sessionId : prev.focusedSessionId,
       }));
     };
 
@@ -115,19 +104,21 @@ export function createPanelActions(args: {
       void shell.dispose?.(sessionId).catch(() => {});
       forgetSession(sessionId);
       setState((prev) => {
-        const tabs = prev.tabs
-          .map((tab) => {
-            const tree = removeLeaf(tab.tree, sessionId);
-            return { ...tab, tree, focusedSessionId: tab.focusedSessionId === sessionId ? firstLeaf(tree) ?? "" : tab.focusedSessionId };
-          })
-          .filter((tab): tab is TerminalTab => !!tab.tree && !!tab.focusedSessionId);
-        return { ...prev, tabs, activeTabId: tabs.some((tab) => tab.tabId === prev.activeTabId) ? prev.activeTabId : tabs[0]?.tabId };
+        const tree = prev.tree ? removeLeaf(prev.tree, sessionId) : undefined;
+        const focusedSessionId = prev.focusedSessionId === sessionId ? firstLeaf(tree) : prev.focusedSessionId;
+        return {
+          ...prev,
+          tree,
+          focusedSessionId: focusedSessionId && containsSession(tree, focusedSessionId)
+            ? focusedSessionId
+            : firstLeaf(tree),
+          zoomedSessionId: prev.zoomedSessionId === sessionId ? undefined : prev.zoomedSessionId,
+        };
       });
     };
 
     const splitSession = async (targetSessionId: string, direction: "row" | "column", command?: string): Promise<string | undefined> => {
-      const targetTab = state.tabs.find((tab) => containsSession(tab.tree, targetSessionId));
-      if (!targetTab) return openTab(command);
+      if (!containsSession(state.tree, targetSessionId)) return state.tree ? undefined : openSession(command);
       const focusedInfo = sessions[targetSessionId];
       const cwd = liveSessionCwd(focusedInfo);
       const req = command
@@ -139,20 +130,15 @@ export function createPanelActions(args: {
       rememberSession(info);
       setState((prev) => ({
         ...prev,
-        tabs: prev.tabs.map((tab) => tab.tabId === targetTab.tabId ? {
-          ...tab,
-          tree: splitLeaf(tab.tree, targetSessionId, direction, sessionId),
-          focusedSessionId: sessionId,
-        } : tab),
-        activeTabId: targetTab.tabId,
+        tree: prev.tree ? splitLeaf(prev.tree, targetSessionId, direction, sessionId) : { kind: "leaf", sessionId },
+        focusedSessionId: sessionId,
       }));
       return sessionId;
     };
 
     const splitFocused = async (direction: "row" | "column", command?: string): Promise<string | undefined> => {
-      const activeTab = state.tabs.find((tab) => tab.tabId === state.activeTabId) ?? state.tabs[0];
-      if (!activeTab) return openTab(command);
-      return splitSession(activeTab.focusedSessionId, direction, command);
+      if (!state.tree || !state.focusedSessionId) return openSession(command);
+      return splitSession(state.focusedSessionId, direction, command);
     };
 
     const runCommand = async (command: string): Promise<string | undefined> => splitFocused("row", command);
@@ -164,16 +150,15 @@ export function createPanelActions(args: {
       rememberSession(info);
       setState((prev) => ({
         ...prev,
-        tabs: prev.tabs.map((tab) => containsSession(tab.tree, sessionId)
-          ? { ...tab, tree: replaceLeaf(tab.tree, sessionId, nextSessionId), focusedSessionId: nextSessionId }
-          : tab),
+        tree: prev.tree ? replaceLeaf(prev.tree, sessionId, nextSessionId) : { kind: "leaf", sessionId: nextSessionId },
+        focusedSessionId: nextSessionId,
       }));
       await disposeReplacedSession(sessionId);
       return nextSessionId;
     };
 
     return {
-      openTab,
+      openSession,
       closeSession,
       splitFocused,
       splitSession,
@@ -188,9 +173,8 @@ export function createPanelActions(args: {
         rememberSession(info);
         setState((prev) => ({
           ...prev,
-          tabs: prev.tabs.map((tab) => containsSession(tab.tree, sessionId)
-            ? { ...tab, tree: replaceLeaf(tab.tree, sessionId, result.sessionId), focusedSessionId: result.sessionId }
-            : tab),
+          tree: prev.tree ? replaceLeaf(prev.tree, sessionId, result.sessionId) : { kind: "leaf", sessionId: result.sessionId },
+          focusedSessionId: result.sessionId,
         }));
         await disposeReplacedSession(sessionId);
         return result.sessionId;

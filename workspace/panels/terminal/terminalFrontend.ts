@@ -33,6 +33,7 @@ export interface TerminalFrontend {
   onScroll?(cb: () => void): { dispose(): void };
   onShellIntegrationEvent?(cb: (event: VscodeShellIntegrationEvent) => void): { dispose(): void };
   onLineData?(cb: (line: string) => void): { dispose(): void };
+  onTitleChange?(cb: (title: string) => void): { dispose(): void };
   fit(): void;
   refresh(): void;
   focus(): void;

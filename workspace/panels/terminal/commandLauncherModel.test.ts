@@ -15,8 +15,8 @@ describe("command launcher model", () => {
     expect(commandTargetForEnter(key())).toBe("splitRight");
   });
 
-  it("runs Shift+Enter in a new tab", () => {
-    expect(commandTargetForEnter(key({ shiftKey: true }))).toBe("tab");
+  it("runs Shift+Enter in a split-down pane", () => {
+    expect(commandTargetForEnter(key({ shiftKey: true }))).toBe("splitDown");
   });
 
   it("runs Ctrl/Cmd+Shift+Enter in a split-down pane", () => {

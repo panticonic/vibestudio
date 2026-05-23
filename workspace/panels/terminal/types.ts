@@ -55,16 +55,6 @@ export type SplitNode =
   | { kind: "leaf"; sessionId: string }
   | { kind: "split"; direction: "row" | "column"; ratio: number; a: SplitNode; b: SplitNode };
 
-export interface TerminalTab {
-  tabId: string;
-  label: string;
-  tree: SplitNode;
-  focusedSessionId: string;
-  icon?: string;
-  accent?: string;
-  badge?: { text?: string; color?: string; severity?: NotificationSeverity };
-}
-
 export type NotificationSeverity = "info" | "done" | "waiting" | "approval" | "failure";
 
 export interface TerminalNotification {
@@ -78,17 +68,6 @@ export interface TerminalNotification {
   source?: "osc" | "snug" | "system";
 }
 
-export interface SavedLayout {
-  id: string;
-  name: string;
-  tree: SplitNode;
-  cwds: Record<string, string>;
-  labels: Record<string, string>;
-  icon?: string;
-  accent?: string;
-  updatedAt: number;
-}
-
 export interface PerSessionState {
   label?: string;
   cwd: string;
@@ -98,8 +77,8 @@ export interface PerSessionState {
 }
 
 export interface TerminalState {
-  tabs: TerminalTab[];
-  activeTabId?: string;
+  tree?: SplitNode;
+  focusedSessionId?: string;
   zoomedSessionId?: string;
   notifications: TerminalNotification[];
   paletteHistory: string[];
@@ -109,9 +88,7 @@ export interface TerminalState {
   themeOverride: "auto" | "light" | "dark";
   notificationCenterOpen: boolean;
   notificationFilter?: "all" | "approval" | "failure" | "done";
-  sidebarCollapsed: boolean;
   perSession: Record<string, PerSessionState>;
-  savedLayouts: SavedLayout[];
   pasteMode: "path" | "dataUri" | "both";
   imagePasteRelative: boolean;
   keybindings: KeybindingOverrides;

@@ -153,6 +153,19 @@ describe("VscodeTerminalInstance", () => {
 
     expect(onLineData).toHaveBeenCalledWith("build complete");
   });
+
+  it("forwards frontend title changes through the instance boundary", async () => {
+    const frontend = createFakeFrontend();
+    const shell = createShell();
+    const onTitleChange = vi.fn();
+    attachWithScrollback.mockResolvedValue(responseFromChunks([]));
+    const instance = createInstance({ frontend, shell, onTitleChange });
+
+    await instance.attach(hostElement());
+    frontend.emitTitleChange("vim package.json");
+
+    expect(onTitleChange).toHaveBeenCalledWith("vim package.json");
+  });
 });
 
 const encoder = new TextEncoder();
@@ -165,6 +178,7 @@ function createInstance(opts: {
   onNotification?: (notification: ParsedNotification) => void;
   onShellIntegrationEvent?: (event: VscodeShellIntegrationEvent) => void;
   onLineData?: (line: string) => void;
+  onTitleChange?: (title: string) => void;
 }): VscodeTerminalInstance {
   const frontendFactory: TerminalFrontendFactory = vi.fn(async () => opts.frontend);
   return new VscodeTerminalInstance({
@@ -179,6 +193,7 @@ function createInstance(opts: {
     onNotification: opts.onNotification ?? vi.fn(),
     onShellIntegrationEvent: opts.onShellIntegrationEvent,
     onLineData: opts.onLineData,
+    onTitleChange: opts.onTitleChange,
   });
 }
 
@@ -221,6 +236,7 @@ type FakeFrontend = TerminalFrontend & {
   emitResize(size: { cols: number; rows: number }): void;
   emitShellIntegrationEvent(event: VscodeShellIntegrationEvent): void;
   emitLineData(line: string): void;
+  emitTitleChange(title: string): void;
   focus: ReturnType<typeof vi.fn>;
   fit: ReturnType<typeof vi.fn>;
   refresh: ReturnType<typeof vi.fn>;
@@ -235,6 +251,7 @@ function createFakeFrontend(): FakeFrontend {
   let resize: ((size: { cols: number; rows: number }) => void) | undefined;
   let shellIntegrationEvent: ((event: VscodeShellIntegrationEvent) => void) | undefined;
   let lineData: ((line: string) => void) | undefined;
+  let titleChange: ((title: string) => void) | undefined;
   const writes: Uint8Array[] = [];
   return {
     writes,
@@ -258,6 +275,10 @@ function createFakeFrontend(): FakeFrontend {
     }),
     onLineData: vi.fn((cb) => {
       lineData = cb;
+      return { dispose: vi.fn() };
+    }),
+    onTitleChange: vi.fn((cb) => {
+      titleChange = cb;
       return { dispose: vi.fn() };
     }),
     fit: vi.fn(),
@@ -285,6 +306,9 @@ function createFakeFrontend(): FakeFrontend {
     },
     emitLineData(line: string) {
       lineData?.(line);
+    },
+    emitTitleChange(title: string) {
+      titleChange?.(title);
     },
   };
 }

@@ -1,4 +1,4 @@
-import { Badge, ContextMenu, Dialog, Flex, Kbd, Text, TextField } from "@radix-ui/themes";
+import { Badge, Dialog, Flex, Kbd, Text, TextField } from "@radix-ui/themes";
 import { LightningBoltIcon } from "@radix-ui/react-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useIsMobile, useViewportHeight } from "@workspace/react/responsive";
@@ -13,19 +13,14 @@ import {
   offsetForSuggestion,
   visibleCommandRows,
 } from "./commandVirtualization.js";
-import type { SavedLayout } from "./types.js";
 
 export function CommandLauncher(props: {
   open: boolean;
   cwd?: string;
   history: string[];
-  layouts: SavedLayout[];
   onOpenChange(open: boolean): void;
   onRun(command: string, target: CommandRunTarget): Promise<void>;
   onBuiltin(action: string): void;
-  onLoadLayout(layoutId: string): Promise<void>;
-  onRenameLayout(layoutId: string): void;
-  onDeleteLayout(layoutId: string): void;
 }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(0);
@@ -47,13 +42,12 @@ export function CommandLauncher(props: {
       query,
       cwd: props.cwd,
       history: props.history,
-      layouts: props.layouts,
     }).then((items) => {
       setSuggestions(items);
       setSelected(0);
       setScrollTop(0);
     });
-  }, [props.open, query, props.cwd, props.history, props.layouts]);
+  }, [props.open, query, props.cwd, props.history]);
 
   useEffect(() => {
     const list = listRef.current;
@@ -67,7 +61,6 @@ export function CommandLauncher(props: {
 
   async function accept(suggestion: CommandSuggestion, target: CommandRunTarget) {
     if (suggestion.kind === "builtin") props.onBuiltin(suggestion.action);
-    else if (suggestion.kind === "layout") await props.onLoadLayout(suggestion.layoutId);
     else await props.onRun(suggestion.command, target);
     props.onOpenChange(false);
     setQuery("");
@@ -141,14 +134,6 @@ export function CommandLauncher(props: {
                       void accept(row.suggestion, suggestionDefaultTarget(row.suggestion))
                     }
                     onAcceptTarget={(target) => void accept(row.suggestion, target)}
-                    onRenameLayout={() =>
-                      row.suggestion.kind === "layout" &&
-                      props.onRenameLayout(row.suggestion.layoutId)
-                    }
-                    onDeleteLayout={() =>
-                      row.suggestion.kind === "layout" &&
-                      props.onDeleteLayout(row.suggestion.layoutId)
-                    }
                   />
                 )
               )}
@@ -160,7 +145,7 @@ export function CommandLauncher(props: {
             <Kbd>Enter</Kbd> split right
           </Text>
           <Text size="1" color="gray">
-            <Kbd>Shift Enter</Kbd> new tab
+            <Kbd>Shift Enter</Kbd> split down
           </Text>
           <Text size="1" color="gray">
             <Kbd>Ctrl/Cmd Enter</Kbd> split right
@@ -188,8 +173,6 @@ function SuggestionRow(props: {
   onMouseEnter(): void;
   onAccept(): void;
   onAcceptTarget(target: CommandRunTarget): void;
-  onRenameLayout(): void;
-  onDeleteLayout(): void;
 }) {
   const row = (
     <div
@@ -251,7 +234,6 @@ function SuggestionRow(props: {
             color="amber"
             onClick={() => props.onAcceptTarget("splitDown")}
           />
-          <TargetChip label="Tab" color="green" onClick={() => props.onAcceptTarget("tab")} />
         </Flex>
       ) : (
         <Badge
@@ -266,18 +248,7 @@ function SuggestionRow(props: {
     </div>
   );
 
-  if (props.suggestion.kind !== "layout") return row;
-  return (
-    <ContextMenu.Root>
-      <ContextMenu.Trigger>{row}</ContextMenu.Trigger>
-      <ContextMenu.Content>
-        <ContextMenu.Item onSelect={props.onRenameLayout}>Rename layout...</ContextMenu.Item>
-        <ContextMenu.Item color="red" onSelect={props.onDeleteLayout}>
-          Delete layout
-        </ContextMenu.Item>
-      </ContextMenu.Content>
-    </ContextMenu.Root>
-  );
+  return row;
 }
 
 function TargetChip(props: {
@@ -306,21 +277,17 @@ function canChooseRunTarget(suggestion: CommandSuggestion): boolean {
 
 function targetLabel(suggestion: CommandSuggestion): string {
   if (suggestion.kind === "builtin") return "Action";
-  if (suggestion.kind === "layout") return "Open";
   const target = suggestionDefaultTarget(suggestion);
   if (target === "here") return "Here";
-  if (target === "tab") return "New tab";
   if (target === "splitDown") return "Split down";
   return "Split right";
 }
 
 function targetBadgeColor(suggestion: CommandSuggestion): "gray" | "blue" | "green" | "amber" {
   if (suggestion.kind === "builtin") return "gray";
-  if (suggestion.kind === "layout") return "green";
   const target = suggestionDefaultTarget(suggestion);
   if (target === "here") return "gray";
   if (target === "splitDown") return "amber";
-  if (target === "tab") return "green";
   return "blue";
 }
 
@@ -347,7 +314,6 @@ function SectionHeader(props: { kind: CommandSuggestion["kind"]; top: number; he
 function sectionLabel(kind: CommandSuggestion["kind"]): string {
   if (kind === "recent") return "Recent";
   if (kind === "project") return "Project commands";
-  if (kind === "layout") return "Layouts";
   if (kind === "builtin") return "Builtins";
   return "Run as command";
 }

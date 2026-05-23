@@ -1,5 +1,6 @@
 import { PaneView } from "./PaneView.js";
 import { SplitPane } from "./SplitPane.js";
+import type { ReactNode } from "react";
 import type { ParsedNotification } from "./notificationParser.js";
 import type { TerminalAppearance } from "./paneTheme.js";
 import type { NotificationSeverity, SessionInfo, ShellApi, SplitNode, TerminalNotification } from "./types.js";
@@ -10,6 +11,7 @@ export function SplitTree(props: {
   sessions: Record<string, SessionInfo>;
   notifications: TerminalNotification[];
   focusedSessionId?: string;
+  settingsControl?: ReactNode;
   shell: ShellApi;
   fontSize: number;
   fontFamily: string;
@@ -46,6 +48,7 @@ export function SplitTree(props: {
         imagePasteRelative={props.imagePasteRelative}
         resizeKey={props.resizeKey}
         focused={props.focusedSessionId === session.sessionId}
+        settingsControl={props.focusedSessionId === session.sessionId ? props.settingsControl : undefined}
         severity={sessionSeverity(session.sessionId, props.notifications, session.alive)}
         onFocus={() => props.onFocus(session.sessionId)}
         onClose={() => props.onClose(session.sessionId)}

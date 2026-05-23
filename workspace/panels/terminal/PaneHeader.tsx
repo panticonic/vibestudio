@@ -1,5 +1,6 @@
 import { Badge, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
 import { DotsHorizontalIcon, EnterFullScreenIcon, ViewHorizontalIcon, ViewVerticalIcon } from "@radix-ui/react-icons";
+import type { ReactNode } from "react";
 import { headerBackground, headerBorderColor, paneAttentionShadow, severityDotColor } from "./paneChrome.js";
 import { sessionExitText } from "./sessionStatus.js";
 import type { NotificationSeverity, SessionInfo } from "./types.js";
@@ -14,6 +15,7 @@ export function PaneHeader(props: {
   session: SessionInfo;
   focused: boolean;
   severity: NotificationSeverity;
+  settingsControl?: ReactNode;
   onSplitRight(): void;
   onSplitDown(): void;
   onOpenPort(port: number): void;
@@ -76,6 +78,7 @@ export function PaneHeader(props: {
         <IconButton size="1" variant="ghost" aria-label="Split right" onClick={props.onSplitRight}><ViewVerticalIcon /></IconButton>
         <IconButton size="1" variant="ghost" aria-label="Split down" onClick={props.onSplitDown}><ViewHorizontalIcon /></IconButton>
         <IconButton size="1" variant="ghost" aria-label="Zoom pane" onClick={props.onZoom}><EnterFullScreenIcon /></IconButton>
+        {props.settingsControl}
         <DropdownMenu.Root>
           <DropdownMenu.Trigger>
             <IconButton size="1" variant="ghost" aria-label="Pane menu"><DotsHorizontalIcon /></IconButton>

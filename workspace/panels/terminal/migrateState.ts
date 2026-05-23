@@ -1,11 +1,12 @@
-import type { PerSessionState, SavedLayout, SplitNode, TerminalNotification, TerminalState, TerminalTab } from "./types.js";
+import type { PerSessionState, SplitNode, TerminalNotification, TerminalState } from "./types.js";
 import { defaultKeybindings, sanitizeKeybindingOverrides, type KeybindingAction, type KeybindingOverrides } from "./keybindings.js";
 
 export const TERMINAL_STATE_SCHEMA_VERSION = 1;
 
 export function defaultTerminalState(): TerminalState {
   return {
-    tabs: [],
+    tree: undefined,
+    focusedSessionId: undefined,
     notifications: [],
     paletteHistory: [],
     fontSize: 13,
@@ -14,9 +15,7 @@ export function defaultTerminalState(): TerminalState {
     themeOverride: "auto",
     notificationCenterOpen: false,
     notificationFilter: "all",
-    sidebarCollapsed: false,
     perSession: {},
-    savedLayouts: [],
     pasteMode: "path",
     imagePasteRelative: false,
     keybindings: {},
@@ -30,10 +29,15 @@ export function migrateState(raw: unknown): TerminalState {
   const state = raw as Partial<TerminalState> & {
     notifications?: Array<Partial<TerminalNotification> & { message?: string }>;
   };
+  const restoredTree = migrateSplitNode(state.tree);
+  const restoredFocus =
+    typeof state.focusedSessionId === "string" && containsSession(restoredTree, state.focusedSessionId)
+      ? state.focusedSessionId
+      : undefined;
 
   return {
-    tabs: migrateTabs(state.tabs),
-    activeTabId: typeof state.activeTabId === "string" ? state.activeTabId : defaults.activeTabId,
+    tree: restoredTree,
+    focusedSessionId: restoredFocus && containsSession(restoredTree, restoredFocus) ? restoredFocus : firstLeaf(restoredTree),
     zoomedSessionId: typeof state.zoomedSessionId === "string" ? state.zoomedSessionId : defaults.zoomedSessionId,
     notifications: (Array.isArray(state.notifications) ? state.notifications : []).map((notification) => ({
       notifId: typeof notification.notifId === "string" && notification.notifId ? notification.notifId : crypto.randomUUID(),
@@ -52,9 +56,7 @@ export function migrateState(raw: unknown): TerminalState {
     themeOverride: isThemeOverride(state.themeOverride) ? state.themeOverride : defaults.themeOverride,
     notificationCenterOpen: typeof state.notificationCenterOpen === "boolean" ? state.notificationCenterOpen : defaults.notificationCenterOpen,
     notificationFilter: isNotificationFilter(state.notificationFilter) ? state.notificationFilter : defaults.notificationFilter,
-    sidebarCollapsed: typeof state.sidebarCollapsed === "boolean" ? state.sidebarCollapsed : defaults.sidebarCollapsed,
     perSession: migratePerSession(state.perSession),
-    savedLayouts: migrateSavedLayouts(state.savedLayouts),
     pasteMode: isPasteMode(state.pasteMode) ? state.pasteMode : defaults.pasteMode,
     imagePasteRelative: typeof state.imagePasteRelative === "boolean" ? state.imagePasteRelative : defaults.imagePasteRelative,
     keybindings: migrateKeybindings(state.keybindings),
@@ -90,38 +92,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function migrateTabs(value: unknown): TerminalTab[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter(isRecord)
-    .map((tab): TerminalTab | undefined => {
-      const tree = migrateSplitNode(tab["tree"]);
-      const focusedSessionId = typeof tab["focusedSessionId"] === "string" ? tab["focusedSessionId"] : firstLeaf(tree);
-      if (!tree || !focusedSessionId) return undefined;
-      const badge = migrateTabBadge(tab["badge"]);
-      return {
-        tabId: typeof tab["tabId"] === "string" && tab["tabId"] ? tab["tabId"] : crypto.randomUUID(),
-        label: typeof tab["label"] === "string" && tab["label"].trim() ? tab["label"] : "Terminal",
-        tree,
-        focusedSessionId,
-        ...(typeof tab["icon"] === "string" && tab["icon"].trim() ? { icon: tab["icon"] } : {}),
-        ...(typeof tab["accent"] === "string" && tab["accent"].trim() ? { accent: tab["accent"] } : {}),
-        ...(badge ? { badge } : {}),
-      };
-    })
-    .filter((tab): tab is TerminalTab => !!tab);
-}
-
-function migrateTabBadge(value: unknown): TerminalTab["badge"] | undefined {
-  if (!isRecord(value)) return undefined;
-  const badge = {
-    ...(typeof value["text"] === "string" && value["text"] ? { text: value["text"] } : {}),
-    ...(typeof value["color"] === "string" && value["color"] ? { color: value["color"] } : {}),
-    ...(isNotificationSeverity(value["severity"]) ? { severity: value["severity"] } : {}),
-  };
-  return Object.keys(badge).length ? badge : undefined;
-}
-
 function migratePerSession(value: unknown): TerminalState["perSession"] {
   if (!isRecord(value)) return {};
   return Object.fromEntries(
@@ -138,33 +108,6 @@ function migratePerSession(value: unknown): TerminalState["perSession"] {
         return [sessionId, next];
       }),
   );
-}
-
-function migrateSavedLayouts(value: unknown): TerminalState["savedLayouts"] {
-  if (!Array.isArray(value)) return [];
-  return [...value]
-    .filter(isRecord)
-    .map(migrateSavedLayout)
-    .filter((layout): layout is SavedLayout => !!layout)
-    .sort((a, b) => timestampOf(b["updatedAt"]) - timestampOf(a["updatedAt"]))
-    .slice(0, 32);
-}
-
-function migrateSavedLayout(value: Record<string, unknown>): SavedLayout | undefined {
-  const tree = migrateSplitNode(value["tree"]);
-  if (!tree) return undefined;
-  const id = typeof value["id"] === "string" && value["id"] ? value["id"] : crypto.randomUUID();
-  const name = typeof value["name"] === "string" && value["name"].trim() ? value["name"] : "Saved layout";
-  return {
-    id,
-    name,
-    tree,
-    cwds: stringRecord(value["cwds"]),
-    labels: stringRecord(value["labels"]),
-    ...(typeof value["icon"] === "string" && value["icon"].trim() ? { icon: value["icon"] } : {}),
-    ...(typeof value["accent"] === "string" && value["accent"].trim() ? { accent: value["accent"] } : {}),
-    updatedAt: timestampOf(value["updatedAt"]),
-  };
 }
 
 function migrateSplitNode(value: unknown): SplitNode | undefined {
@@ -192,15 +135,10 @@ function firstLeaf(node: SplitNode | undefined): string | undefined {
   return firstLeaf(node.a) ?? firstLeaf(node.b);
 }
 
-function stringRecord(value: unknown): Record<string, string> {
-  if (!isRecord(value)) return {};
-  return Object.fromEntries(
-    Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
-  );
-}
-
-function timestampOf(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+function containsSession(node: SplitNode | undefined, sessionId: string): boolean {
+  if (!node) return false;
+  if (node.kind === "leaf") return node.sessionId === sessionId;
+  return containsSession(node.a, sessionId) || containsSession(node.b, sessionId);
 }
 
 function migrateKeybindings(value: unknown): KeybindingOverrides {
