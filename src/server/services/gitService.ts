@@ -120,6 +120,7 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
       completeWorkspaceDependencies: {
         args: z.union([z.tuple([]), z.tuple([completeWorkspaceDependenciesSchema.optional()])]),
       },
+      syncRepoToContexts: { args: z.tuple([z.string()]) },
     },
     handler: async (ctx, method, args) => {
       const g = deps.gitServer;
@@ -280,6 +281,13 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
         case "completeWorkspaceDependencies": {
           const [options] = args as [{ credentialId?: string } | undefined];
           return completeWorkspaceDependencies(ctx, deps, options);
+        }
+
+        case "syncRepoToContexts": {
+          const [repoPath] = args as [string];
+          const validRepoPath = normalizeWorkspaceRepoPath(repoPath);
+          await deps.contextFolderManager?.syncRepoToContexts(validRepoPath);
+          return { synced: validRepoPath };
         }
 
         default:

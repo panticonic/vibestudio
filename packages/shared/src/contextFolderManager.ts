@@ -3,13 +3,14 @@
  *
  * Each context gets a folder at `{contextsRoot}/{contextId}/` that starts as
  * a copy of all workspace git repos from the source tree. Working tree files
- * and git state are copied per-context so panel-side git clients can read a
- * normal repository through the runtime filesystem. Panel fs calls are routed
+ * and mutable git state are copied per-context while immutable git objects are
+ * shared with the source repo via a validated .git/objects symlink. Panel fs calls are routed
  * to these folders via RPC, making files visible on disk and accessible to
  * server-side tools and agents.
  */
 
 import * as fs from "fs/promises";
+import { constants as fsConstants } from "fs";
 import * as path from "path";
 import { createDevLogger } from "@natstack/dev-log";
 
@@ -31,7 +32,7 @@ function validateContextId(contextId: string): void {
   }
   if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/.test(contextId)) {
     throw new Error(
-      `Invalid context ID: must be lowercase alphanumeric with hyphens, not starting/ending with hyphen. Got "${contextId}"`,
+      `Invalid context ID: must be lowercase alphanumeric with hyphens, not starting/ending with hyphen. Got "${contextId}"`
     );
   }
 }
@@ -43,14 +44,28 @@ function copyFilter(src: string): boolean {
 }
 
 /**
- * Create a context-local .git directory by copying the source repo's git state.
+ * Create a context-local .git directory by copying mutable git state and
+ * symlinking the immutable object database to the canonical source repo.
  *
- * This intentionally avoids symlinking .git/objects. Panel-side git operations
- * go through the runtime filesystem adapter, which does not reliably expose
- * symlink metadata to isomorphic-git. A normal copied object store is larger,
- * but it keeps status/commit operations correct and context-local.
+ * Context refs, HEAD, index, config, and hooks remain context-local. Only
+ * `.git/objects` is shared; the fs sandbox separately verifies this symlink
+ * before allowing it to escape the context root.
  */
-async function setupContextGit(srcGit: string, destGit: string): Promise<void> {
+async function createSharedObjectsSymlink(
+  destGit: string,
+  sharedObjectsTarget: string
+): Promise<void> {
+  const objectsPath = path.join(destGit, "objects");
+  await fs.rm(objectsPath, { recursive: true, force: true });
+  const relativeTarget = path.relative(destGit, sharedObjectsTarget) || sharedObjectsTarget;
+  await fs.symlink(relativeTarget, objectsPath, "dir");
+}
+
+async function setupContextGit(
+  srcGit: string,
+  destGit: string,
+  sharedObjectsTarget: string
+): Promise<void> {
   await fs.mkdir(destGit, { recursive: true });
 
   const entries = await fs.readdir(srcGit, { withFileTypes: true });
@@ -58,7 +73,7 @@ async function setupContextGit(srcGit: string, destGit: string): Promise<void> {
     const srcPath = path.join(srcGit, entry.name);
     const destPath = path.join(destGit, entry.name);
 
-    if (entry.name.endsWith(".lock")) continue;
+    if (entry.name === "objects" || entry.name.endsWith(".lock")) continue;
 
     if (entry.isDirectory()) {
       await fs.cp(srcPath, destPath, {
@@ -69,6 +84,8 @@ async function setupContextGit(srcGit: string, destGit: string): Promise<void> {
       await fs.copyFile(srcPath, destPath);
     }
   }
+
+  await createSharedObjectsSymlink(destGit, sharedObjectsTarget);
 
   // Integrity check: verify the objects/ store is readable and that HEAD
   // points to a reachable object.
@@ -95,6 +112,57 @@ async function setupContextGit(srcGit: string, destGit: string): Promise<void> {
   } catch (err) {
     log.warn(`Git integrity check failed for ${destGit}: ${err}`);
   }
+}
+
+async function copyLooseObjectsNoOverwrite(
+  srcObjects: string,
+  destObjects: string
+): Promise<number> {
+  let copied = 0;
+  let fanoutEntries: import("fs").Dirent[];
+  try {
+    fanoutEntries = await fs.readdir(srcObjects, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+
+  for (const fanout of fanoutEntries) {
+    if (!fanout.isDirectory() || !/^[0-9a-f]{2}$/.test(fanout.name)) continue;
+    const srcFanout = path.join(srcObjects, fanout.name);
+    const destFanout = path.join(destObjects, fanout.name);
+    await fs.mkdir(destFanout, { recursive: true });
+    let objectEntries: import("fs").Dirent[];
+    try {
+      objectEntries = await fs.readdir(srcFanout, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const objectEntry of objectEntries) {
+      if (!objectEntry.isFile() || !/^[0-9a-f]{38}$/.test(objectEntry.name)) continue;
+      const srcObject = path.join(srcFanout, objectEntry.name);
+      const destObject = path.join(destFanout, objectEntry.name);
+      try {
+        await fs.copyFile(srcObject, destObject, fsConstants.COPYFILE_EXCL);
+        copied++;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      }
+    }
+  }
+  return copied;
+}
+
+async function nextBackupPath(basePath: string): Promise<string> {
+  const stamp = Date.now();
+  for (let i = 0; i < 1000; i++) {
+    const candidate = `${basePath}.backup-${stamp}${i === 0 ? "" : `-${i}`}`;
+    try {
+      await fs.access(candidate);
+    } catch {
+      return candidate;
+    }
+  }
+  throw new Error(`Could not choose backup path for ${basePath}`);
 }
 
 /**
@@ -170,6 +238,7 @@ export class ContextFolderManager {
           // Does not exist, create it
         }
         if (contextExists) {
+          await this.repairSharedGitObjectsForContextPath(contextPath);
           await this.syncDeclaredRemotesForContextPath(contextPath);
           return contextPath; // Already exists
         }
@@ -247,7 +316,7 @@ export class ContextFolderManager {
           return repoPath
             ? this.syncDeclaredRemoteForRepo(contextPath, repoPath)
             : this.syncDeclaredRemotesForContextPath(contextPath);
-        }),
+        })
     );
   }
 
@@ -273,8 +342,39 @@ export class ContextFolderManager {
           } catch (err) {
             log.warn(`Failed to copy repo ${repoPath} into context ${entry.name}: ${err}`);
           }
-        }),
+        })
     );
+  }
+
+  /**
+   * Repair existing context repos so their `.git/objects` entry is the approved
+   * symlink to the canonical source repo object database. If a context still
+   * has a copied object directory, loose objects missing from the source object
+   * store are copied into the canonical store with no-overwrite semantics before
+   * the copied directory is moved aside.
+   */
+  async repairSharedGitObjects(repoPath?: string): Promise<void> {
+    let contextEntries: import("fs").Dirent[];
+    try {
+      contextEntries = await fs.readdir(this.contextsRoot, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    await Promise.all(
+      contextEntries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) =>
+          this.repairSharedGitObjectsForContextPath(
+            path.join(this.contextsRoot, entry.name),
+            repoPath
+          )
+        )
+    );
+  }
+
+  async repairContextRepoGit(contextId: string, repoPath: string): Promise<void> {
+    validateContextId(contextId);
+    await this.repairContextRepoGitAtPath(path.join(this.contextsRoot, contextId), repoPath);
   }
 
   /**
@@ -297,7 +397,9 @@ export class ContextFolderManager {
     if (!this.getWorkspaceConfig) return;
     const tree = await this.getWorkspaceTree();
     const repos = this.collectRepos(tree.children);
-    await Promise.all(repos.map((repoPath) => this.syncDeclaredRemoteForRepo(contextPath, repoPath)));
+    await Promise.all(
+      repos.map((repoPath) => this.syncDeclaredRemoteForRepo(contextPath, repoPath))
+    );
   }
 
   private async syncDeclaredRemoteForRepo(contextPath: string, repoPath: string): Promise<void> {
@@ -316,13 +418,14 @@ export class ContextFolderManager {
   private async copyRepoIntoContext(
     contextPath: string,
     repoPath: string,
-    opts: { skipIfExists?: boolean } = {},
+    opts: { skipIfExists?: boolean } = {}
   ): Promise<void> {
     const src = path.join(this.sourcePath, repoPath);
     const dest = path.join(contextPath, repoPath);
     if (opts.skipIfExists) {
       try {
         await fs.access(dest);
+        await this.repairContextRepoGitAtPath(contextPath, repoPath);
         await this.syncDeclaredRemoteForRepo(contextPath, repoPath);
         return;
       } catch {
@@ -337,7 +440,109 @@ export class ContextFolderManager {
     } catch {
       return;
     }
-    await setupContextGit(srcGit, path.join(dest, ".git"));
+    await setupContextGit(srcGit, path.join(dest, ".git"), path.join(srcGit, "objects"));
     await this.syncDeclaredRemoteForRepo(contextPath, repoPath);
+  }
+
+  private async repairSharedGitObjectsForContextPath(
+    contextPath: string,
+    repoPath?: string
+  ): Promise<void> {
+    const repos = repoPath
+      ? [repoPath]
+      : this.collectRepos((await this.getWorkspaceTree()).children);
+    await Promise.all(repos.map((repo) => this.repairContextRepoGitAtPath(contextPath, repo)));
+  }
+
+  private async repairContextRepoGitAtPath(contextPath: string, repoPath: string): Promise<void> {
+    const srcGit = path.join(this.sourcePath, repoPath, ".git");
+    const destGit = path.join(contextPath, repoPath, ".git");
+    const sourceObjects = path.join(srcGit, "objects");
+    const destObjects = path.join(destGit, "objects");
+
+    try {
+      const sourceStat = await fs.stat(sourceObjects);
+      if (!sourceStat.isDirectory()) return;
+      await fs.access(destGit);
+    } catch {
+      return;
+    }
+
+    let objectStat: import("fs").Stats | null = null;
+    try {
+      objectStat = await fs.lstat(destObjects);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    }
+
+    if (objectStat?.isSymbolicLink()) {
+      const target = await fs.realpath(destObjects).catch(() => null);
+      if (
+        target &&
+        (await this.isAllowedSharedGitObjectsSymlink({
+          contextRoot: contextPath,
+          symlinkPath: destObjects,
+          realTarget: target,
+        }))
+      ) {
+        return;
+      }
+      await fs.rm(destObjects, { recursive: true, force: true });
+    } else if (objectStat?.isDirectory()) {
+      const copied = await copyLooseObjectsNoOverwrite(destObjects, sourceObjects);
+      if (copied > 0) {
+        log.info(
+          `Migrated ${copied} loose git object(s) from ${path.relative(this.contextsRoot, destObjects)} into source store`
+        );
+      }
+      const backupPath = await nextBackupPath(destObjects);
+      await fs.rename(destObjects, backupPath);
+    } else if (objectStat) {
+      await fs.rm(destObjects, { recursive: true, force: true });
+    }
+
+    await createSharedObjectsSymlink(destGit, sourceObjects);
+    const repaired = await fs.stat(destObjects);
+    if (!repaired.isDirectory()) {
+      throw new Error(`Repaired git objects path is not a directory: ${destObjects}`);
+    }
+  }
+
+  /**
+   * Authoritative check used by FsService before permitting a symlink to escape
+   * a context root. The only approved escape is the server-created
+   * `<context>/<repo>/.git/objects` symlink pointing at the corresponding
+   * canonical source repo's object database.
+   */
+  async isAllowedSharedGitObjectsSymlink(args: {
+    contextRoot: string;
+    symlinkPath: string;
+    realTarget: string;
+  }): Promise<boolean> {
+    const contextRootReal = await fs.realpath(args.contextRoot).catch(() => null);
+    if (!contextRootReal) return false;
+
+    const symlinkAbs = path.resolve(args.symlinkPath);
+    const rel = path.relative(contextRootReal, symlinkAbs);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) return false;
+
+    const suffix = `${path.sep}.git${path.sep}objects`;
+    if (!symlinkAbs.endsWith(suffix)) return false;
+    const repoRel = path.dirname(path.dirname(symlinkAbs));
+    const repoPath = path.relative(contextRootReal, repoRel).split(path.sep).join("/");
+    if (!repoPath || repoPath.startsWith("..") || path.isAbsolute(repoPath)) return false;
+
+    const repos = new Set(this.collectRepos((await this.getWorkspaceTree()).children));
+    if (!repos.has(repoPath)) return false;
+
+    const expectedPath = path.join(this.sourcePath, repoPath, ".git", "objects");
+    const expectedStat = await fs.stat(expectedPath).catch(() => null);
+    if (!expectedStat?.isDirectory()) return false;
+    const expected = await fs.realpath(expectedPath).catch(() => null);
+    if (!expected) return false;
+    const actual = await fs.realpath(args.realTarget).catch(() => null);
+    if (actual !== expected) return false;
+    const actualStat = await fs.stat(actual).catch(() => null);
+    return actualStat?.isDirectory() === true;
   }
 }

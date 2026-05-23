@@ -37,6 +37,7 @@ state/
 - **AGENTS.md** — The system prompt injected into every agent session. Loaded by the resource loader at agent startup. Agents can also read it directly from `meta/AGENTS.md` in their context folder.
 
 Like every other source directory, `meta/` is a git repo. This means:
+
 - It gets copied into each context folder by the context folder manager
 - Agents can commit and push changes back to the workspace source via the internal git server
 - Changes pushed to meta/ can trigger rebuilds and config reloads
@@ -50,10 +51,14 @@ Like every other source directory, `meta/` is a git repo. This means:
 When a panel or agent session starts, it gets a **context folder** — an isolated copy of the workspace's git repos. Each context folder:
 
 1. Copies the working tree from every git repo in the workspace (panels, packages, skills, meta, etc.)
-2. Shares the immutable git object store via symlink (saves disk space)
-3. Gets its own mutable git state (HEAD, index, refs) so it can commit independently
+2. Gets its own mutable git state (`.git/HEAD`, `.git/index`, `.git/refs`, `.git/config`, hooks)
+3. Shares only the immutable git object store via a validated `.git/objects` symlink to the canonical source repo
 
-This means agents can freely read and write files in their context without affecting the workspace source or other contexts. To propagate changes back, agents commit and push through the internal git server.
+Context commits may add immutable loose objects to the shared object pool before a push. Push approval gates the canonical repository refs and source working tree update, not raw object admission. Object writes are no-overwrite and limited to loose object paths; packfile mutation through the context symlink is intentionally blocked.
+
+This means agents can freely read and write files in their context without affecting the workspace source or other contexts. To propagate changes back, agents commit and push through the internal git server. Existing contexts do not auto-reset when another context pushes; shared objects become visible immediately, but each context keeps its own refs and working tree until it explicitly fetches, pulls, rebases, or resets.
+
+Do not run destructive pruning on canonical source object stores unless the GC is context-aware. Context-only commits can be reachable from context refs even before their refs are pushed.
 
 ## Plain Projects
 
@@ -63,6 +68,7 @@ the workspace build system. Examples include upstream application checkouts,
 third-party libraries, or larger patch branches an agent is preparing.
 
 Plain projects are still normal workspace git repos:
+
 - They appear in the workspace tree once initialized or cloned.
 - They are copied into context folders like other repos.
 - Shared remotes declared under `git.remotes.projects.<repo>.<remoteName>` are

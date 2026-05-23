@@ -20,12 +20,12 @@ relative imports from that file, and resolves bare imports from the nearest
 
 ## Parameters
 
-| Param | Type | Default | Description |
-|-------|------|---------|-------------|
-| `code` | string | — | TypeScript/JavaScript code to execute. Provide either `code` or `path` |
-| `path` | string | — | Context-relative TypeScript/TSX file to execute instead of inline code |
-| `syntax` | `"typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax |
-| `imports` | `Record<string, string>` | — | Packages to build on-demand (workspace or npm) |
+| Param     | Type                             | Default | Description                                                            |
+| --------- | -------------------------------- | ------- | ---------------------------------------------------------------------- |
+| `code`    | string                           | —       | TypeScript/JavaScript code to execute. Provide either `code` or `path` |
+| `path`    | string                           | —       | Context-relative TypeScript/TSX file to execute instead of inline code |
+| `syntax`  | `"typescript" \| "jsx" \| "tsx"` | `"tsx"` | Source syntax                                                          |
+| `imports` | `Record<string, string>`         | —       | Packages to build on-demand (workspace or npm)                         |
 
 ## Top-level Await
 
@@ -68,6 +68,8 @@ eval({ code: `...`, imports: { "@workspace-skills/paneldev": "my-branch" } })
 ```
 
 **Important:** Workspace packages are built from git, not from the working tree. If you edit source files, you must **commit and push** before changes take effect. Use `commitAndPush` from the paneldev skill or the GitClient API.
+
+Context folders are isolated working trees with context-local refs, index, HEAD, config, and hooks. Only `.git/objects` is shared, through a validated symlink to the canonical source repo object store. Local commits can add immutable loose objects before push; approval gates canonical ref movement and source working tree updates. Do not manually edit `.git/objects`, and do not assume another context's push resets your current context.
 
 ### npm packages
 
@@ -150,6 +152,7 @@ imported from `@workspace/runtime` — bare references throw `ReferenceError`.
 `scope` is a live in-memory object shared across eval calls. Store anything — handles, pages, functions, class instances, data — and it all works between calls within the same panel session. No serialization happens between eval calls; `scope` is the same in-memory Proxy every time.
 
 Serialization only matters in two situations:
+
 1. **Panel reload** — scope is rehydrated from DB. Data survives, functions/class instances are lost.
 2. **`scopes.get(id)`** — returns a serialized snapshot. Data only, no functions.
 
@@ -184,6 +187,7 @@ eval({ code: `
 ### Serialization
 
 Scope is serialized per-property when persisted:
+
 - **Kept:** primitives, plain objects, arrays, Date, Map, Set, RegExp
 - **Dropped:** functions, symbols, class instances, WeakRef/WeakMap/WeakSet, circular refs, depth > 20
 - **Partial restoration:** if `scope.browser = { id: "x", title: "Y", page: fn }`, after reload `scope.browser.id` and `scope.browser.title` survive but `scope.browser.page` is lost
@@ -197,6 +201,7 @@ Deep mutations (`scope.data.push(x)`, `scope.config.key = val`) are captured by 
 ### Scope History
 
 Scopes are append-only. Each has a stable UUID:
+
 ```
 // Push creates a new scope (old one is archived)
 eval({ code: `
@@ -353,14 +358,9 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { rpc } from "@workspace/runtime";
-  const result = await rpc.call(
-    "main",
-    "extensions.invoke",
-    "@workspace-extensions/typecheck-service",
-    "check",
-    ["panels/my-app"],
-  );
+  import { extensions } from "@workspace/runtime";
+  const typecheck = extensions.use("@workspace-extensions/typecheck-service");
+  const result = await typecheck.checkPanel("panels/my-app");
   console.log("Type errors:", result);
 `
 })

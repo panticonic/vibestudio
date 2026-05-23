@@ -15,7 +15,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, writeFileSync, mkdirSync, symlinkSync } from "node:fs";
+import {
+  mkdtempSync,
+  rmSync,
+  existsSync,
+  writeFileSync,
+  mkdirSync,
+  symlinkSync,
+  realpathSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { FsService } from "./fsService.js";
@@ -33,6 +41,22 @@ function makeStubFolderManager(root: string): ContextFolderManager {
       const p = path.join(root, contextId);
       mkdirSync(p, { recursive: true });
       return p;
+    },
+    async isAllowedSharedGitObjectsSymlink(args: {
+      contextRoot: string;
+      symlinkPath: string;
+      realTarget: string;
+    }): Promise<boolean> {
+      const expectedSymlink = path.join(args.contextRoot, "repo", ".git", "objects");
+      const expectedTarget = path.join(root, "source", "repo", ".git", "objects");
+      try {
+        return (
+          path.resolve(args.symlinkPath) === expectedSymlink &&
+          realpathSync(args.realTarget) === realpathSync(expectedTarget)
+        );
+      } catch {
+        return false;
+      }
     },
   } as unknown as ContextFolderManager;
 }
@@ -175,11 +199,10 @@ describe("FsService", () => {
       });
 
       await expect(
-        service.handleCall(
-          ctx,
-          "readFile",
-          ["/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12", "utf8"]
-        )
+        service.handleCall(ctx, "readFile", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+          "utf8",
+        ])
       ).resolves.toBe("object");
     });
 
@@ -191,28 +214,25 @@ describe("FsService", () => {
       });
 
       await service.handleCall(ctx, "mkdir", ["/repo/.git/objects/cd", { recursive: true }]);
-      await service.handleCall(
-        ctx,
-        "writeFile",
-        ["/repo/.git/objects/cd/ef1234567890abcdef1234567890abcdef1234", "new"]
-      );
+      await service.handleCall(ctx, "writeFile", [
+        "/repo/.git/objects/cd/ef1234567890abcdef1234567890abcdef1234",
+        "new",
+      ]);
       expect(
         existsSync(path.join(sharedObjects, "cd", "ef1234567890abcdef1234567890abcdef1234"))
       ).toBe(true);
 
       await expect(
-        service.handleCall(
-          ctx,
-          "writeFile",
-          ["/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12", "overwrite"]
-        )
+        service.handleCall(ctx, "writeFile", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+          "overwrite",
+        ])
       ).rejects.toMatchObject({ code: "EEXIST" });
       expect(
-        await service.handleCall(
-          ctx,
-          "readFile",
-          ["/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12", "utf8"]
-        )
+        await service.handleCall(ctx, "readFile", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+          "utf8",
+        ])
       ).toBe("existing");
     });
 
@@ -227,11 +247,57 @@ describe("FsService", () => {
         service.handleCall(ctx, "writeFile", ["/repo/.git/objects/not-a-loose-object", "bad"])
       ).rejects.toThrow(/loose object/i);
       await expect(
-        service.handleCall(
-          ctx,
-          "unlink",
-          ["/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12"]
-        )
+        service.handleCall(ctx, "unlink", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+        ])
+      ).rejects.toThrow(/Symlink escapes sandbox/i);
+      await expect(
+        service.handleCall(ctx, "rm", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+        ])
+      ).rejects.toThrow(/Symlink escapes sandbox/i);
+      await expect(service.handleCall(ctx, "rmdir", ["/repo/.git/objects/ab"])).rejects.toThrow(
+        /Symlink escapes sandbox/i
+      );
+      await expect(
+        service.handleCall(ctx, "rename", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+          "/repo/.git/objects/ab/ffffffffffffffffffffffffffffffffffffff",
+        ])
+      ).rejects.toThrow(/Symlink escapes sandbox/i);
+      await expect(
+        service.handleCall(ctx, "truncate", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+          0,
+        ])
+      ).rejects.toThrow(/Symlink escapes sandbox/i);
+      await expect(
+        service.handleCall(ctx, "open", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+          "w",
+        ])
+      ).rejects.toThrow(/Symlink escapes sandbox/i);
+    });
+
+    it("rejects reads through an invalid .git/objects symlink escape", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-git-invalid");
+      const contextRoot = path.join(tmpRoot, "ctx-git-invalid");
+      const repoGit = path.join(contextRoot, "repo", ".git");
+      const externalObjects = path.join(tmpRoot, "external-objects");
+      mkdirSync(path.join(externalObjects, "ab"), { recursive: true });
+      writeFileSync(
+        path.join(externalObjects, "ab", "cdef1234567890abcdef1234567890abcdef12"),
+        "outside"
+      );
+      mkdirSync(repoGit, { recursive: true });
+      symlinkSync(path.relative(repoGit, externalObjects), path.join(repoGit, "objects"), "dir");
+
+      await expect(
+        service.handleCall(ctx, "readFile", [
+          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
+          "utf8",
+        ])
       ).rejects.toThrow(/Symlink escapes sandbox/i);
     });
   });
@@ -307,7 +373,7 @@ describe("FsService", () => {
   function setupSharedGitObjects(contextId: string, objects: Record<string, string>): string {
     const contextRoot = path.join(tmpRoot, contextId);
     const repoGit = path.join(contextRoot, "repo", ".git");
-    const sharedObjects = path.join(tmpRoot, `shared-objects-${contextId}`);
+    const sharedObjects = path.join(tmpRoot, "source", "repo", ".git", "objects");
     mkdirSync(repoGit, { recursive: true });
     mkdirSync(sharedObjects, { recursive: true });
     for (const [objectPath, content] of Object.entries(objects)) {

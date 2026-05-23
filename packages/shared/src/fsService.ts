@@ -34,12 +34,19 @@ interface TrackedHandle {
 interface FsCallScope {
   root: string;
   panelId: string;
+  contextId?: string;
   unrestricted: boolean;
   exposeHostPaths: boolean;
+  isAllowedSharedGitObjectsSymlink?: (args: {
+    contextRoot: string;
+    symlinkPath: string;
+    realTarget: string;
+  }) => Promise<boolean>;
 }
 
 interface ResolvePathOptions {
   allowSharedGitObjects?: boolean;
+  isAllowedSharedGitObjectsSymlink?: FsCallScope["isAllowedSharedGitObjectsSymlink"];
 }
 
 interface ResolvedFsPath {
@@ -58,9 +65,11 @@ function relativeSegments(root: string, absolutePath: string): string[] {
 
 function isContextGitObjectsPath(root: string, absolutePath: string): boolean {
   const segments = relativeSegments(root, absolutePath);
-  return segments.length >= 3 &&
+  return (
+    segments.length >= 3 &&
     segments[segments.length - 2] === ".git" &&
-    segments[segments.length - 1] === "objects";
+    segments[segments.length - 1] === "objects"
+  );
 }
 
 function sharedGitObjectsSubpath(root: string, absolutePath: string): string[] | null {
@@ -68,6 +77,16 @@ function sharedGitObjectsSubpath(root: string, absolutePath: string): string[] |
   for (let i = 0; i < segments.length - 1; i++) {
     if (segments[i] === ".git" && segments[i + 1] === "objects") {
       return segments.slice(i + 2);
+    }
+  }
+  return null;
+}
+
+function sharedGitObjectsRepoPath(root: string, absolutePath: string): string | null {
+  const segments = relativeSegments(root, absolutePath);
+  for (let i = 0; i < segments.length - 1; i++) {
+    if (segments[i] === ".git" && segments[i + 1] === "objects") {
+      return segments.slice(0, i).join("/");
     }
   }
   return null;
@@ -95,7 +114,7 @@ function isLooseGitObjectFile(root: string, absolutePath: string): boolean {
 async function sandboxPath(
   root: string,
   userPath: string,
-  opts: ResolvePathOptions = {},
+  opts: ResolvePathOptions = {}
 ): Promise<ResolvedFsPath> {
   const relative = userPath.startsWith("/") ? userPath.slice(1) : userPath;
   const resolved = path.resolve(root, relative);
@@ -113,7 +132,16 @@ async function sandboxPath(
       if (st.isSymbolicLink()) {
         const target = await fs.realpath(current);
         if (!target.startsWith(root + path.sep) && target !== root) {
-          if (opts.allowSharedGitObjects && isContextGitObjectsPath(root, current)) {
+          const allowedSharedObjects =
+            opts.allowSharedGitObjects &&
+            isContextGitObjectsPath(root, current) &&
+            opts.isAllowedSharedGitObjectsSymlink &&
+            (await opts.isAllowedSharedGitObjectsSymlink({
+              contextRoot: root,
+              symlinkPath: current,
+              realTarget: target,
+            }));
+          if (allowedSharedObjects) {
             escapedViaSharedGitObjects = true;
             continue;
           }
@@ -132,7 +160,7 @@ async function sandboxPath(
 async function resolveFsPathInfo(
   scope: FsCallScope,
   userPath: string,
-  opts: ResolvePathOptions = {},
+  opts: ResolvePathOptions = {}
 ): Promise<ResolvedFsPath> {
   if (!scope.unrestricted) {
     return sandboxPath(scope.root, userPath, opts);
@@ -146,7 +174,7 @@ async function resolveFsPathInfo(
 async function resolveFsPath(
   scope: FsCallScope,
   userPath: string,
-  opts: ResolvePathOptions = {},
+  opts: ResolvePathOptions = {}
 ): Promise<string> {
   return (await resolveFsPathInfo(scope, userPath, opts)).path;
 }
@@ -212,6 +240,7 @@ export class FsService {
 
   /** handleId → TrackedHandle */
   private readonly openHandles = new Map<number, TrackedHandle>();
+  private readonly sharedObjectWrites = new Map<string, { count: number; bytes: number }>();
   private nextHandleId = 1;
 
   constructor(
@@ -279,7 +308,15 @@ export class FsService {
         }
         contextId = cid;
         const root = await this.contextFolderManager.ensureContextFolder(contextId);
-        return { root, panelId, unrestricted: false, exposeHostPaths: true };
+        return {
+          root,
+          panelId,
+          contextId,
+          unrestricted: false,
+          exposeHostPaths: true,
+          isAllowedSharedGitObjectsSymlink: (args) =>
+            this.contextFolderManager.isAllowedSharedGitObjectsSymlink(args),
+        };
       }
       return {
         root: "",
@@ -297,7 +334,15 @@ export class FsService {
     }
 
     const root = await this.contextFolderManager.ensureContextFolder(contextId);
-    return { root, panelId, unrestricted: false, exposeHostPaths: false };
+    return {
+      root,
+      panelId,
+      contextId,
+      unrestricted: false,
+      exposeHostPaths: false,
+      isAllowedSharedGitObjectsSymlink: (args) =>
+        this.contextFolderManager.isAllowedSharedGitObjectsSymlink(args),
+    };
   }
 
   // =========================================================================
@@ -343,7 +388,10 @@ export class FsService {
     switch (method) {
       // ----- File content -----
       case "readFile": {
-        const p = await resolveFsPath(scope, args[0] as string, { allowSharedGitObjects: true });
+        const p = await resolveFsPath(scope, args[0] as string, {
+          allowSharedGitObjects: true,
+          isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
+        });
         const encoding = args[1] as string | undefined;
         if (encoding) {
           return fs.readFile(p, encoding as BufferEncoding);
@@ -355,6 +403,7 @@ export class FsService {
       case "writeFile": {
         const resolvedPath = await resolveFsPathInfo(scope, args[0] as string, {
           allowSharedGitObjects: true,
+          isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
         });
         const p = resolvedPath.path;
         const data = isBinaryEnvelope(args[1]) ? decodeBinary(args[1]) : (args[1] as string);
@@ -363,6 +412,22 @@ export class FsService {
             throw new Error("Shared git object writes are limited to loose object files");
           }
           await fs.writeFile(p, data, { flag: "wx" });
+          const bytes = typeof data === "string" ? Buffer.byteLength(data) : data.byteLength;
+          const objectPath = sharedGitObjectsSubpath(root, p)?.join("/") ?? path.basename(p);
+          const quotaKey = `${scope.contextId ?? root}:${sharedGitObjectsRepoPath(root, p) ?? "unknown"}`;
+          const previous = this.sharedObjectWrites.get(quotaKey) ?? { count: 0, bytes: 0 };
+          const next = { count: previous.count + 1, bytes: previous.bytes + bytes };
+          this.sharedObjectWrites.set(quotaKey, next);
+          if (bytes > 50 * 1024 * 1024) {
+            log.warn(`Large shared git object admitted: ${objectPath} (${bytes} bytes)`);
+          } else {
+            log.info(`Shared git object admitted: ${objectPath} (${bytes} bytes)`);
+          }
+          if (next.bytes > 250 * 1024 * 1024) {
+            log.warn(
+              `Shared git object write volume is high for ${quotaKey}: ${next.count} object(s), ${next.bytes} bytes`
+            );
+          }
           return;
         }
         await fs.writeFile(p, data);
@@ -378,7 +443,10 @@ export class FsService {
 
       // ----- Directory operations -----
       case "readdir": {
-        const p = await resolveFsPath(scope, args[0] as string, { allowSharedGitObjects: true });
+        const p = await resolveFsPath(scope, args[0] as string, {
+          allowSharedGitObjects: true,
+          isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
+        });
         const opts = args[1] as { withFileTypes?: boolean } | undefined;
         if (opts?.withFileTypes) {
           const entries = await fs.readdir(p, { withFileTypes: true });
@@ -390,11 +458,14 @@ export class FsService {
       case "mkdir": {
         const resolvedPath = await resolveFsPathInfo(scope, args[0] as string, {
           allowSharedGitObjects: true,
+          isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
         });
         const p = resolvedPath.path;
         const opts = args[1] as { recursive?: boolean } | undefined;
         if (resolvedPath.escapedViaSharedGitObjects && !isLooseGitObjectDirectory(root, p)) {
-          throw new Error("Shared git object directory creation is limited to loose object fanout directories");
+          throw new Error(
+            "Shared git object directory creation is limited to loose object fanout directories"
+          );
         }
         const result = await fs.mkdir(p, opts);
         // Return first-created path relative to context root (Node API contract)
@@ -416,17 +487,26 @@ export class FsService {
 
       // ----- Stat / metadata -----
       case "stat": {
-        const p = await resolveFsPath(scope, args[0] as string, { allowSharedGitObjects: true });
+        const p = await resolveFsPath(scope, args[0] as string, {
+          allowSharedGitObjects: true,
+          isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
+        });
         return serializeStat(await fs.stat(p));
       }
 
       case "lstat": {
-        const p = await resolveFsPath(scope, args[0] as string, { allowSharedGitObjects: true });
+        const p = await resolveFsPath(scope, args[0] as string, {
+          allowSharedGitObjects: true,
+          isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
+        });
         return serializeStat(await fs.lstat(p));
       }
 
       case "exists": {
-        const p = await resolveFsPath(scope, args[0] as string, { allowSharedGitObjects: true });
+        const p = await resolveFsPath(scope, args[0] as string, {
+          allowSharedGitObjects: true,
+          isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
+        });
         try {
           await fs.access(p);
           return true;
@@ -436,7 +516,10 @@ export class FsService {
       }
 
       case "access": {
-        const p = await resolveFsPath(scope, args[0] as string, { allowSharedGitObjects: true });
+        const p = await resolveFsPath(scope, args[0] as string, {
+          allowSharedGitObjects: true,
+          isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
+        });
         await fs.access(p, args[1] as number | undefined);
         return;
       }

@@ -738,7 +738,10 @@ async function main() {
   gitServer.onPush((event) => {
     if (event.repo !== "meta") {
       queueMicrotask(() => {
-        syncDeclaredRemotesForSource(event.repo)
+        gitServer.invalidateTreeCache();
+        contextFolderManager
+          .syncRepoToContexts(event.repo)
+          .then(() => syncDeclaredRemotesForSource(event.repo))
           .then(() => contextFolderManager.syncDeclaredRemotes(event.repo))
           .catch((err: unknown) =>
             console.warn(
