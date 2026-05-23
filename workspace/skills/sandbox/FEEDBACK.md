@@ -30,6 +30,11 @@ For standard forms with typed fields. No code needed.
 | `slider` | `min`, `max` | Range slider |
 | `segmented` | `options: { value, label }[]` | Segmented control |
 
+Choice fields (`select`, `segmented`, and `multiSelect`) show an automatic
+free-text "Other" choice in feedback forms unless `allowFreeText: false` is set
+on the field. `buttonGroup` can opt in with `allowFreeText: true`. Customize it
+with `freeTextLabel`, `freeTextPlaceholder`, and `freeTextKey`.
+
 ### Field Definition
 
 ```typescript

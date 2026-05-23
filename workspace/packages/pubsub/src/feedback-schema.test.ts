@@ -23,6 +23,30 @@ describe("FeedbackFormArgsSchema", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("accepts free-text choice configuration", () => {
+    const parsed = FeedbackFormArgsSchema.safeParse({
+      title: "Choose",
+      fields: [
+        {
+          key: "choice",
+          label: "Choice",
+          type: "segmented",
+          variant: "cards",
+          allowFreeText: true,
+          freeTextLabel: "Something else",
+          freeTextPlaceholder: "Describe it",
+          freeTextKey: "choiceOther",
+          options: [
+            { value: "a", label: "A" },
+            { value: "b", label: "B" },
+          ],
+        },
+      ],
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
   it("rejects timeout arguments", () => {
     const parsed = FeedbackFormArgsSchema.safeParse({
       ...baseFeedbackForm,

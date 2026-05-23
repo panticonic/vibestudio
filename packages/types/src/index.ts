@@ -18,6 +18,7 @@ export type {
   FieldDefinition,
   FormSchema,
 } from "./form-schema.js";
+export { FREE_TEXT_CHOICE_VALUE } from "./form-schema.js";
 
 // AI types
 export type {

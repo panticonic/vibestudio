@@ -112,6 +112,10 @@ export const FieldDefinitionSchema = z.object({
     .array(z.object({ value: z.string(), label: z.string(), description: z.string().optional() }))
     .optional(),
   placeholder: z.string().optional(),
+  allowFreeText: z.boolean().optional(),
+  freeTextLabel: z.string().optional(),
+  freeTextPlaceholder: z.string().optional(),
+  freeTextKey: z.string().optional(),
 
   // Slider-specific fields
   min: z.number().optional(),

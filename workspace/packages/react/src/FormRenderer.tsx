@@ -8,6 +8,7 @@
 import {
   Button,
   Callout,
+  Card,
   Checkbox,
   CheckboxGroup,
   Code,
@@ -19,6 +20,7 @@ import {
   Slider,
   Switch,
   Text,
+  TextArea,
   TextField,
 } from "@radix-ui/themes";
 import { InfoCircledIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
@@ -28,6 +30,7 @@ import type {
   FieldWarning,
   FormSchema,
 } from "@natstack/types";
+import { FREE_TEXT_CHOICE_VALUE } from "@natstack/types";
 import {
   isFieldVisible,
   isFieldEnabled,
@@ -87,6 +90,41 @@ function getWarningColor(severity: FieldWarning["severity"]): "red" | "orange" |
     default:
       return "blue";
   }
+}
+
+function fieldSupportsFreeText(field: FieldDefinition): boolean {
+  return (
+    field.allowFreeText === true &&
+    (field.type === "select" ||
+      field.type === "segmented" ||
+      field.type === "multiSelect" ||
+      field.type === "buttonGroup")
+  );
+}
+
+function getFreeTextKey(field: FieldDefinition): string {
+  return field.freeTextKey ?? `${field.key}FreeText`;
+}
+
+function getOptionsWithFreeText(field: FieldDefinition) {
+  const options = field.options ?? [];
+  if (!fieldSupportsFreeText(field) || options.some((option) => option.value === FREE_TEXT_CHOICE_VALUE)) {
+    return options;
+  }
+  return [
+    ...options,
+    {
+      value: FREE_TEXT_CHOICE_VALUE,
+      label: field.freeTextLabel ?? "Other",
+      description: "Enter your own answer.",
+    },
+  ];
+}
+
+function isFreeTextSelected(field: FieldDefinition, value: FieldValue | undefined): boolean {
+  if (!fieldSupportsFreeText(field)) return false;
+  if (Array.isArray(value)) return value.includes(FREE_TEXT_CHOICE_VALUE);
+  return value === FREE_TEXT_CHOICE_VALUE;
 }
 
 /**
@@ -194,6 +232,19 @@ export function FormRenderer({
     const isEnabled = isFieldEnabled(field, effectiveValues);
     const currentValue = effectiveValues[field.key] ?? field.default;
     const warning = getFieldWarning(field, currentValue as FieldValue);
+    const freeTextKey = getFreeTextKey(field);
+    const freeTextValue = values[freeTextKey] ?? effectiveValues[freeTextKey];
+    const showFreeText = isFreeTextSelected(field, currentValue as FieldValue | undefined);
+    const freeTextInput = showFreeText ? (
+      <TextArea
+        size={size}
+        placeholder={field.freeTextPlaceholder ?? "Type your answer..."}
+        value={String(freeTextValue ?? "")}
+        disabled={!isEnabled}
+        onChange={(e) => onChange(freeTextKey, e.target.value)}
+        {...clickProps}
+      />
+    ) : null;
 
     // Build placeholder text with default value info
     const placeholderText = field.placeholder
@@ -276,21 +327,24 @@ export function FormRenderer({
 
         {/* Select dropdown */}
         {field.type === "select" && field.options && (
-          <Select.Root
-            size={size}
-            value={String(currentValue ?? "")}
-            disabled={!isEnabled}
-            onValueChange={(value) => onChange(field.key, value)}
-          >
-            <Select.Trigger placeholder="Select..." {...clickProps} />
-            <Select.Content>
-              {field.options.map((option) => (
-                <Select.Item key={option.value} value={option.value}>
-                  {option.label}
-                </Select.Item>
-              ))}
-            </Select.Content>
-          </Select.Root>
+          <Flex direction="column" gap="2" {...clickProps}>
+            <Select.Root
+              size={size}
+              value={String(currentValue ?? "")}
+              disabled={!isEnabled}
+              onValueChange={(value) => onChange(field.key, value)}
+            >
+              <Select.Trigger placeholder="Select..." />
+              <Select.Content>
+                {getOptionsWithFreeText(field).map((option) => (
+                  <Select.Item key={option.value} value={option.value}>
+                    {option.label}
+                  </Select.Item>
+                ))}
+              </Select.Content>
+            </Select.Root>
+            {freeTextInput}
+          </Flex>
         )}
 
         {/* Slider (continuous or notched) */}
@@ -348,7 +402,7 @@ export function FormRenderer({
               value={String(currentValue ?? "")}
               onValueChange={isEnabled ? (value) => onChange(field.key, value) : undefined}
             >
-              {field.options.map((option) => (
+              {getOptionsWithFreeText(field).map((option) => (
                 <SegmentedControl.Item
                   key={option.value}
                   value={option.value}
@@ -359,40 +413,65 @@ export function FormRenderer({
             </SegmentedControl.Root>
             {/* Selected option description */}
             {(() => {
-              const selectedOption = field.options?.find(
+              const selectedOption = getOptionsWithFreeText(field).find(
                 (o) => o.value === String(currentValue)
               );
               return selectedOption?.description ? (
                 <Text size="1" color="gray">{selectedOption.description}</Text>
               ) : null;
             })()}
+            {freeTextInput}
           </Flex>
         )}
 
-        {/* Segmented control - cards variant (RadioGroup with visible radio buttons) */}
+        {/* Segmented control - cards variant */}
         {field.type === "segmented" && field.options && field.variant === "cards" && (
-          <RadioGroup.Root
-            size={size}
-            value={String(currentValue ?? "")}
-            onValueChange={isEnabled ? (value) => onChange(field.key, value) : undefined}
-            {...clickProps}
-          >
-            <Flex direction="column" gap="2">
-              {field.options.map((option) => (
-                <Text as="label" size={size} key={option.value}>
-                  <Flex gap="2" align={option.description ? "start" : "center"}>
-                    <RadioGroup.Item value={option.value} disabled={!isEnabled} style={{ marginTop: option.description ? 2 : 0 }} />
-                    <Flex direction="column" gap="1">
-                      <Text weight="medium">{option.label}</Text>
-                      {option.description && (
-                        <Text size="1" color="gray">{option.description}</Text>
-                      )}
-                    </Flex>
-                  </Flex>
-                </Text>
-              ))}
-            </Flex>
-          </RadioGroup.Root>
+          <Flex direction="column" gap="2" {...clickProps}>
+            <RadioGroup.Root
+              size={size}
+              value={String(currentValue ?? "")}
+              onValueChange={isEnabled ? (value) => onChange(field.key, value) : undefined}
+            >
+              <Flex direction="column" gap="2">
+                {getOptionsWithFreeText(field).map((option) => {
+                  const selected = String(currentValue ?? "") === option.value;
+                  return (
+                    <Card
+                      key={option.value}
+                      size="1"
+                      asChild
+                      style={{
+                        borderColor: selected ? "var(--accent-8)" : undefined,
+                        background: selected ? "var(--accent-a3)" : undefined,
+                        opacity: isEnabled ? 1 : 0.6,
+                      }}
+                    >
+                      <label style={{ cursor: isEnabled ? "pointer" : "default" }}>
+                        <Flex gap="2" align={option.description ? "start" : "center"}>
+                          <RadioGroup.Item
+                            value={option.value}
+                            disabled={!isEnabled}
+                            style={{
+                              position: "absolute",
+                              opacity: 0,
+                              pointerEvents: "none",
+                            }}
+                          />
+                          <Flex direction="column" gap="1">
+                            <Text weight="medium">{option.label}</Text>
+                            {option.description && (
+                              <Text size="1" color="gray">{option.description}</Text>
+                            )}
+                          </Flex>
+                        </Flex>
+                      </label>
+                    </Card>
+                  );
+                })}
+              </Flex>
+            </RadioGroup.Root>
+            {freeTextInput}
+          </Flex>
         )}
 
         {/* Toggle (two-state with labels) */}
@@ -414,13 +493,14 @@ export function FormRenderer({
             </SegmentedControl.Root>
             {/* Selected option description */}
             {(() => {
-              const selectedOption = field.options?.find(
+              const selectedOption = getOptionsWithFreeText(field).find(
                 (o) => o.value === String(currentValue)
               );
               return selectedOption?.description ? (
                 <Text size="1" color="gray">{selectedOption.description}</Text>
               ) : null;
             })()}
+            {freeTextInput}
           </Flex>
         )}
 
@@ -442,31 +522,43 @@ export function FormRenderer({
 
         {/* ButtonGroup field - horizontal action buttons */}
         {field.type === "buttonGroup" && field.buttons && (
-          <Flex gap="2" {...clickProps}>
-            {field.buttons.map((btn) => (
-              <Button
-                key={btn.value}
-                variant={field.buttonStyle ?? "outline"}
-                color={btn.color ?? "gray"}
-                disabled={!isEnabled}
-                onClick={() => {
-                  onChange(field.key, btn.value);
-                  if (field.submitOnSelect && onSubmit) {
-                    // Use setTimeout to ensure state update is processed first
-                    setTimeout(onSubmit, 0);
-                  }
-                }}
-              >
-                {btn.label}
-              </Button>
-            ))}
+          <Flex direction="column" gap="2" {...clickProps}>
+            <Flex gap="2">
+              {[
+                ...field.buttons,
+                ...(fieldSupportsFreeText(field)
+                  ? [{
+                    value: FREE_TEXT_CHOICE_VALUE,
+                    label: field.freeTextLabel ?? "Other",
+                    color: "gray" as const,
+                  }]
+                  : []),
+              ].map((btn) => (
+                <Button
+                  key={btn.value}
+                  variant={field.buttonStyle ?? "outline"}
+                  color={btn.color ?? "gray"}
+                  disabled={!isEnabled}
+                  onClick={() => {
+                    onChange(field.key, btn.value);
+                    if (field.submitOnSelect && onSubmit && btn.value !== FREE_TEXT_CHOICE_VALUE) {
+                      // Use setTimeout to ensure state update is processed first
+                      setTimeout(onSubmit, 0);
+                    }
+                  }}
+                >
+                  {btn.label}
+                </Button>
+              ))}
+            </Flex>
+            {freeTextInput}
           </Flex>
         )}
 
         {/* MultiSelect field - list variant (default) */}
         {field.type === "multiSelect" && field.options && field.variant !== "cards" && (
           <Flex direction="column" gap="1" {...clickProps}>
-            {field.options.map((opt) => {
+            {getOptionsWithFreeText(field).map((opt) => {
               const selected = Array.isArray(currentValue) ? currentValue : [];
               const isChecked = selected.includes(opt.value);
               return (
@@ -490,6 +582,7 @@ export function FormRenderer({
                 </Flex>
               );
             })}
+            {freeTextInput}
           </Flex>
         )}
 
@@ -502,7 +595,7 @@ export function FormRenderer({
             {...clickProps}
           >
             <Flex direction="column" gap="2">
-              {field.options.map((opt) => (
+              {getOptionsWithFreeText(field).map((opt) => (
                 <Text as="label" size={size} key={opt.value}>
                   <Flex gap="2" align={opt.description ? "start" : "center"}>
                     <CheckboxGroup.Item value={opt.value} disabled={!isEnabled} style={{ marginTop: opt.description ? 2 : 0 }} />
@@ -518,6 +611,7 @@ export function FormRenderer({
             </Flex>
           </CheckboxGroup.Root>
         )}
+        {field.type === "multiSelect" && field.options && field.variant === "cards" && freeTextInput}
 
         {/* Diff field - pre-formatted diff display */}
         {field.type === "diff" && (

@@ -40,6 +40,8 @@ export type FieldType =
   | "toolPreview" // Rich tool argument preview (Monaco diff, git previews, etc.)
   | "approvalHeader"; // Tool approval header (first-time grant or per-call)
 
+export const FREE_TEXT_CHOICE_VALUE = "__natstack_free_text__";
+
 /**
  * Comparison operators for field conditions
  */
@@ -101,6 +103,12 @@ export interface FieldDefinition {
 
   // Variant for segmented and multiSelect fields
   variant?: "buttons" | "cards" | "list";
+
+  // Add an "Other" choice that captures arbitrary user text.
+  allowFreeText?: boolean;
+  freeTextLabel?: string;
+  freeTextPlaceholder?: string;
+  freeTextKey?: string;
 
   // Slider configuration
   min?: number;
