@@ -1949,6 +1949,7 @@ async function main() {
     workerdGatewayToken,
     getWorkerdDispatchSecret: () => workerdManagerForGateway?.getDispatchSecret() ?? null,
     tokenManager,
+    connectionGrants,
     entityCache,
     routeRegistry,
     getPublicUrl: () => {

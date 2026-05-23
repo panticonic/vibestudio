@@ -8,20 +8,44 @@ describe("GitAuthManager", () => {
     expect(auth.canAccess("shell:1", "shell", "panels/example", "push")).toEqual({ allowed: true });
   });
 
-  it("keeps protected tree push ownership checks before prompting", () => {
+  it.each([
+    ["panel", "panel:chat"],
+    ["worker", "worker:agent"],
+    ["do", "do:workspace"],
+  ])("lets %s callers reach the approval gate for normal workspace repos", (kind, callerId) => {
     const auth = new GitAuthManager();
 
-    expect(auth.canAccess("panel:tree/panels/chat/owner", "panel", "tree/panels/chat/other", "push")).toEqual({
-      allowed: false,
-      reason: expect.stringContaining("cannot push"),
+    expect(auth.canAccess(callerId, kind, "panels/terminal", "push")).toEqual({
+      allowed: true,
     });
   });
 
-  it("allows canonical panel callers to push owned protected tree paths", () => {
+  it.each([
+    ["panel", "panel:chat"],
+    ["worker", "worker:agent"],
+    ["do", "do:workspace"],
+  ])("lets %s callers reach approval for protected repo paths", (kind, callerId) => {
+    const auth = new GitAuthManager(() => "workers/agent-worker");
+
+    expect(auth.canAccess(callerId, kind, "tree/panels/terminal", "push")).toEqual({
+      allowed: true,
+    });
+  });
+
+  it("allows fetches for authenticated callers", () => {
     const auth = new GitAuthManager();
 
-    expect(auth.canAccess("panel:tree/panels/chat", "panel", "tree/panels/chat/child", "push")).toEqual({
+    expect(auth.canAccess("panel:chat", "panel", "tree/panels/chat", "fetch")).toEqual({
       allowed: true,
+    });
+  });
+
+  it("rejects malformed repo paths before git routing", () => {
+    const auth = new GitAuthManager();
+
+    expect(auth.canAccess("panel:chat", "panel", "../panels/chat", "push")).toEqual({
+      allowed: false,
+      reason: expect.stringContaining("Invalid repo path segment"),
     });
   });
 });

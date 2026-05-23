@@ -37,15 +37,15 @@ function normalizeRepoPath(repoPath: string): string {
 }
 
 /**
- * Git auth manager — controls which panels can push to which repos.
+ * Git auth manager — validates already-authenticated repo access.
  *
- * Rules:
- * - Fetch (read) is always allowed for authenticated panels
- * - Write (push) to tree/<path> or singleton/<path>: canonical panel ID
- *   panel:<path> must match or be a prefix
+ * This layer deliberately does not make userland write-policy decisions. All
+ * authenticated panels, workers, DOs, extensions, shells, and server callers
+ * are allowed through to the write authorizer, which presents approvals for
+ * sensitive operations. Keeping policy there avoids silent pre-prompt denies.
  */
 export class GitAuthManager {
-  constructor(private getSourceForCaller: (callerId: string) => string | null = () => null) {}
+  constructor(_getSourceForCaller: (callerId: string) => string | null = () => null) {}
 
   canAccess(
     callerId: string,
@@ -60,44 +60,10 @@ export class GitAuthManager {
       return { allowed: false, reason: err instanceof Error ? err.message : "Invalid repo path" };
     }
 
-    if (operation === "fetch") {
-      return { allowed: true };
-    }
-
-    if (callerKind === "shell" || callerKind === "server" || callerKind === "extension") {
-      return { allowed: true };
-    }
-
-    if (callerKind === "worker") {
-      const source = this.getSourceForCaller(callerId);
-      if (!source) {
-        return { allowed: false, reason: `Worker "${callerId}" has no source identity` };
-      }
-      const normalizedSource = normalizeRepoPath(source);
-      if (normalizedPath === normalizedSource || normalizedPath.startsWith(normalizedSource + "/")) {
-        return { allowed: true };
-      }
-      return {
-        allowed: false,
-        reason: `Worker "${callerId}" cannot push to repo "${normalizedPath}" outside source "${normalizedSource}"`,
-      };
-    }
-
-    const isTreePath = normalizedPath.startsWith("tree/");
-    const isSingletonPath = normalizedPath.startsWith("singleton/");
-
-    if (!isTreePath && !isSingletonPath) {
-      return { allowed: true };
-    }
-
-    const ownerPanelId = `panel:${normalizedPath}`;
-    if (ownerPanelId === callerId || ownerPanelId.startsWith(callerId + "/")) {
-      return { allowed: true };
-    }
-
-    return {
-      allowed: false,
-      reason: `Panel "${callerId}" cannot push to protected repo "${normalizedPath}"`,
-    };
+    void callerId;
+    void callerKind;
+    void operation;
+    void normalizedPath;
+    return { allowed: true };
   }
 }

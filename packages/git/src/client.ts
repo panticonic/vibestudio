@@ -206,12 +206,22 @@ export function createRoutingHttpClient(options: {
   };
 }
 
-function getAuthFailureStatus(err: unknown): number | undefined {
-  const maybeStatus = (err as { statusCode?: number }).statusCode;
-  if (maybeStatus === 401 || maybeStatus === 403) return maybeStatus;
-  const message = (err as { message?: string }).message ?? "";
-  if (/401|403|auth/i.test(message)) return maybeStatus ?? 401;
-  return undefined;
+function getAuthFailureInfo(err: unknown): { statusCode: number; message: string } | null {
+  const data = (
+    err as { data?: { statusCode?: number; response?: string; statusMessage?: string } }
+  ).data;
+  const maybeStatus = (err as { statusCode?: number }).statusCode ?? data?.statusCode;
+  const baseMessage = (err as { message?: string }).message ?? "";
+  const response = data?.response?.trim();
+  const statusMessage = data?.statusMessage?.trim();
+  const detail = response || statusMessage || baseMessage;
+  const message =
+    detail && !/^HTTP Error: \d+/.test(detail)
+      ? `Authentication failed: ${detail}`
+      : "Authentication failed. Please check your credentials.";
+  if (maybeStatus === 401 || maybeStatus === 403) return { statusCode: maybeStatus, message };
+  if (/401|403|auth/i.test(baseMessage)) return { statusCode: maybeStatus ?? 401, message };
+  return null;
 }
 
 /**
@@ -927,9 +937,9 @@ export class GitClient {
         onProgress,
       });
     } catch (err) {
-      const status = getAuthFailureStatus(err);
-      if (status) {
-        throw new GitAuthError("Authentication failed. Please check your credentials.", status);
+      const authFailure = getAuthFailureInfo(err);
+      if (authFailure) {
+        throw new GitAuthError(authFailure.message, authFailure.statusCode);
       }
       throw err;
     }
@@ -985,9 +995,9 @@ export class GitClient {
         onProgress,
       });
     } catch (err) {
-      const status = getAuthFailureStatus(err);
-      if (status) {
-        throw new GitAuthError("Authentication failed. Please check your credentials.", status);
+      const authFailure = getAuthFailureInfo(err);
+      if (authFailure) {
+        throw new GitAuthError(authFailure.message, authFailure.statusCode);
       }
       throw err;
     }

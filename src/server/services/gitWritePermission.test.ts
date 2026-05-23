@@ -13,7 +13,7 @@ function tempStatePath(): string {
 
 function caller(
   id: string,
-  kind: "panel" | "worker",
+  kind: "panel" | "worker" | "do",
   repoPath: string,
   effectiveVersion = "version-1"
 ) {
@@ -48,7 +48,11 @@ function createApprovalQueueMock(
 }
 
 describe("gitWritePermission", () => {
-  it("requests permission for internal git writes and reuses session grants", async () => {
+  it.each([
+    ["panel", "panel-source"],
+    ["worker", "worker:source"],
+    ["do", "do:source:WorkspaceDO:object"],
+  ] as const)("requests permission for %s internal git writes", async (kind, callerId) => {
     const approvalQueue = createApprovalQueueMock("session");
     const grantStore = new CapabilityGrantStore({ statePath: tempStatePath() });
     const authorizer = createGitWriteAuthorizer({
@@ -58,13 +62,13 @@ describe("gitWritePermission", () => {
 
     await expect(
       authorizer({
-        caller: caller("panel-source", "panel", "panels/source"),
+        caller: caller(callerId, kind, "panels/source"),
         repoPath: "/panels/target.git",
       })
     ).resolves.toMatchObject({ allowed: true });
     await expect(
       authorizer({
-        caller: caller("panel-source", "panel", "panels/source"),
+        caller: caller(callerId, kind, "panels/source"),
         repoPath: "panels/target",
       })
     ).resolves.toMatchObject({ allowed: true });
@@ -77,10 +81,37 @@ describe("gitWritePermission", () => {
         dedupKey: null,
         repoPath: "panels/source",
         effectiveVersion: "version-1",
+        callerId,
+        callerKind: kind,
         resource: {
           type: "git-repo",
           label: "Repository",
           value: "panels/target",
+        },
+      })
+    );
+  });
+
+  it("requests approval for protected internal repo paths", async () => {
+    const approvalQueue = createApprovalQueueMock("once");
+    const authorizer = createGitWriteAuthorizer({
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    });
+
+    await expect(
+      authorizer({
+        caller: caller("panel-source", "panel", "panels/source"),
+        repoPath: "tree/panels/target",
+      })
+    ).resolves.toMatchObject({ allowed: true });
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        resource: {
+          type: "git-repo",
+          label: "Repository",
+          value: "tree/panels/target",
         },
       })
     );

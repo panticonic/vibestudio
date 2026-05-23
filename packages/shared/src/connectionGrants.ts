@@ -1,11 +1,19 @@
 import { randomBytes } from "node:crypto";
 import type { EntityCache } from "./runtime/entityCache.js";
+import type { CallerKind } from "./serviceDispatcher.js";
 
 export interface ConnectionGrant {
   token: string;
   principalId: string;
   issuedBy: string;
   expiresAt: number;
+  redeemed?: boolean;
+}
+
+export interface ConnectionGrantValidation {
+  principalId: string;
+  principalKind: CallerKind;
+  issuedBy: string;
 }
 
 export class ConnectionGrantService {
@@ -36,9 +44,32 @@ export class ConnectionGrantService {
   redeem(token: string): { principalId: string; issuedBy: string } | null {
     const grant = this.grants.get(token);
     if (!grant) return null;
-    this.grants.delete(token);
-    if (grant.expiresAt <= Date.now()) return null;
+    if (grant.redeemed) return null;
+    if (grant.expiresAt <= Date.now()) {
+      this.grants.delete(token);
+      return null;
+    }
+    grant.redeemed = true;
     return { principalId: grant.principalId, issuedBy: grant.issuedBy };
+  }
+
+  validate(token: string): ConnectionGrantValidation | null {
+    const grant = this.grants.get(token);
+    if (!grant) return null;
+    if (grant.expiresAt <= Date.now()) {
+      this.grants.delete(token);
+      return null;
+    }
+    const record = this.entityCache.resolveActive(grant.principalId);
+    if (!record) {
+      this.grants.delete(token);
+      return null;
+    }
+    return {
+      principalId: grant.principalId,
+      principalKind: record.kind as CallerKind,
+      issuedBy: grant.issuedBy,
+    };
   }
 
   revokeForPrincipal(principalId: string): number {
