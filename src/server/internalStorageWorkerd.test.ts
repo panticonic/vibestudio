@@ -136,23 +136,9 @@ describe("internal storage DOs under workerd", () => {
       objectKey: "workspace-fts5",
     };
 
-    // Index two panels; the search index lives on panel_fts (FTS5 virtual
-    // table) which is only available under real workerd, not sql.js.
-    await harness.callDurableObject(ref, "panelIndex", {
-      id: "slot-alpha",
-      title: "Alpha chat panel",
-      manifestDescription: "primary chat workspace",
-      keywords: ["chat", "alpha"],
-    });
-    await harness.callDurableObject(ref, "panelIndex", {
-      id: "slot-beta",
-      title: "Beta notes panel",
-      manifestDescription: "scratchpad for notes",
-      keywords: ["notes"],
-    });
-
-    // slotCreate enforces a foreign key into entities, so activate the panel
-    // entities first.
+    // Production order is slotCreate → panelIndex: the slot needs to exist
+    // and bind to a current entity before panelIndex can stamp the title
+    // onto entities.display_title (the new source of truth for titles).
     for (const key of ["entry-a", "entry-b"]) {
       await harness.callDurableObject(ref, "entityActivate", {
         kind: "panel",
@@ -161,7 +147,6 @@ describe("internal storage DOs under workerd", () => {
         key,
       });
     }
-    // Slots must be open for panelSearch to surface them.
     await harness.callDurableObject(ref, "slotCreate", {
       slotId: "slot-alpha",
       parentSlotId: null,
@@ -183,6 +168,18 @@ describe("internal storage DOs under workerd", () => {
         source: "panels/example",
         contextId: "ctx-1",
       },
+    });
+    await harness.callDurableObject(ref, "panelIndex", {
+      id: "slot-alpha",
+      title: "Alpha chat panel",
+      manifestDescription: "primary chat workspace",
+      keywords: ["chat", "alpha"],
+    });
+    await harness.callDurableObject(ref, "panelIndex", {
+      id: "slot-beta",
+      title: "Beta notes panel",
+      manifestDescription: "scratchpad for notes",
+      keywords: ["notes"],
     });
 
     const matches = (await harness.callDurableObject(ref, "panelSearch", "chat", 10)) as Array<{

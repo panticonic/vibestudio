@@ -29,7 +29,8 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         status TEXT NOT NULL DEFAULT 'active',
         retired_at INTEGER,
         cleanup_complete INTEGER NOT NULL DEFAULT 1,
-        error TEXT
+        error TEXT,
+        display_title TEXT
       )
     `);
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status, retired_at)`);
@@ -71,7 +72,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
     sql.exec(`
       CREATE TABLE IF NOT EXISTS panel_search_metadata (
         slot_id TEXT PRIMARY KEY,
-        searchable_title TEXT NOT NULL,
+        searchable_title TEXT NOT NULL DEFAULT '',
         searchable_path TEXT,
         manifest_description TEXT,
         manifest_dependencies TEXT,

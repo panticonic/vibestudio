@@ -333,8 +333,46 @@ describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
     )[0];
   }
 
-  it("panelIndex inserts a row, panelUpdateTitle updates it, panelIncrementAccess bumps the counter", () => {
-    instance.panelIndex({
+  // Helper: stand up an entity + slot pair so the title-flow methods have
+  // something to bind to. Returns the entity id (= what
+  // `panelIndex`/`panelUpdateTitle` will return when they stamp a title).
+  function bindSlotToEntity(slotId: string, entityKey: string): string {
+    const entity = instance.entityActivate({
+      kind: "panel",
+      source: { repoPath: "panels/test", effectiveVersion: "ev-1" },
+      contextId: "ctx",
+      key: entityKey,
+    });
+    instance.slotCreate({
+      slotId,
+      parentSlotId: null,
+      positionId: "000001000000",
+      initialEntry: {
+        entryKey: "entry-1",
+        entityId: entity.id,
+        source: "panels/test",
+        contextId: "ctx",
+      },
+    });
+    return entity.id;
+  }
+
+  function readEntityTitle(entityId: string): string | null {
+    const sql = (
+      instance as unknown as {
+        sql: { exec(s: string, ...b: unknown[]): { toArray(): unknown[] } };
+      }
+    ).sql;
+    const row = sql
+      .exec(`SELECT display_title FROM entities WHERE id = ?`, entityId)
+      .toArray()[0] as { display_title: string | null } | undefined;
+    return row?.display_title ?? null;
+  }
+
+  it("panelIndex stamps the title onto the slot's current entity, then panelUpdateTitle routes through entitySetDisplayTitle", () => {
+    const entityId = bindSlotToEntity("slot-1", "key-1");
+
+    const returned = instance.panelIndex({
       id: "slot-1",
       title: "Initial Title",
       path: "/projects/foo",
@@ -342,8 +380,12 @@ describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
       tags: ["x", "y"],
       keywords: ["alpha"],
     });
+    expect(returned).toBe(entityId);
+    expect(readEntityTitle(entityId)).toBe("Initial Title");
 
     const inserted = readMetadata("slot-1");
+    // panel_search_metadata.searchable_title is a documented FTS
+    // denormalization of entities.display_title; both should agree.
     expect(inserted).toMatchObject({
       slot_id: "slot-1",
       searchable_title: "Initial Title",
@@ -354,7 +396,10 @@ describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
     expect(JSON.parse(inserted!["tags"] as string)).toEqual(["x", "y"]);
     expect(JSON.parse(inserted!["keywords"] as string)).toEqual(["alpha"]);
 
-    instance.panelUpdateTitle("slot-1", "Renamed Title");
+    const renamed = instance.panelUpdateTitle("slot-1", "Renamed Title");
+    expect(renamed).toBe(entityId);
+    expect(readEntityTitle(entityId)).toBe("Renamed Title");
+    // The FTS denormalization on panel_search_metadata moves in lockstep.
     expect(readMetadata("slot-1")?.["searchable_title"]).toBe("Renamed Title");
 
     instance.panelIncrementAccess("slot-1");
@@ -363,7 +408,58 @@ describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
     expect(readMetadata("slot-1")?.["access_count"]).toBe(3);
   });
 
+  it("entitySetDisplayTitle works for non-panel entities and clears with null/empty", () => {
+    const worker = instance.entityActivate({
+      kind: "worker",
+      source: { repoPath: "workers/agent", effectiveVersion: "ev-1" },
+      contextId: "ctx",
+      key: "agent-key",
+    });
+    instance.entitySetDisplayTitle(worker.id, "Agent Title");
+    expect(readEntityTitle(worker.id)).toBe("Agent Title");
+
+    instance.entitySetDisplayTitle(worker.id, "");
+    expect(readEntityTitle(worker.id)).toBeNull();
+
+    instance.entitySetDisplayTitle(worker.id, "Back");
+    instance.entitySetDisplayTitle(worker.id, null);
+    expect(readEntityTitle(worker.id)).toBeNull();
+  });
+
+  it("entityListDisplayTitles returns only active entities with titles", () => {
+    const a = instance.entityActivate({
+      kind: "worker",
+      source: { repoPath: "workers/a", effectiveVersion: "ev" },
+      contextId: "ctx",
+      key: "a",
+    });
+    const b = instance.entityActivate({
+      kind: "worker",
+      source: { repoPath: "workers/b", effectiveVersion: "ev" },
+      contextId: "ctx",
+      key: "b",
+    });
+    instance.entitySetDisplayTitle(a.id, "Alpha");
+    // b has no title — it should be absent from the list.
+    expect(
+      instance
+        .entityListDisplayTitles()
+        .map((r) => r.id)
+        .sort()
+    ).toEqual([a.id]);
+    // Retired entities drop out.
+    instance.entitySetDisplayTitle(b.id, "Bravo");
+    instance.entityRetire(b.id);
+    expect(
+      instance
+        .entityListDisplayTitles()
+        .map((r) => r.id)
+        .sort()
+    ).toEqual([a.id]);
+  });
+
   it("panelIndex is idempotent — re-indexing the same slot_id updates in place rather than inserting a duplicate", () => {
+    bindSlotToEntity("slot-2", "key-2");
     instance.panelIndex({ id: "slot-2", title: "First" });
     instance.panelIndex({ id: "slot-2", title: "Second", path: "/p" });
 
