@@ -81,6 +81,34 @@
   display: none;
 }
 
+.titlebar-breadcrumb-scroll [data-breadcrumb-focusable="true"]:focus-visible {
+  outline: 2px solid var(--accent-8);
+  outline-offset: 1px;
+}
+
+.titlebar-breadcrumb-scroll[data-dragging="true"] [data-breadcrumb-focusable="true"] {
+  cursor: grabbing;
+}
+
+.titlebar-breadcrumb-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 1;
+  width: 22px;
+  pointer-events: none;
+}
+
+.titlebar-breadcrumb-fade.left {
+  left: 0;
+  background: linear-gradient(90deg, var(--app-chrome-bg), transparent);
+}
+
+.titlebar-breadcrumb-fade.right {
+  right: 0;
+  background: linear-gradient(270deg, var(--app-chrome-bg), transparent);
+}
+
 /* Approval bar: container, stripe, and entry animation */
 .approval-bar {
   position: relative;

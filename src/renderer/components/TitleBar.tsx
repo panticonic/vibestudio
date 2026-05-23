@@ -22,6 +22,7 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
+  type PointerEvent,
   type RefObject,
 } from "react";
 import { useIsMobile, useTouchDevice } from "@workspace/react/responsive";
@@ -323,6 +324,9 @@ interface BreadcrumbBarProps {
 
 const MAX_VISIBLE_ANCESTORS = 2;
 const MAX_VISIBLE_DESC_GROUPS = 2;
+const MAX_VISIBLE_SIBLINGS_PER_GROUP = 7;
+const MIN_VISIBLE_SIBLINGS_PER_GROUP = 4;
+const ESTIMATED_BREADCRUMB_ITEM_WIDTH = 108;
 
 /**
  * Get window-relative position from element bounding rect for native menu positioning.
@@ -1004,6 +1008,11 @@ function escapeOverlayHtmlText(value: string): string {
 const itemStyle: CSSProperties = {
   appRegion: "no-drag",
   WebkitAppRegion: "no-drag",
+  display: "inline-flex",
+  alignItems: "center",
+  border: "1px solid transparent",
+  minWidth: 0,
+  maxWidth: "clamp(72px, 16vw, 180px)",
   padding: "2px 6px",
   borderRadius: "3px",
   cursor: "pointer",
@@ -1016,6 +1025,9 @@ const groupStyle = {
   display: "inline-flex",
   alignItems: "center",
   gap: "1px",
+  minWidth: 0,
+  maxWidth: "100%",
+  flexShrink: 0,
   padding: "1px",
   borderRadius: "4px",
   border: "1px solid var(--gray-6)",
@@ -1056,56 +1068,175 @@ function HoverableBreadcrumbItem({
     archivePanel();
   };
 
+  const handleKeyDown = (e: KeyboardEvent<HTMLSpanElement>) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    onNavigate();
+  };
+
   return (
-    <span
-      style={{
-        position: "relative",
-        ...itemStyle,
-        backgroundColor:
-          isCurrent && isActive ? "var(--gray-a4)" : isHovered ? "var(--gray-a3)" : undefined,
-      }}
-      onClick={onNavigate}
-      onContextMenu={onContextMenu}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-    >
-      <Text
-        as="span"
-        size="2"
-        color={isActive ? undefined : "gray"}
-        style={{ whiteSpace: "nowrap" }}
+    <Tooltip content={title}>
+      <span
+        role="button"
+        tabIndex={0}
+        data-breadcrumb-focusable="true"
+        data-breadcrumb-id={panelId}
+        data-breadcrumb-current={isCurrent && isActive ? "true" : undefined}
+        style={{
+          position: "relative",
+          ...itemStyle,
+          borderColor: isCurrent && isActive ? "var(--accent-7)" : "transparent",
+          backgroundColor:
+            isCurrent && isActive
+              ? "var(--accent-a3)"
+              : isActive
+                ? "var(--gray-a3)"
+                : isHovered
+                  ? "var(--gray-a3)"
+                  : undefined,
+          color: isCurrent && isActive ? "var(--accent-12)" : undefined,
+          boxShadow: isCurrent && isActive ? "inset 0 -1px 0 var(--accent-8)" : undefined,
+        }}
+        onClick={onNavigate}
+        onContextMenu={onContextMenu}
+        onKeyDown={handleKeyDown}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
       >
-        {title}
-      </Text>
-      {(isHovered || isTouch) && (
-        <IconButton
-          size="1"
-          variant="ghost"
-          color="gray"
-          radius="small"
-          aria-label="Archive panel"
-          onClick={handleArchive}
-          className="breadcrumb-archive-btn"
-          style={
-            {
-              appRegion: "no-drag",
-              WebkitAppRegion: "no-drag",
-              position: "absolute",
-              right: 2,
-              top: "50%",
-              transform: "translateY(-50%)",
-              width: 16,
-              height: 16,
-              padding: 0,
-              opacity: 0.6,
-            } as CSSProperties
-          }
+        <Text
+          as="span"
+          size="2"
+          color={isActive ? undefined : "gray"}
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
         >
-          <Cross2Icon width={10} height={10} />
-        </IconButton>
-      )}
-    </span>
+          {title}
+        </Text>
+        {(isHovered || isTouch) && (
+          <IconButton
+            size="1"
+            variant="ghost"
+            color="gray"
+            radius="small"
+            aria-label="Archive panel"
+            onClick={handleArchive}
+            className="breadcrumb-archive-btn"
+            style={
+              {
+                appRegion: "no-drag",
+                WebkitAppRegion: "no-drag",
+                position: "absolute",
+                right: 2,
+                top: "50%",
+                transform: "translateY(-50%)",
+                width: 16,
+                height: 16,
+                padding: 0,
+                opacity: 0.75,
+              } as CSSProperties
+            }
+          >
+            <Cross2Icon width={10} height={10} />
+          </IconButton>
+        )}
+      </span>
+    </Tooltip>
   );
+}
+
+function getVisibleSiblingLimit(width: number): number {
+  if (width <= 0) return MAX_VISIBLE_SIBLINGS_PER_GROUP;
+  return Math.max(
+    MIN_VISIBLE_SIBLINGS_PER_GROUP,
+    Math.min(
+      MAX_VISIBLE_SIBLINGS_PER_GROUP + 5,
+      Math.floor(width / ESTIMATED_BREADCRUMB_ITEM_WIDTH)
+    )
+  );
+}
+
+function getFocusableBreadcrumbItems(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>('[data-breadcrumb-focusable="true"], button')
+  ).filter((element) => !element.hasAttribute("disabled") && element.tabIndex >= 0);
+}
+
+function scrollBreadcrumbIdIntoView(
+  container: HTMLElement | null,
+  panelId: string | null | undefined
+) {
+  if (!container || !panelId) return;
+  const items = Array.from(container.querySelectorAll<HTMLElement>("[data-breadcrumb-id]"));
+  const target = items.find((item) => item.dataset["breadcrumbId"] === panelId);
+  target?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+function updateBreadcrumbScrollState(
+  element: HTMLElement | null,
+  setScrollState: (state: { canScrollLeft: boolean; canScrollRight: boolean }) => void
+) {
+  if (!element) {
+    setScrollState({ canScrollLeft: false, canScrollRight: false });
+    return;
+  }
+
+  const maxScrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
+  setScrollState({
+    canScrollLeft: element.scrollLeft > 1,
+    canScrollRight: element.scrollLeft < maxScrollLeft - 1,
+  });
+}
+
+interface VisibleSiblingEntry {
+  sibling: PanelSummary;
+  originalIndex: number;
+}
+
+interface BreadcrumbSiblingPartition {
+  visible: VisibleSiblingEntry[];
+  hidden: PanelSummary[];
+}
+
+function partitionBreadcrumbSiblings(
+  siblings: PanelSummary[],
+  activeId: string | null,
+  maxVisible: number = MAX_VISIBLE_SIBLINGS_PER_GROUP
+): BreadcrumbSiblingPartition {
+  if (siblings.length <= maxVisible) {
+    return {
+      visible: siblings.map((sibling, originalIndex) => ({ sibling, originalIndex })),
+      hidden: [],
+    };
+  }
+
+  const effectiveActiveId = activeId || siblings[0]?.id || null;
+  const activeIndex = Math.max(
+    0,
+    siblings.findIndex((sibling) => sibling.id === effectiveActiveId)
+  );
+  const visibleIndexes = new Set<number>([0, siblings.length - 1, activeIndex]);
+  const desiredVisible = Math.max(3, maxVisible - 1);
+
+  for (let distance = 1; visibleIndexes.size < desiredVisible; distance++) {
+    const before = activeIndex - distance;
+    const after = activeIndex + distance;
+    if (before > 0) visibleIndexes.add(before);
+    if (visibleIndexes.size >= desiredVisible) break;
+    if (after < siblings.length - 1) visibleIndexes.add(after);
+    if (before <= 0 && after >= siblings.length - 1) break;
+  }
+
+  const visibleSet = visibleIndexes;
+  return {
+    visible: siblings
+      .map((sibling, originalIndex) => ({ sibling, originalIndex }))
+      .filter((entry) => visibleSet.has(entry.originalIndex)),
+    hidden: siblings.filter((_sibling, index) => !visibleSet.has(index)),
+  };
 }
 
 function BreadcrumbBar({
@@ -1118,12 +1249,61 @@ function BreadcrumbBar({
   const ancestors = navigationData?.ancestors ?? [];
   const currentSiblings = navigationData?.currentSiblings ?? [];
   const descendantGroups = statusNavigation?.descendantGroups ?? [];
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startScrollLeft: number;
+    didDrag: boolean;
+  } | null>(null);
+  const suppressClickRef = useRef(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [maxVisibleSiblings, setMaxVisibleSiblings] = useState(MAX_VISIBLE_SIBLINGS_PER_GROUP);
+  const [scrollState, setScrollState] = useState({ canScrollLeft: false, canScrollRight: false });
 
   const visibleAncestors = ancestors.slice(-MAX_VISIBLE_ANCESTORS);
   const hiddenAncestors = ancestors.slice(0, ancestors.length - visibleAncestors.length);
 
   const visibleDescendantGroups = descendantGroups.slice(0, MAX_VISIBLE_DESC_GROUPS);
   const hiddenDescendantGroups = descendantGroups.slice(visibleDescendantGroups.length);
+
+  const refreshScrollState = useCallback(() => {
+    updateBreadcrumbScrollState(scrollRef.current, setScrollState);
+  }, []);
+
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element) return;
+
+    const handleResize = () => {
+      setMaxVisibleSiblings(getVisibleSiblingLimit(element.clientWidth));
+      refreshScrollState();
+    };
+    handleResize();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", handleResize);
+      return () => window.removeEventListener("resize", handleResize);
+    }
+
+    const observer = new ResizeObserver(handleResize);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [refreshScrollState]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      scrollBreadcrumbIdIntoView(scrollRef.current, navigationData?.currentId);
+      refreshScrollState();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [
+    currentSiblings.length,
+    descendantGroups.length,
+    maxVisibleSiblings,
+    navigationData?.currentId,
+    refreshScrollState,
+  ]);
 
   const handlePanelContextMenu = async (
     e: MouseEvent<HTMLSpanElement>,
@@ -1135,6 +1315,87 @@ function BreadcrumbBar({
     if (action) {
       onPanelAction?.(panel.id, action);
     }
+  };
+
+  const showSiblingMenu = async (e: MouseEvent<HTMLButtonElement>, siblings: PanelSummary[]) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const items = siblings.map((sibling) => ({
+      id: sibling.id,
+      label: sibling.title,
+    }));
+    const selected = await menu.showContext(items, getWindowPositionFromRect(rect));
+    if (selected !== null) {
+      onNavigateToId?.(selected);
+    }
+  };
+
+  const handlePointerDown = (e: PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button")) return;
+    dragStateRef.current = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startScrollLeft: e.currentTarget.scrollLeft,
+      didDrag: false,
+    };
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setIsDragging(true);
+  };
+
+  const handlePointerMove = (e: PointerEvent<HTMLDivElement>) => {
+    const state = dragStateRef.current;
+    if (!state || state.pointerId !== e.pointerId) return;
+    const deltaX = e.clientX - state.startX;
+    if (Math.abs(deltaX) > 3) {
+      state.didDrag = true;
+    }
+    e.currentTarget.scrollLeft = state.startScrollLeft - deltaX;
+  };
+
+  const finishPointerDrag = (e: PointerEvent<HTMLDivElement>) => {
+    const state = dragStateRef.current;
+    if (!state || state.pointerId !== e.pointerId) return;
+    suppressClickRef.current = state.didDrag;
+    dragStateRef.current = null;
+    setIsDragging(false);
+    if (state.didDrag) {
+      window.setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
+    }
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
+  const handleClickCapture = (e: MouseEvent<HTMLDivElement>) => {
+    if (!suppressClickRef.current) return;
+    suppressClickRef.current = false;
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const items = getFocusableBreadcrumbItems(e.currentTarget);
+    if (items.length === 0) return;
+
+    const activeElement = document.activeElement as HTMLElement | null;
+    const currentIndex = activeElement ? items.indexOf(activeElement) : -1;
+    const delta = e.key === "ArrowRight" ? 1 : -1;
+    const nextIndex =
+      currentIndex === -1
+        ? delta > 0
+          ? 0
+          : items.length - 1
+        : Math.max(0, Math.min(items.length - 1, currentIndex + delta));
+
+    e.preventDefault();
+    const nextItem = items[nextIndex];
+    nextItem?.focus();
+    nextItem?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    window.requestAnimationFrame(refreshScrollState);
   };
 
   const renderBreadcrumbItem = (panel: PanelSummary, isActive: boolean, isCurrent: boolean) => (
@@ -1168,19 +1429,47 @@ function BreadcrumbBar({
   ) => {
     if (siblings.length === 0) return null;
     const effectiveActiveId = activeId || siblings[0]?.id || "";
+    const partition = partitionBreadcrumbSiblings(siblings, effectiveActiveId, maxVisibleSiblings);
 
     return (
       <span style={groupStyle}>
-        {siblings.map((sibling, index) => (
-          <span key={sibling.id} style={{ display: "inline-flex", alignItems: "center" }}>
-            {index > 0 && (
-              <DividerVerticalIcon
-                style={{ color: "var(--gray-7)", width: 12, height: 12, flexShrink: 0 }}
-              />
-            )}
-            {renderBreadcrumbItem(sibling, sibling.id === effectiveActiveId, isCurrent)}
-          </span>
-        ))}
+        {partition.visible.map(({ sibling, originalIndex }, visibleIndex) => {
+          const previousEntry = partition.visible[visibleIndex - 1];
+          const gapSiblings =
+            partition.hidden.length > 0 &&
+            visibleIndex > 0 &&
+            previousEntry !== undefined &&
+            originalIndex - previousEntry.originalIndex > 1
+              ? siblings.slice(previousEntry.originalIndex + 1, originalIndex)
+              : [];
+
+          return (
+            <span key={sibling.id} style={{ display: "inline-flex", alignItems: "center" }}>
+              {visibleIndex > 0 && (
+                <DividerVerticalIcon
+                  style={{ color: "var(--gray-7)", width: 12, height: 12, flexShrink: 0 }}
+                />
+              )}
+              {gapSiblings.length > 0 && (
+                <>
+                  <IconButton
+                    size="1"
+                    variant="ghost"
+                    aria-label="More sibling panels"
+                    onClick={(e) => showSiblingMenu(e, gapSiblings)}
+                    style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
+                  >
+                    <DotsHorizontalIcon />
+                  </IconButton>
+                  <DividerVerticalIcon
+                    style={{ color: "var(--gray-7)", width: 12, height: 12, flexShrink: 0 }}
+                  />
+                </>
+              )}
+              {renderBreadcrumbItem(sibling, sibling.id === effectiveActiveId, isCurrent)}
+            </span>
+          );
+        })}
       </span>
     );
   };
@@ -1215,79 +1504,160 @@ function BreadcrumbBar({
 
   const renderDescendantSiblingGroup = (group: DescendantSiblingGroup) => {
     if (group.siblings.length === 0) return null;
+    const partition = partitionBreadcrumbSiblings(
+      group.siblings,
+      group.selectedId,
+      maxVisibleSiblings
+    );
 
     return (
       <span style={groupStyle}>
-        {group.siblings.map((sibling, index) => (
-          <span key={sibling.id} style={{ display: "inline-flex", alignItems: "center" }}>
-            {index > 0 && (
-              <DividerVerticalIcon
-                style={{ color: "var(--gray-7)", width: 12, height: 12, flexShrink: 0 }}
-              />
-            )}
-            {renderBreadcrumbItem(sibling, sibling.id === group.selectedId, false)}
-          </span>
-        ))}
+        {partition.visible.map(({ sibling, originalIndex }, visibleIndex) => {
+          const previousEntry = partition.visible[visibleIndex - 1];
+          const gapSiblings =
+            partition.hidden.length > 0 &&
+            visibleIndex > 0 &&
+            previousEntry !== undefined &&
+            originalIndex - previousEntry.originalIndex > 1
+              ? group.siblings.slice(previousEntry.originalIndex + 1, originalIndex)
+              : [];
+
+          return (
+            <span key={sibling.id} style={{ display: "inline-flex", alignItems: "center" }}>
+              {visibleIndex > 0 && (
+                <DividerVerticalIcon
+                  style={{ color: "var(--gray-7)", width: 12, height: 12, flexShrink: 0 }}
+                />
+              )}
+              {gapSiblings.length > 0 && (
+                <>
+                  <IconButton
+                    size="1"
+                    variant="ghost"
+                    aria-label="More sibling panels"
+                    onClick={(e) => showSiblingMenu(e, gapSiblings)}
+                    style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
+                  >
+                    <DotsHorizontalIcon />
+                  </IconButton>
+                  <DividerVerticalIcon
+                    style={{ color: "var(--gray-7)", width: 12, height: 12, flexShrink: 0 }}
+                  />
+                </>
+              )}
+              {renderBreadcrumbItem(sibling, sibling.id === group.selectedId, false)}
+            </span>
+          );
+        })}
       </span>
     );
   };
 
   return (
-    <Flex align="center" gap="1" style={{ minWidth: 0, overflow: "hidden" } as CSSProperties}>
-      {/* Ancestors */}
-      {hiddenAncestors.length > 0 && (
-        <>
-          <IconButton
-            size="1"
-            variant="ghost"
-            aria-label="More ancestors"
-            onClick={handleHiddenAncestorsClick}
-            style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
-          >
-            <DotsHorizontalIcon />
-          </IconButton>
-          <ChevronRightIcon color="var(--gray-8)" />
-        </>
-      )}
-      {visibleAncestors.map((ancestor) => (
-        <Flex key={ancestor.id} align="center" gap="1">
-          <span style={groupStyle}>{renderAncestorItem(ancestor)}</span>
-          <ChevronRightIcon color="var(--gray-8)" />
-        </Flex>
-      ))}
+    <Box
+      style={
+        {
+          position: "relative",
+          minWidth: 0,
+          overflow: "hidden",
+          appRegion: "no-drag",
+          WebkitAppRegion: "no-drag",
+        } as CSSProperties
+      }
+    >
+      <Flex
+        ref={scrollRef}
+        align="center"
+        gap="1"
+        className="titlebar-breadcrumb-scroll"
+        data-dragging={isDragging ? "true" : undefined}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={finishPointerDrag}
+        onPointerCancel={finishPointerDrag}
+        onScroll={refreshScrollState}
+        onKeyDown={handleKeyDown}
+        onClickCapture={handleClickCapture}
+        style={
+          {
+            appRegion: "no-drag",
+            WebkitAppRegion: "no-drag",
+            minWidth: 0,
+            overflowX: "auto",
+            overflowY: "hidden",
+            overscrollBehaviorX: "contain",
+            cursor: isDragging ? "grabbing" : "grab",
+            scrollbarWidth: "none",
+            touchAction: "pan-x",
+          } as CSSProperties
+        }
+      >
+        {/* Ancestors */}
+        {hiddenAncestors.length > 0 && (
+          <>
+            <IconButton
+              size="1"
+              variant="ghost"
+              aria-label="More ancestors"
+              onClick={handleHiddenAncestorsClick}
+              style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
+            >
+              <DotsHorizontalIcon />
+            </IconButton>
+            <ChevronRightIcon color="var(--gray-8)" />
+          </>
+        )}
+        {visibleAncestors.map((ancestor) => (
+          <Flex key={ancestor.id} align="center" gap="1" style={{ flexShrink: 0 }}>
+            <span style={groupStyle}>{renderAncestorItem(ancestor)}</span>
+            <ChevronRightIcon color="var(--gray-8)" />
+          </Flex>
+        ))}
 
-      {/* Current (with siblings) */}
-      {currentSiblings.length > 0 ? (
-        renderSiblingGroup(currentSiblings, navigationData?.currentId ?? null, true)
-      ) : (
-        <span style={groupStyle}>
-          <Text size="2" style={{ ...itemStyle, backgroundColor: "var(--gray-a4)" }}>
-            {navigationData?.currentTitle ?? title}
-          </Text>
-        </span>
-      )}
+        {/* Current (with siblings) */}
+        {currentSiblings.length > 0 ? (
+          renderSiblingGroup(currentSiblings, navigationData?.currentId ?? null, true)
+        ) : (
+          <span style={groupStyle}>
+            <HoverableBreadcrumbItem
+              panelId={navigationData?.currentId ?? "current-panel"}
+              title={navigationData?.currentTitle ?? title}
+              isActive={true}
+              isCurrent={true}
+              onNavigate={() => {
+                if (navigationData?.currentId) onNavigateToId?.(navigationData.currentId);
+              }}
+              onContextMenu={(e) => {
+                e.preventDefault();
+              }}
+            />
+          </span>
+        )}
 
-      {/* Descendants (sibling groups) */}
-      {visibleDescendantGroups.map((group) => (
-        <Flex key={`desc-${group.depth}`} align="center" gap="1">
-          <ChevronRightIcon color="var(--gray-8)" />
-          {renderDescendantSiblingGroup(group)}
-        </Flex>
-      ))}
-      {hiddenDescendantGroups.length > 0 && (
-        <>
-          <ChevronRightIcon color="var(--gray-8)" />
-          <IconButton
-            size="1"
-            variant="ghost"
-            aria-label="More descendants"
-            onClick={handleHiddenDescendantsClick}
-            style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
-          >
-            <DotsHorizontalIcon />
-          </IconButton>
-        </>
-      )}
-    </Flex>
+        {/* Descendants (sibling groups) */}
+        {visibleDescendantGroups.map((group) => (
+          <Flex key={`desc-${group.depth}`} align="center" gap="1" style={{ flexShrink: 0 }}>
+            <ChevronRightIcon color="var(--gray-8)" />
+            {renderDescendantSiblingGroup(group)}
+          </Flex>
+        ))}
+        {hiddenDescendantGroups.length > 0 && (
+          <>
+            <ChevronRightIcon color="var(--gray-8)" />
+            <IconButton
+              size="1"
+              variant="ghost"
+              aria-label="More descendants"
+              onClick={handleHiddenDescendantsClick}
+              style={{ appRegion: "no-drag", WebkitAppRegion: "no-drag" } as CSSProperties}
+            >
+              <DotsHorizontalIcon />
+            </IconButton>
+          </>
+        )}
+      </Flex>
+      {scrollState.canScrollLeft && <Box className="titlebar-breadcrumb-fade left" />}
+      {scrollState.canScrollRight && <Box className="titlebar-breadcrumb-fade right" />}
+    </Box>
   );
 }
