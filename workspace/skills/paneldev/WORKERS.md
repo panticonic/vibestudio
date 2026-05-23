@@ -225,6 +225,22 @@ such as external browser opens, credentials, git writes, project imports, or
 webhooks, call the existing runtime API and let NatStack's built-in permission
 flow handle the prompt and trust scope.
 
+## Agent Debug Port
+
+The default AI agent worker exposes a read-only participant method named
+`getDebugState`. Use it when a channel appears stuck, especially after
+`turn.opened` with no assistant message, tool call, or `turn.closed` event:
+
+```ts
+const debug = await chat.callMethod(agentParticipantId, "getDebugState", {});
+console.log(JSON.stringify(debug, null, 2).slice(0, 4000));
+```
+
+The response includes dispatcher state, runner phase, persisted pending work,
+channel checkpoints, and recent lifecycle/debug events. Do not add sleeps or
+timeouts to diagnose these stalls; inspect the debug state and fix the blocked
+operation. See `../../../docs/agent-debug-port.md` for the full field guide.
+
 ## Blobstore (content-addressable bytes)
 
 The per-workspace blobstore stores arbitrary content keyed by sha256 digest.

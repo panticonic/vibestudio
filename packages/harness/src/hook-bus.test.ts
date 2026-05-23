@@ -2,6 +2,20 @@ import { describe, it, expect, vi } from "vitest";
 
 import { HookBus } from "./hook-bus.js";
 
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("HookBus.emitEvent", () => {
   it("awaits async listeners in registration order", async () => {
     const bus = new HookBus();
@@ -86,5 +100,31 @@ describe("HookBus.emitTransformContext", () => {
     bus.clear();
     await bus.emitEvent({ type: "agent_start" } as any);
     expect(seen).toEqual([]);
+  });
+
+  it("passes abort signals to awaited listeners and reports active diagnostics", async () => {
+    const bus = new HookBus();
+    const gate = deferred<any[]>();
+    const controller = new AbortController();
+    let seenSignal: AbortSignal | undefined;
+    bus.on("transform_context", (_msgs, context) => {
+      seenSignal = context?.signal;
+      return gate.promise;
+    });
+
+    const pending = bus.emitTransformContext([], { signal: controller.signal });
+    await Promise.resolve();
+
+    expect(seenSignal).toBe(controller.signal);
+    expect(bus.getDebugState().active).toMatchObject({
+      hook: "transform_context",
+      listenerIndex: 0,
+      listenerCount: 1,
+      aborted: false,
+    });
+
+    controller.abort();
+    await expect(pending).resolves.toEqual([]);
+    expect(bus.getDebugState().active).toBeNull();
   });
 });

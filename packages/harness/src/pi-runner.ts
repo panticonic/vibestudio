@@ -190,6 +190,57 @@ export interface RunnerTurnInput {
   images?: ImageContent[];
 }
 
+interface RunnerDebugCheckpoint {
+  phase: string;
+  at: string;
+  detail?: Record<string, unknown>;
+}
+
+interface RunnerDebugError {
+  scope: string;
+  at: string;
+  message: string;
+  name?: string;
+  stack?: string;
+}
+
+interface RunnerDebugEvent {
+  type: string;
+  at: string;
+  turnId: string | null;
+  summary?: Record<string, unknown>;
+}
+
+interface RunnerDebugTrajectoryEvent {
+  kind: string;
+  at: string;
+  turnId?: string;
+  eventId?: string;
+  publishToChannel?: boolean;
+  causality?: unknown;
+  payloadSummary?: unknown;
+}
+
+interface OpenToolInvocationDebug {
+  invocationId: string;
+  modelToolCallId?: string;
+  name: string;
+  request: unknown;
+  messageId?: string;
+  turnId?: string;
+  startedAt: string;
+}
+
+interface RunnerDebugOperation {
+  kind: "prompt" | "continue";
+  startedAt: string;
+  input?: {
+    contentLength: number;
+    contentPreview: string;
+    imageCount: number;
+  };
+}
+
 interface PendingMutation {
   intentEntryId: string;
   path: string;
@@ -218,6 +269,79 @@ interface ResolvedServiceLike {
   targetId?: string;
 }
 
+interface ChannelPublicationBroadcastState {
+  pendingBatches: number;
+  queuedEnvelopeIds: string[];
+  activeEnvelopeIds: string[];
+  lastScheduledAt?: string;
+  lastCompletedAt?: string;
+  lastError?: {
+    envelopeIds: string[];
+    message: string;
+    at: string;
+  };
+}
+
+function removeQueuedEnvelopeIds(queued: string[], removed: string[]): string[] {
+  const remainingToRemove = new Map<string, number>();
+  for (const id of removed) {
+    remainingToRemove.set(id, (remainingToRemove.get(id) ?? 0) + 1);
+  }
+  return queued.filter((id) => {
+    const count = remainingToRemove.get(id) ?? 0;
+    if (count === 0) return true;
+    if (count === 1) remainingToRemove.delete(id);
+    else remainingToRemove.set(id, count - 1);
+    return false;
+  });
+}
+
+const DEBUG_RING_LIMIT = 80;
+const DEBUG_PREVIEW_LIMIT = 240;
+const DEBUG_COLLECTION_LIMIT = 16;
+const DEBUG_DEPTH_LIMIT = 3;
+
+function pushBounded<T>(items: T[], item: T, limit = DEBUG_RING_LIMIT): void {
+  items.push(item);
+  if (items.length > limit) {
+    items.splice(0, items.length - limit);
+  }
+}
+
+function previewText(value: string, limit = DEBUG_PREVIEW_LIMIT): string {
+  const compact = value.replace(/\s+/gu, " ").trim();
+  return compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
+}
+
+function summarizeDebugValue(value: unknown, depth = 0): unknown {
+  if (value == null) return value;
+  if (typeof value === "string") return previewText(value);
+  if (typeof value === "number" || typeof value === "boolean") return value;
+  if (typeof value === "bigint") return value.toString();
+  if (Array.isArray(value)) {
+    const sample = value
+      .slice(0, DEBUG_COLLECTION_LIMIT)
+      .map((item) => summarizeDebugValue(item, depth + 1));
+    return value.length > sample.length
+      ? [...sample, { omittedItems: value.length - sample.length }]
+      : sample;
+  }
+  if (typeof value === "object") {
+    if (depth >= DEBUG_DEPTH_LIMIT) return "[object]";
+    const entries = Object.entries(value as Record<string, unknown>);
+    const sample = entries.slice(0, DEBUG_COLLECTION_LIMIT).map(([key, item]) => [
+      key,
+      summarizeDebugValue(item, depth + 1),
+    ]);
+    const result = Object.fromEntries(sample) as Record<string, unknown>;
+    if (entries.length > sample.length) {
+      result["omittedKeys"] = entries.length - sample.length;
+    }
+    return result;
+  }
+  return String(value);
+}
+
 export class PiRunner {
   private harness: AgentHarness | null = null;
   private extensionRuntime: PiExtensionRuntime | null = null;
@@ -237,9 +361,23 @@ export class PiRunner {
   private running = false;
   private currentTurnId: TurnId | null = null;
   private readonly channelTargetPromises = new Map<string, Promise<string>>();
+  private readonly channelPublicationBroadcastChains = new Map<string, Promise<void>>();
+  private readonly channelPublicationBroadcasts = new Map<string, ChannelPublicationBroadcastState>();
   private readonly openInvocationIds = new Set<string>();
+  private readonly openToolInvocations = new Map<string, OpenToolInvocationDebug>();
+  private readonly phaseCheckpoints: RunnerDebugCheckpoint[] = [];
+  private readonly recentHarnessEvents: RunnerDebugEvent[] = [];
+  private readonly recentTrajectoryEvents: RunnerDebugTrajectoryEvent[] = [];
+  private readonly lastErrors: RunnerDebugError[] = [];
+  private currentOperation: RunnerDebugOperation | null = null;
+  private awaitingProviderFirstEvent = false;
+  private providerRequestCount = 0;
+  private credentialRequestCount = 0;
   private restoredTrajectoryState: TrajectoryState | null = null;
   private activeAssistantMessage: { messageId: string; lastText: string; started: boolean } | null = null;
+  private activeRunSignal: AbortSignal | null = null;
+  private activeOperationAbortController: AbortController | null = null;
+  private lastContinueDiagnostic: Record<string, unknown> | null = null;
 
   constructor(private readonly options: PiRunnerOptions) {
     this._approvalLevel = options.approvalLevel;
@@ -251,8 +389,218 @@ export class PiRunner {
     return this.currentTurnId;
   }
 
+  private rememberCheckpoint(phase: string, detail?: Record<string, unknown>): void {
+    pushBounded(this.phaseCheckpoints, {
+      phase,
+      at: new Date().toISOString(),
+      ...(detail ? { detail: this.summarizeRecord(detail) } : {}),
+    });
+  }
+
+  private rememberError(scope: string, error: unknown): void {
+    const err = error instanceof Error ? error : new Error(String(error));
+    pushBounded(this.lastErrors, {
+      scope,
+      at: new Date().toISOString(),
+      message: err.message,
+      name: err.name,
+      stack: err.stack,
+    });
+  }
+
+  private rememberHarnessEvent(event: AgentHarnessEvent): void {
+    const type = (event as { type?: unknown }).type;
+    if (typeof type !== "string") return;
+    pushBounded(this.recentHarnessEvents, {
+      type,
+      at: new Date().toISOString(),
+      turnId: this.currentTurnId,
+      summary: this.harnessEventSummary(event),
+    });
+    if (this.awaitingProviderFirstEvent) {
+      this.awaitingProviderFirstEvent = false;
+      this.rememberCheckpoint("provider.first_event", { eventType: type });
+    }
+  }
+
+  private rememberTrajectoryEvent(item: TrajectoryQueueItem): void {
+    const event = item.event;
+    pushBounded(this.recentTrajectoryEvents, {
+      kind: event.kind,
+      at: new Date().toISOString(),
+      ...(event.turnId ? { turnId: event.turnId } : {}),
+      ...(item.eventId ? { eventId: item.eventId } : {}),
+      ...(item.publishToChannel !== undefined ? { publishToChannel: item.publishToChannel } : {}),
+      causality: (event as { causality?: unknown }).causality,
+      payloadSummary: summarizeDebugValue((event as { payload?: unknown }).payload),
+    });
+  }
+
+  private harnessEventSummary(event: AgentHarnessEvent): Record<string, unknown> | undefined {
+    const record = event as Record<string, unknown>;
+    const message = record["message"] as { role?: unknown; content?: unknown } | undefined;
+    if (message && typeof message === "object") {
+      return {
+        role: message.role,
+        content: summarizeDebugValue(message.content),
+      };
+    }
+    if (Array.isArray(record["messages"])) {
+      return { messageCount: record["messages"].length };
+    }
+    return undefined;
+  }
+
+  private summarizeRecord(record: Record<string, unknown>): Record<string, unknown> {
+    return Object.fromEntries(
+      Object.entries(record).map(([key, value]) => [key, summarizeDebugValue(value)])
+    );
+  }
+
+  private activeOperationSignal(): AbortSignal | undefined {
+    return this.activeRunSignal ?? this.activeOperationAbortController?.signal;
+  }
+
+  async getDebugState(): Promise<Record<string, unknown>> {
+    let sessionLeafId: string | null = null;
+    let sessionEntries: unknown[] | null = null;
+    let contextMessages: unknown[] | null = null;
+    try {
+      sessionLeafId = await this.session?.getLeafId() ?? null;
+    } catch (err) {
+      sessionLeafId = `error: ${err instanceof Error ? err.message : String(err)}`;
+    }
+    try {
+      sessionEntries = await this.session?.getEntries() ?? null;
+    } catch (err) {
+      sessionEntries = [{ error: err instanceof Error ? err.message : String(err) }];
+    }
+    try {
+      contextMessages = (await this.session?.buildContext())?.messages ?? null;
+    } catch (err) {
+      contextMessages = [{ error: err instanceof Error ? err.message : String(err) }];
+    }
+    return {
+      running: this.running,
+      currentTurnId: this.currentTurnId,
+      openInvocationIds: [...this.openInvocationIds],
+      openToolInvocations: [...this.openToolInvocations.values()].map((invocation) => ({
+        ...invocation,
+      })),
+      activeAssistantMessage: this.activeAssistantMessage ? { ...this.activeAssistantMessage } : null,
+      phase: {
+        currentOperation: this.currentOperation ? { ...this.currentOperation } : null,
+        activeRunSignal: this.activeRunSignal
+          ? { aborted: this.activeRunSignal.aborted }
+          : null,
+        activeOperationSignal: this.activeOperationAbortController
+          ? { aborted: this.activeOperationAbortController.signal.aborted }
+          : null,
+        awaitingProviderFirstEvent: this.awaitingProviderFirstEvent,
+        providerRequestCount: this.providerRequestCount,
+        credentialRequestCount: this.credentialRequestCount,
+        checkpoints: [...this.phaseCheckpoints],
+      },
+      hooks: this.hooks.getDebugState(),
+      lastContinueDiagnostic: this.lastContinueDiagnostic,
+      recentHarnessEvents: [...this.recentHarnessEvents],
+      recentTrajectoryEvents: [...this.recentTrajectoryEvents],
+      lastErrors: [...this.lastErrors],
+      pendingProvenance: this.provenanceQueue.map((item) => ({
+        kind: item.event.kind,
+        eventId: item.eventId ?? null,
+        publishToChannel: item.publishToChannel ?? false,
+      })),
+      pendingMutations: [...this.pendingMutations.values()].map((mutation) => ({
+        intentEntryId: mutation.intentEntryId,
+        path: mutation.path,
+        toolCallId: mutation.toolCallId,
+        toolName: mutation.toolName,
+        before: mutation.before,
+      })),
+      branchInfo: this.options.gad
+        ? {
+            trajectoryId: this.gadTrajectoryId(),
+            branchId: this.options.gad.branchId,
+            workspaceId: this.options.gad.workspaceId ?? null,
+            channelId: this.options.gad.channelId ?? null,
+            contextId: this.options.gad.contextId ?? null,
+            source: this.options.gad.source ?? null,
+            metadata: this.options.gad.metadata ?? {},
+          }
+        : null,
+      restoredTrajectoryState: this.restoredTrajectoryState
+        ? {
+            turnCount: Object.keys(this.restoredTrajectoryState.turns).length,
+            openTurns: Object.values(this.restoredTrajectoryState.turns)
+              .filter((turn) => turn.status === "open")
+              .map((turn) => turn.turnId),
+            invocationCount: Object.keys(this.restoredTrajectoryState.invocations).length,
+            openInvocations: Object.values(this.restoredTrajectoryState.invocations)
+              .filter((invocation) => !this.isTerminalInvocationStatus(invocation.status))
+              .map((invocation) => invocation.invocationId),
+          }
+        : null,
+      channelPublicationBroadcasts: Object.fromEntries(
+        [...this.channelPublicationBroadcasts.entries()].map(([channelId, state]) => [
+          channelId,
+          {
+            ...state,
+            queuedEnvelopeIds: [...state.queuedEnvelopeIds],
+            activeEnvelopeIds: [...state.activeEnvelopeIds],
+            lastError: state.lastError ? { ...state.lastError, envelopeIds: [...state.lastError.envelopeIds] } : undefined,
+          },
+        ])
+      ),
+      sessionLeafId,
+      sessionEntries,
+      contextMessages,
+      approvalLevel: this._approvalLevel,
+      model: this.resolvedModel
+        ? {
+            id: (this.resolvedModel as { id?: unknown }).id,
+            provider: (this.resolvedModel as { provider?: unknown }).provider,
+            modelId: (this.resolvedModel as { modelId?: unknown }).modelId,
+            baseUrl: (this.resolvedModel as { baseUrl?: unknown }).baseUrl,
+          }
+        : null,
+    };
+  }
+
+  async forceCloseCurrentTurn(reason = "user_interrupted", summary = "Agent turn interrupted"): Promise<boolean> {
+    if (!this.options.gad || !this.currentTurnId) return false;
+    const turnId = this.currentTurnId;
+    this.currentTurnId = null;
+    this.running = false;
+    this.activeAssistantMessage = null;
+    await this.flushProvenance().catch((err) => {
+      console.warn("[PiRunner] flushProvenance during forceCloseCurrentTurn failed:", err);
+    });
+    await this.abandonOpenInvocations(summary).catch((err) => {
+      console.warn("[PiRunner] abandonOpenInvocations during forceCloseCurrentTurn failed:", err);
+    });
+    await this.appendTrajectoryEvents([
+      {
+        event: {
+          kind: "turn.closed",
+          actor: this.agentActor(),
+          turnId,
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            summary,
+            reason,
+          },
+          createdAt: new Date().toISOString(),
+        },
+        publishToChannel: true,
+      },
+    ]);
+    return true;
+  }
+
   forgetOpenInvocation(invocationId: string): void {
     this.openInvocationIds.delete(invocationId);
+    this.openToolInvocations.delete(invocationId);
   }
 
   async init(): Promise<void> {
@@ -318,7 +666,26 @@ export class PiRunner {
       activeToolNames: this.computeActiveTools().map((tool) => tool.name),
       model: this.resolvedModel,
       thinkingLevel: this.options.thinkingLevel ?? "medium",
-      getApiKeyAndHeaders: async () => ({ apiKey: await this.options.getApiKey() }),
+      getApiKeyAndHeaders: async () => {
+        this.credentialRequestCount++;
+        this.rememberCheckpoint("model_credential.request.start", {
+          credentialRequestCount: this.credentialRequestCount,
+        });
+        try {
+          const apiKey = await this.options.getApiKey();
+          this.rememberCheckpoint("model_credential.request.ok", {
+            credentialRequestCount: this.credentialRequestCount,
+          });
+          return { apiKey };
+        } catch (err) {
+          this.rememberError("model_credential.request", err);
+          this.rememberCheckpoint("model_credential.request.error", {
+            credentialRequestCount: this.credentialRequestCount,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
+      },
       systemPrompt: () => this.composeCurrentSystemPrompt(),
     });
 
@@ -374,15 +741,66 @@ export class PiRunner {
       this.handleHarnessEvent(event, signal)
     );
 
-    this.harness.on("context", async (event) => ({
-      messages: await this.hooks.emitTransformContext(event.messages),
-    }));
-    this.harness.on("before_provider_request", (event) =>
-      this.hooks.emitBeforeProviderRequest(event)
-    );
+    this.harness.on("context", async (event) => {
+      this.rememberCheckpoint("context.transform.start", {
+        messageCount: event.messages.length,
+      });
+      try {
+        const messages = await this.hooks.emitTransformContext(event.messages, {
+          signal: this.activeRunSignal ?? undefined,
+        });
+        this.rememberCheckpoint("context.transform.ok", { messageCount: messages.length });
+        return { messages };
+      } catch (err) {
+        this.rememberError("context.transform", err);
+        this.rememberCheckpoint("context.transform.error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    });
+    this.harness.on("before_provider_request", async (event) => {
+      this.providerRequestCount++;
+      this.awaitingProviderFirstEvent = true;
+      this.rememberCheckpoint("provider.request.ready", {
+        providerRequestCount: this.providerRequestCount,
+      });
+      try {
+        const result = await this.hooks.emitBeforeProviderRequest(event, {
+          signal: this.activeRunSignal ?? undefined,
+        });
+        this.rememberCheckpoint("provider.request.hooks_ok", {
+          providerRequestCount: this.providerRequestCount,
+          patchedStreamOptions: Boolean(result?.streamOptions),
+        });
+        return result;
+      } catch (err) {
+        this.rememberError("provider.request.hooks", err);
+        this.rememberCheckpoint("provider.request.hooks_error", {
+          providerRequestCount: this.providerRequestCount,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    });
     this.harness.on("before_agent_start", async () => {
-      this.currentResources = await loadNatStackResources({ rpc: this.options.rpc });
-      return { systemPrompt: this.composeCurrentSystemPrompt() };
+      const signal = this.activeOperationSignal();
+      this.rememberCheckpoint("agent.before_start.resources.start", {
+        signalAborted: signal?.aborted ?? false,
+      });
+      try {
+        this.currentResources = await loadNatStackResources({ rpc: this.options.rpc, signal });
+        this.rememberCheckpoint("agent.before_start.resources.ok", {
+          skillCount: this.currentResources.skills.length,
+        });
+        return { systemPrompt: this.composeCurrentSystemPrompt() };
+      } catch (err) {
+        this.rememberError("agent.before_start.resources", err);
+        this.rememberCheckpoint("agent.before_start.resources.error", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
     });
     this.harness.on("tool_result", async (event) => {
       if (event.toolName === "edit" || event.toolName === "write") {
@@ -611,7 +1029,13 @@ export class PiRunner {
   }
 
   private async handleHarnessEvent(event: AgentHarnessEvent, _signal?: AbortSignal): Promise<void> {
+    const signal = _signal ?? this.activeRunSignal ?? undefined;
+    this.rememberHarnessEvent(event);
     if (event.type === "agent_start") {
+      this.activeRunSignal = signal ?? null;
+      this.rememberCheckpoint("agent.start", {
+        signalAborted: signal?.aborted ?? false,
+      });
       this.running = true;
       await this.openCurrentTurn();
     }
@@ -627,8 +1051,15 @@ export class PiRunner {
     if (event.type === "agent_end") {
       await this.closeCurrentTurn();
       this.running = false;
+      this.awaitingProviderFirstEvent = false;
     }
-    await this.hooks.emitEvent(event);
+    try {
+      await this.hooks.emitEvent(event, { signal });
+    } finally {
+      if (event.type === "agent_end") {
+        this.activeRunSignal = null;
+      }
+    }
   }
 
   private async openCurrentTurn(): Promise<void> {
@@ -812,7 +1243,18 @@ export class PiRunner {
     for (const [blockIndex, block] of this.messageBlocks(message).entries()) {
       const toolCallId = this.toolCallIdFromBlock(block);
       if (toolCallId) {
+        const name = this.toolNameFromBlock(block) ?? "unknown";
+        const request = this.toolInputFromBlock(block) ?? this.asJsonRecord(block) ?? { blockIndex };
         this.openInvocationIds.add(toolCallId);
+        this.openToolInvocations.set(toolCallId, {
+          invocationId: toolCallId,
+          modelToolCallId: toolCallId,
+          name,
+          request: summarizeDebugValue(request),
+          messageId: visibleMessageId,
+          ...(this.currentTurnId ? { turnId: this.currentTurnId } : {}),
+          startedAt: this.messageTimestamp(message),
+        });
         this.provenanceQueue.push({
           event: {
             kind: "invocation.started",
@@ -824,9 +1266,9 @@ export class PiRunner {
             },
             payload: {
               protocol: "agentic.trajectory.v1",
-              name: this.toolNameFromBlock(block) ?? "unknown",
+              name,
               invocationType: "tool",
-              request: this.toolInputFromBlock(block) ?? this.asJsonRecord(block) ?? { blockIndex },
+              request,
               transport: { kind: "local", awaiterId: toolCallId },
               userVisible: true,
             },
@@ -843,6 +1285,7 @@ export class PiRunner {
       const details = (message as { details?: unknown }).details;
       if (typeof toolCallId === "string" && toolCallId.length > 0) {
         this.openInvocationIds.delete(toolCallId);
+        this.openToolInvocations.delete(toolCallId);
         this.provenanceQueue.push({
           event: {
             kind: (message as { isError?: boolean }).isError === true
@@ -929,28 +1372,35 @@ export class PiRunner {
 
   private async appendTrajectoryEvents(items: TrajectoryQueueItem[]): Promise<void> {
     if (items.length === 0 || !this.options.gad) return;
-    const result = await this.gad.call<AppendTrajectoryBatchResultLike>("appendTrajectoryBatch", {
-      trajectoryId: this.gadTrajectoryId(),
-      branchId: this.options.gad.branchId,
-      owner: this.agentActor(),
-      events: items.map((item) => {
-        const event = this.withCurrentTurnId(item.event);
-        const publishToChannel = this.options.publicationPolicy
-          ? this.options.publicationPolicy({ event, publishToChannel: item.publishToChannel })
-          : item.publishToChannel;
-        return {
-          event,
-          ...(item.eventId ? { eventId: item.eventId } : {}),
-          ...(this.options.gad?.channelId && publishToChannel === true
-            ? { publish: { channelIds: [this.options.gad.channelId] } }
-            : {}),
-        };
-      }),
+    const events = items.map((item) => {
+      const event = this.withCurrentTurnId(item.event);
+      const publishToChannel = this.options.publicationPolicy
+        ? this.options.publicationPolicy({ event, publishToChannel: item.publishToChannel })
+        : item.publishToChannel;
+      this.rememberTrajectoryEvent({ ...item, event, publishToChannel });
+      return {
+        event,
+        ...(item.eventId ? { eventId: item.eventId } : {}),
+        ...(this.options.gad?.channelId && publishToChannel === true
+          ? { publish: { channelIds: [this.options.gad.channelId] } }
+          : {}),
+      };
     });
-    await this.broadcastPublishedChannelEnvelopes(result?.published ?? []);
+    try {
+      const result = await this.gad.call<AppendTrajectoryBatchResultLike>("appendTrajectoryBatch", {
+        trajectoryId: this.gadTrajectoryId(),
+        branchId: this.options.gad.branchId,
+        owner: this.agentActor(),
+        events,
+      });
+      this.schedulePublishedChannelEnvelopeBroadcasts(result?.published ?? []);
+    } catch (err) {
+      this.rememberError("trajectory.append", err);
+      throw err;
+    }
   }
 
-  private async broadcastPublishedChannelEnvelopes(publications: PublishedChannelEnvelope[]): Promise<void> {
+  private schedulePublishedChannelEnvelopeBroadcasts(publications: PublishedChannelEnvelope[]): void {
     if (publications.length === 0) return;
     const byChannel = new Map<string, string[]>();
     for (const publication of publications) {
@@ -959,18 +1409,77 @@ export class PiRunner {
       existing.push(publication.envelopeId);
       byChannel.set(publication.channelId, existing);
     }
-    await Promise.all(Array.from(byChannel, async ([channelId, envelopeIds]) => {
-      try {
-        const target = await this.resolveChannelTarget(channelId);
-        await this.options.rpc.call(target, "broadcastStoredEnvelopes", [envelopeIds]);
-      } catch (err) {
-        console.warn("[PiRunner] channel publication broadcast failed:", {
-          channelId,
-          envelopeIds,
-          error: err instanceof Error ? err.message : String(err),
-        });
+    for (const [channelId, envelopeIds] of byChannel) {
+      this.enqueueChannelPublicationBroadcast(channelId, envelopeIds);
+    }
+  }
+
+  private enqueueChannelPublicationBroadcast(channelId: string, envelopeIds: string[]): void {
+    if (envelopeIds.length === 0) return;
+    const state = this.getChannelPublicationBroadcastState(channelId);
+    state.pendingBatches += 1;
+    state.queuedEnvelopeIds.push(...envelopeIds);
+    state.lastScheduledAt = new Date().toISOString();
+
+    const previous = this.channelPublicationBroadcastChains.get(channelId) ?? Promise.resolve();
+    const next = previous
+      .catch(() => undefined)
+      .then(async () => {
+        state.activeEnvelopeIds = [...envelopeIds];
+        state.queuedEnvelopeIds = removeQueuedEnvelopeIds(state.queuedEnvelopeIds, envelopeIds);
+        try {
+          const target = await this.resolveChannelTarget(channelId);
+          await this.options.rpc.call(target, "broadcastStoredEnvelopes", [envelopeIds]);
+          state.lastCompletedAt = new Date().toISOString();
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          state.lastError = {
+            envelopeIds: [...envelopeIds],
+            message,
+            at: new Date().toISOString(),
+          };
+          console.warn("[PiRunner] channel publication broadcast failed:", {
+            channelId,
+            envelopeIds,
+            error: message,
+          });
+        } finally {
+          state.pendingBatches = Math.max(0, state.pendingBatches - 1);
+          state.activeEnvelopeIds = [];
+          this.pruneChannelPublicationBroadcastState(channelId, state);
+        }
+      });
+
+    this.channelPublicationBroadcastChains.set(channelId, next);
+    void next.finally(() => {
+      if (this.channelPublicationBroadcastChains.get(channelId) === next) {
+        this.channelPublicationBroadcastChains.delete(channelId);
       }
-    }));
+    });
+  }
+
+  private getChannelPublicationBroadcastState(channelId: string): ChannelPublicationBroadcastState {
+    let state = this.channelPublicationBroadcasts.get(channelId);
+    if (!state) {
+      state = {
+        pendingBatches: 0,
+        queuedEnvelopeIds: [],
+        activeEnvelopeIds: [],
+      };
+      this.channelPublicationBroadcasts.set(channelId, state);
+    }
+    return state;
+  }
+
+  private pruneChannelPublicationBroadcastState(channelId: string, state: ChannelPublicationBroadcastState): void {
+    if (
+      state.pendingBatches === 0 &&
+      state.queuedEnvelopeIds.length === 0 &&
+      state.activeEnvelopeIds.length === 0 &&
+      !state.lastError
+    ) {
+      this.channelPublicationBroadcasts.delete(channelId);
+    }
   }
 
   private async resolveChannelTarget(channelId: string): Promise<string> {
@@ -984,6 +1493,11 @@ export class PiRunner {
           }
           return service.targetId;
         });
+      void promise.catch(() => {
+        if (this.channelTargetPromises.get(channelId) === promise) {
+          this.channelTargetPromises.delete(channelId);
+        }
+      });
       this.channelTargetPromises.set(channelId, promise);
     }
     return promise;
@@ -1541,8 +2055,37 @@ export class PiRunner {
 
   async prompt(input: RunnerTurnInput): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
-    await this.refreshRuntimeTools();
-    await this.harness.prompt(input.content, input.images ? { images: input.images } : undefined);
+    const operationAbortController = new AbortController();
+    this.activeOperationAbortController = operationAbortController;
+    this.currentOperation = {
+      kind: "prompt",
+      startedAt: new Date().toISOString(),
+      input: {
+        contentLength: input.content.length,
+        contentPreview: previewText(input.content),
+        imageCount: input.images?.length ?? 0,
+      },
+    };
+    this.rememberCheckpoint("prompt.start", this.currentOperation.input);
+    try {
+      this.rememberCheckpoint("prompt.refresh_tools.start");
+      await this.refreshRuntimeTools();
+      this.rememberCheckpoint("prompt.refresh_tools.ok");
+      this.rememberCheckpoint("prompt.harness.start");
+      await this.harness.prompt(input.content, input.images ? { images: input.images } : undefined);
+      this.rememberCheckpoint("prompt.harness.ok");
+    } catch (err) {
+      this.rememberError("prompt", err);
+      this.rememberCheckpoint("prompt.error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    } finally {
+      if (this.activeOperationAbortController === operationAbortController) {
+        this.activeOperationAbortController = null;
+      }
+      this.currentOperation = null;
+    }
   }
 
   buildUserMessage(input: RunnerTurnInput): AgentMessage {
@@ -1556,25 +2099,151 @@ export class PiRunner {
   async steerMessage(message: AgentMessage): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
     const harness = this.harness as unknown as AgentHarnessQueueAccess;
+    this.rememberCheckpoint("steer.queue.push", {
+      queuedBefore: harness.steerQueue.length,
+      role: (message as { role?: unknown }).role,
+    });
     harness.steerQueue.push(message);
-    await harness.emitQueueUpdate();
+    try {
+      this.rememberCheckpoint("steer.queue_update.start", {
+        queuedAfter: harness.steerQueue.length,
+      });
+      await harness.emitQueueUpdate();
+      this.rememberCheckpoint("steer.queue_update.ok", {
+        queuedAfter: harness.steerQueue.length,
+      });
+    } catch (err) {
+      this.rememberError("steer.queue_update", err);
+      this.rememberCheckpoint("steer.queue_update.error", {
+        error: err instanceof Error ? err.message : String(err),
+        queuedAfter: harness.steerQueue.length,
+      });
+      throw err;
+    }
   }
 
   async clearSteeringQueue(): Promise<void> {
     if (!this.harness) return;
     const harness = this.harness as unknown as AgentHarnessQueueAccess;
     if (harness.steerQueue.length === 0) return;
+    this.rememberCheckpoint("steer.clear.start", {
+      queuedBefore: harness.steerQueue.length,
+    });
     harness.steerQueue.splice(0);
-    await harness.emitQueueUpdate();
+    try {
+      await harness.emitQueueUpdate();
+      this.rememberCheckpoint("steer.clear.ok");
+    } catch (err) {
+      this.rememberError("steer.clear", err);
+      this.rememberCheckpoint("steer.clear.error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   }
 
   async continueAgent(): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
-    await this.refreshRuntimeTools();
-    await this.harness.continue();
+    const operationAbortController = new AbortController();
+    this.activeOperationAbortController = operationAbortController;
+    this.currentOperation = {
+      kind: "continue",
+      startedAt: new Date().toISOString(),
+    };
+    this.rememberCheckpoint("continue.start");
+    try {
+      this.rememberCheckpoint("continue.preflight.start");
+      await this.prepareSessionForContinue();
+      this.rememberCheckpoint("continue.preflight.ok");
+      this.rememberCheckpoint("continue.refresh_tools.start");
+      await this.refreshRuntimeTools();
+      this.rememberCheckpoint("continue.refresh_tools.ok");
+      this.rememberCheckpoint("continue.harness.start");
+      await this.harness.continue();
+      this.rememberCheckpoint("continue.harness.ok");
+    } catch (err) {
+      this.rememberError("continue", err);
+      this.rememberCheckpoint("continue.error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    } finally {
+      if (this.activeOperationAbortController === operationAbortController) {
+        this.activeOperationAbortController = null;
+      }
+      this.currentOperation = null;
+    }
+  }
+
+  private async prepareSessionForContinue(): Promise<void> {
+    if (!this.session) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    const [leafId, branch, context] = await Promise.all([
+      this.session.getLeafId(),
+      this.session.getBranch(),
+      this.session.buildContext(),
+    ]);
+    const last = context.messages[context.messages.length - 1] as
+      | ({ role?: string; stopReason?: string } & AgentMessage)
+      | undefined;
+    if (!last) {
+      this.lastContinueDiagnostic = {
+        status: "invalid",
+        reason: "empty_context",
+        leafId,
+        at: new Date().toISOString(),
+      };
+      throw new AgentWorkerError(
+        "session",
+        "Cannot continue: session context is empty. Send a new prompt instead.",
+      );
+    }
+    if (last.role === "user" || last.role === "toolResult") {
+      this.lastContinueDiagnostic = {
+        status: "ok",
+        lastRole: last.role,
+        leafId,
+        at: new Date().toISOString(),
+      };
+      return;
+    }
+    const leafEntry = branch[branch.length - 1] as
+      | { type?: string; id?: string; parentId?: string | null; message?: AgentMessage }
+      | undefined;
+    if (
+      last.role === "assistant" &&
+      last.stopReason === "aborted" &&
+      !this.assistantMessageHasVisibleContent(last) &&
+      leafEntry?.type === "message" &&
+      leafEntry.id === leafId
+    ) {
+      const repairedLeafId = leafEntry.parentId ?? null;
+      await this.session.moveTo(repairedLeafId);
+      this.lastContinueDiagnostic = {
+        status: "repaired",
+        reason: "empty_aborted_assistant_leaf",
+        fromLeafId: leafId,
+        toLeafId: repairedLeafId,
+        at: new Date().toISOString(),
+      };
+      this.rememberCheckpoint("continue.preflight.repaired", this.lastContinueDiagnostic);
+      return;
+    }
+    this.lastContinueDiagnostic = {
+      status: "invalid",
+      reason: "unsupported_last_role",
+      lastRole: last.role ?? null,
+      lastStopReason: last.stopReason ?? null,
+      leafId,
+      at: new Date().toISOString(),
+    };
+    throw new AgentWorkerError(
+      "session",
+      `Cannot continue: session context ends with ${last.role ?? "an unknown role"}. Send a new prompt instead.`,
+    );
   }
 
   async abort(): Promise<{ clearedSteer: AgentMessage[]; clearedFollowUp: AgentMessage[] }> {
+    this.activeOperationAbortController?.abort(new Error("Agent run aborted"));
     if (!this.harness) return { clearedSteer: [], clearedFollowUp: [] };
     return this.harness.abort();
   }
@@ -1605,6 +2274,7 @@ export class PiRunner {
       publishToChannel: true,
     }));
     this.openInvocationIds.clear();
+    this.openToolInvocations.clear();
     await this.appendTrajectoryEvents(items);
   }
 
@@ -1665,8 +2335,12 @@ export class PiRunner {
     if (!last || last.role !== "assistant" || last.stopReason !== "aborted") {
       return messages;
     }
-    const content = Array.isArray(last.content) ? last.content : [];
-    const hasVisibleContent = content.some((block) => {
+    return this.assistantMessageHasVisibleContent(last) ? messages : messages.slice(0, -1);
+  }
+
+  private assistantMessageHasVisibleContent(message: { content?: unknown }): boolean {
+    const content = Array.isArray(message.content) ? message.content : [];
+    return content.some((block) => {
       if (!block || typeof block !== "object") return true;
       if ((block as { type?: string }).type === "text") {
         return Boolean((block as { text?: string }).text);
@@ -1676,7 +2350,6 @@ export class PiRunner {
       }
       return true;
     });
-    return hasVisibleContent ? messages : messages.slice(0, -1);
   }
 
   async getStateSnapshot(): Promise<PiStateSnapshot> {
@@ -1700,6 +2373,8 @@ export class PiRunner {
   }
 
   dispose(): void {
+    this.activeOperationAbortController?.abort(new Error("PiRunner disposed"));
+    this.activeOperationAbortController = null;
     void this.harness?.abort().catch((err) => {
       console.warn("[PiRunner] abort during dispose failed:", err);
     });
@@ -1713,6 +2388,9 @@ export class PiRunner {
     this.session = null;
     this.storage = null;
     this.running = false;
+    this.activeRunSignal = null;
+    this.awaitingProviderFirstEvent = false;
+    this.currentOperation = null;
   }
 }
 

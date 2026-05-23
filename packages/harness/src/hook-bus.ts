@@ -21,12 +21,35 @@ export interface OrphanFileMutationIntentEvent {
 export type NatStackRunnerEvent = OrphanFileMutationIntentEvent;
 export type RunnerEvent = AgentHarnessEvent | NatStackRunnerEvent;
 
-export type EventListener = (event: RunnerEvent) => Promise<void> | void;
+export interface HookListenerContext {
+  signal?: AbortSignal;
+}
+
+export interface HookBusActiveListener {
+  hook: HookName;
+  listenerIndex: number;
+  listenerCount: number;
+  eventType?: string;
+  startedAt: string;
+  aborted: boolean;
+}
+
+export interface HookBusDebugState {
+  listenerCounts: Record<HookName, number>;
+  active: HookBusActiveListener | null;
+}
+
+export type EventListener = (
+  event: RunnerEvent,
+  context?: HookListenerContext,
+) => Promise<void> | void;
 export type TransformContextListener = (
   messages: AgentMessage[],
+  context?: HookListenerContext,
 ) => Promise<AgentMessage[]> | AgentMessage[];
 export type BeforeProviderRequestListener = (
   event: Extract<AgentHarnessEvent, { type: "before_provider_request" }>,
+  context?: HookListenerContext,
 ) =>
   | Promise<{ streamOptions?: AgentHarnessStreamOptionsPatch } | undefined>
   | { streamOptions?: AgentHarnessStreamOptionsPatch }
@@ -44,6 +67,7 @@ export class HookBus {
   private readonly eventListeners: EventListener[] = [];
   private readonly transformContextListeners: TransformContextListener[] = [];
   private readonly beforeProviderRequestListeners: BeforeProviderRequestListener[] = [];
+  private active: HookBusActiveListener | null = null;
 
   on<TName extends HookName>(name: TName, listener: HookListenerMap[TName]): () => void {
     const list = this.bucket(name);
@@ -54,23 +78,46 @@ export class HookBus {
     };
   }
 
-  async emitEvent(event: RunnerEvent): Promise<void> {
-    for (const listener of [...this.eventListeners]) {
+  async emitEvent(event: RunnerEvent, context: HookListenerContext = {}): Promise<void> {
+    const listeners = [...this.eventListeners];
+    for (const [idx, listener] of listeners.entries()) {
+      if (context.signal?.aborted) return;
       try {
-        await listener(event);
+        await this.awaitListener(
+          "event",
+          idx,
+          listeners.length,
+          event.type,
+          listener(event, context),
+          context.signal,
+        );
       } catch (err) {
+        if (isAbortError(err)) return;
         console.error("[HookBus] event listener threw:", err);
       }
     }
   }
 
-  async emitTransformContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
+  async emitTransformContext(
+    messages: AgentMessage[],
+    context: HookListenerContext = {},
+  ): Promise<AgentMessage[]> {
     let current = messages;
-    for (const listener of [...this.transformContextListeners]) {
+    const listeners = [...this.transformContextListeners];
+    for (const [idx, listener] of listeners.entries()) {
+      if (context.signal?.aborted) return current;
       try {
-        const result = await listener(current);
+        const result = await this.awaitListener(
+          "transform_context",
+          idx,
+          listeners.length,
+          undefined,
+          listener(current, context),
+          context.signal,
+        );
         if (Array.isArray(result)) current = result;
       } catch (err) {
+        if (isAbortError(err)) return current;
         console.error("[HookBus] transform_context listener threw:", err);
       }
     }
@@ -79,15 +126,26 @@ export class HookBus {
 
   async emitBeforeProviderRequest(
     event: Extract<AgentHarnessEvent, { type: "before_provider_request" }>,
+    context: HookListenerContext = {},
   ): Promise<{ streamOptions?: AgentHarnessStreamOptionsPatch } | undefined> {
     let streamOptions: AgentHarnessStreamOptionsPatch | undefined;
-    for (const listener of [...this.beforeProviderRequestListeners]) {
+    const listeners = [...this.beforeProviderRequestListeners];
+    for (const [idx, listener] of listeners.entries()) {
+      if (context.signal?.aborted) break;
       try {
-        const result = await listener(event);
+        const result = await this.awaitListener(
+          "before_provider_request",
+          idx,
+          listeners.length,
+          event.type,
+          listener(event, context),
+          context.signal,
+        );
         if (result?.streamOptions) {
           streamOptions = mergeStreamOptionPatch(streamOptions, result.streamOptions);
         }
       } catch (err) {
+        if (isAbortError(err)) break;
         console.error("[HookBus] before_provider_request listener threw:", err);
       }
     }
@@ -98,6 +156,18 @@ export class HookBus {
     this.eventListeners.length = 0;
     this.transformContextListeners.length = 0;
     this.beforeProviderRequestListeners.length = 0;
+    this.active = null;
+  }
+
+  getDebugState(): HookBusDebugState {
+    return {
+      listenerCounts: {
+        event: this.eventListeners.length,
+        transform_context: this.transformContextListeners.length,
+        before_provider_request: this.beforeProviderRequestListeners.length,
+      },
+      active: this.active ? { ...this.active } : null,
+    };
   }
 
   private bucket<TName extends HookName>(name: TName): HookListenerMap[TName][] {
@@ -108,6 +178,77 @@ export class HookBus {
     }
     throw new Error(`[HookBus] unknown hook: ${String(name)}`);
   }
+
+  private async awaitListener<T>(
+    hook: HookName,
+    listenerIndex: number,
+    listenerCount: number,
+    eventType: string | undefined,
+    value: Promise<T> | T,
+    signal: AbortSignal | undefined,
+  ): Promise<T> {
+    this.active = {
+      hook,
+      listenerIndex,
+      listenerCount,
+      ...(eventType ? { eventType } : {}),
+      startedAt: new Date().toISOString(),
+      aborted: signal?.aborted ?? false,
+    };
+    const markAborted = (): void => {
+      if (this.active?.hook === hook && this.active.listenerIndex === listenerIndex) {
+        this.active = { ...this.active, aborted: true };
+      }
+    };
+    try {
+      return await abortable(value, signal, markAborted);
+    } finally {
+      signal?.removeEventListener("abort", markAborted);
+      if (this.active?.hook === hook && this.active.listenerIndex === listenerIndex) {
+        this.active = null;
+      }
+    }
+  }
+}
+
+function abortable<T>(
+  value: Promise<T> | T,
+  signal: AbortSignal | undefined,
+  onAbort: () => void,
+): Promise<T> {
+  if (!signal) return Promise.resolve(value);
+  if (signal.aborted) {
+    onAbort();
+    return Promise.reject(createAbortError());
+  }
+  const promise = Promise.resolve(value);
+  return new Promise<T>((resolve, reject) => {
+    const abort = (): void => {
+      onAbort();
+      reject(createAbortError());
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    promise.then(
+      (result) => {
+        signal.removeEventListener("abort", abort);
+        resolve(result);
+      },
+      (err) => {
+        signal.removeEventListener("abort", abort);
+        reject(err);
+      },
+    );
+  });
+}
+
+function createAbortError(): Error {
+  const err = new Error("Hook listener aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
 }
 
 function mergeStreamOptionPatch(

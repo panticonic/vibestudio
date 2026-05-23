@@ -32,18 +32,61 @@ export interface NatStackResources {
 }
 export interface ResourceLoaderDeps {
     rpc: RpcCaller;
+    signal?: AbortSignal;
 }
 /**
  * Fetches the workspace system prompt and skill list in parallel and
  * returns a `NatStackResources` bundle for PiRunner to consume.
  */
 export async function loadNatStackResources(deps: ResourceLoaderDeps): Promise<NatStackResources> {
+    throwIfAborted(deps.signal);
     const [systemPrompt, skills] = await Promise.all([
-        deps.rpc.call<string>("main", "workspace.getAgentsMd", []),
-        deps.rpc.call<SkillEntry[]>("main", "workspace.listSkills", []),
+        abortable(callWorkspace<string>(deps, "workspace.getAgentsMd"), deps.signal),
+        abortable(callWorkspace<SkillEntry[]>(deps, "workspace.listSkills"), deps.signal),
     ]);
     const skillIndex = formatSkillIndex(skills);
     return { systemPrompt, skillIndex, skills };
+}
+
+function callWorkspace<T>(deps: ResourceLoaderDeps, method: string): Promise<T> {
+    if (deps.signal)
+        return deps.rpc.call<T>("main", method, [], { signal: deps.signal });
+    return deps.rpc.call<T>("main", method, []);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+    if (!signal?.aborted)
+        return;
+    throw createAbortError(signal);
+}
+
+function abortable<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+    if (!signal)
+        return promise;
+    throwIfAborted(signal);
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => reject(createAbortError(signal));
+        signal.addEventListener("abort", onAbort, { once: true });
+        promise.then(
+            (value) => {
+                signal.removeEventListener("abort", onAbort);
+                resolve(value);
+            },
+            (err) => {
+                signal.removeEventListener("abort", onAbort);
+                reject(err);
+            }
+        );
+    });
+}
+
+function createAbortError(signal: AbortSignal): Error {
+    const reason = signal.reason;
+    if (reason instanceof Error)
+        return reason;
+    const err = new Error(typeof reason === "string" ? reason : "Resource loading aborted");
+    err.name = "AbortError";
+    return err;
 }
 /**
  * Renders the skill index as a markdown section. Returns an empty string

@@ -95,6 +95,7 @@ export class AiChatWorker extends AgentWorkerBase {
         { name: "setApprovalLevel", description: "Set live approval level: 0=manual, 1=auto-safe, 2=full-auto" },
         { name: "setRespondPolicy", description: "Set live chattiness policy and optional participant allow-list" },
         { name: "getAgentSettings", description: "Read effective model, effort, approval, and chattiness settings" },
+        { name: "getDebugState", description: "Read agent DO persisted and in-memory debug state" },
       ],
     };
   }
@@ -154,6 +155,8 @@ export class AiChatWorker extends AgentWorkerBase {
       }
       case "getAgentSettings":
         return { result: this.getAgentSettings(channelId) };
+      case "getDebugState":
+        return { result: await this.getDebugState(channelId) };
       default:
         return { result: { error: `unknown method: ${methodName}` }, isError: true };
     }

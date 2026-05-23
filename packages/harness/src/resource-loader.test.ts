@@ -55,6 +55,49 @@ describe("loadNatStackResources", () => {
     expect(callSpy).toHaveBeenCalledWith("main", "workspace.listSkills", []);
   });
 
+  it("passes the abort signal to both resource RPC calls", async () => {
+    const rpc = createMockRpc({
+      "main:workspace.getAgentsMd": "System prompt content",
+      "main:workspace.listSkills": SAMPLE_SKILLS,
+    });
+    const callSpy = rpc.call as ReturnType<typeof vi.fn>;
+    const controller = new AbortController();
+
+    await loadNatStackResources({ rpc, signal: controller.signal });
+
+    expect(callSpy).toHaveBeenCalledWith(
+      "main",
+      "workspace.getAgentsMd",
+      [],
+      { signal: controller.signal },
+    );
+    expect(callSpy).toHaveBeenCalledWith(
+      "main",
+      "workspace.listSkills",
+      [],
+      { signal: controller.signal },
+    );
+  });
+
+  it("rejects on abort even when a resource RPC does not settle", async () => {
+    const controller = new AbortController();
+    const call = vi.fn((_targetId: string, method: string) => {
+      if (method === "workspace.getAgentsMd") return new Promise<string>(() => undefined);
+      if (method === "workspace.listSkills") return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected method: ${method}`));
+    });
+    const rpc: RpcCaller = {
+      call: call as RpcCaller["call"],
+      streamCall: vi.fn(async () => new Response()) as unknown as RpcCaller["streamCall"],
+    };
+
+    const loadPromise = loadNatStackResources({ rpc, signal: controller.signal });
+    await Promise.resolve();
+    controller.abort(new Error("user interrupted"));
+
+    await expect(loadPromise).rejects.toThrow("user interrupted");
+  });
+
   it("formats skillIndex as a markdown section listing each skill", async () => {
     const rpc = createMockRpc({
       "main:workspace.getAgentsMd": "System prompt content",

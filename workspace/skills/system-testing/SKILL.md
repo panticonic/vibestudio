@@ -98,6 +98,23 @@ if (fail.execution.snapshot) {
 }
 ```
 
+### Agent debug port
+
+If a test shows an open turn but no assistant message, tool call, or
+`turn.closed` event, inspect the agent debug port before changing prompts or
+adding waits:
+
+```typescript
+const debug = await chat.callMethod(agentParticipantId, "getDebugState", {});
+console.log(JSON.stringify(debug, null, 2).slice(0, 4000));
+```
+
+The default AI agent exposes `getDebugState` as a read-only participant method.
+It reports dispatcher state, runner phase, persisted pending work, channel
+checkpoints, and recent lifecycle events. See
+`docs/agent-debug-port.md` for the full response shape and interpretation
+guide.
+
 ### Participants (who was in the channel)
 
 Check if the agent actually joined, and whether it disconnected:

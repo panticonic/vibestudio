@@ -33,6 +33,16 @@ class TestAgentWorker extends AgentWorkerBase {
   }
 }
 
+class InterruptTestAgentWorker extends TestAgentWorker {
+  public testInterruptRunner(channelId: string): Promise<void> {
+    return this.interruptRunner(channelId);
+  }
+
+  public testInterruptAllRunners(): Promise<void> {
+    return this.interruptAllRunners();
+  }
+}
+
 class CloneTestAgentWorker extends TestAgentWorker {
   public subscribeCalls: Array<{
     channelId: string;
@@ -103,6 +113,99 @@ describe("AgentWorkerBase runner contract", () => {
   });
 });
 
+describe("AgentWorkerBase interrupt recovery", () => {
+  it("resets dispatcher and force-closes the turn without awaiting a stuck runner interrupt", async () => {
+    const { instance } = await createTestDO(InterruptTestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const reset = vi.fn();
+    const forceCloseCurrentTurn = vi.fn().mockResolvedValue(true);
+    const interrupt = vi.fn(() => new Promise<void>(() => {}));
+    const worker = instance as unknown as {
+      runners: Map<string, unknown>;
+      dispatchers: Map<string, unknown>;
+      abortContexts: Map<string, { reason: string }>;
+      testInterruptRunner(channelId: string): Promise<void>;
+    };
+
+    worker.runners.set("chat-1", {
+      runner: {
+        forceCloseCurrentTurn,
+        interrupt,
+      },
+    });
+    worker.dispatchers.set("chat-1", { reset });
+
+    await worker.testInterruptRunner("chat-1");
+
+    expect(reset).toHaveBeenCalledTimes(1);
+    expect(forceCloseCurrentTurn).toHaveBeenCalledWith(
+      "user_interrupted",
+      "Agent turn interrupted by user"
+    );
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    expect(worker.abortContexts.get("chat-1")?.reason).toBe("interrupt-channel");
+  });
+
+  it("still asks the runner to interrupt if force-close fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { instance } = await createTestDO(InterruptTestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const forceCloseCurrentTurn = vi.fn().mockRejectedValue(new Error("close failed"));
+    const interrupt = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      runners: Map<string, unknown>;
+      dispatchers: Map<string, unknown>;
+      testInterruptRunner(channelId: string): Promise<void>;
+    };
+
+    worker.runners.set("chat-1", {
+      runner: {
+        forceCloseCurrentTurn,
+        interrupt,
+      },
+    });
+    worker.dispatchers.set("chat-1", { reset: vi.fn() });
+
+    await expect(worker.testInterruptRunner("chat-1")).resolves.toBeUndefined();
+
+    expect(interrupt).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(
+      "[TrajectoryVesselBase] forceCloseCurrentTurn failed for channel=chat-1:",
+      expect.any(Error)
+    );
+    warn.mockRestore();
+  });
+
+  it("preserves interrupt-all abort reason while using the same reset path", async () => {
+    const { instance } = await createTestDO(InterruptTestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      runners: Map<string, unknown>;
+      dispatchers: Map<string, unknown>;
+      abortContexts: Map<string, { reason: string }>;
+      testInterruptAllRunners(): Promise<void>;
+    };
+
+    for (const channelId of ["chat-1", "chat-2"]) {
+      worker.runners.set(channelId, {
+        runner: {
+          forceCloseCurrentTurn: vi.fn().mockResolvedValue(true),
+          interrupt: vi.fn().mockResolvedValue(undefined),
+        },
+      });
+      worker.dispatchers.set(channelId, { reset: vi.fn() });
+    }
+
+    await worker.testInterruptAllRunners();
+
+    expect(worker.abortContexts.get("chat-1")?.reason).toBe("interrupt-all");
+    expect(worker.abortContexts.get("chat-2")?.reason).toBe("interrupt-all");
+  });
+});
+
 describe("AgentWorkerBase typed transcript input", () => {
   it("submits panel-authored message.completed events to the runner", async () => {
     const { instance } = await createTestDO(TestAgentWorker, {
@@ -140,10 +243,7 @@ describe("AgentWorkerBase typed transcript input", () => {
       ts: Date.now(),
     });
 
-    expect(submit).toHaveBeenCalledWith(
-      { content: "Read the onboarding docs first" },
-      undefined,
-    );
+    expect(submit).toHaveBeenCalledWith({ content: "Read the onboarding docs first" }, undefined);
   });
 });
 
@@ -166,33 +266,37 @@ describe("TrajectoryVesselBase respond policy", () => {
       { participantId: "do:agent" },
     ]);
 
-    await expect(worker.testShouldRespond("chat-1", {
-      id: 1,
-      messageId: "msg-1",
-      type: AGENTIC_EVENT_PAYLOAD_KIND,
-      senderId: "panel:panel-1",
-      payload: {
-        kind: "message.completed",
-        payload: { protocol: "agentic.trajectory.v1", content: "hello" },
-      },
-      ts: Date.now(),
-    })).resolves.toBe(false);
-
-    await expect(worker.testShouldRespond("chat-1", {
-      id: 2,
-      messageId: "msg-2",
-      type: AGENTIC_EVENT_PAYLOAD_KIND,
-      senderId: "panel:panel-1",
-      payload: {
-        kind: "message.completed",
+    await expect(
+      worker.testShouldRespond("chat-1", {
+        id: 1,
+        messageId: "msg-1",
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        senderId: "panel:panel-1",
         payload: {
-          protocol: "agentic.trajectory.v1",
-          content: "@gmail hello",
-          mentions: ["do:agent"],
+          kind: "message.completed",
+          payload: { protocol: "agentic.trajectory.v1", content: "hello" },
         },
-      },
-      ts: Date.now(),
-    })).resolves.toBe(true);
+        ts: Date.now(),
+      })
+    ).resolves.toBe(false);
+
+    await expect(
+      worker.testShouldRespond("chat-1", {
+        id: 2,
+        messageId: "msg-2",
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        senderId: "panel:panel-1",
+        payload: {
+          kind: "message.completed",
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            content: "@gmail hello",
+            mentions: ["do:agent"],
+          },
+        },
+        ts: Date.now(),
+      })
+    ).resolves.toBe(true);
   });
 
   it("covers multi-agent gating for custom updates and mention combinations", async () => {
@@ -239,22 +343,23 @@ describe("TrajectoryVesselBase respond policy", () => {
     expect(chat.testShouldProcess(customUpdate)).toBe(false);
     expect(gmail.testShouldProcess(customUpdate)).toBe(false);
 
-    const userMessage = (mentions?: string[]) => ({
-      id: 2,
-      messageId: crypto.randomUUID(),
-      type: AGENTIC_EVENT_PAYLOAD_KIND,
-      senderId: "panel:user",
-      senderMetadata: { type: "panel", handle: "user" },
-      payload: {
-        kind: "message.completed",
+    const userMessage = (mentions?: string[]) =>
+      ({
+        id: 2,
+        messageId: crypto.randomUUID(),
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        senderId: "panel:user",
+        senderMetadata: { type: "panel", handle: "user" },
         payload: {
-          protocol: "agentic.trajectory.v1",
-          content: "hello",
-          mentions,
+          kind: "message.completed",
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            content: "hello",
+            mentions,
+          },
         },
-      },
-      ts: Date.now(),
-    }) satisfies ChannelEvent;
+        ts: Date.now(),
+      }) satisfies ChannelEvent;
 
     await expect(chat.testShouldRespond("chat-1", userMessage())).resolves.toBe(false);
     await expect(gmail.testShouldRespond("chat-1", userMessage())).resolves.toBe(false);
@@ -262,8 +367,12 @@ describe("TrajectoryVesselBase respond policy", () => {
     await expect(gmail.testShouldRespond("chat-1", userMessage(["do:chat"]))).resolves.toBe(false);
     await expect(chat.testShouldRespond("chat-1", userMessage(["do:gmail"]))).resolves.toBe(false);
     await expect(gmail.testShouldRespond("chat-1", userMessage(["do:gmail"]))).resolves.toBe(true);
-    await expect(chat.testShouldRespond("chat-1", userMessage(["do:chat", "do:gmail"]))).resolves.toBe(true);
-    await expect(gmail.testShouldRespond("chat-1", userMessage(["do:chat", "do:gmail"]))).resolves.toBe(true);
+    await expect(
+      chat.testShouldRespond("chat-1", userMessage(["do:chat", "do:gmail"]))
+    ).resolves.toBe(true);
+    await expect(
+      gmail.testShouldRespond("chat-1", userMessage(["do:chat", "do:gmail"]))
+    ).resolves.toBe(true);
   });
 });
 
@@ -386,25 +495,28 @@ describe("AgentWorkerBase fork subscription state", () => {
       "ctx-1",
       Date.now(),
       JSON.stringify({ approvalLevel: 2 }),
-      "do:workers/test-agent:TestAgentWorker:agent-parent",
+      "do:workers/test-agent:TestAgentWorker:agent-parent"
     );
     sql.exec(
       `INSERT INTO delivery_cursor (channel_id, last_delivered_seq) VALUES (?, ?)`,
       "channel-parent",
-      10,
+      10
     );
 
     await instance.postClone("agent-parent", "channel-fork", "channel-parent", 42);
 
-    expect(gadCall).toHaveBeenCalledWith("forkTrajectoryBranch", expect.objectContaining({
-      fromTrajectoryId: "branch:channel:channel-parent",
-      fromBranchId: "branch:channel:channel-parent",
-      toTrajectoryId: "branch:channel:channel-fork",
-      toBranchId: "branch:channel:channel-fork",
-      throughPublishedChannelId: "channel-parent",
-      throughPublishedChannelSeq: 42,
-      toPublishedChannelId: "channel-fork",
-    }));
+    expect(gadCall).toHaveBeenCalledWith(
+      "forkTrajectoryBranch",
+      expect.objectContaining({
+        fromTrajectoryId: "branch:channel:channel-parent",
+        fromBranchId: "branch:channel:channel-parent",
+        toTrajectoryId: "branch:channel:channel-fork",
+        toBranchId: "branch:channel:channel-fork",
+        throughPublishedChannelId: "channel-parent",
+        throughPublishedChannelSeq: 42,
+        toPublishedChannelId: "channel-fork",
+      })
+    );
     expect(instance.subscribeCalls).toEqual([
       expect.objectContaining({
         channelId: "channel-fork",
@@ -424,7 +536,9 @@ describe("AgentWorkerBase dispatched method results", () => {
       __objectKey: "agent-test",
     });
     let capturedCallId = "";
-    let capturedOpts: { invocationId?: string; transportCallId?: string; turnId?: string } | undefined;
+    let capturedOpts:
+      | { invocationId?: string; transportCallId?: string; turnId?: string }
+      | undefined;
     const worker = instance as unknown as {
       subscriptions: {
         getParticipantId(channelId: string): string | null;
@@ -482,7 +596,7 @@ describe("AgentWorkerBase dispatched method results", () => {
       { code: "1 + 1" },
       undefined,
       undefined,
-      "turn-1",
+      "turn-1"
     );
 
     expect(result).toEqual({
@@ -496,7 +610,6 @@ describe("AgentWorkerBase dispatched method results", () => {
       invocationId: "tool-1",
       transportCallId: capturedCallId,
       turnId: "turn-1",
-      timeoutMs: 600000,
     });
   });
 
@@ -555,9 +668,204 @@ describe("AgentWorkerBase dispatched method results", () => {
     await expect(pending).rejects.toThrow("Request was aborted");
     expect(cancelCall).toHaveBeenCalledWith(capturedCallId);
   });
+
+  it("exposes an open dispatched method call in debug state without timing it out", async () => {
+    const { instance } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const controller = new AbortController();
+    let capturedCallId = "";
+    let resolveCallStarted!: () => void;
+    const callStarted = new Promise<void>((resolve) => {
+      resolveCallStarted = resolve;
+    });
+    const worker = instance as unknown as {
+      subscriptions: {
+        getParticipantId(channelId: string): string | null;
+      };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      invokeChannelMethod(
+        channelId: string,
+        toolCallId: string,
+        participantHandle: string,
+        method: string,
+        args: unknown,
+        signal?: AbortSignal,
+        onStreamUpdate?: (content: unknown) => void,
+        turnId?: string
+      ): Promise<unknown>;
+      getDebugState(channelId?: string): Promise<Record<string, unknown>>;
+      runners: Map<string, { runner: { getDebugState(): Promise<Record<string, unknown>> } }>;
+    };
+
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.runners.set("chat-1", {
+      runner: {
+        getDebugState: vi.fn(async () => ({
+          running: true,
+          currentTurnId: "turn-open",
+          phase: {
+            currentOperation: { kind: "prompt", startedAt: "2026-05-23T00:00:00.000Z" },
+            awaitingProviderFirstEvent: true,
+          },
+        })),
+      },
+    });
+    worker.createChannelClient = vi.fn().mockReturnValue({
+      getParticipants: vi.fn().mockResolvedValue([
+        {
+          participantId: "panel:panel-1",
+          metadata: { handle: "user", type: "panel" },
+        },
+      ]),
+      callMethod: vi.fn(async (_callerId, _targetId, callId, _method, _args, opts) => {
+        capturedCallId = callId;
+        expect(opts).not.toHaveProperty("timeoutMs");
+        resolveCallStarted();
+      }),
+      cancelCall: vi.fn().mockResolvedValue(undefined),
+    });
+
+    const pending = worker.invokeChannelMethod(
+      "chat-1",
+      "tool-open",
+      "user",
+      "eval",
+      { code: "await forever()" },
+      controller.signal,
+      undefined,
+      "turn-open",
+    );
+    await callStarted;
+
+    const debug = await worker.getDebugState("chat-1") as {
+      volatile?: {
+        methodResultWaiters?: Array<Record<string, unknown>>;
+        runners?: Record<string, Record<string, unknown>>;
+      };
+    };
+    expect(debug.volatile?.runners?.["chat-1"]).toEqual(expect.objectContaining({
+      running: true,
+      currentTurnId: "turn-open",
+      phase: expect.objectContaining({ awaitingProviderFirstEvent: true }),
+    }));
+    expect(debug.volatile?.methodResultWaiters).toEqual([
+      expect.objectContaining({
+        callId: capturedCallId,
+        channelId: "chat-1",
+        invocationId: "tool-open",
+        method: "eval",
+        participantHandle: "user",
+        targetParticipantId: "panel:panel-1",
+        turnId: "turn-open",
+        argsSummary: { code: "await forever()" },
+      }),
+    ]);
+
+    controller.abort();
+    await expect(pending).rejects.toThrow("Request was aborted");
+  });
 });
 
 describe("AgentWorkerBase model credential resume", () => {
+  it("does not wait on interruption diagnostics or credential card delivery before failing auth", async () => {
+    const { instance } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const sendSignal = vi.fn(() => new Promise<void>(() => undefined));
+    const channelClient = {
+      getParticipants: vi.fn(() => new Promise(() => undefined)),
+      sendSignal,
+    };
+    const worker = instance as unknown as {
+      _rpc: {
+        call: ReturnType<typeof vi.fn>;
+        streamCall: ReturnType<typeof vi.fn>;
+        emit: ReturnType<typeof vi.fn>;
+        onEvent: ReturnType<typeof vi.fn>;
+        handleIncomingPost: ReturnType<typeof vi.fn>;
+      };
+      subscriptions: {
+        getParticipantId(channelId: string): string | null;
+      };
+      runners: Map<string, unknown>;
+      createChannelClient: ReturnType<typeof vi.fn>;
+      getModelBaseUrl(channelId: string): string;
+      getApiKeyForChannel(channelId: string): () => Promise<string>;
+      readRunnerMessages(channelId: string): Promise<AgentMessage[]>;
+    };
+
+    worker._rpc = {
+      call: vi.fn(async () => null),
+      streamCall: vi.fn(),
+      emit: vi.fn(),
+      onEvent: vi.fn(),
+      handleIncomingPost: vi.fn(),
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClient);
+    worker.getModelBaseUrl = vi.fn().mockReturnValue("https://model.example/v1");
+    worker.readRunnerMessages = vi.fn(() => new Promise<AgentMessage[]>(() => undefined));
+    worker.runners.set("chat-1", { runner: {} });
+
+    await expect(worker.getApiKeyForChannel("chat-1")()).rejects.toThrow(
+      "No URL-bound model credential is configured for model provider: test"
+    );
+
+    expect(worker.readRunnerMessages).toHaveBeenCalledWith("chat-1");
+    expect(channelClient.getParticipants).not.toHaveBeenCalled();
+    expect(sendSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates user interruption to in-flight model credential resolution", async () => {
+    const { instance } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    let capturedSignal: AbortSignal | undefined;
+    let markCallStarted!: () => void;
+    const callStarted = new Promise<void>((resolve) => {
+      markCallStarted = resolve;
+    });
+    const worker = instance as unknown as {
+      _rpc: {
+        call: ReturnType<typeof vi.fn>;
+        streamCall: ReturnType<typeof vi.fn>;
+        emit: ReturnType<typeof vi.fn>;
+        onEvent: ReturnType<typeof vi.fn>;
+        handleIncomingPost: ReturnType<typeof vi.fn>;
+      };
+      getModelBaseUrl(channelId: string): string;
+      getApiKeyForChannel(channelId: string): () => Promise<string>;
+      interruptRunner(channelId: string): Promise<void>;
+    };
+
+    worker._rpc = {
+      call: vi.fn((_target, _method, _args, opts?: { signal?: AbortSignal }) => {
+        capturedSignal = opts?.signal;
+        markCallStarted();
+        return new Promise((_resolve, reject) => {
+          opts?.signal?.addEventListener(
+            "abort",
+            () => reject(opts.signal?.reason ?? new Error("aborted")),
+            { once: true }
+          );
+        });
+      }),
+      streamCall: vi.fn(),
+      emit: vi.fn(),
+      onEvent: vi.fn(),
+      handleIncomingPost: vi.fn(),
+    };
+    worker.getModelBaseUrl = vi.fn().mockReturnValue("https://model.example/v1");
+
+    const pending = worker.getApiKeyForChannel("chat-1")();
+    await callStarted;
+    await worker.interruptRunner("chat-1");
+
+    expect(capturedSignal?.aborted).toBe(true);
+    await expect(pending).rejects.toThrow(/aborted/i);
+  });
+
   it("resumes from the saved interruption cursor after an assistant error is appended", async () => {
     const { instance } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",

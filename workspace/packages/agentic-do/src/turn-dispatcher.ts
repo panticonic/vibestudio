@@ -18,9 +18,23 @@ export interface TurnDispatcherRunner {
   clearSteeringQueue(): Promise<void>;
 }
 
-type WorkItem =
-  | { kind: "prompt"; input: RunnerTurnInput }
-  | { kind: "continue" };
+type WorkItem = { kind: "prompt"; input: RunnerTurnInput } | { kind: "continue" };
+
+type WorkCompletion =
+  | { status: "completed"; source: "runner" | "agent_end" }
+  | { status: "failed"; error: unknown }
+  | { status: "invalidated" };
+
+interface ActiveWork {
+  generation: number;
+  kind: WorkItem["kind"];
+  sawAgentStart: boolean;
+  sawAgentEnd: boolean;
+  runnerSettled: boolean;
+  completed: boolean;
+  completion: Promise<WorkCompletion>;
+  complete(result: WorkCompletion): void;
+}
 
 interface PendingSteer {
   input: RunnerTurnInput;
@@ -46,9 +60,7 @@ export class TurnDispatcher {
   private drainGeneration = 0;
   private lastTypingOn = false;
   private disposed = false;
-  private activeWork:
-    | { generation: number; kind: WorkItem["kind"]; sawAgentStart: boolean; sawAgentEnd: boolean }
-    | null = null;
+  private activeWork: ActiveWork | null = null;
   private readonly unsub: () => void;
   private readonly log: Pick<Console, "warn" | "error">;
 
@@ -66,7 +78,9 @@ export class TurnDispatcher {
       this.notifyTyping();
       void this.opts.runner.steerMessage(message).catch((err) => {
         this.log.warn("[TurnDispatcher] steer failed; routing as fresh prompt:", err);
-        this.pendingSteered = this.pendingSteered.filter((candidate) => candidate.message !== message);
+        this.pendingSteered = this.pendingSteered.filter(
+          (candidate) => candidate.message !== message
+        );
         this.pending.push({ kind: "prompt", input });
         this.ensureDrain();
       });
@@ -90,6 +104,7 @@ export class TurnDispatcher {
     this.running = false;
     this.draining = false;
     this.drainGeneration++;
+    this.invalidateActiveWork();
     void this.opts.runner.clearSteeringQueue().catch((err) => {
       this.log.warn("[TurnDispatcher] clearSteeringQueue during reset failed:", err);
     });
@@ -102,6 +117,7 @@ export class TurnDispatcher {
     this.running = false;
     this.draining = false;
     this.drainGeneration++;
+    this.invalidateActiveWork();
     this.notifyTyping();
     if (this.pending.length > 0) this.ensureDrain();
   }
@@ -114,8 +130,31 @@ export class TurnDispatcher {
     this.running = false;
     this.draining = false;
     this.drainGeneration++;
+    this.invalidateActiveWork();
     this.unsub();
     this.notifyTyping();
+  }
+
+  getDebugState(): Record<string, unknown> {
+    return {
+      pending: this.pending.map((item) =>
+        item.kind === "continue"
+          ? { kind: item.kind }
+          : { kind: item.kind, input: summarizeTurnInput(item.input) }
+      ),
+      pendingSteered: this.pendingSteered.map((item) => ({
+        input: summarizeTurnInput(item.input),
+        messageRole: (item.message as { role?: unknown }).role ?? null,
+      })),
+      pendingSteeredCount: this.pendingSteered.length,
+      running: this.running,
+      draining: this.draining,
+      drainGeneration: this.drainGeneration,
+      lastTypingOn: this.lastTypingOn,
+      disposed: this.disposed,
+      activeWork: this.activeWork ? this.activeWorkDebugState(this.activeWork) : null,
+      busy: this.busy,
+    };
   }
 
   private get busy(): boolean {
@@ -148,7 +187,12 @@ export class TurnDispatcher {
         return;
       }
       case "agent_end": {
-        if (this.activeWork) this.activeWork.sawAgentEnd = true;
+        const active = this.activeWork;
+        if (active && !active.sawAgentStart) {
+          this.log.warn("[TurnDispatcher] ignoring agent_end before agent_start for active work");
+          return;
+        }
+        if (active) active.sawAgentEnd = true;
         this.running = false;
         if (this.pendingSteered.length > 0) {
           const stranded = this.pendingSteered;
@@ -159,6 +203,9 @@ export class TurnDispatcher {
           for (const item of stranded) this.pending.push({ kind: "prompt", input: item.input });
         }
         this.notifyTyping();
+        if (active && active.generation === this.drainGeneration) {
+          this.completeActiveWork(active, { status: "completed", source: "agent_end" });
+        }
         if (this.pending.length > 0) this.ensureDrain();
         return;
       }
@@ -182,26 +229,16 @@ export class TurnDispatcher {
       while (!this.disposed && generation === this.drainGeneration && this.pending.length > 0) {
         const work = this.pending.shift()!;
         this.running = true;
-        this.activeWork = {
-          generation,
-          kind: work.kind,
-          sawAgentStart: false,
-          sawAgentEnd: false,
-        };
+        const active = this.beginActiveWork(generation, work);
         this.notifyTyping();
-        try {
-          if (work.kind === "continue") {
-            await this.opts.runner.continueAgent();
-          } else {
-            await this.opts.runner.prompt(work.input);
-          }
-          if (generation !== this.drainGeneration) return;
-          this.warnIfWorkProducedNoLifecycle(work);
-        } catch (err) {
+        this.observeRunnerWork(work, active);
+        const completion = await active.completion;
+        if (generation !== this.drainGeneration || completion.status === "invalidated") return;
+        if (completion.status === "failed") {
           if (generation !== this.drainGeneration) return;
           this.log.warn(
             `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} failed:`,
-            err,
+            completion.error
           );
           try {
             await this.opts.projector.closeAll();
@@ -209,17 +246,28 @@ export class TurnDispatcher {
             this.log.warn("[TurnDispatcher] projector.closeAll failed:", closeErr);
           }
           if (this.pendingSteered.length > 0) {
-            for (const item of this.pendingSteered) this.pending.push({ kind: "prompt", input: item.input });
+            for (const item of this.pendingSteered)
+              this.pending.push({ kind: "prompt", input: item.input });
             this.pendingSteered = [];
             try {
               await this.opts.runner.clearSteeringQueue();
             } catch (abortErr) {
-              this.log.warn("[TurnDispatcher] clearSteeringQueue after prompt failure failed:", abortErr);
+              this.log.warn(
+                "[TurnDispatcher] clearSteeringQueue after prompt failure failed:",
+                abortErr
+              );
             }
           }
           this.running = false;
           this.notifyTyping();
+          continue;
         }
+        if (!active.sawAgentEnd) {
+          this.running = false;
+          await this.sweepPendingSteered("after runner completion without agent_end");
+          this.notifyTyping();
+        }
+        this.warnIfWorkProducedNoLifecycle(work, active);
       }
     } finally {
       if (generation !== this.drainGeneration) return;
@@ -229,24 +277,117 @@ export class TurnDispatcher {
     }
   }
 
-  private warnIfWorkProducedNoLifecycle(work: WorkItem): void {
-    if (work.kind !== "continue") return;
+  private beginActiveWork(generation: number, work: WorkItem): ActiveWork {
+    let resolveCompletion!: (result: WorkCompletion) => void;
+    const active: ActiveWork = {
+      generation,
+      kind: work.kind,
+      sawAgentStart: false,
+      sawAgentEnd: false,
+      runnerSettled: false,
+      completed: false,
+      completion: new Promise<WorkCompletion>((resolve) => {
+        resolveCompletion = resolve;
+      }),
+      complete: (result) => {
+        if (active.completed) return;
+        active.completed = true;
+        resolveCompletion(result);
+      },
+    };
+    this.activeWork = active;
+    return active;
+  }
+
+  private observeRunnerWork(work: WorkItem, active: ActiveWork): void {
+    let promise: Promise<void>;
+    try {
+      promise =
+        work.kind === "continue"
+          ? this.opts.runner.continueAgent()
+          : this.opts.runner.prompt(work.input);
+    } catch (err) {
+      active.runnerSettled = true;
+      this.completeActiveWork(active, { status: "failed", error: err });
+      return;
+    }
+    void promise.then(
+      () => {
+        active.runnerSettled = true;
+        this.completeActiveWork(active, { status: "completed", source: "runner" });
+      },
+      (err) => {
+        active.runnerSettled = true;
+        this.completeActiveWork(active, { status: "failed", error: err });
+      }
+    );
+  }
+
+  private completeActiveWork(active: ActiveWork, result: WorkCompletion): void {
+    if (this.activeWork !== active || active.generation !== this.drainGeneration) return;
+    active.complete(result);
+  }
+
+  private invalidateActiveWork(): void {
     const active = this.activeWork;
-    if (!active || active.generation !== this.drainGeneration || active.kind !== work.kind) return;
+    this.activeWork = null;
+    active?.complete({ status: "invalidated" });
+  }
+
+  private async sweepPendingSteered(context: string): Promise<void> {
+    if (this.pendingSteered.length === 0) return;
+    const stranded = this.pendingSteered;
+    this.pendingSteered = [];
+    for (const item of stranded) this.pending.push({ kind: "prompt", input: item.input });
+    try {
+      await this.opts.runner.clearSteeringQueue();
+    } catch (err) {
+      this.log.warn(`[TurnDispatcher] clearSteeringQueue ${context} failed:`, err);
+    }
+  }
+
+  private activeWorkDebugState(active: ActiveWork): Record<string, unknown> {
+    return {
+      generation: active.generation,
+      kind: active.kind,
+      sawAgentStart: active.sawAgentStart,
+      sawAgentEnd: active.sawAgentEnd,
+      runnerSettled: active.runnerSettled,
+      completed: active.completed,
+    };
+  }
+
+  private warnIfWorkProducedNoLifecycle(work: WorkItem, active: ActiveWork): void {
+    if (active.generation !== this.drainGeneration || active.kind !== work.kind) return;
     if (!active.sawAgentStart) {
       this.log.warn(
-        `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} completed without agent_start`,
+        `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} completed without agent_start`
       );
       return;
     }
     if (!active.sawAgentEnd) {
       this.log.warn(
-        `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} completed without agent_end`,
+        `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} completed without agent_end`
       );
     }
   }
 }
 
 function isUserMessage(value: unknown): value is AgentMessage {
-  return Boolean(value && typeof value === "object" && (value as { role?: string }).role === "user");
+  return Boolean(
+    value && typeof value === "object" && (value as { role?: string }).role === "user"
+  );
+}
+
+function summarizeTurnInput(input: RunnerTurnInput): Record<string, unknown> {
+  return {
+    contentLength: input.content.length,
+    contentPreview: previewDebugText(input.content),
+    imageCount: input.images?.length ?? 0,
+  };
+}
+
+function previewDebugText(value: string, limit = 240): string {
+  const compact = value.replace(/\s+/gu, " ").trim();
+  return compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
 }

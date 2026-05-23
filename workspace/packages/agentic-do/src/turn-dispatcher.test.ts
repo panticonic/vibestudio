@@ -310,6 +310,27 @@ describe("TurnDispatcher — mid-run steer", () => {
 });
 
 describe("TurnDispatcher — self-healing sweep", () => {
+  it("continues after agent_end even when the runner promise never settles", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector: makeProjector(),
+      notifyTyping: () => {},
+    });
+
+    const first = makeMsg("first");
+    const second = makeMsg("second");
+    d.submit(first);
+    d.submit(second);
+    await flush();
+
+    emitRunLifecycle(runner, [first]);
+    await flush();
+
+    expect(runner.runTurnCalls).toHaveLength(2);
+    expect(runner.runTurnCalls[1]!.msg).toBe(second);
+  });
+
   it("sweeps a stranded steer into pending and runs it as a fresh turn", async () => {
     const runner = makeRunner();
     const typing: boolean[] = [];
@@ -341,6 +362,31 @@ describe("TurnDispatcher — self-healing sweep", () => {
     expect(runner.clearSteerCount).toBe(1);
     // Typing stayed on the whole time — no flicker between turns.
     expect(typing.filter((b) => !b)).toHaveLength(0);
+  });
+
+  it("sweeps stranded steers after agent_end even when the runner promise never settles", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector: makeProjector(),
+      notifyTyping: () => {},
+    });
+
+    const first = makeMsg("first");
+    d.submit(first);
+    await flush();
+    runner.emit(agentStart());
+
+    const stranded = makeMsg("stranded");
+    d.submit(stranded);
+
+    runner.emit(messageStart(first));
+    runner.emit(agentEnd());
+    await flush();
+
+    expect(runner.runTurnCalls).toHaveLength(2);
+    expect(runner.runTurnCalls[1]!.msg).toBe(stranded);
+    expect(runner.clearSteerCount).toBe(1);
   });
 
   it("sweeps multiple stranded steers in order", async () => {
@@ -484,6 +530,28 @@ describe("TurnDispatcher — external aborts", () => {
     expect(typing).toEqual([true, false, true]);
   });
 
+  it("clears active debug state on abort even if the runner promise never settles", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector: makeProjector(),
+      notifyTyping: () => {},
+    });
+
+    d.submit(makeMsg("dispatches a participant method"));
+    await flush();
+    expect(d.getDebugState()["activeWork"]).toMatchObject({ kind: "prompt" });
+
+    d.markCurrentTurnAborted();
+
+    expect(d.getDebugState()).toMatchObject({
+      activeWork: null,
+      running: false,
+      draining: false,
+      busy: false,
+    });
+  });
+
   it("ignores a stale prompt resolution after a replacement drain starts", async () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
@@ -520,7 +588,7 @@ describe("TurnDispatcher — external aborts", () => {
     await flush();
 
     expect(log.warn).toHaveBeenCalledWith(
-      "[TurnDispatcher] continueAgent completed without agent_start",
+      "[TurnDispatcher] continueAgent completed without agent_start"
     );
   });
 });
@@ -569,6 +637,69 @@ describe("TurnDispatcher — reset", () => {
     await flush();
 
     expect(runner.runTurnCalls).toHaveLength(1); // no re-run
+  });
+
+  it("recovers deterministically after reset when the old runner promise never settles", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector: makeProjector(),
+      notifyTyping: () => {},
+    });
+
+    const wedged = makeMsg("wedged");
+    d.submit(wedged);
+    await flush();
+    expect(runner.runTurnCalls[0]!.msg).toBe(wedged);
+
+    d.reset();
+    expect(d.getDebugState()).toMatchObject({
+      activeWork: null,
+      running: false,
+      draining: false,
+      busy: false,
+    });
+
+    const next = makeMsg("next");
+    d.submit(next);
+    await flush();
+
+    expect(runner.runTurnCalls).toHaveLength(2);
+    expect(runner.runTurnCalls[1]!.msg).toBe(next);
+  });
+
+  it("ignores an agent_end from before reset if the replacement work has not started", async () => {
+    const runner = makeRunner();
+    const log = { warn: vi.fn(), error: vi.fn() };
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector: makeProjector(),
+      notifyTyping: () => {},
+      log,
+    });
+
+    d.submit(makeMsg("old"));
+    await flush();
+    d.reset();
+
+    const next = makeMsg("next");
+    d.submit(next);
+    await flush();
+    runner.emit(agentEnd());
+    await flush();
+
+    expect(d.getDebugState()).toMatchObject({
+      activeWork: {
+        kind: "prompt",
+        sawAgentStart: false,
+        sawAgentEnd: false,
+      },
+      running: true,
+      draining: true,
+    });
+    expect(log.warn).toHaveBeenCalledWith(
+      "[TurnDispatcher] ignoring agent_end before agent_start for active work"
+    );
   });
 });
 
@@ -619,7 +750,9 @@ describe("TurnDispatcher — dispose", () => {
     const d = new TurnDispatcher({
       runner: runner.runner,
       projector: makeProjector(),
-      notifyTyping: () => { typingCalls++; },
+      notifyTyping: () => {
+        typingCalls++;
+      },
     });
 
     d.submit(makeMsg("x"));

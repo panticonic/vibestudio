@@ -32,6 +32,18 @@ function deferred<T = void>(): {
   return { promise, resolve, reject };
 }
 
+async function flushMicrotasks(iterations = 8): Promise<void> {
+  for (let i = 0; i < iterations; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+async function flushUntil(predicate: () => boolean, iterations = 50): Promise<void> {
+  for (let i = 0; i < iterations && !predicate(); i += 1) {
+    await Promise.resolve();
+  }
+}
+
 function createFs(): RuntimeFs {
   return {
     constants: { F_OK: 0, R_OK: 4, W_OK: 2, X_OK: 1 },
@@ -104,6 +116,47 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
+  it("aborts before_agent_start resource loading when the runner is interrupted", async () => {
+    const stuckResources = deferred<string>();
+    let agentsMdCalls = 0;
+    const rpcCall = vi.fn(async (_target: string, method: string, _args: unknown[], opts?: { signal?: AbortSignal }) => {
+      if (method === "workspace.getAgentsMd") {
+        agentsMdCalls++;
+        if (agentsMdCalls === 1) return "workspace prompt";
+        return stuckResources.promise;
+      }
+      if (method === "workspace.listSkills") return [];
+      if (method === "workers.resolveService") {
+        return {
+          kind: "durable-object",
+          targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
+        };
+      }
+      if (method === "query") return { rows: [] };
+      throw new Error(`unexpected rpc method ${method}`);
+    });
+    const runner = new PiRunner(createOptions({
+      rpc: { call: rpcCall } as unknown as PiRunnerOptions["rpc"],
+    }));
+    await runner.init();
+
+    const prompt = runner.prompt({ content: "hello" });
+    await flushUntil(() => agentsMdCalls > 1);
+    expect(rpcCall).toHaveBeenCalledWith(
+      "main",
+      "workspace.getAgentsMd",
+      [],
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+
+    await expect(Promise.allSettled([runner.abort(), prompt])).resolves.toEqual([
+      expect.objectContaining({ status: "fulfilled" }),
+      expect.objectContaining({ status: "rejected" }),
+    ]);
+
+    runner.dispose();
+  });
+
   it("appends user messages through the session", async () => {
     const runner = new PiRunner(createOptions());
     await runner.init();
@@ -112,6 +165,70 @@ describe("PiRunner", () => {
     const snapshot = await runner.getStateSnapshot();
     expect(snapshot.messages).toHaveLength(1);
     expect((snapshot.messages[0] as any).content).toBe("hello");
+
+    runner.dispose();
+  });
+
+  it("repairs an empty aborted assistant leaf before continuing", async () => {
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      prepareSessionForContinue(): Promise<void>;
+      lastContinueDiagnostic: Record<string, unknown> | null;
+    };
+    await runner.init();
+
+    const userLeaf = await runner.appendUserMessage({
+      role: "user",
+      content: "continue from here",
+      timestamp: 1,
+    } as any);
+    const abortedLeaf = await runner.session!.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "" }],
+      stopReason: "aborted",
+      timestamp: 2,
+    } as any);
+
+    expect(await runner.session!.getLeafId()).toBe(abortedLeaf);
+    await internals.prepareSessionForContinue();
+
+    expect(await runner.session!.getLeafId()).toBe(userLeaf);
+    expect(internals.lastContinueDiagnostic).toMatchObject({
+      status: "repaired",
+      reason: "empty_aborted_assistant_leaf",
+      fromLeafId: abortedLeaf,
+      toLeafId: userLeaf,
+    });
+
+    runner.dispose();
+  });
+
+  it("rejects continue when the session ends with a completed assistant message", async () => {
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      prepareSessionForContinue(): Promise<void>;
+      lastContinueDiagnostic: Record<string, unknown> | null;
+    };
+    await runner.init();
+
+    await runner.appendUserMessage({ role: "user", content: "hello", timestamp: 1 } as any);
+    const assistantLeaf = await runner.session!.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "done" }],
+      stopReason: "stop",
+      timestamp: 2,
+    } as any);
+
+    await expect(internals.prepareSessionForContinue()).rejects.toMatchObject({
+      code: "session",
+      message: expect.stringContaining("Cannot continue"),
+    });
+    expect(await runner.session!.getLeafId()).toBe(assistantLeaf);
+    expect(internals.lastContinueDiagnostic).toMatchObject({
+      status: "invalid",
+      reason: "unsupported_last_role",
+      lastRole: "assistant",
+    });
 
     runner.dispose();
   });
@@ -512,11 +629,123 @@ describe("PiRunner", () => {
         },
       },
     ]);
+    await flushMicrotasks();
 
     expect(rpcCall).toHaveBeenCalledWith(
       "do:workers/pubsub-channel:PubSubChannel:channel:test",
       "broadcastStoredEnvelopes",
       [["env-1", "env-2"]],
     );
+  });
+
+  it("does not block trajectory append completion on a stuck channel broadcast", async () => {
+    const stuckBroadcast = deferred<unknown>();
+    const appendTrajectoryBatch = vi.fn(async () => ({
+      published: [{ channelId: "channel:test", envelopeId: "env-1" }],
+    }));
+    const rpcCall = vi.fn((target: string, method: string) => {
+      if (target === "main" && method === "workers.resolveService") {
+        return Promise.resolve({
+          kind: "durable-object",
+          targetId: "do:workers/pubsub-channel:PubSubChannel:channel:test",
+        });
+      }
+      if (target === "do:workers/pubsub-channel:PubSubChannel:channel:test" && method === "broadcastStoredEnvelopes") {
+        return stuckBroadcast.promise;
+      }
+      return Promise.reject(new Error(`unexpected rpc call ${target}.${method}`));
+    });
+    const runner = new PiRunner(createOptions({ rpc: { call: rpcCall } as unknown as PiRunnerOptions["rpc"] })) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      appendTrajectoryEvents(items: Array<Record<string, unknown>>): Promise<void>;
+      getDebugState(): Promise<Record<string, unknown>>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+
+    await expect(runner.appendTrajectoryEvents([
+      {
+        publishToChannel: true,
+        event: {
+          kind: "turn.opened",
+          actor: { kind: "agent", id: "pi" },
+          turnId: "turn-1",
+          payload: { protocol: "agentic.trajectory.v1", summary: "Agent turn started" },
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    ])).resolves.toBeUndefined();
+    await flushMicrotasks();
+
+    expect(rpcCall).toHaveBeenCalledWith(
+      "do:workers/pubsub-channel:PubSubChannel:channel:test",
+      "broadcastStoredEnvelopes",
+      [["env-1"]],
+    );
+    const debug = await runner.getDebugState();
+    expect(debug["channelPublicationBroadcasts"]).toMatchObject({
+      "channel:test": {
+        pendingBatches: 1,
+        activeEnvelopeIds: ["env-1"],
+      },
+    });
+
+    stuckBroadcast.resolve({ broadcasted: 1 });
+  });
+
+  it("serializes channel broadcasts after async scheduling", async () => {
+    const firstBroadcast = deferred<unknown>();
+    const appendTrajectoryBatch = vi
+      .fn()
+      .mockResolvedValueOnce({ published: [{ channelId: "channel:test", envelopeId: "env-1" }] })
+      .mockResolvedValueOnce({ published: [{ channelId: "channel:test", envelopeId: "env-2" }] });
+    const broadcastCalls: string[][] = [];
+    const rpcCall = vi.fn((target: string, method: string, args: unknown[]) => {
+      if (target === "main" && method === "workers.resolveService") {
+        return Promise.resolve({
+          kind: "durable-object",
+          targetId: "do:workers/pubsub-channel:PubSubChannel:channel:test",
+        });
+      }
+      if (target === "do:workers/pubsub-channel:PubSubChannel:channel:test" && method === "broadcastStoredEnvelopes") {
+        const envelopeIds = args[0] as string[];
+        broadcastCalls.push(envelopeIds);
+        return broadcastCalls.length === 1 ? firstBroadcast.promise : Promise.resolve({ broadcasted: 1 });
+      }
+      return Promise.reject(new Error(`unexpected rpc call ${target}.${method}`));
+    });
+    const runner = new PiRunner(createOptions({ rpc: { call: rpcCall } as unknown as PiRunnerOptions["rpc"] })) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      appendTrajectoryEvents(items: Array<Record<string, unknown>>): Promise<void>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+    const event = {
+      kind: "message.completed",
+      actor: { kind: "agent", id: "pi" },
+      payload: { protocol: "agentic.trajectory.v1", role: "assistant", content: "hello" },
+      createdAt: new Date(0).toISOString(),
+    };
+
+    await runner.appendTrajectoryEvents([{ publishToChannel: true, event }]);
+    await flushMicrotasks();
+    await runner.appendTrajectoryEvents([{ publishToChannel: true, event }]);
+    await flushMicrotasks();
+
+    expect(broadcastCalls).toEqual([["env-1"]]);
+    firstBroadcast.resolve({ broadcasted: 1 });
+    await flushMicrotasks();
+
+    expect(broadcastCalls).toEqual([["env-1"], ["env-2"]]);
   });
 });

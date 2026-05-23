@@ -84,6 +84,26 @@ import {
    appropriate worker callbacks.
 3. Add unit tests with a mock `ExtensionAPI` (see `extensions/approval-gate.test.ts`).
 
+## Hook listener cancellation
+
+Hook listeners registered through `PiRunner.hooks` must honor the
+`AbortSignal` passed in the listener context:
+
+```typescript
+runner.hooks.on("transform_context", async (messages, context) => {
+  if (context?.signal?.aborted) return messages;
+  const result = await doWork({ signal: context?.signal });
+  return applyResult(messages, result);
+});
+```
+
+This applies to all new `event`, `transform_context`, and
+`before_provider_request` listeners. Thread `context.signal` into any RPC,
+fetch, file walk, or other cancellable async operation, and check it before
+starting non-idempotent work. NatStack may stop awaiting a listener after
+abort, but it cannot cancel side effects inside listener code that ignores the
+signal.
+
 ## Tests
 
 ```bash

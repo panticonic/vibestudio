@@ -93,6 +93,19 @@ for (const r of scope.results.results.filter(r => !r.result.passed)) {
 }
 ```
 
+If lifecycle events show `turn.opened` but no assistant message, tool call, or
+`turn.closed`, query the agent debug port instead of adding sleeps or timeouts:
+
+```typescript
+const debug = await chat.callMethod(agentParticipantId, "getDebugState", {});
+console.log(JSON.stringify(debug, null, 2).slice(0, 4000));
+```
+
+The default AI agent exposes this read-only method for stall diagnosis. It
+captures dispatcher state, runner phase, persisted pending work, checkpoints,
+and recent lifecycle/debug events. See `docs/agent-debug-port.md` for the full
+field guide.
+
 ## Phase 3: Classify the Root Cause
 
 For each failure, determine the root cause category and act accordingly:
