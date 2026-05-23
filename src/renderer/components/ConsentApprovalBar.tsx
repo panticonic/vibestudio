@@ -13,11 +13,15 @@ import {
 } from "@radix-ui/themes";
 import {
   ChevronDownIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   CheckCircledIcon,
   Cross2Icon,
   CrossCircledIcon,
+  EnterIcon,
   ExclamationTriangleIcon,
   ExternalLinkIcon,
+  GearIcon,
   GlobeIcon,
   LockClosedIcon,
   PersonIcon,
@@ -44,10 +48,37 @@ import {
 } from "@natstack/shared/approvalCopy";
 import { useShellEvent } from "../shell/useShellEvent";
 import { shellApproval, shellPresence, view } from "../shell/client";
+import { useNavigation } from "./NavigationContext";
+
+interface CallerInfo {
+  /** Friendly user-visible label — panel title, worker source basename, etc. */
+  label: string;
+  /** Caller kind, formatted for display ("Panel" / "Worker" / "Service"). */
+  kindLabel: string;
+  /** Caller kind as accepted by the approval payload. */
+  kind: "panel" | "worker" | "do";
+  /** Set when this caller refers to a panel that exists in the live tree. */
+  panelId?: string;
+  /** Truncated id, retained for the expandable details panel. */
+  shortId: string;
+}
+
+function basename(path: string): string {
+  if (!path) return "";
+  const trimmed = path.replace(/\/+$/, "");
+  const idx = trimmed.lastIndexOf("/");
+  return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
+}
+
+function prettifyId(callerId: string): string {
+  // Drop common prefixes ("do-service:", "do:", "worker:") and trim noise.
+  return callerId.replace(/^(do-service:|do:|worker:|panel:)/, "");
+}
 
 export function ConsentApprovalBar() {
   const [pendingAccess, setPendingAccess] = useState<PendingApproval[]>([]);
   const [secretConfigValues, setSecretConfigValues] = useState<Record<string, string>>({});
+  const { navigateToId } = useNavigation();
 
   useEffect(() => {
     const heartbeat = () => {
@@ -80,11 +111,74 @@ export function ConsentApprovalBar() {
     }, [])
   );
 
-  const current = pendingAccess[0] ?? null;
+  // Browsable index into pendingAccess. Stays put when later items resolve,
+  // clamps when the visible item disappears (the most natural fallback is to
+  // stay at the same index — the next pending slides into view).
+  const [browseIndex, setBrowseIndex] = useState(0);
+  useEffect(() => {
+    setBrowseIndex((idx) => {
+      if (pendingAccess.length === 0) return 0;
+      if (idx >= pendingAccess.length) return pendingAccess.length - 1;
+      return idx;
+    });
+  }, [pendingAccess.length]);
+
+  const current = pendingAccess[browseIndex] ?? pendingAccess[0] ?? null;
+  const queueLength = pendingAccess.length;
+  const canPrev = queueLength > 1 && browseIndex > 0;
+  const canNext = queueLength > 1 && browseIndex < queueLength - 1;
 
   useEffect(() => {
     setSecretConfigValues({});
   }, [current?.approvalId]);
+
+  const resolveCallerInfo = useCallback((approval: PendingApproval): CallerInfo => {
+    const shortId = truncateId(approval.callerId);
+    // Authoritative title comes from the server-side entity-title registry
+    // (populated by `runtime.setTitle` for workers/DOs and by the
+    // workspace-state panel.* mirror for panels). We no longer cross-check
+    // the renderer's panel tree — the server is the single source of
+    // truth, and mobile shells don't have a panel tree anyway. If the
+    // server doesn't know a title yet, fall back to a derived id-ish label.
+    const serverTitle = approval.callerTitle?.trim() || undefined;
+    if (approval.callerKind === "panel") {
+      return {
+        label: serverTitle ?? prettifyId(approval.callerId),
+        kindLabel: "Panel",
+        kind: "panel",
+        // The "Show panel" action is offered unconditionally — the
+        // navigation callback is a no-op for unknown ids, so it's safe.
+        panelId: approval.callerId,
+        shortId,
+      };
+    }
+    if (approval.callerKind === "worker") {
+      const fromRepo = basename(approval.repoPath);
+      return {
+        label: serverTitle ?? fromRepo ?? prettifyId(approval.callerId),
+        kindLabel: "Worker",
+        kind: "worker",
+        shortId,
+      };
+    }
+    // Durable-object service or unknown — show the trailing segment of the id.
+    const id = prettifyId(approval.callerId);
+    const segments = id.split(":");
+    return {
+      label: serverTitle ?? segments[segments.length - 1] ?? id,
+      kindLabel: "Service",
+      kind: "do",
+      shortId,
+    };
+  }, []);
+
+  const currentCaller = current ? resolveCallerInfo(current) : null;
+
+  const showRequestingPanel = useCallback(() => {
+    if (currentCaller?.panelId) {
+      navigateToId(currentCaller.panelId);
+    }
+  }, [currentCaller, navigateToId]);
 
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -134,63 +228,55 @@ export function ConsentApprovalBar() {
       .catch((err: unknown) => console.error("[ConsentApprovalBar] resolveUserland failed:", err));
   };
 
-  const callerLabel = current.callerKind === "worker" ? "Worker" : "Panel";
-  const extraCount = pendingAccess.length - 1;
+  if (!currentCaller) return null;
+  const callerLabel = currentCaller.kindLabel;
   const copy = getApprovalCopy(current, callerLabel);
   const isExtensionApproval = current.kind === "extension";
   const accent = isExtensionApproval ? "amber" : "sky";
-  const approvalTone = `var(--app-approval-${accent}`;
+  // Drive the bar palette through CSS variables on a single class so the
+  // light/dark overrides in overrides.css remain authoritative.
+  const toneStyle = {
+    "--app-approval-bg": `var(--app-approval-${accent}-bg)`,
+    "--app-approval-edge": `var(--app-approval-${accent}-edge)`,
+    "--app-approval-border": `var(--app-approval-${accent}-border)`,
+    "--app-approval-stripe": `var(--app-approval-${accent}-stripe)`,
+    "--app-approval-text": `var(--app-approval-${accent}-text)`,
+  } as CSSProperties;
 
   return (
     <Box
       ref={barRef}
-      style={{
-        backgroundColor: `${approvalTone}-bg)`,
-        backgroundImage: `linear-gradient(90deg, ${approvalTone}-edge), transparent 55%)`,
-        borderBottom: `1px solid ${approvalTone}-border)`,
-        boxShadow: [`inset 0 3px 0 0 var(--${accent}-9)`, "0 4px 12px -4px var(--black-a6)"].join(
-          ", "
-        ),
-        flexShrink: 0,
-      }}
+      key={current.approvalId}
+      className="approval-bar approval-bar-attention"
+      style={{ ...toneStyle, flexShrink: 0 }}
     >
-      <Flex direction="column" gap="3" px="3" py="2">
+      <Flex direction="column" gap="3" px="4" py="3">
         <Flex align="start" gap="3">
-          <Flex
-            align="center"
-            justify="center"
-            style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
-              backgroundColor: `var(--${accent}-9)`,
-              color: `var(--${accent}-contrast)`,
-              flexShrink: 0,
-            }}
-          >
+          <Box className="approval-icon-box">
             {isExtensionApproval ? (
-              <ExclamationTriangleIcon width={16} height={16} />
-            ) : current.kind === "capability" || current.kind === "device-code" ? (
-              <ExternalLinkIcon width={16} height={16} />
+              <ExclamationTriangleIcon width={18} height={18} />
+            ) : current.kind === "device-code" ? (
+              <ExternalLinkIcon width={18} height={18} />
+            ) : current.kind === "capability" ? (
+              <GlobeIcon width={18} height={18} />
+            ) : current.kind === "client-config" || current.kind === "credential-input" ? (
+              <GearIcon width={18} height={18} />
             ) : (
-              <LockClosedIcon width={16} height={16} />
+              <LockClosedIcon width={18} height={18} />
             )}
-          </Flex>
+          </Box>
 
           <Flex direction="column" gap="1" style={{ minWidth: 0, flex: 1 }}>
             <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
               <Text
-                size="1"
+                size="3"
                 weight="bold"
                 style={{
-                  color: `var(--${accent}-11)`,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
+                  lineHeight: 1.25,
+                  color: "var(--app-approval-text)",
+                  overflowWrap: "anywhere",
                 }}
               >
-                {getApprovalCategoryLabel(current)}
-              </Text>
-              <Text size="2" weight="bold">
                 {copy.title}
               </Text>
               {current.kind === "credential" ? (
@@ -198,14 +284,46 @@ export function ConsentApprovalBar() {
                   {current.credentialLabel}
                 </Badge>
               ) : null}
-              {extraCount > 0 ? (
-                <Badge color="gray" variant="soft">
-                  +{extraCount} queued
-                </Badge>
+              {queueLength > 1 ? (
+                <QueueNavigator
+                  index={browseIndex}
+                  total={queueLength}
+                  canPrev={canPrev}
+                  canNext={canNext}
+                  onPrev={() => setBrowseIndex((idx) => Math.max(0, idx - 1))}
+                  onNext={() => setBrowseIndex((idx) => Math.min(queueLength - 1, idx + 1))}
+                />
               ) : null}
             </Flex>
 
-            <Text size="2" color="gray" style={{ lineHeight: 1.35, overflowWrap: "anywhere" }}>
+            <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
+              <Text size="1" color="gray" style={{ flexShrink: 0 }}>
+                Requested by
+              </Text>
+              <CallerChip caller={currentCaller} onShow={showRequestingPanel} />
+              <Text
+                size="1"
+                style={{
+                  textTransform: "uppercase",
+                  letterSpacing: "0.06em",
+                  fontWeight: 600,
+                  color: "var(--app-approval-text)",
+                  opacity: 0.75,
+                  flexShrink: 0,
+                }}
+              >
+                {getApprovalCategoryLabel(current)}
+              </Text>
+            </Flex>
+
+            <Text
+              size="2"
+              style={{
+                lineHeight: 1.4,
+                overflowWrap: "anywhere",
+                color: "var(--gray-12)",
+              }}
+            >
               {copy.summary}
             </Text>
 
@@ -220,10 +338,12 @@ export function ConsentApprovalBar() {
 
             <ApprovalDetails
               approval={current}
-              callerLabel={callerLabel}
+              caller={currentCaller}
               defaultOpen={shouldOpenApprovalDetails(current)}
             />
-            {current.kind === "userland" ? <UserlandApprovalBody approval={current} /> : null}
+            {current.kind === "userland" ? (
+              <UserlandApprovalBody approval={current} caller={currentCaller} />
+            ) : null}
             {current.kind === "device-code" ? <DeviceCodeBody approval={current} /> : null}
             {current.kind === "client-config" || current.kind === "credential-input" ? (
               <SecretConfigFields
@@ -264,6 +384,93 @@ export function ConsentApprovalBar() {
         </Flex>
       </Flex>
     </Box>
+  );
+}
+
+function QueueNavigator({
+  index,
+  total,
+  canPrev,
+  canNext,
+  onPrev,
+  onNext,
+}: {
+  index: number;
+  total: number;
+  canPrev: boolean;
+  canNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+}) {
+  return (
+    <Flex align="center" gap="1" style={{ marginLeft: "auto", flexShrink: 0 }}>
+      <Tooltip content={canPrev ? "Previous pending approval" : "No earlier approvals"}>
+        <IconButton
+          size="1"
+          variant="ghost"
+          color="gray"
+          disabled={!canPrev}
+          onClick={onPrev}
+          aria-label="Previous approval"
+        >
+          <ChevronLeftIcon />
+        </IconButton>
+      </Tooltip>
+      <Text size="1" color="gray" style={{ minWidth: 32, textAlign: "center" }}>
+        {index + 1} / {total}
+      </Text>
+      <Tooltip content={canNext ? "Next pending approval" : "No more approvals"}>
+        <IconButton
+          size="1"
+          variant="ghost"
+          color="gray"
+          disabled={!canNext}
+          onClick={onNext}
+          aria-label="Next approval"
+        >
+          <ChevronRightIcon />
+        </IconButton>
+      </Tooltip>
+    </Flex>
+  );
+}
+
+function CallerChip({ caller, onShow }: { caller: CallerInfo; onShow: () => void }) {
+  const clickable = caller.panelId !== undefined;
+  const tooltip = clickable
+    ? `Show panel — ${caller.label} (${caller.shortId})`
+    : `${caller.kindLabel} ${caller.shortId}`;
+  return (
+    <Tooltip content={tooltip}>
+      <span
+        className="approval-caller-chip"
+        role={clickable ? "button" : undefined}
+        tabIndex={clickable ? 0 : undefined}
+        data-clickable={clickable ? "true" : "false"}
+        onClick={clickable ? onShow : undefined}
+        onKeyDown={
+          clickable
+            ? (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  onShow();
+                }
+              }
+            : undefined
+        }
+      >
+        <span className="approval-caller-chip-kind" aria-hidden="true">
+          {caller.kind === "panel" ? (
+            <EnterIcon width={11} height={11} />
+          ) : caller.kind === "worker" ? (
+            <PersonIcon width={11} height={11} />
+          ) : (
+            <GearIcon width={11} height={11} />
+          )}
+        </span>
+        <span className="approval-caller-chip-title">{caller.label}</span>
+      </span>
+    </Tooltip>
   );
 }
 
@@ -490,7 +697,13 @@ function DecisionButton({
   );
 }
 
-function UserlandApprovalBody({ approval }: { approval: PendingUserlandApproval }) {
+function UserlandApprovalBody({
+  approval,
+  caller,
+}: {
+  approval: PendingUserlandApproval;
+  caller: CallerInfo;
+}) {
   return (
     <Box
       mt="1"
@@ -504,7 +717,16 @@ function UserlandApprovalBody({ approval }: { approval: PendingUserlandApproval 
     >
       <Flex direction="column" gap="1">
         <Text size="1" color="gray">
-          From <IdCode value={approval.callerId} />
+          From {caller.kindLabel.toLowerCase()} <InlineCode>{caller.label}</InlineCode>
+          {approval.issuer &&
+          (approval.issuer.kind !== approval.callerKind ||
+            approval.issuer.id !== approval.callerId) ? (
+            <>
+              {" "}
+              · on behalf of {approval.issuer.kind}{" "}
+              <InlineCode>{approval.issuer.label ?? prettifyId(approval.issuer.id)}</InlineCode>
+            </>
+          ) : null}
         </Text>
         <Flex direction="column" gap="1">
           <Text size="1" color="gray">
@@ -518,8 +740,11 @@ function UserlandApprovalBody({ approval }: { approval: PendingUserlandApproval 
           <Text size="1" color="gray">
             Subject
           </Text>
-          <IdCode value={approval.subject.id} />
-          {approval.subject.label ? <InlineCode>{approval.subject.label}</InlineCode> : null}
+          {approval.subject.label ? (
+            <InlineCode>{approval.subject.label}</InlineCode>
+          ) : (
+            <IdCode value={approval.subject.id} />
+          )}
         </Flex>
         {approval.warning ? (
           <Flex align="center" gap="1" style={{ color: "var(--red-11)" }}>
@@ -631,11 +856,11 @@ function Detail({ icon, label, value }: { icon: ReactNode; label: string; value:
 
 function ApprovalDetails({
   approval,
-  callerLabel,
+  caller,
   defaultOpen,
 }: {
   approval: PendingApproval;
-  callerLabel: string;
+  caller: CallerInfo;
   defaultOpen: boolean;
 }) {
   const detailsProps = defaultOpen ? { open: true } : {};
@@ -649,7 +874,23 @@ function ApprovalDetails({
         <Detail
           icon={<PersonIcon />}
           label="Requester"
-          value={<IdCode prefix={callerLabel} value={approval.callerId} />}
+          value={
+            <Flex align="center" gap="2" wrap="wrap">
+              <InlineCode>
+                {caller.kindLabel} · {caller.label}
+              </InlineCode>
+              <Tooltip content={`Full id — click to select: ${approval.callerId}`}>
+                <Code
+                  size="1"
+                  variant="soft"
+                  color="gray"
+                  style={{ cursor: "text", userSelect: "all" }}
+                >
+                  {caller.shortId}
+                </Code>
+              </Tooltip>
+            </Flex>
+          }
         />
         <Detail
           icon={<GlobeIcon />}
@@ -1266,7 +1507,23 @@ function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
         <Detail
           icon={<PersonIcon />}
           label="Asked by"
-          value={<InlineCode>{`${issuer.kind} ${issuer.label ?? issuer.id}`}</InlineCode>}
+          value={
+            <Flex align="center" gap="2" wrap="wrap">
+              <InlineCode>
+                {issuer.kind} · {issuer.label ?? prettifyId(issuer.id)}
+              </InlineCode>
+              <Tooltip content={`Full id — click to select: ${issuer.id}`}>
+                <Code
+                  size="1"
+                  variant="soft"
+                  color="gray"
+                  style={{ cursor: "text", userSelect: "all" }}
+                >
+                  {truncateId(issuer.id)}
+                </Code>
+              </Tooltip>
+            </Flex>
+          }
         />
       ) : null}
       <Detail
