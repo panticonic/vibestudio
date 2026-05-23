@@ -22,6 +22,10 @@ export function createConnectDeepLink(gatewayUrl, pairingCode) {
   return `natstack://connect?url=${encodeURIComponent(gatewayUrl)}&code=${encodeURIComponent(pairingCode)}`;
 }
 
+export function createStartRemotePairCommand(gatewayUrl, pairingCode) {
+  return `pnpm start:remote --pair ${shellQuote(createConnectDeepLink(gatewayUrl, pairingCode))}`;
+}
+
 export function parseConnectLink(rawUrl) {
   if (typeof rawUrl !== "string") return { kind: "error", reason: "Deep link must be a string" };
   let deepLink;
@@ -170,6 +174,7 @@ export function printConnectBanner({
   gatewayUrl,
   pairingCode,
   deepLinkLabel = "Deep link",
+  clientCommandLabel = null,
   instructions = "Open the QR code with the Android camera. NatStack will confirm and save the connection.",
 }) {
   const deepLink = createConnectDeepLink(gatewayUrl, pairingCode);
@@ -180,9 +185,17 @@ export function printConnectBanner({
   console.log(`  Gateway:    ${gatewayUrl}`);
   console.log(`  Pair code:  ${pairingCode}`);
   console.log(`  ${deepLinkLabel}:  ${deepLink}`);
+  if (clientCommandLabel) {
+    console.log(`  ${clientCommandLabel}:`);
+    console.log(`    ${createStartRemotePairCommand(gatewayUrl, pairingCode)}`);
+  }
   console.log();
   qrcode.generate(deepLink, { small: true });
   console.log(divider);
   console.log(`  ${instructions}`);
   console.log(`${divider}\n`);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }

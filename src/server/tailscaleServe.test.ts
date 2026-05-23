@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { classifyServeError, classifyServeStatus } from "./tailscaleServe.js";
+import {
+  classifyServeError,
+  classifyServeStatus,
+  inferHttpsServePublicUrl,
+} from "./tailscaleServe.js";
 
 describe("classifyServeStatus", () => {
   it("treats empty status as empty", () => {
@@ -45,6 +49,19 @@ describe("classifyServeStatus", () => {
     );
   });
 
+  it("does not substring-match a longer port", () => {
+    const status = {
+      Web: {
+        "host.tailnet.ts.net:443": {
+          Handlers: { "/": { Proxy: "http://127.0.0.1:30301" } },
+        },
+      },
+    };
+    expect(classifyServeStatus(status, { port: 3030, hostname: "host.tailnet.ts.net" })).toBe(
+      "conflict"
+    );
+  });
+
   it("matches under the legacy Services key as well as Web", () => {
     const status = {
       Services: {
@@ -69,6 +86,55 @@ describe("classifyServeStatus", () => {
     expect(classifyServeStatus(status, { port: 3030, hostname: "host.tailnet.ts.net" })).toBe(
       "conflict"
     );
+  });
+});
+
+describe("inferHttpsServePublicUrl", () => {
+  it("infers the HTTPS URL from a Serve handler on the requested port", () => {
+    const status = {
+      Web: {
+        "dgx.meerkat-caiman.ts.net:443": {
+          Handlers: { "/": { Proxy: "http://127.0.0.1:3030" } },
+        },
+      },
+    };
+    expect(inferHttpsServePublicUrl(status, { port: 3030 })).toEqual({
+      hostname: "dgx.meerkat-caiman.ts.net",
+      url: "https://dgx.meerkat-caiman.ts.net",
+    });
+  });
+
+  it("ignores Serve handlers that do not target the requested port", () => {
+    const status = {
+      Web: {
+        "dgx.meerkat-caiman.ts.net:443": {
+          Handlers: { "/": { Proxy: "http://127.0.0.1:8080" } },
+        },
+      },
+    };
+    expect(inferHttpsServePublicUrl(status, { port: 3030 })).toBeNull();
+  });
+
+  it("does not infer from a substring port match", () => {
+    const status = {
+      Web: {
+        "dgx.meerkat-caiman.ts.net:443": {
+          Handlers: { "/": { Proxy: "http://127.0.0.1:30301" } },
+        },
+      },
+    };
+    expect(inferHttpsServePublicUrl(status, { port: 3030 })).toBeNull();
+  });
+
+  it("ignores non-proxy handlers", () => {
+    const status = {
+      Web: {
+        "dgx.meerkat-caiman.ts.net:443": {
+          Handlers: { "/": { Path: "/var/www/html" } },
+        },
+      },
+    };
+    expect(inferHttpsServePublicUrl(status, { port: 3030 })).toBeNull();
   });
 });
 

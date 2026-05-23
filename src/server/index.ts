@@ -1968,7 +1968,21 @@ async function main() {
     ? Promise.resolve({ detectedVpn: null, serveProvision: null, publicUrlVerified: false })
     : (async (): Promise<VpnSetupResult> => {
         const { detectVpnPublicUrl } = await import("./vpnDetect.js");
-        const detectedVpn = await detectVpnPublicUrl().catch(() => null);
+        let detectedVpn = await detectVpnPublicUrl().catch(() => null);
+        if (!detectedVpn) {
+          const { detectHttpsServePublicUrl } = await import("./tailscaleServe.js");
+          const serveUrl = await detectHttpsServePublicUrl({ port: gatewayPort }).catch(
+            () => null
+          );
+          if (serveUrl) {
+            detectedVpn = {
+              vendor: "tailscale",
+              hostname: serveUrl.hostname,
+              url: serveUrl.url,
+              raw: { source: "tailscale-serve-status" },
+            };
+          }
+        }
         if (!detectedVpn) {
           return { detectedVpn: null, serveProvision: null, publicUrlVerified: false };
         }

@@ -293,6 +293,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       gatewayUrl: mobileUrl ?? gatewayUrl,
       pairingCode,
       deepLinkLabel: config.deepLinkLabel,
+      clientCommandLabel: config.clientCommandLabel,
       instructions: config.instructions,
     });
     printServeActionFollowup();

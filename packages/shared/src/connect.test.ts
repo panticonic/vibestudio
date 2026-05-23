@@ -55,6 +55,7 @@ describe("connect deep links", () => {
     const scriptUrl = new URL("../../../scripts/connect-utils.mjs", import.meta.url);
     const script = (await import(scriptUrl.href)) as {
       createConnectDeepLink: (url: string, code: string) => string;
+      createStartRemotePairCommand: (url: string, code: string) => string;
       parseConnectLink: (raw: string) => unknown;
     };
     const fixtures = [
@@ -67,6 +68,14 @@ describe("connect deep links", () => {
 
     expect(script.createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24))).toBe(
       createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24))
+    );
+    expect(
+      script.createStartRemotePairCommand("https://host.tailnet.ts.net", "A".repeat(24))
+    ).toBe(
+      `pnpm start:remote --pair '${createConnectDeepLink(
+        "https://host.tailnet.ts.net",
+        "A".repeat(24)
+      )}'`
     );
     for (const fixture of fixtures) {
       expect(script.parseConnectLink(fixture)).toEqual(parseConnectLink(fixture));

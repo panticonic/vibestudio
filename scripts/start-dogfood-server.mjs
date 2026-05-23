@@ -430,6 +430,7 @@ export function runDogfoodServer(argv = process.argv.slice(2)) {
       "Dogfood mode always uses a persistent managed workspace. Use --workspace <name>; --workspace-dir, --dev, and --no-init are not supported.",
     bannerTitle: "NatStack dogfood server",
     deepLinkLabel: "Pair URL",
+    clientCommandLabel: "Client command",
     instructions: "Connect with pnpm start:remote --pair, mobile pairing, or the Pair URL.",
   };
   if (argv.includes("--help")) {

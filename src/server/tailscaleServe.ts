@@ -187,7 +187,7 @@ export function verifyHttpsReachable(baseUrl: string, timeoutMs = 2500): Promise
 
 // ── helpers ────────────────────────────────────────────────────────────
 
-interface TailscaleServeStatus {
+export interface TailscaleServeStatus {
   Web?: Record<
     string,
     {
@@ -201,6 +201,42 @@ interface TailscaleServeStatus {
       Handlers?: Record<string, { Proxy?: string }>;
     }
   >;
+}
+
+export interface DetectedTailscaleServeUrl {
+  hostname: string;
+  url: string;
+}
+
+export async function detectHttpsServePublicUrl(
+  opts: { port: number; timeoutMs?: number }
+): Promise<DetectedTailscaleServeUrl | null> {
+  const timeoutMs = opts.timeoutMs ?? 12000;
+  const deadline = Date.now() + timeoutMs;
+  const cli = await locateTailscale(deadline);
+  if (!cli) return null;
+  const status = await runServeStatusJson(cli, deadline);
+  if (!status) return null;
+  return inferHttpsServePublicUrl(status, opts);
+}
+
+export function inferHttpsServePublicUrl(
+  status: TailscaleServeStatus,
+  opts: { port: number }
+): DetectedTailscaleServeUrl | null {
+  for (const section of [status.Web, status.Services]) {
+    if (!section) continue;
+    for (const [hostPort, value] of Object.entries(section)) {
+      const hostname = parseHttpsServeHostname(hostPort);
+      if (!hostname) continue;
+      for (const handler of Object.values(value.Handlers ?? {})) {
+        if (matchesLocalGatewayPort(handler.Proxy, opts.port)) {
+          return { hostname, url: `https://${hostname}` };
+        }
+      }
+    }
+  }
+  return null;
 }
 
 export function classifyServeStatus(
@@ -217,16 +253,31 @@ export function classifyServeStatus(
     }
   }
   if (handlers.length === 0) return "empty";
-  const matchesPort = (proxy: string | undefined): boolean => {
-    if (!proxy) return false;
-    return (
-      proxy.includes(`127.0.0.1:${opts.port}`) ||
-      proxy.includes(`localhost:${opts.port}`) ||
-      proxy.includes(`[::1]:${opts.port}`)
-    );
-  };
-  if (handlers.some((h) => matchesPort(h.proxy))) return "matches";
+  if (handlers.some((h) => matchesLocalGatewayPort(h.proxy, opts.port))) return "matches";
   return "conflict";
+}
+
+function matchesLocalGatewayPort(proxy: string | undefined, port: number): boolean {
+  if (!proxy) return false;
+  try {
+    const url = new URL(proxy);
+    const host = url.hostname.toLowerCase();
+    return (
+      Number(url.port) === port &&
+      (host === "127.0.0.1" || host === "localhost" || host === "[::1]" || host === "::1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function parseHttpsServeHostname(hostPort: string): string | null {
+  const withoutScheme = hostPort.replace(/^https:\/\//, "");
+  const hostname = withoutScheme.endsWith(":443")
+    ? withoutScheme.slice(0, -":443".length)
+    : withoutScheme;
+  if (!hostname || hostname.includes("/") || hostname.includes(":")) return null;
+  return hostname.replace(/\.$/, "");
 }
 
 async function locateTailscale(deadline: number): Promise<string | null> {
