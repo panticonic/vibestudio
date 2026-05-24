@@ -10,4 +10,3 @@ export type { Api as Ext_workspace_extensions_browser_data } from "@workspace-ex
 export type { Api as Ext_workspace_extensions_file_tools } from "@workspace-extensions/file-tools";
 export type { Api as Ext_workspace_extensions_image_service } from "@workspace-extensions/image-service";
 export type { Api as Ext_workspace_extensions_shell } from "@workspace-extensions/shell";
-export type { Api as Ext_workspace_extensions_typecheck_service } from "@workspace-extensions/typecheck-service";

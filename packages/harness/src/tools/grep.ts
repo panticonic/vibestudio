@@ -193,9 +193,7 @@ export function createGrepTool(
   fs: RuntimeFs,
   deps?: GrepToolDeps,
 ): AgentTool<typeof grepSchema, GrepToolDetails | undefined> {
-  const fileTools = deps?.rpc
-    ? createExtensionsClient(deps.rpc).use(FILE_TOOLS_EXTENSION, { streamingMethods: [] })
-    : null;
+  const fileTools = deps?.rpc ? createExtensionsClient(deps.rpc).use(FILE_TOOLS_EXTENSION) : null;
   return {
     name: "grep",
     label: "grep",

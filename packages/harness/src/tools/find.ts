@@ -70,9 +70,7 @@ export function createFindTool(
   fs: RuntimeFs,
   deps?: FindToolDeps,
 ): AgentTool<typeof findSchema, FindToolDetails | undefined> {
-  const fileTools = deps?.rpc
-    ? createExtensionsClient(deps.rpc).use(FILE_TOOLS_EXTENSION, { streamingMethods: [] })
-    : null;
+  const fileTools = deps?.rpc ? createExtensionsClient(deps.rpc).use(FILE_TOOLS_EXTENSION) : null;
   return {
     name: "find",
     label: "find",

@@ -57,8 +57,8 @@ export interface ReadToolDeps {
 }
 export function createReadTool(cwd: string, fs: RuntimeFs, deps?: ReadToolDeps): AgentTool<typeof readSchema, ReadToolDetails> {
     const extensions = deps?.rpc ? createExtensionsClient(deps.rpc) : null;
-    const fileTools = extensions?.use(FILE_TOOLS_EXTENSION, { streamingMethods: [] });
-    const imageService = extensions?.use(IMAGE_SERVICE_EXTENSION, { streamingMethods: [] });
+    const fileTools = extensions?.use(FILE_TOOLS_EXTENSION);
+    const imageService = extensions?.use(IMAGE_SERVICE_EXTENSION);
     return {
         name: "read",
         label: "read",

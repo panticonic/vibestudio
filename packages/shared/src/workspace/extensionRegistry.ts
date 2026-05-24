@@ -33,8 +33,11 @@ export const EXTENSION_REGISTRY_RELATIVE_PATH = path.join(
 
 interface ExtensionManifest {
   name?: string;
-  natstack?: { extension?: unknown };
+  natstack?: { extension?: unknown; entry?: unknown };
 }
+
+/** Matches an extension's `declare module "@natstack/extension" { ... }` block. */
+const REGISTRY_AUGMENTATION = /declare\s+module\s+["']@natstack\/extension["']/;
 
 function aliasFor(packageName: string): string {
   return "Ext_" + packageName.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
@@ -58,16 +61,32 @@ function readManifest(dir: string): ExtensionManifest | null {
 }
 
 /**
- * Names of every extension package under `<workspacePath>/extensions`, matching
- * the pnpm globs `extensions/*` and `extensions/<scope>/*`. An extension is any
- * package whose manifest carries a `natstack.extension` entry.
+ * Whether an extension opts into the typed registry by augmenting
+ * `WorkspaceExtensions` in its entry file. This is the same declaration the
+ * repo-wide `tsc` reads via `include`, so gating the barrel on it keeps every
+ * surface's registry identical. Infra extensions that don't self-register (e.g.
+ * typecheck-service) are excluded, so their type graph never enters panels.
+ */
+function selfRegisters(dir: string, manifest: ExtensionManifest): boolean {
+  const entry = typeof manifest.natstack?.entry === "string" ? manifest.natstack.entry : "index.ts";
+  try {
+    return REGISTRY_AUGMENTATION.test(fs.readFileSync(path.join(dir, entry), "utf-8"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Names of every extension package under `<workspacePath>/extensions` (matching
+ * the pnpm globs `extensions/*` and `extensions/<scope>/*`) that registers
+ * itself in the `WorkspaceExtensions` type registry.
  */
 export function discoverExtensionPackageNames(workspacePath: string): string[] {
   const root = path.join(workspacePath, "extensions");
   const names: string[] = [];
   const consider = (dir: string): void => {
     const pkg = readManifest(dir);
-    if (isExtensionManifest(pkg)) names.push(pkg.name);
+    if (isExtensionManifest(pkg) && selfRegisters(dir, pkg)) names.push(pkg.name);
   };
 
   let top: fs.Dirent[];

@@ -89,11 +89,11 @@ function normalizeCheckPanelOptions(options?: CheckPanelOptions | string): Check
 
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
-declare module "@natstack/extension" {
-  interface WorkspaceExtensions {
-    "@workspace-extensions/typecheck-service": Api;
-  }
-}
+// Intentionally NOT registered in the WorkspaceExtensions type registry.
+// typecheck-service is agent/host infrastructure invoked over the extension RPC,
+// not something panels call via extensions.use(...). Registering it would drag
+// its type graph — including @natstack/typecheck and the ~2.4MB bundled
+// TypeScript lib sources — into every panel's type-check program for no benefit.
 
 export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("typecheck-service activating");

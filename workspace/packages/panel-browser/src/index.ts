@@ -14,6 +14,7 @@
  * is available from `@workspace/runtime`, not this package.
  */
 import type { RpcBridge } from "@natstack/rpc";
+import { createExtensionProxy } from "@natstack/extension";
 // ---- Types (mirrored from @natstack/browser-data for browser context) ----
 export type BrowserName = "firefox" | "zen" | "chrome" | "chrome-beta" | "chrome-dev" | "chrome-canary" | "chromium" | "edge" | "edge-beta" | "edge-dev" | "brave" | "vivaldi" | "opera" | "opera-gx" | "arc" | "safari";
 export type BrowserFamily = "firefox" | "chromium" | "safari";
@@ -201,70 +202,18 @@ export interface BrowserDataApi {
     exportCookies(format: "json" | "netscape-txt"): Promise<string>;
     exportAll(): Promise<string>;
 }
-const SVC = "browser-data";
 const BROWSER_DATA_EXTENSION = "@workspace-extensions/browser-data";
-/**
- * Call function signature: (method, ...args) → Promise.
- * Both the Electron IPC path and the RPC bridge path satisfy this shape.
- */
-type ServiceCallFn = <T = unknown>(method: string, ...args: unknown[]) => Promise<T>;
-function buildApi(call: ServiceCallFn): BrowserDataApi {
-    return {
-        // Detection
-        detectBrowsers: () => call(`${SVC}.detectBrowsers`),
-        // Import
-        startImport: (request) => call(`${SVC}.startImport`, request),
-        getImportHistory: () => call(`${SVC}.getImportHistory`),
-        // Bookmarks
-        getBookmarks: (folderPath?) => call(`${SVC}.getBookmarks`, folderPath),
-        addBookmark: (bookmark) => call(`${SVC}.addBookmark`, bookmark),
-        updateBookmark: (id, partial) => call(`${SVC}.updateBookmark`, id, partial),
-        deleteBookmark: (id) => call(`${SVC}.deleteBookmark`, id),
-        moveBookmark: (id, folder, pos) => call(`${SVC}.moveBookmark`, id, folder, pos),
-        searchBookmarks: (query) => call(`${SVC}.searchBookmarks`, query),
-        // History
-        getHistory: (query) => call(`${SVC}.getHistory`, query),
-        deleteHistoryEntry: (id) => call(`${SVC}.deleteHistoryEntry`, id),
-        deleteHistoryRange: (start, end) => call(`${SVC}.deleteHistoryRange`, start, end),
-        clearAllHistory: () => call(`${SVC}.clearAllHistory`),
-        searchHistory: (query, limit?) => call(`${SVC}.searchHistory`, query, limit),
-        // Passwords
-        getPasswords: () => call(`${SVC}.getPasswords`),
-        getPasswordForSite: (url) => call(`${SVC}.getPasswordForSite`, url),
-        addPassword: (pw) => call(`${SVC}.addPassword`, pw),
-        updatePassword: (id, partial) => call(`${SVC}.updatePassword`, id, partial),
-        deletePassword: (id) => call(`${SVC}.deletePassword`, id),
-        // Autofill
-        getAutofillSuggestions: (field, prefix?) => call(`${SVC}.getAutofillSuggestions`, field, prefix),
-        // Search Engines
-        getSearchEngines: () => call(`${SVC}.getSearchEngines`),
-        setDefaultEngine: (id) => call(`${SVC}.setDefaultEngine`, id),
-        // Permissions
-        getPermissions: (origin?) => call(`${SVC}.getPermissions`, origin),
-        setPermission: (origin, perm, setting) => call(`${SVC}.setPermission`, origin, perm, setting),
-        // Cookies
-        getCookies: (domain?) => call(`${SVC}.getCookies`, domain),
-        deleteCookie: (id) => call(`${SVC}.deleteCookie`, id),
-        clearCookies: (domain?) => call(`${SVC}.clearCookies`, domain),
-        // Export
-        exportBookmarks: (format) => call(`${SVC}.exportBookmarks`, format),
-        exportPasswords: (format) => call(`${SVC}.exportPasswords`, format),
-        exportCookies: (format) => call(`${SVC}.exportCookies`, format),
-        exportAll: () => call(`${SVC}.exportAll`),
-    };
-}
 export function createBrowserDataApi(rpc: RpcBridge): BrowserDataApi {
     if (!rpc) {
         throw new Error("createBrowserDataApi requires an RPC bridge. " +
             "In eval context: import { rpc } from '@workspace/runtime'. " +
             "In inline_ui components: use chat.rpc.");
     }
-    // browser-data is an extension, not a standalone `browser-data.*` service.
-    // Strip the legacy service prefix and relay through the extension host.
-    return buildApi((method, ...args) => {
-        const bareMethod = method.startsWith(`${SVC}.`) ? method.slice(SVC.length + 1) : method;
-        return rpc.call("main", "extensions.invoke", [BROWSER_DATA_EXTENSION, bareMethod, args]);
-    });
+    // browser-data is an extension reached over the extension host. Route through
+    // the canonical extension proxy (typed against our own BrowserDataApi) rather
+    // than hand-rolling the invoke envelope. It exposes no streaming methods, so
+    // every call goes through extensions.invoke.
+    return createExtensionProxy<BrowserDataApi>(rpc, BROWSER_DATA_EXTENSION, () => false);
 }
 // Auto-initialize using the runtime's RPC bridge via __natstackRequire__
 // (the module system for panel bundles and eval/inline_ui blocks).

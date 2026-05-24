@@ -22,10 +22,22 @@ function write(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content);
 }
 
-function writeExtension(root: string, relDir: string, name: string, isExtension = true): void {
+function writeExtension(
+  root: string,
+  relDir: string,
+  name: string,
+  opts: { manifestExtension?: boolean; selfRegisters?: boolean } = {},
+): void {
+  const { manifestExtension = true, selfRegisters = true } = opts;
   write(
     path.join(root, "extensions", relDir, "package.json"),
-    JSON.stringify({ name, ...(isExtension ? { natstack: { extension: {} } } : {}) }),
+    JSON.stringify({ name, ...(manifestExtension ? { natstack: { extension: {}, entry: "index.ts" } } : {}) }),
+  );
+  write(
+    path.join(root, "extensions", relDir, "index.ts"),
+    selfRegisters
+      ? `export type Api = {};\ndeclare module "@natstack/extension" { interface WorkspaceExtensions { "${name}": Api } }\n`
+      : "export type Api = {};\n",
   );
 }
 
@@ -62,13 +74,26 @@ describe("discoverExtensionPackageNames", () => {
     writeExtension(root, "@workspace-extensions/shell", "@workspace-extensions/shell");
     writeExtension(root, "@workspace-extensions/file-tools", "@workspace-extensions/file-tools");
     writeExtension(root, "standalone-ext", "standalone-ext");
-    writeExtension(root, "@workspace-extensions/not-an-ext", "@workspace-extensions/not-an-ext", false);
+    writeExtension(root, "@workspace-extensions/not-an-ext", "@workspace-extensions/not-an-ext", {
+      manifestExtension: false,
+    });
 
     expect(discoverExtensionPackageNames(root).sort()).toEqual([
       "@workspace-extensions/file-tools",
       "@workspace-extensions/shell",
       "standalone-ext",
     ]);
+  });
+
+  it("excludes extensions that do not self-register in WorkspaceExtensions", () => {
+    const root = tempDir();
+    writeExtension(root, "@workspace-extensions/shell", "@workspace-extensions/shell");
+    // Infra extension: has the manifest marker but never augments the registry.
+    writeExtension(root, "@workspace-extensions/infra", "@workspace-extensions/infra", {
+      selfRegisters: false,
+    });
+
+    expect(discoverExtensionPackageNames(root)).toEqual(["@workspace-extensions/shell"]);
   });
 
   it("returns [] when there is no extensions directory", () => {

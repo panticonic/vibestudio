@@ -92,9 +92,7 @@
   },
   "include": [
     "src/**/*",
-    "packages/**/*",
-    "workspace/extensions/@workspace-extensions/file-tools/index.ts",
-    "workspace/extensions/@workspace-extensions/image-service/index.ts"
+    "packages/**/*"
   ],
   "exclude": [
     "node_modules",
