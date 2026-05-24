@@ -349,7 +349,7 @@ If an extension process exits unexpectedly (non-zero exit, signal, ready-handsha
 
 ## Reaching extensions from userland
 
-Extensions have two callable surfaces. The **RPC** surface (the `extensions` dispatcher service) is the canonical one — every extension has it, and it's where management methods (install / uninstall / setEnabled / reload) also live. The **HTTP fetch** surface is optional: an extension that wants to be reachable like a worker can export a default `fetch` handler, and the gateway will route `/_r/ext/<name>/*` to it.
+Extensions have two callable surfaces. The **RPC** surface (the `extensions` dispatcher service) is the canonical one — every extension has it, and it's where the read/lifecycle methods (`list` / `reload`) live. Installing and enabling extensions is declarative — `meta/natstack.yml` is the only surface (see [Declared extension set and management](#declared-extension-set-and-management)); there are no imperative `install` / `uninstall` / `setEnabled` / `update` RPCs. The **HTTP fetch** surface is optional: an extension that wants to be reachable like a worker can export a default `fetch` handler, and the gateway will route `/_r/ext/<name>/*` to it.
 
 ### RPC: the `extensions` service
 
@@ -362,18 +362,16 @@ There is exactly one RPC entry point: the dispatcher service named `extensions`.
   policy: { allowed: ["panel", "worker", "shell", "extension"] },
   methods: {
     invoke:     { args: [z.string(), z.string(), z.array(z.unknown())] },
+    invokeStream: { args: [z.string(), z.string(), z.array(z.unknown())] },
+    streamingMethods: { args: [z.string()] },
     list:       { args: [] },
     on:         { args: [z.string(), z.string()] }, // (extName, event) — returns subscription id
-    install:    { /* elevated-approval-gated */ },
-    uninstall:  { /* approval-gated */ },
-    setEnabled: { /* approval-gated */ },
-    update:     { /* elevated-approval-gated */ },
     reload:     { /* approval-gated; restarts active approved build */ },
   },
 }
 ```
 
-`invoke`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. `invoke` is still caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. The management methods are approval-gated, and install/update plus extension main/master push acceptance use the extension-specific approval treatment described below.
+`invoke`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. `invoke` is still caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. There are no imperative management methods: extensions are installed/enabled by declaring them in `meta/natstack.yml`, and the reconciler grants newly declared extensions through the joint approval flow. `reload` is approval-gated, and extension main/master push acceptance uses the extension-specific approval treatment described below.
 
 Consumers — panels, workers, and other extensions — use the same thin client from `@workspace/runtime`:
 
@@ -404,16 +402,12 @@ The same client is exposed to panels and workers via `@workspace/runtime`, and t
 ```ts
 interface ExtensionsClient {
   // Calling an extension
-  use<T>(name: string): T;                                       // returns a proxy
-  on(name: string, event: string, cb: (payload: unknown) => void): Disposable;
+  use<K extends ExtensionName>(name: K, options?: { streamingMethods?: Iterable<string> }): WorkspaceExtensions[K];
+  on(name: ExtensionName, event: string, cb: (payload: unknown) => void): Disposable;
   list(): Promise<RegistryEntry[]>;
 
-  // Management — approval-gated, with install/update using the extension approval UI.
-  install(spec: InstallSpec): Promise<void>;                     // elevated
-  uninstall(name: string, opts?: { purge?: boolean }): Promise<void>;
-  setEnabled(name: string, enabled: boolean): Promise<void>;
-  update(name: string): Promise<void>;                           // extension approval if deps changed
-  reload(name: string): Promise<void>;                           // restart active approved build
+  // Lifecycle — install/enable is declarative (meta/natstack.yml), not an API.
+  reload(name: ExtensionName): Promise<void>;                    // restart active approved build
 }
 ```
 
@@ -607,46 +601,38 @@ This means **no source push to an active extension branch can land without expli
 
 **Headless mode**: enabled extensions with an active bundle start normally on boot; their approval happened at install, source-push, or explicit update time. Extension main/master pushes still require the existing git push approval and fail if no approval UI can answer within the receive timeout.
 
-## Userland extension management
+## Declared extension set and management
 
-Userland code cannot bypass the extension manager — extensions are workspace units, but `installed`/`enabled` state and the registry are server-managed. To install, remove, enable, or reload extensions, callers go through the `extensions` service.
+The extensions a workspace uses are **declared** in `meta/natstack.yml` under `extensions:`. That list is the single source of truth and the only install/enable/disable/uninstall surface — there is no imperative `extensions.install` / `setEnabled` / `uninstall` / `update` API. The registry remains server-managed operational state; the declared set drives it.
+
+```yaml
+# meta/natstack.yml
+extensions:
+  - source: extensions/@workspace-extensions/git-tools   # repo path or package name
+    ref: main          # optional, defaults to "main"
+    enabled: true       # optional, defaults to true; false = installed but stopped
+```
+
+The server **reconciles** the registry against the declared set at two moments:
+
+- **Workspace startup.** Already-approved declared extensions start immediately. Any declared extension that is not yet approved is surfaced in **one joint, elevated approval** listing every unapproved extension with a per-extension overview (source, version, EV, granted native capabilities). Boot does not block on the decision — the prompt is presented (desktop approval bar and mobile push), and each extension builds and activates when the set is approved. Denial leaves them pending until the next startup or meta edit.
+- **A push to `meta/`.** If the pushed `meta/natstack.yml` adds extensions, the change is gated by a **single combined approval** that shows both the workspace-config write and the new-extension overview (the same prompt on desktop and mobile). Approving allows the push and activates the newly-trusted extensions without a second prompt; denying rejects the push. Removing an extension from the list stops and removes it on reconcile (storage retained); no approval is needed beyond the gated meta write itself.
+
+The remaining userland surface is read/diagnostic only:
 
 ```ts
 import { extensions } from "@workspace/runtime";
 
-// No approval — registry metadata only
-await extensions.list();
-
-// Elevated approval
-await extensions.install({
-  source: { kind: "internal-git", repo: "extensions/git-tools", ref: "main" },
-});
-
-// Standard approval
-await extensions.setEnabled("@workspace-extensions/git-tools", false);
-
-// Standard approval (uninstall)
-await extensions.uninstall("@workspace-extensions/git-tools");
-
-// Extension approval if current dependency state would change runtime inputs
-await extensions.update("@workspace-extensions/git-tools");
-
-// Standard approval; restarts the active approved build
-await extensions.reload("@workspace-extensions/git-tools");
+await extensions.list();                                   // No approval — registry metadata
+await extensions.reload("@workspace-extensions/git-tools"); // Approval-gated; restarts active build
 ```
-
-`install` only supports workspace-internal git sources in v1. The source repo must already exist under workspace git, and installing records it as an extension unit in the registry. There is no non-workspace install path in v1. Dev iteration happens by editing in `workspace/extensions/<name>/` and pushing `main` / `master` to its internal-git repo; that push is the approval gate for running the new extension build. A dev-session approval can avoid the per-push prompt while the user is actively iterating.
 
 | Method | Approval | Notes |
 |--------|----------|-------|
 | `list` | No | Returns `RegistryEntry[]` (full canonical shape from "Workspace layout") |
-| `install` | `extension.install` (elevated) | Fetches into workspace, registers, builds, activates |
-| `uninstall` | `extension.uninstall` | Deactivates, removes workspace unit, updates registry; `storage/<workspaceId>/<name>/` is retained unless `purge: true` |
-| `setEnabled` | `extension.toggle` | Persisted in registry; on disable, kills the extension process |
-| `update` | `extension.update` | Re-resolves the current extension source and dependency graph, builds, approves, activates; no-op if runtime inputs are unchanged |
-| `reload` | `extension.reload` | Restarts the active approved build; does not adopt dependency changes |
+| `reload` | `extension.reload` | Restarts the active approved build; rebuilds if the dependency graph changed |
 
-There is no `readFile` / `writeFile` over the RPC surface. Source authoring happens against the workspace git; to push extension changes, commit and push `main` / `master`. Dependency-only refreshes happen through `extensions.update(name)` or the equivalent manager UI action.
+Source iteration still happens by editing in `workspace/extensions/<name>/` and pushing `main` / `master`; that push is gated by the existing source-push approval, with a 4-hour dev-session grant to avoid the per-push prompt while iterating. There is no `readFile` / `writeFile` over the RPC surface. Dependency changes are adopted on the next reconcile (startup or meta push) or via `reload`.
 
 ## Activation lifecycle
 
@@ -655,10 +641,11 @@ There is no `readFile` / `writeFile` over the RPC surface. Source authoring happ
   2. Wait for the ready handshake (timeout: 10s), call `activate(ctx)` over the wire, record the exposed API metadata, and set `status = "running"`.
   3. Throws during `activate` are caught, logged, marked `error` in the registry, and emitted as `extensions:error` events. The process is killed. One extension's failure does not block others.
 - **Eager only for v1**. `activationEvents` is plumbed through but only `"*"` is accepted; other values fail validation.
-- **Hot install**: a freshly installed extension activates immediately — the manager spawns the process after the elevated approval resolves and the build completes.
+- **Boot reconcile**: the registry is reconciled against the declared `extensions:` set. Approved declared extensions start; unapproved ones surface in the joint approval (non-blocking) and activate on grant; undeclared registry entries are stopped and removed.
+- **Newly declared (meta push)**: the combined meta-push approval gates the push; on grant the manager builds and activates the newly-declared extensions. Removing a declaration stops and removes the extension.
 - **Extension source push**: a `main` / `master` push is approved before the ref moves. After receive completes, the manager records the approved build as active and replaces the running process.
-- **Dependency update**: `update(name)` computes the current candidate build from the extension source plus current dependency graph. If runtime inputs changed, it requests `extension.update`; on grant it records the build as active and replaces the running process.
-- **Hot reload**: `reload` restarts the currently active approved build. It does not implicitly pull dependency changes into the extension; use `update` for that.
+- **Dependency changes**: adopted on the next reconcile (startup or meta push), or via `reload`. They do not auto-reload a running extension on their own.
+- **Hot reload**: `reload` restarts the currently active approved build, rebuilding if the dependency graph changed.
 - **Crash**: handled by the crash policy above. The process boundary contains the failure; the host keeps running.
 
 ## Dispatcher and approval integration

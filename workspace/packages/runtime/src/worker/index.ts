@@ -66,10 +66,11 @@ export type {
 } from "../shared/workspace.js";
 export type {
   Disposable,
+  ExtensionName,
   ExtensionSource,
   ExtensionsClient,
-  InstallSpec,
   RegistryEntry,
+  WorkspaceExtensions,
 } from "../shared/extensions.js";
 export type * from "../shared/gad.js";
 export { DurableObjectBase } from "./durable-base.js";

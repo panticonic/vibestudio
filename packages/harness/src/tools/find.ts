@@ -14,6 +14,7 @@ import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { RpcCaller } from "@natstack/rpc";
+import { createExtensionProxy } from "@natstack/extension";
 import path from "node:path";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -46,6 +47,15 @@ interface FindToolResult {
   details: FindToolDetails | undefined;
 }
 
+interface FileToolsApi {
+  find(request: {
+    pattern: string;
+    path?: string;
+    cwd: string;
+    limit?: number;
+  }): Promise<FindToolResult>;
+}
+
 export interface FindToolDeps {
   rpc?: RpcCaller;
 }
@@ -69,6 +79,9 @@ export function createFindTool(
   fs: RuntimeFs,
   deps?: FindToolDeps,
 ): AgentTool<typeof findSchema, FindToolDetails | undefined> {
+  const fileTools = deps?.rpc
+    ? createExtensionProxy<FileToolsApi>(deps.rpc, FILE_TOOLS_EXTENSION, () => false)
+    : null;
   return {
     name: "find",
     label: "find",
@@ -83,13 +96,9 @@ export function createFindTool(
         throw new Error("Operation aborted");
       }
 
-      if (deps?.rpc) {
+      if (fileTools) {
         try {
-          return await deps.rpc.call<FindToolResult>("main", "extensions.invoke", [
-            FILE_TOOLS_EXTENSION,
-            "find",
-            [{ pattern, path: searchDir, cwd, limit }],
-          ]);
+          return (await fileTools.find({ pattern, path: searchDir, cwd, limit })) as FindToolResult;
         } catch (err) {
           if (!isFileToolsExtensionUnavailable(err)) throw err;
         }
@@ -190,7 +199,9 @@ function isFileToolsExtensionUnavailable(err: unknown): boolean {
   const code = typeof err === "object" && err !== null
     ? (err as { code?: unknown }).code
     : undefined;
-  if (code === "ENOEXT") return true;
+  // ENOEXT = not installed/enabled; ENOTREADY = declared but not yet running.
+  // Both mean the extension can't serve this call, so fall back to runtime-fs.
+  if (code === "ENOEXT" || code === "ENOTREADY") return true;
   const message = err instanceof Error ? err.message : String(err);
   return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed or enabled|Extension is not running/.test(message);
 }

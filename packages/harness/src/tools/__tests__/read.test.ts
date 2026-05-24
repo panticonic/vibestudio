@@ -28,9 +28,12 @@ describe("createReadTool", () => {
   it("delegates text reads to the file extension when context rpc is available", async () => {
     const fs = new StubFs();
     const rpc = {
-      call: vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "line 3\nline 4" }],
-        details: { path: "big.txt", engine: "node-file" },
+      call: vi.fn().mockImplementation((_target: string, method: string) => {
+        if (method === "extensions.streamingMethods") return Promise.resolve([]);
+        return Promise.resolve({
+          content: [{ type: "text", text: "line 3\nline 4" }],
+          details: { path: "big.txt", engine: "node-file" },
+        });
       }),
       streamCall: vi.fn(async () => new Response()),
     };
@@ -51,6 +54,7 @@ describe("createReadTool", () => {
     const fs = new StubFs({ files: { [`${CWD}/pic.png`]: pngBytes } });
     const rpc = {
       call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
+        if (method === "extensions.streamingMethods") return Promise.resolve([]);
         const [extensionName, extensionMethod] = args;
         expect(method).toBe("extensions.invoke");
         expect(extensionName).toBe("@workspace-extensions/image-service");
@@ -95,6 +99,7 @@ describe("createReadTool", () => {
     const fs = new StubFs({ files: { [`${CWD}/pic.png`]: pngBytes } });
     const rpc = {
       call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
+        if (method === "extensions.streamingMethods") return Promise.resolve([]);
         const [extensionName, extensionMethod] = args;
         expect(method).toBe("extensions.invoke");
         expect(extensionName).toBe("@workspace-extensions/image-service");

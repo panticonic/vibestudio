@@ -13,6 +13,7 @@ import type {
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
 } from "@natstack/shared/panel/panelLease";
+import { asPanelSlotId } from "@natstack/shared/panel/ids";
 import {
   getSharedBrowserAddressOptions,
   getSharedPanelAddressOptions,
@@ -20,6 +21,12 @@ import {
   type PanelAddressOptions,
   type PanelRepoState,
 } from "@natstack/shared/panelChrome";
+import {
+  createBrowserDataRpcClient,
+  type BrowserDataClient,
+  type RecordHistoryVisitRequest,
+  type UpdateHistoryTitleRequest,
+} from "@natstack/browser-data";
 import { createBridgeAdapter, type MobilePanelRuntimeHost } from "./bridgeAdapter";
 import { MobileTransport, type ConnectionStatus } from "./mobileTransport";
 import { createMobileShellCore } from "../shellCore/createMobileShellCore";
@@ -35,6 +42,7 @@ class MobilePanels {
   private panelManager: PanelManager | null = null;
   private registryInstance: PanelRegistry | null = null;
   private bridgeAdapterInstance: ReturnType<typeof createBridgeAdapter> | null = null;
+  private readonly browserData: BrowserDataClient;
   constructor(
     private readonly deps: {
       serverUrl: string;
@@ -43,7 +51,12 @@ class MobilePanels {
       navigateToPanel: (panelId: string) => void;
       clientSessionId: string;
     }
-  ) {}
+  ) {
+    this.browserData = createBrowserDataRpcClient({
+      call: (service, method, args) =>
+        this.deps.transport.call("main", `${service}.${method}`, args),
+    });
+  }
   get registry(): PanelRegistry {
     if (!this.registryInstance) throw new Error("Panels not initialized");
     return this.registryInstance;
@@ -91,7 +104,7 @@ class MobilePanels {
     await this.syncRuntimeLeases();
     const firstRoot = nextTree.rootPanels[0];
     if (firstRoot) {
-      await this.panelManager.notifyFocused(firstRoot.id);
+      await this.panelManager.notifyFocused(asPanelSlotId(firstRoot.id));
       this.deps.navigateToPanel(firstRoot.id);
     }
   }
@@ -110,21 +123,25 @@ class MobilePanels {
     return this.registry.getCollapsedIds();
   }
   async archive(panelId: string): Promise<void> {
-    await this.requireManager().close(panelId);
+    await this.requireManager().close(asPanelSlotId(panelId));
   }
   async movePanel(
     panelId: string,
     newParentId: string | null,
     targetPosition: number
   ): Promise<void> {
-    await this.requireManager().movePanel(panelId, newParentId, targetPosition);
+    await this.requireManager().movePanel(
+      asPanelSlotId(panelId),
+      newParentId ? asPanelSlotId(newParentId) : null,
+      targetPosition
+    );
   }
   async createAboutPanel(page: string): Promise<{
     id: string;
     title: string;
   }> {
     const result = await this.requireManager().createAboutPanel(page);
-    await this.requireManager().notifyFocused(result.id);
+    await this.requireManager().notifyFocused(asPanelSlotId(result.id));
     this.deps.navigateToPanel(result.id);
     return result;
   }
@@ -139,7 +156,7 @@ class MobilePanels {
     title: string;
   }> {
     const result = await this.requireManager().createFromSource(source, options);
-    await this.requireManager().notifyFocused(result.id);
+    await this.requireManager().notifyFocused(asPanelSlotId(result.id));
     this.deps.navigateToPanel(result.id);
     return result;
   }
@@ -158,7 +175,7 @@ class MobilePanels {
     title: string;
   }> {
     const result = await this.requireManager().create(source, {
-      parentId,
+      parentId: asPanelSlotId(parentId),
       name: options?.name,
       contextId: options?.contextId,
       ref: options?.ref,
@@ -181,7 +198,7 @@ class MobilePanels {
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().createBrowser(parentId, url, {
+    const result = await this.requireManager().createBrowser(parentId ? asPanelSlotId(parentId) : null, url, {
       name: options?.name,
       addAsRoot: parentId == null,
     });
@@ -210,26 +227,26 @@ class MobilePanels {
     return { id: result.panelId, title: result.title };
   }
   async setCollapsed(panelId: string, collapsed: boolean): Promise<void> {
-    await this.requireManager().setCollapsed(panelId, collapsed);
+    await this.requireManager().setCollapsed(asPanelSlotId(panelId), collapsed);
   }
   async expandIds(panelIds: string[]): Promise<void> {
-    await this.requireManager().expandIds(panelIds);
+    await this.requireManager().expandIds(panelIds.map(asPanelSlotId));
   }
   async notifyFocused(panelId: string): Promise<void> {
-    await this.requireManager().notifyFocused(panelId);
+    await this.requireManager().notifyFocused(asPanelSlotId(panelId));
   }
   async updateStateArgs(
     panelId: string,
     updates: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    return this.requireManager().updateStateArgs(panelId, updates);
+    return this.requireManager().updateStateArgs(asPanelSlotId(panelId), updates);
   }
   async updateTitle(panelId: string, title: string): Promise<void> {
-    await this.requireManager().updateTitle(panelId, title);
+    await this.requireManager().updateTitle(asPanelSlotId(panelId), title);
     this.deps.onTreeUpdated?.(this.getTree());
   }
   async updateBrowserUrl(panelId: string, url: string): Promise<void> {
-    await this.requireManager().replaceCurrentSnapshot(panelId, { source: `browser:${url}` });
+    await this.requireManager().replaceCurrentSnapshot(asPanelSlotId(panelId), { source: `browser:${url}` });
     this.deps.onTreeUpdated?.(this.getTree());
   }
   async navigatePanel(
@@ -244,7 +261,7 @@ class MobilePanels {
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().navigate(panelId, source, options);
+    const result = await this.requireManager().navigate(asPanelSlotId(panelId), source, options);
     this.deps.onTreeUpdated?.(this.getTree());
     return { id: result.panelId, title: result.title };
   }
@@ -285,47 +302,25 @@ class MobilePanels {
       panels: this.getTree(),
       browserData: {
         searchHistoryForAutocomplete: (searchQuery, limit) =>
-          this.invokeBrowserData<Record<string, unknown>[]>("searchHistoryForAutocomplete", [
-            { query: searchQuery, limit },
-          ]),
-        getHistory: (historyQuery) =>
-          this.invokeBrowserData<Record<string, unknown>[]>("getHistory", [historyQuery]),
-        searchBookmarks: (searchQuery) =>
-          this.invokeBrowserData<Record<string, unknown>[]>("searchBookmarks", [searchQuery]),
-        getSearchEngines: () =>
-          this.invokeBrowserData<Record<string, unknown>[]>("getSearchEngines", []),
+          this.browserData.history.searchForAutocomplete(searchQuery, limit),
+        getHistory: (historyQuery) => this.browserData.history.get(historyQuery),
+        searchBookmarks: (searchQuery) => this.browserData.bookmarks.search(searchQuery),
+        getSearchEngines: () => this.browserData.searchEngines.getAll(),
       },
     });
   }
-  async recordHistoryVisit(request: {
-    url: string;
-    title?: string;
-    transition?: string;
-    visitTime?: number;
-    typed?: boolean;
-  }): Promise<void> {
-    await this.invokeBrowserData("recordHistoryVisit", [request]);
+  async recordHistoryVisit(request: RecordHistoryVisitRequest): Promise<void> {
+    await this.browserData.history.recordVisit(request);
   }
-  async updateHistoryTitle(request: {
-    url: string;
-    title: string;
-    observedAt?: number;
-  }): Promise<void> {
-    await this.invokeBrowserData("updateHistoryTitle", [request]);
-  }
-  private invokeBrowserData<T = unknown>(method: string, args: unknown[]): Promise<T> {
-    return this.deps.transport.call<T>("main", "extensions.invoke", [
-      "@workspace-extensions/browser-data",
-      method,
-      args,
-    ]);
+  async updateHistoryTitle(request: UpdateHistoryTitleRequest): Promise<void> {
+    await this.browserData.history.updateTitle(request);
   }
   async updateTheme(theme: ThemeAppearance): Promise<void> {
     this.requireManager().setCurrentTheme(theme);
   }
   async unload(_panelId: string): Promise<void> {}
   async getPanelInit(panelId: string): Promise<unknown> {
-    return this.requireManager().getPanelInit(panelId);
+    return this.requireManager().getPanelInit(asPanelSlotId(panelId));
   }
   async acquireLease(
     panelId: string,

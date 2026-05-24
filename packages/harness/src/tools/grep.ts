@@ -21,6 +21,7 @@ import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import type { RpcCaller } from "@natstack/rpc";
+import { createExtensionProxy } from "@natstack/extension";
 import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
 import {
@@ -102,7 +103,9 @@ function isFileToolsExtensionUnavailable(err: unknown): boolean {
   const code = typeof err === "object" && err !== null
     ? (err as { code?: unknown }).code
     : undefined;
-  if (code === "ENOEXT") return true;
+  // ENOEXT = not installed/enabled; ENOTREADY = declared but not yet running.
+  // Both mean the extension can't serve this call, so fall back to runtime-fs.
+  if (code === "ENOEXT" || code === "ENOTREADY") return true;
   const message = err instanceof Error ? err.message : String(err);
   return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed or enabled|Extension is not running/.test(message);
 }
@@ -155,6 +158,19 @@ interface GrepToolResult {
   details: GrepToolDetails | undefined;
 }
 
+interface FileToolsApi {
+  grep(request: {
+    pattern: string;
+    path?: string;
+    cwd: string;
+    glob?: string;
+    ignoreCase?: boolean;
+    literal?: boolean;
+    context?: number;
+    limit?: number;
+  }): Promise<GrepToolResult>;
+}
+
 export interface GrepToolDetails {
   type?: "console";
   content?: string;
@@ -192,6 +208,9 @@ export function createGrepTool(
   fs: RuntimeFs,
   deps?: GrepToolDeps,
 ): AgentTool<typeof grepSchema, GrepToolDetails | undefined> {
+  const fileTools = deps?.rpc
+    ? createExtensionProxy<FileToolsApi>(deps.rpc, FILE_TOOLS_EXTENSION, () => false)
+    : null;
   return {
     name: "grep",
     label: "grep",
@@ -211,22 +230,18 @@ export function createGrepTool(
         throw new Error("Operation aborted");
       }
 
-      if (deps?.rpc) {
+      if (fileTools) {
         try {
-          return await deps.rpc.call<GrepToolResult>("main", "extensions.invoke", [
-            FILE_TOOLS_EXTENSION,
-            "grep",
-            [{
-              pattern,
-              path: searchDir,
-              cwd,
-              glob,
-              ignoreCase,
-              literal,
-              context,
-              limit,
-            }],
-          ]);
+          return (await fileTools.grep({
+            pattern,
+            path: searchDir,
+            cwd,
+            glob,
+            ignoreCase,
+            literal,
+            context,
+            limit,
+          })) as GrepToolResult;
         } catch (err) {
           if (!isFileToolsExtensionUnavailable(err)) throw err;
           if (onUpdate) {

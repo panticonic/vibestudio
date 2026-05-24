@@ -13,6 +13,7 @@ import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { Buffer } from "node:buffer";
 import type { RuntimeFs } from "./runtime-fs.js";
 import type { RpcCaller } from "@natstack/rpc";
+import { createExtensionProxy } from "@natstack/extension";
 import { resolveReadPath } from "./path-utils.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead, type TruncationResult, } from "./truncate.js";
 const readSchema = Type.Object({
@@ -48,6 +49,26 @@ interface ImageResizeResult {
     wasResized: boolean;
     dimensionNote?: string;
 }
+interface ReadResult {
+    content: (TextContent | ImageContent)[];
+    details: ReadToolDetails;
+}
+interface FileToolsApi {
+    read(request: {
+        path: string;
+        cwd: string;
+        offset?: number;
+        limit?: number;
+    }): Promise<ReadResult>;
+}
+interface ImageServiceApi {
+    detectMimeType(bytes: Uint8Array): Promise<string | null>;
+    resize(
+        bytes: Uint8Array,
+        mimeType: string,
+        opts: { maxWidth: number; maxHeight: number },
+    ): Promise<ImageResizeResult>;
+}
 const IMAGE_SERVICE_EXTENSION = "@workspace-extensions/image-service";
 const FILE_TOOLS_EXTENSION = "@workspace-extensions/file-tools";
 export interface ReadToolDeps {
@@ -55,6 +76,12 @@ export interface ReadToolDeps {
     rpc?: RpcCaller;
 }
 export function createReadTool(cwd: string, fs: RuntimeFs, deps?: ReadToolDeps): AgentTool<typeof readSchema, ReadToolDetails> {
+    const fileTools = deps?.rpc
+        ? createExtensionProxy<FileToolsApi>(deps.rpc, FILE_TOOLS_EXTENSION, () => false)
+        : null;
+    const imageService = deps?.rpc
+        ? createExtensionProxy<ImageServiceApi>(deps.rpc, IMAGE_SERVICE_EXTENSION, () => false)
+        : null;
     return {
         name: "read",
         label: "read",
@@ -69,13 +96,9 @@ export function createReadTool(cwd: string, fs: RuntimeFs, deps?: ReadToolDeps):
                 throw new Error("Operation aborted");
             }
             const absolutePath = resolveReadPath(path, cwd);
-            if (deps?.rpc && !isLikelyImagePath(path)) {
+            if (fileTools && !isLikelyImagePath(path)) {
                 try {
-                    return await deps.rpc.call<{ content: (TextContent | ImageContent)[]; details: ReadToolDetails }>("main", "extensions.invoke", [
-                        FILE_TOOLS_EXTENSION,
-                        "read",
-                        [{ path, cwd, offset, limit }],
-                    ]);
+                    return await fileTools.read({ path, cwd, offset, limit });
                 }
                 catch (err) {
                     if (!isFileToolsExtensionFallback(err)) throw err;
@@ -108,14 +131,10 @@ export function createReadTool(cwd: string, fs: RuntimeFs, deps?: ReadToolDeps):
                 }
                 throw err;
             }
-            if (raw instanceof Uint8Array && deps?.rpc) {
-                const mimeType = await deps.rpc.call<string | null>("main", "extensions.invoke", [IMAGE_SERVICE_EXTENSION,
-                    "detectMimeType",
-                    [raw]]);
+            if (raw instanceof Uint8Array && imageService) {
+                const mimeType = await imageService.detectMimeType(raw);
                 if (mimeType?.startsWith("image/")) {
-                    const resized = await deps.rpc.call<ImageResizeResult>("main", "extensions.invoke", [IMAGE_SERVICE_EXTENSION,
-                        "resize",
-                        [raw, mimeType, { maxWidth: 2000, maxHeight: 2000 }]]);
+                    const resized = await imageService.resize(raw, mimeType, { maxWidth: 2000, maxHeight: 2000 });
                     const base64 = Buffer.from(resized.data).toString("base64");
                     const content: (TextContent | ImageContent)[] = [
                         { type: "image", mimeType: resized.mimeType, data: base64 },
@@ -150,7 +169,8 @@ function isFileToolsExtensionFallback(err: unknown): boolean {
     const code = typeof err === "object" && err !== null
         ? (err as { code?: unknown }).code
         : undefined;
-    if (code === "ENOEXT" || code === "EIMAGE") return true;
+    // ENOTREADY = declared but not yet running; treat like ENOEXT and fall back.
+    if (code === "ENOEXT" || code === "ENOTREADY" || code === "EIMAGE") return true;
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("Image reads are handled by the image service path")) return true;
     return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed or enabled|Extension is not running/.test(message);

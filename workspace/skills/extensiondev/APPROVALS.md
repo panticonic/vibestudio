@@ -112,9 +112,9 @@ The host shows a standard userland-approval card with attribution: "Panel `<call
 
 The prompt's **default action on dismissal is deny**. Don't write code that depends on the prompt being answered in a specific time window — the user may walk away.
 
-## Cached grants and `setEnabled`
+## Cached grants and undeclaring
 
-Grants persist in the userland-approval grant store across host restarts. Two ways to clear:
+Grants persist in the userland-approval grant store across host restarts.
 
-- **Programmatically** from a panel/worker or attributed extension: `runtime.approvals.revoke(subjectId)` / `ctx.approvals.revoke(subjectId)`.
-- **By disabling the extension**: `extensions.setEnabled(name, false)` doesn't clear grants by itself. `extensions.uninstall(name, { purge: true })` removes the storage scratch but not the grants. Grants are namespaced by `(principal, extension)`, so reinstalling the extension under the same name will see the same grants.
+- **Clearing grants** is only done programmatically, from a panel/worker or attributed extension: `runtime.approvals.revoke(subjectId)` / `ctx.approvals.revoke(subjectId)`.
+- **Undeclaring or stopping an extension** is separate and does **not** clear grants: removing it from `extensions:` in `meta/natstack.yml` stops and removes the extension, but its grants and per-extension storage scratch are retained. Grants are namespaced by `(principal, extension)`, so re-declaring under the same name will see the same grants — revoke explicitly if you want them gone.

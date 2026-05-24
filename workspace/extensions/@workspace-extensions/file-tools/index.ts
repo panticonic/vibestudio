@@ -97,6 +97,23 @@ interface ReadDetails {
   engine: "node-file";
 }
 
+// Tool results only ever carry text content here; image bytes are resized by
+// the image-service extension at the call site. The literal `type` keeps these
+// assignable to the agent runtime's content union without a cast.
+type TextBlock = { type: "text"; text: string };
+interface ReadResult {
+  content: TextBlock[];
+  details: ReadDetails;
+}
+interface FindResult {
+  content: TextBlock[];
+  details: FindDetails | undefined;
+}
+interface GrepResult {
+  content: TextBlock[];
+  details: GrepDetails | undefined;
+}
+
 function resolveWithin(root: string, input: string): string {
   const resolved = path.resolve(root, input);
   const rel = path.relative(root, resolved);
@@ -227,12 +244,20 @@ function codedError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
 }
 
+/** Public API surface of this extension — the awaited return of {@link activate}. */
+export type Api = Awaited<ReturnType<typeof activate>>;
+declare module "@natstack/extension" {
+  interface WorkspaceExtensions {
+    "@workspace-extensions/file-tools": Api;
+  }
+}
+
 export async function activate(ctx: ExtensionContextLike) {
   ctx.log.info("file-tools extension activating");
   ctx.health?.healthy({ summary: "File tools extension activated" });
 
   return {
-    async grep(raw: GrepRequest) {
+    async grep(raw: GrepRequest): Promise<GrepResult> {
       if (!raw || typeof raw.pattern !== "string") {
         throw new Error("file-tools.grep requires a pattern");
       }
@@ -270,7 +295,7 @@ export async function activate(ctx: ExtensionContextLike) {
       if (raw.glob) args.push("--glob", raw.glob);
       args.push(raw.pattern, searchPath);
 
-      return await new Promise((resolve, reject) => {
+      return await new Promise<GrepResult>((resolve, reject) => {
         const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
         const rl = createInterface({ input: child.stdout });
         let stderr = "";
@@ -381,7 +406,7 @@ export async function activate(ctx: ExtensionContextLike) {
       });
     },
 
-    async find(raw: FindRequest) {
+    async find(raw: FindRequest): Promise<FindResult> {
       if (!raw || typeof raw.pattern !== "string") {
         throw new Error("file-tools.find requires a pattern");
       }
@@ -390,7 +415,7 @@ export async function activate(ctx: ExtensionContextLike) {
       const effectiveLimit = Math.max(1, raw.limit ?? 1000);
       const args = ["--files", "--hidden", "--color=never", "--glob", raw.pattern, searchPath];
 
-      return await new Promise((resolve, reject) => {
+      return await new Promise<FindResult>((resolve, reject) => {
         const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
         const rl = createInterface({ input: child.stdout });
         const matches: string[] = [];
@@ -451,7 +476,7 @@ export async function activate(ctx: ExtensionContextLike) {
       });
     },
 
-    async read(raw: ReadRequest) {
+    async read(raw: ReadRequest): Promise<ReadResult> {
       if (!raw || typeof raw.path !== "string") {
         throw new Error("file-tools.read requires a path");
       }

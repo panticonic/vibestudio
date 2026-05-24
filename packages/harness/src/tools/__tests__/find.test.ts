@@ -49,9 +49,12 @@ describe("createFindTool", () => {
   it("delegates to the file-tools extension when context rpc is available", async () => {
     const fs = new StubFs();
     const rpc = {
-      call: vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "src/a.ts" }],
-        details: { engine: "ripgrep" },
+      call: vi.fn().mockImplementation((_target: string, method: string) => {
+        if (method === "extensions.streamingMethods") return Promise.resolve([]);
+        return Promise.resolve({
+          content: [{ type: "text", text: "src/a.ts" }],
+          details: { engine: "ripgrep" },
+        });
       }),
       streamCall: vi.fn(async () => new Response()),
     };
