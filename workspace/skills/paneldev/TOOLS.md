@@ -137,7 +137,7 @@ const shell = extensions.use<ShellApi>("@workspace-extensions/shell", {
 
 To check whether an extension is available before calling it, use `extensions.list()`:
 
-```
+```ts
 eval({ code: `
   import { extensions } from "@workspace/runtime";
   const name = "@workspace-extensions/image-service";

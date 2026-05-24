@@ -73,7 +73,7 @@ await extensions.reload("@workspace-extensions/hello");
 
 Approval-gated. Restarts the *currently active approved build* — does not pull dependency changes. Use this after editing in-process state (env vars, on-disk config) that the extension reads at `activate()` time.
 
-To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump), the extension rebuilds on the next reconcile — at workspace startup, or when `meta/natstack.yml` is pushed. `extensions.reload(name)` also rebuilds if the dependency graph changed. Dependency pushes do not auto-reload a running extension on their own.
+To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump), the extension must rebuild — and rebuilds happen only on reconcile, at workspace startup or when `meta/natstack.yml` is pushed. `extensions.reload(name)` restarts the *active approved build* and does **not** rebuild, so it won't pick up dependency changes on its own, and dependency pushes don't auto-reload a running extension either.
 
 ## Common failure shapes
 

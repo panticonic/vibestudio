@@ -349,7 +349,7 @@ If an extension process exits unexpectedly (non-zero exit, signal, ready-handsha
 
 ## Reaching extensions from userland
 
-Extensions have two callable surfaces. The **RPC** surface (the `extensions` dispatcher service) is the canonical one — every extension has it, and it's where management methods (install / uninstall / setEnabled / reload) also live. The **HTTP fetch** surface is optional: an extension that wants to be reachable like a worker can export a default `fetch` handler, and the gateway will route `/_r/ext/<name>/*` to it.
+Extensions have two callable surfaces. The **RPC** surface (the `extensions` dispatcher service) is the canonical one — every extension has it, and it's where the read/lifecycle methods (`list` / `reload`) live. Installing and enabling extensions is declarative — `meta/natstack.yml` is the only surface (see [Declared extension set and management](#declared-extension-set-and-management)); there are no imperative `install` / `uninstall` / `setEnabled` / `update` RPCs. The **HTTP fetch** surface is optional: an extension that wants to be reachable like a worker can export a default `fetch` handler, and the gateway will route `/_r/ext/<name>/*` to it.
 
 ### RPC: the `extensions` service
 
@@ -362,18 +362,16 @@ There is exactly one RPC entry point: the dispatcher service named `extensions`.
   policy: { allowed: ["panel", "worker", "shell", "extension"] },
   methods: {
     invoke:     { args: [z.string(), z.string(), z.array(z.unknown())] },
+    invokeStream: { args: [z.string(), z.string(), z.array(z.unknown())] },
+    streamingMethods: { args: [z.string()] },
     list:       { args: [] },
     on:         { args: [z.string(), z.string()] }, // (extName, event) — returns subscription id
-    install:    { /* elevated-approval-gated */ },
-    uninstall:  { /* approval-gated */ },
-    setEnabled: { /* approval-gated */ },
-    update:     { /* elevated-approval-gated */ },
     reload:     { /* approval-gated; restarts active approved build */ },
   },
 }
 ```
 
-`invoke`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. `invoke` is still caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. The management methods are approval-gated, and install/update plus extension main/master push acceptance use the extension-specific approval treatment described below.
+`invoke`, `list`, and `on` are not host approval-gated — they're userland code talking to userland code. `invoke` is still caller-aware: the host stamps the immediate caller and, when available, the original panel/worker principal into the invocation envelope delivered to the extension. The extension decides whether the requested method needs an approval and calls `ctx.approvals.requestForCaller(...)` when it does. There are no imperative management methods: extensions are installed/enabled by declaring them in `meta/natstack.yml`, and the reconciler grants newly declared extensions through the joint approval flow. `reload` is approval-gated, and extension main/master push acceptance uses the extension-specific approval treatment described below.
 
 Consumers — panels, workers, and other extensions — use the same thin client from `@workspace/runtime`:
 
@@ -404,16 +402,12 @@ The same client is exposed to panels and workers via `@workspace/runtime`, and t
 ```ts
 interface ExtensionsClient {
   // Calling an extension
-  use<T>(name: string): T;                                       // returns a proxy
-  on(name: string, event: string, cb: (payload: unknown) => void): Disposable;
+  use<K extends ExtensionName>(name: K, options?: { streamingMethods?: Iterable<string> }): WorkspaceExtensions[K];
+  on(name: ExtensionName, event: string, cb: (payload: unknown) => void): Disposable;
   list(): Promise<RegistryEntry[]>;
 
-  // Management — approval-gated, with install/update using the extension approval UI.
-  install(spec: InstallSpec): Promise<void>;                     // elevated
-  uninstall(name: string, opts?: { purge?: boolean }): Promise<void>;
-  setEnabled(name: string, enabled: boolean): Promise<void>;
-  update(name: string): Promise<void>;                           // extension approval if deps changed
-  reload(name: string): Promise<void>;                           // restart active approved build
+  // Lifecycle — install/enable is declarative (meta/natstack.yml), not an API.
+  reload(name: ExtensionName): Promise<void>;                    // restart active approved build
 }
 ```
 
