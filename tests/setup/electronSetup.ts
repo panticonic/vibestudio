@@ -13,6 +13,7 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
+import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "@natstack/shared/workspace/sourceDirs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -57,19 +58,6 @@ interface ManagedWorkspaceInfo {
   testRoot: string;
   env: Record<string, string>;
 }
-
-const SOURCE_DIRS = [
-  "meta",
-  "panels",
-  "packages",
-  "agents",
-  "workers",
-  "skills",
-  "extensions",
-  "about",
-  "projects",
-];
-const STATE_DIRS = [".cache", ".databases", ".contexts"];
 
 function getTestEnv(testRoot: string): Record<string, string> {
   switch (process.platform) {
@@ -146,7 +134,7 @@ export function createManagedTestWorkspace(projectRoot?: string): string {
   fs.mkdirSync(sourceRoot, { recursive: true });
   fs.mkdirSync(stateRoot, { recursive: true });
 
-  for (const dir of SOURCE_DIRS) {
+  for (const dir of WORKSPACE_SOURCE_DIRS) {
     const src = path.join(templateDir, dir);
     const dest = path.join(sourceRoot, dir);
     if (fs.existsSync(src)) {
@@ -156,7 +144,7 @@ export function createManagedTestWorkspace(projectRoot?: string): string {
     }
   }
 
-  for (const dir of STATE_DIRS) {
+  for (const dir of WORKSPACE_STATE_DIRS) {
     fs.mkdirSync(path.join(stateRoot, dir), { recursive: true });
   }
 
@@ -223,6 +211,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
       // Disable GPU acceleration for CI environments
       ELECTRON_DISABLE_GPU: "1",
       ELECTRON_DISABLE_SANDBOX: "1",
+      ...(ownsWorkspace ? { NATSTACK_WORKSPACE_CREATED_FROM_TEMPLATE: "1" } : {}),
       ...workspaceInfo.env,
       ...env,
     },

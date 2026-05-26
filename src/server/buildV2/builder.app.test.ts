@@ -81,7 +81,9 @@ describe("buildUnit app builds", () => {
     );
     const html = result.artifacts.find((artifact) => artifact.path === "index.html")?.content;
 
-    expect(html).toContain('src="/__loader.js"');
+    expect(html).toContain('type="module" src="./bundle.js"');
+    expect(html).not.toContain('src="/__loader.js"');
+    expect(html).not.toContain("<base ");
     expect(html).not.toContain("renderer/index.js");
     expect(result.artifacts).toEqual(
       expect.arrayContaining([
@@ -277,6 +279,87 @@ describe("buildUnit app builds", () => {
         content: Buffer.from("bundle:@workspace-apps/mobile:ev-mobile").toString("base64"),
       }),
     ]);
+  });
+
+  it("builds panel bundles that import fs through the runtime-backed shim", async () => {
+    const runtimeDir = path.join(workspaceRoot, "packages", "runtime");
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(runtimeDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/runtime",
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        exports: { ".": "./index.ts" },
+      })
+    );
+    fs.writeFileSync(path.join(runtimeDir, "index.ts"), "export const fs = {};\n");
+    git(runtimeDir, ["init", "-b", "main"]);
+    git(runtimeDir, ["add", "."]);
+    git(runtimeDir, [
+      "-c",
+      "user.name=NatStack Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-m",
+      "initial runtime",
+    ]);
+
+    const panelDir = path.join(workspaceRoot, "panels", "fs-panel");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/fs-panel",
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        natstack: {
+          title: "FS Panel",
+          entry: "index.ts",
+        },
+        dependencies: {
+          "@workspace/runtime": "workspace:*",
+        },
+      })
+    );
+    fs.writeFileSync(
+      path.join(panelDir, "index.ts"),
+      [
+        "import { readFile } from 'fs/promises';",
+        "void readFile;",
+        "document.body.dataset.ready = 'true';",
+        "",
+      ].join("\n")
+    );
+    git(panelDir, ["init", "-b", "main"]);
+    git(panelDir, ["add", "."]);
+    git(panelDir, [
+      "-c",
+      "user.name=NatStack Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-m",
+      "initial panel",
+    ]);
+
+    const graph = discoverPackageGraph(workspaceRoot);
+    const result = await buildUnit(
+      graph.get("@workspace-panels/fs-panel"),
+      "ev-panel",
+      graph,
+      workspaceRoot
+    );
+
+    expect(result.artifacts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "bundle.js", role: "primary" }),
+        expect.objectContaining({ path: "index.html", role: "html" }),
+      ])
+    );
   });
 
   it("rejects dist as an app build target", async () => {

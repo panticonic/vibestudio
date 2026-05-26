@@ -39,6 +39,8 @@ const DEFAULT_WORKER_SOURCE = "workers/agent-worker";
 const DEFAULT_CLASS_NAME = "AiChatWorker";
 const DEFAULT_HANDLE = "ai-chat";
 const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
+const AGENT_SUBSCRIPTION_RETRY_DELAY_MS = 1_000;
+const AGENT_SUBSCRIPTION_MAX_ATTEMPTS = 60;
 
 /** Response shape from workers.listSources */
 interface WorkerSourceEntry {
@@ -91,6 +93,10 @@ async function getChannelDOParticipants(channelId: string): Promise<ChannelDORef
     [],
   );
   return participants.map((p) => parseDoTargetId(p.participantId)).filter((p): p is ChannelDORef => p !== null);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Persisted per-agent record. `key` is the stable DO `objectKey` minted once
@@ -245,70 +251,70 @@ export default function ChatPanel() {
     stateArgs.systemPromptMode,
   ]);
 
-  // Rehydration recovery: when a panel mounts with channelName already set
-  // (persisted from a prior session) but no DO participants are in the
-  // channel, re-create+subscribe each persisted agent using its stable
-  // `key` so we hit the same entity row idempotently. Skipped when this
-  // session ran the bootstrap itself.
+  // Agent subscription recovery: when a panel has a channel but no DO
+  // participants, re-create+subscribe each persisted agent using its stable
+  // `key` so we hit the same entity row idempotently. This also covers fresh
+  // bootstrap, where server-side startup approvals/builds can briefly race
+  // the first create+subscribe attempt.
   const rehydrationCheckedRef = useRef(false);
   useEffect(() => {
     if (
       rehydrationCheckedRef.current ||
-      bootstrapAttempted.current ||
       !stateArgs.channelName ||
       !resolvedContextId
     ) return;
     rehydrationCheckedRef.current = true;
+    let cancelled = false;
 
     const channelName = stateArgs.channelName;
     void (async () => {
-      try {
-        const dos = await getChannelDOParticipants(channelName);
-        if (dos.length > 0) return;
+      for (let attempt = 1; attempt <= AGENT_SUBSCRIPTION_MAX_ATTEMPTS && !cancelled; attempt += 1) {
+        try {
+          const dos = await getChannelDOParticipants(channelName);
+          if (dos.length > 0) return;
 
-        const workerSource = stateArgs.agentSource ?? DEFAULT_WORKER_SOURCE;
-        const fallbackClass = stateArgs.agentClass ?? DEFAULT_CLASS_NAME;
-        const fallbackHandle = fallbackClass === DEFAULT_CLASS_NAME
-          ? DEFAULT_HANDLE
-          : fallbackClass.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
-        // Persisted pendingAgents carry the original `key`. If state was
-        // written by an older build that only stored `{agentId, handle}`, mint
-        // and persist a key now so subsequent rehydrations are stable.
-        let pendingList: PendingAgent[];
-        if (stateArgs.pendingAgents && stateArgs.pendingAgents.length > 0) {
-          let mutated = false;
-          pendingList = stateArgs.pendingAgents.map((agent) => {
-            if (agent.key && agent.source && agent.className) return agent;
-            mutated = true;
-            const handle = agent.handle;
-            return {
-              agentId: agent.agentId,
-              handle,
-              key: agent.key ?? `${handle}-${crypto.randomUUID().slice(0, 8)}`,
-              source: agent.source ?? workerSource,
-              className: agent.className ?? agent.agentId,
+          const workerSource = stateArgs.agentSource ?? DEFAULT_WORKER_SOURCE;
+          const fallbackClass = stateArgs.agentClass ?? DEFAULT_CLASS_NAME;
+          const fallbackHandle = fallbackClass === DEFAULT_CLASS_NAME
+            ? DEFAULT_HANDLE
+            : fallbackClass.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+          // Persisted pendingAgents carry the original `key`. If state was
+          // written by an older build that only stored `{agentId, handle}`, mint
+          // and persist a key now so subsequent rehydrations are stable.
+          let pendingList: PendingAgent[];
+          if (stateArgs.pendingAgents && stateArgs.pendingAgents.length > 0) {
+            let mutated = false;
+            pendingList = stateArgs.pendingAgents.map((agent) => {
+              if (agent.key && agent.source && agent.className) return agent;
+              mutated = true;
+              const handle = agent.handle;
+              return {
+                agentId: agent.agentId,
+                handle,
+                key: agent.key ?? `${handle}-${crypto.randomUUID().slice(0, 8)}`,
+                source: agent.source ?? workerSource,
+                className: agent.className ?? agent.agentId,
+              };
+            });
+            if (mutated) void setStateArgs({ pendingAgents: pendingList });
+          } else {
+            pendingList = [{
+              agentId: fallbackClass,
+              handle: fallbackHandle,
+              key: `${fallbackHandle}-${crypto.randomUUID().slice(0, 8)}`,
+              source: workerSource,
+              className: fallbackClass,
+            }];
+            void setStateArgs({ pendingAgents: pendingList });
+          }
+
+          for (const agent of pendingList) {
+            const subscribeConfig: Record<string, unknown> = {
+              ...(stateArgs.agentConfig ?? {}),
+              handle: agent.handle,
             };
-          });
-          if (mutated) void setStateArgs({ pendingAgents: pendingList });
-        } else {
-          pendingList = [{
-            agentId: fallbackClass,
-            handle: fallbackHandle,
-            key: `${fallbackHandle}-${crypto.randomUUID().slice(0, 8)}`,
-            source: workerSource,
-            className: fallbackClass,
-          }];
-          void setStateArgs({ pendingAgents: pendingList });
-        }
-
-        for (const agent of pendingList) {
-          const subscribeConfig: Record<string, unknown> = {
-            ...(stateArgs.agentConfig ?? {}),
-            handle: agent.handle,
-          };
-          if (stateArgs.systemPrompt) subscribeConfig["systemPrompt"] = stateArgs.systemPrompt;
-          if (stateArgs.systemPromptMode) subscribeConfig["systemPromptMode"] = stateArgs.systemPromptMode;
-          try {
+            if (stateArgs.systemPrompt) subscribeConfig["systemPrompt"] = stateArgs.systemPrompt;
+            if (stateArgs.systemPromptMode) subscribeConfig["systemPromptMode"] = stateArgs.systemPromptMode;
             await createAndSubscribeAgent({
               source: agent.source,
               className: agent.className,
@@ -318,14 +324,21 @@ export default function ChatPanel() {
               config: subscribeConfig,
               replay: true,
             });
-          } catch (err) {
-            console.warn(`[ChatPanel] Failed to re-subscribe agent "${agent.handle}" on rehydration:`, err);
           }
+          return;
+        } catch (err) {
+          if (attempt === AGENT_SUBSCRIPTION_MAX_ATTEMPTS) {
+            console.warn(`[ChatPanel] Agent subscription recovery failed:`, err);
+            return;
+          }
+          await delay(AGENT_SUBSCRIPTION_RETRY_DELAY_MS);
         }
-      } catch (err) {
-        console.warn(`[ChatPanel] Rehydration agent check failed:`, err);
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [stateArgs.channelName, resolvedContextId, stateArgs.agentConfig]);
 
   // Build ConnectionConfig from runtime

@@ -69,14 +69,22 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     if (!batch) return;
     this.pending.delete(trigger);
     if (batch.timer) clearTimeout(batch.timer);
-    const requests = batch.requests;
-    const units = requests.flatMap((request) => request.entries);
+    let requests = batch.requests;
     try {
       if (trigger === "startup" && this.deps.autoApproveStartup) {
-        for (const request of requests) await request.applyApproved();
-        for (const request of requests) request.resolve();
-        return;
+        const promptRequests: PendingRequest[] = [];
+        for (const request of requests) {
+          if (request.entries.every((entry) => entry.unitKind === "app")) {
+            await request.applyApproved();
+            request.resolve();
+          } else {
+            promptRequests.push(request);
+          }
+        }
+        requests = promptRequests;
+        if (requests.length === 0) return;
       }
+      const units = requests.flatMap((request) => request.entries);
       const decision = await this.deps.approvalQueue.request({
         kind: "unit-batch",
         callerId: "system:units",

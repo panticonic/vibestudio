@@ -88,7 +88,7 @@ describe("ServerUnitApprovalCoordinator", () => {
     expect(denyApp).toHaveBeenCalledOnce();
   });
 
-  it("auto-approves startup batches for freshly created trusted template workspaces", async () => {
+  it("auto-approves startup app batches for freshly created trusted template workspaces", async () => {
     const approvalQueue = {
       request: vi.fn(async () => "deny" as const),
     };
@@ -110,6 +110,45 @@ describe("ServerUnitApprovalCoordinator", () => {
     expect(approvalQueue.request).not.toHaveBeenCalled();
     expect(apply).toHaveBeenCalledOnce();
     expect(deny).not.toHaveBeenCalled();
+  });
+
+  it("still prompts for startup extension batches when template app startup is auto-approved", async () => {
+    const approvalQueue = {
+      request: vi.fn(async () => "once" as const),
+    };
+    const coordinator = new ServerUnitApprovalCoordinator({
+      approvalQueue,
+      delayMs: 1,
+      autoApproveStartup: true,
+    });
+    const applyExtension = vi.fn(async () => undefined);
+    const applyApp = vi.fn(async () => undefined);
+
+    await Promise.all([
+      coordinator.enqueue({
+        trigger: "startup",
+        entries: [unit("extension", "image-service")],
+        applyApproved: applyExtension,
+        applyDenied: vi.fn(),
+      }),
+      coordinator.enqueue({
+        trigger: "startup",
+        entries: [unit("app", "shell")],
+        applyApproved: applyApp,
+        applyDenied: vi.fn(),
+      }),
+    ]);
+
+    expect(applyApp).toHaveBeenCalledOnce();
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        title: "Approve workspace extensions",
+        units: [expect.objectContaining({ unitKind: "extension", unitName: "image-service" })],
+      })
+    );
+    expect(applyExtension).toHaveBeenCalledOnce();
   });
 
   it("still prompts for meta-push batches when startup auto-approval is enabled", async () => {

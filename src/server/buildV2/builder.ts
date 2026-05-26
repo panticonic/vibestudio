@@ -677,11 +677,82 @@ function createDedupePlugin(runtimeNodeModules: string, packages: string[]): esb
   };
 }
 
+function createAppRuntimeShimPlugin(): esbuild.Plugin {
+  const unavailable =
+    '() => { throw new Error("@workspace/runtime panel APIs are not available in workspace app renderers"); }';
+  const contents = `const unavailable = ${unavailable};
+export const fs = new Proxy({}, { get: () => unavailable });
+export const gatewayConfig = {};
+export const gatewayFetch = unavailable;
+export const gitConfig = {};
+export const env = {};
+export const entityId = "app";
+export const id = "app";
+export const slotId = "app";
+export const parentId = null;
+export const contextId = "";
+export const runtimeParentId = null;
+export const rpc = {};
+export const parent = {};
+export const workers = {};
+export const gad = {};
+export const Rpc = {};
+export const z = {};
+export const recoveryCoordinator = {};
+export const getTheme = unavailable;
+export const onThemeChange = () => () => {};
+export const onConnectionError = () => () => {};
+export const getInfo = unavailable;
+export const focusPanel = unavailable;
+export const getWorkspaceTree = unavailable;
+export const listBranches = unavailable;
+export const listCommits = unavailable;
+export const exposeMethod = unavailable;
+export const openPanel = unavailable;
+export const openExternal = unavailable;
+export const listPanels = unavailable;
+export const getPanelHandle = unavailable;
+export const getParent = unavailable;
+export const getParentWithContract = unavailable;
+export const createDurableObjectServiceClient = unavailable;
+export const defineContract = (contract) => contract;
+export const noopParent = {};
+export const normalizePath = (value) => String(value);
+export const getFileName = (value) => String(value).split("/").pop() ?? "";
+export const resolvePath = (...parts) => parts.join("/");
+export const getStateArgs = unavailable;
+export const useStateArgs = unavailable;
+export const setStateArgs = unavailable;
+export const setStateArgsForPanel = unavailable;
+export const agentApi = {};
+export class Journal {}
+export const withJournal = unavailable;
+export const currentJournal = null;
+export default {};`;
+  return {
+    name: "app-runtime-shim",
+    setup(build) {
+      build.onResolve({ filter: /^@workspace\/runtime$/ }, () => ({
+        path: "@workspace/runtime",
+        namespace: "app-runtime-shim",
+      }));
+      build.onLoad({ filter: /.*/, namespace: "app-runtime-shim" }, () => ({
+        contents,
+        loader: "js",
+      }));
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // FS/Path Shim Plugins
 // ---------------------------------------------------------------------------
 
-function createFsShimPlugin(resolveDir: string): esbuild.Plugin {
+function createFsShimPlugin(options: {
+  runtimeBacked: boolean;
+  resolveDir?: string;
+}): esbuild.Plugin {
+  const resolveDir = options.resolveDir ?? process.cwd();
   return {
     name: "fs-shim",
     setup(build) {
@@ -692,6 +763,74 @@ function createFsShimPlugin(resolveDir: string): esbuild.Plugin {
 
       build.onLoad({ filter: /.*/, namespace: "workspace-fs-shim" }, (args) => {
         const isPromises = args.path === "fs/promises" || args.path === "node:fs/promises";
+        if (!options.runtimeBacked) {
+          const unavailable =
+            '() => { throw new Error("Node fs is not available in workspace app renderers"); }';
+          const contents = isPromises
+            ? `export const readFile = ${unavailable};
+export const writeFile = ${unavailable};
+export const readdir = ${unavailable};
+export const stat = ${unavailable};
+export const lstat = ${unavailable};
+export const mkdir = ${unavailable};
+export const rmdir = ${unavailable};
+export const unlink = ${unavailable};
+export const rename = ${unavailable};
+export const copyFile = ${unavailable};
+export const access = ${unavailable};
+export const appendFile = ${unavailable};
+export const chmod = ${unavailable};
+export const chown = ${unavailable};
+export const symlink = ${unavailable};
+export const readlink = ${unavailable};
+export const realpath = ${unavailable};
+export const truncate = ${unavailable};
+export const utimes = ${unavailable};
+export const rm = ${unavailable};
+export const open = ${unavailable};
+export const link = ${unavailable};
+export const mkdtemp = ${unavailable};
+export const watch = ${unavailable};
+export const cp = ${unavailable};
+export const constants = {};`
+            : `const unavailable = ${unavailable};
+export const promises = new Proxy({}, { get: () => unavailable });
+export const readFile = unavailable;
+export const writeFile = unavailable;
+export const readdir = unavailable;
+export const stat = unavailable;
+export const lstat = unavailable;
+export const mkdir = unavailable;
+export const rmdir = unavailable;
+export const unlink = unavailable;
+export const rename = unavailable;
+export const copyFile = unavailable;
+export const access = unavailable;
+export const appendFile = unavailable;
+export const chmod = unavailable;
+export const chown = unavailable;
+export const symlink = unavailable;
+export const readlink = unavailable;
+export const realpath = unavailable;
+export const truncate = unavailable;
+export const utimes = unavailable;
+export const rm = unavailable;
+export const open = unavailable;
+export const link = unavailable;
+export const mkdtemp = unavailable;
+export const watch = unavailable;
+export const cp = unavailable;
+export const constants = {};
+export const existsSync = unavailable;
+export const readFileSync = unavailable;
+export const writeFileSync = unavailable;
+export const mkdirSync = unavailable;
+export const rmSync = unavailable;
+export const statSync = unavailable;
+export const lstatSync = unavailable;
+export default { promises, readFile, writeFile, readdir, stat, lstat, mkdir, rmdir, unlink, rename, copyFile, access, appendFile, chmod, chown, symlink, readlink, realpath, truncate, utimes, rm, open, link, mkdtemp, watch, cp, constants, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync, lstatSync };`;
+          return { loader: "js", resolveDir: process.cwd(), contents };
+        }
         // @workspace/runtime exports `fs` as a Proxy object with async methods.
         // We destructure individual methods from it for Node fs/promises compat.
         const contents = isPromises
@@ -864,10 +1003,11 @@ function escapeHtml(str: string): string {
  */
 export function injectHtmlTransforms(
   html: string,
-  baseHref: string,
+  baseHref: string | null,
   hasCss: boolean,
   externals?: Record<string, string>,
-  title?: string
+  title?: string,
+  usePanelLoader = true
 ): string {
   let result = html;
   if (title !== undefined) {
@@ -897,7 +1037,7 @@ export function injectHtmlTransforms(
     result = result.replace(/(<head\b[^>]*>)/i, `$1\n  ${PANEL_CSP_META}`);
   }
   // Inject base href if not present
-  if (!/<base\b/i.test(result)) {
+  if (baseHref && !/<base\b/i.test(result)) {
     result = result.replace(/(<head\b[^>]*>)/i, `$1\n  <base href="${escapeHtml(baseHref)}">`);
   }
   // If esbuild emitted CSS for imported component styles, make custom panel
@@ -913,11 +1053,13 @@ export function injectHtmlTransforms(
       result = `${cssLink}\n${result}`;
     }
   }
-  // Replace bundle.js script with loader
-  result = result.replace(
-    /<script\b[^>]*\bsrc\s*=\s*["'](?:\.\/)?bundle\.js(?:\?[^"']*)?["'][^>]*><\/script>/i,
-    `<script src="/__loader.js"></script>`
-  );
+  if (usePanelLoader) {
+    // Replace bundle.js script with the panel identity/config loader.
+    result = result.replace(
+      /<script\b[^>]*\bsrc\s*=\s*["'](?:\.\/)?bundle\.js(?:\?[^"']*)?["'][^>]*><\/script>/i,
+      `<script src="/__loader.js"></script>`
+    );
+  }
   return result;
 }
 
@@ -926,14 +1068,22 @@ function generatePanelHtml(
   relativePath: string,
   templateHtmlPath: string | null,
   adapter: FrameworkAdapter,
-  options: { hasCss: boolean; externals?: Record<string, string> }
+  options: { hasCss: boolean; externals?: Record<string, string>; usePanelLoader?: boolean }
 ): string {
-  const baseHref = `/${relativePath}/`;
+  const usePanelLoader = options.usePanelLoader ?? true;
+  const baseHref = usePanelLoader ? `/${relativePath}/` : null;
 
   // If template or panel provides HTML, use it with standard injections
   if (templateHtmlPath && fs.existsSync(templateHtmlPath)) {
     const html = fs.readFileSync(templateHtmlPath, "utf-8");
-    return injectHtmlTransforms(html, baseHref, options.hasCss, options.externals, title);
+    return injectHtmlTransforms(
+      html,
+      baseHref,
+      options.hasCss,
+      options.externals,
+      title,
+      usePanelLoader
+    );
   }
 
   // Adapter-generated fallback HTML
@@ -954,7 +1104,7 @@ function generatePanelHtml(
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <base href="${escapeHtml(baseHref)}">
+  ${baseHref ? `<base href="${escapeHtml(baseHref)}">` : ""}
   ${PANEL_CSP_META}
   <title>${escapeHtml(title)}</title>
   ${importMapScript}${cdnLinks}${cssLink}
@@ -965,7 +1115,11 @@ function generatePanelHtml(
 </head>
 <body>
   ${rootElement}
-  <script src="/__loader.js"></script>
+  ${
+    options.usePanelLoader === false
+      ? '<script type="module" src="./bundle.js"></script>'
+      : '<script src="/__loader.js"></script>'
+  }
 </body>
 </html>`;
 }
@@ -1409,9 +1563,10 @@ async function buildPanel(
 
   // Build plugins — resolve plugin uses extracted source paths.
   const plugins: esbuild.Plugin[] = [
+    ...(node.kind === "app" ? [createAppRuntimeShimPlugin()] : []),
     createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot),
     createTsExtensionPlugin(sourceRoot),
-    createFsShimPlugin(resolveDir),
+    createFsShimPlugin({ runtimeBacked: node.kind !== "app", resolveDir }),
     createPathShimPlugin(resolveDir),
     createCryptoShimPlugin({ resolveDir }),
   ];
@@ -1537,6 +1692,7 @@ async function buildPanel(
     const html = generatePanelHtml(title, node.relativePath, resolved.htmlPath, adapter, {
       hasCss: !!css,
       externals: manifestExternals,
+      usePanelLoader: node.kind !== "app",
     });
 
     artifactEntries.push({
@@ -2519,7 +2675,7 @@ async function buildLibraryBundle(
       plugins: [
         createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, PANEL_CONDITIONS),
         createTsExtensionPlugin(sourceRoot),
-        createFsShimPlugin(env.resolveDir),
+        createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
         createPathShimPlugin(env.resolveDir),
       ],
       nodePaths: env.nodePaths,
