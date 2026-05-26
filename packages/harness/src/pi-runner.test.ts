@@ -270,8 +270,7 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
-  it("isolates permanent provenance failures so one bad event does not poison retries", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  it("raises permanent provenance failures instead of dropping events", async () => {
     const appendTrajectoryBatch = vi
       .fn()
       .mockRejectedValueOnce(new Error("GAD event id collision with different content"))
@@ -309,32 +308,23 @@ describe("PiRunner", () => {
     runner.gad = { call: appendTrajectoryBatch };
     runner.provenanceQueue = [valid, invalid];
 
-    try {
-      await runner.flushProvenance();
+    await expect(runner.flushProvenance()).rejects.toMatchObject({
+      code: "provenance",
+      message: expect.stringContaining("Permanent provenance persistence failure"),
+    });
 
-      expect(appendTrajectoryBatch).toHaveBeenCalledTimes(3);
-      expect(appendTrajectoryBatch).toHaveBeenNthCalledWith(
-        2,
-        "appendTrajectoryBatch",
-        expect.objectContaining({ events: [expect.objectContaining({ eventId: "valid" })] })
-      );
-      expect(appendTrajectoryBatch).toHaveBeenNthCalledWith(
-        3,
-        "appendTrajectoryBatch",
-        expect.objectContaining({ events: [expect.objectContaining({ eventId: "invalid" })] })
-      );
-      expect(runner.provenanceQueue).toEqual([]);
-      expect(warn).toHaveBeenCalledWith(
-        "[PiRunner] dropping permanent provenance event:",
-        expect.objectContaining({ eventId: "invalid", kind: "system.event" })
-      );
-      expect(warn).not.toHaveBeenCalledWith(
-        "[PiRunner] provenance flush failed:",
-        expect.anything()
-      );
-    } finally {
-      warn.mockRestore();
-    }
+    expect(appendTrajectoryBatch).toHaveBeenCalledTimes(3);
+    expect(appendTrajectoryBatch).toHaveBeenNthCalledWith(
+      2,
+      "appendTrajectoryBatch",
+      expect.objectContaining({ events: [expect.objectContaining({ eventId: "valid" })] })
+    );
+    expect(appendTrajectoryBatch).toHaveBeenNthCalledWith(
+      3,
+      "appendTrajectoryBatch",
+      expect.objectContaining({ events: [expect.objectContaining({ eventId: "invalid" })] })
+    );
+    expect(runner.provenanceQueue).toEqual([invalid]);
   });
 
   it("raises oversized provenance events that remain too large after blob spilling", async () => {
@@ -389,7 +379,9 @@ describe("PiRunner", () => {
 
   it("clears active run state when message-end provenance persistence fails", async () => {
     const appendTrajectoryBatch = vi.fn(async () => {
-      throw new Error('DO RPC relay failed (500): {"error":"string or blob too big: SQLITE_TOOBIG"}');
+      throw new Error(
+        'DO RPC relay failed (500): {"error":"string or blob too big: SQLITE_TOOBIG"}'
+      );
     });
     const options = createOptions();
     const runner = new PiRunner(options) as unknown as {
@@ -521,10 +513,9 @@ describe("PiRunner", () => {
     ]);
 
     expect(appendTrajectoryBatch).toHaveBeenCalledTimes(1);
-    const calls = appendTrajectoryBatch.mock.calls as unknown as Array<[
-      string,
-      { events: Array<{ event: { payload: { result?: unknown } } }> },
-    ]>;
+    const calls = appendTrajectoryBatch.mock.calls as unknown as Array<
+      [string, { events: Array<{ event: { payload: { result?: unknown } } }> }]
+    >;
     const input = calls[0]![1];
     const result = input.events[0]!.event.payload.result as Record<string, unknown>;
     expect(result).toMatchObject({
@@ -563,6 +554,7 @@ describe("PiRunner", () => {
         },
       },
       {
+        eventId: "entry-result:invocation:call_1:terminal",
         publishToChannel: true,
         event: {
           kind: "invocation.completed",
@@ -573,6 +565,36 @@ describe("PiRunner", () => {
         },
       },
     ]);
+  });
+
+  it("uses the message leaf captured at harness emission time for message-end provenance", async () => {
+    const runner = new PiRunner(createOptions()) as unknown as {
+      session: { getLeafId(): Promise<string> };
+      provenanceQueue: Array<Record<string, unknown>>;
+      handleMessageEnd(message: unknown, capturedMessageEntryId?: string): Promise<void>;
+    };
+    runner.session = {
+      getLeafId: vi.fn(async () => {
+        throw new Error("late leaf lookup should not run");
+      }),
+    };
+    runner.provenanceQueue = [];
+
+    await runner.handleMessageEnd(
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "eval",
+        content: [{ type: "text", text: "done" }],
+      },
+      "entry-at-emit"
+    );
+
+    expect(runner.provenanceQueue).toMatchObject([
+      { eventId: "entry-at-emit" },
+      { eventId: "entry-at-emit:invocation:call_1:terminal" },
+    ]);
+    expect(runner.session.getLeafId).not.toHaveBeenCalled();
   });
 
   it("does not emit duplicate terminal provenance for already-terminal invocations", () => {
@@ -670,6 +692,7 @@ describe("PiRunner", () => {
     ).toBe(false);
     expect(runner.provenanceQueue).toContainEqual(
       expect.objectContaining({
+        eventId: "entry-assistant:invocation:call_2:started",
         event: expect.objectContaining({
           kind: "invocation.started",
           causality: expect.objectContaining({ invocationId: "call_2" }),

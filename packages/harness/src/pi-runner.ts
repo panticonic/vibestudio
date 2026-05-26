@@ -1112,7 +1112,14 @@ export class PiRunner {
   }
 
   private enqueueHarnessEvent(event: AgentHarnessEvent, signal?: AbortSignal): void {
-    const next = this.harnessEventChain.then(() => this.handleHarnessEvent(event, signal));
+    const messageEndLeafId = event.type === "message_end" ? this.session?.getLeafId() : undefined;
+    const next = this.harnessEventChain.then(async () =>
+      this.handleHarnessEvent(
+        event,
+        signal,
+        (messageEndLeafId ? await messageEndLeafId : undefined) ?? undefined
+      )
+    );
     this.harnessEventChain = next.catch((err) => {
       this.recordHarnessEventFailure(err);
     });
@@ -1145,7 +1152,10 @@ export class PiRunner {
     if (this.harnessEventFailure) throw this.harnessEventFailure;
   }
 
-  private async runHarnessOperation(scope: string, operation: () => Promise<unknown>): Promise<void> {
+  private async runHarnessOperation(
+    scope: string,
+    operation: () => Promise<unknown>
+  ): Promise<void> {
     await this.harnessEventChain;
     this.throwHarnessEventFailure();
     this.harnessEventFailure = null;
@@ -1170,7 +1180,11 @@ export class PiRunner {
     }
   }
 
-  private async handleHarnessEvent(event: AgentHarnessEvent, _signal?: AbortSignal): Promise<void> {
+  private async handleHarnessEvent(
+    event: AgentHarnessEvent,
+    _signal?: AbortSignal,
+    capturedMessageEntryId?: string
+  ): Promise<void> {
     const signal = _signal ?? this.activeRunSignal ?? undefined;
     try {
       this.rememberHarnessEvent(event);
@@ -1189,7 +1203,7 @@ export class PiRunner {
         await this.handleMessageUpdate((event as { message: AgentMessage }).message);
       }
       if (event.type === "message_end") {
-        await this.handleMessageEnd(event.message);
+        await this.handleMessageEnd(event.message, capturedMessageEntryId);
       }
       if (event.type === "agent_end") {
         await this.closeCurrentTurn();
@@ -1328,9 +1342,12 @@ export class PiRunner {
     );
   }
 
-  private async handleMessageEnd(message: AgentMessage): Promise<void> {
+  private async handleMessageEnd(
+    message: AgentMessage,
+    capturedMessageEntryId?: string
+  ): Promise<void> {
     if (!this.session) return;
-    const messageEntryId = await this.session.getLeafId();
+    const messageEntryId = capturedMessageEntryId ?? (await this.session.getLeafId());
     if (!messageEntryId) return;
     const role = this.messageRole(message);
     const messageId =
@@ -1457,6 +1474,7 @@ export class PiRunner {
             },
             createdAt: this.messageTimestamp(message),
           },
+          eventId: `${messageEntryId}:invocation:${toolCallId}:started`,
           publishToChannel: true,
         });
       }
@@ -1507,6 +1525,7 @@ export class PiRunner {
                   },
             createdAt: this.messageTimestamp(message),
           },
+          eventId: `${messageEntryId}:invocation:${toolCallId}:terminal`,
           publishToChannel: true,
         });
       }
@@ -1522,12 +1541,20 @@ export class PiRunner {
     } catch (err) {
       const outcome = await this.flushProvenanceIndividually(batch, err);
       if (outcome.sizeLimitError) {
-        if (outcome.sizeLimitError.error instanceof AgentWorkerError) throw outcome.sizeLimitError.error;
-        throw this.provenanceSizeLimitError(outcome.sizeLimitError.item, outcome.sizeLimitError.error);
+        if (outcome.sizeLimitError.error instanceof AgentWorkerError)
+          throw outcome.sizeLimitError.error;
+        throw this.provenanceSizeLimitError(
+          outcome.sizeLimitError.item,
+          outcome.sizeLimitError.error
+        );
       }
-      if (outcome.requeued > 0 || !isPermanentProvenanceError(err)) {
-        console.warn("[PiRunner] provenance flush failed:", err);
+      if (outcome.permanentError) {
+        throw this.provenancePermanentError(
+          outcome.permanentError.item,
+          outcome.permanentError.error
+        );
       }
+      if (outcome.requeued > 0 || !isPermanentProvenanceError(err)) throw err;
     }
   }
 
@@ -1535,14 +1562,14 @@ export class PiRunner {
     batch: TrajectoryQueueItem[],
     batchError: unknown
   ): Promise<{
-    dropped: number;
     requeued: number;
     sizeLimitError?: { item: TrajectoryQueueItem; error: unknown };
+    permanentError?: { item: TrajectoryQueueItem; error: unknown };
   }> {
-    if (!this.options.gad) return { dropped: 0, requeued: 0 };
+    if (!this.options.gad) return { requeued: 0 };
     const retry: TrajectoryQueueItem[] = [];
-    let dropped = 0;
     let sizeLimitError: { item: TrajectoryQueueItem; error: unknown } | undefined;
+    let permanentError: { item: TrajectoryQueueItem; error: unknown } | undefined;
     for (const item of batch) {
       try {
         await this.appendTrajectoryEvents([item]);
@@ -1553,21 +1580,26 @@ export class PiRunner {
           continue;
         }
         if (isPermanentProvenanceError(err)) {
-          dropped += 1;
-          console.warn("[PiRunner] dropping permanent provenance event:", {
-            eventId: item.eventId,
-            kind: item.event.kind,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          retry.push(item);
+          permanentError ??= { item, error: err };
           continue;
         }
         retry.push(item);
       }
     }
-    if (retry.length > 0 || !isPermanentProvenanceError(batchError)) {
-      this.provenanceQueue = retry.concat(this.provenanceQueue);
+    if (retry.length > 0 || permanentError || !isPermanentProvenanceError(batchError)) {
+      this.provenanceQueue = [...retry, ...this.provenanceQueue];
     }
-    return { dropped, requeued: retry.length, sizeLimitError };
+    return { requeued: retry.length, sizeLimitError, permanentError };
+  }
+
+  private provenancePermanentError(item: TrajectoryQueueItem, err: unknown): AgentWorkerError {
+    const eventId = item.eventId ? ` eventId=${item.eventId}` : "";
+    return new AgentWorkerError(
+      "provenance",
+      `Permanent provenance persistence failure:${eventId} kind=${item.event.kind}`,
+      { cause: err }
+    );
   }
 
   private provenanceSizeLimitError(item: TrajectoryQueueItem, err: unknown): AgentWorkerError {
@@ -1581,7 +1613,10 @@ export class PiRunner {
     );
   }
 
-  private async normalizeProvenanceEvent(event: AgenticEvent, eventId?: string): Promise<AgenticEvent> {
+  private async normalizeProvenanceEvent(
+    event: AgenticEvent,
+    eventId?: string
+  ): Promise<AgenticEvent> {
     const { event: normalized, eventBytes } = await encodeAgenticEventStoredValues(event, {
       putText: (value) => this.putRequiredGadBlob(value),
     });
@@ -1594,20 +1629,25 @@ export class PiRunner {
 
   private async appendTrajectoryEvents(items: TrajectoryQueueItem[]): Promise<void> {
     if (items.length === 0 || !this.options.gad) return;
-    const events = await Promise.all(items.map(async (item) => {
-      const event = await this.normalizeProvenanceEvent(this.withCurrentTurnId(item.event), item.eventId);
-      const publishToChannel = this.options.publicationPolicy
-        ? this.options.publicationPolicy({ event, publishToChannel: item.publishToChannel })
-        : item.publishToChannel;
-      this.rememberTrajectoryEvent({ ...item, event, publishToChannel });
-      return {
-        event,
-        ...(item.eventId ? { eventId: item.eventId } : {}),
-        ...(this.options.gad?.channelId && publishToChannel === true
-          ? { publish: { channelIds: [this.options.gad.channelId] } }
-          : {}),
-      };
-    }));
+    const events = await Promise.all(
+      items.map(async (item) => {
+        const event = await this.normalizeProvenanceEvent(
+          this.withCurrentTurnId(item.event),
+          item.eventId
+        );
+        const publishToChannel = this.options.publicationPolicy
+          ? this.options.publicationPolicy({ event, publishToChannel: item.publishToChannel })
+          : item.publishToChannel;
+        this.rememberTrajectoryEvent({ ...item, event, publishToChannel });
+        return {
+          event,
+          ...(item.eventId ? { eventId: item.eventId } : {}),
+          ...(this.options.gad?.channelId && publishToChannel === true
+            ? { publish: { channelIds: [this.options.gad.channelId] } }
+            : {}),
+        };
+      })
+    );
     try {
       const result = await this.gad.call<AppendTrajectoryBatchResultLike>("appendTrajectoryBatch", {
         trajectoryId: this.gadTrajectoryId(),
@@ -1616,7 +1656,8 @@ export class PiRunner {
         events,
       });
       for (const { event } of events) {
-        const invocationId = (event as { causality?: { invocationId?: unknown } }).causality?.invocationId;
+        const invocationId = (event as { causality?: { invocationId?: unknown } }).causality
+          ?.invocationId;
         if (typeof invocationId === "string" && this.isTerminalInvocationEvent(event.kind)) {
           this.terminalInvocationIds.add(invocationId);
         }
@@ -1963,56 +2004,52 @@ export class PiRunner {
   private async snapshotMutationTarget(absPath: string): Promise<GadBlobSnapshot | null> {
     try {
       const raw = await this.options.fs.readFile(absPath);
-      const blob = await this.putGadBlob(raw);
-      return blob ?? null;
-    } catch {
-      return null;
+      return await this.putGadBlob(raw);
+    } catch (err) {
+      if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") return null;
+      throw err;
     }
   }
 
-  private async putGadBlob(value: string | Uint8Array | Buffer): Promise<GadBlobSnapshot | null> {
-    try {
-      if (typeof value === "string") {
-        return await this.options.rpc.call<GadBlobSnapshot>("main", "blobstore.putText", [value]);
-      }
-      return await this.options.rpc.call<GadBlobSnapshot>("main", "blobstore.putBase64", [
-        Buffer.from(value).toString("base64"),
-      ]);
-    } catch (err) {
-      console.warn("[PiRunner] blobstore put failed:", err);
-      return null;
+  private async putGadBlob(value: string | Uint8Array | Buffer): Promise<GadBlobSnapshot> {
+    if (typeof value === "string") {
+      return await this.options.rpc.call<GadBlobSnapshot>("main", "blobstore.putText", [value]);
     }
+    return await this.options.rpc.call<GadBlobSnapshot>("main", "blobstore.putBase64", [
+      Buffer.from(value).toString("base64"),
+    ]);
   }
 
   private async putRequiredGadBlob(value: string | Uint8Array | Buffer): Promise<GadBlobSnapshot> {
-    const blob = await this.putGadBlob(value);
-    if (blob) return blob;
-    throw new AgentWorkerError("provenance", "Failed to spill oversized provenance payload to blobstore");
+    try {
+      return await this.putGadBlob(value);
+    } catch (err) {
+      throw new AgentWorkerError(
+        "provenance",
+        "Failed to spill oversized provenance payload to blobstore",
+        { cause: err }
+      );
+    }
   }
 
   private async surfaceOrphanMutationIntents(): Promise<void> {
     if (!this.options.gad) return;
     let intents: Array<{ event_id: string; payload_ref_json: string }> = [];
     let observed: Array<{ payload_ref_json: string }> = [];
-    try {
-      const intentResult = await this.gad.call<{
-        rows: Array<{ event_id: string; payload_ref_json: string }>;
-      }>(
-        "query",
-        "SELECT event_id, payload_ref_json FROM trajectory_events WHERE branch_id = ? AND kind = 'state.file_mutation_intended'",
-        [this.options.gad.branchId]
-      );
-      const observedResult = await this.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
-        "query",
-        "SELECT payload_ref_json FROM trajectory_events WHERE branch_id = ? AND kind = 'state.file_mutation_applied'",
-        [this.options.gad.branchId]
-      );
-      intents = intentResult.rows;
-      observed = observedResult.rows;
-    } catch (err) {
-      console.warn("[PiRunner] orphan-intent scan failed:", err);
-      return;
-    }
+    const intentResult = await this.gad.call<{
+      rows: Array<{ event_id: string; payload_ref_json: string }>;
+    }>(
+      "query",
+      "SELECT event_id, payload_ref_json FROM trajectory_events WHERE branch_id = ? AND kind = 'state.file_mutation_intended'",
+      [this.options.gad.branchId]
+    );
+    const observedResult = await this.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
+      "query",
+      "SELECT payload_ref_json FROM trajectory_events WHERE branch_id = ? AND kind = 'state.file_mutation_applied'",
+      [this.options.gad.branchId]
+    );
+    intents = intentResult.rows;
+    observed = observedResult.rows;
 
     const observedParents = new Set(
       observed
@@ -2551,8 +2588,8 @@ export class PiRunner {
       } as AgentToolResult<any>;
     }
     if (
-      (tool as AgentTool<any> & HibernationResumableTool).natstackResume
-        ?.safeAcrossHibernation !== true
+      (tool as AgentTool<any> & HibernationResumableTool).natstackResume?.safeAcrossHibernation !==
+      true
     ) {
       return {
         content: [
