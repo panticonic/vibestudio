@@ -71,7 +71,13 @@ describe("remoteCredService", () => {
 
     const { createRemoteCredService } = await import("./remoteCredService.js");
     const service = createRemoteCredService({
-      startupMode: { kind: "local", wsDir: "/tmp/ws", workspaceId: "ws", isEphemeral: false },
+      startupMode: {
+        kind: "local",
+        wsDir: "/tmp/ws",
+        workspaceId: "ws",
+        isEphemeral: false,
+        createdFromTemplate: false,
+      },
     });
 
     await expect(
@@ -228,7 +234,13 @@ describe("remoteCredService", () => {
     const call = vi.fn();
     const { createRemoteCredService } = await import("./remoteCredService.js");
     const service = createRemoteCredService({
-      startupMode: { kind: "local", wsDir: "/tmp/ws", workspaceId: "ws", isEphemeral: false },
+      startupMode: {
+        kind: "local",
+        wsDir: "/tmp/ws",
+        workspaceId: "ws",
+        isEphemeral: false,
+        createdFromTemplate: false,
+      },
       getServerClient: () => ({ call }) as never,
     });
 

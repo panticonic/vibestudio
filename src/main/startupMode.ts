@@ -27,7 +27,13 @@ export interface RemoteTlsOptions {
 }
 
 export type StartupMode =
-  | { kind: "local"; wsDir: string; workspaceId: string; isEphemeral: boolean }
+  | {
+      kind: "local";
+      wsDir: string;
+      workspaceId: string;
+      isEphemeral: boolean;
+      createdFromTemplate: boolean;
+    }
   | {
       kind: "remote";
       remoteUrl: URL;
@@ -177,5 +183,6 @@ export function resolveLocalStartupMode(centralData: CentralDataManager): LocalS
     wsDir: startup.resolved.wsDir,
     workspaceId: startup.resolved.workspace.config.id,
     isEphemeral: startup.isEphemeral,
+    createdFromTemplate: startup.resolved.created,
   };
 }

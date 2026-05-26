@@ -502,7 +502,8 @@ async function main() {
     });
     workspace = startup.resolved.workspace;
     workspaceName = startup.resolved.name;
-    workspaceCreatedFromTemplate = startup.resolved.created;
+    workspaceCreatedFromTemplate =
+      startup.resolved.created || process.env["NATSTACK_WORKSPACE_CREATED_FROM_TEMPLATE"] === "1";
     workspaceIsEphemeral =
       startup.isEphemeral || process.env["NATSTACK_WORKSPACE_EPHEMERAL"] === "1";
   } catch (error) {

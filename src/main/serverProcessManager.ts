@@ -25,6 +25,7 @@ export class ServerProcessManager {
   private ports: ServerPorts | null = null;
   private isShuttingDown = false;
   private restartTimestamps: number[] = [];
+  private nextSpawnCreatedFromTemplate: boolean;
 
   constructor(
     private config: {
@@ -32,6 +33,7 @@ export class ServerProcessManager {
       wsDir: string;
       appRoot: string;
       isEphemeral?: boolean;
+      createdFromTemplate?: boolean;
       logLevel?: string;
       /** Called if the server process exits unexpectedly */
       onCrash: (code: number | null) => void;
@@ -59,7 +61,9 @@ export class ServerProcessManager {
         msg: Record<string, unknown>
       ) => Promise<Record<string, unknown> | null>;
     }
-  ) {}
+  ) {
+    this.nextSpawnCreatedFromTemplate = !!config.createdFromTemplate;
+  }
 
   async start(): Promise<ServerPorts> {
     const proc = this.spawn();
@@ -194,12 +198,15 @@ export class ServerProcessManager {
   private spawn(): ProcessAdapter {
     const bundlePath = getServerProcessEntryPath();
     const esbuildBinaryPath = getEsbuildBinaryPath();
+    const createdFromTemplate = this.nextSpawnCreatedFromTemplate;
+    this.nextSpawnCreatedFromTemplate = false;
     const env: Record<string, string | undefined> = {
       ...process.env,
       NATSTACK_WORKSPACE_DIR: this.config.wsDir,
       NATSTACK_APP_ROOT: this.config.appRoot,
       ...(esbuildBinaryPath ? { ESBUILD_BINARY_PATH: esbuildBinaryPath } : {}),
       ...(this.config.isEphemeral ? { NATSTACK_WORKSPACE_EPHEMERAL: "1" } : {}),
+      ...(createdFromTemplate ? { NATSTACK_WORKSPACE_CREATED_FROM_TEMPLATE: "1" } : {}),
       ...(this.config.logLevel ? { NATSTACK_LOG_LEVEL: this.config.logLevel } : {}),
     };
 
