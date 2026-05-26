@@ -73,16 +73,26 @@ approval** (remembered per requester→target; escalated for privileged targets)
   `natstack:getCdpEndpoint`, `natstack:panel.*`).
 
 Main **spawns the server as a child process** (`src/main/serverSession.ts`,
-`createServerClient`/`ServerProcessManager`). So a CDP request handled in main must reach the
-approval system in the server. The seam already exists and is exercised by CORS approval:
-`serverSession.serverClient.call(service, method, args)` (`src/main/index.ts:409-435`).
+`createServerClient`/`ServerProcessManager`); main connects to it as a single privileged
+`shell`-token principal (`serverSession.ts:295/392`), and `serverClient.call(service, method,
+args)` carries **no per-call principal** (`src/main/serverClient.ts:23`).
+
+**Key consequence for the approval design (§4.3):** CDP/control ops are *requester-initiated*
+(a panel/worker/do actively calls them). The requester already has its own RPC connection to
+the server where `ctx.caller` is its genuine identity, so it asks the server for the
+capability **directly** — no impersonation, no main→server attribution. Main's only job is
+**enforcement** at the boundary it owns (the `WebContentsView`/debugger): it mints the CDP
+endpoint only if an approved grant exists. This is the opposite of CORS, which is genuinely
+*main-originated* (the decision fires inside main's `webRequest` interception, where no panel
+identity is on the stack) — that is why CORS uses the `serverClient` hop and CDP does not.
 
 Mode notes:
-- **Desktop:** CDP = `src/main/cdpServer.ts`; approval requires the main→server hop (§4.3).
-- **Server-mode (UI client present):** CDP = `src/server/cdpBridge.ts`; approval is
-  **in-process** in the same server dispatcher — no hop.
+- **Desktop:** approval = panel→server (direct); enforcement = `src/main/cdpServer.ts` /
+  `browserService` (main).
+- **Server-mode (UI client present):** CDP = `src/server/cdpBridge.ts`; approval + enforcement
+  are both in the server dispatcher — same connection, no hop.
 - **Mobile:** `apps/mobile/src/services/bridgeAdapter.ts` (`getCdpEndpoint`,
-  `MainScreen.tsx:491`) reaches the same server approval service.
+  `MainScreen.tsx:491`) reaches the same server approval service on its own connection.
 
 ## 4. Authorization + approval — the core refactor
 
@@ -126,53 +136,60 @@ existing pipeline (`ApprovalQueue` emits `shell-approval:pending-changed`,
 `approvalQueue.ts:291`; `approvalPushBridge.ts` delivers to the shell renderer) — so a CDP
 approval gets the prompt UI automatically.
 
-### 4.3 Concrete CDP-approval wiring (the part that must actually work)
+### 4.3 CDP/control approval wiring — requester asks, main enforces
 
-Model on `corsApprovalService` (`src/server/services/corsApprovalService.ts`), which already
-calls `requestCapabilityPermission` for a panel caller and is invoked by main via
-`serverClient`.
+The principle (§3): the **requester asks the server for the capability on its own connection**
+(`ctx.caller` is the genuine panel/worker/do — no impersonation, no mis-keying); the **main
+boundary only enforces**. Model the service on `corsApprovalService`
+(`src/server/services/corsApprovalService.ts`), which already calls
+`requestCapabilityPermission` for a panel caller — but invoked by the requester, not by main.
 
-**Add a server service `panelControlApproval`** (server dispatcher, alongside corsApproval):
-- `authorize({ requesterId, requesterKind, targetId, targetTitle, capability, severity })`
-  → `{ allowed, decision }`.
-- Policy admits the trusted shell/host caller (main) **plus** `panel`/`worker`/`do` (for the
-  in-process server-mode path).
-- **Caller attribution (critical):** `serverClient.call` carries no per-call caller identity
-  (`src/main/serverClient.ts:23` — `call(service, method, args)`), and `corsApprovalService`
-  derives the issuer from `ctx.caller`. We do **not** rely on impersonation: main passes the
-  already-verified requester identity *explicitly* in the args (it has it from the IPC
-  `ctx.caller.runtime.id`), and the service synthesizes a `VerifiedCaller`
-  `{ runtime: { id: requesterId, kind: requesterKind } }` to feed `requestCapabilityPermission`
-  (which only reads `caller.runtime`). Main is trusted to assert the requester it already
-  authenticated. *(First confirm exactly how CORS attribution works today — whether
-  `serverClient` connects with a panel identity or there is an existing per-call override —
-  and prefer that mechanism if it's cleaner; the explicit-arg design above is the fallback
-  that does not depend on impersonation.)*
-- Capability/resource: `capability` from §4.1; `resource = { type:"panel",
-  label: targetTitle, value: targetId, key: targetId }`; `dedupKey` =
-  `cdp:${requesterId}:${targetId}:${capability}`. Severe → danger tone.
+**Approval — new server service `panelControlApproval`** (server dispatcher, alongside
+corsApproval), policy `allowed: ["panel","worker","do"]` (NOT shell):
+- `authorize({ targetId, targetTitle, capability })` → `{ allowed, decision, grantToken? }`.
+- Uses `ctx.caller` as the genuine requester. Runs `requestCapabilityPermission` with
+  `capability` ∈ {`panel.automate`,`panel.structural`} (§4.1), `resource = { type:"panel",
+  label: targetTitle, value: targetId, key: targetId }`, `dedupKey =
+  cdp:${ctx.caller.runtime.id}:${targetId}:${capability}`, severity by target privilege
+  (severe → danger tone). On allow, the grant is recorded in `CapabilityGrantStore` keyed
+  (requester→target→capability) → "remembered per requester→target" for free; the prompt
+  surfaces via the existing pipeline (§4.2). On allow, mint and return a short-lived **signed
+  capability token** bound to (requesterId, targetId, capability) — reuse the existing
+  `cdpGrants` signing scheme (`packages/shared/src/cdpGrants.ts`) so main can verify it
+  offline.
 
-**Desktop flow (`getCdpEndpoint`):**
-1. Panel calls `natstack:getCdpEndpoint` (IPC) → `browserService` (main). Main knows the
-   verified requester (`ctx.caller.runtime.id/kind`) and the target id.
-2. Main runs §4.1 `accessDecision("cdp", requester, target)`. If a capability is required,
-   main calls `serverSession.serverClient.call("panelControlApproval","authorize",[{...}])`
-   and awaits `{ allowed, decision }` (mirror the CORS call at `src/main/index.ts:409-435`,
-   including the failure→deny `.catch`).
-3. On allow, main **transparently ensures the target is loaded** (§8), then mints the CDP
-   grant token (`packages/shared/src/cdpGrants.ts`) and returns the endpoint. On deny/timeout
-   → throw "CDP access denied". The WebSocket `handleConnection` continues to only validate
-   the token (approval already happened at issuance). Persist `CallerKind` in `CdpGrant` so
-   `handleConnection`/`cdpBridge` can re-evaluate bypass without re-prompting.
-4. Repeat calls hit the remembered grant in `CapabilityGrantStore` → no second prompt.
+**Enforcement at the main boundary** (it owns the `WebContentsView`/debugger):
+- `getCdpEndpoint(targetId, grantToken?)` (Electron IPC → `browserService`, main): main runs
+  §4.1 `accessDecision("cdp", requester=ctx.caller, target)`. If `panel.automate` is required,
+  main verifies a valid grant for (requester→target): **prefer offline verification of the
+  signed `grantToken`** (no round-trip on the hot path); fall back to a
+  `serverClient.call("capabilityGrants","check",[…])` lookup (a *query* — correctly attributed
+  because the grant was created under the real requester id — not an approval). Absent/invalid
+  → reject `"CDP access denied"`. On pass → **transparently `ensureLoaded(target)`** (§8) →
+  mint the CDP endpoint. Persist `CallerKind` in the minted `CdpGrant` so the WebSocket
+  `handleConnection`/`cdpBridge` re-evaluate bypass without re-prompting.
+- **Drive/structural ops** (`navigate`/`reload`/… and `close`/`archive`/…) go through the
+  userland panel service (§6, main) and enforce identically before delegating to
+  `PanelOrchestrator`; `panel.structural` is distinct so an automate grant never authorizes
+  them.
 
-**Drive/structural ops** (`navigate`/`reload`/… and `close`/`archive`/…) follow the same
-gate before acting; `panel.structural` is a distinct capability so an automate grant never
-authorizes them.
+**SDK orchestration (the handle, transparent to callers):** a live-only op first calls
+`panelControlApproval.authorize` on the requester's own RPC connection — **idempotent**:
+returns immediately with a token if a grant already exists, otherwise prompts — then calls the
+main IPC with the returned `grantToken`. The caller writes only `handle.cdp.page()`.
 
-**Server-mode (`cdpBridge.ts`):** identical, but call `requestCapabilityPermission`
-in-process (no `serverClient` hop). Replace `canAccessBrowser` / `panelOwnsBrowser` /
-`assertOwner` (`browserService.ts:42`) with the shared `accessDecision` + this approval.
+**Why main can trust this:** the requester names only the *target* (the approved resource); it
+cannot forge its own identity (that is its verified RPC `ctx.caller`), and main independently
+re-runs `accessDecision` + verifies the signed token, so a panel that skips asking simply gets
+rejected. Defense in depth, with the policy module (§4.1) shared by both sides.
+
+**Server-mode (`cdpBridge.ts`) & mobile:** same `panelControlApproval` service, in-process in
+the server dispatcher (no token round-trip needed — same process owns the grant store).
+Replace `canAccessBrowser` / `panelOwnsBrowser` / `assertOwner` (`browserService.ts:42`) with
+the shared `accessDecision` + grant check.
+
+**CORS is unchanged:** it remains main-originated via the `serverClient` hop
+(`src/main/index.ts:409-435`); only CDP/control move to the requester-asks model.
 
 ## 5. Unified `PanelHandle`
 
@@ -267,7 +284,8 @@ target's runtime: `cdp.*`, RPC `call`/`emit`, and `_agent` introspection
   `WebContentsView` is debugger-attachable so loading-without-focus still permits CDP.
 - **Transparent on CDP access:** fold `ensureLoaded(targetId)` into the main `getCdpEndpoint`
   handler (and the `cdp.*` drive paths), so `handle.cdp.page()` on an unloaded panel just
-  works — no caller action. Loading runs *after* the §4.3 approval is granted.
+  works — no caller action. Loading runs *after* main's §4.3 grant enforcement passes (never
+  load a panel the requester isn't authorized to drive).
 - **Explicit `ensureLoaded()` / `isLoaded()`** stay on the handle (open class — no prompt) for
   non-CDP needs, e.g. before RPC `call`/`emit` to an unloaded panel. Documented, but CDP
   examples no longer need to call it (transparency handles them). RPC/`_agent` do **not**
@@ -299,10 +317,12 @@ target's runtime: `cdp.*`, RPC `call`/`emit`, and `_agent` introspection
    (+ tests). No behavior change yet.
 2. Privileged-target persistence (`PanelSnapshot.privileged`) + `registerTarget` + root
    registration + `browser`→`target` rename in the CDP layer.
-3. `panelControlApproval` server service (§4.3) + reuse `requestCapabilityPermission`. First
-   confirm CORS caller attribution; implement explicit-requester args.
-4. Wire main `browserService` (and drive/structural paths) to call it via `serverClient`
-   before minting grants; in-process for `cdpBridge`. Replace `canAccessBrowser`/`assertOwner`.
+3. `panelControlApproval` server service (§4.3), policy `["panel","worker","do"]`, reusing
+   `requestCapabilityPermission`; returns a signed `grantToken` (reuse `cdpGrants` signing).
+4. Main enforcement: `getCdpEndpoint(targetId, grantToken?)` + drive/structural paths run
+   `accessDecision` and verify the signed token (fallback: `capabilityGrants.check` query).
+   Replace `canAccessBrowser`/`assertOwner`; `cdpBridge` enforces in-process. SDK handle calls
+   `authorize` (idempotent) then passes the token to main.
 5. `PanelOrchestrator.ensureLoaded` + transparent fold into `getCdpEndpoint`.
 6. New userland panel service + `panelCall` RPC routing for no-shell runtimes.
 7. Unified `PanelHandle` (merge types, `cdp` rename, `withContract(role)`, sync metadata +
@@ -312,11 +332,13 @@ target's runtime: `cdp.*`, RPC `call`/`emit`, and `_agent` introspection
 
 ## 11. Open risks / verify before/while building
 
-- **CORS caller attribution** (§4.3) — confirm how `serverClient`-invoked approvals are
-  attributed to a panel today; adopt that or the explicit-requester fallback.
-- **Worker→main service routing in desktop mode** (§6) — confirm or implement.
-- **Main→server approval round-trip** adds latency and a hard dependency on server
-  reachability; failure mode is deny (mirror CORS `.catch`).
+- **Grant enforcement at main** (§4.3) — decide signed-token offline verification (preferred,
+  no round-trip) vs. a `capabilityGrants.check` query; confirm the `cdpGrants` signing scheme
+  is reusable for the capability `grantToken`.
+- **Worker→main service routing in desktop mode** (§6) — confirm or implement (needed for the
+  enforcement IPC; the panel→server approval connection is already confirmed).
+- **Signed-token freshness/revocation** — short TTL so a revoked `CapabilityGrantStore` entry
+  can't be replayed via a stale token; main re-runs `accessDecision` regardless.
 - **Host debugger coexistence** (§7) — renames/access-widening must not disturb
   `getAccessibilityTree`/snapshot or single-session command serialization.
 - **Hidden-view CDP attach** (§8) — verify a non-visible `WebContentsView` attaches.
