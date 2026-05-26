@@ -392,6 +392,9 @@ export class PiRunner {
   private activeRunSignal: AbortSignal | null = null;
   private activeOperationAbortController: AbortController | null = null;
   private lastContinueDiagnostic: Record<string, unknown> | null = null;
+  private harnessEventChain: Promise<void> = Promise.resolve();
+  private harnessEventFailure: unknown = null;
+  private readonly harnessEventFailureWaiters = new Set<(err: unknown) => void>();
 
   constructor(private readonly options: PiRunnerOptions) {
     this._approvalLevel = options.approvalLevel;
@@ -589,15 +592,10 @@ export class PiRunner {
   ): Promise<boolean> {
     if (!this.options.gad || !this.currentTurnId) return false;
     const turnId = this.currentTurnId;
-    this.currentTurnId = null;
     this.running = false;
     this.activeAssistantMessage = null;
-    await this.flushProvenance().catch((err) => {
-      console.warn("[PiRunner] flushProvenance during forceCloseCurrentTurn failed:", err);
-    });
-    await this.abandonOpenInvocations(summary).catch((err) => {
-      console.warn("[PiRunner] abandonOpenInvocations during forceCloseCurrentTurn failed:", err);
-    });
+    await this.flushProvenance();
+    await this.abandonOpenInvocations(summary);
     await this.appendTrajectoryEvents([
       {
         event: {
@@ -614,6 +612,7 @@ export class PiRunner {
         publishToChannel: true,
       },
     ]);
+    if (this.currentTurnId === turnId) this.currentTurnId = null;
     return true;
   }
 
@@ -815,9 +814,9 @@ export class PiRunner {
   private wireHarness(): void {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
 
-    this.harnessUnsub = this.harness.subscribe((event, signal) =>
-      this.handleHarnessEvent(event, signal)
-    );
+    this.harnessUnsub = this.harness.subscribe((event, signal) => {
+      this.enqueueHarnessEvent(event, signal);
+    });
 
     this.harness.on("context", async (event) => {
       this.rememberCheckpoint("context.transform.start", {
@@ -1112,6 +1111,65 @@ export class PiRunner {
     }
   }
 
+  private enqueueHarnessEvent(event: AgentHarnessEvent, signal?: AbortSignal): void {
+    const next = this.harnessEventChain.then(() => this.handleHarnessEvent(event, signal));
+    this.harnessEventChain = next.catch((err) => {
+      this.recordHarnessEventFailure(err);
+    });
+  }
+
+  private recordHarnessEventFailure(err: unknown): void {
+    this.harnessEventFailure ??= err;
+    for (const reject of this.harnessEventFailureWaiters) reject(err);
+    this.harnessEventFailureWaiters.clear();
+  }
+
+  private watchHarnessEventFailure(): { promise: Promise<never>; dispose: () => void } {
+    if (this.harnessEventFailure) {
+      return { promise: Promise.reject(this.harnessEventFailure), dispose: () => undefined };
+    }
+    let reject!: (err: unknown) => void;
+    const promise = new Promise<never>((_, rej) => {
+      reject = rej;
+    });
+    this.harnessEventFailureWaiters.add(reject);
+    return {
+      promise,
+      dispose: () => {
+        this.harnessEventFailureWaiters.delete(reject);
+      },
+    };
+  }
+
+  private throwHarnessEventFailure(): void {
+    if (this.harnessEventFailure) throw this.harnessEventFailure;
+  }
+
+  private async runHarnessOperation(scope: string, operation: () => Promise<unknown>): Promise<void> {
+    await this.harnessEventChain;
+    this.throwHarnessEventFailure();
+    this.harnessEventFailure = null;
+    const failure = this.watchHarnessEventFailure();
+    const operationPromise = operation();
+    void operationPromise.catch(() => undefined);
+    try {
+      await Promise.race([operationPromise, failure.promise]);
+      await this.harnessEventChain;
+      this.throwHarnessEventFailure();
+      await operationPromise;
+    } catch (err) {
+      if (this.harnessEventFailure === err) {
+        this.rememberCheckpoint(`${scope}.harness_event_failed`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        await this.harness?.abort();
+      }
+      throw err;
+    } finally {
+      failure.dispose();
+    }
+  }
+
   private async handleHarnessEvent(event: AgentHarnessEvent, _signal?: AbortSignal): Promise<void> {
     const signal = _signal ?? this.activeRunSignal ?? undefined;
     try {
@@ -1156,12 +1214,9 @@ export class PiRunner {
       error: err instanceof Error ? err.message : String(err),
     });
     this.running = false;
-    this.currentTurnId = null;
     this.activeAssistantMessage = null;
     this.awaitingProviderFirstEvent = false;
     this.activeRunSignal = null;
-    this.openInvocationIds.clear();
-    this.openToolInvocations.clear();
     try {
       this.options.uiCallbacks.setWorkingMessage(undefined);
     } catch (callbackErr) {
@@ -2265,7 +2320,9 @@ export class PiRunner {
       await this.refreshRuntimeTools();
       this.rememberCheckpoint("prompt.refresh_tools.ok");
       this.rememberCheckpoint("prompt.harness.start");
-      await this.harness.prompt(input.content, input.images ? { images: input.images } : undefined);
+      await this.runHarnessOperation("prompt", () =>
+        this.harness!.prompt(input.content, input.images ? { images: input.images } : undefined)
+      );
       this.rememberCheckpoint("prompt.harness.ok");
     } catch (err) {
       this.rememberError("prompt", err);
@@ -2352,7 +2409,7 @@ export class PiRunner {
       await this.refreshRuntimeTools();
       this.rememberCheckpoint("continue.refresh_tools.ok");
       this.rememberCheckpoint("continue.harness.start");
-      await this.harness.continue();
+      await this.runHarnessOperation("continue", () => this.harness!.continue());
       this.rememberCheckpoint("continue.harness.ok");
     } catch (err) {
       this.rememberError("continue", err);
@@ -2468,9 +2525,11 @@ export class PiRunner {
         publishToChannel: true,
       })
     );
-    this.openInvocationIds.clear();
-    this.openToolInvocations.clear();
     await this.appendTrajectoryEvents(items);
+    for (const toolCallId of items.map((item) => item.event.causality?.invocationId)) {
+      if (typeof toolCallId === "string") this.openInvocationIds.delete(toolCallId);
+    }
+    this.openToolInvocations.clear();
   }
 
   markToolCallPreApproved(toolCallId: string): void {

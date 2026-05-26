@@ -181,6 +181,19 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
+  it("rejects prompt when async lifecycle handling fails", async () => {
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+    runner.hooks.on("event", (event) => {
+      if (event.type === "agent_start") throw new Error("listener failed");
+    });
+
+    await expect(runner.prompt({ content: "hello" })).rejects.toThrow("listener failed");
+    expect(runner.isStreaming).toBe(false);
+
+    runner.dispose();
+  });
+
   it("appends user messages through the session", async () => {
     const runner = new PiRunner(createOptions());
     await runner.init();
@@ -433,13 +446,46 @@ describe("PiRunner", () => {
     });
 
     expect((await runner.getStateSnapshot()).isStreaming).toBe(false);
-    expect(runner.currentTurnId).toBeNull();
+    expect(runner.currentTurnId).toBe("turn-open");
     expect(runner.activeAssistantMessage).toBeNull();
     expect(runner.awaitingProviderFirstEvent).toBe(false);
     expect(runner.activeRunSignal).toBeNull();
-    expect(runner.openInvocationIds.size).toBe(0);
-    expect(runner.openToolInvocations.size).toBe(0);
+    expect(runner.openInvocationIds.size).toBe(1);
+    expect(runner.openToolInvocations.size).toBe(1);
     expect(options.uiCallbacks.setWorkingMessage).toHaveBeenCalledWith(undefined);
+  });
+
+  it("raises force-close persistence failures without dropping the open turn", async () => {
+    const appendTrajectoryBatch = vi.fn(async () => {
+      throw new Error("append failed");
+    });
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      currentTurnId: string | null;
+      running: boolean;
+      activeAssistantMessage: { messageId: string; lastText: string; started: boolean } | null;
+      forceCloseCurrentTurn(reason?: string, summary?: string): Promise<boolean>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+    runner.currentTurnId = "turn-open";
+    runner.running = true;
+    runner.activeAssistantMessage = {
+      messageId: "message-assistant",
+      lastText: "partial",
+      started: true,
+    };
+
+    await expect(runner.forceCloseCurrentTurn("failed", "failed")).rejects.toThrow("append failed");
+
+    expect(runner.currentTurnId).toBe("turn-open");
+    expect(runner.running).toBe(false);
+    expect(runner.activeAssistantMessage).toBeNull();
   });
 
   it("spills oversized invocation results to blobstore before appending provenance", async () => {
