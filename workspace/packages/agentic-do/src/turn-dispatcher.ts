@@ -16,7 +16,6 @@ export interface TurnDispatcherRunner {
   continueAgent(): Promise<void>;
   steerMessage(message: AgentMessage): Promise<void>;
   clearSteeringQueue(): Promise<void>;
-  abortCurrentTurn?(reason: string): Promise<void>;
 }
 
 type WorkItem = { kind: "prompt"; input: RunnerTurnInput } | { kind: "continue" };
@@ -33,7 +32,6 @@ interface ActiveWork {
   sawAgentEnd: boolean;
   runnerSettled: boolean;
   completed: boolean;
-  stallTimer: ReturnType<typeof setTimeout> | null;
   completion: Promise<WorkCompletion>;
   complete(result: WorkCompletion): void;
 }
@@ -52,18 +50,6 @@ export interface TurnDispatcherOptions {
   projector: TurnDispatcherProjector;
   notifyTyping: (busy: boolean) => void;
   log?: Pick<Console, "warn" | "error">;
-  stallTimeoutMs?: number;
-}
-
-const DEFAULT_STALL_TIMEOUT_MS = 5 * 60 * 1000;
-
-class TurnDispatcherStallError extends Error {
-  constructor(kind: WorkItem["kind"], timeoutMs: number) {
-    super(
-      `Agent ${kind === "continue" ? "continue" : "prompt"} stalled: no runner lifecycle event for ${timeoutMs}ms`
-    );
-    this.name = "TurnDispatcherStallError";
-  }
 }
 
 export class TurnDispatcher {
@@ -77,11 +63,9 @@ export class TurnDispatcher {
   private activeWork: ActiveWork | null = null;
   private readonly unsub: () => void;
   private readonly log: Pick<Console, "warn" | "error">;
-  private readonly stallTimeoutMs: number;
 
   constructor(private readonly opts: TurnDispatcherOptions) {
     this.log = opts.log ?? console;
-    this.stallTimeoutMs = opts.stallTimeoutMs ?? DEFAULT_STALL_TIMEOUT_MS;
     this.unsub = opts.runner.subscribe((event) => this.handleEvent(event));
   }
 
@@ -170,7 +154,6 @@ export class TurnDispatcher {
       disposed: this.disposed,
       activeWork: this.activeWork ? this.activeWorkDebugState(this.activeWork) : null,
       busy: this.busy,
-      stallTimeoutMs: this.stallTimeoutMs,
     };
   }
 
@@ -191,7 +174,6 @@ export class TurnDispatcher {
 
   private handleEvent(event: RunnerEvent): void {
     if (this.disposed) return;
-    this.markActiveWorkProgress();
     switch (event.type) {
       case "agent_start": {
         if (this.activeWork) this.activeWork.sawAgentStart = true;
@@ -304,19 +286,16 @@ export class TurnDispatcher {
       sawAgentEnd: false,
       runnerSettled: false,
       completed: false,
-      stallTimer: null,
       completion: new Promise<WorkCompletion>((resolve) => {
         resolveCompletion = resolve;
       }),
       complete: (result) => {
         if (active.completed) return;
         active.completed = true;
-        this.clearStallTimer(active);
         resolveCompletion(result);
       },
     };
     this.activeWork = active;
-    this.armStallTimer(active);
     return active;
   }
 
@@ -352,45 +331,7 @@ export class TurnDispatcher {
   private invalidateActiveWork(): void {
     const active = this.activeWork;
     this.activeWork = null;
-    if (active) this.clearStallTimer(active);
     active?.complete({ status: "invalidated" });
-  }
-
-  private markActiveWorkProgress(): void {
-    const active = this.activeWork;
-    if (!active || active.completed) return;
-    this.armStallTimer(active);
-  }
-
-  private armStallTimer(active: ActiveWork): void {
-    this.clearStallTimer(active);
-    if (!Number.isFinite(this.stallTimeoutMs) || this.stallTimeoutMs <= 0) return;
-    const timer = setTimeout(() => this.handleActiveWorkStalled(active), this.stallTimeoutMs);
-    (timer as { unref?: () => void }).unref?.();
-    active.stallTimer = timer;
-  }
-
-  private clearStallTimer(active: ActiveWork): void {
-    if (!active.stallTimer) return;
-    clearTimeout(active.stallTimer);
-    active.stallTimer = null;
-  }
-
-  private handleActiveWorkStalled(active: ActiveWork): void {
-    if (
-      this.disposed ||
-      this.activeWork !== active ||
-      active.generation !== this.drainGeneration ||
-      active.completed
-    ) {
-      return;
-    }
-    const error = new TurnDispatcherStallError(active.kind, this.stallTimeoutMs);
-    this.log.error("[TurnDispatcher] active work stalled:", error);
-    void this.opts.runner.abortCurrentTurn?.("dispatcher_stall").catch((err) => {
-      this.log.warn("[TurnDispatcher] abortCurrentTurn after stall failed:", err);
-    });
-    this.completeActiveWork(active, { status: "failed", error });
   }
 
   private async sweepPendingSteered(context: string): Promise<void> {
@@ -413,7 +354,6 @@ export class TurnDispatcher {
       sawAgentEnd: active.sawAgentEnd,
       runnerSettled: active.runnerSettled,
       completed: active.completed,
-      stallTimerArmed: active.stallTimer !== null,
     };
   }
 

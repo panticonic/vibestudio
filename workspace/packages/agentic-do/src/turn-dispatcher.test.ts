@@ -38,7 +38,6 @@ interface FakeRunnerState {
   continueCalls: Array<ReturnType<typeof deferred<void>>>;
   steerCalls: Array<AgentMessage & RunnerTurnInput>;
   clearSteerCount: number;
-  abortCurrentTurnCount: number;
   unsubscribed: boolean;
 }
 
@@ -49,7 +48,6 @@ function makeRunner(): FakeRunnerState {
     continueCalls: [],
     steerCalls: [],
     clearSteerCount: 0,
-    abortCurrentTurnCount: 0,
     unsubscribed: false,
     runner: null as unknown as TurnDispatcherRunner,
     emit: (event) => listener?.(event),
@@ -81,10 +79,6 @@ function makeRunner(): FakeRunnerState {
     },
     clearSteeringQueue() {
       state.clearSteerCount++;
-      return Promise.resolve();
-    },
-    abortCurrentTurn() {
-      state.abortCurrentTurnCount++;
       return Promise.resolve();
     },
   };
@@ -335,45 +329,6 @@ describe("TurnDispatcher — self-healing sweep", () => {
 
     expect(runner.runTurnCalls).toHaveLength(2);
     expect(runner.runTurnCalls[1]!.msg).toBe(second);
-  });
-
-  it("fails and clears typing when the runner promise and lifecycle both stall", async () => {
-    vi.useFakeTimers();
-    try {
-      const runner = makeRunner();
-      const typing: boolean[] = [];
-      const projector = makeProjector();
-      const log = { warn: vi.fn(), error: vi.fn() };
-      const d = new TurnDispatcher({
-        runner: runner.runner,
-        projector,
-        notifyTyping: (busy) => typing.push(busy),
-        log,
-        stallTimeoutMs: 100,
-      });
-
-      d.submit(makeMsg("silent"));
-      await flush();
-      expect(typing).toEqual([true]);
-
-      await vi.advanceTimersByTimeAsync(100);
-      await flush();
-
-      expect(runner.abortCurrentTurnCount).toBe(1);
-      expect(projector.closeAllCount).toBe(1);
-      expect(typing).toEqual([true, false]);
-      expect(log.error).toHaveBeenCalledWith(
-        "[TurnDispatcher] active work stalled:",
-        expect.any(Error)
-      );
-      expect(log.warn).toHaveBeenCalledWith(
-        "[TurnDispatcher] prompt failed:",
-        expect.any(Error)
-      );
-      d.dispose();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("sweeps a stranded steer into pending and runs it as a fresh turn", async () => {
