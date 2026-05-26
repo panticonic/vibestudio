@@ -2446,6 +2446,30 @@ export class PiRunner {
     await this.abandonOpenInvocations("User interrupted execution");
   }
 
+  async abortCurrentTurn(reason = "dispatcher_stall"): Promise<void> {
+    const error = new Error("Agent run aborted by dispatcher");
+    this.rememberError(reason, error);
+    this.rememberCheckpoint("agent.run.aborted", { reason });
+    this.running = false;
+    this.activeAssistantMessage = null;
+    this.awaitingProviderFirstEvent = false;
+    this.activeRunSignal = null;
+    try {
+      this.options.uiCallbacks.setWorkingMessage(undefined);
+    } catch (callbackErr) {
+      console.warn("[PiRunner] setWorkingMessage cleanup failed:", callbackErr);
+    }
+    await this.abort().catch((err) => {
+      console.warn("[PiRunner] abortCurrentTurn abort failed:", err);
+    });
+    await this.abandonOpenInvocations("Agent run aborted by dispatcher").catch((err) => {
+      console.warn("[PiRunner] abortCurrentTurn abandonOpenInvocations failed:", err);
+    });
+    await this.forceCloseCurrentTurn(reason, "Agent turn aborted by dispatcher").catch((err) => {
+      console.warn("[PiRunner] abortCurrentTurn forceCloseCurrentTurn failed:", err);
+    });
+  }
+
   private async abandonOpenInvocations(reason: string): Promise<void> {
     if (this.openInvocationIds.size === 0) return;
     const now = new Date().toISOString();
