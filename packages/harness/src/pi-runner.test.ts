@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
 
 vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-ai")>();
@@ -67,8 +68,9 @@ function createFs(): RuntimeFs {
 }
 
 function createOptions(overrides: Partial<PiRunnerOptions> = {}): PiRunnerOptions {
+  const blobs = new Map<string, string>();
   const rpc = {
-    call: vi.fn(async (_target: string, method: string) => {
+    call: vi.fn(async (_target: string, method: string, args: unknown[] = []) => {
       if (method === "workspace.getAgentsMd") return "workspace prompt";
       if (method === "workspace.listSkills") return [];
       if (method === "workers.resolveService") {
@@ -78,6 +80,19 @@ function createOptions(overrides: Partial<PiRunnerOptions> = {}): PiRunnerOption
         };
       }
       if (method === "query") return { rows: [] };
+      if (method === "blobstore.putText") {
+        const text = String(args[0] ?? "");
+        const digest = createHash("sha256").update(text, "utf8").digest("hex");
+        blobs.set(digest, text);
+        return { digest, size: Buffer.byteLength(text, "utf8") };
+      }
+      if (method === "blobstore.getRange") {
+        const text = blobs.get(String(args[0]));
+        if (text === undefined) return null;
+        const offset = Number(args[1] ?? 0);
+        const limit = Number(args[2] ?? text.length);
+        return text.slice(offset, offset + limit);
+      }
       throw new Error(`unexpected rpc method ${method}`);
     }),
   };
@@ -297,7 +312,7 @@ describe("PiRunner", () => {
       );
       expect(runner.provenanceQueue).toEqual([]);
       expect(warn).toHaveBeenCalledWith(
-        "[PiRunner] dropping invalid provenance event:",
+        "[PiRunner] dropping permanent provenance event:",
         expect.objectContaining({ eventId: "invalid", kind: "system.event" })
       );
       expect(warn).not.toHaveBeenCalledWith(
@@ -307,6 +322,103 @@ describe("PiRunner", () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("raises oversized provenance events that remain too large after blob spilling", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const appendTrajectoryBatch = vi.fn(async () => undefined);
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      provenanceQueue: Array<Record<string, unknown>>;
+      flushProvenance(): Promise<void>;
+    };
+    const hugeMetadata: Record<string, string> = {};
+    for (let i = 0; i < 60000; i += 1) hugeMetadata[`k${i}`] = "v";
+    const oversized = {
+      eventId: "oversized",
+      event: {
+        kind: "invocation.completed",
+        actor: { kind: "agent", id: "test", metadata: hugeMetadata },
+        causality: { invocationId: "call_1" },
+        payload: { protocol: "agentic.trajectory.v1", result: { content: "small output" } },
+        createdAt: new Date(0).toISOString(),
+      },
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+    runner.provenanceQueue = [oversized];
+
+    try {
+      await expect(runner.flushProvenance()).rejects.toMatchObject({
+        code: "provenance",
+        message: expect.stringContaining("Provenance event remains too large after blob spilling"),
+      });
+
+      expect(appendTrajectoryBatch).not.toHaveBeenCalled();
+      expect(runner.provenanceQueue).toEqual([oversized]);
+      expect(warn).not.toHaveBeenCalledWith(
+        "[PiRunner] dropping permanent provenance event:",
+        expect.anything()
+      );
+      expect(warn).not.toHaveBeenCalledWith(
+        "[PiRunner] provenance flush failed:",
+        expect.anything()
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("spills oversized invocation results to blobstore before appending provenance", async () => {
+    const appendTrajectoryBatch = vi.fn(async () => undefined);
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      appendTrajectoryEvents(items: Array<Record<string, unknown>>): Promise<void>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+    const largeText = "x".repeat(160 * 1024);
+
+    await runner.appendTrajectoryEvents([
+      {
+        publishToChannel: true,
+        event: {
+          kind: "invocation.completed",
+          actor: { kind: "agent", id: "test" },
+          causality: { invocationId: "call_1" },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            result: { toolCallId: "call_1", content: [{ type: "text", text: largeText }] },
+            summary: "large result",
+          },
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    ]);
+
+    expect(appendTrajectoryBatch).toHaveBeenCalledTimes(1);
+    const calls = appendTrajectoryBatch.mock.calls as unknown as Array<[
+      string,
+      { events: Array<{ event: { payload: { result?: unknown } } }> },
+    ]>;
+    const input = calls[0]![1];
+    const result = input.events[0]!.event.payload.result as Record<string, unknown>;
+    expect(result).toMatchObject({
+      protocol: "natstack.blob-ref.v1",
+      encoding: "json",
+      originalBytes: expect.any(Number),
+    });
+    expect(JSON.stringify(input)).not.toContain(largeText);
   });
 
   it("records completed tool results as trajectory invocation provenance", () => {
@@ -616,7 +728,11 @@ describe("PiRunner", () => {
               }),
               payload: expect.objectContaining({
                 question: "Allow tool call?",
-                details: { toolName: "write", input: { path: "a.txt" } },
+                details: expect.objectContaining({
+                  protocol: "natstack.blob-ref.v1",
+                  encoding: "json",
+                  originalBytes: expect.any(Number),
+                }),
               }),
             }),
           }),

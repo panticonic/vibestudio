@@ -74,6 +74,8 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   brandId,
   createInitialTrajectoryState,
+  encodeAgenticEventStoredValues,
+  MAX_INLINE_TRAJECTORY_EVENT_BYTES,
   reduceTrajectory,
   TURN_SCOPED_OWNER_KINDS,
   type AgenticEvent,
@@ -107,6 +109,7 @@ const BUILTIN_TOOL_NAMES = [
   "web_fetch",
   "web_read",
 ] as const;
+
 export interface PiRunnerGadProvenance {
   trajectoryId?: string | null;
   branchId: string;
@@ -1430,6 +1433,10 @@ export class PiRunner {
       await this.appendTrajectoryEvents(batch);
     } catch (err) {
       const outcome = await this.flushProvenanceIndividually(batch, err);
+      if (outcome.sizeLimitError) {
+        if (outcome.sizeLimitError.error instanceof AgentWorkerError) throw outcome.sizeLimitError.error;
+        throw this.provenanceSizeLimitError(outcome.sizeLimitError.item, outcome.sizeLimitError.error);
+      }
       if (outcome.requeued > 0 || !isPermanentProvenanceError(err)) {
         console.warn("[PiRunner] provenance flush failed:", err);
       }
@@ -1439,17 +1446,27 @@ export class PiRunner {
   private async flushProvenanceIndividually(
     batch: TrajectoryQueueItem[],
     batchError: unknown
-  ): Promise<{ dropped: number; requeued: number }> {
+  ): Promise<{
+    dropped: number;
+    requeued: number;
+    sizeLimitError?: { item: TrajectoryQueueItem; error: unknown };
+  }> {
     if (!this.options.gad) return { dropped: 0, requeued: 0 };
     const retry: TrajectoryQueueItem[] = [];
     let dropped = 0;
+    let sizeLimitError: { item: TrajectoryQueueItem; error: unknown } | undefined;
     for (const item of batch) {
       try {
         await this.appendTrajectoryEvents([item]);
       } catch (err) {
+        if (isProvenanceSizeLimitError(err)) {
+          retry.push(item);
+          sizeLimitError ??= { item, error: err };
+          continue;
+        }
         if (isPermanentProvenanceError(err)) {
           dropped += 1;
-          console.warn("[PiRunner] dropping invalid provenance event:", {
+          console.warn("[PiRunner] dropping permanent provenance event:", {
             eventId: item.eventId,
             kind: item.event.kind,
             error: err instanceof Error ? err.message : String(err),
@@ -1462,13 +1479,35 @@ export class PiRunner {
     if (retry.length > 0 || !isPermanentProvenanceError(batchError)) {
       this.provenanceQueue = retry.concat(this.provenanceQueue);
     }
-    return { dropped, requeued: retry.length };
+    return { dropped, requeued: retry.length, sizeLimitError };
+  }
+
+  private provenanceSizeLimitError(item: TrajectoryQueueItem, err: unknown): AgentWorkerError {
+    const payloadBytes = Buffer.byteLength(JSON.stringify(item.event.payload), "utf8");
+    const eventBytes = Buffer.byteLength(JSON.stringify(item.event), "utf8");
+    const eventId = item.eventId ? ` eventId=${item.eventId}` : "";
+    return new AgentWorkerError(
+      "provenance",
+      `Provenance event is too large to store:${eventId} kind=${item.event.kind} payloadBytes=${payloadBytes} eventBytes=${eventBytes}`,
+      { cause: err }
+    );
+  }
+
+  private async normalizeProvenanceEvent(event: AgenticEvent, eventId?: string): Promise<AgenticEvent> {
+    const { event: normalized, eventBytes } = await encodeAgenticEventStoredValues(event, {
+      putText: (value) => this.putRequiredGadBlob(value),
+    });
+    if (eventBytes <= MAX_INLINE_TRAJECTORY_EVENT_BYTES) return normalized;
+    throw new AgentWorkerError(
+      "provenance",
+      `Provenance event remains too large after blob spilling:${eventId ? ` eventId=${eventId}` : ""} kind=${normalized.kind} eventBytes=${eventBytes} maxBytes=${MAX_INLINE_TRAJECTORY_EVENT_BYTES}`
+    );
   }
 
   private async appendTrajectoryEvents(items: TrajectoryQueueItem[]): Promise<void> {
     if (items.length === 0 || !this.options.gad) return;
-    const events = items.map((item) => {
-      const event = this.withCurrentTurnId(item.event);
+    const events = await Promise.all(items.map(async (item) => {
+      const event = await this.normalizeProvenanceEvent(this.withCurrentTurnId(item.event), item.eventId);
       const publishToChannel = this.options.publicationPolicy
         ? this.options.publicationPolicy({ event, publishToChannel: item.publishToChannel })
         : item.publishToChannel;
@@ -1480,7 +1519,7 @@ export class PiRunner {
           ? { publish: { channelIds: [this.options.gad.channelId] } }
           : {}),
       };
-    });
+    }));
     try {
       const result = await this.gad.call<AppendTrajectoryBatchResultLike>("appendTrajectoryBatch", {
         trajectoryId: this.gadTrajectoryId(),
@@ -1857,21 +1896,27 @@ export class PiRunner {
     }
   }
 
+  private async putRequiredGadBlob(value: string | Uint8Array | Buffer): Promise<GadBlobSnapshot> {
+    const blob = await this.putGadBlob(value);
+    if (blob) return blob;
+    throw new AgentWorkerError("provenance", "Failed to spill oversized provenance payload to blobstore");
+  }
+
   private async surfaceOrphanMutationIntents(): Promise<void> {
     if (!this.options.gad) return;
-    let intents: Array<{ event_id: string; payload_json: string }> = [];
-    let observed: Array<{ payload_json: string }> = [];
+    let intents: Array<{ event_id: string; payload_ref_json: string }> = [];
+    let observed: Array<{ payload_ref_json: string }> = [];
     try {
       const intentResult = await this.gad.call<{
-        rows: Array<{ event_id: string; payload_json: string }>;
+        rows: Array<{ event_id: string; payload_ref_json: string }>;
       }>(
         "query",
-        "SELECT event_id, payload_json FROM trajectory_events WHERE branch_id = ? AND kind = 'state.file_mutation_intended'",
+        "SELECT event_id, payload_ref_json FROM trajectory_events WHERE branch_id = ? AND kind = 'state.file_mutation_intended'",
         [this.options.gad.branchId]
       );
-      const observedResult = await this.gad.call<{ rows: Array<{ payload_json: string }> }>(
+      const observedResult = await this.gad.call<{ rows: Array<{ payload_ref_json: string }> }>(
         "query",
-        "SELECT payload_json FROM trajectory_events WHERE branch_id = ? AND kind = 'state.file_mutation_applied'",
+        "SELECT payload_ref_json FROM trajectory_events WHERE branch_id = ? AND kind = 'state.file_mutation_applied'",
         [this.options.gad.branchId]
       );
       intents = intentResult.rows;
@@ -1885,7 +1930,7 @@ export class PiRunner {
       observed
         .map((o) => {
           try {
-            const payload = JSON.parse(o.payload_json) as { mutationId?: unknown };
+            const payload = JSON.parse(o.payload_ref_json) as { mutationId?: unknown };
             return typeof payload.mutationId === "string" ? payload.mutationId : null;
           } catch {
             return null;
@@ -1895,7 +1940,7 @@ export class PiRunner {
     );
     const orphans = intents.filter((intent) => !observedParents.has(intent.event_id));
     for (const orphan of orphans) {
-      const payload = JSON.parse(orphan.payload_json) as { path?: string };
+      const payload = JSON.parse(orphan.payload_ref_json) as { path?: string };
       const path = payload.path ?? null;
       const event = {
         type: "system_event" as const,
@@ -2714,6 +2759,12 @@ function isPermanentProvenanceError(err: unknown): boolean {
     /Cannot resolve unknown approval/u.test(message) ||
     /Cannot resolve approval .* more than once/u.test(message)
   );
+}
+
+function isProvenanceSizeLimitError(err: unknown): boolean {
+  if (err instanceof AgentWorkerError && err.code === "provenance") return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /SQLITE_TOOBIG/u.test(message) || /string or blob too big/u.test(message);
 }
 
 function fileErr<T>(code: FileError["code"], path: string, cause: unknown): Result<T, FileError> {

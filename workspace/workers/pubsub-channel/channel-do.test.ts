@@ -88,7 +88,7 @@ describe("PubSubChannel", () => {
 
     expect(result.id).toBe(2);
     const rows = gad.sql.exec(
-      `SELECT seq, envelope_id, payload_kind, payload_json, metadata_json
+      `SELECT seq, envelope_id, payload_kind, payload_ref_json, metadata_json
        FROM channel_envelopes ORDER BY seq ASC`,
     ).toArray();
     expect(rows).toHaveLength(2);
@@ -96,7 +96,7 @@ describe("PubSubChannel", () => {
       seq: 2,
       payload_kind: AGENTIC_EVENT_PAYLOAD_KIND,
     });
-    expect(JSON.parse(rows[1]!["payload_json"] as string)).toMatchObject({
+    expect(JSON.parse(rows[1]!["payload_ref_json"] as string)).toMatchObject({
       kind: "message.completed",
     });
     expect(JSON.parse(rows[1]!["metadata_json"] as string)).toMatchObject({ name: "User" });
@@ -232,10 +232,10 @@ describe("PubSubChannel", () => {
     await instance.cancelMethodCall("transport-1");
 
     const rows = gad.sql.exec(
-      `SELECT payload_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
+      `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
       AGENTIC_EVENT_PAYLOAD_KIND,
     ).toArray();
-    const events = rows.map((row: Record<string, unknown>) => JSON.parse(row["payload_json"] as string));
+    const events = rows.map((row: Record<string, unknown>) => JSON.parse(row["payload_ref_json"] as string));
     const started = events.find((event: { kind?: string }) => event.kind === "invocation.started");
     const cancelled = events.find((event: { kind?: string }) => event.kind === "invocation.cancelled");
 
@@ -322,9 +322,9 @@ describe("PubSubChannel", () => {
     })).rejects.toThrow(/Invalid registry payload/);
 
     const rows = gad.sql.exec(
-      `SELECT payload_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
+      `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
       AGENTIC_EVENT_PAYLOAD_KIND,
     ).toArray();
-    expect(rows.map((row) => JSON.parse(row["payload_json"] as string).kind)).not.toContain("messageType.registered");
+    expect(rows.map((row) => JSON.parse(row["payload_ref_json"] as string).kind)).not.toContain("messageType.registered");
   });
 });

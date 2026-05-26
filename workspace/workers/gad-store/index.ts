@@ -3,9 +3,11 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   GENESIS_EVENT_HASH,
   agenticEventSchema,
+  assertAgenticEventStoredValuesEncoded,
   brandId,
   channelEnvelopeSchema,
   checkTrajectoryIntegrity,
+  collectStoredValueRefs,
   computeEventHash,
   trajectoryEventSchema,
   type AgenticEvent,
@@ -273,7 +275,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         kind TEXT NOT NULL,
         actor_json TEXT NOT NULL,
         causality_json TEXT,
-        payload_json TEXT NOT NULL,
+        payload_ref_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         event_hash TEXT NOT NULL UNIQUE,
         prev_event_hash TEXT NOT NULL,
@@ -283,6 +285,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.sql.exec(`CREATE INDEX idx_trajectory_events_kind ON trajectory_events(kind, branch_id, seq)`);
     this.sql.exec(`CREATE INDEX idx_trajectory_events_turn ON trajectory_events(turn_id, seq)`);
     this.sql.exec(`CREATE INDEX idx_trajectory_events_hash ON trajectory_events(event_hash)`);
+    this.sql.exec(`
+      CREATE TABLE trajectory_blob_refs (
+        event_id TEXT NOT NULL,
+        field_path TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        preview_json TEXT,
+        size INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (event_id, field_path)
+      )
+    `);
+    this.sql.exec(`CREATE INDEX idx_trajectory_blob_refs_digest ON trajectory_blob_refs(digest)`);
     this.sql.exec(`
       CREATE TABLE trajectory_turns (
         turn_id TEXT NOT NULL,
@@ -313,7 +328,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         branch_id TEXT NOT NULL,
         block_index INTEGER NOT NULL,
         block_type TEXT NOT NULL,
-        body_json TEXT,
+        body_ref_json TEXT,
         invocation_id TEXT,
         PRIMARY KEY (branch_id, block_id)
       )
@@ -325,8 +340,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
         transport_call_id TEXT,
         kind TEXT,
         status TEXT NOT NULL,
-        request_json TEXT,
-        result_json TEXT,
+        request_ref_json TEXT,
+        result_ref_json TEXT,
         started_event_id TEXT,
         completed_event_id TEXT,
         updated_at TEXT NOT NULL,
@@ -339,7 +354,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         invocation_id TEXT NOT NULL,
         branch_id TEXT NOT NULL,
         seq INTEGER NOT NULL,
-        chunk_json TEXT NOT NULL,
+        chunk_ref_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         PRIMARY KEY (branch_id, invocation_id, seq)
       )
@@ -386,7 +401,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         seq INTEGER NOT NULL,
         from_json TEXT NOT NULL,
         to_json TEXT,
-        payload_json TEXT NOT NULL,
+        payload_ref_json TEXT NOT NULL,
         payload_kind TEXT,
         metadata_json TEXT,
         attachments_json TEXT,
@@ -395,6 +410,19 @@ export class GadWorkspaceDO extends DurableObjectBase {
       )
     `);
     this.sql.exec(`CREATE INDEX idx_channel_envelopes_kind ON channel_envelopes(payload_kind, channel_id, seq)`);
+    this.sql.exec(`
+      CREATE TABLE channel_blob_refs (
+        envelope_id TEXT NOT NULL,
+        field_path TEXT NOT NULL,
+        digest TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        preview_json TEXT,
+        size INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (envelope_id, field_path)
+      )
+    `);
+    this.sql.exec(`CREATE INDEX idx_channel_blob_refs_digest ON channel_blob_refs(digest)`);
     this.sql.exec(`
       CREATE TABLE channel_message_types (
         channel_id TEXT NOT NULL,
@@ -600,7 +628,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         subject TEXT,
         predicate TEXT,
         object TEXT,
-        body_json TEXT,
+        body_ref_json TEXT,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -623,7 +651,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         theory_id TEXT PRIMARY KEY,
         trajectory_event_id TEXT NOT NULL,
         invocation_id TEXT,
-        body_json TEXT,
+        body_ref_json TEXT,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -634,7 +662,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         version_id TEXT PRIMARY KEY,
         theory_id TEXT NOT NULL,
         trajectory_event_id TEXT NOT NULL,
-        body_json TEXT,
+        body_ref_json TEXT,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL
       )
@@ -644,7 +672,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         contradiction_id TEXT PRIMARY KEY,
         trajectory_event_id TEXT NOT NULL,
         invocation_id TEXT,
-        body_json TEXT,
+        body_ref_json TEXT,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -710,6 +738,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       item: TrajectoryAppendItem,
     ): Promise<TrajectoryEvent> => {
       const parsed = agenticEventSchema.parse(item.event) as AgenticEvent;
+      assertAgenticEventStoredValuesEncoded(parsed);
       const eventId = item.eventId ?? crypto.randomUUID();
       const eventHash = await computeEventHash({
         prevEventHash,
@@ -906,6 +935,123 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return rows.map((row) => this.mapTrajectoryEvent(row as JsonRecord));
   }
 
+  getTrajectoryEvent(input: { eventId: string }): TrajectoryEvent | null {
+    this.ensureReady();
+    const row = this.sql
+      .exec(`SELECT * FROM trajectory_events WHERE event_id = ? LIMIT 1`, input.eventId)
+      .toArray()[0] as JsonRecord | undefined;
+    return row ? this.mapTrajectoryEvent(row) : null;
+  }
+
+  listStoredValueRefs(input: {
+    eventId?: string | null;
+    envelopeId?: string | null;
+    digest?: string | null;
+    limit?: number | null;
+  } = {}): { rows: JsonRecord[] } {
+    this.ensureReady();
+    const limit = Math.min(Math.max(input.limit ?? 500, 1), 1000);
+    const rows: JsonRecord[] = [];
+    if (input.eventId || input.digest || !input.envelopeId) {
+      const clauses: string[] = [];
+      const bindings: SqlBinding[] = [];
+      if (input.eventId) {
+        clauses.push("event_id = ?");
+        bindings.push(input.eventId);
+      }
+      if (input.digest) {
+        clauses.push("digest = ?");
+        bindings.push(input.digest);
+      }
+      const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+      rows.push(...this.sql.exec(
+        `SELECT 'trajectory' AS ref_scope, event_id AS owner_id, field_path, digest, purpose, preview_json, size, created_at
+         FROM trajectory_blob_refs ${where}
+         ORDER BY created_at ASC LIMIT ?`,
+        ...bindings,
+        limit,
+      ).toArray() as JsonRecord[]);
+    }
+    if (input.envelopeId || input.digest || !input.eventId) {
+      const clauses: string[] = [];
+      const bindings: SqlBinding[] = [];
+      if (input.envelopeId) {
+        clauses.push("envelope_id = ?");
+        bindings.push(input.envelopeId);
+      }
+      if (input.digest) {
+        clauses.push("digest = ?");
+        bindings.push(input.digest);
+      }
+      const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+      rows.push(...this.sql.exec(
+        `SELECT 'channel' AS ref_scope, envelope_id AS owner_id, field_path, digest, purpose, preview_json, size, created_at
+         FROM channel_blob_refs ${where}
+         ORDER BY created_at ASC LIMIT ?`,
+        ...bindings,
+        limit,
+      ).toArray() as JsonRecord[]);
+    }
+    return { rows: rows.slice(0, limit) };
+  }
+
+  inspectStorageDiagnostics(input: { rowByteLimit?: number | null; limit?: number | null } = {}): { rows: JsonRecord[] } {
+    this.ensureReady();
+    const rowByteLimit = input.rowByteLimit ?? 512 * 1024;
+    const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
+    const rows: JsonRecord[] = [];
+    const collect = (scope: string, sql: string): void => {
+      rows.push(...this.sql.exec(sql, rowByteLimit, limit).toArray().map((row) => ({
+        scope,
+        ...(row as JsonRecord),
+      })) as JsonRecord[]);
+    };
+    collect("trajectory_events", `SELECT event_id AS id, length(payload_ref_json) AS bytes FROM trajectory_events WHERE length(payload_ref_json) > ? ORDER BY bytes DESC LIMIT ?`);
+    collect("channel_envelopes", `SELECT envelope_id AS id, length(payload_ref_json) AS bytes FROM channel_envelopes WHERE length(payload_ref_json) > ? ORDER BY bytes DESC LIMIT ?`);
+    collect("trajectory_invocations", `SELECT invocation_id AS id, MAX(COALESCE(length(request_ref_json), 0), COALESCE(length(result_ref_json), 0)) AS bytes FROM trajectory_invocations WHERE MAX(COALESCE(length(request_ref_json), 0), COALESCE(length(result_ref_json), 0)) > ? ORDER BY bytes DESC LIMIT ?`);
+    rows.push(...this.sql.exec(
+      `SELECT 'missing_gad_blob_index' AS scope, refs.digest AS id, refs.size AS bytes
+       FROM (
+         SELECT digest, size FROM trajectory_blob_refs
+         UNION
+         SELECT digest, size FROM channel_blob_refs
+       ) refs
+       LEFT JOIN gad_blobs b ON b.hash = refs.digest
+       WHERE b.hash IS NULL
+       LIMIT ?`,
+      limit,
+    ).toArray() as JsonRecord[]);
+    return { rows: rows.slice(0, limit) };
+  }
+
+  collectGarbageBlobRefs(input: { dryRun?: boolean | null; limit?: number | null } = {}): { deleted: string[]; kept: number; dryRun: boolean } {
+    this.ensureReady();
+    const dryRun = input.dryRun !== false;
+    const limit = Math.min(Math.max(input.limit ?? 500, 1), 5000);
+    const rows = this.sql.exec(
+      `SELECT b.hash
+       FROM gad_blobs b
+       LEFT JOIN (
+         SELECT digest FROM trajectory_blob_refs
+         UNION
+         SELECT digest FROM channel_blob_refs
+         UNION
+         SELECT content_hash AS digest FROM gad_file_observations WHERE content_hash IS NOT NULL
+         UNION
+         SELECT content_hash AS digest FROM gad_file_versions WHERE content_hash IS NOT NULL
+       ) refs ON refs.digest = b.hash
+       WHERE refs.digest IS NULL
+       LIMIT ?`,
+      limit,
+    ).toArray() as Array<{ hash: string }>;
+    const deleted = rows.map((row) => String(row.hash));
+    if (!dryRun) {
+      for (const hash of deleted) this.sql.exec(`DELETE FROM gad_blobs WHERE hash = ?`, hash);
+    }
+    const kept = asNumber(this.sql.exec(`SELECT COUNT(*) AS cnt FROM gad_blobs`).one()["cnt"]) - (dryRun ? 0 : deleted.length);
+    return { deleted, kept, dryRun };
+  }
+
   appendChannelEnvelope(input: Omit<ChannelEnvelope, "seq" | "envelopeId" | "publishedAt"> & {
     envelopeId?: string | null;
     publishedAt?: string | null;
@@ -918,6 +1064,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
       publishedAt: input.publishedAt ?? nowIso(),
     } as ChannelEnvelope;
     channelEnvelopeSchema.parse(envelope);
+    if (envelope.payloadKind === AGENTIC_EVENT_PAYLOAD_KIND) {
+      assertAgenticEventStoredValuesEncoded(envelope.payload as AgenticEvent);
+    }
     this.insertChannelEnvelope(envelope);
     return envelope;
   }
@@ -1425,7 +1574,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
            te.kind AS te_kind,
            te.actor_json AS te_actor_json,
            te.causality_json AS te_causality_json,
-           te.payload_json AS te_payload_json,
+           te.payload_ref_json AS te_payload_ref_json,
            te.created_at AS te_created_at,
            te.event_hash AS te_event_hash,
            te.prev_event_hash AS te_prev_event_hash
@@ -1497,7 +1646,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
            te.kind AS te_kind,
            te.actor_json AS te_actor_json,
            te.causality_json AS te_causality_json,
-           te.payload_json AS te_payload_json,
+           te.payload_ref_json AS te_payload_ref_json,
            te.created_at AS te_created_at,
            te.event_hash AS te_event_hash,
            te.prev_event_hash AS te_prev_event_hash
@@ -1568,7 +1717,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       .exec(
         `SELECT * FROM trajectory_events
          WHERE kind != 'external.envelope_published'
-           AND (causality_json LIKE ? OR payload_json LIKE ?)
+           AND (causality_json LIKE ? OR payload_ref_json LIKE ?)
          ORDER BY created_at ASC, branch_id ASC, seq ASC
          LIMIT ?`,
         `%${needle}%`,
@@ -1781,7 +1930,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.sql.exec(
       `INSERT INTO trajectory_events (
          event_id, branch_id, trajectory_id, turn_id, seq, kind, actor_json,
-         causality_json, payload_json, created_at, event_hash, prev_event_hash
+         causality_json, payload_ref_json, created_at, event_hash, prev_event_hash
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       event.eventId,
       event.branchId,
@@ -1796,6 +1945,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
       event.eventHash,
       event.prevEventHash
     );
+    this.insertTrajectoryBlobRefs(event.eventId, event.payload, "payload");
+  }
+
+  private insertTrajectoryBlobRefs(eventId: string, value: unknown, purpose: string): void {
+    for (const { path, ref } of collectStoredValueRefs(value)) {
+      this.sql.exec(
+        `INSERT OR REPLACE INTO trajectory_blob_refs (
+           event_id, field_path, digest, purpose, preview_json, size, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        eventId,
+        path,
+        ref.digest,
+        purpose,
+        ref.preview !== undefined ? JSON.stringify(ref.preview) : null,
+        ref.size,
+        nowIso()
+      );
+      this.ensureBlob(ref.digest, ref.size, ref.encoding === "json" ? "application/json" : "text/plain");
+    }
   }
 
   private applyTrajectoryProjection(event: TrajectoryEvent): void {
@@ -1904,7 +2072,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       const blockId = asString(record["blockId"]) ?? `${messageId}:block:${index}`;
       this.sql.exec(
         `INSERT OR REPLACE INTO trajectory_message_blocks (
-           block_id, message_id, branch_id, block_index, block_type, body_json, invocation_id
+           block_id, message_id, branch_id, block_index, block_type, body_ref_json, invocation_id
          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         blockId,
         messageId,
@@ -1939,7 +2107,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const payload = event.payload as JsonRecord;
     if (event.kind === "invocation.output" || event.kind === "invocation.progress") {
       this.sql.exec(
-        `INSERT INTO trajectory_invocation_outputs (invocation_id, branch_id, seq, chunk_json, created_at)
+        `INSERT INTO trajectory_invocation_outputs (invocation_id, branch_id, seq, chunk_ref_json, created_at)
          VALUES (?, ?, ?, ?, ?)`,
         invocationId,
         event.branchId,
@@ -1950,15 +2118,15 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
     this.sql.exec(
       `INSERT INTO trajectory_invocations (
-         invocation_id, branch_id, transport_call_id, kind, status, request_json, result_json,
+         invocation_id, branch_id, transport_call_id, kind, status, request_ref_json, result_ref_json,
          started_event_id, completed_event_id, updated_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(branch_id, invocation_id) DO UPDATE SET
          transport_call_id = COALESCE(excluded.transport_call_id, trajectory_invocations.transport_call_id),
          kind = COALESCE(excluded.kind, trajectory_invocations.kind),
          status = excluded.status,
-         request_json = COALESCE(excluded.request_json, trajectory_invocations.request_json),
-         result_json = COALESCE(excluded.result_json, trajectory_invocations.result_json),
+         request_ref_json = COALESCE(excluded.request_ref_json, trajectory_invocations.request_ref_json),
+         result_ref_json = COALESCE(excluded.result_ref_json, trajectory_invocations.result_ref_json),
          started_event_id = COALESCE(trajectory_invocations.started_event_id, excluded.started_event_id),
          completed_event_id = COALESCE(excluded.completed_event_id, trajectory_invocations.completed_event_id),
          updated_at = excluded.updated_at`,
@@ -2179,14 +2347,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
       this.sql.exec(
         `INSERT INTO gad_claims (
            claim_id, trajectory_event_id, invocation_id, subject, predicate, object,
-           body_json, status, created_at, updated_at
+           body_ref_json, status, created_at, updated_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(claim_id) DO UPDATE SET
            trajectory_event_id = excluded.trajectory_event_id,
            subject = COALESCE(excluded.subject, gad_claims.subject),
            predicate = COALESCE(excluded.predicate, gad_claims.predicate),
            object = COALESCE(excluded.object, gad_claims.object),
-           body_json = excluded.body_json,
+           body_ref_json = excluded.body_ref_json,
            status = excluded.status,
            updated_at = excluded.updated_at`,
         claimId,
@@ -2222,7 +2390,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   private insertChannelEnvelope(envelope: ChannelEnvelope): void {
     this.sql.exec(
       `INSERT INTO channel_envelopes (
-         envelope_id, channel_id, seq, from_json, to_json, payload_json, payload_kind,
+         envelope_id, channel_id, seq, from_json, to_json, payload_ref_json, payload_kind,
          metadata_json, attachments_json, published_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       envelope.envelopeId,
@@ -2236,6 +2404,25 @@ export class GadWorkspaceDO extends DurableObjectBase {
       envelope.attachments ? JSON.stringify(envelope.attachments) : null,
       envelope.publishedAt
     );
+    this.insertChannelBlobRefs(String(envelope.envelopeId), envelope.payload, "payload");
+  }
+
+  private insertChannelBlobRefs(envelopeId: string, value: unknown, purpose: string): void {
+    for (const { path, ref } of collectStoredValueRefs(value)) {
+      this.sql.exec(
+        `INSERT OR REPLACE INTO channel_blob_refs (
+           envelope_id, field_path, digest, purpose, preview_json, size, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        envelopeId,
+        path,
+        ref.digest,
+        purpose,
+        ref.preview !== undefined ? JSON.stringify(ref.preview) : null,
+        ref.size,
+        nowIso()
+      );
+      this.ensureBlob(ref.digest, ref.size, ref.encoding === "json" ? "application/json" : "text/plain");
+    }
   }
 
   private applyRegistryMutation(channelId: string, seq: number, mutation: RegistryMutationInput): void {
@@ -2367,7 +2554,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       kind: row["te_kind"] ?? null,
       actor_json: row["te_actor_json"] ?? null,
       causality_json: row["te_causality_json"] ?? null,
-      payload_json: row["te_payload_json"] ?? null,
+      payload_ref_json: row["te_payload_ref_json"] ?? null,
       created_at: row["te_created_at"] ?? null,
       event_hash: row["te_event_hash"] ?? null,
       prev_event_hash: row["te_prev_event_hash"] ?? null,
@@ -2386,7 +2573,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       actor: parseRecord(asString(row["actor_json"])),
       ...(row["turn_id"] ? { turnId: String(row["turn_id"]) } : {}),
       ...(row["causality_json"] ? { causality: parseRecord(asString(row["causality_json"])) } : {}),
-      payload: parseRecord(asString(row["payload_json"])),
+      payload: parseRecord(asString(row["payload_ref_json"])),
       createdAt: String(row["created_at"]),
     } as unknown as TrajectoryEvent;
   }
@@ -2399,8 +2586,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
       from: parseRecord(asString(row["from_json"])) as unknown as ChannelEnvelope["from"],
       ...(row["to_json"] ? { to: parseJson(asString(row["to_json"])) as ChannelEnvelope["to"] } : {}),
       payload: row["payload_kind"] === AGENTIC_EVENT_PAYLOAD_KIND
-        ? agenticEventSchema.parse(parseRecord(asString(row["payload_json"])))
-        : parseJson(asString(row["payload_json"])),
+        ? agenticEventSchema.parse(parseRecord(asString(row["payload_ref_json"])))
+        : parseJson(asString(row["payload_ref_json"])),
       payloadKind: asString(row["payload_kind"]) ?? undefined,
       ...(row["metadata_json"] ? { metadata: parseRecord(asString(row["metadata_json"])) } : {}),
       ...(row["attachments_json"] ? { attachments: parseJson(asString(row["attachments_json"])) as unknown[] } : {}),

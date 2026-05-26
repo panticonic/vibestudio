@@ -22,6 +22,17 @@ function event<K extends AgenticEvent["kind"]>(
   } as AgenticEvent<K>;
 }
 
+function blobRef(digest: string, preview = "{}") {
+  return {
+    protocol: "natstack.blob-ref.v1" as const,
+    digest,
+    size: preview.length,
+    encoding: "json" as const,
+    originalBytes: preview.length,
+    preview,
+  };
+}
+
 describe("GadWorkspaceDO trajectory persistence", () => {
   it("creates only canonical trajectory/channel tables, not Pi/session dispatch tables", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
@@ -208,7 +219,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
               name: "eval",
-              request: { code: "1 + 1" },
+              request: blobRef("request-1", "{\"code\":\"1 \+ 1\"}"),
             },
           }),
         },
@@ -380,7 +391,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
               kind: "private-before",
-              details: { value: 1 },
+              details: blobRef("details-before", "{\"value\":1}"),
             },
           }),
         },
@@ -404,7 +415,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
               kind: "private-after",
-              details: { value: 2 },
+              details: blobRef("details-after", "{\"value\":2}"),
             },
           }),
         },
@@ -502,7 +513,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
             payload: {
               protocol: AGENTIC_PROTOCOL_VERSION,
               kind: "side-search-result",
-              details: { privateFinding: "keep this out of PubSub" },
+              details: blobRef("details-side", "{\"privateFinding\":\"keep this out of PubSub\"}"),
             },
           }),
         },
@@ -635,6 +646,101 @@ describe("GadWorkspaceDO trajectory persistence", () => {
         ],
       }),
     ).rejects.toThrow(/duplicate terminal invocation/u);
+  });
+
+  it("indexes stored value references from trajectory payloads", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "event-inv-complete-ref",
+          event: event("invocation.completed", {
+            turnId: "turn-1" as never,
+            causality: { invocationId: "inv-1" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              result: {
+                protocol: "natstack.blob-ref.v1",
+                digest: "abc123",
+                size: 42,
+                encoding: "json",
+                originalBytes: 42,
+                preview: "{\"ok\":true}",
+              },
+            },
+          }),
+        },
+      ],
+    });
+
+    const refs = await call<{ rows: Array<{ event_id: string; field_path: string; digest: string }> }>(
+      "query",
+      "SELECT event_id, field_path, digest FROM trajectory_blob_refs ORDER BY event_id, field_path",
+      [],
+    );
+    expect(refs.rows).toEqual([
+      { event_id: "event-inv-complete-ref", field_path: "$.result", digest: "abc123" },
+    ]);
+  });
+
+  it("rejects raw unbounded trajectory payload fields", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await expect(call("appendTrajectoryBatch", {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "event-raw-result",
+          event: event("invocation.completed", {
+            turnId: "turn-1" as never,
+            causality: { invocationId: "inv-1" as never },
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: { raw: true } },
+          }),
+        },
+      ],
+    })).rejects.toThrow(/unencoded stored values/u);
+  });
+
+  it("reports storage diagnostics and garbage-collects unreferenced blob metadata", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("ensureBlob", "orphan-digest", 10, "text/plain");
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "event-ref",
+          event: event("invocation.completed", {
+            turnId: "turn-1" as never,
+            causality: { invocationId: "inv-1" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              result: {
+                protocol: "natstack.blob-ref.v1",
+                digest: "kept-digest",
+                size: 20,
+                encoding: "json",
+                originalBytes: 20,
+              },
+            },
+          }),
+        },
+      ],
+    });
+
+    const refs = await call<{ rows: Array<{ digest: string }> }>("listStoredValueRefs", { eventId: "event-ref" });
+    expect(refs.rows.map((row) => row.digest)).toEqual(["kept-digest"]);
+    const diagnostics = await call<{ rows: unknown[] }>("inspectStorageDiagnostics", {});
+    expect(diagnostics.rows).toEqual([]);
+    const dryRun = await call<{ deleted: string[]; dryRun: boolean }>("collectGarbageBlobRefs", {});
+    expect(dryRun).toMatchObject({ deleted: ["orphan-digest"], dryRun: true });
+    const deleted = await call<{ deleted: string[]; dryRun: boolean }>("collectGarbageBlobRefs", { dryRun: false });
+    expect(deleted).toMatchObject({ deleted: ["orphan-digest"], dryRun: false });
   });
 
   it("projects file intent/apply events into content-addressed state provenance", async () => {
@@ -829,7 +935,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
       ],
     });
 
-    sql.exec("UPDATE trajectory_events SET payload_json = ? WHERE event_id = ?", "{}", "msg-1");
+    sql.exec("UPDATE trajectory_events SET payload_ref_json = ? WHERE event_id = ?", "{}", "msg-1");
     sql.exec(
       "INSERT INTO gad_state_transitions (event_id, input_state_hash, output_state_hash, created_at) VALUES (?, ?, ?, ?)",
       "missing-event",
