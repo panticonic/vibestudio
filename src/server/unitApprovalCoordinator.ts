@@ -38,6 +38,7 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     private readonly deps: {
       approvalQueue: UnitApprovalQueueLike;
       delayMs?: number;
+      autoApproveStartup?: boolean;
     }
   ) {}
 
@@ -59,7 +60,7 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
       }, this.deps.delayMs ?? 0);
     }
     return new Promise<void>((resolve, reject) => {
-      batch!.requests.push({ ...request, resolve, reject });
+      batch.requests.push({ ...request, resolve, reject });
     });
   }
 
@@ -71,6 +72,11 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     const requests = batch.requests;
     const units = requests.flatMap((request) => request.entries);
     try {
+      if (trigger === "startup" && this.deps.autoApproveStartup) {
+        for (const request of requests) await request.applyApproved();
+        for (const request of requests) request.resolve();
+        return;
+      }
       const decision = await this.deps.approvalQueue.request({
         kind: "unit-batch",
         callerId: "system:units",

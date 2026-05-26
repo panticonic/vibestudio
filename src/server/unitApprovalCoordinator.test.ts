@@ -87,4 +87,48 @@ describe("ServerUnitApprovalCoordinator", () => {
     expect(denyExtension).toHaveBeenCalledOnce();
     expect(denyApp).toHaveBeenCalledOnce();
   });
+
+  it("auto-approves startup batches for freshly created trusted template workspaces", async () => {
+    const approvalQueue = {
+      request: vi.fn(async () => "deny" as const),
+    };
+    const coordinator = new ServerUnitApprovalCoordinator({
+      approvalQueue,
+      delayMs: 1,
+      autoApproveStartup: true,
+    });
+    const apply = vi.fn(async () => undefined);
+    const deny = vi.fn();
+
+    await coordinator.enqueue({
+      trigger: "startup",
+      entries: [unit("app", "shell")],
+      applyApproved: apply,
+      applyDenied: deny,
+    });
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledOnce();
+    expect(deny).not.toHaveBeenCalled();
+  });
+
+  it("still prompts for meta-push batches when startup auto-approval is enabled", async () => {
+    const approvalQueue = {
+      request: vi.fn(async () => "once" as const),
+    };
+    const coordinator = new ServerUnitApprovalCoordinator({
+      approvalQueue,
+      delayMs: 1,
+      autoApproveStartup: true,
+    });
+
+    await coordinator.enqueue({
+      trigger: "meta-push",
+      entries: [unit("extension", "shell")],
+      applyApproved: vi.fn(async () => undefined),
+      applyDenied: vi.fn(),
+    });
+
+    expect(approvalQueue.request).toHaveBeenCalledOnce();
+  });
 });
