@@ -462,6 +462,16 @@ async function buildWorkspacePackages() {
   }
 }
 
+async function checkBuildArtifacts() {
+  console.log("Checking build artifact contracts...");
+  try {
+    execSync("node scripts/check-build-artifacts.mjs", { stdio: "inherit" });
+  } catch (error) {
+    console.error("Build artifact contract check failed:", error);
+    throw error;
+  }
+}
+
 /**
  * Build web workers declared by dependencies via natstack.workers in package.json.
  * Scans node_modules for worker declarations and bundles them.
@@ -605,6 +615,8 @@ async function build() {
     // Dependencies: None (just copying files)
     // Required by: None
     copyAssets();
+
+    await checkBuildArtifacts();
 
     console.log("Build successful!");
   } catch (error) {
