@@ -35,6 +35,17 @@ describe("connect deep links", () => {
     });
   });
 
+  it("rejects server URLs that are not plain origins", () => {
+    expect(parseConnectLink(createConnectDeepLink("https://host.tailnet.ts.net/base", "A".repeat(24)))).toEqual({
+      kind: "error",
+      reason: "Server URL must be an origin without a path, query, or fragment",
+    });
+    expect(parseConnectLink(createConnectDeepLink("https://user@host.tailnet.ts.net", "A".repeat(24)))).toEqual({
+      kind: "error",
+      reason: "Server URL must be an origin without a path, query, or fragment",
+    });
+  });
+
   it("accepts local cleartext hosts", () => {
     expect(isTrustedCleartextHost("localhost")).toBe(true);
     expect(isTrustedCleartextHost("192.168.1.20")).toBe(true);
@@ -62,6 +73,7 @@ describe("connect deep links", () => {
       createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24)),
       createConnectDeepLink("http://127.0.0.1:3030", "B".repeat(24)),
       createConnectDeepLink("http://example.com", "C".repeat(24)),
+      createConnectDeepLink("https://host.tailnet.ts.net/base", "D".repeat(24)),
       "not-a-link",
       createConnectDeepLink("https://host.tailnet.ts.net", "short"),
     ];

@@ -28,7 +28,7 @@ Terminal attach is a streaming extension method:
 5. The server routes those frames back into the pending server-side RPC bridge stream.
 6. `VscodeTerminalProcessBridge` reads the `Response.body` and schedules writes into xterm.
 
-Regular shell calls such as `getScrollback` stay unary. `useWithStreams(name, methods)` remains as a compatibility alias, but new code should use `use(name, { streamingMethods })` so a typed extension client declares unary and streaming methods in one place.
+Regular shell calls such as `getScrollback` stay unary. Streaming methods are declared through `use(name, { streamingMethods })` so unary and streaming methods live on one typed client.
 
 ## Renderer Policy
 

@@ -164,4 +164,61 @@ describe("natstack-client", () => {
     const { main } = await import("./client.js");
     await expect(main(["status"])).resolves.toBe(0);
   });
+
+  it("creates a pairing invite using the stored device credential", async () => {
+    const credentialDir = path.join(tmpDir, ".config", "natstack");
+    fs.mkdirSync(credentialDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(credentialDir, "cli-credentials.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: "device",
+        url: "https://host.tailnet.ts.net",
+        deviceId: "dev_cli",
+        refreshToken: "refresh_cli",
+      })
+    );
+    const bodies: unknown[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        bodies.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
+        if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
+          return new Response(JSON.stringify({ shellToken: "shell_token" }));
+        }
+        return new Response(
+          JSON.stringify({
+            result: {
+              code: "A".repeat(24),
+              deepLink: createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24)),
+              connectUrl: "https://host.tailnet.ts.net",
+              serverUrl: "https://host.tailnet.ts.net",
+              expiresAt: 123,
+              expiresInMs: 60_000,
+              serverId: "srv",
+              serverBootId: "boot",
+              workspaceId: "ws",
+            },
+          })
+        );
+      })
+    );
+
+    const { main } = await import("./client.js");
+    await expect(main(["invite", "--ttl-ms", "60000"])).resolves.toBe(0);
+
+    expect(bodies).toEqual([
+      {
+        url: "https://host.tailnet.ts.net/_r/s/auth/refresh-shell",
+        body: { deviceId: "dev_cli", refreshToken: "refresh_cli" },
+      },
+      {
+        url: "https://host.tailnet.ts.net/rpc",
+        body: { method: "auth.createPairingInvite", args: [{ ttlMs: 60_000 }] },
+      },
+    ]);
+    expect(console.log).toHaveBeenCalledWith(
+      `Pair URL: ${createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24))}`
+    );
+  });
 });

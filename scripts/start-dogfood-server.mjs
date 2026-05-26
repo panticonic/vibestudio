@@ -210,19 +210,43 @@ function printDirtyWarning() {
 
 export function shouldRestart(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) return true;
-  return changedPaths.some((changedPath) => {
-    if (typeof changedPath !== "string") return true;
-    if (/^README/.test(changedPath)) return false;
-    if (changedPath.endsWith(".md")) return false;
-    if (changedPath.startsWith("docs/")) return false;
-    if (changedPath.startsWith("apps/mobile/")) return false;
-    if (changedPath.startsWith("src/main/")) return false;
-    if (changedPath.startsWith("src/preload/")) return false;
-    if (changedPath.startsWith("src/renderer/")) return false;
-    // Workspace sources are Build V2/userland runtime inputs, not files bundled into dist/server.mjs.
-    if (changedPath.startsWith("workspace/")) return false;
-    return true;
-  });
+  return changedPaths.some((changedPath) => classifySelfUpdatePath(changedPath).requiresRestart);
+}
+
+export function classifySelfUpdatePath(changedPath) {
+  if (typeof changedPath !== "string") {
+    return {
+      kind: "unknown",
+      requiresRestart: true,
+    };
+  }
+  if (/^README/.test(changedPath) || changedPath.endsWith(".md") || changedPath.startsWith("docs/")) {
+    return {
+      kind: "docs",
+      requiresRestart: false,
+    };
+  }
+  if (
+    changedPath.startsWith("apps/mobile/") ||
+    changedPath.startsWith("src/main/") ||
+    changedPath.startsWith("src/preload/") ||
+    changedPath.startsWith("src/renderer/")
+  ) {
+    return {
+      kind: "client",
+      requiresRestart: false,
+    };
+  }
+  if (changedPath.startsWith("workspace/")) {
+    return {
+      kind: "workspace-runtime",
+      requiresRestart: false,
+    };
+  }
+  return {
+    kind: "server-runtime",
+    requiresRestart: true,
+  };
 }
 
 function printDogfoodBlock(title, lines) {
@@ -237,7 +261,12 @@ function printDogfoodBlock(title, lines) {
 function recoveryLines(exitLabel = null) {
   return [
     ...(exitLabel ? [`Exit: ${exitLabel}`] : []),
-    `Recovery: cd ${repoRoot} && git reset --hard HEAD~1 && pnpm dev:self:server`,
+    `Recovery: cd ${repoRoot}`,
+    "Inspect the last mirrored commit, then revert or fix it before restarting:",
+    "  git log --oneline -5",
+    "  git revert HEAD",
+    "  pnpm dev:self:server",
+    "If the checkout is intentionally disposable, a hard reset is still possible, but review the branch first.",
   ];
 }
 

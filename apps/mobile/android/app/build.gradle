@@ -2,6 +2,20 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
+def hermesOsBin = {
+    def os = org.gradle.internal.os.OperatingSystem.current()
+    if (os.isLinux()) return "linux64-bin"
+    if (os.isMacOsX()) return "osx-bin"
+    if (os.isWindows()) return "win64-bin"
+    throw new GradleException("Unsupported OS for React Native Hermes compiler")
+}()
+def hermesExecutable = org.gradle.internal.os.OperatingSystem.current().isWindows() ? "hermesc.exe" : "hermesc"
+def defaultHermesCommand = rootProject.file("../../../node_modules/react-native/sdks/hermesc/${hermesOsBin}/${hermesExecutable}").absolutePath
+def configuredHermesCommand = providers
+    .gradleProperty("natstackHermesCommand")
+    .orElse(providers.environmentVariable("NATSTACK_HERMESC"))
+    .orNull
+
 // Apply google-services only when the JSON exists locally. Devs without
 // Firebase can copy google-services.template.json to google-services.json.
 if (file("google-services.json").exists()) {
@@ -18,7 +32,7 @@ react {
     reactNativeDir = rootProject.file("../../../node_modules/react-native")
     codegenDir = rootProject.file("../../../node_modules/@react-native/codegen")
     cliFile = rootProject.file("../../../node_modules/react-native/cli.js")
-    hermesCommand = rootProject.file("../../../node_modules/react-native/sdks/hermesc/%OS-BIN%/hermesc").absolutePath
+    hermesCommand = configuredHermesCommand ?: defaultHermesCommand
 
     // Autolinking configuration
     autolinkLibrariesWithApp()

@@ -1,0 +1,10 @@
+{
+  "kind": "product-seed-source",
+  "unitKind": "app",
+  "name": "@workspace-apps/mobile",
+  "sourceRepo": "apps/mobile",
+  "sourceDigest": "e44b165d605a87eca41f2996a655227585054dadc007b3fa5c8de20a31e2deac",
+  "signatureKeyId": "natstack-dev-seed-v1",
+  "signature": "natstack-dev-seed-sha256:a2bc4f70a22e12d6286024d77756aa6dc9f0772ab62b0f74d77c99853f458c96",
+  "createdBy": "natstack"
+}

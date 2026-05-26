@@ -31,12 +31,7 @@ function loadCliCredentials() {
 function saveCliCredentials(creds) {
   const p = credentialPath();
   fs.mkdirSync(path.dirname(p), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(p, JSON.stringify(creds, null, 2), { mode: 0o600 });
-  try {
-    fs.chmodSync(p, 0o600);
-  } catch {
-    // chmod can fail on some non-POSIX filesystems; the file content remains usable.
-  }
+  fs.writeFileSync(p, `${JSON.stringify(creds, null, 2)}\n`, { mode: 0o600 });
 }
 
 function parseArgs(argv) {
@@ -117,23 +112,21 @@ CLI device credentials are read from ${credentialPath()}.
 async function pair(link, label) {
   const parsed = parseConnectLink(link);
   if (parsed.kind === "error") throw new Error(parsed.reason);
-
-  const response = await fetch(new URL("/_r/s/auth/complete-pairing", parsed.url), {
+  const response = await fetch(`${parsed.url}/_r/s/auth/complete-pairing`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       code: parsed.code,
-      label: label || `Electron on ${os.hostname()}`,
+      label: label ?? `${os.hostname()} CLI`,
       platform: "desktop",
     }),
   });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || typeof body.deviceId !== "string" || typeof body.refreshToken !== "string") {
-    throw new Error(
-      typeof body.error === "string"
-        ? body.error
-        : `pairing failed (${response.status} ${response.statusText})`
-    );
+  if (!response.ok) {
+    throw new Error(body?.error ? String(body.error) : `Pairing failed with HTTP ${response.status}`);
+  }
+  if (typeof body.deviceId !== "string" || typeof body.refreshToken !== "string") {
+    throw new Error("Pairing response did not include a device credential");
   }
   const creds = {
     schemaVersion: 1,
@@ -143,7 +136,7 @@ async function pair(link, label) {
     refreshToken: body.refreshToken,
   };
   saveCliCredentials(creds);
-  console.log(`[start-remote] Paired ${parsed.url}`);
+  console.log(`[start-remote] Paired ${body.label ?? "device"} with ${parsed.url}`);
   return creds;
 }
 

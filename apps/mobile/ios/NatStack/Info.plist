@@ -40,17 +40,11 @@
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
 	<!--
-		CFBundleURLTypes: registers the `natstack://` custom URL scheme.
-		This is now a TRANSITIONAL FALLBACK only — the primary OAuth
-		callback path is the universal link
-		https://auth.snugenv.com/oauth/callback/<provider>?... declared in
-		NatStack.entitlements (associated-domains). The custom scheme is
-		kept so devices that haven't completed App-Site Association
-		verification don't get locked out (cold-start before AASA fetch,
-		users on networks that block apple-app-site-association.cdn.apple.com).
-		oauthHandler.ts emits `warn` on every custom-scheme hit; once
-		telemetry shows zero fallback usage the entry below can be
-		removed. See docs/audit/08-mobile-supply-chain.md H-2.
+		CFBundleURLTypes: registers the `natstack://connect` onboarding
+		scheme used by QR/link pairing. OAuth callbacks are accepted only
+		through the universal link declared in NatStack.entitlements; iOS
+		cannot path-scope custom schemes at registration time, so JS handlers
+		ignore any oauth-shaped natstack:// URL.
 	-->
 	<key>CFBundleURLTypes</key>
 	<array>

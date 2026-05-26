@@ -16,6 +16,19 @@ function makePanelRecord(id: string): EntityRecord {
   };
 }
 
+function makeAppRecord(id: string): EntityRecord {
+  return {
+    id,
+    kind: "app",
+    source: { repoPath: "apps/example", effectiveVersion: "1.0.0" },
+    contextId: "device-1",
+    key: "device-1",
+    createdAt: Date.now(),
+    status: "active",
+    cleanupComplete: true,
+  };
+}
+
 describe("ConnectionGrantService", () => {
   it("throws when granting an unregistered principal", () => {
     const grants = new ConnectionGrantService({ entityCache: new EntityCache() });
@@ -48,6 +61,34 @@ describe("ConnectionGrantService", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 15));
     expect(grants.validate(token)).toBeNull();
+    grants.stop();
+  });
+
+  it("validates app grants through the principal-kind registry", () => {
+    const entityCache = new EntityCache();
+    entityCache._onActivate(makeAppRecord("app:apps/example:device-1"));
+    const grants = new ConnectionGrantService({ entityCache });
+    const { token } = grants.grant("app:apps/example:device-1", "shell:test");
+
+    expect(grants.validate(token)).toEqual({
+      principalId: "app:apps/example:device-1",
+      principalKind: "app",
+      issuedBy: "shell:test",
+    });
+    grants.stop();
+  });
+
+  it("fails closed when a grant resolves to an unknown principal kind", () => {
+    const entityCache = new EntityCache();
+    entityCache._onActivate({
+      ...makePanelRecord("panel:one"),
+      kind: "legacy-panel",
+    } as unknown as EntityRecord);
+    const grants = new ConnectionGrantService({ entityCache });
+    const { token } = grants.grant("panel:one", "shell:test");
+
+    expect(grants.validate(token)).toBeNull();
+    expect(grants.redeem(token)).toBeNull();
     grants.stop();
   });
 
@@ -87,6 +128,20 @@ describe("ConnectionGrantService", () => {
     expect(grants.redeem(first)).toBeNull();
     expect(grants.redeem(second)).toBeNull();
     expect(grants.redeem(other)).toEqual({ principalId: "panel:two", issuedBy: "shell:test" });
+    grants.stop();
+  });
+
+  it("fails closed when redeeming after the principal is retired", () => {
+    const entityCache = new EntityCache();
+    const record = makePanelRecord("panel:one");
+    entityCache._onActivate(record);
+    const grants = new ConnectionGrantService({ entityCache });
+    const { token } = grants.grant("panel:one", "shell:test");
+
+    entityCache._onRetire({ ...record, status: "retired", retiredAt: Date.now() });
+
+    expect(grants.redeem(token)).toBeNull();
+    expect(grants.validate(token)).toBeNull();
     grants.stop();
   });
 });

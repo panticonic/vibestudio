@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { callerKindForPrincipalKind } from "./principalKinds.js";
 import type { EntityCache } from "./runtime/entityCache.js";
 import type { CallerKind } from "./serviceDispatcher.js";
 
@@ -49,6 +50,17 @@ export class ConnectionGrantService {
       this.grants.delete(token);
       return null;
     }
+    const record = this.entityCache.resolveActive(grant.principalId);
+    if (!record) {
+      this.grants.delete(token);
+      return null;
+    }
+    try {
+      callerKindForPrincipalKind(record.kind);
+    } catch {
+      this.grants.delete(token);
+      return null;
+    }
     grant.redeemed = true;
     return { principalId: grant.principalId, issuedBy: grant.issuedBy };
   }
@@ -65,9 +77,16 @@ export class ConnectionGrantService {
       this.grants.delete(token);
       return null;
     }
+    let principalKind: CallerKind;
+    try {
+      principalKind = callerKindForPrincipalKind(record.kind);
+    } catch {
+      this.grants.delete(token);
+      return null;
+    }
     return {
       principalId: grant.principalId,
-      principalKind: record.kind as CallerKind,
+      principalKind,
       issuedBy: grant.issuedBy,
     };
   }

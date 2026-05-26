@@ -276,7 +276,7 @@ export class FsService {
 
   /**
    * Resolve the context root path for a service call.
-   * - panel/worker/DO/harness callers: look up contextId from EntityCache
+   * - panel/app/worker/DO/harness callers: look up contextId from EntityCache
    * - extension callers inside an invocation: use the chained caller context
    * - extension callers outside an invocation: unrestricted host fs
    * - server callers: contextId is the first arg (shifted from args array)
@@ -287,6 +287,7 @@ export class FsService {
 
     if (
       ctx.caller.runtime.kind === "panel" ||
+      ctx.caller.runtime.kind === "app" ||
       ctx.caller.runtime.kind === "worker" ||
       ctx.caller.runtime.kind === "do" ||
       ctx.caller.runtime.kind === "harness"
@@ -579,7 +580,7 @@ export class FsService {
       }
 
       // TODO(audit #39): `symlink` and `chown` should NOT be reachable from
-      // panel/worker callers. The `fs` service `policy.allowed` is declared
+      // panel/app/worker callers. The `fs` service `policy.allowed` is declared
       // in `src/server/panelRuntimeRegistration.ts` (see fsServiceInstance
       // registration). Remove `panel` from the allowed list there — and ideally
       // remove `symlink` / `chown` from the methods table entirely so panels

@@ -49,20 +49,14 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!--
-                TRANSITIONAL: natstack:// custom-scheme handler. The primary
-                OAuth callback path is the verified Android App Link below
-                (https://auth.snugenv.com/oauth/...). This custom-scheme
-                filter is kept so devices that haven't completed app-link
-                verification don't lock users out of the OAuth flow.
-                oauthHandler.ts emits a `warn` log when the custom scheme is
-                used. See docs/audit/08-mobile-supply-chain.md H-2.
-            -->
+            <!-- natstack://connect onboarding links only. OAuth callbacks use the verified App Link below. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="natstack" />
+                <data
+                    android:scheme="natstack"
+                    android:host="connect" />
             </intent-filter>
 
             <!--

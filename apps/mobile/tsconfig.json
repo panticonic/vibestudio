@@ -23,10 +23,18 @@
     "paths": {
       "@natstack/shared/*": ["../../packages/shared/src/*"],
       "@natstack/browser-data": ["../../packages/browser-data/src/index.ts"],
+      "@natstack/browser-data/client": ["../../packages/browser-data/src/client.ts"],
       "@natstack/rpc": ["../../packages/rpc/src/index.ts"],
       "@natstack/types": ["../../packages/types/src/index.ts"]
     }
   },
-  "include": ["src/**/*", "App.tsx"],
-  "exclude": ["node_modules", "ios", "android", "**/*.test.ts", "**/*.test.tsx"]
+  "include": ["../../workspace/apps/mobile/**/*"],
+  "exclude": [
+    "node_modules",
+    "ios",
+    "android",
+    "../../workspace/apps/mobile/jest.setup.ts",
+    "../../workspace/apps/mobile/**/*.test.ts",
+    "../../workspace/apps/mobile/**/*.test.tsx"
+  ]
 }

@@ -53,9 +53,20 @@ pnpm server:dev \
 
 `pnpm server:dev` sets `NODE_ENV=development` before launching `dist/server.mjs`.
 That matters for local smoke tests from a repo checkout because a freshly
-initialized managed workspace will include `panels/chat` and the other built-in
-units. Without it, first-run `--init` falls back to `workspace-template/` and
-may create a bare workspace if that template is not present.
+initialized managed workspace will include the checked-in workspace runtime
+units, including apps, extensions, panels, workers, packages, and skills.
+Without it, first-run `--init` falls back to `workspace-template/` and may
+create a bare workspace if that template is not present.
+
+Common development entrypoints:
+
+| Command | Use when | Workspace behavior |
+| --- | --- | --- |
+| `pnpm dev` | Developing the local Electron app from a source checkout | Creates an ephemeral workspace from `workspace/`; accepted workspace-unit pushes mirror back to that template |
+| `pnpm server:dev` | Running only `dist/server.mjs` from a source checkout | Uses the checked-in `workspace/` template when `--init` creates a managed workspace |
+| `pnpm mobile:pair:dev` | Pairing a phone against a disposable source-checkout workspace | Creates an ephemeral phone-reachable workspace from `workspace/` |
+| `pnpm mobile:dev` | Full Android dev loop with Metro, install, launch, and local server | Starts Metro, a local ephemeral server, installs/launches the app, and wires ADB reverse ports |
+| `pnpm dev:self:server` | Letting a paired client edit this NatStack checkout | Uses a persistent dogfood workspace with `projects/natstack` mirroring back to the host checkout |
 
 Use `--help` for a full list of options:
 
@@ -194,6 +205,11 @@ pnpm start:remote
 Plain `pnpm start` still starts local mode unless remote credentials have been
 saved in Electron's own credential store from Connection Settings.
 
+Once any Electron client is connected, open **Remote server** → **Paired
+devices** → **Pair another device** to mint a fresh pairing link from the
+server. This uses the existing trusted device connection; you do not need to
+return to the server terminal or copy the admin token.
+
 ### Dogfood server mode
 
 From a NatStack source checkout, use dogfood mode when you want a paired client
@@ -214,7 +230,9 @@ credentials.
 
 Dogfood mode is intentionally stricter than ordinary pairing:
 
-- The host checkout must be clean before startup and before each mirror apply.
+- If the host checkout is dirty at startup, the supervisor warns that
+  propagation will be refused.
+- The host checkout must be clean before each mirror apply.
 - The gateway port is fixed across restarts; if that port is unavailable, the
   supervisor refuses to continue and prints recovery instructions.
 - Dirty or non-fast-forward mirror targets are skipped instead of overwritten.
@@ -257,11 +275,27 @@ each launch, credentials resolve in this order:
 Use the default **Pair with code** tab. Paste the `Pair URL` or enter the URL
 and code shown by `pnpm pair`, then **Save & relaunch**.
 
+If another trusted client is already connected, create a new link from
+**Remote server** → **Paired devices** → **Pair another device** instead of
+running a new server pairing command.
+
 For terminal-driven pairing, run:
 
 ```bash
 pnpm start:remote --pair "natstack://connect?url=...&code=..."
 ```
+
+From an already-paired terminal client, mint another invite with:
+
+```bash
+natstack-client invite
+```
+
+The server records invite creation, redemption, and device revocation in the
+audit log. App callers need the `connection-management` capability before they
+can call `auth.createPairingInvite`. Capability denials include the stable code
+`EACCES`; revoked or stale device credentials return stable auth error codes
+such as `DEVICE_NOT_PAIRED` or `INVALID_REFRESH_CREDENTIAL`.
 
 ### Option B: Environment variables (advanced)
 
@@ -335,8 +369,29 @@ forward.
 
 Mobile clients use the same durable device model, but start from a pairing
 code instead of the admin token. Standalone startup prints an initial pairing
-code. Admin callers can create another one later with
-`POST /_r/s/auth/create-pairing-code` if the startup code expires.
+code. A connected shell or paired terminal can create another invite later via
+`auth.createPairingInvite`; the admin-token
+`POST /_r/s/auth/create-pairing-code` route remains for headless automation.
+Mobile native hosts refresh app-scoped connection grants through
+`POST /_r/s/auth/refresh-principal-grant` with `principal:
+"react-native-app"`; the older `refresh-app-grant` path remains as a
+compatibility alias and returns deprecation headers. New clients should not
+use the alias.
+
+Trusted app and extension layout, capabilities, and the device/principal model
+are described in [trusted-workspace-units.md](./trusted-workspace-units.md).
+
+### Remote pairing smoke
+
+Use this checklist after changes to pairing or remote bootstrap:
+
+1. Start the server with `pnpm pair --host 127.0.0.1 --port 3030`.
+2. Pair one desktop or CLI client with the printed `Pair URL`.
+3. From that paired client, create another invite with **Pair another device**
+   or `natstack-client invite`.
+4. Pair a second client with the new invite.
+5. Revoke one device from **Paired devices** and confirm that device can no
+   longer refresh a shell or app connection grant.
 
 ### Electron state in remote mode
 

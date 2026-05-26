@@ -41,7 +41,9 @@ critical path for personal-server use.
 OAuth callback paths (when using the shared-relay path) should be:
 
 - `https://auth.snugenv.com/oauth/callback/:providerId`
-- transitional fallback only: `natstack://oauth/callback/:providerId`
+
+`natstack://oauth/callback/:providerId` is no longer accepted; OAuth callbacks
+must arrive through the verified app-link/universal-link host.
 
 Webhook public ingress paths should be:
 
@@ -112,9 +114,11 @@ Follow-up TODOs:
 
 ### TODO: Mobile App Links
 
-- TODO: Fill `apps/well-known/config.json` with the real Apple Developer Team ID.
+- TODO: Fill `apps/well-known/config.json` with the real Apple Developer Team ID,
+  or set `NATSTACK_APPLE_TEAM_ID` in CI/deploy.
 - TODO: Fill `apps/well-known/config.json` with Android release signing SHA256
-  fingerprints:
+  fingerprints, or set `NATSTACK_ANDROID_SHA256_CERT_FINGERPRINTS` as a
+  comma-separated list in CI/deploy:
   - upload key
   - Play App Signing key, if Play signing is enabled
 - TODO: Build and deploy the well-known site.
@@ -125,8 +129,9 @@ Follow-up TODOs:
     are kept.
 - TODO: Confirm iOS associated domains include `applinks:auth.snugenv.com`.
 - TODO: Confirm Android intent filters include `https://auth.snugenv.com/oauth/callback`.
-- TODO: Keep `natstack://` only as a debug/transitional fallback until app-link
-  verification is proven on production builds.
+- Done: OAuth callbacks are app-link/universal-link only. `natstack://` remains
+  registered only for connect-link onboarding and is not accepted as an OAuth
+  callback path.
 
 ### OAuth Provider Registrations
 
@@ -201,7 +206,8 @@ Follow-up:
 1. TODO: Extend `apps/well-known` build output with an explicit
    `auth.snugenv.com`/`snugenv.com` deployment checklist.
 2. Done: production builds fail if placeholder Team ID or Android fingerprints
-   remain.
+   remain; CI/deploy can provide those values via environment variables without
+   committing release identifiers to `config.json`.
 3. TODO: Add a small verification script that fetches both well-known URLs and checks:
    - content type
    - cache headers

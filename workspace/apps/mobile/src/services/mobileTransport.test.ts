@@ -1,0 +1,32 @@
+jest.mock(
+  "@natstack/shared/shell/transport",
+  () => ({
+    BaseWsTransport: class {},
+  }),
+  { virtual: true }
+);
+
+import { buildWsUrl, MobileTransport } from "./mobileTransport";
+
+describe("MobileTransport", () => {
+  it("rejects non-canonical app principals from native grants", async () => {
+    const transport = new MobileTransport({
+      serverUrl: "https://server.example",
+      issueConnectionGrant: async () => ({
+        callerId: "app:other-app:dev_123",
+        connectionGrant: "grant_123",
+      }),
+    });
+
+    await expect(transport.call("main", "noop", [])).rejects.toThrow(
+      /invalid app connection grant/
+    );
+  });
+
+  it("builds websocket URLs only from server origins", () => {
+    expect(buildWsUrl("https://server.example")).toBe("wss://server.example/rpc");
+    expect(buildWsUrl("http://127.0.0.1:3030")).toBe("ws://127.0.0.1:3030/rpc");
+    expect(() => buildWsUrl("https://server.example/base")).toThrow(/Invalid server URL/);
+    expect(() => buildWsUrl("https://user@server.example")).toThrow(/Invalid server URL/);
+  });
+});

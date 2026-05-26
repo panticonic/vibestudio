@@ -1,0 +1,98 @@
+import React, { useEffect } from "react";
+import { AppRegistry, StatusBar } from "react-native";
+import { NavigationContainer } from "@react-navigation/native";
+import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai";
+import type { AppCapability } from "@natstack/shared/unitManifest";
+import { RootNavigator } from "./src/navigation/RootNavigator";
+import { ErrorBoundary } from "./src/components/ErrorBoundary";
+import { setApprovedAppCapabilities } from "./src/services/appCapabilities";
+import { registerBackgroundHandlers } from "./src/services/backgroundHandlers";
+import { setupOAuthHandler } from "./src/services/oauthHandler";
+import { setupNotificationCategories } from "./src/services/notificationCategories";
+import { registerForPushNotifications } from "./src/services/pushNotifications";
+import { isDarkModeAtom } from "./src/state/themeAtoms";
+import { shellClientAtom } from "./src/state/shellClientAtom";
+import { approvalDeepLinkAtom } from "./src/state/approvalDeepLinkAtom";
+import { pushToastAtom } from "./src/state/toastAtoms";
+
+const APPROVED_APP_CAPABILITIES = [
+  "notifications",
+  "camera",
+  "keychain",
+  "clipboard",
+  "open-external",
+] satisfies readonly AppCapability[];
+
+setApprovedAppCapabilities(APPROVED_APP_CAPABILITIES);
+registerBackgroundHandlers();
+
+function AppContent() {
+  const shellClient = useAtomValue(shellClientAtom);
+  const isDark = useAtomValue(isDarkModeAtom);
+  const setApprovalDeepLink = useSetAtom(approvalDeepLinkAtom);
+  const pushToast = useSetAtom(pushToastAtom);
+
+  // Set up OAuth deep link handler when the shell client is available
+  useEffect(() => {
+    if (!shellClient) return;
+    const cleanup = setupOAuthHandler(shellClient);
+    return cleanup;
+  }, [shellClient]);
+
+  useEffect(() => {
+    if (!shellClient) return;
+    let cleanup: (() => void) | null = null;
+    let disposed = false;
+
+    void setupNotificationCategories().then(() => registerForPushNotifications(shellClient, {
+      onApprovalDeepLink: (approvalId) => setApprovalDeepLink(approvalId),
+      onToast: (toast) => pushToast(toast),
+    })).then((nextCleanup) => {
+      if (disposed) {
+        nextCleanup();
+        return;
+      }
+      cleanup = nextCleanup;
+    }).catch((error) => {
+      console.warn("[App] Failed to initialize push notifications:", error);
+      pushToast({
+        durationMs: 10000,
+        message: error instanceof Error ? error.message : String(error),
+        title: "Push notifications unavailable",
+        tone: "danger",
+      });
+    });
+
+    return () => {
+      disposed = true;
+      cleanup?.();
+    };
+  }, [pushToast, setApprovalDeepLink, shellClient]);
+
+  return (
+    <>
+      <StatusBar
+        barStyle={isDark ? "light-content" : "dark-content"}
+        translucent
+        backgroundColor="transparent"
+      />
+      <ErrorBoundary label="App">
+        <NavigationContainer>
+          <RootNavigator />
+        </NavigationContainer>
+      </ErrorBoundary>
+    </>
+  );
+}
+
+function App() {
+  return (
+    <JotaiProvider>
+      <AppContent />
+    </JotaiProvider>
+  );
+}
+
+AppRegistry.registerComponent("NatStack", () => App);
+
+export default App;

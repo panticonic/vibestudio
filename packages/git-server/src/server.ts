@@ -435,7 +435,7 @@ export class GitServer {
 
     for (const pattern of this.initPatterns) {
       // Simple glob expansion for workspace unit patterns such as "dir/*"
-      // and scoped package patterns such as "extensions/*/*".
+      // and scoped package patterns such as "extensions/*".
       if (pattern.includes("*")) {
         for (const dirPath of expandDirectoryPattern(reposPath, pattern)) {
           await this.ensureGitRepo(dirPath);

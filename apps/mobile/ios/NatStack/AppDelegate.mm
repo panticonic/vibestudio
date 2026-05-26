@@ -2,6 +2,7 @@
 
 #import <React/RCTBundleURLProvider.h>
 #import <UserNotifications/UserNotifications.h>
+#import <CommonCrypto/CommonDigest.h>
 
 #if __has_include(<FirebaseCore/FirebaseCore.h>)
 #import <FirebaseCore/FirebaseCore.h>
@@ -22,6 +23,11 @@
 #else
 #define NATSTACK_HAS_RNFB_MESSAGING 0
 #endif
+
+static NSString *const NatStackActiveBundleLocalPath = @"activeBundle.localPath";
+static NSString *const NatStackActiveBundleBuildKey = @"activeBundle.buildKey";
+static NSString *const NatStackActiveBundleIntegrity = @"activeBundle.integrity";
+static BOOL NatStackBundleHasSha256Integrity(NSString *path, NSString *integrity);
 
 @implementation AppDelegate
 
@@ -64,6 +70,20 @@
 
 - (NSURL *)bundleURL
 {
+  NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];
+  NSString *activeBundlePath = [defaults stringForKey:NatStackActiveBundleLocalPath];
+  NSString *integrity = [defaults stringForKey:NatStackActiveBundleIntegrity];
+  if (activeBundlePath.length > 0 &&
+      [NSFileManager.defaultManager fileExistsAtPath:activeBundlePath] &&
+      NatStackBundleHasSha256Integrity(activeBundlePath, integrity)) {
+    return [NSURL fileURLWithPath:activeBundlePath];
+  }
+  if (activeBundlePath.length > 0) {
+    [defaults removeObjectForKey:NatStackActiveBundleLocalPath];
+    [defaults removeObjectForKey:NatStackActiveBundleBuildKey];
+    [defaults removeObjectForKey:NatStackActiveBundleIntegrity];
+    [defaults synchronize];
+  }
 #if DEBUG
   return [[RCTBundleURLProvider sharedSettings] jsBundleURLForBundleRoot:@"index"];
 #else
@@ -72,3 +92,21 @@
 }
 
 @end
+
+static BOOL NatStackBundleHasSha256Integrity(NSString *path, NSString *integrity)
+{
+  if (integrity.length == 0) return NO;
+  NSString *expected = [integrity hasPrefix:@"sha256-"] ? [integrity substringFromIndex:@"sha256-".length] : integrity;
+  NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"^[A-Fa-f0-9]{64}$" options:0 error:nil];
+  if ([regex numberOfMatchesInString:expected options:0 range:NSMakeRange(0, expected.length)] != 1) return NO;
+
+  NSData *data = [NSData dataWithContentsOfFile:path];
+  if (data == nil) return NO;
+  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+  CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+  NSMutableString *actual = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+  for (int index = 0; index < CC_SHA256_DIGEST_LENGTH; index++) {
+    [actual appendFormat:@"%02x", digest[index]];
+  }
+  return [actual caseInsensitiveCompare:expected] == NSOrderedSame;
+}

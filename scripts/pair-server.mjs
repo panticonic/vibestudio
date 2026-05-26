@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { pickMobileHost, printConnectBanner } from "./connect-utils.mjs";
 
@@ -155,9 +157,16 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     includeTunnel: true,
   });
   const requirePublicUrl = options.requirePublicUrl || options.host === "tailscale";
-  const serverArgs = hooks.buildServerArgs
+  let serverArgs = hooks.buildServerArgs
     ? hooks.buildServerArgs(options, selectedHost.address)
     : buildServerArgs(options, selectedHost.address);
+  let ownedReadyDir = null;
+  let readyFile = readyFileFromServerArgs(serverArgs);
+  if (!readyFile) {
+    ownedReadyDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-pair-"));
+    readyFile = path.join(ownedReadyDir, "ready.json");
+    serverArgs = [...serverArgs, "--ready-file", readyFile];
+  }
 
   hooks.beforeStart?.({ options, selectedHost, requirePublicUrl, serverArgs });
 
@@ -201,6 +210,22 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   const serveActionLines = [];
   let pendingTimer = null;
   let waitElapsed = false;
+  let readyPoll = null;
+  let readyPollStartedAt = 0;
+
+  const cleanupReadyState = () => {
+    if (readyPoll !== null) {
+      clearInterval(readyPoll);
+      readyPoll = null;
+    }
+    if (ownedReadyDir) {
+      try {
+        fs.rmSync(ownedReadyDir, { recursive: true, force: true });
+      } catch {
+        // Best-effort cleanup only.
+      }
+    }
+  };
 
   const spawnChild = () => {
     buffer = "";
@@ -211,6 +236,13 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       pairingCode = null;
       bannerPrinted = false;
       waitElapsed = false;
+      if (ownedReadyDir) {
+        try {
+          fs.unlinkSync(readyFile);
+        } catch {
+          // It may not have been written yet.
+        }
+      }
       if (pendingTimer !== null) {
         clearTimeout(pendingTimer);
         pendingTimer = null;
@@ -225,7 +257,41 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
           env,
         });
     wireChild(child);
+    startReadyPoll();
     return child;
+  };
+
+  const applyReadyPayload = (payload) => {
+    if (typeof payload?.connectUrl === "string" && payload.connectUrl) {
+      mobileUrl = payload.connectUrl;
+    } else if (typeof payload?.publicUrl === "string" && payload.publicUrl) {
+      mobileUrl = payload.publicUrl;
+    } else if (typeof payload?.gatewayUrl === "string" && payload.gatewayUrl) {
+      gatewayUrl = payload.gatewayUrl;
+    }
+    if (typeof payload?.pairingCode === "string" && payload.pairingCode) {
+      pairingCode = payload.pairingCode;
+    }
+    tryPrintBanner();
+  };
+
+  const startReadyPoll = () => {
+    if (readyPoll !== null) clearInterval(readyPoll);
+    readyPollStartedAt = Date.now();
+    readyPoll = setInterval(() => {
+      try {
+        const stat = fs.statSync(readyFile);
+        if (stat.mtimeMs < readyPollStartedAt - 1) return;
+        const text = fs.readFileSync(readyFile, "utf8");
+        applyReadyPayload(JSON.parse(text));
+        if (bannerPrinted) {
+          clearInterval(readyPoll);
+          readyPoll = null;
+        }
+      } catch {
+        // The server writes readiness after startup settles; stdout remains a fallback.
+      }
+    }, 100);
   };
 
   const printServeActionFollowup = () => {
@@ -411,6 +477,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
     childProcess.on("exit", (code, signal) => {
       if (restarting) return;
+      cleanupReadyState();
       if (stderrBuffer) stderrLines.push(stderrBuffer);
       if (hooks.onChildExit?.({ code, signal, strictPublicUrlFailure, stderrLines }, control))
         return;
@@ -423,7 +490,10 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   spawnChild();
 
   for (const sig of ["SIGINT", "SIGTERM"]) {
-    process.on(sig, () => child?.kill(sig));
+    process.on(sig, () => {
+      cleanupReadyState();
+      child?.kill(sig);
+    });
   }
 }
 
@@ -448,6 +518,15 @@ function buildServerArgs(options, host) {
   if (options.publicUrl) args.push("--public-url", options.publicUrl);
   args.push(...options.serverArgs);
   return args;
+}
+
+function readyFileFromServerArgs(args) {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--ready-file") return args[i + 1] ?? null;
+    if (arg.startsWith("--ready-file=")) return arg.slice("--ready-file=".length) || null;
+  }
+  return null;
 }
 
 function firstDefined(values) {

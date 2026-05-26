@@ -174,6 +174,11 @@ pnpm mobile:pair --host tailscale --port 3030
 The command prints a `natstack://connect?...` deep link and QR code. Scan it
 with the Android camera and accept the app's connection prompt.
 
+If a desktop client is already connected to the same server, you can also open
+**Remote server** → **Paired devices** → **Pair another device** there and use
+the generated link. The server creates the same single-use device pairing code
+without requiring access to the server terminal.
+
 For UI and panel development, prefer the disposable dev variant:
 
 ```bash
@@ -271,6 +276,13 @@ central config and reuses it on later starts.
   `*.ts.net`, single-label local names such as `pop-os`, and `.local` names.
   When the auto-detected `Mobile URL:` is HTTPS, the QR uses that and the
   HTTP rules don't matter.
+- The native mobile host refreshes short-lived app grants through
+  `/_r/s/auth/refresh-principal-grant` for the `react-native-app` principal.
+  The durable device credential stays in the native keychain; React Native JS
+  receives only one-time connection grants.
+- `/_r/s/auth/refresh-app-grant` is a compatibility alias for older builds.
+  It returns deprecation headers; new native hosts should use
+  `refresh-principal-grant`.
 - Release builds keep the stricter network policy in
   `apps/mobile/android/app/src/main/res/xml/network_security_config.xml`.
 - The auto-detected URL is also used by OAuth flows on mobile, panel chrome,

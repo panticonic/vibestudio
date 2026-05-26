@@ -7,9 +7,6 @@
  * and `remote-credentials.json`. Keeping it in `workspace/loader.ts`
  * conflated "workspace configuration" with "credential storage for the
  * local machine."
- *
- * Backwards compatibility: `workspace/loader.ts` re-exports these symbols so
- * existing call sites keep working.
  */
 
 import * as fs from "fs";
