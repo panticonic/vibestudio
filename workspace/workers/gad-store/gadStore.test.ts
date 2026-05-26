@@ -201,6 +201,92 @@ describe("GadWorkspaceDO trajectory persistence", () => {
     ]);
   });
 
+  it("treats replayed matching event ids as idempotent appends", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    const input = {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "event-message-idempotent",
+          event: event("message.completed", {
+            turnId: "turn-1" as never,
+            causality: { messageId: "msg-1" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              role: "assistant",
+              content: "hello once",
+            },
+          }),
+          publish: { channelIds: ["channel-1"] },
+        },
+      ],
+    };
+
+    const first = await call<any>("appendTrajectoryBatch", input);
+    const second = await call<any>("appendTrajectoryBatch", input);
+
+    expect(second.headEventId).toBe(first.headEventId);
+    expect(second.headEventHash).toBe(first.headEventHash);
+    expect(second.events.map((row: { eventId: string }) => row.eventId)).toEqual([
+      "event-message-idempotent",
+    ]);
+    expect(second.published).toEqual(first.published);
+
+    const count = await call<{ rows: Array<{ cnt: number }> }>(
+      "query",
+      "SELECT COUNT(*) AS cnt FROM trajectory_events WHERE event_id = ?",
+      ["event-message-idempotent"],
+    );
+    expect(count.rows[0]?.cnt).toBe(1);
+  });
+
+  it("rejects reused event ids with different event content", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "event-message-collision",
+          event: event("message.completed", {
+            turnId: "turn-1" as never,
+            causality: { messageId: "msg-1" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              role: "assistant",
+              content: "first",
+            },
+          }),
+        },
+      ],
+    });
+
+    await expect(
+      call("appendTrajectoryBatch", {
+        trajectoryId: "traj-1",
+        branchId: "main",
+        owner,
+        events: [
+          {
+            eventId: "event-message-collision",
+            event: event("message.completed", {
+              turnId: "turn-1" as never,
+              causality: { messageId: "msg-1" as never },
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                role: "assistant",
+                content: "different",
+              },
+            }),
+          },
+        ],
+      }),
+    ).rejects.toThrow(/GAD event id collision with different content/u);
+  });
+
   it("indexes transport call ids on projected invocations for channel/trajectory joins", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendTrajectoryBatch", {

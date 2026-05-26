@@ -216,6 +216,25 @@ function sortJson(value: unknown): unknown {
   return out;
 }
 
+function stableJson(value: unknown): string {
+  return JSON.stringify(sortJson(value));
+}
+
+function semanticAgenticEvent(value: AgenticEvent | TrajectoryEvent): Record<string, unknown> {
+  return {
+    kind: value.kind,
+    actor: value.actor,
+    ...(value.turnId ? { turnId: value.turnId } : {}),
+    ...((value as { causality?: unknown }).causality ? { causality: (value as { causality?: unknown }).causality } : {}),
+    payload: value.payload,
+    createdAt: value.createdAt,
+  };
+}
+
+function sameAgenticEvent(left: AgenticEvent | TrajectoryEvent, right: AgenticEvent): boolean {
+  return stableJson(semanticAgenticEvent(left)) === stableJson(semanticAgenticEvent(right));
+}
+
 export class GadWorkspaceDO extends DurableObjectBase {
   static override schemaVersion = 13;
 
@@ -718,6 +737,9 @@ export class GadWorkspaceDO extends DurableObjectBase {
     if (!input.trajectoryId) throw new Error("appendTrajectoryBatch requires trajectoryId");
     if (!input.branchId) throw new Error("appendTrajectoryBatch requires branchId");
     if (input.events.length === 0) throw new Error("appendTrajectoryBatch requires at least one event");
+
+    const idempotent = this.tryIdempotentTrajectoryAppend(input);
+    if (idempotent) return idempotent;
 
     const existingHead = this.getTrajectoryBranchHead({
       trajectoryId: input.trajectoryId,
@@ -2576,6 +2598,68 @@ export class GadWorkspaceDO extends DurableObjectBase {
       payload: parseRecord(asString(row["payload_ref_json"])),
       createdAt: String(row["created_at"]),
     } as unknown as TrajectoryEvent;
+  }
+
+  private tryIdempotentTrajectoryAppend(input: AppendTrajectoryBatchInput): AppendTrajectoryBatchResult | null {
+    const requested = input.events
+      .map((item) => ({ item, eventId: item.eventId ?? null }))
+      .filter((entry): entry is { item: TrajectoryAppendItem; eventId: string } =>
+        typeof entry.eventId === "string" && entry.eventId.length > 0
+      );
+    if (requested.length === 0) return null;
+
+    const existing = requested
+      .map(({ item, eventId }) => ({
+        item,
+        eventId,
+        row: this.sql
+          .exec(`SELECT * FROM trajectory_events WHERE event_id = ? LIMIT 1`, eventId)
+          .toArray()[0] as JsonRecord | undefined,
+      }))
+      .filter((entry) => entry.row);
+    if (existing.length === 0) return null;
+    if (existing.length !== input.events.length || requested.length !== input.events.length) {
+      throw new Error("GAD append batch mixes already-applied event ids with new events");
+    }
+
+    const events = existing.map(({ item, eventId, row }) => {
+      const event = this.mapTrajectoryEvent(row!);
+      if (
+        event.trajectoryId !== input.trajectoryId ||
+        event.branchId !== input.branchId ||
+        !sameAgenticEvent(event, item.event)
+      ) {
+        throw new Error(`GAD event id collision with different content: ${eventId}`);
+      }
+      return event;
+    });
+    const head = this.getTrajectoryBranchHead({
+      trajectoryId: input.trajectoryId,
+      branchId: input.branchId,
+    });
+    const published = this.sql
+      .exec(
+        `SELECT event_id, channel_id, envelope_id
+           FROM trajectory_channel_publications
+           WHERE event_id IN (${requested.map(() => "?").join(", ")})
+           ORDER BY channel_seq ASC`,
+        ...requested.map((entry) => entry.eventId)
+      )
+      .toArray()
+      .map((row) => ({
+        eventId: String(row["event_id"]),
+        channelId: String(row["channel_id"]),
+        envelopeId: String(row["envelope_id"]),
+      }));
+    return {
+      trajectoryId: input.trajectoryId,
+      branchId: input.branchId,
+      headEventId: asString(head?.["head_event_id"]),
+      headEventHash: asString(head?.["head_event_hash"]),
+      headStateHash: asString(head?.["head_state_hash"]) ?? EMPTY_STATE_HASH,
+      events,
+      published,
+    };
   }
 
   private mapChannelEnvelope(row: JsonRecord): ChannelEnvelope {
