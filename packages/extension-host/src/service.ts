@@ -14,18 +14,22 @@ import type { EventName } from "@natstack/shared/events";
 import type { NotificationPayload } from "@natstack/shared/events";
 import type { EventService, Subscriber } from "@natstack/shared/eventsService";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@natstack/shared/extensionRuntimeAbi";
-import type { BuildProvider, BuildProviderOutput, BuildProviderTarget } from "@natstack/shared/buildProvider";
-import { verifyProductSeedSource } from "@natstack/shared/productSeedTrust";
 import type {
-  PendingUnitBatchApproval,
-  UnitBatchEntry,
-} from "@natstack/shared/approvals";
+  BuildProvider,
+  BuildProviderOutput,
+  BuildProviderTarget,
+} from "@natstack/shared/buildProvider";
+import { verifyProductSeedSource } from "@natstack/shared/productSeedTrust";
+import type { PendingUnitBatchApproval, UnitBatchEntry } from "@natstack/shared/approvals";
 import {
   UnitManifestError,
   extensionUnitManifestDescriptor,
   readAndValidateUnitManifest,
 } from "@natstack/shared/unitManifest";
-import { parseWorkspaceConfigContentWithId, resolveDeclaredExtensions } from "@natstack/shared/workspace/configParser";
+import {
+  parseWorkspaceConfigContentWithId,
+  resolveDeclaredExtensions,
+} from "@natstack/shared/workspace/configParser";
 import {
   UnitHost,
   UnitRegistry,
@@ -82,9 +86,19 @@ const EXTENSION_UNIT_DESCRIPTOR: UnitDescriptor<"extension"> = {
 interface BuildSystemLike {
   getBuild(
     unitPath: string,
-    ref?: string,
-  ): Promise<{ dir: string; metadata: ExtensionBuildMetadataLike; artifacts: ExtensionBuildArtifactLike[] }>;
-  getBuildByKey?(key: string): { dir: string; metadata: ExtensionBuildMetadataLike; artifacts: ExtensionBuildArtifactLike[] } | null;
+    ref?: string
+  ): Promise<{
+    dir: string;
+    metadata: ExtensionBuildMetadataLike;
+    artifacts: ExtensionBuildArtifactLike[];
+  }>;
+  getBuildByKey?(
+    key: string
+  ): {
+    dir: string;
+    metadata: ExtensionBuildMetadataLike;
+    artifacts: ExtensionBuildArtifactLike[];
+  } | null;
   getEffectiveVersion(unitName: string): string | null;
   getExternalDeps(unitName: string): Record<string, string>;
   getGraph(): {
@@ -110,12 +124,14 @@ interface BuildSystemLike {
 
 interface ExtensionBuildMetadataLike {
   ev: string;
-  details?: {
-    kind: "extension";
-    runtimeDepsKey?: string | null;
-    runtimeAbi?: string | null;
-    externalDeps?: Record<string, string>;
-  } | { kind: string };
+  details?:
+    | {
+        kind: "extension";
+        runtimeDepsKey?: string | null;
+        runtimeAbi?: string | null;
+        externalDeps?: Record<string, string>;
+      }
+    | { kind: string };
 }
 
 interface ExtensionBuildArtifactLike {
@@ -130,31 +146,35 @@ interface ExtensionTransportLike {
 }
 
 interface ApprovalQueueLike {
-  request(req: ({
-    kind: "capability";
-    callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do";
-    repoPath: string;
-    effectiveVersion: string;
-    capability: string;
-    dedupKey?: string | null;
-    title: string;
-    description?: string;
-    resource?: { type: string; label: string; value: string };
-    details?: Array<{ label: string; value: string }>;
-  } | {
-    kind: "unit-batch";
-    callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do" | "system";
-    repoPath: string;
-    effectiveVersion: string;
-    dedupKey?: string | null;
-    trigger: PendingUnitBatchApproval["trigger"];
-    title: string;
-    description: string;
-    units: PendingUnitBatchApproval["units"];
-    configWrite?: PendingUnitBatchApproval["configWrite"];
-  })): Promise<"once" | "session" | "version" | "repo" | "deny">;
+  request(
+    req:
+      | {
+          kind: "capability";
+          callerId: string;
+          callerKind: "panel" | "app" | "worker" | "do";
+          repoPath: string;
+          effectiveVersion: string;
+          capability: string;
+          dedupKey?: string | null;
+          title: string;
+          description?: string;
+          resource?: { type: string; label: string; value: string };
+          details?: Array<{ label: string; value: string }>;
+        }
+      | {
+          kind: "unit-batch";
+          callerId: string;
+          callerKind: "panel" | "app" | "worker" | "do" | "system";
+          repoPath: string;
+          effectiveVersion: string;
+          dedupKey?: string | null;
+          trigger: PendingUnitBatchApproval["trigger"];
+          title: string;
+          description: string;
+          units: PendingUnitBatchApproval["units"];
+          configWrite?: PendingUnitBatchApproval["configWrite"];
+        }
+  ): Promise<"once" | "session" | "version" | "repo" | "deny">;
 }
 
 interface NotificationServiceLike {
@@ -207,10 +227,11 @@ export class ExtensionHost {
     });
     this.extensionTrustResolver = new UnitTrustResolver<RegistryEntry>({
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
-      productSeedTrust: (identity) => verifyProductSeedSource({
-        unitDir: path.join(this.deps.workspacePath, identity.source.repo),
-        identity,
-      }) !== null,
+      productSeedTrust: (identity) =>
+        verifyProductSeedSource({
+          unitDir: path.join(this.deps.workspacePath, identity.source.repo),
+          identity,
+        }) !== null,
     });
     this.sourcePushGrants = new UnitSourcePushGrantStore({ statePath: deps.statePath });
     this.processes = new ExtensionProcessManager({
@@ -249,7 +270,8 @@ export class ExtensionHost {
     this.unitHost = new UnitHost({
       descriptor: EXTENSION_UNIT_DESCRIPTOR,
       registry: this.registry,
-      currentDeclarationVersion: () => resolveGitCommit(path.join(this.deps.workspacePath, "meta"), "HEAD"),
+      currentDeclarationVersion: () =>
+        resolveGitCommit(path.join(this.deps.workspacePath, "meta"), "HEAD"),
       resolveNode: (source) => this.findExtensionNode(source),
       candidateIdentity: (node, decl) => this.declarationBuildIdentity(node, decl.ref),
       trustResolver: this.extensionTrustResolver,
@@ -282,12 +304,13 @@ export class ExtensionHost {
         });
       },
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl.ref),
-      requestApproval: (entries, trigger) => requestUnitBatchApproval({
-        descriptor: EXTENSION_UNIT_DESCRIPTOR,
-        approvalQueue: this.deps.approvalQueue,
-        entries,
-        trigger,
-      }),
+      requestApproval: (entries, trigger) =>
+        requestUnitBatchApproval({
+          descriptor: EXTENSION_UNIT_DESCRIPTOR,
+          approvalQueue: this.deps.approvalQueue,
+          entries,
+          trigger,
+        }),
       approvalCoordinator: deps.approvalCoordinator,
       onApprovalDenied: (items) => {
         const names = items.map((item) => item.node.name);
@@ -308,7 +331,7 @@ export class ExtensionHost {
       onBackgroundError: (err) => {
         console.error(
           "[ExtensionHost] Background unit approval flow failed:",
-          err instanceof Error ? err.message : String(err),
+          err instanceof Error ? err.message : String(err)
         );
       },
     });
@@ -316,7 +339,7 @@ export class ExtensionHost {
       this.handleSourceRebuilt(source).catch((err) => {
         console.error(
           `[ExtensionHost] Failed to reload rebuilt extension source ${source}:`,
-          err instanceof Error ? err.message : String(err),
+          err instanceof Error ? err.message : String(err)
         );
       });
     });
@@ -328,12 +351,12 @@ export class ExtensionHost {
    * disables, or removes extensions — there is no imperative path. Called at
    * boot and after a meta push (post-receive). The declared set is
    * authoritative: anything in the registry but not declared is removed.
-  */
+   */
   async reconcileDeclared(
     declared: Array<{ source: string; ref: string; enabled: boolean }>,
-    opts: { trigger?: UnitReconcileTrigger } = {},
+    opts: { trigger?: UnitReconcileTrigger } = {}
   ): Promise<void> {
-    await this.unitHost.reconcileDeclared(declared, opts);
+    await this.unitHost.reconcileDeclared(this.normalizeDeclaredRefs(declared), opts);
   }
 
   /**
@@ -347,7 +370,7 @@ export class ExtensionHost {
   /** Build/start (or stop) a single declared extension per its declaration. */
   private async applyDeclared(
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
-    decl: UnitDeclaration,
+    decl: UnitDeclaration
   ): Promise<void> {
     await this.unitHost.applyRuntimeDeclaration({
       node,
@@ -355,7 +378,8 @@ export class ExtensionHost {
       stopDisabled: async () => {
         if (this.processes.isRunning(node.name)) await this.processes.stop(node.name);
       },
-      validateBeforeActivateCurrent: () => this.validateExtensionManifestAtPath(node.path, node.name),
+      validateBeforeActivateCurrent: () =>
+        this.validateExtensionManifestAtPath(node.path, node.name),
       needsBuildRefresh: (entry) => this.needsBuildRefresh(entry, node),
       buildAndActivate: async (_node, d) => this.buildAndActivate(node.name, d.ref),
       activateCurrent: async () => this.activate(node.name),
@@ -365,7 +389,7 @@ export class ExtensionHost {
   private pendingEntryFor(
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
     decl: UnitDeclaration,
-    building = false,
+    building = false
   ): RegistryEntry {
     return createPendingUnitRegistryEntry({
       unitKind: "extension",
@@ -384,13 +408,13 @@ export class ExtensionHost {
         extensionUnitManifestDescriptor,
         path.join(nodePath, "package.json"),
         { unitName },
-        fs.readFileSync as (p: string, encoding: "utf-8") => string,
+        fs.readFileSync as (p: string, encoding: "utf-8") => string
       );
     } catch (err) {
       if (err instanceof UnitManifestError) throw err;
       throw new UnitManifestError(
         `Extension ${unitName} manifest validation failed: ${err instanceof Error ? err.message : String(err)}`,
-        "MANIFEST_INTERNAL",
+        "MANIFEST_INTERNAL"
       );
     }
   }
@@ -410,12 +434,22 @@ export class ExtensionHost {
         streamingMethods: { args: z.tuple([z.string()]) },
         list: { args: z.tuple([]) },
         on: { args: z.tuple([z.string(), z.string()]) },
-        ready: { args: z.tuple([z.object({ methods: z.array(z.string()), hasFetch: z.boolean() })]) },
+        ready: {
+          args: z.tuple([z.object({ methods: z.array(z.string()), hasFetch: z.boolean() })]),
+        },
         emit: { args: z.tuple([z.string(), z.unknown()]) },
         fetchRequestBodyChunk: { args: z.tuple([z.string()]) },
         fetchRequestBodyClose: { args: z.tuple([z.string()]) },
-        health: { args: z.tuple([z.enum(["healthy", "degraded", "unhealthy"]), z.unknown().optional()]) },
-        log: { args: z.tuple([z.enum(["debug", "info", "warn", "error"]), z.string(), z.record(z.unknown()).optional()]) },
+        health: {
+          args: z.tuple([z.enum(["healthy", "degraded", "unhealthy"]), z.unknown().optional()]),
+        },
+        log: {
+          args: z.tuple([
+            z.enum(["debug", "info", "warn", "error"]),
+            z.string(),
+            z.record(z.unknown()).optional(),
+          ]),
+        },
         reload: { args: z.tuple([z.string()]) },
       },
       handler: (ctx, method, args) => this.handle(ctx, method, args),
@@ -435,10 +469,7 @@ export class ExtensionHost {
       case "on":
         return this.subscribe(ctx, args[0] as string, args[1] as string);
       case "ready":
-        return this.readyFromExtension(
-          ctx,
-          args[0] as { methods: string[]; hasFetch: boolean },
-        );
+        return this.readyFromExtension(ctx, args[0] as { methods: string[]; hasFetch: boolean });
       case "emit":
         return this.emitFromExtension(ctx, args[0] as string, args[1]);
       case "fetchRequestBodyChunk":
@@ -452,23 +483,44 @@ export class ExtensionHost {
           ctx,
           args[0] as UnitLogRecord["level"],
           args[1] as string,
-          args[2] as Record<string, unknown> | undefined,
+          args[2] as Record<string, unknown> | undefined
         );
       case "reload":
         return this.reload(ctx, args[0] as string);
       default:
-        throw new ServiceError("extensions", method, `Unknown extensions method: ${method}`, "ENOSYS");
+        throw new ServiceError(
+          "extensions",
+          method,
+          `Unknown extensions method: ${method}`,
+          "ENOSYS"
+        );
     }
   }
 
-  async invoke(ctx: ServiceContext, name: string, method: string, args: unknown[]): Promise<unknown> {
+  async invoke(
+    ctx: ServiceContext,
+    name: string,
+    method: string,
+    args: unknown[]
+  ): Promise<unknown> {
+    await this.whenSettled();
     const entry = this.lookupForInvoke(name);
     if (!entry || !entry.enabled) {
-      throw new ServiceError("extensions", "invoke", `Extension is not installed or enabled: ${name}`, "ENOEXT");
+      throw new ServiceError(
+        "extensions",
+        "invoke",
+        `Extension is not installed or enabled: ${name}`,
+        "ENOEXT"
+      );
     }
     const invocation = this.createTrackedInvocation(ctx, entry.name, method);
     if (!this.processes.isRunning(entry.name)) {
-      throw new ServiceError("extensions", "invoke", `Extension is not running: ${entry.name}`, "ENOTREADY");
+      throw new ServiceError(
+        "extensions",
+        "invoke",
+        `Extension is not running: ${entry.name}`,
+        "ENOTREADY"
+      );
     }
     try {
       return await this.deps.extensionTransport.call(
@@ -476,13 +528,11 @@ export class ExtensionHost {
         "extension.invoke",
         method,
         args,
-        invocation,
+        invocation
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const wrapped = new Error(
-        `Extension ${entry.name}.${method} invocation failed: ${message}`,
-      );
+      const wrapped = new Error(`Extension ${entry.name}.${method} invocation failed: ${message}`);
       if (error instanceof Error) {
         (wrapped as Error & { cause?: unknown }).cause = error;
         if (error.stack) {
@@ -504,7 +554,7 @@ export class ExtensionHost {
           code: typeof code === "string" ? code : undefined,
           stack: wrapped.stack,
         },
-        "console",
+        "console"
       );
       throw wrapped;
     } finally {
@@ -526,17 +576,38 @@ export class ExtensionHost {
     }
   }
 
-  async invokeStream(ctx: ServiceContext, name: string, method: string, args: unknown[]): Promise<Response> {
+  async invokeStream(
+    ctx: ServiceContext,
+    name: string,
+    method: string,
+    args: unknown[]
+  ): Promise<Response> {
+    await this.whenSettled();
     const entry = this.lookupForInvoke(name);
     if (!entry || !entry.enabled) {
-      throw new ServiceError("extensions", "invokeStream", `Extension is not installed or enabled: ${name}`, "ENOEXT");
+      throw new ServiceError(
+        "extensions",
+        "invokeStream",
+        `Extension is not installed or enabled: ${name}`,
+        "ENOEXT"
+      );
     }
     if (!this.deps.extensionTransport.streamCallTarget) {
-      throw new ServiceError("extensions", "invokeStream", "Extension streaming transport is unavailable", "ENOTIMPL");
+      throw new ServiceError(
+        "extensions",
+        "invokeStream",
+        "Extension streaming transport is unavailable",
+        "ENOTIMPL"
+      );
     }
     const invocation = this.createTrackedInvocation(ctx, entry.name, method);
     if (!this.processes.isRunning(entry.name)) {
-      throw new ServiceError("extensions", "invokeStream", `Extension is not running: ${entry.name}`, "ENOTREADY");
+      throw new ServiceError(
+        "extensions",
+        "invokeStream",
+        `Extension is not running: ${entry.name}`,
+        "ENOTREADY"
+      );
     }
     try {
       const response = await this.deps.extensionTransport.streamCallTarget(
@@ -544,7 +615,7 @@ export class ExtensionHost {
         "extension.invokeStream",
         method,
         args,
-        invocation,
+        invocation
       );
       return this.responseWithInvocationCleanup(response, invocation);
     } catch (err) {
@@ -553,7 +624,10 @@ export class ExtensionHost {
     }
   }
 
-  private responseWithInvocationCleanup(response: Response, invocation: ExtensionInvocation): Response {
+  private responseWithInvocationCleanup(
+    response: Response,
+    invocation: ExtensionInvocation
+  ): Response {
     if (!response.body) {
       this.clearTrackedInvocation(invocation);
       return response;
@@ -584,20 +658,26 @@ export class ExtensionHost {
 
   resolveActiveInvocation(
     extensionName: string,
-    invocationToken: string,
+    invocationToken: string
   ): (ExtensionInvocation & { chainCaller?: ExtensionUserlandCaller }) | null {
-    return (this.activeInvocations.get(this.invocationKey(extensionName, invocationToken)) as
-      | (ExtensionInvocation & { chainCaller?: ExtensionUserlandCaller })
-      | undefined) ?? null;
+    return (
+      (this.activeInvocations.get(this.invocationKey(extensionName, invocationToken)) as
+        | (ExtensionInvocation & { chainCaller?: ExtensionUserlandCaller })
+        | undefined) ?? null
+    );
   }
 
-  private createTrackedInvocation(ctx: ServiceContext, extensionName: string, method: string): ExtensionInvocation {
+  private createTrackedInvocation(
+    ctx: ServiceContext,
+    extensionName: string,
+    method: string
+  ): ExtensionInvocation {
     const invocation = invocationFromServiceContext(
       ctx,
       extensionName,
       method,
       randomUUID(),
-      this.deps.getContextIdForCaller,
+      this.deps.getContextIdForCaller
     );
     const token = randomUUID();
     invocation.invocationToken = token;
@@ -607,7 +687,9 @@ export class ExtensionHost {
 
   private clearTrackedInvocation(invocation: ExtensionInvocation): void {
     if (invocation.invocationToken) {
-      this.activeInvocations.delete(this.invocationKey(invocation.extensionName, invocation.invocationToken));
+      this.activeInvocations.delete(
+        this.invocationKey(invocation.extensionName, invocation.invocationToken)
+      );
     }
   }
 
@@ -637,7 +719,7 @@ export class ExtensionHost {
     res: ServerResponse,
     name: string,
     remainderPath: string,
-    caller: VerifiedCaller,
+    caller: VerifiedCaller
   ): Promise<void> {
     const entry = this.registry.get(name);
     if (!entry || !entry.enabled) {
@@ -671,7 +753,12 @@ export class ExtensionHost {
         headers: headersToRecord(req.headers),
         ...(body !== undefined ? { body } : {}),
       };
-      const response = await this.deps.extensionTransport.call(name, "extension.fetch", requestEnvelope, invocation);
+      const response = await this.deps.extensionTransport.call(
+        name,
+        "extension.fetch",
+        requestEnvelope,
+        invocation
+      );
       const typedResponse = response as {
         status: number;
         headers: Record<string, string>;
@@ -692,14 +779,17 @@ export class ExtensionHost {
     }
   }
 
-  private registerRequestBody(extensionName: string, req: IncomingMessage): StreamEnvelope | undefined {
+  private registerRequestBody(
+    extensionName: string,
+    req: IncomingMessage
+  ): StreamEnvelope | undefined {
     if (req.method === "GET" || req.method === "HEAD") return undefined;
     const contentLengthHeader = req.headers["content-length"];
     if (typeof contentLengthHeader === "string") {
       const declared = Number(contentLengthHeader);
       if (Number.isFinite(declared) && declared > EXTENSION_REQUEST_BODY_MAX_BYTES) {
         const err = new Error(
-          `Request body exceeds the ${EXTENSION_REQUEST_BODY_MAX_BYTES}-byte extension fetch limit`,
+          `Request body exceeds the ${EXTENSION_REQUEST_BODY_MAX_BYTES}-byte extension fetch limit`
         );
         (err as NodeJS.ErrnoException).code = "EFBIG";
         throw err;
@@ -730,7 +820,7 @@ export class ExtensionHost {
   private async writeExtensionResponseBody(
     extensionName: string,
     res: ServerResponse,
-    body: BodyEnvelope | string,
+    body: BodyEnvelope | string
   ): Promise<void> {
     if (!isStreamEnvelope(body)) {
       await writeInlineResponseBody(res, body);
@@ -738,11 +828,11 @@ export class ExtensionHost {
     }
     try {
       while (true) {
-        const next = await this.deps.extensionTransport.call(
+        const next = (await this.deps.extensionTransport.call(
           extensionName,
           "extension.fetchResponseBodyChunk",
-          body.id,
-        ) as StreamChunkEnvelope;
+          body.id
+        )) as StreamChunkEnvelope;
         if (next.done) break;
         if (next.chunk) {
           await writeResponseChunk(res, Buffer.from(next.chunk.data, "base64"));
@@ -752,43 +842,72 @@ export class ExtensionHost {
       res.end();
       await finished;
     } finally {
-      await this.deps.extensionTransport.call(
-        extensionName,
-        "extension.fetchResponseBodyClose",
-        body.id,
-      ).catch(() => {});
+      await this.deps.extensionTransport
+        .call(extensionName, "extension.fetchResponseBodyClose", body.id)
+        .catch(() => {});
     }
   }
 
   private subscribe(ctx: ServiceContext, name: string, event: string): null {
     const eventName = `extensions:${name}::${event}` as const;
     const subscriber = this.deps.eventService.getOrCreateSubscriber(ctx);
-    this.deps.eventService.subscribe(eventName, ctx.caller.runtime.id, subscriber, ctx.connectionId);
+    this.deps.eventService.subscribe(
+      eventName,
+      ctx.caller.runtime.id,
+      subscriber,
+      ctx.connectionId
+    );
     return null;
   }
 
   private emitFromExtension(ctx: ServiceContext, event: string, payload: unknown): null {
     if (ctx.caller.runtime.kind !== "extension") {
-      throw new ServiceError("extensions", "emit", "Only extensions can emit extension events", "EACCES");
+      throw new ServiceError(
+        "extensions",
+        "emit",
+        "Only extensions can emit extension events",
+        "EACCES"
+      );
     }
-    this.deps.eventService.emit(`extensions:${ctx.caller.runtime.id}::${event}` as EventName, payload);
+    this.deps.eventService.emit(
+      `extensions:${ctx.caller.runtime.id}::${event}` as EventName,
+      payload
+    );
     return null;
   }
 
-  private async fetchRequestBodyChunk(ctx: ServiceContext, streamId: string): Promise<StreamChunkEnvelope> {
+  private async fetchRequestBodyChunk(
+    ctx: ServiceContext,
+    streamId: string
+  ): Promise<StreamChunkEnvelope> {
     if (ctx.caller.runtime.kind !== "extension") {
-      throw new ServiceError("extensions", "fetchRequestBodyChunk", "Only extensions can read extension fetch request bodies", "EACCES");
+      throw new ServiceError(
+        "extensions",
+        "fetchRequestBodyChunk",
+        "Only extensions can read extension fetch request bodies",
+        "EACCES"
+      );
     }
     const stream = this.fetchRequestBodies.get(streamId);
     if (!stream || stream.extensionName !== ctx.caller.runtime.id) {
-      throw new ServiceError("extensions", "fetchRequestBodyChunk", `Unknown extension fetch request body stream: ${streamId}`, "ENOENT");
+      throw new ServiceError(
+        "extensions",
+        "fetchRequestBodyChunk",
+        `Unknown extension fetch request body stream: ${streamId}`,
+        "ENOENT"
+      );
     }
     return readNextBodyChunk(stream);
   }
 
   private async fetchRequestBodyClose(ctx: ServiceContext, streamId: string): Promise<null> {
     if (ctx.caller.runtime.kind !== "extension") {
-      throw new ServiceError("extensions", "fetchRequestBodyClose", "Only extensions can close extension fetch request bodies", "EACCES");
+      throw new ServiceError(
+        "extensions",
+        "fetchRequestBodyClose",
+        "Only extensions can close extension fetch request bodies",
+        "EACCES"
+      );
     }
     const stream = this.fetchRequestBodies.get(streamId);
     if (!stream || stream.extensionName !== ctx.caller.runtime.id) return null;
@@ -796,19 +915,38 @@ export class ExtensionHost {
     return null;
   }
 
-  private readyFromExtension(ctx: ServiceContext, ready: { methods: string[]; hasFetch: boolean }): null {
+  private readyFromExtension(
+    ctx: ServiceContext,
+    ready: { methods: string[]; hasFetch: boolean }
+  ): null {
     if (ctx.caller.runtime.kind !== "extension") {
-      throw new ServiceError("extensions", "ready", "Only extensions can complete extension startup", "EACCES");
+      throw new ServiceError(
+        "extensions",
+        "ready",
+        "Only extensions can complete extension startup",
+        "EACCES"
+      );
     }
     this.processes.markReady(ctx.caller.runtime.id, ready);
     return null;
   }
 
-  private healthFromExtension(ctx: ServiceContext, state: ExtensionHealth["state"], detail: unknown): null {
+  private healthFromExtension(
+    ctx: ServiceContext,
+    state: ExtensionHealth["state"],
+    detail: unknown
+  ): null {
     if (ctx.caller.runtime.kind !== "extension") {
-      throw new ServiceError("extensions", "health", "Only extensions can report extension health", "EACCES");
+      throw new ServiceError(
+        "extensions",
+        "health",
+        "Only extensions can report extension health",
+        "EACCES"
+      );
     }
-    const healthDetail = detail as { summary?: string; reasons?: string[]; retryAt?: number } | undefined;
+    const healthDetail = detail as
+      | { summary?: string; reasons?: string[]; retryAt?: number }
+      | undefined;
     this.reportExtensionHealth(ctx.caller.runtime.id, {
       state,
       summary: healthDetail?.summary ?? state,
@@ -823,10 +961,15 @@ export class ExtensionHost {
     ctx: ServiceContext,
     level: UnitLogRecord["level"],
     message: string,
-    fields?: Record<string, unknown>,
+    fields?: Record<string, unknown>
   ): null {
     if (ctx.caller.runtime.kind !== "extension") {
-      throw new ServiceError("extensions", "log", "Only extensions can write extension logs", "EACCES");
+      throw new ServiceError(
+        "extensions",
+        "log",
+        "Only extensions can write extension logs",
+        "EACCES"
+      );
     }
     this.recordExtensionLog(ctx.caller.runtime.id, level, message, fields, "ctx.log");
     return null;
@@ -868,12 +1011,17 @@ export class ExtensionHost {
       const base = baseByName.get(entry.name) ?? extensionWorkspaceStatusFallback(entry, node);
       const running = runningByName.get(entry.name);
       const lastBuiltAt = this.resolveBundleMtime(entry);
-      const pendingApproval = entry.status === "pending-approval"
-        ? { kind: entry.activeBundleKey ? "extension.update" : "extension.install", submittedAt: entry.installedAt }
-        : null;
-      const availableUpdate = entry.enabled && entry.activeBundleKey && this.needsBuildRefresh(entry, node)
-        ? { reason: "dependency" as const, checkedAt: Date.now() }
-        : null;
+      const pendingApproval =
+        entry.status === "pending-approval"
+          ? {
+              kind: entry.activeBundleKey ? "extension.update" : "extension.install",
+              submittedAt: entry.installedAt,
+            }
+          : null;
+      const availableUpdate =
+        entry.enabled && entry.activeBundleKey && this.needsBuildRefresh(entry, node)
+          ? { reason: "dependency" as const, checkedAt: Date.now() }
+          : null;
       return {
         ...base,
         lastBuiltAt,
@@ -901,13 +1049,14 @@ export class ExtensionHost {
 
   listWorkspaceUnitLogs(
     name: string,
-    opts?: { since?: number; level?: "debug" | "info" | "warn" | "error"; limit?: number },
+    opts?: { since?: number; level?: "debug" | "info" | "warn" | "error"; limit?: number }
   ): UnitLogRecord[] {
     const logs = this.unitLogs.get(name) ?? [];
     const minLevel = opts?.level ? LOG_LEVEL_RANK[opts.level] : null;
-    const filtered = logs.filter((record) =>
-      (opts?.since === undefined || record.timestamp >= opts.since)
-      && (minLevel === null || LOG_LEVEL_RANK[record.level] >= minLevel)
+    const filtered = logs.filter(
+      (record) =>
+        (opts?.since === undefined || record.timestamp >= opts.since) &&
+        (minLevel === null || LOG_LEVEL_RANK[record.level] >= minLevel)
     );
     const limit = opts?.limit && opts.limit > 0 ? Math.min(Math.floor(opts.limit), 1000) : 200;
     return filtered.slice(-limit);
@@ -923,33 +1072,40 @@ export class ExtensionHost {
     if (repoPath === "meta") {
       return { allowed: true };
     }
-    return authorizeUnitSourcePush({
-      descriptor: EXTENSION_UNIT_DESCRIPTOR,
-      grantStore: this.sourcePushGrants,
-      grantTtlMs: EXTENSION_DEV_SESSION_TTL_MS,
-      findInstalledByRepo: (source) => this.unitHost.findInstalledByRepo(source),
-      requestApproval: async ({ request: sourcePush, installed, identity, callerKind }) =>
-        this.deps.approvalQueue.request({
-          kind: "unit-batch",
-          callerId: sourcePush.caller.runtime.id,
-          callerKind,
-          repoPath: identity.repoPath,
-          effectiveVersion: identity.effectiveVersion,
-          dedupKey: `unit-source-push:extension:${installed.entry.name}:${sourcePush.branch}`,
-          trigger: "source-push",
-          title: `${installed.entry.name} source push`,
-          description: "Accepting this push updates trusted native extension code.",
-          units: [{
-            ...this.buildBatchEntry(installed.node, installed.entry.source.ref),
-            ev: installed.entry.activeEv,
-          }],
-          configWrite: null,
-        }),
-    }, request);
+    return authorizeUnitSourcePush(
+      {
+        descriptor: EXTENSION_UNIT_DESCRIPTOR,
+        grantStore: this.sourcePushGrants,
+        grantTtlMs: EXTENSION_DEV_SESSION_TTL_MS,
+        findInstalledByRepo: (source) => this.unitHost.findInstalledByRepo(source),
+        requestApproval: async ({ request: sourcePush, installed, identity, callerKind }) =>
+          this.deps.approvalQueue.request({
+            kind: "unit-batch",
+            callerId: sourcePush.caller.runtime.id,
+            callerKind,
+            repoPath: identity.repoPath,
+            effectiveVersion: identity.effectiveVersion,
+            dedupKey: `unit-source-push:extension:${installed.entry.name}:${sourcePush.branch}`,
+            trigger: "source-push",
+            title: `${installed.entry.name} source push`,
+            description: "Accepting this push updates trusted native extension code.",
+            units: [
+              {
+                ...this.buildBatchEntry(installed.node, installed.entry.source.ref),
+                ev: installed.entry.activeEv,
+              },
+            ],
+            configWrite: null,
+          }),
+      },
+      request
+    );
   }
 
   metaPushApprovalForCommit(commit: string): { units: UnitBatchEntry[]; identityKeys: string[] } {
-    const approval = this.unitHost.approvalForDeclarations(this.readDeclaredExtensionsFromCommit(commit));
+    const approval = this.unitHost.approvalForDeclarations(
+      this.normalizeDeclaredRefs(this.readDeclaredExtensionsFromCommit(commit))
+    );
     return { units: approval.entries, identityKeys: approval.identityKeys };
   }
 
@@ -957,8 +1113,21 @@ export class ExtensionHost {
     this.unitHost.acceptPreapprovedTrust(version, keys);
   }
 
+  private normalizeDeclaredRefs(
+    declared: Array<{ source: string; ref: string; enabled: boolean }>
+  ): UnitDeclaration[] {
+    return declared.map((decl) => {
+      try {
+        const node = this.findExtensionNode(decl.source);
+        return { ...decl, ref: this.resolveDeclarationRef(node, decl.ref) };
+      } catch {
+        return decl;
+      }
+    });
+  }
+
   private readDeclaredExtensionsFromCommit(
-    commit: string,
+    commit: string
   ): Array<{ source: string; ref: string; enabled: boolean }> {
     const metaRepoDir = path.join(this.deps.workspacePath, "meta");
     try {
@@ -967,9 +1136,11 @@ export class ExtensionHost {
           cwd: metaRepoDir,
           encoding: "utf-8",
           stdio: ["ignore", "pipe", "ignore"],
-        }),
+        })
       );
-      return resolveDeclaredExtensions(parseWorkspaceConfigContentWithId(out, this.deps.workspaceId));
+      return resolveDeclaredExtensions(
+        parseWorkspaceConfigContentWithId(out, this.deps.workspaceId)
+      );
     } catch {
       return [];
     }
@@ -977,7 +1148,7 @@ export class ExtensionHost {
 
   private buildBatchEntry(
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
-    ref: string,
+    ref: string
   ): UnitBatchEntry {
     return {
       ...createUnitBatchEntryBase({
@@ -998,7 +1169,7 @@ export class ExtensionHost {
 
   private declarationBuildIdentity(
     node: ReturnType<ExtensionHost["findExtensionNode"]>,
-    ref: string,
+    ref: string
   ): UnitBuildIdentity<"extension"> {
     return createUnitBuildIdentity({
       unitKind: "extension" as const,
@@ -1045,13 +1216,15 @@ export class ExtensionHost {
             "extension.invoke",
             "build",
             [input],
-            invocation,
+            invocation
           );
           return assertBuildProviderOutput(entry.name, target, output);
         },
         streamArtifact: async (artifact, input) => {
           if (!artifact.stream) {
-            throw new Error(`Build provider ${entry.name} artifact ${artifact.path} is not stream-backed`);
+            throw new Error(
+              `Build provider ${entry.name} artifact ${artifact.path} is not stream-backed`
+            );
           }
           if (!this.deps.extensionTransport.streamCallTarget) {
             throw new Error(`Build provider ${entry.name} streaming transport is unavailable`);
@@ -1070,7 +1243,7 @@ export class ExtensionHost {
             "extension.invokeStream",
             artifact.stream.method,
             artifact.stream.args ?? [artifact.path, input],
-            invocation,
+            invocation
           );
         },
       });
@@ -1081,8 +1254,8 @@ export class ExtensionHost {
 
   private unregisterBuildProvidersFor(name: string): void {
     if (!this.deps.unregisterBuildProvider) return;
-    const targets = this.registeredBuildProviderTargets.get(name)
-      ?? new Set(this.buildProviderTargetsFor(name));
+    const targets =
+      this.registeredBuildProviderTargets.get(name) ?? new Set(this.buildProviderTargetsFor(name));
     for (const target of targets) {
       this.deps.unregisterBuildProvider(target, name);
     }
@@ -1091,7 +1264,7 @@ export class ExtensionHost {
 
   private unregisterStaleBuildProvidersFor(
     name: string,
-    nextTargets: ReadonlySet<BuildProviderTarget>,
+    nextTargets: ReadonlySet<BuildProviderTarget>
   ): void {
     if (!this.deps.unregisterBuildProvider) return;
     const previousTargets = this.registeredBuildProviderTargets.get(name);
@@ -1105,7 +1278,8 @@ export class ExtensionHost {
 
   private buildProviderTargetsFor(name: string): BuildProviderTarget[] {
     try {
-      const targets = this.findExtensionNode(name).manifest.extension?.contributes?.buildTargets ?? [];
+      const targets =
+        this.findExtensionNode(name).manifest.extension?.contributes?.buildTargets ?? [];
       return targets.filter((target): target is BuildProviderTarget => target === "react-native");
     } catch {
       return [];
@@ -1117,7 +1291,9 @@ export class ExtensionHost {
     if (!entry?.activeBundleKey) throw new Error(`Extension has no active approved build: ${name}`);
     const build = this.deps.buildSystem.getBuildByKey?.(entry.activeBundleKey);
     if (!build) {
-      throw new Error(`Approved extension build is missing from build store: ${entry.activeBundleKey}`);
+      throw new Error(
+        `Approved extension build is missing from build store: ${entry.activeBundleKey}`
+      );
     }
     const token = this.deps.tokenManager.ensureToken(name, "extension");
     this.registry.patch(name, { status: "building", lastError: null });
@@ -1214,30 +1390,36 @@ export class ExtensionHost {
     }
   }
 
-  private currentDependencyEvs(node: ReturnType<ExtensionHost["findExtensionNode"]>): Record<string, string> {
+  private currentDependencyEvs(
+    node: ReturnType<ExtensionHost["findExtensionNode"]>
+  ): Record<string, string> {
     return collectTransitiveUnitDependencyEvs(
       this.deps.buildSystem.getGraph().allNodes(),
       node,
-      (name) => this.deps.buildSystem.getEffectiveVersion(name),
+      (name) => this.deps.buildSystem.getEffectiveVersion(name)
     );
   }
 
-  private currentExternalDeps(node: ReturnType<ExtensionHost["findExtensionNode"]>): Record<string, string> {
+  private currentExternalDeps(
+    node: ReturnType<ExtensionHost["findExtensionNode"]>
+  ): Record<string, string> {
     return this.deps.buildSystem.getExternalDeps(node.name);
   }
 
   private needsBuildRefresh(
     entry: RegistryEntry,
-    node: ReturnType<ExtensionHost["findExtensionNode"]>,
+    node: ReturnType<ExtensionHost["findExtensionNode"]>
   ): boolean {
     const currentExternalDeps = this.currentExternalDeps(node);
-    if (this.unitHost.needsBuildRefresh(entry, {
-      sourceRepo: node.relativePath,
-      ref: entry.source.ref,
-      effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
-      dependencyEvs: this.currentDependencyEvs(node),
-      externalDeps: currentExternalDeps,
-    })) {
+    if (
+      this.unitHost.needsBuildRefresh(entry, {
+        sourceRepo: node.relativePath,
+        ref: entry.source.ref,
+        effectiveVersion: this.deps.buildSystem.getEffectiveVersion(node.name),
+        dependencyEvs: this.currentDependencyEvs(node),
+        externalDeps: currentExternalDeps,
+      })
+    ) {
       return true;
     }
     if (!this.hasCurrentExtensionRuntimeAbi(entry)) return true;
@@ -1260,7 +1442,11 @@ export class ExtensionHost {
   }
 
   private findExtensionNode(nameOrRepo: string) {
-    const node = findUnitGraphNode(this.deps.buildSystem.getGraph().allNodes(), EXTENSION_UNIT_DESCRIPTOR, nameOrRepo);
+    const node = findUnitGraphNode(
+      this.deps.buildSystem.getGraph().allNodes(),
+      EXTENSION_UNIT_DESCRIPTOR,
+      nameOrRepo
+    );
     const events = node.manifest.extension?.activationEvents ?? ["*"];
     if (events.some((event) => event !== "*")) {
       throw new Error(`Extension ${node.name} only supports eager activation in v1`);
@@ -1268,12 +1454,29 @@ export class ExtensionHost {
     return node;
   }
 
+  private resolveDeclarationRef(
+    node: ReturnType<ExtensionHost["findExtensionNode"]>,
+    ref: string
+  ): string {
+    if (resolveGitCommit(node.path, ref)) return ref;
+    if (ref === "main" && resolveGitCommit(node.path, "master")) return "master";
+    return ref;
+  }
+
   private storageDirFor(name: string): string {
-    return path.join(this.deps.statePath, "extensions", "storage", this.deps.workspaceId, encodeURIComponent(name));
+    return path.join(
+      this.deps.statePath,
+      "extensions",
+      "storage",
+      this.deps.workspaceId,
+      encodeURIComponent(name)
+    );
   }
 
   private readNodeVersion(nodePath: string): string {
-    const pkg = JSON.parse(fs.readFileSync(path.join(nodePath, "package.json"), "utf8")) as { version?: string };
+    const pkg = JSON.parse(fs.readFileSync(path.join(nodePath, "package.json"), "utf8")) as {
+      version?: string;
+    };
     return pkg.version ?? "0.0.0";
   }
 
@@ -1292,12 +1495,17 @@ export class ExtensionHost {
         "extensions",
         "reload",
         `Extension reload is not available to ${ctx.caller.runtime.kind} callers`,
-        "EACCES",
+        "EACCES"
       );
     }
     const identity = ctx.caller.code;
     if (!identity || identity.callerKind !== ctx.caller.runtime.kind) {
-      throw new ServiceError("extensions", "reload", `Unknown caller identity: ${ctx.caller.runtime.id}`, "ENOENT");
+      throw new ServiceError(
+        "extensions",
+        "reload",
+        `Unknown caller identity: ${ctx.caller.runtime.id}`,
+        "ENOENT"
+      );
     }
     const node = this.findExtensionNode(name);
     const entry = this.registry.get(node.name);
@@ -1316,19 +1524,21 @@ export class ExtensionHost {
       trigger: "management",
       title: "Reload extension",
       description: `Allow ${ctx.caller.runtime.kind} ${ctx.caller.runtime.id} to reload ${name}.`,
-      units: [{
-        unitKind: "extension",
-        unitName: node.name,
-        displayName: node.manifest.displayName ?? node.name,
-        version: entry?.version ?? this.readNodeVersion(node.path),
-        target: null,
-        source,
-        ev: entry?.activeEv ?? null,
-        capabilities: extensionRuntimeCapabilities(),
-        dependencyEvs: entry?.activeDependencyEvs ?? this.currentDependencyEvs(node),
-        externalDeps: entry?.activeExternalDeps ?? this.currentExternalDeps(node),
-        commit: null,
-      }],
+      units: [
+        {
+          unitKind: "extension",
+          unitName: node.name,
+          displayName: node.manifest.displayName ?? node.name,
+          version: entry?.version ?? this.readNodeVersion(node.path),
+          target: null,
+          source,
+          ev: entry?.activeEv ?? null,
+          capabilities: extensionRuntimeCapabilities(),
+          dependencyEvs: entry?.activeDependencyEvs ?? this.currentDependencyEvs(node),
+          externalDeps: entry?.activeExternalDeps ?? this.currentExternalDeps(node),
+          commit: null,
+        },
+      ],
       configWrite: null,
     });
     if (decision === "deny") {
@@ -1353,7 +1563,7 @@ export class ExtensionHost {
     level: UnitLogRecord["level"],
     message: string,
     fields?: Record<string, unknown>,
-    source: UnitLogRecord["source"] = "ctx.log",
+    source: UnitLogRecord["source"] = "ctx.log"
   ): void {
     const record: UnitLogRecord = {
       workspaceId: this.deps.workspaceId,
@@ -1368,7 +1578,6 @@ export class ExtensionHost {
     this.recordUnitLog(record);
     this.deps.eventService.emit("workspace:unit-log", record);
   }
-
 }
 
 interface UnitLogRecord {
@@ -1436,7 +1645,7 @@ async function readNextBodyChunk(stream: FetchRequestBodyStream): Promise<Stream
       // Best-effort: caller already saw the failure.
     }
     const err = new Error(
-      `Request body exceeds the ${EXTENSION_REQUEST_BODY_MAX_BYTES}-byte extension fetch limit`,
+      `Request body exceeds the ${EXTENSION_REQUEST_BODY_MAX_BYTES}-byte extension fetch limit`
     );
     (err as NodeJS.ErrnoException).code = "EFBIG";
     throw err;
@@ -1462,7 +1671,10 @@ async function writeResponseChunk(res: ServerResponse, chunk: Buffer): Promise<v
   });
 }
 
-async function writeInlineResponseBody(res: ServerResponse, body: BinaryEnvelope | string): Promise<void> {
+async function writeInlineResponseBody(
+  res: ServerResponse,
+  body: BinaryEnvelope | string
+): Promise<void> {
   if (typeof body === "string") {
     res.end(body);
     return;
@@ -1490,9 +1702,13 @@ function extensionMetadataDetails(metadata: ExtensionBuildMetadataLike | undefin
   };
 }
 
-function extensionPrimaryArtifactPath(build: { dir: string; artifacts: ExtensionBuildArtifactLike[] }): string {
-  const artifact = build.artifacts.find((entry) => entry.role === "primary" && entry.platform === undefined)
-    ?? build.artifacts.find((entry) => entry.role === "primary");
+function extensionPrimaryArtifactPath(build: {
+  dir: string;
+  artifacts: ExtensionBuildArtifactLike[];
+}): string {
+  const artifact =
+    build.artifacts.find((entry) => entry.role === "primary" && entry.platform === undefined) ??
+    build.artifacts.find((entry) => entry.role === "primary");
   if (!artifact) {
     throw new Error("Extension build has no primary artifact");
   }
@@ -1510,11 +1726,15 @@ function extensionRuntimeCapabilities(): string[] {
 
 function resolveGitCommit(repoPath: string, ref = "HEAD"): string | null {
   try {
-    return String(execGitFileSync(["rev-parse", "--verify", "--end-of-options", ref], {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    })).trim() || null;
+    return (
+      String(
+        execGitFileSync(["rev-parse", "--verify", "--end-of-options", ref], {
+          cwd: repoPath,
+          encoding: "utf-8",
+          stdio: ["ignore", "pipe", "ignore"],
+        })
+      ).trim() || null
+    );
   } catch {
     return null;
   }
@@ -1523,22 +1743,25 @@ function resolveGitCommit(repoPath: string, ref = "HEAD"): string | null {
 function assertBuildProviderOutput(
   providerName: string,
   target: BuildProviderTarget,
-  value: unknown,
+  value: unknown
 ): BuildProviderOutput {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Build provider ${providerName} for ${target} returned a non-object output`);
   }
   const output = value as Partial<BuildProviderOutput>;
   if (
-    !Array.isArray(output.artifacts)
-    || output.artifacts.some((artifact) =>
-      !artifact
-      || typeof artifact !== "object"
-      || typeof artifact.path !== "string"
-      || typeof artifact.role !== "string"
-      || typeof artifact.contentType !== "string"
-      || (typeof artifact.content !== "string" && !isBuildProviderArtifactStream(artifact.stream))
-      || (artifact.encoding !== undefined && artifact.encoding !== "utf8" && artifact.encoding !== "base64")
+    !Array.isArray(output.artifacts) ||
+    output.artifacts.some(
+      (artifact) =>
+        !artifact ||
+        typeof artifact !== "object" ||
+        typeof artifact.path !== "string" ||
+        typeof artifact.role !== "string" ||
+        typeof artifact.contentType !== "string" ||
+        (typeof artifact.content !== "string" && !isBuildProviderArtifactStream(artifact.stream)) ||
+        (artifact.encoding !== undefined &&
+          artifact.encoding !== "utf8" &&
+          artifact.encoding !== "base64")
     )
   ) {
     throw new Error(`Build provider ${providerName} for ${target} returned invalid artifacts`);
@@ -1551,7 +1774,7 @@ function assertBuildProviderOutput(
 
 function extensionWorkspaceStatusFallback(
   entry: RegistryEntry,
-  node: ReturnType<ExtensionHost["findExtensionNode"]>,
+  node: ReturnType<ExtensionHost["findExtensionNode"]>
 ): UnitWorkspaceStatus<"extension"> {
   return {
     name: entry.name,
@@ -1569,12 +1792,14 @@ function extensionWorkspaceStatusFallback(
   };
 }
 
-function isBuildProviderArtifactStream(value: unknown): value is { method: string; args?: unknown[] } {
+function isBuildProviderArtifactStream(
+  value: unknown
+): value is { method: string; args?: unknown[] } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const stream = value as { method?: unknown; args?: unknown };
   return (
-    typeof stream.method === "string"
-    && stream.method.trim().length > 0
-    && (stream.args === undefined || Array.isArray(stream.args))
+    typeof stream.method === "string" &&
+    stream.method.trim().length > 0 &&
+    (stream.args === undefined || Array.isArray(stream.args))
   );
 }

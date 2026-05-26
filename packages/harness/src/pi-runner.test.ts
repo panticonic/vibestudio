@@ -349,6 +349,36 @@ describe("PiRunner", () => {
     ]);
   });
 
+  it("does not emit duplicate terminal provenance for already-terminal invocations", () => {
+    const runner = new PiRunner(createOptions()) as unknown as {
+      provenanceQueue: Array<Record<string, unknown>>;
+      terminalInvocationIds: Set<string>;
+      queueMessageProvenance(message: unknown, messageEntryId: string): void;
+    };
+    runner.provenanceQueue = [];
+    runner.terminalInvocationIds.add("call_1");
+
+    runner.queueMessageProvenance(
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "eval",
+        content: [{ type: "text", text: "done" }],
+      },
+      "entry-result"
+    );
+
+    expect(runner.provenanceQueue).toEqual([
+      expect.objectContaining({
+        eventId: "entry-result",
+        event: expect.objectContaining({
+          kind: "message.completed",
+          payload: expect.objectContaining({ role: "tool" }),
+        }),
+      }),
+    ]);
+  });
+
   it("keeps session-appended user messages provenance-only", () => {
     const runner = new PiRunner(createOptions()) as unknown as {
       provenanceQueue: Array<Record<string, unknown>>;

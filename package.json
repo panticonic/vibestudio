@@ -36,6 +36,7 @@
     "dist:linux": "pnpm build:dist && electron-builder --linux",
     "generate:runtime-docs": "node scripts/generate-runtime-docs.mjs",
     "check:runtime-docs": "node scripts/generate-runtime-docs.mjs --check",
+    "check:build-artifacts": "node scripts/check-build-artifacts.mjs",
     "dev:debug": "NATSTACK_DEBUG_PATHS=1 pnpm dev",
     "dev:verbose": "NATSTACK_LOG_LEVEL=verbose pnpm dev",
     "terminal:jig": "node scripts/run-terminal-input-jig.mjs",

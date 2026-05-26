@@ -377,6 +377,7 @@ export class PiRunner {
   private readonly phaseCheckpoints: RunnerDebugCheckpoint[] = [];
   private readonly recentHarnessEvents: RunnerDebugEvent[] = [];
   private readonly recentTrajectoryEvents: RunnerDebugTrajectoryEvent[] = [];
+  private readonly terminalInvocationIds = new Set<string>();
   private readonly lastErrors: RunnerDebugError[] = [];
   private currentOperation: RunnerDebugOperation | null = null;
   private awaitingProviderFirstEvent = false;
@@ -786,6 +787,12 @@ export class PiRunner {
     });
     const state = events.reduce(reduceTrajectory, createInitialTrajectoryState());
     this.restoredTrajectoryState = state;
+    this.terminalInvocationIds.clear();
+    for (const invocation of Object.values(state.invocations)) {
+      if (this.isTerminalInvocationStatus(invocation.status)) {
+        this.terminalInvocationIds.add(invocation.invocationId);
+      }
+    }
     return new TrajectoryBackedSessionStorage({
       trajectoryId,
       branchId: gad.branchId,
@@ -1221,6 +1228,15 @@ export class PiRunner {
     );
   }
 
+  private isTerminalInvocationEvent(kind: string | undefined): boolean {
+    return (
+      kind === "invocation.completed" ||
+      kind === "invocation.failed" ||
+      kind === "invocation.cancelled" ||
+      kind === "invocation.abandoned"
+    );
+  }
+
   private async handleMessageEnd(message: AgentMessage): Promise<void> {
     if (!this.session) return;
     const messageEntryId = await this.session.getLeafId();
@@ -1362,6 +1378,7 @@ export class PiRunner {
       if (typeof toolCallId === "string" && toolCallId.length > 0) {
         this.openInvocationIds.delete(toolCallId);
         this.openToolInvocations.delete(toolCallId);
+        if (this.terminalInvocationIds.has(toolCallId)) return;
         this.provenanceQueue.push({
           event: {
             kind:
@@ -1471,6 +1488,12 @@ export class PiRunner {
         owner: this.agentActor(),
         events,
       });
+      for (const { event } of events) {
+        const invocationId = (event as { causality?: { invocationId?: unknown } }).causality?.invocationId;
+        if (typeof invocationId === "string" && this.isTerminalInvocationEvent(event.kind)) {
+          this.terminalInvocationIds.add(invocationId);
+        }
+      }
       this.schedulePublishedChannelEnvelopeBroadcasts(result?.published ?? []);
     } catch (err) {
       this.rememberError("trajectory.append", err);

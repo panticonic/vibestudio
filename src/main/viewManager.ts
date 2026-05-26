@@ -210,7 +210,7 @@ export class ViewManager {
       const menuItems = this.buildContextMenuItems(params, this.shellView.webContents);
       if (menuItems.length > 0) {
         const menu = Menu.buildFromTemplate(menuItems);
-        menu.popup();
+        this.popupWebContentsContextMenu(menu, params, this.views.get("shell")?.bounds);
       }
     });
 
@@ -364,7 +364,7 @@ export class ViewManager {
         const menuItems = this.buildContextMenuItems(params, view.webContents);
         if (menuItems.length > 0) {
           const menu = Menu.buildFromTemplate(menuItems);
-          menu.popup();
+          this.popupWebContentsContextMenu(menu, params, managed.bounds);
         }
       },
       renderProcessGone: (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) => {
@@ -480,6 +480,20 @@ export class ViewManager {
     });
 
     return items;
+  }
+
+  private popupWebContentsContextMenu(
+    menu: Menu,
+    params: Electron.ContextMenuParams,
+    bounds?: ViewBounds
+  ): void {
+    menu.popup({
+      window: this.window,
+      frame: params.frame ?? undefined,
+      sourceType: params.menuSourceType,
+      x: Math.round((bounds?.x ?? 0) + params.x),
+      y: Math.round((bounds?.y ?? 0) + params.y),
+    });
   }
 
   /**
