@@ -54,6 +54,7 @@ function makeHost(overrides: {
   activeRuntimeDepsKey?: string | null;
   extensionTransport?: { call: ReturnType<typeof vi.fn> };
   getContextIdForCaller?: (callerId: string) => string | null;
+  gitDefaultBranch?: "main" | "master";
   installed?: boolean;
   enabled?: boolean;
   status?: "running" | "stopped" | "building" | "error" | "pending-approval";
@@ -84,6 +85,26 @@ function makeHost(overrides: {
       },
     }),
   );
+  if (overrides.gitDefaultBranch) {
+    execFileSync("git", ["-c", `init.defaultBranch=${overrides.gitDefaultBranch}`, "init", "-q"], {
+      cwd: extensionNode.path,
+    });
+    execFileSync("git", ["add", "package.json"], { cwd: extensionNode.path });
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "user.name=NatStack Test",
+        "-c",
+        "user.email=test@natstack.local",
+        "commit",
+        "-q",
+        "-m",
+        "initial extension",
+      ],
+      { cwd: extensionNode.path },
+    );
+  }
   const approvalQueue = {
     request: vi.fn(async () => overrides.approvalDecision ?? "once"),
   };
@@ -395,6 +416,63 @@ describe("ExtensionHost reconcileDeclared", () => {
     });
   });
 
+  it("resolves the default main ref to master for managed workspace extension repos", async () => {
+    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
+      installed: false,
+      gitDefaultBranch: "master",
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await host.reconcileDeclared(declare(extensionNode.name));
+    await host.whenSettled();
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "extension-batch",
+      extensions: [expect.objectContaining({
+        extensionName: extensionNode.name,
+        source: expect.objectContaining({ ref: "master" }),
+      })],
+    }));
+    expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "master");
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      activeBundleKey: "candidate-key",
+      source: { repo: extensionNode.relativePath, ref: "master" },
+    });
+  });
+
+  it("waits for startup approval and activation before invoking a declared extension", async () => {
+    const approval = deferred<"once">();
+    const extensionTransport = {
+      call: vi.fn(async (_name: string, _method: string, apiMethod: string) => {
+        return `called:${apiMethod}`;
+      }),
+    };
+    const { host, approvalQueue, extensionNode } = makeHost({
+      installed: false,
+      extensionTransport,
+    });
+    approvalQueue.request.mockImplementationOnce(() => approval.promise);
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+    vi.spyOn(host.processes, "isRunning").mockImplementation((name) =>
+      Boolean(host.registry.get(name)?.activeBundleKey),
+    );
+
+    await host.reconcileDeclared(declare(extensionNode.name));
+    const invoke = host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []);
+    await Promise.resolve();
+    expect(extensionTransport.call).not.toHaveBeenCalled();
+
+    approval.resolve("once");
+    await expect(invoke).resolves.toBe("called:blame");
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invoke",
+      "blame",
+      [],
+      expect.objectContaining({ extensionName: extensionNode.name }),
+    );
+  });
+
   it("starts an already-approved declared extension without prompting", async () => {
     const { host, approvalQueue, buildSystem, extensionNode } = makeHost();
     const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
@@ -556,6 +634,24 @@ describe("ExtensionHost activation", () => {
     );
     const invocation = extensionTransport.call.mock.calls[0]![4] as { invocationToken: string };
     expect(host.resolveActiveInvocation(extensionNode.name, invocation.invocationToken)).toBeNull();
+  });
+
+  it("accepts workspace-relative extension paths on invocation", async () => {
+    const extensionTransport = { call: vi.fn(async () => "transport-result") };
+    const { host, extensionNode } = makeHost({ extensionTransport });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+
+    await expect(
+      host.invoke(panelCtx("panel-1"), `workspace/${extensionNode.relativePath}`, "blame", []),
+    ).resolves.toBe("transport-result");
+
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invoke",
+      "blame",
+      [],
+      expect.objectContaining({ extensionName: extensionNode.name }),
+    );
   });
 
   it("records extension invocation failures with stack context", async () => {

@@ -266,7 +266,8 @@ export class ExtensionHost {
     const unresolved: string[] = [];
     for (const decl of declared) {
       try {
-        resolved.push({ decl, node: this.findExtensionNode(decl.source) });
+        const node = this.findExtensionNode(decl.source);
+        resolved.push({ decl: { ...decl, ref: this.resolveDeclarationRef(node, decl.ref) }, node });
       } catch {
         unresolved.push(decl.source);
       }
@@ -516,6 +517,7 @@ export class ExtensionHost {
   }
 
   async invoke(ctx: ServiceContext, name: string, method: string, args: unknown[]): Promise<unknown> {
+    await this.whenSettled();
     const entry = this.lookupForInvoke(name);
     if (!entry || !entry.enabled) {
       throw new ServiceError("extensions", "invoke", `Extension is not installed or enabled: ${name}`, "ENOEXT");
@@ -581,6 +583,7 @@ export class ExtensionHost {
   }
 
   async invokeStream(ctx: ServiceContext, name: string, method: string, args: unknown[]): Promise<Response> {
+    await this.whenSettled();
     const entry = this.lookupForInvoke(name);
     if (!entry || !entry.enabled) {
       throw new ServiceError("extensions", "invokeStream", `Extension is not installed or enabled: ${name}`, "ENOEXT");
@@ -1087,9 +1090,10 @@ export class ExtensionHost {
       } catch {
         continue;
       }
+      const ref = this.resolveDeclarationRef(node, decl.ref);
       const entry = this.registry.get(node.name);
-      if (!this.isApprovedForDeclaration(entry, node, decl.ref)) {
-        unapproved.push({ node, ref: decl.ref });
+      if (!this.isApprovedForDeclaration(entry, node, ref)) {
+        unapproved.push({ node, ref });
       }
     }
     const declarationKeys = new Set(unapproved.map(({ node, ref }) => this.declarationTrustKey(node, ref)));
@@ -1438,6 +1442,15 @@ export class ExtensionHost {
       throw new Error(`Extension ${node.name} only supports eager activation in v1`);
     }
     return node;
+  }
+
+  private resolveDeclarationRef(
+    node: ReturnType<ExtensionHost["findExtensionNode"]>,
+    ref: string,
+  ): string {
+    if (resolveGitCommit(node.path, ref)) return ref;
+    if (ref === "main" && resolveGitCommit(node.path, "master")) return "master";
+    return ref;
   }
 
   private storageDirFor(name: string): string {
