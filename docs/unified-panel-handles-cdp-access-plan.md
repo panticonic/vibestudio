@@ -152,28 +152,32 @@ boundary only enforces**. Model the service on `corsApprovalService`
 
 **Approval — new server service `panelControlApproval`** (server dispatcher, alongside
 corsApproval), policy `allowed: ["panel","worker","do"]` (NOT shell):
-- `authorize({ targetId, targetTitle, capability })` → `{ allowed, decision, grantToken? }`.
+- `authorize({ targetId, targetTitle, capability })` → `{ allowed, decision }`.
 - Uses `ctx.caller` as the genuine requester. Runs `requestCapabilityPermission` with
   `capability` ∈ {`panel.automate`,`panel.structural`} (§4.1), `resource = { type:"panel",
   label: targetTitle, value: targetId, key: targetId }`, `dedupKey =
   cdp:${ctx.caller.runtime.id}:${targetId}:${capability}`, severity by target privilege
-  (severe → danger tone). On allow, the grant is recorded in `CapabilityGrantStore` keyed
-  (requester→target→capability) → "remembered per requester→target" for free; the prompt
-  surfaces via the existing pipeline (§4.2). On allow, mint and return a short-lived **signed
-  capability token** bound to (requesterId, targetId, capability) — reuse the existing
-  `cdpGrants` signing scheme (`packages/shared/src/cdpGrants.ts`) so main can verify it
-  offline.
+  (severe → danger tone). On allow, the **durable** grant is recorded in `CapabilityGrantStore`
+  keyed (requester→target→capability) → "remembered per requester→target" for free, and is the
+  revocable source of truth; the prompt surfaces via the existing pipeline (§4.2). Returns only
+  `{ allowed, decision }` — no token (see the two-token note below).
+
+**Two tokens, do not conflate them:** (a) the **durable capability grant** in the server
+`CapabilityGrantStore` — scoped (`once`/`session`/`version`), revocable, the authorization of
+record; (b) the existing **`CdpGrantService` handshake token** (`packages/shared/src/cdpGrants.ts`)
+— an opaque, single-use, 60s, **process-local** token (not signed: `randomBytes` + `Map`,
+minted in `getCdpEndpoint` and redeemed at WS connect in the *same* process). It only ties a
+mint to its immediately-following WS connection; it carries no cross-process authorization.
 
 **Enforcement at the main boundary** (it owns the `WebContentsView`/debugger):
-- `getCdpEndpoint(targetId, grantToken?)` (Electron IPC → `browserService`, main): main runs
-  §4.1 `accessDecision("cdp", requester=ctx.caller, target)`. If `panel.automate` is required,
-  main verifies a valid grant for (requester→target): **prefer offline verification of the
-  signed `grantToken`** (no round-trip on the hot path); fall back to a
-  `serverClient.call("capabilityGrants","check",[…])` lookup (a *query* — correctly attributed
-  because the grant was created under the real requester id — not an approval). Absent/invalid
-  → reject `"CDP access denied"`. On pass → **transparently `ensureLoaded(target)`** (§8) →
-  mint the CDP endpoint. Persist `CallerKind` in the minted `CdpGrant` so the WebSocket
-  `handleConnection`/`cdpBridge` re-evaluate bypass without re-prompting.
+- `getCdpEndpoint(targetId)` (Electron IPC → `browserService`, main): main runs §4.1
+  `accessDecision("cdp", requester=ctx.caller, target)`. If `panel.automate` is required, main
+  checks the **durable** grant via `serverClient.call("capabilityGrants","check",[{requesterId,
+  targetId, capability}])` (a *query*, correctly attributed because the grant was recorded under
+  the real requester id — `cdpGrants` is not signed, so there is no offline path). Absent →
+  reject `"CDP access denied"`. On pass → **transparently `ensureLoaded(target)`** (§8) → mint
+  the local `CdpGrant` handshake token and return the endpoint. `handleConnection` continues to
+  redeem the handshake token (now the ancestry `canAccessBrowser` check is gone — §4.4).
 - **Drive/structural ops** (`navigate`/`reload`/… and `close`/`archive`/…) go through the
   userland panel service (§6, main) and enforce identically before delegating to
   `PanelOrchestrator`; `panel.structural` is distinct so an automate grant never authorizes
@@ -181,21 +185,47 @@ corsApproval), policy `allowed: ["panel","worker","do"]` (NOT shell):
 
 **SDK orchestration (the handle, transparent to callers):** a live-only op first calls
 `panelControlApproval.authorize` on the requester's own RPC connection — **idempotent**:
-returns immediately with a token if a grant already exists, otherwise prompts — then calls the
-main IPC with the returned `grantToken`. The caller writes only `handle.cdp.page()`.
+returns immediately if a grant exists, otherwise prompts and records it — then calls the main
+IPC. No token is relayed between the two calls; main re-checks the durable grant itself. The
+caller writes only `handle.cdp.page()`.
 
 **Why main can trust this:** the requester names only the *target* (the approved resource); it
 cannot forge its own identity (that is its verified RPC `ctx.caller`), and main independently
-re-runs `accessDecision` + verifies the signed token, so a panel that skips asking simply gets
+re-runs `accessDecision` + the grant `check`, so a panel that skips asking simply gets
 rejected. Defense in depth, with the policy module (§4.1) shared by both sides.
 
 **Server-mode (`cdpBridge.ts`) & mobile:** same `panelControlApproval` service, in-process in
-the server dispatcher (no token round-trip needed — same process owns the grant store).
+the server dispatcher (no `serverClient` query — same process owns the grant store).
 Replace `canAccessBrowser` / `panelOwnsBrowser` / `assertOwner` (`browserService.ts:42`) with
 the shared `accessDecision` + grant check.
 
 **CORS is unchanged:** it remains main-originated via the `serverClient` hop
 (`src/main/index.ts:409-435`); only CDP/control move to the requester-asks model.
+
+### 4.4 Unify the CDP auth gate across both backends
+
+There are two CDP *transports* — `cdpServer.ts` (desktop) drives Electron `WebContentsView`s
+via `webContents.debugger`; `cdpBridge.ts` (server) **relays to a browser-extension
+`chrome.debugger`** to drive external Chrome tabs (`cdpBridge.ts:5-6,422-499`). Those debuggee
+transports are irreducibly different (in-process Electron debugger vs. extension WS relay) and
+**stay separate** — that is I/O, not authorization.
+
+Their **auth is already ~80% shared** and should be fully unified: both use the same
+`CdpGrantService` handshake, the same two predicates (`canAccessBrowser` for the endpoint,
+`panelOwnsBrowser` for nav — `cdpBridge.ts:213,238`; `cdpServer.ts:323`), the same
+`natstack:cdp-auth` frame, and the same client-facing CDP protocol (so Playwright connects
+identically). Extract one shared **CDP auth gate** (in `packages/shared`, next to §4.1) invoked
+by both backends at their three chokepoints:
+- endpoint mint — `getCdpEndpoint`,
+- WS-connect redeem — `cdpServer.handleConnection` / `cdpBridge.handleUpgrade`,
+- nav/command — `sendBrowserCommand` / drive ops.
+
+The gate = §4.1 `accessDecision` + the durable capability-grant `check` + the ephemeral
+`CdpGrantService` handshake. It **replaces** `canAccessBrowser` + `panelOwnsBrowser`
+(ancestry/owner) in both backends. The **only** per-backend difference is the grant-`check`
+transport, injected as a callback: in-process for `cdpBridge` (server) vs. a `serverClient`
+query for `cdpServer` (main). This is also what makes the §4.3 enforcement uniform and removes
+any need for signed offline tokens.
 
 ## 5. Unified `PanelHandle`
 
@@ -416,11 +446,12 @@ transport.
 2. Privileged-target persistence (`PanelSnapshot.privileged`) + `registerTarget` + root
    registration + `browser`→`target` rename in the CDP layer.
 3. `panelControlApproval` server service (§4.3), policy `["panel","worker","do"]`, reusing
-   `requestCapabilityPermission`; returns a signed `grantToken` (reuse `cdpGrants` signing).
-4. Main enforcement: `getCdpEndpoint(targetId, grantToken?)` + drive/structural paths run
-   `accessDecision` and verify the signed token (fallback: `capabilityGrants.check` query).
-   Replace `canAccessBrowser`/`assertOwner`; `cdpBridge` enforces in-process. SDK handle calls
-   `authorize` (idempotent) then passes the token to main.
+   `requestCapabilityPermission`; records the durable grant, returns `{ allowed, decision }`.
+   Add a `capabilityGrants.check` query for main to consult.
+4. Shared **CDP auth gate** (§4.4) replacing `canAccessBrowser`/`panelOwnsBrowser`/`assertOwner`
+   in *both* `cdpServer` and `cdpBridge`, with the grant-`check` injected (in-process vs
+   `serverClient` query). `getCdpEndpoint` + drive/structural paths enforce via the gate. SDK
+   handle calls `authorize` (idempotent) then the main IPC; no token relayed.
 5. `PanelOrchestrator.ensureLoaded` + transparent fold into `getCdpEndpoint`.
 6. New userland panel service + `panelCall` RPC routing for no-shell runtimes.
 7. Unified `PanelHandle` (merge types, `cdp` rename, `withContract(role)`, sync metadata +
@@ -433,17 +464,23 @@ transport.
 
 ## 12. Open risks / verify before/while building
 
-- **Grant enforcement at main** (§4.3) — decide signed-token offline verification (preferred,
-  no round-trip) vs. a `capabilityGrants.check` query; confirm the `cdpGrants` signing scheme
-  is reusable for the capability `grantToken`.
-- **Worker→main service routing in desktop mode** (§6) — confirm or implement (needed for the
-  enforcement IPC; the panel→server approval connection is already confirmed).
-- **Signed-token freshness/revocation** — short TTL so a revoked `CapabilityGrantStore` entry
-  can't be replayed via a stale token; main re-runs `accessDecision` regardless.
-- **Host debugger coexistence** (§7) — renames/access-widening must not disturb
-  `getAccessibilityTree`/snapshot or single-session command serialization.
-- **Hidden-view CDP attach** (§8) — verify a non-visible `WebContentsView` attaches (also the
-  basis for the headless host, §9.3).
+- **Grant enforcement** (§4.3/§4.4) — *resolved:* `cdpGrants` is opaque/main-local (not
+  signed), so there is no offline path; main consults the durable grant via a
+  `capabilityGrants.check` `serverClient` query, `cdpBridge` checks in-process. Revocation is
+  authoritative on the durable grant (server); the 60s handshake token is too short-lived to
+  matter, and main re-runs `accessDecision` every time.
+- **Worker→main routing** (§6) — *confirmed: does not exist today.* Workers/DOs reach neither
+  Electron IPC nor a `"main"` relay target (`rpcServer` has no main route; main connects as
+  `admin` with no server-side WS state). Panels work (IPC). So worker/DO-as-CDP-requester needs
+  new server→main reverse-routing — **scope decision pending** (phase vs. build now).
+- **Host debugger coexistence** (§7) — *confirmed shape:* host `getAccessibilityTree`
+  (`cdpServer.ts:259`) and client CDP share one per-target serialized queue
+  (`debuggerCommandQueues`, `sendDebuggerCommand:506`); the `browser`→`target` rename must keep
+  the queue keyed per target.
+- **Hidden-view CDP attach** (§8/§9) — *confirmed:* `debugger.attach` is visibility-independent,
+  so attach + most CDP work on hidden/offscreen views. **Exception:** `Page.captureScreenshot`
+  needs `withViewVisible` (`cdpServer.ts:363-369`, `viewManager.ts:799`), which a windowless
+  headless host can't satisfy → screenshots are the one headless gap (see scope decision).
 - **(§9) Mobile-held target + CDP** — *resolved:* reject with `cdp_unavailable_mobile_held`
   (no take-over). Implementation note: enforcement must know the current holder's
   CDP-capability — derive it from the lease `holderLabel`/host-capability presence (§9.4), not
