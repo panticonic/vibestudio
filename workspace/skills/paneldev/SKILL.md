@@ -7,6 +7,9 @@ description: Build and develop NatStack panels — project scaffolding, hooks, R
 
 Documentation for developing NatStack panels.
 
+For trusted workspace apps under `apps/` (`@workspace-apps/*`, Electron shell,
+mobile React Native, or terminal targets), use the `appdev` skill instead.
+
 ## Files
 
 | Document                               | Content                                                                                                                                           |

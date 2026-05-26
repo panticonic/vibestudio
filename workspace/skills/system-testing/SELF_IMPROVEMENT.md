@@ -154,10 +154,15 @@ Pick the checkout type based on what failed.
 
 ### Workspace Runtime Repos
 
-If the bug is in workspace-owned runtime source such as `workspace/packages/`,
-`workspace/panels/`, `workspace/workers/`, or `workspace/skills/`, edit the
-existing workspace repo directly in your context and commit/push to the
-internal git server. These repos are live build inputs.
+If the bug is in workspace-owned runtime source such as `workspace/apps/`,
+`workspace/extensions/`, `workspace/packages/`, `workspace/panels/`,
+`workspace/workers/`, or `workspace/skills/`, edit the existing workspace repo
+directly in your context and commit/push to the internal git server. These repos
+are live build inputs.
+
+For `workspace/apps/` bugs, read `workspace/skills/appdev/SKILL.md` before
+editing. App fixes can require target-specific validation: Electron host chrome,
+mobile native bootstrap and principal grants, or terminal artifact-only status.
 
 ### NatStack Application Source
 
@@ -184,12 +189,15 @@ runtime unit, but it is a **self-edit target**:
 - Commit and push from `projects/natstack` to the internal git server.
 - If the host checkout is clean and fast-forwardable, the server mirrors the
   commit back to the launching checkout.
-- Server-relevant changes rebuild `dist/server.mjs` and restart the standalone
+- Server-runtime changes rebuild `dist/server.mjs` and restart the standalone
   dogfood server on the same gateway port.
-- Docs/mobile/Electron-only changes may mirror without restarting the server.
+- Docs, desktop shell, mobile app, and `workspace/` runtime-unit changes may
+  mirror without restarting the server.
 - If the host checkout is dirty, propagation is refused. Do not try to work
   around that from userland; ask the operator to clean or commit the host
   checkout.
+- If the host checkout is dirty at startup, the launcher warns, but startup
+  continues. The later mirror apply is what refuses dirty targets.
 - If the dogfood project clone is dirty or diverged at startup, the launcher
   warns and does not force it. Resolve that git state before expecting
   fast-forward propagation.

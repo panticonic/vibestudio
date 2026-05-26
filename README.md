@@ -236,6 +236,8 @@ See [docs/mobile-vpn.md](docs/mobile-vpn.md) for host selection, workspace
 flags, dev-vs-persistent workspace mode, and reconnect behavior. Use
 `pnpm mobile:pair` when you want mobile-specific install/log reminders, and
 click the printed `Pair URL` to connect a laptop without copying an admin token.
+After one desktop client is connected, use **Remote server** → **Paired
+devices** → **Pair another device** to create additional pairing links.
 
 Each panel gets:
 

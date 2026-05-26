@@ -67,7 +67,7 @@ To pin a specific git ref (branch, tag, or commit SHA), use the `imports` parame
 eval({ code: `...`, imports: { "@workspace-skills/paneldev": "my-branch" } })
 ```
 
-**Important:** Workspace packages are built from git, not from the working tree. If you edit source files, you must **commit and push** before changes take effect. Use `commitAndPush` from the paneldev skill or the GitClient API.
+**Important:** Workspace runtime units are built from git, not from the working tree. If you edit source files under `workspace/apps/`, `workspace/extensions/`, `workspace/packages/`, `workspace/panels/`, `workspace/workers/`, or `workspace/skills/`, you must **commit and push** before changes take effect. Use `commitAndPush` from the paneldev skill or the GitClient API.
 
 Context folders are isolated working trees with context-local refs, index, HEAD, config, and hooks. Only `.git/objects` is shared, through a validated symlink to the canonical source repo object store. Local commits can add immutable loose objects before push; approval gates canonical ref movement and source working tree updates. Do not manually edit `.git/objects`, and do not assume another context's push resets your current context.
 

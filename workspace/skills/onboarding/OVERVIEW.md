@@ -15,6 +15,13 @@ Panels are the building blocks of your workspace. Each panel is a self-contained
 
 The **chat panel** is the default root panel — it's where you interact with the AI agent.
 
+### Trusted Apps
+
+Trusted workspace apps live under `apps/` and use package names such as
+`@workspace-apps/shell`, `@workspace-apps/mobile`, and
+`@workspace-apps/remote-cli`. Apps are for trusted client runtimes, not ordinary
+panels. Use the `appdev` skill before creating or changing apps.
+
 ### Workspaces
 
 A workspace is a named collection of panels, packages, workers, and configuration. You can:

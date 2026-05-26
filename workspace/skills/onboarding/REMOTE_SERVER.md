@@ -15,7 +15,8 @@ On the host machine:
 
 ```
 natstack-server --host my-home-server.local --bind-host 0.0.0.0 \
-  --protocol https --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem
+  --protocol https --tls-cert /path/to/cert.pem --tls-key /path/to/key.pem \
+  --serve-panels --print-credentials
 ```
 
 Flags worth knowing:
@@ -25,7 +26,7 @@ Flags worth knowing:
 - `--protocol https` + `--tls-cert` / `--tls-key` — strongly recommended for anything outside localhost. Self-signed certs are fine for home use; see §3.
 - `--print-credentials` — prints machine-parseable `NATSTACK_ADMIN_TOKEN=...` and `NATSTACK_PAIRING_CODE=...` lines after startup, useful for scripting.
 
-On first boot the server generates an admin token (if `NATSTACK_ADMIN_TOKEN` isn't set) and persists it at `~/.config/natstack/admin-token` (`0o600`). That token is stable across restarts. Copy it — you'll enter it into clients next.
+On first boot the server generates an admin token (if `NATSTACK_ADMIN_TOKEN` isn't set) and persists it at `~/.config/natstack/admin-token` (`0o600`). Treat that token as bootstrap/recovery material. Normal clients should connect with the printed `Pair URL` or pairing code, which creates a durable device credential without copying the admin token off the server.
 
 The server prints its URL and `/healthz` is available for liveness checks (e.g., `curl https://my-home-server.local:3000/healthz`).
 
@@ -51,9 +52,15 @@ behavior.
 
 ### Desktop (Electron)
 
-Two paths:
+Recommended path:
 
-**(a) Bootstrap via env vars, then save via the UI.** Launch once with:
+1. Run `pnpm pair` or `natstack-server --print-credentials` on the server.
+2. Click the printed `Pair URL`, or open the connection badge → **Remote server** → **Pair with code** and paste the URL/code.
+3. Save and relaunch. The app stores a durable device credential in the OS-protected credential store.
+
+Once any desktop client is connected, open **Remote server** → **Paired devices** → **Pair another device** to mint a fresh pairing link for another laptop or phone without returning to the server terminal. A paired terminal can do the same with `natstack-client invite`.
+
+Admin-token bootstrap remains available for recovery and automation. Launch once with:
 
 ```
 NATSTACK_REMOTE_URL=https://my-home-server.local:3000 \
@@ -61,20 +68,19 @@ NATSTACK_REMOTE_TOKEN=<paste-the-admin-token> \
 natstack
 ```
 
-Once connected, open the connection badge in the title bar → **Remote server** dialog → enter the same details → **Save & relaunch**. The app encrypts the token via OS keychain (Keychain / DPAPI / libsecret) from then on; you won't need the env vars again.
-
-**(b) Go straight to the settings dialog.** Launch `natstack` normally in local mode, click the connection badge, fill in URL + token, save, relaunch.
+Once connected, open the connection badge in the title bar → **Remote server** dialog → enter the same details on the **Admin token** tab → **Save & relaunch**. The app encrypts the token via OS keychain (Keychain / DPAPI / libsecret) from then on; you won't need the env vars again.
 
 **Buttons in the settings dialog:**
 
 - **Test** — runs a `/healthz` probe and a throwaway auth attempt against the URL + token you entered. Surfaces invalid URL, unreachable server, TLS mismatch, or auth failure inline — no relaunch needed to discover a bad config.
 - **Fetch from server** (next to the fingerprint field) — pulls the server's leaf-cert SHA-256 from the TLS handshake so you don't have to run `openssl` by hand. Paired with the trust-on-first-use prompt: if you hit **Save & relaunch** against an `https://` URL without a stored fingerprint, the dialog shows the observed fingerprint and asks you to confirm before saving.
-- **Rotate token** — only enabled while connected. Mints a fresh admin token on the server, updates the local credential store, and relaunches with the new token. Old clients with the old token will fail to reconnect until updated.
+- **Pair another device** — only enabled while connected. Mints a fresh single-use pairing link through the active trusted device connection.
+- **Rotate token** — only enabled while connected with a saved admin token. Mints a fresh admin token on the server, updates the local credential store, and relaunches with the new token. Old clients with the old token will fail to reconnect until updated.
 - **Disconnect…** — destructive; wipes the credential store and relaunches into local mode. Requires a second click to confirm.
 
 ### Mobile
 
-Open the app → connection screen → enter URL and the same admin token (or a paired token; see §4). Token is stored via `react-native-keychain`.
+Use a `natstack://connect?...` pairing link from `pnpm mobile:pair`, `pnpm pair`, or **Pair another device** in an already-connected desktop client. The native mobile host exchanges the code for a durable device credential stored via `react-native-keychain`.
 
 ## 3. Self-signed HTTPS
 

@@ -133,8 +133,6 @@ const shell = extensions.use<ShellApi>("@workspace-extensions/shell", {
 });
 ```
 
-`extensions.useWithStreams(name, methods)` is an alias for the same option. Prefer `extensions.use(name, { streamingMethods })` in new code so unary and streaming methods live on one typed client.
-
 To check whether an extension is available before calling it, use `extensions.list()`:
 
 ```ts
