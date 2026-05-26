@@ -188,7 +188,8 @@ capability grant in `CapabilityGrantStore` (§4.2), re-evaluated on every `getCd
 ### 4.4 Host CDP provider agent (replaces the extension)
 
 Each Electron host (desktop main, and the headless host §9) runs a small **CDP provider** that
-connects to the broker's provider endpoint (as the extension did at `/api/cdp-bridge`),
+connects to the broker's provider endpoint (as the extension did at `/api/cdp-bridge`; detailed
+design in §14),
 authenticates with its host/admin token, registers the `browserId`s it currently holds (per the
 lease), and forwards CDP commands to its local `webContents.debugger`, streaming events back.
 This is the *existing* `cdpServer` machinery — `ensureDebuggerAttached`, `sendDebuggerCommand`,
@@ -466,10 +467,10 @@ exist, so the headless extension is mostly policy + the windowless host process.
   events), so workers/DOs need neither IPC nor a `"main"` relay. (Confirmed that relay doesn't
   exist — `rpcServer` has no main route, main connects as `admin` with no WS server-state — and
   this design avoids needing it.)
-- **Server↔host provider channel** (§4.4) — the new load-bearing piece: a host (main/headless)
-  connects to the broker's provider endpoint, registers held `browserId`s, and streams CDP both
-  ways. Define provider auth (host/admin token), reconnection, and how the broker maps a
-  `browserId` → current provider (from the lease holder).
+- **Server↔host provider channel** (§4.4) — *designed in §14:* dedicated provider WS per host,
+  routed by `lease.connectionId`, reusing the `cdpBridge` relay + extension protocol. Remaining
+  to validate in build: the headless orchestrator's new "load-on-lease-assignment" behavior
+  (§14.4) and `getCdpEndpoint` awaiting provider-ready without racing lease churn.
 - **CDP now hops through the server** — desktop-local CDP loses the direct main loopback; every
   CDP command crosses client→server→host. Accepted tradeoff; watch latency/throughput for
   chatty Playwright sessions and large payloads (e.g. screenshots).
@@ -514,3 +515,86 @@ exist, so the headless extension is mostly policy + the windowless host process.
   (headless unloads); release/disconnect the desktop → the panel falls back to the headless
   host. A panel currently leased by a mobile client → CDP automate request is **rejected** with
   `cdp_unavailable_mobile_held` (no take-over, panel stays on the device).
+
+## 14. Detailed design: server↔host CDP provider channel
+
+The load-bearing new piece for §3/§4.4. It generalizes today's `cdpBridge` (server-side broker
+between Playwright clients and a single browser-extension provider) into a broker between
+clients and **per-host debugger providers**, routed by lease ownership.
+
+### 14.1 Routing key = `lease.connectionId` (no new registry)
+`PanelRuntimeCoordinator` already maps `browserId → holder` and the holder identity **is** a
+`connectionId` (`panelRuntimeCoordinator.ts:18,169`; `getLease(id).connectionId`). The broker
+routes each client connection through it:
+```
+client → /cdp/{browserId}
+  lease       = coordinator.getLease(browserId)
+  providerWS  = providers.get(lease.connectionId)
+  relay client ⇄ providerWS  (tagged with browserId)
+```
+The **only** structural change to `cdpBridge`: replace the singular `extensionWs` ("one
+extension at a time", `cdpBridge.ts:80,424`) with `providers: Map<connectionId, WS>`, and look
+up per-`browserId` via the lease. The lease coordinator stays the single source of truth, so a
+provider can never serve a panel it doesn't hold (the broker only routes what the lease says) —
+no separate browserId→provider registry, no divergence.
+
+### 14.2 Connection & identity
+- Each Electron host (desktop main, headless §9) opens **one dedicated provider WS** to the
+  server's existing `panelHttpServer` HTTP surface, at `/api/cdp-host` (renamed from
+  `/api/cdp-bridge`).
+- It authenticates with its host token via `tokenManager` (`shell-remote`/admin — desktop main
+  already has `shellToken`, `index.ts:2277`; the headless host mints its own the same way),
+  using the existing constant-time check (`cdpBridge.ts:175`).
+- On connect it declares the **same `connectionId` it uses to acquire leases**
+  (`acquireRuntimeLease`). The broker keys `providers.set(connectionId, ws)`. That declared
+  `connectionId` is the join between "who holds the lease" and "which WS to drive."
+
+**Decision — dedicated WS, not multiplexed over `serverClient`.** Multiplexing is *not* simpler:
+`serverClient` has no inbound-request path (broker→host would have to be modeled as event +
+reverse call, splitting one round trip), the broker could no longer reuse its WS-frame relay,
+and CDP event/screenshot volume would share the JSON-RPC control channel. Only hosts are
+providers (1–2 sockets total), and the dedicated WS's auth/reconnect is a near-copy of existing
+patterns. So dedicated.
+
+### 14.3 Protocol: reuse the extension protocol verbatim
+The broker↔provider frames already exist (`cdp:command` / `cdp:result` / `cdp:error` /
+`cdp:event` / `cdp:detach`, `cdpBridge.ts:501-636`). The provider implements the **host** side
+against `webContents.debugger` instead of `chrome.debugger` — exactly the migrated `cdpServer`
+logic (`ensureDebuggerAttached`, `sendDebuggerCommand` + per-target serialized
+`debuggerCommandQueues`, `Page.captureScreenshot`, event forwarding via
+`contents.debugger.on("message")`, `cdpServer.ts:343-520`). Wire protocol unchanged; only the
+debuggee binding differs. The provider attaches its local debugger lazily on the first
+`cdp:command` for a held `browserId`, and detaches on `cdp:detach` (broker sends it when the
+last client for that browserId disconnects, refcounted broker-side as today).
+
+### 14.4 Transparent load = lease assignment (no server→host requests)
+When `getCdpEndpoint` (§4.3) finds no CDP-capable holder:
+1. the server **assigns the lease** to the headless host's `connectionId`;
+2. the headless orchestrator observes the lease change (`applyRuntimeLeaseChanged`) and **loads
+   on assignment** — the one genuinely new orchestrator behavior, localized to the headless
+   host's "default-lessee loads what it's assigned" policy (§9.2);
+3. `getCdpEndpoint` **awaits provider-ready** for that `browserId` (mirror how
+   `cdpBridge.openBrowserTab` awaits `cdp:register`, `cdpBridge.ts:295`), then returns the
+   endpoint.
+
+Loading is thus driven entirely through the existing lease/event sync — the server never issues
+a request *to* a host (which would need the non-existent reverse-routing).
+
+### 14.5 Failure / lease change → error out (decided)
+The broker subscribes to `panel:runtimeLeaseChanged`. On a holder change or a provider WS drop,
+it **closes the affected client `/cdp/{browserId}` connections** (a provider drop already flushes
+that host's pending commands, `cdpBridge.ts:462-494`). The client CDP socket errors; no
+reconnect, no lease-holding.
+
+### 14.6 `connectionId` stability (good-enough)
+Leases are keyed by `connectionId` and survive brief drops via the existing grace window
+(`markDisconnected`/`markConnected`/`expired`, `coordinator.ts:151-163`). The host reuses a
+stable `connectionId` and re-registers its provider WS on reconnect, so routing recovers within
+the grace window; leases that fully expire are re-acquired on the host's next load. No explicit
+re-assertion handshake beyond re-registering the `connectionId`.
+
+### 14.7 Trust model
+The provider WS is authenticated (host token), but the broker does **not** trust it for
+authorization: client-side `accessDecision` + capability approval happen at `getCdpEndpoint`
+(§4.3, in-process), and routing is gated by the lease coordinator. A provider can only ever
+drive panels its host legitimately holds.
