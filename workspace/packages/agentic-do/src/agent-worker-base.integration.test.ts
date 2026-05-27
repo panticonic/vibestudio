@@ -180,7 +180,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
           isError: boolean;
           waiterPresent: boolean;
         }
-      ): void;
+      ): Promise<void>;
       markLiveToolResultAdmitted(channelId: string, message: AgentMessage): void;
     };
 
@@ -199,7 +199,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
         .toArray()[0]
     ).toMatchObject({ count: 256, min_seq: 5, max_seq: 260 });
 
-    worker.markMethodSuspensionTerminal("call-1", {
+    await worker.markMethodSuspensionTerminal("call-1", {
       terminalKind: "completed",
       result: { content: [{ type: "text", text: "done" }] },
       isError: false,
@@ -371,6 +371,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         appendToolResult: async (message: AgentMessage) => {
           appended.push(message);
@@ -449,6 +450,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         appendToolResult: async (message: AgentMessage) => {
           appended.push(message);
@@ -516,6 +518,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         executeToolDirect,
         appendToolResult: async (message: AgentMessage) => {
@@ -568,11 +571,91 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(
       sql
         .exec(
-          `SELECT channel_id, reason FROM agent_recovery_continuations WHERE channel_id = ?`,
+          `SELECT channel_id, reason, status FROM agent_recovery_continuations WHERE channel_id = ?`,
           "chat-1"
         )
         .toArray()
-    ).toEqual([{ channel_id: "chat-1", reason: "method_suspension_recovered" }]);
+    ).toEqual([
+      { channel_id: "chat-1", reason: "method_suspension_recovered", status: "submitted" },
+    ]);
+  });
+
+  it("does not replay a recovery continuation already submitted in the same activation", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const submitContinue = vi.fn();
+    const worker = instance as unknown as {
+      dispatchers: Map<string, unknown>;
+      submitRecoveryContinue(channelId: string, runner: PiRunner, reason: string): void;
+      replayPendingRecoveryContinue(channelId: string, runner: PiRunner): Promise<void>;
+    };
+    const runner = {
+      getContinueReadiness: vi.fn(async () => ({ continuable: true, lastRole: "toolResult" })),
+    } as unknown as PiRunner;
+    worker.dispatchers.set("chat-1", {
+      submitContinue,
+      getDebugState: () => ({ busy: false }),
+    });
+
+    worker.submitRecoveryContinue("chat-1", runner, "method_suspension_recovered");
+    await worker.replayPendingRecoveryContinue("chat-1", runner);
+
+    expect(submitContinue).toHaveBeenCalledTimes(1);
+    expect(runner.getContinueReadiness).not.toHaveBeenCalled();
+    expect(
+      sql
+        .exec(`SELECT status FROM agent_recovery_continuations WHERE channel_id = ?`, "chat-1")
+        .toArray()[0]
+    ).toEqual({ status: "submitted" });
+  });
+
+  it("marks expired recovery continuations stale when the restored session is no longer continuable", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const submitContinue = vi.fn();
+    const worker = instance as unknown as {
+      dispatchers: Map<string, unknown>;
+      replayPendingRecoveryContinue(channelId: string, runner: PiRunner): Promise<void>;
+    };
+    const now = Date.now();
+    sql.exec(
+      `INSERT INTO agent_recovery_continuations (
+         channel_id, reason, status, created_at, updated_at, submitted_at
+       ) VALUES (?, ?, 'submitted', ?, ?, ?)`,
+      "chat-1",
+      "method_suspension_recovered",
+      now - 60_000,
+      now - 60_000,
+      now - 60_000
+    );
+    worker.dispatchers.set("chat-1", {
+      submitContinue,
+      getDebugState: () => ({ busy: false }),
+    });
+    const runner = {
+      getContinueReadiness: vi.fn(async () => ({
+        continuable: false,
+        reason: "unsupported_last_role",
+        lastRole: "assistant",
+      })),
+    } as unknown as PiRunner;
+
+    await worker.replayPendingRecoveryContinue("chat-1", runner);
+
+    expect(submitContinue).not.toHaveBeenCalled();
+    expect(
+      sql
+        .exec(
+          `SELECT status, failure_json FROM agent_recovery_continuations WHERE channel_id = ?`,
+          "chat-1"
+        )
+        .toArray()[0]
+    ).toMatchObject({
+      status: "stale",
+      failure_json: expect.stringContaining("unsupported_last_role"),
+    });
   });
 
   it("replays recovered ui prompt answers while resuming the outer tool", async () => {
@@ -607,6 +690,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         executeToolDirect,
         appendToolResult: async (message: AgentMessage) => {
@@ -679,6 +763,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         appendToolResult: async (message: AgentMessage) => {
           appended.push(message);
@@ -749,6 +834,181 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(worker.runners.has("chat-1")).toBe(false);
   });
 
+  it("settles a live waiter even when its durable suspension row is missing", async () => {
+    const { instance } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      createMethodResultWaiter(
+        channelId: string,
+        callId: string,
+        invocationId: string,
+        opts: { method: string }
+      ): { promise: Promise<{ result: unknown; isError: boolean }> };
+      handleCompletedMethodResult(
+        channelId: string,
+        callId: string,
+        result: unknown,
+        isError: boolean
+      ): Promise<void>;
+    };
+
+    const waiter = worker.createMethodResultWaiter("chat-1", "call-1", "tool-1", {
+      method: "ui_prompt",
+    });
+
+    await worker.handleCompletedMethodResult("chat-1", "call-1", { approved: true }, false);
+
+    await expect(waiter.promise).resolves.toEqual({
+      result: { approved: true },
+      isError: false,
+    });
+  });
+
+  it("spills large live method results before storing suspension terminals", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const largeText = "x".repeat(300 * 1024);
+    const rpcCall = vi.fn(async (_target: string, method: string, args: unknown[]) => {
+      if (method === "blobstore.putText") {
+        expect(args[0]).toContain(largeText);
+        return { digest: "large-result-digest", size: String(args[0]).length };
+      }
+      return null;
+    });
+    const worker = instance as unknown as {
+      _rpc: {
+        call: ReturnType<typeof vi.fn>;
+        streamCall: ReturnType<typeof vi.fn>;
+        emit: ReturnType<typeof vi.fn>;
+        onEvent: ReturnType<typeof vi.fn>;
+        handleIncomingPost: ReturnType<typeof vi.fn>;
+      };
+      createMethodResultWaiter(
+        channelId: string,
+        callId: string,
+        invocationId: string,
+        opts: { method: string }
+      ): { promise: Promise<{ result: unknown; isError: boolean }> };
+      handleCompletedMethodResult(
+        channelId: string,
+        callId: string,
+        result: unknown,
+        isError: boolean
+      ): Promise<void>;
+    };
+    worker._rpc = {
+      call: rpcCall,
+      streamCall: vi.fn(),
+      emit: vi.fn(),
+      onEvent: vi.fn(),
+      handleIncomingPost: vi.fn(),
+    };
+    insertSuspension(sql, {
+      callId: "call-1",
+      terminalKind: "none",
+      deliveryStatus: "pending",
+    });
+    const waiter = worker.createMethodResultWaiter("chat-1", "call-1", "tool-1", {
+      method: "eval",
+    });
+
+    await worker.handleCompletedMethodResult(
+      "chat-1",
+      "call-1",
+      { content: [{ type: "text", text: largeText }] },
+      false
+    );
+
+    await expect(waiter.promise).resolves.toMatchObject({
+      result: { content: [{ type: "text", text: largeText }] },
+      isError: false,
+    });
+    const row = sql
+      .exec(
+        `SELECT result_json, result_ref_json, delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`,
+        "call-1"
+      )
+      .toArray()[0]!;
+    const stored = JSON.parse(row["result_ref_json"] as string) as Record<string, unknown>;
+    expect(stored).toMatchObject({
+      protocol: "natstack.blob-ref.v1",
+      digest: "large-result-digest",
+      encoding: "json",
+    });
+    expect(row).toMatchObject({ delivery_status: "delivered_live" });
+    expect(row["result_json"]).toBeNull();
+    expect(row["result_ref_json"]).not.toContain(largeText);
+  });
+
+  it("does not stall when large method result blob persistence fails", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const largeText = "x".repeat(300 * 1024);
+    const worker = instance as unknown as {
+      _rpc: {
+        call: ReturnType<typeof vi.fn>;
+        streamCall: ReturnType<typeof vi.fn>;
+        emit: ReturnType<typeof vi.fn>;
+        onEvent: ReturnType<typeof vi.fn>;
+        handleIncomingPost: ReturnType<typeof vi.fn>;
+      };
+      createMethodResultWaiter(
+        channelId: string,
+        callId: string,
+        invocationId: string,
+        opts: { method: string }
+      ): { promise: Promise<{ result: unknown; isError: boolean }> };
+      handleCompletedMethodResult(
+        channelId: string,
+        callId: string,
+        result: unknown,
+        isError: boolean
+      ): Promise<void>;
+    };
+    worker._rpc = {
+      call: vi.fn(async (_target: string, method: string) => {
+        if (method === "blobstore.putText") throw new Error("blobstore down");
+        return null;
+      }),
+      streamCall: vi.fn(),
+      emit: vi.fn(),
+      onEvent: vi.fn(),
+      handleIncomingPost: vi.fn(),
+    };
+    insertSuspension(sql, {
+      callId: "call-blob-fail",
+      terminalKind: "none",
+      deliveryStatus: "pending",
+    });
+    const waiter = worker.createMethodResultWaiter("chat-1", "call-blob-fail", "tool-blob-fail", {
+      method: "eval",
+    });
+
+    await worker.handleCompletedMethodResult(
+      "chat-1",
+      "call-blob-fail",
+      { content: [{ type: "text", text: largeText }] },
+      false
+    );
+
+    await expect(waiter.promise).resolves.toMatchObject({ isError: false });
+    const row = sql
+      .exec(
+        `SELECT result_json, result_ref_json, delivery_status, recovery_error FROM agent_method_suspensions WHERE transport_call_id = ?`,
+        "call-blob-fail"
+      )
+      .toArray()[0]!;
+    expect(row["result_ref_json"]).toBeNull();
+    expect(JSON.parse(row["result_json"] as string)).toMatchObject({
+      omitted: true,
+      reason: "large suspension result could not be stored",
+    });
+    expect(row).toMatchObject({ delivery_status: "delivered_live" });
+  });
+
   it("recovers an orphan terminal through the channel event completion handler", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
@@ -768,6 +1028,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         appendToolResult: async (message: AgentMessage) => {
           appended.push(message);
@@ -854,6 +1115,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         appendToolResult: async (message: AgentMessage) => {
           appended.push(message);
@@ -881,7 +1143,6 @@ describe("AgentWorkerBase method suspension ledger", () => {
         size: 128,
         encoding: "json",
         originalBytes: 128,
-        preview: "{\"content\":[{\"type\":\"text\",\"text\":\"stored eval output\"}]}",
       },
       false
     );
@@ -990,6 +1251,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         appendToolResult,
       },
@@ -1030,13 +1292,19 @@ describe("AgentWorkerBase method suspension ledger", () => {
     const worker = instance as unknown as {
       runners: Map<string, { runner: unknown }>;
       dispatchers: Map<string, unknown>;
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
       recoverDeliveredAndOrphanedSuspensions(channelId: string): Promise<void>;
     };
+    const send = vi.fn().mockResolvedValue(undefined);
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue({ send });
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => false,
         hasToolResult: async () => true,
         isLeafDescendantOf: async () => true,
+        getSessionBranchEntryIds: async () => ["entry-1"],
         appendToolResult,
       },
     });
@@ -1064,6 +1332,193 @@ describe("AgentWorkerBase method suspension ledger", () => {
         )
         .toArray()[0]
     ).toMatchObject({ delivery_status: "stale", recovery_error: "invocation closed" });
+    expect(send).toHaveBeenCalledWith(
+      "do:agent",
+      expect.any(String),
+      expect.stringContaining("Tool result could not be safely resumed"),
+      expect.objectContaining({
+        idempotencyKey: "method-recovery-stale:chat-1:call-1",
+      })
+    );
+  });
+
+  it("records branch diagnostics and surfaces an error when completed recovery is unsafe to replay", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const appendToolResult = vi.fn();
+    const send = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      runners: Map<string, { runner: unknown }>;
+      dispatchers: Map<string, unknown>;
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      getDebugState(channelId?: string): Promise<Record<string, unknown>>;
+      recoverDeliveredAndOrphanedSuspensions(channelId: string): Promise<void>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue({ send });
+    worker.runners.set("chat-1", {
+      runner: {
+        isInvocationOpen: () => false,
+        hasToolResult: async () => false,
+        isLeafDescendantOf: async () => false,
+        getSessionBranchEntryIds: async () => ["root", "active-leaf"],
+        getDebugState: async () => ({ restoredBranch: ["root", "active-leaf"] }),
+        appendToolResult,
+      },
+    });
+    worker.dispatchers.set("chat-1", {
+      submitContinue: vi.fn(),
+      getDebugState: () => ({ busy: false }),
+    });
+    insertSuspension(sql, {
+      callId: "call-1",
+      terminalKind: "completed",
+      result: "done",
+      sessionLeafBeforeCall: "old-leaf",
+    });
+
+    await worker.recoverDeliveredAndOrphanedSuspensions("chat-1");
+
+    expect(appendToolResult).not.toHaveBeenCalled();
+    expect(
+      sql
+        .exec(
+          `SELECT delivery_status, recovery_error
+             FROM agent_method_suspensions
+             WHERE transport_call_id = ?`,
+          "call-1"
+        )
+        .toArray()[0]
+    ).toMatchObject({ delivery_status: "stale", recovery_error: "session branch moved" });
+    expect(send).toHaveBeenCalledWith(
+      "do:agent",
+      expect.any(String),
+      expect.stringContaining("session branch moved"),
+      expect.objectContaining({
+        idempotencyKey: "method-recovery-stale:chat-1:call-1",
+      })
+    );
+    const debugState = await worker.getDebugState("chat-1");
+    expect(JSON.stringify(debugState)).toContain("active-leaf");
+  });
+
+  it("recovers an open invocation even when the session leaf moved", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const appended: AgentMessage[] = [];
+    const submitContinue = vi.fn();
+    const worker = instance as unknown as {
+      runners: Map<string, { runner: unknown }>;
+      dispatchers: Map<string, unknown>;
+      recoverDeliveredAndOrphanedSuspensions(channelId: string): Promise<void>;
+    };
+    worker.runners.set("chat-1", {
+      runner: {
+        isInvocationOpen: () => true,
+        hasToolResult: async () => false,
+        isLeafDescendantOf: async () => false,
+        appendToolResult: async (message: AgentMessage) => {
+          appended.push(message);
+          return "entry-recovered";
+        },
+      },
+    });
+    worker.dispatchers.set("chat-1", {
+      submitContinue,
+      getDebugState: () => ({ busy: false }),
+    });
+    insertSuspension(sql, {
+      callId: "call-1",
+      terminalKind: "completed",
+      result: { content: [{ type: "text", text: "done" }] },
+      sessionLeafBeforeCall: "old-leaf",
+    });
+
+    await worker.recoverDeliveredAndOrphanedSuspensions("chat-1");
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "tool-1",
+      content: [{ type: "text", text: "done" }],
+    });
+    expect(submitContinue).toHaveBeenCalledTimes(1);
+    expect(
+      sql
+        .exec(
+          `SELECT delivery_status, recovery_error, recovered_entry_id
+             FROM agent_method_suspensions
+             WHERE transport_call_id = ?`,
+          "call-1"
+        )
+        .toArray()[0]
+    ).toMatchObject({
+      delivery_status: "recovered",
+      recovery_error: null,
+      recovered_entry_id: "entry-recovered",
+    });
+  });
+
+  it("recovers a completed invocation after restart when the restored session branch still contains the call leaf", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const appended: AgentMessage[] = [];
+    const submitContinue = vi.fn();
+    const worker = instance as unknown as {
+      runners: Map<string, { runner: unknown }>;
+      dispatchers: Map<string, unknown>;
+      recoverDeliveredAndOrphanedSuspensions(channelId: string): Promise<void>;
+    };
+    worker.runners.set("chat-1", {
+      runner: {
+        isInvocationOpen: () => false,
+        hasToolResult: async () => false,
+        isLeafDescendantOf: async (entryId: string) => entryId === "call-leaf",
+        getSessionBranchEntryIds: async () => ["root", "call-leaf"],
+        appendToolResult: async (message: AgentMessage) => {
+          appended.push(message);
+          return "entry-recovered";
+        },
+      },
+    });
+    worker.dispatchers.set("chat-1", {
+      submitContinue,
+      getDebugState: () => ({ busy: false }),
+    });
+    insertSuspension(sql, {
+      callId: "call-1",
+      terminalKind: "completed",
+      result: { content: [{ type: "text", text: "done" }] },
+      sessionLeafBeforeCall: "call-leaf",
+    });
+
+    await worker.recoverDeliveredAndOrphanedSuspensions("chat-1");
+
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "tool-1",
+      content: [{ type: "text", text: "done" }],
+    });
+    expect(submitContinue).toHaveBeenCalledTimes(1);
+    expect(
+      sql
+        .exec(
+          `SELECT delivery_status, recovery_error, recovered_entry_id
+             FROM agent_method_suspensions
+             WHERE transport_call_id = ?`,
+          "call-1"
+        )
+        .toArray()[0]
+    ).toMatchObject({
+      delivery_status: "recovered",
+      recovery_error: null,
+      recovered_entry_id: "entry-recovered",
+    });
   });
 
   it("records recovery_error and retains partials when appendToolResult fails", async () => {
@@ -1079,6 +1534,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     worker.runners.set("chat-1", {
       runner: {
         isInvocationOpen: () => true,
+        hasToolResult: async () => false,
         isLeafDescendantOf: async () => true,
         appendToolResult: async () => {
           throw new Error("append failed");
@@ -1297,6 +1753,47 @@ describe("AgentWorkerBase method suspension ledger", () => {
 });
 
 describe("AgentWorkerBase interrupt recovery", () => {
+  it("force-closes an open turn before disposing a runner during channel unsubscribe", async () => {
+    const { instance } = await createTestDO(InterruptTestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const calls: string[] = [];
+    const forceCloseCurrentTurn = vi.fn().mockImplementation(async () => {
+      calls.push("forceCloseCurrentTurn");
+      return true;
+    });
+    const dispose = vi.fn().mockImplementation(() => {
+      calls.push("dispose");
+    });
+    const dispatcherDispose = vi.fn();
+    const worker = instance as unknown as {
+      runners: Map<string, unknown>;
+      dispatchers: Map<string, unknown>;
+      abortContexts: Map<string, { reason: string }>;
+      unsubscribeChannel(channelId: string): Promise<unknown>;
+    };
+
+    worker.runners.set("chat-1", {
+      runner: {
+        forceCloseCurrentTurn,
+        dispose,
+      },
+    });
+    worker.dispatchers.set("chat-1", { dispose: dispatcherDispose });
+
+    await worker.unsubscribeChannel("chat-1");
+
+    expect(dispatcherDispose).toHaveBeenCalledTimes(1);
+    expect(forceCloseCurrentTurn).toHaveBeenCalledWith(
+      "channel_unsubscribe",
+      "Agent channel unsubscribed before turn closed"
+    );
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual(["forceCloseCurrentTurn", "dispose"]);
+    expect(worker.runners.has("chat-1")).toBe(false);
+    expect(worker.abortContexts.has("chat-1")).toBe(false);
+  });
+
   it("resets dispatcher and force-closes the turn without awaiting a stuck runner interrupt", async () => {
     const { instance } = await createTestDO(InterruptTestAgentWorker, {
       __objectKey: "agent-test",
@@ -1315,6 +1812,7 @@ describe("AgentWorkerBase interrupt recovery", () => {
       runner: {
         forceCloseCurrentTurn,
         interrupt,
+        getDebugState: vi.fn(async () => ({})),
       },
     });
     worker.dispatchers.set("chat-1", { reset });
@@ -1341,15 +1839,17 @@ describe("AgentWorkerBase interrupt recovery", () => {
       runners: Map<string, unknown>;
       dispatchers: Map<string, unknown>;
       testInterruptRunner(channelId: string): Promise<void>;
+      getDebugState(channelId?: string): Promise<Record<string, unknown>>;
     };
 
     worker.runners.set("chat-1", {
       runner: {
         forceCloseCurrentTurn,
         interrupt,
+        getDebugState: vi.fn(async () => ({})),
       },
     });
-    worker.dispatchers.set("chat-1", { reset: vi.fn() });
+    worker.dispatchers.set("chat-1", { reset: vi.fn(), getDebugState: vi.fn(() => ({})) });
 
     await expect(worker.testInterruptRunner("chat-1")).resolves.toBeUndefined();
 
@@ -1357,6 +1857,16 @@ describe("AgentWorkerBase interrupt recovery", () => {
     expect(warn).toHaveBeenCalledWith(
       "[TrajectoryVesselBase] forceCloseCurrentTurn failed for channel=chat-1:",
       expect.any(Error)
+    );
+    const debug = await worker.getDebugState("chat-1");
+    expect((debug["volatile"] as { lastErrors?: unknown[] }).lastErrors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channelId: "chat-1",
+          scope: "runner.force_close",
+          message: "close failed",
+        }),
+      ])
     );
     warn.mockRestore();
   });

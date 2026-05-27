@@ -27,10 +27,11 @@ import type {
   ProjectedMessage,
   ProjectedTurn,
 } from "@workspace/agentic-protocol";
-import { isStoredValueRef } from "@workspace/agentic-protocol";
+import { assertNoStoredValueRefs, isStoredValueRef } from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
 
 export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessage[] {
+  assertNoStoredValueRefs(state, "chat message projection input");
   const messages = Object.values(state.messages)
     .map(projectedMessageToChatMessage);
   const invocations = Object.values(state.invocations).map(projectedInvocationToChatMessage);
@@ -40,9 +41,25 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
       .filter((message) => message.turnId && message.role === "assistant" && (message.status === "started" || message.status === "streaming"))
       .map((message) => message.turnId as string),
   );
+  const assistantMessageTurnIds = new Set(
+    Object.values(state.messages)
+      .filter((message) => message.turnId && message.role === "assistant")
+      .map((message) => message.turnId as string),
+  );
+  const turnIdsWithInvocations = new Set(
+    Object.values(state.invocations)
+      .filter((invocation) => invocation.turnId)
+      .map((invocation) => invocation.turnId as string),
+  );
   const turns = Object.values(state.turns).flatMap((turn) => activeStreamingTurns.has(turn.turnId)
     ? []
     : projectedTurnToTypingMessage(turn));
+  const silentClosedTurns = Object.values(state.turns).flatMap((turn) =>
+    projectedClosedTurnWithoutResponseMessage(turn, {
+      hasAssistantMessage: assistantMessageTurnIds.has(turn.turnId),
+      hasInvocation: turnIdsWithInvocations.has(turn.turnId),
+    })
+  );
   const inlineUi = Object.entries(state.inlineUi).flatMap(([participantId, map]) =>
     Object.values(map).flatMap((item) =>
       isStoredValueRef(item.source)
@@ -53,7 +70,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   const custom = Object.values(state.customMessages).flatMap((item) =>
     projectedCustomMessageToChatMessage(item, state.messageTypes[item.typeId ?? ""]),
   );
-  return [...messages, ...invocations, ...approvals, ...turns, ...inlineUi, ...custom].sort((a, b) =>
+  return [...messages, ...invocations, ...approvals, ...turns, ...silentClosedTurns, ...inlineUi, ...custom].sort((a, b) =>
     Number((a as ChatMessage & { sortTime?: number }).sortTime ?? 0) -
       Number((b as ChatMessage & { sortTime?: number }).sortTime ?? 0) ||
     a.id.localeCompare(b.id)
@@ -129,6 +146,44 @@ function projectedTurnToTypingMessage(turn: ProjectedTurn): ChatMessage[] {
   } as ChatMessage & { sortTime: number }];
 }
 
+function projectedClosedTurnWithoutResponseMessage(
+  turn: ProjectedTurn,
+  opts: { hasAssistantMessage: boolean; hasInvocation: boolean }
+): ChatMessage[] {
+  if (turn.status !== "closed") return [];
+  if (turn.actor.kind !== "agent") return [];
+  if (opts.hasAssistantMessage) return [];
+  if (isExpectedNoAssistantClose(turn)) return [];
+  if (!opts.hasInvocation && !turn.summary) return [];
+  const detail = turn.reason === "runner_restarted" ||
+    turn.summary === "runner_restarted" ||
+    turn.summary === "Runner restarted before turn closed"
+    ? " Recovered after runner restart; no assistant response was produced before the turn was closed."
+    : turn.summary ? ` ${turn.summary}` : "";
+  return [{
+    id: `turn:${turn.turnId}:no-response`,
+    senderId: turn.actor.id,
+    content: `Agent turn closed without an assistant response.${detail}`,
+    kind: "message",
+    complete: true,
+    error: "Agent turn closed without an assistant response",
+    senderMetadata: {
+      name: turn.actor.displayName ?? turn.actor.id,
+      type: turn.actor.kind,
+      handle: turn.actor.id,
+    },
+    sortTime: Date.parse(turn.closedAt ?? turn.updatedAt ?? turn.openedAt) || 0,
+  } as ChatMessage & { sortTime: number }];
+}
+
+function isExpectedNoAssistantClose(turn: ProjectedTurn): boolean {
+  return turn.reason === "user_interrupted" ||
+    turn.reason === "channel_unsubscribe" ||
+    turn.summary === "Agent turn interrupted by user" ||
+    turn.summary === "Agent channel unsubscribed before turn closed" ||
+    turn.summary === "Agent turn completed";
+}
+
 function projectedMessageToChatMessage(message: ProjectedMessage): ChatMessage {
   return {
     id: message.messageId,
@@ -188,6 +243,7 @@ function projectedInvocationToChatMessage(invocation: ProjectedInvocation): Chat
     ?? "invocation";
   const payload: InvocationCardPayload = {
     id: invocation.invocationId,
+    ...(invocation.transportCallId ? { transportCallId: invocation.transportCallId } : {}),
     name,
     arguments: recordOrEmpty(invocation.request ?? inferred.request),
     execution: {
@@ -286,26 +342,10 @@ function projectedCustomMessageToChatMessage(
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {
-  if (isStoredValueRef(value)) {
-    const parsed = parseStoredJsonPreview(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? { ...(parsed as Record<string, unknown>) }
-      : {};
-  }
+  if (isStoredValueRef(value)) return {};
   return value && typeof value === "object" && !Array.isArray(value)
     ? { ...(value as Record<string, unknown>) }
     : {};
-}
-
-function parseStoredJsonPreview(value: unknown): unknown {
-  if (!isStoredValueRef(value) || value.encoding !== "json" || typeof value.preview !== "string") {
-    return undefined;
-  }
-  try {
-    return JSON.parse(value.preview);
-  } catch {
-    return undefined;
-  }
 }
 
 function meaningfulInvocationName(value: unknown): string | undefined {
@@ -320,9 +360,7 @@ function inferInvocationDisplay(value: unknown): {
   summary?: string;
 } {
   if (isStoredValueRef(value)) {
-    const parsed = parseStoredJsonPreview(value);
-    if (parsed !== undefined) return inferInvocationDisplay(parsed);
-    return { summary: value.preview ?? `${value.encoding} blob ${value.digest}` };
+    return { summary: `${value.encoding} blob ${value.digest}` };
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const record = value as Record<string, unknown>;
@@ -339,17 +377,10 @@ function inferInvocationDisplay(value: unknown): {
 }
 
 function stringifyOutput(value: unknown): string {
-  if (isStoredValueRef(value)) return value.preview ?? `[stored ${value.encoding} blob ${value.digest}]`;
+  if (isStoredValueRef(value)) return `[stored ${value.encoding} blob ${value.digest}]`;
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 function displayStoredValue(value: unknown): unknown {
-  if (!isStoredValueRef(value)) return value;
-  return {
-    stored: true,
-    digest: value.digest,
-    size: value.size,
-    encoding: value.encoding,
-    preview: value.preview,
-  };
+  return value;
 }

@@ -18,7 +18,7 @@ export interface TurnDispatcherRunner {
   clearSteeringQueue(): Promise<void>;
 }
 
-type WorkItem = { kind: "prompt"; input: RunnerTurnInput } | { kind: "continue" };
+export type WorkItem = { kind: "prompt"; input: RunnerTurnInput } | { kind: "continue" };
 
 type WorkCompletion =
   | { status: "completed"; source: "runner" | "agent_end" }
@@ -49,6 +49,7 @@ export interface TurnDispatcherOptions {
   runner: TurnDispatcherRunner;
   projector: TurnDispatcherProjector;
   notifyTyping: (busy: boolean) => void;
+  onWorkFailure?: (work: WorkItem, error: unknown) => void | Promise<void>;
   log?: Pick<Console, "warn" | "error">;
 }
 
@@ -240,6 +241,11 @@ export class TurnDispatcher {
             `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} failed:`,
             completion.error
           );
+          try {
+            await this.opts.onWorkFailure?.(work, completion.error);
+          } catch (failureErr) {
+            this.log.warn("[TurnDispatcher] onWorkFailure failed:", failureErr);
+          }
           try {
             await this.opts.projector.closeAll();
           } catch (closeErr) {

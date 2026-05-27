@@ -77,6 +77,7 @@ import {
   brandId,
   createInitialTrajectoryState,
   encodeAgenticEventStoredValues,
+  hydrateStoredValueRefs,
   MAX_INLINE_TRAJECTORY_EVENT_BYTES,
   reduceTrajectory,
   TURN_SCOPED_OWNER_KINDS,
@@ -163,6 +164,7 @@ export interface PiRunnerOptions {
     snapshot: TurnSnapshot
   ) => Promise<TurnSnapshot | void> | TurnSnapshot | void;
   publicationPolicy?: (input: { event: AgenticEvent; publishToChannel?: boolean }) => boolean;
+  repairDurableOpenStateOnInit?: boolean;
   extraTools?: AgentTool<any>[];
   toolFilter?: (toolName: string) => boolean;
   compactionPolicy?: CompactionTriggerOptions;
@@ -287,8 +289,21 @@ interface ChannelPublicationBroadcastState {
   activeEnvelopeIds: string[];
   lastScheduledAt?: string;
   lastCompletedAt?: string;
+  failureCount?: number;
   lastError?: {
     envelopeIds: string[];
+    message: string;
+    at: string;
+  };
+}
+
+interface CompactionDiagnosticState {
+  attempts: number;
+  failures: number;
+  consecutiveFailures: number;
+  lastAttemptAt?: string;
+  lastCompletedAt?: string;
+  lastFailure?: {
     message: string;
     at: string;
   };
@@ -353,6 +368,42 @@ function summarizeDebugValue(value: unknown, depth = 0): unknown {
   return String(value);
 }
 
+function summarizeAgentMessage(message: Record<string, unknown>): Record<string, unknown> {
+  return {
+    role: message["role"] ?? null,
+    timestamp: message["timestamp"] ?? null,
+    ...(message["stopReason"] ? { stopReason: message["stopReason"] } : {}),
+    ...(message["toolCallId"] ? { toolCallId: message["toolCallId"] } : {}),
+    ...(message["toolName"] ? { toolName: message["toolName"] } : {}),
+    content: summarizeDebugValue(message["content"]),
+  };
+}
+
+function summarizeSessionEntry(entry: unknown): unknown {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return summarizeDebugValue(entry);
+  const record = entry as Record<string, unknown>;
+  const message = record["message"];
+  return {
+    type: record["type"] ?? null,
+    id: record["id"] ?? null,
+    parentId: record["parentId"] ?? null,
+    timestamp: record["timestamp"] ?? null,
+    ...(message && typeof message === "object" && !Array.isArray(message)
+      ? { message: summarizeAgentMessage(message as Record<string, unknown>) }
+      : {}),
+  };
+}
+
+function summarizeDebugList(values: unknown[] | null, itemSummarizer = summarizeDebugValue): Record<string, unknown> | null {
+  if (!values) return null;
+  const sample = values.slice(0, DEBUG_COLLECTION_LIMIT).map(itemSummarizer);
+  return {
+    count: values.length,
+    sample,
+    ...(values.length > sample.length ? { omittedItems: values.length - sample.length } : {}),
+  };
+}
+
 export class PiRunner {
   private harness: AgentHarness | null = null;
   private extensionRuntime: PiExtensionRuntime | null = null;
@@ -379,11 +430,17 @@ export class PiRunner {
   >();
   private readonly openInvocationIds = new Set<string>();
   private readonly openToolInvocations = new Map<string, OpenToolInvocationDebug>();
+  private readonly forceClosingTurnIds = new Set<string>();
   private readonly phaseCheckpoints: RunnerDebugCheckpoint[] = [];
   private readonly recentHarnessEvents: RunnerDebugEvent[] = [];
   private readonly recentTrajectoryEvents: RunnerDebugTrajectoryEvent[] = [];
   private readonly terminalInvocationIds = new Set<string>();
   private readonly lastErrors: RunnerDebugError[] = [];
+  private readonly compactionDiagnostics: CompactionDiagnosticState = {
+    attempts: 0,
+    failures: 0,
+    consecutiveFailures: 0,
+  };
   private currentOperation: RunnerDebugOperation | null = null;
   private awaitingProviderFirstEvent = false;
   private providerRequestCount = 0;
@@ -525,6 +582,12 @@ export class PiRunner {
       recentHarnessEvents: [...this.recentHarnessEvents],
       recentTrajectoryEvents: [...this.recentTrajectoryEvents],
       lastErrors: [...this.lastErrors],
+      compaction: {
+        ...this.compactionDiagnostics,
+        lastFailure: this.compactionDiagnostics.lastFailure
+          ? { ...this.compactionDiagnostics.lastFailure }
+          : undefined,
+      },
       pendingProvenance: this.provenanceQueue.map((item) => ({
         kind: item.event.kind,
         eventId: item.eventId ?? null,
@@ -574,8 +637,12 @@ export class PiRunner {
         ])
       ),
       sessionLeafId,
-      sessionEntries,
-      contextMessages,
+      sessionEntries: summarizeDebugList(sessionEntries, summarizeSessionEntry),
+      contextMessages: summarizeDebugList(contextMessages, (message) =>
+        message && typeof message === "object" && !Array.isArray(message)
+          ? summarizeAgentMessage(message as Record<string, unknown>)
+          : summarizeDebugValue(message)
+      ),
       approvalLevel: this._approvalLevel,
       model: this.resolvedModel
         ? {
@@ -594,28 +661,33 @@ export class PiRunner {
   ): Promise<boolean> {
     if (!this.options.gad || !this.currentTurnId) return false;
     const turnId = this.currentTurnId;
+    this.forceClosingTurnIds.add(turnId);
     this.running = false;
     this.activeAssistantMessage = null;
-    await this.flushProvenance();
-    await this.abandonOpenInvocations(summary);
-    await this.appendTrajectoryEvents([
-      {
-        event: {
-          kind: "turn.closed",
-          actor: this.agentActor(),
-          turnId,
-          payload: {
-            protocol: "agentic.trajectory.v1",
-            summary,
-            reason,
+    try {
+      await this.flushProvenance();
+      await this.abandonOpenInvocations(summary, turnId);
+      await this.appendTrajectoryEvents([
+        {
+          event: {
+            kind: "turn.closed",
+            actor: this.agentActor(),
+            turnId,
+            payload: {
+              protocol: "agentic.trajectory.v1",
+              summary,
+              reason,
+            },
+            createdAt: new Date().toISOString(),
           },
-          createdAt: new Date().toISOString(),
+          publishToChannel: true,
         },
-        publishToChannel: true,
-      },
-    ]);
-    if (this.currentTurnId === turnId) this.currentTurnId = null;
-    return true;
+      ]);
+      if (this.currentTurnId === turnId) this.currentTurnId = null;
+      return true;
+    } finally {
+      this.forceClosingTurnIds.delete(turnId);
+    }
   }
 
   forgetOpenInvocation(invocationId: string): void {
@@ -674,6 +746,16 @@ export class PiRunner {
     }
     const branch = await this.session.getBranch();
     return branch.some((entry: { id?: unknown }) => entry.id === ancestorEntryId);
+  }
+
+  async getSessionBranchEntryIds(): Promise<string[]> {
+    if (!this.session) {
+      throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    }
+    const branch = await this.session.getBranch();
+    return branch
+      .map((entry: { id?: unknown }) => entry.id)
+      .filter((id): id is string => typeof id === "string");
   }
 
   async init(): Promise<void> {
@@ -764,7 +846,9 @@ export class PiRunner {
 
     this.wireHarness();
     await this.surfaceOrphanMutationIntents();
-    await this.repairDurableOpenState();
+    if (this.options.repairDurableOpenStateOnInit !== false) {
+      await this.repairDurableOpenState();
+    }
   }
 
   private async createSession(): Promise<Session<TrajectorySessionMetadata | SessionMetadata>> {
@@ -789,8 +873,15 @@ export class PiRunner {
       branchId: gad.branchId,
       limit: 0,
     });
-    const state = events.reduce(reduceTrajectory, createInitialTrajectoryState());
+    const hydratedEvents = await Promise.all(events.map((event) => this.hydrateGadStoredRefs(event)));
+    const state = hydratedEvents.reduce(reduceTrajectory, createInitialTrajectoryState());
     this.restoredTrajectoryState = state;
+    const restoredOpenTurnId =
+      state.openTurnIdByBranch[gad.branchId] ??
+      Object.values(state.turns).find((turn) => turn.status === "open")?.turnId;
+    if (restoredOpenTurnId && state.turns[restoredOpenTurnId]?.status === "open") {
+      this.currentTurnId = restoredOpenTurnId;
+    }
     this.terminalInvocationIds.clear();
     for (const invocation of Object.values(state.invocations)) {
       if (this.isTerminalInvocationStatus(invocation.status)) {
@@ -812,6 +903,12 @@ export class PiRunner {
     const gad = this.options.gad;
     if (!gad) throw new AgentWorkerError("invalid_state", "GAD provenance is not configured");
     return gad.trajectoryId ?? gad.workspaceId ?? gad.branchId;
+  }
+
+  private async hydrateGadStoredRefs<T>(value: T): Promise<T> {
+    return hydrateStoredValueRefs(value, {
+      getText: (digest) => this.options.rpc.call<string | null>("main", "blobstore.getText", [digest]),
+    }) as Promise<T>;
   }
 
   private sessionEntryEventId(entryId: string): string {
@@ -1122,9 +1219,26 @@ export class PiRunner {
     if (!this.harness || !this.session) return;
     const snapshot = await this.buildSnapshot();
     if (!this.compactionTrigger.shouldCompact(snapshot.messages, snapshot.model)) return;
+    this.compactionDiagnostics.attempts += 1;
+    this.compactionDiagnostics.lastAttemptAt = new Date().toISOString();
     try {
       await this.harness.compact();
+      this.compactionDiagnostics.consecutiveFailures = 0;
+      this.compactionDiagnostics.lastCompletedAt = new Date().toISOString();
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.compactionDiagnostics.failures += 1;
+      this.compactionDiagnostics.consecutiveFailures += 1;
+      this.compactionDiagnostics.lastFailure = {
+        message,
+        at: new Date().toISOString(),
+      };
+      this.rememberError("compaction", err);
+      this.rememberCheckpoint("compaction.failed", {
+        consecutiveFailures: this.compactionDiagnostics.consecutiveFailures,
+        failures: this.compactionDiagnostics.failures,
+        error: message,
+      });
       console.error("[PiRunner] compaction failed:", err);
     }
   }
@@ -1227,6 +1341,7 @@ export class PiRunner {
         await this.closeCurrentTurn();
         this.running = false;
         this.awaitingProviderFirstEvent = false;
+        this.options.uiCallbacks.setWorkingMessage(undefined);
       }
       await this.hooks.emitEvent(event, { signal });
     } catch (err) {
@@ -1280,6 +1395,7 @@ export class PiRunner {
   private async closeCurrentTurn(): Promise<void> {
     if (!this.options.gad || !this.currentTurnId) return;
     const turnId = this.currentTurnId;
+    if (this.forceClosingTurnIds.has(turnId)) return;
     await this.flushProvenance();
     await this.appendTrajectoryEvents([
       {
@@ -1295,16 +1411,21 @@ export class PiRunner {
         },
         publishToChannel: true,
       },
-    ]);
+    ]).catch((err) => {
+      this.rememberError("trajectory.turn.close", err);
+      throw err;
+    });
     this.currentTurnId = null;
   }
 
-  private async repairDurableOpenState(): Promise<void> {
+  async repairDurableOpenState(opts: { closeOpenTurns?: boolean } = {}): Promise<void> {
     if (!this.options.gad || !this.restoredTrajectoryState) return;
+    const closeOpenTurns = opts.closeOpenTurns ?? true;
     const now = new Date().toISOString();
     const repairs: TrajectoryQueueItem[] = [];
     for (const invocation of Object.values(this.restoredTrajectoryState.invocations)) {
       if (this.isTerminalInvocationStatus(invocation.status)) continue;
+      if (this.terminalInvocationIds.has(invocation.invocationId)) continue;
       repairs.push({
         event: {
           kind: "invocation.abandoned",
@@ -1321,24 +1442,31 @@ export class PiRunner {
         publishToChannel: true,
       });
     }
-    for (const turn of Object.values(this.restoredTrajectoryState.turns)) {
-      if (turn.status !== "open") continue;
-      repairs.push({
-        event: {
-          kind: "turn.closed",
-          actor: turn.actor.kind === "agent" ? turn.actor : this.agentActor(),
-          turnId: turn.turnId,
-          payload: {
-            protocol: "agentic.trajectory.v1",
-            summary: "Runner restarted before turn closed",
-            reason: "runner_restarted",
+    const repairedTurnIds = new Set<string>();
+    if (closeOpenTurns) {
+      for (const turn of Object.values(this.restoredTrajectoryState.turns)) {
+        if (turn.status !== "open") continue;
+        repairedTurnIds.add(turn.turnId);
+        repairs.push({
+          event: {
+            kind: "turn.closed",
+            actor: turn.actor.kind === "agent" ? turn.actor : this.agentActor(),
+            turnId: turn.turnId,
+            payload: {
+              protocol: "agentic.trajectory.v1",
+              summary: "Runner restarted before turn closed",
+              reason: "runner_restarted",
+            },
+            createdAt: now,
           },
-          createdAt: now,
-        },
-        publishToChannel: true,
-      });
+          publishToChannel: true,
+        });
+      }
     }
     if (repairs.length > 0) await this.appendTrajectoryEvents(repairs);
+    if (this.currentTurnId && repairedTurnIds.has(this.currentTurnId)) {
+      this.currentTurnId = null;
+    }
     this.restoredTrajectoryState = null;
   }
 
@@ -1560,18 +1688,16 @@ export class PiRunner {
     } catch (err) {
       const outcome = await this.flushProvenanceIndividually(batch, err);
       if (outcome.sizeLimitError) {
-        if (outcome.sizeLimitError.error instanceof AgentWorkerError)
-          throw outcome.sizeLimitError.error;
-        throw this.provenanceSizeLimitError(
-          outcome.sizeLimitError.item,
-          outcome.sizeLimitError.error
-        );
+        const error = outcome.sizeLimitError.error instanceof AgentWorkerError
+          ? outcome.sizeLimitError.error
+          : this.provenanceSizeLimitError(outcome.sizeLimitError.item, outcome.sizeLimitError.error);
+        this.rememberError("trajectory.append.size_limit", error);
+        throw error;
       }
       if (outcome.permanentError) {
-        throw this.provenancePermanentError(
-          outcome.permanentError.item,
-          outcome.permanentError.error
-        );
+        const error = this.provenancePermanentError(outcome.permanentError.item, outcome.permanentError.error);
+        this.rememberError("trajectory.append.permanent", error);
+        throw error;
       }
       if (outcome.requeued > 0 || !isPermanentProvenanceError(err)) throw err;
     }
@@ -1728,6 +1854,14 @@ export class PiRunner {
             message,
             at: new Date().toISOString(),
           };
+          state.failureCount = (state.failureCount ?? 0) + 1;
+          this.rememberError("channel_publication.broadcast", err);
+          this.rememberCheckpoint("channel_publication.broadcast.failed", {
+            channelId,
+            envelopeIds,
+            failureCount: state.failureCount,
+            error: message,
+          });
           console.warn("[PiRunner] channel publication broadcast failed:", {
             channelId,
             envelopeIds,
@@ -2482,6 +2616,53 @@ export class PiRunner {
     }
   }
 
+  async getContinueReadiness(): Promise<{
+    continuable: boolean;
+    reason?: string;
+    lastRole?: string | null;
+    lastStopReason?: string | null;
+    leafId?: string | null;
+  }> {
+    if (!this.session) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    const [leafId, branch, context] = await Promise.all([
+      this.session.getLeafId(),
+      this.session.getBranch(),
+      this.session.buildContext(),
+    ]);
+    const last = context.messages[context.messages.length - 1] as
+      | ({ role?: string; stopReason?: string } & AgentMessage)
+      | undefined;
+    if (!last) return { continuable: false, reason: "empty_context", leafId };
+    if (last.role === "user" || last.role === "toolResult") {
+      return { continuable: true, lastRole: last.role, leafId };
+    }
+    const leafEntry = branch[branch.length - 1] as
+      | { type?: string; id?: string; message?: AgentMessage }
+      | undefined;
+    if (
+      last.role === "assistant" &&
+      last.stopReason === "aborted" &&
+      !this.assistantMessageHasVisibleContent(last) &&
+      leafEntry?.type === "message" &&
+      leafEntry.id === leafId
+    ) {
+      return {
+        continuable: true,
+        reason: "repairable_empty_aborted_assistant_leaf",
+        lastRole: last.role,
+        lastStopReason: last.stopReason,
+        leafId,
+      };
+    }
+    return {
+      continuable: false,
+      reason: "unsupported_last_role",
+      lastRole: last.role ?? null,
+      lastStopReason: last.stopReason ?? null,
+      leafId,
+    };
+  }
+
   private async prepareSessionForContinue(): Promise<void> {
     if (!this.session) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
     const [leafId, branch, context] = await Promise.all([
@@ -2560,7 +2741,7 @@ export class PiRunner {
     await this.abandonOpenInvocations("User interrupted execution");
   }
 
-  private async abandonOpenInvocations(reason: string): Promise<void> {
+  private async abandonOpenInvocations(reason: string, turnId?: string): Promise<void> {
     if (this.openInvocationIds.size === 0) return;
     const now = new Date().toISOString();
     const items = [...this.openInvocationIds].map(
@@ -2568,6 +2749,7 @@ export class PiRunner {
         event: {
           kind: "invocation.abandoned",
           actor: this.agentActor(),
+          ...(turnId ? { turnId: brandId<TurnId>(turnId) } : {}),
           causality: {
             invocationId: brandId<InvocationId>(toolCallId),
             modelToolCallId: toolCallId,

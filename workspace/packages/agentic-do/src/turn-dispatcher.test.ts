@@ -478,6 +478,7 @@ describe("TurnDispatcher — runTurn failure", () => {
     // block's defensive sweep should re-route the stranded steer.
     runner.runTurnCalls[0]!.deferred.reject(new Error("boom"));
     await flush();
+    await flush();
 
     expect(projector.closeAllCount).toBe(1);
     expect(runner.runTurnCalls).toHaveLength(2);
@@ -915,6 +916,35 @@ describe("TurnDispatcher — typing transitions", () => {
     // The submit still reached the runner despite the thrown notify.
     expect(runner.runTurnCalls).toHaveLength(1);
     warn.mockRestore();
+  });
+
+  it("clears typing and closes durable turn on runner prompt failure", async () => {
+    const runner = makeRunner();
+    const projector = makeProjector();
+    const typing: boolean[] = [];
+    const failures: Array<{ kind: string; message: string }> = [];
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      projector,
+      notifyTyping: (busy) => typing.push(busy),
+      onWorkFailure: async (work, error) => {
+        failures.push({
+          kind: work.kind,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      },
+    });
+
+    d.submit(makeMsg("fails"));
+    await flush();
+    runner.runTurnCalls[0]!.deferred.reject(new Error("eval result persistence failed"));
+    await flush();
+    await flush();
+
+    expect(projector.closeAllCount).toBe(1);
+    expect(typing).toEqual([true, false]);
+    expect(failures).toEqual([{ kind: "prompt", message: "eval result persistence failed" }]);
+    expect(d.getDebugState()).toMatchObject({ busy: false, running: false });
   });
 });
 

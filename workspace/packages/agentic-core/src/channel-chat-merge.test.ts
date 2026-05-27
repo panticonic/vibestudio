@@ -116,6 +116,101 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("surfaces a closed agent turn that ended without an assistant response", () => {
+    const turnId = brandId<TurnId>("turn-no-response");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      turnId,
+      causality: { invocationId: brandId<InvocationId>("inv-stalled") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "eval", request: { code: "run()" } },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const abandoned: AgenticEvent<"invocation.abandoned"> = {
+      kind: "invocation.abandoned",
+      actor: agent,
+      turnId,
+      causality: { invocationId: brandId<InvocationId>("inv-stalled") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "Runner restarted before invocation completed" },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const closed: AgenticEvent<"turn.closed"> = {
+      kind: "turn.closed",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "runner_restarted" },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [opened, started, abandoned, closed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state).map((message) => message.id)).toEqual([
+      "invocation:inv-stalled",
+      "turn:turn-no-response:no-response",
+    ]);
+    expect(chatMessagesFromChannelView(state)[1]).toMatchObject({
+      content: "Agent turn closed without an assistant response. Recovered after runner restart; no assistant response was produced before the turn was closed.",
+      error: "Agent turn closed without an assistant response",
+      complete: true,
+    });
+  });
+
+  it("does not surface user-interrupted agent turns as no-response errors", () => {
+    const turnId = brandId<TurnId>("turn-interrupted");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      turnId,
+      causality: { invocationId: brandId<InvocationId>("inv-cancelled") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "eval", request: { code: "run()" } },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const abandoned: AgenticEvent<"invocation.abandoned"> = {
+      kind: "invocation.abandoned",
+      actor: agent,
+      turnId,
+      causality: { invocationId: brandId<InvocationId>("inv-cancelled") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "Agent turn interrupted by user" },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const closed: AgenticEvent<"turn.closed"> = {
+      kind: "turn.closed",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        summary: "Agent turn interrupted by user",
+        reason: "user_interrupted",
+      },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [opened, started, abandoned, closed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    const messages = chatMessagesFromChannelView(state);
+
+    expect(messages.map((message) => message.id)).toEqual(["invocation:inv-cancelled"]);
+    expect(messages[0]?.invocation?.execution.status).toBe("abandoned");
+    expect(messages[0]?.complete).toBe(true);
+  });
+
   it("preserves invocation name and arguments when only completion is projected", () => {
     const completed: AgenticEvent<"invocation.completed"> = {
       kind: "invocation.completed",
@@ -146,6 +241,49 @@ describe("chatMessagesFromChannelView", () => {
         execution: { status: "complete" },
       },
     });
+  });
+
+  it("rejects stored refs before semantic chat projection", () => {
+    const storedResult = {
+      protocol: "natstack.blob-ref.v1" as const,
+      digest: "digest-result",
+      size: 1024,
+      encoding: "json" as const,
+      originalBytes: 1024,
+    };
+    const storedRequest = {
+      protocol: "natstack.blob-ref.v1" as const,
+      digest: "digest-request",
+      size: 512,
+      encoding: "json" as const,
+      originalBytes: 512,
+    };
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-stored") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "eval",
+        request: storedRequest,
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const completed: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-stored") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: storedResult,
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+
+    expect(() => [envelope(started, 1), envelope(completed, 2)]
+      .reduce(reduceChannelView, createInitialChannelViewState())).toThrow(
+      /must be hydrated before semantic use/
+    );
   });
 
   it("projects invocation progress, output, and errors without losing the exact invocation name", () => {
