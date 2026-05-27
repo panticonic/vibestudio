@@ -70,3 +70,13 @@ export function registerAgentApi(shell: any): void {
   shell.panel.registerAgentHandler("_agent.routes", () => agentApi.routes());
   shell.panel.registerAgentHandler("_agent.setMode", (mode: AgentDataMode) => agentApi.setMode(mode));
 }
+
+export function exposeAgentApi(
+  exposeMethod: (method: string, handler: (...args: unknown[]) => unknown | Promise<unknown>) => void
+): void {
+  exposeMethod("_agent.snapshot", () => agentApi.snapshot());
+  exposeMethod("_agent.tree", () => agentApi.tree());
+  exposeMethod("_agent.state", () => agentApi.state());
+  exposeMethod("_agent.routes", () => agentApi.routes());
+  exposeMethod("_agent.setMode", (mode) => agentApi.setMode(mode as AgentDataMode));
+}

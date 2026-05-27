@@ -1,6 +1,6 @@
 # Agent Panel Workflow
 
-Use one runtime concept: `PanelHandle`. `openPanel(source, options)` opens both workspace panels and URLs and returns a handle. `listPanels()` rediscovers existing handles. Keep the handle and reload it after code changes.
+Use one runtime concept: `PanelHandle`. `openPanel(source, options)` opens both workspace panels and URLs and returns a handle. In userland, opening a panel is a structural tree mutation and may prompt on first use for the requester entity and parent/root target. `listPanels()` rediscovers existing handles. Keep the handle and reload it after code changes.
 
 ## Loop
 
@@ -66,12 +66,12 @@ URLs also use `openPanel`:
 ```ts
 import { openPanel } from "@workspace/runtime";
 
-const browser = await openPanel("https://example.com", { focus: true });
-const page = await browser.browser.page();
+const sitePanel = await openPanel("https://example.com", { focus: true });
+const page = await sitePanel.cdp.page();
 await page.title();
 ```
 
-Browser automation lives under `handle.browser`. Workspace handles expose the same property, but browser methods throw with a clear error unless `handle.kind === "browser"`.
+CDP automation lives under `handle.cdp` and is available for panel-tree targets through the server broker after approval. Use `handle.ensureLoaded()` before RPC to unloaded targets; CDP loads automatically after approval.
 
 ## Verification
 

@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 export interface CdpGrant {
   token: string;
   principalId: string;
-  browserId: string;
+  targetId: string;
   expiresAt: number;
 }
 
@@ -18,26 +18,27 @@ export class CdpGrantService {
 
   grant(
     principalId: string,
-    browserId: string,
-    ttlMs: number = 60_000,
+    targetId: string,
+    ttlMs: number = 60_000
   ): { token: string; expiresAt: number } {
     const token = randomBytes(32).toString("hex");
     const expiresAt = Date.now() + ttlMs;
-    this.grants.set(token, { token, principalId, browserId, expiresAt });
+    this.grants.set(token, { token, principalId, targetId, expiresAt });
     return { token, expiresAt };
   }
 
-  redeem(token: string, browserId: string): { principalId: string } | null {
+  redeem(token: string, targetId: string): { principalId: string } | null {
     const grant = this.grants.get(token);
     if (!grant) return null;
     this.grants.delete(token);
     if (grant.expiresAt <= Date.now()) return null;
-    if (grant.browserId !== browserId) return null;
+    if (grant.targetId !== targetId) return null;
     return { principalId: grant.principalId };
   }
 
   stop(): void {
     clearInterval(this.gcTimer);
+    this.grants.clear();
   }
 
   private gcExpired(): void {

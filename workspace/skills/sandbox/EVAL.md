@@ -190,7 +190,7 @@ Scope is serialized per-property when persisted:
 
 - **Kept:** primitives, plain objects, arrays, Date, Map, Set, RegExp
 - **Dropped:** functions, symbols, class instances, WeakRef/WeakMap/WeakSet, circular refs, depth > 20
-- **Partial restoration:** if `scope.browser = { id: "x", title: "Y", page: fn }`, after reload `scope.browser.id` and `scope.browser.title` survive but `scope.browser.page` is lost
+- **Partial restoration:** if `scope.browser` is a panel handle, after reload `scope.browser.id` and `scope.browser.title` survive but function-valued fields such as `scope.browser.cdp.page` are lost
 
 On reload, a system message lists what was restored, partially restored, and lost.
 
@@ -325,7 +325,7 @@ eval({ code: `
 
   // Use openPanel when you need page automation
   const handle = await openPanel("https://example.com");
-  const page = await handle.browser.page();
+  const page = await handle.cdp.page();
   console.log(await page.title());
 ` })
 ```

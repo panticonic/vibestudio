@@ -19,6 +19,11 @@
   --app-approval-amber-border: var(--amber-a7);
   --app-approval-amber-stripe: var(--amber-10);
   --app-approval-amber-text: var(--amber-12);
+  /* Approval bar — red (privileged panel automation / structural changes) */
+  --app-approval-red-bg: var(--red-a4);
+  --app-approval-red-border: var(--red-a7);
+  --app-approval-red-stripe: var(--red-9);
+  --app-approval-red-text: var(--red-12);
 }
 
 .app-shell-theme:where(.light, .light-theme) {
@@ -38,6 +43,10 @@
   --app-approval-amber-border: var(--amber-7);
   --app-approval-amber-stripe: var(--amber-10);
   --app-approval-amber-text: var(--amber-12);
+  --app-approval-red-bg: var(--red-3);
+  --app-approval-red-border: var(--red-7);
+  --app-approval-red-stripe: var(--red-9);
+  --app-approval-red-text: var(--red-12);
 }
 
 .app-shell-panel-card {

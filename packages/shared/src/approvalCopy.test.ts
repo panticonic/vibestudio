@@ -187,6 +187,43 @@ describe("approvalCopy", () => {
       title: "Worker requests your decision",
       summaryIncludes: "team-x:foo",
     },
+    {
+      name: "panel automate",
+      approval: {
+        ...base,
+        kind: "capability",
+        capability: "panel.automate",
+        severity: "severe",
+        title: "Drive privileged panel",
+        resource: {
+          type: "panel",
+          label: "Panel",
+          value: "Shell",
+        },
+      },
+      category: "Panel automation",
+      title: "Drive privileged panel",
+      summaryIncludes: "automate Shell",
+      warning:
+        "This target is privileged. Approving gives the requester control of a trusted shell panel.",
+    },
+    {
+      name: "panel structural",
+      approval: {
+        ...base,
+        kind: "capability",
+        capability: "panel.structural",
+        title: "Close panel",
+        resource: {
+          type: "panel",
+          label: "Panel",
+          value: "Child panel",
+        },
+      },
+      category: "Panel change",
+      title: "Close panel",
+      summaryIncludes: "change Child panel",
+    },
   ];
 
   it.each(fixtures)(
@@ -204,6 +241,13 @@ describe("approvalCopy", () => {
 
   it("formats standard action labels by approval subtype", () => {
     const [capability, oauth, gitWrite] = fixtures.map((fixture) => fixture.approval);
+    const severePanelAutomation = fixtures.find((fixture) => fixture.name === "panel automate")!
+      .approval as Extract<PendingApproval, { kind: "capability" }>;
+    const severePanelStructural = {
+      ...(fixtures.find((fixture) => fixture.name === "panel structural")!
+        .approval as Extract<PendingApproval, { kind: "capability" }>),
+      severity: "severe" as const,
+    };
 
     expect(
       getStandardActionCopy(oauth as Extract<PendingApproval, { kind: "credential" }>).once.label
@@ -215,6 +259,10 @@ describe("approvalCopy", () => {
       getStandardActionCopy(capability as Extract<PendingApproval, { kind: "capability" }>).once
         .label
     ).toBe("Open once");
+    expect(getStandardActionCopy(severePanelAutomation).once.label).toBe("Drive once");
+    expect(getStandardActionCopy(severePanelAutomation).version.label).toBe("Trust and drive");
+    expect(getStandardActionCopy(severePanelStructural).once.label).toBe("Change once");
+    expect(getStandardActionCopy(severePanelStructural).version.label).toBe("Trust and change");
     expect(
       getStandardActionCopy(
         fixtures.find((fixture) => fixture.name === "extension source push")!

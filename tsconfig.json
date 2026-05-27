@@ -81,6 +81,9 @@
       ],
       "@workspace/integrations/providers": [
         "workspace/packages/integrations/src/providers.ts"
+      ],
+      "@workspace/playwright-client": [
+        "workspace/packages/playwright-client/index.d.ts"
       ]
     }
   },

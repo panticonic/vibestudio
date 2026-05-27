@@ -74,14 +74,6 @@ const natstackShell = {
   openExternal: (url: string, options?: unknown) =>
     ipcRenderer.invoke("natstack:openExternal", url, options),
 
-  // Browser automation (CdpServer)
-  getCdpEndpoint: (id: string) => ipcRenderer.invoke("natstack:getCdpEndpoint", id),
-  navigate: (id: string, url: string) => ipcRenderer.invoke("natstack:navigate", id, url),
-  goBack: (id: string) => ipcRenderer.invoke("natstack:goBack", id),
-  goForward: (id: string) => ipcRenderer.invoke("natstack:goForward", id),
-  reload: (id: string) => ipcRenderer.invoke("natstack:reload", id),
-  stop: (id: string) => ipcRenderer.invoke("natstack:stop", id),
-
   // Generic Electron service dispatch — lets panels call Electron-local services
   // (e.g., browser-data, autofill) via IPC instead of going through the server.
   serviceCall: (method: string, ...args: unknown[]) =>

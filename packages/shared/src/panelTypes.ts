@@ -85,5 +85,6 @@ export {
   getInjectHostThemeVariables,
   getBrowserResolvedUrl,
   getPanelStateArgs,
+  updatePanelNavigationState,
   createSnapshot,
 } from "./panel/accessors.js";

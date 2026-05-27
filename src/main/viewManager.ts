@@ -139,6 +139,7 @@ export class ViewManager {
     shellHtmlPath: string;
     shellAdditionalArguments?: string[];
     devTools?: boolean;
+    showWindowOnShellLoad?: boolean;
   }) {
     this.window = options.window;
     // Create shell view (React UI) - fills entire window
@@ -184,7 +185,7 @@ export class ViewManager {
     this.shellView.webContents.on("did-finish-load", () => {
       this.updateShellBounds();
       // Show window now that content is ready (avoids layout flash)
-      if (!this.window.isVisible()) {
+      if (options.showWindowOnShellLoad !== false && !this.window.isVisible()) {
         this.window.show();
       }
     });

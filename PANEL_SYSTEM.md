@@ -66,11 +66,13 @@ import {
   // Navigation
   buildPanelLink,        // Build URL for panel navigation
 
-  // Parent communication
-  parent,                // ParentHandle (noop if root)
-  getParent,             // Get typed parent handle
-  getParentWithContract, // Get contract-typed parent
-  noopParent,            // Safe fallback for null parent
+  // Panel handles and tree
+  parent,                // Parent PanelHandle surface; operations fail loudly when root has no parent
+  panelTree,             // Get/list/open/focus/drive any panel-tree member
+  getPanelHandle,        // Get a PanelHandle by ID
+  listPanels,            // List accessible panels
+  getParent,             // Get typed parent PanelHandle or null
+  getParentWithContract, // Get contract-typed parent PanelHandle or null
 
   // RPC
   rpc,                   // RPC bridge for expose/events
@@ -117,9 +119,7 @@ import {
   openPanel,             // Open any panel — URLs become browser panels, source paths open workspace panels
   buildPanelLink,        // Build URL for panel navigation (low-level — prefer openPanel)
 
-  // Browser panels
-  getPanelHandle,        // Get a typed PanelHandle for an existing panel
-  listPanels,            // List panels this panel can access
+  // External URLs
   openExternal,          // Open URL in system browser
   onChildCreated,        // Subscribe to child-created events (window.open flow)
 } from "@workspace/runtime";
@@ -153,13 +153,18 @@ window.location.href = buildPanelLink("panels/chat", { contextId: "abc-123" });
 `buildPanelLink` returns a relative path for same-context navigation and an absolute URL with `contextId` in the query string when `contextId` is provided.
 
 
-## ParentHandle Methods
+## PanelHandle Methods
 
 ```typescript
-parent.id                         // Parent's ID
-parent.call.method(args)          // Call parent's RPC method
-parent.emit("event", payload)     // Emit event to parent
-parent.onEvent("event", handler)  // Listen for parent events
+const handle = panelTree.get("panel-id");
+
+handle.id                         // Panel ID
+handle.call.method(args)          // Call exposed RPC method
+handle.emit("event", payload)     // Emit event to the panel
+handle.onEvent("event", handler)  // Listen for events from the panel
+handle.cdp.page()                 // Approval-gated CDP page access
+handle.ensureLoaded()             // Explicit load for RPC/introspection
+handle.close()                    // Approval-gated structural operation
 ```
 
 ## Typed RPC Contracts
@@ -189,17 +194,17 @@ export const editorContract = defineContract({
 A panel exposes methods and communicates with its parent using the contract:
 
 ```typescript
-import { rpc, getParentWithContract, noopParent } from "@workspace/runtime";
+import { rpc, getParentWithContract } from "@workspace/runtime";
 import { editorContract } from "./contract.js";
 
-const parent = getParentWithContract(editorContract) ?? noopParent;
+const parent = getParentWithContract(editorContract);
 
 rpc.expose({
   async getContent() { return content; },
   async setContent(text) { setContent(text); },
 });
 
-parent.emit("saved", { path: "/file.txt" }); // Typed!
+await parent?.emit("saved", { path: "/file.txt" }); // Typed when a parent is present.
 ```
 
 ## Git Utilities

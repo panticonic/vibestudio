@@ -1,11 +1,14 @@
 import type { PanelEntityId, PanelSlotId } from "./ids.js";
 
-export type ClientPlatform = "desktop" | "mobile";
+export type ClientPlatform = "desktop" | "headless" | "mobile";
 
 export interface ClientSession {
   clientSessionId: string;
+  hostConnectionId?: string;
+  ownerCallerId?: string;
   label: string;
   platform: ClientPlatform;
+  supportsCdp?: boolean;
   connectedAt: number;
   lastSeenAt: number;
 }
@@ -19,9 +22,11 @@ export interface PanelRuntimeLease {
   slotId: PanelSlotId;
   runtimeEntityId: PanelEntityId;
   clientSessionId: string;
+  hostConnectionId: string;
   connectionId: string;
   holderLabel: string;
   platform: ClientPlatform;
+  supportsCdp: boolean;
   acquiredAt: number;
   expiresAt?: number;
 }

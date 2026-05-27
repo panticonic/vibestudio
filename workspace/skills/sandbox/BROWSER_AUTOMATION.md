@@ -1,6 +1,6 @@
-# Browser Automation
+# CDP Panel Automation
 
-Automate browser panels with Playwright-style page control. Open a URL, get a page handle, and interact — click, fill forms, evaluate JS, take screenshots.
+Automate panels with Playwright-style CDP page control. Open a URL or target an existing panel, get a page handle, and interact — click, fill forms, evaluate JS, take screenshots.
 
 ## REPL Scope: Open Once, Reuse Across Calls
 
@@ -11,7 +11,7 @@ The primary pattern: open a browser panel once, store the handle in `scope`, and
 eval({ code: `
   import { openPanel } from "@workspace/runtime";
   scope.browser = await openPanel("https://example.com");
-  scope.page = await scope.browser.browser.page();
+  scope.page = await scope.browser.cdp.page();
   console.log("Opened:", await scope.page.title());
 `
 })
@@ -37,20 +37,20 @@ eval({ code: `
 ```
 
 Two lines to get started:
-1. `scope.browser = await openPanel(url)` — opens a browser panel, stores handle in scope
-2. `scope.page = await scope.browser.browser.page()` — connects Playwright via CDP, stores page in scope
+1. `scope.browser = await openPanel(url)` — opens a browser panel, stores handle in scope; may prompt on first structural use
+2. `scope.page = await scope.browser.cdp.page()` — connects Playwright via CDP, stores page in scope
 
 All subsequent eval calls reuse `scope.page` directly — no re-creation needed.
 
 ## Reconnection After Panel Reload
 
-On panel reload, `scope.browser.id` survives serialization (it's a string) even though methods like `scope.browser.page` and `scope.browser.navigate` are lost (functions aren't serializable). Reconnect using the surviving ID:
+On panel reload, `scope.browser.id` survives serialization (it's a string) even though handle methods like `scope.browser.cdp.page` and `scope.browser.cdp.navigate` are lost (functions aren't serializable). Reconnect using the surviving ID:
 
 ```
 eval({ code: `
   import { getPanelHandle } from "@workspace/runtime";
   scope.browser = getPanelHandle(scope.browser.id);  // id survived serialization
-  scope.page = await scope.browser.browser.page();
+  scope.page = await scope.browser.cdp.page();
   console.log("Reconnected:", await scope.page.title());
 `
 })
@@ -62,7 +62,7 @@ No need for a separate `scope.browserId` — per-property serialization means `s
 
 ```typescript
 scope.browser = await openPanel("https://example.com");
-scope.page = await scope.browser.browser.page();
+scope.page = await scope.browser.cdp.page();
 ```
 
 ### Navigation
@@ -142,12 +142,12 @@ The handle also has direct navigation methods (no Playwright needed):
 
 | Method | Description |
 |--------|-------------|
-| `handle.browser.page()` | Connect Playwright, return page |
-| `handle.browser.navigate(url)` | Load a URL |
-| `handle.browser.goBack()` | Navigate back |
-| `handle.goForward()` | Navigate forward |
-| `handle.browser.reload()` | Reload page |
-| `handle.stop()` | Stop loading |
+| `handle.cdp.page()` | Connect Playwright, return page |
+| `handle.cdp.navigate(url)` | Load a URL |
+| `handle.cdp.goBack()` | Navigate back |
+| `handle.cdp.goForward()` | Navigate forward |
+| `handle.cdp.reload()` | Reload page |
+| `handle.cdp.stop()` | Stop loading |
 | `handle.close()` | Close browser panel |
 
 ## Examples
@@ -159,7 +159,7 @@ The handle also has direct navigation methods (no Playwright needed):
 eval({ code: `
   import { openPanel } from "@workspace/runtime";
   scope.browser = await openPanel("https://news.ycombinator.com");
-  scope.page = await scope.browser.browser.page();
+  scope.page = await scope.browser.cdp.page();
   console.log("Opened HN");
 `
 })
@@ -191,7 +191,7 @@ eval({ code: `
 eval({ code: `
   import { openPanel } from "@workspace/runtime";
   scope.browser = await openPanel("https://example.com/login");
-  scope.page = await scope.browser.browser.page();
+  scope.page = await scope.browser.cdp.page();
 `
 })
 
@@ -235,7 +235,7 @@ eval({ code: `
 
   // Step 2: Open browser — now has imported cookies
   scope.browser = await openPanel("https://github.com");
-  scope.page = await scope.browser.browser.page();
+  scope.page = await scope.browser.cdp.page();
 
   const title = await scope.page.title();
   console.log("Page title:", title);
@@ -271,7 +271,7 @@ export default function BrowserController({ props, chat }) {
     setStatus("connecting...");
     const handle = await openPanel(url);
     handleRef.current = handle;
-    const page = await handle.browser.page();
+    const page = await handle.cdp.page();
     pageRef.current = page;
     setStatus("connected");
     setPageTitle(await page.title());

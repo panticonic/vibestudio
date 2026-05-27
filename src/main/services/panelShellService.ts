@@ -8,6 +8,7 @@ import type {
   BranchInfo,
   CommitInfo,
   PanelFocusResult,
+  PanelNavigationState,
   ThemeAppearance,
   WorkspaceNode,
 } from "@natstack/shared/types";
@@ -420,11 +421,7 @@ export function createPanelShellService(deps: {
               canGoForward?: boolean;
             },
           ];
-          // updatePanelState is handled by PanelView's browser state tracking
-          // This was a method on PanelManager that's now in PanelView
-          // For now, delegate to the panel view
-          void state;
-          void panelId;
+          await lifecycle.updatePanelState(panelId, state satisfies PanelNavigationState);
           return;
         }
 

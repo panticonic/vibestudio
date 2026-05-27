@@ -54,7 +54,7 @@ eval({ code: `
 
   // Open target site — imported cookies are already in the browser session
   const handle = await openPanel("https://github.com");
-  const page = await handle.browser.page();
+  const page = await handle.cdp.page();
 
   const title = await page.title();
   console.log("Page title:", title);

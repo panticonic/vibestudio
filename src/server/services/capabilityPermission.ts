@@ -1,4 +1,8 @@
 import type { PendingCapabilityApproval } from "@natstack/shared/approvals";
+import {
+  PANEL_AUTOMATE_CAPABILITY,
+  PANEL_STRUCTURAL_CAPABILITY,
+} from "@natstack/shared/panelAccessPolicy";
 import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -21,10 +25,19 @@ export interface CapabilityPermissionResource {
   key?: string;
 }
 
+export function panelCapabilityResourceKey(
+  targetPanelId: string,
+  requesterEntityId: string
+): string {
+  return `panel:${targetPanelId}:requester:${requesterEntityId}`;
+}
+
 export interface CapabilityPermissionRequest {
   caller: VerifiedCaller;
   capability: string;
+  severity?: PendingCapabilityApproval["severity"];
   dedupKey?: string | null;
+  signal?: AbortSignal;
   resource: CapabilityPermissionResource;
   title: string;
   description?: string;
@@ -61,6 +74,10 @@ export async function requestCapabilityPermission(
   }
 
   const resourceKey = request.resource.key ?? request.resource.value;
+  const dedupKey =
+    request.dedupKey === undefined && isPanelCapability(request.capability)
+      ? `panel-capability:${request.capability}:${resourceKey}`
+      : request.dedupKey;
   if (deps.grantStore.hasGrant(request.capability, resourceKey, identity)) {
     return { allowed: true };
   }
@@ -72,7 +89,8 @@ export async function requestCapabilityPermission(
     repoPath: identity.repoPath,
     effectiveVersion: identity.effectiveVersion,
     capability: request.capability,
-    dedupKey: request.dedupKey,
+    severity: request.severity,
+    dedupKey,
     title: request.title,
     description: request.description,
     resource: {
@@ -82,6 +100,7 @@ export async function requestCapabilityPermission(
     },
     grantResourceKey: resourceKey,
     details: request.details,
+    signal: request.signal,
   });
   if (decision === "deny") {
     return { allowed: false, reason: request.deniedReason };
@@ -112,4 +131,8 @@ export function normalizeCallerKind(kind: string): "panel" | "worker" | "do" | n
     return kind;
   }
   return null;
+}
+
+function isPanelCapability(capability: string): boolean {
+  return capability === PANEL_AUTOMATE_CAPABILITY || capability === PANEL_STRUCTURAL_CAPABILITY;
 }

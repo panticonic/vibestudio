@@ -10,6 +10,7 @@ import {
 } from "./workerdManager.js";
 import { spawn } from "child_process";
 import { findServicePort } from "@natstack/port-utils";
+import * as fs from "node:fs";
 
 // Mock child_process to prevent actual workerd spawning
 vi.mock("child_process", () => ({
@@ -117,6 +118,34 @@ describe("WorkerdManager", () => {
       expect(instance.callerId).toBe("worker:hello");
       expect(instance.token).toBe("mock-token-123");
       expect(instance.status).toBe("running");
+    });
+
+    it("stores parent handle metadata and injects it into the worker runtime bindings", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+
+      const instance = await mgr.createInstance(
+        defaultCreateOptions({
+          parentId: "panel-parent",
+          parentEntityId: "panel:parent-entity",
+          parentKind: "panel",
+        })
+      );
+
+      expect(instance.parentId).toBe("panel-parent");
+      expect(instance.parentEntityId).toBe("panel:parent-entity");
+      expect(instance.parentKind).toBe("panel");
+      const spawnCalls = vi.mocked(spawn).mock.calls;
+      const spawnArgs = spawnCalls[spawnCalls.length - 1]?.[1] as string[] | undefined;
+      const configPath = spawnArgs?.[spawnArgs.length - 1];
+      expect(configPath).toBeTruthy();
+      const config = fs.readFileSync(configPath as string, "utf8");
+      expect(config).toContain('name = "PARENT_ID"');
+      expect(config).toContain('text = "panel-parent"');
+      expect(config).toContain('name = "PARENT_ENTITY_ID"');
+      expect(config).toContain('text = "panel:parent-entity"');
+      expect(config).toContain('name = "PARENT_KIND"');
+      expect(config).toContain('text = "panel"');
     });
 
     it("mints a bearer token for the worker callerId", async () => {

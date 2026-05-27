@@ -37,6 +37,29 @@ describe("createWorkerdClient", () => {
     expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.createInstance", [opts]);
   });
 
+  it("adds parent defaults when creating workers from a runtime", async () => {
+    client = createWorkerdClient(mock.rpc, {
+      parentId: "parent-slot",
+      parentEntityId: "panel:parent-entity",
+      parentKind: "panel",
+    });
+
+    await client.create({
+      source: "workers/child",
+      contextId: "ctx-1",
+    });
+
+    expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.createInstance", [
+      {
+        source: "workers/child",
+        contextId: "ctx-1",
+        parentId: "parent-slot",
+        parentEntityId: "panel:parent-entity",
+        parentKind: "panel",
+      },
+    ]);
+  });
+
   it("destroy calls workerd.destroyInstance", async () => {
     await client.destroy("hello");
     expect(mock.rpc.call).toHaveBeenCalledWith("main", "workerd.destroyInstance", ["hello"]);

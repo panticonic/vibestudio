@@ -480,14 +480,15 @@ export async function runAllTests(cdpEndpoint: CdpEndpoint) {
 }
 
 /**
- * Example usage in natstack panel:
+ * Example usage in a NatStack panel:
  *
  * ```typescript
  * import { runAllTests } from './INTEGRATION_TEST_EXAMPLE';
+ * import { panelTree } from '@workspace/runtime';
  *
  * // In your panel component:
  * const runTests = async () => {
- *   const endpoint = await panel.browser.getCdpEndpoint(browserId);
+ *   const endpoint = await panelTree.self().cdp.getCdpEndpoint();
  *   await runAllTests(endpoint);
  * };
  * ```

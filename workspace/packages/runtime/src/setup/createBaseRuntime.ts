@@ -4,7 +4,7 @@
  * Provides: rpc, fs, callMain, workspace tree/branches/commits,
  * connection error handling, method exposure, theme, focus.
  *
- * Does NOT include: stateArgs, parent handles, panel-specific features.
+ * Does NOT include: stateArgs, panel handles, panel-specific features.
  */
 import { createRpcBridge, type RpcTransport } from "@natstack/rpc";
 import { createWorkerdClient } from "../shared/workerd.js";

@@ -5,7 +5,13 @@
   "description": "Browser-compatible CDP client library - thin wrapper",
   "license": "Apache-2.0",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./index.d.ts",
+      "natstack-panel": "./src/browser.ts",
+      "worker": "./src/worker.ts",
+      "workerd": "./src/worker.ts",
+      "default": "./src/index.ts"
+    }
   },
   "dependencies": {
     "@workspace/playwright-core": "workspace:*"

@@ -245,15 +245,6 @@ Each panel gets:
 - **RPC-backed filesystem** via server-side context folders
 - **Full service access** — AI, git, database, build, channels
 
-### Browser Extensions
-
-NatStack ships Chrome and Firefox extensions that connect to the headless
-server and automatically manage browser tabs for panels. The extensions
-handle lifecycle events, context pre-warming, and path-based panel URLs.
-
-See **[BROWSER_EXTENSIONS.md](BROWSER_EXTENSIONS.md)** for installation
-instructions, configuration, and the full connection flow.
-
 ### In-Process Agents
 
 Agents run as in-process services managed by AgentManager. They have direct

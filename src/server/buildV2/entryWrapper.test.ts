@@ -95,6 +95,14 @@ describe("generateExposeModuleCode", () => {
     expect(code).toContain('import * as __mod0__ from "@workspace/runtime"');
   });
 
+  it("worker target preloads the CDP client when runtime handles are exposed", () => {
+    const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
+    expect(code).toContain('import * as __mod1__ from "@workspace/playwright-client"');
+    expect(code).toContain(
+      'globalThis.__natstackModuleMap__["@workspace/playwright-client"] = __mod1__'
+    );
+  });
+
   it("worker target synthesizes fs shims from runtime exports", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
     expect(code).toContain('map["fs"]');

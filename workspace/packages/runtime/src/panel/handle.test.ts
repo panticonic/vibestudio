@@ -1,52 +1,74 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("PanelHandle", () => {
-  beforeEach(() => {
-    vi.resetModules();
-    (globalThis as any).__natstackShell = {
-      panel: {
-        create: vi.fn(async (source: string) => ({
+function createRpcCall() {
+  return vi.fn(async (_target: string, method: string, args: unknown[]) => {
+    switch (method) {
+      case "panelTree.create": {
+        const source = args[0] as string;
+        return {
           id: source.startsWith("http") ? "browser-1" : "panel-1",
           title: "Created",
           kind: source.startsWith("http") ? "browser" : "workspace",
-        })),
-        list: vi.fn(async (parentId?: string | null) =>
-          parentId
-            ? [
-                {
-                  panelId: "child-1",
-                  title: "Child",
-                  source: "panels/child",
-                  kind: "workspace",
-                  parentId,
-                  contextId: "ctx",
-                },
-              ]
-            : [
-                {
-                  panelId: "browser-1",
-                  title: "Browser",
-                  source: "browser:https://example.com",
-                  kind: "browser",
-                  parentId: null,
-                  contextId: "ctx",
-                },
-              ]
-        ),
-        close: vi.fn(async () => undefined),
-        reload: vi.fn(async () => undefined),
-        getStateArgs: vi.fn(async () => ({ mode: "fixture" })),
-        setStateArgs: vi.fn(async () => ({ mode: "live" })),
-        snapshot: vi.fn(async () => ({ kind: "ax", text: "ok" })),
-        callAgent: vi.fn(async () => ({})),
-      },
-      getCdpEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://localhost", token: "t" })),
-    };
+        };
+      }
+      case "panelTree.list": {
+        const parentId = args[0] as string | null | undefined;
+        return parentId
+          ? [
+              {
+                panelId: "child-1",
+                title: "Child",
+                source: "panels/child",
+                kind: "workspace",
+                parentId,
+                contextId: "ctx",
+                runtimeEntityId: "panel:child-entity",
+              },
+            ]
+          : [
+              {
+                panelId: "browser-1",
+                title: "Browser",
+                source: "browser:https://example.com",
+                kind: "browser",
+                parentId: null,
+                contextId: "ctx",
+                runtimeEntityId: "panel:browser-entity",
+              },
+            ];
+      }
+      case "panelTree.roots":
+        return [
+          {
+            panelId: "root-1",
+            title: "Root",
+            source: "panels/root",
+            kind: "workspace",
+            parentId: null,
+            contextId: "ctx",
+            runtimeEntityId: "panel:root-entity",
+          },
+        ];
+      case "panelCdp.getCdpEndpoint":
+        return { wsEndpoint: "ws://localhost", token: "t" };
+      default:
+        return undefined;
+    }
+  });
+}
+
+describe("PanelHandle", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("@workspace/playwright-client");
+    delete (globalThis as any).__natstackShell;
+    delete (globalThis as any).__natstackRequire__;
+    delete (globalThis as any).__natstackRequireAsync__;
   });
 
   it("returns a workspace handle from openPanel", async () => {
     const { _initPanelHandleBridge, openPanel } = await import("./handle.js");
-    _initPanelHandleBridge({ call: vi.fn(), onEvent: vi.fn() } as never);
+    _initPanelHandleBridge({ call: createRpcCall(), onEvent: vi.fn() } as never);
 
     const handle = await openPanel("panels/example");
 
@@ -56,32 +78,263 @@ describe("PanelHandle", () => {
       source: "panels/example",
       kind: "workspace",
     });
-    await expect(handle.browser.getCdpEndpoint()).rejects.toThrow("workspace panel");
-  });
-
-  it("hydrates rediscovered browser handles with browser automation", async () => {
-    const { _initPanelHandleBridge, listPanels } = await import("./handle.js");
-    _initPanelHandleBridge({ call: vi.fn(), onEvent: vi.fn() } as never);
-
-    const [handle] = await listPanels();
-
-    expect(handle?.kind).toBe("browser");
-    expect(handle?.source).toBe("https://example.com");
-    await expect(handle?.browser.getCdpEndpoint()).resolves.toEqual({
+    await expect(handle.cdp.getCdpEndpoint()).resolves.toEqual({
       wsEndpoint: "ws://localhost",
       token: "t",
     });
   });
 
+  it("hydrates rediscovered browser handles with CDP automation", async () => {
+    const { _initPanelHandleBridge, listPanels } = await import("./handle.js");
+    _initPanelHandleBridge({ call: createRpcCall(), onEvent: vi.fn() } as never);
+
+    const [handle] = await listPanels();
+
+    expect(handle?.kind).toBe("browser");
+    expect(handle?.source).toBe("https://example.com");
+    await expect(handle?.cdp.getCdpEndpoint()).resolves.toEqual({
+      wsEndpoint: "ws://localhost",
+      token: "t",
+    });
+  });
+
+  it("routes hydrated handle RPC to the current runtime entity", async () => {
+    const rpcCall = createRpcCall();
+    const rpcEmit = vi.fn(async () => undefined);
+    const eventHandlers: Array<(fromId: string, payload: unknown) => void> = [];
+    const rpcOnEvent = vi.fn(
+      (_event: string, handler: (fromId: string, payload: unknown) => void) => {
+        eventHandlers.push(handler);
+        return vi.fn();
+      }
+    );
+    const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, emit: rpcEmit, onEvent: rpcOnEvent } as never);
+
+    const [child] = await panelTree.children("parent-1");
+    expect(child).toBeDefined();
+    await (child!.call as Record<string, () => Promise<unknown>>)["ping"]!();
+    await child!.emit("ready", { ok: true });
+    const listener = vi.fn();
+    child!.onEvent("status", listener);
+    eventHandlers[0]?.("panel:other-entity", { ignored: true });
+    eventHandlers[0]?.("panel:child-entity", { ok: true });
+
+    expect(rpcCall).toHaveBeenCalledWith("panel:child-entity", "ping", []);
+    expect(rpcEmit).toHaveBeenCalledWith("panel:child-entity", "ready", { ok: true });
+    expect(rpcOnEvent).toHaveBeenCalledWith("status", expect.any(Function));
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("keeps child contract handles unified with the underlying panel target", async () => {
+    const rpcCall = createRpcCall();
+    const rpcEmit = vi.fn(async () => undefined);
+    const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, emit: rpcEmit, onEvent: vi.fn() } as never);
+
+    const [child] = await panelTree.children("parent-1");
+    const typedChild = child!.withContract({ source: "panels/child" }, "child");
+
+    expect(typedChild).toBe(child);
+    expect(typedChild.id).toBe("child-1");
+    await (typedChild.call as Record<string, () => Promise<unknown>>)["ping"]!();
+    await typedChild.emit("ready", { ok: true });
+    await typedChild.cdp.getCdpEndpoint();
+    await typedChild.stateArgs.set({ mode: "live" });
+
+    expect(rpcCall).toHaveBeenCalledWith("panel:child-entity", "ping", []);
+    expect(rpcEmit).toHaveBeenCalledWith("panel:child-entity", "ready", { ok: true });
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["child-1"]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.setStateArgs", [
+      "child-1",
+      { mode: "live" },
+    ]);
+  });
+
+  it("exposes panelTree roots/list/get and self handles", async () => {
+    const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
+    const rpcCall = createRpcCall();
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never, {
+      selfId: "panel-self",
+      selfRpcTargetId: "panel:self-entity",
+      parentId: "panel-parent",
+      parentRpcTargetId: "panel:parent-entity",
+    });
+
+    const roots = await panelTree.roots();
+    const all = await panelTree.list();
+    const self = panelTree.self();
+    const parent = self.parent();
+
+    expect(roots).toHaveLength(1);
+    expect(roots[0]?.id).toBe("root-1");
+    expect(all.map((handle) => handle.id)).toEqual(["browser-1"]);
+    expect(panelTree.get("arbitrary").id).toBe("arbitrary");
+    expect(self.id).toBe("panel-self");
+    await (self.call as Record<string, () => Promise<unknown>>)["ping"]!();
+    expect(rpcCall).toHaveBeenCalledWith("panel:self-entity", "ping", []);
+    expect(parent?.id).toBe("panel-parent");
+    await (parent!.call as Record<string, () => Promise<unknown>>)["ping"]!();
+    expect(rpcCall).toHaveBeenCalledWith("panel:parent-entity", "ping", []);
+  });
+
+  it("hydrates arbitrary parent handles from discovered tree metadata", async () => {
+    const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
+    _initPanelHandleBridge({ call: createRpcCall(), onEvent: vi.fn() } as never, {
+      selfId: "panel-self",
+      parentId: "panel-parent",
+    });
+
+    const [child] = await panelTree.children("parent-1");
+    const parent = child?.parent();
+
+    expect(child?.id).toBe("child-1");
+    expect(panelTree.parent("child-1")?.id).toBe("parent-1");
+    expect(parent?.id).toBe("parent-1");
+  });
+
+  it("creates non-panel runtime handles that cannot be targeted", async () => {
+    const { createNonPanelRuntimeHandle } = await import("../shared/handles.js");
+    const parent = createNonPanelRuntimeHandle({ id: "panel-parent" });
+    const handle = createNonPanelRuntimeHandle({
+      id: "worker:agent",
+      parentId: "panel-parent",
+      parent: () => parent,
+    });
+
+    expect(handle.id).toBe("worker:agent");
+    expect(handle.parent()?.id).toBe("panel-parent");
+    await expect(handle.cdp.getCdpEndpoint()).rejects.toThrow(
+      "CDP is not available for panel worker:agent"
+    );
+    await expect(handle.call["anything"]!()).rejects.toThrow("worker:agent is not a panel target");
+    await expect(handle.emit("event", {})).rejects.toThrow("worker:agent is not a panel target");
+  });
+
+  it("fails loudly for operations on the unified no-parent handle", async () => {
+    const { createNoPanelHandle } = await import("../shared/handles.js");
+    const handle = createNoPanelHandle();
+
+    expect(handle.parent()).toBeNull();
+    await expect(handle.call["anything"]!()).rejects.toThrow("No parent panel");
+    await expect(handle.close()).rejects.toThrow("No parent panel");
+    await expect(handle.stateArgs.set({ mode: "fixture" })).rejects.toThrow("No parent panel");
+    await expect(handle.emit("event", {})).rejects.toThrow("No parent panel");
+  });
+
+  it("routes non-Electron CDP calls through the server panelCdp service", async () => {
+    const rpcCall = vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/panel-1", token: "t" }));
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await expect(getPanelHandle("panel-1").cdp.getCdpEndpoint()).resolves.toEqual({
+      wsEndpoint: "ws://server/cdp/panel-1",
+      token: "t",
+    });
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["panel-1"]);
+  });
+
+  it("routes non-Electron CDP drive verbs through panelCdp", async () => {
+    const rpcCall = vi.fn(async () => undefined);
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await getPanelHandle("panel-1").cdp.navigate("https://example.com");
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.navigate", [
+      "panel-1",
+      "https://example.com",
+    ]);
+  });
+
+  it("loads the Playwright CDP client through the async module hook for worker/DO handles", async () => {
+    const page = { marker: "page" };
+    const connect = vi.fn(async () => ({
+      contexts: () => [{ pages: () => [page] }],
+    }));
+    (globalThis as any).__natstackRequireAsync__ = vi.fn(async () => ({
+      BrowserImpl: { connect },
+    }));
+    const rpcCall = vi.fn(async () => ({
+      wsEndpoint: "ws://server/cdp/panel-1",
+      token: "token-1",
+    }));
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await expect(getPanelHandle("panel-1").cdp.page()).resolves.toBe(page);
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["panel-1"]);
+    expect(connect).toHaveBeenCalledWith("ws://server/cdp/panel-1", {
+      isElectronWebview: true,
+      transportOptions: { authToken: "token-1" },
+    });
+  });
+
+  it("loads the CDP client through the sync worker module map", async () => {
+    const page = { marker: "worker-page" };
+    const connect = vi.fn(async () => ({
+      contexts: () => [{ pages: () => [page] }],
+    }));
+    (globalThis as any).__natstackRequire__ = vi.fn((id: string) => {
+      if (id === "@workspace/playwright-client") return { BrowserImpl: { connect } };
+      throw new Error(`missing module: ${id}`);
+    });
+    const rpcCall = vi.fn(async () => ({
+      wsEndpoint: "ws://server/cdp/panel-1",
+      token: "token-1",
+    }));
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await expect(getPanelHandle("panel-1").cdp.page()).resolves.toBe(page);
+
+    expect((globalThis as any).__natstackRequire__).toHaveBeenCalledWith(
+      "@workspace/playwright-client"
+    );
+    expect(connect).toHaveBeenCalledWith("ws://server/cdp/panel-1", {
+      isElectronWebview: true,
+      transportOptions: { authToken: "token-1" },
+    });
+  });
+
+  it("falls back when the sync module map is present but lacks the CDP client", async () => {
+    const page = { marker: "async-page" };
+    const connect = vi.fn(async () => ({
+      contexts: () => [{ pages: () => [page] }],
+    }));
+    (globalThis as any).__natstackRequire__ = vi.fn(() => {
+      throw new Error("not in map");
+    });
+    (globalThis as any).__natstackRequireAsync__ = vi.fn(async () => ({
+      BrowserImpl: { connect },
+    }));
+    const rpcCall = vi.fn(async () => ({
+      wsEndpoint: "ws://server/cdp/panel-1",
+      token: "token-1",
+    }));
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await expect(getPanelHandle("panel-1").cdp.page()).resolves.toBe(page);
+
+    expect((globalThis as any).__natstackRequireAsync__).toHaveBeenCalledWith(
+      "@workspace/playwright-client"
+    );
+  });
+
   it("hydrates direct children from the host each call", async () => {
     const { _initPanelHandleBridge, openPanel } = await import("./handle.js");
-    _initPanelHandleBridge({ call: vi.fn(), onEvent: vi.fn() } as never);
+    const rpcCall = createRpcCall();
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
     const handle = await openPanel("panels/example");
 
     const children = await handle.children();
 
     expect(children).toHaveLength(1);
     expect(children[0]?.id).toBe("child-1");
-    expect((globalThis as any).__natstackShell.panel.list).toHaveBeenCalledWith("panel-1");
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.list", ["panel-1"]);
   });
 });

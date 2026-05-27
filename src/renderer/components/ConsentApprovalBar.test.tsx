@@ -4,7 +4,10 @@ import React from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { PendingUserlandApproval } from "@natstack/shared/approvals";
+import type {
+  PendingCapabilityApproval,
+  PendingUserlandApproval,
+} from "@natstack/shared/approvals";
 
 type ListPendingFn = () => Promise<unknown[]>;
 const shellClient = vi.hoisted(() => ({
@@ -107,6 +110,31 @@ function userlandApproval(
   };
 }
 
+function capabilityApproval(
+  partial: Partial<PendingCapabilityApproval> & { approvalId: string; title: string }
+): PendingCapabilityApproval {
+  return {
+    kind: "capability",
+    callerId: partial.callerId ?? `panel:${partial.approvalId}`,
+    callerKind: partial.callerKind ?? "panel",
+    repoPath: partial.repoPath ?? "panels/test",
+    effectiveVersion: partial.effectiveVersion ?? "ev",
+    requestedAt: partial.requestedAt ?? Date.now(),
+    capability: partial.capability ?? "panel.automate",
+    severity: partial.severity,
+    title: partial.title,
+    description: partial.description,
+    resource: partial.resource ?? {
+      type: "panel",
+      label: "Panel",
+      value: "Shell",
+    },
+    grantResourceKey: partial.grantResourceKey,
+    details: partial.details,
+    approvalId: partial.approvalId,
+  };
+}
+
 describe("ConsentApprovalBar queue browsing", () => {
   beforeEach(() => {
     shellClient.heartbeat.mockClear();
@@ -165,5 +193,34 @@ describe("ConsentApprovalBar queue browsing", () => {
     });
     expect(screen.queryByLabelText("Next approval")).toBeNull();
     expect(screen.queryByLabelText("Previous approval")).toBeNull();
+  });
+
+  it("renders severe panel capability approvals with danger-tone trust action", async () => {
+    shellClient.listPending.mockResolvedValueOnce([
+      capabilityApproval({
+        approvalId: "cap-severe",
+        title: "Drive privileged panel",
+        severity: "severe",
+      }),
+    ]);
+
+    render(
+      <Theme>
+        <ConsentApprovalBar />
+      </Theme>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Drive privileged panel")).toBeTruthy();
+    });
+    const bar = screen
+      .getByText("Drive privileged panel")
+      .closest(".approval-bar") as HTMLElement | null;
+    expect(bar?.style.getPropertyValue("--app-approval-stripe")).toBe(
+      "var(--app-approval-red-stripe)"
+    );
+    const trustButton = screen.getByText("Trust and drive").closest("button");
+    expect(trustButton).toBeTruthy();
+    expect(trustButton?.getAttribute("data-accent-color")).toBe("red");
   });
 });

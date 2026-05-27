@@ -15,6 +15,7 @@
     "build:dist": "pnpm build",
     "dev": "export NODE_ENV=development && node build.mjs && (pnpm type-check &) && node scripts/run-electron.mjs",
     "start": "node scripts/run-electron.mjs",
+    "headless-host": "NATSTACK_HEADLESS_HOST=1 node scripts/run-electron.mjs --headless-host",
     "start:remote": "node scripts/start-remote.mjs",
     "server": "node dist/server.mjs",
     "server:dev": "NODE_ENV=development node dist/server.mjs",

@@ -3,7 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import { normalizeCallerKind, requestCapabilityPermission } from "./capabilityPermission.js";
+import {
+  normalizeCallerKind,
+  panelCapabilityResourceKey,
+  requestCapabilityPermission,
+} from "./capabilityPermission.js";
+import { PANEL_AUTOMATE_CAPABILITY } from "@natstack/shared/panelAccessPolicy";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 
@@ -135,6 +140,117 @@ describe("capabilityPermission", () => {
     });
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("supports requester-entity scoped panel grants even for repo/version approvals", async () => {
+    const approvalQueue = createApprovalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const targetPanelId = "target-panel";
+    const baseRequest = {
+      capability: PANEL_AUTOMATE_CAPABILITY,
+      resource: {
+        type: "panel",
+        label: "Panel",
+        value: "Target Panel",
+      },
+      title: "Automate panel",
+      deniedReason: "Denied",
+    };
+
+    const firstCaller = createVerifiedCaller("panel:first-entity", "panel", {
+      callerId: "panel:first-entity",
+      callerKind: "panel",
+      repoPath: "panels/source",
+      effectiveVersion: "version-1",
+    });
+    await requestCapabilityPermission(deps, {
+      ...baseRequest,
+      caller: firstCaller,
+      resource: {
+        ...baseRequest.resource,
+        key: panelCapabilityResourceKey(targetPanelId, firstCaller.runtime.id),
+      },
+    });
+    await requestCapabilityPermission(deps, {
+      ...baseRequest,
+      caller: firstCaller,
+      resource: {
+        ...baseRequest.resource,
+        key: panelCapabilityResourceKey(targetPanelId, firstCaller.runtime.id),
+      },
+    });
+    const secondCaller = createVerifiedCaller("panel:second-entity", "panel", {
+      callerId: "panel:second-entity",
+      callerKind: "panel",
+      repoPath: "panels/source",
+      effectiveVersion: "version-1",
+    });
+    await requestCapabilityPermission(deps, {
+      ...baseRequest,
+      caller: secondCaller,
+      resource: {
+        ...baseRequest.resource,
+        key: panelCapabilityResourceKey(targetPanelId, secondCaller.runtime.id),
+      },
+    });
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        dedupKey: `panel-capability:${PANEL_AUTOMATE_CAPABILITY}:${panelCapabilityResourceKey(
+          targetPanelId,
+          firstCaller.runtime.id
+        )}`,
+        grantResourceKey: panelCapabilityResourceKey(targetPanelId, firstCaller.runtime.id),
+      })
+    );
+    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        dedupKey: `panel-capability:${PANEL_AUTOMATE_CAPABILITY}:${panelCapabilityResourceKey(
+          targetPanelId,
+          secondCaller.runtime.id
+        )}`,
+        grantResourceKey: panelCapabilityResourceKey(targetPanelId, secondCaller.runtime.id),
+      })
+    );
+  });
+
+  it("passes capability severity through to approval prompts", async () => {
+    const approvalQueue = createApprovalQueueMock("once");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+
+    await requestCapabilityPermission(deps, {
+      caller: createVerifiedCaller("panel:source", "panel", {
+        callerId: "panel:source",
+        callerKind: "panel",
+        repoPath: "panels/source",
+        effectiveVersion: "version-1",
+      }),
+      capability: PANEL_AUTOMATE_CAPABILITY,
+      severity: "severe",
+      resource: {
+        type: "panel",
+        label: "Panel",
+        value: "Shell",
+        key: panelCapabilityResourceKey("shell-panel", "panel:source"),
+      },
+      title: "Automate privileged panel",
+      deniedReason: "Denied",
+    });
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        severity: "severe",
+      })
+    );
   });
 
   describe("normalizeCallerKind", () => {

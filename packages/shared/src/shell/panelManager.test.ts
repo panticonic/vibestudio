@@ -348,6 +348,80 @@ describe("PanelManager", () => {
     expect(mem.state.retired.length).toBeGreaterThan(0);
   });
 
+  it("marks shell manifest panels as privileged in snapshots and create results", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "about", "shell-panel");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "shell-panel",
+        natstack: {
+          title: "Shell Panel",
+          shell: true,
+        },
+      })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+
+    const created = await manager.create("about/shell-panel", {
+      isRoot: true,
+      addAsRoot: true,
+    });
+
+    expect(created.privileged).toBe(true);
+    expect(getCurrentSnapshot(registry.getPanel(created.panelId)!)).toMatchObject({
+      privileged: true,
+    });
+  });
+
+  it("updates live navigation state and resolved URL through the shared manager", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "browserish");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "browserish", natstack: { title: "Initial Title" } })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+
+    const created = await manager.create("panels/browserish", {
+      isRoot: true,
+      addAsRoot: true,
+    });
+
+    const revisionBeforeUpdate = registry.getTreeRevision();
+    await manager.updatePanelState(created.panelId, {
+      url: "https://example.com/docs",
+      pageTitle: "Docs",
+      isLoading: false,
+      canGoBack: true,
+      canGoForward: false,
+    });
+
+    const panel = registry.getPanel(created.panelId)!;
+    expect(panel.title).toBe("Docs");
+    expect(panel.navigation).toEqual({
+      url: "https://example.com/docs",
+      pageTitle: "Docs",
+      isLoading: false,
+      canGoBack: true,
+      canGoForward: false,
+    });
+    expect(getCurrentSnapshot(panel).resolvedUrl).toBe("https://example.com/docs");
+    expect(registry.getTreeRevision()).toBeGreaterThan(revisionBeforeUpdate);
+  });
+
   it("builds remote bootstrap URLs with gateway-routed RPC", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
     tempDirs.push(workspacePath);

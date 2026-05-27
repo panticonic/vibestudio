@@ -8,6 +8,7 @@ function createHarness() {
     applyBuildComplete: vi.fn(),
     applyRuntimeLeaseChanged: vi.fn(async () => {}),
     createBrowserUrlPanel: vi.fn(async () => ({ id: "browser", title: "Browser" })),
+    recoverShellSnapshot: vi.fn(async () => undefined),
   };
   const serverClient = {
     call: vi.fn(async () => undefined),
@@ -62,6 +63,18 @@ describe("createServerEventBridge", () => {
       type: "info",
       title: "Hello",
     });
+  });
+
+  it("recovers the local panel tree when the server tree changes", async () => {
+    const { handle, eventService, panelOrchestrator } = createHarness();
+
+    handle("event:panel-tree-updated", { revision: 2, rootPanels: [], collapsedIds: [] });
+    await Promise.resolve();
+
+    expect(panelOrchestrator.recoverShellSnapshot).toHaveBeenCalledWith({
+      loadFocusedView: false,
+    });
+    expect(eventService.emit).not.toHaveBeenCalled();
   });
 
   it("handles browser-panel requests locally instead of forwarding raw events", async () => {

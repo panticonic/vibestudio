@@ -328,7 +328,6 @@ export interface RpcCaller {
 export const ELECTRON_LOCAL_SERVICE_NAMES = [
   "adblock",
   "app",
-  "browser",
   "browser-session-sync",
   "events",
   "menu",

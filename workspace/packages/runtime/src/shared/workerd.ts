@@ -67,6 +67,10 @@ export interface WorkerCreateOptions {
     ref?: string;
     /** ID of the creating caller. Worker can call getParent() to communicate back. */
     parentId?: string;
+    /** Runtime entity id of the creating caller, when different from parentId. */
+    parentEntityId?: string;
+    /** Runtime kind of the creating caller. */
+    parentKind?: "panel" | "worker" | "do";
 }
 export interface WorkerUpdateOptions {
     env?: Record<string, string>;
@@ -80,12 +84,16 @@ export interface WorkerInstanceInfo {
     source: string;
     contextId: string;
     callerId: string;
+    /** Parent panel/worker id injected into the worker runtime for getParent(). */
+    parentId?: string;
     env: Record<string, string>;
     bindings: Record<string, WorkerBindingDef>;
     stateArgs?: Record<string, unknown>;
     buildKey?: string;
     /** Git ref this instance is built at. */
     ref?: string;
+    parentEntityId?: string;
+    parentKind?: "panel" | "worker" | "do";
     status: "building" | "starting" | "running" | "stopped" | "error";
 }
 export interface WorkerSourceInfo {
@@ -161,14 +169,21 @@ export interface WorkerdClient {
   /** Destroy a DO's SQLite storage (main + WAL/SHM files). */
   destroyDO(ref: DORefParam): Promise<void>;
 }
-export function createWorkerdClient(rpc: RpcCaller): WorkerdClient {
+export function createWorkerdClient(
+  rpc: RpcCaller,
+  parentDefaults?: Pick<WorkerCreateOptions, "parentId" | "parentEntityId" | "parentKind">
+): WorkerdClient {
   const call = <T>(method: string, ...args: unknown[]) =>
     rpc.call<T>("main", `workerd.${method}`, args);
   const callWorkers = <T>(method: string, ...args: unknown[]) =>
     rpc.call<T>("main", `workers.${method}`, args);
 
   return {
-    create: (options) => call<WorkerInstanceInfo>("createInstance", options),
+    create: (options) =>
+      call<WorkerInstanceInfo>("createInstance", {
+        ...parentDefaults,
+        ...options,
+      }),
     destroy: (name) => call<void>("destroyInstance", name),
     update: (name, updates) => call<WorkerInstanceInfo>("updateInstance", name, updates),
     list: () => call<WorkerInstanceInfo[]>("listInstances"),

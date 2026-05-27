@@ -25,6 +25,10 @@ export interface BridgePanelLifecycle {
   closePanel(panelId: string): void | Promise<void>;
   getInfo(panelId: string): unknown;
   focusPanel?(panelId: string): void;
+  updatePanelState?(
+    panelId: string,
+    state: import("./types.js").PanelNavigationState
+  ): void | Promise<void>;
   getBootstrapConfig?(callerId: string): Promise<unknown> | unknown;
   createBrowserUrlPanel?(
     callerId: string,

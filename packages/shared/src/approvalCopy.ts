@@ -55,6 +55,12 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.capability === "extension-management") {
     return "Extension management";
   }
+  if (approval.capability === "panel.automate") {
+    return "Panel automation";
+  }
+  if (approval.capability === "panel.structural") {
+    return "Panel change";
+  }
   return isOAuthExternalApproval(approval) ? "Sign-in action" : "Browser action";
 }
 
@@ -327,6 +333,52 @@ export function getStandardActionCopy(
       denyDescription: "Do not manage this extension.",
     };
   }
+  if (approval.capability === "panel.automate") {
+    const target = approval.resource?.value ?? "this panel";
+    const severe = approval.severity === "severe";
+    return {
+      once: {
+        label: severe ? "Drive once" : "Automate once",
+        description: `Allow automation of ${target} for this request only.`,
+      },
+      session: {
+        label: severe ? "Drive this session" : "Automate this session",
+        description: `Allow automation of ${target} until NatStack restarts.`,
+      },
+      version: {
+        label: severe ? "Trust and drive" : "Trust version",
+        description: `Allow this exact code version to automate ${target}.`,
+      },
+      repo: {
+        label: severe ? "Trust repo and drive" : "Trust repo",
+        description: `Allow this workspace project to automate ${target}.`,
+      },
+      denyDescription: `Do not automate ${target}.`,
+    };
+  }
+  if (approval.capability === "panel.structural") {
+    const target = approval.resource?.value ?? "this panel";
+    const severe = approval.severity === "severe";
+    return {
+      once: {
+        label: severe ? "Change once" : "Allow once",
+        description: `Allow this panel-tree change to ${target} once.`,
+      },
+      session: {
+        label: severe ? "Change this session" : "Allow this session",
+        description: `Allow panel-tree changes to ${target} until NatStack restarts.`,
+      },
+      version: {
+        label: severe ? "Trust and change" : "Trust version",
+        description: `Allow this exact code version to change ${target}.`,
+      },
+      repo: {
+        label: severe ? "Trust repo and change" : "Trust repo",
+        description: `Allow this workspace project to change ${target}.`,
+      },
+      denyDescription: `Do not change ${target}.`,
+    };
+  }
   return {
     once: { label: "Open once", description: "Open this browser action once." },
     session: {
@@ -424,6 +476,32 @@ export function getApprovalCopy(
       return {
         title: approval.title || "Manage extension",
         summary: `${requester} wants to manage ${destination}, which can run native Node code.`,
+      };
+    }
+    if (approval.capability === "panel.automate") {
+      const target = approval.resource?.value ?? "this panel";
+      return {
+        title: approval.title || "Automate panel",
+        summary: `${requester} wants to automate ${target}.`,
+        ...(approval.severity === "severe"
+          ? {
+              warning:
+                "This target is privileged. Approving gives the requester control of a trusted shell panel.",
+            }
+          : {}),
+      };
+    }
+    if (approval.capability === "panel.structural") {
+      const target = approval.resource?.value ?? "this panel";
+      return {
+        title: approval.title || "Change panel tree",
+        summary: `${requester} wants to change ${target}.`,
+        ...(approval.severity === "severe"
+          ? {
+              warning:
+                "This target is privileged. Approving allows changes to a trusted shell panel.",
+            }
+          : {}),
       };
     }
     const isOAuth = isOAuthExternalApproval(approval);

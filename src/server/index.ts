@@ -1746,6 +1746,10 @@ async function main() {
     args,
     hostConfig,
     isIpcMode: !!ipcChannel,
+    tokenManager,
+    grantStore: capabilityGrantStore,
+    panelRuntimeCoordinator,
+    getGatewayPort: () => gatewayPortResolved,
     eventService,
     requestRelaunch,
     requestWorkspaceList,
@@ -2283,17 +2287,6 @@ async function main() {
       shellToken,
     });
   } else {
-    // Register for browser extension auto-discovery (idempotent file writes)
-    const { registerHeadlessService } = await import("./headlessServiceRegistration.js");
-    try {
-      registerHeadlessService(statePath, {
-        adminToken,
-        gatewayPort,
-      });
-    } catch (err) {
-      console.warn("[Server] Failed to register headless service:", err);
-    }
-
     // Write admin token to a well-known file for scripting
     const tokenFilePath = path.join(statePath, "admin-token");
     try {

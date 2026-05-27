@@ -65,6 +65,7 @@ export interface CredentialApprovalQueueRequest extends ApprovalQueueRequestBase
 export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase {
   kind: "capability";
   capability: string;
+  severity?: PendingCapabilityApproval["severity"];
   /**
    * Override pending-request deduplication for capability prompts. `null`
    * isolates this request so a one-shot approval cannot release unrelated
@@ -407,6 +408,7 @@ export function createApprovalQueue(deps: {
         ...base,
         kind: "capability",
         capability: req.capability,
+        severity: req.severity,
         grantResourceKey: req.grantResourceKey,
         title: req.title,
         description: req.description,

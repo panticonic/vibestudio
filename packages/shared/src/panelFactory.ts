@@ -25,6 +25,7 @@ export interface PanelCreateResult {
   stateArgs: Record<string, unknown>;
   options: Record<string, unknown>;
   autoArchiveWhenEmpty?: boolean;
+  privileged?: boolean;
 }
 
 export interface BuildBootstrapConfigOpts {
@@ -181,6 +182,9 @@ export function buildPanelFromResult(result: PanelCreateResult, parentId: string
 
   if (result.autoArchiveWhenEmpty) {
     initialSnapshot.autoArchiveWhenEmpty = true;
+  }
+  if (result.privileged) {
+    initialSnapshot.privileged = true;
   }
 
   const artifacts: PanelArtifacts = isBrowser

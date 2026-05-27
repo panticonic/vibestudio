@@ -3,7 +3,7 @@
  */
 
 import type { CreateChildOptions } from "@natstack/types";
-import type { Panel, PanelSnapshot, PackageManifest, StateArgsValue } from "../types.js";
+import type { Panel, PanelNavigationState, PanelSnapshot, PackageManifest, StateArgsValue } from "../types.js";
 
 /**
  * Get the current snapshot for a panel.
@@ -95,6 +95,20 @@ export function getPanelHistoryState(panel: Panel): { canGoBack: boolean; canGoF
     canGoBack: Boolean(panel.navigation?.canGoBack || (panel.history && panel.history.index > 0)),
     canGoForward: Boolean(panel.navigation?.canGoForward || (panel.history && panel.history.index < panel.history.entries.length - 1)),
   };
+}
+
+export function updatePanelNavigationState(panel: Panel, state: PanelNavigationState): void {
+  const snapshot = getCurrentSnapshot(panel);
+  if (state.url !== undefined) snapshot.resolvedUrl = state.url;
+
+  panel.navigation = {
+    ...(panel.navigation ?? {}),
+    ...state,
+  };
+
+  if (state.pageTitle !== undefined) {
+    panel.title = state.pageTitle;
+  }
 }
 
 /**

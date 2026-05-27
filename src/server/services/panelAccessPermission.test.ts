@@ -1,0 +1,265 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createVerifiedCaller, type ServiceContext } from "@natstack/shared/serviceDispatcher";
+import {
+  PANEL_AUTOMATE_CAPABILITY,
+  PANEL_STRUCTURAL_CAPABILITY,
+} from "@natstack/shared/panelAccessPolicy";
+import { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { panelCapabilityResourceKey } from "./capabilityPermission.js";
+import { requirePanelAccessPermission } from "./panelAccessPermission.js";
+import type { ApprovalQueue } from "./approvalQueue.js";
+
+function tempStatePath(): string {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-access-"));
+}
+
+function approvalQueueMock(
+  decision: Awaited<ReturnType<ApprovalQueue["request"]>> = "session"
+): ApprovalQueue {
+  return {
+    request: vi.fn(async () => decision),
+    requestClientConfig: vi.fn(async () => ({ decision: "deny" as const })),
+    requestCredentialInput: vi.fn(async () => ({ decision: "deny" as const })),
+    requestUserland: vi.fn(async () => ({ kind: "dismissed" as const })),
+    presentDeviceCode: vi.fn(() => ({
+      approvalId: "device-code-test",
+      cancelled: new AbortController().signal,
+      dispose: vi.fn(),
+    })),
+    resolve: vi.fn(),
+    resolveUserland: vi.fn(),
+    submitClientConfig: vi.fn(),
+    submitCredentialInput: vi.fn(),
+    listPending: vi.fn(() => []),
+    cancelForCaller: vi.fn(),
+  };
+}
+
+function panelCtx(entityId = "panel:requester"): ServiceContext {
+  return {
+    caller: createVerifiedCaller(entityId, "panel", {
+      callerId: entityId,
+      callerKind: "panel",
+      repoPath: "panels/requester",
+      effectiveVersion: "version-1",
+    }),
+  };
+}
+
+describe("panelAccessPermission", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("allows open operations without prompting", async () => {
+    const approvalQueue = approvalQueueMock();
+
+    const result = await requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      },
+      panelCtx(),
+      "rpc.call",
+      { id: "target", title: "Target" }
+    );
+
+    expect(result).toEqual({ allowed: true });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("prompts for automation and remembers by requester entity to target panel", async () => {
+    const approvalQueue = approvalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+
+    await requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", {
+      id: "target",
+      title: "Target",
+    });
+    await requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", {
+      id: "target",
+      title: "Target",
+    });
+    await requirePanelAccessPermission(deps, panelCtx("panel:two"), "cdp", {
+      id: "target",
+      title: "Target",
+    });
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        capability: PANEL_AUTOMATE_CAPABILITY,
+        grantResourceKey: panelCapabilityResourceKey("target", "panel:one"),
+      })
+    );
+    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        capability: PANEL_AUTOMATE_CAPABILITY,
+        grantResourceKey: panelCapabilityResourceKey("target", "panel:two"),
+      })
+    );
+  });
+
+  it("uses a separate structural capability", async () => {
+    const approvalQueue = approvalQueueMock("session");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+
+    await requirePanelAccessPermission(deps, panelCtx(), "cdp", { id: "target" });
+    await requirePanelAccessPermission(deps, panelCtx(), "close", { id: "target" });
+
+    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ capability: PANEL_AUTOMATE_CAPABILITY })
+    );
+    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ capability: PANEL_STRUCTURAL_CAPABILITY })
+    );
+  });
+
+  it("passes severe severity for privileged targets", async () => {
+    const approvalQueue = approvalQueueMock("once");
+
+    await requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      },
+      panelCtx(),
+      "cdp",
+      { id: "shell-target", title: "Shell", privileged: true }
+    );
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: PANEL_AUTOMATE_CAPABILITY,
+        severity: "severe",
+      })
+    );
+  });
+
+  it("denies panel capabilities without queueing when no approval shell is active", async () => {
+    const approvalQueue = approvalQueueMock("session");
+
+    const result = await requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+        hasApprovalSession: () => false,
+      },
+      panelCtx(),
+      "cdp",
+      { id: "target", title: "Target" }
+    );
+
+    expect(result).toEqual({
+      allowed: false,
+      capability: PANEL_AUTOMATE_CAPABILITY,
+      reason: "No approval-capable shell is connected",
+    });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("allows remembered panel capabilities without an active approval shell", async () => {
+    const approvalQueue = approvalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      hasApprovalSession: vi.fn(() => true),
+    };
+
+    await expect(
+      requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", {
+        id: "target",
+        title: "Target",
+      })
+    ).resolves.toMatchObject({ allowed: true });
+    deps.hasApprovalSession.mockReturnValue(false);
+    await expect(
+      requirePanelAccessPermission(deps, panelCtx("panel:one"), "cdp", {
+        id: "target",
+        title: "Target",
+      })
+    ).resolves.toMatchObject({ allowed: true });
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+  });
+
+  it("denies panel capabilities when the approval prompt times out", async () => {
+    vi.useFakeTimers();
+    const approvalQueue = approvalQueueMock("session");
+    vi.mocked(approvalQueue.request).mockImplementation(
+      (req) =>
+        new Promise((resolve) => {
+          req.signal?.addEventListener("abort", () => resolve("deny"), { once: true });
+        })
+    );
+
+    const promise = requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+        hasApprovalSession: () => true,
+        approvalTimeoutMs: 25,
+      },
+      panelCtx(),
+      "cdp",
+      { id: "target", title: "Target" }
+    );
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    await expect(promise).resolves.toEqual({
+      allowed: false,
+      capability: PANEL_AUTOMATE_CAPABILITY,
+      reason: "cdp denied for panel target",
+    });
+  });
+
+  it("bypasses when the requester panel resolves as privileged", async () => {
+    const approvalQueue = approvalQueueMock("once");
+
+    const result = await requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+        resolveRequesterPanel: vi.fn(async () => ({ id: "about", privileged: true })),
+      },
+      panelCtx("panel:about"),
+      "cdp",
+      { id: "target", title: "Target" }
+    );
+
+    expect(result).toEqual({ allowed: true });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("bypasses shell and server callers", async () => {
+    const approvalQueue = approvalQueueMock("once");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+
+    for (const kind of ["shell", "shell-remote", "server"] as const) {
+      await expect(
+        requirePanelAccessPermission(deps, { caller: createVerifiedCaller(kind, kind) }, "close", {
+          id: "target",
+        })
+      ).resolves.toEqual({ allowed: true });
+    }
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+});

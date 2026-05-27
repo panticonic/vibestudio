@@ -997,10 +997,16 @@ export function generateExposeModuleCode(
   exposeModules: string[],
   target: BootstrapTarget = "panel"
 ): string {
-  const importLines = exposeModules.map(
+  const effectiveExposeModules =
+    target === "worker" &&
+    exposeModules.includes("@workspace/runtime") &&
+    !exposeModules.includes("@workspace/playwright-client")
+      ? [...exposeModules, "@workspace/playwright-client"]
+      : exposeModules;
+  const importLines = effectiveExposeModules.map(
     (dep, index) => `import * as __mod${index}__ from ${JSON.stringify(dep)};`
   );
-  const registerLines = exposeModules.map(
+  const registerLines = effectiveExposeModules.map(
     (dep, index) => `globalThis.__natstackModuleMap__[${JSON.stringify(dep)}] = __mod${index}__;`
   );
 
@@ -1008,7 +1014,7 @@ export function generateExposeModuleCode(
   // This lets eval code use `import fs from "fs"` and `import path from "path"`
   // transparently — they delegate to @workspace/runtime's RPC-backed implementations.
   const shimLines: string[] = [];
-  const runtimeIndex = exposeModules.indexOf("@workspace/runtime");
+  const runtimeIndex = effectiveExposeModules.indexOf("@workspace/runtime");
   if (runtimeIndex >= 0) {
     const rtVar = `__mod${runtimeIndex}__`;
     shimLines.push(`(function() {

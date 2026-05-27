@@ -229,6 +229,9 @@
       "@workspace/panel-browser": [
         "workspace/packages/panel-browser/src/index.ts"
       ],
+      "@workspace/playwright-client": [
+        "workspace/packages/playwright-client/index.d.ts"
+      ],
       "@workspace/pi-adapter": [
         "workspace/packages/pi-adapter/src/index.ts"
       ],

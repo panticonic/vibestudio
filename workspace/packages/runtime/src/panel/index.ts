@@ -27,7 +27,7 @@ const { runtime, config } = initRuntime({
 });
 export * as Rpc from "../core/rpc.js";
 export { z } from "../core/zod.js";
-export { defineContract, noopParent } from "../core/defineContract.js";
+export { defineContract } from "../core/defineContract.js";
 export { buildPanelLink } from "../core/panelLinks.js";
 export { parseContextId, isValidContextId, getInstanceId, } from "../core/context.js";
 export type * from "../core/types.js";
@@ -39,7 +39,7 @@ const gatewayConfig = config.gatewayConfig;
 const gatewayFetch = createGatewayFetch(gatewayConfig);
 const gitConfig = config.gitConfig;
 const env = config.env;
-const { parentId: runtimeParentId, rpc, parent, getParent, getParentWithContract, onConnectionError, getInfo, focusPanel, getWorkspaceTree, listBranches, listCommits, getTheme, onThemeChange, onFocus, exposeMethod, contextId, } = runtime;
+const { parentId: runtimeParentId, parentEntityId: runtimeParentEntityId, rpc, parent, getParent, getParentWithContract, onConnectionError, getInfo, focusPanel, getWorkspaceTree, listBranches, listCommits, getTheme, onThemeChange, onFocus, exposeMethod, contextId, } = runtime;
 export { rpc, parent, getParent, getParentWithContract, onConnectionError, getInfo, focusPanel, getWorkspaceTree, listBranches, listCommits, getTheme, onThemeChange, onFocus, exposeMethod, contextId, recoveryCoordinator, runtimeParentId as parentId, };
 const { workers } = runtime;
 const helpfulWorkers = helpfulNamespace("workers", workers);
@@ -54,9 +54,15 @@ export { normalizePath, getFileName, resolvePath } from "../shared/pathUtils.js"
 export { getStateArgs, useStateArgs, setStateArgs, setStateArgsForPanel } from "./stateArgs.js";
 // Panel handle API
 import { _initPanelHandleBridge, openPanel as _openPanel } from "./handle.js";
-_initPanelHandleBridge(rpc);
-export { openExternal, onChildCreated, openPanel, listPanels, getPanelHandle } from "./handle.js";
+_initPanelHandleBridge(rpc, {
+    selfId: slotId,
+    selfRpcTargetId: entityId,
+    parentId: runtimeParentId,
+    parentRpcTargetId: runtimeParentEntityId,
+});
+export { openExternal, onChildCreated, openPanel, listPanels, getPanelHandle, panelTree } from "./handle.js";
 export type { PanelHandle } from "./handle.js";
+export type { CdpAutomation, CdpEndpoint } from "./cdpAutomation.js";
 export { agentApi } from "./agentApi.js";
 export { Journal, withJournal, currentJournal } from "./journal.js";
 export type { PanelJournalEntry } from "./journal.js";

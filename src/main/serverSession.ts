@@ -35,6 +35,8 @@ export interface SessionConnection {
   gatewayPort: number;
   externalHost: string;
   gatewayConfig: { serverUrl: string };
+  adminToken: string;
+  shellToken: string;
   workerdPort: number;
   workspaceId: string;
   workspacePath: string;
@@ -446,6 +448,8 @@ export async function establishServerSession(args: {
      *  Do NOT use for local I/O; use getRemoteUserDataDir() instead. */
     statePath: wsInfo.statePath,
     workspaceConfig: wsInfo.config,
+    adminToken: ports.adminToken,
+    shellToken: ports.shellToken ?? "",
     serverClient,
     serverProcessManager,
     panelHttpServer,
