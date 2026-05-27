@@ -1,6 +1,7 @@
 import React from "react";
-import { Box, Code, Flex, Spinner, Text } from "@radix-ui/themes";
+import { Box, Flex, Spinner, Text } from "@radix-ui/themes";
 import { ExpandableChevron } from "./shared/Chevron";
+import { MessageContent } from "./MessageContent";
 
 // Collapsed state - small inline pill matching method calls
 const ThinkingPill = React.memo(function ThinkingPill({
@@ -37,9 +38,12 @@ const ThinkingPill = React.memo(function ThinkingPill({
         Thinking
       </Text>
       {preview && (
-        <Text className="inline-pill-summary" size="1" color="gray" style={{ opacity: 0.85 }}>
-          {preview}{isTruncated ? "..." : ""}
-        </Text>
+        <Box className="inline-pill-summary inline-pill-markdown-preview" style={{ opacity: 0.85 }}>
+          <MessageContent
+            content={`${preview}${isTruncated ? "..." : ""}`}
+            isStreaming={isStreaming}
+          />
+        </Box>
       )}
     </Flex>
   );
@@ -48,9 +52,11 @@ const ThinkingPill = React.memo(function ThinkingPill({
 // Expanded state - shows full thinking content
 const ExpandedThinking = React.memo(function ExpandedThinking({
   content,
+  isStreaming,
   onCollapse,
 }: {
   content: string;
+  isStreaming: boolean;
   onCollapse: () => void;
 }) {
   return (
@@ -77,17 +83,7 @@ const ExpandedThinking = React.memo(function ExpandedThinking({
         </Text>
       </Flex>
       <Box mt="2" ml="4">
-        <Code
-          size="1"
-          style={{
-            whiteSpace: "pre-wrap",
-            display: "block",
-            maxHeight: "300px",
-            overflow: "auto",
-          }}
-        >
-          {content}
-        </Code>
+        <MessageContent content={content} isStreaming={isStreaming} />
       </Box>
     </Box>
   );

@@ -446,7 +446,12 @@ export class PiRunner {
   private providerRequestCount = 0;
   private credentialRequestCount = 0;
   private restoredTrajectoryState: TrajectoryState | null = null;
-  private activeAssistantMessage: { messageId: string; lastText: string; started: boolean } | null =
+  private activeAssistantMessage: {
+    messageId: string;
+    lastText: string;
+    lastBlocks: MessageBlockInput[];
+    started: boolean;
+  } | null =
     null;
   private activeRunSignal: AbortSignal | null = null;
   private activeOperationAbortController: AbortController | null = null;
@@ -1488,8 +1493,9 @@ export class PiRunner {
   private async handleMessageStart(message: AgentMessage): Promise<void> {
     if (!this.options.gad || this.messageRole(message) !== "assistant") return;
     const content = this.messageText(message);
+    const blocks = this.messageBlocksForTrajectory(this.messageBlocks(message));
     const messageId = this.activeAssistantMessage?.messageId ?? uuidv7();
-    this.activeAssistantMessage = { messageId, lastText: content, started: true };
+    this.activeAssistantMessage = { messageId, lastText: content, lastBlocks: blocks, started: true };
     await this.appendTrajectoryEvents([
       {
         event: {
@@ -1500,11 +1506,11 @@ export class PiRunner {
             protocol: "agentic.trajectory.v1",
             role: "assistant",
             content,
-            blocks: this.messageBlocksForTrajectory(this.messageBlocks(message)),
+            blocks,
           },
           createdAt: this.messageTimestamp(message),
         },
-        publishToChannel: this.shouldPublishMessageToChannel("assistant", content),
+        publishToChannel: this.shouldPublishMessageToChannel("assistant", content, blocks),
       },
     ]);
   }
@@ -1516,11 +1522,14 @@ export class PiRunner {
       return;
     }
     const content = this.messageText(message);
+    const blocks = this.messageBlocksForTrajectory(this.messageBlocks(message));
     const previous = this.activeAssistantMessage.lastText;
     const isAppendOnly = content.startsWith(previous);
     const delta = isAppendOnly ? content.slice(previous.length) : content;
+    const changedBlock = this.changedMessageBlock(this.activeAssistantMessage.lastBlocks, blocks);
     this.activeAssistantMessage.lastText = content;
-    if (!delta) return;
+    this.activeAssistantMessage.lastBlocks = blocks;
+    if (!delta && !changedBlock) return;
     await this.appendTrajectoryEvents([
       {
         event: {
@@ -1531,10 +1540,11 @@ export class PiRunner {
             protocol: "agentic.trajectory.v1",
             delta,
             ...(isAppendOnly ? {} : { replace: true }),
+            ...(changedBlock ? { block: changedBlock } : {}),
           },
           createdAt: new Date().toISOString(),
         },
-        publishToChannel: true,
+        publishToChannel: this.shouldPublishMessageToChannel("assistant", content, blocks),
       },
     ]);
   }
@@ -1546,6 +1556,7 @@ export class PiRunner {
   ): void {
     const role = this.messageRole(message);
     const blocks = this.messageBlocks(message);
+    const trajectoryBlocks = this.messageBlocksForTrajectory(blocks);
     const content = this.messageText(message);
     this.provenanceQueue.push({
       event: {
@@ -1556,12 +1567,12 @@ export class PiRunner {
           protocol: "agentic.trajectory.v1",
           role,
           content,
-          blocks: this.messageBlocksForTrajectory(blocks),
+          blocks: trajectoryBlocks,
         },
         createdAt: this.messageTimestamp(message),
       },
       eventId: messageEntryId,
-      publishToChannel: this.shouldPublishMessageToChannel(role, content),
+      publishToChannel: this.shouldPublishMessageToChannel(role, content, trajectoryBlocks),
     });
 
     for (const [blockIndex, block] of this.messageBlocks(message).entries()) {
@@ -2340,11 +2351,16 @@ export class PiRunner {
     };
   }
 
-  private shouldPublishMessageToChannel(role: MessageRole, content: string): boolean {
-    if (!content.trim()) return false;
+  private shouldPublishMessageToChannel(
+    role: MessageRole,
+    content: string,
+    blocks: MessageBlockInput[] = [],
+  ): boolean {
     // User messages are already durably published by PubSubClient.send().
     // Tool results are represented in the transcript by invocation events.
-    return role === "assistant" || role === "panel" || role === "system";
+    if (role !== "assistant" && role !== "panel" && role !== "system") return false;
+    return Boolean(content.trim()) ||
+      blocks.some((block) => block.type === "thinking" && Boolean(block.content?.trim()));
   }
 
   private messageTimestamp(message: AgentMessage): string {
@@ -2371,6 +2387,21 @@ export class PiRunner {
       })
       .filter(Boolean)
       .join("\n");
+  }
+
+  private changedMessageBlock(
+    previous: MessageBlockInput[],
+    next: MessageBlockInput[],
+  ): MessageBlockInput | undefined {
+    const max = Math.max(previous.length, next.length);
+    for (let index = 0; index < max; index++) {
+      const nextBlock = next[index];
+      if (!nextBlock) continue;
+      if (JSON.stringify(previous[index]) !== JSON.stringify(nextBlock)) {
+        return nextBlock;
+      }
+    }
+    return undefined;
   }
 
   private messageBlocksForTrajectory(blocks: unknown[]): MessageBlockInput[] {

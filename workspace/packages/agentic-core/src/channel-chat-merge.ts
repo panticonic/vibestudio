@@ -35,7 +35,7 @@ type StoredValueRefPreview = { preview?: string };
 export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessage[] {
   assertNoStoredValueRefs(state, "chat message projection input");
   const messages = Object.values(state.messages)
-    .map(projectedMessageToChatMessage);
+    .flatMap(projectedMessageToChatMessages);
   const invocations = Object.values(state.invocations).map(projectedInvocationToChatMessage);
   const approvals = Object.values(state.approvals).map(projectedApprovalToChatMessage);
   const activeStreamingTurns = new Set(
@@ -186,23 +186,44 @@ function isExpectedNoAssistantClose(turn: ProjectedTurn): boolean {
     turn.summary === "Agent turn completed";
 }
 
-function projectedMessageToChatMessage(message: ProjectedMessage): ChatMessage {
-  return {
-    id: message.messageId,
-    senderId: message.actor.id,
-    content: message.content,
-    kind: "message",
-    complete: message.status === "completed" || message.status === "failed",
-    replyTo: message.replyTo,
-    mentions: message.mentions,
-    error: message.status === "failed" ? "Message failed" : undefined,
-    senderMetadata: {
-      name: message.actor.displayName ?? message.actor.id,
-      type: message.actor.kind,
-      handle: message.actor.id,
-    },
-    sortTime: Date.parse(message.updatedAt ?? message.completedAt ?? message.startedAt ?? "") || 0,
-  } as ChatMessage & { sortTime: number };
+function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[] {
+  const sortTime = Date.parse(message.updatedAt ?? message.completedAt ?? message.startedAt ?? "") || 0;
+  const senderMetadata = {
+    name: message.actor.displayName ?? message.actor.id,
+    type: message.actor.kind,
+    handle: message.actor.id,
+  };
+  const complete = message.status === "completed" || message.status === "failed";
+  const thinking = (message.blocks ?? []).flatMap((block, index) => {
+    if (block.type !== "thinking" || !block.content) return [];
+    return [{
+      id: `thinking:${message.messageId}:${block.blockId ?? index}`,
+      senderId: message.actor.id,
+      content: block.content,
+      contentType: "thinking",
+      kind: "message",
+      complete,
+      senderMetadata,
+      sortTime: sortTime - 0.5 + index / 1000,
+    } as ChatMessage & { sortTime: number }];
+  });
+  const visibleContent = message.content.trim();
+  if (!visibleContent && thinking.length > 0) return thinking;
+  return [
+    ...thinking,
+    {
+      id: message.messageId,
+      senderId: message.actor.id,
+      content: message.content,
+      kind: "message",
+      complete,
+      replyTo: message.replyTo,
+      mentions: message.mentions,
+      error: message.status === "failed" ? "Message failed" : undefined,
+      senderMetadata,
+      sortTime,
+    } as ChatMessage & { sortTime: number },
+  ];
 }
 
 function projectedApprovalToChatMessage(approval: ProjectedApproval): ChatMessage {

@@ -831,6 +831,41 @@ describe("PiRunner", () => {
     );
   });
 
+  it("publishes assistant thinking-only messages to the channel", () => {
+    const runner = new PiRunner(createOptions()) as unknown as {
+      provenanceQueue: Array<Record<string, unknown>>;
+      queueMessageProvenance(message: unknown, messageEntryId: string): void;
+    };
+    runner.provenanceQueue = [];
+
+    runner.queueMessageProvenance(
+      {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "Checking repository state." }],
+      },
+      "entry-thinking"
+    );
+
+    expect(runner.provenanceQueue).toContainEqual(
+      expect.objectContaining({
+        publishToChannel: true,
+        event: expect.objectContaining({
+          kind: "message.completed",
+          payload: expect.objectContaining({
+            role: "assistant",
+            content: "",
+            blocks: [
+              expect.objectContaining({
+                type: "thinking",
+                content: "Checking repository state.",
+              }),
+            ],
+          }),
+        }),
+      })
+    );
+  });
+
   it("records tool-call names and parsed arguments from provider-shaped blocks", () => {
     const runner = new PiRunner(createOptions()) as unknown as {
       provenanceQueue: Array<Record<string, unknown>>;

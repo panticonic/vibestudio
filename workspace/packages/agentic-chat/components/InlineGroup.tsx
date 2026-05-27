@@ -126,6 +126,7 @@ export const InlineGroup = React.memo(function InlineGroup({
             {expandedItem.type === "thinking" && (
               <ExpandedThinking
                 content={expandedItem.content}
+                isStreaming={!expandedItem.complete}
                 onCollapse={handleCollapse}
               />
             )}

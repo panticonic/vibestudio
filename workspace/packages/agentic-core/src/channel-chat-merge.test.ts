@@ -116,6 +116,41 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("projects assistant thinking blocks as inline thinking messages", () => {
+    const message: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-thinking") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        content: "Final answer",
+        blocks: [
+          { type: "thinking", content: "I should inspect the repo first." },
+          { type: "text", content: "Final answer" },
+        ],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+
+    const state = [envelope(message, 1)]
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)).toEqual([
+      expect.objectContaining({
+        id: "thinking:msg-thinking:0",
+        contentType: "thinking",
+        content: "I should inspect the repo first.",
+        complete: true,
+      }),
+      expect.objectContaining({
+        id: "msg-thinking",
+        content: "Final answer",
+        complete: true,
+      }),
+    ]);
+  });
+
   it("surfaces a closed agent turn that ended without an assistant response", () => {
     const turnId = brandId<TurnId>("turn-no-response");
     const opened: AgenticEvent<"turn.opened"> = {

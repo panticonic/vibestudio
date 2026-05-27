@@ -20,6 +20,7 @@ import {
   trajectoryEventSchema,
   userVisibleTrajectoryProjection,
   type AgenticEvent,
+  type BlockId,
   type BranchId,
   type ChannelEnvelope,
   type ChannelId,
@@ -303,6 +304,42 @@ describe("@workspace/agentic-protocol reducers", () => {
       .reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(state.messages["msg-replace"]?.content).toBe("hello world");
+  });
+
+  it("preserves message blocks and updates streamed blocks", () => {
+    const started: AgenticEvent<"message.started"> = {
+      kind: "message.started",
+      actor: agent,
+      turnId: brandId<TurnId>("turn-1"),
+      causality: { messageId: brandId<MessageId>("msg-thinking") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        content: "",
+        blocks: [{ blockId: brandId<BlockId>("think-1"), type: "thinking", content: "draft" }],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const replacement: AgenticEvent<"message.delta"> = {
+      kind: "message.delta",
+      actor: agent,
+      turnId: brandId<TurnId>("turn-1"),
+      causality: { messageId: brandId<MessageId>("msg-thinking") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        delta: "",
+        block: { blockId: brandId<BlockId>("think-1"), type: "thinking", content: "draft updated" },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+
+    const state = [started, replacement]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(state.messages["msg-thinking"]?.blocks).toEqual([
+      { blockId: "think-1", type: "thinking", content: "draft updated" },
+    ]);
   });
 
   it("drops malformed agentic envelopes without stopping transcript reduction", () => {

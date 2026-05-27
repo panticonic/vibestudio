@@ -120,6 +120,45 @@ describe("MessageList typing indicators (roster-based)", () => {
     expect(screen.getByText("Edit src/config.ts")).toBeTruthy();
   });
 
+  it("renders expanded thinking details as markdown", () => {
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "thinking-1",
+          contentType: "thinking",
+          content: "**Check:**\n\n- read files\n- run tests",
+          complete: true,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: {},
+    } as never));
+
+    fireEvent.click(screen.getByText("Thinking"));
+
+    expect(document.body.textContent).toContain("Check:");
+    expect(document.body.querySelectorAll("li")).toHaveLength(2);
+  });
+
+  it("renders compact thinking previews as markdown", () => {
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "thinking-1",
+          contentType: "thinking",
+          content: "Check **repo** state",
+          complete: true,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: {},
+    } as never));
+
+    expect(document.body.querySelector(".rt-r-weight-bold")?.textContent).toBe("repo");
+  });
+
   it("shows a cancel control for pending invocation pills", () => {
     const onCancelInvocation = vi.fn();
     render(React.createElement(MessageList, {
