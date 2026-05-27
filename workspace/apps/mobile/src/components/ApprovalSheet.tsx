@@ -180,7 +180,7 @@ type PendingAction =
   | "submit-credential-input"
   | `userland:${string}`;
 
-type ButtonVariant = "primary" | "surface" | "danger" | "outline";
+type ButtonVariant = "primary" | "surface" | "danger" | "dangerPrimary" | "outline";
 
 const SECONDARY_GRANT_DECISIONS: Array<
   Exclude<ApprovalDecision, "once" | "version" | "repo" | "deny" | "dismiss">
@@ -219,7 +219,12 @@ export function ApprovalSheet({
   const callerInfo = current ? resolveCallerInfo(current) : null;
   const copy = current && callerInfo ? getApprovalCopy(current, callerInfo.kindLabel) : null;
   const categoryLabel = current ? getApprovalCategoryLabel(current) : "";
-  const accentColor = current?.kind === "unit-batch" ? colors.warning : colors.primary;
+  const severeCapability = current?.kind === "capability" && current.severity === "severe";
+  const accentColor = severeCapability
+    ? colors.danger
+    : current?.kind === "unit-batch"
+      ? colors.warning
+      : colors.primary;
 
   const isBusy = pendingAction !== null;
   const currentApprovalId = current?.approvalId;
@@ -354,7 +359,10 @@ export function ApprovalSheet({
               ]}
               testID="approval-sheet"
             >
-              <View style={[styles.accentStripe, { backgroundColor: accentColor }]} />
+              <View
+                style={[styles.accentStripe, { backgroundColor: accentColor }]}
+                testID="approval-accent-stripe"
+              />
               <Pressable
                 accessibilityLabel="Dismiss approval"
                 accessibilityRole="button"
@@ -524,7 +532,7 @@ function ApprovalHeader({
   const CategoryIcon = getCategoryIcon(approval);
   return (
     <View style={styles.headerRow}>
-      <View style={[styles.categoryIcon, { backgroundColor: accentColor }]}>
+      <View style={[styles.categoryIcon, { backgroundColor: accentColor }]} testID="approval-category-icon">
         <CategoryIcon size={17} color="#ffffff" />
       </View>
       {approval.kind === "credential" ? <Pill>{approval.credentialLabel}</Pill> : null}
@@ -1151,6 +1159,10 @@ function StandardActions({
   onChoose: (decision: ApprovalDecision) => void;
 }) {
   const copy = getStandardActionCopy(approval);
+  const severePanelCapability =
+    approval.kind === "capability" &&
+    approval.severity === "severe" &&
+    (approval.capability === "panel.automate" || approval.capability === "panel.structural");
   return (
     <View style={styles.actionGroups}>
       <View style={styles.actionRow}>
@@ -1166,9 +1178,10 @@ function StandardActions({
         <DecisionButton
           label={copy.version.label}
           description={copy.version.description}
-          variant="primary"
+          variant={severePanelCapability ? "dangerPrimary" : "primary"}
           disabled={busy}
           loading={pendingAction === "version"}
+          icon={severePanelCapability ? AlertTriangle : CheckCircle2}
           onPress={() => onChoose("version")}
           testID="approval-action-version"
         />
@@ -1467,6 +1480,12 @@ function buttonStyle(
     return {
       button: { backgroundColor: "transparent", borderColor: colors.danger },
       text: { color: colors.danger },
+    };
+  }
+  if (variant === "dangerPrimary") {
+    return {
+      button: { backgroundColor: colors.danger, borderColor: colors.danger },
+      text: { color: "#ffffff" },
     };
   }
   if (variant === "outline") {

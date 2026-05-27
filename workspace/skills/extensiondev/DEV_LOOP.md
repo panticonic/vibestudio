@@ -57,7 +57,7 @@ The unified status surface (`workspace.units.list()`) is the right tool for "is 
 - `status` — lifecycle: `running`, `stopped`, `building`, `error`, `pending-approval`
 - `health` — self-reported operational state (see `ctx.health` in [AUTHORING.md](AUTHORING.md))
 - `respawn` — when the manager is mid-backoff after a crash, this shows `{ attempts, nextAttemptAt }`
-- `pendingApproval` — set when an install/update prompt is in flight
+- `pendingApproval` — set when a declaration/update approval is in flight
 - `availableUpdate` — set when current workspace state would change the extension's runtime inputs (a dep push, an external-dep bump)
 - `lastBuiltAt` — best-effort epoch ms of the active bundle
 - `lastError` — populated on `error` status
@@ -85,9 +85,9 @@ To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump)
 | `Cannot find module ...` at runtime | Dep was externalized but missing from runtime install | Set `dependencyMode: "external"` and confirm the package is in `dependencies` |
 | `Named export ... not found` | ESM imported a named export from a CJS package | Use `import pkg from "x"; const { fn } = pkg;` |
 | `require is not defined` | Code crossed an ESM/CJS boundary in a bundled dep | Switch the dep to `dependencyMode: "external"` |
-| 503 from `/_r/ext/<name>/*` | Extension is `pending-approval`, `building`, or `error` | Approve install or check `lastError` |
+| 503 from `/_r/ext/<name>/*` | Extension is `pending-approval`, `building`, or `error` | Approve the declaration/update or check `lastError` |
 | 413 from fetch endpoint | Request body exceeded 32 MB | Split the upload or stream to disk via `ctx.fs` |
 
-## Uninstall
+## Remove a Declaration
 
-Remove the extension's entry from the `extensions:` list in `meta/natstack.yml` and push. The next reconcile stops the process and deletes its registry entry; the per-extension storage scratch is retained. The workspace source tree stays — you'd `git rm` that separately. Userland approval grants the extension received persist (they're keyed by `(principal, extension-name)`); re-declaring under the same name reuses them. There is no `extensions.uninstall` API — the declared set is authoritative.
+Remove the extension's entry from the `extensions:` list in `meta/natstack.yml` and push. The next reconcile stops the process and deletes its registry entry; the per-extension storage scratch is retained. The workspace source tree stays — you'd `git rm` that separately. Userland approval grants the extension received persist (they're keyed by `(principal, extension-name)`); re-declaring under the same name reuses them. The declared set is authoritative.

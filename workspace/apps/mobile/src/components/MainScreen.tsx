@@ -39,7 +39,6 @@ import {
 } from "../services/appUpdatePrompt";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
 import type { MobilePanelRuntimeHost } from "../services/bridgeAdapter";
-import { getAndroidWebViewCdpEndpoint } from "../services/androidWebViewCdp";
 import {
   buildPanelChromeState,
   buildAddressAutocompleteItems,
@@ -498,36 +497,12 @@ export function MainScreen() {
         const handle = await waitForWebViewHandle(panelId);
         return handle.callAgent(method, args);
       },
-      navigate: async (panelId, nextUrl) => {
-        const handle = await waitForWebViewHandle(panelId);
-        handle.navigate(nextUrl);
-      },
-      goBack: async (panelId) => {
-        const handle = await waitForWebViewHandle(panelId);
-        handle.goBack();
-      },
-      goForward: async (panelId) => {
-        const handle = await waitForWebViewHandle(panelId);
-        handle.goForward();
-      },
       reload: async (panelId) => {
         const handle = await waitForWebViewHandle(panelId);
         handle.reload();
       },
-      stop: async (panelId) => {
-        const handle = await waitForWebViewHandle(panelId);
-        handle.stop();
-      },
-      getCdpEndpoint: async (panelId) => {
-        await waitForWebViewHandle(panelId);
-        const entry = webViewStackRef.current.find((item) => item.panelId === panelId);
-        const nav = webViewNavigation[panelId];
-        return getAndroidWebViewCdpEndpoint(
-          [nav?.url, entry?.url].filter((value): value is string => Boolean(value))
-        );
-      },
     }),
-    [waitForWebViewHandle, webViewNavigation]
+    [waitForWebViewHandle]
   );
   useLayoutEffect(() => {
     shellClient?.panels.setRuntimeHost(mobileRuntimeHost);

@@ -22,20 +22,18 @@ are in [docs/approvals.md](../../docs/approvals.md).
 
 ## Panel Automation
 
-Mobile panels use the WebView bridge for supported automation. Workspace panel
-handles can call `snapshot()`, `tree()`, `state()`, `routes()`, and `setMode()`;
-the mobile host loads the target WebView when needed and dispatches to the
-panel's registered `_agent.*` handlers. Browser panel handles support direct
-host navigation methods such as `navigate()`, `goBack()`, `goForward()`,
-`reload()`, and `stop()`.
+Mobile panels use the WebView bridge for non-CDP runtime introspection.
+Workspace panel handles can call `snapshot()`, `tree()`, `state()`,
+`routes()`, and `setMode()`; the mobile host loads the target WebView when
+needed and dispatches to the panel's registered `_agent.*` handlers.
 
-Android WebView debugging is enabled by default when the WebView implementation
-supports it, so attached development tools can inspect WebView targets through
-the platform's Android-only debugging backend. NatStack also ships an
-Android-only in-app CDP proxy: `handle.browser.page()` starts a loopback
-TCP proxy to `webview_devtools_remote_<pid>`, discovers the matching `/json`
-target, and connects Playwright to the returned WebSocket URL. iOS `WKWebView`
-does not provide CDP, so browser-page automation remains unavailable there.
+CDP automation always runs through the server broker and requires a
+CDP-capable Electron host. The mobile app does not expose an Android WebView
+CDP proxy or a direct WebView drive path. Panels held by the mobile host are
+not CDP targets; `handle.cdp.page()` and drive verbs reject while a target is
+leased to mobile rather than taking it over silently. iOS `WKWebView` does not
+provide CDP, so brokered CDP automation remains unavailable for mobile-held
+panels there as well.
 
 ## Local Checks
 

@@ -84,6 +84,12 @@ export interface WorkerCreateOptions {
   source: string;
   contextId: string;
   name?: string;
+  /** Parent panel/worker id injected into the runtime for getParent(). */
+  parentId?: string;
+  /** Parent runtime entity id, when the display/control id differs from the RPC id. */
+  parentEntityId?: string;
+  /** Parent runtime kind for constructing the correct unified handle shape. */
+  parentKind?: "panel" | "worker" | "do";
   env?: Record<string, string>;
   bindings?: Record<string, WorkerBinding>;
   stateArgs?: Record<string, unknown>;
@@ -97,6 +103,9 @@ export interface WorkerInstance {
   source: string;
   contextId: string;
   callerId: string;
+  parentId?: string;
+  parentEntityId?: string;
+  parentKind?: "panel" | "worker" | "do";
   token: string;
   env: Record<string, string>;
   bindings: Record<string, WorkerBinding>;
@@ -533,6 +542,9 @@ export class WorkerdManager {
       source: options.source,
       contextId,
       callerId,
+      parentId: options.parentId,
+      parentEntityId: options.parentEntityId,
+      parentKind: options.parentKind,
       token,
       env: options.env ?? {},
       bindings: options.bindings ?? {},
@@ -814,6 +826,15 @@ export class WorkerdManager {
         { name: "CONTEXT_ID", text: instance.contextId },
         { name: "GATEWAY_URL", text: this.deps.getServerUrl() },
       ];
+      if (instance.parentId) {
+        bindings.push({ name: "PARENT_ID", text: instance.parentId });
+      }
+      if (instance.parentEntityId) {
+        bindings.push({ name: "PARENT_ENTITY_ID", text: instance.parentEntityId });
+      }
+      if (instance.parentKind) {
+        bindings.push({ name: "PARENT_KIND", text: instance.parentKind });
+      }
       const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
       if (gatewayAliases.length > 0) {
         bindings.push({ name: "GATEWAY_URL_ALIASES", json: JSON.stringify(gatewayAliases) });

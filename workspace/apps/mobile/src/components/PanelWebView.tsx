@@ -345,6 +345,11 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         }
       } catch (_) {}
 
+      const cdpUnavailable = () =>
+        Promise.reject(
+          new Error("CDP automation is routed through the server broker and is not available for mobile-held WebViews")
+        );
+
       const shell = {
         getPanelInit: () => Promise.resolve(panelInit),
         getBootstrapConfig: () => Promise.resolve(panelInit),
@@ -368,12 +373,12 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         openDevtools: () => callHost("openDevtools", []),
         openFolderDialog: (opts) => callHost("openFolderDialog", [opts]),
         openExternal: (url, opts) => callHost("openExternal", [url, opts]),
-        getCdpEndpoint: (id) => callHost("getCdpEndpoint", [id]),
-        navigate: (id, url) => callHost("navigate", [id, url]),
-        goBack: (id) => callHost("goBack", [id]),
-        goForward: (id) => callHost("goForward", [id]),
-        reload: (id) => callHost("reload", [id]),
-        stop: (id) => callHost("stop", [id]),
+        getCdpEndpoint: cdpUnavailable,
+        navigate: cdpUnavailable,
+        goBack: cdpUnavailable,
+        goForward: cdpUnavailable,
+        reload: cdpUnavailable,
+        stop: cdpUnavailable,
         addEventListener: (handler) => {
           const id = nextListenerId++;
           listeners.set(id, handler);

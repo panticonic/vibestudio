@@ -188,7 +188,7 @@ eval({ code: `
   import { htmlToReadableMarkdown } from "@natstack/harness/web-extract";
 
   const browser = await openPanel("https://example.com/article");
-  const page = await browser.browser.page();
+  const page = await browser.cdp.page();
   await page.waitForLoadState("networkidle");
   const html = await page.content();
   const { title, markdown } = htmlToReadableMarkdown(html, page.url());

@@ -69,7 +69,7 @@ export async function activate(ctx: ExtensionContext) {
 }
 ```
 
-Declare it in `meta/natstack.yml` to install/enable it:
+Declare it in `meta/natstack.yml`:
 
 ```yaml
 extensions:
@@ -84,7 +84,7 @@ const hello = extensions.use<{ greet(name: string): Promise<string> }>("@workspa
 await hello.greet("world");
 ```
 
-There is no `extensions.install` / `setEnabled` / `uninstall` API — the declared set in `meta/natstack.yml` is the single source of truth, reconciled at startup and on every meta push.
+The declared set in `meta/natstack.yml` is the single source of truth, reconciled at startup and on every meta push.
 
 ## Common tasks
 

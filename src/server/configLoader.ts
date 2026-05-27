@@ -48,6 +48,18 @@ export const CONFIG_LOADER_JS = `(async () => {
       return null;
     }
   };
+  const persistPanelInit = (value) => {
+    try {
+      const stored = value && typeof value === "object" ? { ...value } : value;
+      if (stored && typeof stored === "object") {
+        delete stored.connectionId;
+        delete stored.leaseConnectionId;
+      }
+      sessionStorage.setItem("__natstackPanelInit", JSON.stringify(stored));
+    } catch {
+      /* ignore */
+    }
+  };
 
   let cfg = null;
   const shell = globalThis.__natstackShell ?? globalThis.__natstackElectron;
@@ -55,7 +67,7 @@ export const CONFIG_LOADER_JS = `(async () => {
   if (shell && typeof shell.getPanelInit === "function") {
     try {
       cfg = await shell.getPanelInit();
-      sessionStorage.setItem("__natstackPanelInit", JSON.stringify(cfg));
+      persistPanelInit(cfg);
     } catch (err) {
       const root = document.getElementById("root");
       if (root) root.textContent = "Failed to load panel init: " + (err.message || err);
@@ -63,14 +75,16 @@ export const CONFIG_LOADER_JS = `(async () => {
     }
   } else if (globalThis.__natstackPanelInit) {
     cfg = globalThis.__natstackPanelInit;
-    sessionStorage.setItem("__natstackPanelInit", JSON.stringify(cfg));
+    persistPanelInit(cfg);
   } else {
     cfg = parseStoredInit();
   }
 
   const entityId = cfg?.entityId;
   const slotId = cfg?.slotId ?? entityId;
-  const connectionId = cfg?.connectionId ?? cfg?.leaseConnectionId;
+  const url = new URL(location.href);
+  const configuredConnectionId = cfg?.connectionId ?? cfg?.leaseConnectionId;
+  const connectionId = typeof configuredConnectionId === "string" ? configuredConnectionId : undefined;
 
   if (!cfg || !entityId || !cfg.gatewayConfig || !cfg.gatewayConfig.serverUrl || !cfg.gatewayConfig.token) {
     const root = document.getElementById("root");
@@ -87,15 +101,6 @@ export const CONFIG_LOADER_JS = `(async () => {
   globalThis.__natstackGatewayToken = gatewayConfig.token;
   globalThis.__natstackKind = "panel";
 
-  await new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = "/__transport.js";
-    s.onload = resolve;
-    s.onerror = reject;
-    document.head.appendChild(s);
-  });
-
-  const url = new URL(location.href);
   let effectiveStateArgs = cfg.stateArgs;
   if (url.searchParams.has("stateArgs")) {
     try { effectiveStateArgs = JSON.parse(url.searchParams.get("stateArgs")); } catch { /* ignore */ }
@@ -113,6 +118,15 @@ export const CONFIG_LOADER_JS = `(async () => {
     __natstackClientLabel: cfg.clientLabel,
     process: { env: cfg.env },
   });
+
+  await new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "/__transport.js";
+    s.onload = resolve;
+    s.onerror = reject;
+    document.head.appendChild(s);
+  });
+  delete globalThis.__natstackConnectionId;
 
   globalThis.__natstackContextReady = true;
   const bundle = document.createElement("script");

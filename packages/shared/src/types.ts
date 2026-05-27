@@ -146,7 +146,9 @@ export interface PanelViewStatus {
 export interface PanelRuntimeStatus {
   leased: boolean;
   holderLabel?: string;
-  platform?: "desktop" | "mobile";
+  platform?: "desktop" | "headless" | "mobile";
+  hostConnectionId?: string;
+  supportsCdp?: boolean;
   clientSessionId?: string;
   connectionId?: string;
 }
@@ -227,6 +229,8 @@ export interface PanelSnapshot {
   resolvedUrl?: string;
   /** If true, panel is auto-archived when it has no children (e.g., launcher panels) */
   autoArchiveWhenEmpty?: boolean;
+  /** If true, this panel is privileged and approvals targeting it use severe tone. */
+  privileged?: boolean;
 }
 
 /**

@@ -149,6 +149,7 @@ export class ViewManager {
     shellHtmlPath: string;
     shellAdditionalArguments?: string[];
     devTools?: boolean;
+    showWindowOnShellLoad?: boolean;
   }) {
     this.window = options.window;
     // Create the minimal shipped bootstrap/recovery UI. The full shell is a
@@ -196,7 +197,7 @@ export class ViewManager {
     this.shellView.webContents.on("did-finish-load", () => {
       this.updateShellBounds();
       // Show window now that content is ready (avoids layout flash)
-      if (!this.window.isVisible()) {
+      if (options.showWindowOnShellLoad !== false && !this.window.isVisible()) {
         this.window.show();
       }
     });

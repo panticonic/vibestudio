@@ -4,6 +4,7 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   brandId,
+  encodeChannelPayloadStoredValues,
   type AgenticEvent,
   type InvocationId,
   type MessageId,
@@ -27,6 +28,13 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
   const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
   const channel = await createTestDO(PubSubChannel, { __objectKey: channelId });
   const listeners = new Map<string, (fromId: string, payload: unknown) => void>();
+  const blobs = new Map<string, string>();
+  let blobCounter = 0;
+  const putTextBlob = (value: string) => {
+    const digest = `test-digest-${++blobCounter}`;
+    blobs.set(digest, value);
+    return { digest, size: value.length };
+  };
 
   (channel.instance as unknown as {
     _rpc: {
@@ -46,6 +54,13 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
           objectKey: "workspace-gad",
           targetId: TRANSCRIPT_TEST_GAD_TARGET,
         };
+      }
+      if (target === "main" && method === "blobstore.putText") {
+        const value = String(args[0] ?? "");
+        return putTextBlob(value);
+      }
+      if (target === "main" && method === "blobstore.getText") {
+        return blobs.get(String(args[0] ?? "")) ?? null;
       }
       if (target === TRANSCRIPT_TEST_GAD_TARGET) {
         const callable = gad.instance as unknown as Record<string, (...methodArgs: unknown[]) => unknown>;
@@ -106,7 +121,7 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
     });
   }
 
-  return { gad, channel, channelId, connectParticipant, createParticipantRpc };
+  return { gad, channel, channelId, connectParticipant, createParticipantRpc, putTextBlob };
 }
 
 export async function appendTrajectoryEventsAndBroadcast(
@@ -119,10 +134,15 @@ export async function appendTrajectoryEventsAndBroadcast(
     trajectoryId: "trajectory:test",
     branchId: "branch:test",
     owner: { kind: "agent", id: "agent:onboarding" },
-    events: events.map((event) => ({
-      event: { ...event, turnId: "turn:test" },
+    events: await Promise.all(events.map(async (event) => ({
+      event: await encodeChannelPayloadStoredValues(
+        { ...event, turnId: "turn:test" },
+        {
+          putText: async (value) => harness.putTextBlob(value),
+        },
+      ),
       publish: { channelIds: [harness.channelId] },
-    })),
+    }))),
   });
   await harness.channel.call(
     "broadcastStoredEnvelopes",

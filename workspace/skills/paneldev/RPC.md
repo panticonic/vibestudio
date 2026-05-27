@@ -19,8 +19,8 @@ export const editorContract = defineContract({
   child: {
     methods: {} as EditorApi,
     emits: {
-      "saved": z.object({ path: z.string(), timestamp: z.number() }),
-      "modified": z.object({ dirty: z.boolean() }),
+      saved: z.object({ path: z.string(), timestamp: z.number() }),
+      modified: z.object({ dirty: z.boolean() }),
     },
   },
 });
@@ -42,20 +42,24 @@ export const editorContract = defineContract({
 
 ```tsx
 import { useEffect, useState } from "react";
-import { rpc, getParentWithContract, noopParent } from "@workspace/runtime";
+import { rpc, getParentWithContract } from "@workspace/runtime";
 import { editorContract } from "./contract.js";
 
-const parent = getParentWithContract(editorContract) ?? noopParent;
+const parent = getParentWithContract(editorContract);
 
 export default function Editor() {
   const [content, setContent] = useState("");
 
   useEffect(() => {
     rpc.expose({
-      async getContent() { return content; },
-      async setContent(text) { setContent(text); },
+      async getContent() {
+        return content;
+      },
+      async setContent(text) {
+        setContent(text);
+      },
       async save() {
-        parent.emit("saved", { path: "/file.txt", timestamp: Date.now() });
+        await parent?.emit("saved", { path: "/file.txt", timestamp: Date.now() });
       },
     });
   }, [content]);
@@ -63,9 +67,9 @@ export default function Editor() {
   return (
     <textarea
       value={content}
-      onChange={e => {
+      onChange={(e) => {
         setContent(e.target.value);
-        parent.emit("modified", { dirty: true });
+        void parent?.emit("modified", { dirty: true });
       }}
     />
   );
@@ -99,22 +103,22 @@ export default function IDE() {
 ## ChildHandle Methods
 
 ```typescript
-child.id                          // Unique ID
-child.name                        // Name from creation
-child.type                        // "app" | "worker" | "browser"
-child.source                      // Panel path or URL
+child.id; // Unique ID
+child.name; // Name from creation
+child.type; // "app" | "worker" | "browser"
+child.source; // Panel path or URL
 
-child.call.method(args)           // Call exposed RPC method
-child.onEvent("event", handler)   // Listen for events
-child.emit("event", payload)      // Emit event to child
-child.close()                     // Close the panel
+child.call.method(args); // Call exposed RPC method
+child.onEvent("event", handler); // Listen for events
+child.emit("event", payload); // Emit event to child
+child.close(); // Close the panel
 ```
 
-## ParentHandle Methods
+## Parent PanelHandle Methods
 
 ```typescript
-parent.id                         // Parent's ID
-parent.call.method(args)          // Call parent's RPC method
-parent.emit("event", payload)     // Emit event to parent
-parent.onEvent("event", handler)  // Listen for parent events
+parent.id; // Parent's ID
+parent.call.method(args); // Call parent's RPC method
+parent.emit("event", payload); // Emit event to parent
+parent.onEvent("event", handler); // Listen for parent events
 ```

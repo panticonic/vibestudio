@@ -186,7 +186,6 @@ export interface WorkspaceUnitStatus {
   kind: "panel" | "worker" | "extension" | "app";
   source: string;
   displayName?: string;
-  enabled?: boolean;
   status: "running" | "stopped" | "error" | "pending-approval" | "building" | "available";
   version?: string;
   ev?: string | null;

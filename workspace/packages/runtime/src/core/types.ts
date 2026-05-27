@@ -62,7 +62,6 @@ export interface GitConfig {
   gitRef?: string;
 }
 
-
 /**
  * Information about a panel or worker.
  */
@@ -90,49 +89,82 @@ export type TypedCallProxy<T extends Record<string, Rpc.AnyFunction>> = {
 };
 
 // =============================================================================
-// ParentHandle Types (for child→parent communication)
+// Unified PanelHandle Types
 // =============================================================================
 
+export interface CdpEndpoint {
+  wsEndpoint: string;
+  token?: string;
+}
+
+export interface CdpAutomation {
+  page(): Promise<any>;
+  getCdpEndpoint(): Promise<CdpEndpoint>;
+  navigate(url: string): Promise<void>;
+  goBack(): Promise<void>;
+  goForward(): Promise<void>;
+  reload(): Promise<void>;
+  stop(): Promise<void>;
+  click(selector: string): Promise<void>;
+  screenshot(options?: unknown): Promise<unknown>;
+}
+
+export type PanelHandleContractRole = "parent" | "child";
+
 /**
- * Handle for communicating with the parent panel.
- * Available via `panel.getParent()` or `panel.getParentWithContract()` in child panels.
+ * Unified handle for communicating with any panel-tree member.
+ * Parent helpers return this same handle type.
  *
- * @typeParam T - RPC methods exposed by the parent (what the child can call)
- * @typeParam E - RPC event map for events from parent (what the child can listen to)
- * @typeParam EmitE - RPC event map for events to parent (what the child emits)
+ * @typeParam T - RPC methods exposed by the target (what this caller can call)
+ * @typeParam E - RPC event map for events from the target (what this caller can listen to)
+ * @typeParam EmitE - RPC event map for events to the target (what this caller emits)
  *
  * @example
  * ```ts
  * // For full type safety, prefer getParentWithContract():
  * import { myContract } from "./contract.js";
- * const parent = panel.getParentWithContract(myContract);
+ * const parent = getParentWithContract(myContract);
  * if (parent) {
  *   await parent.emit("saved", { path: "/foo.txt" }); // Typed from contract!
  * }
  *
  * // Or use direct type parameters:
  * interface MyEmitEvents { saved: { path: string } }
- * const parent = panel.getParent<{}, {}, MyEmitEvents>();
+ * const parent = getParent<{}, {}, MyEmitEvents>();
  * parent?.emit("saved", { path: "/foo.txt" }); // Typed!
  * ```
  */
-export interface ParentHandle<
+export interface PanelHandle<
   T extends Record<string, Rpc.AnyFunction> = Rpc.ExposedMethods,
   E extends Rpc.RpcEventMap = Rpc.RpcEventMap,
-  EmitE extends Rpc.RpcEventMap = Rpc.RpcEventMap
+  EmitE extends Rpc.RpcEventMap = Rpc.RpcEventMap,
 > {
-  /** Parent panel's unique ID */
+  /** Panel's unique slot/runtime target ID. */
   readonly id: string;
+  /** Last known title. Bare handles use the id until refresh/list hydrates them. */
+  readonly title: string;
+  /** Last known source. Browser URLs are exposed without the internal browser: prefix. */
+  readonly source: string;
+  readonly kind: "workspace" | "browser";
+  readonly parentId: string | null;
 
   /**
-   * Typed RPC call proxy for parent methods.
-   * @example parent.call.notifyReady()
+   * Typed RPC call proxy for methods the target chose to expose.
+   * @example handle.call.notifyReady()
    */
   readonly call: TypedCallProxy<T>;
 
+  /** Chrome DevTools Protocol automation for this panel. */
+  readonly cdp: CdpAutomation;
+
+  readonly stateArgs: {
+    get<TState = Record<string, unknown>>(): Promise<TState>;
+    set(updates: Record<string, unknown>): Promise<void>;
+  };
+
   /**
-   * Emit a typed event to the parent.
-   * @example parent.emit("saved", { path: "/foo.txt" })
+   * Emit a typed event to the target.
+   * @example handle.emit("saved", { path: "/foo.txt" })
    */
   emit<EventName extends Extract<keyof EmitE, string>>(
     event: EventName,
@@ -140,13 +172,13 @@ export interface ParentHandle<
   ): Promise<void>;
 
   /**
-   * Emit an event to the parent (untyped fallback).
-   * @example parent.emit("status", { ready: true })
+   * Emit an event to the target panel (untyped fallback).
+   * @example handle.emit("status", { ready: true })
    */
   emit(event: string, payload: unknown): Promise<void>;
 
   /**
-   * Listen for events from the parent (typed if event map provided).
+   * Listen for events from the target panel (typed if event map provided).
    * @returns Unsubscribe function
    */
   onEvent<EventName extends Extract<keyof E, string>>(
@@ -155,10 +187,36 @@ export interface ParentHandle<
   ): () => void;
 
   /**
-   * Listen for events from the parent (untyped fallback).
+   * Listen for events from the target panel (untyped fallback).
    * @returns Unsubscribe function
    */
   onEvent(event: string, listener: (payload: unknown) => void): () => void;
+
+  withContract<C extends PanelContract, Role extends PanelHandleContractRole>(
+    contract: C,
+    role: Role
+  ): PanelHandleFromContract<C, Role>;
+
+  refresh(): Promise<PanelHandle<T, E, EmitE>>;
+  children(): Promise<PanelHandle[]>;
+  parent(): PanelHandle | null;
+  ensureLoaded(): Promise<unknown>;
+  isLoaded(): Promise<boolean>;
+  reload(): Promise<void>;
+  close(): Promise<void>;
+  archive(): Promise<void>;
+  unload(): Promise<void>;
+  movePanel(newParentId: string | null, targetPosition: number): Promise<void>;
+  takeOver(): Promise<void>;
+  openDevTools(mode?: "detach" | "right" | "bottom"): Promise<void>;
+  rebuildPanel(): Promise<void>;
+  updatePanelState(state: Record<string, unknown>): Promise<void>;
+  focus(): Promise<unknown>;
+  snapshot(): Promise<unknown>;
+  tree(): Promise<unknown>;
+  state(): Promise<unknown>;
+  routes(): Promise<unknown>;
+  setMode(mode: "fixture" | "live"): Promise<unknown>;
 }
 
 // =============================================================================
@@ -170,7 +228,7 @@ export interface ParentHandle<
  */
 export interface ContractSide<
   Methods extends Record<string, Rpc.AnyFunction> = Rpc.ExposedMethods,
-  Emits extends EventSchemaMap = EventSchemaMap
+  Emits extends EventSchemaMap = EventSchemaMap,
 > {
   readonly methods?: Methods;
   readonly emits?: Emits;
@@ -184,7 +242,7 @@ export interface PanelContract<
   ChildMethods extends Record<string, Rpc.AnyFunction> = Rpc.ExposedMethods,
   ChildEmits extends EventSchemaMap = EventSchemaMap,
   ParentMethods extends Record<string, Rpc.AnyFunction> = Rpc.ExposedMethods,
-  ParentEmits extends EventSchemaMap = EventSchemaMap
+  ParentEmits extends EventSchemaMap = EventSchemaMap,
 > {
   readonly source: string;
   readonly child?: ContractSide<ChildMethods, ChildEmits>;
@@ -193,12 +251,18 @@ export interface PanelContract<
 }
 
 /**
- * Extract the ParentHandle type from a contract.
- * Used internally by getParent when given a contract.
+ * Extract a typed PanelHandle from a contract for one side of the relationship.
  */
-export type ParentHandleFromContract<C extends PanelContract> =
-  C extends PanelContract<infer _ChildMethods, infer ChildEmits, infer ParentMethods, infer ParentEmits>
-    ? ParentHandle<ParentMethods, InferEventMap<ParentEmits>, InferEventMap<ChildEmits>>
+export type PanelHandleFromContract<C extends PanelContract, Role extends PanelHandleContractRole> =
+  C extends PanelContract<
+    infer _ChildMethods,
+    infer ChildEmits,
+    infer ParentMethods,
+    infer ParentEmits
+  >
+    ? Role extends "parent"
+      ? PanelHandle<ParentMethods, InferEventMap<ParentEmits>, InferEventMap<ChildEmits>>
+      : PanelHandle<_ChildMethods, InferEventMap<ChildEmits>, InferEventMap<ParentEmits>>
     : never;
 
 // =============================================================================

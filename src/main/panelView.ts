@@ -17,6 +17,7 @@ import {
   getPanelSource,
   getPanelContextId,
   getPanelRef,
+  updatePanelNavigationState,
 } from "@natstack/shared/panelTypes";
 import { contextIdToPartition } from "@natstack/shared/contextIdToPartition.js";
 import { isManagedHost, parsePanelUrl } from "@natstack/shared/shell/urlParsing.js";
@@ -31,9 +32,9 @@ const log = createDevLogger("PanelView");
 // syncSnapshotFromManifest moved server-side (panelService snapshot replacement handles autoArchiveWhenEmpty)
 
 // Narrow interfaces for dependencies
-interface CdpServerLike {
-  registerBrowser(panelId: string, contentsId: number, parentId: string): void;
-  unregisterBrowser(panelId: string): void;
+interface CdpHostLike {
+  registerTarget(panelId: string, contentsId: number): void;
+  unregisterTarget(panelId: string): void;
   cleanupPanelAccess(panelId: string): void;
 }
 
@@ -72,7 +73,7 @@ export class PanelView implements PanelViewLike {
   private viewManager: ViewManager;
   private readonly panelRegistry: PanelRegistry;
   private readonly serverInfo: ServerInfoLike;
-  private readonly cdpServer: CdpServerLike;
+  private readonly cdpHost: CdpHostLike;
   private readonly panelOrchestrator: PanelOrchestratorLike;
   private readonly externalHost: string;
   private sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
@@ -107,7 +108,7 @@ export class PanelView implements PanelViewLike {
     viewManager: ViewManager;
     panelRegistry: PanelRegistry;
     serverInfo: ServerInfoLike;
-    cdpServer: CdpServerLike;
+    cdpHost: CdpHostLike;
     panelOrchestrator: PanelOrchestratorLike;
     sendPanelEvent?: (panelId: string, event: string, payload: unknown) => void;
     autofillManager?: AutofillManagerLike;
@@ -120,7 +121,7 @@ export class PanelView implements PanelViewLike {
     this.viewManager = deps.viewManager;
     this.panelRegistry = deps.panelRegistry;
     this.serverInfo = deps.serverInfo;
-    this.cdpServer = deps.cdpServer;
+    this.cdpHost = deps.cdpHost;
     this.panelOrchestrator = deps.panelOrchestrator;
     this.externalHost = deps.serverInfo.externalHost;
     this.sendPanelEvent = deps.sendPanelEvent;
@@ -155,15 +156,14 @@ export class PanelView implements PanelViewLike {
 
     this.setupBrowserStateTracking(panelId, view.webContents);
 
-    if (parentId) {
-      // Register immediately so CDP access checks pass before dom-ready
-      this.cdpServer.registerBrowser(panelId, view.webContents.id, parentId);
-      const domReadyHandler = () => {
-        this.cdpServer.registerBrowser(panelId, view.webContents.id, parentId);
-      };
-      view.webContents.on("dom-ready", domReadyHandler);
-      this.contentLoadHandlers.set(panelId, { domReady: domReadyHandler });
-    }
+    // Register immediately so CDP access checks pass before dom-ready.
+    // Root panels are CDP targets too; parentage is no longer an auth input.
+    this.cdpHost.registerTarget(panelId, view.webContents.id);
+    const domReadyHandler = () => {
+      this.cdpHost.registerTarget(panelId, view.webContents.id);
+    };
+    view.webContents.on("dom-ready", domReadyHandler);
+    this.contentLoadHandlers.set(panelId, { domReady: domReadyHandler });
 
     this.setupLinkInterception(panelId, view.webContents);
   }
@@ -217,8 +217,8 @@ export class PanelView implements PanelViewLike {
     }
     this.cleanupBrowserStateTracking(panelId, contents ?? undefined);
     this.cleanupLinkInterception(panelId, contents ?? undefined);
-    this.cdpServer.cleanupPanelAccess(panelId);
-    this.cdpServer.unregisterBrowser(panelId);
+    this.cdpHost.cleanupPanelAccess(panelId);
+    this.cdpHost.unregisterTarget(panelId);
     this.crashHistory.delete(panelId);
     this.viewManager.destroyView(panelId);
   }
@@ -268,15 +268,14 @@ export class PanelView implements PanelViewLike {
 
     this.setupBrowserStateTracking(panelId, view.webContents);
 
-    if (parentId) {
-      // Register immediately so CDP access checks pass before dom-ready
-      this.cdpServer.registerBrowser(panelId, view.webContents.id, parentId);
-      const domReadyHandler = () => {
-        this.cdpServer.registerBrowser(panelId, view.webContents.id, parentId);
-      };
-      view.webContents.on("dom-ready", domReadyHandler);
-      this.contentLoadHandlers.set(panelId, { domReady: domReadyHandler });
-    }
+    // Register immediately so CDP access checks pass before dom-ready.
+    // Root panels are CDP targets too; parentage is no longer an auth input.
+    this.cdpHost.registerTarget(panelId, view.webContents.id);
+    const domReadyHandler = () => {
+      this.cdpHost.registerTarget(panelId, view.webContents.id);
+    };
+    view.webContents.on("dom-ready", domReadyHandler);
+    this.contentLoadHandlers.set(panelId, { domReady: domReadyHandler });
 
     // Attach autofill for browser panels
     if (this.autofillManager) {
@@ -449,16 +448,9 @@ export class PanelView implements PanelViewLike {
     const panel = this.panelRegistry.getPanel(panelId);
     if (!panel) return;
 
-    const snapshot = getCurrentSnapshot(panel);
-    if (state.url !== undefined) snapshot.resolvedUrl = state.url;
-
-    panel.navigation = {
-      ...(panel.navigation ?? {}),
-      ...state,
-    };
+    updatePanelNavigationState(panel, state);
 
     if (state.pageTitle !== undefined) {
-      panel.title = state.pageTitle;
       void this.panelOrchestrator.updatePanelTitle(panelId, state.pageTitle).catch(() => {});
     }
     this.panelRegistry.notifyPanelTreeUpdate();

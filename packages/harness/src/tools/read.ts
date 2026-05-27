@@ -173,7 +173,7 @@ function isFileToolsExtensionFallback(err: unknown): boolean {
     if (code === "ENOEXT" || code === "ENOTREADY" || code === "EIMAGE") return true;
     const message = err instanceof Error ? err.message : String(err);
     if (message.includes("Image reads are handled by the image service path")) return true;
-    return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed or enabled|Extension is not running/.test(message);
+    return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running/.test(message);
 }
 function formatTextResult(textContent: string, displayPath: string, offset: number | undefined, limit: number | undefined): {
     content: (TextContent | ImageContent)[];

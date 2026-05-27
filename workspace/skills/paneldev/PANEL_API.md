@@ -2,9 +2,9 @@
 
 Import panel APIs from `@workspace/runtime`.
 
-Panel handles are host APIs. They require an Electron or mobile shell bridge;
-server/headless runtimes cannot create, list, inspect, or mutate UI panels
-unless they are executing inside a host-provided panel runtime.
+Panel handles are server-mediated APIs. Panels, workers, and Durable Objects can
+list, inspect, open, and mutate UI panels through `panelTree`; CDP is served by
+the Electron host that currently holds the target panel's runtime lease.
 
 ## Handles
 
@@ -30,7 +30,7 @@ const snapshot = await handle.snapshot();
 | `stateArgs.get()` / `stateArgs.set(updates)` | Host-owned state args |
 | `snapshot()` | Agent-readable AX/synthetic snapshot |
 | `tree()` / `state()` / `routes()` / `setMode()` | Workspace `_agent` methods |
-| `browser` | Browser automation namespace for URL panels |
+| `cdp` | Approval-gated CDP automation namespace for panel-tree targets |
 
 ## State Args
 
@@ -54,6 +54,6 @@ const next = await handle.stateArgs.get();
 
 Every runtime panel registers `_agent.snapshot`, `_agent.tree`, `_agent.state`, `_agent.routes`, and `_agent.setMode`. Agents should call these through a handle, not directly.
 
-Mobile hosts implement these methods through the WebView bridge. Android hosts
-also expose an in-app WebView CDP proxy for `handle.browser.page()` when the
-WebView debugging backend is available. iOS WebViews do not provide CDP.
+Mobile hosts implement these methods through the WebView bridge. CDP access is
+served by CDP-capable Electron hosts through `handle.cdp.page()`. Panels held by
+non-CDP hosts reject CDP access instead of being silently taken over.

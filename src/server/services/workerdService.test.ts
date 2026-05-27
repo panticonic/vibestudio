@@ -82,6 +82,32 @@ describe("workerdService", () => {
     ).rejects.toThrow(/Invalid args/);
   });
 
+  it("accepts and forwards parent handle metadata for worker parent handles", async () => {
+    const result = await dispatcher.dispatch(workerCtx, "workerd", "createInstance", [
+      {
+        source: "workers/hello",
+        contextId: "ctx-1",
+        parentId: "panel-parent",
+        parentEntityId: "panel:parent-entity",
+        parentKind: "panel",
+      },
+    ]);
+
+    expect(result).not.toHaveProperty("token");
+    expect(result).toMatchObject({
+      parentId: "panel-parent",
+      parentEntityId: "panel:parent-entity",
+      parentKind: "panel",
+    });
+    expect(deps.workerdManager.createInstance).toHaveBeenCalledWith({
+      source: "workers/hello",
+      contextId: "ctx-1",
+      parentId: "panel-parent",
+      parentEntityId: "panel:parent-entity",
+      parentKind: "panel",
+    });
+  });
+
   it("rejects unknown updateInstance fields", async () => {
     await expect(
       dispatcher.dispatch(workerCtx, "workerd", "updateInstance", [

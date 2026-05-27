@@ -25,6 +25,7 @@ export interface PanelCreateResult {
   stateArgs: Record<string, unknown>;
   options: Record<string, unknown>;
   autoArchiveWhenEmpty?: boolean;
+  privileged?: boolean;
 }
 
 export interface BuildBootstrapConfigOpts {
@@ -43,7 +44,6 @@ export interface BuildBootstrapConfigOpts {
 export interface BuildPanelUrlOpts {
   source: string;
   contextId: string;
-  connectionId?: string;
   ref?: string;
   gatewayPort: number;
   externalHost: string;
@@ -110,7 +110,6 @@ export function buildPanelUrl(opts: BuildPanelUrlOpts): string {
 
   const params = new URLSearchParams();
   params.set("contextId", opts.contextId);
-  if (opts.connectionId) params.set("connectionId", opts.connectionId);
   if (opts.ref) params.set("ref", opts.ref);
   const encodedPath = encodeURIComponent(opts.source).replace(/%2F/g, "/");
   return `${opts.protocol}://${opts.externalHost}:${opts.gatewayPort}/${encodedPath}/?${params.toString()}`;
@@ -175,6 +174,9 @@ export function buildPanelFromResult(result: PanelCreateResult, parentId: string
 
   if (result.autoArchiveWhenEmpty) {
     initialSnapshot.autoArchiveWhenEmpty = true;
+  }
+  if (result.privileged) {
+    initialSnapshot.privileged = true;
   }
 
   const artifacts: PanelArtifacts = isBrowser

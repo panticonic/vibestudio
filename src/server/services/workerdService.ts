@@ -19,6 +19,9 @@ const createOptionsSchema = z
     env: z.record(z.string()).optional(),
     bindings: z.record(z.unknown()).optional(),
     stateArgs: z.record(z.unknown()).optional(),
+    parentId: z.string().optional(),
+    parentEntityId: z.string().optional(),
+    parentKind: z.enum(["panel", "worker", "do"]).optional(),
     ref: z.string().optional(),
   })
   .strict();

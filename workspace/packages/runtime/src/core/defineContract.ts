@@ -1,5 +1,5 @@
 import type * as Rpc from "./rpc.js";
-import type { PanelContract, ParentHandle, EventSchemaMap } from "./types.js";
+import type { PanelContract, EventSchemaMap } from "./types.js";
 
 /**
  * Helper to define a panel contract with proper type inference.
@@ -25,7 +25,7 @@ export function defineContract<
   ChildMethods extends Record<string, Rpc.AnyFunction> = {},
   ChildEmits extends EventSchemaMap = {},
   ParentMethods extends Record<string, Rpc.AnyFunction> = {},
-  ParentEmits extends EventSchemaMap = {}
+  ParentEmits extends EventSchemaMap = {},
 >(contract: {
   source: string;
   child?: {
@@ -39,22 +39,3 @@ export function defineContract<
 }): PanelContract<ChildMethods, ChildEmits, ParentMethods, ParentEmits> {
   return contract as PanelContract<ChildMethods, ChildEmits, ParentMethods, ParentEmits>;
 }
-
-/**
- * A no-op parent handle for when there's no parent.
- * Use with nullish coalescing to avoid repetitive null checks:
- *
- * @example
- * ```ts
- * const parent = panel.getParentWithContract(contract) ?? noopParent;
- * parent.emit("event", payload); // Safe - silently does nothing if no parent
- * ```
- */
-export const noopParent: ParentHandle = {
-  id: "",
-  call: new Proxy({} as ParentHandle["call"], {
-    get: () => () => Promise.reject(new Error("No parent")),
-  }),
-  emit: () => Promise.resolve(),
-  onEvent: () => () => {},
-};

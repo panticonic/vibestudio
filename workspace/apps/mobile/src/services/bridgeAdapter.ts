@@ -3,7 +3,6 @@ import type { PanelRegistry } from "@natstack/shared/panelRegistry";
 import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
 import { asPanelSlotId } from "@natstack/shared/panel/ids";
 import type { MobileTransport } from "./mobileTransport";
-import { Platform } from "react-native";
 
 export interface BridgeAdapterCallbacks {
     navigateToPanel(panelId: string): void;
@@ -13,12 +12,7 @@ export interface MobilePanelRuntimeHost {
     ensureLoaded(panelId: string): Promise<void>;
     snapshot(panelId: string): Promise<unknown>;
     callAgent(panelId: string, method: string, args: unknown[]): Promise<unknown>;
-    navigate(panelId: string, url: string): Promise<void>;
-    goBack(panelId: string): Promise<void>;
-    goForward(panelId: string): Promise<void>;
     reload(panelId: string): Promise<void>;
-    stop(panelId: string): Promise<void>;
-    getCdpEndpoint(panelId: string): Promise<{ wsEndpoint: string; token?: string }>;
 }
 
 function chooseNextPanel(registry: PanelRegistry, closingPanelId: string): string | null {
@@ -130,19 +124,13 @@ export function createBridgeAdapter(deps: {
                     return;
                 }
                 case "getCdpEndpoint":
-                    if (Platform.OS === "android")
-                        return requireRuntimeHost().getCdpEndpoint(args[0] as string);
-                    throw new Error("CDP is not available on iOS WebView");
                 case "navigate":
-                    return requireRuntimeHost().navigate(args[0] as string, args[1] as string);
                 case "goBack":
-                    return requireRuntimeHost().goBack(args[0] as string);
                 case "goForward":
-                    return requireRuntimeHost().goForward(args[0] as string);
+                case "stop":
+                    throw new Error("CDP automation is routed through the server broker and is not available for mobile-held WebViews");
                 case "reload":
                     return requireRuntimeHost().reload(args[0] as string);
-                case "stop":
-                    return requireRuntimeHost().stop(args[0] as string);
                 case "openDevtools":
                     return;
                 case "openFolderDialog":

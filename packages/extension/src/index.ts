@@ -61,7 +61,7 @@ export interface RegistryEntry extends UnitRegistryEntryBase {
 }
 
 /**
- * Open registry of the workspace's installed extensions, mapping each
+ * Open registry of the workspace's declared extensions, mapping each
  * extension's package name to its public API type. Each extension augments
  * this interface from its own module:
  *

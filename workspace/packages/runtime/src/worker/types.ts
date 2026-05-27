@@ -16,8 +16,12 @@ export interface WorkerEnv {
   GATEWAY_URL: string;
   /** Additional gateway URLs that should use the internal bearer token. */
   GATEWAY_URL_ALIASES?: string | string[];
-  /** Parent panel/worker ID for parent handle */
+  /** Parent panel/worker ID used to seed the unified parent handle */
   PARENT_ID?: string;
+  /** Parent runtime entity ID used for RPC when the parent is a panel slot */
+  PARENT_ENTITY_ID?: string;
+  /** Parent runtime kind used to seed the correct unified handle shape */
+  PARENT_KIND?: "panel" | "worker" | "do";
   /** Initial state args (parsed object from JSON binding, if provided at instance creation) */
   STATE_ARGS?: Record<string, unknown>;
   /** User-defined bindings */

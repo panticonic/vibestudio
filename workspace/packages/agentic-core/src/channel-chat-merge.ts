@@ -286,10 +286,26 @@ function projectedCustomMessageToChatMessage(
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {
-  if (isStoredValueRef(value)) return {};
+  if (isStoredValueRef(value)) {
+    const parsed = parseStoredJsonPreview(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? { ...(parsed as Record<string, unknown>) }
+      : {};
+  }
   return value && typeof value === "object" && !Array.isArray(value)
     ? { ...(value as Record<string, unknown>) }
     : {};
+}
+
+function parseStoredJsonPreview(value: unknown): unknown {
+  if (!isStoredValueRef(value) || value.encoding !== "json" || typeof value.preview !== "string") {
+    return undefined;
+  }
+  try {
+    return JSON.parse(value.preview);
+  } catch {
+    return undefined;
+  }
 }
 
 function meaningfulInvocationName(value: unknown): string | undefined {
@@ -304,6 +320,8 @@ function inferInvocationDisplay(value: unknown): {
   summary?: string;
 } {
   if (isStoredValueRef(value)) {
+    const parsed = parseStoredJsonPreview(value);
+    if (parsed !== undefined) return inferInvocationDisplay(parsed);
     return { summary: value.preview ?? `${value.encoding} blob ${value.digest}` };
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};

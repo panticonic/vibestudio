@@ -461,7 +461,12 @@ export class ShellClient {
   }
   dispose(): void {
     this.stopPeriodicSync();
-    this.transport.disconnect();
+    void (async () => {
+      await this.transport
+        .call("main", "panelRuntime.unregisterClient", [this.credentials.deviceId])
+        .catch(() => {});
+      this.transport.disconnect();
+    })();
     this.statusUnsub?.();
     this.statusUnsub = null;
   }

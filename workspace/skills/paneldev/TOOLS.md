@@ -114,9 +114,9 @@ Available via `import { ... } from "@workspace/runtime"` and `import { ... } fro
 
 ### Using extensions
 
-Extensions are **declared** in `meta/natstack.yml` under `extensions:`. That declaration is the only way to install/enable/disable/uninstall one — there is no `extensions.install` / `setEnabled` API, and invoking an extension never prompts. To start using an extension, add it to the `extensions:` list in `meta/natstack.yml`; saving that change (a gated meta write) raises one joint approval covering every newly-declared extension. Once approved and running, call it with `extensions.use(name)`.
+Extensions are **declared** in `meta/natstack.yml` under `extensions:`. That declaration is the only way to add or remove one, and invoking an extension never prompts. To start using an extension, add it to the `extensions:` list in `meta/natstack.yml`; saving that change (a gated meta write) raises one joint approval covering every newly-declared extension. Once approved and running, call it with `extensions.use(name)`.
 
-`extensions.use(name).method(...)` fails with `ENOEXT` if the extension is not declared/enabled, or `ENOTREADY` if it is still starting. If you need an extension that isn't declared yet, edit `meta/natstack.yml` rather than calling an install API.
+`extensions.use(name).method(...)` fails with `ENOEXT` if the extension is not declared, or `ENOTREADY` if it is still starting. If you need an extension that isn't declared yet, edit `meta/natstack.yml`.
 
 Extension methods normally use unary RPC and must return JSON-serializable values. If an extension method returns a `Response` or `ReadableStream`, declare it when creating the client so the runtime uses streaming RPC end-to-end:
 
@@ -140,7 +140,7 @@ eval({ code: `
   import { extensions } from "@workspace/runtime";
   const name = "@workspace-extensions/image-service";
   const entry = (await extensions.list()).find((e) => e.name === name);
-  if (!entry || !entry.enabled || entry.status !== "running") {
+  if (!entry || entry.status !== "running") {
     throw new Error(name + " is not available — declare it in meta/natstack.yml and approve it.");
   }
 `

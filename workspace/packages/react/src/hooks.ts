@@ -6,7 +6,7 @@
 import { useState, useEffect, useMemo } from "react";
 import * as runtime from "@workspace/runtime";
 import { Rpc } from "@workspace/runtime";
-import type { ParentHandle, ThemeAppearance } from "@workspace/runtime";
+import type { PanelHandle, ThemeAppearance } from "@workspace/runtime";
 
 /**
  * Get the panel API object.
@@ -101,7 +101,10 @@ export function usePanelPartition(): string | null {
   const [partition, setPartition] = useState<string | null>(null);
 
   useEffect(() => {
-    runtime.getInfo().then((info) => setPartition(info.partition)).catch(console.error);
+    runtime
+      .getInfo()
+      .then((info) => setPartition(info.partition))
+      .catch(console.error);
   }, []);
 
   return partition;
@@ -136,7 +139,7 @@ export function usePanelRpcGlobalEvent<T = unknown>(
 }
 
 // =============================================================================
-// ParentHandle Hooks
+// Parent PanelHandle Hooks
 // =============================================================================
 
 /**
@@ -168,8 +171,8 @@ export function usePanelRpcGlobalEvent<T = unknown>(
  */
 export function usePanelParent<
   T extends Rpc.ExposedMethods = Rpc.ExposedMethods,
-  E extends Rpc.RpcEventMap = Rpc.RpcEventMap
->(): ParentHandle<T, E> | null {
+  E extends Rpc.RpcEventMap = Rpc.RpcEventMap,
+>(): PanelHandle<T, E> | null {
   // getParent() returns a cached handle, so useMemo is for React stability
   return useMemo(() => runtime.getParent<T, E>(), []);
 }

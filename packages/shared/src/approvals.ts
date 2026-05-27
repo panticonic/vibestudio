@@ -179,6 +179,7 @@ export interface PendingCredentialApproval extends PendingApprovalBase {
 export interface PendingCapabilityApproval extends PendingApprovalBase {
   kind: "capability";
   capability: string;
+  severity?: "standard" | "severe";
   grantResourceKey?: string;
   title: string;
   description?: string;

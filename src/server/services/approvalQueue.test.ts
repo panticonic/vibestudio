@@ -122,6 +122,34 @@ describe("approvalQueue", () => {
     await expect(promise).resolves.toBe("once");
   });
 
+  it("preserves severe capability approval tone in pending state", async () => {
+    const { queue } = createQueue();
+    const promise = queue.request({
+      kind: "capability",
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      capability: "panel.automate",
+      severity: "severe",
+      title: "Drive privileged panel",
+      resource: {
+        type: "panel",
+        label: "Panel",
+        value: "Shell",
+      },
+    });
+
+    expect(queue.listPending()[0]).toMatchObject({
+      kind: "capability",
+      capability: "panel.automate",
+      severity: "severe",
+      title: "Drive privileged panel",
+    });
+    queue.resolve(queue.listPending()[0]!.approvalId, "deny");
+    await expect(promise).resolves.toBe("deny");
+  });
+
   it("fans out pending changes to listeners and supports unsubscribe", async () => {
     const { queue } = createQueue();
     const listener = vi.fn();

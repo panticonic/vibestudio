@@ -12,9 +12,16 @@ import { createHttpRpcBridge } from "../shared/httpRpcBridge.js";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
 import { _initFsWithRpc } from "./fs.js";
-import { createParentHandle } from "../shared/handles.js";
+import {
+  createNonPanelRuntimeHandle,
+  createPanelHandle,
+  type PanelHandleHostOps,
+  type PanelHandleMetadata,
+} from "../shared/handles.js";
+import { createCdpAutomation } from "../panel/cdpAutomation.js";
 import type { RpcBridge } from "@natstack/rpc";
 import type { RuntimeFs } from "../types.js";
+import type { PanelHandle } from "../core/index.js";
 
 // ---------------------------------------------------------------------------
 // Console bridge — forwards DO console.* output to the server terminal.
@@ -56,8 +63,11 @@ function installConsoleBridge(rpc: RpcBridge): void {
         .map((a) => {
           if (typeof a === "string") return a;
           if (a instanceof Error) return a.stack ?? `${a.name}: ${a.message}`;
-          try { return JSON.stringify(a); }
-          catch { return String(a); }
+          try {
+            return JSON.stringify(a);
+          } catch {
+            return String(a);
+          }
         })
         .join(" ");
     } catch {
@@ -73,10 +83,22 @@ function installConsoleBridge(rpc: RpcBridge): void {
       forwarding = false;
     }
   };
-  console.log = (...args: unknown[]) => { original.log(...args); forward("log", args); };
-  console.info = (...args: unknown[]) => { original.info(...args); forward("info", args); };
-  console.warn = (...args: unknown[]) => { original.warn(...args); forward("warn", args); };
-  console.error = (...args: unknown[]) => { original.error(...args); forward("error", args); };
+  console.log = (...args: unknown[]) => {
+    original.log(...args);
+    forward("log", args);
+  };
+  console.info = (...args: unknown[]) => {
+    original.info(...args);
+    forward("info", args);
+  };
+  console.warn = (...args: unknown[]) => {
+    original.warn(...args);
+    forward("warn", args);
+  };
+  console.error = (...args: unknown[]) => {
+    original.error(...args);
+    forward("error", args);
+  };
 }
 
 // Minimal types for workerd DurableObject context (cannot import cloudflare:workers in Node)
@@ -119,6 +141,26 @@ export interface DORef {
   objectKey: string;
 }
 
+type DurablePanelListItem = {
+  panelId: string;
+  title: string;
+  source: string;
+  kind: "workspace" | "browser";
+  parentId: string | null;
+  contextId: string;
+  runtimeEntityId?: string | null;
+  children?: DurablePanelListItem[];
+};
+
+type DurablePanelMetadataResult = {
+  id?: string;
+  title?: string;
+  source?: string;
+  kind?: "workspace" | "browser";
+  parentId?: string | null;
+  runtimeEntityId?: string | null;
+};
+
 export abstract class DurableObjectBase {
   protected ctx: DurableObjectContext;
   protected sql: SqlStorage;
@@ -128,6 +170,8 @@ export abstract class DurableObjectBase {
   private _rpc: (RpcBridge & { handleIncomingPost(body: unknown): Promise<unknown> }) | null = null;
   protected _currentRpcCallerId: string | null = null;
   protected _currentRpcCallerKind: string | null = null;
+  protected _currentRpcCallerPanelId: string | null = null;
+  private _panelMetadataCache = new Map<string, PanelHandleMetadata>();
   private _credentials: CredentialClient | null = null;
   private _notifications: NotificationClient | null = null;
   private _fs: RuntimeFs | null = null;
@@ -168,7 +212,9 @@ export abstract class DurableObjectBase {
     try {
       const row = this.sql.exec(`SELECT value FROM state WHERE key = 'schema_version'`).toArray();
       if (row.length > 0) currentVersion = parseInt(row[0]!["value"] as string, 10) || 0;
-    } catch { /* table might not have the row yet */ }
+    } catch {
+      /* table might not have the row yet */
+    }
 
     const targetVersion = (this.constructor as typeof DurableObjectBase).schemaVersion;
     if (currentVersion < targetVersion) {
@@ -176,7 +222,7 @@ export abstract class DurableObjectBase {
       this.migrate(currentVersion, targetVersion);
       this.sql.exec(
         `INSERT OR REPLACE INTO state (key, value) VALUES ('schema_version', ?)`,
-        String(targetVersion),
+        String(targetVersion)
       );
     }
   }
@@ -189,10 +235,7 @@ export abstract class DurableObjectBase {
   }
 
   protected setStateValue(key: string, value: string): void {
-    this.sql.exec(
-      `INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)`,
-      key, value,
-    );
+    this.sql.exec(`INSERT OR REPLACE INTO state (key, value) VALUES (?, ?)`, key, value);
   }
 
   protected deleteStateValue(key: string): void {
@@ -279,9 +322,207 @@ export abstract class DurableObjectBase {
     return this._currentRpcCallerKind;
   }
 
+  protected get rpcCallerPanelId(): string | null {
+    return this._currentRpcCallerPanelId;
+  }
+
   /** Get a handle to the parent (first dispatcher) */
-  protected getParent() {
-    return createParentHandle({ rpc: this.rpc, parentId: null });
+  protected getParent(): PanelHandle | null {
+    const callerId = this.rpcCallerId;
+    if (!callerId) return null;
+    if (this.rpcCallerKind === "panel") {
+      const panelId = this.rpcCallerPanelId ?? callerId;
+      return this.createRuntimePanelHandle(panelId, {
+        rpcTargetId: callerId,
+      });
+    }
+    if (this.rpcCallerKind === "worker" || this.rpcCallerKind === "do") {
+      return createNonPanelRuntimeHandle({ id: callerId });
+    }
+    return null;
+  }
+
+  private panelCall<T>(method: string, args: unknown[]): Promise<T> {
+    return this.rpc.call<T>("main", `panelTree.${method}`, args);
+  }
+
+  private rememberPanelMetadata(metadata: PanelHandleMetadata): PanelHandleMetadata {
+    const next = { ...(this._panelMetadataCache.get(metadata.id) ?? {}), ...metadata };
+    this._panelMetadataCache.set(metadata.id, next);
+    return next;
+  }
+
+  private metadataForPanelId(
+    id: string,
+    overrides: Partial<PanelHandleMetadata> = {}
+  ): PanelHandleMetadata {
+    return this.rememberPanelMetadata({
+      title: id,
+      source: id,
+      kind: "workspace",
+      parentId: null,
+      ...(this._panelMetadataCache.get(id) ?? {}),
+      ...overrides,
+      id,
+    });
+  }
+
+  private metadataFromPanelResult(
+    id: string,
+    meta: DurablePanelMetadataResult
+  ): PanelHandleMetadata {
+    return {
+      id,
+      title: meta.title,
+      source: meta.source,
+      kind: meta.kind,
+      parentId: meta.parentId,
+      rpcTargetId: meta.runtimeEntityId ?? meta.id ?? id,
+    };
+  }
+
+  private panelOps(): PanelHandleHostOps {
+    return {
+      refresh: async (id) => {
+        const meta = await this.panelCall<DurablePanelMetadataResult | null>("metadata", [id]);
+        return meta
+          ? this.rememberPanelMetadata(this.metadataFromPanelResult(id, meta))
+          : this.metadataForPanelId(id);
+      },
+      children: (id) => this.panelTree.children(id),
+      parent: (id, parentId) => {
+        const resolvedParentId = parentId ?? this._panelMetadataCache.get(id)?.parentId ?? null;
+        return resolvedParentId ? this.panelTree.get(resolvedParentId) : null;
+      },
+      ensureLoaded: (id) => this.panelCall("ensureLoaded", [id]),
+      isLoaded: async (id) => {
+        try {
+          const lease = await this.panelCall<{ leased?: boolean } | null>("getRuntimeLease", [id]);
+          return Boolean(lease?.leased);
+        } catch {
+          return false;
+        }
+      },
+      reload: (id) => this.panelCall("reload", [id]),
+      close: (id) => this.panelCall("close", [id]),
+      archive: (id) => this.panelCall("archive", [id]),
+      unload: (id) => this.panelCall("unload", [id]),
+      movePanel: (id, newParentId, targetPosition) =>
+        this.panelCall("movePanel", [{ panelId: id, newParentId, targetPosition }]),
+      takeOver: (id) => this.panelCall("takeOver", [id]),
+      openDevTools: (id, mode) => this.panelCall("openDevTools", [id, mode]),
+      rebuildPanel: (id) => this.panelCall("rebuildPanel", [id]),
+      updatePanelState: (id, state) => this.panelCall("updatePanelState", [id, state]),
+      focus: (id) => this.panelCall("focus", [id]),
+      stateArgs: {
+        get: (id) => this.panelCall("getStateArgs", [id]),
+        set: (id, updates) => this.panelCall("setStateArgs", [id, updates]),
+      },
+      snapshot: (id) => this.panelCall("snapshot", [id]),
+      callAgent: (id, method, args) => this.panelCall("callAgent", [id, method, args]),
+    };
+  }
+
+  private createRuntimePanelHandle(
+    id: string,
+    metadata: Partial<PanelHandleMetadata> = {}
+  ): PanelHandle {
+    return createPanelHandle({
+      rpc: this.rpc,
+      metadata: this.metadataForPanelId(id, metadata),
+      cdp: createCdpAutomation(this.rpc, id),
+      ops: this.panelOps(),
+    });
+  }
+
+  private panelListItemToMetadata(item: DurablePanelListItem): PanelHandleMetadata {
+    return this.rememberPanelMetadata({
+      id: item.panelId,
+      title: item.title,
+      source: item.source,
+      kind: item.kind,
+      parentId: item.parentId,
+      rpcTargetId: item.runtimeEntityId ?? item.panelId,
+    });
+  }
+
+  private hydratePanelListItem(item: DurablePanelListItem): PanelHandle {
+    return createPanelHandle({
+      rpc: this.rpc,
+      metadata: this.panelListItemToMetadata(item),
+      cdp: createCdpAutomation(this.rpc, item.panelId),
+      ops: this.panelOps(),
+    });
+  }
+
+  /** Panel tree API for Durable Objects. */
+  protected get panelTree(): {
+    self(): PanelHandle;
+    get(id: string): PanelHandle;
+    list(): Promise<PanelHandle[]>;
+    roots(): Promise<PanelHandle[]>;
+    children(id: string): Promise<PanelHandle[]>;
+    parent(id: string): PanelHandle | null;
+    open(
+      source: string,
+      options?: {
+        parentId?: string | null;
+        name?: string;
+        focus?: boolean;
+        stateArgs?: Record<string, unknown>;
+      }
+    ): Promise<PanelHandle>;
+  } {
+    const flatten = (items: DurablePanelListItem[]): DurablePanelListItem[] => {
+      const out: DurablePanelListItem[] = [];
+      const visit = (item: DurablePanelListItem) => {
+        out.push(item);
+        for (const child of item.children ?? []) visit(child);
+      };
+      for (const item of items) visit(item);
+      return out;
+    };
+    return {
+      self: () =>
+        createNonPanelRuntimeHandle({
+          id: String(this.env["DO_ID"] ?? this.ctx.id.toString()),
+        }),
+      get: (id) => this.createRuntimePanelHandle(id),
+      list: async () =>
+        flatten(await this.panelCall<DurablePanelListItem[]>("list", [null])).map((item) =>
+          this.hydratePanelListItem(item)
+        ),
+      roots: async () =>
+        (await this.panelCall<DurablePanelListItem[]>("roots", [])).map((item) =>
+          this.hydratePanelListItem(item)
+        ),
+      children: async (id) =>
+        (await this.panelCall<DurablePanelListItem[]>("list", [id])).map((item) =>
+          this.hydratePanelListItem(item)
+        ),
+      parent: (id) => {
+        const parentId = this._panelMetadataCache.get(id)?.parentId ?? null;
+        return parentId ? this.createRuntimePanelHandle(parentId) : null;
+      },
+      open: async (source, options) => {
+        const parentId = options?.parentId ?? null;
+        const result = await this.panelCall<{
+          id: string;
+          title: string;
+          kind: "workspace" | "browser";
+          runtimeEntityId?: string | null;
+        }>("create", [source, { ...options, parentId }]);
+        return this.hydratePanelListItem({
+          panelId: result.id,
+          title: result.title,
+          source: result.kind === "browser" ? `browser:${source}` : source,
+          kind: result.kind,
+          parentId,
+          contextId: "",
+          runtimeEntityId: result.runtimeEntityId ?? result.id,
+        });
+      },
+    };
   }
 
   /** Last value pushed via `setOwnTitle` during this activation. Used to
@@ -380,7 +621,10 @@ export abstract class DurableObjectBase {
     if (this._objectKey) return this._objectKey;
     // Fallback to ctx.id.name (available in some workerd versions)
     const name = this.ctx.id.name;
-    if (name) { this._objectKey = name; return name; }
+    if (name) {
+      this._objectKey = name;
+      return name;
+    }
     // Fallback to persisted state (survives hibernation)
     try {
       const stored = this.sql.exec(`SELECT value FROM state WHERE key = '__objectKey'`).toArray();
@@ -388,7 +632,9 @@ export abstract class DurableObjectBase {
         this._objectKey = stored[0]!["value"] as string;
         return this._objectKey;
       }
-    } catch { /* state table may not exist yet */ }
+    } catch {
+      /* state table may not exist yet */
+    }
     throw new Error("objectKey not available — no request received yet and ctx.id.name not set");
   }
 
@@ -412,8 +658,14 @@ export abstract class DurableObjectBase {
     if (segments.length >= 1 && !this._objectKey) {
       this._objectKey = decodeURIComponent(segments[0]!);
       // Persist for hibernation recovery
-      try { this.sql.exec(`INSERT OR IGNORE INTO state (key, value) VALUES ('__objectKey', ?)`, this._objectKey); }
-      catch { /* state table may not exist yet — ensureReady hasn't run */ }
+      try {
+        this.sql.exec(
+          `INSERT OR IGNORE INTO state (key, value) VALUES ('__objectKey', ?)`,
+          this._objectKey
+        );
+      } catch {
+        /* state table may not exist yet — ensureReady hasn't run */
+      }
     }
 
     this.ensureReady();
@@ -441,7 +693,8 @@ export abstract class DurableObjectBase {
           const result = this.parseRequestBody(body);
           if (result.error) {
             return new Response(JSON.stringify({ error: result.error }), {
-              status: 400, headers: { "Content-Type": "application/json" },
+              status: 400,
+              headers: { "Content-Type": "application/json" },
             });
           }
           args = result.args;
@@ -451,10 +704,13 @@ export abstract class DurableObjectBase {
       // Event endpoint — handle incoming events
       if (method === "__event") {
         if (args.length < 2) {
-          return new Response(JSON.stringify({ error: "__event requires at least [event, payload]" }), {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          });
+          return new Response(
+            JSON.stringify({ error: "__event requires at least [event, payload]" }),
+            {
+              status: 400,
+              headers: { "Content-Type": "application/json" },
+            }
+          );
         }
         const [event, payload, fromId] = args as [string, unknown, string | undefined];
         await this.rpc.handleIncomingPost({ type: "emit", event, payload, fromId: fromId ?? "" });
@@ -473,8 +729,10 @@ export abstract class DurableObjectBase {
 
       const previousCallerId = this._currentRpcCallerId;
       const previousCallerKind = this._currentRpcCallerKind;
+      const previousCallerPanelId = this._currentRpcCallerPanelId;
       this._currentRpcCallerId = request.headers.get("X-Natstack-Rpc-Caller-Id");
       this._currentRpcCallerKind = request.headers.get("X-Natstack-Rpc-Caller-Kind");
+      this._currentRpcCallerPanelId = request.headers.get("X-Natstack-Rpc-Caller-Panel-Id");
       try {
         const result = await (fn as (...a: unknown[]) => Promise<unknown>).call(this, ...args);
         return new Response(JSON.stringify(result ?? null), {
@@ -483,6 +741,7 @@ export abstract class DurableObjectBase {
       } finally {
         this._currentRpcCallerId = previousCallerId;
         this._currentRpcCallerKind = previousCallerKind;
+        this._currentRpcCallerPanelId = previousCallerPanelId;
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -507,7 +766,12 @@ export abstract class DurableObjectBase {
     this.ensureReady();
   }
 
-  async webSocketClose(_ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+  async webSocketClose(
+    _ws: WebSocket,
+    _code: number,
+    _reason: string,
+    _wasClean: boolean
+  ): Promise<void> {
     this.ensureReady();
   }
 

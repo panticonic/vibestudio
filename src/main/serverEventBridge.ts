@@ -106,6 +106,19 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       return;
     }
 
+    if (bareEvent === "panel-tree-updated") {
+      void panelOrchestrator
+        ?.recoverShellSnapshot({ loadFocusedView: false })
+        .catch((err: unknown) => {
+          deps.warn(
+            `[panelTree] failed to recover server tree snapshot: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        });
+      return;
+    }
+
     if (isValidEventName(bareEvent)) {
       emitNormalized(bareEvent, payload);
     }

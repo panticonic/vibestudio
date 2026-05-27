@@ -1,19 +1,19 @@
 /**
  * CdpBridge — Server-side relay between Playwright CDP clients and the
- * browser extension's chrome.debugger API.
+ * active host provider's Electron webContents.debugger API.
  *
  * Architecture:
- *   Panel (Playwright) → Server CDP WebSocket → Extension WebSocket → chrome.debugger → Tab
+ *   Runtime (Playwright) → Server CDP WebSocket → Host provider → webContents.debugger → Panel
  *
  * Two WebSocket paths:
- * - `/api/cdp-bridge` — single extension connection
- * - `/cdp/{browserId}` — per-browser Playwright client connections
+ * - `/api/cdp-host` — Electron host provider connection
+ * - `/cdp/{targetId}` — per-panel Playwright client connections
  *
  * Both paths authenticate with a first WebSocket message:
  * `{ "type": "natstack:cdp-auth", "token": "..." }`.
  *
- * The client ↔ server protocol is standard CDP (same as Electron's CdpServer),
- * so Playwright connects identically regardless of backend.
+ * The client ↔ server protocol is standard CDP, so Playwright connects
+ * identically regardless of backend.
  */
 
 import { WebSocket, type WebSocketServer } from "ws";
@@ -21,6 +21,7 @@ import type { IncomingMessage } from "http";
 import type { Duplex } from "stream";
 import { constantTimeStringEqual } from "@natstack/shared/tokenManager";
 import { CdpGrantService } from "@natstack/shared/cdpGrants";
+import type { PanelRuntimeLeaseChangedEvent } from "@natstack/shared/panel/panelLease";
 import { createDevLogger } from "@natstack/dev-log";
 import { assertPresent } from "../lintHelpers";
 
@@ -31,10 +32,13 @@ const NAV_COMMAND_TIMEOUT_MS = 30_000;
 interface CdpBridgeOptions {
   adminToken: string;
   cdpGrants?: CdpGrantService;
-  canAccessBrowser: (requestingPanelId: string, browserId: string) => boolean;
-  panelOwnsBrowser: (requestingPanelId: string, browserId: string) => boolean;
-  /** Check if a browserId corresponds to a known panel in the registry. */
-  isPanelKnown?: (browserId: string) => boolean;
+  authenticateHostProvider?: (token: string, hostConnectionId: string) => boolean;
+  canRegisterHostProvider?: (hostConnectionId: string) => boolean;
+  resolveHostForTarget?: (targetId: string) => string | null;
+  /** Check if a targetId corresponds to a known panel in the registry. */
+  isPanelKnown?: (targetId: string) => boolean | Promise<boolean>;
+  protocol?: "http" | "https";
+  externalHost?: string;
   port: number;
 }
 
@@ -46,7 +50,7 @@ export interface CdpEndpoint {
 interface PendingCommand {
   ws: WebSocket;
   clientId: number;
-  browserId: string;
+  targetId: string;
   sessionId?: string;
 }
 
@@ -54,13 +58,17 @@ interface PendingNavCommand {
   resolve: (value?: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  targetId: string;
 }
 
-interface ExtensionBridgeMessage {
+interface ProviderBridgeMessage {
   type?: string;
-  browserId?: string;
+  targetId?: string;
   tabId?: number;
+  reason?: string;
   requestId?: string;
+  action?: string;
+  args?: unknown[];
   result?: unknown;
   error?: string;
   method?: string;
@@ -68,21 +76,29 @@ interface ExtensionBridgeMessage {
   sessionId?: string;
 }
 
+interface RegisteredTarget {
+  tabId: number;
+  hostConnectionId?: string;
+}
+
 export class CdpBridge {
   private adminToken: string;
   private cdpGrants: CdpGrantService;
-  private canAccessBrowser: (requestingPanelId: string, browserId: string) => boolean;
-  private panelOwnsBrowser: (requestingPanelId: string, browserId: string) => boolean;
-  private isPanelKnown: (browserId: string) => boolean;
+  private authenticateHostProvider: (token: string, hostConnectionId: string) => boolean;
+  private canRegisterHostProvider: (hostConnectionId: string) => boolean;
+  private resolveHostForTarget?: (targetId: string) => string | null;
+  private isPanelKnown: (targetId: string) => boolean | Promise<boolean>;
+  private protocol: "http" | "https";
+  private externalHost: string;
   private port: number;
 
-  /** Extension WebSocket connection (single connection, one extension at a time) */
-  private extensionWs: WebSocket | null = null;
+  /** Host provider WebSocket connections: stable hostConnectionId → provider WS */
+  private providers = new Map<string, WebSocket>();
 
-  /** Registered browsers from extension: browserId → {tabId} */
-  private browserRegistry = new Map<string, { tabId: number }>();
+  /** Registered targets from providers: targetId → provider metadata */
+  private targetRegistry = new Map<string, RegisteredTarget>();
 
-  /** Active client connections: browserId → Set<WebSocket> */
+  /** Active client connections: targetId → Set<WebSocket> */
   private clientConnections = new Map<string, Set<WebSocket>>();
 
   /** Pending CDP commands: requestId → pending info */
@@ -91,21 +107,20 @@ export class CdpBridge {
   /** Pending navigation commands: requestId → {resolve, reject, timer} */
   private pendingNavCommands = new Map<string, PendingNavCommand>();
 
-  /** Pending browser tab creations: browserId → {resolve, reject} */
-  private pendingBrowserCreations = new Map<
-    string,
-    { resolve: () => void; reject: (e: Error) => void }
-  >();
-
   /** Counter for unique bridge request IDs (shared across CDP and nav) */
   private nextRequestId = 1;
 
   constructor(options: CdpBridgeOptions) {
     this.adminToken = options.adminToken;
     this.cdpGrants = options.cdpGrants ?? new CdpGrantService();
-    this.canAccessBrowser = options.canAccessBrowser;
-    this.panelOwnsBrowser = options.panelOwnsBrowser;
+    this.authenticateHostProvider =
+      options.authenticateHostProvider ??
+      ((token) => constantTimeStringEqual(token, this.adminToken));
+    this.canRegisterHostProvider = options.canRegisterHostProvider ?? (() => true);
+    this.resolveHostForTarget = options.resolveHostForTarget;
     this.isPanelKnown = options.isPanelKnown ?? (() => true);
+    this.protocol = options.protocol ?? "http";
+    this.externalHost = options.externalHost ?? "127.0.0.1";
     this.port = options.port;
   }
 
@@ -169,20 +184,26 @@ export class CdpBridge {
     const url = new URL(req.url ?? "/", `http://localhost`);
     const pathname = url.pathname;
 
-    if (pathname === "/api/cdp-bridge") {
+    if (pathname === "/api/cdp-host") {
+      const hostConnectionId = url.searchParams.get("hostConnectionId") ?? "";
+      if (!hostConnectionId || !this.canRegisterHostProvider(hostConnectionId)) {
+        socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+        socket.destroy();
+        return;
+      }
       wss.handleUpgrade(req, socket, head, (ws) => {
         void this.authenticateConnection(ws, (token) =>
-          constantTimeStringEqual(token, this.adminToken)
+          this.authenticateHostProvider(token, hostConnectionId)
         ).then((ok) => {
           if (!ok) return;
-          this.handleExtensionConnection(ws);
+          this.handleProviderConnection(hostConnectionId, ws);
           ws.send(JSON.stringify({ type: "natstack:cdp-auth-ok" }));
         });
       });
     } else if (pathname.startsWith("/cdp/")) {
-      const browserId = pathname.slice("/cdp/".length);
+      const targetId = pathname.slice("/cdp/".length);
 
-      if (!this.browserRegistry.has(browserId)) {
+      if (!this.targetRegistry.has(targetId)) {
         socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
         socket.destroy();
         return;
@@ -190,12 +211,15 @@ export class CdpBridge {
 
       wss.handleUpgrade(req, socket, head, (ws) => {
         void this.authenticateConnection(ws, (token) => {
-          const grant = this.cdpGrants.redeem(token, browserId);
-          if (!grant) return false;
-          return this.canAccessBrowser(grant.principalId, browserId);
+          const grant = this.cdpGrants.redeem(token, targetId);
+          return Boolean(grant);
         }).then((ok) => {
           if (!ok) return;
-          this.handleClientConnection(ws, browserId);
+          if (!this.providerForTarget(targetId)) {
+            ws.close(1011, "CDP provider not connected");
+            return;
+          }
+          this.handleClientConnection(ws, targetId);
           ws.send(JSON.stringify({ type: "natstack:cdp-auth-ok" }));
         });
       });
@@ -206,47 +230,41 @@ export class CdpBridge {
   }
 
   /**
-   * Get a CDP WebSocket endpoint URL for a browser.
-   * Requires ancestry-based access (parent or ancestor).
+   * Mint a single-use CDP handshake token for a registered target. Access has
+   * already been approved by the panelCdp service before this is called.
    */
-  getCdpEndpoint(browserId: string, requestingPanelId: string): CdpEndpoint | null {
-    if (!this.canAccessBrowser(requestingPanelId, browserId)) {
+  getCdpEndpoint(targetId: string, requesterId: string): CdpEndpoint | null {
+    if (!this.targetRegistry.has(targetId)) {
+      return null;
+    }
+    if (!this.providerForTarget(targetId)) {
       return null;
     }
 
-    if (!this.browserRegistry.has(browserId)) {
-      return null;
-    }
-
-    const { token } = this.cdpGrants.grant(requestingPanelId, browserId);
+    const { token } = this.cdpGrants.grant(requesterId, targetId);
+    const wsProtocol = this.protocol === "https" ? "wss" : "ws";
     return {
-      wsEndpoint: `ws://127.0.0.1:${this.port}/cdp/${browserId}`,
+      wsEndpoint: `${wsProtocol}://${this.externalHost}:${this.port}/cdp/${targetId}`,
       token,
     };
   }
 
   /**
-   * Send a navigation command to the extension for a browser tab.
-   * Requires owner-only access (direct parent).
+   * Send an approved navigation command to the target's active host provider.
    */
-  async sendBrowserCommand(
-    browserId: string,
-    requestingPanelId: string,
+  async sendTargetCommand(
+    targetId: string,
+    _requesterId: string,
     command: string,
     args: unknown[]
   ): Promise<unknown> {
-    if (!this.panelOwnsBrowser(requestingPanelId, browserId)) {
-      throw new Error(
-        `Access denied: only the direct parent can send navigation commands to ${browserId}`
-      );
+    const provider = this.providerForTarget(targetId);
+    if (!provider) {
+      throw new Error("CDP provider not connected");
     }
 
-    if (!this.extensionWs || this.extensionWs.readyState !== WebSocket.OPEN) {
-      throw new Error("Browser extension not connected");
-    }
-
-    if (!this.browserRegistry.has(browserId)) {
-      throw new Error(`Browser not found: ${browserId}`);
+    if (!this.targetRegistry.has(targetId)) {
+      throw new Error(`Target not found: ${targetId}`);
     }
 
     const requestId = String(this.nextRequestId++);
@@ -257,12 +275,12 @@ export class CdpBridge {
         reject(new Error(`Navigation command timed out: ${command}`));
       }, NAV_COMMAND_TIMEOUT_MS);
 
-      this.pendingNavCommands.set(requestId, { resolve, reject, timer });
+      this.pendingNavCommands.set(requestId, { resolve, reject, timer, targetId });
 
       const msg: Record<string, unknown> = {
         type: "nav:command",
         requestId,
-        browserId,
+        targetId,
         action: command,
       };
 
@@ -272,7 +290,7 @@ export class CdpBridge {
       }
 
       try {
-        assertPresent(this.extensionWs).send(JSON.stringify(msg));
+        provider.send(JSON.stringify(msg));
       } catch (err) {
         clearTimeout(timer);
         this.pendingNavCommands.delete(requestId);
@@ -282,91 +300,77 @@ export class CdpBridge {
   }
 
   /**
-   * Check if the browser extension is currently connected.
+   * Send an approved host-control command to the active provider for a target.
+   * These are not CDP commands; they drive Electron-hosted operations such as
+   * opening DevTools or rebuilding a panel on the host that owns the lease.
    */
-  isExtensionConnected(): boolean {
-    return this.extensionWs !== null && this.extensionWs.readyState === WebSocket.OPEN;
-  }
-
-  /**
-   * Create a new browser tab via extension. Resolves when cdp:register arrives
-   * (browser ready for CDP).
-   */
-  async openBrowserTab(browserId: string, url: string): Promise<void> {
-    if (!this.extensionWs || this.extensionWs.readyState !== WebSocket.OPEN) {
-      throw new Error("Browser extension not connected");
+  async sendHostCommand(targetId: string, action: string, args: unknown[] = []): Promise<unknown> {
+    const provider = this.providerForTarget(targetId);
+    if (!provider) {
+      throw new Error("CDP provider not connected");
     }
 
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingBrowserCreations.delete(browserId);
-        reject(new Error("open-tab timed out waiting for cdp:register"));
-      }, NAV_COMMAND_TIMEOUT_MS);
-
-      this.pendingBrowserCreations.set(browserId, {
-        resolve: () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-      });
-
-      const requestId = String(this.nextRequestId++);
-      assertPresent(this.extensionWs).send(
-        JSON.stringify({
-          type: "nav:command",
-          requestId,
-          browserId,
-          action: "open-tab",
-          url,
-        })
-      );
-    });
-  }
-
-  /**
-   * Open URL in a new tab without CDP tracking (system browser equivalent
-   * in headless mode).
-   */
-  async openExternalTab(url: string): Promise<void> {
-    if (!this.extensionWs || this.extensionWs.readyState !== WebSocket.OPEN) {
-      throw new Error("Browser extension not connected");
+    if (!this.targetRegistry.has(targetId)) {
+      throw new Error(`Target not found: ${targetId}`);
     }
 
     const requestId = String(this.nextRequestId++);
-    const dummyBrowserId = `external-${requestId}`;
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingNavCommands.delete(requestId);
-        reject(new Error("open-external timed out"));
+        reject(new Error(`Host command timed out: ${action}`));
       }, NAV_COMMAND_TIMEOUT_MS);
 
-      this.pendingNavCommands.set(requestId, {
-        resolve: () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        reject: (e) => {
-          clearTimeout(timer);
-          reject(e);
-        },
-        timer,
-      });
+      this.pendingNavCommands.set(requestId, { resolve, reject, timer, targetId });
 
-      assertPresent(this.extensionWs).send(
-        JSON.stringify({
-          type: "nav:command",
-          requestId,
-          browserId: dummyBrowserId,
-          action: "open-external",
-          url,
-        })
-      );
+      try {
+        provider.send(
+          JSON.stringify({
+            type: "host:command",
+            requestId,
+            targetId,
+            action,
+            args,
+          })
+        );
+      } catch (err) {
+        clearTimeout(timer);
+        this.pendingNavCommands.delete(requestId);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
     });
+  }
+
+  isProviderConnected(hostConnectionId: string): boolean {
+    return this.providers.get(hostConnectionId)?.readyState === WebSocket.OPEN;
+  }
+
+  isTargetRegistered(targetId: string): boolean {
+    return this.targetRegistry.has(targetId);
+  }
+
+  isTargetRegisteredForHost(targetId: string, hostConnectionId: string): boolean {
+    return this.targetRegistry.get(targetId)?.hostConnectionId === hostConnectionId;
+  }
+
+  handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
+    if (!event.previous && !event.next) return;
+    if (
+      event.previous &&
+      event.next &&
+      event.previous.hostConnectionId === event.next.hostConnectionId
+    ) {
+      return;
+    }
+    if (event.previous) {
+      this.detachTargetFromHost(
+        event.slotId,
+        event.previous.hostConnectionId,
+        "CDP target host changed"
+      );
+    }
+    this.closeTargetConnections(event.slotId, "CDP target host changed");
   }
 
   /**
@@ -378,12 +382,6 @@ export class CdpBridge {
       clearTimeout(pending.timer);
       pending.reject(new Error("CDP bridge shutting down"));
       this.pendingNavCommands.delete(requestId);
-    }
-
-    // Reject all pending browser creations
-    for (const [browserId, pending] of this.pendingBrowserCreations) {
-      pending.reject(new Error("CDP bridge shutting down"));
-      this.pendingBrowserCreations.delete(browserId);
     }
 
     // Flush pending CDP commands with errors
@@ -405,154 +403,156 @@ export class CdpBridge {
     }
     this.clientConnections.clear();
 
-    // Close extension connection
-    if (this.extensionWs) {
-      this.extensionWs.close(1000, "CDP bridge shutting down");
-      this.extensionWs = null;
+    for (const [, provider] of this.providers) {
+      provider.close(1000, "CDP bridge shutting down");
     }
+    this.providers.clear();
 
-    this.browserRegistry.clear();
+    this.targetRegistry.clear();
+    this.cdpGrants.stop();
     log.info("CdpBridge stopped");
   }
 
-  // =========================================================================
-  // Extension connection handling
-  // =========================================================================
-
-  private handleExtensionConnection(ws: WebSocket): void {
-    // Only one extension connection at a time — flush pending state before replacing
-    if (this.extensionWs) {
-      // Flush pending CDP commands (no timeout, would hang forever)
-      for (const [requestId, pending] of this.pendingCommands) {
-        this.sendErrorToClient(
-          pending.ws,
-          pending.clientId,
-          "Extension reconnected",
-          pending.sessionId
-        );
-        this.pendingCommands.delete(requestId);
-      }
-      // Reject pending nav commands
-      for (const [requestId, pending] of this.pendingNavCommands) {
-        clearTimeout(pending.timer);
-        pending.reject(new Error("Extension reconnected"));
-        this.pendingNavCommands.delete(requestId);
-      }
-      // Reject pending browser creations
-      for (const [browserId, pending] of this.pendingBrowserCreations) {
-        pending.reject(new Error("Extension reconnected"));
-        this.pendingBrowserCreations.delete(browserId);
-      }
-      this.browserRegistry.clear();
-      this.extensionWs.close(1000, "Replaced by new extension connection");
+  private handleProviderConnection(hostConnectionId: string, ws: WebSocket): void {
+    const existing = this.providers.get(hostConnectionId);
+    if (existing && existing !== ws) {
+      this.flushProvider(hostConnectionId, "CDP host provider reconnected");
+      existing.close(1000, "Replaced by new CDP host provider connection");
     }
 
-    this.extensionWs = ws;
-    log.info("Extension connected to CDP bridge");
+    this.providers.set(hostConnectionId, ws);
+    log.info(`CDP host provider connected: ${hostConnectionId}`);
 
+    let providerMessageQueue = Promise.resolve();
     ws.on("message", (data) => {
       try {
-        const msg = JSON.parse(data.toString()) as ExtensionBridgeMessage;
-        this.handleExtensionMessage(msg);
+        const msg = JSON.parse(data.toString()) as ProviderBridgeMessage;
+        providerMessageQueue = providerMessageQueue
+          .then(() => this.handleProviderMessage(msg, ws, hostConnectionId))
+          .catch((err: unknown) => {
+            log.warn(
+              `Failed to handle host provider message: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
       } catch (err) {
-        log.warn(`Failed to parse extension message: ${err}`);
+        log.warn(`Failed to parse host provider message: ${err}`);
       }
     });
 
     ws.on("close", () => {
-      if (this.extensionWs === ws) {
-        log.info("Extension disconnected from CDP bridge");
-        this.extensionWs = null;
-
-        // Flush all pending CDP commands with errors
-        for (const [requestId, pending] of this.pendingCommands) {
-          this.sendErrorToClient(
-            pending.ws,
-            pending.clientId,
-            "Extension disconnected",
-            pending.sessionId
-          );
-          this.pendingCommands.delete(requestId);
+      if (this.providers.get(hostConnectionId) !== ws) return;
+      log.info(`CDP host provider disconnected: ${hostConnectionId}`);
+      this.providers.delete(hostConnectionId);
+      this.flushProvider(hostConnectionId, "CDP host provider disconnected");
+      for (const [targetId, registration] of this.targetRegistry) {
+        if (registration.hostConnectionId === hostConnectionId) {
+          this.targetRegistry.delete(targetId);
         }
-
-        // Reject all pending nav commands
-        for (const [requestId, pending] of this.pendingNavCommands) {
-          clearTimeout(pending.timer);
-          pending.reject(new Error("Extension disconnected"));
-          this.pendingNavCommands.delete(requestId);
-        }
-
-        // Reject all pending browser creations
-        for (const [browserId, pending] of this.pendingBrowserCreations) {
-          pending.reject(new Error("Extension disconnected"));
-          this.pendingBrowserCreations.delete(browserId);
-        }
-
-        // Clear browser registry (extension owns the tab tracking)
-        this.browserRegistry.clear();
       }
     });
 
     ws.on("error", (err) => {
-      log.info(`Extension WebSocket error: ${err}`);
+      log.info(`CDP host provider WebSocket error (${hostConnectionId}): ${err}`);
     });
   }
 
-  private handleExtensionMessage(msg: ExtensionBridgeMessage): void {
+  private async handleProviderMessage(
+    msg: ProviderBridgeMessage,
+    providerWs: WebSocket,
+    hostConnectionId?: string
+  ): Promise<void> {
     switch (msg.type) {
       case "cdp:register": {
-        if (typeof msg.browserId !== "string" || typeof msg.tabId !== "number") break;
+        if (typeof msg.targetId !== "string" || typeof msg.tabId !== "number") break;
         // Reject registrations for panels that don't exist (e.g. rolled back
         // after open-tab timeout, or stale mappings from a previous session)
-        if (!this.isPanelKnown(msg.browserId)) {
-          log.info(`Rejecting cdp:register for unknown panel: ${msg.browserId}`);
-          if (this.extensionWs && this.extensionWs.readyState === WebSocket.OPEN) {
-            this.extensionWs.send(
+        if (!(await this.isPanelKnown(msg.targetId))) {
+          log.info(`Rejecting cdp:register for unknown panel: ${msg.targetId}`);
+          if (providerWs.readyState === WebSocket.OPEN) {
+            providerWs.send(
               JSON.stringify({
                 type: "cdp:register-rejected",
-                browserId: msg.browserId,
+                targetId: msg.targetId,
                 tabId: msg.tabId,
+                reason: "unknown_panel",
               })
             );
           }
           break;
         }
-        this.browserRegistry.set(msg.browserId, { tabId: msg.tabId });
-        log.info(`Browser registered: ${msg.browserId} (tab ${msg.tabId})`);
-        // Resolve pending browser creation if this was an open-tab request
-        const pendingCreation = this.pendingBrowserCreations.get(msg.browserId);
-        if (pendingCreation) {
-          this.pendingBrowserCreations.delete(msg.browserId);
-          pendingCreation.resolve();
+        if (!this.isActiveProvider(hostConnectionId, providerWs)) {
+          break;
         }
+        const leaseHostId = this.resolveHostForTarget?.(msg.targetId);
+        if (this.resolveHostForTarget && !leaseHostId) {
+          log.info(`Rejecting cdp:register for ${msg.targetId}: no active CDP-capable lease`);
+          if (providerWs.readyState === WebSocket.OPEN) {
+            providerWs.send(
+              JSON.stringify({
+                type: "cdp:register-rejected",
+                targetId: msg.targetId,
+                tabId: msg.tabId,
+                reason: "no_cdp_capable_lease",
+              })
+            );
+          }
+          break;
+        }
+        if (leaseHostId && hostConnectionId && leaseHostId !== hostConnectionId) {
+          log.info(
+            `Rejecting cdp:register for ${msg.targetId}: host ${hostConnectionId} does not hold lease ${leaseHostId}`
+          );
+          if (providerWs.readyState === WebSocket.OPEN) {
+            providerWs.send(
+              JSON.stringify({
+                type: "cdp:register-rejected",
+                targetId: msg.targetId,
+                tabId: msg.tabId,
+                reason: "lease_mismatch",
+              })
+            );
+          }
+          break;
+        }
+        this.targetRegistry.set(msg.targetId, { tabId: msg.tabId, hostConnectionId });
+        log.info(
+          `Target registered: ${msg.targetId} (tab ${msg.tabId}${
+            hostConnectionId ? `, host ${hostConnectionId}` : ""
+          })`
+        );
         break;
       }
 
       case "cdp:unregister": {
-        if (typeof msg.browserId !== "string") break;
-        this.browserRegistry.delete(msg.browserId);
-        log.info(`Browser unregistered: ${msg.browserId}`);
+        if (typeof msg.targetId !== "string") break;
+        const registration = this.targetRegistry.get(msg.targetId);
+        if (registration?.hostConnectionId !== hostConnectionId) break;
+        this.targetRegistry.delete(msg.targetId);
+        log.info(`Target unregistered: ${msg.targetId}`);
 
-        // Flush pending commands for this browser
+        // Flush pending commands for this target.
         for (const [requestId, pending] of this.pendingCommands) {
-          if (pending.browserId === msg.browserId) {
+          if (pending.targetId === msg.targetId) {
             this.sendErrorToClient(
               pending.ws,
               pending.clientId,
-              "Browser tab closed",
+              "CDP target closed",
               pending.sessionId
             );
             this.pendingCommands.delete(requestId);
           }
         }
+        this.rejectPendingTargetCommands(msg.targetId, "CDP target closed");
 
-        // Close client connections for this browser
-        const connections = this.clientConnections.get(msg.browserId);
+        // Close client connections for this target.
+        const connections = this.clientConnections.get(msg.targetId);
         if (connections) {
           for (const ws of connections) {
-            ws.close(1000, "Browser tab closed");
+            ws.close(1000, "CDP target closed");
           }
-          this.clientConnections.delete(msg.browserId);
+          this.clientConnections.delete(msg.targetId);
         }
         break;
       }
@@ -561,6 +561,7 @@ export class CdpBridge {
         if (typeof msg.requestId !== "string") break;
         const pending = this.pendingCommands.get(msg.requestId);
         if (pending) {
+          if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
           const response: Record<string, unknown> = { id: pending.clientId, result: msg.result };
           if (pending.sessionId) response["sessionId"] = pending.sessionId;
           if (pending.ws.readyState === WebSocket.OPEN) {
@@ -575,10 +576,11 @@ export class CdpBridge {
         if (typeof msg.requestId !== "string") break;
         const pending = this.pendingCommands.get(msg.requestId);
         if (pending) {
+          if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
           this.sendErrorToClient(
             pending.ws,
             pending.clientId,
-            msg.error ?? "CDP extension error",
+            msg.error ?? "CDP provider error",
             pending.sessionId
           );
           this.pendingCommands.delete(msg.requestId);
@@ -587,9 +589,10 @@ export class CdpBridge {
       }
 
       case "cdp:event": {
-        if (typeof msg.browserId !== "string" || typeof msg.method !== "string") break;
-        // Broadcast CDP event to ALL client connections for this browser
-        const connections = this.clientConnections.get(msg.browserId);
+        if (typeof msg.targetId !== "string" || typeof msg.method !== "string") break;
+        if (!this.isMessageFromTargetProvider(msg.targetId, hostConnectionId)) break;
+        // Broadcast CDP event to all client connections for this target.
+        const connections = this.clientConnections.get(msg.targetId);
         if (connections) {
           const event: Record<string, unknown> = { method: msg.method, params: msg.params };
           if (msg.sessionId) event["sessionId"] = msg.sessionId;
@@ -607,6 +610,7 @@ export class CdpBridge {
         if (typeof msg.requestId !== "string") break;
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
+          if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
           clearTimeout(pending.timer);
           pending.resolve();
           this.pendingNavCommands.delete(msg.requestId);
@@ -618,17 +622,34 @@ export class CdpBridge {
         if (typeof msg.requestId !== "string") break;
         const pending = this.pendingNavCommands.get(msg.requestId);
         if (pending) {
+          if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
           clearTimeout(pending.timer);
           pending.reject(new Error(msg.error ?? "Navigation failed"));
           this.pendingNavCommands.delete(msg.requestId);
         }
-        // Also check pending browser creations (open-tab failures)
-        if (typeof msg.browserId === "string") {
-          const pendingCreation = this.pendingBrowserCreations.get(msg.browserId);
-          if (pendingCreation) {
-            this.pendingBrowserCreations.delete(msg.browserId);
-            pendingCreation.reject(new Error(msg.error ?? "Navigation failed"));
-          }
+        break;
+      }
+
+      case "host:result": {
+        if (typeof msg.requestId !== "string") break;
+        const pending = this.pendingNavCommands.get(msg.requestId);
+        if (pending) {
+          if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
+          clearTimeout(pending.timer);
+          pending.resolve(msg.result);
+          this.pendingNavCommands.delete(msg.requestId);
+        }
+        break;
+      }
+
+      case "host:error": {
+        if (typeof msg.requestId !== "string") break;
+        const pending = this.pendingNavCommands.get(msg.requestId);
+        if (pending) {
+          if (!this.isMessageFromTargetProvider(pending.targetId, hostConnectionId)) break;
+          clearTimeout(pending.timer);
+          pending.reject(new Error(msg.error ?? "Host command failed"));
+          this.pendingNavCommands.delete(msg.requestId);
         }
         break;
       }
@@ -639,14 +660,14 @@ export class CdpBridge {
   // Client connection handling
   // =========================================================================
 
-  private handleClientConnection(ws: WebSocket, browserId: string): void {
+  private handleClientConnection(ws: WebSocket, targetId: string): void {
     // Track connection
-    if (!this.clientConnections.has(browserId)) {
-      this.clientConnections.set(browserId, new Set());
+    if (!this.clientConnections.has(targetId)) {
+      this.clientConnections.set(targetId, new Set());
     }
-    assertPresent(this.clientConnections.get(browserId)).add(ws);
+    assertPresent(this.clientConnections.get(targetId)).add(ws);
 
-    log.info(`Client connected for browser ${browserId}`);
+    log.info(`Client connected for target ${targetId}`);
 
     ws.on("message", (data) => {
       try {
@@ -657,8 +678,9 @@ export class CdpBridge {
           sessionId?: string;
         };
 
-        if (!this.extensionWs || this.extensionWs.readyState !== WebSocket.OPEN) {
-          this.sendErrorToClient(ws, msg.id, "Extension not connected", msg.sessionId);
+        const provider = this.providerForTarget(targetId);
+        if (!provider) {
+          this.sendErrorToClient(ws, msg.id, "CDP provider not connected", msg.sessionId);
           return;
         }
 
@@ -666,16 +688,16 @@ export class CdpBridge {
         this.pendingCommands.set(requestId, {
           ws,
           clientId: msg.id,
-          browserId,
+          targetId,
           sessionId: msg.sessionId,
         });
 
         try {
-          this.extensionWs.send(
+          provider.send(
             JSON.stringify({
               type: "cdp:command",
               requestId,
-              browserId,
+              targetId,
               method: msg.method,
               params: msg.params,
               sessionId: msg.sessionId,
@@ -683,7 +705,7 @@ export class CdpBridge {
           );
         } catch {
           this.pendingCommands.delete(requestId);
-          this.sendErrorToClient(ws, msg.id, "Failed to send to extension", msg.sessionId);
+          this.sendErrorToClient(ws, msg.id, "Failed to send to CDP provider", msg.sessionId);
         }
       } catch (err) {
         log.warn(`Failed to parse client message: ${err}`);
@@ -691,21 +713,22 @@ export class CdpBridge {
     });
 
     ws.on("close", () => {
-      log.info(`Client disconnected for browser ${browserId}`);
+      log.info(`Client disconnected for target ${targetId}`);
 
       // Remove from tracked connections
-      const connections = this.clientConnections.get(browserId);
+      const connections = this.clientConnections.get(targetId);
       if (connections) {
         connections.delete(ws);
         if (connections.size === 0) {
-          this.clientConnections.delete(browserId);
+          this.clientConnections.delete(targetId);
 
-          // Last connection closed — tell extension to detach debugger
-          if (this.extensionWs && this.extensionWs.readyState === WebSocket.OPEN) {
-            this.extensionWs.send(
+          // Last connection closed — tell the provider to detach its debugger
+          const provider = this.providerForTarget(targetId);
+          if (provider) {
+            provider.send(
               JSON.stringify({
                 type: "cdp:detach",
-                browserId,
+                targetId,
               })
             );
           }
@@ -721,13 +744,108 @@ export class CdpBridge {
     });
 
     ws.on("error", (err) => {
-      log.info(`Client WebSocket error for browser ${browserId}: ${err}`);
+      log.info(`Client WebSocket error for target ${targetId}: ${err}`);
     });
   }
 
   // =========================================================================
   // Helpers
   // =========================================================================
+
+  private providerForTarget(targetId: string): WebSocket | null {
+    const registration = this.targetRegistry.get(targetId);
+    if (!registration) return null;
+
+    if (this.resolveHostForTarget) {
+      const resolvedHostId = this.resolveHostForTarget(targetId);
+      if (!resolvedHostId) return null;
+      if (registration.hostConnectionId !== resolvedHostId) return null;
+      const provider = this.providers.get(resolvedHostId);
+      return provider?.readyState === WebSocket.OPEN ? provider : null;
+    }
+
+    const registeredHostId = registration.hostConnectionId;
+    if (registeredHostId) {
+      const provider = this.providers.get(registeredHostId);
+      return provider?.readyState === WebSocket.OPEN ? provider : null;
+    }
+
+    return null;
+  }
+
+  private isMessageFromTargetProvider(
+    targetId: string,
+    hostConnectionId: string | undefined
+  ): boolean {
+    if (!hostConnectionId) return false;
+    return this.targetRegistry.get(targetId)?.hostConnectionId === hostConnectionId;
+  }
+
+  private isActiveProvider(hostConnectionId: string | undefined, providerWs: WebSocket): boolean {
+    if (!hostConnectionId) return false;
+    return (
+      this.providers.get(hostConnectionId) === providerWs &&
+      providerWs.readyState === WebSocket.OPEN
+    );
+  }
+
+  private flushProvider(hostConnectionId: string, reason: string): void {
+    for (const [requestId, pending] of this.pendingCommands) {
+      const registration = this.targetRegistry.get(pending.targetId);
+      if (registration?.hostConnectionId !== hostConnectionId) continue;
+      this.sendErrorToClient(pending.ws, pending.clientId, reason, pending.sessionId);
+      this.pendingCommands.delete(requestId);
+    }
+
+    for (const [targetId, registration] of this.targetRegistry) {
+      if (registration.hostConnectionId !== hostConnectionId) continue;
+      this.rejectPendingTargetCommands(targetId, reason);
+      const connections = this.clientConnections.get(targetId);
+      if (connections) {
+        for (const ws of connections) ws.close(1000, reason);
+        this.clientConnections.delete(targetId);
+      }
+    }
+  }
+
+  private closeTargetConnections(targetId: string, reason: string): void {
+    for (const [requestId, pending] of this.pendingCommands) {
+      if (pending.targetId !== targetId) continue;
+      this.sendErrorToClient(pending.ws, pending.clientId, reason, pending.sessionId);
+      this.pendingCommands.delete(requestId);
+    }
+    this.rejectPendingTargetCommands(targetId, reason);
+
+    const connections = this.clientConnections.get(targetId);
+    if (!connections) return;
+    for (const ws of connections) ws.close(1000, reason);
+    this.clientConnections.delete(targetId);
+  }
+
+  private detachTargetFromHost(targetId: string, hostConnectionId: string, reason: string): void {
+    const registration = this.targetRegistry.get(targetId);
+    if (registration?.hostConnectionId !== hostConnectionId) return;
+    const provider = this.providers.get(hostConnectionId);
+    if (provider?.readyState === WebSocket.OPEN) {
+      provider.send(
+        JSON.stringify({
+          type: "cdp:detach",
+          targetId,
+          reason,
+        })
+      );
+    }
+    this.targetRegistry.delete(targetId);
+  }
+
+  private rejectPendingTargetCommands(targetId: string, reason: string): void {
+    for (const [requestId, pending] of this.pendingNavCommands) {
+      if (pending.targetId !== targetId) continue;
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+      this.pendingNavCommands.delete(requestId);
+    }
+  }
 
   private sendErrorToClient(ws: WebSocket, id: number, message: string, sessionId?: string): void {
     if (ws.readyState !== WebSocket.OPEN) return;

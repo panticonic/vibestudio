@@ -107,7 +107,7 @@ function isFileToolsExtensionUnavailable(err: unknown): boolean {
   // Both mean the extension can't serve this call, so fall back to runtime-fs.
   if (code === "ENOEXT" || code === "ENOTREADY") return true;
   const message = err instanceof Error ? err.message : String(err);
-  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed or enabled|Extension is not running/.test(message);
+  return /Extension @workspace-extensions\/file-tools(?:\.\w+)? invocation failed: Extension is not installed|Extension is not running/.test(message);
 }
 
 /** Exposed for `find.ts` so it can apply the same RE2 / fallback policy. */

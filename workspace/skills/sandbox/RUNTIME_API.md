@@ -12,7 +12,6 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `Rpc` | value |  | RPC helpers namespace export. |
 | `z` | value |  | Zod export. |
 | `defineContract` | value |  |  |
-| `noopParent` | value |  |  |
 | `buildPanelLink` | value |  |  |
 | `parseContextId` | value |  |  |
 | `isValidContextId` | value |  |  |
@@ -58,6 +57,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `openPanel` | value |  |  |
 | `listPanels` | value |  |  |
 | `getPanelHandle` | value |  |  |
+| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `open` |  |
 | `agentApi` | value |  |  |
 | `Journal` | value |  |  |
 | `withJournal` | value |  |  |
@@ -68,7 +68,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote`, `syncRepoToContexts`, `client` |  |
 | `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `blameGadFileSnippet`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
-| `extensions` | namespace | `use`, `on`, `list`, `install`, `uninstall`, `setEnabled`, `update`, `reload` |  |
+| `extensions` | namespace | `use`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `requestApproval` | value |  |  |
 | `revokeApproval` | value |  |  |
@@ -128,6 +128,41 @@ await credentials.fetch("https://api.example.com/v1/items", undefined, {
   credentialId: stored.id,
 });
 ```
+
+## Unified Panel Handles
+
+Use `panelTree` and `PanelHandle` for panel-tree work from panels, workers, and
+Durable Objects:
+
+```ts
+import { panelTree, openPanel } from "@workspace/runtime";
+
+const created = await openPanel("https://example.com", { focus: true });
+const same = panelTree.get(created.id);
+const parent = panelTree.self().parent();
+const roots = await panelTree.roots();
+```
+
+`PanelHandle` combines metadata, RPC, lifecycle, state, tree, and CDP:
+
+```ts
+await same.refresh();
+await same.focus();
+await same.stateArgs.set({ mode: "review" });
+await same.call.someExposedMethod();
+
+const page = await same.cdp.page();
+await page.title();
+
+await parent?.cdp.page();
+```
+
+CDP and structural operations are approval-gated on first use per requester
+runtime entity and target panel. Privileged shell/about targets use a severe
+danger-tone approval. CDP transparently loads unloaded targets after approval;
+RPC and `_agent` introspection do not auto-load, so call `handle.ensureLoaded()`
+first when you need those against an unloaded target. A target held by a
+mobile/non-CDP host rejects CDP access rather than being taken over silently.
 
 ## Userland Approval Prompts
 

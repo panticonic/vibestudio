@@ -249,7 +249,8 @@ export function ConsentApprovalBar() {
   const callerLabel = currentCaller.kindLabel;
   const copy = getApprovalCopy(current, callerLabel);
   const isUnitApproval = current.kind === "unit-batch";
-  const accent = isUnitApproval ? "amber" : "sky";
+  const isSevereCapability = current.kind === "capability" && current.severity === "severe";
+  const accent = isSevereCapability ? "red" : isUnitApproval ? "amber" : "sky";
   // Drive the bar palette through CSS variables on a single class so the
   // light/dark overrides in overrides.css remain authoritative.
   const toneStyle = {
@@ -500,6 +501,7 @@ function StandardApprovalActions({
   decide: (decision: ApprovalDecision) => void;
 }) {
   const copy = getStandardActionCopy(approval);
+  const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       <DecisionButton
@@ -517,7 +519,7 @@ function StandardApprovalActions({
       <DecisionButton
         label={copy.version.label}
         description={copy.version.description}
-        color="sky"
+        color={isSevereCapability ? "red" : "sky"}
         variant="solid"
         onClick={() => decide("version")}
       />

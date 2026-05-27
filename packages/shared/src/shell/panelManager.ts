@@ -2,7 +2,7 @@ import * as path from "path";
 import { randomBytes } from "crypto";
 import { createDevLogger } from "@natstack/dev-log";
 import type { PanelRegistry } from "../panelRegistry.js";
-import type { Panel, PanelSnapshot, ThemeAppearance } from "../types.js";
+import type { Panel, PanelNavigationState, PanelSnapshot, ThemeAppearance } from "../types.js";
 import type { PanelSearchIndex } from "../panelSearchTypes.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
 import { loadPanelManifest } from "../panelTypes.js";
@@ -21,6 +21,7 @@ import {
   getPanelOptions,
   getPanelSource,
   getPanelStateArgs,
+  updatePanelNavigationState,
 } from "../panel/accessors.js";
 import { between as rankBetween, first as firstRank } from "../lexorank.js";
 import { canonicalEntityId } from "../runtime/entitySpec.js";
@@ -64,6 +65,7 @@ export interface CreatePanelResult {
   stateArgs: Record<string, unknown>;
   options: Record<string, unknown>;
   autoArchiveWhenEmpty?: boolean;
+  privileged?: boolean;
 }
 
 export interface NavigatePanelOptions {
@@ -242,6 +244,9 @@ export class PanelManager {
     if (opts?.autoArchiveWhenEmpty || manifest.autoArchiveWhenEmpty) {
       snapshot.autoArchiveWhenEmpty = true;
     }
+    if (manifest.privileged) {
+      snapshot.privileged = true;
+    }
 
     const handle = await this.runtime.createEntity({
       kind: "panel",
@@ -295,6 +300,7 @@ export class PanelManager {
       stateArgs: stateArgsPayload,
       options: { env: opts?.env ?? {}, ...(opts?.ref ? { ref: opts.ref } : {}) },
       autoArchiveWhenEmpty: snapshot.autoArchiveWhenEmpty,
+      privileged: snapshot.privileged,
     };
   }
 
@@ -526,6 +532,8 @@ export class PanelManager {
       const manifest = this.tryResolveManifestForSource(updates.source);
       if (manifest?.autoArchiveWhenEmpty) nextSnapshot.autoArchiveWhenEmpty = true;
       else delete nextSnapshot.autoArchiveWhenEmpty;
+      if (manifest?.privileged) nextSnapshot.privileged = true;
+      else delete nextSnapshot.privileged;
     }
 
     await this.replaceHistoryAtCurrent(slotId, panel, nextSnapshot);
@@ -595,6 +603,7 @@ export class PanelManager {
       stateArgs: stateArgsPayload,
       options: nextSnapshot.options,
       autoArchiveWhenEmpty: nextSnapshot.autoArchiveWhenEmpty,
+      privileged: nextSnapshot.privileged,
     };
   }
 
@@ -662,6 +671,21 @@ export class PanelManager {
     if (livePanel) livePanel.title = title;
     this.searchIndex?.updateTitle(slotId, title);
     await this.persistViewState();
+    this.registry.notifyPanelTreeUpdate();
+  }
+
+  async updatePanelState(slotId: PanelSlotId, state: PanelNavigationState): Promise<void> {
+    const livePanel = this.registry.getPanel(slotId);
+    if (!livePanel) return;
+
+    updatePanelNavigationState(livePanel, state);
+
+    if (state.pageTitle !== undefined) {
+      await this.ensureViewStateLoaded();
+      this.searchIndex?.updateTitle(slotId, state.pageTitle);
+      await this.persistViewState();
+    }
+
     this.registry.notifyPanelTreeUpdate();
   }
 
@@ -1063,6 +1087,7 @@ export class PanelManager {
       validatedStateArgs
     );
     if (manifest.autoArchiveWhenEmpty) snapshot.autoArchiveWhenEmpty = true;
+    if (manifest.privileged) snapshot.privileged = true;
     return snapshot;
   }
 
@@ -1076,9 +1101,13 @@ export class PanelManager {
     absolutePath: string,
     relativePath: string,
     allowMissing: boolean
-  ): { title: string; stateArgs?: unknown; autoArchiveWhenEmpty?: boolean } {
+  ): { title: string; stateArgs?: unknown; autoArchiveWhenEmpty?: boolean; privileged?: boolean } {
     try {
-      return loadPanelManifest(absolutePath);
+      const manifest = loadPanelManifest(absolutePath);
+      return {
+        ...manifest,
+        privileged: manifest.shell === true,
+      };
     } catch (error) {
       if (allowMissing) {
         return { title: path.basename(relativePath) };
@@ -1095,7 +1124,11 @@ export class PanelManager {
     if (source.startsWith("browser:")) return null;
     try {
       const { absolutePath } = resolveSource(source, this.workspacePath);
-      return loadPanelManifest(absolutePath);
+      const manifest = loadPanelManifest(absolutePath);
+      return {
+        ...manifest,
+        privileged: manifest.shell === true,
+      };
     } catch {
       return null;
     }

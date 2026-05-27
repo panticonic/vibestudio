@@ -17,6 +17,7 @@ export interface DurableObjectRelayDeps {
   workerdDispatchSecret?: string;
   callerId?: string;
   callerKind?: string;
+  callerPanelId?: string;
 }
 
 export async function postToDurableObject(
@@ -35,6 +36,7 @@ export async function postToDurableObject(
         : {}),
       ...(deps.callerId ? { "X-Natstack-Rpc-Caller-Id": deps.callerId } : {}),
       ...(deps.callerKind ? { "X-Natstack-Rpc-Caller-Kind": deps.callerKind } : {}),
+      ...(deps.callerPanelId ? { "X-Natstack-Rpc-Caller-Panel-Id": deps.callerPanelId } : {}),
     },
     body: JSON.stringify(args),
   });

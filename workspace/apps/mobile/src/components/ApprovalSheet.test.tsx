@@ -242,6 +242,50 @@ describe("ApprovalSheet", () => {
     expect(getByTestId("approval-userland-later").props.accessibilityLabel).toContain("Later");
   });
 
+  it("renders severe panel capability approvals with danger-tone trust action", () => {
+    const severePanel: PendingApproval = {
+      ...capability,
+      capability: "panel.automate",
+      severity: "severe",
+      title: "Drive privileged panel",
+      resource: { type: "panel", label: "Panel", value: "Shell" },
+    };
+
+    const { getByTestId, getByText } = renderSheet(severePanel);
+
+    expect(getByText("Drive privileged panel")).toBeTruthy();
+    expect(
+      getByText(
+        "This target is privileged. Approving gives the requester control of a trusted shell panel."
+      )
+    ).toBeTruthy();
+    expect(getByTestId("approval-accent-stripe").props.style).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          backgroundColor: "#ff7b72",
+        }),
+      ])
+    );
+    expect(getByTestId("approval-category-icon").props.style).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          backgroundColor: "#ff7b72",
+        }),
+      ])
+    );
+    expect(getByTestId("approval-action-version").props.accessibilityLabel).toContain(
+      "Trust and drive"
+    );
+    expect(getByTestId("approval-action-version").props.style).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          backgroundColor: "#ff7b72",
+          borderColor: "#ff7b72",
+        }),
+      ])
+    );
+  });
+
   it("dismisses from backdrop and uses userland dismiss RPC", async () => {
     const onResolveUserland = jest.fn(async () => undefined);
     const { getByTestId } = renderSheet(userland, { onResolveUserland });

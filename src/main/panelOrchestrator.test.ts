@@ -24,12 +24,17 @@ function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel
 function createOrchestrator(
   registry: PanelRegistry,
   emit = vi.fn(),
-  opts: { panelRestorePolicy?: "focused" | "none" } = {}
+  opts: {
+    panelRestorePolicy?: "focused" | "none";
+    runtimeClient?: ConstructorParameters<typeof PanelOrchestrator>[0]["runtimeClient"];
+  } = {}
 ) {
   const closedIds: string[] = [];
   const panelView = {
     createViewForPanel: vi.fn(async (_panelId: string, _url: string, _contextId?: string) => {}),
+    createViewForBrowser: vi.fn(async (_panelId: string, _url: string, _contextId?: string) => {}),
     hasView: vi.fn((_panelId: string) => false),
+    getWebContents: vi.fn((_panelId: string) => null),
     setViewVisible: vi.fn((_panelId: string, _visible: boolean) => {}),
     destroyView: vi.fn((_panelId: string) => {}),
   };
@@ -57,6 +62,10 @@ function createOrchestrator(
     }),
     onStateArgsChanged: vi.fn(() => () => {}),
     notifyFocused: vi.fn(async () => {}),
+    getPanelInit: vi.fn(async (panelId: string) => ({
+      entityId: panelId,
+      gatewayConfig: { serverUrl: "http://127.0.0.1:1234", token: "token" },
+    })),
     getCurrentEntityId: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
     loadTree: vi.fn(async () => ({
       rootPanels: registry.getRootPanels(),
@@ -71,16 +80,16 @@ function createOrchestrator(
       return undefined;
     }),
   };
-  const cdpServer = {
+  const cdpHost = {
     cleanupPanelAccess: vi.fn(),
-    unregisterBrowser: vi.fn(),
+    unregisterTarget: vi.fn(),
   };
   const orchestrator = new PanelOrchestrator({
     registry,
     eventService: { emit } as never,
     serverClient: serverClient as never,
     shellCore: shellCore as never,
-    cdpServer,
+    cdpHost,
     panelHttpServer,
     externalHost: "localhost",
     protocol: "http",
@@ -90,6 +99,7 @@ function createOrchestrator(
     workspaceConfig: opts.panelRestorePolicy
       ? ({ id: "test", panelRestorePolicy: opts.panelRestorePolicy } as never)
       : undefined,
+    runtimeClient: opts.runtimeClient,
   });
 
   return {
@@ -100,11 +110,62 @@ function createOrchestrator(
     panelView,
     panelHttpServer,
     serverClient,
-    cdpServer,
+    cdpHost,
   };
 }
 
 describe("PanelOrchestrator.closePanel", () => {
+  it("registers the runtime host before CDP provider startup can claim its host id", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "host-session",
+        platform: "headless",
+        label: "Headless",
+        supportsCdp: true,
+      },
+    });
+
+    await orchestrator.registerRuntimeClient();
+    await orchestrator.registerRuntimeClient();
+
+    expect(serverClient.call).toHaveBeenCalledTimes(1);
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "registerClient", [
+      {
+        clientSessionId: "host-session",
+        hostConnectionId: "host-session",
+        label: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+      },
+    ]);
+  });
+
+  it("unregisters the runtime host once during shutdown", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "host-session",
+        platform: "headless",
+        label: "Headless",
+        supportsCdp: true,
+      },
+    });
+
+    await orchestrator.registerRuntimeClient();
+    await orchestrator.unregisterRuntimeClient();
+    await orchestrator.unregisterRuntimeClient();
+
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "unregisterClient", [
+      "host-session",
+    ]);
+    expect(
+      serverClient.call.mock.calls.filter(
+        ([service, method]) => service === "panelRuntime" && method === "unregisterClient"
+      )
+    ).toHaveLength(1);
+  });
+
   it("navigates away when closing a root that contains the focused panel", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const closingRoot = makePanel("closing-root");
@@ -144,14 +205,40 @@ describe("PanelOrchestrator.closePanel", () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const root = makePanel("root");
     registry.addPanel(root, null, { addAsRoot: true });
-    const { orchestrator, panelView, cdpServer } = createOrchestrator(registry);
+    const { orchestrator, panelView, cdpHost } = createOrchestrator(registry);
     panelView.hasView.mockReturnValue(true);
 
     await orchestrator.closePanel(root.id);
 
-    expect(cdpServer.cleanupPanelAccess).toHaveBeenCalledWith(root.id);
-    expect(cdpServer.unregisterBrowser).toHaveBeenCalledWith(root.id);
+    expect(cdpHost.cleanupPanelAccess).toHaveBeenCalledWith(root.id);
+    expect(cdpHost.unregisterTarget).toHaveBeenCalledWith(root.id);
     expect(panelView.destroyView).toHaveBeenCalledWith(root.id);
+  });
+});
+
+describe("PanelOrchestrator.ensureLoaded", () => {
+  it("loads a panel without selecting or focusing it", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("target");
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView, shellCore, emit } = createOrchestrator(registry);
+    let loaded = false;
+    panelView.createViewForPanel.mockImplementationOnce(async () => {
+      loaded = true;
+    });
+    panelView.hasView.mockImplementation((panelId: string) => panelId === "target" && loaded);
+
+    await expect(orchestrator.ensureLoaded("target")).resolves.toMatchObject({
+      panelId: "target",
+      status: "loaded",
+      focused: false,
+      loaded: true,
+    });
+
+    expect(shellCore.notifyFocused).not.toHaveBeenCalled();
+    expect(panelView.setViewVisible).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
   });
 });
 
@@ -195,6 +282,46 @@ describe("PanelOrchestrator.focusPanel", () => {
     );
     expect(panelView.setViewVisible).toHaveBeenCalledWith(panel.id, true);
     expect(result).toMatchObject({ status: "loaded", focused: true, loaded: true });
+  });
+
+  it("acquires and releases runtime leases for browser panels", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("browser-1", [], {
+      snapshot: {
+        source: "browser:https://example.com",
+        contextId: "ctx-browser-1",
+        options: {},
+      },
+      artifacts: { buildState: "ready" },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
+    const loadedPanels = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
+    panelView.createViewForBrowser.mockImplementation(async (panelId: string) => {
+      loadedPanels.add(panelId);
+    });
+
+    await expect(orchestrator.ensureLoaded(panel.id)).resolves.toMatchObject({
+      status: "loaded",
+      loaded: true,
+    });
+
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "acquire", [
+      `panel:nav-${panel.id}`,
+      expect.objectContaining({
+        slotId: panel.id,
+        clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      }),
+    ]);
+
+    await orchestrator.unloadPanel(panel.id);
+
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "release", [
+      `panel:nav-${panel.id}`,
+      expect.stringContaining(`desktop-${panel.id}-`),
+    ]);
   });
 
   it("returns a structured leased_elsewhere result when focus cannot acquire runtime", async () => {
@@ -402,6 +529,28 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
   });
 });
 
+describe("PanelOrchestrator.getBootstrapConfig", () => {
+  it("returns the leased runtime connection id string", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel-1");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, shellCore, panelView } = createOrchestrator(registry);
+
+    await orchestrator.ensureLoaded(panel.id);
+    const loadedUrl = panelView.createViewForPanel.mock.calls[0]?.[1] ?? "";
+
+    const config = await orchestrator.getBootstrapConfig(panel.id);
+
+    expect(shellCore.getPanelInit).toHaveBeenCalledWith(panel.id);
+    expect(loadedUrl).not.toContain("connectionId=");
+    expect(config).toMatchObject({
+      entityId: panel.id,
+      connectionId: expect.stringMatching(/^desktop-panel-1-/),
+      clientLabel: "Desktop",
+    });
+  });
+});
+
 describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
   it("unloads local panel resources when the local runtime lease is released", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
@@ -412,7 +561,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
       },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, panelView, cdpServer } = createOrchestrator(registry);
+    const { orchestrator, panelView, cdpHost } = createOrchestrator(registry);
     panelView.hasView.mockReturnValue(true);
 
     await orchestrator.applyRuntimeLeaseChanged({
@@ -424,21 +573,198 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
         slotId: asPanelSlotId(panel.id),
         runtimeEntityId: asPanelEntityId("panel:nav-panel-1"),
         clientSessionId: orchestrator.getRuntimeClientSessionId(),
+        hostConnectionId: orchestrator.getRuntimeClientSessionId(),
         connectionId: "desktop-conn",
         holderLabel: "Desktop",
         platform: "desktop",
+        supportsCdp: true,
         acquiredAt: 1,
       },
       next: null,
       reason: "retired",
     });
 
-    expect(cdpServer.cleanupPanelAccess).toHaveBeenCalledWith(panel.id);
-    expect(cdpServer.unregisterBrowser).toHaveBeenCalledWith(panel.id);
+    expect(cdpHost.cleanupPanelAccess).toHaveBeenCalledWith(panel.id);
+    expect(cdpHost.unregisterTarget).toHaveBeenCalledWith(panel.id);
     expect(panelView.destroyView).toHaveBeenCalledWith(panel.id);
     expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
       buildState: "pending",
       buildProgress: "Panel unloaded - will rebuild when focused",
     });
+  });
+
+  it("loads panels assigned to a load-on-assignment host without reacquiring the lease", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel-1");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "headless-session",
+        label: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+        restorePolicy: "none",
+      },
+    });
+
+    await orchestrator.applyRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: asPanelEntityId("panel:nav-panel-1"),
+      previous: null,
+      next: {
+        slotId: asPanelSlotId(panel.id),
+        runtimeEntityId: asPanelEntityId("panel:nav-panel-1"),
+        clientSessionId: "headless-session",
+        hostConnectionId: "headless-session",
+        connectionId: "assigned-runtime-conn",
+        holderLabel: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        acquiredAt: 1,
+      },
+      reason: "acquired",
+    });
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+      panel.id,
+      expect.not.stringContaining("connectionId="),
+      "ctx-panel-1"
+    );
+    expect(serverClient.call).not.toHaveBeenCalledWith(
+      "panelRuntime",
+      "acquire",
+      expect.any(Array)
+    );
+  });
+
+  it("unloads idle panels assigned to a load-on-assignment host", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+      const panel = makePanel("panel-1");
+      registry.addPanel(panel, null, { addAsRoot: true });
+      const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
+        runtimeClient: {
+          clientSessionId: "headless-session",
+          label: "Headless",
+          platform: "headless",
+          supportsCdp: true,
+          loadOnLeaseAssignment: true,
+          assignedPanelIdleMs: 1000,
+          restorePolicy: "none",
+        },
+      });
+
+      await orchestrator.applyRuntimeLeaseChanged({
+        type: "panel:runtimeLeaseChanged",
+        version: { epoch: "test", counter: 2 },
+        slotId: asPanelSlotId(panel.id),
+        runtimeEntityId: asPanelEntityId("panel:nav-panel-1"),
+        previous: null,
+        next: {
+          slotId: asPanelSlotId(panel.id),
+          runtimeEntityId: asPanelEntityId("panel:nav-panel-1"),
+          clientSessionId: "headless-session",
+          hostConnectionId: "headless-session",
+          connectionId: "assigned-runtime-conn",
+          holderLabel: "Headless",
+          platform: "headless",
+          supportsCdp: true,
+          acquiredAt: 1,
+        },
+        reason: "acquired",
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "release", [
+        asPanelEntityId("panel:nav-panel-1"),
+        "assigned-runtime-conn",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("caps load-on-assignment host resources by unloading the oldest assigned panel", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const first = makePanel("panel-1");
+    const second = makePanel("panel-2");
+    registry.addPanel(first, null, { addAsRoot: true });
+    registry.addPanel(second, null, { addAsRoot: true });
+    const { orchestrator, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "headless-session",
+        label: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+        maxAssignedPanelViews: 1,
+        assignedPanelIdleMs: 0,
+        restorePolicy: "none",
+      },
+    });
+
+    await orchestrator.applyRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(first.id),
+      runtimeEntityId: asPanelEntityId("panel:nav-panel-1"),
+      previous: null,
+      next: {
+        slotId: asPanelSlotId(first.id),
+        runtimeEntityId: asPanelEntityId("panel:nav-panel-1"),
+        clientSessionId: "headless-session",
+        hostConnectionId: "headless-session",
+        connectionId: "assigned-runtime-1",
+        holderLabel: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        acquiredAt: 1,
+      },
+      reason: "acquired",
+    });
+    await orchestrator.applyRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 3 },
+      slotId: asPanelSlotId(second.id),
+      runtimeEntityId: asPanelEntityId("panel:nav-panel-2"),
+      previous: null,
+      next: {
+        slotId: asPanelSlotId(second.id),
+        runtimeEntityId: asPanelEntityId("panel:nav-panel-2"),
+        clientSessionId: "headless-session",
+        hostConnectionId: "headless-session",
+        connectionId: "assigned-runtime-2",
+        holderLabel: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        acquiredAt: 2,
+      },
+      reason: "acquired",
+    });
+
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "release", [
+      asPanelEntityId("panel:nav-panel-1"),
+      "assigned-runtime-1",
+    ]);
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "release", [
+      asPanelEntityId("panel:nav-panel-2"),
+      "assigned-runtime-2",
+    ]);
+  });
+
+  it("does not implicitly load unloaded panels for agent introspection", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel-1");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry);
+
+    await expect(orchestrator.snapshot(panel.id)).rejects.toThrow("target-not-loaded: panel-1");
+
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
   });
 });

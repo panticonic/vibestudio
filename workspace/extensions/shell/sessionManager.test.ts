@@ -6,30 +6,59 @@ import { SessionManager } from "./sessionManager.js";
 
 describe("SessionManager janitor", () => {
   it("emits watch-all heartbeats only after an idle interval", async () => {
-    const manager = new SessionManager({}, { janitorIntervalMs: 60 * 60_000, watchAllHeartbeatMs: 40 });
-    const response = manager.watchAllInfo("panel:test");
-    const reader = response.body!.getReader();
+    vi.useFakeTimers();
+    const manager = new SessionManager(
+      {},
+      { janitorIntervalMs: 60 * 60_000, watchAllHeartbeatMs: 40 }
+    );
+    const fakePty = new FakePty();
+    (
+      manager as unknown as {
+        pty: { spawn: () => FakePty };
+      }
+    ).pty = { spawn: () => fakePty };
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
 
-    await expect(readEvent(reader)).resolves.toMatchObject({ type: "snapshot-batch", sessions: [] });
+    try {
+      const response = manager.watchAllInfo("panel:test");
+      reader = response.body!.getReader();
 
-    await delay(20);
-    const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
-    const opened = manager.open({
-      command: process.execPath,
-      args: ["-e", "setTimeout(() => {}, 5000)"],
-      cwd: root,
-      env: {},
-      cols: 80,
-      rows: 24,
-    }, { callerId: "panel:test", callerKind: "panel" });
-    await expect(readEvent(reader)).resolves.toMatchObject({ type: "opened", sessionId: opened.sessionId });
+      await expect(readEvent(reader)).resolves.toMatchObject({
+        type: "snapshot-batch",
+        sessions: [],
+      });
 
-    const afterOpened = Date.now();
-    await expect(readEvent(reader, 100)).resolves.toMatchObject({ type: "heartbeat" });
-    expect(Date.now() - afterOpened).toBeGreaterThanOrEqual(30);
+      await vi.advanceTimersByTimeAsync(20);
+      const root = await mkdtemp(join(tmpdir(), "session-manager-test-"));
+      const opened = manager.open(
+        {
+          command: process.execPath,
+          args: ["-e", "setTimeout(() => {}, 5000)"],
+          cwd: root,
+          env: {},
+          cols: 80,
+          rows: 24,
+        },
+        { callerId: "panel:test", callerKind: "panel" }
+      );
+      await expect(readEvent(reader)).resolves.toMatchObject({
+        type: "opened",
+        sessionId: opened.sessionId,
+      });
 
-    manager.dispose(manager.requireOwner(opened.sessionId, "panel:test"));
-    await reader.cancel();
+      const heartbeat = readEvent(reader, 100);
+      const onHeartbeat = vi.fn();
+      heartbeat.then(onHeartbeat, onHeartbeat);
+      await vi.advanceTimersByTimeAsync(39);
+      expect(onHeartbeat).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(heartbeat).resolves.toMatchObject({ type: "heartbeat" });
+
+      manager.dispose(manager.requireOwner(opened.sessionId, "panel:test"));
+    } finally {
+      await reader?.cancel();
+      vi.useRealTimers();
+    }
   });
 
   it("disposes exited, old, listenerless sessions and preserves live sessions", async () => {

@@ -13,7 +13,7 @@ import * as path from "path";
 // Silence Electron security warnings in dev; panels run in isolated webviews.
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
 
-import { isDev, assertHttpUrl } from "./utils.js";
+import { isDev } from "./utils.js";
 import { createDevLogger } from "@natstack/dev-log";
 import {
   enqueueFirstArgvLink,
@@ -25,6 +25,8 @@ import {
 
 const log = createDevLogger("App");
 const APP_NAME = "NatStack";
+const IS_HEADLESS_HOST =
+  process.env["NATSTACK_HEADLESS_HOST"] === "1" || process.argv.includes("--headless-host");
 
 function formatUnknownError(error: unknown): string {
   if (error instanceof Error) {
@@ -49,7 +51,7 @@ process.on("unhandledRejection", (reason) => {
 dialog.showErrorBox = logSuppressedErrorDialog;
 
 app.setName(APP_NAME);
-if (!app.requestSingleInstanceLock()) {
+if (!IS_HEADLESS_HOST && !app.requestSingleInstanceLock()) {
   app.exit(0);
   process.exit(0);
 }
@@ -82,7 +84,7 @@ import {
 } from "./startupMode.js";
 import { establishServerSession, type SessionConnection } from "./serverSession.js";
 import type { ServerClient } from "./serverClient.js";
-import { CdpServer } from "./cdpServer.js";
+import { CdpHostProvider } from "./cdpHostProvider.js";
 import { EventService } from "@natstack/shared/eventsService";
 import type { EventName } from "@natstack/shared/events";
 import { createServerEventBridge } from "./serverEventBridge.js";
@@ -160,9 +162,15 @@ try {
 
 if (startupMode.kind === "local") {
   workspaceId = startupMode.workspaceId;
-  app.setPath("userData", path.join(startupMode.wsDir, "state"));
+  app.setPath(
+    "userData",
+    path.join(startupMode.wsDir, IS_HEADLESS_HOST ? "state-headless-host" : "state")
+  );
 } else {
-  app.setPath("userData", getRemoteUserDataDir());
+  app.setPath(
+    "userData",
+    IS_HEADLESS_HOST ? path.join(getRemoteUserDataDir(), "headless-host") : getRemoteUserDataDir()
+  );
 }
 
 installRemoteTlsPinning(startupMode);
@@ -171,7 +179,10 @@ function applyLocalStartupMode(reason: string): void {
   const localMode = resolveLocalStartupMode(centralData);
   startupMode = localMode;
   workspaceId = localMode.workspaceId;
-  app.setPath("userData", path.join(localMode.wsDir, "state"));
+  app.setPath(
+    "userData",
+    path.join(localMode.wsDir, IS_HEADLESS_HOST ? "state-headless-host" : "state")
+  );
   log.warn(`[Workspace] Falling back to local mode: ${reason}`);
 }
 
@@ -183,7 +194,7 @@ function shouldFallbackToLocalForRemoteCredential(error: unknown): boolean {
   return /Device credential expired or revoked|re-pair from the server/i.test(message);
 }
 
-let cdpServer: CdpServer | null = null;
+let cdpHostProvider: CdpHostProvider | null = null;
 let panelRegistry: PanelRegistry | null = null;
 let panelOrchestrator: PanelOrchestrator | null = null;
 let panelView: PanelView | null = null;
@@ -323,6 +334,24 @@ function sendIncomingPairLink(link: unknown): void {
       contents.send("natstack:incoming-pair-link", link);
     }
   }
+}
+
+function createCdpRegistrationAdapter() {
+  return {
+    registerTarget(panelId: string, contentsId: number): void {
+      cdpHostProvider?.registerTarget(panelId, contentsId);
+    },
+    unregisterTarget(panelId: string): void {
+      cdpHostProvider?.unregisterTarget(panelId);
+    },
+    cleanupPanelAccess(panelId: string): void {
+      cdpHostProvider?.cleanupPanelAccess(panelId);
+    },
+    getAccessibilityTree(panelId: string): Promise<unknown[]> {
+      if (cdpHostProvider) return cdpHostProvider.getAccessibilityTree(panelId);
+      return Promise.resolve([]);
+    },
+  };
 }
 
 log.info(` Starting in main mode`);
@@ -836,6 +865,7 @@ function createWindow(): void {
     width: 1200,
     height: 600,
     show: false,
+    skipTaskbar: IS_HEADLESS_HOST,
     titleBarStyle: "hidden",
     ...(process.platform !== "darwin"
       ? {
@@ -852,10 +882,13 @@ function createWindow(): void {
     shellHtmlPath: path.join(__dirname, "index.html"),
     shellAdditionalArguments: [],
     devTools: false,
+    showWindowOnShellLoad: !IS_HEADLESS_HOST,
   });
 
   // Set native window title for OS taskbar / window switcher (Alt+Tab / dock)
-  mainWindow.setTitle(`NatStack — ${workspaceId}`);
+  mainWindow.setTitle(
+    IS_HEADLESS_HOST ? `NatStack Headless Host — ${workspaceId}` : `NatStack — ${workspaceId}`
+  );
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -864,18 +897,13 @@ function createWindow(): void {
     appOrchestrator = null;
   });
 
-  // PanelView is resolved lazily by PanelOrchestrator via getPanelView()
-  if (cdpServer && viewManager) {
-    cdpServer.setViewManager(viewManager);
-  }
-
-  if (viewManager && panelRegistry && panelOrchestrator && cdpServer && serverSession) {
+  if (viewManager && panelRegistry && panelOrchestrator && serverSession) {
     const browserHistoryRecorder = new BrowserHistoryRecorder(serverSession.serverClient);
     panelView = new PanelView({
       viewManager,
       panelRegistry,
       serverInfo: serverSession.serverInfo,
-      cdpServer,
+      cdpHost: createCdpRegistrationAdapter(),
       panelOrchestrator,
       sendPanelEvent: (panelId, event, payload) => {
         const wc = viewManager?.getWebContents(panelId);
@@ -923,26 +951,27 @@ function createWindow(): void {
 
   // Setup application menu (uses shell webContents for menu events)
   if (viewManager) setMenuViewManager(viewManager);
-  setupMenu(mainWindow, viewManager.getShellWebContents(), {
-    onHistoryBack: () => {
-      if (!panelRegistry || !viewManager) return;
-      const panelId = panelRegistry.getFocusedPanelId();
-      if (!panelId) return;
-      const contents = viewManager.getWebContents(panelId);
-      if (contents && !contents.isDestroyed() && contents.canGoBack()) {
-        contents.goBack();
-      }
-    },
-    onHistoryForward: () => {
-      if (!panelRegistry || !viewManager) return;
-      const panelId = panelRegistry.getFocusedPanelId();
-      if (!panelId) return;
-      const contents = viewManager.getWebContents(panelId);
-      if (contents && !contents.isDestroyed() && contents.canGoForward()) {
-        contents.goForward();
-      }
-    },
-  });
+  if (!IS_HEADLESS_HOST)
+    setupMenu(mainWindow, viewManager.getShellWebContents(), {
+      onHistoryBack: () => {
+        if (!panelRegistry || !viewManager) return;
+        const panelId = panelRegistry.getFocusedPanelId();
+        if (!panelId) return;
+        const contents = viewManager.getWebContents(panelId);
+        if (contents && !contents.isDestroyed() && contents.canGoBack()) {
+          contents.goBack();
+        }
+      },
+      onHistoryForward: () => {
+        if (!panelRegistry || !viewManager) return;
+        const panelId = panelRegistry.getFocusedPanelId();
+        if (!panelId) return;
+        const contents = viewManager.getWebContents(panelId);
+        if (contents && !contents.isDestroyed() && contents.canGoForward()) {
+          contents.goForward();
+        }
+      },
+    });
 
   // Initialize panel tree after window is ready
   if (panelOrchestrator) {
@@ -970,6 +999,7 @@ app.on("ready", async () => {
     return getPendingConnectLink();
   });
   onConnectLink((link) => {
+    if (IS_HEADLESS_HOST) return;
     sendIncomingPairLink(link);
     mainWindow?.show();
     mainWindow?.focus();
@@ -1242,6 +1272,8 @@ app.on("ready", async () => {
     shellEventSubscriptions.add("apps:available");
     shellEventSubscriptions.add("external-open:open");
     shellEventSubscriptions.add("browser-panel:open");
+    shellEventSubscriptions.add("panel-tree-updated");
+    shellEventSubscriptions.add("panel:runtimeLeaseChanged");
     await replayShellSubscriptionsToServer();
     workspaceId = serverSession.workspaceId;
 
@@ -1265,12 +1297,6 @@ app.on("ready", async () => {
         eventService,
       });
     }
-
-    // CDP server (Electron-local) — must start before panel services
-    cdpServer = new CdpServer();
-    if (viewManager) cdpServer.setViewManager(viewManager);
-    const cdpPort = await cdpServer.start();
-    log.info(`[CDP] Server started on port ${cdpPort}`);
 
     // Create PanelRegistry (pure in-memory — server owns persistence)
     panelRegistry = new PanelRegistry({
@@ -1337,7 +1363,7 @@ app.on("ready", async () => {
       eventService,
       serverClient: conn.serverClient,
       shellCore: shellCore.panelManager,
-      cdpServer,
+      cdpHost: createCdpRegistrationAdapter(),
       getPanelView: () => panelView,
       panelHttpServer: conn.panelHttpServer,
       externalHost: conn.externalHost,
@@ -1350,7 +1376,43 @@ app.on("ready", async () => {
         }
       },
       workspaceConfig: conn.workspaceConfig,
+      runtimeClient: IS_HEADLESS_HOST
+        ? {
+            label: "Headless",
+            platform: "headless",
+            supportsCdp: true,
+            loadOnLeaseAssignment: true,
+            restorePolicy: "none",
+          }
+        : undefined,
     });
+
+    await panelOrchestrator.registerRuntimeClient();
+
+    cdpHostProvider = new CdpHostProvider({
+      serverUrl: conn.gatewayConfig.serverUrl,
+      authToken: () => conn.shellToken || conn.adminToken,
+      hostConnectionId: panelOrchestrator.getRuntimeClientSessionId(),
+      getViewManager: () => viewManager,
+      onHostCommand: async (panelId, action, args) => {
+        if (action === "openDevTools") {
+          if (!viewManager) throw new Error("ViewManager not initialized");
+          const mode = args[0] === "right" || args[0] === "bottom" ? args[0] : "detach";
+          viewManager.openDevTools(panelId, mode);
+          return null;
+        }
+        if (action === "rebuildPanel") {
+          await panelOrchestrator?.retryBuild(panelId);
+          return null;
+        }
+        if (action === "accessibilityTree") {
+          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
+          return cdpHostProvider.getAccessibilityTree(panelId);
+        }
+        throw new Error(`Unknown host command: ${action}`);
+      },
+    });
+    cdpHostProvider.start();
 
     // Set up test API for E2E testing (only when NATSTACK_TEST_MODE=1)
     setupTestApi(panelOrchestrator, panelRegistry, null);
@@ -1378,7 +1440,6 @@ app.on("ready", async () => {
     const { createNotificationService } = await import("./services/notificationService.js");
     const { createSettingsService } = await import("./services/settingsService.js");
     const { createAdblockService } = await import("./services/adblockService.js");
-    const { createBrowserService } = await import("./services/browserService.js");
     // FS and git-local services removed — server owns these via panel service
     const { createBrowserDataRpcClient } = await import("@natstack/browser-data");
 
@@ -1440,16 +1501,6 @@ app.on("ready", async () => {
       rpcService(createRemoteCredService({ startupMode, getServerClient: () => serverClientRef }))
     );
     electronContainer.register(rpcService(createAdblockService({ adBlockManager })));
-    // Locally-hosted services
-    electronContainer.register(
-      rpcService(
-        createBrowserService({
-          cdpServer,
-          getViewManager,
-          panelRegistry,
-        })
-      )
-    );
     // Browser-data persistence lives on the server; Electron keeps only the
     // host-bound autofill adapter.
     {
@@ -1618,26 +1669,6 @@ app.on("ready", async () => {
         console.warn(`[ipc] Rejecting ${channel} from non-shell sender (callerId=${callerId})`);
         throw new Error(`Channel '${channel}' is shell-only`);
       }
-    };
-
-    /**
-     * Verify the caller owns (i.e. IS) the target view, OR is the shell.
-     * Used for cross-view IPC handlers like natstack:navigate where allowing
-     * any panel to drive any other panel's webContents is an audit finding
-     * (#9).
-     */
-    const requireOwnsViewOrShell = (
-      event: Electron.IpcMainInvokeEvent,
-      targetViewId: string,
-      channel: string
-    ): void => {
-      const { callerKind, callerId } = resolveCaller(event);
-      if (callerKind === "shell") return;
-      if (callerId === targetViewId) return;
-      console.warn(
-        `[ipc] Rejecting ${channel} from ${callerId} → ${targetViewId} (not owner, not shell)`
-      );
-      throw new Error(`Caller does not own target view '${targetViewId}'`);
     };
 
     const requireAppCapabilityForIpc = (
@@ -1812,43 +1843,6 @@ app.on("ready", async () => {
       );
     });
 
-    // Browser automation (CdpServer)
-    ipcMain.handle("natstack:getCdpEndpoint", async (event, browserId: string) => {
-      const callerId = resolveCallerId(event);
-      const { getCdpEndpointForCaller } = await import("./services/browserService.js");
-      return getCdpEndpointForCaller(assertPresent(cdpServer), browserId, callerId);
-    });
-    ipcMain.handle("natstack:navigate", async (event, browserId: string, url: string) => {
-      // Audit #9: caller must own the target view OR be the shell.
-      requireOwnsViewOrShell(event, browserId, "natstack:navigate");
-      assertHttpUrl(url);
-      const wc = assertPresent(viewManager).getWebContents(browserId);
-      if (!wc) throw new Error(`Browser webContents not found for ${browserId}`);
-      try {
-        await wc.loadURL(url);
-      } catch (err) {
-        const error = err as { code?: string; errno?: number };
-        if (error.errno === -3 || error.code === "ERR_ABORTED") return;
-        throw err;
-      }
-    });
-    ipcMain.handle("natstack:goBack", async (event, browserId: string) => {
-      requireOwnsViewOrShell(event, browserId, "natstack:goBack");
-      assertPresent(viewManager).getWebContents(browserId)?.goBack();
-    });
-    ipcMain.handle("natstack:goForward", async (event, browserId: string) => {
-      requireOwnsViewOrShell(event, browserId, "natstack:goForward");
-      assertPresent(viewManager).getWebContents(browserId)?.goForward();
-    });
-    ipcMain.handle("natstack:reload", async (event, browserId: string) => {
-      requireOwnsViewOrShell(event, browserId, "natstack:reload");
-      assertPresent(viewManager).getWebContents(browserId)?.reload();
-    });
-    ipcMain.handle("natstack:stop", async (event, browserId: string) => {
-      requireOwnsViewOrShell(event, browserId, "natstack:stop");
-      assertPresent(viewManager).getWebContents(browserId)?.stop();
-    });
-
     // createWindow will create ViewManager, PanelView, and initialize panel tree
     void createWindow();
 
@@ -1912,11 +1906,9 @@ app.on("ready", async () => {
       );
     }
     serverSession = null;
-    if (cdpServer) {
-      cleanupPromises.push(
-        cdpServer.stop().catch((e) => console.error("[App] cdpServer cleanup error:", e))
-      );
-      cdpServer = null;
+    if (cdpHostProvider) {
+      cdpHostProvider.stop();
+      cdpHostProvider = null;
     }
     await Promise.all(cleanupPromises);
 
@@ -1950,7 +1942,7 @@ app.on("will-quit", (event) => {
     }
   };
 
-  const hasResourcesToClean = serverSession || cdpServer;
+  const hasResourcesToClean = serverSession || cdpHostProvider;
   if (hasResourcesToClean) {
     isCleaningUp = true;
     event.preventDefault();
@@ -1973,6 +1965,9 @@ app.on("will-quit", (event) => {
             .shutdownCleanup(livePanelIds)
             .catch((e: unknown) => console.error("[App] Failed to run shutdown cleanup:", e));
         }
+        await panelOrchestrator
+          ?.unregisterRuntimeClient()
+          .catch((e: unknown) => console.error("[App] Failed to unregister runtime client:", e));
         await session.serverClient
           .close()
           .catch((e) => console.error("[App] Server client close error:", e));
@@ -1991,13 +1986,9 @@ app.on("will-quit", (event) => {
       }
     }
 
-    if (cdpServer) {
-      stopPromises.push(
-        cdpServer
-          .stop()
-          .then(() => console.log("[App] CDP server stopped"))
-          .catch((e) => console.error("[App] Error stopping CDP server:", e))
-      );
+    if (cdpHostProvider) {
+      cdpHostProvider.stop();
+      cdpHostProvider = null;
     }
 
     // Add a timeout to ensure we exit even if cleanup hangs

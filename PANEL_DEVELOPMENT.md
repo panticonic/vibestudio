@@ -61,7 +61,9 @@ export default function App() {
 
 ### Navigation
 
-Use `openPanel` to open panels. It handles both URLs (browser panels) and workspace sources:
+Use `openPanel` to open panels. It handles both URLs (browser panels) and workspace sources.
+From userland runtimes, opening a panel is a structural tree mutation and prompts on first use
+per requester entity and parent/root target; shell UI calls use the trusted shell path.
 
 ```tsx
 import { openPanel, buildPanelLink } from "@workspace/runtime";
@@ -184,10 +186,10 @@ export const editorContract = defineContract({
 ```tsx
 // panels/editor/index.tsx
 import { useEffect, useState } from "react";
-import { rpc, getParentWithContract, noopParent } from "@workspace/runtime";
+import { rpc, getParentWithContract } from "@workspace/runtime";
 import { editorContract } from "./contract.js";
 
-const parent = getParentWithContract(editorContract) ?? noopParent;
+const parent = getParentWithContract(editorContract);
 
 export default function Editor() {
   const [content, setContent] = useState("");
@@ -198,7 +200,7 @@ export default function Editor() {
       async setContent(text) { setContent(text); },
       async save() {
         // Save logic...
-        parent.emit("saved", { path: "/file.txt", timestamp: Date.now() });
+        await parent?.emit("saved", { path: "/file.txt", timestamp: Date.now() });
       },
     });
   }, [content]);
@@ -288,36 +290,40 @@ const workspace = env["NATSTACK_WORKSPACE"] || "/workspace";
 
 ---
 
-## Browser Automation
+## CDP Panel Automation
 
-Open URL panels and control them via the typed panel handle. Browser automation is a host feature: it is available in Electron, and on Android when the in-app WebView CDP backend can attach to the target WebView.
+Open URL panels and control any panel through the unified `PanelHandle`. Opening panels,
+CDP automation, and structural operations are approval-gated on first use per requester
+panel/worker/DO and target pair. Approvals are remembered for that requester entity;
+privileged shell/about panels use a danger-tone approval.
 
 #### Typed API
 
 ```typescript
-import { openPanel, openExternal } from "@workspace/runtime";
-import { chromium } from "playwright-core";
+import { openPanel, openExternal, panelTree } from "@workspace/runtime";
 
-// 1. Open a URL panel, which returns a PanelHandle
+// 1. Open a URL panel, which returns a PanelHandle.
 const handle = await openPanel("https://example.com", { focus: true });
 
-// 2. Get CDP endpoint and connect Playwright
-const cdpUrl = await handle.browser.getCdpEndpoint();
-const browser = await chromium.connectOverCDP(cdpUrl);
-const page = browser.contexts()[0].pages()[0];
+// 2. CDP access prompts on first use and transparently loads unloaded targets.
+const page = await handle.cdp.page();
 
 // 3. Interact with the page
 await page.fill("input[name=query]", "NatStack");
 await page.click(".search-button");
 const text = await page.textContent(".results .first");
 
-// 4. Navigate via browser controls
-await handle.browser.navigate("https://other.com");
-await handle.browser.goBack();
-await handle.browser.reload();
+// 4. Navigate via CDP controls
+await handle.cdp.navigate("https://other.com");
+await handle.cdp.goBack();
+await handle.cdp.reload();
 
 // 5. Close when done
 await handle.close();
+
+// Drive a parent or sibling the same way. Tree relationships do not bypass approval.
+const parent = panelTree.self().parent();
+await parent?.cdp.page();
 
 // Or open in system browser (no CDP access)
 await openExternal("https://docs.example.com");
@@ -332,24 +338,25 @@ import { getPanelHandle, onChildCreated } from "@workspace/runtime";
 
 onChildCreated(({ childId, url }) => {
   const handle = getPanelHandle(childId);
-  // Now use handle.browser.getCdpEndpoint(), handle.browser.navigate(), etc.
+  // Now use handle.cdp.getCdpEndpoint(), handle.cdp.navigate(), etc.
 });
 window.open("https://example.com");
 ```
 
-#### PanelHandle browser methods
+#### PanelHandle CDP methods
 
 | Method | Description |
 |--------|-------------|
-| `browser.getCdpEndpoint()` | Get CDP WebSocket URL for Playwright |
-| `browser.navigate(url)` | Load a URL |
-| `browser.goBack()` | Navigate back |
-| `browser.goForward()` | Navigate forward |
-| `browser.reload()` | Reload page |
-| `browser.stop()` | Stop loading |
+| `cdp.page()` | Connect Playwright and return the active page |
+| `cdp.getCdpEndpoint()` | Get CDP WebSocket URL and token for Playwright |
+| `cdp.navigate(url)` | Load a URL |
+| `cdp.goBack()` | Navigate back |
+| `cdp.goForward()` | Navigate forward |
+| `cdp.reload()` | Reload page |
+| `cdp.stop()` | Stop loading |
 | `close()` | Close browser panel |
 
-**Security:** Panels can only control browser panels they own.
+Use `handle.ensureLoaded()` before RPC calls to an unloaded panel. CDP access performs that load automatically after approval.
 
 ---
 
@@ -479,10 +486,10 @@ Key channel client APIs:
 
 2. **Use contracts** -- Type safety across panel boundaries catches errors at compile time
 
-3. **Use noopParent** -- Avoid null checks when panel may run standalone:
+3. **Check optional parents** -- Panels may run standalone:
    ```typescript
-   const parent = getParentWithContract(contract) ?? noopParent;
-   parent.emit("event", data); // Safe even if no parent
+   const parent = getParentWithContract(contract);
+   await parent?.emit("event", data);
    ```
 
 4. **Export contracts** -- Put contract in separate file and export via package.json

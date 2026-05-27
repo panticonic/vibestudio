@@ -20,7 +20,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote`, `syncRepoToContexts`, `client` |  |
 | `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `blameGadFileSnippet`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
-| `extensions` | namespace | `use`, `on`, `list`, `install`, `uninstall`, `setEnabled`, `update`, `reload` |  |
+| `extensions` | namespace | `use`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
 | `contextId` | value |  |  |
@@ -37,6 +37,7 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | `listApprovals` | value |  |  |
 | `exposeMethod` | value |  |  |
 | `getParent` | value |  |  |
+| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `open` |  |
 | `handleRpcPost` | value |  |  |
 | `destroy` | value |  |  |
 <!-- END GENERATED: worker-runtime-surface -->

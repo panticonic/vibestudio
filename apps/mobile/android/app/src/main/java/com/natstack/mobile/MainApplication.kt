@@ -20,7 +20,6 @@ class MainApplication : Application(), ReactApplication {
                 PackageList(this).packages.apply {
                     add(NatStackMobileHostPackage())
                     add(OAuthLoopbackPackage())
-                    add(WebViewCdpProxyPackage())
                 }
 
             override fun getJSMainModuleName(): String = "index"

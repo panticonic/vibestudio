@@ -2170,12 +2170,17 @@ export class RpcServer {
     const workerdDispatchSecret = this.workerdDispatchSecret;
 
     const dispatch = async () => {
+      const callerPanelId =
+        callerKind === "panel"
+          ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
+          : undefined;
       const result = await postToDurableObject(ref, method, args, {
         workerdUrl,
         workerdGatewayToken,
         ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
         callerId,
         callerKind,
+        ...(callerPanelId ? { callerPanelId } : {}),
       });
       return result;
     };
