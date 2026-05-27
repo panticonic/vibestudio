@@ -787,9 +787,15 @@ importers:
 
   workspace/apps/remote-cli:
     dependencies:
+      '@natstack/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
       '@natstack/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      ws:
+        specifier: ^8.18.3
+        version: 8.19.0
 
   workspace/apps/shell:
     dependencies:
