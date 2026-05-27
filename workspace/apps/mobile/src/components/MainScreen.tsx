@@ -101,6 +101,7 @@ export function MainScreen() {
   const [webViewStack, setWebViewStack] = useState<WebViewEntry[]>([]);
   const [loadingPanelId, setLoadingPanelId] = useState<string | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const pendingApprovalsRefreshSeq = useRef(0);
   const [addressBarVisible, setAddressBarVisible] = useState(false);
   const [addressQuery, setAddressQuery] = useState("");
   const [addressSuggestions, setAddressSuggestions] = useState<AddressAutocompleteItem[]>([]);
@@ -312,15 +313,19 @@ export function MainScreen() {
   }, [shellClient, setPanelTree]);
   const refreshPendingApprovals = useCallback(async () => {
     if (!shellClient) {
+      pendingApprovalsRefreshSeq.current++;
       setPendingApprovals([]);
       return [];
     }
+    const seq = ++pendingApprovalsRefreshSeq.current;
     const pending = await shellClient.transport.call<PendingApproval[]>(
       "main",
       RPC_METHODS.shellApproval.listPending,
       []
     );
-    setPendingApprovals(pending);
+    if (seq === pendingApprovalsRefreshSeq.current) {
+      setPendingApprovals(pending);
+    }
     return pending;
   }, [shellClient]);
   const removeResolvedApproval = useCallback((approvalId: string) => {
@@ -336,8 +341,9 @@ export function MainScreen() {
         decision,
       ]);
       removeResolvedApproval(approvalId);
+      void refreshPendingApprovals().catch(() => {});
     },
-    [removeResolvedApproval, shellClient]
+    [refreshPendingApprovals, removeResolvedApproval, shellClient]
   );
   const submitClientConfig = useCallback(
     async (approvalId: string, values: Record<string, string>) => {
@@ -612,11 +618,8 @@ export function MainScreen() {
     );
     const unsubApproval = shellClient.transport.onEvent(
       "event:shell-approval:pending-changed",
-      (_from: string, payload: unknown) => {
-        const { pending } = payload as {
-          pending?: PendingApproval[];
-        };
-        setPendingApprovals(pending ?? []);
+      () => {
+        void refreshPendingApprovals().catch(() => {});
       }
     );
     const unsubWorkspaceRevision = shellClient.transport.onEvent(

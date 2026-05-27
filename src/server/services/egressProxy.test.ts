@@ -16,7 +16,7 @@ import { EgressProxy } from "./egressProxy.js";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
 import { CredentialLifecycleError } from "./credentialLifecycle.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
-import type { ApprovalQueue } from "./approvalQueue.js";
+import { createApprovalQueue, type ApprovalQueue } from "./approvalQueue.js";
 
 class MemoryCredentialStore {
   constructor(private readonly credentials = new Map<string, Credential>()) {}
@@ -1164,4 +1164,50 @@ describe("EgressProxy", () => {
       );
     }
   );
+
+  it("resolves queued credential proxy approvals covered by a trusted version grant", async () => {
+    const credential = createCredential({ grants: [] });
+    const store = new MemoryCredentialStore(new Map([[credential.id!, credential]]));
+    const approvalQueue = createApprovalQueue({ eventService: { emit: vi.fn() } as never });
+    const proxy = new EgressProxy({
+      credentialStore: store,
+      auditLog: new MemoryAuditLog() as never,
+      approvalQueue,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
+    );
+
+    const first = proxy.forwardProxyFetch({
+      caller: workerCaller("worker:first"),
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+    await vi.waitFor(() => expect(approvalQueue.listPending()).toHaveLength(1));
+    const second = proxy.forwardProxyFetch({
+      caller: workerCaller("do:worker:first"),
+      credentialId: "cred-1",
+      url: "https://api.example.test/v1/items",
+      method: "GET",
+    });
+    await vi.waitFor(() => expect(approvalQueue.listPending()).toHaveLength(2));
+
+    approvalQueue.resolve(approvalQueue.listPending()[0]!.approvalId, "version");
+
+    await expect(first).resolves.toMatchObject({ status: 200 });
+    await expect(second).resolves.toMatchObject({ status: 200 });
+    expect(approvalQueue.listPending()).toEqual([]);
+    expect(store.loadUrlBound("cred-1")?.grants).toContainEqual(
+      expect.objectContaining({
+        bindingId: "api",
+        resource: "https://api.example.test/v1",
+        action: "use",
+        scope: "version",
+        repoPath: "/repo",
+        effectiveVersion: "hash-1",
+      })
+    );
+  });
 });

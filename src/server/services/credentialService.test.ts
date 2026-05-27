@@ -13,6 +13,7 @@ import type { ClientConfigRecord } from "../../../packages/shared/src/credential
 import { createCredentialService } from "./credentialService.js";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
+import { createApprovalQueue } from "./approvalQueue.js";
 
 function verifiedTestCaller(
   callerId: string,
@@ -630,6 +631,70 @@ describe("credentialService", () => {
         scope: decision,
         repoPath: "/consumer",
         grantedBy: decision,
+      })
+    );
+  });
+
+  it("resolves queued credential use approvals covered by a trusted version grant", async () => {
+    const store = new MemoryCredentialStore();
+    const seedService = createCredentialService({
+      credentialStore: store as never,
+    });
+    const stored = (await seedService.handler(
+      { caller: verifiedTestCaller("worker:owner", "worker") },
+      "storeCredential",
+      [
+        {
+          label: "Example API",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          material: { type: "bearer-token", token: "secret-token" },
+        },
+      ]
+    )) as StoredCredentialSummary;
+    const emit = vi.fn();
+    const approvalQueue = createApprovalQueue({ eventService: { emit } as never });
+    const service = createCredentialService({
+      credentialStore: store as never,
+      approvalQueue,
+      sessionGrantStore: new CredentialSessionGrantStore(),
+    });
+    const callerA = createVerifiedCaller("worker:consumer-a", "worker", {
+      callerId: "worker:consumer-a",
+      callerKind: "worker",
+      repoPath: "/consumer",
+      effectiveVersion: "hash-1",
+    });
+    const callerB = createVerifiedCaller("worker:consumer-b", "worker", {
+      callerId: "worker:consumer-b",
+      callerKind: "worker",
+      repoPath: "/consumer",
+      effectiveVersion: "hash-1",
+    });
+
+    const first = service.handler({ caller: callerA }, "resolveCredential", [
+      { url: "https://api.example.test/v1" },
+    ]);
+    await vi.waitFor(() => expect(approvalQueue.listPending()).toHaveLength(1));
+    const second = service.handler({ caller: callerB }, "resolveCredential", [
+      { url: "https://api.example.test/v1" },
+    ]);
+    await vi.waitFor(() => expect(approvalQueue.listPending()).toHaveLength(2));
+
+    approvalQueue.resolve(approvalQueue.listPending()[0]!.approvalId, "version");
+
+    await expect(first).resolves.toMatchObject({ id: stored.id });
+    await expect(second).resolves.toMatchObject({ id: stored.id });
+    expect(approvalQueue.listPending()).toEqual([]);
+    expect((await store.loadUrlBound(stored.id))?.grants).toContainEqual(
+      expect.objectContaining({
+        bindingId: "fetch",
+        use: "fetch",
+        resource: "https://api.example.test/",
+        action: "use",
+        scope: "version",
+        repoPath: "/consumer",
+        effectiveVersion: "hash-1",
       })
     );
   });

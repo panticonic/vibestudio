@@ -78,6 +78,7 @@ function prettifyId(callerId: string): string {
 export function ConsentApprovalBar() {
   const [pendingAccess, setPendingAccess] = useState<PendingApproval[]>([]);
   const [secretConfigValues, setSecretConfigValues] = useState<Record<string, string>>({});
+  const pendingAccessRefreshSeq = useRef(0);
   const { navigateToId } = useNavigation();
 
   useEffect(() => {
@@ -91,24 +92,27 @@ export function ConsentApprovalBar() {
     return () => window.clearInterval(intervalId);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    void shellApproval
-      .listPending()
-      .then((list) => {
-        if (!cancelled) setPendingAccess(list);
-      })
-      .catch((err: unknown) => console.warn("[ConsentApprovalBar] listPending failed:", err));
-    return () => {
-      cancelled = true;
-    };
+  const refreshPendingAccess = useCallback(async () => {
+    const seq = ++pendingAccessRefreshSeq.current;
+    try {
+      const list = await shellApproval.listPending();
+      if (seq === pendingAccessRefreshSeq.current) {
+        setPendingAccess(list);
+      }
+    } catch (err) {
+      console.warn("[ConsentApprovalBar] listPending failed:", err);
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshPendingAccess();
+  }, [refreshPendingAccess]);
 
   useShellEvent(
     "shell-approval:pending-changed",
-    useCallback((payload: { pending: PendingApproval[] }) => {
-      setPendingAccess(payload.pending);
-    }, [])
+    useCallback(() => {
+      void refreshPendingAccess();
+    }, [refreshPendingAccess])
   );
 
   // Browsable index into pendingAccess. Stays put when later items resolve,
@@ -220,6 +224,7 @@ export function ConsentApprovalBar() {
   const decide = (decision: ApprovalDecision) => {
     void shellApproval
       .resolve(current.approvalId, decision)
+      .then(() => refreshPendingAccess())
       .catch((err: unknown) => console.error("[ConsentApprovalBar] resolve failed:", err));
   };
   const submitClientConfig = () => {

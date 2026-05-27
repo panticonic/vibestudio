@@ -51,6 +51,7 @@ vi.mock("./NavigationContext", () => ({
   }),
 }));
 
+import { useShellEvent } from "../shell/useShellEvent";
 import { ConsentApprovalBar } from "./ConsentApprovalBar";
 
 describe("ConsentApprovalBar shell presence", () => {
@@ -139,6 +140,7 @@ describe("ConsentApprovalBar queue browsing", () => {
   beforeEach(() => {
     shellClient.heartbeat.mockClear();
     shellClient.listPending.mockClear();
+    vi.mocked(useShellEvent).mockClear();
   });
 
   it("shows a queue navigator when multiple approvals are pending and steps through them", async () => {
@@ -222,5 +224,41 @@ describe("ConsentApprovalBar queue browsing", () => {
     const trustButton = screen.getByText("Trust and drive").closest("button");
     expect(trustButton).toBeTruthy();
     expect(trustButton?.getAttribute("data-accent-color")).toBe("red");
+  });
+
+  it("refreshes pending approvals from the server instead of trusting stale event payloads", async () => {
+    shellClient.listPending.mockResolvedValueOnce([
+      userlandApproval({ approvalId: "a1", title: "First approval" }),
+    ]);
+
+    render(
+      <Theme>
+        <ConsentApprovalBar />
+      </Theme>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("First approval")).toBeTruthy();
+    });
+
+    const eventCallback = vi
+      .mocked(useShellEvent)
+      .mock.calls.find(([event]) => event === "shell-approval:pending-changed")?.[1];
+    expect(eventCallback).toBeTruthy();
+
+    shellClient.listPending.mockResolvedValueOnce([]);
+    await act(async () => {
+      eventCallback?.({
+        pending: [
+          userlandApproval({ approvalId: "a1", title: "First approval" }),
+          userlandApproval({ approvalId: "a2", title: "Stale covered approval" }),
+        ],
+      } as never);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("First approval")).toBeNull();
+      expect(screen.queryByText("Stale covered approval")).toBeNull();
+    });
   });
 });
