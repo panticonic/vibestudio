@@ -20,7 +20,6 @@ export interface PanelTreeServiceDeps extends PanelAccessPermissionDeps {
 }
 
 const METHOD_ACCESS: Partial<Record<string, PanelAccessOperation>> = {
-  create: "openPanel",
   reload: "reload",
   close: "close",
   archive: "archive",
@@ -102,25 +101,6 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     return { ...meta, id: panelId };
   }
 
-  async function createParentTarget(
-    ctx: ServiceContext,
-    options: unknown
-  ): Promise<PanelAccessPermissionTarget> {
-    const explicitParentId = (options as { parentId?: unknown } | null)?.parentId;
-    if (typeof explicitParentId === "string") {
-      return targetFor(ctx, explicitParentId);
-    }
-    if (ctx.caller.runtime.kind === "panel" && deps.resolveRequesterPanel) {
-      const requesterPanel = await deps.resolveRequesterPanel(ctx.caller);
-      if (requesterPanel) return requesterPanel;
-    }
-    const parentId = ctx.caller.runtime.kind === "panel" ? ctx.caller.runtime.id : "workspace-root";
-    if (parentId === "workspace-root") {
-      return { id: parentId, title: "Workspace root" };
-    }
-    return targetFor(ctx, parentId);
-  }
-
   function operationFor(method: string, args: unknown[]): PanelAccessOperation | undefined {
     if (method === "callAgent") {
       const agentMethod = args[1];
@@ -147,15 +127,8 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
       const op = operationFor(method, args);
       if (op) {
         const panelId =
-          method === "movePanel"
-            ? (args[0] as { panelId: string }).panelId
-            : method === "create"
-              ? null
-              : (args[0] as string);
-        const target =
-          method === "create"
-            ? await createParentTarget(ctx, args[1])
-            : await targetFor(ctx, panelId as string);
+          method === "movePanel" ? (args[0] as { panelId: string }).panelId : (args[0] as string);
+        const target = await targetFor(ctx, panelId as string);
         const permission = await requirePanelAccessPermission(deps, ctx, op, target);
         if (!permission.allowed) {
           throw new Error(permission.reason ?? `${method} denied for panel ${target.id}`);
