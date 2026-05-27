@@ -120,6 +120,7 @@ export class ViewManager {
     notificationBarHeight: 0,
     consentBarHeight: 0,
   };
+  private panelViewportBounds: ViewBounds | null = null;
   /** ID of the currently visible panel (to apply bounds updates) */
   private visiblePanelId: string | null = null;
   /** Whether a shell overlay (dialog) is active — panel views are hidden while true */
@@ -542,6 +543,11 @@ export class ViewManager {
     managed.view.setBounds(bounds);
   }
 
+  setPanelViewportBounds(bounds: ViewBounds | null): void {
+    this.panelViewportBounds = bounds ? this.normalizeBounds(bounds) : null;
+    this.applyBoundsToVisiblePanel();
+  }
+
   /**
    * Forward a shell-layer click into an embedded view. This covers platforms
    * where a WebContentsView paints above the shell but native hit-testing still
@@ -670,6 +676,10 @@ export class ViewManager {
    * Calculate the bounds for the panel content area based on current layout state.
    */
   private calculatePanelBounds(): ViewBounds {
+    if (this.panelViewportBounds) {
+      return this.clampPanelBoundsToChrome(this.panelViewportBounds);
+    }
+
     const size = this.window.getContentSize();
     const windowWidth = size[0] ?? 0;
     const windowHeight = size[1] ?? 0;
@@ -699,6 +709,37 @@ export class ViewManager {
   updateLayout(update: Partial<LayoutState>): void {
     Object.assign(this.layoutState, update);
     this.applyBoundsToVisiblePanel();
+  }
+
+  private normalizeBounds(bounds: ViewBounds): ViewBounds {
+    return {
+      x: Math.max(0, Math.round(bounds.x)),
+      y: Math.max(0, Math.round(bounds.y)),
+      width: Math.max(0, Math.round(bounds.width)),
+      height: Math.max(0, Math.round(bounds.height)),
+    };
+  }
+
+  private chromeTopOffset(): number {
+    const { titleBarHeight, saveBarHeight, notificationBarHeight, consentBarHeight } =
+      this.layoutState;
+    return titleBarHeight + notificationBarHeight + saveBarHeight + consentBarHeight;
+  }
+
+  private clampPanelBoundsToChrome(bounds: ViewBounds): ViewBounds {
+    const [windowWidth = 0, windowHeight = 0] = this.window.getContentSize();
+    const minY = this.chromeTopOffset();
+    const y = Math.max(bounds.y, minY);
+    const lostHeight = Math.max(0, y - bounds.y);
+    const maxWidth = Math.max(0, windowWidth - bounds.x);
+    const maxHeight = Math.max(0, windowHeight - y);
+
+    return {
+      x: bounds.x,
+      y,
+      width: Math.min(bounds.width, maxWidth),
+      height: Math.min(Math.max(0, bounds.height - lostHeight), maxHeight),
+    };
   }
 
   /**
@@ -1008,6 +1049,22 @@ export class ViewManager {
       capabilities: managed.appCapabilities,
       appIdentity: managed.appIdentity,
     };
+  }
+
+  getVisibleHostChromeAppId(): string | null {
+    for (const [id, managed] of this.views) {
+      if (managed.type === "app" && managed.hostChrome && managed.visible) {
+        return id;
+      }
+    }
+    return null;
+  }
+
+  openHostChromeAppDevTools(mode: "detach" | "right" | "bottom" = "detach"): boolean {
+    const appId = this.getVisibleHostChromeAppId();
+    if (!appId) return false;
+    this.openDevTools(appId, mode);
+    return true;
   }
 
   /**

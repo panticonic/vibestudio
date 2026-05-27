@@ -232,17 +232,17 @@ async function createServerPanelTreeBridge(
     if (origin === "mirror") return;
     const normalized = title?.trim();
     if (!normalized) return;
-    await sync({ force: true });
     const target = await panelManager.resolveTitleTargetSlot(entityId);
     if (!target) return;
-    const panel = registry.getPanel(target.slotId);
-    if (panel?.title === normalized) return;
-    if (target.titleIsAlreadyPersistedForSlot) {
-      registry.updateTitle(target.slotId, normalized);
-    } else {
+    if (!target.titleIsAlreadyPersistedForSlot && origin !== "set-explicit") return;
+    if (!target.titleIsAlreadyPersistedForSlot) {
       await panelManager.updateTitle(asPanelSlotId(target.slotId), normalized);
     }
-    emitTreeSnapshot();
+    deps.eventService?.emit("panel-title-updated", {
+      panelId: target.slotId,
+      title: normalized,
+      explicit: origin === "set-explicit",
+    });
   });
   const withRuntimeEntity = async <T extends { panelId: string }>(
     item: T
@@ -335,7 +335,11 @@ async function createServerPanelTreeBridge(
       case "metadata": {
         await sync();
         const panelId = String(args[0]);
-        const panel = registry.getPanel(panelId);
+        let panel = registry.getPanel(panelId);
+        if (!panel) {
+          await sync({ force: true });
+          panel = registry.getPanel(panelId);
+        }
         if (!panel) return null;
         const snapshot = getCurrentSnapshot(panel);
         return {
@@ -635,7 +639,7 @@ export interface CommonDeps {
     listener: (
       entityId: string,
       title: string | undefined,
-      origin: "set" | "mirror" | "clear"
+      origin: "set" | "set-explicit" | "mirror" | "clear"
     ) => void | Promise<void>
   ) => () => void;
 }
@@ -658,6 +662,17 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   const getPanelTreeBridge = () => {
     serverPanelTreeBridgePromise ??= createServerPanelTreeBridge(deps);
     return serverPanelTreeBridgePromise;
+  };
+  const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
+  const isKnownPanelSlot = async (targetId: string): Promise<boolean> => {
+    try {
+      const slot = (await deps.dispatcher.dispatch(serverCtx, "workspace-state", "slot.get", [
+        targetId,
+      ])) as SlotRow | null;
+      return Boolean(slot && slot.closed_at == null);
+    } catch {
+      return false;
+    }
   };
   const requestPanelMetadataForServices = async (
     panelId: string,
@@ -780,8 +795,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             if (!resolved) return null;
             return resolved.supportsCdp ? resolved.hostConnectionId : null;
           },
-          isPanelKnown: async (targetId) =>
-            Boolean(await requestPanelMetadataForServices(targetId)),
+          isPanelKnown: isKnownPanelSlot,
         });
         deps.panelRuntimeCoordinator?.onLeaseChanged((event) => {
           cdpBridge.handleRuntimeLeaseChanged(event);

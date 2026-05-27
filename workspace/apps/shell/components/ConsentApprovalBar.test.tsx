@@ -6,6 +6,7 @@ import { Theme } from "@radix-ui/themes";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PendingCapabilityApproval,
+  PendingUnitBatchApproval,
   PendingUserlandApproval,
 } from "@natstack/shared/approvals";
 
@@ -136,6 +137,34 @@ function capabilityApproval(
   };
 }
 
+function unitBatchApproval(
+  partial: Partial<PendingUnitBatchApproval> & { approvalId: string }
+): PendingUnitBatchApproval {
+  return {
+    kind: "unit-batch",
+    trigger: partial.trigger ?? "startup",
+    callerId: partial.callerId ?? "system:units",
+    callerKind: partial.callerKind ?? "system",
+    repoPath: partial.repoPath ?? "meta",
+    effectiveVersion: partial.effectiveVersion ?? "ev",
+    requestedAt: partial.requestedAt ?? Date.now(),
+    title: partial.title ?? "Approve workspace extensions",
+    description: partial.description ?? "This workspace declares extensions.",
+    approvalId: partial.approvalId,
+    units:
+      partial.units ??
+      Array.from({ length: 2 }, (_, index) => ({
+        unitKind: "extension" as const,
+        unitName: `@workspace-extensions/ext-${index + 1}`,
+        displayName: `Extension ${index + 1}`,
+        version: "0.1.0",
+        source: { kind: "internal-git" as const, repo: `extensions/ext-${index + 1}`, ref: "main" },
+        ev: `ev-${index + 1}`,
+        capabilities: ["node:fs", "node:process"],
+      })),
+  };
+}
+
 describe("ConsentApprovalBar queue browsing", () => {
   beforeEach(() => {
     shellClient.heartbeat.mockClear();
@@ -224,6 +253,32 @@ describe("ConsentApprovalBar queue browsing", () => {
     const trustButton = screen.getByText("Trust and drive").closest("button");
     expect(trustButton).toBeTruthy();
     expect(trustButton?.getAttribute("data-accent-color")).toBe("red");
+  });
+
+  it("keeps unit-batch entries collapsed inside the approval bar by default", async () => {
+    shellClient.listPending.mockResolvedValueOnce([
+      unitBatchApproval({ approvalId: "extensions" }),
+    ]);
+
+    render(
+      <Theme>
+        <ConsentApprovalBar />
+      </Theme>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Extension 1 · v0.1.0")).toBeTruthy();
+    });
+
+    const firstUnitDetails = screen
+      .getByText("Extension 1 · v0.1.0")
+      .closest("details") as HTMLDetailsElement | null;
+    const secondUnitDetails = screen
+      .getByText("Extension 2 · v0.1.0")
+      .closest("details") as HTMLDetailsElement | null;
+
+    expect(firstUnitDetails?.open).toBe(false);
+    expect(secondUnitDetails?.open).toBe(false);
   });
 
   it("refreshes pending approvals from the server instead of trusting stale event payloads", async () => {

@@ -16,6 +16,7 @@ function makeViewManager(capabilities: string[] = []) {
         : null
     ),
     updateLayout: vi.fn(),
+    setPanelViewportBounds: vi.fn(),
     setThemeCss: vi.fn(),
     setViewVisible: vi.fn(),
   };
@@ -35,6 +36,22 @@ describe("view service", () => {
     ).resolves.toBeUndefined();
 
     expect(vm.updateLayout).toHaveBeenCalledWith({ sidebarVisible: true });
+  });
+
+  it("allows a panel-hosting workspace app to report the panel viewport", async () => {
+    const vm = makeViewManager(["panel-hosting"]);
+    const service = createViewService({ getViewManager: () => vm as never });
+    const bounds = { x: 12, y: 80, width: 700, height: 500 };
+
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
+        "updatePanelViewportBounds",
+        [bounds]
+      )
+    ).resolves.toBeUndefined();
+
+    expect(vm.setPanelViewportBounds).toHaveBeenCalledWith(bounds);
   });
 
   it("rejects ordinary apps for host-wide view controls", async () => {

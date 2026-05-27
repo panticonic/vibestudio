@@ -1273,6 +1273,7 @@ app.on("ready", async () => {
     shellEventSubscriptions.add("external-open:open");
     shellEventSubscriptions.add("browser-panel:open");
     shellEventSubscriptions.add("panel-tree-updated");
+    shellEventSubscriptions.add("panel-title-updated");
     shellEventSubscriptions.add("panel:runtimeLeaseChanged");
     await replayShellSubscriptionsToServer();
     workspaceId = serverSession.workspaceId;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect } from "react";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import { Box, Button, Card, Flex, Heading, IconButton, Spinner, Text } from "@radix-ui/themes";
 import { useIsMobile } from "@workspace/react/responsive";
@@ -476,11 +476,67 @@ export function PanelStack({
   }, [visiblePanel?.id]);
 
   const previousVisiblePanelId = useRef<string | null>(null);
+  const panelViewportRef = useRef<HTMLDivElement | null>(null);
+  const lastPanelViewportBoundsKeyRef = useRef<string | null>(null);
 
   // Notify main process of layout changes (sidebar visibility and width)
   const mobileSidebarWidth = Math.max(0, Math.min(360, viewportWidth - 48));
   const effectiveSidebarWidth = isMobile ? mobileSidebarWidth : sidebarWidth;
   const sidebarVisible = navigationMode === "tree";
+
+  const reportPanelViewportBounds = useCallback(() => {
+    const el = panelViewportRef.current;
+    const rect = el?.getBoundingClientRect();
+    const bounds =
+      rect && rect.width > 0 && rect.height > 0
+        ? {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            width: Math.round(rect.width),
+            height: Math.round(rect.height),
+          }
+        : null;
+    const key = bounds
+      ? `${bounds.x}:${bounds.y}:${bounds.width}:${bounds.height}`
+      : "null";
+
+    if (lastPanelViewportBoundsKeyRef.current === key) {
+      return Promise.resolve();
+    }
+
+    lastPanelViewportBoundsKeyRef.current = key;
+    return view
+      .updatePanelViewportBounds(bounds)
+      .catch((err: unknown) => console.warn("[PanelStack] Panel viewport update failed:", err));
+  }, []);
+
+  useLayoutEffect(() => {
+    void reportPanelViewportBounds();
+
+    const el = panelViewportRef.current;
+    if (!el || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => void reportPanelViewportBounds());
+    observer.observe(el);
+    const handleResize = () => void reportPanelViewportBounds();
+    const handleViewportInvalidated = () => void reportPanelViewportBounds();
+    window.addEventListener("resize", handleResize);
+    window.addEventListener("shell-panel-viewport-invalidated", handleViewportInvalidated);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", handleResize);
+      window.removeEventListener("shell-panel-viewport-invalidated", handleViewportInvalidated);
+      lastPanelViewportBoundsKeyRef.current = null;
+      void view.updatePanelViewportBounds(null).catch(() => {});
+    };
+  }, [reportPanelViewportBounds]);
+
+  useLayoutEffect(() => {
+    void reportPanelViewportBounds();
+  }, [effectiveSidebarWidth, isMobile, reportPanelViewportBounds, sidebarVisible]);
 
   // Show/hide panel views when visible panel changes
   // Main process calculates bounds based on layout state
@@ -505,6 +561,7 @@ export function PanelStack({
     if (shouldShowPanelView(visiblePanel?.artifacts)) {
       void (async () => {
         try {
+          await reportPanelViewportBounds();
           await view.setVisible(panelId, true);
           await view.updateLayout({
             sidebarVisible,
@@ -517,6 +574,7 @@ export function PanelStack({
     }
   }, [
     effectiveSidebarWidth,
+    reportPanelViewportBounds,
     sidebarVisible,
     visiblePanel?.id,
     visiblePanel?.artifacts?.htmlPath,
@@ -1047,13 +1105,25 @@ export function PanelStack({
             style={{
               flex: 1,
               minHeight: 0,
+              height: "100%",
               overflow: "hidden",
               padding: 0,
               display: "flex",
               flexDirection: "column",
             }}
           >
-            <Box style={{ flex: 1, minHeight: 0, position: "relative" }}>
+            <Box
+              ref={panelViewportRef}
+              style={{
+                flex: "1 1 0",
+                width: "100%",
+                height: "100%",
+                minHeight: 0,
+                position: "relative",
+                display: "flex",
+                flexDirection: "column",
+              }}
+            >
               {renderPanelContent()}
             </Box>
           </Card>

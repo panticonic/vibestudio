@@ -78,7 +78,11 @@ export interface RuntimeServiceDeps {
    * call `runtime.setTitle(title)` to populate the title that approval UIs
    * surface in place of the opaque entity id.
    */
-  setEntityTitle?: (entityId: string, title: string | undefined) => void | Promise<void>;
+  setEntityTitle?: (
+    entityId: string,
+    title: string | undefined,
+    options?: { explicit?: boolean }
+  ) => void | Promise<void>;
 }
 
 const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
@@ -317,7 +321,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           "Return the contextId for an entity (or null if unknown). Cached read; falls back to DO.",
       },
       setTitle: {
-        args: z.tuple([z.string().nullable()]),
+        args: z.tuple([
+          z.string().nullable(),
+          z.object({ explicit: z.boolean().optional() }).optional(),
+        ]),
         description:
           "Set a server-controlled display title for the calling entity. Surfaced by approval UIs in place of the opaque id. Pass null/empty to clear.",
       },
@@ -338,7 +345,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           return await resolveContext(id);
         }
         case "setTitle": {
-          const [title] = args as [string | null];
+          const [title, options] = args as [string | null, { explicit?: boolean } | undefined];
           const callerKind = ctx.caller.runtime.kind;
           if (
             callerKind !== "panel" &&
@@ -348,7 +355,9 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           ) {
             throw new Error(`runtime.setTitle is only available to panel/app/worker/do callers`);
           }
-          await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title);
+          await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title, {
+            explicit: options?.explicit === true,
+          });
           return;
         }
         default:

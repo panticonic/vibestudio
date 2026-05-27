@@ -123,6 +123,14 @@ describe("createEntityTitleService", () => {
     expect(listener).toHaveBeenCalledWith("panel:dup", "Same", "set");
   });
 
+  it("marks explicit setTitle calls distinctly", async () => {
+    const { svc } = svcWithDispatch();
+    const listener = vi.fn();
+    svc.onChanged(listener);
+    await svc.setTitle("panel:explicit", "Pinned", { explicit: true });
+    expect(listener).toHaveBeenCalledWith("panel:explicit", "Pinned", "set-explicit");
+  });
+
   it("marks explicit clears distinctly", async () => {
     const { svc } = svcWithDispatch();
     await svc.setTitle("panel:clear", "Temporary");

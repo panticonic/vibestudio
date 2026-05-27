@@ -276,6 +276,80 @@ describe("ViewManager", () => {
       expect(view.setBounds).toHaveBeenCalledWith(bounds);
     });
 
+    it("uses reported panel viewport bounds over reconstructed shell chrome layout", () => {
+      const view = vm.createView({
+        id: "test-view",
+        type: "panel",
+      });
+
+      vm.updateLayout({
+        titleBarHeight: 32,
+        sidebarVisible: true,
+        sidebarWidth: 260,
+        consentBarHeight: 0,
+      });
+      vm.setPanelViewportBounds({ x: 8.4, y: 164.6, width: 1180.2, height: 620.7 });
+      vm.setViewVisible("test-view", true);
+
+      expect(view.setBounds).toHaveBeenLastCalledWith({
+        x: 8,
+        y: 165,
+        width: 1180,
+        height: 621,
+      });
+
+      vm.updateLayout({ sidebarVisible: false, consentBarHeight: 0 });
+
+      expect(view.setBounds).toHaveBeenLastCalledWith({
+        x: 8,
+        y: 165,
+        width: 1180,
+        height: 621,
+      });
+    });
+
+    it("clamps stale reported panel viewport bounds below host chrome", () => {
+      const view = vm.createView({
+        id: "test-view",
+        type: "panel",
+      });
+
+      vm.setPanelViewportBounds({ x: 248, y: 32, width: 952, height: 768 });
+      vm.setViewVisible("test-view", true);
+      vm.updateLayout({
+        titleBarHeight: 32,
+        notificationBarHeight: 0,
+        saveBarHeight: 0,
+        consentBarHeight: 130,
+      });
+
+      expect(view.setBounds).toHaveBeenLastCalledWith({
+        x: 248,
+        y: 162,
+        width: 952,
+        height: 638,
+      });
+    });
+
+    it("falls back to chrome layout when no panel viewport bounds are reported", () => {
+      const view = vm.createView({
+        id: "test-view",
+        type: "panel",
+      });
+
+      vm.setPanelViewportBounds({ x: 8, y: 164, width: 1180, height: 620 });
+      vm.setPanelViewportBounds(null);
+      vm.updateLayout({ sidebarVisible: true, sidebarWidth: 260, titleBarHeight: 32 });
+      vm.setViewVisible("test-view", true);
+
+      expect(view.setBounds).toHaveBeenLastCalledWith({
+        x: 260,
+        y: 32,
+        width: 940,
+        height: 768,
+      });
+    });
+
     it("setViewVisible shows and hides view", () => {
       const view = vm.createView({
         id: "test-view",
@@ -320,6 +394,25 @@ describe("ViewManager", () => {
         width: 940,
         height: 768,
       });
+    });
+
+    it("opens devtools on the visible host chrome app instead of the bootstrap shell", () => {
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      const shellContents = vm.getShellWebContents();
+
+      expect(vm.openHostChromeAppDevTools()).toBe(false);
+
+      vm.setViewVisible("@workspace-apps/shell", true);
+
+      expect(vm.getVisibleHostChromeAppId()).toBe("@workspace-apps/shell");
+      expect(vm.openHostChromeAppDevTools()).toBe(true);
+      expect(hostView.webContents.openDevTools).toHaveBeenCalledWith({ mode: "detach" });
+      expect(shellContents.openDevTools).not.toHaveBeenCalled();
     });
 
     it("ignores hiding a missing view", () => {

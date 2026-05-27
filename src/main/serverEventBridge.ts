@@ -91,6 +91,22 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       return;
     }
 
+    if (bareEvent === "panel-title-updated") {
+      const { panelId, title, explicit } = payload as {
+        panelId?: unknown;
+        title?: unknown;
+        explicit?: unknown;
+      };
+      if (typeof panelId === "string" && typeof title === "string") {
+        panelOrchestrator?.applyServerPanelTitleUpdate({
+          panelId,
+          title,
+          explicit: explicit === true,
+        });
+      }
+      return;
+    }
+
     if (bareEvent === "apps:available") {
       void appOrchestrator
         ?.applyAppAvailable(payload as AppAvailableEvent)

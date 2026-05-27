@@ -22,11 +22,15 @@ import type { DODispatch, DORef } from "../doDispatch.js";
 
 export type { DODispatch, DORef };
 
-export type EntityTitleChangeOrigin = "set" | "mirror" | "clear";
+export type EntityTitleChangeOrigin = "set" | "set-explicit" | "mirror" | "clear";
 
 export interface EntityTitleService {
   /** Authoritative write: dispatches to WorkspaceDO and refreshes the cache. */
-  setTitle(entityId: string, title: string | undefined | null): Promise<void>;
+  setTitle(
+    entityId: string,
+    title: string | undefined | null,
+    options?: { explicit?: boolean }
+  ): Promise<void>;
   /** Synchronous read against the in-memory cache. */
   getTitle(entityId: string): string | undefined;
   /**
@@ -132,9 +136,9 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
   }
 
   return {
-    async setTitle(entityId, title) {
+    async setTitle(entityId, title, options) {
       const next = sanitizeTitle(title);
-      applyToCache(entityId, next, "set");
+      applyToCache(entityId, next, options?.explicit ? "set-explicit" : "set");
       await writeThrough(entityId, next ?? null);
     },
 

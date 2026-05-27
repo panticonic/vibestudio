@@ -469,7 +469,21 @@ describe("runtimeService.setTitle", () => {
       service.handler({ caller }, "setTitle", ["Workspace Shell"])
     ).resolves.toBeUndefined();
 
-    expect(setEntityTitle).toHaveBeenCalledWith("app:apps/shell:desktop", "Workspace Shell");
+    expect(setEntityTitle).toHaveBeenCalledWith("app:apps/shell:desktop", "Workspace Shell", {
+      explicit: false,
+    });
+  });
+
+  it("passes explicit title intent through to the title registry", async () => {
+    const setEntityTitle = vi.fn();
+    const { service } = await buildDeps({ setEntityTitle });
+    const caller = appCaller("app:apps/shell:desktop");
+
+    await service.handler({ caller }, "setTitle", ["Workspace Shell", { explicit: true }]);
+
+    expect(setEntityTitle).toHaveBeenCalledWith("app:apps/shell:desktop", "Workspace Shell", {
+      explicit: true,
+    });
   });
 });
 

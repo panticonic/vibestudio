@@ -67,6 +67,14 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           }),
         ]),
       },
+      updatePanelViewportBounds: {
+        args: z.tuple([
+          z.union([
+            z.null(),
+            z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
+          ]),
+        ]),
+      },
       setShellOverlay: { args: z.tuple([z.boolean()]) },
       showNativeShellOverlay: {
         args: z.tuple([
@@ -156,6 +164,17 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
             consentBarHeight?: number;
           };
           vm.updateLayout(layoutUpdate);
+          return;
+        }
+        case "updatePanelViewportBounds": {
+          assertViewHost(
+            vm,
+            ctx.caller.runtime.id,
+            ctx.caller.runtime.kind,
+            "updatePanelViewportBounds"
+          );
+          const bounds = args[0] as { x: number; y: number; width: number; height: number } | null;
+          vm.setPanelViewportBounds(bounds);
           return;
         }
         case "setShellOverlay": {

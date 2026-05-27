@@ -1317,7 +1317,8 @@ async function main() {
             approvalQueue,
             grantStore: capabilityGrantStore,
           },
-          setEntityTitle: (entityId, title) => entityTitleService.setTitle(entityId, title),
+          setEntityTitle: (entityId, title, options) =>
+            entityTitleService.setTitle(entityId, title, options),
         });
       },
       getServiceDefinition() {
@@ -2048,7 +2049,7 @@ async function main() {
       listener: (
         entityId: string,
         title: string | undefined,
-        origin: "set" | "mirror" | "clear"
+        origin: "set" | "set-explicit" | "mirror" | "clear"
       ) => void | Promise<void>
     ) =>
       entityTitleService.onChanged((entityId, title, origin) => {

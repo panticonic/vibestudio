@@ -54,6 +54,7 @@ function createOrchestrator(
       source: "panels/created-panel",
       options: {},
     })),
+    updateTitle: vi.fn(async (_panelId: string, _title: string) => {}),
     updateStateArgs: vi.fn(async (panelId: string, updates: Record<string, unknown>) => {
       const panel = registry.getPanel(panelId);
       const current = panel
@@ -607,11 +608,44 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
 
     await orchestrator.applyServerPanelTreeSnapshot({
       revision: 1,
-      rootPanels: [makePanel("root", [], { title: "New title" })],
+      rootPanels: [makePanel("root", [makePanel("child")], { title: "New title" })],
     });
 
     expect(repopulate).toHaveBeenCalledOnce();
     expect(registry.getPanel("root")?.title).toBe("New title");
+    expect(registry.getPanel("child")).toBeDefined();
+  });
+
+  it("patches title-only server snapshots without repopulating the tree", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+    const repopulate = vi.spyOn(registry, "repopulate");
+
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [makePanel("root", [], { title: "New title" })],
+    });
+
+    expect(repopulate).not.toHaveBeenCalled();
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
+    expect(registry.getPanel("root")?.title).toBe("New title");
+  });
+
+  it("prevents page-title fallback updates from overwriting explicit runtime titles", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
+    const { orchestrator, shellCore } = createOrchestrator(registry);
+
+    orchestrator.applyServerPanelTitleUpdate({
+      panelId: "root",
+      title: "Explicit title",
+      explicit: true,
+    });
+    await orchestrator.updatePanelTitle("root", "Fallback page title");
+
+    expect(shellCore.updateTitle).not.toHaveBeenCalled();
+    expect(registry.getPanel("root")?.title).toBe("Explicit title");
   });
 });
 

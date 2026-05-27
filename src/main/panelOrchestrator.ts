@@ -120,6 +120,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   private nextAgentRequestId = 1;
   private viewRevision = 0;
   private lastAppliedServerPanelTreeRevision = 0;
+  private readonly explicitTitlePanelIds = new Set<string>();
   private readonly restorePolicy: PanelRestorePolicy;
 
   constructor(deps: PanelOrchestratorDeps) {
@@ -644,6 +645,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   }
 
   async updatePanelTitle(panelId: string, title: string): Promise<void> {
+    if (this.explicitTitlePanelIds.has(panelId)) return;
     await this.shellCore.updateTitle(asPanelSlotId(panelId), title);
   }
 
@@ -970,6 +972,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     if (this.panelTreesMatchSemantically(this.registry.getRootPanels(), snapshot.rootPanels)) {
       return;
     }
+    if (this.panelTreesMatchIgnoringTitles(this.registry.getRootPanels(), snapshot.rootPanels)) {
+      this.applyPanelTitlesFromSnapshot(snapshot.rootPanels);
+      return;
+    }
     this.registry.repopulate(snapshot.rootPanels);
     await this.syncRuntimeLeaseSnapshot().catch((error: unknown) => {
       log.warn(
@@ -978,6 +984,20 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
         }`
       );
     });
+  }
+
+  applyServerPanelTitleUpdate(update: {
+    panelId: string;
+    title: string;
+    explicit?: boolean;
+  }): void {
+    const panel = this.registry.getPanel(update.panelId);
+    if (!panel) return;
+    if (update.explicit) {
+      this.explicitTitlePanelIds.add(update.panelId);
+    }
+    if (panel.title === update.title) return;
+    this.registry.updateTitle(update.panelId, update.title);
   }
 
   private panelTreesMatchSemantically(
@@ -997,6 +1017,31 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     if ((current.selectedChildId ?? null) !== (incoming.selectedChildId ?? null)) return false;
     if (!this.panelSnapshotsMatchSemantically(current, incoming)) return false;
     return this.panelTreesMatchSemantically(current.children, incoming.children);
+  }
+
+  private panelTreesMatchIgnoringTitles(
+    current: readonly Panel[],
+    incoming: readonly Panel[]
+  ): boolean {
+    if (current.length !== incoming.length) return false;
+    return current.every((panel, index) =>
+      this.panelsMatchIgnoringTitle(panel, assertPresent(incoming[index]))
+    );
+  }
+
+  private panelsMatchIgnoringTitle(current: Panel, incoming: Panel): boolean {
+    if (current.id !== incoming.id) return false;
+    if ((current.positionId ?? null) !== (incoming.positionId ?? null)) return false;
+    if ((current.selectedChildId ?? null) !== (incoming.selectedChildId ?? null)) return false;
+    if (!this.panelSnapshotsMatchSemantically(current, incoming)) return false;
+    return this.panelTreesMatchIgnoringTitles(current.children, incoming.children);
+  }
+
+  private applyPanelTitlesFromSnapshot(panels: readonly Panel[]): void {
+    for (const incoming of panels) {
+      this.applyServerPanelTitleUpdate({ panelId: incoming.id, title: incoming.title });
+      this.applyPanelTitlesFromSnapshot(incoming.children);
+    }
   }
 
   private panelSnapshotsMatchSemantically(current: Panel, incoming: Panel): boolean {

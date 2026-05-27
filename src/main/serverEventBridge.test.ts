@@ -8,6 +8,7 @@ function createHarness() {
     applyBuildComplete: vi.fn(),
     applyRuntimeLeaseChanged: vi.fn(async () => {}),
     applyServerPanelTreeSnapshot: vi.fn(async () => undefined),
+    applyServerPanelTitleUpdate: vi.fn(),
     createBrowserUrlPanel: vi.fn(async () => ({ id: "browser", title: "Browser" })),
     recoverShellSnapshot: vi.fn(async () => undefined),
   };
@@ -79,6 +80,19 @@ describe("createServerEventBridge", () => {
 
     expect(panelOrchestrator.applyServerPanelTreeSnapshot).toHaveBeenCalledWith(snapshot);
     expect(panelOrchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
+    expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("applies server panel title updates without forwarding raw events", () => {
+    const { handle, eventService, panelOrchestrator } = createHarness();
+
+    handle("event:panel-title-updated", { panelId: "panel-1", title: "New title", explicit: true });
+
+    expect(panelOrchestrator.applyServerPanelTitleUpdate).toHaveBeenCalledWith({
+      panelId: "panel-1",
+      title: "New title",
+      explicit: true,
+    });
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 

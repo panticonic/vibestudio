@@ -206,16 +206,24 @@ export function ConsentApprovalBar() {
   useEffect(() => {
     if (!current) {
       void view.updateLayout({ consentBarHeight: 0 });
+      window.dispatchEvent(new Event("shell-panel-viewport-invalidated"));
       return;
     }
     const el = barRef.current;
-    const update = () => void view.updateLayout({ consentBarHeight: el?.offsetHeight ?? 0 });
+    const update = () => {
+      void view.updateLayout({ consentBarHeight: el?.offsetHeight ?? 0 });
+      window.dispatchEvent(new Event("shell-panel-viewport-invalidated"));
+      window.requestAnimationFrame(() => {
+        window.dispatchEvent(new Event("shell-panel-viewport-invalidated"));
+      });
+    };
     update();
     const observer = el ? new ResizeObserver(update) : null;
     if (el) observer?.observe(el);
     return () => {
       observer?.disconnect();
       void view.updateLayout({ consentBarHeight: 0 });
+      window.dispatchEvent(new Event("shell-panel-viewport-invalidated"));
     };
   }, [current]);
 
@@ -1343,7 +1351,7 @@ function UnitBatchDetails({ approval }: { approval: PendingUnitBatchApproval }) 
         const deps = Object.entries(entry.dependencyEvs ?? {});
         const external = Object.entries(entry.externalDeps ?? {});
         return (
-          <details key={`${entry.unitKind}:${entry.unitName}`} className="approval-details" open>
+          <details key={`${entry.unitKind}:${entry.unitName}`} className="approval-details">
             <summary>
               <ChevronDownIcon className="approval-details-chevron" width={13} height={13} />
               {entry.displayName}
