@@ -27,6 +27,21 @@ export default function MainMode() {
     void view.setShellOverlay(shellOverlayActive);
   }, [shellOverlayActive]);
 
+  useEffect(() => {
+    void view
+      .setHostedShellReady({ ready: true })
+      .catch((err: unknown) => console.warn("[MainMode] Hosted shell ready failed:", err));
+    const markNotReady = () => {
+      void view.setHostedShellReady({ ready: false }).catch(() => {});
+    };
+    window.addEventListener("pagehide", markNotReady);
+    window.addEventListener("beforeunload", markNotReady);
+    return () => {
+      window.removeEventListener("pagehide", markNotReady);
+      window.removeEventListener("beforeunload", markNotReady);
+    };
+  }, []);
+
   return (
     <>
       <PanelApp />

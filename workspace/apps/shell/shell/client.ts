@@ -236,26 +236,34 @@ export interface NativeShellOverlayEvent {
   type: string;
   payload?: unknown;
 }
+export interface NativePanelSlotBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 type NativeShellOverlayBridge = {
   onEvent: (handler: (event: NativeShellOverlayEvent) => void) => () => void;
 };
 export const view = {
-  setVisible: (viewId: string, visible: boolean) =>
-    rpc.call<undefined>("main", "view.setVisible", [viewId, visible]),
   forwardMouseClick: (viewId: string, point: { x: number; y: number }) =>
     rpc.call<boolean>("main", "view.forwardMouseClick", [viewId, point]),
   setThemeCss: (css: string) => rpc.call<undefined>("main", "view.setThemeCss", [css]),
-  updateLayout: (layout: {
-    titleBarHeight?: number;
-    sidebarVisible?: boolean;
-    sidebarWidth?: number;
-    saveBarHeight?: number;
-    notificationBarHeight?: number;
-    consentBarHeight?: number;
-  }) => rpc.call<undefined>("main", "view.updateLayout", [layout]),
-  updatePanelViewportBounds: (
-    bounds: { x: number; y: number; width: number; height: number } | null
-  ) => rpc.call<undefined>("main", "view.updatePanelViewportBounds", [bounds]),
+  bindNativePanelSlot: (request: {
+    nativeSlotId: string;
+    panelId: string;
+    bounds: NativePanelSlotBounds;
+    focused?: boolean;
+  }) => rpc.call<undefined>("main", "view.bindNativePanelSlot", [request]),
+  updateNativePanelSlot: (request: {
+    nativeSlotId: string;
+    bounds?: NativePanelSlotBounds;
+    focused?: boolean;
+  }) => rpc.call<undefined>("main", "view.updateNativePanelSlot", [request]),
+  clearNativePanelSlot: (request: { nativeSlotId: string }) =>
+    rpc.call<undefined>("main", "view.clearNativePanelSlot", [request]),
+  setHostedShellReady: (request: { ready: boolean }) =>
+    rpc.call<undefined>("main", "view.setHostedShellReady", [request]),
   setShellOverlay: (active: boolean) =>
     rpc.call<undefined>("main", "view.setShellOverlay", [active]),
   showNativeShellOverlay: (options: NativeShellOverlayOptions) =>

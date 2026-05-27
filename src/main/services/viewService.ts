@@ -27,6 +27,39 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
     throw new Error(`view.${method}: caller '${callerId}' cannot host workspace views`);
   };
 
+  const assertNativePanelSlotHost = (
+    vm: ViewManager,
+    callerId: string,
+    callerKind: string,
+    method: string
+  ): void => {
+    const viewInfo = vm.getViewInfo(callerId);
+    if (
+      callerKind === "app" &&
+      viewInfo?.type === "app" &&
+      viewInfo.capabilities.includes("panel-hosting")
+    ) {
+      return;
+    }
+    throw new Error(`view.${method}: caller '${callerId}' cannot place native panel slots`);
+  };
+
+  const assertLegacyShellLayoutHost = (
+    callerId: string,
+    callerKind: string,
+    method: string
+  ): void => {
+    if (callerKind === "shell") return;
+    throw new Error(`view.${method}: hosted apps must place panels with native panel slots`);
+  };
+
+  const boundsSchema = z.object({
+    x: z.number(),
+    y: z.number(),
+    width: z.number(),
+    height: z.number(),
+  });
+
   const assertOwnsOrViewHost = (
     vm: ViewManager,
     callerId: string,
@@ -68,12 +101,32 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
         ]),
       },
       updatePanelViewportBounds: {
+        args: z.tuple([z.union([z.null(), boundsSchema])]),
+      },
+      bindNativePanelSlot: {
         args: z.tuple([
-          z.union([
-            z.null(),
-            z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
-          ]),
+          z.object({
+            nativeSlotId: z.string(),
+            panelId: z.string(),
+            bounds: boundsSchema,
+            focused: z.boolean().optional(),
+          }),
         ]),
+      },
+      updateNativePanelSlot: {
+        args: z.tuple([
+          z.object({
+            nativeSlotId: z.string(),
+            bounds: boundsSchema.optional(),
+            focused: z.boolean().optional(),
+          }),
+        ]),
+      },
+      clearNativePanelSlot: {
+        args: z.tuple([z.object({ nativeSlotId: z.string() })]),
+      },
+      setHostedShellReady: {
+        args: z.tuple([z.object({ ready: z.boolean() })]),
       },
       setShellOverlay: { args: z.tuple([z.boolean()]) },
       showNativeShellOverlay: {
@@ -132,6 +185,16 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
         }
         case "setVisible": {
           const [viewId, visible] = args as [string, boolean];
+          const targetInfo = vm.getViewInfo(viewId);
+          if (
+            ctx.caller.runtime.kind === "app" &&
+            ctx.caller.runtime.id !== viewId &&
+            targetInfo?.type === "panel"
+          ) {
+            throw new Error(
+              `view.setVisible: hosted apps must place panel views with native panel slots`
+            );
+          }
           assertOwnsOrViewHost(
             vm,
             ctx.caller.runtime.id,
@@ -154,7 +217,11 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           return;
         }
         case "updateLayout": {
-          assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "updateLayout");
+          assertLegacyShellLayoutHost(
+            ctx.caller.runtime.id,
+            ctx.caller.runtime.kind,
+            "updateLayout"
+          );
           const layoutUpdate = args[0] as {
             titleBarHeight?: number;
             sidebarVisible?: boolean;
@@ -167,14 +234,70 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           return;
         }
         case "updatePanelViewportBounds": {
-          assertViewHost(
-            vm,
+          assertLegacyShellLayoutHost(
             ctx.caller.runtime.id,
             ctx.caller.runtime.kind,
             "updatePanelViewportBounds"
           );
           const bounds = args[0] as { x: number; y: number; width: number; height: number } | null;
           vm.setPanelViewportBounds(bounds);
+          return;
+        }
+        case "bindNativePanelSlot": {
+          assertNativePanelSlotHost(
+            vm,
+            ctx.caller.runtime.id,
+            ctx.caller.runtime.kind,
+            "bindNativePanelSlot"
+          );
+          const [request] = args as [
+            {
+              nativeSlotId: string;
+              panelId: string;
+              bounds: { x: number; y: number; width: number; height: number };
+              focused?: boolean;
+            },
+          ];
+          vm.bindPanelSlot(ctx.caller.runtime.id, request);
+          return;
+        }
+        case "updateNativePanelSlot": {
+          assertNativePanelSlotHost(
+            vm,
+            ctx.caller.runtime.id,
+            ctx.caller.runtime.kind,
+            "updateNativePanelSlot"
+          );
+          const [request] = args as [
+            {
+              nativeSlotId: string;
+              bounds?: { x: number; y: number; width: number; height: number };
+              focused?: boolean;
+            },
+          ];
+          vm.updatePanelSlot(ctx.caller.runtime.id, request);
+          return;
+        }
+        case "clearNativePanelSlot": {
+          assertNativePanelSlotHost(
+            vm,
+            ctx.caller.runtime.id,
+            ctx.caller.runtime.kind,
+            "clearNativePanelSlot"
+          );
+          const [request] = args as [{ nativeSlotId: string }];
+          vm.clearPanelSlot(ctx.caller.runtime.id, request.nativeSlotId);
+          return;
+        }
+        case "setHostedShellReady": {
+          assertNativePanelSlotHost(
+            vm,
+            ctx.caller.runtime.id,
+            ctx.caller.runtime.kind,
+            "setHostedShellReady"
+          );
+          const [request] = args as [{ ready: boolean }];
+          vm.setHostedShellReady(ctx.caller.runtime.id, request.ready);
           return;
         }
         case "setShellOverlay": {

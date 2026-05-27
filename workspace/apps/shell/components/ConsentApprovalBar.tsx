@@ -47,7 +47,7 @@ import {
   shouldOpenApprovalDetails,
 } from "@natstack/shared/approvalCopy";
 import { useShellEvent } from "../shell/useShellEvent";
-import { shellApproval, shellPresence, view } from "../shell/client";
+import { shellApproval, shellPresence } from "../shell/client";
 import { useNavigation } from "./NavigationContext";
 
 interface CallerInfo {
@@ -205,16 +205,12 @@ export function ConsentApprovalBar() {
 
   useEffect(() => {
     if (!current) {
-      void view.updateLayout({ consentBarHeight: 0 });
-      window.dispatchEvent(new Event("shell-panel-viewport-invalidated"));
       return;
     }
     const el = barRef.current;
     const update = () => {
-      void view.updateLayout({ consentBarHeight: el?.offsetHeight ?? 0 });
-      window.dispatchEvent(new Event("shell-panel-viewport-invalidated"));
       window.requestAnimationFrame(() => {
-        window.dispatchEvent(new Event("shell-panel-viewport-invalidated"));
+        window.dispatchEvent(new Event("resize"));
       });
     };
     update();
@@ -222,8 +218,6 @@ export function ConsentApprovalBar() {
     if (el) observer?.observe(el);
     return () => {
       observer?.disconnect();
-      void view.updateLayout({ consentBarHeight: 0 });
-      window.dispatchEvent(new Event("shell-panel-viewport-invalidated"));
     };
   }, [current]);
 
@@ -276,6 +270,7 @@ export function ConsentApprovalBar() {
   return (
     <Box
       ref={barRef}
+      data-shell-top-chrome="approval-bar"
       key={current.approvalId}
       className="approval-bar approval-bar-attention"
       style={{

@@ -1,9 +1,8 @@
 /**
  * NotificationBar — centralized notification display in the shell chrome area.
  *
- * Renders between TitleBar and the panel viewport. Uses the SavePasswordBar
- * pattern: reports its height via `view.updateLayout({ notificationBarHeight })`
- * so the ViewManager shrinks the panel viewport to make room.
+ * Renders between TitleBar and the panel viewport. Normal DOM flow resizes the
+ * measured native panel surface below it.
  *
  * Supports notification types: info/success/warning/error as auto-dismissing
  * toast banners. Consent prompts are handled by ConsentDialog.
@@ -20,7 +19,7 @@ import {
   LockClosedIcon,
 } from "@radix-ui/react-icons";
 import { useShellEvent } from "../shell/useShellEvent";
-import { app, view, notification, workspaceUnits } from "../shell/client";
+import { app, notification, workspaceUnits } from "../shell/client";
 import type { NotificationPayload } from "@natstack/shared/events";
 import { assertPresent } from "../utils/assertPresent";
 
@@ -194,26 +193,7 @@ export function NotificationBar() {
     };
   }, []);
 
-  // Report bar height to layout system
   const isVisible = notifications.size > 0;
-  useEffect(() => {
-    if (!isVisible) {
-      void view.updateLayout({ notificationBarHeight: 0 });
-      return;
-    }
-    const el = barRef.current;
-    if (!el) return;
-    void view.updateLayout({ notificationBarHeight: el.offsetHeight });
-    const observer = new ResizeObserver(([entry]) => {
-      if (entry) void view.updateLayout({ notificationBarHeight: entry.contentRect.height });
-    });
-    observer.observe(el);
-    return () => {
-      observer.disconnect();
-      void view.updateLayout({ notificationBarHeight: 0 });
-    };
-  }, [isVisible, notifications.size]);
-
   if (!isVisible) return null;
 
   // Show the most recent notification (last added)
@@ -222,7 +202,7 @@ export function NotificationBar() {
   const queueCount = entries.length - 1;
 
   return (
-    <div ref={barRef}>
+    <div ref={barRef} data-shell-top-chrome="notification-bar">
       <ToastNotification
         notification={current}
         queueCount={queueCount}

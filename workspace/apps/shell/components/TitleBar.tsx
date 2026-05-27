@@ -100,6 +100,7 @@ export function TitleBar({
   if (isMobile) {
     return (
       <Box
+        data-shell-top-chrome="titlebar"
         style={
           {
             appRegion: "drag",
@@ -199,6 +200,7 @@ export function TitleBar({
 
   return (
     <Box
+      data-shell-top-chrome="titlebar"
       style={
         {
           appRegion: "drag",

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Flex, Text, Button } from "@radix-ui/themes";
 import { useShellEvent } from "../shell/useShellEvent";
-import { autofill, view } from "../shell/client";
+import { autofill } from "../shell/client";
 
 interface SavePromptData {
   panelId: string;
@@ -76,24 +76,6 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
     };
   }, []);
 
-  const barRef = useRef<HTMLDivElement>(null);
-
-  // Report bar height to layout system so browser view shrinks to make room
-  const isBarVisible = prompt !== null || confirmed;
-  useEffect(() => {
-    if (!isBarVisible) {
-      void view.updateLayout({ saveBarHeight: 0 });
-      return;
-    }
-    const el = barRef.current;
-    if (el) {
-      void view.updateLayout({ saveBarHeight: el.offsetHeight });
-    }
-    return () => {
-      void view.updateLayout({ saveBarHeight: 0 });
-    };
-  }, [isBarVisible]);
-
   // Show confirmation briefly then hide
   useEffect(() => {
     if (!confirmed) return;
@@ -106,7 +88,7 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
   if (confirmed) {
     return (
       <Flex
-        ref={barRef}
+        data-shell-top-chrome="save-password-bar"
         align="center"
         px="3"
         py="2"
@@ -168,7 +150,7 @@ export function SavePasswordBar({ visiblePanelId }: SavePasswordBarProps) {
 
   return (
     <Flex
-      ref={barRef}
+      data-shell-top-chrome="save-password-bar"
       align="center"
       justify="between"
       px="3"
