@@ -273,13 +273,10 @@ export function ConsentApprovalBar() {
       style={{
         ...toneStyle,
         flexShrink: 0,
-        display: "flex",
-        maxHeight: "min(44dvh, 520px)",
-        overflow: "hidden",
       }}
     >
-      <Flex direction="column" gap="3" px="4" py="3" style={{ flex: 1, minHeight: 0 }}>
-        <Flex align="start" gap="3" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+      <Flex direction="column" gap="3" px="4" py="3">
+        <Flex align="start" gap="3">
           <Box className="approval-icon-box">
             {isUnitApproval ? (
               <ExclamationTriangleIcon width={18} height={18} />

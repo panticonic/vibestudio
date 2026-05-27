@@ -211,8 +211,19 @@ async function createServerPanelTreeBridge(
     grantConnection: (panelId) => call<{ token: string }>("auth", "grantConnection", [panelId]),
   });
 
+  let panelTreeLoaded = false;
+  let panelTreeLoadPromise: Promise<void> | null = null;
   const sync = async () => {
-    await panelManager.loadTree();
+    if (panelTreeLoaded) return;
+    panelTreeLoadPromise ??= panelManager
+      .loadTree()
+      .then(() => {
+        panelTreeLoaded = true;
+      })
+      .finally(() => {
+        panelTreeLoadPromise = null;
+      });
+    await panelTreeLoadPromise;
   };
   const emitTreeSnapshot = () => {
     deps.eventService?.emit("panel-tree-updated", registry.getPanelTreeSnapshot());
@@ -323,6 +334,7 @@ async function createServerPanelTreeBridge(
         };
       }
       case "create": {
+        await sync();
         const source = String(args[0]);
         const options = (args[1] ?? {}) as {
           parentId?: string | null;
@@ -342,7 +354,6 @@ async function createServerPanelTreeBridge(
         const created = isBrowser
           ? await panelManager.createBrowser(parentId ?? null, source, options)
           : await panelManager.create(source, { ...options, parentId });
-        await sync();
         emitTreeSnapshot();
         const runtimeEntityId = await panelManager.getCurrentEntityId(
           asPanelSlotId(created.panelId)

@@ -252,7 +252,6 @@ export const view = {
     saveBarHeight?: number;
     notificationBarHeight?: number;
     consentBarHeight?: number;
-    panelContentBounds?: { x: number; y: number; width: number; height: number } | null;
   }) => rpc.call<undefined>("main", "view.updateLayout", [layout]),
   setShellOverlay: (active: boolean) =>
     rpc.call<undefined>("main", "view.setShellOverlay", [active]),
