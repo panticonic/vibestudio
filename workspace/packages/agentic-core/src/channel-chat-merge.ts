@@ -30,6 +30,8 @@ import type {
 import { assertNoStoredValueRefs, isStoredValueRef } from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
 
+type StoredValueRefPreview = { preview?: string };
+
 export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessage[] {
   assertNoStoredValueRefs(state, "chat message projection input");
   const messages = Object.values(state.messages)
@@ -348,6 +350,23 @@ function recordOrEmpty(value: unknown): Record<string, unknown> {
     : {};
 }
 
+function parseStoredJsonPreview(value: unknown): unknown {
+  if (!isStoredValueRef(value) || value.encoding !== "json") return undefined;
+  const preview = (value as StoredValueRefPreview).preview;
+  if (typeof preview !== "string") {
+    return undefined;
+  }
+  try {
+    return JSON.parse(preview);
+  } catch {
+    return undefined;
+  }
+}
+
+function storedValuePreview(value: unknown): string | undefined {
+  return isStoredValueRef(value) ? (value as StoredValueRefPreview).preview : undefined;
+}
+
 function meaningfulInvocationName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -360,7 +379,9 @@ function inferInvocationDisplay(value: unknown): {
   summary?: string;
 } {
   if (isStoredValueRef(value)) {
-    return { summary: `${value.encoding} blob ${value.digest}` };
+    const parsed = parseStoredJsonPreview(value);
+    if (parsed !== undefined) return inferInvocationDisplay(parsed);
+    return { summary: storedValuePreview(value) ?? `${value.encoding} blob ${value.digest}` };
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const record = value as Record<string, unknown>;
@@ -377,10 +398,17 @@ function inferInvocationDisplay(value: unknown): {
 }
 
 function stringifyOutput(value: unknown): string {
-  if (isStoredValueRef(value)) return `[stored ${value.encoding} blob ${value.digest}]`;
+  if (isStoredValueRef(value)) return storedValuePreview(value) ?? `[stored ${value.encoding} blob ${value.digest}]`;
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
 function displayStoredValue(value: unknown): unknown {
-  return value;
+  if (!isStoredValueRef(value)) return value;
+  return {
+    stored: true,
+    digest: value.digest,
+    size: value.size,
+    encoding: value.encoding,
+    preview: storedValuePreview(value),
+  };
 }

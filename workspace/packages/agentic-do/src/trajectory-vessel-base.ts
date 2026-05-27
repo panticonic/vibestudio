@@ -5064,7 +5064,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   }
 
   async getDebugState(channelId?: string): Promise<Record<string, unknown>> {
-    await this.ensureAgentActivationReady();
     const readTable = (table: string): unknown[] => {
       try {
         return this.sql.exec(`SELECT * FROM ${table}`).toArray();
@@ -5072,11 +5071,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         return [{ error: err instanceof Error ? err.message : String(err) }];
       }
     };
-    const runnerEntries = await Promise.all(
-      [...this.runners.entries()]
-        .filter(([id]) => !channelId || id === channelId)
-        .map(async ([id, entry]) => [id, await entry.runner.getDebugState()] as const)
-    );
+    const runnerEntries = [...this.runners.entries()]
+      .filter(([id]) => !channelId || id === channelId)
+      .map(([id, entry]) => [id, entry.runner.getDebugState()] as const);
     const channelFilter = ([id]: [string, unknown]) => !channelId || id === channelId;
     const subscriptionRows = readTable("subscriptions");
     const subscribedChannels = subscriptionRows

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { SandboxOptions, SandboxResult } from "@workspace/eval";
+import type { MethodExecutionContext } from "@workspace/pubsub";
 import { buildEvalTool } from "./eval-tool.js";
 
 function createEvalTool(overrides: Partial<Parameters<typeof buildEvalTool>[0]> = {}) {
@@ -112,5 +114,33 @@ describe("buildEvalTool", () => {
     expect(rendered).toContain("omitted from tool transcript");
     expect(rendered).toContain("scope.__lastEvalReturn");
     expect(scope["__lastEvalReturn"]).toBe(huge);
+  });
+
+  it("passes the method abort signal into sandbox execution", async () => {
+    const controller = new AbortController();
+    let capturedSignal: AbortSignal | undefined;
+    const tool = createEvalTool({
+      executeSandbox: async (_code: string, opts: SandboxOptions): Promise<SandboxResult> => {
+        capturedSignal = opts.signal;
+        return { success: true, consoleOutput: "" };
+      },
+    });
+
+    await tool.execute?.(
+      { code: "return 1;" },
+      {
+        callId: "call-1",
+        invocationId: "invocation-1",
+        transportCallId: "transport-1",
+        callerId: "caller-1",
+        signal: controller.signal,
+        stream: async () => undefined,
+        streamWithAttachments: async () => undefined,
+        resultWithAttachments: (content: unknown) => ({ content, attachments: [] }),
+        progress: async () => undefined,
+      } as MethodExecutionContext
+    );
+
+    expect(capturedSignal).toBe(controller.signal);
   });
 });

@@ -1750,6 +1750,32 @@ describe("AgentWorkerBase method suspension ledger", () => {
         .suspensions?.lastActivationTypingCleanup?.count
     ).toBe(1);
   });
+
+  it("serves debug state without waiting for activation cleanup", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const setTypingState = vi.fn(() => new Promise<void>(() => undefined));
+    const worker = instance as unknown as {
+      createChannelClient: ReturnType<typeof vi.fn>;
+      getDebugState(channelId?: string): Promise<Record<string, unknown>>;
+    };
+    sql.exec(
+      `INSERT INTO subscriptions (channel_id, context_id, subscribed_at, config, participant_id)
+       VALUES (?, ?, ?, NULL, ?)`,
+      "chat-1",
+      "ctx-1",
+      Date.now(),
+      "do:agent"
+    );
+    worker.createChannelClient = vi.fn().mockReturnValue({ setTypingState });
+
+    const debug = await worker.getDebugState("chat-1");
+
+    expect(debug["requestedChannelId"]).toBe("chat-1");
+    expect(worker.createChannelClient).not.toHaveBeenCalled();
+    expect(setTypingState).not.toHaveBeenCalled();
+  });
 });
 
 describe("AgentWorkerBase interrupt recovery", () => {
@@ -2573,13 +2599,13 @@ describe("AgentWorkerBase dispatched method results", () => {
         turnId?: string
       ): Promise<unknown>;
       getDebugState(channelId?: string): Promise<Record<string, unknown>>;
-      runners: Map<string, { runner: { getDebugState(): Promise<Record<string, unknown>> } }>;
+      runners: Map<string, { runner: { getDebugState(): Record<string, unknown> } }>;
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
     worker.runners.set("chat-1", {
       runner: {
-        getDebugState: vi.fn(async () => ({
+        getDebugState: vi.fn(() => ({
           running: true,
           currentTurnId: "turn-open",
           phase: {

@@ -82,6 +82,7 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
             try {
                 const result: SandboxResult = await runSandbox(code, {
                     syntax: typedArgs.syntax,
+                    signal: ctx.signal,
                     imports: typedArgs.imports,
                     loadImport: sandbox.loadImport,
                     sourcePath: path,

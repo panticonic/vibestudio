@@ -210,7 +210,7 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
-  it("summarizes session context in debug state instead of dumping full messages", async () => {
+  it("does not perform async session inspection in debug state", async () => {
     const runner = new PiRunner(createOptions());
     await runner.init();
     const huge = "x".repeat(20_000);
@@ -220,8 +220,10 @@ describe("PiRunner", () => {
     const serialized = JSON.stringify(debug);
 
     expect(serialized).not.toContain(huge);
-    expect(debug["sessionEntries"]).toMatchObject({ count: 1 });
-    expect(debug["contextMessages"]).toMatchObject({ count: 1 });
+    expect(debug["session"]).toEqual({
+      available: false,
+      reason: "session_debug_requires_async_io",
+    });
 
     runner.dispose();
   });
@@ -1268,7 +1270,7 @@ describe("PiRunner", () => {
       options: PiRunnerOptions;
       gad: { call: typeof appendTrajectoryBatch };
       appendTrajectoryEvents(items: Array<Record<string, unknown>>): Promise<void>;
-      getDebugState(): Promise<Record<string, unknown>>;
+      getDebugState(): Record<string, unknown>;
     };
     runner.options.gad = {
       trajectoryId: "trajectory:test",

@@ -41,6 +41,8 @@ import { getAsyncTracking } from "./asyncTracking.js";
 export interface SandboxOptions {
   /** Source syntax (default: "tsx") */
   syntax?: "typescript" | "jsx" | "tsx";
+  /** Abort signal used to interrupt async eval work. Synchronous user code cannot be preempted. */
+  signal?: AbortSignal;
   /** Packages to build and load before execution.
    *  - Workspace packages: value is "latest" or a git ref (branch/tag/SHA)
    *  - npm packages: value is "npm:<version>" (e.g. "npm:^4.17.21", "npm:latest")
@@ -252,6 +254,44 @@ function isPromise(value: unknown): value is Promise<unknown> {
   return !!value && typeof (value as { then?: unknown }).then === "function";
 }
 
+function createAbortError(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) return reason;
+  const message = typeof reason === "string" && reason.length > 0
+    ? reason
+    : "Eval interrupted";
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw createAbortError(signal);
+}
+
+function withAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(createAbortError(signal));
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(createAbortError(signal));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
 // =============================================================================
 // executeSandbox
 // =============================================================================
@@ -274,6 +314,7 @@ export async function executeSandbox(
   options: SandboxOptions = {},
 ): Promise<SandboxResult> {
   const { syntax = "tsx", bindings = {} } = options;
+  const { signal } = options;
 
   const tracking = getAsyncTracking();
   const trackingContext = tracking?.start();
@@ -297,15 +338,17 @@ export async function executeSandbox(
   });
 
   try {
+    throwIfAborted(signal);
+
     // Load on-demand imports
     if (options.imports && Object.keys(options.imports).length > 0) {
       if (!options.loadImport) {
         throw new Error("loadImport callback required when imports are specified");
       }
-      await loadImports(options.imports, options.loadImport);
+      await withAbort(loadImports(options.imports, options.loadImport), signal);
     }
 
-    const prepared = await prepareSourceCode(code, {
+    const prepared = await withAbort(prepareSourceCode(code, {
       syntax,
       sourcePath: options.sourcePath,
       sourceFiles: options.sourceFiles,
@@ -315,9 +358,11 @@ export async function executeSandbox(
       loadSourceFile: options.loadSourceFile,
       sourcePath: options.sourcePath,
       imports: options.imports,
-    }, context));
+    }, context)), signal);
+    throwIfAborted(signal);
 
-    const transformed = await transformCode(prepared.code, { syntax });
+    const transformed = await withAbort(transformCode(prepared.code, { syntax }), signal);
+    throwIfAborted(signal);
 
     // Validate requires
     const requireFn = getDefaultRequire();
@@ -341,7 +386,7 @@ export async function executeSandbox(
       });
       if (Object.keys(autoImports).length > 0) {
         options.onConsole?.(`[eval] Auto-loading: ${Object.keys(autoImports).join(", ")}...`);
-        await loadImports(autoImports, options.loadImport);
+        await withAbort(loadImports(autoImports, options.loadImport), signal);
         validation = validateRequires(transformed.requires, requireFn);
       }
     }
@@ -381,6 +426,7 @@ export async function executeSandbox(
       : null;
     const journal = createRuntimeJournal(runtimeModule);
     const runUserCode = async () => {
+      throwIfAborted(signal);
       const wrapped = wrapForTopLevelAwait(transformed.code);
       let result: ReturnType<typeof execute>;
       try {
@@ -395,14 +441,17 @@ export async function executeSandbox(
       // Wait for async operations and promised return values without imposing a
       // wall-clock limit. Agentic eval work should finish by completion, error,
       // or explicit user interruption, not a hidden timeout.
+      throwIfAborted(signal);
       if (tracking && trackingContext) {
-        await tracking.waitAll(trackingContext);
+        await withAbort(tracking.waitAll(trackingContext), signal);
       }
 
+      throwIfAborted(signal);
       let returnValue = result.returnValue;
       if (isPromise(returnValue)) {
-        returnValue = await returnValue;
+        returnValue = await withAbort(returnValue, signal);
       }
+      throwIfAborted(signal);
       return {
         safeReturnValue: safeSerialize(returnValue ?? result.exports["default"]),
         exports: result.exports,

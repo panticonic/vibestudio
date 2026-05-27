@@ -537,25 +537,7 @@ export class PiRunner {
     return this.activeRunSignal ?? this.activeOperationAbortController?.signal;
   }
 
-  async getDebugState(): Promise<Record<string, unknown>> {
-    let sessionLeafId: string | null = null;
-    let sessionEntries: unknown[] | null = null;
-    let contextMessages: unknown[] | null = null;
-    try {
-      sessionLeafId = (await this.session?.getLeafId()) ?? null;
-    } catch (err) {
-      sessionLeafId = `error: ${err instanceof Error ? err.message : String(err)}`;
-    }
-    try {
-      sessionEntries = (await this.session?.getEntries()) ?? null;
-    } catch (err) {
-      sessionEntries = [{ error: err instanceof Error ? err.message : String(err) }];
-    }
-    try {
-      contextMessages = (await this.session?.buildContext())?.messages ?? null;
-    } catch (err) {
-      contextMessages = [{ error: err instanceof Error ? err.message : String(err) }];
-    }
+  getDebugState(): Record<string, unknown> {
     return {
       running: this.running,
       currentTurnId: this.currentTurnId,
@@ -636,13 +618,10 @@ export class PiRunner {
           },
         ])
       ),
-      sessionLeafId,
-      sessionEntries: summarizeDebugList(sessionEntries, summarizeSessionEntry),
-      contextMessages: summarizeDebugList(contextMessages, (message) =>
-        message && typeof message === "object" && !Array.isArray(message)
-          ? summarizeAgentMessage(message as Record<string, unknown>)
-          : summarizeDebugValue(message)
-      ),
+      session: {
+        available: false,
+        reason: "session_debug_requires_async_io",
+      },
       approvalLevel: this._approvalLevel,
       model: this.resolvedModel
         ? {
