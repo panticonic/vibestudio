@@ -114,6 +114,7 @@ export interface ChatCoreState {
   // Actions
   sendMessage: (attachments?: AttachmentInput[], options?: { mentions?: string[]; replyTo?: string }) => Promise<void>;
   handleInterruptAgent: (agentId: string, messageId?: string, agentHandle?: string) => Promise<void>;
+  handleCancelInvocation: (transportCallId: string) => Promise<void>;
   handleCallMethod: (providerId: string, methodName: string, args: unknown) => void;
   stopTyping: () => Promise<void>;
 
@@ -479,7 +480,7 @@ export function useChatCore({
       if (defaultTitle) {
         defaultTitleSetRef.current = true;
         document.title = defaultTitle;
-        void clientRef.current.updateChannelConfig({ title: defaultTitle }).catch(() => {});
+        void clientRef.current.updateChannelConfig({ title: defaultTitle, titleExplicit: false }).catch(() => {});
       }
     } catch (err) {
       setInput(text);
@@ -512,7 +513,7 @@ export function useChatCore({
     if (defaultTitle) {
       defaultTitleSetRef.current = true;
       document.title = defaultTitle;
-      void client.updateChannelConfig({ title: defaultTitle }).catch(() => {});
+      void client.updateChannelConfig({ title: defaultTitle, titleExplicit: false }).catch(() => {});
     }
 
     client.send(prompt, {
@@ -552,6 +553,16 @@ export function useChatCore({
     },
     [],
   );
+
+  const handleCancelInvocation = useCallback(async (transportCallId: string) => {
+    const c = clientRef.current;
+    if (!c) return;
+    try {
+      await c.cancelMethodCall(transportCallId);
+    } catch (err) {
+      console.warn("[Chat] Cancel invocation failed:", err);
+    }
+  }, []);
 
   const handleCallMethod = useCallback(
     (providerId: string, methodName: string, args: unknown) => {
@@ -638,6 +649,7 @@ export function useChatCore({
     messageTypes,
     sendMessage,
     handleInterruptAgent,
+    handleCancelInvocation,
     handleCallMethod,
     stopTyping,
     debugEvents,

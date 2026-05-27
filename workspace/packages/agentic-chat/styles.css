@@ -441,13 +441,24 @@
 }
 
 /* Markdown code blocks (rehype-highlight / highlight.js) */
+.ns-codeblock-frame {
+  border: 1px solid var(--gray-6);
+  border-radius: var(--radius-3);
+  background: var(--gray-2);
+  max-width: 100%;
+}
+
+.ns-codeblock-toolbar {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--gray-5);
+}
+
 .ns-codeblock {
   padding: 12px;
-  border-radius: var(--radius-3);
   overflow-x: auto;
   max-width: 100%;
-  background: var(--gray-2);
-  border: 1px solid var(--gray-6);
+  background: transparent;
+  border: 0;
   color: var(--gray-12);
   white-space: pre;
   font-family: var(--code-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace);
@@ -455,7 +466,7 @@
   line-height: var(--line-height-2);
 }
 
-:is(.dark, .dark-theme) .ns-codeblock {
+:is(.dark, .dark-theme) .ns-codeblock-frame {
   background: var(--gray-3);
   border-color: var(--gray-6);
 }

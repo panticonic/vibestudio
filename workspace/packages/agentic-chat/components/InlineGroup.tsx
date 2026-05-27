@@ -1,6 +1,7 @@
 import React, { useCallback, useState } from "react";
 import { Box, Flex } from "@radix-ui/themes";
 import type { CustomMessageCardPayload, InvocationCardPayload } from "@workspace/agentic-core";
+import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { ThinkingPill, ExpandedThinking } from "./ThinkingMessage";
 import { ActionPill, ExpandedAction } from "./ActionMessage";
 import { TypingPill } from "./TypingMessage";
@@ -11,18 +12,20 @@ const PREVIEW_MAX_LENGTH = 50;
 
 export type InlineItem =
   | { type: "thinking"; id: string; content: string; complete: boolean }
-  | { type: "invocation"; id: string; invocation: InvocationCardPayload; complete: boolean }
+  | { type: "invocation"; id: string; invocation: InvocationCardPayload; complete: boolean; senderId: string }
   | { type: "custom"; id: string; payload: CustomMessageCardPayload }
   | { type: "typing"; id: string; data: TypingIndicatorData; senderId: string };
 
 interface InlineGroupProps {
   items: InlineItem[];
   messageTypeComponents?: Map<string, MessageTypeComponentEntry>;
-  chat?: Record<string, unknown>;
+  chat?: Record<string, unknown> & Partial<Pick<ChatSandboxValue, "rpc">>;
   scope?: Record<string, unknown>;
   scopes?: Record<string, unknown>;
-  /** Callback to interrupt an agent (used for typing indicators) */
+  /** Callback to interrupt an agent (used for typing indicators). */
   onInterrupt?: (senderId: string) => void;
+  /** Callback to cancel one pending tool/invocation dispatch. */
+  onCancelInvocation?: (transportCallId: string) => void;
 }
 
 /**
@@ -37,6 +40,7 @@ export const InlineGroup = React.memo(function InlineGroup({
   scope = {},
   scopes = {},
   onInterrupt,
+  onCancelInvocation,
 }: InlineGroupProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const handleExpand = useCallback((id: string) => setExpandedId(id), []);
@@ -84,6 +88,9 @@ export const InlineGroup = React.memo(function InlineGroup({
                     id={itemId}
                     payload={item.invocation}
                     onExpand={handleExpand}
+                    onCancel={item.invocation.transportCallId && onCancelInvocation
+                      ? () => onCancelInvocation(item.invocation.transportCallId!)
+                      : undefined}
                   />
                 );
               case "custom":
@@ -125,7 +132,11 @@ export const InlineGroup = React.memo(function InlineGroup({
             {expandedItem.type === "invocation" && (
               <ExpandedAction
                 payload={expandedItem.invocation}
+                chat={chat}
                 onCollapse={handleCollapse}
+                onCancel={expandedItem.invocation.transportCallId && onCancelInvocation
+                  ? () => onCancelInvocation(expandedItem.invocation.transportCallId!)
+                  : undefined}
               />
             )}
             {expandedItem.type === "custom" && (

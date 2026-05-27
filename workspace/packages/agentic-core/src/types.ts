@@ -66,15 +66,35 @@ export interface ChatSandboxValue {
     options?: { idempotencyKey?: string }
   ) => Promise<number | undefined>;
   /** Call a participant method and resolve to the provider's result payload. */
-  callMethod: (participantId: string, method: string, args: unknown) => Promise<unknown>;
+  callMethod: (
+    participantId: string,
+    method: string,
+    args: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ) => Promise<unknown>;
   /** Call a participant method and resolve to the full invocation result envelope. */
-  callMethodResult: (participantId: string, method: string, args: unknown) => Promise<ChatMethodResult>;
+  callMethodResult: (
+    participantId: string,
+    method: string,
+    args: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ) => Promise<ChatMethodResult>;
   /** Resolve a participant by handle, accepting either "handle" or "@handle". */
   participantByHandle: (handle: string) => Participant<ChatParticipantMetadata> | null;
   /** Call a participant method by handle and resolve to the provider's result payload. */
-  callMethodByHandle: (handle: string, method: string, args: unknown) => Promise<unknown>;
+  callMethodByHandle: (
+    handle: string,
+    method: string,
+    args: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ) => Promise<unknown>;
   /** Call a participant method by handle and resolve to the full invocation result envelope. */
-  callMethodResultByHandle: (handle: string, method: string, args: unknown) => Promise<ChatMethodResult>;
+  callMethodResultByHandle: (
+    handle: string,
+    method: string,
+    args: unknown,
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ) => Promise<ChatMethodResult>;
   contextId: string;
   channelId: string | null;
   rpc: { call: (target: string, method: string, args: unknown[]) => Promise<unknown> };

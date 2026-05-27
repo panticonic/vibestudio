@@ -120,6 +120,75 @@ describe("MessageList typing indicators (roster-based)", () => {
     expect(screen.getByText("Edit src/config.ts")).toBeTruthy();
   });
 
+  it("shows a cancel control for pending invocation pills", () => {
+    const onCancelInvocation = vi.fn();
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "action-1",
+          senderId: "agent-1",
+          contentType: "invocation",
+          content: "",
+          invocation: {
+            id: "tool-1",
+            transportCallId: "transport-1",
+            name: "eval",
+            arguments: { code: "await work()" },
+            execution: { status: "pending", description: "" },
+          },
+          complete: false,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+      onCancelInvocation,
+    } as never));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel pending tool call" }));
+
+    expect(onCancelInvocation).toHaveBeenCalledWith("transport-1");
+  });
+
+  it("expands invocation details with full code arguments and flags unhydrated stored results", async () => {
+    const longCode = "const answer = 42;\n".repeat(40);
+    const storedResult = {
+      protocol: "natstack.blob-ref.v1",
+      digest: "result-digest",
+      size: 2048,
+      encoding: "json",
+      originalBytes: 2048,
+    };
+    const rpcCall = vi.fn();
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "action-1",
+          contentType: "invocation",
+          content: "",
+          invocation: {
+            id: "tool-1",
+            name: "eval",
+            arguments: { code: longCode },
+            execution: { status: "complete", result: storedResult },
+          },
+          complete: true,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: {},
+      chat: { rpc: { call: rpcCall } },
+    } as never));
+
+    fireEvent.click(screen.getByTestId("invocation-pill"));
+
+    expect(document.body.textContent).toContain(longCode);
+    expect(screen.getAllByRole("button", { name: "Copy" }).length).toBeGreaterThan(0);
+    expect(document.body.textContent).toContain("Stored value reached transcript UI");
+    expect(rpcCall).not.toHaveBeenCalled();
+  });
+
   it("renders durable typing indicators in their own inline row", () => {
     render(React.createElement(MessageList, {
       messages: [

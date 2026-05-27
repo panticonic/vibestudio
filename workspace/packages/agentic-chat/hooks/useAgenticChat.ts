@@ -65,6 +65,49 @@ function actorForClient(clientId: string | undefined, metadata: ChatParticipantM
     };
 }
 
+const SANDBOX_METHOD_TIMEOUT_MS = 20 * 60 * 1000;
+
+async function waitForMethodHandle<T>(
+    handle: { result: Promise<T>; cancel?: () => Promise<void> },
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+): Promise<T> {
+    const timeoutMs = options?.timeoutMs ?? SANDBOX_METHOD_TIMEOUT_MS;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let abortCleanup: (() => void) | undefined;
+    const cancel = () => {
+        void handle.cancel?.().catch(() => undefined);
+    };
+    try {
+        const blockers: Array<Promise<never>> = [];
+        if (timeoutMs > 0) {
+            blockers.push(new Promise<never>((_, reject) => {
+                timeout = setTimeout(() => {
+                    cancel();
+                    reject(new Error(`Method call timed out after ${timeoutMs}ms`));
+                }, timeoutMs);
+            }));
+        }
+        if (options?.signal) {
+            if (options.signal.aborted) {
+                cancel();
+                throw new Error("Method call aborted");
+            }
+            blockers.push(new Promise<never>((_, reject) => {
+                const onAbort = () => {
+                    cancel();
+                    reject(new Error("Method call aborted"));
+                };
+                options.signal!.addEventListener("abort", onAbort, { once: true });
+                abortCleanup = () => options.signal!.removeEventListener("abort", onAbort);
+            }));
+        }
+        return await Promise.race([handle.result, ...blockers]);
+    } finally {
+        if (timeout) clearTimeout(timeout);
+        abortCleanup?.();
+    }
+}
+
 function parseInlineUiPayload(content: string): {
     id: string;
     source: SandboxSourcePayload;
@@ -215,18 +258,20 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
                 idempotencyKey: opts?.idempotencyKey ?? crypto.randomUUID(),
             });
         },
-        callMethod: async (pid: string, method: string, callArgs: unknown) => {
-            const handle = core.clientRef.current!.callMethod(pid, method, callArgs);
-            const result = await (handle as {
+        callMethod: async (pid: string, method: string, callArgs: unknown, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
+            const handle = core.clientRef.current!.callMethod(pid, method, callArgs, options);
+            const result = await waitForMethodHandle(handle as {
                 result: Promise<ChatMethodResult>;
-            }).result;
+                cancel?: () => Promise<void>;
+            }, options);
             return unwrapChatMethodResult(result);
         },
-        callMethodResult: async (pid: string, method: string, callArgs: unknown) => {
-            const handle = core.clientRef.current!.callMethod(pid, method, callArgs);
-            return (handle as {
+        callMethodResult: async (pid: string, method: string, callArgs: unknown, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
+            const handle = core.clientRef.current!.callMethod(pid, method, callArgs, options);
+            return waitForMethodHandle(handle as {
                 result: Promise<ChatMethodResult>;
-            }).result;
+                cancel?: () => Promise<void>;
+            }, options);
         },
         participantByHandle: (rawHandle: string) => {
             const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
@@ -236,26 +281,28 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
                 return typeof metadataHandle === "string" && metadataHandle === handle;
             }) ?? null;
         },
-        callMethodByHandle: async (rawHandle: string, method: string, callArgs: unknown) => {
+        callMethodByHandle: async (rawHandle: string, method: string, callArgs: unknown, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
             const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
             const roster = core.clientRef.current?.roster ?? {};
             const participant = Object.values(roster).find((item) => item.metadata?.handle === handle);
             if (!participant) throw new Error(`No participant with handle @${handle}`);
-            const methodHandle = core.clientRef.current!.callMethod(participant.id, method, callArgs);
-            const result = await (methodHandle as {
+            const methodHandle = core.clientRef.current!.callMethod(participant.id, method, callArgs, options);
+            const result = await waitForMethodHandle(methodHandle as {
                 result: Promise<ChatMethodResult>;
-            }).result;
+                cancel?: () => Promise<void>;
+            }, options);
             return unwrapChatMethodResult(result);
         },
-        callMethodResultByHandle: async (rawHandle: string, method: string, callArgs: unknown) => {
+        callMethodResultByHandle: async (rawHandle: string, method: string, callArgs: unknown, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
             const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
             const roster = core.clientRef.current?.roster ?? {};
             const participant = Object.values(roster).find((item) => item.metadata?.handle === handle);
             if (!participant) throw new Error(`No participant with handle @${handle}`);
-            const methodHandle = core.clientRef.current!.callMethod(participant.id, method, callArgs);
-            return (methodHandle as {
+            const methodHandle = core.clientRef.current!.callMethod(participant.id, method, callArgs, options);
+            return waitForMethodHandle(methodHandle as {
                 result: Promise<ChatMethodResult>;
-            }).result;
+                cancel?: () => Promise<void>;
+            }, options);
         },
         contextId: contextId ?? "",
         channelId: channelName,
@@ -493,7 +540,7 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
                             const client = core.clientRef.current;
                             if (client) {
                                 try {
-                                    await client.updateChannelConfig({ title });
+                                    await client.updateChannelConfig({ title, titleExplicit: true });
                                 }
                                 catch { /* best-effort */ }
                             }
@@ -897,6 +944,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
         theme,
         onLoadEarlierMessages: core.loadEarlierMessages,
         onInterrupt: core.handleInterruptAgent,
+        onCancelInvocation: core.handleCancelInvocation,
         onCallMethod: core.handleCallMethod,
         onFeedbackDismiss: feedback.onFeedbackDismiss,
         onFeedbackError: feedback.onFeedbackError,

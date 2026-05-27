@@ -167,6 +167,7 @@ export interface ChatContextValue {
   // Handlers
   onLoadEarlierMessages: () => void;
   onInterrupt: (agentId: string, messageId?: string, agentHandle?: string) => void;
+  onCancelInvocation: (transportCallId: string) => void;
   onCallMethod: (providerId: string, methodName: string, args: unknown) => void;
   onFeedbackDismiss: (callId: string) => void;
   onFeedbackError: (callId: string, error: Error) => void;
