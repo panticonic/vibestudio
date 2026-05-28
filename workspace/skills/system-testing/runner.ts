@@ -1,11 +1,25 @@
 import { HeadlessSession } from "@workspace/agentic-session";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { rpc } from "@workspace/runtime";
+import { gad, rpc } from "@workspace/runtime";
 
 // The panel's rpc has the full interface (call, onEvent, selfId) that
 // ConnectionConfig.rpc needs. Cast through the specific interface type.
 const rpcConfig = rpc as unknown as NonNullable<ConnectionConfig["rpc"]>;
+
+export const SYSTEM_TEST_AGENT_PROMPT = `You are running inside an automated NatStack system test.
+
+Your job is to exercise the harness and runtime honestly, not to make the test pass by inventing workarounds.
+
+When the task requires a specialized workflow, choose and use the relevant workspace skills yourself. Do not wait for the prompt to name the exact skill or API.
+
+If you cannot quickly find the relevant knowledge needed to accomplish the task, do not try harder by spelunking through unrelated code or guessing APIs. It is desirable, high-signal feedback to say that the docs/skills were insufficient and that you do not know the correct supported path.
+
+If setup, documentation, tools, runtime APIs, or the harness behave incorrectly, stop that line of work and report the mismatch clearly. Do not silently switch to shell commands, raw internal APIs, or unrelated alternate paths unless the task explicitly asks for that fallback.
+
+Keep evidence bounded. Report summaries, counts, ids, byte lengths, and exact error messages. Do not paste large raw payloads, full database rows, full channel envelopes, image data, or secrets.
+
+Every final response should be concise, include the requested marker tokens exactly when applicable, and mention any problems encountered while setting up or running the test.`;
 
 export class HeadlessRunner {
   private contextId: string;
@@ -39,6 +53,45 @@ export class HeadlessRunner {
       source: opts?.source ?? "workers/agent-worker",
       className: opts?.className ?? "AiChatWorker",
       contextId: this.contextId,
+      extraConfig: {
+        systemPrompt: SYSTEM_TEST_AGENT_PROMPT,
+        systemPromptMode: "append",
+      },
     });
+  }
+
+  async collectDiagnostics(opts?: {
+    channelId?: string | null;
+    branchId?: string | null;
+    error?: unknown;
+  }): Promise<Record<string, unknown>> {
+    const channelId = opts?.channelId ?? null;
+    const diagnostics: Record<string, unknown> = {
+      generatedAt: new Date().toISOString(),
+      contextId: this.contextId,
+      channelId,
+      error: opts?.error instanceof Error ? opts.error.message : opts?.error ? String(opts.error) : null,
+    };
+    try {
+      diagnostics["buildProvenance"] = await rpc.call("main", "build.inspectBuildProvenance", [
+        "@workspace-skills/system-testing",
+      ]);
+    } catch (err) {
+      diagnostics["buildProvenanceError"] = err instanceof Error ? err.message : String(err);
+    }
+    if (channelId) {
+      try {
+        diagnostics["agentHealth"] = await gad.inspectAgentHealth({
+          channelId,
+          branchId: opts?.branchId,
+          limit: 50,
+          envelopeLimit: 25,
+          storageLimit: 25,
+        });
+      } catch (err) {
+        diagnostics["agentHealthError"] = err instanceof Error ? err.message : String(err);
+      }
+    }
+    return diagnostics;
   }
 }

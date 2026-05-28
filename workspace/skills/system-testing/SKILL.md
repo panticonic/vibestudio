@@ -14,7 +14,7 @@ Spin up headless agentic sessions to systematically test every NatStack capabili
 | runner.ts | `HeadlessRunner` — spawn headless sessions from eval with one line |
 | test-runner.ts | `TestRunner` — orchestrate test suites, collect full diagnostics |
 | types.ts | `TestCase`, `TestResult`, `TestSuiteResult`, `TestExecutionResult` |
-| tests/ | 66 pre-built test cases across 14 categories |
+| tests/ | 92 pre-built test cases across 19 categories |
 | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) | Workflow for analyzing failures and pushing fixes |
 
 ## Quick Start
@@ -117,6 +117,40 @@ Treat cleanup errors as infrastructure failures. They can indicate that the
 headless agent was not unsubscribed/retired cleanly, which may otherwise show
 up later as recovery or stale-turn artifacts.
 
+### Automatic runtime diagnostics
+
+When a test errors, `execution.diagnostics` is attached automatically. It
+contains build provenance for `@workspace-skills/system-testing` and, when a
+headless channel was created, a bounded `gad.inspectAgentHealth(...)` report.
+
+```typescript
+if (fail.execution.diagnostics) {
+  console.log(JSON.stringify(fail.execution.diagnostics, null, 2).slice(0, 4000));
+}
+```
+
+### Orchestrator failures before tests start
+
+If `tester.runSuite(...)` throws before `scope.results` is set, capture bounded
+runtime diagnostics from the orchestrating channel instead of retrying blindly:
+
+```typescript
+import { gad, rpc } from "@workspace/runtime";
+
+const channelId = "chat-...";
+const branchId = `branch:channel:${channelId}`;
+
+return {
+  health: await gad.inspectAgentHealth({ channelId, branchId }),
+  build: await rpc.call("main", "build.inspectBuildProvenance", [
+    "@workspace-skills/system-testing",
+  ]),
+};
+```
+
+You can also call `await runner.collectDiagnostics({ channelId, error })` to
+produce the same bounded packet explicitly.
+
 ### Agent debug port
 
 If a test shows an open turn but no assistant message, tool call, or
@@ -133,6 +167,13 @@ It reports dispatcher state, runner phase, persisted pending work, channel
 checkpoints, and recent lifecycle events. See
 `docs/agent-debug-port.md` for the full response shape and interpretation
 guide.
+
+For eval/tool projection mismatches, call the joined suspension diagnostic:
+
+```typescript
+const suspensions = await chat.callMethod(agentParticipantId, "inspectMethodSuspensions", {});
+console.log(JSON.stringify(suspensions, null, 2).slice(0, 4000));
+```
 
 ### Participants (who was in the channel)
 
@@ -163,8 +204,44 @@ if (fail.execution.snapshot) {
 | `agentCapabilityTests` | 6 | Multi-turn, error recovery, large output, dynamic import |
 | `rpcTests` | 2 | Cross-service calls |
 | `edgeCaseTests` | 3 | Invalid eval args, invalid imports, missing files |
+| `agenticRuntimeTests` | 7 | State args, routed git client, GAD conventions, bounded inspection, no-stall tool turns |
+| `interactionSurfaceTests` | 4 | MDX ActionButton, inline UI, action bar, custom messages |
+| `projectLifecycleTests` | 4 | Create, fork, commit, push, open, and inspect real workspace units |
+| `cdpGadDiagnosticTests` | 4 | CDP/Playwright UI mutation, panel state args, GAD integrity/state diagnostics |
+| `harnessResilienceTests` | 5 | Eval errors, huge returns, visible timeouts, invalid args, post-tool follow-ups |
+| `docsProbeTests` | 10 | Scenario probes that require agents to apply relevant skills, not summarize docs |
 
-Use `allTests()` to get all 57 tests combined.
+Use `allTests()` to get all 92 tests combined.
+
+## Expanded Regression Coverage
+
+The suite intentionally includes tests for failure modes that are easy to miss
+with ordinary smoke testing:
+
+- state args must update the caller panel immediately from the returned host
+  snapshot, while host-published events still update non-callers
+- browser-panel git operations must use `git.client()` instead of raw
+  `new GitClient(fs, { serverUrl: gitConfig.serverUrl, token })`
+- GAD raw SQL uses positional `(sql, bindings)` calls
+- channel/history inspection must stay bounded enough for agent context
+- large eval/tool results must complete visibly without pending invocation
+  spinners or silent turns
+- the standard agent participant debug method should be discoverable
+- rich interaction surfaces must exercise MDX, `inline_ui`,
+  `load_action_bar`, and custom messages without hand-writing raw channel rows
+- project lifecycle flows must create real projects, commit/push them, fork
+  panel and worker sources, open the result, and inspect snapshots/state
+- CDP/Playwright automation must be able to mutate browser UI, type/click,
+  evaluate DOM state, and take screenshots through runtime panel handles
+- GAD diagnostic APIs must provide bounded summaries for storage,
+  publication, turn, invocation, hash, branch, and file/state probes
+- harness failures must surface visibly for thrown evals, huge eval returns,
+  timeout-style errors, invalid tool arguments, and post-tool follow-up turns
+
+The `docsProbeTests` suite uses realistic user goals and asks agents to choose
+the relevant skills themselves. These tests avoid doc recitation and instead
+check concrete decisions, bounded evidence, and clear reports when documented
+paths do not work.
 
 For SQLite-backed userland storage, the canonical pattern is `this.sql` inside a Durable Object. See `workspace/workers/sample-do/index.ts` for the minimal example and `workspace/workers/sample-do/sampleDo.test.ts` for an end-to-end round-trip exercised via `createTestDO`.
 
@@ -179,13 +256,18 @@ await tester.runSuite(allTests(), { name: "fs-write-read" });
 
 Each test case:
 1. Spawns a fresh headless session (new channel + new AiChatWorker DO)
-2. Sends a natural-language prompt telling the test agent what to do
-3. Waits for the agent to become idle (debounce-based turn completion)
-4. Captures a full snapshot: messages, invocation diagnostics, debug events, cleanup diagnostics, participants
-5. Validates programmatically and returns structured results
-6. Closes the session
+2. Appends the shared system-test agent prompt from `runner.ts`
+3. Sends a short natural-language prompt telling the test agent what goal to accomplish
+4. Waits for the agent to become idle (debounce-based turn completion)
+5. Captures a full snapshot: messages, invocation diagnostics, debug events, cleanup diagnostics, participants
+6. Validates programmatically and returns structured results
+7. Closes the session
 
-The test agent is a standard AiChatWorker with full eval + set_title tools and full-auto approval. It has no knowledge of being tested — it just receives a task and does its best.
+The test agent is a standard AiChatWorker with full eval + set_title tools and
+full-auto approval. The shared system-test prompt tells it that it is testing
+the harness, should choose relevant skills itself, should report setup/tool/API
+mismatches clearly, should not hunt for unrelated workarounds, and should keep
+evidence bounded. Individual test prompts should stay short and goal-oriented.
 
 ## Auto-Start as Initial Panel
 

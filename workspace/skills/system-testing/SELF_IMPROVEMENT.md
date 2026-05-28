@@ -338,6 +338,17 @@ const retest = await tester.runOne(failedTest);
 console.log(`Re-test: ${retest.result.passed ? "PASS" : "FAIL"}`);
 ```
 
+Before assuming a fix failed, verify provenance:
+
+- the checkout containing the edit is the context the test is using
+- the change is committed and pushed
+- the build/reload consumed the pushed commit
+- dogfood mirror logs did not report `skipped-dirty`
+
+Planned hardening: expose a runtime build-provenance API with context id,
+source path, git SHA, dirty flag, build timestamp, and artifact id, then include
+it automatically in system-test failure reports.
+
 ## Phase 8: Iterate or Finalize
 
 ```typescript

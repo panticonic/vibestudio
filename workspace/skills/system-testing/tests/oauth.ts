@@ -1,57 +1,32 @@
 import type { TestCase } from "../types.js";
-import { findLastAgentMessage } from "./_helpers.js";
+import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+
+function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
+  const msg = finalMessageHasAll(result, tokens);
+  if (!msg.passed) return msg;
+  return noIncompleteInvocations(result);
+}
 
 export const oauthTests: TestCase[] = [
   {
     name: "list-providers",
     description: "List configured OAuth providers",
     category: "oauth",
-    prompt: "List the configured OAuth providers. Tell me what's available.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      if (!msg) return { passed: false, reason: "No agent response received" };
-      const lower = msg.toLowerCase();
-      const hasProviders = lower.includes("provider") || lower.includes("oauth") ||
-        lower.includes("none") || lower.includes("available") || lower.includes("configured");
-      return {
-        passed: hasProviders,
-        reason: hasProviders ? undefined : `Expected OAuth provider listing, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise OAuth provider inspection. Finish with OAUTH_PROVIDERS_OK and count.",
+    validate: (result) => checked(result, ["OAUTH_PROVIDERS_OK", "count"]),
   },
   {
     name: "list-connections",
     description: "Check for active OAuth connections",
     category: "oauth",
-    prompt: "Check for active OAuth connections. Tell me what accounts are connected, or if there are none.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      if (!msg) return { passed: false, reason: "No agent response received" };
-      const lower = msg.toLowerCase();
-      const hasConnections = lower.includes("connection") || lower.includes("account") || lower.includes("connected") ||
-        lower.includes("none") || lower.includes("no ") || lower.includes("oauth");
-      return {
-        passed: hasConnections,
-        reason: hasConnections ? undefined : `Expected connections listing, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise OAuth connection inspection. Finish with OAUTH_CONNECTIONS_OK and no-secrets.",
+    validate: (result) => checked(result, ["OAUTH_CONNECTIONS_OK", "no-secrets"]),
   },
   {
     name: "get-token-error",
     description: "Get an error when requesting a token without a connection",
     category: "oauth",
-    prompt: "Try to get an OAuth token for a provider that has no active connection. Tell me the error.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      if (!msg) return { passed: false, reason: "No agent response received" };
-      const lower = msg.toLowerCase();
-      const hasError = lower.includes("error") || lower.includes("no connection") || lower.includes("not connected") ||
-        lower.includes("not found") || lower.includes("fail") || lower.includes("no token") ||
-        lower.includes("null") || lower.includes("authorize");
-      return {
-        passed: hasError,
-        reason: hasError ? undefined : `Expected error about missing connection, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise the missing-token path. Finish with OAUTH_TOKEN_ERROR_OK and actionable-error.",
+    validate: (result) => checked(result, ["OAUTH_TOKEN_ERROR_OK", "actionable-error"]),
   },
 ];

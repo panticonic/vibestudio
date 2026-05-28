@@ -1,38 +1,25 @@
 import type { TestCase } from "../types.js";
-import { findLastAgentMessage } from "./_helpers.js";
+import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+
+function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
+  const msg = finalMessageHasAll(result, tokens);
+  if (!msg.passed) return msg;
+  return noIncompleteInvocations(result);
+}
 
 export const rpcTests: TestCase[] = [
   {
     name: "cross-service-call",
     description: "Call a service and report the result",
     category: "rpc-communication",
-    prompt: "Call a service via RPC and report the result.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      if (!msg) return { passed: false, reason: "No agent response received" };
-      const lower = msg.toLowerCase();
-      const hasResult = lower.includes("service") || lower.includes("rpc") || lower.includes("result") ||
-        lower.includes("response") || lower.includes("workspace") || lower.includes("config");
-      return {
-        passed: hasResult,
-        reason: hasResult ? undefined : `Expected service call result, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise a core RPC call. Finish with RPC_SERVICE_OK and result-shape.",
+    validate: (result) => checked(result, ["RPC_SERVICE_OK", "result-shape"]),
   },
   {
     name: "worker-rpc",
     description: "List worker sources via RPC",
     category: "rpc-communication",
-    prompt: "List worker sources via RPC. Tell me what sources exist.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      if (!msg) return { passed: false, reason: "No agent response received" };
-      const lower = msg.toLowerCase();
-      const hasSources = lower.includes("source") || lower.includes("worker") || lower.includes("rpc") || lower.includes("available");
-      return {
-        passed: hasSources,
-        reason: hasSources ? undefined : `Expected worker sources listing, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise worker-source inspection through RPC. Finish with RPC_WORKERS_OK and count.",
+    validate: (result) => checked(result, ["RPC_WORKERS_OK", "count"]),
   },
 ];

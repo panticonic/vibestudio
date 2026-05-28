@@ -92,6 +92,10 @@ export class TestRunner {
         error: err instanceof Error ? err.message : String(err),
         snapshot,
       };
+      execution.diagnostics = await this.runner.collectDiagnostics({
+        channelId: session?.channelId,
+        error: err,
+      });
       outcome = {
         result: { passed: false, reason: `Error: ${execution.error}` },
         execution,

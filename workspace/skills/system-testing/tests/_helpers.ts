@@ -55,6 +55,40 @@ export function responseContains(result: TestExecutionResult, text: string): boo
   return findLastAgentMessage(result).toLowerCase().includes(text.toLowerCase());
 }
 
+export function finalMessageHasAll(result: TestExecutionResult, tokens: readonly string[]): { passed: boolean; reason?: string } {
+  const msg = findLastAgentMessage(result);
+  if (!msg) return { passed: false, reason: "No agent response received" };
+  const lower = msg.toLowerCase();
+  const missing = tokens.filter((token) => !lower.includes(token.toLowerCase()));
+  return {
+    passed: missing.length === 0,
+    reason: missing.length === 0
+      ? undefined
+      : `Missing ${missing.join(", ")} in response: ${msg.slice(0, 400)}`,
+  };
+}
+
+export function finalMessageHasAny(result: TestExecutionResult, tokens: readonly string[]): { passed: boolean; reason?: string } {
+  const msg = findLastAgentMessage(result);
+  if (!msg) return { passed: false, reason: "No agent response received" };
+  const lower = msg.toLowerCase();
+  const found = tokens.some((token) => lower.includes(token.toLowerCase()));
+  return {
+    passed: found,
+    reason: found ? undefined : `Expected one of ${tokens.join(", ")} in response: ${msg.slice(0, 400)}`,
+  };
+}
+
+export function noIncompleteInvocations(result: TestExecutionResult): { passed: boolean; reason?: string } {
+  const incomplete = incompleteToolCalls(result);
+  return {
+    passed: incomplete.length === 0,
+    reason: incomplete.length === 0
+      ? undefined
+      : `Expected no incomplete tool calls, got ${incomplete.map((c) => `${c.name}:${c.execution?.status ?? "unknown"}`).join(", ")}`,
+  };
+}
+
 /** Check that the response does NOT contain error-indicating phrases alongside the expected content */
 export function responseSucceeds(result: TestExecutionResult, expectedContent: string): { passed: boolean; reason?: string } {
   const msg = findLastAgentMessage(result);

@@ -1,96 +1,61 @@
 import type { TestCase } from "../types.js";
-import { findLastAgentMessage } from "./_helpers.js";
+import { completedToolNames, finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+
+function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
+  const msg = finalMessageHasAll(result, tokens);
+  if (!msg.passed) return msg;
+  return noIncompleteInvocations(result);
+}
 
 export const agentCapabilityTests: TestCase[] = [
   {
     name: "multi-turn",
     description: "Agent stores something in scope and retrieves it later",
     category: "agent-capabilities",
-    prompt: "Store something in scope and then retrieve it in a separate step. Tell me what you stored and got back.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasStore = lower.includes("stored") || lower.includes("set") || lower.includes("retriev") || lower.includes("value") || lower.includes("scope");
-      return {
-        passed: hasStore,
-        reason: hasStore ? undefined : `Expected scope store/retrieve confirmation, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise persistent tool scope across steps. Finish with AGENT_SCOPE_OK and marker-match.",
+    validate: (result) => checked(result, ["AGENT_SCOPE_OK", "marker-match"]),
   },
   {
     name: "error-recovery",
     description: "Agent recovers from a thrown error and retries successfully",
     category: "agent-capabilities",
-    prompt: "Run some code that will fail, then recover and run something that succeeds. Tell me about both outcomes.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasError = lower.includes("error") || lower.includes("fail") || lower.includes("threw") || lower.includes("exception");
-      const hasRecovery = lower.includes("success") || lower.includes("work") || lower.includes("result") || lower.includes("recover") || lower.includes("succeed");
-      return {
-        passed: hasError && hasRecovery,
-        reason: (hasError && hasRecovery) ? undefined : `Expected error and recovery, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise recovery after a tool failure. Finish with AGENT_ERROR_RECOVERY_OK and recovered.",
+    validate: (result) => checked(result, ["AGENT_ERROR_RECOVERY_OK", "recovered"]),
   },
   {
     name: "large-output",
     description: "Agent generates a large data structure and reports on it",
     category: "agent-capabilities",
-    prompt: "Generate a large array of objects and tell me how many you created.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const hasNumber = /\d{2,}/.test(msg);
-      return {
-        passed: hasNumber,
-        reason: hasNumber ? undefined : `Expected a count in response, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise summarizing large generated data. Finish with AGENT_LARGE_SUMMARY_OK and count.",
+    validate: (result) => checked(result, ["AGENT_LARGE_SUMMARY_OK", "count"]),
   },
   {
     name: "dynamic-import",
     description: "Dynamically import an external package and use it",
     category: "agent-capabilities",
-    prompt: "Import an external package and use it for something useful. Tell me what you imported and what happened.",
+    prompt: "Exercise dynamic import. Finish with AGENT_DYNAMIC_IMPORT_OK or AGENT_DYNAMIC_IMPORT_MISMATCH.",
     validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasImport = lower.includes("import") || lower.includes("package") || lower.includes("module") || lower.includes("instal");
-      return {
-        passed: hasImport,
-        reason: hasImport ? undefined : `Expected external package usage, got: ${msg.slice(0, 200)}`,
-      };
+      const ok = finalMessageHasAll(result, ["AGENT_DYNAMIC_IMPORT_OK"]);
+      if (ok.passed) return noIncompleteInvocations(result);
+      return checked(result, ["AGENT_DYNAMIC_IMPORT_MISMATCH"]);
     },
   },
   {
     name: "console-streaming",
     description: "Console output is captured and reported",
     category: "agent-capabilities",
-    prompt: "Run some code that logs to the console, then tell me what the output was.",
+    prompt: "Exercise console capture. Finish with AGENT_CONSOLE_OK and lines:3.",
     validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasConsole = lower.includes("console") || lower.includes("log") || lower.includes("output") || lower.includes("print");
-      return {
-        passed: hasConsole,
-        reason: hasConsole ? undefined : `Expected console output description, got: ${msg.slice(0, 200)}`,
-      };
+      const completed = completedToolNames(result);
+      if (!completed.has("eval")) return { passed: false, reason: "Expected a completed eval call for console streaming" };
+      return checked(result, ["AGENT_CONSOLE_OK", "lines:3"]);
     },
   },
   {
     name: "concurrent-scope",
     description: "Multiple scope assignments persist independently",
     category: "agent-capabilities",
-    prompt: "Store several different values in scope across separate code executions, then read them all back. Confirm they all persisted.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasPersist = lower.includes("persist") || lower.includes("all") || lower.includes("confirm") ||
-        lower.includes("value") || lower.includes("scope") || lower.includes("stored");
-      return {
-        passed: hasPersist,
-        reason: hasPersist ? undefined : `Expected scope persistence confirmation, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise multiple independent persistent scope values. Finish with AGENT_SCOPE_MULTI_OK and values:3.",
+    validate: (result) => checked(result, ["AGENT_SCOPE_MULTI_OK", "values:3"]),
   },
 ];

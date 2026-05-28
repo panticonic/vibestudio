@@ -22,6 +22,8 @@ export interface TestExecutionResult {
   cleanupErrors?: string[];
   /** Full diagnostic snapshot from the session (invocations, debug events, participants) */
   snapshot?: SessionSnapshot;
+  /** Runtime/GAD diagnostics collected automatically when a test errors. */
+  diagnostics?: Record<string, unknown>;
 }
 
 export interface TestResult {
