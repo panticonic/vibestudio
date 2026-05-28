@@ -36,7 +36,8 @@ type StandardAgentMethodName =
   | "setApprovalLevel"
   | "setRespondPolicy"
   | "getAgentSettings"
-  | "getDebugState";
+  | "getDebugState"
+  | "inspectMethodSuspensions";
 
 type StandardAgentMethodOptions = {
   include?: readonly StandardAgentMethodName[];
@@ -112,6 +113,10 @@ export abstract class AgentWorkerBase extends TrajectoryVesselBase {
         description: "Read effective model, effort, approval, and chattiness settings",
       },
       { name: "getDebugState", description: "Read agent DO persisted and in-memory debug state" },
+      {
+        name: "inspectMethodSuspensions",
+        description: "Compare local method suspensions with GAD invocation projection state",
+      },
     ];
     const include = opts?.include ? new Set<string>(opts.include) : null;
     const exclude = opts?.exclude ? new Set<string>(opts.exclude) : null;
@@ -196,6 +201,8 @@ export abstract class AgentWorkerBase extends TrajectoryVesselBase {
         return { result: this.getAgentSettings(channelId) };
       case "getDebugState":
         return { result: await this.getDebugState(channelId) };
+      case "inspectMethodSuspensions":
+        return { result: await this.inspectMethodSuspensions(channelId) };
       default:
         return null;
     }

@@ -5764,6 +5764,66 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     };
   }
 
+  async inspectMethodSuspensions(channelId?: string): Promise<Record<string, unknown>> {
+    await this.ensureAgentActivationReady();
+    const rows = this.summarizeMethodSuspensionRows(channelId) as Array<Record<string, unknown>>;
+    const diagnostics = await Promise.all(
+      rows.slice(0, DEBUG_COLLECTION_LIMIT).map(async (row) => {
+        const rowChannelId = typeof row["channel_id"] === "string" ? row["channel_id"] : channelId;
+        const branchId = rowChannelId ? gadBranchIdForChannel(rowChannelId) : null;
+        const invocationId =
+          typeof row["invocation_id"] === "string" ? row["invocation_id"] : undefined;
+        const transportCallId =
+          typeof row["transport_call_id"] === "string" ? row["transport_call_id"] : undefined;
+        let gadInvocation: unknown = null;
+        let gadError: string | null = null;
+        if (branchId && (invocationId || transportCallId)) {
+          try {
+            gadInvocation = await this.gad.call("inspectInvocationState", {
+              branchId,
+              invocationId,
+              transportCallId,
+              limit: 5,
+            });
+          } catch (err) {
+            gadError = err instanceof Error ? err.message : String(err);
+          }
+        }
+        return {
+          ...row,
+          gad: {
+            branchId,
+            invocation: gadInvocation,
+            error: gadError,
+          },
+        };
+      })
+    );
+    return {
+      generatedAt: new Date().toISOString(),
+      requestedChannelId: channelId ?? null,
+      summary: {
+        localRows: rows.length,
+        inspectedRows: diagnostics.length,
+        byDeliveryStatus: Object.fromEntries(
+          [...new Set(rows.map((row) => String(row["delivery_status"] ?? "unknown")))].map(
+            (status) => [
+              status,
+              rows.filter((row) => String(row["delivery_status"] ?? "unknown") === status).length,
+            ]
+          )
+        ),
+        byTerminalKind: Object.fromEntries(
+          [...new Set(rows.map((row) => String(row["terminal_kind"] ?? "none")))].map((kind) => [
+            kind,
+            rows.filter((row) => String(row["terminal_kind"] ?? "none") === kind).length,
+          ])
+        ),
+      },
+      rows: diagnostics,
+    };
+  }
+
   override async getState(): Promise<Record<string, unknown>> {
     await this.ensureAgentActivationReady();
     const subscriptions = this.sql.exec(`SELECT * FROM subscriptions`).toArray();
