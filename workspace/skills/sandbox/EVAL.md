@@ -199,7 +199,7 @@ Scope is serialized per-property when persisted:
 
 - **Kept:** primitives, plain objects, arrays, Date, Map, Set, RegExp
 - **Dropped:** functions, symbols, class instances, WeakRef/WeakMap/WeakSet, circular refs, depth > 20
-- **Partial restoration:** if `scope.browser` is a panel handle, after reload `scope.browser.id` and `scope.browser.title` survive but function-valued fields such as `scope.browser.cdp.page` are lost
+- **Partial restoration:** if `scope.browser` is a panel handle, after reload `scope.browser.id` and `scope.browser.title` survive but function-valued fields such as `scope.browser.cdp.playwrightPage` are lost
 
 On reload, a system message lists what was restored, partially restored, and lost.
 
@@ -280,10 +280,16 @@ eval({ code: `
   await client.addAll("/my-repo");
   const sha = await client.commit({ dir: "/my-repo", message: "Initial commit" });
   console.log("Committed:", sha);
+  const status = await client.status("/my-repo");
+  console.log("Changed files:", status.files);
   const log = await client.log("/my-repo");
   console.log("History:", log);
 ` })
 ```
+
+Use `client.status(dir)` for normal structured status. If you specifically need
+isomorphic-git's raw `[filepath, HEAD, WORKDIR, STAGE]` tuples, use
+`client.statusMatrix(dir)`.
 
 ## Large Results And Diagnostics
 
@@ -327,6 +333,22 @@ The method transport also caps oversized durable results and records a blob
 digest when storage is available. Agents should still return bounded summaries
 because compact results are easier to inspect and less likely to hide the
 important error message.
+
+## Extension Calls
+
+`extensions.use(name)` is synchronous and returns a method proxy. Do not `await`
+it and do not attach `.catch(...)` to it. Catch the actual extension method
+Promise instead:
+
+```ts
+import { extensions } from "@workspace/runtime";
+
+const typecheck = extensions.use("@workspace-extensions/typecheck-service");
+const result = await typecheck.checkPanel("panels/spectrolite").catch((error) => ({
+  error: String(error),
+}));
+return result;
+```
 
 For read-only queries, RPC shortcuts work too:
 
@@ -376,7 +398,7 @@ eval({ code: `
 
   // Use openPanel when you need page automation
   const handle = await openPanel("https://example.com");
-  const page = await handle.cdp.page();
+  const page = await handle.cdp.playwrightPage();
   console.log(await page.title());
 ` })
 ```

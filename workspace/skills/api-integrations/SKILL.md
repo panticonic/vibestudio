@@ -156,11 +156,14 @@ import { git } from "@workspace/runtime";
 
 const client = git.client();
 await client.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
+const status = await client.status("/repo");
 ```
 
 When the caller just needs a Git client, prefer `git.client()` from the runtime.
 It routes relative NatStack repositories to the internal git server and absolute
 external remotes through credential-gated host git HTTP.
+Use `client.status(dir)` for structured status and `client.statusMatrix(dir)`
+only when raw isomorphic-git HEAD/WORKDIR/STAGE tuples are required.
 
 To share a git remote across future contexts, use the runtime git remote API
 instead of editing only the current `.git/config`:

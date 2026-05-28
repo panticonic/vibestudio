@@ -140,6 +140,7 @@ import { panelTree, openPanel } from "@workspace/runtime";
 const created = await openPanel("https://example.com", { focus: true });
 const same = panelTree.get(created.id);
 const parent = panelTree.self().parent();
+const parentInfo = parent ? await parent.getInfo() : null;
 const roots = await panelTree.roots();
 ```
 
@@ -152,11 +153,18 @@ await same.stateArgs.set({ mode: "review" });
 const state = await same.stateArgs.get();
 await same.call.someExposedMethod();
 
-const page = await same.cdp.page();
+const page = await same.cdp.playwrightPage();
 await page.title();
+await page.url();
+await same.click("button");
 
-await parent?.cdp.page();
+await parent?.cdp.playwrightPage();
 ```
+
+Use `same.cdp.playwrightPage()` for the vendored Playwright-style client or
+`same.cdp.lightweightPage()` for the smaller wrapper. There is no generic
+`same.cdp.page()` alias; the API exposes only named clients so the two scopes
+are not confused.
 
 CDP and structural operations are approval-gated on first use per requester
 runtime entity and target panel. Privileged shell/about targets use a severe
@@ -164,6 +172,8 @@ danger-tone approval. CDP transparently loads unloaded targets after approval;
 RPC and `_agent` introspection do not auto-load, so call `handle.ensureLoaded()`
 first when you need those against an unloaded target. A target held by a
 mobile/non-CDP host rejects CDP access rather than being taken over silently.
+Approval prompts time out if no shell decision arrives before the deadline; that
+is a consent UI timeout, not a model prompt timeout.
 
 ## Userland Approval Prompts
 

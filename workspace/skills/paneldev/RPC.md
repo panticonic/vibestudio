@@ -118,7 +118,9 @@ child.close(); // Close the panel
 
 ```typescript
 parent.id; // Parent's ID
+await parent.getInfo(); // Metadata: id/title/source/kind/parentId
 parent.call.method(args); // Call parent's RPC method
 parent.emit("event", payload); // Emit event to parent
 parent.onEvent("event", handler); // Listen for parent events
+await parent.click("button"); // CDP click convenience; prompts on first automation use
 ```

@@ -96,7 +96,7 @@ The declared set in `meta/natstack.yml` is the single source of truth, reconcile
 | Add an HTTP endpoint | See [FETCH.md](FETCH.md) — default-export `fetch` handler |
 | Push edits and pick up changes | See [DEV_LOOP.md](DEV_LOOP.md) — git push, dev-session, inspector |
 | Migrate from `src/server/services/*` | See [MIGRATIONS.md](MIGRATIONS.md) — canary pattern, `extensions.use(...)` codemod |
-| Inspect an extension's status / health / logs | `workspace.units.list()`, `workspace.units.logs(name)`, `workspace.units.inspector(name)` |
+| Inspect an extension's status / health / logs | `workspace.units.list()`, `workspace.units.diagnostics(name)`, `workspace.units.logs(name)`, `workspace.units.inspector(name)` |
 | Force restart (no source change) | `extensions.reload(name)` — approval-gated, restarts the active approved build |
 
 ## Reference material

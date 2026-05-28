@@ -11,7 +11,7 @@ The primary pattern: open a browser panel once, store the handle in `scope`, and
 eval({ code: `
   import { openPanel } from "@workspace/runtime";
   scope.browser = await openPanel("https://example.com");
-  scope.page = await scope.browser.cdp.page();
+  scope.page = await scope.browser.cdp.playwrightPage();
   console.log("Opened:", await scope.page.title());
 `
 })
@@ -38,19 +38,19 @@ eval({ code: `
 
 Two lines to get started:
 1. `scope.browser = await openPanel(url)` — opens a browser panel, stores handle in scope; may prompt on first structural use
-2. `scope.page = await scope.browser.cdp.page()` — connects Playwright via CDP, stores page in scope
+2. `scope.page = await scope.browser.cdp.playwrightPage()` — connects the vendored Playwright CDP client, stores page in scope
 
 All subsequent eval calls reuse `scope.page` directly — no re-creation needed.
 
 ## Reconnection After Panel Reload
 
-On panel reload, `scope.browser.id` survives serialization (it's a string) even though handle methods like `scope.browser.cdp.page` and `scope.browser.cdp.navigate` are lost (functions aren't serializable). Reconnect using the surviving ID:
+On panel reload, `scope.browser.id` survives serialization (it's a string) even though handle methods like `scope.browser.cdp.playwrightPage` and `scope.browser.cdp.navigate` are lost (functions aren't serializable). Reconnect using the surviving ID:
 
 ```
 eval({ code: `
   import { getPanelHandle } from "@workspace/runtime";
   scope.browser = getPanelHandle(scope.browser.id);  // id survived serialization
-  scope.page = await scope.browser.cdp.page();
+  scope.page = await scope.browser.cdp.playwrightPage();
   console.log("Reconnected:", await scope.page.title());
 `
 })
@@ -62,15 +62,70 @@ No need for a separate `scope.browserId` — per-property serialization means `s
 
 ```typescript
 scope.browser = await openPanel("https://example.com");
-scope.page = await scope.browser.cdp.page();
+scope.page = await scope.browser.cdp.playwrightPage();
 ```
 
-The CDP handle is Playwright-like but comes from the bundled runtime client. In
-some environments `url` is exposed as a property rather than a function; prefer
-`await scope.page.evaluate(() => location.href)` when you need a portable current
-URL. Panel handles expose methods under `.call` and `.cdp`; a parent handle does
-not have `parent.click()`. Use `const parent = getPanelHandle(parentId)` then
-`await parent.cdp.click(selector)` or `await parent.call.someMethod()`.
+Choose one named CDP client explicitly:
+
+- `await handle.cdp.playwrightPage()` loads vendored
+  `@workspace/playwright-core` and gives the fuller Playwright-style API. Use
+  this for normal eval diagnostics, UI testing, login flows, and any task that
+  benefits from locators/waits.
+- `await handle.cdp.lightweightPage()` loads the smaller
+  `@workspace/playwright-client` wrapper. Use this only when you intentionally
+  want the constrained surface.
+
+There is no silent fallback between clients. If `playwrightPage()` cannot load
+`@workspace/playwright-core`, fix the context/build exposure or deliberately
+switch to `lightweightPage()` and accept the smaller API. There is no
+`handle.cdp.page()` alias.
+
+API scope:
+
+| Client | Entry point | Scope | Use when |
+|--------|-------------|-------|----------|
+| Vendored Playwright | `handle.cdp.playwrightPage()` | Fuller Playwright-style page/locator surface: `url`, `title`, `goto`, `locator`, locator `click/fill/innerText/textContent/count`, `waitForSelector`, `waitForLoadState`, `evaluate`, `screenshot` | Eval diagnostics, UI tests, browser workflows, login flows, anything where robust selectors/waits matter |
+| Lightweight CDP | `handle.cdp.lightweightPage()` | Small CDP wrapper for basic `goto`, `click`, `fill`, `evaluate`, `waitForSelector`, `screenshot`, console event capture, DOM `inspect(selector)`, and simple locator helpers | Constrained worker/DO contexts or code paths where you intentionally avoid the vendored client |
+
+Historical console diagnostics are not a CDP page feature. CDP console events
+only include messages after the client connects. For "something already went
+wrong in this panel" debugging, use the host-captured history:
+
+```ts
+const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 100 });
+console.log(history.errors.map((entry) => entry.message));
+console.log(history.dropped); // visible overflow counts, not silent truncation
+```
+
+`history.entries` is the recent general console buffer. `history.errors` is a
+separate error-only buffer so noisy normal logs do not evict historical errors.
+Each entry includes `timestamp`, `level`, `message`, `line`, `sourceId`, and
+`url`. Use `page.consoleEvents()` on the lightweight page only for live events
+captured after the CDP connection is established.
+
+For broad post-mortem panel debugging, prefer the unified bundle:
+
+```ts
+const diagnostics = await handle.diagnostics({ limit: 200, errorLimit: 100 });
+console.log(diagnostics.info);
+console.log(diagnostics.consoleHistory.errors);
+```
+
+The same historical capture includes renderer lifecycle failures such as
+`render-process-gone`, failed main-frame loads, and unresponsive renderer
+events.
+
+Do not import `@workspace/playwright-core` eagerly in panel code just to inspect
+or automate a panel. Use `await handle.cdp.playwrightPage()` so the full client
+is loaded only when automation is requested.
+
+`page.url()` follows the Playwright shape. Use
+`await scope.page.evaluate(() => location.href)` only when you need the page to
+compute a URL after client-side routing. Panel handles expose target RPC under
+`.call` and automation under `.cdp`; `handle.click(selector)` is a Playwright
+convenience wrapper for `handle.cdp.click(selector)`.
+Use `await parent.getInfo()` for handle metadata; top-level runtime `getInfo()`
+describes the current runtime, not arbitrary handles.
 
 ### Navigation
 
@@ -98,6 +153,10 @@ await scope.page.type('input[name="search"]', "query")  // types character by ch
 await scope.page.waitForSelector(".loaded")              // wait for element to appear
 await scope.page.waitForSelector(".modal")
 await scope.page.querySelector(".result")                // check if element exists
+await scope.page.locator(".result").count()               // count matches
+await scope.page.locator(".result").innerText()           // visible text
+await scope.page.locator(".result").textContent()         // raw text content
+await scope.page.waitForLoadState("networkidle")          // wait for load lifecycle
 ```
 
 ### Evaluate JavaScript in Page
@@ -149,7 +208,10 @@ The handle also has direct navigation methods (no Playwright needed):
 
 | Method | Description |
 |--------|-------------|
-| `handle.cdp.page()` | Connect Playwright, return page |
+| `handle.cdp.playwrightPage()` | Load vendored Playwright CDP client and return the page |
+| `handle.cdp.lightweightPage()` | Load the smaller CDP wrapper and return the page |
+| `handle.cdp.consoleHistory({ limit, errorLimit })` | Read host-captured historical console logs and the separate error buffer |
+| `handle.click(selector)` | Convenience wrapper for `handle.cdp.click(selector)` |
 | `handle.cdp.navigate(url)` | Load a URL |
 | `handle.cdp.goBack()` | Navigate back |
 | `handle.cdp.goForward()` | Navigate forward |
@@ -166,7 +228,7 @@ The handle also has direct navigation methods (no Playwright needed):
 eval({ code: `
   import { openPanel } from "@workspace/runtime";
   scope.browser = await openPanel("https://news.ycombinator.com");
-  scope.page = await scope.browser.cdp.page();
+  scope.page = await scope.browser.cdp.playwrightPage();
   console.log("Opened HN");
 `
 })
@@ -198,7 +260,7 @@ eval({ code: `
 eval({ code: `
   import { openPanel } from "@workspace/runtime";
   scope.browser = await openPanel("https://example.com/login");
-  scope.page = await scope.browser.cdp.page();
+  scope.page = await scope.browser.cdp.playwrightPage();
 `
 })
 
@@ -242,7 +304,7 @@ eval({ code: `
 
   // Step 2: Open browser — now has imported cookies
   scope.browser = await openPanel("https://github.com");
-  scope.page = await scope.browser.cdp.page();
+  scope.page = await scope.browser.cdp.playwrightPage();
 
   const title = await scope.page.title();
   console.log("Page title:", title);
@@ -278,7 +340,7 @@ export default function BrowserController({ props, chat }) {
     setStatus("connecting...");
     const handle = await openPanel(url);
     handleRef.current = handle;
-    const page = await handle.cdp.page();
+    const page = await handle.cdp.playwrightPage();
     pageRef.current = page;
     setStatus("connected");
     setPageTitle(await page.title());

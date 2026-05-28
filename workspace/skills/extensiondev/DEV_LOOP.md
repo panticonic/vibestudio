@@ -63,7 +63,9 @@ The unified status surface (`workspace.units.list()`) is the right tool for "is 
 - `lastError` — populated on `error` status
 - `inspectorUrl` — dev-only
 
-`workspace.units.logs(name, { since?, level?, limit? })` returns recent log records for any unit. Extension records (from `ctx.log`) and DO records (from workerd `console.*`) share the same schema.
+`workspace.units.logs(name, { since?, level?, limit? })` returns recent log records for any unit. `workspace.units.diagnostics(name, { limit?, errorLimit?, since?, level? })` returns the same bounded log stream plus a separate error-only buffer, dropped counts, and the current unit status row.
+
+Extension records from `ctx.log`, extension process stdout/stderr, worker/DO `console.*`, and panel lifecycle diagnostics share the same persisted diagnostic history. The history is retained under the workspace state directory with separate bounds for general logs and errors, so noisy info logs do not evict the error trail.
 
 ## Restart without a source change
 

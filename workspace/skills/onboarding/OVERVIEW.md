@@ -75,7 +75,7 @@ All panels and sandbox code can import from `@workspace/runtime`:
 | `workspace` | List, create, configure, switch workspaces |
 | `rpc` | Call services on the main process or other panels |
 
-Additional packages: `@workspace/panel-browser` (browser data import/export), `@workspace/playwright-client` (browser automation).
+Additional packages: `@workspace/panel-browser` (browser data import/export), `@workspace/playwright-core` (vendored Playwright-style CDP client, loaded by `handle.cdp.playwrightPage()`), `@workspace/playwright-client` (explicit lightweight CDP client).
 
 ### Build System
 

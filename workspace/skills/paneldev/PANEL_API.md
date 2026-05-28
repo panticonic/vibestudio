@@ -22,6 +22,7 @@ const snapshot = await handle.snapshot();
 | Member | Description |
 |--------|-------------|
 | `id` | Host panel id |
+| `getInfo()` | Copyable metadata `{ id, title, source, kind, parentId }` |
 | `source` | Workspace source or URL |
 | `kind` | `"workspace"` or `"browser"` |
 | `children()` | Fresh direct child handles |
@@ -31,6 +32,7 @@ const snapshot = await handle.snapshot();
 | `snapshot()` | Agent-readable AX/synthetic snapshot |
 | `tree()` / `state()` / `routes()` / `setMode()` | Workspace `_agent` methods |
 | `cdp` | Approval-gated CDP automation namespace for panel-tree targets |
+| `click(selector)` | Convenience wrapper for `cdp.click(selector)` |
 
 ## State Args
 
@@ -55,26 +57,47 @@ await handle.stateArgs.set({ theme: "dark" });
 const next = await handle.stateArgs.get();
 ```
 
+Parent handles are regular `PanelHandle`s:
+
+```ts
+import { panelTree } from "@workspace/runtime";
+
+const parent = panelTree.self().parent();
+if (parent) {
+  const info = await parent.getInfo();
+  const args = await parent.stateArgs.get();
+  console.log(info.id, args);
+}
+```
+
 ## Agent Inspection
 
 Every runtime panel registers `_agent.snapshot`, `_agent.tree`, `_agent.state`, `_agent.routes`, and `_agent.setMode`. Agents should call these through a handle, not directly.
 
 Mobile hosts implement these methods through the WebView bridge. CDP access is
-served by CDP-capable Electron hosts through `handle.cdp.page()`. Panels held by
-non-CDP hosts reject CDP access instead of being silently taken over.
+served by CDP-capable Electron hosts through `handle.cdp.playwrightPage()`,
+or `handle.cdp.lightweightPage()`. Panels held by non-CDP hosts reject CDP
+access instead of being silently taken over.
+Use `handle.cdp.playwrightPage()` for the vendored `@workspace/playwright-core`
+client, or `handle.cdp.lightweightPage()` for the smaller wrapper. There is no
+silent fallback between them and no generic `handle.cdp.page()` alias. Use
+these APIs instead of eagerly importing Playwright in panel UI code.
+
+Approval-gated panel operations wait for a visible shell approval decision. If
+no decision arrives before the approval deadline, the request fails with an
+approval-timeout error. That timeout means the consent prompt was not resolved;
+it is not a model prompt timeout.
 
 ## Runtime Provenance
 
-Panel handles identify the live panel (`id`, `source`, `kind`) but do not yet
-prove which build artifact is running. Until a build-provenance API exists, use
-git status, commit/push state, typecheck/build output, and panel reload timing
-to verify that a running panel has consumed your source change.
-
-Target design for provenance inspection:
+Panel handles identify the live panel (`id`, `source`, `kind`). To inspect the
+build artifact serving a workspace source, call the host provenance RPC:
 
 ```ts
-const provenance = await runtime.inspectBuildProvenance({ source: handle.source });
+import { rpc } from "@workspace/runtime";
+
+const provenance = await rpc.call("main", "build.inspectBuildProvenance", [handle.source]);
 // { source, contextId, gitSha, ref, dirty, builtAt, artifactId }
 ```
 
-This should become the first check when a panel appears stale after a fix.
+This should be an early check when a panel appears stale after a fix.

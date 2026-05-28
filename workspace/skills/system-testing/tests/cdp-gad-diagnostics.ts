@@ -16,6 +16,13 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     validate: (result) => checked(result, ["CDP_PLAYWRIGHT_OK", "clicked", "evaluated", "screenshot"]),
   },
   {
+    name: "cdp-lightweight-console-dom-inspection",
+    description: "Exercise explicit lightweight CDP inspection and host historical console APIs",
+    category: "cdp-gad-diagnostics",
+    prompt: "Open a tiny disposable browser page, explicitly use handle.cdp.lightweightPage(), trigger console.log and console.error from the page, inspect DOM with the lightweight page/locator inspection helpers, read host historical console history with handle.cdp.consoleHistory({ limit: 20, errorLimit: 20 }), and finish with CDP_LIGHTWEIGHT_OK, console-events, console-history, console-errors, dom-inspect, visible, and lightweightPage.",
+    validate: (result) => checked(result, ["CDP_LIGHTWEIGHT_OK", "console-events", "console-history", "console-errors", "dom-inspect", "visible", "lightweightPage"]),
+  },
+  {
     name: "panel-stateargs-cdp-roundtrip",
     description: "Inspect panel state after a change",
     category: "cdp-gad-diagnostics",

@@ -14,7 +14,7 @@ Spin up headless agentic sessions to systematically test every NatStack capabili
 | runner.ts | `HeadlessRunner` — spawn headless sessions from eval with one line |
 | test-runner.ts | `TestRunner` — orchestrate test suites, collect full diagnostics |
 | types.ts | `TestCase`, `TestResult`, `TestSuiteResult`, `TestExecutionResult` |
-| tests/ | 92 pre-built test cases across 19 categories |
+| tests/ | 93 pre-built test cases across 19 categories |
 | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) | Workflow for analyzing failures and pushing fixes |
 
 ## Quick Start
@@ -333,11 +333,11 @@ if (fail.execution.snapshot) {
 | `agenticRuntimeTests` | 7 | State args, routed git client, GAD conventions, bounded inspection, no-stall tool turns |
 | `interactionSurfaceTests` | 4 | MDX ActionButton, inline UI, action bar, custom messages |
 | `projectLifecycleTests` | 4 | Create, fork, commit, push, open, and inspect real workspace units |
-| `cdpGadDiagnosticTests` | 4 | CDP/Playwright UI mutation, panel state args, GAD integrity/state diagnostics |
+| `cdpGadDiagnosticTests` | 5 | CDP/Playwright UI mutation, lightweight console/DOM inspection, historical console diagnostics, panel state args, GAD integrity/state diagnostics |
 | `harnessResilienceTests` | 5 | Eval errors, huge returns, visible timeouts, invalid args, post-tool follow-ups |
 | `docsProbeTests` | 10 | Scenario probes that require agents to apply relevant skills, not summarize docs |
 
-Use `allTests()` to get all 92 tests combined. For full-suite execution, prefer
+Use `allTests()` to get all 93 tests combined. For full-suite execution, prefer
 the category-progress pattern above: one eval per category, with
 `tester.runSuiteParallel(allTests(), { category, concurrency })` inside each
 category eval.
@@ -362,6 +362,10 @@ with ordinary smoke testing:
   panel and worker sources, open the result, and inspect snapshots/state
 - CDP/Playwright automation must be able to mutate browser UI, type/click,
   evaluate DOM state, and take screenshots through runtime panel handles
+- historical console diagnostics must expose host-captured general logs and a
+  separate error buffer through `handle.cdp.consoleHistory()`
+- unit diagnostics must expose persisted worker/DO/extension logs and separate
+  error buffers through `workspace.units.diagnostics(name)`
 - GAD diagnostic APIs must provide bounded summaries for storage,
   publication, turn, invocation, hash, branch, and file/state probes
 - harness failures must surface visibly for thrown evals, huge eval returns,

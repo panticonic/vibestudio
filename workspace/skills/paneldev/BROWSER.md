@@ -9,10 +9,11 @@ per requester entity and parent/root target:
 import { openPanel, openExternal } from "@workspace/runtime";
 
 const handle = await openPanel("https://example.com", { focus: true });
-const page = await handle.cdp.page();
+const page = await handle.cdp.playwrightPage();
 
 await page.fill("input[name=query]", "NatStack");
 await page.click(".search-button");
+await handle.click(".search-button"); // same target, convenience wrapper
 
 await handle.cdp.navigate("https://other.com");
 await handle.cdp.goBack();
@@ -21,6 +22,65 @@ await handle.close();
 
 await openExternal("https://docs.example.com");
 ```
+
+Choose one named CDP client explicitly. This keeps ordinary panel startup fast while
+making the automation surface unambiguous:
+
+- `await handle.cdp.playwrightPage()` loads vendored
+  `@workspace/playwright-core` and gives the fuller Playwright-style API. Use
+  this for eval diagnostics, UI tests, login flows, locators, waits, and
+  screenshots.
+- `await handle.cdp.lightweightPage()` loads the smaller
+  `@workspace/playwright-client` wrapper. Use it only when you intentionally
+  want the constrained surface.
+
+There is no silent fallback between clients. If `playwrightPage()` cannot load
+the vendored client, fix the context/build exposure or deliberately switch to
+`lightweightPage()` and accept the smaller API. There is no generic
+`handle.cdp.page()` alias.
+
+API scope:
+
+| Client | Entry point | Scope | Use when |
+|--------|-------------|-------|----------|
+| Vendored Playwright | `handle.cdp.playwrightPage()` | Fuller Playwright-style page/locator surface: `url`, `title`, `goto`, `locator`, locator `click/fill/innerText/textContent/count`, `waitForSelector`, `waitForLoadState`, `evaluate`, `screenshot` | Eval diagnostics, UI tests, browser workflows, login flows, anything where robust selectors/waits matter |
+| Lightweight CDP | `handle.cdp.lightweightPage()` | Small CDP wrapper for basic `goto`, `click`, `fill`, `evaluate`, `waitForSelector`, `screenshot`, console event capture, DOM `inspect(selector)`, and simple locator helpers | Constrained worker/DO contexts or code paths where you intentionally avoid the vendored client |
+
+Use historical console diagnostics for post-mortem panel debugging. CDP live
+console events start only after a CDP client connects; they cannot recover
+earlier errors. The host captures panel console messages from `webContents` as
+soon as the target is registered:
+
+```ts
+const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 100 });
+console.log(history.errors);
+console.log(history.dropped); // overflow is explicit
+```
+
+`history.entries` is the recent general log buffer. `history.errors` is a
+separate error-only buffer so high-value errors survive noisy normal logging.
+Entries include `timestamp`, `level`, `message`, `line`, `sourceId`, and `url`.
+For a single panel-debugging call, use `await handle.diagnostics({ limit: 200,
+errorLimit: 100 })`. The bundle includes handle metadata and the same
+host-captured console history. Renderer lifecycle failures such as crashes,
+failed loads, and unresponsive renderers are recorded in the historical error
+buffer with `source: "lifecycle"`.
+
+Use the page object returned by `handle.cdp.playwrightPage()` for automation:
+
+```ts
+const page = await handle.cdp.playwrightPage();
+console.log(page.url(), await page.title());
+await page.locator("button.submit").click();
+await page.locator(".status").innerText();
+await page.waitForSelector(".ready");
+await page.waitForLoadState("networkidle");
+```
+
+Do not eagerly import `@workspace/playwright-core` in panel UI code unless the
+panel itself is building an automation tool. For agents and diagnostics, use
+`handle.cdp.playwrightPage()` so the client loads only when CDP is actually
+requested.
 
 `handle.reload()` is panel lifecycle reload. For Chromium page reloads, use
 `handle.cdp.reload()`.
@@ -32,7 +92,7 @@ that target's handle and use the same `handle.cdp` namespace:
 import { panelTree } from "@workspace/runtime";
 
 const parent = panelTree.self().parent();
-await parent?.cdp.page();
+await parent?.cdp.playwrightPage();
 
 const sibling = panelTree.get("sibling-panel-id");
 await sibling.cdp.navigate("https://example.com/status");
@@ -47,7 +107,11 @@ introspection before calling `handle.call`, `handle.snapshot()`, `handle.tree()`
 
 | Method | Description |
 |--------|-------------|
-| `handle.cdp.page()` | Connect Playwright and return the page |
+| `handle.cdp.playwrightPage()` | Load vendored Playwright CDP client and return the page |
+| `handle.cdp.lightweightPage()` | Load the smaller CDP wrapper and return the page |
+| `handle.cdp.consoleHistory({ limit, errorLimit })` | Read host-captured historical console logs and the separate error buffer |
+| `handle.diagnostics({ limit, errorLimit })` | Read handle metadata plus host-captured console/lifecycle diagnostics |
+| `handle.click(selector)` | Click in the target panel through CDP |
 | `handle.cdp.navigate(url)` | Load a URL in the target panel |
 | `handle.cdp.goBack()` / `goForward()` | Chromium history |
 | `handle.cdp.reload()` | Chromium page reload |
