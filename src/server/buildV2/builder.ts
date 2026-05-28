@@ -1170,12 +1170,15 @@ export function generateExposeModuleCode(
   exposeModules: string[],
   target: BootstrapTarget = "panel"
 ): string {
-  const effectiveExposeModules =
-    target === "worker" &&
-    exposeModules.includes("@workspace/runtime") &&
-    !exposeModules.includes("@workspace/playwright-client")
-      ? [...exposeModules, "@workspace/playwright-client"]
-      : exposeModules;
+  let effectiveExposeModules = exposeModules;
+  if (target === "worker" && exposeModules.includes("@workspace/runtime")) {
+    effectiveExposeModules = [...exposeModules];
+    for (const specifier of ["@workspace/playwright-client", "@workspace/playwright-core"]) {
+      if (!effectiveExposeModules.includes(specifier)) {
+        effectiveExposeModules.push(specifier);
+      }
+    }
+  }
   const importLines = effectiveExposeModules.map(
     (dep, index) => `import * as __mod${index}__ from ${JSON.stringify(dep)};`
   );

@@ -170,6 +170,61 @@ describe("panelAccessPermission", () => {
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 
+  it("still gates panel CDP for the requesting panel itself", async () => {
+    const approvalQueue = approvalQueueMock("session");
+
+    const result = await requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+        resolveRequesterPanel: vi.fn(async () => ({
+          id: "slot-a",
+          runtimeEntityId: "panel:entity-a",
+        })),
+      },
+      panelCtx("panel:entity-a"),
+      "cdp",
+      { id: "slot-a", runtimeEntityId: "panel:entity-a" }
+    );
+
+    expect(result).toMatchObject({
+      allowed: true,
+      capability: PANEL_AUTOMATE_CAPABILITY,
+      prompted: true,
+    });
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: PANEL_AUTOMATE_CAPABILITY,
+        grantResourceKey: panelCapabilityResourceKey("slot-a", "panel:entity-a"),
+      })
+    );
+  });
+
+  it("gates panel CDP for child and sibling panel targets", async () => {
+    const approvalQueue = approvalQueueMock("session");
+
+    await requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+        resolveRequesterPanel: vi.fn(async () => ({
+          id: "slot-a",
+          runtimeEntityId: "panel:entity-a",
+        })),
+      },
+      panelCtx("panel:entity-a"),
+      "cdp",
+      { id: "slot-b", runtimeEntityId: "panel:entity-b" }
+    );
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: PANEL_AUTOMATE_CAPABILITY,
+        grantResourceKey: panelCapabilityResourceKey("slot-b", "panel:entity-a"),
+      })
+    );
+  });
+
   it("still gates stateArgs updates for other panels", async () => {
     const approvalQueue = approvalQueueMock("session");
 
@@ -266,7 +321,7 @@ describe("panelAccessPermission", () => {
     await expect(promise).resolves.toEqual({
       allowed: false,
       capability: PANEL_AUTOMATE_CAPABILITY,
-      reason: "cdp denied for panel target",
+      reason: "Automate panel approval timed out for panel target",
     });
   });
 

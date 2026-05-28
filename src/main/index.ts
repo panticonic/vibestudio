@@ -82,6 +82,8 @@ import { CdpHostProvider } from "./cdpHostProvider.js";
 import { EventService } from "@natstack/shared/eventsService";
 import type { EventName } from "@natstack/shared/events";
 import { createServerEventBridge } from "./serverEventBridge.js";
+import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
+import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { installPinnedTlsForAllPartitions } from "./tlsPinning.js";
 import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
 
@@ -1175,31 +1177,13 @@ app.on("ready", async () => {
 
   performance.mark("startup:services-registered");
 
-  // Active shell subscriptions on the server side. The bridging events
-  // service (registered further down) keeps this in sync with what the shell
-  // has asked to receive. On serverClient reconnect the server forgets all
-  // subscriptions (fresh auth → fresh callerId → fresh subscriber), so we
-  // replay this set on every transition to "connected" — see
-  // `replayShellSubscriptionsToServer` below.
-  const shellEventSubscriptions = new Set<EventName>();
   let serverClientRef: import("./serverClient.js").ServerClient | null = null;
-  const replayShellSubscriptionsToServer = async () => {
-    if (!serverClientRef || shellEventSubscriptions.size === 0) return;
-    const events = [...shellEventSubscriptions];
-    log.info(`[events] replaying ${events.length} shell subscription(s) to server`);
-    await Promise.all(
-      events.map((event) =>
-        assertPresent(serverClientRef)
-          .call("events", "subscribe", [event])
-          .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(`[events] replay subscribe(${event}) failed: ${msg}`);
-          })
-      )
-    );
-  };
+  const serverEventSubscriptions = createServerEventSubscriptionBridge({
+    getServerClient: () => serverClientRef,
+    log,
+  });
   const recoverShellStateFromServer = async (_kind: "resubscribe" | "cold-recover") => {
-    await replayShellSubscriptionsToServer();
+    await serverEventSubscriptions.replay({ force: true });
     if (!panelOrchestrator) return;
     await panelOrchestrator
       .recoverShellSnapshot({ loadFocusedView: false })
@@ -1252,11 +1236,10 @@ app.on("ready", async () => {
           });
           // On every transition into "connected" (including the very first one
           // and any subsequent reconnect), replay shell subscriptions. The
-          // initial transition is a no-op because the shell hasn't subscribed
-          // to anything yet; subsequent reconnects actually matter because the
-          // server's EventService forgets subscriptions when the old WS closes.
+          // first callback may fire before `serverClientRef` is assigned; the
+          // post-establish replay below covers that startup ordering.
           if (status === "connected" && previousStatus !== "connected") {
-            void replayShellSubscriptionsToServer();
+            void serverEventSubscriptions.replay({ force: true });
           }
           previousStatus = status;
         },
@@ -1277,13 +1260,13 @@ app.on("ready", async () => {
       serverSession = await establish(startupMode);
     }
     serverClientRef = serverSession.serverClient;
-    shellEventSubscriptions.add("apps:available");
-    shellEventSubscriptions.add("external-open:open");
-    shellEventSubscriptions.add("browser-panel:open");
-    shellEventSubscriptions.add("panel-tree-updated");
-    shellEventSubscriptions.add("panel-title-updated");
-    shellEventSubscriptions.add("panel:runtimeLeaseChanged");
-    await replayShellSubscriptionsToServer();
+    serverEventSubscriptions.add("apps:available");
+    serverEventSubscriptions.add("external-open:open");
+    serverEventSubscriptions.add("browser-panel:open");
+    serverEventSubscriptions.add("panel-tree-updated");
+    serverEventSubscriptions.add("panel-title-updated");
+    serverEventSubscriptions.add("panel:runtimeLeaseChanged");
+    await serverEventSubscriptions.replay({ force: true });
     workspaceId = serverSession.workspaceId;
 
     performance.mark("startup:server-spawned");
@@ -1403,6 +1386,9 @@ app.on("ready", async () => {
       authToken: () => conn.shellToken || conn.adminToken,
       hostConnectionId: panelOrchestrator.getRuntimeClientSessionId(),
       getViewManager: () => viewManager,
+      diagnosticsStore: new RuntimeDiagnosticsStore({
+        statePath: startupMode.kind === "remote" ? getRemoteUserDataDir() : serverSession.statePath,
+      }),
       onHostCommand: async (panelId, action, args) => {
         if (action === "openDevTools") {
           if (!viewManager) throw new Error("ViewManager not initialized");
@@ -1417,6 +1403,14 @@ app.on("ready", async () => {
         if (action === "accessibilityTree") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           return cdpHostProvider.getAccessibilityTree(panelId);
+        }
+        if (action === "consoleHistory") {
+          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
+          return cdpHostProvider.getConsoleHistory(
+            panelId,
+            (args[0] as import("./cdpHostProvider.js").PanelConsoleHistoryOptions | undefined) ??
+              undefined
+          );
         }
         throw new Error(`Unknown host command: ${action}`);
       },
@@ -1563,18 +1557,13 @@ app.on("ready", async () => {
       })
     );
     // Events service — local subscription on main's EventService plus a
-    // fire-and-forget forward to the server. The forward makes main's
-    // serverClient WS a subscriber on the server's EventService for the same
-    // event, so anything the server emits (notification:show, oauth consent
-    // prompts, etc.) comes back over that WS and is re-emitted on main's
-    // EventService by handleServerEvent. Net effect: the shell sees one
-    // logical event bus across the main/server split.
+    // bridge-owned server subscription. Main owns the remote subscription set:
+    // renderer unmount/remount churn can remove local listeners, but it must
+    // not race a remote unsubscribe against a newer remote subscribe and leave
+    // server-originated approval/notification events stranded.
     //
-    // We also keep `shellEventSubscriptions` in sync with what the shell
-    // has subscribed to, so that on serverClient reconnect we can replay
-    // the set to the server's freshly-authenticated connection (the old
-    // subscriber dies with the old WS). The workspace shell now runs as an
-    // app view, so an app with `panel-hosting` has the same event-bus role.
+    // The workspace shell now runs as an app view, so an app with
+    // `panel-hosting` has the same event-bus role.
     {
       const baseEventsService = createEventsServiceDefinition(eventService);
       const shouldForwardServerEvents = (caller: ServiceContext["caller"]): boolean => {
@@ -1591,17 +1580,12 @@ app.on("ready", async () => {
             if (!shouldForwardServerEvents(ctx.caller)) return result;
 
             if (method === "subscribe") {
-              shellEventSubscriptions.add(args[0] as EventName);
+              serverEventSubscriptions.add(args[0] as EventName);
             } else if (method === "unsubscribe") {
-              shellEventSubscriptions.delete(args[0] as EventName);
+              serverEventSubscriptions.delete(args[0] as EventName);
             } else if (method === "unsubscribeAll") {
-              shellEventSubscriptions.clear();
+              serverEventSubscriptions.clear();
             }
-
-            void sc.call("events", method, args as unknown[]).catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              log.warn(`[events] forward ${method} to server failed: ${msg}`);
-            });
             return result;
           },
         })

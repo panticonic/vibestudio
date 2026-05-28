@@ -601,6 +601,17 @@ export interface CommonDeps {
   ) =>
     | Promise<import("./services/workspaceService.js").WorkspaceUnitLogRecord[]>
     | import("./services/workspaceService.js").WorkspaceUnitLogRecord[];
+  unitDiagnostics?: (
+    name: string,
+    opts?: {
+      since?: number;
+      level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"];
+      limit?: number;
+      errorLimit?: number;
+    }
+  ) =>
+    | Promise<import("./services/workspaceService.js").WorkspaceUnitDiagnostics>
+    | import("./services/workspaceService.js").WorkspaceUnitDiagnostics;
   bakeAppDist?: (sourceOrName: string, opts?: { outDir?: string }) => Promise<unknown> | unknown;
   listAppVersions?: (
     sourceOrName: string
@@ -724,6 +735,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           listUnits: deps.listWorkspaceUnits,
           restartUnit: deps.restartWorkspaceUnit,
           listUnitLogs: deps.listWorkspaceUnitLogs,
+          unitDiagnostics: deps.unitDiagnostics,
           bakeAppDist: deps.bakeAppDist,
           listAppVersions: deps.listAppVersions,
           rollbackAppVersion: deps.rollbackAppVersion,
@@ -838,6 +850,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           drive: async (panelId, requesterEntityId, command, args) => {
             await ensureCdpTargetReady(panelId);
             return bridge.sendTargetCommand(panelId, requesterEntityId, command, args);
+          },
+          consoleHistory: async (panelId, _requesterEntityId, options) => {
+            await ensureCdpTargetReady(panelId);
+            return bridge.sendHostCommand(panelId, "consoleHistory", [options ?? {}]) as Promise<
+              import("./services/panelCdpService.js").PanelConsoleHistoryResult
+            >;
           },
         });
 

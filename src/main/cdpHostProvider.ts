@@ -3,8 +3,14 @@ import { WebSocket } from "ws";
 import { webContents } from "electron";
 import { createDevLogger } from "@natstack/dev-log";
 import type { ViewManager } from "./viewManager.js";
+import type {
+  RuntimeDiagnosticRecord,
+  RuntimeDiagnosticsStore,
+} from "../server/runtimeDiagnosticsStore.js";
 
 const log = createDevLogger("CdpHostProvider");
+const CONSOLE_LOG_HISTORY_CAPACITY = 1_000;
+const CONSOLE_ERROR_HISTORY_CAPACITY = 500;
 
 export interface CdpHostProviderSocket {
   readonly readyState: number;
@@ -23,6 +29,38 @@ export interface CdpHostProviderTarget {
   webContentsId: number;
 }
 
+export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
+
+export interface PanelConsoleHistoryEntry {
+  timestamp: number;
+  level: PanelConsoleHistoryLevel;
+  message: string;
+  line: number;
+  sourceId: string;
+  url: string;
+  source?: "console" | "lifecycle";
+  fields?: Record<string, unknown>;
+}
+
+export interface PanelConsoleHistoryResult {
+  entries: PanelConsoleHistoryEntry[];
+  errors: PanelConsoleHistoryEntry[];
+  dropped: {
+    entries: number;
+    errors: number;
+  };
+  capacity: {
+    entries: number;
+    errors: number;
+  };
+}
+
+export interface PanelConsoleHistoryOptions {
+  limit?: number;
+  errorLimit?: number;
+  levels?: PanelConsoleHistoryLevel[];
+}
+
 export interface CdpHostProviderOptions {
   serverUrl: string;
   authToken: string | (() => string);
@@ -30,6 +68,7 @@ export interface CdpHostProviderOptions {
   getViewManager: () => ViewManager | null;
   socketFactory?: (url: string) => CdpHostProviderSocket;
   reconnectDelayMs?: number;
+  diagnosticsStore?: RuntimeDiagnosticsStore;
   onHostCommand?: (targetId: string, action: string, args: unknown[]) => unknown | Promise<unknown>;
 }
 
@@ -55,6 +94,22 @@ export class CdpHostProvider {
   private readonly debuggerEventHandlers = new Map<
     string,
     (event: unknown, method: string, params?: unknown, sessionId?: string) => void
+  >();
+  private readonly consoleHistories = new Map<
+    string,
+    {
+      entries: PanelConsoleHistoryEntry[];
+      errors: PanelConsoleHistoryEntry[];
+      droppedEntries: number;
+      droppedErrors: number;
+    }
+  >();
+  private readonly consoleListeners = new Map<
+    string,
+    {
+      contents: Electron.WebContents;
+      handlers: Array<{ event: string; handler: (...args: unknown[]) => void }>;
+    }
   >();
   private socket: CdpHostProviderSocket | null = null;
   private authenticated = false;
@@ -117,12 +172,14 @@ export class CdpHostProvider {
 
   registerTarget(targetId: string, webContentsId: number): void {
     this.targets.set(targetId, webContentsId);
+    this.attachConsoleHistory(targetId);
     this.sendRegistration(targetId, webContentsId);
   }
 
   unregisterTarget(targetId: string): void {
     this.targets.delete(targetId);
     this.activeCdpTargets.delete(targetId);
+    this.detachConsoleHistory(targetId);
     this.send({ type: "cdp:unregister", targetId: targetId });
     this.detachDebuggerIfIdle(targetId, this.getTargetContents(targetId), { force: true });
   }
@@ -145,6 +202,39 @@ export class CdpHostProvider {
     } finally {
       this.detachDebuggerIfIdle(targetId, contents);
     }
+  }
+
+  getConsoleHistory(
+    targetId: string,
+    options: PanelConsoleHistoryOptions = {}
+  ): PanelConsoleHistoryResult {
+    this.requireTargetContents(targetId);
+    const history = this.historyFor(targetId);
+    const stored = this.options.diagnosticsStore?.history(targetId, {
+      limit: options.limit,
+      errorLimit: options.errorLimit,
+    });
+    const rawEntries =
+      stored?.entries.map(runtimeDiagnosticToPanelConsoleHistoryEntry) ?? history.entries;
+    const rawErrors =
+      stored?.errors.map(runtimeDiagnosticToPanelConsoleHistoryEntry) ?? history.errors;
+    const levels = new Set(options.levels ?? []);
+    const entries =
+      levels.size > 0 ? rawEntries.filter((entry) => levels.has(entry.level)) : rawEntries;
+    const limit = normalizeLimit(options.limit, entries.length);
+    const errorLimit = normalizeLimit(options.errorLimit, rawErrors.length);
+    return {
+      entries: limit > 0 ? entries.slice(-limit) : [],
+      errors: errorLimit > 0 ? rawErrors.slice(-errorLimit) : [],
+      dropped: {
+        entries: stored?.dropped.entries ?? history.droppedEntries,
+        errors: stored?.dropped.errors ?? history.droppedErrors,
+      },
+      capacity: {
+        entries: stored?.capacity.entries ?? CONSOLE_LOG_HISTORY_CAPACITY,
+        errors: stored?.capacity.errors ?? CONSOLE_ERROR_HISTORY_CAPACITY,
+      },
+    };
   }
 
   async handleProviderMessageForTest(message: ProviderMessage): Promise<void> {
@@ -181,6 +271,7 @@ export class CdpHostProvider {
             const contents = this.getTargetContents(message.targetId);
             this.targets.delete(message.targetId);
             this.activeCdpTargets.delete(message.targetId);
+            this.detachConsoleHistory(message.targetId);
             this.detachDebuggerIfIdle(message.targetId, contents, { force: true });
           }
         }
@@ -272,7 +363,160 @@ export class CdpHostProvider {
     if (action === "accessibilityTree") {
       return this.getAccessibilityTree(targetId);
     }
+    if (action === "consoleHistory") {
+      return this.getConsoleHistory(targetId, normalizeConsoleHistoryOptions(args[0]));
+    }
     throw new Error(`Unknown host command: ${action}`);
+  }
+
+  private attachConsoleHistory(targetId: string): void {
+    const contents = this.getTargetContents(targetId);
+    if (!contents || contents.isDestroyed()) return;
+    const existing = this.consoleListeners.get(targetId);
+    if (existing?.contents === contents) return;
+    this.detachConsoleHistory(targetId);
+    this.historyFor(targetId);
+    const consoleMessage = (
+      _event: unknown,
+      level: unknown,
+      message: unknown,
+      line: unknown,
+      sourceId: unknown
+    ) => {
+      this.recordConsoleMessage(targetId, contents, level, message, line, sourceId);
+    };
+    const renderProcessGone = (_event: unknown, details: unknown) => {
+      this.recordLifecycleDiagnostic(targetId, contents, "error", "render-process-gone", details);
+    };
+    const didFailLoad = (
+      _event: unknown,
+      errorCode: unknown,
+      errorDescription: unknown,
+      validatedURL: unknown,
+      isMainFrame: unknown
+    ) => {
+      this.recordLifecycleDiagnostic(targetId, contents, "error", "did-fail-load", {
+        errorCode,
+        errorDescription,
+        validatedURL,
+        isMainFrame,
+      });
+    };
+    const unresponsive = () => {
+      this.recordLifecycleDiagnostic(targetId, contents, "error", "unresponsive");
+    };
+    const emitter = contents as unknown as EventEmitter;
+    const handlers = [
+      { event: "console-message", handler: consoleMessage },
+      { event: "render-process-gone", handler: renderProcessGone },
+      { event: "did-fail-load", handler: didFailLoad },
+      { event: "unresponsive", handler: unresponsive },
+    ];
+    for (const entry of handlers) emitter.on(entry.event, entry.handler);
+    this.consoleListeners.set(targetId, { contents, handlers });
+  }
+
+  private detachConsoleHistory(targetId: string): void {
+    const existing = this.consoleListeners.get(targetId);
+    if (!existing) return;
+    const emitter = existing.contents as unknown as EventEmitter;
+    for (const entry of existing.handlers) emitter.off(entry.event, entry.handler);
+    this.consoleListeners.delete(targetId);
+  }
+
+  private recordConsoleMessage(
+    targetId: string,
+    contents: Electron.WebContents,
+    level: unknown,
+    message: unknown,
+    line: unknown,
+    sourceId: unknown
+  ): void {
+    const history = this.historyFor(targetId);
+    const entry: PanelConsoleHistoryEntry = {
+      timestamp: Date.now(),
+      level: normalizeConsoleLevel(level),
+      message: typeof message === "string" ? message : String(message ?? ""),
+      line: typeof line === "number" ? line : 0,
+      sourceId: typeof sourceId === "string" ? sourceId : "",
+      url: safeWebContentsUrl(contents),
+      source: "console",
+    };
+    this.persistPanelDiagnostic(targetId, entry);
+    history.entries.push(entry);
+    while (history.entries.length > CONSOLE_LOG_HISTORY_CAPACITY) {
+      history.entries.shift();
+      history.droppedEntries += 1;
+    }
+    if (entry.level === "error") {
+      history.errors.push(entry);
+      while (history.errors.length > CONSOLE_ERROR_HISTORY_CAPACITY) {
+        history.errors.shift();
+        history.droppedErrors += 1;
+      }
+    }
+  }
+
+  private recordLifecycleDiagnostic(
+    targetId: string,
+    contents: Electron.WebContents,
+    level: PanelConsoleHistoryLevel,
+    message: string,
+    fields?: unknown
+  ): void {
+    const history = this.historyFor(targetId);
+    const entry: PanelConsoleHistoryEntry = {
+      timestamp: Date.now(),
+      level,
+      message,
+      line: 0,
+      sourceId: "",
+      url: safeWebContentsUrl(contents),
+      source: "lifecycle",
+      fields:
+        fields && typeof fields === "object" ? (fields as Record<string, unknown>) : undefined,
+    };
+    this.persistPanelDiagnostic(targetId, entry);
+    history.entries.push(entry);
+    while (history.entries.length > CONSOLE_LOG_HISTORY_CAPACITY) {
+      history.entries.shift();
+      history.droppedEntries += 1;
+    }
+    if (entry.level === "error") {
+      history.errors.push(entry);
+      while (history.errors.length > CONSOLE_ERROR_HISTORY_CAPACITY) {
+        history.errors.shift();
+        history.droppedErrors += 1;
+      }
+    }
+  }
+
+  private persistPanelDiagnostic(targetId: string, entry: PanelConsoleHistoryEntry): void {
+    this.options.diagnosticsStore?.record({
+      entityId: targetId,
+      kind: "panel",
+      timestamp: entry.timestamp,
+      level: panelLevelToRuntimeLevel(entry.level),
+      message: entry.message,
+      source: entry.source ?? "console",
+      fields: entry.fields,
+      url: entry.url,
+      line: entry.line,
+      sourceId: entry.sourceId,
+    });
+  }
+
+  private historyFor(targetId: string): {
+    entries: PanelConsoleHistoryEntry[];
+    errors: PanelConsoleHistoryEntry[];
+    droppedEntries: number;
+    droppedErrors: number;
+  } {
+    const existing = this.consoleHistories.get(targetId);
+    if (existing) return existing;
+    const created = { entries: [], errors: [], droppedEntries: 0, droppedErrors: 0 };
+    this.consoleHistories.set(targetId, created);
+    return created;
   }
 
   private async handleCdpCommand(message: ProviderMessage): Promise<void> {
@@ -316,7 +560,7 @@ export class CdpHostProvider {
     if (fromView && !fromView.isDestroyed()) return fromView;
     const id = this.targets.get(targetId);
     if (id === undefined) return null;
-    const fromId = webContents.fromId(id);
+    const fromId = webContents?.fromId?.(id);
     return fromId && !fromId.isDestroyed() ? fromId : null;
   }
 
@@ -429,6 +673,9 @@ export class CdpHostProvider {
     for (const targetId of this.debuggerAttached.keys()) {
       this.detachDebuggerIfIdle(targetId, this.getTargetContents(targetId), { force: true });
     }
+    for (const targetId of this.consoleListeners.keys()) {
+      this.detachConsoleHistory(targetId);
+    }
   }
 
   private send(message: Record<string, unknown>): void {
@@ -455,6 +702,72 @@ export class CdpHostProvider {
     if (!this.reconnectTimer) return;
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+}
+
+function normalizeConsoleHistoryOptions(value: unknown): PanelConsoleHistoryOptions {
+  if (!value || typeof value !== "object") return {};
+  const record = value as { limit?: unknown; errorLimit?: unknown; levels?: unknown };
+  const options: PanelConsoleHistoryOptions = {};
+  if (typeof record.limit === "number") options.limit = record.limit;
+  if (typeof record.errorLimit === "number") options.errorLimit = record.errorLimit;
+  if (Array.isArray(record.levels)) {
+    options.levels = record.levels.map(normalizeConsoleLevel);
+  }
+  return options;
+}
+
+function normalizeLimit(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.max(0, Math.floor(value));
+}
+
+function normalizeConsoleLevel(level: unknown): PanelConsoleHistoryLevel {
+  if (level === "debug" || level === "info" || level === "warning" || level === "error") {
+    return level;
+  }
+  if (level === "warn") return "warning";
+  if (level === 0) return "debug";
+  if (level === 1) return "info";
+  if (level === 2) return "warning";
+  if (level === 3) return "error";
+  return "unknown";
+}
+
+function panelLevelToRuntimeLevel(
+  level: PanelConsoleHistoryLevel
+): RuntimeDiagnosticRecord["level"] {
+  if (level === "warning") return "warn";
+  if (level === "unknown") return "info";
+  return level;
+}
+
+function runtimeDiagnosticToPanelConsoleHistoryEntry(
+  record: RuntimeDiagnosticRecord
+): PanelConsoleHistoryEntry {
+  return {
+    timestamp: record.timestamp,
+    level: runtimeLevelToPanelLevel(record.level),
+    message: record.message,
+    line: record.line ?? 0,
+    sourceId: record.sourceId ?? "",
+    url: record.url ?? "",
+    source: record.source === "lifecycle" ? "lifecycle" : "console",
+    fields: record.fields,
+  };
+}
+
+function runtimeLevelToPanelLevel(
+  level: RuntimeDiagnosticRecord["level"]
+): PanelConsoleHistoryLevel {
+  return level === "warn" ? "warning" : level;
+}
+
+function safeWebContentsUrl(contents: Electron.WebContents): string {
+  try {
+    return contents.getURL();
+  } catch {
+    return "";
   }
 }
 

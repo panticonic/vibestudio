@@ -258,6 +258,10 @@ describe("worker panelTree handles", () => {
 
     const parent = runtime.getParent();
     expect(parent?.id).toBe("parent-slot");
+    await expect(parent?.getInfo()).resolves.toMatchObject({
+      id: "parent-slot",
+      parentId: null,
+    });
     await parent?.call["ping"]?.();
     await parent?.cdp.getCdpEndpoint();
     await parent?.reload();

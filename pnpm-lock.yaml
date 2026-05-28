@@ -1267,6 +1267,9 @@ importers:
       '@workspace/playwright-client':
         specifier: workspace:*
         version: link:../playwright-client
+      '@workspace/playwright-core':
+        specifier: workspace:*
+        version: link:../playwright-core
       buffer:
         specifier: ^6.0.3
         version: 6.0.3

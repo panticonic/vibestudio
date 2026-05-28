@@ -104,13 +104,21 @@ export async function requirePanelAccessPermission(
   }
 
   if (!result.allowed) {
-    return { allowed: false, capability: decision.capability, reason: result.reason };
+    const reason =
+      controller?.signal.aborted && result.reason === deniedReasonFor(op, target.id)
+        ? `${titleFor(op, targetLabel, decision.severity)} approval timed out for panel ${target.id}`
+        : result.reason;
+    return { allowed: false, capability: decision.capability, reason };
   }
   return {
     allowed: true,
     capability: decision.capability,
     prompted: result.decision !== undefined,
   };
+}
+
+function deniedReasonFor(op: PanelAccessOperation, targetId: string): string {
+  return `${op} denied for panel ${targetId}`;
 }
 
 function isSelfPanelTarget(

@@ -266,6 +266,10 @@ describe("initRuntime", () => {
     expect(runtime.parentId).toBe("parent-slot");
     expect(runtime.parentEntityId).toBe("panel:parent-entity");
     expect(runtime.getParent()?.id).toBe("parent-slot");
+    await expect(runtime.getParent()?.getInfo()).resolves.toMatchObject({
+      id: "parent-slot",
+      parentId: null,
+    });
 
     await runtime.getParent()?.call["ping"]?.();
     await runtime.getParent()?.cdp.getCdpEndpoint();

@@ -25,6 +25,34 @@ export interface ScreenshotOptions {
   timeout?: number;
 }
 
+class PageLocatorImpl {
+  constructor(private readonly page: PageImpl, private readonly selector: string) {}
+
+  async click(options?: any): Promise<void> {
+    await this.page.click(this.selector, options);
+  }
+
+  async fill(value: string, options?: any): Promise<void> {
+    await this.page.fill(this.selector, value, options);
+  }
+
+  async innerText(options?: any): Promise<string> {
+    return this.page.innerText(this.selector, options);
+  }
+
+  async textContent(options?: any): Promise<string | null> {
+    return this.page.textContent(this.selector, options);
+  }
+
+  async count(): Promise<number> {
+    return this.page.evaluate((selector) => document.querySelectorAll(selector).length, this.selector);
+  }
+
+  locator(selector: string): PageLocatorImpl {
+    return new PageLocatorImpl(this.page, `${this.selector} ${selector}`);
+  }
+}
+
 /**
  * CDP-direct Page implementation
  */
@@ -220,6 +248,18 @@ export class PageImpl {
   }
 
   /**
+   * Wait for a document lifecycle state.
+   */
+  async waitForLoadState(state: 'load' | 'domcontentloaded' | 'networkidle' = 'load', options?: { timeout?: number }): Promise<void> {
+    const readyState = await this.evaluate(() => document.readyState);
+    if (state === 'domcontentloaded' && (readyState === 'interactive' || readyState === 'complete'))
+      return;
+    if ((state === 'load' || state === 'networkidle') && readyState === 'complete')
+      return;
+    await this._waitForNavigation(state, options?.timeout ?? this._defaultTimeout);
+  }
+
+  /**
    * Close the page
    */
   async close(): Promise<void> {
@@ -270,6 +310,27 @@ export class PageImpl {
 
   async querySelector(selector: string): Promise<any> {
     return this._mainFrame.querySelector(selector);
+  }
+
+  async textContent(selector: string, options?: any): Promise<string | null> {
+    await this.waitForSelector(selector, { state: 'attached', timeout: options?.timeout });
+    const value = await this.evaluate((sel) => document.querySelector(sel)?.textContent ?? null, selector);
+    return value == null ? null : String(value);
+  }
+
+  async innerText(selector: string, options?: any): Promise<string> {
+    await this.waitForSelector(selector, { state: 'attached', timeout: options?.timeout });
+    return String(
+      await this.evaluate((sel) => {
+        const element = document.querySelector(sel) as HTMLElement | null;
+        if (!element) throw new Error(`No element matches selector: ${sel}`);
+        return element.innerText ?? element.textContent ?? '';
+      }, selector)
+    );
+  }
+
+  locator(selector: string): PageLocatorImpl {
+    return new PageLocatorImpl(this, selector);
   }
 
   async click(selector: string, options?: any): Promise<void> {
