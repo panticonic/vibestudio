@@ -72,6 +72,18 @@ describe("createExtensionsClient", () => {
     expect(rpc.call).not.toHaveBeenCalled();
     expect(rpc.streamCall).not.toHaveBeenCalled();
   });
+
+  it("reports Promise-style catch misuse on extension proxies clearly", () => {
+    const rpc = createRpc();
+    const extensions = createExtensionsClient(rpc);
+    const shell = extensions.use("@workspace-extensions/shell") as Record<string, unknown>;
+
+    expect(() => (shell["catch"] as () => void)()).toThrow(
+      'extensions.use("@workspace-extensions/shell") is synchronous'
+    );
+    expect(rpc.call).not.toHaveBeenCalled();
+    expect(rpc.streamCall).not.toHaveBeenCalled();
+  });
 });
 
 function createRpc(

@@ -112,14 +112,14 @@ export interface ExtensionsClientRpc {
 
 const IGNORED_PROXY_PROPS = new Set<PropertyKey>([
   "then",
-  "catch",
-  "finally",
   "constructor",
   Symbol.toPrimitive,
   Symbol.toStringTag,
   "inspect",
   "toJSON",
 ]);
+
+const PROMISE_MISUSE_PROPS = new Set<PropertyKey>(["catch", "finally"]);
 
 /**
  * Build the invocation proxy for a single extension. Method access becomes a
@@ -135,6 +135,17 @@ export function createExtensionProxy<T extends object>(
   return new Proxy(Object.create(null), {
     get(_target, prop) {
       if (IGNORED_PROXY_PROPS.has(prop) || typeof prop !== "string") return undefined;
+      if (PROMISE_MISUSE_PROPS.has(prop)) {
+        return () => {
+          throw new Error(
+            `extensions.use(${JSON.stringify(
+              name,
+            )}) is synchronous and returns an extension method proxy. ` +
+              `Call an extension method and catch that Promise instead, e.g. ` +
+              `extensions.use(${JSON.stringify(name)}).method(...).catch(...).`,
+          );
+        };
+      }
       return async (...args: unknown[]) => {
         const streaming = await resolveStreaming(prop);
         return streaming
