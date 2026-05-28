@@ -34,6 +34,7 @@ import {
 } from "./bootstrap";
 import { Workspace } from "./components/Workspace";
 import { spectroliteAgentSystemPrompt } from "./agent-prompt";
+import "@workspace/agentic-chat/styles.css";
 import "./style.css";
 
 // Silent agent worker is the default companion: it only sends a chat

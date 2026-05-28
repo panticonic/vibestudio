@@ -14,7 +14,8 @@
       "react/jsx-dev-runtime",
       "@radix-ui/themes",
       "@radix-ui/react-icons",
-      "@workspace/runtime"
+      "@workspace/runtime",
+      "@workspace/agentic-chat"
     ]
   },
   "dependencies": {

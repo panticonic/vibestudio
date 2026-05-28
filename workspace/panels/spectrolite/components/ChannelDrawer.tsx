@@ -24,6 +24,7 @@ import type { PubSubClient } from "@workspace/pubsub";
 import { Badge, Box, Button, Card, Flex, IconButton, ScrollArea, Text, TextArea } from "@radix-ui/themes";
 import { ChevronUpIcon, ChevronDownIcon, Cross2Icon, PaperPlaneIcon, CommitIcon } from "@radix-ui/react-icons";
 import { useIsMobile, useViewportHeight } from "@workspace/react";
+import { MessageContent } from "@workspace/agentic-chat";
 
 interface DrawerMessage {
   id: string;
@@ -112,6 +113,14 @@ export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal
     })();
     return () => { cancelled = true; };
   }, [client]);
+
+  const mdxActions = useMemo(() => ({
+    publishMessage: async (content: string) => {
+      if (!client) return;
+      await client.send(content);
+      onSend?.(content);
+    },
+  }), [client, onSend]);
 
   const recent = useMemo(() => messages.slice(-MAX_DRAWER_MESSAGES), [messages]);
   const newestAgentMessage = useMemo(() => {
@@ -248,7 +257,9 @@ export function ChannelDrawer({ client, onSend, onUseAsCommitMessage, openSignal
                               </Button>
                             ) : null}
                           </Flex>
-                          <Text size="1" style={{ whiteSpace: "pre-wrap" }}>{m.content}</Text>
+                          <Box style={{ fontSize: "var(--font-size-1)" }}>
+                            <MessageContent content={m.content} isStreaming={false} mdxActions={mdxActions} />
+                          </Box>
                         </Flex>
                       </Card>
                     );

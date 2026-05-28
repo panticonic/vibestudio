@@ -45,6 +45,7 @@ import { mdxComponents } from "@workspace/agentic-chat";
 import { nodeToMdxSource } from "./mdastSerialize";
 
 const sandbox = createPanelSandboxConfig(rpc);
+const BASE_LIVE_JSX_IMPORTS = { "@workspace/agentic-chat": "latest" } as const;
 
 // PascalCase component names exported by @workspace/agentic-chat that we
 // inject unconditionally into the live-compile wrapper. The set mirrors
@@ -64,6 +65,7 @@ const RESERVED_WRAPPER_NAMES = new Set([
   ...importedNames,
   "React",
   "WikiLink",
+  "ActionButton",
   "useDocState",
   "useIsMobile",
   "useTouchDevice",
@@ -106,6 +108,14 @@ function WikiLink({ target, children }) {
     >
       {children ?? target}
     </a>
+  );
+}
+
+function ActionButton({ children, message, variant = "soft", size = "1" }) {
+  return (
+    <Button size={size} variant={variant} disabled title="ActionButton is preview-only in Spectrolite documents">
+      {children ?? message}
+    </Button>
   );
 }
 
@@ -173,10 +183,14 @@ export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
     if (!source.trim()) {
       return () => { cancelled = true; };
     }
+    const compileImports = {
+      ...BASE_LIVE_JSX_IMPORTS,
+      ...(dependencies ?? {}),
+    };
     void compileComponent(wrapped, {
       loadImport: sandbox.loadImport,
       sourcePath: `workspace/panels/spectrolite/inline-jsx-${tagName === "*" ? "wild" : tagName}.tsx`,
-      imports: dependencies && Object.keys(dependencies).length > 0 ? dependencies : undefined,
+      imports: compileImports,
     }).then((result) => {
       if (cancelled) return;
       if (result.success && result.Component) {
