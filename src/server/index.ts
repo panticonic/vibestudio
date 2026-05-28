@@ -1018,7 +1018,15 @@ async function main() {
       )
     );
   }
-  container.register(rpcService(createEventsServiceDefinition(eventService)));
+  container.register(
+    rpcService(
+      createEventsServiceDefinition(eventService, {
+        snapshots: {
+          "shell-approval:pending-changed": () => ({ pending: approvalQueue.listPending() }),
+        },
+      })
+    )
+  );
 
   // ── Approval-gated host capabilities ──
   {

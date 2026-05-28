@@ -68,7 +68,7 @@ describe("ConsentApprovalBar shell presence", () => {
     vi.useRealTimers();
   });
 
-  it("polls pending approvals with the shell heartbeat while mounted", async () => {
+  it("sends a heartbeat while mounted even when no approvals are pending", async () => {
     const { unmount } = render(React.createElement(ConsentApprovalBar));
 
     expect(shellClient.heartbeat).toHaveBeenCalledTimes(1);
@@ -78,13 +78,13 @@ describe("ConsentApprovalBar shell presence", () => {
       vi.advanceTimersByTime(5_000);
     });
     expect(shellClient.heartbeat).toHaveBeenCalledTimes(2);
-    expect(shellClient.listPending).toHaveBeenCalledTimes(2);
+    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       vi.advanceTimersByTime(5_000);
     });
     expect(shellClient.heartbeat).toHaveBeenCalledTimes(3);
-    expect(shellClient.listPending).toHaveBeenCalledTimes(3);
+    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
 
     unmount();
 
@@ -92,7 +92,7 @@ describe("ConsentApprovalBar shell presence", () => {
       vi.advanceTimersByTime(5_000);
     });
     expect(shellClient.heartbeat).toHaveBeenCalledTimes(3);
-    expect(shellClient.listPending).toHaveBeenCalledTimes(3);
+    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
   });
 });
 

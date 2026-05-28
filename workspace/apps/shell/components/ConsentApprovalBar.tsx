@@ -94,15 +94,18 @@ export function ConsentApprovalBar() {
   }, []);
 
   useEffect(() => {
-    const heartbeatAndRefresh = () => {
+    const heartbeat = () => {
       void shellPresence
         .heartbeat()
         .catch((err: unknown) => console.warn("[ConsentApprovalBar] heartbeat failed:", err));
-      void refreshPendingAccess();
     };
-    heartbeatAndRefresh();
-    const intervalId = window.setInterval(heartbeatAndRefresh, 5_000);
+    heartbeat();
+    const intervalId = window.setInterval(heartbeat, 5_000);
     return () => window.clearInterval(intervalId);
+  }, []);
+
+  useEffect(() => {
+    void refreshPendingAccess();
   }, [refreshPendingAccess]);
 
   useShellEvent(
