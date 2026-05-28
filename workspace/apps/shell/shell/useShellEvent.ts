@@ -23,7 +23,11 @@ const subscriptionRefcounts = new Map<EventName, number>();
 function addSubscription(event: EventName): void {
   const prev = subscriptionRefcounts.get(event) ?? 0;
   subscriptionRefcounts.set(event, prev + 1);
-  if (prev === 0) void events.subscribe(event);
+  if (prev === 0) {
+    void events
+      .subscribe(event)
+      .catch((err: unknown) => console.warn(`[useShellEvent] subscribe ${event} failed:`, err));
+  }
 }
 
 function removeSubscription(event: EventName): void {
@@ -31,7 +35,9 @@ function removeSubscription(event: EventName): void {
   if (prev <= 0) return;
   if (prev === 1) {
     subscriptionRefcounts.delete(event);
-    void events.unsubscribe(event);
+    void events
+      .unsubscribe(event)
+      .catch((err: unknown) => console.warn(`[useShellEvent] unsubscribe ${event} failed:`, err));
   } else {
     subscriptionRefcounts.set(event, prev - 1);
   }

@@ -81,17 +81,6 @@ export function ConsentApprovalBar() {
   const pendingAccessRefreshSeq = useRef(0);
   const { navigateToId } = useNavigation();
 
-  useEffect(() => {
-    const heartbeat = () => {
-      void shellPresence
-        .heartbeat()
-        .catch((err: unknown) => console.warn("[ConsentApprovalBar] heartbeat failed:", err));
-    };
-    heartbeat();
-    const intervalId = window.setInterval(heartbeat, 5_000);
-    return () => window.clearInterval(intervalId);
-  }, []);
-
   const refreshPendingAccess = useCallback(async () => {
     const seq = ++pendingAccessRefreshSeq.current;
     try {
@@ -105,7 +94,15 @@ export function ConsentApprovalBar() {
   }, []);
 
   useEffect(() => {
-    void refreshPendingAccess();
+    const heartbeatAndRefresh = () => {
+      void shellPresence
+        .heartbeat()
+        .catch((err: unknown) => console.warn("[ConsentApprovalBar] heartbeat failed:", err));
+      void refreshPendingAccess();
+    };
+    heartbeatAndRefresh();
+    const intervalId = window.setInterval(heartbeatAndRefresh, 5_000);
+    return () => window.clearInterval(intervalId);
   }, [refreshPendingAccess]);
 
   useShellEvent(
