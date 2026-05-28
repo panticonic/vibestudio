@@ -539,12 +539,14 @@ describe("TurnDispatcher — external aborts", () => {
     expect(runner.continueCalls).toHaveLength(1);
   });
 
-  it("warns when continuation completes without runner lifecycle events", async () => {
+  it("reports an invariant when continuation completes without runner lifecycle events", async () => {
     const runner = makeRunner();
     const log = { warn: vi.fn(), error: vi.fn() };
+    const onInvariantViolation = vi.fn();
     const d = new TurnDispatcher({
       runner: runner.runner,
       notifyTyping: () => {},
+      onInvariantViolation,
       log,
     });
 
@@ -553,9 +555,10 @@ describe("TurnDispatcher — external aborts", () => {
     runner.continueCalls[0]!.resolve();
     await flush();
 
-    expect(log.warn).toHaveBeenCalledWith(
-      "[TurnDispatcher] continueAgent completed without agent_start"
-    );
+    expect(onInvariantViolation).toHaveBeenCalledWith("runner_completed_without_agent_start", {
+      workKind: "continue",
+      turnId: null,
+    });
   });
 });
 
@@ -660,7 +663,8 @@ describe("TurnDispatcher — reset", () => {
       draining: true,
     });
     expect(log.warn).toHaveBeenCalledWith(
-      "[TurnDispatcher] ignoring agent_end before agent_start for active work"
+      "[TurnDispatcher] invariant violation: runner_lifecycle_agent_end_before_agent_start",
+      { activeTurnId: null }
     );
   });
 });

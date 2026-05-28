@@ -49,6 +49,10 @@ export interface TurnDispatcherOptions {
   notifyTyping: (busy: boolean) => void;
   onWorkStart?: (work: WorkItem) => string | undefined | Promise<string | undefined>;
   onWorkFailure?: (work: WorkItem, error: unknown, turnId?: string) => void | Promise<void>;
+  onInvariantViolation?: (
+    code: string,
+    detail?: Record<string, unknown>
+  ) => void | Promise<void>;
   log?: Pick<Console, "warn" | "error">;
 }
 
@@ -176,7 +180,10 @@ export class TurnDispatcher {
     if (this.disposed) return;
     switch (event.type) {
       case "agent_start": {
-        if (this.activeWork) this.activeWork.sawAgentStart = true;
+        const active = this.activeWork;
+        if (active && this.eventMatchesActiveWork(event, active)) {
+          active.sawAgentStart = true;
+        }
         return;
       }
       case "message_start": {
@@ -188,8 +195,18 @@ export class TurnDispatcher {
       }
       case "agent_end": {
         const active = this.activeWork;
+        if (active && !this.eventMatchesActiveWork(event, active)) return;
+        if (active && eventMetadata(event).lifecycleMatched === false) {
+          this.reportInvariant("runner_lifecycle_unmatched_agent_end", {
+            activeTurnId: active.turnId ?? null,
+            eventTurnId: eventMetadata(event).turnId ?? null,
+          });
+          return;
+        }
         if (active && !active.sawAgentStart) {
-          this.log.warn("[TurnDispatcher] ignoring agent_end before agent_start for active work");
+          this.reportInvariant("runner_lifecycle_agent_end_before_agent_start", {
+            activeTurnId: active.turnId ?? null,
+          });
           return;
         }
         if (active) active.sawAgentEnd = true;
@@ -219,6 +236,9 @@ export class TurnDispatcher {
     void this.drainLoop(generation).catch((err) => {
       if (generation !== this.drainGeneration) return;
       this.log.error("[TurnDispatcher] drainLoop crashed:", err);
+      this.reportInvariant("dispatcher_drain_loop_crashed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
       this.draining = false;
       this.notifyTyping();
     });
@@ -244,6 +264,11 @@ export class TurnDispatcher {
             await this.opts.onWorkFailure?.(work, completion.error, active.turnId);
           } catch (failureErr) {
             this.log.warn("[TurnDispatcher] onWorkFailure failed:", failureErr);
+            this.reportInvariant("dispatcher_on_work_failure_failed", {
+              workKind: work.kind,
+              turnId: active.turnId ?? null,
+              error: failureErr instanceof Error ? failureErr.message : String(failureErr),
+            });
           }
           if (this.pendingSteered.length > 0) {
             for (const item of this.pendingSteered)
@@ -337,6 +362,11 @@ export class TurnDispatcher {
     active.complete(result);
   }
 
+  private eventMatchesActiveWork(event: RunnerEvent, active: ActiveWork): boolean {
+    const eventTurnId = eventMetadata(event).turnId;
+    return !eventTurnId || !active.turnId || eventTurnId === active.turnId;
+  }
+
   private invalidateActiveWork(): void {
     const active = this.activeWork;
     this.activeWork = null;
@@ -369,17 +399,31 @@ export class TurnDispatcher {
   private warnIfWorkProducedNoLifecycle(work: WorkItem, active: ActiveWork): void {
     if (active.generation !== this.drainGeneration || active.kind !== work.kind) return;
     if (!active.sawAgentStart) {
-      this.log.warn(
-        `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} completed without agent_start`
-      );
+      this.reportInvariant("runner_completed_without_agent_start", {
+        workKind: work.kind,
+        turnId: active.turnId ?? null,
+      });
       return;
     }
     if (!active.sawAgentEnd) {
-      this.log.warn(
-        `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} completed without agent_end`
-      );
+      this.reportInvariant("runner_completed_without_agent_end", {
+        workKind: work.kind,
+        turnId: active.turnId ?? null,
+      });
     }
   }
+
+  private reportInvariant(code: string, detail?: Record<string, unknown>): void {
+    this.log.warn(`[TurnDispatcher] invariant violation: ${code}`, detail ?? {});
+    void Promise.resolve(this.opts.onInvariantViolation?.(code, detail)).catch((err) => {
+      this.log.warn("[TurnDispatcher] onInvariantViolation failed:", err);
+    });
+  }
+}
+
+function eventMetadata(event: RunnerEvent): { turnId?: string; lifecycleMatched?: boolean } {
+  return ((event as { natstack?: { turnId?: string; lifecycleMatched?: boolean } }).natstack ??
+    {}) as { turnId?: string; lifecycleMatched?: boolean };
 }
 
 function isUserMessage(value: unknown): value is AgentMessage {

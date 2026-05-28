@@ -7,7 +7,7 @@ import { AgentWorkerBase } from "./agent-worker-base.js";
 import type { RespondPolicy, CustomMessageReducer } from "./trajectory-vessel-base.js";
 import type { TurnDispatcherRunner } from "./turn-dispatcher.js";
 import type { ChannelEvent } from "@natstack/harness/types";
-import type { PiRunner } from "@natstack/harness";
+import type { PiRunner, PiRunnerOptions } from "@natstack/harness";
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 
 class TestAgentWorker extends AgentWorkerBase {
@@ -38,6 +38,18 @@ class TestAgentWorker extends AgentWorkerBase {
     message: AgentMessage
   ): Promise<void> {
     return this.handleRunnerMessageEndForTurnLedger(channelId, runner, message);
+  }
+
+  public testHandleRunnerAgentEndForTurnLedger(channelId: string, runner: PiRunner): Promise<void> {
+    return this.handleRunnerAgentEndForTurnLedger(channelId, runner);
+  }
+
+  public testHandleRunnerAgentEndEventForTurnLedger(
+    channelId: string,
+    runner: PiRunner,
+    event: Parameters<TestAgentWorker["handleRunnerAgentEndForTurnLedger"]>[2]
+  ): Promise<void> {
+    return this.handleRunnerAgentEndForTurnLedger(channelId, runner, event);
   }
 }
 
@@ -114,6 +126,76 @@ class CustomMessageIndexTestAgentWorker extends TestAgentWorker {
   }
 }
 
+class ExpectedToolGateTestWorker extends AgentWorkerBase {
+  public readonly prompt = vi.fn(async () => undefined);
+  public readonly emittedDiagnostics: string[] = [];
+
+  protected override getExpectedChannelToolNames(_channelId: string): readonly string[] {
+    return ["eval"];
+  }
+
+  protected override getExpectedChannelToolReadinessTimeoutMs(_channelId: string): number {
+    return 0;
+  }
+
+  protected override async getOrCreateRunner(channelId: string): Promise<PiRunner> {
+    const runners = (this as unknown as { runners: Map<string, { runner: PiRunner }> }).runners;
+    const existing = runners.get(channelId)?.runner;
+    if (existing) return existing;
+    const runner = {
+      subscribe: vi.fn(() => vi.fn()),
+      buildUserMessage: vi.fn((input: { content: string }) => ({
+        role: "user",
+        content: [{ type: "text", text: input.content }],
+      })),
+      prompt: this.prompt,
+      continueAgent: vi.fn(async () => undefined),
+      steerMessage: vi.fn(async () => undefined),
+      clearSteeringQueue: vi.fn(async () => undefined),
+    } as unknown as PiRunner;
+    runners.set(channelId, { runner });
+    this.getOrCreateDispatcher(channelId, runner);
+    return runner;
+  }
+
+  protected override createChannelClient(_channelId: string): never {
+    return {
+      getParticipants: vi.fn(async () => []),
+      send: vi.fn(async (_participantId: string, _messageId: string, content: string) => {
+        this.emittedDiagnostics.push(content);
+      }),
+      setTypingState: vi.fn(async () => undefined),
+    } as never;
+  }
+}
+
+class RunnerInitGateTestWorker extends AgentWorkerBase {
+  public createRunnerCalls = 0;
+
+  protected override getExpectedChannelToolNames(_channelId: string): readonly string[] {
+    return ["eval"];
+  }
+
+  protected override getExpectedChannelToolReadinessTimeoutMs(_channelId: string): number {
+    return 0;
+  }
+
+  protected override createRunner(channelId: string, opts: PiRunnerOptions): PiRunner {
+    this.createRunnerCalls++;
+    return super.createRunner(channelId, opts);
+  }
+
+  protected override createChannelClient(_channelId: string): never {
+    return {
+      getParticipants: vi.fn(async () => []),
+    } as never;
+  }
+
+  public testGetOrCreateRunner(channelId: string): Promise<PiRunner> {
+    return this.getOrCreateRunner(channelId);
+  }
+}
+
 describe("AgentWorkerBase runner contract", () => {
   it("uses the clean AgentHarness-facing dispatcher surface", () => {
     const methods = [
@@ -133,6 +215,29 @@ describe("AgentWorkerBase runner contract", () => {
       "continueAgent",
       "clearSteeringQueue",
     ]);
+  });
+
+  it("refuses to initialize a runner when required channel tools are absent", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { instance } = await createTestDO(RunnerInitGateTestWorker, {
+      __objectKey: "agent-test",
+    });
+
+    await expect(instance.testGetOrCreateRunner("chat-1")).rejects.toThrow(
+      "Cannot start agent model turn: missing expected channel tool(s): eval"
+    );
+
+    expect(instance.createRunnerCalls).toBe(0);
+    expect(error).toHaveBeenCalledWith(
+      "[TrajectoryVesselBase] Expected channel tools were not available",
+      expect.objectContaining({
+        reason: "runner.init",
+        missingExpectedChannelToolNames: ["eval"],
+        rosterToolNames: [],
+        participantCount: 0,
+      })
+    );
+    error.mockRestore();
   });
 });
 
@@ -313,7 +418,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
     ).toEqual([]);
   });
 
-  it("moves final assistant messages to closing and queues the durable close projection", async () => {
+  it("keeps final assistant messages open until the agent loop ends", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
     });
@@ -329,10 +434,118 @@ describe("AgentWorkerBase method suspension ledger", () => {
       timestamp: Date.now(),
     } as AgentMessage);
 
-    expect(turnStatus(sql, "turn-final")).toMatchObject({ status: "closing" });
+    expect(turnStatus(sql, "turn-final")).toMatchObject({ status: "running_model" });
     expect(
       sql.exec(`SELECT kind, status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-final").toArray()
-    ).toEqual([expect.objectContaining({ kind: "close_turn_projection", status: "pending" })]);
+    ).toEqual([]);
+  });
+
+  it("moves active turns to closing and queues the durable close projection on agent end", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const repairDurableOpenState = vi.fn().mockResolvedValue(undefined);
+    const runner = {
+      getCurrentTurnId: () => "turn-final",
+      repairDurableOpenState,
+      session: null,
+    } as unknown as PiRunner;
+    insertTurnRun(sql, { turnId: "turn-final", status: "running_model" });
+
+    await instance.testHandleRunnerAgentEndForTurnLedger("chat-1", runner);
+
+    expect(repairDurableOpenState).toHaveBeenCalledWith({ closeOpenTurns: true });
+    expect(turnStatus(sql, "turn-final")).toMatchObject({ status: "closed" });
+    expect(
+      sql.exec(`SELECT kind, status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-final").toArray()
+    ).toEqual([expect.objectContaining({ kind: "close_turn_projection", status: "done" })]);
+  });
+
+  it("marks starting turns interrupted on agent end instead of closing them", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      sendTurnLedgerDiagnostic(channelId: string, turnId: string, message: string): Promise<void>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.sendTurnLedgerDiagnostic = send;
+    const runner = {
+      getCurrentTurnId: () => "turn-starting",
+      repairDurableOpenState: vi.fn().mockResolvedValue(undefined),
+      session: null,
+    } as unknown as PiRunner;
+    (instance as unknown as { runners: Map<string, { runner: PiRunner }> }).runners.set("chat-1", {
+      runner,
+    });
+    insertTurnRun(sql, { turnId: "turn-starting", status: "starting" });
+
+    await instance.testHandleRunnerAgentEndEventForTurnLedger("chat-1", runner, {
+      type: "agent_end",
+      messages: [],
+      natstack: { turnId: "turn-starting", operationId: "op-1", lifecycleMatched: true },
+    } as never);
+
+    expect(turnStatus(sql, "turn-starting")).toMatchObject({
+      status: "interrupted",
+      failure_code: "runner_ended_before_model",
+    });
+    expect(send).toHaveBeenCalledWith(
+      "chat-1",
+      "turn-starting",
+      "Agent turn ended before model generation began."
+    );
+  });
+
+  it("ignores unmatched agent_end events for the active turn", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const runner = {
+      getCurrentTurnId: () => "turn-starting",
+      repairDurableOpenState: vi.fn().mockResolvedValue(undefined),
+      session: null,
+    } as unknown as PiRunner;
+    (instance as unknown as { runners: Map<string, { runner: PiRunner }> }).runners.set("chat-1", {
+      runner,
+    });
+    insertTurnRun(sql, { turnId: "turn-starting", status: "starting" });
+
+    await instance.testHandleRunnerAgentEndEventForTurnLedger("chat-1", runner, {
+      type: "agent_end",
+      messages: [],
+      natstack: { turnId: "turn-starting", operationId: "op-1", lifecycleMatched: false },
+    } as never);
+
+    expect(turnStatus(sql, "turn-starting")).toMatchObject({ status: "starting" });
+    expect(
+      sql.exec(`SELECT * FROM agent_turn_outbox WHERE turn_id = ?`, "turn-starting").toArray()
+    ).toEqual([]);
+  });
+
+  it("ignores agent_end events for a different turn", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const runner = {
+      getCurrentTurnId: () => "turn-current",
+      repairDurableOpenState: vi.fn().mockResolvedValue(undefined),
+      session: null,
+    } as unknown as PiRunner;
+    insertTurnRun(sql, { turnId: "turn-current", status: "running_model" });
+
+    await instance.testHandleRunnerAgentEndEventForTurnLedger("chat-1", runner, {
+      type: "agent_end",
+      messages: [],
+      natstack: { turnId: "turn-old", operationId: "op-old", lifecycleMatched: true },
+    } as never);
+
+    expect(turnStatus(sql, "turn-current")).toMatchObject({ status: "running_model" });
+    expect(
+      sql.exec(`SELECT * FROM agent_turn_outbox WHERE turn_id = ?`, "turn-current").toArray()
+    ).toEqual([]);
   });
 
   it("rejects UI prompt dispatch before creating a live waiter when durable recording is skipped", async () => {
@@ -2565,6 +2778,57 @@ describe("AgentWorkerBase typed transcript input", () => {
     });
 
     expect(submit).toHaveBeenCalledWith({ content: "Read the onboarding docs first" }, undefined);
+  });
+
+  it("does not call the runner when required channel tools are absent", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { instance } = await createTestDO(ExpectedToolGateTestWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as ExpectedToolGateTestWorker & {
+      subscriptions: {
+        getParticipantId(channelId: string): string | null;
+      };
+      processChannelEvent(channelId: string, event: unknown): Promise<void>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+
+    await worker.processChannelEvent("chat-1", {
+      id: 1,
+      messageId: "env-1",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      senderId: "panel:panel-1",
+      senderMetadata: { name: "User", type: "panel", handle: "user" },
+      payload: {
+        kind: "message.completed",
+        actor: { kind: "panel", id: "panel:panel-1" },
+        causality: { messageId: "initial-prompt" },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          role: "user",
+          content: "run with eval",
+        },
+        createdAt: "2026-05-21T08:00:00.000Z",
+      },
+      ts: Date.now(),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(worker.prompt).not.toHaveBeenCalled();
+    expect(worker.emittedDiagnostics).toEqual([
+      "Agent turn failed while running: Cannot start agent model turn: missing expected channel tool(s): eval",
+    ]);
+    expect(error).toHaveBeenCalledWith(
+      "[TrajectoryVesselBase] Expected channel tools were not available",
+      expect.objectContaining({
+        missingExpectedChannelToolNames: ["eval"],
+        rosterToolNames: [],
+        participantCount: 0,
+      })
+    );
+    error.mockRestore();
+    warn.mockRestore();
   });
 });
 

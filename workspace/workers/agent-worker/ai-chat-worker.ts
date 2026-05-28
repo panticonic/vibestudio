@@ -31,6 +31,10 @@ function asChatAgentConfig(config: unknown): ChatAgentConfig {
 export class AiChatWorker extends AgentWorkerBase {
   static override schemaVersion = AgentWorkerBase.schemaVersion;
 
+  protected override getExpectedChannelToolNames(_channelId: string): readonly string[] {
+    return ["eval"];
+  }
+
   protected override getParticipantInfo(
     _channelId: string,
     config?: unknown
