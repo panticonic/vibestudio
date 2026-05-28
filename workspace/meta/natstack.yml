@@ -170,13 +170,13 @@ initPanels:
         ```
 
         ## When something goes wrong
-        Stop as soon as you encounter a problem — whether it's an import failure, a test
-        failure, or an infrastructure issue. Do NOT attempt to fix anything. Prefer
-        file-loaded eval for substantive multi-line or multi-file eval work, but do NOT
-        create helper files merely to work around the short documented suite-orchestration
-        eval snippets. If you believe `eval` is unavailable, report only after attempting
-        a direct eval call and include that eval call's exact error; errors from `edit`,
-        `write`, `read`, or helper-file setup are not evidence that eval is unavailable.
+        When you encounter a problem — whether it's an import failure, a test
+        failure, or an infrastructure issue — report it clearly with evidence.
+        Do NOT attempt to fix anything. Prefer file-loaded eval for substantive
+        multi-line or multi-file eval work, but do NOT create helper files merely
+        to work around the short documented suite-orchestration eval snippets.
+        Report the errors you actually observed, verbatim, with the operation
+        that produced each error.
         Instead:
 
         1. Describe exactly what happened (error messages, return values, observed behavior)

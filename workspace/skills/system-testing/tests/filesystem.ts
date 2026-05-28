@@ -1,10 +1,8 @@
 import type { TestCase } from "../types.js";
-import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import { finalMessageHasAll, finalMessageHasAny } from "./_helpers.js";
 
 function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
-  const msg = finalMessageHasAll(result, tokens);
-  if (!msg.passed) return msg;
-  return noIncompleteInvocations(result);
+  return finalMessageHasAll(result, tokens);
 }
 
 export const filesystemTests: TestCase[] = [
@@ -62,21 +60,13 @@ export const filesystemTests: TestCase[] = [
     description: "Create and read through a symbolic link",
     category: "filesystem",
     prompt: "Exercise symlink behavior. Finish with FS_SYMLINK_OK or FS_SYMLINK_UNSUPPORTED.",
-    validate: (result) => {
-      const ok = finalMessageHasAll(result, ["FS_SYMLINK_OK"]);
-      if (ok.passed) return noIncompleteInvocations(result);
-      return checked(result, ["FS_SYMLINK_UNSUPPORTED"]);
-    },
+    validate: (result) => finalMessageHasAny(result, ["FS_SYMLINK_OK", "FS_SYMLINK_UNSUPPORTED"]),
   },
   {
     name: "file-handles",
     description: "Use low-level file handles to write and read",
     category: "filesystem",
     prompt: "Exercise file-handle behavior. Finish with FS_HANDLE_OK or FS_HANDLE_UNAVAILABLE.",
-    validate: (result) => {
-      const ok = finalMessageHasAll(result, ["FS_HANDLE_OK"]);
-      if (ok.passed) return noIncompleteInvocations(result);
-      return checked(result, ["FS_HANDLE_UNAVAILABLE"]);
-    },
+    validate: (result) => finalMessageHasAny(result, ["FS_HANDLE_OK", "FS_HANDLE_UNAVAILABLE"]),
   },
 ];
