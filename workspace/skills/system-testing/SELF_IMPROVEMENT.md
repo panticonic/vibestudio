@@ -52,9 +52,11 @@ eval({
 
 Repeat this eval until `remainingCategories` is `0`:
 
-Run the snippet directly in eval. Do not create helper files for the category
-loop. If eval cannot be called, report the exact failed eval attempt and its
-exact error; helper-file edit/write/read errors are separate setup failures.
+Run the short category-loop snippet directly in eval. File-loaded eval remains
+preferred for substantive multi-line or multi-file code, but helper files should
+not be used merely to wrap this category loop. If eval cannot be called, report
+the exact failed eval attempt and its exact error; helper-file edit/write/read
+errors are separate setup failures.
 
 ```
 eval({

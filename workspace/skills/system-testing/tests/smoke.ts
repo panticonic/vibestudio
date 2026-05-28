@@ -6,8 +6,15 @@ export const smokeTests: TestCase[] = [
     name: "eval-return-value",
     description: "Agent computes a value and reports it",
     category: "smoke",
-    prompt: "Compute the factorial of 5 and tell me the result.",
+    prompt: "Use eval to compute the factorial of 5 and tell me the result.",
     validate: (result) => {
+      const completed = completedToolNames(result);
+      if (!completed.has("eval")) {
+        return {
+          passed: false,
+          reason: `Expected a completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
+        };
+      }
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();
       const hasResult = lower.includes("result") || lower.includes("answer") || /\d+/.test(msg);
@@ -36,8 +43,15 @@ export const smokeTests: TestCase[] = [
     name: "build-service",
     description: "Agent imports a workspace package and inspects exports",
     category: "smoke",
-    prompt: "Exercise importing a workspace package.",
+    prompt: "Use eval to import a workspace package and inspect its exports.",
     validate: (result) => {
+      const completed = completedToolNames(result);
+      if (!completed.has("eval")) {
+        return {
+          passed: false,
+          reason: `Expected a completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
+        };
+      }
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();
       const hasExports = lower.includes("export") || lower.includes("function") || lower.includes("module") || lower.includes("import");

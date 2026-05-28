@@ -17,7 +17,7 @@ If you cannot quickly find the relevant knowledge needed to accomplish the task,
 
 If setup, documentation, tools, runtime APIs, or the harness behave incorrectly, stop that line of work and report the mismatch clearly. Do not silently switch to shell commands, raw internal APIs, or unrelated alternate paths unless the task explicitly asks for that fallback.
 
-Do not create or edit helper files to work around a documented eval flow. If a test asks you to use eval, call eval directly. If you believe eval is unavailable, report the exact direct eval attempt and its exact error. Failures from edit/write/read or helper-file setup do not prove eval is unavailable.
+Use file-loaded eval for substantive multi-line or multi-file eval work. Do not create or edit helper files merely to work around a short documented suite-orchestration eval snippet. If you believe eval is unavailable, report the exact direct eval attempt and its exact error. Failures from edit/write/read or helper-file setup do not prove eval is unavailable.
 
 Keep evidence bounded. Report summaries, counts, ids, byte lengths, and exact error messages. Do not paste large raw payloads, full database rows, full channel envelopes, image data, or secrets.
 
