@@ -71,7 +71,7 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
             };
             const path = typedArgs.path?.trim();
             const code = path
-                ? await opts.rpc.call("main", "fs.readFile", [path, "utf8"]) as string
+                ? await loadEvalSource(opts.rpc, path)
                 : typedArgs.code;
             if (!code)
                 throw new Error("Missing code or path");
@@ -168,6 +168,24 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
             }
         },
     };
+}
+
+async function loadEvalSource(
+    rpc: SandboxConfig["rpc"],
+    path: string
+): Promise<string> {
+    try {
+        return await rpc.call("main", "fs.readFile", [path, "utf8"]) as string;
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+            `Failed to load eval source from path "${path}". ` +
+            `Eval path is resolved inside the current context filesystem, not the host filesystem. ` +
+            `If you created a helper file, create it through this same chat/context filesystem and pass that context path. ` +
+            `Underlying error: ${message}`
+        );
+    }
 }
 
 function formatEvalReturnValue(

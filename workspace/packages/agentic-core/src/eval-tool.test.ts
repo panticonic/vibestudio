@@ -59,6 +59,23 @@ describe("buildEvalTool", () => {
     expect(parsed.success).toBe(true);
   });
 
+  it("reports path source loading failures with eval-specific context", async () => {
+    const tool = createEvalTool({
+      rpc: {
+        call: async () => {
+          throw new Error("ENOENT: no such file or directory");
+        },
+      },
+    });
+
+    await expect(
+      tool.execute({ path: "/tmp/run_category.ts" }, { stream: async () => undefined } as never)
+    ).rejects.toThrow("Failed to load eval source from path \"/tmp/run_category.ts\"");
+    await expect(
+      tool.execute({ path: "/tmp/run_category.ts" }, { stream: async () => undefined } as never)
+    ).rejects.toThrow("current context filesystem");
+  });
+
   it("documents pre-injected bindings and runtime import usage in help", async () => {
     const tool = createEvalTool({
       executeSandbox: async (_code, opts) => ({
