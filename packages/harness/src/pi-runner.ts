@@ -94,7 +94,12 @@ import {
   type TurnId,
 } from "@workspace/agentic-protocol";
 import { buildTurnSnapshot, type TurnSnapshot } from "./turn-snapshot.js";
-import { HookBus, type EventListener, type TransformContextListener } from "./hook-bus.js";
+import {
+  HookBus,
+  type CorrelatedAgentHarnessEvent,
+  type EventListener,
+  type TransformContextListener,
+} from "./hook-bus.js";
 import { CompactionTrigger, type CompactionTriggerOptions } from "./compaction-trigger.js";
 import { AgentWorkerError } from "./errors.js";
 
@@ -168,6 +173,13 @@ export interface PiRunnerOptions {
   onTurnPhase?: (event: { turnId: string; phase: "model_start" }) => void | Promise<void>;
   extraTools?: AgentTool<any>[];
   toolFilter?: (toolName: string) => boolean;
+  /**
+   * Channel-provided tools that this runner expects to see before model calls.
+   * These are diagnostics only: absence is logged/checkpointed loudly because
+   * it usually means the runner is about to call the model in a bare built-in
+   * tool mode while the conversation expects panel/headless methods such as eval.
+   */
+  expectedChannelToolNames?: readonly string[];
   compactionPolicy?: CompactionTriggerOptions;
   /**
    * Optional probe asking whether the credentials runtime holds a credential
@@ -252,6 +264,8 @@ interface OpenToolInvocationDebug {
 
 interface RunnerDebugOperation {
   kind: "prompt" | "continue";
+  operationId?: string;
+  turnId?: string | null;
   startedAt: string;
   input?: {
     contentLength: number;
@@ -399,6 +413,81 @@ function summarizeSessionEntry(entry: unknown): unknown {
   };
 }
 
+function providerPayloadToolNames(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const record = payload as Record<string, unknown>;
+  const tools = Array.isArray(record["tools"]) ? record["tools"] : [];
+  const names = new Set<string>();
+  for (const tool of tools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) continue;
+    const item = tool as Record<string, unknown>;
+    if (typeof item["name"] === "string") {
+      names.add(item["name"]);
+      continue;
+    }
+    const fn = item["function"];
+    if (fn && typeof fn === "object" && !Array.isArray(fn)) {
+      const name = (fn as Record<string, unknown>)["name"];
+      if (typeof name === "string") names.add(name);
+      continue;
+    }
+    const declarations = item["functionDeclarations"];
+    if (Array.isArray(declarations)) {
+      for (const declaration of declarations) {
+        if (!declaration || typeof declaration !== "object" || Array.isArray(declaration)) continue;
+        const name = (declaration as Record<string, unknown>)["name"];
+        if (typeof name === "string") names.add(name);
+      }
+    }
+  }
+  return [...names].sort();
+}
+
+function sortedToolNames(tools: readonly AgentTool<any>[]): string[] {
+  return [...new Set(tools.map((tool) => tool.name))].sort();
+}
+
+function diffToolNames(previous: readonly string[] | null, next: readonly string[]): {
+  added: string[];
+  removed: string[];
+} {
+  if (!previous) return { added: [], removed: [] };
+  const prev = new Set(previous);
+  const current = new Set(next);
+  return {
+    added: next.filter((name) => !prev.has(name)),
+    removed: previous.filter((name) => !current.has(name)),
+  };
+}
+
+function sameToolNames(previous: readonly string[] | null, next: readonly string[]): boolean {
+  return !!previous && previous.length === next.length && previous.every((name, index) => name === next[index]);
+}
+
+function uniqueToolsByName(tools: readonly AgentTool<any>[]): {
+  tools: AgentTool<any>[];
+  duplicates: string[];
+} {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  const unique: AgentTool<any>[] = [];
+  for (const tool of tools) {
+    if (seen.has(tool.name)) {
+      duplicates.add(tool.name);
+      continue;
+    }
+    seen.add(tool.name);
+    unique.push(tool);
+  }
+  return { tools: unique, duplicates: [...duplicates].sort() };
+}
+
+function missingNames(expected: readonly string[] | undefined, actual: readonly string[]): string[] {
+  if (!expected || expected.length === 0) return [];
+  const actualSet = new Set(actual);
+  return [...new Set(expected)].filter((name) => !actualSet.has(name)).sort();
+}
+
 function summarizeDebugList(values: unknown[] | null, itemSummarizer = summarizeDebugValue): Record<string, unknown> | null {
   if (!values) return null;
   const sample = values.slice(0, DEBUG_COLLECTION_LIMIT).map(itemSummarizer);
@@ -413,6 +502,9 @@ export class PiRunner {
   private harness: AgentHarness | null = null;
   private extensionRuntime: PiExtensionRuntime | null = null;
   private builtinTools: AgentTool<any>[] = [];
+  private lastHarnessToolNames: string[] | null = null;
+  private lastProviderPayloadToolNames: string[] | null = null;
+  private lastRosterToolNames: string[] = [];
   private harnessUnsub: (() => void) | null = null;
   private _approvalLevel: ApprovalLevel;
   private readonly preApprovedCallIds = new Set<string>();
@@ -462,6 +554,9 @@ export class PiRunner {
     null;
   private activeRunSignal: AbortSignal | null = null;
   private activeOperationAbortController: AbortController | null = null;
+  private activeOperationId: string | null = null;
+  private activeOperationSawAgentStart = false;
+  private activeOperationSawAgentEnd = false;
   private lastContinueDiagnostic: Record<string, unknown> | null = null;
   private harnessEventChain: Promise<void> = Promise.resolve();
   private harnessEventFailure: unknown = null;
@@ -809,7 +904,7 @@ export class PiRunner {
 
     this.resolvedModel = resolveModel(this.options.model);
     this.session = await this.createSession();
-    await this.refreshRuntimeTools();
+    await this.refreshRuntimeTools("init");
 
     this.harness = new AgentHarness({
       env: createExecutionEnv(cwd, this.options.fs),
@@ -913,6 +1008,10 @@ export class PiRunner {
     return `${entryId}:pi-session-entry`;
   }
 
+  private semanticEntryEventId(entryId: string, label: string, event: AgenticEvent): string {
+    return `${entryId}:${label}:${stableHash(stableJson(event))}`;
+  }
+
   private async queueSessionEntryProvenance(entryId: string): Promise<void> {
     if (!this.options.gad || !(this.storage instanceof TrajectoryBackedSessionStorage)) return;
     const entry = await this.storage.getEntry(entryId);
@@ -954,6 +1053,7 @@ export class PiRunner {
       this.awaitingProviderFirstEvent = true;
       this.rememberCheckpoint("provider.request.ready", {
         providerRequestCount: this.providerRequestCount,
+        activeToolNames: this.computeActiveTools().map((tool) => tool.name),
       });
       try {
         const result = await this.hooks.emitBeforeProviderRequest(event, {
@@ -978,6 +1078,62 @@ export class PiRunner {
         });
         throw err;
       }
+    });
+    this.harness.on("before_provider_payload", async (event) => {
+      const toolNames = providerPayloadToolNames(event.payload);
+      const expectedToolNames = this.lastHarnessToolNames ?? sortedToolNames(this.computeActiveTools());
+      const payloadDiff = diffToolNames(expectedToolNames, toolNames);
+      const missingExpected = missingNames(this.options.expectedChannelToolNames, toolNames);
+      this.rememberCheckpoint("provider.payload.ready", {
+        providerRequestCount: this.providerRequestCount,
+        toolNames,
+        expectedToolNames,
+        rosterToolNames: this.lastRosterToolNames,
+        ...(this.options.expectedChannelToolNames?.length
+          ? { expectedChannelToolNames: [...this.options.expectedChannelToolNames] }
+          : {}),
+        ...(missingExpected.length > 0 ? { missingExpectedChannelToolNames: missingExpected } : {}),
+        hasEval: toolNames.includes("eval"),
+      });
+      if (missingExpected.length > 0) {
+        console.warn("[PiRunner] Provider payload is missing expected channel tools", {
+          providerRequestCount: this.providerRequestCount,
+          missingExpectedChannelToolNames: missingExpected,
+          expectedChannelToolNames: this.options.expectedChannelToolNames,
+          rosterToolNames: this.lastRosterToolNames,
+          activeToolNames: expectedToolNames,
+          payloadToolNames: toolNames,
+          currentOperation: this.currentOperation,
+        });
+      }
+      if (!sameToolNames(expectedToolNames, toolNames)) {
+        console.warn("[PiRunner] Provider payload tool set differs from active harness tools", {
+          providerRequestCount: this.providerRequestCount,
+          missingFromPayload: payloadDiff.removed,
+          unexpectedInPayload: payloadDiff.added,
+          activeToolNames: expectedToolNames,
+          payloadToolNames: toolNames,
+          currentOperation: this.currentOperation,
+        });
+        this.rememberCheckpoint("provider.payload.tool_mismatch", {
+          providerRequestCount: this.providerRequestCount,
+          missingFromPayload: payloadDiff.removed,
+          unexpectedInPayload: payloadDiff.added,
+        });
+      }
+      const previousPayload = this.lastProviderPayloadToolNames;
+      if (!sameToolNames(previousPayload, toolNames) && previousPayload) {
+        const diff = diffToolNames(previousPayload, toolNames);
+        console.warn("[PiRunner] Provider payload advertised tool set changed", {
+          providerRequestCount: this.providerRequestCount,
+          added: diff.added,
+          removed: diff.removed,
+          payloadToolNames: toolNames,
+          currentOperation: this.currentOperation,
+        });
+      }
+      this.lastProviderPayloadToolNames = toolNames;
+      return undefined;
     });
     this.harness.on("before_agent_start", async () => {
       const signal = this.activeOperationSignal();
@@ -1146,17 +1302,72 @@ export class PiRunner {
     });
   }
 
-  private async refreshRuntimeTools(): Promise<void> {
-    await this.extensionRuntime!.dispatch("session_start", { type: "session_start" });
-    const tools = this.computeActiveTools();
-    this.rememberCheckpoint("tools.refreshed", {
-      activeToolNames: tools.map((tool) => tool.name),
+  private async applyHarnessTools(
+    tools: AgentTool<any>[],
+    reason: string,
+    details: Record<string, unknown> = {},
+  ): Promise<void> {
+    const names = sortedToolNames(tools);
+    const previous = this.lastHarnessToolNames;
+    const changed = !sameToolNames(previous, names);
+    const diff = diffToolNames(previous, names);
+    this.rememberCheckpoint("tools.apply", {
+      reason,
+      activeToolNames: names,
+      changed,
+      ...(changed && previous ? { added: diff.added, removed: diff.removed } : {}),
+      ...details,
     });
+    if (changed && previous) {
+      console.warn("[PiRunner] Model-facing tool set changed", {
+        reason,
+        added: diff.added,
+        removed: diff.removed,
+        activeToolNames: names,
+        currentOperation: this.currentOperation,
+        ...details,
+      });
+    }
+    this.lastHarnessToolNames = names;
+    await this.harness!.setTools(tools, tools.map((tool) => tool.name));
+  }
+
+  private async refreshRuntimeTools(reason = "refreshRuntimeTools"): Promise<void> {
+    const rosterToolNames = [...new Set(this.options.rosterCallback().map((method) => method.name))].sort();
+    this.lastRosterToolNames = rosterToolNames;
+    const missingExpectedFromRoster = missingNames(this.options.expectedChannelToolNames, rosterToolNames);
+    await this.extensionRuntime!.dispatch("session_start", { type: "session_start" });
+    const rawBase = this.extensionRuntime!.getActiveTools(this.builtinTools);
+    const rawCombined = [...rawBase, ...(this.options.extraTools ?? [])];
+    const rawFiltered = this.options.toolFilter
+      ? rawCombined.filter((tool) => this.options.toolFilter!(tool.name))
+      : rawCombined;
+    const { tools: uniqueTools, duplicates } = uniqueToolsByName(rawFiltered);
+    const tools = uniqueTools.map((tool) => this.wrapTool(tool));
+    this.rememberCheckpoint("tools.refreshed", {
+      reason,
+      activeToolNames: tools.map((tool) => tool.name),
+      rosterToolNames,
+      ...(this.options.expectedChannelToolNames?.length
+        ? { expectedChannelToolNames: [...this.options.expectedChannelToolNames] }
+        : {}),
+      ...(missingExpectedFromRoster.length > 0
+        ? { missingExpectedChannelToolNames: missingExpectedFromRoster }
+        : {}),
+      ...(duplicates.length > 0 ? { duplicateToolNames: duplicates } : {}),
+    });
+    if (missingExpectedFromRoster.length > 0) {
+      console.warn("[PiRunner] Channel roster is missing expected tools before model refresh", {
+        reason,
+        missingExpectedChannelToolNames: missingExpectedFromRoster,
+        expectedChannelToolNames: this.options.expectedChannelToolNames,
+        rosterToolNames,
+        activeToolNames: tools.map((tool) => tool.name),
+        currentOperation: this.currentOperation,
+      });
+    }
     if (this.harness) {
-      await this.harness.setTools(
-        tools,
-        tools.map((tool) => tool.name)
-      );
+      await this.applyHarnessTools(tools, reason);
     }
   }
 
@@ -1166,7 +1377,8 @@ export class PiRunner {
     const filtered = this.options.toolFilter
       ? combined.filter((tool) => this.options.toolFilter!(tool.name))
       : combined;
-    return filtered.map((tool) => this.wrapTool(tool));
+    const { tools } = uniqueToolsByName(filtered);
+    return tools.map((tool) => this.wrapTool(tool));
   }
 
   private wrapTool(tool: AgentTool<any>): AgentTool<any> {
@@ -1190,21 +1402,34 @@ export class PiRunner {
   }
 
   private async prepareFollowingTurn(): Promise<void> {
-    await this.refreshRuntimeTools();
-    if (!this.options.onPrepareNextTurn || !this.harness || !this.session) return;
-    let snapshot = await this.buildSnapshot();
-    const replacement = await this.options.onPrepareNextTurn(snapshot);
-    if (replacement) snapshot = replacement;
+    if (!this.options.onPrepareNextTurn || !this.harness || !this.session) {
+      await this.refreshRuntimeTools("prepareFollowingTurn.no_hook");
+      return;
+    }
+    const beforeHook = await this.buildSnapshot();
+    const replacement = await this.options.onPrepareNextTurn(beforeHook);
+    await this.refreshRuntimeTools("prepareFollowingTurn.after_hook");
+    const refreshed = await this.buildSnapshot();
+    const snapshot = replacement
+      ? buildTurnSnapshot({
+          sessionLeafId: replacement.sessionLeafId,
+          messages: replacement.messages,
+          systemPrompt: replacement.systemPrompt,
+          model: replacement.model,
+          thinkingLevel: replacement.thinkingLevel,
+          tools: replacement.tools,
+          activeToolNames: replacement.activeToolNames,
+        })
+      : refreshed;
     if (snapshot.model !== this.harness.getModel()) {
       await this.harness.setModel(snapshot.model);
     }
     if (snapshot.thinkingLevel !== this.harness.getThinkingLevel()) {
       await this.harness.setThinkingLevel(snapshot.thinkingLevel);
     }
-    await this.harness.setTools(
-      snapshot.tools,
-      snapshot.tools.map((tool) => tool.name)
-    );
+    await this.applyHarnessTools(snapshot.tools, replacement ? "prepareFollowingTurn.replacement" : "prepareFollowingTurn.refreshed_snapshot", {
+      sessionLeafId: snapshot.sessionLeafId,
+    });
   }
 
   private async buildSnapshot(): Promise<TurnSnapshot> {
@@ -1325,6 +1550,7 @@ export class PiRunner {
     capturedMessageEntryId?: string
   ): Promise<void> {
     const signal = _signal ?? this.activeRunSignal ?? undefined;
+    let correlatedEvent: CorrelatedAgentHarnessEvent = this.correlateHarnessEvent(event);
     try {
       this.rememberHarnessEvent(event);
       if (event.type === "agent_start") {
@@ -1334,6 +1560,8 @@ export class PiRunner {
         });
         this.running = true;
         await this.openCurrentTurn();
+        this.activeOperationSawAgentStart = true;
+        correlatedEvent = this.correlateHarnessEvent(event);
       }
       if (event.type === "message_start") {
         await this.handleMessageStart((event as { message: AgentMessage }).message);
@@ -1345,20 +1573,52 @@ export class PiRunner {
         await this.handleMessageEnd(event.message, capturedMessageEntryId);
       }
       if (event.type === "agent_end") {
-        await this.closeCurrentTurn();
-        this.running = false;
-        this.awaitingProviderFirstEvent = false;
-        this.options.uiCallbacks.setWorkingMessage(undefined);
+        if (correlatedEvent.natstack?.lifecycleMatched === false) {
+          this.rememberCheckpoint("agent.end.unmatched_ignored", {
+            operationId: correlatedEvent.natstack.operationId ?? null,
+            turnId: correlatedEvent.natstack.turnId ?? null,
+          });
+        } else {
+          await this.closeCurrentTurn();
+          this.running = false;
+          this.awaitingProviderFirstEvent = false;
+          this.options.uiCallbacks.setWorkingMessage(undefined);
+          this.activeOperationSawAgentEnd = true;
+        }
       }
-      await this.hooks.emitEvent(event, { signal });
+      await this.hooks.emitEvent(correlatedEvent, { signal });
     } catch (err) {
       this.failActiveRun(`harness.event.${event.type}`, err);
       throw err;
     } finally {
       if (event.type === "agent_end") {
-        this.activeRunSignal = null;
+        if (correlatedEvent.natstack?.lifecycleMatched !== false) {
+          this.activeRunSignal = null;
+          this.activeOperationSawAgentStart = false;
+        }
       }
     }
+  }
+
+  private correlateHarnessEvent(event: AgentHarnessEvent): CorrelatedAgentHarnessEvent {
+    const operationId = this.activeOperationId ?? undefined;
+    const turnId = this.currentTurnId ?? undefined;
+    const lifecycleMatched =
+      event.type === "agent_end" || event.type === "message_start" || event.type === "message_end"
+        ? operationId
+          ? this.activeOperationSawAgentStart
+          : undefined
+        : event.type === "agent_start"
+          ? true
+          : undefined;
+    return {
+      ...(event as Record<string, unknown>),
+      natstack: {
+        ...(operationId ? { operationId } : {}),
+        ...(turnId ? { turnId } : {}),
+        ...(lifecycleMatched !== undefined ? { lifecycleMatched } : {}),
+      },
+    } as CorrelatedAgentHarnessEvent;
   }
 
   private failActiveRun(scope: string, err: unknown): void {
@@ -1371,11 +1631,26 @@ export class PiRunner {
     this.activeAssistantMessage = null;
     this.awaitingProviderFirstEvent = false;
     this.activeRunSignal = null;
+    this.activeOperationSawAgentStart = false;
+    this.activeOperationSawAgentEnd = false;
     try {
       this.options.uiCallbacks.setWorkingMessage(undefined);
     } catch (callbackErr) {
       console.warn("[PiRunner] setWorkingMessage cleanup failed:", callbackErr);
     }
+  }
+
+  private assertOperationLifecycleComplete(scope: "prompt" | "continue", operationId: string): void {
+    if (this.activeOperationId !== operationId) return;
+    if (this.activeOperationSawAgentEnd) return;
+    const missing = this.activeOperationSawAgentStart ? "agent_end" : "agent_start";
+    const message = `Runner ${scope} completed without ${missing}`;
+    this.rememberCheckpoint(`${scope}.lifecycle_incomplete`, {
+      operationId,
+      missing,
+      turnId: this.currentTurnId,
+    });
+    throw new AgentWorkerError("runner_lifecycle", message);
   }
 
   private async openCurrentTurn(): Promise<void> {
@@ -1643,20 +1918,21 @@ export class PiRunner {
     const blocks = this.messageBlocks(message);
     const trajectoryBlocks = this.messageBlocksForTrajectory(blocks);
     const content = this.messageText(message);
-    this.provenanceQueue.push({
-      event: {
-        kind: "message.completed",
-        actor: this.actorForMessageRole(role),
-        causality: { messageId: brandId<MessageId>(visibleMessageId) },
-        payload: {
-          protocol: "agentic.trajectory.v1",
-          role,
-          content,
-          blocks: trajectoryBlocks,
-        },
-        createdAt: this.messageTimestamp(message),
+    const completedEvent: AgenticEvent = {
+      kind: "message.completed",
+      actor: this.actorForMessageRole(role),
+      causality: { messageId: brandId<MessageId>(visibleMessageId) },
+      payload: {
+        protocol: "agentic.trajectory.v1",
+        role,
+        content,
+        blocks: trajectoryBlocks,
       },
-      eventId: messageEntryId,
+      createdAt: this.messageTimestamp(message),
+    };
+    this.provenanceQueue.push({
+      event: completedEvent,
+      eventId: this.semanticEntryEventId(messageEntryId, "message:completed", completedEvent),
       publishToChannel: this.shouldPublishMessageToChannel(role, content, trajectoryBlocks),
     });
 
@@ -1677,26 +1953,31 @@ export class PiRunner {
           ...(this.currentTurnId ? { turnId: this.currentTurnId } : {}),
           startedAt: this.messageTimestamp(message),
         });
-        this.provenanceQueue.push({
-          event: {
-            kind: "invocation.started",
-            actor: this.actorForMessageRole(role),
-            causality: {
-              messageId: brandId<MessageId>(visibleMessageId),
-              invocationId: brandId<InvocationId>(toolCallId),
-              modelToolCallId: toolCallId,
-            },
-            payload: {
-              protocol: "agentic.trajectory.v1",
-              name,
-              invocationType: "tool",
-              request,
-              transport: { kind: "local", awaiterId: toolCallId },
-              userVisible: true,
-            },
-            createdAt: this.messageTimestamp(message),
+        const startedEvent: AgenticEvent = {
+          kind: "invocation.started",
+          actor: this.actorForMessageRole(role),
+          causality: {
+            messageId: brandId<MessageId>(visibleMessageId),
+            invocationId: brandId<InvocationId>(toolCallId),
+            modelToolCallId: toolCallId,
           },
-          eventId: `${messageEntryId}:invocation:${toolCallId}:started`,
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            name,
+            invocationType: "tool",
+            request,
+            transport: { kind: "local", awaiterId: toolCallId },
+            userVisible: true,
+          },
+          createdAt: this.messageTimestamp(message),
+        };
+        this.provenanceQueue.push({
+          event: startedEvent,
+          eventId: this.semanticEntryEventId(
+            messageEntryId,
+            `invocation:${toolCallId}:started`,
+            startedEvent
+          ),
           publishToChannel: true,
         });
       }
@@ -1710,54 +1991,59 @@ export class PiRunner {
         this.openInvocationIds.delete(toolCallId);
         this.openToolInvocations.delete(toolCallId);
         if (this.terminalInvocationIds.has(toolCallId)) return;
-        this.provenanceQueue.push({
-          event: {
-            kind:
-              (message as { isError?: boolean }).isError === true
-                ? "invocation.failed"
-                : "invocation.completed",
-            actor: this.agentActor(),
-            causality: {
-              messageId: brandId<MessageId>(visibleMessageId),
-              invocationId: brandId<InvocationId>(toolCallId),
-              modelToolCallId: toolCallId,
-            },
-            payload:
-              (message as { isError?: boolean }).isError === true
-                ? {
-                    protocol: "agentic.trajectory.v1",
-                    reason: this.summarizeToolResult({
-                      content: (message as { content?: unknown }).content ?? [],
-                      details,
-                    } as AgentToolResult<unknown>),
-                    error: {
-                      toolCallId,
-                      toolName: typeof toolName === "string" ? toolName : "unknown",
-                      text: this.toolResultText({
-                        content: (message as { content?: unknown }).content ?? [],
-                        details,
-                      } as AgentToolResult<unknown>),
-                      content: (message as { content?: unknown }).content ?? [],
-                      details,
-                    },
-                    recoverable: true,
-                  }
-                : {
-                    protocol: "agentic.trajectory.v1",
-                    result: {
-                      toolCallId,
-                      toolName: typeof toolName === "string" ? toolName : "unknown",
-                      content: (message as { content?: unknown }).content ?? [],
-                      details,
-                    },
-                    summary: this.summarizeToolResult({
-                      content: (message as { content?: unknown }).content ?? [],
-                      details,
-                    } as AgentToolResult<unknown>),
-                  },
-            createdAt: this.messageTimestamp(message),
+        const terminalEvent: AgenticEvent = {
+          kind:
+            (message as { isError?: boolean }).isError === true
+              ? "invocation.failed"
+              : "invocation.completed",
+          actor: this.agentActor(),
+          causality: {
+            messageId: brandId<MessageId>(visibleMessageId),
+            invocationId: brandId<InvocationId>(toolCallId),
+            modelToolCallId: toolCallId,
           },
-          eventId: `${messageEntryId}:invocation:${toolCallId}:terminal`,
+          payload:
+            (message as { isError?: boolean }).isError === true
+              ? {
+                  protocol: "agentic.trajectory.v1",
+                  reason: this.summarizeToolResult({
+                    content: (message as { content?: unknown }).content ?? [],
+                    details,
+                  } as AgentToolResult<unknown>),
+                  error: {
+                    toolCallId,
+                    toolName: typeof toolName === "string" ? toolName : "unknown",
+                    text: this.toolResultText({
+                      content: (message as { content?: unknown }).content ?? [],
+                      details,
+                    } as AgentToolResult<unknown>),
+                    content: (message as { content?: unknown }).content ?? [],
+                    details,
+                  },
+                  recoverable: true,
+                }
+              : {
+                  protocol: "agentic.trajectory.v1",
+                  result: {
+                    toolCallId,
+                    toolName: typeof toolName === "string" ? toolName : "unknown",
+                    content: (message as { content?: unknown }).content ?? [],
+                    details,
+                  },
+                  summary: this.summarizeToolResult({
+                    content: (message as { content?: unknown }).content ?? [],
+                    details,
+                  } as AgentToolResult<unknown>),
+                },
+          createdAt: this.messageTimestamp(message),
+        };
+        this.provenanceQueue.push({
+          event: terminalEvent,
+          eventId: this.semanticEntryEventId(
+            messageEntryId,
+            `invocation:${toolCallId}:terminal`,
+            terminalEvent
+          ),
           publishToChannel: true,
         });
       }
@@ -2600,10 +2886,16 @@ export class PiRunner {
   async prompt(input: RunnerTurnInput, opts: RunnerTurnOptions = {}): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
     this.adoptTurnId(opts.turnId);
+    const operationId = uuidv7();
+    this.activeOperationId = operationId;
+    this.activeOperationSawAgentStart = false;
+    this.activeOperationSawAgentEnd = false;
     const operationAbortController = new AbortController();
     this.activeOperationAbortController = operationAbortController;
     this.currentOperation = {
       kind: "prompt",
+      operationId,
+      turnId: this.currentTurnId,
       startedAt: new Date().toISOString(),
       input: {
         contentLength: input.content.length,
@@ -2614,12 +2906,13 @@ export class PiRunner {
     this.rememberCheckpoint("prompt.start", this.currentOperation.input);
     try {
       this.rememberCheckpoint("prompt.refresh_tools.start");
-      await this.refreshRuntimeTools();
+      await this.refreshRuntimeTools("prompt.preflight");
       this.rememberCheckpoint("prompt.refresh_tools.ok");
       this.rememberCheckpoint("prompt.harness.start");
       await this.runHarnessOperation("prompt", () =>
         this.harness!.prompt(input.content, input.images ? { images: input.images } : undefined)
       );
+      this.assertOperationLifecycleComplete("prompt", operationId);
       this.rememberCheckpoint("prompt.harness.ok");
     } catch (err) {
       await this.settleFailedOperationTurn(
@@ -2635,6 +2928,11 @@ export class PiRunner {
     } finally {
       if (this.activeOperationAbortController === operationAbortController) {
         this.activeOperationAbortController = null;
+      }
+      if (this.activeOperationId === operationId) {
+        this.activeOperationId = null;
+        this.activeOperationSawAgentStart = false;
+        this.activeOperationSawAgentEnd = false;
       }
       this.currentOperation = null;
     }
@@ -2697,10 +2995,16 @@ export class PiRunner {
   async continueAgent(opts: RunnerTurnOptions = {}): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
     this.adoptTurnId(opts.turnId);
+    const operationId = uuidv7();
+    this.activeOperationId = operationId;
+    this.activeOperationSawAgentStart = false;
+    this.activeOperationSawAgentEnd = false;
     const operationAbortController = new AbortController();
     this.activeOperationAbortController = operationAbortController;
     this.currentOperation = {
       kind: "continue",
+      operationId,
+      turnId: this.currentTurnId,
       startedAt: new Date().toISOString(),
     };
     this.rememberCheckpoint("continue.start");
@@ -2709,10 +3013,11 @@ export class PiRunner {
       await this.prepareSessionForContinue();
       this.rememberCheckpoint("continue.preflight.ok");
       this.rememberCheckpoint("continue.refresh_tools.start");
-      await this.refreshRuntimeTools();
+      await this.refreshRuntimeTools("continue.preflight");
       this.rememberCheckpoint("continue.refresh_tools.ok");
       this.rememberCheckpoint("continue.harness.start");
       await this.runHarnessOperation("continue", () => this.harness!.continue());
+      this.assertOperationLifecycleComplete("continue", operationId);
       this.rememberCheckpoint("continue.harness.ok");
     } catch (err) {
       await this.settleFailedOperationTurn(
@@ -2728,6 +3033,11 @@ export class PiRunner {
     } finally {
       if (this.activeOperationAbortController === operationAbortController) {
         this.activeOperationAbortController = null;
+      }
+      if (this.activeOperationId === operationId) {
+        this.activeOperationId = null;
+        this.activeOperationSawAgentStart = false;
+        this.activeOperationSawAgentEnd = false;
       }
       this.currentOperation = null;
     }
@@ -3207,6 +3517,27 @@ function isPermanentProvenanceError(err: unknown): boolean {
     /Cannot resolve unknown approval/u.test(message) ||
     /Cannot resolve approval .* more than once/u.test(message)
   );
+}
+
+function stableJson(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
+
+function stableHash(value: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= BigInt(value.charCodeAt(index));
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16).padStart(16, "0");
 }
 
 function isProvenanceSizeLimitError(err: unknown): boolean {

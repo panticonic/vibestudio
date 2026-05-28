@@ -18,8 +18,17 @@ export interface OrphanFileMutationIntentEvent {
   path: string | null;
 }
 
+export interface RunnerEventMetadata {
+  operationId?: string;
+  turnId?: string;
+  lifecycleMatched?: boolean;
+}
+
 export type NatStackRunnerEvent = OrphanFileMutationIntentEvent;
-export type RunnerEvent = AgentHarnessEvent | NatStackRunnerEvent;
+export type CorrelatedAgentHarnessEvent = AgentHarnessEvent & {
+  natstack?: RunnerEventMetadata;
+};
+export type RunnerEvent = CorrelatedAgentHarnessEvent | NatStackRunnerEvent;
 
 export interface HookListenerContext {
   signal?: AbortSignal;

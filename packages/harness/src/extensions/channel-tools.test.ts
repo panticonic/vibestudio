@@ -116,7 +116,7 @@ describe("createChannelToolsExtension", () => {
     expect(api.getActive()).not.toContain("eval");
   });
 
-  it("re-reconciles roster on a subsequent session_start", async () => {
+  it("keeps previously registered tools active across transient roster misses", async () => {
     let roster: ChannelToolMethod[] = [
       { participantHandle: "ai-chat", name: "inline_ui", description: "", parameters: {} },
       { participantHandle: "sandbox", name: "eval", description: "", parameters: {} },
@@ -135,8 +135,9 @@ describe("createChannelToolsExtension", () => {
     roster = roster.filter((m) => m.name !== "eval");
     await api.fire("session_start");
     expect(api.getActive()).toContain("inline_ui");
-    expect(api.getActive()).not.toContain("eval");
-    // Tool stays registered (Pi has no unregisterTool) but inactive.
+    expect(api.getActive()).toContain("eval");
+    // Tool stays registered and active. Its execute handler checks current
+    // participant availability and returns a visible tool error if needed.
     expect(api.getRegistered().has("eval")).toBe(true);
   });
 

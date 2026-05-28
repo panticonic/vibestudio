@@ -198,6 +198,41 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
+  it("rejects prompt when the runner completes without agent_end", async () => {
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      harness: { prompt(content: string): Promise<void> };
+      handleHarnessEvent(event: unknown): Promise<void>;
+    };
+    await runner.init();
+    internals.harness.prompt = async () => {
+      await internals.handleHarnessEvent({ type: "agent_start" });
+    };
+
+    await expect(runner.prompt({ content: "hello" }, { turnId: "turn-no-end" })).rejects.toThrow(
+      "Runner prompt completed without agent_end"
+    );
+    expect((await runner.getDebugState())["currentTurnId"]).toBeNull();
+
+    runner.dispose();
+  });
+
+  it("rejects prompt when the runner completes without agent_start", async () => {
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      harness: { prompt(content: string): Promise<void> };
+    };
+    await runner.init();
+    internals.harness.prompt = async () => undefined;
+
+    await expect(runner.prompt({ content: "hello" }, { turnId: "turn-no-start" })).rejects.toThrow(
+      "Runner prompt completed without agent_start"
+    );
+    expect((await runner.getDebugState())["currentTurnId"]).toBeNull();
+
+    runner.dispose();
+  });
+
   it("clears adopted turn ids when prompt setup fails before turn.opened", async () => {
     const runner = new PiRunner(createOptions());
     await runner.init();
@@ -390,6 +425,190 @@ describe("PiRunner", () => {
     const debug = await runner.getDebugState();
     expect(debug["activeToolNames"]).toEqual(expect.arrayContaining(["read", "eval"]));
     expect(JSON.stringify(debug["phase"])).toContain("tools.refreshed");
+
+    runner.dispose();
+  });
+
+  it("warns when expected channel tools are absent from the roster", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runner = new PiRunner(createOptions({
+      rosterCallback: () => [],
+      expectedChannelToolNames: ["eval"],
+    }));
+    await runner.init();
+
+    expect(warn).toHaveBeenCalledWith(
+      "[PiRunner] Channel roster is missing expected tools before model refresh",
+      expect.objectContaining({
+        missingExpectedChannelToolNames: ["eval"],
+        rosterToolNames: [],
+      })
+    );
+    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain('"missingExpectedChannelToolNames":["eval"]');
+
+    warn.mockRestore();
+    runner.dispose();
+  });
+
+  it("refreshes channel tools after the next-turn hook updates the roster", async () => {
+    let roster: Array<{
+      participantHandle: string;
+      name: string;
+      description: string;
+      parameters: unknown;
+    }> = [];
+    const runner = new PiRunner(
+      createOptions({
+        rosterCallback: () => roster,
+        onPrepareNextTurn: async () => {
+          roster = [
+            {
+              participantHandle: "sandbox",
+              name: "eval",
+              description: "Run code in the panel sandbox",
+              parameters: { type: "object" },
+            },
+          ];
+        },
+      })
+    );
+    await runner.init();
+
+    expect((await runner.getDebugState())["activeToolNames"]).not.toContain("eval");
+
+    await (runner as unknown as { prepareFollowingTurn(): Promise<void> }).prepareFollowingTurn();
+
+    expect((await runner.getDebugState())["activeToolNames"]).toContain("eval");
+    runner.dispose();
+  });
+
+  it("records provider payload tool names for model-call diagnostics", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+    await (
+      runner as unknown as {
+        harness: {
+          emitBeforeProviderPayload(model: unknown, payload: unknown): Promise<unknown>;
+        };
+      }
+    ).harness.emitBeforeProviderPayload(
+      { id: "gpt-5", provider: "openai-codex" },
+      {
+        tools: [
+          { type: "function", name: "eval" },
+          { type: "function", function: { name: "feedback_form" } },
+          { functionDeclarations: [{ name: "inline_ui" }] },
+        ],
+      }
+    );
+
+    const debug = await runner.getDebugState();
+    expect(JSON.stringify(debug["phase"])).toContain("provider.payload.ready");
+    expect(JSON.stringify(debug["phase"])).toContain('"hasEval":true');
+    expect(JSON.stringify(debug["phase"])).toContain('"toolNames":["eval","feedback_form","inline_ui"]');
+    expect(warn).toHaveBeenCalledWith(
+      "[PiRunner] Provider payload tool set differs from active harness tools",
+      expect.objectContaining({
+        payloadToolNames: ["eval", "feedback_form", "inline_ui"],
+      })
+    );
+    warn.mockRestore();
+    runner.dispose();
+  });
+
+  it("warns when provider payload omits expected channel tools", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runner = new PiRunner(createOptions({
+      rosterCallback: () => [
+        {
+          participantHandle: "sandbox",
+          name: "eval",
+          description: "Run code in the panel sandbox",
+          parameters: { type: "object" },
+        },
+      ],
+      expectedChannelToolNames: ["eval"],
+    }));
+    await runner.init();
+    await (
+      runner as unknown as {
+        harness: {
+          emitBeforeProviderPayload(model: unknown, payload: unknown): Promise<unknown>;
+        };
+      }
+    ).harness.emitBeforeProviderPayload(
+      { id: "gpt-5", provider: "openai-codex" },
+      { tools: [{ type: "function", name: "read" }] }
+    );
+
+    expect(warn).toHaveBeenCalledWith(
+      "[PiRunner] Provider payload is missing expected channel tools",
+      expect.objectContaining({
+        missingExpectedChannelToolNames: ["eval"],
+        rosterToolNames: ["eval"],
+        payloadToolNames: ["read"],
+      })
+    );
+
+    warn.mockRestore();
+    runner.dispose();
+  });
+
+  it("logs a loud diagnostic when the model-facing tool set changes", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    let allowEval = true;
+    const runner = new PiRunner(createOptions({
+      rosterCallback: () => [
+        {
+          participantHandle: "sandbox",
+          name: "eval",
+          description: "Run code in the panel sandbox",
+          parameters: { type: "object" },
+        },
+      ],
+      toolFilter: (name) => allowEval || name !== "eval",
+    }));
+    await runner.init();
+    await (runner as unknown as { refreshRuntimeTools(reason?: string): Promise<void> }).refreshRuntimeTools("test.initial");
+    allowEval = false;
+    await (runner as unknown as { refreshRuntimeTools(reason?: string): Promise<void> }).refreshRuntimeTools("test.remove_eval");
+
+    expect(warn).toHaveBeenCalledWith(
+      "[PiRunner] Model-facing tool set changed",
+      expect.objectContaining({
+        reason: "test.remove_eval",
+        removed: ["eval"],
+      })
+    );
+    warn.mockRestore();
+    runner.dispose();
+  });
+
+  it("deduplicates tool names before advertising tools to the model", async () => {
+    const setTitleTool = {
+      name: "set_title",
+      label: "set_title",
+      description: "worker title fallback",
+      parameters: { type: "object" },
+      execute: vi.fn(),
+    } as unknown as NonNullable<PiRunnerOptions["extraTools"]>[number];
+    const runner = new PiRunner(createOptions({
+      rosterCallback: () => [
+        {
+          participantHandle: "panel",
+          name: "set_title",
+          description: "panel title tool",
+          parameters: { type: "object" },
+        },
+      ],
+      extraTools: [setTitleTool],
+    }));
+    await runner.init();
+
+    const names = ((await runner.getDebugState())["activeToolNames"] as string[]).filter((name) => name === "set_title");
+    expect(names).toHaveLength(1);
+    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain('"duplicateToolNames":["set_title"]');
 
     runner.dispose();
   });
@@ -868,7 +1087,7 @@ describe("PiRunner", () => {
 
     expect(runner.provenanceQueue).toMatchObject([
       {
-        eventId: "entry-result",
+        eventId: expect.stringMatching(/^entry-result:message:completed:[0-9a-f]{16}$/u),
         publishToChannel: false,
         event: {
           kind: "message.completed",
@@ -877,7 +1096,9 @@ describe("PiRunner", () => {
         },
       },
       {
-        eventId: "entry-result:invocation:call_1:terminal",
+        eventId: expect.stringMatching(
+          /^entry-result:invocation:call_1:terminal:[0-9a-f]{16}$/u
+        ),
         publishToChannel: true,
         event: {
           kind: "invocation.completed",
@@ -914,10 +1135,37 @@ describe("PiRunner", () => {
     );
 
     expect(runner.provenanceQueue).toMatchObject([
-      { eventId: "entry-at-emit" },
-      { eventId: "entry-at-emit:invocation:call_1:terminal" },
+      { eventId: expect.stringMatching(/^entry-at-emit:message:completed:[0-9a-f]{16}$/u) },
+      {
+        eventId: expect.stringMatching(
+          /^entry-at-emit:invocation:call_1:terminal:[0-9a-f]{16}$/u
+        ),
+      },
     ]);
     expect(runner.session.getLeafId).not.toHaveBeenCalled();
+  });
+
+  it("content-addresses derived message provenance for repeated session entry ids", () => {
+    const runner = new PiRunner(createOptions()) as unknown as {
+      provenanceQueue: Array<Record<string, unknown>>;
+      queueMessageProvenance(message: unknown, messageEntryId: string): void;
+    };
+    runner.provenanceQueue = [];
+
+    runner.queueMessageProvenance(
+      { role: "assistant", content: [{ type: "text", text: "first" }] },
+      "entry-replayed"
+    );
+    runner.queueMessageProvenance(
+      { role: "assistant", content: [{ type: "text", text: "second" }] },
+      "entry-replayed"
+    );
+
+    const eventIds = runner.provenanceQueue.map((item) => item["eventId"]);
+    expect(eventIds).toHaveLength(2);
+    expect(eventIds[0]).toMatch(/^entry-replayed:message:completed:[0-9a-f]{16}$/u);
+    expect(eventIds[1]).toMatch(/^entry-replayed:message:completed:[0-9a-f]{16}$/u);
+    expect(eventIds[0]).not.toBe(eventIds[1]);
   });
 
   it("batches exact Pi session entries with semantic message provenance", async () => {
@@ -979,8 +1227,14 @@ describe("PiRunner", () => {
               }),
             }),
           }),
-          expect.objectContaining({ eventId: "entry-tool" }),
-          expect.objectContaining({ eventId: "entry-tool:invocation:call_1:terminal" }),
+          expect.objectContaining({
+            eventId: expect.stringMatching(/^entry-tool:message:completed:[0-9a-f]{16}$/u),
+          }),
+          expect.objectContaining({
+            eventId: expect.stringMatching(
+              /^entry-tool:invocation:call_1:terminal:[0-9a-f]{16}$/u
+            ),
+          }),
         ],
       })
     );
@@ -1007,7 +1261,7 @@ describe("PiRunner", () => {
 
     expect(runner.provenanceQueue).toEqual([
       expect.objectContaining({
-        eventId: "entry-result",
+        eventId: expect.stringMatching(/^entry-result:message:completed:[0-9a-f]{16}$/u),
         event: expect.objectContaining({
           kind: "message.completed",
           payload: expect.objectContaining({ role: "tool" }),
@@ -1116,7 +1370,9 @@ describe("PiRunner", () => {
     ).toBe(false);
     expect(runner.provenanceQueue).toContainEqual(
       expect.objectContaining({
-        eventId: "entry-assistant:invocation:call_2:started",
+        eventId: expect.stringMatching(
+          /^entry-assistant:invocation:call_2:started:[0-9a-f]{16}$/u
+        ),
         event: expect.objectContaining({
           kind: "invocation.started",
           causality: expect.objectContaining({ invocationId: "call_2" }),
