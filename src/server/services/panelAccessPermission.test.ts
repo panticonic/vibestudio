@@ -149,6 +149,49 @@ describe("panelAccessPermission", () => {
     );
   });
 
+  it("allows a panel to update its own stateArgs without prompting", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+
+    const result = await requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+        resolveRequesterPanel: vi.fn(async () => ({
+          id: "slot-a",
+          runtimeEntityId: "panel:entity-a",
+        })),
+      },
+      panelCtx("panel:entity-a"),
+      "stateArgs.set",
+      { id: "slot-a", runtimeEntityId: "panel:entity-a" }
+    );
+
+    expect(result).toEqual({ allowed: true });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("still gates stateArgs updates for other panels", async () => {
+    const approvalQueue = approvalQueueMock("session");
+
+    await requirePanelAccessPermission(
+      {
+        approvalQueue,
+        grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+        resolveRequesterPanel: vi.fn(async () => ({
+          id: "slot-a",
+          runtimeEntityId: "panel:entity-a",
+        })),
+      },
+      panelCtx("panel:entity-a"),
+      "stateArgs.set",
+      { id: "slot-b", runtimeEntityId: "panel:entity-b" }
+    );
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: PANEL_STRUCTURAL_CAPABILITY })
+    );
+  });
+
   it("denies panel capabilities without queueing when no approval shell is active", async () => {
     const approvalQueue = approvalQueueMock("session");
 

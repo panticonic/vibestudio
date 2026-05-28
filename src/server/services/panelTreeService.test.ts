@@ -247,6 +247,41 @@ describe("panelTreeService", () => {
     );
   });
 
+  it("lets a panel set its own stateArgs without approval", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+    const bridge = vi.fn(async (request: { method: string }) =>
+      request.method === "metadata"
+        ? {
+            id: "requester-slot",
+            title: "Requester",
+            source: "panels/requester",
+            runtimeEntityId: "panel:requester",
+          }
+        : { mode: "edit" }
+    );
+    const service = createPanelTreeService({
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      resolveRequesterPanel: vi.fn(async () => ({
+        id: "requester-slot",
+        runtimeEntityId: "panel:requester",
+      })),
+      bridge,
+    });
+
+    await expect(
+      service.handler(ctx(), "setStateArgs", ["requester-slot", { mode: "edit" }])
+    ).resolves.toEqual({ mode: "edit" });
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(bridge).toHaveBeenLastCalledWith({
+      callerId: "panel:requester",
+      callerKind: "panel",
+      method: "setStateArgs",
+      args: ["requester-slot", { mode: "edit" }],
+    });
+  });
+
   it("approval-gates object-shaped structural operations by target panel id", async () => {
     const approvalQueue = approvalQueueMock("session");
     const bridge = vi.fn(async (request: { method: string }) =>

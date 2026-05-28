@@ -38,6 +38,9 @@ export async function requirePanelAccessPermission(
     ctx.caller.runtime.kind === "panel" && deps.resolveRequesterPanel
       ? await deps.resolveRequesterPanel(ctx.caller)
       : null;
+  if (op === "stateArgs.set" && isSelfPanelTarget(ctx.caller, target, requesterPanel)) {
+    return { allowed: true };
+  }
   const decision = accessDecision(
     op,
     {
@@ -108,6 +111,19 @@ export async function requirePanelAccessPermission(
     capability: decision.capability,
     prompted: result.decision !== undefined,
   };
+}
+
+function isSelfPanelTarget(
+  caller: VerifiedCaller,
+  target: PanelAccessPermissionTarget,
+  requesterPanel: PanelAccessPermissionTarget | null
+): boolean {
+  if (caller.runtime.kind !== "panel") return false;
+  if (target.runtimeEntityId && target.runtimeEntityId === caller.runtime.id) return true;
+  if (requesterPanel?.runtimeEntityId && target.runtimeEntityId) {
+    return requesterPanel.runtimeEntityId === target.runtimeEntityId;
+  }
+  return Boolean(requesterPanel?.id && requesterPanel.id === target.id);
 }
 
 function titleFor(
