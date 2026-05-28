@@ -83,6 +83,11 @@ eval({
 
 Then repeat this eval until `remainingCategories` is `0`:
 
+Run this snippet directly in eval. Do not create helper files for this loop. If
+a later eval call cannot be made, report the exact failed eval attempt and its
+exact error; unrelated `edit`, `write`, `read`, or helper-file errors do not
+mean eval is unavailable.
+
 ```
 eval({
   code: `

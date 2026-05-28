@@ -169,7 +169,12 @@ initPanels:
 
         ## When something goes wrong
         Stop as soon as you encounter a problem — whether it's an import failure, a test
-        failure, or an infrastructure issue. Do NOT attempt to fix anything. Instead:
+        failure, or an infrastructure issue. Do NOT attempt to fix anything. Do NOT
+        create or edit helper files to work around eval orchestration. Run the documented
+        eval snippets directly. If you believe `eval` is unavailable, report only after
+        attempting a direct eval call and include that eval call's exact error; errors from
+        `edit`, `write`, `read`, or helper-file setup are not evidence that eval is unavailable.
+        Instead:
 
         1. Describe exactly what happened (error messages, return values, observed behavior)
         2. Show the code you ran and the exact output

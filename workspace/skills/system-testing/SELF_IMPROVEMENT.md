@@ -52,6 +52,10 @@ eval({
 
 Repeat this eval until `remainingCategories` is `0`:
 
+Run the snippet directly in eval. Do not create helper files for the category
+loop. If eval cannot be called, report the exact failed eval attempt and its
+exact error; helper-file edit/write/read errors are separate setup failures.
+
 ```
 eval({
   code: `
