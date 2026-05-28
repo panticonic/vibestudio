@@ -874,6 +874,7 @@ export class PiRunner {
       Object.values(state.turns).find((turn) => turn.status === "open")?.turnId;
     if (restoredOpenTurnId && state.turns[restoredOpenTurnId]?.status === "open") {
       this.currentTurnId = restoredOpenTurnId;
+      this.openedTurnIds.add(restoredOpenTurnId);
     }
     this.terminalInvocationIds.clear();
     for (const invocation of Object.values(state.invocations)) {
@@ -1524,6 +1525,9 @@ export class PiRunner {
     if (repairs.length > 0) await this.appendTrajectoryEvents(repairs);
     if (this.currentTurnId && repairedTurnIds.has(this.currentTurnId)) {
       this.currentTurnId = null;
+    }
+    for (const turnId of repairedTurnIds) {
+      this.openedTurnIds.delete(turnId);
     }
     this.restoredTrajectoryState = null;
   }

@@ -1810,6 +1810,9 @@ describe("PiRunner", () => {
     await runner.init();
     expect((await runner.getDebugState())["currentTurnId"]).toBe("turn-open");
 
+    await (runner as unknown as { openCurrentTurn(): Promise<void> }).openCurrentTurn();
+    expect(appended).toEqual([]);
+
     await runner.repairDurableOpenState({ closeOpenTurns: false });
 
     expect(appended.map((item) => (item as { event?: { kind?: string } }).event?.kind)).toEqual([

@@ -24,12 +24,7 @@ import {
   type TurnId,
 } from "@workspace/agentic-protocol";
 import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-constants";
-import type {
-  SubscribeResult,
-  ChannelConfig,
-  PresencePayload,
-  StoredAttachment,
-} from "./types.js";
+import type { SubscribeResult, ChannelConfig, PresencePayload, StoredAttachment } from "./types.js";
 import {
   broadcast,
   buildChannelEvent,
@@ -164,7 +159,7 @@ export class PubSubChannel extends DurableObjectBase {
         call: <T = unknown>(targetId: string, method: string, args: unknown[]) =>
           this.rpc.call<T>(targetId, method, args),
       },
-      this.objectKey,
+      this.objectKey
     );
     return this._channelLog;
   }
@@ -193,7 +188,7 @@ export class PubSubChannel extends DurableObjectBase {
     transportCallId: string,
     turnId: string | undefined,
     methodName: string,
-    args: unknown,
+    args: unknown
   ): AgenticEvent {
     return {
       kind: "invocation.started",
@@ -226,7 +221,7 @@ export class PubSubChannel extends DurableObjectBase {
     transportCallId: string | undefined,
     turnId: string | undefined,
     result: unknown,
-    isError: boolean,
+    isError: boolean
   ): AgenticEvent {
     return {
       kind: isError ? "invocation.failed" : "invocation.completed",
@@ -248,7 +243,7 @@ export class PubSubChannel extends DurableObjectBase {
     invocationId: string,
     transportCallId: string | undefined,
     turnId: string | undefined,
-    reason: string,
+    reason: string
   ): AgenticEvent {
     return {
       kind: "invocation.cancelled",
@@ -265,9 +260,22 @@ export class PubSubChannel extends DurableObjectBase {
 
   private invocationResultFromPublishedPayload(
     type: string,
-    payload: unknown,
-  ): { transportCallId: string; invocationId: string; turnId?: string; content: unknown; isError: boolean; complete: boolean } | null {
-    if (type !== AGENTIC_EVENT_PAYLOAD_KIND || !payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+    payload: unknown
+  ): {
+    transportCallId: string;
+    invocationId: string;
+    turnId?: string;
+    content: unknown;
+    isError: boolean;
+    complete: boolean;
+  } | null {
+    if (
+      type !== AGENTIC_EVENT_PAYLOAD_KIND ||
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    )
+      return null;
     const eventObj = payload as AgenticEvent;
     if (!eventObj.kind.startsWith("invocation.")) return null;
     const invocationId = eventObj.causality?.invocationId;
@@ -276,7 +284,14 @@ export class PubSubChannel extends DurableObjectBase {
     const turnId = typeof eventObj.turnId === "string" ? eventObj.turnId : undefined;
     if (eventObj.kind === "invocation.completed") {
       const result = "result" in eventObj.payload ? eventObj.payload.result : undefined;
-      return { transportCallId, invocationId, turnId, content: result, isError: false, complete: true };
+      return {
+        transportCallId,
+        invocationId,
+        turnId,
+        content: result,
+        isError: false,
+        complete: true,
+      };
     }
     if (eventObj.kind === "invocation.failed" || eventObj.kind === "invocation.cancelled") {
       const payloadObj = eventObj.payload as Record<string, unknown>;
@@ -289,18 +304,36 @@ export class PubSubChannel extends DurableObjectBase {
         complete: true,
       };
     }
-    return { transportCallId, invocationId, turnId, content: eventObj.payload, isError: false, complete: false };
+    return {
+      transportCallId,
+      invocationId,
+      turnId,
+      content: eventObj.payload,
+      isError: false,
+      complete: false,
+    };
   }
 
-  private registryMutationFromPublishedPayload(type: string, payload: unknown): RegistryMutationInput | null {
-    if (type !== AGENTIC_EVENT_PAYLOAD_KIND || !payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  private registryMutationFromPublishedPayload(
+    type: string,
+    payload: unknown
+  ): RegistryMutationInput | null {
+    if (
+      type !== AGENTIC_EVENT_PAYLOAD_KIND ||
+      !payload ||
+      typeof payload !== "object" ||
+      Array.isArray(payload)
+    )
+      return null;
     const event = payload as AgenticEvent;
     if (event.kind === "messageType.registered") {
       const body = event.payload as Record<string, unknown>;
       const typeId = typeof body["typeId"] === "string" ? body["typeId"] : "";
-      const displayMode = body["displayMode"] === "inline" ? "inline" : body["displayMode"] === "row" ? "row" : null;
+      const displayMode =
+        body["displayMode"] === "inline" ? "inline" : body["displayMode"] === "row" ? "row" : null;
       const source = body["source"];
-      if (!typeId || !displayMode || !source || typeof source !== "object" || Array.isArray(source)) return null;
+      if (!typeId || !displayMode || !source || typeof source !== "object" || Array.isArray(source))
+        return null;
       const sourceRecord = source as Record<string, unknown>;
       const normalizedSource =
         sourceRecord["type"] === "code" && typeof sourceRecord["code"] === "string"
@@ -317,11 +350,20 @@ export class PubSubChannel extends DurableObjectBase {
           source: normalizedSource,
         },
       };
-      if (body["imports"] && typeof body["imports"] === "object" && !Array.isArray(body["imports"])) {
+      if (
+        body["imports"] &&
+        typeof body["imports"] === "object" &&
+        !Array.isArray(body["imports"])
+      ) {
         row.row.imports = body["imports"] as Record<string, string>;
       }
-      if (body["schemaSourceOrPath"] !== undefined) row.row.schemaSourceOrPath = body["schemaSourceOrPath"];
-      if (body["registeredBy"] && typeof body["registeredBy"] === "object" && !Array.isArray(body["registeredBy"])) {
+      if (body["schemaSourceOrPath"] !== undefined)
+        row.row.schemaSourceOrPath = body["schemaSourceOrPath"];
+      if (
+        body["registeredBy"] &&
+        typeof body["registeredBy"] === "object" &&
+        !Array.isArray(body["registeredBy"])
+      ) {
         row.row.registeredBy = body["registeredBy"] as Record<string, unknown>;
       }
       return row;
@@ -359,15 +401,18 @@ export class PubSubChannel extends DurableObjectBase {
     payload: AgenticEvent,
     senderId: string,
     senderMetadata: Record<string, unknown> | undefined,
-    mutation: RegistryMutationInput,
+    mutation: RegistryMutationInput
   ): Promise<ChannelEvent> {
     await this.ensureRegistryHydrated();
-    const event = await this.channelLog.appendWithRegistryMutation({
-      type,
-      payload,
-      senderId,
-      senderMetadata,
-    }, mutation);
+    const event = await this.channelLog.appendWithRegistryMutation(
+      {
+        type,
+        payload,
+        senderId,
+        senderMetadata,
+      },
+      mutation
+    );
     this.cacheMessageTypeMutation(event.id, mutation);
     return event;
   }
@@ -381,8 +426,10 @@ export class PubSubChannel extends DurableObjectBase {
         updatedAtSeq: seq,
       };
       if (mutation.row.imports !== undefined) definition.imports = mutation.row.imports;
-      if (mutation.row.schemaSourceOrPath !== undefined) definition.schemaSourceOrPath = mutation.row.schemaSourceOrPath;
-      if (mutation.row.registeredBy !== undefined) definition.registeredBy = mutation.row.registeredBy;
+      if (mutation.row.schemaSourceOrPath !== undefined)
+        definition.schemaSourceOrPath = mutation.row.schemaSourceOrPath;
+      if (mutation.row.registeredBy !== undefined)
+        definition.registeredBy = mutation.row.registeredBy;
       this.sql.exec(
         `INSERT INTO message_types (type_id, definition_json, updated_at_seq, cleared_at_seq)
          VALUES (?, ?, ?, NULL)
@@ -394,7 +441,7 @@ export class PubSubChannel extends DurableObjectBase {
            AND excluded.updated_at_seq > COALESCE(message_types.cleared_at_seq, -1)`,
         mutation.typeId,
         JSON.stringify(definition),
-        seq,
+        seq
       );
       return;
     }
@@ -404,7 +451,7 @@ export class PubSubChannel extends DurableObjectBase {
        ON CONFLICT(type_id) DO UPDATE SET
          cleared_at_seq = MAX(COALESCE(message_types.cleared_at_seq, -1), excluded.cleared_at_seq)`,
       mutation.typeId,
-      seq,
+      seq
     );
   }
 
@@ -420,14 +467,16 @@ export class PubSubChannel extends DurableObjectBase {
         definition.typeId,
         JSON.stringify(definition),
         definition.updatedAtSeq,
-        definition.clearedAtSeq ?? null,
+        definition.clearedAtSeq ?? null
       );
     }
   }
 
   private localMessageTypes(): MessageTypeDefinition[] {
     const rows = this.sql
-      .exec(`SELECT definition_json FROM message_types WHERE definition_json IS NOT NULL AND updated_at_seq > COALESCE(cleared_at_seq, -1)`)
+      .exec(
+        `SELECT definition_json FROM message_types WHERE definition_json IS NOT NULL AND updated_at_seq > COALESCE(cleared_at_seq, -1)`
+      )
       .toArray();
     return rows.flatMap((row) => {
       try {
@@ -467,7 +516,9 @@ export class PubSubChannel extends DurableObjectBase {
 
   private rosterSnapshot(): BootstrapSnapshot {
     const participants: ParticipantSnapshot[] = [];
-    for (const row of this.sql.exec(`SELECT id, metadata FROM participants ORDER BY id ASC`).toArray()) {
+    for (const row of this.sql
+      .exec(`SELECT id, metadata FROM participants ORDER BY id ASC`)
+      .toArray()) {
       try {
         participants.push({
           id: row["id"] as string,
@@ -499,7 +550,7 @@ export class PubSubChannel extends DurableObjectBase {
         transportCallId ?? invocationId,
         turnId,
         methodName ?? "unknown",
-        args,
+        args
       ),
       callerId,
       this.getSenderMetadata(callerId),
@@ -697,11 +748,11 @@ export class PubSubChannel extends DurableObjectBase {
     }
 
     if (doRef && callerId) {
-      await this.rpc.call(
-        "main",
-        "workers.resolveDurableObject",
-        [doRef.source, doRef.className, doRef.objectKey]
-      );
+      await this.rpc.call("main", "workers.resolveDurableObject", [
+        doRef.source,
+        doRef.className,
+        doRef.objectKey,
+      ]);
     }
 
     // Re-subscribe with the same participant ID: replace the roster entry, but
@@ -769,12 +820,13 @@ export class PubSubChannel extends DurableObjectBase {
     await this.publishPresenceEvent(participantId, "join", storedMetadata);
 
     const mode = wantsReplay && sinceId && sinceId > 0 ? "after" : "initial";
-    const envelope = mode === "after"
-      ? await this.channelLog.replayAfter(sinceId!, this.currentReplayContext())
-      : await this.channelLog.replayInitial(
-          wantsReplay ? (replayMessageLimit ?? REPLAY_LIMIT) : 0,
-          this.currentReplayContext(),
-        );
+    const envelope =
+      mode === "after"
+        ? await this.channelLog.replayAfter(sinceId!, this.currentReplayContext())
+        : await this.channelLog.replayInitial(
+            wantsReplay ? (replayMessageLimit ?? REPLAY_LIMIT) : 0,
+            this.currentReplayContext()
+          );
     this.queueReplayEnvelope(participantId, envelope, doRef != null);
 
     if (sessionReplaced) this.redeliverPendingCallsTo(participantId);
@@ -813,7 +865,11 @@ export class PubSubChannel extends DurableObjectBase {
         onFatal
       );
       if (deliverToDo) {
-        void queueDoEnvelope(this.broadcastDeps, subscriberId, { kind: "log", phase: "replay", event });
+        void queueDoEnvelope(this.broadcastDeps, subscriberId, {
+          kind: "log",
+          phase: "replay",
+          event,
+        });
       }
     }
     for (const snapshot of envelope.snapshots) {
@@ -823,12 +879,21 @@ export class PubSubChannel extends DurableObjectBase {
         participants: snapshot.participants,
         ts: snapshot.ts,
       };
-      void queueEmit(this.broadcastDeps, subscriberId, { channelId: this.objectKey, message }, onFatal);
+      void queueEmit(
+        this.broadcastDeps,
+        subscriberId,
+        { channelId: this.objectKey, message },
+        onFatal
+      );
       if (deliverToDo) {
         void queueDoEnvelope(this.broadcastDeps, subscriberId, message);
       }
     }
-    const readyMessage = { kind: "control" as const, type: "ready" as const, ready: envelope.ready };
+    const readyMessage = {
+      kind: "control" as const,
+      type: "ready" as const,
+      ready: envelope.ready,
+    };
     void queueEmit(
       this.broadcastDeps,
       subscriberId,
@@ -898,7 +963,7 @@ export class PubSubChannel extends DurableObjectBase {
     for (const row of rows) {
       const transportCallId = row["transport_call_id"] as string;
       const invocationId = row["invocation_id"] as string;
-      const turnId = row["turn_id"] ? row["turn_id"] as string : undefined;
+      const turnId = row["turn_id"] ? (row["turn_id"] as string) : undefined;
       const callerId = row["caller_id"] as string;
       const methodName = row["method"] as string;
       const argsRaw = row["args"] as string | null;
@@ -907,11 +972,22 @@ export class PubSubChannel extends DurableObjectBase {
         try {
           args = JSON.parse(argsRaw);
         } catch (err) {
-          console.warn(`[Channel] redeliver: failed to parse args for transportCallId=${transportCallId}:`, err);
+          console.warn(
+            `[Channel] redeliver: failed to parse args for transportCallId=${transportCallId}:`,
+            err
+          );
           continue;
         }
       }
-      const payload = this.invocationStartedPayload(callerId, participantId, invocationId, transportCallId, turnId, methodName, args);
+      const payload = this.invocationStartedPayload(
+        callerId,
+        participantId,
+        invocationId,
+        transportCallId,
+        turnId,
+        methodName,
+        args
+      );
       const senderMetadata = this.getSenderMetadata(callerId);
       const ts = Date.now();
       const event: ChannelEvent = {
@@ -959,9 +1035,19 @@ export class PubSubChannel extends DurableObjectBase {
           : `Target ${targetId} was replaced by a new session before the call completed`;
     for (const { transportCallId, invocationId, turnId, callerId } of cancelled) {
       try {
-        await this.deliverCallResult(callerId, invocationId, transportCallId, turnId, { error: errorMessage }, true);
+        await this.deliverCallResult(
+          callerId,
+          invocationId,
+          transportCallId,
+          turnId,
+          { error: errorMessage },
+          true
+        );
       } catch (err) {
-        console.warn(`[Channel] failPendingCallsTargeting: deliver failed for ${transportCallId}:`, err);
+        console.warn(
+          `[Channel] failPendingCallsTargeting: deliver failed for ${transportCallId}:`,
+          err
+        );
       }
     }
     console.log(
@@ -1015,13 +1101,16 @@ export class PubSubChannel extends DurableObjectBase {
     if (invocationResult) {
       if (invocationResult.complete) {
         const pending = this.sql
-          .exec(`SELECT transport_call_id FROM pending_calls WHERE transport_call_id = ?`, invocationResult.transportCallId)
+          .exec(
+            `SELECT transport_call_id FROM pending_calls WHERE transport_call_id = ?`,
+            invocationResult.transportCallId
+          )
           .toArray();
         if (pending.length > 0) {
           const resultId = await this.handleMethodResult(
             invocationResult.transportCallId,
             invocationResult.content,
-            invocationResult.isError,
+            invocationResult.isError
           );
           if (idempotencyKey && resultId !== undefined) {
             this.sql.exec(
@@ -1045,8 +1134,8 @@ export class PubSubChannel extends DurableObjectBase {
       payload &&
       typeof payload === "object" &&
       !Array.isArray(payload) &&
-      (((payload as AgenticEvent).kind === "messageType.registered") ||
-        ((payload as AgenticEvent).kind === "messageType.cleared")) &&
+      ((payload as AgenticEvent).kind === "messageType.registered" ||
+        (payload as AgenticEvent).kind === "messageType.cleared") &&
       !registryMutation
     ) {
       throw new Error(`Invalid registry payload for ${(payload as AgenticEvent).kind}`);
@@ -1057,7 +1146,7 @@ export class PubSubChannel extends DurableObjectBase {
         payload as AgenticEvent,
         participantId,
         senderMetadata,
-        registryMutation,
+        registryMutation
       );
       if (idempotencyKey) {
         this.sql.exec(
@@ -1277,7 +1366,7 @@ export class PubSubChannel extends DurableObjectBase {
     const cachedState = this.sql
       .exec(
         `SELECT updated_at_seq, cleared_at_seq FROM message_types WHERE type_id = ? LIMIT 1`,
-        typeId,
+        typeId
       )
       .toArray()[0];
     if (
@@ -1293,7 +1382,7 @@ export class PubSubChannel extends DurableObjectBase {
          WHERE type_id = ? AND definition_json IS NOT NULL
            AND updated_at_seq > COALESCE(cleared_at_seq, -1)
          LIMIT 1`,
-        typeId,
+        typeId
       )
       .toArray();
     if (rows.length > 0) {
@@ -1310,18 +1399,22 @@ export class PubSubChannel extends DurableObjectBase {
 
   async adminInspectSchema() {
     this.assertAdminCaller("adminInspectSchema");
-    const tables = ["participants", "pending_calls", "dedup_keys", "message_types"].map((table) => ({
-      table,
-      columns: this.sql.exec(`PRAGMA table_info(${table})`).toArray(),
-    }));
-    const indexes = ["participants", "pending_calls", "dedup_keys", "message_types"].flatMap((table) => {
-      const list = this.sql.exec(`PRAGMA index_list(${table})`).toArray();
-      return list.map((idx) => ({
+    const tables = ["participants", "pending_calls", "dedup_keys", "message_types"].map(
+      (table) => ({
         table,
-        ...idx,
-        columns: this.sql.exec(`PRAGMA index_info(${idx["name"] as string})`).toArray(),
-      }));
-    });
+        columns: this.sql.exec(`PRAGMA table_info(${table})`).toArray(),
+      })
+    );
+    const indexes = ["participants", "pending_calls", "dedup_keys", "message_types"].flatMap(
+      (table) => {
+        const list = this.sql.exec(`PRAGMA index_list(${table})`).toArray();
+        return list.map((idx) => ({
+          table,
+          ...idx,
+          columns: this.sql.exec(`PRAGMA index_info(${idx["name"] as string})`).toArray(),
+        }));
+      }
+    );
     const localEnvelopeTables = this.sql
       .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_envelopes'`)
       .toArray();
@@ -1337,18 +1430,26 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  async adminInspectLog(opts: {
-    afterId?: number;
-    beforeId?: number;
-    limit?: number;
-    includePresence?: boolean;
-  } = {}) {
+  async adminInspectLog(
+    opts: {
+      afterId?: number;
+      beforeId?: number;
+      limit?: number;
+      includePresence?: boolean;
+    } = {}
+  ) {
     this.assertAdminCaller("adminInspectLog");
     const rows = await this.channelLog.inspectRows(opts);
     const firstId = rows[0]?.["seq"] as number | undefined;
     const lastId = rows[rows.length - 1]?.["seq"] as number | undefined;
-    const before = firstId != null ? await this.channelLog.replayBefore(firstId, 1, this.currentReplayContext()) : null;
-    const after = lastId != null ? await this.channelLog.replayAfter(lastId, this.currentReplayContext()) : null;
+    const before =
+      firstId != null
+        ? await this.channelLog.replayBefore(firstId, 1, this.currentReplayContext())
+        : null;
+    const after =
+      lastId != null
+        ? await this.channelLog.replayAfter(lastId, this.currentReplayContext())
+        : null;
     return {
       rows,
       hasMoreBefore: (before?.logEvents.length ?? 0) > 0,
@@ -1366,7 +1467,10 @@ export class PubSubChannel extends DurableObjectBase {
     const envelope =
       opts.beforeSeq != null
         ? await this.getReplayBefore(opts.beforeSeq, opts.rootLimit)
-        : await this.channelLog.replayInitial(opts.rootLimit ?? REPLAY_LIMIT, this.currentReplayContext());
+        : await this.channelLog.replayInitial(
+            opts.rootLimit ?? REPLAY_LIMIT,
+            this.currentReplayContext()
+          );
     return {
       logEvents: envelope.logEvents,
       ready: envelope.ready,
@@ -1378,16 +1482,23 @@ export class PubSubChannel extends DurableObjectBase {
     const issues: Array<{ code: string; message: string; rowId?: number }> = [];
     const schema = await this.adminInspectSchema();
     for (const invariant of schema.invariants) {
-      if (!invariant.ok) issues.push({ code: "schema", message: `schema invariant failed: ${invariant.name}` });
+      if (!invariant.ok)
+        issues.push({ code: "schema", message: `schema invariant failed: ${invariant.name}` });
     }
-    const rows = await this.channelLog.inspectRows({ limit: Math.min(Math.max(opts.rootLimit ?? 10000, 1), 100000) });
+    const rows = await this.channelLog.inspectRows({
+      limit: Math.min(Math.max(opts.rootLimit ?? 10000, 1), 100000),
+    });
     for (const row of rows) {
       const rowId = row["seq"] as number;
       try {
         const parsed = JSON.parse(row["payload"] as string);
         if (row["payload_kind"] === AGENTIC_EVENT_PAYLOAD_KIND) {
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            issues.push({ code: "agentic-envelope", message: "agentic envelope payload is invalid", rowId });
+            issues.push({
+              code: "agentic-envelope",
+              message: "agentic envelope payload is invalid",
+              rowId,
+            });
           }
         }
       } catch {
@@ -1420,14 +1531,39 @@ export class PubSubChannel extends DurableObjectBase {
     const transportCallId = opts?.transportCallId ?? callId;
     const invocationId = opts?.invocationId ?? callId;
     const turnId = opts?.turnId;
-    const deadlineAt = opts?.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
-    storeCall(this.sql, transportCallId, invocationId, turnId, callerPid, targetPid, method, args, deadlineAt);
+    const deadlineAt =
+      opts?.timeoutMs && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
+    storeCall(
+      this.sql,
+      transportCallId,
+      invocationId,
+      turnId,
+      callerPid,
+      targetPid,
+      method,
+      args,
+      deadlineAt
+    );
     this.scheduleNextAlarm();
-    const payload = this.invocationStartedPayload(callerPid, targetPid, invocationId, transportCallId, turnId, method, args);
+    const payload = this.invocationStartedPayload(
+      callerPid,
+      targetPid,
+      invocationId,
+      transportCallId,
+      turnId,
+      method,
+      args
+    );
     const senderMetadata = this.getSenderMetadata(callerPid);
-    const callEvent = await this.appendLogEvent(AGENTIC_EVENT_PAYLOAD_KIND, payload, callerPid, senderMetadata, {
-      messageId: invocationId,
-    });
+    const callEvent = await this.appendLogEvent(
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      payload,
+      callerPid,
+      senderMetadata,
+      {
+        messageId: invocationId,
+      }
+    );
     broadcast(this.broadcastDeps, callEvent, { kind: "log", phase: "live" }, callerPid);
 
     // Deliver to target
@@ -1453,16 +1589,25 @@ export class PubSubChannel extends DurableObjectBase {
     if (t["transport"] === "do") {
       // Deliver to DO target via RPC call
       try {
-        const result = await this.rpc.call(
-          targetPid,
-          "onMethodCall",
-          [this.objectKey, transportCallId, method, args, { invocationId, turnId }]
-        );
+        const result = await this.rpc.call(targetPid, "onMethodCall", [
+          this.objectKey,
+          transportCallId,
+          method,
+          args,
+          { invocationId, turnId },
+        ]);
         // Method returned a result — deliver to caller
         const pending = consumeCall(this.sql, transportCallId);
         if (pending) {
           const res = result as { result: unknown; isError?: boolean };
-          await this.deliverCallResult(callerPid, pending.invocationId, pending.transportCallId, pending.turnId, res.result, !!res.isError);
+          await this.deliverCallResult(
+            callerPid,
+            pending.invocationId,
+            pending.transportCallId,
+            pending.turnId,
+            res.result,
+            !!res.isError
+          );
         }
       } catch (err) {
         const pending = consumeCall(this.sql, transportCallId);
@@ -1494,7 +1639,7 @@ export class PubSubChannel extends DurableObjectBase {
     if (!pending) {
       console.warn(
         `[Channel] Ignoring invocation result without pending call: ` +
-        `channel=${this.objectKey} transportCallId=${transportCallId} isError=${isError}`,
+          `channel=${this.objectKey} transportCallId=${transportCallId} isError=${isError}`
       );
       return undefined;
     }
@@ -1504,7 +1649,7 @@ export class PubSubChannel extends DurableObjectBase {
       pending.transportCallId,
       pending.turnId,
       content,
-      isError,
+      isError
     );
     this.scheduleNextAlarm();
     return resultId;
@@ -1524,7 +1669,7 @@ export class PubSubChannel extends DurableObjectBase {
         cancelled.callerId,
         providerId,
         cancelled.transportCallId,
-        cancelled.turnId,
+        cancelled.turnId
       );
       const event = await this.appendLogEvent(
         AGENTIC_EVENT_PAYLOAD_KIND,
@@ -1533,7 +1678,7 @@ export class PubSubChannel extends DurableObjectBase {
           cancelled.invocationId,
           cancelled.transportCallId,
           cancelled.turnId,
-          "cancelled",
+          "cancelled"
         ),
         "system"
       );
@@ -1555,7 +1700,7 @@ export class PubSubChannel extends DurableObjectBase {
       cancelled.callerId,
       cancelled.targetId,
       cancelled.transportCallId,
-      cancelled.turnId,
+      cancelled.turnId
     );
     const event = await this.appendLogEvent(
       AGENTIC_EVENT_PAYLOAD_KIND,
@@ -1564,7 +1709,7 @@ export class PubSubChannel extends DurableObjectBase {
         cancelled.invocationId,
         cancelled.transportCallId,
         cancelled.turnId,
-        reason ?? "timed out",
+        reason ?? "timed out"
       ),
       "system"
     );
@@ -1579,17 +1724,23 @@ export class PubSubChannel extends DurableObjectBase {
     result: unknown,
     isError: boolean
   ): Promise<number | undefined> {
-    const caller = this.sql
-      .exec(`SELECT id FROM participants WHERE id = ?`, callerId)
-      .toArray();
-
-    if (caller.length === 0) return undefined;
+    const caller = this.sql.exec(`SELECT id FROM participants WHERE id = ?`, callerId).toArray();
+    const callerPresent = caller.length > 0;
 
     // Persist and broadcast the result as the single canonical invocation completion path.
     await this.ensureMethodRoot(invocationId, callerId, undefined, transportCallId, turnId);
-    const payload = this.invocationResultPayload(callerId, invocationId, transportCallId, turnId, result, isError ?? false);
+    const payload = this.invocationResultPayload(
+      callerId,
+      invocationId,
+      transportCallId,
+      turnId,
+      result,
+      isError ?? false
+    );
     const event = await this.appendLogEvent(AGENTIC_EVENT_PAYLOAD_KIND, payload, callerId);
-    broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, callerId);
+    if (callerPresent) {
+      broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, callerId);
+    }
     return event.id;
   }
 
@@ -1670,10 +1821,16 @@ export class PubSubChannel extends DurableObjectBase {
   private async timeoutExpiredPendingCalls(): Promise<void> {
     const now = Date.now();
     const rows = this.sql
-      .exec(`SELECT transport_call_id FROM pending_calls WHERE deadline_at IS NOT NULL AND deadline_at <= ?`, now)
+      .exec(
+        `SELECT transport_call_id FROM pending_calls WHERE deadline_at IS NOT NULL AND deadline_at <= ?`,
+        now
+      )
       .toArray();
     for (const row of rows) {
-      await this.timeoutMethodCall(row["transport_call_id"] as string, "Channel method deadline expired");
+      await this.timeoutMethodCall(
+        row["transport_call_id"] as string,
+        "Channel method deadline expired"
+      );
     }
   }
 

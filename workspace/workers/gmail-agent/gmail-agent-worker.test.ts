@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { GmailClient, GmailMessage, GmailThread } from "@workspace/gmail";
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
-import { TrajectoryVesselBase } from "@workspace/agentic-do";
+import { AgentWorkerBase } from "@workspace/agentic-do";
 
 import { GmailAgentWorker } from "./gmail-agent-worker.js";
 
@@ -33,6 +33,7 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     event: { kind?: string; payload?: unknown };
     opts?: unknown;
   }> = [];
+  signals: Array<{ participantId: string; content: string; type?: string }> = [];
   replayEvents: Array<{
     id: number;
     type: string;
@@ -80,6 +81,14 @@ class TestGmailAgentWorker extends GmailAgentWorker {
   };
   sent = vi.fn(async (params: unknown) => ({ id: "sent-1", threadId: "thr-1", params }));
   draftBodies = vi.fn(async () => "Thanks for the context. I will follow up shortly.");
+  useBaseDraftGeneration = false;
+  rpcCall = vi.fn(
+    async (..._args: unknown[]): Promise<{ id: string } | null> => ({ id: "cred-1" })
+  );
+
+  protected override get rpc(): never {
+    return { call: this.rpcCall } as never;
+  }
 
   protected override createGmailClient(): GmailClient {
     return {
@@ -99,7 +108,13 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     };
   }
 
-  protected override generateDraftReplyBody(): Promise<string> {
+  protected override generateDraftReplyBody(
+    channelId: string,
+    thread: GmailThread
+  ): Promise<string> {
+    if (this.useBaseDraftGeneration) {
+      return super.generateDraftReplyBody(channelId, thread);
+    }
     return this.draftBodies();
   }
 
@@ -119,6 +134,9 @@ class TestGmailAgentWorker extends GmailAgentWorker {
         this.published.push({ participantId, event, opts });
         return { id: this.published.length };
       },
+      sendSignal: async (participantId: string, content: string, type?: string) => {
+        this.signals.push({ participantId, content, type });
+      },
     } as never;
   }
 
@@ -134,6 +152,14 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     );
   }
 
+  updateSubscriptionConfig(channelId: string, config: Record<string, unknown>) {
+    this.sql.exec(
+      `UPDATE subscriptions SET config = ? WHERE channel_id = ?`,
+      JSON.stringify(config),
+      channelId
+    );
+  }
+
   respondPolicy(channelId: string) {
     return this.getRespondPolicy(channelId);
   }
@@ -145,14 +171,26 @@ class TestGmailAgentWorker extends GmailAgentWorker {
   participant() {
     return this.getParticipantInfo("ch-1");
   }
+
+  model(channelId = "ch-1") {
+    return this.getModel(channelId);
+  }
+
+  toolAllowed(toolName: string) {
+    return this.getRunnerToolFilter("ch-1")?.(toolName);
+  }
+
+  async debug(channelId = "ch-1") {
+    return this.getDebugState(channelId);
+  }
 }
 
 describe("GmailAgentWorker", () => {
   it("inherits the base vessel schema version so base-table migrations run", () => {
-    expect(GmailAgentWorker.schemaVersion).toBe(TrajectoryVesselBase.schemaVersion);
+    expect(GmailAgentWorker.schemaVersion).toBe(AgentWorkerBase.schemaVersion);
   });
 
-  it("advertises the gmail participant and strict mention policy", async () => {
+  it("advertises Gmail and standard agent methods with strict mention policy", async () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
@@ -163,7 +201,80 @@ describe("GmailAgentWorker", () => {
       type: "agent",
     });
     expect(worker.participant().methods?.map((method) => method.name)).toContain("checkNow");
+    expect(worker.participant().methods?.map((method) => method.name)).toContain(
+      "connectModelCredential"
+    );
+    expect(worker.participant().methods?.map((method) => method.name)).toContain(
+      "getAgentSettings"
+    );
     expect(worker.prompt("ch-1").systemPrompt).toContain("Gmail agent");
+  });
+
+  it("inherits model credential methods and honors configured model overrides", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+    worker.seedSubscription();
+    worker.updateSubscriptionConfig("ch-1", {
+      handle: "gmail",
+      model: "anthropic:claude-sonnet-4-6",
+    });
+
+    expect(worker.model()).toBe("anthropic:claude-sonnet-4-6");
+    worker.updateSubscriptionConfig("ch-1", {
+      handle: "gmail",
+      model: "openai-codex:gpt-5.5",
+    });
+    await expect(
+      worker.onMethodCall("ch-1", "call-1", "connectModelCredential", {
+        providerId: "openai-codex",
+        browserOpenMode: "external",
+      })
+    ).resolves.toMatchObject({ result: { id: "cred-1" } });
+    expect(worker.rpcCall).toHaveBeenCalledWith("main", "credentials.connect", [
+      expect.objectContaining({
+        flow: expect.objectContaining({ type: "oauth2-auth-code-pkce" }),
+      }),
+    ]);
+  });
+
+  it("keeps base built-in tools visible through the Gmail tool filter", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+
+    expect(worker.toolAllowed("set_title")).toBe(true);
+    expect(worker.toolAllowed("gmail_checkInbox")).toBe(true);
+    expect(worker.toolAllowed("eval")).toBe(false);
+  });
+
+  it("emits a connect-only credential card for one-shot draft generation without entering external wait", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+    worker.seedSubscription();
+    worker.useBaseDraftGeneration = true;
+    worker.rpcCall.mockImplementation(async (...args: unknown[]) => {
+      const method = args[1];
+      if (method === "credentials.resolveCredential") return null;
+      return { id: "cred-1" };
+    });
+
+    const result = await worker.onMethodCall("ch-1", "call-1", "draftReply", { threadId: "thr-1" });
+
+    expect(result).toMatchObject({
+      isError: true,
+      result: {
+        error: "No URL-bound model credential is configured for model provider: openai-codex",
+      },
+    });
+    const inlineUi = worker.signals.find((signal) => signal.type === "inline_ui");
+    expect(inlineUi).toBeDefined();
+    expect(JSON.parse(inlineUi!.content).props).toMatchObject({
+      providerId: "openai-codex",
+      resumeAfterConnect: false,
+    });
+    expect(
+      ((await worker.debug())["persisted"] as { modelCredentialInterruptions?: unknown[] })
+        .modelCredentialInterruptions
+    ).toEqual([]);
   });
 
   it("fetches sanitized thread contents for renderer expansion", async () => {

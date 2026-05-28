@@ -214,11 +214,19 @@ function parseRecord(value: string | null | undefined): JsonRecord {
 }
 
 function readOnlySql(sql: string): boolean {
-  const verb = sql
-    .trimStart()
-    .match(/^[A-Za-z]+/u)?.[0]
-    ?.toUpperCase();
-  return verb === "SELECT" || verb === "EXPLAIN" || verb === "PRAGMA";
+  const normalized = sql
+    .replace(/\/\*[\s\S]*?\*\//gu, " ")
+    .replace(/--[^\n\r]*/gu, " ")
+    .replace(/'(?:''|[^'])*'/gu, "''")
+    .replace(/"(?:[^"]|"")*"/gu, '""')
+    .trimStart();
+  const verb = normalized.match(/^[A-Za-z]+/u)?.[0]?.toUpperCase();
+  if (verb === "SELECT" || verb === "EXPLAIN" || verb === "PRAGMA") return true;
+  if (verb !== "WITH") return false;
+  if (!/\bSELECT\b/iu.test(normalized)) return false;
+  return !/\b(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|VACUUM|ATTACH|DETACH)\b/iu.test(
+    normalized
+  );
 }
 
 function quoteIdentifier(identifier: string): string {
@@ -938,12 +946,30 @@ export class GadWorkspaceDO extends DurableObjectBase {
       envelope: ChannelEnvelope;
     }> = [];
     const now = nowIso();
+    const openedTurnKeys = new Set(
+      (
+        this.sql
+          .exec(
+            `SELECT turn_id FROM trajectory_events
+             WHERE branch_id = ? AND kind = 'turn.opened' AND turn_id IS NOT NULL`,
+            input.branchId
+          )
+          .toArray() as JsonRecord[]
+      ).map((row) => `${input.branchId}:${String(row["turn_id"])}`)
+    );
 
     const prepareEvent = async (item: TrajectoryAppendItem): Promise<TrajectoryEvent> => {
       const parsed = sanitizeAgenticEventParticipantRefs(
         storedAgenticEventSchema.parse(item.event) as AgenticEvent
       );
       assertAgenticEventStoredValuesEncoded(parsed);
+      if (parsed.kind === "turn.opened" && parsed.turnId) {
+        const key = `${input.branchId}:${parsed.turnId}`;
+        if (openedTurnKeys.has(key)) {
+          throw new Error(`duplicate turn.opened for turn ${parsed.turnId}`);
+        }
+        openedTurnKeys.add(key);
+      }
       const eventId = item.eventId ?? crypto.randomUUID();
       const eventHash = await computeEventHash({
         prevEventHash,
@@ -2189,6 +2215,57 @@ export class GadWorkspaceDO extends DurableObjectBase {
       }
     }
 
+    for (const turn of this.sql
+      .exec(
+        `SELECT branch_id, turn_id, COUNT(*) AS count, MIN(created_at) AS first_opened_at, MAX(created_at) AS last_opened_at
+         FROM trajectory_events
+         WHERE kind = 'turn.opened' AND turn_id IS NOT NULL
+         GROUP BY branch_id, turn_id
+         HAVING COUNT(*) > 1`
+      )
+      .toArray() as JsonRecord[]) {
+      addError("trajectory-turn", "turn has duplicate opened events", {
+        branchId: turn["branch_id"] as JsonValue,
+        turnId: turn["turn_id"] as JsonValue,
+        count: turn["count"] as JsonValue,
+        firstOpenedAt: turn["first_opened_at"] as JsonValue,
+        lastOpenedAt: turn["last_opened_at"] as JsonValue,
+      });
+    }
+
+    for (const row of allTrajectoryRows) {
+      if (row["kind"] !== "external.envelope_published") continue;
+      const payload = parseRecord(asString(row["payload_ref_json"]));
+      const publications = Array.isArray(payload["publications"]) ? payload["publications"] : [];
+      for (const publication of publications) {
+        if (!publication || typeof publication !== "object" || Array.isArray(publication)) continue;
+        const record = publication as JsonRecord;
+        const eventId = asString(record["eventId"]);
+        const channelId = asString(record["channelId"]);
+        const envelopeId = asString(record["envelopeId"]);
+        if (!eventId || !channelId || !envelopeId) continue;
+        const mappingExists =
+          this.sql
+            .exec(
+              `SELECT 1 AS ok FROM trajectory_channel_publications
+               WHERE event_id = ? AND channel_id = ? AND envelope_id = ?
+               LIMIT 1`,
+              eventId,
+              channelId,
+              envelopeId
+            )
+            .toArray().length > 0;
+        if (!mappingExists) {
+          addError("trajectory-channel-publication", "publication mapping is missing", {
+            eventId,
+            channelId,
+            envelopeId,
+            publisherEventId: row["event_id"] as JsonValue,
+          });
+        }
+      }
+    }
+
     for (const publication of this.sql
       .exec(`SELECT * FROM trajectory_channel_publications`)
       .toArray() as JsonRecord[]) {
@@ -2307,8 +2384,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     if (event.kind === "turn.opened" && event.turnId) {
       this.sql.exec(
         `INSERT INTO trajectory_turns (turn_id, branch_id, opened_at, summary)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(branch_id, turn_id) DO UPDATE SET opened_at = excluded.opened_at`,
+         VALUES (?, ?, ?, ?)`,
         event.turnId,
         event.branchId,
         event.createdAt,
@@ -2756,6 +2832,89 @@ export class GadWorkspaceDO extends DurableObjectBase {
       envelope.publishedAt
     );
     this.insertChannelBlobRefs(String(envelope.envelopeId), envelope.payload, "payload");
+    this.applyChannelRosterProjection(envelope);
+  }
+
+  private applyChannelRosterProjection(envelope: ChannelEnvelope): void {
+    if (envelope.payloadKind !== "presence") return;
+    const payload = envelope.payload && typeof envelope.payload === "object"
+      ? (envelope.payload as JsonRecord)
+      : {};
+    const action = asString(payload["action"]);
+    if (action !== "join" && action !== "update" && action !== "leave") return;
+    const from = envelope.from && typeof envelope.from === "object"
+      ? (envelope.from as unknown as JsonRecord)
+      : {};
+    const participantId = asString(from["participantId"]) ?? asString(from["id"]);
+    if (!participantId) return;
+    const metadata = parseRecord(
+      JSON.stringify(payload["metadata"] ?? envelope.metadata ?? from["metadata"] ?? null)
+    );
+    const rolesJson = Object.keys(metadata).length > 0 ? JSON.stringify(sortJson(metadata)) : null;
+    const openRow = this.sql
+      .exec(
+        `SELECT joined_at FROM channel_roster
+         WHERE channel_id = ? AND participant_id = ? AND left_at IS NULL
+         ORDER BY joined_at DESC
+         LIMIT 1`,
+        envelope.channelId,
+        participantId
+      )
+      .toArray()[0] as JsonRecord | undefined;
+
+    if (action === "join") {
+      if (openRow) {
+        if (rolesJson) {
+          this.sql.exec(
+            `UPDATE channel_roster
+             SET roles_json = ?
+             WHERE channel_id = ? AND participant_id = ? AND joined_at = ?`,
+            rolesJson,
+            envelope.channelId,
+            participantId,
+            String(openRow["joined_at"])
+          );
+        }
+        return;
+      }
+      this.sql.exec(
+        `INSERT INTO channel_roster (channel_id, participant_id, joined_at, roles_json)
+         VALUES (?, ?, ?, ?)`,
+        envelope.channelId,
+        participantId,
+        envelope.publishedAt,
+        rolesJson
+      );
+      return;
+    }
+
+    if (!openRow) return;
+    if (action === "update") {
+      if (rolesJson) {
+        this.sql.exec(
+          `UPDATE channel_roster
+           SET roles_json = ?
+           WHERE channel_id = ? AND participant_id = ? AND joined_at = ?`,
+          rolesJson,
+          envelope.channelId,
+          participantId,
+          String(openRow["joined_at"])
+        );
+      }
+      return;
+    }
+
+    this.sql.exec(
+      `UPDATE channel_roster
+       SET left_at = COALESCE(left_at, ?),
+           roles_json = COALESCE(?, roles_json)
+       WHERE channel_id = ? AND participant_id = ? AND joined_at = ?`,
+      envelope.publishedAt,
+      rolesJson,
+      envelope.channelId,
+      participantId,
+      String(openRow["joined_at"])
+    );
   }
 
   private insertChannelBlobRefs(envelopeId: string, value: unknown, purpose: string): void {

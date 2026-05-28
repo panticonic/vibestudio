@@ -39,7 +39,7 @@ export class TestAgentWorker extends AgentWorkerBase {
       name: typeof cfg["name"] === "string" ? cfg["name"] : "Test Agent",
       type: "agent",
       metadata: {},
-      methods: [],
+      methods: this.getStandardAgentMethods(),
     };
   }
 
@@ -65,6 +65,7 @@ export class TestAgentWorker extends AgentWorkerBase {
     };
     const invocationId = `deterministic-eval-${event.messageId || Date.now()}`;
     const messageId = `deterministic-message-${event.messageId || Date.now()}`;
+    const turnId = `deterministic-turn-${event.messageId || Date.now()}`;
     const code =
       typeof config["code"] === "string"
         ? config["code"]
@@ -76,6 +77,9 @@ export class TestAgentWorker extends AgentWorkerBase {
     const delayMs = typeof config["delayMs"] === "number" ? config["delayMs"] : 250;
     await this.maybeWriteVaultSwitchMarker(config, input.content);
 
+    // Deterministic mode is a synthetic channel transcript for tests. It
+    // publishes turn boundaries for chat-state fidelity, but still bypasses
+    // TurnDispatcher and PiRunner by design.
     const publish = async (agenticEvent: AgenticEvent, key: string) => {
       await channel.publishAgenticEvent(participantId, agenticEvent, {
         idempotencyKey: `test-agent:${channelId}:${event.messageId}:${key}`,
@@ -84,8 +88,23 @@ export class TestAgentWorker extends AgentWorkerBase {
 
     await publish(
       {
+        kind: "turn.opened",
+        actor,
+        turnId: turnId as never,
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          summary: "Deterministic agent turn started",
+        },
+        createdAt: now,
+      },
+      "turn-opened"
+    );
+
+    await publish(
+      {
         kind: "invocation.started",
         actor,
+        turnId: turnId as never,
         causality: { invocationId: invocationId as never },
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
@@ -104,6 +123,7 @@ export class TestAgentWorker extends AgentWorkerBase {
       {
         kind: "invocation.output",
         actor,
+        turnId: turnId as never,
         causality: { invocationId: invocationId as never },
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
@@ -120,6 +140,7 @@ export class TestAgentWorker extends AgentWorkerBase {
       {
         kind: "invocation.completed",
         actor,
+        turnId: turnId as never,
         causality: { invocationId: invocationId as never },
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
@@ -139,6 +160,7 @@ export class TestAgentWorker extends AgentWorkerBase {
       {
         kind: "message.completed",
         actor,
+        turnId: turnId as never,
         causality: { messageId: messageId as never },
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
@@ -148,6 +170,20 @@ export class TestAgentWorker extends AgentWorkerBase {
         createdAt: new Date().toISOString(),
       },
       "message-completed"
+    );
+
+    await publish(
+      {
+        kind: "turn.closed",
+        actor,
+        turnId: turnId as never,
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          summary: "Deterministic agent turn completed",
+        },
+        createdAt: new Date().toISOString(),
+      },
+      "turn-closed"
     );
   }
 

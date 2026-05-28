@@ -153,7 +153,10 @@ function summarizeDebugRecord(record: Record<string, unknown>): Record<string, u
   );
 }
 
-function summarizeStoredJsonColumns(json: string | null, refJson: string | null): Record<string, unknown> {
+function summarizeStoredJsonColumns(
+  json: string | null,
+  refJson: string | null
+): Record<string, unknown> {
   if (refJson) {
     try {
       const ref = JSON.parse(refJson) as Record<string, unknown>;
@@ -294,7 +297,7 @@ export default function ModelCredentialRequiredCard({ props, chat }) {
         browserHandoffCallerKind: props.browserHandoffCallerKind,
         browserHandoffPlatform: resolveBrowserHandoffPlatform(),
       });
-      if (props.agentParticipantId) {
+      if (props.resumeAfterConnect !== false && props.agentParticipantId) {
         const result = await chat.callMethod(props.agentParticipantId, "credentialConnected", {
           providerId,
           modelBaseUrl,
@@ -329,7 +332,9 @@ export default function ModelCredentialRequiredCard({ props, chat }) {
         ) : null}
         {status === "done" ? (
           <Callout.Root color="green" size="1">
-            <Callout.Text>Credential connected. Continuing...</Callout.Text>
+            <Callout.Text>
+              {props.resumeAfterConnect === false ? "Credential connected." : "Credential connected. Continuing..."}
+            </Callout.Text>
           </Callout.Root>
         ) : null}
         {error ? (
@@ -886,7 +891,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     }
   }
 
-  private async encodeSuspensionStorage(value: unknown): Promise<{ json: string | null; refJson: string | null }> {
+  private async encodeSuspensionStorage(
+    value: unknown
+  ): Promise<{ json: string | null; refJson: string | null }> {
     if (value === undefined) return { json: null, refJson: null };
     let json: string;
     try {
@@ -899,7 +906,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     }
 
     try {
-      const blob = await this.rpc.call<{ digest: string; size: number }>("main", "blobstore.putText", [json]);
+      const blob = await this.rpc.call<{ digest: string; size: number }>(
+        "main",
+        "blobstore.putText",
+        [json]
+      );
       const ref = {
         protocol: "natstack.blob-ref.v1",
         digest: blob.digest,
@@ -910,11 +921,14 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       return { json: null, refJson: JSON.stringify(ref) };
     } catch (err) {
       this.recordLastError("channel_method.suspension.result_blob", err);
-      return { json: JSON.stringify({
-        omitted: true,
-        reason: "large suspension result could not be stored",
-        originalBytes: utf8Bytes(json),
-      }), refJson: null };
+      return {
+        json: JSON.stringify({
+          omitted: true,
+          reason: "large suspension result could not be stored",
+          originalBytes: utf8Bytes(json),
+        }),
+        refJson: null,
+      };
     }
   }
 
@@ -1333,8 +1347,21 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     intent: MethodSuspensionTransitionIntent
   ): void {
     const allowed: Record<MethodSuspensionDeliveryStatus, MethodSuspensionDeliveryStatus[]> = {
-      pending: ["delivered_live", "recovering", "superseded", "cancelled", "dispatch_failed", "ignored"],
-      delivered_live: ["recovering", "transcript_admitted", "superseded", "cancelled", "delivered_live"],
+      pending: [
+        "delivered_live",
+        "recovering",
+        "superseded",
+        "cancelled",
+        "dispatch_failed",
+        "ignored",
+      ],
+      delivered_live: [
+        "recovering",
+        "transcript_admitted",
+        "superseded",
+        "cancelled",
+        "delivered_live",
+      ],
       recovering: ["recovered", "stale", "recovery_error", "delivered_live", "cancelled"],
       transcript_admitted: ["transcript_admitted"],
       recovered: ["recovered"],
@@ -1362,22 +1389,24 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (row.deliveryStatus !== from) return false;
     this.assertSuspensionTransition(from, to, intent);
     const now = Date.now();
-    const updated = this.sql.exec(
-      `UPDATE agent_method_suspensions
+    const updated = this.sql
+      .exec(
+        `UPDATE agent_method_suspensions
          SET delivery_status = ?,
              recovery_error = CASE WHEN ? = 1 THEN ? ELSE recovery_error END,
              recovered_entry_id = COALESCE(?, recovered_entry_id),
              updated_at = ?
          WHERE transport_call_id = ? AND delivery_status = ?
          RETURNING transport_call_id`,
-      to,
-      opts.recoveryError !== undefined ? 1 : 0,
-      opts.recoveryError ?? null,
-      opts.recoveredEntryId ?? null,
-      now,
-      callId,
-      from
-    ).toArray();
+        to,
+        opts.recoveryError !== undefined ? 1 : 0,
+        opts.recoveryError ?? null,
+        opts.recoveredEntryId ?? null,
+        now,
+        callId,
+        from
+      )
+      .toArray();
     return updated.length === 1;
   }
 
@@ -1411,7 +1440,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       );
       return false;
     }
-    const resolvedTurnId = opts.turnId ?? open?.turnId ?? this.currentTurnIdForChannel(opts.channelId);
+    const resolvedTurnId =
+      opts.turnId ?? open?.turnId ?? this.currentTurnIdForChannel(opts.channelId);
     if (!resolvedTurnId) {
       throw new Error(
         `Cannot record ${opts.kind} suspension ${opts.transportCallId} without a turn_id`
@@ -1779,9 +1809,15 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const message = error instanceof Error ? error.message : String(error);
     const row = this.loadMethodSuspension(callId);
     if (!row) return;
-    this.markSuspensionDeliveryStatus(callId, row.deliveryStatus, "recovery_error", "resume_failed", {
-      recoveryError: message,
-    });
+    this.markSuspensionDeliveryStatus(
+      callId,
+      row.deliveryStatus,
+      "recovery_error",
+      "resume_failed",
+      {
+        recoveryError: message,
+      }
+    );
   }
 
   private extractResumeToolInput(row: MethodSuspensionRow): unknown {
@@ -1862,7 +1898,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     runner: PiRunner,
     row: MethodSuspensionRow
   ): Promise<AgentMessage> {
-    const result = await this.hydrateStoredTransportValue(this.parseSuspensionJson(row.resultJson, row.resultRefJson));
+    const result = await this.hydrateStoredTransportValue(
+      this.parseSuspensionJson(row.resultJson, row.resultRefJson)
+    );
     if (row.kind === "channelMethod") {
       const toolResult =
         row.resultIsError === 1 ? methodErrorResult(result) : toAgentToolResult(result);
@@ -1916,10 +1954,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   ): Promise<RecoveryStaleDiagnostic | null> {
     const invocationOpen = runner.isInvocationOpen(row.invocationId);
     const hasToolResult = await runner.hasToolResult(row.invocationId);
-    if (
-      !invocationOpen &&
-      hasToolResult
-    ) {
+    if (!invocationOpen && hasToolResult) {
       return {
         reason: "invocation closed",
         invocationOpen,
@@ -2166,11 +2201,17 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           this.markStale(chosen.transportCallId, "missing_turn_metadata");
           continue;
         }
-        const cursorEntryId = chosen.recoveredEntryId ?? (await runner.session?.getLeafId().catch(() => null)) ?? null;
+        const cursorEntryId =
+          chosen.recoveredEntryId ?? (await runner.session?.getLeafId().catch(() => null)) ?? null;
         this.transitionTurn(chosen.turnId, ["waiting_external", "running_model"], "continuing", {
           resumeCursorEntryId: cursorEntryId,
         });
-        this.submitRecoveryContinue(channelId, runner, "method_suspension_recovered", chosen.turnId);
+        this.submitRecoveryContinue(
+          channelId,
+          runner,
+          "method_suspension_recovered",
+          chosen.turnId
+        );
       }
     }
   }
@@ -2273,8 +2314,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const descriptor = this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId));
     const code = (error as { code?: unknown } | null)?.code;
     const message = error instanceof Error ? error.message : String(error);
-    const content =
-      `Agent turn failed while ${workKind === "continue" ? "continuing" : "running"}: ${message}`;
+    const content = `Agent turn failed while ${workKind === "continue" ? "continuing" : "running"}: ${message}`;
     await this.createChannelClient(channelId)
       .send(participantId, crypto.randomUUID(), content, {
         senderMetadata: {
@@ -2371,7 +2411,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
             )
           );
           const message =
-            payload && typeof payload === "object" && typeof (payload as { message?: unknown }).message === "string"
+            payload &&
+            typeof payload === "object" &&
+            typeof (payload as { message?: unknown }).message === "string"
               ? (payload as { message: string }).message
               : typeof payload === "string"
                 ? payload
@@ -2672,7 +2714,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     return colonIdx >= 0 ? model.slice(0, colonIdx) : model;
   }
 
-  protected getApiKeyForChannel(channelId: string): () => Promise<string> {
+  protected getApiKeyForChannel(
+    channelId: string,
+    opts?: { resumeCurrentTurnOnMissingCredential?: boolean }
+  ): () => Promise<string> {
     const providerId = this.getModelProviderId(channelId);
     return async () => {
       const modelBaseUrl = this.getModelBaseUrl(channelId);
@@ -2709,17 +2754,22 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           providerId,
           modelBaseUrl,
         });
-        const credentialTurnId = this.transitionCurrentTurnToWaiting(
-          channelId,
-          this.currentTurnIdForChannel(channelId) ?? undefined
-        );
-        this.queueModelCredentialInterruptionRecord(
-          channelId,
-          providerId,
-          modelBaseUrl,
-          credentialTurnId
-        );
-        this.emitModelCredentialRequiredCard(channelId, providerId, modelBaseUrl);
+        const shouldResumeCurrentTurn = opts?.resumeCurrentTurnOnMissingCredential !== false;
+        if (shouldResumeCurrentTurn) {
+          const credentialTurnId = this.transitionCurrentTurnToWaiting(
+            channelId,
+            this.currentTurnIdForChannel(channelId) ?? undefined
+          );
+          this.queueModelCredentialInterruptionRecord(
+            channelId,
+            providerId,
+            modelBaseUrl,
+            credentialTurnId
+          );
+        }
+        this.emitModelCredentialRequiredCard(channelId, providerId, modelBaseUrl, {
+          resumeAfterConnect: shouldResumeCurrentTurn,
+        });
         throw new AgentWorkerError(
           "auth",
           `No URL-bound model credential is configured for model provider: ${providerId}`
@@ -3530,7 +3580,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (entry) {
       this.recordAbort(channelId, "channel-unsubscribe");
       await entry.runner
-        .forceCloseCurrentTurn("channel_unsubscribe", "Agent channel unsubscribed before turn closed")
+        .forceCloseCurrentTurn(
+          "channel_unsubscribe",
+          "Agent channel unsubscribed before turn closed"
+        )
         .catch((err) => {
           this.recordLastError("runner.force_close.unsubscribe", err, channelId);
           this.recordDebugPhase(channelId, "runner.force_close.unsubscribe_failed", {
@@ -3851,7 +3904,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       },
       onTurnPhase: async ({ turnId, phase }) => {
         if (phase !== "model_start") return;
-        this.transitionTurn(turnId, ["starting", "continuing", "waiting_external"], "running_model");
+        this.transitionTurn(
+          turnId,
+          ["starting", "continuing", "waiting_external"],
+          "running_model"
+        );
       },
     });
 
@@ -3971,7 +4028,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       throw new Error("Cannot enter external wait without an active agent turn");
     }
     if (turnId && currentTurnId && turnId !== currentTurnId) {
-      throw new Error(`Cannot enter external wait for turn ${turnId}; active turn is ${currentTurnId}`);
+      throw new Error(
+        `Cannot enter external wait for turn ${turnId}; active turn is ${currentTurnId}`
+      );
     }
     let row = this.loadTurnRun(id);
     if (!row) {
@@ -4581,11 +4640,14 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   private emitModelCredentialRequiredCard(
     channelId: string,
     providerId: string,
-    modelBaseUrl: string
+    modelBaseUrl: string,
+    opts?: { resumeAfterConnect?: boolean }
   ): void {
     const participantId = this.subscriptions.getParticipantId(channelId);
     if (!participantId) return;
-    const key = `${channelId}::model-credential::${providerId}`;
+    const key = `${channelId}::model-credential::${providerId}::${
+      opts?.resumeAfterConnect === false ? "connect-only" : "resume-turn"
+    }`;
     if (this.credentialPromptCardsEmitted.has(key)) return;
     this.credentialPromptCardsEmitted.add(key);
 
@@ -4612,6 +4674,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         browserHandoffCallerId,
         browserHandoffCallerKind: browserHandoffCallerId ? "panel" : undefined,
         browserHandoffPlatform,
+        resumeAfterConnect: opts?.resumeAfterConnect,
         ...(this.getModelCredentialSetupProps(providerId) ?? {}),
       },
     });
@@ -5111,14 +5174,14 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     }
     await entry.runner.session?.moveTo(target.id);
     const turnId = interruption
-      ? this.sql
+      ? (this.sql
           .exec(
             `SELECT turn_id FROM model_credential_interruptions
              WHERE channel_id = ? AND provider_id = ?`,
             channelId,
             providerId
           )
-          .toArray()[0]?.["turn_id"] as string | undefined
+          .toArray()[0]?.["turn_id"] as string | undefined)
       : undefined;
     if (turnId) {
       this.transitionTurn(turnId, ["waiting_external", "starting"], "continuing", {
@@ -5126,7 +5189,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       });
     }
     this.clearModelCredentialInterruption(channelId, providerId);
-    this.credentialPromptCardsEmitted.delete(`${channelId}::model-credential::${providerId}`);
+    this.credentialPromptCardsEmitted.delete(
+      `${channelId}::model-credential::${providerId}::resume-turn`
+    );
+    this.credentialPromptCardsEmitted.delete(
+      `${channelId}::model-credential::${providerId}::connect-only`
+    );
     const dispatcher = this.getOrCreateDispatcher(channelId, entry.runner);
     dispatcher.submitContinue(turnId ? { turnId } : undefined);
     return true;
@@ -5444,7 +5512,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   private summarizeMethodSuspensionUpdateRows(): unknown[] {
     return this.sql
-      .exec(`SELECT * FROM agent_method_suspension_updates ORDER BY received_at DESC LIMIT ?`, DEBUG_RING_LIMIT)
+      .exec(
+        `SELECT * FROM agent_method_suspension_updates ORDER BY received_at DESC LIMIT ?`,
+        DEBUG_RING_LIMIT
+      )
       .toArray()
       .map((row) => ({
         transport_call_id: row["transport_call_id"],
@@ -5684,8 +5755,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const row = this.loadMethodSuspension(transportCallId);
     if (!row) return null;
     return {
-      args: await this.hydrateStoredTransportValue(this.parseSuspensionJson(row.argsJson, row.argsRefJson)),
-      result: await this.hydrateStoredTransportValue(this.parseSuspensionJson(row.resultJson, row.resultRefJson)),
+      args: await this.hydrateStoredTransportValue(
+        this.parseSuspensionJson(row.argsJson, row.argsRefJson)
+      ),
+      result: await this.hydrateStoredTransportValue(
+        this.parseSuspensionJson(row.resultJson, row.resultRefJson)
+      ),
     };
   }
 

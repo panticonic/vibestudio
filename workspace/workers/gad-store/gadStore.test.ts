@@ -84,6 +84,26 @@ describe("GadWorkspaceDO trajectory persistence", () => {
     ).toEqual([]);
   });
 
+  it("allows read-only CTE diagnostics while still blocking writes", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+
+    await expect(
+      call<{ rows: Array<{ value: number }> }>(
+        "query",
+        "WITH nums(value) AS (SELECT 1) SELECT value FROM nums",
+        []
+      )
+    ).resolves.toEqual({ rows: [{ value: 1 }] });
+
+    await expect(
+      call(
+        "query",
+        "WITH doomed(value) AS (SELECT 1) DELETE FROM gad_blobs WHERE digest IN (SELECT value FROM doomed)",
+        []
+      )
+    ).rejects.toThrow("rawSql writes are disabled");
+  });
+
   it("atomically appends trajectory events and strips storage fields from published channel payloads", async () => {
     const { call } = await createTestDO(GadWorkspaceDO);
     const result = await call<any>("appendTrajectoryBatch", {
@@ -224,6 +244,86 @@ describe("GadWorkspaceDO trajectory persistence", () => {
 
     const integrity = await call<{ errors: Array<{ type: string }> }>("checkGadIntegrity", {});
     expect(integrity.errors.filter((error) => error.type === "trajectory-channel-publication")).toEqual([]);
+  });
+
+  it("rejects duplicate turn.opened events for the same branch turn", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "turn-opened-1",
+          event: event("turn.opened", {
+            turnId: "turn-1" as never,
+            createdAt: "2026-05-20T12:00:00.000Z",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              summary: "first open",
+            },
+          }),
+        },
+      ],
+    });
+
+    await expect(
+      call("appendTrajectoryBatch", {
+        trajectoryId: "traj-1",
+        branchId: "main",
+        owner,
+        events: [
+          {
+            eventId: "turn-opened-2",
+            event: event("turn.opened", {
+              turnId: "turn-1" as never,
+              createdAt: "2026-05-20T12:05:00.000Z",
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                summary: "duplicate open",
+              },
+            }),
+          },
+        ],
+      })
+    ).rejects.toThrow("duplicate turn.opened for turn turn-1");
+  });
+
+  it("rejects duplicate turn.opened events within the same append batch", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+
+    await expect(
+      call("appendTrajectoryBatch", {
+        trajectoryId: "traj-1",
+        branchId: "main",
+        owner,
+        events: [
+          {
+            eventId: "turn-opened-1",
+            event: event("turn.opened", {
+              turnId: "turn-1" as never,
+              createdAt: "2026-05-20T12:00:00.000Z",
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                summary: "first open",
+              },
+            }),
+          },
+          {
+            eventId: "turn-opened-2",
+            event: event("turn.opened", {
+              turnId: "turn-1" as never,
+              createdAt: "2026-05-20T12:05:00.000Z",
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                summary: "duplicate open",
+              },
+            }),
+          },
+        ],
+      })
+    ).rejects.toThrow("duplicate turn.opened for turn turn-1");
   });
 
   it("treats replayed matching event ids as idempotent appends", async () => {
@@ -464,6 +564,49 @@ describe("GadWorkspaceDO trajectory persistence", () => {
       hasMoreBefore: true,
       envelopes: [expect.objectContaining({ envelopeId: "env-2" })],
     });
+  });
+
+  it("projects channel presence envelopes into the roster", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+
+    await call("appendChannelEnvelope", {
+      channelId: "channel-1",
+      envelopeId: "env-presence-join",
+      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      payloadKind: "presence",
+      payload: { action: "join", metadata: { name: "User", type: "panel" } },
+      publishedAt: "2026-05-20T12:00:00.000Z",
+    });
+    await call("appendChannelEnvelope", {
+      channelId: "channel-1",
+      envelopeId: "env-presence-update",
+      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      payloadKind: "presence",
+      payload: { action: "update", metadata: { name: "Renamed", type: "panel" } },
+      publishedAt: "2026-05-20T12:01:00.000Z",
+    });
+    await call("appendChannelEnvelope", {
+      channelId: "channel-1",
+      envelopeId: "env-presence-leave",
+      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      payloadKind: "presence",
+      payload: { action: "leave" },
+      publishedAt: "2026-05-20T12:02:00.000Z",
+    });
+
+    const rows = await call<{ rows: Array<Record<string, unknown>> }>(
+      "query",
+      "SELECT participant_id, joined_at, left_at, roles_json FROM channel_roster WHERE channel_id = ?",
+      ["channel-1"]
+    );
+    expect(rows.rows).toEqual([
+      {
+        participant_id: "panel:user",
+        joined_at: "2026-05-20T12:00:00.000Z",
+        left_at: "2026-05-20T12:02:00.000Z",
+        roles_json: JSON.stringify({ name: "Renamed", type: "panel" }),
+      },
+    ]);
   });
 
   it("sanitizes every direct channel envelope append before persistence", async () => {
