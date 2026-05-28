@@ -59,12 +59,13 @@ initPanels:
     stateArgs:
       initialPrompt: |
         Read the system-testing skill docs, then run the full system test suite
-        with test-level parallelism using `allTests()` from
-        `@workspace-skills/system-testing`. If the suite cannot start, fall
-        back to `smokeTests` only to isolate the infrastructure failure. For
-        every failure, inspect the full execution — conversation log, method
-        history, debug events, cleanup diagnostics, and participant state.
-        Output a detailed handoff-ready rundown of all problems encountered.
+        category-by-category using separate eval calls. Within each category,
+        run tests in parallel with concurrency 24. If the suite cannot start,
+        fall back to `smokeTests` only to isolate the infrastructure failure.
+        For every failure, inspect the full execution — conversation log,
+        method history, debug events, cleanup diagnostics, and participant
+        state. Output a detailed handoff-ready rundown of all problems
+        encountered.
       systemPrompt: |
         You are a NatStack system testing agent. Your job is to run tests, diagnose failures,
         and produce a clear report. You do NOT fix bugs — you hand off to a developer.
@@ -76,31 +77,74 @@ initPanels:
         that you run inside eval. Workspace packages are auto-resolved — just write
         the `import` statement.
 
-        Run the full suite with real test-level contention and checkpoint progress
-        after every completed test:
+        Run one eval to initialize the category queue:
+        ```
+        eval({
+          code: `
+            import { allTests, testCategories } from "@workspace-skills/system-testing";
+            const tests = allTests();
+            scope.systemTestingQueue = testCategories(tests);
+            scope.results = {
+              total: 0,
+              passed: 0,
+              failed: 0,
+              errored: 0,
+              skipped: tests.length,
+              duration: 0,
+              results: [],
+            };
+            return { categories: scope.systemTestingQueue, testCount: tests.length };
+          `,
+        })
+        ```
+
+        Then run one category per eval, repeating until the queue is empty. Tests
+        inside the category run concurrently:
         ```
         eval({
           code: `
             import { HeadlessRunner, TestRunner, allTests } from "@workspace-skills/system-testing";
             import { contextId } from "@workspace/runtime";
+            const tests = allTests();
+            const queue = scope.systemTestingQueue ?? [];
+            const category = queue.shift();
+            if (!category) return { done: true, results: scope.results };
             const runner = new HeadlessRunner(contextId);
             const tester = new TestRunner(runner, {
               onTestStart: (t) => console.log("Running: " + t.name + "..."),
               onTestEnd: (t, r) => console.log((r.passed ? "PASS" : "FAIL") + ": " + t.name),
               onTestResult: (_entry, aggregate) => {
-                scope.results = aggregate;
-                console.log("Progress: " + aggregate.total + "/" + allTests().length);
+                console.log("Category progress: " + category + " " + aggregate.total + "/" + tests.filter((t) => t.category === category).length);
               },
               testTimeoutMs: 20 * 60 * 1000,
             });
-            const results = await tester.runSuiteParallel(allTests(), { concurrency: 24 });
-            scope.results = results;
+            const partial = await tester.runSuiteParallel(tests, { category, concurrency: 24 });
+            const aggregate = scope.results ?? {
+              total: 0,
+              passed: 0,
+              failed: 0,
+              errored: 0,
+              skipped: tests.length,
+              duration: 0,
+              results: [],
+            };
+            aggregate.total += partial.total;
+            aggregate.passed += partial.passed;
+            aggregate.failed += partial.failed;
+            aggregate.errored += partial.errored;
+            aggregate.duration += partial.duration;
+            aggregate.results.push(...partial.results);
+            aggregate.skipped = tests.length - aggregate.total;
+            scope.systemTestingQueue = queue;
+            scope.results = aggregate;
             return {
-              total: results.total,
-              passed: results.passed,
-              failed: results.failed,
-              errored: results.errored,
-              skipped: results.skipped,
+              category,
+              remainingCategories: queue.length,
+              total: aggregate.total,
+              passed: aggregate.passed,
+              failed: aggregate.failed,
+              errored: aggregate.errored,
+              skipped: aggregate.skipped,
             };
           `,
         })
