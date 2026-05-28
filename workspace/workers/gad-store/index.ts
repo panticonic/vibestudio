@@ -113,6 +113,70 @@ export interface ChannelEnvelopeInspection {
   publishedAt: string;
 }
 
+export interface PublicationIntegrityInspection {
+  summary: {
+    expectedMappings: number;
+    missingMappings: number;
+    orphanMappings: number;
+    missingPublicationEvents: number;
+    missingPublicationEnvelopes: number;
+    sequenceMismatches: number;
+    channelOriginAgenticEnvelopes: number;
+  };
+  rows: JsonRecord[];
+}
+
+export interface TurnStateInspection {
+  summary: {
+    branches: number;
+    openTurns: number;
+    streamingMessages: number;
+    nonterminalInvocations: number;
+    duplicateOpenedTurns: number;
+  };
+  rows: JsonRecord[];
+}
+
+export interface InvocationStateInspection {
+  summary: {
+    projected: number;
+    startedEvents: number;
+    terminalEvents: number;
+    openProjectedInvocations: number;
+  };
+  rows: JsonRecord[];
+}
+
+export interface ChannelRosterInspection {
+  summary: {
+    rows: number;
+    activeParticipants: number;
+    inactiveParticipants: number;
+  };
+  rows: JsonRecord[];
+}
+
+export interface AgentHealthInspection {
+  channelId: string;
+  branchId: string;
+  generatedAt: string;
+  summary: {
+    ok: boolean;
+    publicationIssues: number;
+    openTurns: number;
+    streamingMessages: number;
+    nonterminalInvocations: number;
+    activeParticipants: number;
+    storageIssues: number;
+  };
+  publicationIntegrity: PublicationIntegrityInspection;
+  turnState: TurnStateInspection;
+  invocationState: InvocationStateInspection;
+  roster: ChannelRosterInspection;
+  envelopes: { rows: ChannelEnvelopeInspection[] };
+  storage: { rows: JsonRecord[] };
+}
+
 export interface ForkChannelLogInput {
   fromChannelId: string;
   toChannelId: string;
@@ -260,15 +324,91 @@ function utf8Bytes(value: string): number {
   return new TextEncoder().encode(value).byteLength;
 }
 
+const SHA256_K = [
+  0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+  0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+  0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+  0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+  0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+  0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+  0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+  0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+];
+
+function rotr32(value: number, shift: number): number {
+  return (value >>> shift) | (value << (32 - shift));
+}
+
+function sha256HexSyncText(text: string): string {
+  const data = new TextEncoder().encode(text);
+  const bitLength = data.length * 8;
+  const totalLength = ((data.length + 9 + 63) >> 6) << 6;
+  const bytes = new Uint8Array(totalLength);
+  bytes.set(data);
+  bytes[data.length] = 0x80;
+  const view = new DataView(bytes.buffer);
+  const high = Math.floor(bitLength / 0x100000000);
+  const low = bitLength >>> 0;
+  view.setUint32(totalLength - 8, high, false);
+  view.setUint32(totalLength - 4, low, false);
+  const hash = [
+    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+  ];
+  const w = new Uint32Array(64);
+  for (let offset = 0; offset < totalLength; offset += 64) {
+    for (let i = 0; i < 16; i += 1) w[i] = view.getUint32(offset + i * 4, false);
+    for (let i = 16; i < 64; i += 1) {
+      const s0 = rotr32(w[i - 15]!, 7) ^ rotr32(w[i - 15]!, 18) ^ (w[i - 15]! >>> 3);
+      const s1 = rotr32(w[i - 2]!, 17) ^ rotr32(w[i - 2]!, 19) ^ (w[i - 2]! >>> 10);
+      w[i] = (w[i - 16]! + s0 + w[i - 7]! + s1) >>> 0;
+    }
+    let [a, b, c, d, e, f, g, h] = hash;
+    for (let i = 0; i < 64; i += 1) {
+      const s1 = rotr32(e!, 6) ^ rotr32(e!, 11) ^ rotr32(e!, 25);
+      const ch = (e! & f!) ^ (~e! & g!);
+      const temp1 = (h! + s1 + ch + SHA256_K[i]! + w[i]!) >>> 0;
+      const s0 = rotr32(a!, 2) ^ rotr32(a!, 13) ^ rotr32(a!, 22);
+      const maj = (a! & b!) ^ (a! & c!) ^ (b! & c!);
+      const temp2 = (s0 + maj) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d! + temp1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temp1 + temp2) >>> 0;
+    }
+    hash[0] = (hash[0]! + a!) >>> 0;
+    hash[1] = (hash[1]! + b!) >>> 0;
+    hash[2] = (hash[2]! + c!) >>> 0;
+    hash[3] = (hash[3]! + d!) >>> 0;
+    hash[4] = (hash[4]! + e!) >>> 0;
+    hash[5] = (hash[5]! + f!) >>> 0;
+    hash[6] = (hash[6]! + g!) >>> 0;
+    hash[7] = (hash[7]! + h!) >>> 0;
+  }
+  return hash.map((word) => word.toString(16).padStart(8, "0")).join("");
+}
+
+function stableSha256Hex(value: unknown): string {
+  const text = JSON.stringify(sortJson(value));
+  return sha256HexSyncText(text);
+}
+
 function summarizeJsonForInspection(value: unknown, depth = 0): unknown {
   if (value == null) return value;
   if (typeof value === "string") {
-    return value.length > 240 ? { type: "string", chars: value.length, preview: value.slice(0, 240) } : value;
+    return value.length > 240
+      ? { type: "string", chars: value.length, preview: value.slice(0, 240) }
+      : value;
   }
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (Array.isArray(value)) {
     const sample = value.slice(0, 20).map((item) => summarizeJsonForInspection(item, depth + 1));
-    return value.length > sample.length ? [...sample, { omittedItems: value.length - sample.length }] : sample;
+    return value.length > sample.length
+      ? [...sample, { omittedItems: value.length - sample.length }]
+      : sample;
   }
   if (typeof value === "object") {
     if (depth >= 4) return { type: "object" };
@@ -327,8 +467,12 @@ function sanitizeChannelEnvelopeInput<T extends ChannelEnvelopeInput>(input: T):
     ...input,
     ...(input.from ? { from: publicParticipantRef(input.from) } : {}),
     ...(input.to !== undefined ? { to: sanitizeEnvelopeAudience(input.to) } : {}),
-    ...(input.payload !== undefined ? { payload: sanitizeChannelPayload(input.payload, input.payloadKind) } : {}),
-    ...(input.metadata !== undefined ? { metadata: publicParticipantMetadata(input.metadata) } : {}),
+    ...(input.payload !== undefined
+      ? { payload: sanitizeChannelPayload(input.payload, input.payloadKind) }
+      : {}),
+    ...(input.metadata !== undefined
+      ? { metadata: publicParticipantMetadata(input.metadata) }
+      : {}),
   };
 }
 
@@ -345,12 +489,14 @@ function sanitizeEnvelopeAudience(
 }
 
 function isAgenticEventPayload(payload: unknown): payload is AgenticEvent {
-  return !!payload &&
+  return (
+    !!payload &&
     typeof payload === "object" &&
     !Array.isArray(payload) &&
     typeof (payload as Record<string, unknown>)["kind"] === "string" &&
     typeof (payload as Record<string, unknown>)["actor"] === "object" &&
-    typeof (payload as Record<string, unknown>)["createdAt"] === "string";
+    typeof (payload as Record<string, unknown>)["createdAt"] === "string"
+  );
 }
 
 function sanitizeRegistryMutation(mutation: RegistryMutationInput): RegistryMutationInput {
@@ -369,15 +515,28 @@ function sanitizeRegistryMutation(mutation: RegistryMutationInput): RegistryMuta
   };
 }
 
-function isActorRefLike(value: unknown): value is { kind: "user" | "agent" | "system" | "panel" | "external"; id: string; metadata?: Record<string, unknown> } {
-  const kind = !!value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)["kind"]
-    : undefined;
-  return !!value &&
+function isActorRefLike(
+  value: unknown
+): value is {
+  kind: "user" | "agent" | "system" | "panel" | "external";
+  id: string;
+  metadata?: Record<string, unknown>;
+} {
+  const kind =
+    !!value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)["kind"]
+      : undefined;
+  return (
+    !!value &&
     typeof value === "object" &&
     !Array.isArray(value) &&
-    (kind === "user" || kind === "agent" || kind === "system" || kind === "panel" || kind === "external") &&
-    typeof (value as Record<string, unknown>)["id"] === "string";
+    (kind === "user" ||
+      kind === "agent" ||
+      kind === "system" ||
+      kind === "panel" ||
+      kind === "external") &&
+    typeof (value as Record<string, unknown>)["id"] === "string"
+  );
 }
 
 function findPrivateParticipantMetadataPath(value: unknown, path = "$"): string | null {
@@ -394,7 +553,11 @@ function findPrivateParticipantMetadataPath(value: unknown, path = "$"): string 
     for (const [index, method] of (record["methods"] as unknown[]).entries()) {
       if (!method || typeof method !== "object" || Array.isArray(method)) continue;
       const methodRecord = method as Record<string, unknown>;
-      if ("parameters" in methodRecord || "returns" in methodRecord || "description" in methodRecord) {
+      if (
+        "parameters" in methodRecord ||
+        "returns" in methodRecord ||
+        "description" in methodRecord
+      ) {
         return `${path}.methods[${index}]`;
       }
     }
@@ -408,7 +571,7 @@ function findPrivateParticipantMetadataPath(value: unknown, path = "$"): string 
 }
 
 export class GadWorkspaceDO extends DurableObjectBase {
-  static override schemaVersion = 13;
+  static override schemaVersion = 14;
 
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
@@ -506,6 +669,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       CREATE TABLE trajectory_messages (
         message_id TEXT NOT NULL,
         branch_id TEXT NOT NULL,
+        turn_id TEXT,
         role TEXT NOT NULL,
         status TEXT NOT NULL,
         started_event_id TEXT,
@@ -529,6 +693,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
       CREATE TABLE trajectory_invocations (
         invocation_id TEXT NOT NULL,
         branch_id TEXT NOT NULL,
+        turn_id TEXT,
         transport_call_id TEXT,
         kind TEXT,
         status TEXT NOT NULL,
@@ -1253,17 +1418,24 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return { rows: rows.slice(0, limit) };
   }
 
-  inspectStorageDiagnostics(input: { rowByteLimit?: number | null; limit?: number | null } = {}): {
+  inspectStorageDiagnostics(
+    input: {
+      rowByteLimit?: number | null;
+      limit?: number | null;
+      branchId?: string | null;
+      channelId?: string | null;
+    } = {}
+  ): {
     rows: JsonRecord[];
   } {
     this.ensureReady();
     const rowByteLimit = input.rowByteLimit ?? 512 * 1024;
     const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
     const rows: JsonRecord[] = [];
-    const collect = (scope: string, sql: string): void => {
+    const collect = (scope: string, sql: string, bindings: SqlBinding[]): void => {
       rows.push(
         ...(this.sql
-          .exec(sql, rowByteLimit, limit)
+          .exec(sql, ...bindings, rowByteLimit, limit)
           .toArray()
           .map((row) => ({
             scope,
@@ -1271,35 +1443,444 @@ export class GadWorkspaceDO extends DurableObjectBase {
           })) as JsonRecord[])
       );
     };
+    const branchWhere = input.branchId ? "AND branch_id = ?" : "";
+    const branchBindings = input.branchId ? [input.branchId] : [];
+    const channelWhere = input.channelId ? "AND channel_id = ?" : "";
+    const channelBindings = input.channelId ? [input.channelId] : [];
     collect(
       "trajectory_events",
-      `SELECT event_id AS id, length(payload_ref_json) AS bytes FROM trajectory_events WHERE length(payload_ref_json) > ? ORDER BY bytes DESC LIMIT ?`
+      `SELECT event_id AS id, length(payload_ref_json) AS bytes
+         FROM trajectory_events
+        WHERE 1 = 1 ${branchWhere}
+          AND length(payload_ref_json) > ?
+        ORDER BY bytes DESC LIMIT ?`,
+      branchBindings
     );
     collect(
       "channel_envelopes",
-      `SELECT envelope_id AS id, length(payload_ref_json) AS bytes FROM channel_envelopes WHERE length(payload_ref_json) > ? ORDER BY bytes DESC LIMIT ?`
+      `SELECT envelope_id AS id, length(payload_ref_json) AS bytes
+         FROM channel_envelopes
+        WHERE 1 = 1 ${channelWhere}
+          AND length(payload_ref_json) > ?
+        ORDER BY bytes DESC LIMIT ?`,
+      channelBindings
     );
     collect(
       "trajectory_invocations",
-      `SELECT invocation_id AS id, MAX(COALESCE(length(request_ref_json), 0), COALESCE(length(result_ref_json), 0)) AS bytes FROM trajectory_invocations WHERE MAX(COALESCE(length(request_ref_json), 0), COALESCE(length(result_ref_json), 0)) > ? ORDER BY bytes DESC LIMIT ?`
+      `SELECT invocation_id AS id,
+              MAX(COALESCE(length(request_ref_json), 0), COALESCE(length(result_ref_json), 0)) AS bytes
+         FROM trajectory_invocations
+        WHERE 1 = 1 ${branchWhere}
+          AND MAX(COALESCE(length(request_ref_json), 0), COALESCE(length(result_ref_json), 0)) > ?
+        ORDER BY bytes DESC LIMIT ?`,
+      branchBindings
     );
+    const missingRefClauses: string[] = [];
+    const missingRefBindings: SqlBinding[] = [];
+    if (input.branchId) {
+      missingRefClauses.push(
+        `EXISTS (
+           SELECT 1 FROM trajectory_events te
+            WHERE refs.owner_kind = 'trajectory'
+              AND te.event_id = refs.owner_id
+              AND te.branch_id = ?
+         )`
+      );
+      missingRefBindings.push(input.branchId);
+    }
+    if (input.channelId) {
+      missingRefClauses.push(
+        `EXISTS (
+           SELECT 1 FROM channel_envelopes ce
+            WHERE refs.owner_kind = 'channel'
+              AND ce.envelope_id = refs.owner_id
+              AND ce.channel_id = ?
+         )`
+      );
+      missingRefBindings.push(input.channelId);
+    }
+    const missingRefScopeWhere = missingRefClauses.length
+      ? `AND (${missingRefClauses.join(" OR ")})`
+      : "";
     rows.push(
       ...(this.sql
         .exec(
           `SELECT 'missing_gad_blob_index' AS scope, refs.digest AS id, refs.size AS bytes
        FROM (
-         SELECT digest, size FROM trajectory_blob_refs
+         SELECT 'trajectory' AS owner_kind, event_id AS owner_id, digest, size FROM trajectory_blob_refs
          UNION
-         SELECT digest, size FROM channel_blob_refs
+         SELECT 'channel' AS owner_kind, envelope_id AS owner_id, digest, size FROM channel_blob_refs
        ) refs
        LEFT JOIN gad_blobs b ON b.hash = refs.digest
        WHERE b.hash IS NULL
+       ${missingRefScopeWhere}
        LIMIT ?`,
+          ...missingRefBindings,
           limit
         )
         .toArray() as JsonRecord[])
     );
     return { rows: rows.slice(0, limit) };
+  }
+
+  inspectPublicationIntegrity(
+    input: { channelId?: string | null; branchId?: string | null; limit?: number | null } = {}
+  ): PublicationIntegrityInspection {
+    this.ensureReady();
+    const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
+    const filters: string[] = [];
+    const bindings: SqlBinding[] = [];
+    if (input.branchId) {
+      filters.push("publisher.branch_id = ?");
+      bindings.push(input.branchId);
+    }
+    const rows: JsonRecord[] = [];
+    const expectedPublications = this.sql
+      .exec(
+        `SELECT publisher.event_id AS publisher_event_id,
+                publisher.branch_id,
+                publisher.payload_ref_json
+         FROM trajectory_events publisher
+         WHERE publisher.kind = 'external.envelope_published'
+         ${filters.length ? `AND ${filters.join(" AND ")}` : ""}
+         ORDER BY publisher.branch_id, publisher.seq`,
+        ...bindings
+      )
+      .toArray() as JsonRecord[];
+    let expectedMappings = 0;
+    let missingMappings = 0;
+    for (const publisher of expectedPublications) {
+      const payload = parseRecord(asString(publisher["payload_ref_json"]));
+      const publications = Array.isArray(payload["publications"]) ? payload["publications"] : [];
+      for (const publication of publications) {
+        if (!publication || typeof publication !== "object" || Array.isArray(publication)) continue;
+        const record = publication as JsonRecord;
+        const eventId = asString(record["eventId"]);
+        const channelId = asString(record["channelId"]);
+        const envelopeId = asString(record["envelopeId"]);
+        if (!eventId || !channelId || !envelopeId) continue;
+        if (input.channelId && channelId !== input.channelId) continue;
+        expectedMappings += 1;
+        const mapping = this.sql
+          .exec(
+            `SELECT channel_seq FROM trajectory_channel_publications
+             WHERE event_id = ? AND channel_id = ? AND envelope_id = ?
+             LIMIT 1`,
+            eventId,
+            channelId,
+            envelopeId
+          )
+          .toArray()[0] as JsonRecord | undefined;
+        if (!mapping) {
+          missingMappings += 1;
+          if (rows.length < limit) {
+            rows.push({
+              type: "missing-mapping",
+              publisherEventId: publisher["publisher_event_id"] as JsonValue,
+              branchId: publisher["branch_id"] as JsonValue,
+              eventId,
+              channelId,
+              envelopeId,
+            });
+          }
+        }
+      }
+    }
+
+    const pubFilters: string[] = [];
+    const pubBindings: SqlBinding[] = [];
+    if (input.channelId) {
+      pubFilters.push("p.channel_id = ?");
+      pubBindings.push(input.channelId);
+    }
+    if (input.branchId) {
+      pubFilters.push("p.branch_id = ?");
+      pubBindings.push(input.branchId);
+    }
+    const where = pubFilters.length ? `WHERE ${pubFilters.join(" AND ")}` : "";
+    const publicationRows = this.sql
+      .exec(
+        `SELECT p.*, te.event_id AS te_event_id, ce.envelope_id AS ce_envelope_id, ce.seq AS ce_seq
+         FROM trajectory_channel_publications p
+         LEFT JOIN trajectory_events te ON te.event_id = p.event_id
+         LEFT JOIN channel_envelopes ce ON ce.envelope_id = p.envelope_id
+         ${where}`,
+        ...pubBindings
+      )
+      .toArray() as JsonRecord[];
+    let orphanMappings = 0;
+    let missingPublicationEvents = 0;
+    let missingPublicationEnvelopes = 0;
+    let sequenceMismatches = 0;
+    for (const row of publicationRows) {
+      const missingEvent = row["te_event_id"] == null;
+      const missingEnvelope = row["ce_envelope_id"] == null;
+      const sequenceMismatch =
+        !missingEnvelope && Number(row["channel_seq"]) !== Number(row["ce_seq"]);
+      if (missingEvent || missingEnvelope) orphanMappings += 1;
+      if (missingEvent) missingPublicationEvents += 1;
+      if (missingEnvelope) missingPublicationEnvelopes += 1;
+      if (sequenceMismatch) sequenceMismatches += 1;
+      if ((missingEvent || missingEnvelope || sequenceMismatch) && rows.length < limit) {
+        rows.push({
+          type: missingEvent || missingEnvelope ? "orphan-mapping" : "sequence-mismatch",
+          eventId: row["event_id"] as JsonValue,
+          channelId: row["channel_id"] as JsonValue,
+          channelSeq: row["channel_seq"] as JsonValue,
+          envelopeId: row["envelope_id"] as JsonValue,
+          actualChannelSeq: row["ce_seq"] as JsonValue,
+        });
+      }
+    }
+
+    const channelOriginAgenticEnvelopes = asNumber(
+      this.sql
+        .exec(
+          `SELECT COUNT(*) AS count
+           FROM channel_envelopes ce
+           LEFT JOIN trajectory_channel_publications p ON p.envelope_id = ce.envelope_id
+           WHERE ce.payload_kind = ?
+             AND p.envelope_id IS NULL
+             ${input.channelId ? "AND ce.channel_id = ?" : ""}`,
+          ...(input.channelId
+            ? [AGENTIC_EVENT_PAYLOAD_KIND, input.channelId]
+            : [AGENTIC_EVENT_PAYLOAD_KIND])
+        )
+        .one()["count"]
+    );
+
+    return {
+      summary: {
+        expectedMappings,
+        missingMappings,
+        orphanMappings,
+        missingPublicationEvents,
+        missingPublicationEnvelopes,
+        sequenceMismatches,
+        channelOriginAgenticEnvelopes,
+      },
+      rows,
+    };
+  }
+
+  inspectTurnState(
+    input: { branchId?: string | null; channelId?: string | null; limit?: number | null } = {}
+  ): TurnStateInspection {
+    this.ensureReady();
+    const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
+    const bindings: SqlBinding[] = [];
+    const whereBranch = input.branchId ? "WHERE t.branch_id = ?" : "";
+    if (input.branchId) bindings.push(input.branchId);
+    const rows = this.sql
+      .exec(
+        `SELECT t.branch_id AS branch_id,
+                t.turn_id AS turn_id,
+                t.opened_at AS opened_at,
+                t.closed_at AS closed_at,
+                COUNT(DISTINCT CASE WHEN m.status != 'completed' THEN m.message_id END) AS streaming_messages,
+                COUNT(DISTINCT CASE WHEN i.status NOT IN ('completed', 'failed', 'cancelled', 'abandoned') THEN i.invocation_id END) AS nonterminal_invocations,
+                COUNT(DISTINCT e.event_id) AS duplicate_open_events
+         FROM trajectory_turns t
+         LEFT JOIN trajectory_messages m ON m.branch_id = t.branch_id AND m.turn_id = t.turn_id
+         LEFT JOIN trajectory_invocations i ON i.branch_id = t.branch_id AND i.turn_id = t.turn_id
+         LEFT JOIN trajectory_events e
+           ON e.branch_id = t.branch_id AND e.turn_id = t.turn_id AND e.kind = 'turn.opened'
+         ${whereBranch}
+         GROUP BY t.branch_id, t.turn_id, t.opened_at, t.closed_at
+         ORDER BY t.opened_at DESC
+         LIMIT ?`,
+        ...bindings,
+        limit
+      )
+      .toArray() as JsonRecord[];
+    const scopedRows = input.channelId
+      ? rows.filter((row) => String(row["branch_id"]).includes(input.channelId!))
+      : rows;
+    return {
+      summary: {
+        branches: new Set(scopedRows.map((row) => String(row["branch_id"]))).size,
+        openTurns: scopedRows.filter((row) => row["closed_at"] == null).length,
+        streamingMessages: scopedRows.reduce(
+          (sum, row) => sum + asNumber(row["streaming_messages"]),
+          0
+        ),
+        nonterminalInvocations: scopedRows.reduce(
+          (sum, row) => sum + asNumber(row["nonterminal_invocations"]),
+          0
+        ),
+        duplicateOpenedTurns: scopedRows.filter((row) => asNumber(row["duplicate_open_events"]) > 1)
+          .length,
+      },
+      rows: scopedRows,
+    };
+  }
+
+  inspectInvocationState(
+    input: {
+      branchId?: string | null;
+      invocationId?: string | null;
+      transportCallId?: string | null;
+      limit?: number | null;
+    } = {}
+  ): InvocationStateInspection {
+    this.ensureReady();
+    const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
+    const clauses: string[] = [];
+    const bindings: SqlBinding[] = [];
+    if (input.branchId) {
+      clauses.push("i.branch_id = ?");
+      bindings.push(input.branchId);
+    }
+    if (input.invocationId) {
+      clauses.push("i.invocation_id = ?");
+      bindings.push(input.invocationId);
+    }
+    if (input.transportCallId) {
+      clauses.push("i.transport_call_id = ?");
+      bindings.push(input.transportCallId);
+    }
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    const rows = this.sql
+      .exec(
+        `SELECT i.branch_id,
+                i.invocation_id,
+                i.transport_call_id,
+                i.kind,
+                i.status,
+                i.started_event_id,
+                i.completed_event_id,
+                i.updated_at,
+                COUNT(CASE WHEN e.kind = 'invocation.started' THEN 1 END) AS started_events,
+                COUNT(CASE WHEN e.kind IN ('invocation.completed', 'invocation.failed', 'invocation.cancelled', 'invocation.abandoned') THEN 1 END) AS terminal_events
+         FROM trajectory_invocations i
+         LEFT JOIN trajectory_events e
+           ON e.branch_id = i.branch_id
+          AND json_extract(e.causality_json, '$.invocationId') = i.invocation_id
+         ${where}
+         GROUP BY i.branch_id, i.invocation_id, i.transport_call_id, i.kind, i.status,
+                  i.started_event_id, i.completed_event_id, i.updated_at
+         ORDER BY i.updated_at DESC
+         LIMIT ?`,
+        ...bindings,
+        limit
+      )
+      .toArray() as JsonRecord[];
+    return {
+      summary: {
+        projected: rows.length,
+        startedEvents: rows.reduce((sum, row) => sum + asNumber(row["started_events"]), 0),
+        terminalEvents: rows.reduce((sum, row) => sum + asNumber(row["terminal_events"]), 0),
+        openProjectedInvocations: rows.filter(
+          (row) =>
+            !["completed", "failed", "cancelled", "abandoned"].includes(String(row["status"]))
+        ).length,
+      },
+      rows,
+    };
+  }
+
+  inspectChannelRoster(input: {
+    channelId: string;
+    limit?: number | null;
+  }): ChannelRosterInspection {
+    this.ensureReady();
+    const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
+    const rows = this.sql
+      .exec(
+        `SELECT channel_id,
+                participant_id,
+                joined_at,
+                left_at,
+                roles_json
+           FROM channel_roster
+          WHERE channel_id = ?
+          ORDER BY joined_at DESC
+          LIMIT ?`,
+        input.channelId,
+        limit
+      )
+      .toArray()
+      .map((row) => ({
+        channel_id: row["channel_id"] as JsonValue,
+        participant_id: row["participant_id"] as JsonValue,
+        joined_at: row["joined_at"] as JsonValue,
+        left_at: row["left_at"] as JsonValue,
+        roles: parseJson(row["roles_json"] as string | null | undefined) as JsonValue,
+      })) as JsonRecord[];
+    return {
+      summary: {
+        rows: rows.length,
+        activeParticipants: rows.filter((row) => row["left_at"] == null).length,
+        inactiveParticipants: rows.filter((row) => row["left_at"] != null).length,
+      },
+      rows,
+    };
+  }
+
+  async inspectAgentHealth(input: {
+    channelId: string;
+    branchId?: string | null;
+    limit?: number | null;
+    envelopeLimit?: number | null;
+    storageLimit?: number | null;
+    rowByteLimit?: number | null;
+  }): Promise<AgentHealthInspection> {
+    this.ensureReady();
+    const limit = Math.min(Math.max(input.limit ?? 100, 1), 1000);
+    const branchId = input.branchId ?? `branch:channel:${input.channelId}`;
+    const publicationIntegrity = this.inspectPublicationIntegrity({
+      channelId: input.channelId,
+      branchId,
+      limit,
+    });
+    const turnState = this.inspectTurnState({ channelId: input.channelId, branchId, limit });
+    const invocationState = this.inspectInvocationState({ branchId, limit });
+    const roster = this.inspectChannelRoster({ channelId: input.channelId, limit });
+    const envelopes = await this.inspectChannelEnvelopes({
+      channelId: input.channelId,
+      limit: input.envelopeLimit ?? Math.min(limit, 25),
+    });
+    const storage = this.inspectStorageDiagnostics({
+      branchId,
+      channelId: input.channelId,
+      rowByteLimit: input.rowByteLimit,
+      limit: input.storageLimit ?? Math.min(limit, 25),
+    });
+    const publicationIssues =
+      asNumber(publicationIntegrity.summary.missingMappings) +
+      asNumber(publicationIntegrity.summary.orphanMappings) +
+      asNumber(publicationIntegrity.summary.missingPublicationEvents) +
+      asNumber(publicationIntegrity.summary.missingPublicationEnvelopes) +
+      asNumber(publicationIntegrity.summary.sequenceMismatches);
+    const openTurns = asNumber(turnState.summary.openTurns);
+    const streamingMessages = asNumber(turnState.summary.streamingMessages);
+    const nonterminalInvocations = asNumber(turnState.summary.nonterminalInvocations);
+    const storageIssues = storage.rows.length;
+    return {
+      channelId: input.channelId,
+      branchId,
+      generatedAt: new Date().toISOString(),
+      summary: {
+        ok:
+          publicationIssues === 0 &&
+          openTurns === 0 &&
+          streamingMessages === 0 &&
+          nonterminalInvocations === 0 &&
+          storageIssues === 0,
+        publicationIssues,
+        openTurns,
+        streamingMessages,
+        nonterminalInvocations,
+        activeParticipants: roster.summary.activeParticipants,
+        storageIssues,
+      },
+      publicationIntegrity,
+      turnState,
+      invocationState,
+      roster,
+      envelopes,
+      storage,
+    };
   }
 
   collectGarbageBlobRefs(input: { dryRun?: boolean | null; limit?: number | null } = {}): {
@@ -2275,9 +2856,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
           envelopeId: publication["envelope_id"] as JsonValue,
         });
       }
-      const envelopeExists = this.sql
-        .exec(`SELECT 1 AS ok FROM channel_envelopes WHERE envelope_id = ?`, String(publication["envelope_id"]))
-        .toArray().length > 0;
+      const envelopeExists =
+        this.sql
+          .exec(
+            `SELECT 1 AS ok FROM channel_envelopes WHERE envelope_id = ?`,
+            String(publication["envelope_id"])
+          )
+          .toArray().length > 0;
       if (!envelopeExists) {
         addError("trajectory-channel-publication", "publication envelope is missing", {
           eventId: publication["event_id"] as JsonValue,
@@ -2286,29 +2871,41 @@ export class GadWorkspaceDO extends DurableObjectBase {
       }
     }
 
-    for (const envelope of this.sql.exec(`SELECT * FROM channel_envelopes`).toArray() as JsonRecord[]) {
+    for (const envelope of this.sql
+      .exec(`SELECT * FROM channel_envelopes`)
+      .toArray() as JsonRecord[]) {
       const fields = ["from_json", "to_json", "payload_ref_json", "metadata_json"] as const;
       for (const field of fields) {
         const path = findPrivateParticipantMetadataPath(parseJson(asString(envelope[field])));
         if (path) {
-          addError("channel-envelope-shape", "channel envelope contains private participant metadata", {
-            envelopeId: envelope["envelope_id"] as JsonValue,
-            field,
-            path,
-          });
+          addError(
+            "channel-envelope-shape",
+            "channel envelope contains private participant metadata",
+            {
+              envelopeId: envelope["envelope_id"] as JsonValue,
+              field,
+              path,
+            }
+          );
         }
       }
     }
 
-    for (const event of this.sql.exec(`SELECT * FROM trajectory_events`).toArray() as JsonRecord[]) {
+    for (const event of this.sql
+      .exec(`SELECT * FROM trajectory_events`)
+      .toArray() as JsonRecord[]) {
       for (const field of ["actor_json", "payload_ref_json"] as const) {
         const path = findPrivateParticipantMetadataPath(parseJson(asString(event[field])));
         if (path) {
-          addError("trajectory-event-shape", "trajectory event contains private participant metadata", {
-            eventId: event["event_id"] as JsonValue,
-            field,
-            path,
-          });
+          addError(
+            "trajectory-event-shape",
+            "trajectory event contains private participant metadata",
+            {
+              eventId: event["event_id"] as JsonValue,
+              field,
+              path,
+            }
+          );
         }
       }
     }
@@ -2456,9 +3053,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
             : "started";
     this.sql.exec(
       `INSERT INTO trajectory_messages (
-         message_id, branch_id, role, status, started_event_id, completed_event_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+         message_id, branch_id, turn_id, role, status, started_event_id, completed_event_id, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(branch_id, message_id) DO UPDATE SET
+         turn_id = COALESCE(trajectory_messages.turn_id, excluded.turn_id),
          role = COALESCE(excluded.role, trajectory_messages.role),
          status = excluded.status,
          started_event_id = COALESCE(trajectory_messages.started_event_id, excluded.started_event_id),
@@ -2466,6 +3064,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
          updated_at = excluded.updated_at`,
       messageId,
       event.branchId,
+      event.turnId ?? null,
       asString(payload["role"]) ?? asString(existing?.["role"]) ?? event.actor.kind,
       status,
       event.kind === "message.started" ? event.eventId : null,
@@ -2529,10 +3128,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
     this.sql.exec(
       `INSERT INTO trajectory_invocations (
-         invocation_id, branch_id, transport_call_id, kind, status, request_ref_json, result_ref_json,
+         invocation_id, branch_id, turn_id, transport_call_id, kind, status, request_ref_json, result_ref_json,
          started_event_id, completed_event_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(branch_id, invocation_id) DO UPDATE SET
+         turn_id = COALESCE(trajectory_invocations.turn_id, excluded.turn_id),
          transport_call_id = COALESCE(excluded.transport_call_id, trajectory_invocations.transport_call_id),
          kind = COALESCE(excluded.kind, trajectory_invocations.kind),
          status = excluded.status,
@@ -2543,6 +3143,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
          updated_at = excluded.updated_at`,
       invocationId,
       event.branchId,
+      event.turnId ?? null,
       event.causality?.transportCallId ?? null,
       asString(payload["name"]),
       event.kind.replace("invocation.", ""),
@@ -2837,14 +3438,16 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   private applyChannelRosterProjection(envelope: ChannelEnvelope): void {
     if (envelope.payloadKind !== "presence") return;
-    const payload = envelope.payload && typeof envelope.payload === "object"
-      ? (envelope.payload as JsonRecord)
-      : {};
+    const payload =
+      envelope.payload && typeof envelope.payload === "object"
+        ? (envelope.payload as JsonRecord)
+        : {};
     const action = asString(payload["action"]);
     if (action !== "join" && action !== "update" && action !== "leave") return;
-    const from = envelope.from && typeof envelope.from === "object"
-      ? (envelope.from as unknown as JsonRecord)
-      : {};
+    const from =
+      envelope.from && typeof envelope.from === "object"
+        ? (envelope.from as unknown as JsonRecord)
+        : {};
     const participantId = asString(from["participantId"]) ?? asString(from["id"]);
     if (!participantId) return;
     const metadata = parseRecord(
@@ -3027,12 +3630,14 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   private insertChannelPublication(publication: ChannelPublication): void {
-    const eventExists = this.sql
-      .exec(`SELECT 1 AS ok FROM trajectory_events WHERE event_id = ?`, publication.eventId)
-      .toArray().length > 0;
-    const envelopeExists = this.sql
-      .exec(`SELECT 1 AS ok FROM channel_envelopes WHERE envelope_id = ?`, publication.envelopeId)
-      .toArray().length > 0;
+    const eventExists =
+      this.sql
+        .exec(`SELECT 1 AS ok FROM trajectory_events WHERE event_id = ?`, publication.eventId)
+        .toArray().length > 0;
+    const envelopeExists =
+      this.sql
+        .exec(`SELECT 1 AS ok FROM channel_envelopes WHERE envelope_id = ?`, publication.envelopeId)
+        .toArray().length > 0;
     if (!eventExists || !envelopeExists) {
       throw new Error(
         `cannot publish trajectory/channel mapping before durable rows exist: event=${publication.eventId} envelope=${publication.envelopeId}`
@@ -3497,7 +4102,11 @@ export class GadWorkspaceDO extends DurableObjectBase {
       payloadKind: asString(row["payload_kind"]) ?? undefined,
       from: summarizeJsonForInspection(parseRecord(asString(row["from_json"]))) as JsonRecord,
       ...(row["metadata_json"]
-        ? { metadata: summarizeJsonForInspection(parseRecord(asString(row["metadata_json"]))) as JsonRecord }
+        ? {
+            metadata: summarizeJsonForInspection(
+              parseRecord(asString(row["metadata_json"]))
+            ) as JsonRecord,
+          }
         : {}),
       bytes: {
         from: utf8Bytes(asString(row["from_json"]) ?? ""),
@@ -3591,13 +4200,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   private stateHashForRoot(rootHash: string): string {
-    const value = JSON.stringify(sortJson({ manifestRootHash: rootHash }));
-    let hash = 2166136261;
-    for (let i = 0; i < value.length; i += 1) {
-      hash ^= value.charCodeAt(i);
-      hash = Math.imul(hash, 16777619);
-    }
-    return `state:${(hash >>> 0).toString(16).padStart(8, "0").repeat(8).slice(0, 64)}`;
+    return `state:${stableSha256Hex({ manifestRootHash: rootHash })}`;
   }
 
   private createManifestTree(
@@ -3632,10 +4235,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   private manifestHash(kind: string, entries: unknown): string {
-    const value = JSON.stringify(sortJson({ kind, entries }));
-    let hash = 5381;
-    for (let i = 0; i < value.length; i += 1) hash = ((hash << 5) + hash) ^ value.charCodeAt(i);
-    return `manifest:${(hash >>> 0).toString(16).padStart(8, "0").repeat(8).slice(0, 64)}`;
+    return `manifest:${stableSha256Hex({ kind, entries })}`;
   }
 
   private filesForState(stateHash: string): JsonRecord[] {

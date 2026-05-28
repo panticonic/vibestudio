@@ -37,12 +37,14 @@ function largeParticipantMetadata() {
     type: "panel",
     name: "Panel",
     handle: "user",
-    methods: [{
-      name: "eval",
-      description: "large method description",
-      parameters: { type: "object", properties: { code: { type: "string" } } },
-      returns: { type: "object" },
-    }],
+    methods: [
+      {
+        name: "eval",
+        description: "large method description",
+        parameters: { type: "object", properties: { code: { type: "string" } } },
+        returns: { type: "object" },
+      },
+    ],
     arbitraryLargeField: "x".repeat(1024),
   };
 }
@@ -243,7 +245,20 @@ describe("GadWorkspaceDO trajectory persistence", () => {
     ]);
 
     const integrity = await call<{ errors: Array<{ type: string }> }>("checkGadIntegrity", {});
-    expect(integrity.errors.filter((error) => error.type === "trajectory-channel-publication")).toEqual([]);
+    expect(
+      integrity.errors.filter((error) => error.type === "trajectory-channel-publication")
+    ).toEqual([]);
+
+    const publicationIntegrity = await call<any>("inspectPublicationIntegrity", {
+      channelId: "channel-1",
+    });
+    expect(publicationIntegrity.summary).toMatchObject({
+      expectedMappings: 1,
+      missingMappings: 0,
+      orphanMappings: 0,
+      sequenceMismatches: 0,
+      channelOriginAgenticEnvelopes: 0,
+    });
   });
 
   it("rejects duplicate turn.opened events for the same branch turn", async () => {
@@ -324,6 +339,93 @@ describe("GadWorkspaceDO trajectory persistence", () => {
         ],
       })
     ).rejects.toThrow("duplicate turn.opened for turn turn-1");
+  });
+
+  it("inspects turn and invocation state without hydrating full payloads", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "traj-1",
+      branchId: "main",
+      owner,
+      events: [
+        {
+          eventId: "turn-opened-1",
+          event: event("turn.opened", {
+            turnId: "turn-1" as never,
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "started" },
+          }),
+        },
+        {
+          eventId: "message-started-1",
+          event: event("message.started", {
+            turnId: "turn-1" as never,
+            causality: { messageId: "msg-1" as never },
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant" },
+          }),
+        },
+        {
+          eventId: "invocation-started-1",
+          event: event("invocation.started", {
+            turnId: "turn-1" as never,
+            causality: { invocationId: "tool-1" as never, transportCallId: "transport-1" },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              name: "eval",
+              request: blobRef("request-1", '{"code":"large"}'),
+            },
+          }),
+        },
+        {
+          eventId: "turn-opened-2",
+          event: event("turn.opened", {
+            turnId: "turn-2" as never,
+            createdAt: "2026-05-20T12:01:00.000Z",
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "second" },
+          }),
+        },
+        {
+          eventId: "message-completed-2",
+          event: event("message.completed", {
+            turnId: "turn-2" as never,
+            causality: { messageId: "msg-2" as never },
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "done" },
+          }),
+        },
+      ],
+    });
+
+    const turns = await call<any>("inspectTurnState", { branchId: "main" });
+    expect(turns.summary).toMatchObject({
+      openTurns: 2,
+      streamingMessages: 1,
+      nonterminalInvocations: 1,
+      duplicateOpenedTurns: 0,
+    });
+    expect(turns.rows[0]).toMatchObject({
+      turn_id: "turn-2",
+      streaming_messages: 0,
+      nonterminal_invocations: 0,
+    });
+    expect(turns.rows[1]).toMatchObject({
+      turn_id: "turn-1",
+      streaming_messages: 1,
+      nonterminal_invocations: 1,
+    });
+
+    const invocations = await call<any>("inspectInvocationState", {
+      transportCallId: "transport-1",
+    });
+    expect(invocations.summary).toMatchObject({
+      projected: 1,
+      startedEvents: 1,
+      terminalEvents: 0,
+      openProjectedInvocations: 1,
+    });
+    expect(invocations.rows[0]).toMatchObject({
+      invocation_id: "tool-1",
+      transport_call_id: "transport-1",
+      status: "started",
+    });
   });
 
   it("treats replayed matching event ids as idempotent appends", async () => {
@@ -413,7 +515,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("invocation.completed", {
             turnId: "turn-1" as never,
             causality: { invocationId: "call-1" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: blobRef("result-ok", "\"ok\"") },
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: blobRef("result-ok", '"ok"') },
           }),
         },
       ],
@@ -607,6 +709,91 @@ describe("GadWorkspaceDO trajectory persistence", () => {
         roles_json: JSON.stringify({ name: "Renamed", type: "panel" }),
       },
     ]);
+
+    const roster = await call<any>("inspectChannelRoster", { channelId: "channel-1" });
+    expect(roster.summary).toMatchObject({
+      rows: 1,
+      activeParticipants: 0,
+      inactiveParticipants: 1,
+    });
+    expect(roster.rows[0]).toMatchObject({
+      participant_id: "panel:user",
+      roles: { name: "Renamed", type: "panel" },
+    });
+  });
+
+  it("returns a combined agent health diagnostic", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+
+    await call("appendChannelEnvelope", {
+      channelId: "channel-1",
+      envelopeId: "env-presence-join",
+      from: { kind: "panel", id: "panel:user", participantId: "panel:user" },
+      payloadKind: "presence",
+      payload: { action: "join", metadata: { name: "User", type: "panel" } },
+      publishedAt: "2026-05-20T12:00:00.000Z",
+    });
+    await call("appendTrajectoryBatch", {
+      trajectoryId: "branch:channel:channel-1",
+      branchId: "branch:channel:channel-1",
+      owner,
+      events: [
+        {
+          eventId: "event-message-1",
+          event: event("message.completed", {
+            turnId: "turn-1" as never,
+            causality: { messageId: "msg-1" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              role: "assistant",
+              content: "done",
+            },
+          }),
+          publish: { channelIds: ["channel-1"] },
+        },
+      ],
+    });
+
+    const health = await call<any>("inspectAgentHealth", { channelId: "channel-1" });
+    expect(health).toMatchObject({
+      channelId: "channel-1",
+      branchId: "branch:channel:channel-1",
+      summary: {
+        ok: true,
+        publicationIssues: 0,
+        activeParticipants: 1,
+      },
+    });
+    expect(health.publicationIntegrity.summary.expectedMappings).toBe(1);
+    expect(health.roster.summary.activeParticipants).toBe(1);
+  });
+
+  it("does not fail agent health for expected channel-origin agentic envelopes", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+
+    await call("appendChannelEnvelope", {
+      channelId: "channel-1",
+      envelopeId: "env-user-message",
+      from: { kind: "user", id: "panel:user", participantId: "panel:user" },
+      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: event("message.completed", {
+        turnId: "turn-1" as never,
+        causality: { messageId: "user-msg-1" as never },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          role: "user",
+          content: "hello",
+        },
+      }),
+      publishedAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    const health = await call<any>("inspectAgentHealth", { channelId: "channel-1" });
+    expect(health.publicationIntegrity.summary.channelOriginAgenticEnvelopes).toBe(1);
+    expect(health.summary).toMatchObject({
+      ok: true,
+      publicationIssues: 0,
+    });
   });
 
   it("sanitizes every direct channel envelope append before persistence", async () => {
@@ -616,7 +803,12 @@ describe("GadWorkspaceDO trajectory persistence", () => {
     await call("appendChannelEnvelope", {
       channelId: "channel-1",
       envelopeId: "env-sanitized",
-      from: { kind: "panel", id: "panel:user", participantId: "panel:user", metadata: hugeMetadata },
+      from: {
+        kind: "panel",
+        id: "panel:user",
+        participantId: "panel:user",
+        metadata: hugeMetadata,
+      },
       to: [{ kind: "agent", id: "agent:one", participantId: "agent:one", metadata: hugeMetadata }],
       payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
       payload: event("invocation.started", {
@@ -627,7 +819,12 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           transport: {
             kind: "channel",
             channelId: "channel-1" as never,
-            target: { kind: "panel", id: "panel:user", participantId: "panel:user", metadata: hugeMetadata },
+            target: {
+              kind: "panel",
+              id: "panel:user",
+              participantId: "panel:user",
+              metadata: hugeMetadata,
+            },
           },
         },
       }),
@@ -655,7 +852,12 @@ describe("GadWorkspaceDO trajectory persistence", () => {
     await call("appendChannelEnvelopeWithRegistryMutation", {
       channelId: "channel-1",
       envelopeId: "env-registry",
-      from: { kind: "panel", id: "panel:user", participantId: "panel:user", metadata: hugeMetadata },
+      from: {
+        kind: "panel",
+        id: "panel:user",
+        participantId: "panel:user",
+        metadata: hugeMetadata,
+      },
       payloadKind: "messageType.registered",
       payload: { typeId: "x" },
       metadata: hugeMetadata,
@@ -674,29 +876,43 @@ describe("GadWorkspaceDO trajectory persistence", () => {
       trajectoryId: "traj-1",
       branchId: "main",
       owner: { kind: "agent", id: "agent-1", metadata: hugeMetadata },
-      events: [{
-        eventId: "event-sanitized",
-        event: {
-          kind: "invocation.started",
-          actor: { kind: "agent", id: "agent-1", metadata: hugeMetadata },
-          createdAt: "2026-05-20T12:00:00.000Z",
-          turnId: "turn-1" as never,
-          causality: { invocationId: "inv-1" as never },
-          payload: {
-            protocol: AGENTIC_PROTOCOL_VERSION,
-            name: "eval",
-            transport: {
-              kind: "channel",
-              channelId: "channel-1" as never,
-              target: { kind: "panel", id: "panel:user", participantId: "panel:user", metadata: hugeMetadata },
+      events: [
+        {
+          eventId: "event-sanitized",
+          event: {
+            kind: "invocation.started",
+            actor: { kind: "agent", id: "agent-1", metadata: hugeMetadata },
+            createdAt: "2026-05-20T12:00:00.000Z",
+            turnId: "turn-1" as never,
+            causality: { invocationId: "inv-1" as never },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              name: "eval",
+              transport: {
+                kind: "channel",
+                channelId: "channel-1" as never,
+                target: {
+                  kind: "panel",
+                  id: "panel:user",
+                  participantId: "panel:user",
+                  metadata: hugeMetadata,
+                },
+              },
             },
           },
+          publish: {
+            channelIds: ["channel-1"],
+            audience: [
+              {
+                kind: "panel",
+                id: "panel:user",
+                participantId: "panel:user",
+                metadata: hugeMetadata,
+              },
+            ],
+          },
         },
-        publish: {
-          channelIds: ["channel-1"],
-          audience: [{ kind: "panel", id: "panel:user", participantId: "panel:user", metadata: hugeMetadata }],
-        },
-      }],
+      ],
     });
 
     const rows = await call<{ rows: Array<Record<string, unknown>> }>(
@@ -1155,7 +1371,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("invocation.completed", {
             turnId: "turn-1" as never,
             causality: { invocationId: "inv-1" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: blobRef("result-ok", "\"ok\"") },
+            payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: blobRef("result-ok", '"ok"') },
           }),
         },
       ],
@@ -1266,13 +1482,15 @@ describe("GadWorkspaceDO trajectory persistence", () => {
       {}
     );
     expect(integrity.ok).toBe(false);
-    expect(integrity.errors).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "storage-diagnostic",
-        scope: "channel_envelopes",
-        id: "env-oversized",
-      }),
-    ]));
+    expect(integrity.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "storage-diagnostic",
+          scope: "channel_envelopes",
+          id: "env-oversized",
+        }),
+      ])
+    );
   });
 
   it("flags private participant metadata if storage rows are corrupted", async () => {
@@ -1296,13 +1514,15 @@ describe("GadWorkspaceDO trajectory persistence", () => {
     );
 
     expect(integrity.ok).toBe(false);
-    expect(integrity.errors).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "channel-envelope-shape",
-        envelopeId: "env-corrupt",
-        field: "from_json",
-      }),
-    ]));
+    expect(integrity.errors).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "channel-envelope-shape",
+          envelopeId: "env-corrupt",
+          field: "from_json",
+        }),
+      ])
+    );
   });
 
   it("reports storage diagnostics and garbage-collects unreferenced blob metadata", async () => {
