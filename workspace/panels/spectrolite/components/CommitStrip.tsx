@@ -12,11 +12,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { promises as fs } from "fs";
 import { Button, Callout, Code, Flex, Text, TextArea } from "@radix-ui/themes";
 import { CommitIcon, MagicWandIcon } from "@radix-ui/react-icons";
-import { GitClient, type FsPromisesLike } from "@natstack/git";
-import { gitConfig, contextId as runtimeContextId } from "@workspace/runtime";
+import { git as runtimeGit, contextId as runtimeContextId } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react";
 import type { PubSubClient } from "@workspace/pubsub";
 import { KB_COMMIT_TYPE } from "../messages/register";
@@ -42,13 +40,6 @@ interface DirtyStatus {
   branch: string | undefined;
 }
 
-function makeClient(): GitClient {
-  return new GitClient(fs as unknown as FsPromisesLike, {
-    serverUrl: gitConfig?.serverUrl,
-    token: gitConfig?.token,
-  });
-}
-
 function commitSubject(message: string): string {
   return message.split("\n", 1)[0]?.trim() ?? "";
 }
@@ -65,7 +56,7 @@ export function CommitStrip({ repoRoot, client, refreshNonce = 0, primaryAgentHa
     let cancelled = false;
     (async () => {
       try {
-        const git = makeClient();
+        const git = runtimeGit.client();
         const s = await git.status(repoRoot);
         if (cancelled) return;
         const dirtyFiles = (s.files ?? [])
@@ -105,7 +96,7 @@ export function CommitStrip({ repoRoot, client, refreshNonce = 0, primaryAgentHa
     setCommitting(true);
     setCommitError(null);
     try {
-      const git = makeClient();
+      const git = runtimeGit.client();
       await git.addAll(repoRoot);
       const shaStr = await git.commit({ dir: repoRoot, message });
       if (client && shaStr) {

@@ -43,6 +43,11 @@ const initial = getStateArgs();
 await setStateArgs({ theme: "dark" });
 ```
 
+`setStateArgs()` persists through the host and immediately applies the returned,
+validated snapshot to the caller panel. `useStateArgs()` re-renders from that
+local snapshot and from later host-published `runtime:stateArgsChanged` events
+for updates made elsewhere.
+
 From an agent-held handle:
 
 ```ts

@@ -50,7 +50,11 @@ export type InferEventMap<T extends EventSchemaMap> = {
  * Git configuration for a panel or worker.
  */
 export interface GitConfig {
-  /** Git server base URL (e.g., http://localhost:63524) */
+  /**
+   * Git server base URL (e.g., http://localhost:63524).
+   * Prefer `git.client()` from `@workspace/runtime` for userland git
+   * operations; it applies the correct internal/external HTTP routing.
+   */
   serverUrl: string;
   /** Additional NatStack gateway URLs that should use the internal bearer token. */
   internalOrigins?: readonly string[];

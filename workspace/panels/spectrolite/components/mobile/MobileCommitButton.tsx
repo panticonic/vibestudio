@@ -6,11 +6,9 @@
  */
 
 import { useEffect, useState } from "react";
-import { promises as fs } from "fs";
 import { Badge, Button, Code, Flex, Text } from "@radix-ui/themes";
 import { CommitIcon } from "@radix-ui/react-icons";
-import { GitClient, type FsPromisesLike } from "@natstack/git";
-import { gitConfig } from "@workspace/runtime";
+import { git as runtimeGit } from "@workspace/runtime";
 
 export interface MobileCommitButtonProps {
   repoRoot: string;
@@ -19,29 +17,13 @@ export interface MobileCommitButtonProps {
   onClick: () => void;
 }
 
-function makeClient(): GitClient | null {
-  if (!gitConfig?.serverUrl) return null;
-  return new GitClient(fs as unknown as FsPromisesLike, {
-    serverUrl: gitConfig.serverUrl,
-    token: gitConfig.token,
-  });
-}
-
 export function MobileCommitButton({ repoRoot, refreshNonce, onClick }: MobileCommitButtonProps) {
   const [dirtyCount, setDirtyCount] = useState(0);
   const [branch, setBranch] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const git = makeClient();
-    if (!git) {
-      // No git server available — clear stale display so the user
-      // doesn't see a phantom "5 dirty files" badge after the server
-      // goes away.
-      setDirtyCount(0);
-      setBranch(null);
-      return;
-    }
+    const git = runtimeGit.client();
     (async () => {
       try {
         const s = await git.status(repoRoot);

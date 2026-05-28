@@ -152,11 +152,10 @@ packfiles through `credentials.fetch()`, and do not expose PATs to userland
 `onAuth` callbacks:
 
 ```ts
-import { credentials, fs } from "@workspace/runtime";
-import { GitClient } from "@natstack/git";
+import { git } from "@workspace/runtime";
 
-const git = new GitClient(fs, { http: credentials.gitHttp() });
-await git.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
+const client = git.client();
+await client.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
 ```
 
 When the caller just needs a Git client, prefer `git.client()` from the runtime.

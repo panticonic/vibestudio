@@ -80,8 +80,9 @@ To pin a workspace package to a specific git ref, use the `imports` parameter ex
 
 ```
 eval({ code: `
-  import { GitClient } from "@natstack/git";
+  import { git } from "@workspace/runtime";
   import { createProject } from "@workspace-skills/paneldev";
+  const client = git.client();
   // workspace packages: just import, auto-resolved
 ` })
 ```
@@ -101,7 +102,7 @@ should go through `inline_ui`, `load_action_bar`, `feedback_form`, or
 ## Critical Rules
 
 1. **Static imports only** — `import { rpc } from "@workspace/runtime"` (NOT `await import(...)`). File-loaded relative imports must also be static/literal.
-2. **Workspace packages are auto-resolved** — `import { GitClient } from "@natstack/git"` just works. npm packages require `imports: { "lodash": "npm:4" }`
+2. **Workspace packages are auto-resolved** — `import { git } from "@workspace/runtime"` just works. Use `git.client()` for git operations; npm packages require `imports: { "lodash": "npm:4" }`
 3. **Components must `export default`** — named exports alone won't work for inline_ui/load_action_bar/feedback_custom components
 4. **Inline UI components receive `{ props, chat, scope, scopes }`** — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
 5. **Feedback components receive `{ onSubmit, onCancel, onError, chat }`**

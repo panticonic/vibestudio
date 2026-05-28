@@ -1,7 +1,7 @@
 import type { TestCase } from "../types.js";
 import { findLastAgentMessage } from "./_helpers.js";
 
-const gitHint = `Use GitClient from @natstack/git with fs and gitConfig from @workspace/runtime. Do NOT use node:child_process or shell commands. Example:\nimport { fs, gitConfig } from "@workspace/runtime";\nimport { GitClient } from "@natstack/git";\nconst git = new GitClient(fs, { serverUrl: gitConfig.serverUrl, token: gitConfig.token });`;
+const gitHint = `Use the routed git client from @workspace/runtime. Do NOT use node:child_process, shell commands, or new GitClient(fs, { serverUrl: gitConfig.serverUrl, token }). Example:\nimport { git } from "@workspace/runtime";\nconst client = git.client();`;
 
 export const gitTests: TestCase[] = [
   {
@@ -84,7 +84,7 @@ export const gitTests: TestCase[] = [
     name: "push-to-remote",
     description: "Push a commit to the workspace git server",
     category: "git",
-    prompt: `Create a git repo at /test-repo, add a remote pointing to the workspace git server, commit a file, and push. Report the result.\n\n${gitHint}\nKey methods: git.addRemote(dir, "origin", dir), git.push({ dir, ref: "main" }). The git server URL comes from gitConfig.serverUrl.`,
+    prompt: `Create a git repo at /test-repo, add a remote pointing to the workspace git server, commit a file, and push. Report the result.\n\n${gitHint}\nKey methods: client.addRemote(dir, "origin", dir), client.push({ dir, ref: "main" }). Relative remotes are resolved by the runtime git client.`,
     validate: (result) => {
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();

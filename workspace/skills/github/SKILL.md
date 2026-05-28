@@ -117,11 +117,10 @@ adapter handles `https://github.com/...` git remotes without exposing the PAT to
 panels or workers.
 
 ```ts
-import { credentials, fs } from "@workspace/runtime";
-import { GitClient } from "@natstack/git";
+import { git } from "@workspace/runtime";
 
-const git = new GitClient(fs, { http: credentials.gitHttp() });
-await git.clone({
+const client = git.client();
+await client.clone({
   url: "https://github.com/owner/repo.git",
   dir: "/repo",
 });

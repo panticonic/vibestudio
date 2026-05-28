@@ -259,20 +259,19 @@ eval({ code: `
 
 ## Git Operations
 
-Use `GitClient` from `@natstack/git` — do NOT use `node:child_process` or shell commands.
+Use the routed `git.client()` helper from `@workspace/runtime` — do NOT use `node:child_process`, shell commands, or manually construct `new GitClient(fs, { serverUrl: gitConfig.serverUrl, token })`.
 
 ```
 eval({ code: `
-  import { fs, gitConfig } from "@workspace/runtime";
-  import { GitClient } from "@natstack/git";
+  import { fs, git } from "@workspace/runtime";
 
-  const git = new GitClient(fs, { serverUrl: gitConfig.serverUrl, token: gitConfig.token });
-  await git.init("/my-repo", "main");
+  const client = git.client();
+  await client.init("/my-repo", "main");
   await fs.writeFile("/my-repo/hello.txt", "Hello world");
-  await git.addAll("/my-repo");
-  const sha = await git.commit({ dir: "/my-repo", message: "Initial commit" });
+  await client.addAll("/my-repo");
+  const sha = await client.commit({ dir: "/my-repo", message: "Initial commit" });
   console.log("Committed:", sha);
-  const log = await git.log("/my-repo");
+  const log = await client.log("/my-repo");
   console.log("History:", log);
 ` })
 ```

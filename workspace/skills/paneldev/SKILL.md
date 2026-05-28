@@ -72,7 +72,7 @@ eval({ code: `
 | Edit a file          | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                               |
 | Check types          | `eval` — `extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/my-app")`                                                     |
 | Run tests            | Not available from panel context — `test.run` is server-only (see TOOLS.md)                                                                          |
-| Git status           | `eval` with `imports` — `import { GitClient } from "@natstack/git"` (see TOOLS.md)                                                                   |
+| Git status           | `eval` — `import { git } from "@workspace/runtime"; const client = git.client()` (see TOOLS.md)                                                      |
 | List workspaces      | `eval` — `workspace.list()`                                                                                                                          |
 | Get workspace config | `eval` — `workspace.getConfig()`                                                                                                                     |
 | Create workspace     | `eval` — `workspace.create("name", { forkFrom: "default" })`                                                                                         |

@@ -72,6 +72,32 @@ const g = globalThis as unknown as {
   __natstackEnv?: Record<string, string>;
 };
 
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "0.0.0.0", "::1"]);
+
+function normalizeGatewayConfigForBrowser(config: GatewayConfig): GatewayConfig {
+  const location = (globalThis as { location?: { origin?: string } }).location;
+  if (!location?.origin) return config;
+
+  try {
+    const injectedUrl = new URL(config.serverUrl);
+    const pageUrl = new URL(location.origin);
+    const sameLoopbackPort =
+      injectedUrl.protocol === pageUrl.protocol &&
+      injectedUrl.port === pageUrl.port &&
+      LOOPBACK_HOSTS.has(injectedUrl.hostname) &&
+      LOOPBACK_HOSTS.has(pageUrl.hostname);
+    if (!sameLoopbackPort || injectedUrl.origin === pageUrl.origin) return config;
+
+    const rewritten = new URL(config.serverUrl);
+    rewritten.protocol = pageUrl.protocol;
+    rewritten.host = pageUrl.host;
+    const aliases = Array.from(new Set([...(config.aliases ?? []), config.serverUrl]));
+    return { ...config, serverUrl: rewritten.toString().replace(/\/$/, ""), aliases };
+  } catch {
+    return config;
+  }
+}
+
 /**
  * Get the injected configuration from globals.
  */
@@ -94,12 +120,13 @@ export function getInjectedConfig(): InjectedConfig {
   }
 
   const sourceRepo = g.__natstackSourceRepo ?? g.__natstackEnv?.["__NATSTACK_SOURCE_REPO"] ?? "";
+  const gatewayConfig = normalizeGatewayConfigForBrowser(g.__natstackGatewayConfig);
   const gitConfig: GitConfig = {
-    serverUrl: `${g.__natstackGatewayConfig.serverUrl.replace(/\/$/, "")}/_git`,
-    internalOrigins: g.__natstackGatewayConfig.aliases?.map(
+    serverUrl: `${gatewayConfig.serverUrl.replace(/\/$/, "")}/_git`,
+    internalOrigins: gatewayConfig.aliases?.map(
       (url) => `${url.replace(/\/$/, "")}/_git`
     ),
-    token: g.__natstackGatewayConfig.token,
+    token: gatewayConfig.token,
     sourceRepo,
   };
 
@@ -118,7 +145,7 @@ export function getInjectedConfig(): InjectedConfig {
         ? (g.__natstackParentEntityId as PanelEntityId)
         : null,
     initialTheme: g.__natstackInitialTheme === "dark" ? "dark" : "light",
-    gatewayConfig: g.__natstackGatewayConfig,
+    gatewayConfig,
     gitConfig,
     env: g.__natstackEnv ?? {},
   };
