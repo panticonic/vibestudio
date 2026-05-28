@@ -92,7 +92,7 @@ made, report the exact failed eval attempt and its exact error; unrelated
 ```
 eval({
   code: `
-    import { HeadlessRunner, TestRunner, allTests, testCategories } from "@workspace-skills/system-testing";
+    import { HeadlessRunner, TestRunner, allTests, summarizeFailures, testCategories } from "@workspace-skills/system-testing";
     import { contextId } from "@workspace/runtime";
     const tests = allTests();
     const run = scope.systemTestingRun;
@@ -145,6 +145,7 @@ eval({
       failed: aggregate.failed,
       errored: aggregate.errored,
       skipped: aggregate.skipped,
+      failureDiagnostics: partial.failed || partial.errored ? summarizeFailures(partial) : undefined,
     };
   `,
 })
@@ -152,7 +153,27 @@ eval({
 
 ## Inspecting Results
 
-Every test result includes full diagnostics. **After running a suite, always inspect failures in detail:**
+Every test result includes full diagnostics. **After running a suite, always inspect failures in detail and include the evidence in your answer. Never report only filenames, artifact names, or "files to inspect"; those are pointers, not diagnosis.**
+
+For a bounded structured packet that is safe to paste into a handoff report:
+
+```typescript
+import { summarizeFailures } from "@workspace-skills/system-testing";
+
+return summarizeFailures(scope.results, {
+  failures: 12,
+  messages: 12,
+  invocations: 20,
+  debugEvents: 20,
+  text: 900,
+});
+```
+
+Each failure summary includes the prompt, validation reason, session error,
+final agent message, bounded conversation transcript, invocation statuses and
+errors, debug events, cleanup errors, participant state, and a coarse likely
+issue. Use that packet to explain the mismatch. If the packet is insufficient,
+query the specific failed session further; do not substitute a list of files.
 
 ### Summary
 

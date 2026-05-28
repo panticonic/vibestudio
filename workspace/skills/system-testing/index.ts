@@ -1,5 +1,7 @@
 export { HeadlessRunner } from "./runner.js";
 export { TestRunner } from "./test-runner.js";
+export { summarizeFailures } from "./diagnostics.js";
+export type { FailureDiagnostic, FailureReport } from "./diagnostics.js";
 export type { TestCase, TestResult, TestSuiteResult, TestExecutionResult } from "./types.js";
 export type { SessionSnapshot } from "@workspace/agentic-session";
 

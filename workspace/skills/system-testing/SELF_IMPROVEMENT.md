@@ -61,7 +61,7 @@ errors are separate setup failures.
 ```
 eval({
   code: `
-    import { HeadlessRunner, TestRunner, allTests, testCategories } from "@workspace-skills/system-testing";
+    import { HeadlessRunner, TestRunner, allTests, summarizeFailures, testCategories } from "@workspace-skills/system-testing";
     import { contextId } from "@workspace/runtime";
     const tests = allTests();
     const run = scope.systemTestingRun;
@@ -114,6 +114,7 @@ eval({
       failed: aggregate.failed,
       errored: aggregate.errored,
       skipped: aggregate.skipped,
+      failureDiagnostics: partial.failed || partial.errored ? summarizeFailures(partial) : undefined,
     };
   `,
 })
@@ -121,7 +122,16 @@ eval({
 
 ## Phase 2: Analyze Failures
 
-For each failed test, inspect **everything** — the conversation, every tool call and its result, harness lifecycle, and participant state:
+For each failed test, inspect **everything** — the conversation, every tool call and its result, harness lifecycle, and participant state. Never hand off only filenames or artifact paths. A useful report must say what the test agent did, where it diverged from the expected marker/behavior, what tool calls completed or errored, and whether the failure looks like runtime, docs, harness, or test validation.
+
+Start with the bounded summary helper:
+
+```typescript
+import { summarizeFailures } from "@workspace-skills/system-testing";
+return summarizeFailures(scope.results);
+```
+
+Then drill into any failure whose summary does not explain the mismatch:
 
 ```typescript
 for (const r of scope.results.results.filter((r) => !r.result.passed)) {

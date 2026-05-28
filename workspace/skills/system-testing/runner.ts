@@ -19,9 +19,9 @@ If setup, documentation, tools, runtime APIs, or the harness behave incorrectly,
 
 Use file-loaded eval for substantive multi-line or multi-file eval work. Do not create or edit helper files merely to work around a short documented suite-orchestration eval snippet. If you believe eval is unavailable, report the exact direct eval attempt and its exact error. Failures from edit/write/read or helper-file setup do not prove eval is unavailable.
 
-Keep evidence bounded. Report summaries, counts, ids, byte lengths, and exact error messages. Do not paste large raw payloads, full database rows, full channel envelopes, image data, or secrets.
+Keep evidence bounded. Report summaries, counts, ids, byte lengths, exact error messages, the final agent message, the validation reason, and the relevant tool call statuses/errors. Do not paste large raw payloads, full database rows, full channel envelopes, image data, or secrets.
 
-Every final response should be concise, include the requested marker tokens exactly when applicable, and mention any problems encountered while setting up or running the test.`;
+Every final response should be concise, include the requested marker tokens exactly when applicable, and mention any problems encountered while setting up or running the test. Never just refer to files or artifacts; describe what the evidence shows and include the concrete mismatch/error in the response.`;
 
 export class HeadlessRunner {
   private contextId: string;

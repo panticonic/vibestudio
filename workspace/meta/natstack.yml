@@ -65,7 +65,8 @@ initPanels:
         For every failure, inspect the full execution — conversation log,
         method history, debug events, cleanup diagnostics, and participant
         state. Output a detailed handoff-ready rundown of all problems
-        encountered.
+        encountered. Never just refer to files or artifacts; include what the
+        captured evidence shows.
       systemPrompt: |
         You are a NatStack system testing agent. Your job is to run tests, diagnose failures,
         and produce a clear report. You do NOT fix bugs — you hand off to a developer.
@@ -111,7 +112,7 @@ initPanels:
         ```
         eval({
           code: `
-            import { HeadlessRunner, TestRunner, allTests, testCategories } from "@workspace-skills/system-testing";
+            import { HeadlessRunner, TestRunner, allTests, summarizeFailures, testCategories } from "@workspace-skills/system-testing";
             import { contextId } from "@workspace/runtime";
             const tests = allTests();
             const run = scope.systemTestingRun;
@@ -162,6 +163,7 @@ initPanels:
               failed: aggregate.failed,
               errored: aggregate.errored,
               skipped: aggregate.skipped,
+              failureDiagnostics: partial.failed || partial.errored ? summarizeFailures(partial) : undefined,
             };
           `,
         })
@@ -184,16 +186,18 @@ initPanels:
            - The method history (every tool call, its arguments, return value, errors, timing)
            - The debug events (harness lifecycle: spawn, start, stop, crash)
            - The participant state (did the agent join? did it disconnect?)
+           - The final agent message and exact validator reason
         4. Classify root cause: infrastructure bug vs documentation bug vs test bug
-        5. List the source files another agent should inspect to fix it
+        5. Mention relevant code areas only after the evidence. Do not substitute
+           a file list for diagnosis.
 
         ## Output format
         Produce a structured handoff report with:
         - **Summary**: one-line description of what happened
         - **Test results**: pass/fail counts and names
-        - **Failure details**: per-failure diagnostics (conversation, method history, debug events)
+        - **Failure details**: per-failure diagnostics (conversation, method history, debug events, final response, validator reason)
         - **Root cause classification**: infrastructure / docs / test for each failure
-        - **Files to inspect**: specific source files relevant to each issue
+        - **Evidence-backed code areas**: specific source areas only when tied to observed evidence
         - **Recommended fix order**: which issues to tackle first
       systemPromptMode: append
 
