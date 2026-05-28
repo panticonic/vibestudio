@@ -728,7 +728,11 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     attachments?: AttachmentInput[],
     turnId?: string,
   ): Promise<void> {
-    if (!pid) return;
+    if (!pid) {
+      throw new Error(
+        `Cannot publish ${event.kind} for invocation ${invocationId}: pubsub client is disconnected`
+      );
+    }
     await callChannel("publish", pid, AGENTIC_EVENT_PAYLOAD_KIND, {
         ...event,
         ...(event.turnId || !turnId ? {} : { turnId: turnId as never }),
