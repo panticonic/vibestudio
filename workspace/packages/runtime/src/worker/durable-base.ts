@@ -124,6 +124,8 @@ export interface DurableObjectContext {
   getWebSockets(tag?: string): WebSocket[];
   // Run async init during construction or upgrade (blocks other events)
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
+  // Keep background work alive after an RPC/fetch handler returns.
+  waitUntil?(promise: Promise<unknown>): void;
 }
 
 export interface SqlStorage {

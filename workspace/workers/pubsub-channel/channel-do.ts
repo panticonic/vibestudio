@@ -865,10 +865,16 @@ export class PubSubChannel extends DurableObjectBase {
     deliverToDo: boolean
   ): void {
     const onFatal = (err: { code?: string }) => {
-      if (err?.code === "TARGET_NOT_REACHABLE" || err?.code === "RECONNECT_GRACE_EXPIRED") {
+      if (
+        err?.code === "TARGET_NOT_REACHABLE" ||
+        err?.code === "RECONNECT_GRACE_EXPIRED" ||
+        err?.code === "DO_NOT_CREATED"
+      ) {
         this.sql.exec(`DELETE FROM participants WHERE id = ?`, subscriberId);
         cleanupDeliveryChain(subscriberId);
+        return true;
       }
+      return false;
     };
     for (const event of envelope.logEvents) {
       void queueEmit(
@@ -885,7 +891,7 @@ export class PubSubChannel extends DurableObjectBase {
           kind: "log",
           phase: "replay",
           event,
-        });
+        }, onFatal);
       }
     }
     for (const snapshot of envelope.snapshots) {
@@ -902,7 +908,7 @@ export class PubSubChannel extends DurableObjectBase {
         onFatal
       );
       if (deliverToDo) {
-        void queueDoEnvelope(this.broadcastDeps, subscriberId, message);
+        void queueDoEnvelope(this.broadcastDeps, subscriberId, message, onFatal);
       }
     }
     const readyMessage = {
@@ -917,7 +923,7 @@ export class PubSubChannel extends DurableObjectBase {
       onFatal
     );
     if (deliverToDo) {
-      void queueDoEnvelope(this.broadcastDeps, subscriberId, readyMessage);
+      void queueDoEnvelope(this.broadcastDeps, subscriberId, readyMessage, onFatal);
     }
   }
 
@@ -970,10 +976,16 @@ export class PubSubChannel extends DurableObjectBase {
     if (rows.length === 0) return;
 
     const onFatal = (err: { code?: string }) => {
-      if (err?.code === "TARGET_NOT_REACHABLE" || err?.code === "RECONNECT_GRACE_EXPIRED") {
+      if (
+        err?.code === "TARGET_NOT_REACHABLE" ||
+        err?.code === "RECONNECT_GRACE_EXPIRED" ||
+        err?.code === "DO_NOT_CREATED"
+      ) {
         this.sql.exec(`DELETE FROM participants WHERE id = ?`, participantId);
         cleanupDeliveryChain(participantId);
+        return true;
       }
+      return false;
     };
 
     for (const row of rows) {
@@ -1605,45 +1617,78 @@ export class PubSubChannel extends DurableObjectBase {
 
     const t = target[0]!;
     if (t["transport"] === "do") {
-      // Deliver to DO target via RPC call
-      try {
-        const result = await this.rpc.call(targetPid, "onMethodCall", [
-          this.objectKey,
-          transportCallId,
-          method,
-          args,
-          { invocationId, turnId },
-        ]);
-        // Method returned a result — deliver to caller
-        const pending = consumeCall(this.sql, transportCallId);
-        if (pending) {
-          const res = result as { result: unknown; isError?: boolean };
-          await this.deliverCallResult(
-            callerPid,
-            pending.invocationId,
-            pending.transportCallId,
-            pending.turnId,
-            pending.method,
-            res.result,
-            !!res.isError
-          );
-        }
-      } catch (err) {
-        const pending = consumeCall(this.sql, transportCallId);
-        if (pending) {
-          await this.deliverCallResult(
-            callerPid,
-            pending.invocationId,
-            pending.transportCallId,
-            pending.turnId,
-            pending.method,
-            err instanceof Error ? err.message : String(err),
-            true
-          );
-        }
-      }
+      this.scheduleDoMethodDelivery({
+        callerPid,
+        targetPid,
+        transportCallId,
+        invocationId,
+        turnId,
+        method,
+        args,
+      });
     } else {
       // RPC targets receive the durable invocation start through the log broadcast above.
+    }
+  }
+
+  private scheduleDoMethodDelivery(input: {
+    callerPid: string;
+    targetPid: string;
+    transportCallId: string;
+    invocationId: string;
+    turnId?: string;
+    method: string;
+    args: unknown;
+  }): void {
+    const promise = this.deliverDoMethodCall(input);
+    if (this.ctx.waitUntil) {
+      this.ctx.waitUntil(promise);
+    } else {
+      void promise;
+    }
+  }
+
+  private async deliverDoMethodCall(input: {
+    callerPid: string;
+    targetPid: string;
+    transportCallId: string;
+    invocationId: string;
+    turnId?: string;
+    method: string;
+    args: unknown;
+  }): Promise<void> {
+    try {
+      const result = await this.rpc.call(input.targetPid, "onMethodCall", [
+        this.objectKey,
+        input.transportCallId,
+        input.method,
+        input.args,
+        { invocationId: input.invocationId, turnId: input.turnId },
+      ]);
+      const pending = consumeCall(this.sql, input.transportCallId);
+      if (!pending) return;
+      const res = result as { result: unknown; isError?: boolean };
+      await this.deliverCallResult(
+        input.callerPid,
+        pending.invocationId,
+        pending.transportCallId,
+        pending.turnId,
+        pending.method,
+        res.result,
+        !!res.isError
+      );
+    } catch (err) {
+      const pending = consumeCall(this.sql, input.transportCallId);
+      if (!pending) return;
+      await this.deliverCallResult(
+        input.callerPid,
+        pending.invocationId,
+        pending.transportCallId,
+        pending.turnId,
+        pending.method,
+        err instanceof Error ? err.message : String(err),
+        true
+      );
     }
   }
 
