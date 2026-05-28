@@ -10,6 +10,7 @@ export type {
   ThinkingLevel,
   PiRunnerGadProvenance,
   RunnerTurnInput,
+  RunnerTurnOptions,
   HibernationResumableTool,
 } from "./pi-runner.js";
 

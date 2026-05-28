@@ -165,6 +165,7 @@ export interface PiRunnerOptions {
   ) => Promise<TurnSnapshot | void> | TurnSnapshot | void;
   publicationPolicy?: (input: { event: AgenticEvent; publishToChannel?: boolean }) => boolean;
   repairDurableOpenStateOnInit?: boolean;
+  onTurnPhase?: (event: { turnId: string; phase: "model_start" }) => void | Promise<void>;
   extraTools?: AgentTool<any>[];
   toolFilter?: (toolName: string) => boolean;
   compactionPolicy?: CompactionTriggerOptions;
@@ -201,6 +202,10 @@ export interface PiStateSnapshot {
 export interface RunnerTurnInput {
   content: string;
   images?: ImageContent[];
+}
+
+export interface RunnerTurnOptions {
+  turnId?: string;
 }
 
 interface RunnerDebugCheckpoint {
@@ -422,6 +427,8 @@ export class PiRunner {
   private readonly gad: DurableObjectServiceClient;
   private running = false;
   private currentTurnId: TurnId | null = null;
+  private openedTurnIds = new Set<string>();
+  private turnCloseFailedIds = new Set<string>();
   private readonly channelTargetPromises = new Map<string, Promise<string>>();
   private readonly channelPublicationBroadcastChains = new Map<string, Promise<void>>();
   private readonly channelPublicationBroadcasts = new Map<
@@ -668,6 +675,8 @@ export class PiRunner {
         },
       ]);
       if (this.currentTurnId === turnId) this.currentTurnId = null;
+      this.openedTurnIds.delete(turnId);
+      this.turnCloseFailedIds.delete(turnId);
       return true;
     } finally {
       this.forceClosingTurnIds.delete(turnId);
@@ -945,6 +954,12 @@ export class PiRunner {
         const result = await this.hooks.emitBeforeProviderRequest(event, {
           signal: this.activeRunSignal ?? undefined,
         });
+        if (this.currentTurnId) {
+          await this.options.onTurnPhase?.({
+            turnId: this.currentTurnId,
+            phase: "model_start",
+          });
+        }
         this.rememberCheckpoint("provider.request.hooks_ok", {
           providerRequestCount: this.providerRequestCount,
           patchedStreamOptions: Boolean(result?.streamOptions),
@@ -1356,9 +1371,10 @@ export class PiRunner {
   }
 
   private async openCurrentTurn(): Promise<void> {
-    if (!this.options.gad || this.currentTurnId) return;
-    const turnId = brandId<TurnId>(uuidv7());
+    if (!this.options.gad) return;
+    const turnId = this.currentTurnId ?? brandId<TurnId>(uuidv7());
     this.currentTurnId = turnId;
+    if (this.openedTurnIds.has(turnId)) return;
     await this.appendTrajectoryEvents([
       {
         event: {
@@ -1374,6 +1390,7 @@ export class PiRunner {
         publishToChannel: true,
       },
     ]);
+    this.openedTurnIds.add(turnId);
   }
 
   private async closeCurrentTurn(): Promise<void> {
@@ -1396,10 +1413,67 @@ export class PiRunner {
         publishToChannel: true,
       },
     ]).catch((err) => {
+      this.turnCloseFailedIds.add(turnId);
       this.rememberError("trajectory.turn.close", err);
       throw err;
     });
     this.currentTurnId = null;
+    this.openedTurnIds.delete(turnId);
+    this.turnCloseFailedIds.delete(turnId);
+  }
+
+  private adoptTurnId(turnId?: string): boolean {
+    if (!turnId) return false;
+    if (this.currentTurnId && this.currentTurnId !== turnId) {
+      throw new AgentWorkerError(
+        "invalid_state",
+        `Cannot adopt turn ${turnId}; turn ${this.currentTurnId} is already open`
+      );
+    }
+    const adoptedFromIdle = this.currentTurnId == null;
+    this.currentTurnId = brandId<TurnId>(turnId);
+    return adoptedFromIdle;
+  }
+
+  private async settleFailedOperationTurn(
+    requestedTurnId: string | undefined,
+    reason: string,
+    summary: string
+  ): Promise<void> {
+    const currentTurnId = this.currentTurnId;
+    if (!currentTurnId) return;
+    if (requestedTurnId && currentTurnId !== requestedTurnId) return;
+    if (!this.openedTurnIds.has(currentTurnId)) {
+      this.currentTurnId = null;
+      this.rememberCheckpoint("turn.failed_unopened_cleared", {
+        turnId: currentTurnId,
+        requestedTurnId: requestedTurnId ?? null,
+      });
+      return;
+    }
+    if (this.turnCloseFailedIds.has(currentTurnId)) {
+      this.rememberCheckpoint("turn.failed_not_cleared_after_close_failure", {
+        turnId: currentTurnId,
+        requestedTurnId: requestedTurnId ?? null,
+      });
+      return;
+    }
+    try {
+      await this.forceCloseCurrentTurn(reason, summary);
+      this.rememberCheckpoint("turn.failed_closed", {
+        turnId: currentTurnId,
+        requestedTurnId: requestedTurnId ?? null,
+        reason,
+      });
+    } catch (err) {
+      this.rememberError("turn.failed_close", err);
+      this.rememberCheckpoint("turn.failed_close_error", {
+        turnId: currentTurnId,
+        requestedTurnId: requestedTurnId ?? null,
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   async repairDurableOpenState(opts: { closeOpenTurns?: boolean } = {}): Promise<void> {
@@ -2502,8 +2576,9 @@ export class PiRunner {
     return this.hooks.on("transform_context", listener);
   }
 
-  async prompt(input: RunnerTurnInput): Promise<void> {
+  async prompt(input: RunnerTurnInput, opts: RunnerTurnOptions = {}): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    this.adoptTurnId(opts.turnId);
     const operationAbortController = new AbortController();
     this.activeOperationAbortController = operationAbortController;
     this.currentOperation = {
@@ -2526,6 +2601,11 @@ export class PiRunner {
       );
       this.rememberCheckpoint("prompt.harness.ok");
     } catch (err) {
+      await this.settleFailedOperationTurn(
+        opts.turnId,
+        "work_failed",
+        "Agent turn failed before completion"
+      );
       this.rememberError("prompt", err);
       this.rememberCheckpoint("prompt.error", {
         error: err instanceof Error ? err.message : String(err),
@@ -2593,8 +2673,9 @@ export class PiRunner {
     }
   }
 
-  async continueAgent(): Promise<void> {
+  async continueAgent(opts: RunnerTurnOptions = {}): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    this.adoptTurnId(opts.turnId);
     const operationAbortController = new AbortController();
     this.activeOperationAbortController = operationAbortController;
     this.currentOperation = {
@@ -2613,6 +2694,11 @@ export class PiRunner {
       await this.runHarnessOperation("continue", () => this.harness!.continue());
       this.rememberCheckpoint("continue.harness.ok");
     } catch (err) {
+      await this.settleFailedOperationTurn(
+        opts.turnId,
+        "work_failed",
+        "Agent turn failed before completion"
+      );
       this.rememberError("continue", err);
       this.rememberCheckpoint("continue.error", {
         error: err instanceof Error ? err.message : String(err),

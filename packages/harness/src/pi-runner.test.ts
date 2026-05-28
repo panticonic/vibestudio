@@ -198,6 +198,152 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
+  it("clears adopted turn ids when prompt setup fails before turn.opened", async () => {
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+    (runner as unknown as { refreshRuntimeTools(): Promise<void> }).refreshRuntimeTools = vi.fn(
+      async () => {
+        throw new Error("tool refresh failed");
+      }
+    );
+
+    await expect(runner.prompt({ content: "hello" }, { turnId: "turn-adopted" })).rejects.toThrow(
+      "tool refresh failed"
+    );
+
+    expect((await runner.getDebugState())["currentTurnId"]).toBeNull();
+    runner.dispose();
+  });
+
+  it("clears adopted turn ids when continue setup fails before turn.opened", async () => {
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+    (runner as unknown as { prepareSessionForContinue(): Promise<void> }).prepareSessionForContinue =
+      vi.fn(async () => {
+        throw new Error("continue preflight failed");
+      });
+
+    await expect(runner.continueAgent({ turnId: "turn-adopted" })).rejects.toThrow(
+      "continue preflight failed"
+    );
+
+    expect((await runner.getDebugState())["currentTurnId"]).toBeNull();
+    runner.dispose();
+  });
+
+  it("durably closes adopted turn ids when an opened prompt fails", async () => {
+    const appendTrajectoryBatch = vi.fn(async () => undefined);
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      hooks: { on(event: "event", listener: (event: { type?: string }) => void): unknown };
+    };
+    await runner.init();
+    internals.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    internals.gad = { call: appendTrajectoryBatch };
+    internals.hooks.on("event", (event) => {
+      if (event.type === "agent_start") throw new Error("opened turn failed");
+    });
+
+    await expect(runner.prompt({ content: "hello" }, { turnId: "turn-opened" })).rejects.toThrow(
+      "opened turn failed"
+    );
+
+    expect((await runner.getDebugState())["currentTurnId"]).toBeNull();
+    expect(appendTrajectoryBatch).toHaveBeenCalledWith(
+      "appendTrajectoryBatch",
+      expect.objectContaining({
+        events: [
+          expect.objectContaining({
+            event: expect.objectContaining({ kind: "turn.opened", turnId: "turn-opened" }),
+          }),
+        ],
+      })
+    );
+    expect(appendTrajectoryBatch).toHaveBeenCalledWith(
+      "appendTrajectoryBatch",
+      expect.objectContaining({
+        events: [
+          expect.objectContaining({
+            event: expect.objectContaining({
+              kind: "turn.closed",
+              turnId: "turn-opened",
+              payload: expect.objectContaining({
+                reason: "work_failed",
+                summary: "Agent turn failed before completion",
+              }),
+            }),
+          }),
+        ],
+      })
+    );
+    runner.dispose();
+  });
+
+  it("does not close a turn when turn.opened fails to persist", async () => {
+    const appendTrajectoryBatch = vi.fn(
+      async (
+        _method: string,
+        input: { events: Array<{ event: { kind: string; turnId?: string } }> }
+      ) => {
+        if (input.events.some((item) => item.event.kind === "turn.opened")) {
+          throw new Error("turn open append failed");
+        }
+        return { events: [], published: [] };
+      }
+    );
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+    };
+    await runner.init();
+    internals.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    internals.gad = { call: appendTrajectoryBatch };
+
+    await expect(runner.prompt({ content: "hello" }, { turnId: "turn-open-failed" })).rejects.toThrow(
+      "turn open append failed"
+    );
+
+    expect((await runner.getDebugState())["currentTurnId"]).toBeNull();
+    expect(appendTrajectoryBatch).toHaveBeenCalledWith(
+      "appendTrajectoryBatch",
+      expect.objectContaining({
+        events: [
+          expect.objectContaining({
+            event: expect.objectContaining({
+              kind: "turn.opened",
+              turnId: "turn-open-failed",
+            }),
+          }),
+        ],
+      })
+    );
+    expect(appendTrajectoryBatch).not.toHaveBeenCalledWith(
+      "appendTrajectoryBatch",
+      expect.objectContaining({
+        events: [
+          expect.objectContaining({
+            event: expect.objectContaining({
+              kind: "turn.closed",
+              turnId: "turn-open-failed",
+            }),
+          }),
+        ],
+      })
+    );
+    runner.dispose();
+  });
+
   it("appends user messages through the session", async () => {
     const runner = new PiRunner(createOptions());
     await runner.init();
@@ -537,6 +683,52 @@ describe("PiRunner", () => {
     expect(runner.awaitingProviderFirstEvent).toBe(false);
     expect(runner.activeRunSignal).toBeNull();
     expect(options.uiCallbacks.setWorkingMessage).toHaveBeenCalledWith(undefined);
+  });
+
+  it("keeps an opened turn after public prompt fails while appending turn.closed", async () => {
+    const appendTrajectoryBatch = vi.fn(
+      async (
+        _method: string,
+        input: { events: Array<{ event: { kind: string; turnId?: string } }> }
+      ) => {
+        if (input.events.some((item) => item.event.kind === "turn.closed")) {
+          throw new Error("turn close append failed");
+        }
+        return { events: [], published: [] };
+      }
+    );
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      currentTurnId: string | null;
+    };
+    await runner.init();
+    internals.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    internals.gad = { call: appendTrajectoryBatch };
+
+    await expect(runner.prompt({ content: "hello" }, { turnId: "turn-close-failed" })).rejects.toThrow(
+      "turn close append failed"
+    );
+
+    expect(internals.currentTurnId).toBe("turn-close-failed");
+    expect(appendTrajectoryBatch).toHaveBeenCalledWith(
+      "appendTrajectoryBatch",
+      expect.objectContaining({
+        events: [
+          expect.objectContaining({
+            event: expect.objectContaining({
+              kind: "turn.opened",
+              turnId: "turn-close-failed",
+            }),
+          }),
+        ],
+      })
+    );
   });
 
   it("does not append a completed turn close while force close is in progress", async () => {

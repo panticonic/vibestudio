@@ -4,7 +4,6 @@ import type { AgentEvent, AgentMessage } from "@earendil-works/pi-agent-core";
 
 import {
   TurnDispatcher,
-  type TurnDispatcherProjector,
   type TurnDispatcherRunner,
 } from "./turn-dispatcher.js";
 import type { RunnerTurnInput } from "@natstack/harness";
@@ -85,16 +84,6 @@ function makeRunner(): FakeRunnerState {
   return state;
 }
 
-function makeProjector(): TurnDispatcherProjector & { closeAllCount: number } {
-  const projector = {
-    closeAllCount: 0,
-    async closeAll() {
-      projector.closeAllCount++;
-    },
-  };
-  return projector;
-}
-
 function makeMsg(tag: string): AgentMessage & RunnerTurnInput {
   return {
     role: "user",
@@ -136,11 +125,9 @@ async function flush(): Promise<void> {
 describe("TurnDispatcher — idle submission", () => {
   it("routes an idle submit to prompt with the exact RunnerTurnInput", async () => {
     const runner = makeRunner();
-    const projector = makeProjector();
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector,
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -156,11 +143,9 @@ describe("TurnDispatcher — idle submission", () => {
 
   it("broadcasts typing false after the turn ends and queue drains", async () => {
     const runner = makeRunner();
-    const projector = makeProjector();
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector,
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -178,10 +163,8 @@ describe("TurnDispatcher — idle submission", () => {
 
   it("processes multiple idle submits serially", async () => {
     const runner = makeRunner();
-    const projector = makeProjector();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector,
       notifyTyping: () => {},
     });
 
@@ -218,7 +201,6 @@ describe("TurnDispatcher — mid-run steer", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -239,7 +221,6 @@ describe("TurnDispatcher — mid-run steer", () => {
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -256,7 +237,6 @@ describe("TurnDispatcher — mid-run steer", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -285,7 +265,6 @@ describe("TurnDispatcher — mid-run steer", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -314,7 +293,6 @@ describe("TurnDispatcher — self-healing sweep", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -336,7 +314,6 @@ describe("TurnDispatcher — self-healing sweep", () => {
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -368,7 +345,6 @@ describe("TurnDispatcher — self-healing sweep", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -393,7 +369,6 @@ describe("TurnDispatcher — self-healing sweep", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -427,7 +402,6 @@ describe("TurnDispatcher — self-healing sweep", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -456,11 +430,9 @@ describe("TurnDispatcher — self-healing sweep", () => {
 describe("TurnDispatcher — runTurn failure", () => {
   it("continues draining the queue after a runTurn rejects (steered msg swept)", async () => {
     const runner = makeRunner();
-    const projector = makeProjector();
     const log = { warn: vi.fn(), error: vi.fn() };
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector,
       notifyTyping: () => {},
       log,
     });
@@ -479,8 +451,6 @@ describe("TurnDispatcher — runTurn failure", () => {
     runner.runTurnCalls[0]!.deferred.reject(new Error("boom"));
     await flush();
     await flush();
-
-    expect(projector.closeAllCount).toBe(1);
     expect(runner.runTurnCalls).toHaveLength(2);
     expect(runner.runTurnCalls[1]!.msg).toBe(b);
     expect(runner.clearSteerCount).toBe(1);
@@ -493,7 +463,6 @@ describe("TurnDispatcher — runTurn failure", () => {
     const log = { warn: vi.fn(), error: vi.fn() };
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => typing.push(busy),
       log,
     });
@@ -513,7 +482,6 @@ describe("TurnDispatcher — external aborts", () => {
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -535,7 +503,6 @@ describe("TurnDispatcher — external aborts", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -557,7 +524,6 @@ describe("TurnDispatcher — external aborts", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -578,7 +544,6 @@ describe("TurnDispatcher — external aborts", () => {
     const log = { warn: vi.fn(), error: vi.fn() };
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
       log,
     });
@@ -600,7 +565,6 @@ describe("TurnDispatcher — reset", () => {
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -621,7 +585,6 @@ describe("TurnDispatcher — reset", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -644,7 +607,6 @@ describe("TurnDispatcher — reset", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -674,7 +636,6 @@ describe("TurnDispatcher — reset", () => {
     const log = { warn: vi.fn(), error: vi.fn() };
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
       log,
     });
@@ -710,7 +671,6 @@ describe("TurnDispatcher — dispose", () => {
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -727,7 +687,6 @@ describe("TurnDispatcher — dispose", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -750,7 +709,6 @@ describe("TurnDispatcher — dispose", () => {
     let typingCalls = 0;
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {
         typingCalls++;
       },
@@ -777,7 +735,6 @@ describe("TurnDispatcher — reset edge paths", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -793,7 +750,6 @@ describe("TurnDispatcher — reset edge paths", () => {
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -814,7 +770,6 @@ describe("TurnDispatcher — sequential mode", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -840,7 +795,6 @@ describe("TurnDispatcher — sequential mode", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -868,7 +822,6 @@ describe("TurnDispatcher — typing transitions", () => {
     const typing: boolean[] = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => typing.push(busy),
     });
 
@@ -902,7 +855,6 @@ describe("TurnDispatcher — typing transitions", () => {
     let throwNext = false;
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: (busy) => {
         typing.push(busy);
         if (throwNext) throw new Error("notify boom");
@@ -918,19 +870,19 @@ describe("TurnDispatcher — typing transitions", () => {
     warn.mockRestore();
   });
 
-  it("clears typing and closes durable turn on runner prompt failure", async () => {
+  it("clears typing and reports runner prompt failure", async () => {
     const runner = makeRunner();
-    const projector = makeProjector();
     const typing: boolean[] = [];
-    const failures: Array<{ kind: string; message: string }> = [];
+    const failures: Array<{ kind: string; message: string; turnId?: string }> = [];
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector,
       notifyTyping: (busy) => typing.push(busy),
-      onWorkFailure: async (work, error) => {
+      onWorkStart: async () => "turn-failed",
+      onWorkFailure: async (work, error, turnId) => {
         failures.push({
           kind: work.kind,
           message: error instanceof Error ? error.message : String(error),
+          turnId,
         });
       },
     });
@@ -940,10 +892,10 @@ describe("TurnDispatcher — typing transitions", () => {
     runner.runTurnCalls[0]!.deferred.reject(new Error("eval result persistence failed"));
     await flush();
     await flush();
-
-    expect(projector.closeAllCount).toBe(1);
     expect(typing).toEqual([true, false]);
-    expect(failures).toEqual([{ kind: "prompt", message: "eval result persistence failed" }]);
+    expect(failures).toEqual([
+      { kind: "prompt", message: "eval result persistence failed", turnId: "turn-failed" },
+    ]);
     expect(d.getDebugState()).toMatchObject({ busy: false, running: false });
   });
 });
@@ -953,7 +905,6 @@ describe("TurnDispatcher — race scenarios", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 
@@ -997,7 +948,6 @@ describe("TurnDispatcher — race scenarios", () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
       runner: runner.runner,
-      projector: makeProjector(),
       notifyTyping: () => {},
     });
 

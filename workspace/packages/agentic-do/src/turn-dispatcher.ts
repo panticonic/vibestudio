@@ -7,18 +7,20 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { RunnerEvent, RunnerTurnInput } from "@natstack/harness";
+import type { RunnerEvent, RunnerTurnInput, RunnerTurnOptions } from "@natstack/harness";
 
 export interface TurnDispatcherRunner {
   subscribe(listener: (event: RunnerEvent) => void): () => void;
   buildUserMessage(input: RunnerTurnInput): AgentMessage;
-  prompt(input: RunnerTurnInput): Promise<void>;
-  continueAgent(): Promise<void>;
+  prompt(input: RunnerTurnInput, opts?: RunnerTurnOptions): Promise<void>;
+  continueAgent(opts?: RunnerTurnOptions): Promise<void>;
   steerMessage(message: AgentMessage): Promise<void>;
   clearSteeringQueue(): Promise<void>;
 }
 
-export type WorkItem = { kind: "prompt"; input: RunnerTurnInput } | { kind: "continue" };
+export type WorkItem =
+  | { kind: "prompt"; input: RunnerTurnInput }
+  | { kind: "continue"; turnId?: string };
 
 type WorkCompletion =
   | { status: "completed"; source: "runner" | "agent_end" }
@@ -28,6 +30,7 @@ type WorkCompletion =
 interface ActiveWork {
   generation: number;
   kind: WorkItem["kind"];
+  turnId?: string;
   sawAgentStart: boolean;
   sawAgentEnd: boolean;
   runnerSettled: boolean;
@@ -41,15 +44,11 @@ interface PendingSteer {
   message: AgentMessage;
 }
 
-export interface TurnDispatcherProjector {
-  closeAll(): Promise<void>;
-}
-
 export interface TurnDispatcherOptions {
   runner: TurnDispatcherRunner;
-  projector: TurnDispatcherProjector;
   notifyTyping: (busy: boolean) => void;
-  onWorkFailure?: (work: WorkItem, error: unknown) => void | Promise<void>;
+  onWorkStart?: (work: WorkItem) => string | undefined | Promise<string | undefined>;
+  onWorkFailure?: (work: WorkItem, error: unknown, turnId?: string) => void | Promise<void>;
   log?: Pick<Console, "warn" | "error">;
 }
 
@@ -92,9 +91,9 @@ export class TurnDispatcher {
     this.ensureDrain();
   }
 
-  submitContinue(): void {
+  submitContinue(opts: RunnerTurnOptions = {}): void {
     if (this.disposed) return;
-    this.pending.push({ kind: "continue" });
+    this.pending.push({ kind: "continue", ...(opts.turnId ? { turnId: opts.turnId } : {}) });
     this.notifyTyping();
     this.ensureDrain();
   }
@@ -242,14 +241,9 @@ export class TurnDispatcher {
             completion.error
           );
           try {
-            await this.opts.onWorkFailure?.(work, completion.error);
+            await this.opts.onWorkFailure?.(work, completion.error, active.turnId);
           } catch (failureErr) {
             this.log.warn("[TurnDispatcher] onWorkFailure failed:", failureErr);
-          }
-          try {
-            await this.opts.projector.closeAll();
-          } catch (closeErr) {
-            this.log.warn("[TurnDispatcher] projector.closeAll failed:", closeErr);
           }
           if (this.pendingSteered.length > 0) {
             for (const item of this.pendingSteered)
@@ -308,10 +302,19 @@ export class TurnDispatcher {
   private observeRunnerWork(work: WorkItem, active: ActiveWork): void {
     let promise: Promise<void>;
     try {
-      promise =
-        work.kind === "continue"
-          ? this.opts.runner.continueAgent()
-          : this.opts.runner.prompt(work.input);
+      if (this.opts.onWorkStart) {
+        promise = Promise.resolve(this.opts.onWorkStart(work)).then((turnId) => {
+          active.turnId = turnId;
+          return work.kind === "continue"
+            ? this.opts.runner.continueAgent({ turnId })
+            : this.opts.runner.prompt(work.input, { turnId });
+        });
+      } else {
+        promise =
+          work.kind === "continue"
+            ? this.opts.runner.continueAgent()
+            : this.opts.runner.prompt(work.input);
+      }
     } catch (err) {
       active.runnerSettled = true;
       this.completeActiveWork(active, { status: "failed", error: err });

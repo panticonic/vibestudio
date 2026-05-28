@@ -31,6 +31,14 @@ class TestAgentWorker extends AgentWorkerBase {
   public testShouldProcess(event: ChannelEvent): boolean {
     return this.shouldProcess(event);
   }
+
+  public testHandleRunnerMessageEndForTurnLedger(
+    channelId: string,
+    runner: Pick<PiRunner, "getCurrentTurnId" | "session">,
+    message: AgentMessage
+  ): Promise<void> {
+    return this.handleRunnerMessageEndForTurnLedger(channelId, runner, message);
+  }
 }
 
 class InterruptTestAgentWorker extends TestAgentWorker {
@@ -69,6 +77,21 @@ class StrictMentionTestAgentWorker extends TestAgentWorker {
 
   public testShouldRespond(channelId: string, event: ChannelEvent) {
     return this.shouldRespond(channelId, event);
+  }
+}
+
+class GatingTestAgentWorker extends StrictMentionTestAgentWorker {
+  refreshCount = 0;
+  runnerCount = 0;
+
+  protected override async refreshRoster(channelId: string): Promise<void> {
+    this.refreshCount++;
+    await super.refreshRoster(channelId);
+  }
+
+  protected override async getOrCreateRunner(channelId: string): Promise<PiRunner> {
+    this.runnerCount++;
+    return super.getOrCreateRunner(channelId);
   }
 }
 
@@ -128,6 +151,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       createdAt?: number;
       toolCallIndex?: number;
       toolName?: string;
+      turnId?: string | null;
       sessionLeafBeforeCall?: string | null;
       args?: unknown;
     }
@@ -142,7 +166,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
          participant_handle, target_participant_id, args_json, session_leaf_before_call,
          terminal_kind, result_json, result_is_error, result_event_id, result_received_at,
          delivery_status, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       opts.callId,
       channelId,
       invocationId,
@@ -150,6 +174,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       "assistant-1",
       opts.toolCallIndex ?? 0,
       opts.toolName ?? "eval",
+      opts.turnId ?? "turn-1",
       opts.kind ?? "channelMethod",
       opts.kind === "approval" || opts.kind === "uiPrompt" ? "ui_prompt" : "eval",
       opts.kind === "approval" || opts.kind === "uiPrompt" ? "panel-1" : "tool-1",
@@ -165,6 +190,647 @@ describe("AgentWorkerBase method suspension ledger", () => {
       now
     );
   }
+
+  function insertTurnRun(
+    sql: { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } },
+    opts: {
+      turnId: string;
+      channelId?: string;
+      status?: string;
+      resumeCursorEntryId?: string | null;
+    }
+  ) {
+    const now = Date.now();
+    sql.exec(
+      `INSERT INTO agent_turn_runs (
+         turn_id, channel_id, status, resume_cursor_entry_id,
+         opened_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+      opts.turnId,
+      opts.channelId ?? "chat-1",
+      opts.status ?? "starting",
+      opts.resumeCursorEntryId ?? null,
+      now,
+      now
+    );
+  }
+
+  function turnStatus(
+    sql: { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } },
+    turnId: string
+  ): Record<string, unknown> {
+    return sql.exec(`SELECT * FROM agent_turn_runs WHERE turn_id = ?`, turnId).toArray()[0]!;
+  }
+
+  function diagnosticChannel(send = vi.fn().mockResolvedValue(undefined)) {
+    return {
+      getParticipants: vi.fn().mockResolvedValue([]),
+      send,
+      callMethod: vi.fn(),
+      cancelCall: vi.fn(),
+      setTypingState: vi.fn(),
+    };
+  }
+
+  it("CASes suspension delivery status against the caller-observed state", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      markSuspensionDeliveryStatus(
+        callId: string,
+        from: string,
+        to: string,
+        intent: string
+      ): boolean;
+    };
+
+    insertSuspension(sql, { callId: "call-cas", deliveryStatus: "pending" });
+
+    expect(
+      worker.markSuspensionDeliveryStatus(
+        "call-cas",
+        "pending",
+        "delivered_live",
+        "delivered_to_live_waiter"
+      )
+    ).toBe(true);
+    expect(
+      sql
+        .exec(`SELECT delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`, "call-cas")
+        .toArray()[0]
+    ).toMatchObject({ delivery_status: "delivered_live" });
+
+    expect(
+      worker.markSuspensionDeliveryStatus(
+        "call-cas",
+        "pending",
+        "recovering",
+        "resume_started"
+      )
+    ).toBe(false);
+    expect(
+      sql
+        .exec(`SELECT delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`, "call-cas")
+        .toArray()[0]
+    ).toMatchObject({ delivery_status: "delivered_live" });
+
+    expect(
+      worker.markSuspensionDeliveryStatus(
+        "call-cas",
+        "delivered_live",
+        "delivered_live",
+        "delivered_to_live_waiter"
+      )
+    ).toBe(true);
+    expect(() =>
+      worker.markSuspensionDeliveryStatus("call-cas", "delivered_live", "pending", "resume_started")
+    ).toThrow("illegal method suspension transition");
+  });
+
+  it("keeps assistant tool-call messages open so external waits can be recorded", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const runner = {
+      getCurrentTurnId: () => "turn-tool-call",
+      session: null,
+    } as unknown as Pick<PiRunner, "getCurrentTurnId" | "session">;
+    insertTurnRun(sql, { turnId: "turn-tool-call", status: "running_model" });
+
+    await instance.testHandleRunnerMessageEndForTurnLedger("chat-1", runner, {
+      role: "assistant",
+      content: [
+        { type: "text", text: "I need to run a check." },
+        { type: "tool_call", tool_call_id: "call-eval", name: "eval", input: {} },
+      ],
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    expect(turnStatus(sql, "turn-tool-call")).toMatchObject({ status: "running_model" });
+    expect(
+      sql.exec(`SELECT * FROM agent_turn_outbox WHERE turn_id = ?`, "turn-tool-call").toArray()
+    ).toEqual([]);
+  });
+
+  it("moves final assistant messages to closing and queues the durable close projection", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const runner = {
+      getCurrentTurnId: () => "turn-final",
+      session: null,
+    } as unknown as Pick<PiRunner, "getCurrentTurnId" | "session">;
+    insertTurnRun(sql, { turnId: "turn-final", status: "running_model" });
+
+    await instance.testHandleRunnerMessageEndForTurnLedger("chat-1", runner, {
+      role: "assistant",
+      content: [{ type: "text", text: "Done." }],
+      timestamp: Date.now(),
+    } as AgentMessage);
+
+    expect(turnStatus(sql, "turn-final")).toMatchObject({ status: "closing" });
+    expect(
+      sql.exec(`SELECT kind, status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-final").toArray()
+    ).toEqual([expect.objectContaining({ kind: "close_turn_projection", status: "pending" })]);
+  });
+
+  it("rejects UI prompt dispatch before creating a live waiter when durable recording is skipped", async () => {
+    const { instance } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const callMethod = vi.fn();
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      runners: Map<string, { runner: unknown }>;
+      methodResultWaiters: Map<string, unknown>;
+      dispatchUiPrompt(
+        channelId: string,
+        toolCallId: string,
+        kind: "confirm",
+        params: Record<string, unknown>
+      ): Promise<unknown>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue({
+      getParticipants: vi.fn().mockResolvedValue([
+        { participantId: "panel-1", metadata: { type: "panel" } },
+      ]),
+      callMethod,
+    });
+    worker.runners.set("chat-1", {
+      runner: {
+        getCurrentTurnId: () => "turn-ui",
+        getOpenInvocation: () => undefined,
+        session: { getLeafId: async () => "leaf-1" },
+      },
+    });
+
+    await expect(
+      worker.dispatchUiPrompt("chat-1", "tool-1", "confirm", { title: "Proceed?" })
+    ).rejects.toThrow("durable suspension");
+
+    expect(worker.methodResultWaiters.size).toBe(0);
+    expect(callMethod).not.toHaveBeenCalled();
+  });
+
+  it("models open external waits from turn-scoped suspensions and credentials", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      insertTurnRun(channelId: string, turnId: string): void;
+      turnHasOpenExternalWait(turnId: string): boolean;
+      transitionTurn(turnId: string, from: string[], to: string): boolean;
+    };
+    worker.insertTurnRun("chat-1", "turn-wait");
+    expect(worker.transitionTurn("turn-wait", ["starting"], "waiting_external")).toBe(true);
+
+    insertSuspension(sql, {
+      callId: "resolved",
+      turnId: "turn-wait",
+      deliveryStatus: "transcript_admitted",
+    });
+    expect(worker.turnHasOpenExternalWait("turn-wait")).toBe(false);
+
+    insertSuspension(sql, { callId: "pending", turnId: "turn-wait", deliveryStatus: "pending" });
+    expect(worker.turnHasOpenExternalWait("turn-wait")).toBe(true);
+    sql.exec(
+      `UPDATE agent_method_suspensions
+       SET delivery_status = 'transcript_admitted'
+       WHERE transport_call_id = ?`,
+      "pending"
+    );
+    expect(worker.turnHasOpenExternalWait("turn-wait")).toBe(false);
+
+    sql.exec(
+      `INSERT INTO model_credential_interruptions
+       (channel_id, provider_id, model_base_url, turn_id, resume_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      "chat-1",
+      "provider",
+      "https://model.example/v1",
+      "turn-wait",
+      0,
+      Date.now()
+    );
+    expect(worker.turnHasOpenExternalWait("turn-wait")).toBe(true);
+  });
+
+  it("enforces turn transition legality and terminal absorption", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      transitionTurn(turnId: string, from: string[], to: string): boolean;
+    };
+    const legal: Array<[string, string]> = [
+      ["starting", "running_model"],
+      ["starting", "waiting_external"],
+      ["starting", "failed"],
+      ["starting", "interrupted"],
+      ["running_model", "waiting_external"],
+      ["running_model", "closing"],
+      ["running_model", "failed"],
+      ["running_model", "interrupted"],
+      ["waiting_external", "continuing"],
+      ["waiting_external", "running_model"],
+      ["waiting_external", "failed"],
+      ["waiting_external", "interrupted"],
+      ["continuing", "running_model"],
+      ["continuing", "waiting_external"],
+      ["continuing", "closing"],
+      ["continuing", "failed"],
+      ["continuing", "interrupted"],
+      ["closing", "closed"],
+      ["closing", "failed"],
+      ["closing", "interrupted"],
+    ];
+    for (const [from, to] of legal) {
+      const turnId = `legal-${from}-${to}`;
+      insertTurnRun(sql, { turnId, status: from });
+      expect(worker.transitionTurn(turnId, [from], to)).toBe(true);
+      expect(turnStatus(sql, turnId)).toMatchObject({ status: to });
+    }
+
+    insertTurnRun(sql, { turnId: "illegal", status: "running_model" });
+    expect(() => worker.transitionTurn("illegal", ["running_model"], "starting")).toThrow(
+      "illegal turn transition"
+    );
+    insertTurnRun(sql, { turnId: "terminal", status: "failed" });
+    expect(worker.transitionTurn("terminal", ["failed"], "failed")).toBe(true);
+    expect(() => worker.transitionTurn("terminal", ["failed"], "running_model")).toThrow(
+      "illegal turn transition"
+    );
+  });
+
+  it("returns false (never throws) when the current status is outside expectedFrom", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      transitionTurn(turnId: string, from: string[], to: string): boolean;
+    };
+
+    // The credential-required path leaves the turn at waiting_external, then the
+    // assistant message_end handler attempts ["running_model","continuing"] -> closing.
+    // That must be a no-op, not an illegal-transition throw, so the turn stays a
+    // recoverable waiting_external and credential resume works.
+    insertTurnRun(sql, { turnId: "cred-wait", status: "waiting_external" });
+    let result: boolean | undefined;
+    expect(() => {
+      result = worker.transitionTurn("cred-wait", ["running_model", "continuing"], "closing");
+    }).not.toThrow();
+    expect(result).toBe(false);
+    expect(turnStatus(sql, "cred-wait")).toMatchObject({ status: "waiting_external" });
+
+    // Interrupt race: a turn already interrupted must absorb a late closing
+    // attempt from the message_end handler without throwing in the async listener.
+    insertTurnRun(sql, { turnId: "raced", status: "interrupted" });
+    expect(() =>
+      worker.transitionTurn("raced", ["running_model", "continuing"], "closing")
+    ).not.toThrow();
+    expect(worker.transitionTurn("raced", ["running_model", "continuing"], "closing")).toBe(false);
+    expect(turnStatus(sql, "raced")).toMatchObject({ status: "interrupted" });
+  });
+
+  it("recovers starting turns with credential waits as waiting_external", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    insertTurnRun(sql, { turnId: "turn-start-credential", status: "starting" });
+    sql.exec(
+      `INSERT INTO model_credential_interruptions
+       (channel_id, provider_id, model_base_url, turn_id, resume_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      "chat-1",
+      "provider",
+      "https://model.example/v1",
+      "turn-start-credential",
+      0,
+      Date.now()
+    );
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    expect(turnStatus(sql, "turn-start-credential")).toMatchObject({
+      status: "waiting_external",
+    });
+  });
+
+  it("marks bare starting turns interrupted and emits through the outbox", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(diagnosticChannel(send));
+    insertTurnRun(sql, { turnId: "turn-start-bare", status: "starting" });
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    expect(turnStatus(sql, "turn-start-bare")).toMatchObject({
+      status: "interrupted",
+      failure_code: "runner_restarted_before_model",
+    });
+    expect(send).toHaveBeenCalledWith(
+      "do:agent",
+      expect.any(String),
+      "Agent turn was interrupted before model generation began.",
+      expect.objectContaining({ idempotencyKey: "turn-ledger-diagnostic:turn-start-bare" })
+    );
+    expect(
+      sql.exec(`SELECT status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-start-bare").toArray()
+    ).toEqual([expect.objectContaining({ status: "done" })]);
+  });
+
+  it("keeps waiting_external while any turn-scoped wait remains open", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      sweepStuckDelivery: ReturnType<typeof vi.fn>;
+      recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
+    worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
+    insertTurnRun(sql, { turnId: "turn-wait-open", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "wait-open",
+      turnId: "turn-wait-open",
+      deliveryStatus: "pending",
+    });
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    expect(turnStatus(sql, "turn-wait-open")).toMatchObject({ status: "waiting_external" });
+    expect(worker.sweepStuckDelivery).toHaveBeenCalled();
+    expect(worker.recoverDeliveredAndOrphanedSuspensions).toHaveBeenCalled();
+  });
+
+  it("reconciles admitted waiting_external turns to continuing with the exact cursor", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      sweepStuckDelivery: ReturnType<typeof vi.fn>;
+      recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
+    worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
+    insertTurnRun(sql, { turnId: "turn-wait-admitted", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "wait-admitted",
+      turnId: "turn-wait-admitted",
+      deliveryStatus: "transcript_admitted",
+    });
+    sql.exec(
+      `UPDATE agent_method_suspensions
+       SET admitted_entry_id = ?
+       WHERE transport_call_id = ?`,
+      "entry-exact",
+      "wait-admitted"
+    );
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    expect(turnStatus(sql, "turn-wait-admitted")).toMatchObject({
+      status: "continuing",
+      resume_cursor_entry_id: "entry-exact",
+    });
+  });
+
+  it("fails waiting_external turns whose child waits resolved without a cursor", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      sweepStuckDelivery: ReturnType<typeof vi.fn>;
+      recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(diagnosticChannel(send));
+    worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
+    worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
+    insertTurnRun(sql, { turnId: "turn-wait-stale", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "wait-stale",
+      turnId: "turn-wait-stale",
+      deliveryStatus: "stale",
+    });
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    expect(turnStatus(sql, "turn-wait-stale")).toMatchObject({
+      status: "failed",
+      failure_code: "external_wait_unrecoverable",
+    });
+    expect(send).toHaveBeenCalledWith(
+      "do:agent",
+      expect.any(String),
+      "External wait resolved without a resumable cursor.",
+      expect.objectContaining({ idempotencyKey: "turn-ledger-diagnostic:turn-wait-stale" })
+    );
+  });
+
+  it("resumes continuing turns from a valid explicit cursor", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const submitContinue = vi.fn();
+    const moveTo = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      dispatchers: Map<string, unknown>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.dispatchers.set("chat-1", { submitContinue, getDebugState: () => ({ busy: false }) });
+    insertTurnRun(sql, {
+      turnId: "turn-continuing",
+      status: "continuing",
+      resumeCursorEntryId: "entry-ok",
+    });
+    const runner = {
+      session: {
+        getEntries: vi.fn().mockResolvedValue([{ id: "entry-ok", type: "message" }]),
+        moveTo,
+      },
+      subscribe: () => () => undefined,
+    } as unknown as PiRunner;
+
+    await expect(worker.recoverFromTurnLedger("chat-1", runner)).resolves.toBe(true);
+
+    expect(moveTo).toHaveBeenCalledWith("entry-ok");
+    expect(submitContinue).toHaveBeenCalledTimes(1);
+    expect(submitContinue).toHaveBeenCalledWith({ turnId: "turn-continuing" });
+  });
+
+  it("fails continuing turns with an invalid explicit cursor", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(diagnosticChannel(send));
+    insertTurnRun(sql, {
+      turnId: "turn-continuing-missing",
+      status: "continuing",
+      resumeCursorEntryId: "entry-missing",
+    });
+    const runner = {
+      session: { getEntries: vi.fn().mockResolvedValue([]) },
+    } as unknown as PiRunner;
+
+    await worker.recoverFromTurnLedger("chat-1", runner);
+
+    expect(turnStatus(sql, "turn-continuing-missing")).toMatchObject({
+      status: "failed",
+      failure_code: "invalid_resume_cursor",
+    });
+    expect(send).toHaveBeenCalledWith(
+      "do:agent",
+      expect.any(String),
+      "Agent recovery cursor was missing; the turn cannot continue.",
+      expect.objectContaining({ idempotencyKey: "turn-ledger-diagnostic:turn-continuing-missing" })
+    );
+  });
+
+  it("marks running_model turns interrupted on activation", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(diagnosticChannel(send));
+    insertTurnRun(sql, { turnId: "turn-running", status: "running_model" });
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    expect(turnStatus(sql, "turn-running")).toMatchObject({
+      status: "interrupted",
+      failure_code: "runner_restarted_mid_model",
+    });
+    expect(send).toHaveBeenCalledWith(
+      "do:agent",
+      expect.any(String),
+      "Agent turn was interrupted during model generation.",
+      expect.objectContaining({ idempotencyKey: "turn-ledger-diagnostic:turn-running" })
+    );
+  });
+
+  it("drains close_turn_projection for closing turns and marks them closed", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const repairDurableOpenState = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    insertTurnRun(sql, { turnId: "turn-closing", status: "closing" });
+
+    await worker.recoverFromTurnLedger("chat-1", {
+      repairDurableOpenState,
+    } as unknown as PiRunner);
+
+    expect(repairDurableOpenState).toHaveBeenCalledWith({ closeOpenTurns: true });
+    expect(turnStatus(sql, "turn-closing")).toMatchObject({ status: "closed" });
+    expect(
+      sql.exec(`SELECT status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-closing").toArray()
+    ).toEqual([expect.objectContaining({ status: "done" })]);
+  });
+
+  it("does nothing for terminal turn ledger rows during recovery", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    insertTurnRun(sql, { turnId: "turn-closed", status: "closed" });
+    insertTurnRun(sql, { turnId: "turn-failed", status: "failed" });
+    insertTurnRun(sql, { turnId: "turn-interrupted", status: "interrupted" });
+
+    await expect(worker.recoverFromTurnLedger("chat-1", {} as PiRunner)).resolves.toBe(false);
+
+    expect(turnStatus(sql, "turn-closed")).toMatchObject({ status: "closed" });
+    expect(turnStatus(sql, "turn-failed")).toMatchObject({ status: "failed" });
+    expect(turnStatus(sql, "turn-interrupted")).toMatchObject({ status: "interrupted" });
+  });
+
+  it("deduplicates done outbox diagnostics and retries failed outbox rows", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const failingSend = vi.fn().mockRejectedValueOnce(new Error("send failed"));
+    const channel = diagnosticChannel(failingSend);
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      enqueueTurnOutbox(opts: {
+        channelId: string;
+        turnId: string;
+        kind: "emit_diagnostic";
+        dedupKey: string;
+        payload: unknown;
+      }): Promise<void>;
+      drainTurnOutbox(channelId: string, runner?: PiRunner): Promise<void>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(channel);
+
+    await worker.enqueueTurnOutbox({
+      channelId: "chat-1",
+      turnId: "turn-outbox",
+      kind: "emit_diagnostic",
+      dedupKey: "same-diagnostic",
+      payload: { message: "diagnostic once" },
+    });
+    await worker.enqueueTurnOutbox({
+      channelId: "chat-1",
+      turnId: "turn-outbox",
+      kind: "emit_diagnostic",
+      dedupKey: "same-diagnostic",
+      payload: { message: "diagnostic once" },
+    });
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM agent_turn_outbox`).toArray()[0]).toMatchObject({
+      count: 1,
+    });
+
+    await worker.drainTurnOutbox("chat-1");
+    expect(sql.exec(`SELECT status, attempts, last_error FROM agent_turn_outbox`).toArray()[0])
+      .toMatchObject({ status: "failed", attempts: 1, last_error: "send failed" });
+
+    failingSend.mockResolvedValueOnce(undefined);
+    await worker.drainTurnOutbox("chat-1");
+    expect(sql.exec(`SELECT status, attempts, last_error FROM agent_turn_outbox`).toArray()[0])
+      .toMatchObject({ status: "done", attempts: 1, last_error: null });
+    await worker.drainTurnOutbox("chat-1");
+    expect(failingSend).toHaveBeenCalledTimes(2);
+  });
 
   it("caps partial updates and deletes them after hot-path transcript admission", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
@@ -238,6 +904,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       markLiveToolResultAdmitted(channelId: string, message: AgentMessage): void;
     };
 
+    insertTurnRun(sql, { turnId: "turn-live-admit", status: "waiting_external" });
     insertSuspension(sql, {
       callId: "approval-call",
       invocationId: "tool-1",
@@ -247,6 +914,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       result: true,
       createdAt: 100,
       toolName: "bash",
+      turnId: "turn-live-admit",
     });
     insertSuspension(sql, {
       callId: "eval-call",
@@ -257,6 +925,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       result: { content: [{ type: "text", text: "ran" }] },
       createdAt: 200,
       toolName: "bash",
+      turnId: "turn-live-admit",
     });
 
     worker.markLiveToolResultAdmitted("chat-1", {
@@ -278,6 +947,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       { transport_call_id: "approval-call", delivery_status: "superseded" },
       { transport_call_id: "eval-call", delivery_status: "transcript_admitted" },
     ]);
+    expect(turnStatus(sql, "turn-live-admit")).toMatchObject({ status: "continuing" });
   });
 
   it("does not delete partials when a live admission hook has no delivered row to settle", async () => {
@@ -362,7 +1032,12 @@ describe("AgentWorkerBase method suspension ledger", () => {
       __objectKey: "agent-test",
     });
     const appended: AgentMessage[] = [];
-    const submitContinue = vi.fn();
+    const submitContinue = vi.fn(() => {
+      expect(turnStatus(sql, "turn-recovered")).toMatchObject({
+        status: "continuing",
+        resume_cursor_entry_id: "entry-recovered",
+      });
+    });
     const worker = instance as unknown as {
       runners: Map<string, { runner: unknown }>;
       dispatchers: Map<string, unknown>;
@@ -383,6 +1058,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       submitContinue,
       getDebugState: () => ({ busy: false }),
     });
+    insertTurnRun(sql, { turnId: "turn-recovered", status: "waiting_external" });
 
     insertSuspension(sql, {
       callId: "approval-call",
@@ -393,6 +1069,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       result: true,
       createdAt: 100,
       toolName: "bash",
+      turnId: "turn-recovered",
     });
     insertSuspension(sql, {
       callId: "eval-call",
@@ -403,6 +1080,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       result: { content: [{ type: "text", text: "real output" }] },
       createdAt: 200,
       toolName: "bash",
+      turnId: "turn-recovered",
     });
 
     await worker.recoverDeliveredAndOrphanedSuspensions("chat-1");
@@ -415,6 +1093,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       content: [{ type: "text", text: "real output" }],
     });
     expect(submitContinue).toHaveBeenCalledTimes(1);
+    expect(submitContinue).toHaveBeenCalledWith({ turnId: "turn-recovered" });
     expect(
       sql
         .exec(
@@ -544,6 +1223,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
         prompt: { kind: "confirm", title: "Allow tool call?", message: "Tool: bash" },
         resumeToolInput: { command: "echo resumed" },
       },
+      turnId: "turn-approval",
     });
 
     await worker.recoverDeliveredAndOrphanedSuspensions("chat-1");
@@ -568,94 +1248,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       details: { resumed: true },
     });
     expect(submitContinue).toHaveBeenCalledTimes(1);
-    expect(
-      sql
-        .exec(
-          `SELECT channel_id, reason, status FROM agent_recovery_continuations WHERE channel_id = ?`,
-          "chat-1"
-        )
-        .toArray()
-    ).toEqual([
-      { channel_id: "chat-1", reason: "method_suspension_recovered", status: "submitted" },
-    ]);
-  });
-
-  it("does not replay a recovery continuation already submitted in the same activation", async () => {
-    const { instance, sql } = await createTestDO(TestAgentWorker, {
-      __objectKey: "agent-test",
-    });
-    const submitContinue = vi.fn();
-    const worker = instance as unknown as {
-      dispatchers: Map<string, unknown>;
-      submitRecoveryContinue(channelId: string, runner: PiRunner, reason: string): void;
-      replayPendingRecoveryContinue(channelId: string, runner: PiRunner): Promise<void>;
-    };
-    const runner = {
-      getContinueReadiness: vi.fn(async () => ({ continuable: true, lastRole: "toolResult" })),
-    } as unknown as PiRunner;
-    worker.dispatchers.set("chat-1", {
-      submitContinue,
-      getDebugState: () => ({ busy: false }),
-    });
-
-    worker.submitRecoveryContinue("chat-1", runner, "method_suspension_recovered");
-    await worker.replayPendingRecoveryContinue("chat-1", runner);
-
-    expect(submitContinue).toHaveBeenCalledTimes(1);
-    expect(runner.getContinueReadiness).not.toHaveBeenCalled();
-    expect(
-      sql
-        .exec(`SELECT status FROM agent_recovery_continuations WHERE channel_id = ?`, "chat-1")
-        .toArray()[0]
-    ).toEqual({ status: "submitted" });
-  });
-
-  it("marks expired recovery continuations stale when the restored session is no longer continuable", async () => {
-    const { instance, sql } = await createTestDO(TestAgentWorker, {
-      __objectKey: "agent-test",
-    });
-    const submitContinue = vi.fn();
-    const worker = instance as unknown as {
-      dispatchers: Map<string, unknown>;
-      replayPendingRecoveryContinue(channelId: string, runner: PiRunner): Promise<void>;
-    };
-    const now = Date.now();
-    sql.exec(
-      `INSERT INTO agent_recovery_continuations (
-         channel_id, reason, status, created_at, updated_at, submitted_at
-       ) VALUES (?, ?, 'submitted', ?, ?, ?)`,
-      "chat-1",
-      "method_suspension_recovered",
-      now - 60_000,
-      now - 60_000,
-      now - 60_000
-    );
-    worker.dispatchers.set("chat-1", {
-      submitContinue,
-      getDebugState: () => ({ busy: false }),
-    });
-    const runner = {
-      getContinueReadiness: vi.fn(async () => ({
-        continuable: false,
-        reason: "unsupported_last_role",
-        lastRole: "assistant",
-      })),
-    } as unknown as PiRunner;
-
-    await worker.replayPendingRecoveryContinue("chat-1", runner);
-
-    expect(submitContinue).not.toHaveBeenCalled();
-    expect(
-      sql
-        .exec(
-          `SELECT status, failure_json FROM agent_recovery_continuations WHERE channel_id = ?`,
-          "chat-1"
-        )
-        .toArray()[0]
-    ).toMatchObject({
-      status: "stale",
-      failure_json: expect.stringContaining("unsupported_last_role"),
-    });
+    expect(submitContinue).toHaveBeenCalledWith({ turnId: "turn-approval" });
   });
 
   it("replays recovered ui prompt answers while resuming the outer tool", async () => {
@@ -1705,7 +2298,16 @@ describe("AgentWorkerBase method suspension ledger", () => {
     });
 
     await expect(
-      worker.invokeChannelMethod("chat-1", "tool-1", "user", "eval", { code: "1" })
+      worker.invokeChannelMethod(
+        "chat-1",
+        "tool-1",
+        "user",
+        "eval",
+        { code: "1" },
+        undefined,
+        undefined,
+        "turn-dispatch-failed"
+      )
     ).rejects.toThrow("dispatch exploded");
 
     const row = sql.exec(`SELECT * FROM agent_method_suspensions`).toArray()[0]!;
@@ -1967,6 +2569,42 @@ describe("AgentWorkerBase typed transcript input", () => {
 });
 
 describe("TrajectoryVesselBase respond policy", () => {
+  it("does not create a runner for non-addressed channel events", async () => {
+    const { instance } = await createTestDO(GatingTestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      processChannelEvent(channelId: string, event: ChannelEvent): Promise<void>;
+      refreshCount: number;
+      runnerCount: number;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+
+    await worker.processChannelEvent("chat-1", {
+      id: 1,
+      messageId: "msg-1",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      senderId: "panel:panel-1",
+      senderMetadata: { name: "User", type: "panel", handle: "user" },
+      payload: {
+        kind: "message.completed",
+        actor: { kind: "panel", id: "panel:panel-1" },
+        causality: { messageId: "msg-1" },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          role: "user",
+          content: "not addressed to the agent",
+        },
+        createdAt: "2026-05-21T08:00:00.000Z",
+      },
+      ts: Date.now(),
+    } as unknown as ChannelEvent);
+
+    expect(worker.refreshCount).toBe(1);
+    expect(worker.runnerCount).toBe(0);
+  });
+
   it("mentioned-strict does not use the 1:1 fallback", async () => {
     const { instance } = await createTestDO(StrictMentionTestAgentWorker, {
       __objectKey: "agent-test",
@@ -2539,7 +3177,9 @@ describe("AgentWorkerBase dispatched method results", () => {
         participantHandle: string,
         method: string,
         args: unknown,
-        signal?: AbortSignal
+        signal?: AbortSignal,
+        onStreamUpdate?: (content: unknown) => void,
+        turnId?: string
       ): Promise<unknown>;
     };
 
@@ -2564,7 +3204,9 @@ describe("AgentWorkerBase dispatched method results", () => {
       "user",
       "eval",
       { code: "1 + 1" },
-      controller.signal
+      controller.signal,
+      undefined,
+      "turn-abort"
     );
     await callStarted;
     controller.abort();
@@ -2712,7 +3354,7 @@ describe("AgentWorkerBase model credential resume", () => {
     worker.createChannelClient = vi.fn().mockReturnValue(channelClient);
     worker.getModelBaseUrl = vi.fn().mockReturnValue("https://model.example/v1");
     worker.readRunnerMessages = vi.fn(() => new Promise<AgentMessage[]>(() => undefined));
-    worker.runners.set("chat-1", { runner: {} });
+    worker.runners.set("chat-1", { runner: { getCurrentTurnId: () => "turn-credential-missing" } });
 
     await expect(worker.getApiKeyForChannel("chat-1")()).rejects.toThrow(
       "No URL-bound model credential is configured for model provider: test"
@@ -2773,7 +3415,7 @@ describe("AgentWorkerBase model credential resume", () => {
   });
 
   it("resumes from the saved interruption cursor after an assistant error is appended", async () => {
-    const { instance } = await createTestDO(TestAgentWorker, {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
     });
     const userMessage = { role: "user", content: "hello", timestamp: 1 } as AgentMessage;
@@ -2828,6 +3470,7 @@ describe("AgentWorkerBase model credential resume", () => {
     });
     worker.runners.set("chat-1", {
       runner: {
+        getCurrentTurnId: () => "turn-credential",
         session: {
           buildContext: vi.fn(async () => ({ messages: transcript })),
           getEntries: vi.fn(async () => [
@@ -2839,6 +3482,16 @@ describe("AgentWorkerBase model credential resume", () => {
       },
     });
     worker.getOrCreateDispatcher = vi.fn().mockReturnValue({ submitContinue });
+    sql.exec(
+      `INSERT INTO agent_turn_runs (
+         turn_id, channel_id, status, opened_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
+      "turn-credential",
+      "chat-1",
+      "waiting_external",
+      Date.now(),
+      Date.now()
+    );
 
     await worker.recordModelCredentialInterruption("chat-1", "test", "https://model.example/v1");
     transcript = [userMessage, assistantError];
@@ -2852,5 +3505,6 @@ describe("AgentWorkerBase model credential resume", () => {
 
     expect(moveTo).toHaveBeenCalledWith("entry-user");
     expect(submitContinue).toHaveBeenCalledTimes(1);
+    expect(submitContinue).toHaveBeenCalledWith({ turnId: "turn-credential" });
   });
 });

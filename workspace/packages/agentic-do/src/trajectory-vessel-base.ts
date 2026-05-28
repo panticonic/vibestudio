@@ -81,7 +81,6 @@ const DEBUG_COLLECTION_LIMIT = 16;
 const DEBUG_DEPTH_LIMIT = 3;
 const MAX_PARTIAL_UPDATES_PER_CALL = 256;
 const MAX_INLINE_SUSPENSION_RESULT_BYTES = 256 * 1024;
-const RECOVERY_CONTINUE_LEASE_MS = 30_000;
 const CLAIM_LOST = Symbol("CLAIM_LOST");
 export type RespondPolicy = "all" | "mentioned" | "mentioned-strict" | "from-participants";
 type CachedParticipant = Awaited<ReturnType<ChannelClient["getParticipants"]>>[number];
@@ -580,6 +579,28 @@ type MethodSuspensionTransitionIntent =
   | "dispatch_failed"
   | "ignored_terminal";
 
+type AgentTurnRunStatus =
+  | "starting"
+  | "running_model"
+  | "waiting_external"
+  | "continuing"
+  | "closing"
+  | "closed"
+  | "failed"
+  | "interrupted";
+
+interface AgentTurnRunRow {
+  turnId: string;
+  channelId: string;
+  status: AgentTurnRunStatus;
+  resumeCursorEntryId: string | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+  openedAt: number;
+  updatedAt: number;
+  closedAt: number | null;
+}
+
 interface MethodSuspensionRow {
   transportCallId: string;
   channelId: string;
@@ -636,20 +657,6 @@ interface RecoveryStaleDiagnostic {
   currentBranchTail?: string | null;
   resultEventId?: number | null;
   resultReceivedAt?: number | null;
-}
-
-type RecoveryContinuationStatus = "pending" | "submitted" | "completed" | "failed" | "stale";
-
-interface RecoveryContinuationRow {
-  channelId: string;
-  reason: string;
-  status: RecoveryContinuationStatus;
-  createdAt: number;
-  updatedAt: number;
-  submittedAt: number | null;
-  completedAt: number | null;
-  failedAt: number | null;
-  failureJson: string | null;
 }
 
 interface AgentDebugError {
@@ -713,7 +720,7 @@ function deriveFallbackTitleFromMessage(content: string): string | null {
 }
 
 export abstract class TrajectoryVesselBase extends DurableObjectBase {
-  static override schemaVersion = 14;
+  static override schemaVersion = 15;
 
   protected identity: DOIdentity;
   protected subscriptions: SubscriptionManager;
@@ -756,6 +763,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   private readonly recentChannelEvents: AgentDebugChannelEvent[] = [];
   private readonly lastErrors: AgentDebugError[] = [];
   private readonly recoveryChainByChannel = new Map<string, Promise<void>>();
+  private readonly closingTurnByChannel = new Map<string, string>();
   private readonly recoveredUiPromptReplies = new Map<
     string,
     Array<{ result: unknown; isError: boolean }>
@@ -1016,6 +1024,309 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     return rows.length > 0 ? this.methodSuspensionRow(rows[0]!) : null;
   }
 
+  private turnRunRow(raw: Record<string, unknown>): AgentTurnRunRow {
+    return {
+      turnId: raw["turn_id"] as string,
+      channelId: raw["channel_id"] as string,
+      status: raw["status"] as AgentTurnRunStatus,
+      resumeCursorEntryId: (raw["resume_cursor_entry_id"] as string | null) ?? null,
+      failureCode: (raw["failure_code"] as string | null) ?? null,
+      failureMessage: (raw["failure_message"] as string | null) ?? null,
+      openedAt: Number(raw["opened_at"]),
+      updatedAt: Number(raw["updated_at"]),
+      closedAt: typeof raw["closed_at"] === "number" ? (raw["closed_at"] as number) : null,
+    };
+  }
+
+  private loadTurnRun(turnId: string): AgentTurnRunRow | null {
+    const rows = this.sql.exec(`SELECT * FROM agent_turn_runs WHERE turn_id = ?`, turnId).toArray();
+    return rows.length > 0 ? this.turnRunRow(rows[0]!) : null;
+  }
+
+  private currentTurnRunForChannel(channelId: string): AgentTurnRunRow | null {
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM agent_turn_runs
+         WHERE channel_id = ?
+           AND status NOT IN ('closed', 'failed', 'interrupted')
+         ORDER BY opened_at DESC
+         LIMIT 1`,
+        channelId
+      )
+      .toArray();
+    return rows.length > 0 ? this.turnRunRow(rows[0]!) : null;
+  }
+
+  private channelHasNonTerminalTurnRuns(channelId: string): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM agent_turn_runs
+           WHERE channel_id = ?
+             AND status NOT IN ('closed', 'failed', 'interrupted')
+           LIMIT 1`,
+          channelId
+        )
+        .toArray().length > 0
+    );
+  }
+
+  private insertTurnRun(channelId: string, turnId: string): void {
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT INTO agent_turn_runs (
+         turn_id, channel_id, status, resume_cursor_entry_id,
+         failure_code, failure_message, opened_at, updated_at, closed_at
+       ) VALUES (?, ?, 'starting', NULL, NULL, NULL, ?, ?, NULL)
+       ON CONFLICT(turn_id) DO NOTHING`,
+      turnId,
+      channelId,
+      now,
+      now
+    );
+  }
+
+  private transitionTurn(
+    turnId: string,
+    expectedFrom: AgentTurnRunStatus[],
+    to: AgentTurnRunStatus,
+    fields: {
+      resumeCursorEntryId?: string | null;
+      failureCode?: string | null;
+      failureMessage?: string | null;
+    } = {}
+  ): boolean {
+    const current = this.loadTurnRun(turnId);
+    if (!current) return false;
+    if (current.status === to) return true;
+    // Check the caller's expected-from set BEFORE asserting legality: a turn
+    // that has raced to another state (e.g. terminal via a concurrent
+    // interrupt) is a benign no-op for callers using the boolean return, not
+    // an illegal-transition error. Mirrors markSuspensionDeliveryStatus.
+    if (!expectedFrom.includes(current.status)) return false;
+    this.assertTurnTransition(current.status, to);
+    const now = Date.now();
+    const placeholders = expectedFrom.map(() => "?").join(", ");
+    const updated = this.sql
+      .exec(
+        `UPDATE agent_turn_runs
+           SET status = ?,
+               resume_cursor_entry_id = CASE WHEN ? = 1 THEN ? ELSE resume_cursor_entry_id END,
+               failure_code = CASE WHEN ? = 1 THEN ? ELSE failure_code END,
+               failure_message = CASE WHEN ? = 1 THEN ? ELSE failure_message END,
+               updated_at = ?,
+               closed_at = CASE WHEN ? IN ('closed', 'failed', 'interrupted') THEN ? ELSE closed_at END
+         WHERE turn_id = ?
+           AND status IN (${placeholders})
+         RETURNING turn_id`,
+        to,
+        fields.resumeCursorEntryId !== undefined ? 1 : 0,
+        fields.resumeCursorEntryId ?? null,
+        fields.failureCode !== undefined ? 1 : 0,
+        fields.failureCode ?? null,
+        fields.failureMessage !== undefined ? 1 : 0,
+        fields.failureMessage ?? null,
+        now,
+        to,
+        now,
+        turnId,
+        ...expectedFrom
+      )
+      .toArray();
+    return updated.length === 1;
+  }
+
+  private assertTurnTransition(from: AgentTurnRunStatus, to: AgentTurnRunStatus): void {
+    const terminal: AgentTurnRunStatus[] = ["closed", "failed", "interrupted"];
+    if (from === to) return;
+    if (terminal.includes(from)) throw new Error(`illegal turn transition ${from} -> ${to}`);
+    const allowed: Record<AgentTurnRunStatus, AgentTurnRunStatus[]> = {
+      starting: ["running_model", "waiting_external", "failed", "interrupted"],
+      running_model: ["waiting_external", "closing", "failed", "interrupted"],
+      waiting_external: ["continuing", "running_model", "failed", "interrupted"],
+      continuing: ["running_model", "waiting_external", "closing", "failed", "interrupted"],
+      closing: ["closed", "failed", "interrupted"],
+      closed: ["closed"],
+      failed: ["failed"],
+      interrupted: ["interrupted"],
+    };
+    if (allowed[from]?.includes(to)) return;
+    throw new Error(`illegal turn transition ${from} -> ${to}`);
+  }
+
+  private turnHasOpenExternalWait(turnId: string): boolean {
+    const suspension = this.sql
+      .exec(
+        `SELECT 1 FROM agent_method_suspensions
+         WHERE turn_id = ?
+           AND delivery_status IN ('pending', 'delivered_live', 'recovering')
+         LIMIT 1`,
+        turnId
+      )
+      .toArray();
+    if (suspension.length > 0) return true;
+    const credential = this.sql
+      .exec(
+        `SELECT 1 FROM model_credential_interruptions
+         WHERE turn_id = ?
+         LIMIT 1`,
+        turnId
+      )
+      .toArray();
+    return credential.length > 0;
+  }
+
+  private latestResolvedSuspensionEntryId(turnId: string): string | null {
+    const rows = this.sql
+      .exec(
+        `SELECT COALESCE(admitted_entry_id, recovered_entry_id) AS entry_id
+         FROM agent_method_suspensions
+         WHERE turn_id = ?
+           AND COALESCE(admitted_entry_id, recovered_entry_id) IS NOT NULL
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+        turnId
+      )
+      .toArray();
+    return rows.length > 0 ? ((rows[0]!["entry_id"] as string | null) ?? null) : null;
+  }
+
+  private async recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean> {
+    await this.drainTurnOutbox(channelId, runner);
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM agent_turn_runs
+         WHERE channel_id = ?
+           AND status NOT IN ('closed', 'failed', 'interrupted')
+         ORDER BY opened_at ASC`,
+        channelId
+      )
+      .toArray()
+      .map((row) => this.turnRunRow(row));
+    if (rows.length === 0) {
+      await this.sweepStuckDelivery(channelId, runner);
+      return this.recoverDeliveredAndOrphanedSuspensions(channelId);
+    }
+    let submittedContinue = false;
+    for (const row of rows) {
+      switch (row.status) {
+        case "starting": {
+          if (this.turnHasOpenExternalWait(row.turnId)) {
+            this.transitionTurn(row.turnId, ["starting"], "waiting_external");
+          } else {
+            this.transitionTurn(row.turnId, ["starting"], "interrupted", {
+              failureCode: "runner_restarted_before_model",
+              failureMessage: "Runner restarted before model generation began.",
+            });
+            await this.enqueueTurnOutbox({
+              channelId,
+              turnId: row.turnId,
+              kind: "emit_diagnostic",
+              dedupKey: "starting-interrupted",
+              payload: {
+                message: "Agent turn was interrupted before model generation began.",
+              },
+            });
+            await this.drainTurnOutbox(channelId, runner);
+          }
+          break;
+        }
+        case "waiting_external": {
+          await this.sweepStuckDelivery(channelId, runner);
+          const recovered = await this.recoverDeliveredAndOrphanedSuspensions(channelId);
+          submittedContinue = submittedContinue || recovered;
+          if (!this.turnHasOpenExternalWait(row.turnId)) {
+            const cursor = this.latestResolvedSuspensionEntryId(row.turnId);
+            if (cursor) {
+              this.transitionTurn(row.turnId, ["waiting_external"], "continuing", {
+                resumeCursorEntryId: cursor,
+              });
+            } else {
+              this.transitionTurn(row.turnId, ["waiting_external"], "failed", {
+                failureCode: "external_wait_unrecoverable",
+                failureMessage: "External wait resolved without a resumable cursor.",
+              });
+              await this.enqueueTurnOutbox({
+                channelId,
+                turnId: row.turnId,
+                kind: "emit_diagnostic",
+                dedupKey: "external-wait-unrecoverable",
+                payload: {
+                  message: "External wait resolved without a resumable cursor.",
+                },
+              });
+              await this.drainTurnOutbox(channelId, runner);
+            }
+          }
+          break;
+        }
+        case "continuing": {
+          if (row.resumeCursorEntryId) {
+            const entries = await runner.session?.getEntries();
+            const target = entries?.find((entry) => entry.id === row.resumeCursorEntryId);
+            if (!target) {
+              this.transitionTurn(row.turnId, ["continuing"], "failed", {
+                failureCode: "invalid_resume_cursor",
+                failureMessage: `Recovery cursor ${row.resumeCursorEntryId} was not found.`,
+              });
+              await this.enqueueTurnOutbox({
+                channelId,
+                turnId: row.turnId,
+                kind: "emit_diagnostic",
+                dedupKey: "invalid-resume-cursor",
+                payload: {
+                  message: "Agent recovery cursor was missing; the turn cannot continue.",
+                },
+              });
+              await this.drainTurnOutbox(channelId, runner);
+              break;
+            }
+            await runner.session?.moveTo(target.id);
+          }
+          this.recordDebugPhase(channelId, "turn_ledger.continuing_recovered", {
+            turnId: row.turnId,
+          });
+          this.getOrCreateDispatcher(channelId, runner).submitContinue({ turnId: row.turnId });
+          submittedContinue = true;
+          break;
+        }
+        case "running_model": {
+          this.transitionTurn(row.turnId, ["running_model"], "interrupted", {
+            failureCode: "runner_restarted_mid_model",
+            failureMessage: "Runner restarted during model generation.",
+          });
+          await this.enqueueTurnOutbox({
+            channelId,
+            turnId: row.turnId,
+            kind: "emit_diagnostic",
+            dedupKey: "running-model-interrupted",
+            payload: {
+              message: "Agent turn was interrupted during model generation.",
+            },
+          });
+          await this.drainTurnOutbox(channelId, runner);
+          break;
+        }
+        case "closing": {
+          await this.enqueueTurnOutbox({
+            channelId,
+            turnId: row.turnId,
+            kind: "close_turn_projection",
+            dedupKey: "close-turn-projection",
+          });
+          await this.drainTurnOutbox(channelId, runner);
+          this.transitionTurn(row.turnId, ["closing"], "closed");
+          break;
+        }
+        case "closed":
+        case "failed":
+        case "interrupted":
+          break;
+      }
+    }
+    return submittedContinue;
+  }
+
   private assertSuspensionTransition(
     from: MethodSuspensionDeliveryStatus,
     to: MethodSuspensionDeliveryStatus,
@@ -1040,6 +1351,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   private markSuspensionDeliveryStatus(
     callId: string,
+    from: MethodSuspensionDeliveryStatus,
     to: MethodSuspensionDeliveryStatus,
     intent: MethodSuspensionTransitionIntent,
     opts: { recoveryError?: string | null; recoveredEntryId?: string | null } = {}
@@ -1047,7 +1359,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const row = this.loadMethodSuspension(callId);
     if (!row) return false;
     if (row.deliveryStatus === to) return true;
-    this.assertSuspensionTransition(row.deliveryStatus, to, intent);
+    if (row.deliveryStatus !== from) return false;
+    this.assertSuspensionTransition(from, to, intent);
     const now = Date.now();
     const updated = this.sql.exec(
       `UPDATE agent_method_suspensions
@@ -1055,16 +1368,17 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
              recovery_error = CASE WHEN ? = 1 THEN ? ELSE recovery_error END,
              recovered_entry_id = COALESCE(?, recovered_entry_id),
              updated_at = ?
-         WHERE transport_call_id = ? AND delivery_status = ?`,
+         WHERE transport_call_id = ? AND delivery_status = ?
+         RETURNING transport_call_id`,
       to,
       opts.recoveryError !== undefined ? 1 : 0,
       opts.recoveryError ?? null,
       opts.recoveredEntryId ?? null,
       now,
       callId,
-      row.deliveryStatus
+      from
     ).toArray();
-    return updated.length >= 0;
+    return updated.length === 1;
   }
 
   private async recordMethodSuspension(opts: {
@@ -1097,6 +1411,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       );
       return false;
     }
+    const resolvedTurnId = opts.turnId ?? open?.turnId ?? this.currentTurnIdForChannel(opts.channelId);
+    if (!resolvedTurnId) {
+      throw new Error(
+        `Cannot record ${opts.kind} suspension ${opts.transportCallId} without a turn_id`
+      );
+    }
     let sessionLeafBeforeCall: string | null = null;
     try {
       sessionLeafBeforeCall = (await runner?.session?.getLeafId()) ?? null;
@@ -1119,7 +1439,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       open?.messageId ?? null,
       open?.blockIndex ?? null,
       open?.name ?? opts.fallbackToolName ?? opts.method,
-      opts.turnId ?? open?.turnId ?? null,
+      resolvedTurnId,
       opts.kind,
       opts.method,
       opts.participantHandle ?? null,
@@ -1419,7 +1739,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   }
 
   private markRecovered(callId: string, entryId: string): void {
-    this.markSuspensionDeliveryStatus(callId, "recovered", "resume_succeeded", {
+    const row = this.loadMethodSuspension(callId);
+    if (!row) return;
+    this.markSuspensionDeliveryStatus(callId, row.deliveryStatus, "recovered", "resume_succeeded", {
       recoveredEntryId: entryId,
     });
   }
@@ -1445,13 +1767,19 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   }
 
   private markStale(callId: string, reason: string): void {
-    this.markSuspensionDeliveryStatus(callId, "stale", "unsafe_to_replay", { recoveryError: reason });
+    const row = this.loadMethodSuspension(callId);
+    if (!row) return;
+    this.markSuspensionDeliveryStatus(callId, row.deliveryStatus, "stale", "unsafe_to_replay", {
+      recoveryError: reason,
+    });
     this.deletePartials(callId);
   }
 
   private markRecoveryError(callId: string, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error);
-    this.markSuspensionDeliveryStatus(callId, "recovery_error", "resume_failed", {
+    const row = this.loadMethodSuspension(callId);
+    if (!row) return;
+    this.markSuspensionDeliveryStatus(callId, row.deliveryStatus, "recovery_error", "resume_failed", {
       recoveryError: message,
     });
   }
@@ -1707,7 +2035,13 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
     const runner = await this.getOrCreateRunner(channelId);
     let admitted = 0;
+    let resumeTurnId: string | undefined;
+    let resumeCursorEntryId: string | null = null;
     for (const row of chosen) {
+      if (!row.turnId) {
+        this.markStale(row.transportCallId, "missing_turn_metadata");
+        continue;
+      }
       if (!this.claimGroupForRecovery(channelId, row.invocationId, row.transportCallId)) continue;
       const staleDiagnostic = await this.preflightRecoveredSuspension(runner, row);
       if (staleDiagnostic) {
@@ -1733,6 +2067,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         this.markRecovered(row.transportCallId, entryId);
         this.deletePartialsForInvocation(channelId, row.invocationId);
         admitted++;
+        resumeTurnId ??= row.turnId;
+        resumeCursorEntryId ??= entryId;
       } catch (err) {
         this.markRecoveryError(row.transportCallId, err);
         this.recordDebugPhase(channelId, "channel_method.recovery.append_failed", {
@@ -1744,7 +2080,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       }
     }
     if (admitted > 0) {
-      this.submitRecoveryContinue(channelId, runner, "method_suspension_recovered");
+      if (resumeTurnId) {
+        this.transitionTurn(resumeTurnId, ["waiting_external"], "continuing", {
+          resumeCursorEntryId,
+        });
+      }
+      this.submitRecoveryContinue(channelId, runner, "method_suspension_recovered", resumeTurnId);
       return true;
     }
     return false;
@@ -1821,14 +2162,27 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       }
       this.deletePartialsForInvocation(channelId, invocationId);
       if (shouldContinue) {
-        this.markRecoveryContinuePending(channelId, "method_suspension_recovered");
+        if (!chosen.turnId) {
+          this.markStale(chosen.transportCallId, "missing_turn_metadata");
+          continue;
+        }
+        const cursorEntryId = chosen.recoveredEntryId ?? (await runner.session?.getLeafId().catch(() => null)) ?? null;
+        this.transitionTurn(chosen.turnId, ["waiting_external", "running_model"], "continuing", {
+          resumeCursorEntryId: cursorEntryId,
+        });
+        this.submitRecoveryContinue(channelId, runner, "method_suspension_recovered", chosen.turnId);
       }
     }
   }
 
-  private markLiveToolResultAdmitted(channelId: string, message: AgentMessage): void {
+  private markLiveToolResultAdmitted(
+    channelId: string,
+    message: AgentMessage,
+    entryId: string | null = null
+  ): void {
     const invocationId = (message as { toolCallId?: unknown }).toolCallId;
     if (typeof invocationId !== "string" || invocationId.length === 0) return;
+    let admittedTurnId: string | null = null;
     const settled = this.ctx.storage.transactionSync(() => {
       const rows = this.sql
         .exec(
@@ -1846,12 +2200,16 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       // are intentionally outside this transaction.
       const chosen = this.pickChosenSuspension(rows);
       if (!chosen) return false;
+      admittedTurnId = chosen.turnId;
       const now = Date.now();
       this.sql.exec(
         `UPDATE agent_method_suspensions
-           SET delivery_status = 'transcript_admitted', updated_at = ?
+           SET delivery_status = 'transcript_admitted',
+               admitted_entry_id = COALESCE(?, admitted_entry_id),
+               updated_at = ?
            WHERE transport_call_id = ?
              AND delivery_status = 'delivered_live'`,
+        entryId,
         now,
         chosen.transportCallId
       );
@@ -1870,135 +2228,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       return true;
     });
     if (settled) this.deletePartialsForInvocation(channelId, invocationId);
-  }
-
-  private recoveryContinuationRow(raw: Record<string, unknown>): RecoveryContinuationRow {
-    return {
-      channelId: raw["channel_id"] as string,
-      reason: raw["reason"] as string,
-      status: raw["status"] as RecoveryContinuationStatus,
-      createdAt: raw["created_at"] as number,
-      updatedAt: raw["updated_at"] as number,
-      submittedAt: (raw["submitted_at"] as number | null) ?? null,
-      completedAt: (raw["completed_at"] as number | null) ?? null,
-      failedAt: (raw["failed_at"] as number | null) ?? null,
-      failureJson: (raw["failure_json"] as string | null) ?? null,
-    };
-  }
-
-  private loadRecoveryContinuation(channelId: string): RecoveryContinuationRow | null {
-    const rows = this.sql
-      .exec(`SELECT * FROM agent_recovery_continuations WHERE channel_id = ?`, channelId)
-      .toArray();
-    return rows.length > 0 ? this.recoveryContinuationRow(rows[0]!) : null;
-  }
-
-  private markRecoveryContinuePending(channelId: string, reason: string): void {
-    const now = Date.now();
-    this.sql.exec(
-      `INSERT INTO agent_recovery_continuations (
-         channel_id, reason, status, created_at, updated_at,
-         submitted_at, completed_at, failed_at, failure_json
-       )
-       VALUES (?, ?, 'pending', ?, ?, NULL, NULL, NULL, NULL)
-       ON CONFLICT(channel_id) DO UPDATE SET
-         reason = excluded.reason,
-         status = 'pending',
-         updated_at = excluded.updated_at,
-         submitted_at = NULL,
-         completed_at = NULL,
-         failed_at = NULL,
-         failure_json = NULL`,
-      channelId,
-      reason,
-      now,
-      now
-    );
-  }
-
-  private markRecoveryContinueSubmitted(channelId: string, reason: string): void {
-    const now = Date.now();
-    this.sql.exec(
-      `INSERT INTO agent_recovery_continuations (
-         channel_id, reason, status, created_at, updated_at,
-         submitted_at, completed_at, failed_at, failure_json
-       )
-       VALUES (?, ?, 'submitted', ?, ?, ?, NULL, NULL, NULL)
-       ON CONFLICT(channel_id) DO UPDATE SET
-         reason = excluded.reason,
-         status = 'submitted',
-         updated_at = excluded.updated_at,
-         submitted_at = excluded.submitted_at,
-         completed_at = NULL,
-         failed_at = NULL,
-         failure_json = NULL`,
-      channelId,
-      reason,
-      now,
-      now,
-      now
-    );
-  }
-
-  private markRecoveryContinueCompleted(channelId: string): void {
-    const now = Date.now();
-    this.sql.exec(
-      `UPDATE agent_recovery_continuations
-         SET status = 'completed',
-             updated_at = ?,
-             completed_at = ?,
-             failure_json = NULL
-         WHERE channel_id = ? AND status IN ('pending', 'submitted')`,
-      now,
-      now,
-      channelId
-    );
-  }
-
-  private clearRecoveryContinue(channelId: string): void {
-    this.sql.exec(`DELETE FROM agent_recovery_continuations WHERE channel_id = ?`, channelId);
-  }
-
-  private markRecoveryContinueStale(
-    channelId: string,
-    diagnostic: Record<string, unknown>
-  ): void {
-    const now = Date.now();
-    this.sql.exec(
-      `UPDATE agent_recovery_continuations
-         SET status = 'stale',
-             updated_at = ?,
-             failed_at = ?,
-             failure_json = ?
-         WHERE channel_id = ? AND status IN ('pending', 'submitted')`,
-      now,
-      now,
-      JSON.stringify(diagnostic),
-      channelId
-    );
-  }
-
-  private markRecoveryContinueFailed(channelId: string, error: unknown): void {
-    const row = this.loadRecoveryContinuation(channelId);
-    if (!row || row.status !== "submitted") return;
-    const now = Date.now();
-    const failure = {
-      error: error instanceof Error ? error.message : String(error),
-      code: (error as { code?: unknown } | null)?.code ?? null,
-    };
-    this.sql.exec(
-      `UPDATE agent_recovery_continuations
-         SET status = 'failed',
-             updated_at = ?,
-             failed_at = ?,
-             failure_json = ?
-         WHERE channel_id = ? AND status = 'submitted'`,
-      now,
-      now,
-      JSON.stringify(failure),
-      channelId
-    );
-    this.recordDebugPhase(channelId, "channel_method.recovery_continue.failed", failure);
+    if (settled && admittedTurnId && !this.turnHasOpenExternalWait(admittedTurnId)) {
+      this.transitionTurn(admittedTurnId, ["waiting_external"], "continuing", {
+        resumeCursorEntryId: entryId,
+      });
+    }
   }
 
   private async emitRecoveryContinueFailedDiagnostic(
@@ -2059,39 +2293,138 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       });
   }
 
-  private recoveryContinuationIsClaimable(row: RecoveryContinuationRow): boolean {
-    if (row.status === "pending") return true;
-    if (row.status !== "submitted" || row.submittedAt == null) return false;
-    return Date.now() - row.submittedAt > RECOVERY_CONTINUE_LEASE_MS;
+  private async emitTurnLedgerDiagnostic(
+    channelId: string,
+    turnId: string,
+    message: string
+  ): Promise<void> {
+    await this.sendTurnLedgerDiagnostic(channelId, turnId, message).catch((err) => {
+      console.error(
+        `[TrajectoryVesselBase] Failed to emit turn ledger diagnostic for channel=${channelId}:`,
+        err
+      );
+    });
   }
 
-  private submitRecoveryContinue(channelId: string, runner: PiRunner, reason: string): void {
-    this.markRecoveryContinueSubmitted(channelId, reason);
-    this.getOrCreateDispatcher(channelId, runner).submitContinue();
+  private async sendTurnLedgerDiagnostic(
+    channelId: string,
+    turnId: string,
+    message: string
+  ): Promise<void> {
+    const participantId = this.subscriptions.getParticipantId(channelId);
+    if (!participantId) return;
+    const descriptor = this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId));
+    await this.createChannelClient(channelId).send(participantId, crypto.randomUUID(), message, {
+      senderMetadata: {
+        ...descriptor.metadata,
+        name: descriptor.name,
+        type: descriptor.type,
+        handle: descriptor.handle,
+      },
+      idempotencyKey: `turn-ledger-diagnostic:${turnId}`,
+    });
   }
 
-  private async replayPendingRecoveryContinue(channelId: string, runner: PiRunner): Promise<void> {
-    const row = this.loadRecoveryContinuation(channelId);
-    if (!row || !this.recoveryContinuationIsClaimable(row)) return;
-    const readiness = await runner.getContinueReadiness().catch((err) => ({
-      continuable: false,
-      reason: "readiness_failed",
-      error: err instanceof Error ? err.message : String(err),
-    }));
-    if (!readiness.continuable) {
-      this.markRecoveryContinueStale(channelId, {
-        reason: "session_not_continuable",
-        readiness,
-        recoveryReason: row.reason,
-      });
-      this.recordDebugPhase(channelId, "channel_method.recovery_continue.stale", {
-        recoveryReason: row.reason,
-        readiness,
-      });
-      return;
+  private async enqueueTurnOutbox(opts: {
+    channelId: string;
+    turnId: string;
+    kind: "emit_diagnostic" | "close_turn_projection";
+    dedupKey: string;
+    payload?: unknown;
+  }): Promise<void> {
+    const now = Date.now();
+    const payload = await this.encodeSuspensionStorage(opts.payload);
+    this.sql.exec(
+      `INSERT OR IGNORE INTO agent_turn_outbox (
+         channel_id, turn_id, kind, dedup_key, payload_json, payload_ref_json,
+         status, attempts, last_error, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, NULL, ?, ?)`,
+      opts.channelId,
+      opts.turnId,
+      opts.kind,
+      opts.dedupKey,
+      payload.json,
+      payload.refJson,
+      now,
+      now
+    );
+  }
+
+  private async drainTurnOutbox(channelId: string, runner?: PiRunner): Promise<void> {
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM agent_turn_outbox
+         WHERE channel_id = ? AND status IN ('pending', 'failed')
+         ORDER BY id ASC`,
+        channelId
+      )
+      .toArray();
+    for (const row of rows) {
+      const id = row["id"] as number;
+      try {
+        const kind = row["kind"] as string;
+        if (kind === "emit_diagnostic") {
+          const payload = await this.hydrateStoredTransportValue(
+            this.parseSuspensionJson(
+              (row["payload_json"] as string | null) ?? null,
+              (row["payload_ref_json"] as string | null) ?? null
+            )
+          );
+          const message =
+            payload && typeof payload === "object" && typeof (payload as { message?: unknown }).message === "string"
+              ? (payload as { message: string }).message
+              : typeof payload === "string"
+                ? payload
+                : "Agent recovery diagnostic.";
+          await this.sendTurnLedgerDiagnostic(
+            channelId,
+            (row["turn_id"] as string | null) ?? `outbox:${id}`,
+            message
+          );
+        } else if (kind === "close_turn_projection") {
+          if (!runner) throw new Error("close_turn_projection requires a runner");
+          await runner.repairDurableOpenState({ closeOpenTurns: true });
+        } else {
+          throw new Error(`unknown turn outbox kind: ${kind}`);
+        }
+        this.sql.exec(
+          `UPDATE agent_turn_outbox
+           SET status = 'done', last_error = NULL, updated_at = ?
+           WHERE id = ?`,
+          Date.now(),
+          id
+        );
+      } catch (err) {
+        this.sql.exec(
+          `UPDATE agent_turn_outbox
+           SET status = 'failed',
+               attempts = attempts + 1,
+               last_error = ?,
+               updated_at = ?
+           WHERE id = ?`,
+          err instanceof Error ? err.message : String(err),
+          Date.now(),
+          id
+        );
+      }
     }
-    this.markRecoveryContinueSubmitted(channelId, row.reason);
-    this.getOrCreateDispatcher(channelId, runner).submitContinue();
+  }
+
+  private submitRecoveryContinue(
+    channelId: string,
+    runner: PiRunner,
+    reason: string,
+    turnId?: string
+  ): void {
+    const resumeTurnId = turnId ?? this.currentTurnIdForChannel(channelId);
+    if (!resumeTurnId) {
+      throw new Error("Cannot submit recovery continue without an existing agent turn");
+    }
+    this.recordDebugPhase(channelId, "channel_method.recovery_continue.submitted", {
+      reason,
+      turnId: resumeTurnId,
+    });
+    this.getOrCreateDispatcher(channelId, runner).submitContinue({ turnId: resumeTurnId });
   }
 
   private async ensureAgentActivationReady(): Promise<void> {
@@ -2148,9 +2481,45 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         channel_id TEXT NOT NULL,
         provider_id TEXT NOT NULL,
         model_base_url TEXT,
+        turn_id TEXT,
         resume_count INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
         PRIMARY KEY (channel_id, provider_id)
+      )
+    `);
+    this.ensureColumn("model_credential_interruptions", "turn_id", "TEXT");
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS agent_turn_runs (
+        turn_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        resume_cursor_entry_id TEXT,
+        failure_code TEXT,
+        failure_message TEXT,
+        opened_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        closed_at INTEGER
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_agent_turn_runs_channel_status
+        ON agent_turn_runs(channel_id, status)
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS agent_turn_outbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        channel_id TEXT NOT NULL,
+        turn_id TEXT,
+        kind TEXT NOT NULL,
+        dedup_key TEXT NOT NULL,
+        payload_json TEXT,
+        payload_ref_json TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE(turn_id, kind, dedup_key)
       )
     `);
     this.sql.exec(`
@@ -2193,6 +2562,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     `);
     this.ensureColumn("agent_method_suspensions", "args_ref_json", "TEXT");
     this.ensureColumn("agent_method_suspensions", "result_ref_json", "TEXT");
+    this.ensureColumn("agent_method_suspensions", "terminal_event_id", "TEXT");
+    this.ensureColumn("agent_method_suspensions", "admitted_entry_id", "TEXT");
+    this.ensureColumn("agent_method_suspensions", "failure_code", "TEXT");
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS agent_method_suspension_updates (
         transport_call_id TEXT NOT NULL,
@@ -2202,24 +2574,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         PRIMARY KEY (transport_call_id, seq)
       )
     `);
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS agent_recovery_continuations (
-        channel_id TEXT PRIMARY KEY,
-        reason TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending',
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL,
-        submitted_at INTEGER,
-        completed_at INTEGER,
-        failed_at INTEGER,
-        failure_json TEXT
-      )
-    `);
-    this.ensureColumn("agent_recovery_continuations", "status", "TEXT NOT NULL DEFAULT 'pending'");
-    this.ensureColumn("agent_recovery_continuations", "submitted_at", "INTEGER");
-    this.ensureColumn("agent_recovery_continuations", "completed_at", "INTEGER");
-    this.ensureColumn("agent_recovery_continuations", "failed_at", "INTEGER");
-    this.ensureColumn("agent_recovery_continuations", "failure_json", "TEXT");
   }
 
   private ensureColumn(table: string, column: string, definition: string): void {
@@ -2355,7 +2709,16 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           providerId,
           modelBaseUrl,
         });
-        this.queueModelCredentialInterruptionRecord(channelId, providerId, modelBaseUrl);
+        const credentialTurnId = this.transitionCurrentTurnToWaiting(
+          channelId,
+          this.currentTurnIdForChannel(channelId) ?? undefined
+        );
+        this.queueModelCredentialInterruptionRecord(
+          channelId,
+          providerId,
+          modelBaseUrl,
+          credentialTurnId
+        );
         this.emitModelCredentialRequiredCard(channelId, providerId, modelBaseUrl);
         throw new AgentWorkerError(
           "auth",
@@ -3152,7 +3515,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   async unsubscribeChannel(channelId: string): Promise<UnsubscribeResult> {
     await this.ensureAgentActivationReady();
     this.abortRecoveryDirectExecutions(channelId, "channel_unsubscribe");
-    this.clearRecoveryContinue(channelId);
     this.cancelMethodSuspensionsForChannel(channelId, "channel_unsubscribe");
     await this.subscriptions.unsubscribeFromChannel(channelId);
 
@@ -3487,6 +3849,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       onPrepareNextTurn: async (snapshot) => {
         await this.prepareNextTurnHook(channelId, snapshot);
       },
+      onTurnPhase: async ({ turnId, phase }) => {
+        if (phase !== "model_start") return;
+        this.transitionTurn(turnId, ["starting", "continuing", "waiting_external"], "running_model");
+      },
     });
 
     await runner.init();
@@ -3502,17 +3868,20 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       );
     };
     runner.hooks.on("event", abortedTurnListener);
-    runner.hooks.on("event", (event: RunnerEvent) => {
+    runner.hooks.on("event", async (event: RunnerEvent) => {
+      if (event.type === "agent_end") {
+        const closingTurnId = this.closingTurnByChannel.get(channelId);
+        if (closingTurnId) {
+          await this.drainTurnOutbox(channelId, runner);
+          this.transitionTurn(closingTurnId, ["closing"], "closed");
+          this.closingTurnByChannel.delete(channelId);
+        }
+        return;
+      }
       if (event.type !== "message_end") return;
       const message = (event as { message?: AgentMessage }).message;
       if (!message) return;
-      const role = (message as { role?: unknown }).role;
-      if (role === "assistant") {
-        this.markRecoveryContinueCompleted(channelId);
-        return;
-      }
-      if (role !== "toolResult") return;
-      this.markLiveToolResultAdmitted(channelId, message);
+      await this.handleRunnerMessageEndForTurnLedger(channelId, runner, message);
     });
 
     this.runners.set(channelId, { runner });
@@ -3520,10 +3889,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     // and sweep. Created here so it exists before the first processChannelEvent
     // (which expects to hand messages to it).
     this.getOrCreateDispatcher(channelId, runner);
-    await this.sweepStuckDelivery(channelId, runner);
-    const submittedRecoveryContinue = await this.recoverDeliveredAndOrphanedSuspensions(channelId);
-    await runner.repairDurableOpenState({ closeOpenTurns: !submittedRecoveryContinue });
-    if (!submittedRecoveryContinue) await this.replayPendingRecoveryContinue(channelId, runner);
+    const submittedRecoveryContinue = await this.recoverFromTurnLedger(channelId, runner);
+    await runner.repairDurableOpenState({
+      closeOpenTurns: !submittedRecoveryContinue && !this.channelHasNonTerminalTurnRuns(channelId),
+    });
     return runner;
   }
 
@@ -3547,7 +3916,80 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   }
 
   private currentTurnIdForChannel(channelId: string): string | undefined {
-    return this.runners.get(channelId)?.runner.getCurrentTurnId() ?? undefined;
+    const runner = this.runners.get(channelId)?.runner as
+      | { getCurrentTurnId?: () => string | null }
+      | undefined;
+    return runner?.getCurrentTurnId?.() ?? undefined;
+  }
+
+  private assistantMessageHasToolCalls(message: AgentMessage): boolean {
+    const content = (message as { content?: unknown }).content;
+    const blocks = typeof content === "string" ? [] : Array.isArray(content) ? content : [];
+    return blocks.some((block) => {
+      if (!block || typeof block !== "object") return false;
+      const item = block as Record<string, unknown>;
+      const type = item["type"];
+      return (
+        type === "tool_call" ||
+        type === "toolCall" ||
+        typeof item["toolCallId"] === "string" ||
+        typeof item["tool_call_id"] === "string" ||
+        typeof item["callId"] === "string"
+      );
+    });
+  }
+
+  protected async handleRunnerMessageEndForTurnLedger(
+    channelId: string,
+    runner: Pick<PiRunner, "getCurrentTurnId" | "session">,
+    message: AgentMessage
+  ): Promise<void> {
+    const role = (message as { role?: unknown }).role;
+    if (role === "assistant") {
+      if (this.assistantMessageHasToolCalls(message)) return;
+      const turnId = runner.getCurrentTurnId() ?? this.currentTurnRunForChannel(channelId)?.turnId;
+      if (turnId && this.transitionTurn(turnId, ["running_model", "continuing"], "closing")) {
+        await this.enqueueTurnOutbox({
+          channelId,
+          turnId,
+          kind: "close_turn_projection",
+          dedupKey: "close-turn-projection",
+        });
+        this.closingTurnByChannel.set(channelId, turnId);
+      }
+      return;
+    }
+    if (role !== "toolResult") return;
+    const entryId = await runner.session?.getLeafId().catch(() => null);
+    this.markLiveToolResultAdmitted(channelId, message, entryId ?? null);
+  }
+
+  private transitionCurrentTurnToWaiting(channelId: string, turnId?: string): string {
+    const currentTurnId = this.currentTurnIdForChannel(channelId);
+    const id = turnId ?? currentTurnId;
+    if (!id) {
+      throw new Error("Cannot enter external wait without an active agent turn");
+    }
+    if (turnId && currentTurnId && turnId !== currentTurnId) {
+      throw new Error(`Cannot enter external wait for turn ${turnId}; active turn is ${currentTurnId}`);
+    }
+    let row = this.loadTurnRun(id);
+    if (!row) {
+      this.insertTurnRun(channelId, id);
+      row = this.loadTurnRun(id);
+    }
+    if (!row) throw new Error(`Could not create turn ledger row for ${id}`);
+    if (row.status === "waiting_external") return id;
+    if (
+      !this.transitionTurn(
+        id,
+        ["starting", "running_model", "continuing", "waiting_external"],
+        "waiting_external"
+      )
+    ) {
+      throw new Error(`Could not transition turn ${id} to waiting_external`);
+    }
+    return id;
   }
 
   /**
@@ -3686,22 +4128,30 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         );
       }
     }
-    this.recordModelCredentialInterruptionCursor(channelId, providerId, modelBaseUrl, resumeCount);
+    this.recordModelCredentialInterruptionCursor(
+      channelId,
+      providerId,
+      modelBaseUrl,
+      resumeCount,
+      this.currentTurnIdForChannel(channelId) ?? undefined
+    );
   }
 
   private recordModelCredentialInterruptionCursor(
     channelId: string,
     providerId: string,
     modelBaseUrl: string,
-    resumeCount: number
+    resumeCount: number,
+    turnId?: string
   ): void {
     this.sql.exec(
       `INSERT OR REPLACE INTO model_credential_interruptions
-        (channel_id, provider_id, model_base_url, resume_count, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+        (channel_id, provider_id, model_base_url, turn_id, resume_count, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
       channelId,
       providerId,
       modelBaseUrl,
+      turnId ?? null,
       resumeCount,
       Date.now()
     );
@@ -3710,9 +4160,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   private queueModelCredentialInterruptionRecord(
     channelId: string,
     providerId: string,
-    modelBaseUrl: string
+    modelBaseUrl: string,
+    turnId?: string
   ): void {
-    this.recordModelCredentialInterruptionCursor(channelId, providerId, modelBaseUrl, 0);
+    this.recordModelCredentialInterruptionCursor(channelId, providerId, modelBaseUrl, 0, turnId);
     if (!this.runners.has(channelId)) return;
 
     void (async () => {
@@ -3722,7 +4173,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           channelId,
           providerId,
           modelBaseUrl,
-          messages.length
+          messages.length,
+          turnId
         );
       } catch (err) {
         console.warn(
@@ -3796,11 +4248,47 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (existing) return existing;
     const dispatcher = new TurnDispatcher({
       runner,
-      projector: { closeAll: async () => undefined },
       notifyTyping: (busy) => this.broadcastTyping(channelId, busy),
-      onWorkFailure: async (work, error) => {
+      onWorkStart: async (work) => {
         if (work.kind === "continue") {
-          this.markRecoveryContinueFailed(channelId, error);
+          const turnId = work.turnId ?? this.currentTurnIdForChannel(channelId);
+          if (!turnId) {
+            throw new Error("Cannot continue without an existing agent turn");
+          }
+          const row = this.loadTurnRun(turnId);
+          if (!row) {
+            throw new Error(`Cannot continue unknown agent turn ${turnId}`);
+          }
+          this.recordDebugPhase(channelId, "turn_ledger.continuing", {
+            turnId,
+            workKind: work.kind,
+          });
+          return turnId;
+        }
+        const turnId = crypto.randomUUID();
+        this.insertTurnRun(channelId, turnId);
+        this.recordDebugPhase(channelId, "turn_ledger.started", {
+          turnId,
+          workKind: work.kind,
+        });
+        return turnId;
+      },
+      onWorkFailure: async (work, error, workTurnId) => {
+        const turnId = workTurnId ?? (work.kind === "continue" ? work.turnId : undefined);
+        if (turnId) {
+          this.transitionTurn(
+            turnId,
+            ["starting", "running_model", "waiting_external", "continuing", "closing"],
+            "failed",
+            {
+              failureCode: (error as { code?: unknown } | null)?.code
+                ? String((error as { code?: unknown }).code)
+                : "work_failed",
+              failureMessage: error instanceof Error ? error.message : String(error),
+            }
+          );
+        }
+        if (work.kind === "continue") {
           await this.emitRecoveryContinueFailedDiagnostic(channelId, error);
           return;
         }
@@ -3886,7 +4374,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
     const invocationId = toolCallId;
     const transportCallId = crypto.randomUUID();
-    await this.recordMethodSuspension({
+    const suspensionTurnId = this.transitionCurrentTurnToWaiting(channelId, turnId);
+    const recorded = await this.recordMethodSuspension({
       channelId,
       transportCallId,
       invocationId,
@@ -3895,15 +4384,16 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       participantHandle,
       targetParticipantId: target.participantId,
       args,
-      turnId,
+      turnId: suspensionTurnId,
       fallbackToolName: method,
     });
+    if (!recorded) throw new Error(`Failed to record durable suspension for ${method}`);
     const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
       method,
       participantHandle,
       targetParticipantId: target.participantId,
       args,
-      turnId,
+      turnId: suspensionTurnId,
       signal,
     });
     if (onStreamUpdate) this.streamCallbacks.set(transportCallId, onStreamUpdate);
@@ -3912,7 +4402,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         await channel.callMethod(callerId, target.participantId, transportCallId, method, args, {
           invocationId,
           transportCallId,
-          ...(turnId ? { turnId } : {}),
+          turnId: suspensionTurnId,
         });
       } catch (err) {
         this.markMethodSuspensionDispatchFailed(transportCallId, err);
@@ -3957,7 +4447,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
     const invocationId = toolCallId || crypto.randomUUID();
     const transportCallId = crypto.randomUUID();
-    await this.recordMethodSuspension({
+    const suspensionTurnId = this.transitionCurrentTurnToWaiting(channelId, turnId);
+    const recorded = await this.recordMethodSuspension({
       channelId,
       transportCallId,
       invocationId,
@@ -3965,14 +4456,15 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       method: "feedback_form",
       targetParticipantId: panel.participantId,
       args: params,
-      turnId,
+      turnId: suspensionTurnId,
       fallbackToolName: "feedback_form",
     });
+    if (!recorded) throw new Error("Failed to record durable askUser suspension");
     const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
       method: "feedback_form",
       targetParticipantId: panel.participantId,
       args: params,
-      turnId,
+      turnId: suspensionTurnId,
       signal,
     });
     try {
@@ -3986,7 +4478,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           {
             invocationId,
             transportCallId,
-            ...(turnId ? { turnId } : {}),
+            turnId: suspensionTurnId,
           }
         );
       } catch (err) {
@@ -4331,7 +4823,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
     const transportCallId = crypto.randomUUID();
     const turnId = this.currentTurnIdForChannel(channelId);
-    await this.recordMethodSuspension({
+    const suspensionTurnId = this.transitionCurrentTurnToWaiting(channelId, turnId);
+    const recorded = await this.recordMethodSuspension({
       channelId,
       transportCallId,
       invocationId,
@@ -4342,15 +4835,18 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         prompt: { kind, ...params },
         resumeToolInput: meta?.toolInput,
       },
-      turnId,
+      turnId: suspensionTurnId,
       fallbackToolName: meta?.toolName ?? "ui_prompt",
       requireOpenInvocation: true,
     });
+    if (!recorded) {
+      throw new Error("Cannot dispatch UI prompt without a durable suspension row");
+    }
     const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
       method: "ui_prompt",
       targetParticipantId: panel.participantId,
       args: { kind, ...params },
-      turnId,
+      turnId: suspensionTurnId,
       signal,
     });
     try {
@@ -4367,7 +4863,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           {
             invocationId,
             transportCallId,
-            ...(turnId ? { turnId } : {}),
+            turnId: suspensionTurnId,
           }
         );
       } catch (err) {
@@ -4411,7 +4907,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       .filter(([, waiter]) => waiter.channelId === channelId)
       .map(([callId, waiter]) => ({ callId, invocationId: waiter.invocationId }));
     this.abortRecoveryDirectExecutions(channelId, "user_interrupted");
-    this.clearRecoveryContinue(channelId);
     this.cancelMethodSuspensionsForChannel(channelId, "user_interrupted");
     this.rejectMethodWaitersForChannel(channelId, "Request was aborted");
     const runner = this.runners.get(channelId)?.runner;
@@ -4447,8 +4942,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   ): Promise<void> {
     await this.ensureAgentActivationReady();
     if (!this.shouldProcess(event)) return;
-    await this.ensureChannelContext(channelId);
+    await this.refreshRoster(channelId);
     if (!(await this.shouldRespond(channelId, event))) return;
+    await this.getOrCreateRunner(channelId);
 
     const runner = this.runners.get(channelId)!.runner;
     const input = this.buildTurnInput(event);
@@ -4614,10 +5110,25 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       return false;
     }
     await entry.runner.session?.moveTo(target.id);
+    const turnId = interruption
+      ? this.sql
+          .exec(
+            `SELECT turn_id FROM model_credential_interruptions
+             WHERE channel_id = ? AND provider_id = ?`,
+            channelId,
+            providerId
+          )
+          .toArray()[0]?.["turn_id"] as string | undefined
+      : undefined;
+    if (turnId) {
+      this.transitionTurn(turnId, ["waiting_external", "starting"], "continuing", {
+        resumeCursorEntryId: target.id,
+      });
+    }
     this.clearModelCredentialInterruption(channelId, providerId);
     this.credentialPromptCardsEmitted.delete(`${channelId}::model-credential::${providerId}`);
     const dispatcher = this.getOrCreateDispatcher(channelId, entry.runner);
-    dispatcher.submitContinue();
+    dispatcher.submitContinue(turnId ? { turnId } : undefined);
     return true;
   }
 
@@ -4644,6 +5155,20 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       this.lastUserInterruptAt.set(channelId, Date.now());
       await this.notifyDispatchesInterrupted(channelId);
       this.recordAbort(channelId, reason);
+      const turnId =
+        (entry.runner as { getCurrentTurnId?: () => string | null }).getCurrentTurnId?.() ??
+        this.currentTurnRunForChannel(channelId)?.turnId;
+      if (turnId) {
+        this.transitionTurn(
+          turnId,
+          ["starting", "running_model", "waiting_external", "continuing", "closing"],
+          "interrupted",
+          {
+            failureCode: "user_interrupted",
+            failureMessage: "Agent turn interrupted by user",
+          }
+        );
+      }
 
       // A provider stream or pi-core promise may be wedged. The user-visible
       // pause operation must still close the durable turn and clear typing;
@@ -5103,7 +5628,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         modelCredentialInterruptions: readTable("model_credential_interruptions"),
         methodSuspensions: this.summarizeMethodSuspensionRows(channelId),
         methodSuspensionUpdates: this.summarizeMethodSuspensionUpdateRows(),
-        recoveryContinuations: readTable("agent_recovery_continuations"),
       },
       volatile: {
         runners: Object.fromEntries(runnerEntries),
