@@ -69,3 +69,9 @@ export function formatArgsSummary(args: unknown, maxLen = 60): string {
 
   return parts.join(", ");
 }
+
+export function formatInvocationPreview(args: unknown, description?: string, maxLen = 96): string {
+  const normalizedDescription = description?.replace(/\s+/g, " ").trim();
+  if (normalizedDescription) return truncateStr(normalizedDescription, maxLen);
+  return formatArgsSummary(args, maxLen);
+}

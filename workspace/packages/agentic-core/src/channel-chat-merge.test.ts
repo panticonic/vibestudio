@@ -116,6 +116,63 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("projects failed invocation error payloads into copyable expanded error data", () => {
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-grep") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "grep",
+        request: {
+          path: "packages workers panels",
+          pattern: "console",
+          glob: "*diagnostic*",
+        },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const failed: AgenticEvent<"invocation.failed"> = {
+      kind: "invocation.failed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-grep") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
+        error: {
+          text: "Path not found: /packages workers panels. The `path` argument accepts one directory or file.",
+          content: [
+            {
+              type: "text",
+              text: "Path not found: /packages workers panels. The `path` argument accepts one directory or file.",
+            },
+          ],
+        },
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+
+    const state = [envelope(started, 1), envelope(failed, 2)]
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    const invocation = chatMessagesFromChannelView(state)[0]?.invocation;
+    expect(invocation).toMatchObject({
+      name: "grep",
+      arguments: {
+        path: "packages workers panels",
+        pattern: "console",
+        glob: "*diagnostic*",
+      },
+      execution: {
+        status: "error",
+        description: "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
+        result: {
+          text: "Path not found: /packages workers panels. The `path` argument accepts one directory or file.",
+        },
+      },
+    });
+  });
+
   it("projects assistant thinking blocks as inline thinking messages", () => {
     const message: AgenticEvent<"message.completed"> = {
       kind: "message.completed",

@@ -1,13 +1,13 @@
-import React, { useMemo } from "react";
-import { Badge, Box, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
-import { StopIcon } from "@radix-ui/react-icons";
+import React, { useCallback, useMemo, useState } from "react";
+import { Badge, Box, Button, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import { CheckIcon, CopyIcon, StopIcon } from "@radix-ui/react-icons";
 import { prettifyToolName } from "@workspace/pubsub";
 import type { InvocationCardPayload } from "@workspace/agentic-core";
 import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { ExpandableChevron } from "./shared/Chevron";
 import { CollapsibleSection } from "./shared/CollapsibleSection";
 import { ToolArgumentsView, ToolDataView } from "./shared/ToolDataView";
-import { formatArgsSummary } from "./action-format";
+import { formatArgsSummary, formatInvocationPreview } from "./action-format";
 
 // ── Status helpers ─────────────────────────────────────────────────────────
 
@@ -44,6 +44,12 @@ function StatusDot({ statusKey }: { statusKey: StatusKey }) {
   );
 }
 
+function formatDisplayName(toolName: string): string {
+  return prettifyToolName(toolName)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+}
+
 // ── ActionPill (collapsed view) ────────────────────────────────────────────
 
 export const ActionPill = React.memo(function ActionPill({
@@ -61,11 +67,12 @@ export const ActionPill = React.memo(function ActionPill({
   const isPending = statusKey === "pending";
   const color = getStatusColor(statusKey);
 
-  const argsSummary = useMemo(
-    () => formatArgsSummary(payload.arguments, 50),
-    [payload.arguments],
+  const preview = useMemo(
+    () => formatInvocationPreview(payload.arguments, payload.execution.description, 120),
+    [payload.arguments, payload.execution.description],
   );
-  const displayName = useMemo(() => prettifyToolName(payload.name), [payload.name]);
+  const displayName = useMemo(() => formatDisplayName(payload.name), [payload.name]);
+  const title = preview ? `${displayName}: ${preview}` : displayName;
 
   return (
     <Flex
@@ -73,11 +80,12 @@ export const ActionPill = React.memo(function ActionPill({
       data-testid="invocation-pill"
       data-invocation-name={payload.name}
       data-invocation-status={statusKey}
-      title={payload.name}
+      title={title}
       align="center"
       gap="1"
       onClick={() => onExpand(id)}
       tabIndex={0}
+      aria-label={title}
       style={{
         cursor: "pointer",
         userSelect: "none",
@@ -91,18 +99,9 @@ export const ActionPill = React.memo(function ActionPill({
       <Text className="inline-pill-label" size="1" color={color} weight="medium">
         {displayName}
       </Text>
-      {argsSummary && (
-        <Text className="inline-pill-summary" size="1" color="gray" style={{
-          opacity: 0.85,
-        }}>
-          ({argsSummary})
-        </Text>
-      )}
-      {payload.execution.description && (
-        <Text className="inline-pill-description" size="1" color="gray" style={{
-          opacity: 0.85,
-        }}>
-          {payload.execution.description}
+      {preview && (
+        <Text className="inline-pill-description" size="1" color="gray">
+          {preview}
         </Text>
       )}
       {isPending && onCancel && (
@@ -142,11 +141,19 @@ export const ExpandedAction = React.memo(function ExpandedAction({
   const isPending = statusKey === "pending";
   const isError = statusKey === "error";
   const color = getStatusColor(statusKey);
+  const [copiedDetails, setCopiedDetails] = useState(false);
 
-  const displayName = useMemo(() => prettifyToolName(payload.name), [payload.name]);
+  const displayName = useMemo(() => formatDisplayName(payload.name), [payload.name]);
 
   const exec = payload.execution;
   const hasArgs = Object.keys(payload.arguments).length > 0;
+  const detailsJson = useMemo(() => JSON.stringify(payload, null, 2), [payload]);
+  const copyDetails = useCallback(async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    await navigator.clipboard.writeText(detailsJson);
+    setCopiedDetails(true);
+    window.setTimeout(() => setCopiedDetails(false), 1200);
+  }, [detailsJson]);
 
   return (
     <Box
@@ -174,6 +181,18 @@ export const ExpandedAction = React.memo(function ExpandedAction({
         <Badge color={color} size="1" variant="soft">
           {exec.status}
         </Badge>
+        <Button
+          size="1"
+          color="gray"
+          variant="ghost"
+          onClick={copyDetails}
+          aria-label="Copy invocation details"
+          title="Copy invocation details"
+          style={{ marginLeft: "auto" }}
+        >
+          {copiedDetails ? <CheckIcon /> : <CopyIcon />}
+          {copiedDetails ? "Copied" : "Copy details"}
+        </Button>
         {isPending && onCancel && (
           <IconButton
             size="1"

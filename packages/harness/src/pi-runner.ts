@@ -1723,6 +1723,16 @@ export class PiRunner {
                       content: (message as { content?: unknown }).content ?? [],
                       details,
                     } as AgentToolResult<unknown>),
+                    error: {
+                      toolCallId,
+                      toolName: typeof toolName === "string" ? toolName : "unknown",
+                      text: this.toolResultText({
+                        content: (message as { content?: unknown }).content ?? [],
+                        details,
+                      } as AgentToolResult<unknown>),
+                      content: (message as { content?: unknown }).content ?? [],
+                      details,
+                    },
                     recoverable: true,
                   }
                 : {

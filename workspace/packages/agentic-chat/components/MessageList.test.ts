@@ -189,6 +189,35 @@ describe("MessageList typing indicators (roster-based)", () => {
     expect(onCancelInvocation).toHaveBeenCalledWith("transport-1");
   });
 
+  it("uses the invocation description as the collapsed pill preview", () => {
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "action-1",
+          senderId: "agent-1",
+          contentType: "invocation",
+          content: "",
+          invocation: {
+            id: "tool-1",
+            name: "mcp__workspace__ListDirectory",
+            arguments: { path: "workspace/packages/agentic-chat", recursive: true },
+            execution: { status: "complete", description: "Listed agentic-chat package files" },
+          },
+          complete: true,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: {},
+    } as never));
+
+    const pill = screen.getByTestId("invocation-pill");
+
+    expect(pill.textContent).toContain("List Directory");
+    expect(pill.textContent).toContain("Listed agentic-chat package files");
+    expect(pill.textContent).not.toContain("recursive");
+  });
+
   it("expands invocation details with full code arguments and flags unhydrated stored results", async () => {
     const longCode = "const answer = 42;\n".repeat(40);
     const storedResult = {
@@ -226,6 +255,66 @@ describe("MessageList typing indicators (roster-based)", () => {
     expect(screen.getAllByRole("button", { name: "Copy" }).length).toBeGreaterThan(0);
     expect(document.body.textContent).toContain("Stored value reached transcript UI");
     expect(rpcCall).not.toHaveBeenCalled();
+  });
+
+  it("expands failed invocation details with full copyable error payloads", async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "action-err",
+          contentType: "invocation",
+          content: "",
+          invocation: {
+            id: "tool-err",
+            name: "grep",
+            arguments: {
+              path: "packages workers panels",
+              pattern: "console",
+              glob: "*diagnostic*",
+            },
+            execution: {
+              status: "error",
+              description:
+                "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
+              isError: true,
+              result: {
+                text:
+                  "Path not found: /packages workers panels. The `path` argument accepts one directory or file, not a space-separated list.",
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      "Path not found: /packages workers panels. The `path` argument accepts one directory or file, not a space-separated list.",
+                  },
+                ],
+              },
+            },
+          },
+          complete: true,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: {},
+    } as never));
+
+    fireEvent.click(screen.getByTestId("invocation-pill"));
+
+    expect(document.body.textContent).toContain("packages workers panels");
+    expect(document.body.textContent).toContain("not a space-separated list");
+    expect(screen.getAllByRole("button", { name: "Copy" }).length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Copy invocation details" }));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining("\"path\": \"packages workers panels\""));
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining("not a space-separated list"));
+    });
   });
 
   it("renders durable typing indicators in their own inline row", () => {

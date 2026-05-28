@@ -272,7 +272,11 @@ function projectedInvocationToChatMessage(invocation: ProjectedInvocation): Chat
     execution: {
       status,
       description: invocation.terminalReason ?? (invocation.status === "completed" ? "" : inferred.summary ?? ""),
-      result: displayStoredValue(invocation.result),
+      result: displayStoredValue(
+        invocation.result === undefined && status === "error"
+          ? invocation.terminalReason
+          : invocation.result
+      ),
       isError: invocation.status === "failed" || invocation.status === "cancelled" || invocation.status === "abandoned",
       consoleOutput: invocation.outputs.length > 0
         ? invocation.outputs.map((output) => stringifyOutput(output)).join("\n")
