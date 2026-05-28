@@ -421,11 +421,11 @@
 }
 
 .inline-action-pill .inline-pill-label {
-  flex: 0 1 auto;
-  min-inline-size: 0;
-  max-inline-size: 12rem;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 0 0 auto;
+  min-inline-size: max-content;
+  max-inline-size: none;
+  overflow: visible;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
