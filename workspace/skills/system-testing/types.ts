@@ -32,6 +32,12 @@ export interface TestResult {
   details?: Record<string, unknown>;
 }
 
+export interface TestSuiteResultEntry {
+  test: { name: string; category: string; description: string; prompt: string };
+  result: TestResult;
+  execution: TestExecutionResult;
+}
+
 export interface TestSuiteResult {
   total: number;
   passed: number;
@@ -39,9 +45,5 @@ export interface TestSuiteResult {
   errored: number;
   skipped: number;
   duration: number;
-  results: Array<{
-    test: { name: string; category: string; description: string; prompt: string };
-    result: TestResult;
-    execution: TestExecutionResult;
-  }>;
+  results: TestSuiteResultEntry[];
 }

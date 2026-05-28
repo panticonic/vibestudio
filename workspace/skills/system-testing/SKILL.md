@@ -47,70 +47,39 @@ Workspace packages like `@workspace-skills/system-testing` are auto-resolved —
 
 ## Full Suite
 
-Run the full suite category-by-category, with one eval call per category. This
-keeps each tool invocation bounded and checkpoints partial results after every
-category.
+Run the full suite with test-level parallelism. This intentionally creates
+agent contention across panels, GAD, git, build services, tools, and runtime
+state. The runner checkpoints partial results after every completed test.
 
-First initialize the queue:
-
-```
-eval({
-  code: `
-    import { allTests, testCategories } from "@workspace-skills/system-testing";
-    const tests = allTests();
-    scope.systemTestingQueue = testCategories(tests);
-    scope.results = {
-      total: 0,
-      passed: 0,
-      failed: 0,
-      errored: 0,
-      skipped: 0,
-      duration: 0,
-      results: [],
-    };
-    return { categories: scope.systemTestingQueue, testCount: tests.length };
-  `,
-})
-```
-
-Then repeat this eval until `remaining` is `0`:
+Use a bounded concurrency cap. Raise it when the goal is stress testing; lower
+it when failure attribution is more important than load.
 
 ```
 eval({
   code: `
     import { HeadlessRunner, TestRunner, allTests } from "@workspace-skills/system-testing";
     import { contextId } from "@workspace/runtime";
-    const queue = scope.systemTestingQueue ?? [];
-    const category = queue.shift();
-    if (!category) return { done: true, results: scope.results };
 
     const runner = new HeadlessRunner(contextId);
     const tester = new TestRunner(runner, {
       onTestStart: (t) => console.log("Running: " + t.name + "..."),
       onTestEnd: (t, r) => console.log((r.passed ? "PASS" : "FAIL") + ": " + t.name),
+      onTestResult: (_entry, aggregate) => {
+        scope.results = aggregate;
+        console.log("Progress: " + aggregate.total + "/" + allTests().length);
+      },
       testTimeoutMs: 20 * 60 * 1000,
     });
 
-    const partial = await tester.runSuite(allTests(), { category });
-    const aggregate = scope.results ?? {
-      total: 0,
-      passed: 0,
-      failed: 0,
-      errored: 0,
-      skipped: 0,
-      duration: 0,
-      results: [],
+    const results = await tester.runSuiteParallel(allTests(), { concurrency: 8 });
+    scope.results = results;
+    return {
+      total: results.total,
+      passed: results.passed,
+      failed: results.failed,
+      errored: results.errored,
+      skipped: results.skipped,
     };
-    aggregate.total += partial.total;
-    aggregate.passed += partial.passed;
-    aggregate.failed += partial.failed;
-    aggregate.errored += partial.errored;
-    aggregate.duration += partial.duration;
-    aggregate.results.push(...partial.results);
-    aggregate.skipped = allTests().length - aggregate.total;
-    scope.systemTestingQueue = queue;
-    scope.results = aggregate;
-    return { category, remaining: queue.length, ...aggregate, results: undefined };
   `,
 })
 ```
@@ -282,7 +251,8 @@ if (fail.execution.snapshot) {
 | `docsProbeTests` | 10 | Scenario probes that require agents to apply relevant skills, not summarize docs |
 
 Use `allTests()` to get all 92 tests combined. For full-suite execution, prefer
-the category queue above instead of a single `tester.runSuite(allTests())` eval.
+`tester.runSuiteParallel(allTests(), { concurrency })` over serial
+`tester.runSuite(allTests())`.
 
 ## Expanded Regression Coverage
 

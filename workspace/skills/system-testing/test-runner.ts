@@ -1,7 +1,10 @@
-import type { TestCase, TestSuiteResult, TestExecutionResult, TestResult } from "./types.js";
+import type { TestCase, TestSuiteResult, TestExecutionResult, TestResult, TestSuiteResultEntry } from "./types.js";
 import type { HeadlessRunner } from "./runner.js";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { SessionSnapshot } from "@workspace/agentic-session";
+
+type MaybePromise<T> = T | Promise<T>;
+type RunSuiteFilter = { category?: string; name?: string; concurrency?: number };
 
 export class TestRunner {
   constructor(
@@ -9,6 +12,8 @@ export class TestRunner {
     private opts?: {
       onTestStart?: (test: TestCase) => void;
       onTestEnd?: (test: TestCase, result: TestResult, execution: TestExecutionResult) => void;
+      onTestResult?: (entry: TestSuiteResultEntry, aggregate: TestSuiteResult) => MaybePromise<void>;
+      concurrency?: number;
       testTimeoutMs?: number;
     }
   ) {
@@ -21,8 +26,15 @@ export class TestRunner {
   run = this.runSuite.bind(this);
   /** Alias for runSuite */
   runTests = this.runSuite.bind(this);
+  /** Alias for runSuite with an explicit concurrency cap */
+  runSuiteParallel = (tests: TestCase[], opts?: RunSuiteFilter): Promise<TestSuiteResult> => {
+    return this.runSuite(tests, {
+      ...opts,
+      concurrency: opts?.concurrency ?? this.opts?.concurrency ?? 4,
+    });
+  };
 
-  async runSuite(tests: TestCase[], filter?: { category?: string; name?: string }): Promise<TestSuiteResult> {
+  async runSuite(tests: TestCase[], filter?: RunSuiteFilter): Promise<TestSuiteResult> {
     const filtered = tests.filter(t => {
       if (filter?.category && t.category !== filter.category) return false;
       if (filter?.name && !t.name.includes(filter.name)) return false;
@@ -30,32 +42,66 @@ export class TestRunner {
     });
 
     const startTime = Date.now();
-    const results: TestSuiteResult["results"] = [];
-    let passed = 0, failed = 0, errored = 0;
+    const results: Array<TestSuiteResultEntry | undefined> = new Array(filtered.length);
+    const concurrency = this.normalizeConcurrency(filter?.concurrency ?? this.opts?.concurrency ?? 1, filtered.length);
+    let nextIndex = 0;
 
-    for (const test of filtered) {
+    const runAt = async (index: number): Promise<void> => {
+      const test = filtered[index]!;
       this.opts?.onTestStart?.(test);
       const { result, execution } = await this.runOne(test);
-      results.push({
+      const entry: TestSuiteResultEntry = {
         test: { name: test.name, category: test.category, description: test.description, prompt: test.prompt },
         result,
         execution,
-      });
-      if (execution.error) errored++;
-      else if (result.passed) passed++;
-      else failed++;
+      };
+      results[index] = entry;
       this.opts?.onTestEnd?.(test, result, execution);
-    }
+      if (this.opts?.onTestResult) {
+        await this.opts.onTestResult(entry, this.buildSuiteResult(tests.length, filtered.length, results, startTime));
+      }
+    };
 
+    const worker = async (): Promise<void> => {
+      while (nextIndex < filtered.length) {
+        const index = nextIndex++;
+        await runAt(index);
+      }
+    };
+
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+    return this.buildSuiteResult(tests.length, filtered.length, results, startTime);
+  }
+
+  private buildSuiteResult(
+    sourceTotal: number,
+    filteredTotal: number,
+    entries: Array<TestSuiteResultEntry | undefined>,
+    startTime: number,
+  ): TestSuiteResult {
+    const results = entries.filter((entry): entry is TestSuiteResultEntry => Boolean(entry));
+    let passed = 0, failed = 0, errored = 0;
+    for (const entry of results) {
+      if (entry.execution.error) errored++;
+      else if (entry.result.passed) passed++;
+      else failed++;
+    }
     return {
-      total: filtered.length,
+      total: results.length,
       passed,
       failed,
       errored,
-      skipped: tests.length - filtered.length,
+      skipped: sourceTotal - filteredTotal,
       duration: Date.now() - startTime,
       results,
     };
+  }
+
+  private normalizeConcurrency(value: number, total: number): number {
+    if (total <= 0) return 1;
+    if (!Number.isFinite(value) || value < 1) return 1;
+    return Math.min(total, Math.max(1, Math.floor(value)));
   }
 
   async runOne(test: TestCase): Promise<{ result: TestResult; execution: TestExecutionResult }> {
