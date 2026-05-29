@@ -1,7 +1,7 @@
 import { HeadlessSession } from "@workspace/agentic-session";
 import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { gad, rpc } from "@workspace/runtime";
+import { gad, rpc, getStateArgs } from "@workspace/runtime";
 
 // The panel's rpc has the full interface (call, onEvent, selfId) that
 // ConnectionConfig.rpc needs. Cast through the specific interface type.
@@ -45,6 +45,11 @@ export class HeadlessRunner {
     source?: string;
     className?: string;
   }): Promise<HeadlessSession> {
+    // Inherit the model configured on this panel (stateArgs.agentConfig.model
+    // from natstack.yml) so headless test agents use the same model as the
+    // orchestrating panel agent.
+    const configuredModel = getStateArgs<{ agentConfig?: { model?: string } }>()
+      .agentConfig?.model;
     return HeadlessSession.createWithAgent({
       config: {
         clientId: rpcConfig.selfId,
@@ -58,6 +63,7 @@ export class HeadlessRunner {
       extraConfig: {
         systemPrompt: SYSTEM_TEST_AGENT_PROMPT,
         systemPromptMode: "append",
+        ...(configuredModel ? { model: configuredModel } : {}),
       },
     });
   }

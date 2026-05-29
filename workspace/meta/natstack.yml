@@ -57,6 +57,8 @@ initPanels:
   # System testing agent — runs headless tests and reports problems
   - source: panels/chat
     stateArgs:
+      agentConfig:
+        model: "openai-codex:gpt-5.3-codex-spark"
       initialPrompt: |
         Read the system-testing skill docs, then run the full system test suite.
         Use the documented workflow as you understand it. Report what happened,
