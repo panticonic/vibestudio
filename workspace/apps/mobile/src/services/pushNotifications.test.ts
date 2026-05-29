@@ -7,11 +7,13 @@ import {
 } from "./backgroundActionQueue";
 import { setApprovedAppCapabilities } from "./appCapabilities";
 
+type RecoveryKind = "resubscribe" | "cold-recover";
+
 type MockShellClient = {
   transport: {
     status: "connected" | "connecting" | "disconnected";
     call: jest.Mock;
-    onReconnect: jest.Mock;
+    onRecovery: jest.Mock;
   };
 };
 
@@ -20,7 +22,7 @@ const mockListeners = {
   tokenRefresh: undefined as ((token: string) => void) | undefined,
   message: undefined as ((message: unknown) => void) | undefined,
   foreground: undefined as ((event: unknown) => void) | undefined,
-  reconnect: undefined as (() => void) | undefined,
+  recovery: new Map<RecoveryKind, () => void>(),
   appState: undefined as ((state: string) => void) | undefined,
 };
 
@@ -101,8 +103,8 @@ function createShellClient(
         }
         return undefined;
       }),
-      onReconnect: jest.fn((callback: () => void) => {
-        mockListeners.reconnect = callback;
+      onRecovery: jest.fn((kind: RecoveryKind, callback: () => void) => {
+        mockListeners.recovery.set(kind, callback);
         return jest.fn();
       }),
     },
@@ -116,7 +118,7 @@ beforeEach(() => {
   mockListeners.tokenRefresh = undefined;
   mockListeners.message = undefined;
   mockListeners.foreground = undefined;
-  mockListeners.reconnect = undefined;
+  mockListeners.recovery.clear();
   mockListeners.appState = undefined;
   mockMessagingInstance.requestPermission.mockResolvedValue(1);
   mockMessagingInstance.getInitialNotification.mockResolvedValue(null);
@@ -264,26 +266,32 @@ describe("pushNotifications", () => {
     expect(mockNotifee.displayNotification).not.toHaveBeenCalled();
   });
 
-  it("drains queued actions on reconnect with resolve then cancel", async () => {
-    mockStorage.set(
-      backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY,
-      JSON.stringify({
-        version: 1,
-        actions: [{ approvalId: "approval-1", decision: "session", queuedAt: Date.now() }],
-      })
-    );
-    const shellClient = createShellClient();
-    await registerForPushNotifications(shellClient as never);
+  it.each<RecoveryKind>(["resubscribe", "cold-recover"])(
+    "drains queued actions on %s recovery with resolve then cancel",
+    async (kind) => {
+      mockStorage.set(
+        backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY,
+        JSON.stringify({
+          version: 1,
+          actions: [{ approvalId: "approval-1", decision: "session", queuedAt: Date.now() }],
+        })
+      );
+      const shellClient = createShellClient();
+      await registerForPushNotifications(shellClient as never);
 
-    await mockListeners.reconnect?.();
+      // Both recovery kinds must be wired -- onReconnect only covers
+      // "resubscribe", but a server reboot recovers via "cold-recover".
+      expect(mockListeners.recovery.has(kind)).toBe(true);
+      await mockListeners.recovery.get(kind)?.();
 
-    expect(shellClient.transport.call).toHaveBeenCalledWith("main", "shellApproval.resolve", [
-      "approval-1",
-      "session",
-    ]);
-    expect(mockNotifee.cancelNotification).toHaveBeenCalledWith("approval-1");
-    expect(mockStorage.has(backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY)).toBe(false);
-  });
+      expect(shellClient.transport.call).toHaveBeenCalledWith("main", "shellApproval.resolve", [
+        "approval-1",
+        "session",
+      ]);
+      expect(mockNotifee.cancelNotification).toHaveBeenCalledWith("approval-1");
+      expect(mockStorage.has(backgroundActionQueueStorageKeys.ACTION_QUEUE_KEY)).toBe(false);
+    }
+  );
 
   it("handles silent cancel data messages", async () => {
     const shellClient = createShellClient();
@@ -311,5 +319,22 @@ describe("pushNotifications", () => {
 
     expect(mockNotifee.cancelNotification).toHaveBeenCalledWith("stale-approval");
     expect(mockNotifee.cancelNotification).not.toHaveBeenCalledWith("approval-1");
+  });
+
+  it("keeps a still-pending notification displayed under a distinct cancelKey", async () => {
+    const shellClient = createShellClient();
+    // Displayed under cancelKey, but the pending approvalId lives in data.
+    // Reconcile must match on the carried approvalId, not the display id.
+    mockNotifee.getDisplayedNotifications.mockResolvedValue([
+      { notification: { id: "cancel-key-1", data: { approvalId: "approval-1" } } },
+      { notification: { id: "cancel-key-2", data: { approvalId: "stale-approval" } } },
+    ] as never);
+
+    await reconcilePushNotifications(shellClient as never, mockNotifee);
+
+    // approval-1 is pending -> its notification (display id cancel-key-1) stays.
+    expect(mockNotifee.cancelNotification).not.toHaveBeenCalledWith("cancel-key-1");
+    // stale-approval is not pending -> cancelled by its actual display id.
+    expect(mockNotifee.cancelNotification).toHaveBeenCalledWith("cancel-key-2");
   });
 });
