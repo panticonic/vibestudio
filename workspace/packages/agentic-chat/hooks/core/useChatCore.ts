@@ -557,10 +557,21 @@ export function useChatCore({
   const handleCancelInvocation = useCallback(async (transportCallId: string) => {
     const c = clientRef.current;
     if (!c) return;
+    // Stop a method this panel is executing (e.g. an eval) immediately and
+    // in-process by firing its local AbortController. The executing method's
+    // own catch publishes invocation.failed, which settles the agent's pending
+    // result — so the turn still learns the call ended. We do this BEFORE the
+    // channel round-trip because the round-trip is unreliable for stopping
+    // local work (the DO may have no pending_calls row left to cancel, so it
+    // never broadcasts invocation.cancelled).
+    const abortedLocally = c.abortExecutingMethod(transportCallId);
     try {
+      // Still notify the channel so its pending_calls bookkeeping is cleared
+      // and any remote provider executing the call is asked to stop. Best
+      // effort — when we already aborted locally this is just cleanup.
       await c.cancelMethodCall(transportCallId);
     } catch (err) {
-      console.warn("[Chat] Cancel invocation failed:", err);
+      if (!abortedLocally) console.warn("[Chat] Cancel invocation failed:", err);
     }
   }, []);
 

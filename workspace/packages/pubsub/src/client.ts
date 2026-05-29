@@ -174,4 +174,15 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
 
   /** Cancel a specific in-flight method dispatch by transport call id. */
   cancelMethodCall(callId: string): Promise<void>;
+
+  /**
+   * Abort a method that THIS client is currently executing, synchronously and
+   * in-process, by firing the AbortController handed to the method's execution
+   * context. Returns true if a matching in-flight execution was found and
+   * aborted. Unlike `cancelMethodCall` (which round-trips through the channel
+   * DO and only aborts once the broadcast returns), this acts immediately on
+   * the local executor — use it to stop an eval running in this very panel.
+   * `callId` is the transport call id.
+   */
+  abortExecutingMethod(callId: string): boolean;
 }

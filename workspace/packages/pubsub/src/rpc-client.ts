@@ -1337,6 +1337,23 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     await callChannel("cancelMethodCall", callId);
   }
 
+  // Abort a method THIS client is executing, synchronously and in-process.
+  // The executing method (e.g. an eval running in this panel) was handed
+  // `ctx.signal` from the controller stored in `executingMethods` keyed by the
+  // inbound transport call id (see handleMethodCallExec). Firing it here stops
+  // the local execution immediately; the method's own catch publishes
+  // `invocation.failed`, which settles the caller's pending result. This avoids
+  // the cancel round-trip through the channel DO, which is fragile (the
+  // `pending_calls` row may already be consumed, so the DO emits no
+  // `invocation.cancelled` broadcast and the local abort never fires).
+  function abortExecutingMethod(callId: string): boolean {
+    const controller = executingMethods.get(callId);
+    if (!controller) return false;
+    controller.abort();
+    executingMethods.delete(callId);
+    return true;
+  }
+
   function events(evtOptions?: EventStreamOptions): AsyncIterableIterator<EventStreamItem> {
     const source = eventsFanout.subscribe();
     const includeReplay = evtOptions?.includeReplay ?? false;
@@ -1507,6 +1524,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     error: errorMessage,
     callMethod,
     cancelMethodCall,
+    abortExecutingMethod,
     getMessageTypes,
     getMessageType,
     registerMessageType,

@@ -976,5 +976,72 @@ describe("connectViaRpc", () => {
 
       client.close();
     });
+
+    it("abortExecutingMethod fires the local signal synchronously without a channel round-trip", async () => {
+      let capturedSignal: AbortSignal | null = null;
+
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        methods: {
+          slowWork: {
+            description: "slow operation",
+            parameters: z.object({}),
+            execute: async (_args, ctx) => {
+              capturedSignal = ctx.signal;
+              await new Promise<void>((resolve) => {
+                if (ctx.signal.aborted) return resolve();
+                ctx.signal.addEventListener("abort", () => resolve());
+              });
+              return { cancelled: true };
+            },
+          },
+        },
+      });
+
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      mockRpc.call.mockClear();
+      mockRpc.call.mockResolvedValue(undefined);
+
+      emit({
+        stream: "log", phase: "live",
+        id: 400,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocationEvent("invocation.started", CALL_ID_SLOW, {
+          name: "slowWork",
+          request: {},
+          transport: { kind: "channel", channelId: CHANNEL, target: { kind: "panel", id: SELF_ID, participantId: SELF_ID }, transportCallId: TRANSPORT_ID_1 },
+        }, { transportCallId: TRANSPORT_ID_1 }),
+        senderId: "caller-1",
+        ts: Date.now(),
+      });
+
+      await vi.waitFor(() => {
+        expect(capturedSignal).not.toBeNull();
+      });
+      expect(capturedSignal!.aborted).toBe(false);
+
+      // Abort locally by transport call id — no channel cancelMethodCall needed.
+      const aborted = client.abortExecutingMethod(TRANSPORT_ID_1);
+
+      expect(aborted).toBe(true);
+      expect(capturedSignal!.aborted).toBe(true);
+      // The local abort itself issues no cancelMethodCall RPC.
+      const cancelCalls = mockRpc.call.mock.calls.filter(
+        (c: unknown[]) => c[1] === "cancelMethodCall",
+      );
+      expect(cancelCalls.length).toBe(0);
+
+      client.close();
+    });
+
+    it("abortExecutingMethod returns false when no execution matches the call id", async () => {
+      const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      expect(client.abortExecutingMethod(TRANSPORT_ID_1)).toBe(false);
+      client.close();
+    });
   });
 });
