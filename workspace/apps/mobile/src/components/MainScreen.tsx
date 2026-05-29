@@ -1127,7 +1127,7 @@ export function MainScreen() {
   }, [activePanelId, activePanelParentId, activatePanel, webViewNavigation]);
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      <ConnectionBar />
+      <ConnectionBar onRepair={() => navigation.getParent()?.navigate("Login" as never)} />
       <AppBar
         title={activePanelTitle}
         onMenuPress={handleMenuPress}

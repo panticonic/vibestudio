@@ -1,5 +1,11 @@
+// Must be the first import: react-native-gesture-handler requires its native
+// side to be initialized before anything renders. The drawer navigator and the
+// panel-tree swipe gestures depend on it.
+import "react-native-gesture-handler";
 import React, { useEffect } from "react";
 import { AppRegistry, StatusBar } from "react-native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai";
 import type { AppCapability } from "@natstack/shared/unitManifest";
@@ -87,9 +93,13 @@ function AppContent() {
 
 function App() {
   return (
-    <JotaiProvider>
-      <AppContent />
-    </JotaiProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <JotaiProvider>
+          <AppContent />
+        </JotaiProvider>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
   );
 }
 
