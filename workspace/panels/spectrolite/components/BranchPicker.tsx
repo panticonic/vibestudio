@@ -11,11 +11,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { promises as fs } from "fs";
 import { Button, DropdownMenu, Flex, Spinner, Text } from "@radix-ui/themes";
 import { ChevronDownIcon, CheckIcon } from "@radix-ui/react-icons";
-import { GitClient, type FsPromisesLike } from "@natstack/git";
-import { gitConfig, listBranches } from "@workspace/runtime";
+import { git as runtimeGit, listBranches } from "@workspace/runtime";
 import { formatGitError } from "../state/gitErrors";
 
 export interface BranchPickerProps {
@@ -23,14 +21,6 @@ export interface BranchPickerProps {
   repoRoot: string;
   /** Bumped externally after commits so the branch list refreshes. */
   refreshNonce?: number;
-}
-
-function gitClient(): GitClient | null {
-  if (!gitConfig?.serverUrl) return null;
-  return new GitClient(fs as unknown as FsPromisesLike, {
-    serverUrl: gitConfig.serverUrl,
-    token: gitConfig.token,
-  });
 }
 
 function toRelative(repoRoot: string): string {
@@ -69,11 +59,7 @@ export function BranchPicker({ repoRoot, refreshNonce = 0 }: BranchPickerProps) 
 
   const handleCheckout = useCallback(async (name: string) => {
     if (name === current || busy) return;
-    const git = gitClient();
-    if (!git) {
-      setError("Git server is not available.");
-      return;
-    }
+    const git = runtimeGit.client();
     setBusy(true);
     setError(null);
     try {

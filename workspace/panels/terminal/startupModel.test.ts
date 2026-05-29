@@ -32,9 +32,9 @@ describe("terminal startup model", () => {
     }).detail).toContain("already in progress");
   });
 
-  it("distinguishes extension approval from terminal approval", () => {
+  it("distinguishes unit approval from terminal approval", () => {
     expect(terminalStartupPendingLabel({ pending: true, elapsedSeconds: 5, shellUnit: { pendingApproval: { kind: "install" } } }))
-      .toBe("Waiting for extension approval... 5s");
+      .toBe("Waiting for unit approval... 5s");
   });
 
   it("escalates long terminal approval waits with actionable feedback", () => {

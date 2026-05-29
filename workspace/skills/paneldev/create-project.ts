@@ -1,16 +1,12 @@
-import { fs, git, gitConfig } from "@workspace/runtime";
-import { GitClient, initAndPush } from "@natstack/git";
+import { fs, git } from "@workspace/runtime";
+import { initAndPush, type GitClient } from "@natstack/git";
 
 // ---------------------------------------------------------------------------
 // Shared git client helper
 // ---------------------------------------------------------------------------
 
 function createGit(): GitClient {
-  if (!gitConfig) throw new Error("Git config not available");
-  return new GitClient(fs, {
-    serverUrl: gitConfig.serverUrl,
-    token: gitConfig.token,
-  });
+  return git.client();
 }
 
 // ---------------------------------------------------------------------------

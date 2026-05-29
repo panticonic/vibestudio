@@ -67,7 +67,7 @@ URLs also use `openPanel`:
 import { openPanel } from "@workspace/runtime";
 
 const sitePanel = await openPanel("https://example.com", { focus: true });
-const page = await sitePanel.cdp.page();
+const page = await sitePanel.cdp.playwrightPage();
 await page.title();
 ```
 

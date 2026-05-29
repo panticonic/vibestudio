@@ -10,9 +10,14 @@
  * by the channel implementation.
  *
  * Pi has no `unregisterTool`, so once a tool is registered for a session it
- * stays registered. Reconcile uses `pi.setActiveTools` to control which tools
- * are visible to the LLM. Built-in tool names are passed in via `deps.builtinToolNames`
- * so the extension can re-include them when computing the active set.
+ * stays registered and active for that session. Reconcile can add newly-seen
+ * channel tools, but it does not hide previously-seen tools on transient roster
+ * misses. If the model calls a tool whose participant is really gone, execute()
+ * returns a normal tool error with the exact availability problem instead of
+ * silently removing the method from the model's tool surface.
+ *
+ * Built-in tool names are passed in via `deps.builtinToolNames` so the
+ * extension can keep them active alongside channel methods.
  */
 
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -165,11 +170,12 @@ export function createChannelToolsExtension(
         registered.add(captured.name);
       }
 
-      // Activate built-in tools + currently-rostered tool names. Tools that
-      // were registered earlier but are no longer in the roster get hidden
-      // from the LLM by being absent from this active set.
+      // Activate built-in tools + every channel tool this runner has ever
+      // registered. Participant availability is checked at execute time. This
+      // keeps the model-facing tool surface stable across brief panel reconnects
+      // and channel participant refresh gaps.
       const activeSet = new Set<string>(deps.builtinToolNames);
-      for (const m of roster) activeSet.add(m.name);
+      for (const name of registered) activeSet.add(name);
       pi.setActiveTools([...activeSet]);
     };
 

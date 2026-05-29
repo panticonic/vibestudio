@@ -251,6 +251,7 @@ export type CallerKind =
   | "shell"
   | "shell-remote"
   | "panel"
+  | "app"
   | "worker"
   | "do"
   | "extension"
@@ -331,6 +332,7 @@ export const ELECTRON_LOCAL_SERVICE_NAMES = [
   "browser-session-sync",
   "events",
   "menu",
+  "notification",
   "panel",
   "remoteCred",
   "settings",

@@ -40,7 +40,7 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `createGatewayFetch` | value |  | Create a gateway-authenticated fetch helper from an explicit config. |
 | `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
 | `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
-| `gitConfig` | value |  | Git HTTP endpoint and token derived from the gateway config. |
+| `gitConfig` | value |  | Git HTTP endpoint and token derived from the gateway config. Prefer `git.client()` for git operations. |
 | `env` | value |  |  |
 | `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
@@ -66,9 +66,9 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `openPanel`, `units` |  |
 | `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp` |  |
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote`, `syncRepoToContexts`, `client` |  |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `blameGadFileSnippet`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
+| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `blameGadFileSnippet`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
-| `extensions` | namespace | `use`, `on`, `list`, `install`, `uninstall`, `setEnabled`, `update`, `reload` |  |
+| `extensions` | namespace | `use`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `requestApproval` | value |  |  |
 | `revokeApproval` | value |  |  |
@@ -140,6 +140,7 @@ import { panelTree, openPanel } from "@workspace/runtime";
 const created = await openPanel("https://example.com", { focus: true });
 const same = panelTree.get(created.id);
 const parent = panelTree.self().parent();
+const parentInfo = parent ? await parent.getInfo() : null;
 const roots = await panelTree.roots();
 ```
 
@@ -149,13 +150,21 @@ const roots = await panelTree.roots();
 await same.refresh();
 await same.focus();
 await same.stateArgs.set({ mode: "review" });
+const state = await same.stateArgs.get();
 await same.call.someExposedMethod();
 
-const page = await same.cdp.page();
+const page = await same.cdp.playwrightPage();
 await page.title();
+await page.url();
+await same.click("button");
 
-await parent?.cdp.page();
+await parent?.cdp.playwrightPage();
 ```
+
+Use `same.cdp.playwrightPage()` for the vendored Playwright-style client or
+`same.cdp.lightweightPage()` for the smaller wrapper. There is no generic
+`same.cdp.page()` alias; the API exposes only named clients so the two scopes
+are not confused.
 
 CDP and structural operations are approval-gated on first use per requester
 runtime entity and target panel. Privileged shell/about targets use a severe
@@ -163,6 +172,8 @@ danger-tone approval. CDP transparently loads unloaded targets after approval;
 RPC and `_agent` introspection do not auto-load, so call `handle.ensureLoaded()`
 first when you need those against an unloaded target. A target held by a
 mobile/non-CDP host rejects CDP access rather than being taken over silently.
+Approval prompts time out if no shell decision arrives before the deadline; that
+is a consent UI timeout, not a model prompt timeout.
 
 ## Userland Approval Prompts
 

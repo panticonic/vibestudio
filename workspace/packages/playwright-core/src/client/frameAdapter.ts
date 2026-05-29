@@ -46,19 +46,25 @@ export class FrameAdapter {
     selector: string,
     options: QueryOptions = {}
   ): Promise<any[]> {
-    // This will be implemented once InjectedScript is available
-    // For now, return placeholder
     try {
-      const result = await this.adapter.evaluate<any>({
+      return await this.adapter.evaluate<any[]>({
         expression: `
-          (() => {
-            // Placeholder - will be replaced with actual selector evaluation
-            return document.querySelectorAll('${selector}');
-          })()
+          ((selector) => {
+            return Array.from(document.querySelectorAll(selector)).map((element) => {
+              const style = getComputedStyle(element);
+              const rect = element.getBoundingClientRect();
+              return {
+                visible:
+                  style.visibility !== 'hidden' &&
+                  style.display !== 'none' &&
+                  rect.width > 0 &&
+                  rect.height > 0,
+              };
+            });
+          })(${JSON.stringify(selector)})
         `,
         returnByValue: true,
       });
-      return result ? Array.from(result) : [];
     } catch (e) {
       return [];
     }
@@ -89,10 +95,9 @@ export class FrameAdapter {
         if (state === 'attached' && isAttached) return true;
         if (state === 'detached' && !isAttached) return true;
 
-        // For visibility checks, would need element visibility detection via CDP
-        // For now, treat attached as visible
-        if (state === 'visible' && isAttached) return true;
-        if (state === 'hidden' && !isAttached) return true;
+        const isVisible = found.some((element) => element?.visible === true);
+        if (state === 'visible' && isVisible) return true;
+        if (state === 'hidden' && !isVisible) return true;
       } catch (e) {
         // Continue polling on errors
       }

@@ -1,8 +1,8 @@
-import { BrowserImpl } from "../../playwright-core/src/client/browserImpl";
-
-export type Browser = Awaited<ReturnType<typeof BrowserImpl.connect>>;
+import { BrowserImpl } from "./worker";
 
 export { BrowserImpl };
+
+export type Browser = Awaited<ReturnType<typeof BrowserImpl.connect>>;
 
 export type Options = {
   headless?: boolean;
@@ -14,7 +14,6 @@ export async function connect(
   options: Options & { authToken?: string } = {}
 ): Promise<Browser> {
   return BrowserImpl.connect(wsEndpoint, {
-    isElectronWebview: true,
     transportOptions: options.authToken ? { authToken: options.authToken } : undefined,
   });
 }

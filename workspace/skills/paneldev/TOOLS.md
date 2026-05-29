@@ -114,9 +114,12 @@ Available via `import { ... } from "@workspace/runtime"` and `import { ... } fro
 
 ### Using extensions
 
-Extensions are **declared** in `meta/natstack.yml` under `extensions:`. That declaration is the only way to install/enable/disable/uninstall one — there is no `extensions.install` / `setEnabled` API, and invoking an extension never prompts. To start using an extension, add it to the `extensions:` list in `meta/natstack.yml`; saving that change (a gated meta write) raises one joint approval covering every newly-declared extension. Once approved and running, call it with `extensions.use(name)`.
+Extensions are **declared** in `meta/natstack.yml` under `extensions:`. That declaration is the only way to add or remove one, and invoking an extension never prompts. To start using an extension, add it to the `extensions:` list in `meta/natstack.yml`; saving that change (a gated meta write) raises one joint approval covering every newly-declared extension. Once approved and running, call it with `extensions.use(name)`.
 
-`extensions.use(name).method(...)` fails with `ENOEXT` if the extension is not declared/enabled, or `ENOTREADY` if it is still starting. If you need an extension that isn't declared yet, edit `meta/natstack.yml` rather than calling an install API.
+`extensions.use(name)` is synchronous and returns a method proxy; do not `await`
+it and do not call `.catch(...)` on it. Catch the method call instead:
+`await extensions.use(name).method(...).catch(...)`.
+`extensions.use(name).method(...)` fails with `ENOEXT` if the extension is not declared, or `ENOTREADY` if it is still starting. If you need an extension that isn't declared yet, edit `meta/natstack.yml`.
 
 Extension methods normally use unary RPC and must return JSON-serializable values. If an extension method returns a `Response` or `ReadableStream`, declare it when creating the client so the runtime uses streaming RPC end-to-end:
 
@@ -133,8 +136,6 @@ const shell = extensions.use<ShellApi>("@workspace-extensions/shell", {
 });
 ```
 
-`extensions.useWithStreams(name, methods)` is an alias for the same option. Prefer `extensions.use(name, { streamingMethods })` in new code so unary and streaming methods live on one typed client.
-
 To check whether an extension is available before calling it, use `extensions.list()`:
 
 ```ts
@@ -142,7 +143,7 @@ eval({ code: `
   import { extensions } from "@workspace/runtime";
   const name = "@workspace-extensions/image-service";
   const entry = (await extensions.list()).find((e) => e.name === name);
-  if (!entry || !entry.enabled || entry.status !== "running") {
+  if (!entry || entry.status !== "running") {
     throw new Error(name + " is not available — declare it in meta/natstack.yml and approve it.");
   }
 `
@@ -248,7 +249,10 @@ eval({ code: `
   import { extensions } from "@workspace/runtime";
   const typecheck = extensions.use("@workspace-extensions/typecheck-service");
   // Type-check a specific panel
-  const result = await typecheck.checkPanel("panels/my-app");
+  const result = await typecheck.checkPanel("panels/my-app").catch((error) => ({
+    error: String(error),
+  }));
+  if ("error" in result) return result;
   if (result.errorCount > 0) {
     console.log(result.errorCount + " errors:");
     for (const d of result.diagnostics) {

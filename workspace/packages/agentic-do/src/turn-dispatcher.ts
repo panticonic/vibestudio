@@ -7,18 +7,20 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { RunnerEvent, RunnerTurnInput } from "@natstack/harness";
+import type { RunnerEvent, RunnerTurnInput, RunnerTurnOptions } from "@natstack/harness";
 
 export interface TurnDispatcherRunner {
   subscribe(listener: (event: RunnerEvent) => void): () => void;
   buildUserMessage(input: RunnerTurnInput): AgentMessage;
-  prompt(input: RunnerTurnInput): Promise<void>;
-  continueAgent(): Promise<void>;
+  prompt(input: RunnerTurnInput, opts?: RunnerTurnOptions): Promise<void>;
+  continueAgent(opts?: RunnerTurnOptions): Promise<void>;
   steerMessage(message: AgentMessage): Promise<void>;
   clearSteeringQueue(): Promise<void>;
 }
 
-type WorkItem = { kind: "prompt"; input: RunnerTurnInput } | { kind: "continue" };
+export type WorkItem =
+  | { kind: "prompt"; input: RunnerTurnInput }
+  | { kind: "continue"; turnId?: string };
 
 type WorkCompletion =
   | { status: "completed"; source: "runner" | "agent_end" }
@@ -28,6 +30,7 @@ type WorkCompletion =
 interface ActiveWork {
   generation: number;
   kind: WorkItem["kind"];
+  turnId?: string;
   sawAgentStart: boolean;
   sawAgentEnd: boolean;
   runnerSettled: boolean;
@@ -41,14 +44,25 @@ interface PendingSteer {
   message: AgentMessage;
 }
 
-export interface TurnDispatcherProjector {
-  closeAll(): Promise<void>;
-}
-
 export interface TurnDispatcherOptions {
   runner: TurnDispatcherRunner;
-  projector: TurnDispatcherProjector;
   notifyTyping: (busy: boolean) => void;
+  onWorkStart?: (work: WorkItem) => string | undefined | Promise<string | undefined>;
+  onWorkFailure?: (work: WorkItem, error: unknown, turnId?: string) => void | Promise<void>;
+  onInvariantViolation?: (
+    code: string,
+    detail?: Record<string, unknown>
+  ) => void | Promise<void>;
+  /**
+   * Anchor the detached drain promise to the DO's current request lifetime
+   * (typically `ctx.waitUntil`). The drain loop is started fire-and-forget
+   * from an inbound request handler that returns immediately; without an
+   * anchor, workerd binds the drain's promise continuations to that already
+   * -completed request context and cancels them ("A promise was resolved or
+   * rejected from a different request context..."). Registering the drain
+   * promise here keeps a live context around until the turn settles.
+   */
+  keepAlive?: (promise: Promise<unknown>) => void;
   log?: Pick<Console, "warn" | "error">;
 }
 
@@ -91,9 +105,9 @@ export class TurnDispatcher {
     this.ensureDrain();
   }
 
-  submitContinue(): void {
+  submitContinue(opts: RunnerTurnOptions = {}): void {
     if (this.disposed) return;
-    this.pending.push({ kind: "continue" });
+    this.pending.push({ kind: "continue", ...(opts.turnId ? { turnId: opts.turnId } : {}) });
     this.notifyTyping();
     this.ensureDrain();
   }
@@ -176,7 +190,10 @@ export class TurnDispatcher {
     if (this.disposed) return;
     switch (event.type) {
       case "agent_start": {
-        if (this.activeWork) this.activeWork.sawAgentStart = true;
+        const active = this.activeWork;
+        if (active && this.eventMatchesActiveWork(event, active)) {
+          active.sawAgentStart = true;
+        }
         return;
       }
       case "message_start": {
@@ -188,8 +205,18 @@ export class TurnDispatcher {
       }
       case "agent_end": {
         const active = this.activeWork;
+        if (active && !this.eventMatchesActiveWork(event, active)) return;
+        if (active && eventMetadata(event).lifecycleMatched === false) {
+          this.reportInvariant("runner_lifecycle_unmatched_agent_end", {
+            activeTurnId: active.turnId ?? null,
+            eventTurnId: eventMetadata(event).turnId ?? null,
+          });
+          return;
+        }
         if (active && !active.sawAgentStart) {
-          this.log.warn("[TurnDispatcher] ignoring agent_end before agent_start for active work");
+          this.reportInvariant("runner_lifecycle_agent_end_before_agent_start", {
+            activeTurnId: active.turnId ?? null,
+          });
           return;
         }
         if (active) active.sawAgentEnd = true;
@@ -216,12 +243,18 @@ export class TurnDispatcher {
     if (this.draining) return;
     this.draining = true;
     const generation = ++this.drainGeneration;
-    void this.drainLoop(generation).catch((err) => {
+    const drained = this.drainLoop(generation).catch((err) => {
       if (generation !== this.drainGeneration) return;
       this.log.error("[TurnDispatcher] drainLoop crashed:", err);
+      this.reportInvariant("dispatcher_drain_loop_crashed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
       this.draining = false;
       this.notifyTyping();
     });
+    // Anchor the detached drain to a live request context so workerd does not
+    // cancel its cross-request promise continuations. See keepAlive docs.
+    this.opts.keepAlive?.(drained);
   }
 
   private async drainLoop(generation: number): Promise<void> {
@@ -241,9 +274,14 @@ export class TurnDispatcher {
             completion.error
           );
           try {
-            await this.opts.projector.closeAll();
-          } catch (closeErr) {
-            this.log.warn("[TurnDispatcher] projector.closeAll failed:", closeErr);
+            await this.opts.onWorkFailure?.(work, completion.error, active.turnId);
+          } catch (failureErr) {
+            this.log.warn("[TurnDispatcher] onWorkFailure failed:", failureErr);
+            this.reportInvariant("dispatcher_on_work_failure_failed", {
+              workKind: work.kind,
+              turnId: active.turnId ?? null,
+              error: failureErr instanceof Error ? failureErr.message : String(failureErr),
+            });
           }
           if (this.pendingSteered.length > 0) {
             for (const item of this.pendingSteered)
@@ -302,10 +340,19 @@ export class TurnDispatcher {
   private observeRunnerWork(work: WorkItem, active: ActiveWork): void {
     let promise: Promise<void>;
     try {
-      promise =
-        work.kind === "continue"
-          ? this.opts.runner.continueAgent()
-          : this.opts.runner.prompt(work.input);
+      if (this.opts.onWorkStart) {
+        promise = Promise.resolve(this.opts.onWorkStart(work)).then((turnId) => {
+          active.turnId = turnId;
+          return work.kind === "continue"
+            ? this.opts.runner.continueAgent({ turnId })
+            : this.opts.runner.prompt(work.input, { turnId });
+        });
+      } else {
+        promise =
+          work.kind === "continue"
+            ? this.opts.runner.continueAgent()
+            : this.opts.runner.prompt(work.input);
+      }
     } catch (err) {
       active.runnerSettled = true;
       this.completeActiveWork(active, { status: "failed", error: err });
@@ -326,6 +373,11 @@ export class TurnDispatcher {
   private completeActiveWork(active: ActiveWork, result: WorkCompletion): void {
     if (this.activeWork !== active || active.generation !== this.drainGeneration) return;
     active.complete(result);
+  }
+
+  private eventMatchesActiveWork(event: RunnerEvent, active: ActiveWork): boolean {
+    const eventTurnId = eventMetadata(event).turnId;
+    return !eventTurnId || !active.turnId || eventTurnId === active.turnId;
   }
 
   private invalidateActiveWork(): void {
@@ -360,17 +412,31 @@ export class TurnDispatcher {
   private warnIfWorkProducedNoLifecycle(work: WorkItem, active: ActiveWork): void {
     if (active.generation !== this.drainGeneration || active.kind !== work.kind) return;
     if (!active.sawAgentStart) {
-      this.log.warn(
-        `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} completed without agent_start`
-      );
+      this.reportInvariant("runner_completed_without_agent_start", {
+        workKind: work.kind,
+        turnId: active.turnId ?? null,
+      });
       return;
     }
     if (!active.sawAgentEnd) {
-      this.log.warn(
-        `[TurnDispatcher] ${work.kind === "continue" ? "continueAgent" : "prompt"} completed without agent_end`
-      );
+      this.reportInvariant("runner_completed_without_agent_end", {
+        workKind: work.kind,
+        turnId: active.turnId ?? null,
+      });
     }
   }
+
+  private reportInvariant(code: string, detail?: Record<string, unknown>): void {
+    this.log.warn(`[TurnDispatcher] invariant violation: ${code}`, detail ?? {});
+    void Promise.resolve(this.opts.onInvariantViolation?.(code, detail)).catch((err) => {
+      this.log.warn("[TurnDispatcher] onInvariantViolation failed:", err);
+    });
+  }
+}
+
+function eventMetadata(event: RunnerEvent): { turnId?: string; lifecycleMatched?: boolean } {
+  return ((event as { natstack?: { turnId?: string; lifecycleMatched?: boolean } }).natstack ??
+    {}) as { turnId?: string; lifecycleMatched?: boolean };
 }
 
 function isUserMessage(value: unknown): value is AgentMessage {

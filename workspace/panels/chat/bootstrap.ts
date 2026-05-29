@@ -15,6 +15,8 @@ export interface PendingAgentRecord {
   key: string;
   source: string;
   className: string;
+  /** Per-agent subscription config (model/effort/etc.), excluding handle. */
+  config?: Record<string, unknown>;
 }
 
 /** Append a newly-added agent to the existing pendingAgents list. Pure helper
@@ -49,6 +51,7 @@ export function rehydratePendingAgent(
         key: agent.key,
         source: agent.source,
         className: agent.className,
+        ...(agent.config ? { config: agent.config } : {}),
       },
       mutated: false,
     };
@@ -60,6 +63,7 @@ export function rehydratePendingAgent(
       key: agent.key ?? `${agent.handle}-${defaults.randomSuffix()}`,
       source: agent.source ?? defaults.workerSource,
       className: agent.className ?? agent.agentId,
+      ...(agent.config ? { config: agent.config } : {}),
     },
     mutated: true,
   };

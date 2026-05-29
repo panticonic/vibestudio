@@ -4,7 +4,7 @@ Extension source authoring happens **in the workspace git repo for the extension
 
 ## The flow
 
-1. Edit files under `workspace/extensions/<scope>/<name>/`.
+1. Edit files under `workspace/extensions/<name>/`.
 2. Commit and push to the extension repo's `main` (or `master`).
 3. The git server sees an extension push and triggers the extension-specific approval prompt.
 4. On approve, the manager rebuilds the bundle, replaces the running process, and runs `activate(ctx)` again.
@@ -30,7 +30,7 @@ This is the one place the extension trust model loosens for ergonomics. Source p
 import { commitAndPush } from "@workspace-skills/paneldev";
 
 await commitAndPush(
-  "extensions/@workspace-extensions/hello",
+  "extensions/hello",
   "Add greet method",
 );
 ```
@@ -57,13 +57,15 @@ The unified status surface (`workspace.units.list()`) is the right tool for "is 
 - `status` — lifecycle: `running`, `stopped`, `building`, `error`, `pending-approval`
 - `health` — self-reported operational state (see `ctx.health` in [AUTHORING.md](AUTHORING.md))
 - `respawn` — when the manager is mid-backoff after a crash, this shows `{ attempts, nextAttemptAt }`
-- `pendingApproval` — set when an install/update prompt is in flight
+- `pendingApproval` — set when a declaration/update approval is in flight
 - `availableUpdate` — set when current workspace state would change the extension's runtime inputs (a dep push, an external-dep bump)
 - `lastBuiltAt` — best-effort epoch ms of the active bundle
 - `lastError` — populated on `error` status
 - `inspectorUrl` — dev-only
 
-`workspace.units.logs(name, { since?, level?, limit? })` returns recent log records for any unit. Extension records (from `ctx.log`) and DO records (from workerd `console.*`) share the same schema.
+`workspace.units.logs(name, { since?, level?, limit? })` returns recent log records for any unit. `workspace.units.diagnostics(name, { limit?, errorLimit?, since?, level? })` returns the same bounded log stream plus a separate error-only buffer, dropped counts, and the current unit status row.
+
+Extension records from `ctx.log`, extension process stdout/stderr, worker/DO `console.*`, and panel lifecycle diagnostics share the same persisted diagnostic history. The history is retained under the workspace state directory with separate bounds for general logs and errors, so noisy info logs do not evict the error trail.
 
 ## Restart without a source change
 
@@ -85,9 +87,9 @@ To adopt dependency changes (a `@workspace/runtime` push, an `npm` version bump)
 | `Cannot find module ...` at runtime | Dep was externalized but missing from runtime install | Set `dependencyMode: "external"` and confirm the package is in `dependencies` |
 | `Named export ... not found` | ESM imported a named export from a CJS package | Use `import pkg from "x"; const { fn } = pkg;` |
 | `require is not defined` | Code crossed an ESM/CJS boundary in a bundled dep | Switch the dep to `dependencyMode: "external"` |
-| 503 from `/_r/ext/<name>/*` | Extension is `pending-approval`, `building`, or `error` | Approve install or check `lastError` |
+| 503 from `/_r/ext/<name>/*` | Extension is `pending-approval`, `building`, or `error` | Approve the declaration/update or check `lastError` |
 | 413 from fetch endpoint | Request body exceeded 32 MB | Split the upload or stream to disk via `ctx.fs` |
 
-## Uninstall
+## Remove a Declaration
 
-Remove the extension's entry from the `extensions:` list in `meta/natstack.yml` and push. The next reconcile stops the process and deletes its registry entry; the per-extension storage scratch is retained. The workspace source tree stays — you'd `git rm` that separately. Userland approval grants the extension received persist (they're keyed by `(principal, extension-name)`); re-declaring under the same name reuses them. There is no `extensions.uninstall` API — the declared set is authoritative.
+Remove the extension's entry from the `extensions:` list in `meta/natstack.yml` and push. The next reconcile stops the process and deletes its registry entry; the per-extension storage scratch is retained. The workspace source tree stays — you'd `git rm` that separately. Userland approval grants the extension received persist (they're keyed by `(principal, extension-name)`); re-declaring under the same name reuses them. The declared set is authoritative.

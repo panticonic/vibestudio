@@ -38,6 +38,9 @@ const wellKnownDir = path.join(distDir, ".well-known");
 const rawConfig = JSON.parse(
   readFileSync(path.join(rootDir, "config.json"), "utf8"),
 ) as Record<string, unknown>;
+const strictPlaceholderCheck =
+  process.env.ALLOW_PLACEHOLDER_WELLKNOWN !== "1" &&
+  (process.env.CI === "true" || process.env.NODE_ENV === "production" || process.env.STRICT_WELLKNOWN === "1");
 
 // Strip `_comment_*` keys (used in config.json to document TODOs without
 // polluting the JSON Schema with optional fields).
@@ -54,7 +57,64 @@ function stripComments(obj: unknown): unknown {
   return obj;
 }
 
-const config = stripComments(rawConfig) as Config;
+const config = resolveConfig(stripComments(rawConfig) as Config);
+
+function resolveConfig(fileConfig: Config): Config {
+  const teamId = process.env.NATSTACK_APPLE_TEAM_ID?.trim() || fileConfig.apple.teamId;
+  const bundleId = process.env.NATSTACK_IOS_BUNDLE_ID?.trim() || fileConfig.apple.bundleId;
+  const packageName =
+    process.env.NATSTACK_ANDROID_PACKAGE_NAME?.trim() || fileConfig.android.packageName;
+  const fingerprints =
+    parseFingerprintEnv(process.env.NATSTACK_ANDROID_SHA256_CERT_FINGERPRINTS) ??
+    fileConfig.android.sha256CertFingerprints;
+
+  validateConfig({
+    apple: { teamId, bundleId },
+    android: { packageName, sha256CertFingerprints: fingerprints },
+  });
+
+  return {
+    apple: { teamId, bundleId },
+    android: { packageName, sha256CertFingerprints: fingerprints },
+  };
+}
+
+function parseFingerprintEnv(value: string | undefined): string[] | undefined {
+  if (!value?.trim()) return undefined;
+  return value
+    .split(",")
+    .map((entry) => entry.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function validateConfig(config: Config): void {
+  if (!isPlaceholder(config.apple.teamId) && !/^[A-Z0-9]{10}$/.test(config.apple.teamId)) {
+    throw new Error(
+      "Invalid Apple Team ID for well-known payload. Expected a 10-character alphanumeric Team ID."
+    );
+  }
+  if (!/^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+$/.test(config.apple.bundleId)) {
+    throw new Error("Invalid iOS bundle identifier for well-known payload.");
+  }
+  if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(config.android.packageName)) {
+    throw new Error("Invalid Android package name for well-known payload.");
+  }
+  if (config.android.sha256CertFingerprints.length === 0) {
+    throw new Error("At least one Android SHA256 cert fingerprint is required.");
+  }
+  for (const fingerprint of config.android.sha256CertFingerprints) {
+    if (isPlaceholder(fingerprint)) continue;
+    if (!/^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(fingerprint)) {
+      throw new Error(
+        `Invalid Android SHA256 cert fingerprint for well-known payload: ${fingerprint}`
+      );
+    }
+  }
+}
+
+function isPlaceholder(value: string): boolean {
+  return /^TODO_/.test(value);
+}
 
 function applyReplacements(
   template: string,
@@ -91,9 +151,6 @@ const assetlinksOutput = applyReplacements(assetlinksTemplate, {
 // (which would silently break universal-link verification on every
 // installed device for ~24h until Apple's CDN re-fetches).
 const PLACEHOLDER_PATTERNS = [/TODO_TEAM_ID/, /TODO_SHA256_FROM_KEYSTORE/];
-const strictPlaceholderCheck =
-  process.env.ALLOW_PLACEHOLDER_WELLKNOWN !== "1" &&
-  (process.env.CI === "true" || process.env.NODE_ENV === "production" || process.env.STRICT_WELLKNOWN === "1");
 for (const text of [appleOutput, assetlinksOutput]) {
   for (const pat of PLACEHOLDER_PATTERNS) {
     if (pat.test(text) && strictPlaceholderCheck) {

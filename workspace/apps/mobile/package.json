@@ -1,0 +1,50 @@
+{
+  "name": "@workspace-apps/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "natstack": {
+    "displayName": "NatStack Mobile",
+    "app": {
+      "target": "react-native",
+      "renderer": "App.tsx",
+      "rnComponentName": "NatStack",
+      "rnHostAbi": "rn-host-1",
+      "capabilities": [
+        "notifications",
+        "camera",
+        "keychain",
+        "clipboard",
+        "open-external"
+      ]
+    }
+  },
+  "dependencies": {
+    "@natstack/browser-data": "workspace:*",
+    "@natstack/rpc": "workspace:*",
+    "@natstack/shared": "workspace:*",
+    "@notifee/react-native": "^9.1.8",
+    "@react-native-community/netinfo": "^11.4.1",
+    "@react-native-async-storage/async-storage": "^2.2.0",
+    "@react-native-firebase/app": "^23.5.0",
+    "@react-native-firebase/messaging": "^23.5.0",
+    "@react-navigation/drawer": "^7.3.3",
+    "@react-navigation/native": "^7.1.6",
+    "@react-navigation/stack": "^7.2.6",
+    "jotai": "^2.15.1",
+    "lucide-react-native": "^1.14.0",
+    "path-browserify": "^1.0.1",
+    "react": "^19.0.0",
+    "react-native": "^0.79.2",
+    "react-native-gesture-handler": "^2.25.0",
+    "react-native-get-random-values": "~1.11.0",
+    "react-native-haptic-feedback": "^2.3.4",
+    "react-native-keychain": "^9.2.2",
+    "react-native-reanimated": "^3.17.5",
+    "react-native-safe-area-context": "^5.4.0",
+    "react-native-screens": "~4.10.0",
+    "react-native-svg": "^15.15.4",
+    "react-native-url-polyfill": "^3.0.0",
+    "react-native-webview": "^13.13.5"
+  }
+}

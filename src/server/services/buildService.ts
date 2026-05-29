@@ -1,12 +1,13 @@
 import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { BuildSystemV2, BuildUnitOptions } from "../buildV2/index.js";
+import { computeBuildKey } from "../buildV2/effectiveVersion.js";
 
 export function createBuildService(deps: { buildSystem: BuildSystemV2 }): ServiceDefinition {
   return {
     name: "build",
     description: "Build system (getBuild, getBuildNpm, recompute, gc, getAboutPages)",
-    policy: { allowed: ["panel", "shell", "server", "worker", "do", "extension"] },
+    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "extension"] },
     methods: {
       getBuild: {
         args: z.tuple([
@@ -25,6 +26,11 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
       },
       getBuildMetadata: { args: z.tuple([z.string()]) },
       getEffectiveVersion: { args: z.tuple([z.string()]) },
+      inspectBuildProvenance: {
+        description:
+          "Resolve a workspace build unit and report its effective version, immutable build keys, and cached artifact metadata.",
+        args: z.tuple([z.string()]),
+      },
       doctorExtension: {
         description:
           "Inspect an extension manifest, dependency routing, cached metadata, and smoke/build status.",
@@ -44,12 +50,18 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
     handler: async (_ctx, method, args) => {
       const bs = deps.buildSystem;
       switch (method) {
-        case "getBuild":
-          return bs.getBuild(
-            args[0] as string,
-            args[1] as string | undefined,
-            args[2] as BuildUnitOptions | undefined
-          );
+        case "getBuild": {
+          const options = args[2] as BuildUnitOptions | undefined;
+          return options?.library
+            ? bs.getBuild(args[0] as string, args[1] as string | undefined, {
+                ...options,
+                library: true,
+              })
+            : bs.getBuild(args[0] as string, args[1] as string | undefined, {
+                ...options,
+                library: false,
+              });
+        }
         case "getBuildNpm":
           return bs.getBuildNpm(
             args[0] as string,
@@ -60,6 +72,76 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
           return bs.getBuildByKey(args[0] as string)?.metadata ?? null;
         case "getEffectiveVersion":
           return bs.getEffectiveVersion(args[0] as string);
+        case "inspectBuildProvenance": {
+          const source = args[0] as string;
+          const graph = bs.getGraph();
+          const exactNode =
+            graph.tryGet(source) ??
+            graph
+              .allNodes()
+              .find((candidate) => candidate.relativePath === source || candidate.path === source);
+          const basenameMatches = exactNode
+            ? []
+            : graph
+                .allNodes()
+                .filter((candidate) => candidate.relativePath.split("/").slice(-1)[0] === source);
+          const node = exactNode ?? (basenameMatches.length === 1 ? basenameMatches[0] : undefined);
+          if (!node && basenameMatches.length > 1) {
+            return {
+              source,
+              found: false,
+              ambiguous: true,
+              workspaceRoot: bs.getWorkspaceRoot(),
+              candidates: basenameMatches.map((candidate) => ({
+                name: candidate.name,
+                kind: candidate.kind,
+                relativePath: candidate.relativePath,
+              })),
+            };
+          }
+          if (!node) {
+            return {
+              source,
+              found: false,
+              workspaceRoot: bs.getWorkspaceRoot(),
+            };
+          }
+          const effectiveVersion = bs.getEffectiveVersion(node.name);
+          const buildKeys = effectiveVersion
+            ? {
+                sourcemap: computeBuildKey(node.name, effectiveVersion, true),
+                production: computeBuildKey(node.name, effectiveVersion, false),
+              }
+            : { sourcemap: null, production: null };
+          const cachedBuilds = Object.fromEntries(
+            Object.entries(buildKeys).map(([kind, key]) => {
+              const build = key ? bs.getBuildByKey(key) : null;
+              return [
+                kind,
+                {
+                  key,
+                  cached: !!build,
+                  artifactCount: build?.artifacts.length ?? 0,
+                  metadata: build?.metadata ?? null,
+                },
+              ];
+            })
+          );
+          return {
+            source,
+            found: true,
+            workspaceRoot: bs.getWorkspaceRoot(),
+            unit: {
+              name: node.name,
+              kind: node.kind,
+              relativePath: node.relativePath,
+              path: node.path,
+            },
+            effectiveVersion,
+            buildKeys,
+            cachedBuilds,
+          };
+        }
         case "doctorExtension":
           return bs.doctorExtension(args[0] as string);
         case "recompute":

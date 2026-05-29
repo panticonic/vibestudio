@@ -12,6 +12,36 @@ export interface CdpEndpoint {
   token?: string;
 }
 
+export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
+
+export interface PanelConsoleHistoryOptions {
+  limit?: number;
+  errorLimit?: number;
+  levels?: PanelConsoleHistoryLevel[];
+}
+
+export interface PanelConsoleHistoryEntry {
+  timestamp: number;
+  level: PanelConsoleHistoryLevel;
+  message: string;
+  line: number;
+  sourceId: string;
+  url: string;
+}
+
+export interface PanelConsoleHistoryResult {
+  entries: PanelConsoleHistoryEntry[];
+  errors: PanelConsoleHistoryEntry[];
+  dropped: {
+    entries: number;
+    errors: number;
+  };
+  capacity: {
+    entries: number;
+    errors: number;
+  };
+}
+
 export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
   getTarget(
     panelId: string
@@ -28,7 +58,20 @@ export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
     command: "navigate" | "reload" | "goBack" | "goForward" | "stop",
     args: unknown[]
   ): Promise<unknown>;
+  consoleHistory?(
+    panelId: string,
+    requesterEntityId: string,
+    options?: PanelConsoleHistoryOptions
+  ): Promise<PanelConsoleHistoryResult>;
 }
+
+const consoleHistoryOptionsSchema = z
+  .object({
+    limit: z.number().optional(),
+    errorLimit: z.number().optional(),
+    levels: z.array(z.enum(["debug", "info", "warning", "error", "unknown"])).optional(),
+  })
+  .optional();
 
 export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinition {
   async function requireTarget(panelId: string): Promise<PanelAccessPermissionTarget> {
@@ -48,6 +91,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
       goBack: { args: z.tuple([z.string()]) },
       goForward: { args: z.tuple([z.string()]) },
       stop: { args: z.tuple([z.string()]) },
+      consoleHistory: { args: z.tuple([z.string(), consoleHistoryOptionsSchema]) },
     },
     handler: async (ctx, method, args) => {
       const panelId = args[0] as string;
@@ -61,6 +105,21 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
             throw new Error(permission.reason ?? "CDP access denied");
           }
           return deps.getEndpoint(panelId, requesterEntityId);
+        }
+
+        case "consoleHistory": {
+          const permission = await requirePanelAccessPermission(deps, ctx, "cdp", target);
+          if (!permission.allowed) {
+            throw new Error(permission.reason ?? "CDP access denied");
+          }
+          if (!deps.consoleHistory) {
+            throw new Error("Panel console history is not available");
+          }
+          return deps.consoleHistory(
+            panelId,
+            requesterEntityId,
+            (args[1] as PanelConsoleHistoryOptions | undefined) ?? undefined
+          );
         }
 
         case "navigate":

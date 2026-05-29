@@ -188,7 +188,7 @@ eval({ code: `
   import { htmlToReadableMarkdown } from "@natstack/harness/web-extract";
 
   const browser = await openPanel("https://example.com/article");
-  const page = await browser.cdp.page();
+  const page = await browser.cdp.playwrightPage();
   await page.waitForLoadState("networkidle");
   const html = await page.content();
   const { title, markdown } = htmlToReadableMarkdown(html, page.url());
@@ -219,7 +219,7 @@ over 50 URLs this way. For batch crawls, prefer `web_fetch` and accept
 the partial results.
 
 For login flows or interactive pages, see the `sandbox` skill's
-`BROWSER_AUTOMATION.md` for the full Playwright API.
+`BROWSER_AUTOMATION.md` for the lazy Playwright-style CDP API.
 
 ## Summarizing long pages with an aux model (eval)
 

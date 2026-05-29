@@ -223,6 +223,130 @@ describe("ViewManager", () => {
     });
   });
 
+  describe("native panel slots", () => {
+    let vm: ViewManager;
+
+    beforeEach(() => {
+      vm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        shellHtmlPath: "/path/to/index.html",
+      });
+    });
+
+    it("binds a panel slot with measured bounds and focus", () => {
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        panelId: "panel-1",
+        bounds: { x: 11.4, y: 23.6, width: 500.2, height: 300.8 },
+        focused: true,
+      });
+
+      expect(hostView.setVisible).toHaveBeenCalledWith(true);
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 11,
+        y: 24,
+        width: 500,
+        height: 301,
+      });
+      expect(panelView.setVisible).toHaveBeenCalledWith(true);
+      expect(panelView.webContents.focus).toHaveBeenCalled();
+      expect(vm.isPanelSlotted("panel-1")).toBe(true);
+    });
+
+    it("updates and clears a panel slot", () => {
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        panelId: "panel-1",
+        bounds: { x: 10, y: 20, width: 300, height: 200 },
+      });
+      vm.updatePanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        bounds: { x: 12, y: 24, width: 320, height: 220 },
+      });
+
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 12,
+        y: 24,
+        width: 320,
+        height: 220,
+      });
+
+      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary");
+
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
+      expect(vm.isPanelSlotted("panel-1")).toBe(false);
+    });
+
+    it("rejects binding one panel to two native slots", () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      vm.createView({ id: "panel-1", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "slot-a",
+        panelId: "panel-1",
+        bounds: { x: 0, y: 0, width: 100, height: 100 },
+      });
+
+      expect(() =>
+        vm.bindPanelSlot("@workspace-apps/shell", {
+          nativeSlotId: "slot-b",
+          panelId: "panel-1",
+          bounds: { x: 0, y: 0, width: 100, height: 100 },
+        })
+      ).toThrow(/already bound/);
+      warnSpy.mockRestore();
+    });
+
+    it("hosted shell not-ready clears active slots", () => {
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        panelId: "panel-1",
+        bounds: { x: 0, y: 0, width: 100, height: 100 },
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", false);
+
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
+      expect(hostView.setVisible).toHaveBeenLastCalledWith(false);
+      expect(vm.isPanelSlotted("panel-1")).toBe(false);
+      expect(vm.getVisibleHostChromeAppId()).toBeNull();
+    });
+  });
+
   describe("view lifecycle", () => {
     let vm: ViewManager;
 
@@ -276,6 +400,80 @@ describe("ViewManager", () => {
       expect(view.setBounds).toHaveBeenCalledWith(bounds);
     });
 
+    it("uses reported panel viewport bounds over reconstructed shell chrome layout", () => {
+      const view = vm.createView({
+        id: "test-view",
+        type: "panel",
+      });
+
+      vm.updateLayout({
+        titleBarHeight: 32,
+        sidebarVisible: true,
+        sidebarWidth: 260,
+        consentBarHeight: 0,
+      });
+      vm.setPanelViewportBounds({ x: 8.4, y: 164.6, width: 1180.2, height: 620.7 });
+      vm.setViewVisible("test-view", true);
+
+      expect(view.setBounds).toHaveBeenLastCalledWith({
+        x: 8,
+        y: 165,
+        width: 1180,
+        height: 621,
+      });
+
+      vm.updateLayout({ sidebarVisible: false, consentBarHeight: 0 });
+
+      expect(view.setBounds).toHaveBeenLastCalledWith({
+        x: 8,
+        y: 165,
+        width: 1180,
+        height: 621,
+      });
+    });
+
+    it("clamps stale reported panel viewport bounds below host chrome", () => {
+      const view = vm.createView({
+        id: "test-view",
+        type: "panel",
+      });
+
+      vm.setPanelViewportBounds({ x: 248, y: 32, width: 952, height: 768 });
+      vm.setViewVisible("test-view", true);
+      vm.updateLayout({
+        titleBarHeight: 32,
+        notificationBarHeight: 0,
+        saveBarHeight: 0,
+        consentBarHeight: 130,
+      });
+
+      expect(view.setBounds).toHaveBeenLastCalledWith({
+        x: 248,
+        y: 162,
+        width: 952,
+        height: 638,
+      });
+    });
+
+    it("falls back to chrome layout when no panel viewport bounds are reported", () => {
+      const view = vm.createView({
+        id: "test-view",
+        type: "panel",
+      });
+
+      vm.setPanelViewportBounds({ x: 8, y: 164, width: 1180, height: 620 });
+      vm.setPanelViewportBounds(null);
+      vm.updateLayout({ sidebarVisible: true, sidebarWidth: 260, titleBarHeight: 32 });
+      vm.setViewVisible("test-view", true);
+
+      expect(view.setBounds).toHaveBeenLastCalledWith({
+        x: 260,
+        y: 32,
+        width: 940,
+        height: 768,
+      });
+    });
+
     it("setViewVisible shows and hides view", () => {
       const view = vm.createView({
         id: "test-view",
@@ -291,6 +489,54 @@ describe("ViewManager", () => {
       vm.setViewVisible("test-view", false);
       expect(view.setVisible).toHaveBeenCalledWith(false);
       expect(vm.isViewVisible("test-view")).toBe(false);
+    });
+
+    it("keeps host chrome app views full-window and out of panel layout", () => {
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      const panelView = vm.createView({
+        id: "panel-1",
+        type: "panel",
+      });
+
+      vm.setViewVisible("@workspace-apps/shell", true);
+      vm.updateLayout({ sidebarVisible: true, sidebarWidth: 260, titleBarHeight: 32 });
+
+      expect(hostView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1200, height: 800 });
+
+      vm.setViewVisible("panel-1", true);
+      vm.updateLayout({ sidebarVisible: true, sidebarWidth: 260, titleBarHeight: 32 });
+
+      expect(hostView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 1200, height: 800 });
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 260,
+        y: 32,
+        width: 940,
+        height: 768,
+      });
+    });
+
+    it("opens devtools on the visible host chrome app instead of the bootstrap shell", () => {
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      const shellContents = vm.getShellWebContents();
+
+      expect(vm.openHostChromeAppDevTools()).toBe(false);
+
+      vm.setViewVisible("@workspace-apps/shell", true);
+
+      expect(vm.getVisibleHostChromeAppId()).toBe("@workspace-apps/shell");
+      expect(vm.openHostChromeAppDevTools()).toBe(true);
+      expect(hostView.webContents.openDevTools).toHaveBeenCalledWith({ mode: "detach" });
+      expect(shellContents.openDevTools).not.toHaveBeenCalled();
     });
 
     it("ignores hiding a missing view", () => {
@@ -450,7 +696,7 @@ describe("ViewManager", () => {
       });
     });
 
-    it("refreshVisiblePanel does NOT cycle visibility (only refreshes bounds and z-order)", () => {
+    it("refreshVisiblePanel reasserts visible state without cycling visibility", () => {
       const view = vm.createView({
         id: "panel-1",
         type: "panel",
@@ -462,8 +708,9 @@ describe("ViewManager", () => {
 
       vm.refreshVisiblePanel();
 
-      // setVisible should NOT have been called (no visibility cycling)
-      expect(view.setVisible).not.toHaveBeenCalled();
+      // setVisible(true) is reasserted, but there is no false/true cycle.
+      expect(view.setVisible).toHaveBeenCalledTimes(1);
+      expect(view.setVisible).toHaveBeenCalledWith(true);
       // But bounds should have been refreshed
       expect(view.setBounds).toHaveBeenCalled();
     });

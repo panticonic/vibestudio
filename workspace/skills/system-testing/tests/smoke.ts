@@ -6,8 +6,15 @@ export const smokeTests: TestCase[] = [
     name: "eval-return-value",
     description: "Agent computes a value and reports it",
     category: "smoke",
-    prompt: "Compute the factorial of 5 and tell me the result.",
+    prompt: "Use eval to compute the factorial of 5 and tell me the result.",
     validate: (result) => {
+      const completed = completedToolNames(result);
+      if (!completed.has("eval")) {
+        return {
+          passed: false,
+          reason: `Expected a completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
+        };
+      }
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();
       const hasResult = lower.includes("result") || lower.includes("answer") || /\d+/.test(msg);
@@ -21,7 +28,7 @@ export const smokeTests: TestCase[] = [
     name: "fs-write-read",
     description: "Agent writes a file and reads it back",
     category: "smoke",
-    prompt: "Write some text to a file and read it back to verify. Tell me what you wrote and what you read.",
+    prompt: "Exercise a basic file write/read round-trip.",
     validate: (result) => {
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();
@@ -36,8 +43,15 @@ export const smokeTests: TestCase[] = [
     name: "build-service",
     description: "Agent imports a workspace package and inspects exports",
     category: "smoke",
-    prompt: "Import a workspace package and tell me what it exports.",
+    prompt: "Use eval to import a workspace package and inspect its exports.",
     validate: (result) => {
+      const completed = completedToolNames(result);
+      if (!completed.has("eval")) {
+        return {
+          passed: false,
+          reason: `Expected a completed eval tool call; completed tools: ${[...completed].join(", ") || "(none)"}`,
+        };
+      }
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();
       const hasExports = lower.includes("export") || lower.includes("function") || lower.includes("module") || lower.includes("import");
@@ -51,18 +65,7 @@ export const smokeTests: TestCase[] = [
     name: "file-search-read-tools",
     description: "Agent exercises write, find, grep, and read through the default file-tool surface",
     category: "smoke",
-    prompt: [
-      "Exercise the built-in file tools only; do not use eval or shell for this task.",
-      "1. Write `tmp/agentic-file-tools/entity.ts` with these exact lines:",
-      "   const before = true;",
-      "   export const marker = createEntity('agentic-file-tools-smoke');",
-      "   const after = true;",
-      "2. Write `tmp/agentic-file-tools/notes.md` containing `createEntity('wrong-extension')`.",
-      "3. Use find in `tmp/agentic-file-tools` with pattern `**/*.ts`.",
-      "4. Use grep for pattern `createEntity` in `tmp/agentic-file-tools` with glob `**/*.ts`, limit 100, context 1.",
-      "5. Use read on `tmp/agentic-file-tools/entity.ts` with offset 2 and limit 1.",
-      "Finish with one concise sentence containing FIND_OK, GREP_OK, READ_OK, and agentic-file-tools-smoke.",
-    ].join("\n"),
+    prompt: "Exercise file creation, finding, grepping, and reading around the marker agentic-file-tools-smoke. Finish with FIND_OK, GREP_OK, READ_OK, and agentic-file-tools-smoke.",
     validate: (result) => {
       const msg = findLastAgentMessage(result);
       const lower = msg.toLowerCase();

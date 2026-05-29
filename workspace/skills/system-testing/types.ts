@@ -18,14 +18,24 @@ export interface TestExecutionResult {
   duration: number;
   /** Transport/session-level error (if the session itself failed) */
   error?: string;
+  /** Cleanup errors from closing the headless session or retiring its agent */
+  cleanupErrors?: string[];
   /** Full diagnostic snapshot from the session (invocations, debug events, participants) */
   snapshot?: SessionSnapshot;
+  /** Runtime/GAD diagnostics collected automatically when a test errors. */
+  diagnostics?: Record<string, unknown>;
 }
 
 export interface TestResult {
   passed: boolean;
   reason?: string;
   details?: Record<string, unknown>;
+}
+
+export interface TestSuiteResultEntry {
+  test: { name: string; category: string; description: string; prompt: string };
+  result: TestResult;
+  execution: TestExecutionResult;
 }
 
 export interface TestSuiteResult {
@@ -35,9 +45,5 @@ export interface TestSuiteResult {
   errored: number;
   skipped: number;
   duration: number;
-  results: Array<{
-    test: { name: string; category: string; description: string; prompt: string };
-    result: TestResult;
-    execution: TestExecutionResult;
-  }>;
+  results: TestSuiteResultEntry[];
 }

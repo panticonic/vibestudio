@@ -19,8 +19,15 @@ import * as path from "path";
 import * as fs from "fs";
 import { createHash, randomBytes } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import { UnitSourcePushGrantStore } from "@natstack/unit-host";
 import { formatPairUrlLine } from "./pairingBanner.js";
 import { getPublicUrl } from "./publicUrl.js";
+import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
+import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
+import {
+  createWorkspaceMetaPushAuthorizer,
+  createWorkspaceUnitPushAuthorizer,
+} from "./unitPushAuthorizer.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
@@ -442,13 +449,9 @@ if (!ipcChannel) {
 
 async function main() {
   const { getUserDataPath, setUserDataPath } = await import("@natstack/env-paths");
-  const {
-    loadCentralEnv,
-    deleteWorkspaceDir,
-    loadPersistedAdminToken,
-    savePersistedAdminToken,
-    getAdminTokenPath,
-  } = await import("@natstack/shared/workspace/loader");
+  const { loadCentralEnv, deleteWorkspaceDir } = await import("@natstack/shared/workspace/loader");
+  const { loadPersistedAdminToken, savePersistedAdminToken, getAdminTokenPath } =
+    await import("@natstack/shared/centralAuth");
   const { resolveLocalWorkspaceStartup } = await import("@natstack/shared/workspace/startup");
   const { CentralDataManager } = await import("@natstack/shared/centralData");
   const { GitServer } = await import("@natstack/git-server");
@@ -487,6 +490,7 @@ async function main() {
   let workspace: import("@natstack/shared/workspace/types").Workspace;
   let workspaceName: string;
   let workspaceIsEphemeral = false;
+  let workspaceCreatedFromTemplate = false;
   try {
     const startup = resolveLocalWorkspaceStartup({
       appRoot,
@@ -499,6 +503,8 @@ async function main() {
     });
     workspace = startup.resolved.workspace;
     workspaceName = startup.resolved.name;
+    workspaceCreatedFromTemplate =
+      startup.resolved.created || process.env["NATSTACK_WORKSPACE_CREATED_FROM_TEMPLATE"] === "1";
     workspaceIsEphemeral =
       startup.isEphemeral || process.env["NATSTACK_WORKSPACE_EPHEMERAL"] === "1";
   } catch (error) {
@@ -595,6 +601,11 @@ async function main() {
     eventService,
     resolveTitle: (entityId) => entityTitleService.getTitle(entityId),
   });
+  const { ServerUnitApprovalCoordinator } = await import("./unitApprovalCoordinator.js");
+  const unitApprovalCoordinator = new ServerUnitApprovalCoordinator({
+    approvalQueue,
+    autoApproveStartup: workspaceCreatedFromTemplate,
+  });
   const credentialLifecycle = new CredentialLifecycle({
     credentialStore,
     clientConfigStore,
@@ -688,6 +699,21 @@ async function main() {
     | "https";
   const configuredExternalHost = process.env["NATSTACK_HOST"] ?? args.host ?? "localhost";
   let extensionHostForGateway: import("@natstack/extension-host").ExtensionHost | null = null;
+  let appHostForGateway: import("./appHost.js").AppHost | null = null;
+  type TrustedUnitHostInstance =
+    | import("@natstack/extension-host").ExtensionHost
+    | import("./appHost.js").AppHost;
+  const trustedUnitHosts = (): TrustedUnitHostInstance[] =>
+    [extensionHostForGateway, appHostForGateway].filter(
+      (host): host is TrustedUnitHostInstance => host !== null
+    );
+  const workspaceMetaPushAuthorizer = createWorkspaceMetaPushAuthorizer({
+    workspacePath,
+    approvalQueue,
+    grantStore: new UnitSourcePushGrantStore({ statePath }),
+    grantTtlMs: 4 * 60 * 60 * 1000,
+    getProviders: trustedUnitHosts,
+  });
 
   const { createGitWriteAuthorizer } = await import("./services/gitWritePermission.js");
   const { WORKSPACE_GIT_INIT_PATTERNS } = await import("@natstack/shared/workspace/sourceDirs");
@@ -720,8 +746,13 @@ async function main() {
       approvalQueue,
       grantStore: capabilityGrantStore,
     }),
-    pushAuthorizer: (request) =>
-      extensionHostForGateway?.authorizeSourcePush(request) ?? { allowed: true },
+    pushAuthorizer: createWorkspaceUnitPushAuthorizer({
+      targets: [
+        { sourceRoot: "apps", getHandler: () => appHostForGateway },
+        { sourceRoot: "extensions", getHandler: () => extensionHostForGateway },
+      ],
+      getMetaHandler: () => workspaceMetaPushAuthorizer,
+    }),
   });
 
   // Create ContextFolderManager before core services
@@ -734,8 +765,26 @@ async function main() {
   });
 
   const { syncDeclaredRemoteForRepo } = await import("@natstack/shared/workspace/remotes");
-  const { loadWorkspaceConfig, resolveDeclaredExtensions } =
+  const { loadWorkspaceConfig, resolveDeclaredApps, resolveDeclaredExtensions } =
     await import("@natstack/shared/workspace/loader");
+  const reconcileDeclaredWorkspaceUnits = async (
+    nextConfig: ReturnType<typeof loadWorkspaceConfig>,
+    trigger: "startup" | "meta-push"
+  ): Promise<void> => {
+    const extensionTask = extensionHostForGateway
+      ?.reconcileDeclared(resolveDeclaredExtensions(nextConfig), { trigger })
+      .then(() => import("@natstack/shared/workspace/extensionRegistry"))
+      .then(({ writeExtensionRegistry }) => writeExtensionRegistry(workspacePath))
+      .catch((err: unknown) =>
+        console.warn("[Extensions] Failed to reconcile declared workspace units:", err)
+      );
+    const appTask = appHostForGateway
+      ?.reconcileDeclared(resolveDeclaredApps(nextConfig), { trigger })
+      .catch((err: unknown) =>
+        console.warn("[Apps] Failed to reconcile declared workspace units:", err)
+      );
+    await Promise.all([extensionTask ?? Promise.resolve(), appTask ?? Promise.resolve()]);
+  };
   const syncDeclaredRemotesForSource = async (repoPath?: string): Promise<void> => {
     const repos = repoPath
       ? [repoPath]
@@ -773,17 +822,11 @@ async function main() {
       try {
         const nextConfig = loadWorkspaceConfig(workspacePath);
         replaceWorkspaceConfig(workspaceConfig, nextConfig);
-        // Reconcile the declared extension set against the registry. The
-        // combined meta-push approval already gated this push and stashed any
-        // newly-trusted extensions, so this reconcile activates without a
-        // second prompt.
-        extensionHostForGateway
-          ?.reconcileDeclared(resolveDeclaredExtensions(nextConfig))
-          .then(() => import("@natstack/shared/workspace/extensionRegistry"))
-          .then(({ writeExtensionRegistry }) => writeExtensionRegistry(workspacePath))
-          .catch((err: unknown) =>
-            console.warn("[Extensions] Failed to reconcile after meta push:", err)
-          );
+        // Reconcile declared workspace units after the combined meta-push gate.
+        // Any newly trusted app/extension identities were preapproved by the
+        // unit push authorizer, so these reconciles activate without a second
+        // prompt.
+        void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-push");
         syncDeclaredRemotesForSource()
           .then(() => contextFolderManager.syncDeclaredRemotes())
           .catch((err: unknown) =>
@@ -867,6 +910,7 @@ async function main() {
   const { createGitService } = await import("./services/gitService.js");
   const { createTestService } = await import("./services/testService.js");
   const { createWorkerService } = await import("./services/workerService.js");
+  const { createModelCatalogService } = await import("./services/modelCatalogService.js");
 
   // Resolve testSetup.ts relative to this module's location
   const serverDir = path.dirname(__filename);
@@ -894,6 +938,7 @@ async function main() {
   }
   const presence = createPresenceTracker({ eventService });
   container.register(rpcService(createPresenceService({ presence })));
+  container.register(rpcService(createModelCatalogService()));
 
   {
     let tokensDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
@@ -938,6 +983,7 @@ async function main() {
   container.register(
     rpcService(createTestService({ contextFolderManager, workspacePath, panelTestSetupPath }))
   );
+  const runtimeDiagnostics = new RuntimeDiagnosticsStore({ statePath });
   // Per-worker-source ring buffer feeding `workspace.units.logs`. Same shape
   // as the extension log store: capped at 1000 records per source, FIFO drop.
   const workerUnitLogs = new Map<
@@ -969,6 +1015,26 @@ async function main() {
               message: entry.message,
               source: "console",
             };
+            runtimeDiagnostics.record({
+              workspaceId: workspace.config.id,
+              entityId: entry.callerId,
+              kind: entry.callerId.startsWith("do:") ? "do" : "worker",
+              timestamp: entry.timestamp,
+              level: entry.level === "warn" ? "warn" : entry.level,
+              message: entry.message,
+              source: "console",
+              fields: entry.source ? { source: entry.source } : undefined,
+            });
+            runtimeDiagnostics.record({
+              workspaceId: workspace.config.id,
+              entityId: entry.source,
+              kind: "worker",
+              timestamp: entry.timestamp,
+              level: entry.level === "warn" ? "warn" : entry.level,
+              message: entry.message,
+              source: "console",
+              fields: { callerId: entry.callerId },
+            });
             workerUnitLogsAppend(entry.source, record);
             eventService.emit("workspace:unit-log", record);
           },
@@ -976,7 +1042,15 @@ async function main() {
       )
     );
   }
-  container.register(rpcService(createEventsServiceDefinition(eventService)));
+  container.register(
+    rpcService(
+      createEventsServiceDefinition(eventService, {
+        snapshots: {
+          "shell-approval:pending-changed": () => ({ pending: approvalQueue.listPending() }),
+        },
+      })
+    )
+  );
 
   // ── Approval-gated host capabilities ──
   {
@@ -1263,6 +1337,10 @@ async function main() {
               void ref;
               return buildSystem.getEffectiveVersion(source) ?? "";
             },
+            resolveAppEffectiveVersion: async ({ source, ref }) => {
+              void ref;
+              return buildSystem.getEffectiveVersion(source) ?? "";
+            },
             onRetire: async (record) => {
               await cleanupRuntimeEntityRecord(record);
             },
@@ -1271,7 +1349,8 @@ async function main() {
             approvalQueue,
             grantStore: capabilityGrantStore,
           },
-          setEntityTitle: (entityId, title) => entityTitleService.setTitle(entityId, title),
+          setEntityTitle: (entityId, title, options) =>
+            entityTitleService.setTitle(entityId, title, options),
         });
       },
       getServiceDefinition() {
@@ -1284,7 +1363,7 @@ async function main() {
   }
 
   // browser-data is now an extension at
-  // workspace/extensions/@workspace-extensions/browser-data — callers reach it
+  // workspace/extensions/browser-data — callers reach it
   // through `extensions.invoke`. The extension proxies to the BrowserDataDO
   // via unified RPC, so storage stays in workerd unchanged.
 
@@ -1434,6 +1513,19 @@ async function main() {
         eventService,
         approvalQueue,
         notificationService: notificationResult.internal,
+        recordUnitLog: (record) => {
+          runtimeDiagnostics.record({
+            workspaceId: record.workspaceId,
+            entityId: record.unitName,
+            kind: "extension",
+            timestamp: record.timestamp,
+            level: record.level,
+            message: record.message,
+            source: record.source ?? "ctx.log",
+            fields: record.fields,
+          });
+        },
+        approvalCoordinator: unitApprovalCoordinator,
         getContextIdForCaller: (callerId) => entityCache.resolveContext(callerId),
         getGatewayUrl: () => {
           if (!gatewayPortResolved) {
@@ -1454,6 +1546,8 @@ async function main() {
             return rpcServer.streamCallTarget(name, method, ...args);
           },
         },
+        registerBuildProvider,
+        unregisterBuildProvider,
       });
       extensionHostForGateway = host;
       return host;
@@ -1470,6 +1564,42 @@ async function main() {
   });
 
   // ── Workers RPC service ──
+
+  // ── App host (workspace-owned privileged frontend apps) ──
+  container.register({
+    name: "appHost",
+    dependencies: ["buildSystem"],
+    async start(resolve) {
+      const { AppHost } = await import("./appHost.js");
+      const buildSystemInst = assertPresent(
+        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+      );
+      const host = new AppHost({
+        statePath,
+        workspacePath,
+        workspaceId: workspace.config.id,
+        buildSystem: buildSystemInst,
+        eventService,
+        approvalQueue,
+        notificationService: notificationResult.internal,
+        approvalCoordinator: unitApprovalCoordinator,
+        entityCache,
+        connectionGrants,
+        getGatewayUrl: () => {
+          if (!gatewayPortResolved) {
+            throw new Error("Gateway port not finalized before app startup");
+          }
+          const isTls = !!(hostConfig.tlsCert && hostConfig.tlsKey);
+          return `${isTls ? "https" : "http"}://127.0.0.1:${gatewayPortResolved}`;
+        },
+      });
+      appHostForGateway = host;
+      return host;
+    },
+    async stop(instance: import("./appHost.js").AppHost) {
+      await instance?.shutdown();
+    },
+  });
 
   {
     let workerServiceDef: import("@natstack/shared/serviceDefinition").ServiceDefinition;
@@ -1755,23 +1885,29 @@ async function main() {
     requestWorkspaceList,
     listWorkspaceUnits: () => {
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-      const extensionRows = extensionHostForGateway?.listWorkspaceUnits() ?? [];
-      const extensionsBySource = new Map(extensionRows.map((row) => [row.source, row]));
+      type WorkspaceUnitStatus = import("./services/workspaceService.js").WorkspaceUnitStatus;
+      const trustedRows: WorkspaceUnitStatus[] = trustedUnitHosts().flatMap(
+        (host) => host.listWorkspaceUnits() as WorkspaceUnitStatus[]
+      );
+      const trustedRowsBySource = new Map<string, WorkspaceUnitStatus>(
+        trustedRows.map((row) => [row.source, row])
+      );
       const workerInstances = new Map(
         workerdManagerForGateway?.listInstances().map((instance) => [instance.source, instance]) ??
           []
       );
-      const rows: import("./services/workspaceService.js").WorkspaceUnitStatus[] = [];
+      const rows: import("./services/workspaceService.js").WorkspaceUnitStatus[] = [
+        ...trustedRows.filter((row) => row.kind === "app"),
+      ];
       for (const node of buildSystem?.getGraph().allNodes() ?? []) {
         if (node.kind !== "panel" && node.kind !== "worker" && node.kind !== "extension") continue;
         if (node.kind === "extension") {
           rows.push(
-            extensionsBySource.get(node.relativePath) ?? {
+            trustedRowsBySource.get(node.relativePath) ?? {
               name: node.name,
               kind: "extension",
               source: node.relativePath,
               displayName: node.manifest.displayName ?? node.name,
-              enabled: false,
               status: "stopped",
               ev: buildSystem?.getEffectiveVersion(node.name) ?? null,
               lastError: null,
@@ -1825,6 +1961,14 @@ async function main() {
         await extensionHost.reload(ctx, name);
         return;
       }
+      const appHost = appHostForGateway;
+      if (
+        appHost?.registry.get(name) ||
+        appHost?.registry.list().some((entry) => entry.source.repo === name)
+      ) {
+        await appHost.restartApp(name);
+        return;
+      }
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
       const node = buildSystem
         ?.getGraph()
@@ -1868,8 +2012,28 @@ async function main() {
         .allNodes()
         .find((candidate) => candidate.name === name || candidate.relativePath === name);
       const kind = node?.kind;
+      if (kind === "app") {
+        return appHostForGateway?.listWorkspaceUnitLogs(name) ?? [];
+      }
       if (kind === "worker") {
         const source = node?.relativePath ?? name;
+        const persisted = runtimeDiagnostics.history(source, {
+          since: opts?.since,
+          level: opts?.level,
+          limit: opts?.limit,
+        });
+        if (persisted.entries.length > 0) {
+          return persisted.entries.map((entry) => ({
+            workspaceId: entry.workspaceId ?? workspace.config.id,
+            unitName: source,
+            kind: "worker" as const,
+            timestamp: entry.timestamp,
+            level: entry.level,
+            message: entry.message,
+            fields: entry.fields,
+            source: entry.source === "system" ? "console" : entry.source,
+          }));
+        }
         const buffer = workerUnitLogs.get(source) ?? [];
         return filterUnitLogs(buffer, opts);
       }
@@ -1877,7 +2041,128 @@ async function main() {
       // also returns [] if the name is unknown.
       return extensionHostForGateway?.listWorkspaceUnitLogs(name, opts) ?? [];
     },
+    unitDiagnostics: (
+      name: string,
+      opts?: {
+        since?: number;
+        level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"];
+        limit?: number;
+        errorLimit?: number;
+      }
+    ) => {
+      const units = commonDeps.listWorkspaceUnits();
+      const unit = units.find((row) => row.name === name || row.source === name) ?? null;
+      const entityId = unit?.kind === "worker" ? unit.source : (unit?.name ?? name);
+      const history = runtimeDiagnostics.history(entityId, {
+        since: opts?.since,
+        level: opts?.level,
+        limit: opts?.limit,
+        errorLimit: opts?.errorLimit,
+      });
+      const kind = unit?.kind ?? "worker";
+      const toLog = (
+        entry: import("./runtimeDiagnosticsStore.js").RuntimeDiagnosticRecord
+      ): import("./services/workspaceService.js").WorkspaceUnitLogRecord => ({
+        workspaceId: entry.workspaceId ?? workspace.config.id,
+        unitName: entityId,
+        kind,
+        timestamp: entry.timestamp,
+        level: entry.level,
+        message: entry.message,
+        fields: entry.fields,
+        source: entry.source,
+      });
+      const fallbackLogs = commonDeps.listWorkspaceUnitLogs(name, opts);
+      const logs = history.entries.length > 0 ? history.entries.map(toLog) : fallbackLogs;
+      return {
+        unit,
+        logs,
+        errors: history.errors.map(toLog),
+        dropped: history.dropped,
+        capacity: history.capacity,
+      };
+    },
+    bakeAppDist: (sourceOrName: string, opts?: { outDir?: string }) => {
+      const appHost = appHostForGateway;
+      if (!appHost) throw new Error("App host is not available");
+      return appHost.bakeDist(
+        sourceOrName,
+        opts?.outDir ?? path.join(appRoot, "dist", "baked-app")
+      );
+    },
+    listAppVersions: (sourceOrName: string) => {
+      const appHost = appHostForGateway;
+      if (!appHost) return { current: null, previous: [], retentionLimit: 0 };
+      return appHost.listAppVersions(sourceOrName);
+    },
+    rollbackAppVersion: (sourceOrName: string, buildKey?: string) => {
+      const appHost = appHostForGateway;
+      if (!appHost) throw new Error("App host is not available");
+      return appHost.rollbackAppVersion(sourceOrName, buildKey);
+    },
+    listHostTargetCandidates: (target: import("@natstack/shared/hostTargets").HostTarget) => {
+      const appHost = appHostForGateway;
+      return appHost?.listHostTargetCandidates(target) ?? [];
+    },
+    getHostTargetSelection: (target: import("@natstack/shared/hostTargets").HostTarget) => {
+      const appHost = appHostForGateway;
+      return (
+        appHost?.getHostTargetSelection(target) ?? {
+          selection: null,
+          valid: false,
+          reason: "App host is not available",
+        }
+      );
+    },
+    setHostTargetSelection: (
+      target: import("@natstack/shared/hostTargets").HostTarget,
+      input: import("@natstack/shared/hostTargets").HostTargetSelectionInput
+    ) => {
+      const appHost = appHostForGateway;
+      if (!appHost) throw new Error("App host is not available");
+      return appHost.setHostTargetSelection(target, input);
+    },
+    clearHostTargetSelection: (target: import("@natstack/shared/hostTargets").HostTarget) => {
+      appHostForGateway?.clearHostTargetSelection(target);
+    },
+    listHostTargetVersions: (
+      target: import("@natstack/shared/hostTargets").HostTarget,
+      sourceOrName: string
+    ) => {
+      const appHost = appHostForGateway;
+      if (!appHost) return { current: null, previous: [], retentionLimit: 0 };
+      return appHost.listHostTargetVersions(target, sourceOrName);
+    },
+    prepareHostTargetPinnedCommit: (
+      target: import("@natstack/shared/hostTargets").HostTarget,
+      sourceOrName: string,
+      commit: string
+    ) => {
+      const appHost = appHostForGateway;
+      if (!appHost) throw new Error("App host is not available");
+      return appHost.prepareHostTargetPinnedCommit(target, sourceOrName, commit);
+    },
+    launchHostTarget: (target: import("@natstack/shared/hostTargets").HostTarget) => {
+      const appHost = appHostForGateway;
+      return appHost?.launchHostTarget(target) ?? false;
+    },
     approvalQueue,
+    registerEntityTitleListener: (
+      listener: (
+        entityId: string,
+        title: string | undefined,
+        origin: "set" | "set-explicit" | "mirror" | "clear"
+      ) => void | Promise<void>
+    ) =>
+      entityTitleService.onChanged((entityId, title, origin) => {
+        void Promise.resolve(listener(entityId, title, origin)).catch((error: unknown) => {
+          console.warn(
+            `[entityTitleService] panel title listener failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        });
+      }),
     getEffectiveVersion: async (source: string) => {
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
       return buildSystem?.getEffectiveVersion(source) ?? undefined;
@@ -1905,7 +2190,7 @@ async function main() {
   }
 
   if (!ipcChannel) {
-    // Settings service for remote/mobile shells.
+    // Settings service for trusted remote hosts and mobile workspace apps.
     const { createSettingsServiceStandalone } =
       await import("./services/settingsServiceStandalone.js");
     container.register(rpcService(createSettingsServiceStandalone({ dispatcher })));
@@ -1923,7 +2208,37 @@ async function main() {
           deviceAuthStore,
           getServerBootId: () => serverBootId,
           getWorkspaceId: () => workspace.config.id,
+          getConnectionInfo: () => {
+            if (!gatewayPortResolved) {
+              throw new Error("Gateway is not ready");
+            }
+            const isTls = !!(hostConfig.tlsCert && hostConfig.tlsKey);
+            const protocol = isTls ? "https" : "http";
+            let publicUrl: string | null = null;
+            try {
+              publicUrl = getPublicUrl();
+            } catch {
+              publicUrl = null;
+            }
+            return {
+              serverUrl: `${protocol}://${hostConfig.externalHost}:${gatewayPortResolved}`,
+              publicUrl,
+              protocol,
+              externalHost: hostConfig.externalHost,
+              gatewayPort: gatewayPortResolved,
+            };
+          },
           connectionGrants,
+          auditLog,
+          hasAppCapability: (callerId, capability) =>
+            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          getMobileAppBootstrap: (source) =>
+            appHostForGateway?.getReactNativeBootstrap(source) ?? null,
+          registerMobileAppPrincipal: (deviceId, source) =>
+            appHostForGateway?.registerReactNativeAppPrincipal(deviceId, source) ?? null,
+          retireMobileAppPrincipal: (deviceId) => {
+            appHostForGateway?.retireReactNativeAppPrincipal(deviceId);
+          },
         }),
         routeRegistry
       )
@@ -1950,6 +2265,7 @@ async function main() {
     },
     getGitHandler: () => gitServer,
     getExtensionHttpHandler: () => extensionHostForGateway,
+    getAppArtifactHandler: () => appHostForGateway,
     getWorkerdPort: () => workerdManagerForGateway?.getPort() ?? null,
     externalHost: hostConfig.externalHost,
     bindHost: hostConfig.bindHost,
@@ -2253,19 +2569,7 @@ async function main() {
   });
   cleanupReaper.start();
 
-  const extensionHost =
-    container.get<import("@natstack/extension-host").ExtensionHost>("extensionHost");
-  await extensionHost.reconcileDeclared(resolveDeclaredExtensions(workspaceConfig));
-
-  // Keep the @workspace/runtime extension-registry barrel in sync with the
-  // extensions present in the workspace, so panels type-check
-  // `extensions.use("...")` against the live registry (see extensionRegistry.ts).
-  try {
-    const { writeExtensionRegistry } = await import("@natstack/shared/workspace/extensionRegistry");
-    writeExtensionRegistry(workspacePath);
-  } catch (err) {
-    console.warn("[Extensions] Failed to generate extension registry barrel:", err);
-  }
+  await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
 
   // ===========================================================================
   // Report ready
@@ -2476,6 +2780,8 @@ async function main() {
         rpcUrl: `${wsProto}://${hostConfig.externalHost}:${gatewayPort}/rpc`,
         gitUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_git/`,
         workerdUrl: `${proto}://${hostConfig.externalHost}:${gatewayPort}/_w/`,
+        publicUrl: explicitPublicUrl ?? detectedVpn?.url ?? null,
+        connectUrl: pairingTargetUrl,
         adminToken,
         pairingCode: startupPairingCode,
         serverId: deviceAuthStore.getServerId(),

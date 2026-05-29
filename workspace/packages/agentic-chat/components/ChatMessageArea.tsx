@@ -29,6 +29,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     loadingMore,
     onLoadEarlierMessages,
     onInterrupt,
+    onCancelInvocation,
     onFocusPanel,
     onReloadPanel,
     chat,
@@ -61,6 +62,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
         loadingMore={loadingMore}
         onLoadEarlierMessages={onLoadEarlierMessages}
         onInterrupt={onInterrupt}
+        onCancelInvocation={onCancelInvocation}
         onFocusPanel={onFocusPanel}
         onReloadPanel={onReloadPanel}
         onReply={setReplyTo}

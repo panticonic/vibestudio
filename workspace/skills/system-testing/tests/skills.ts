@@ -1,68 +1,39 @@
 import type { TestCase } from "../types.js";
-import { findLastAgentMessage } from "./_helpers.js";
+import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+
+function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
+  const msg = finalMessageHasAll(result, tokens);
+  if (!msg.passed) return msg;
+  return noIncompleteInvocations(result);
+}
 
 export const skillTests: TestCase[] = [
   {
     name: "load-sandbox",
-    description: "Load the sandbox skill and describe what it offers",
+    description: "Apply the sandbox skill to choose an execution surface",
     category: "skills",
-    prompt: "Load the sandbox skill and describe what it offers.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasSkill = lower.includes("sandbox") || lower.includes("api") || lower.includes("tool") ||
-        lower.includes("eval") || lower.includes("skill");
-      return {
-        passed: hasSkill,
-        reason: hasSkill ? undefined : `Expected sandbox skill description, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Choose how to handle a one-off state inspection. Finish with SKILL_SANDBOX_OK and chosen-surface.",
+    validate: (result) => checked(result, ["SKILL_SANDBOX_OK", "chosen-surface"]),
   },
   {
     name: "load-paneldev",
-    description: "Load the paneldev skill and describe what projects it can create",
+    description: "Apply the paneldev skill to choose a project workflow",
     category: "skills",
-    prompt: "Load the paneldev skill and describe what kinds of projects it can create.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasSkill = lower.includes("panel") || lower.includes("project") || lower.includes("scaffold") ||
-        lower.includes("template") || lower.includes("type") || lower.includes("create");
-      return {
-        passed: hasSkill,
-        reason: hasSkill ? undefined : `Expected paneldev project types, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Choose a workflow for a requested panel change. Finish with SKILL_PANELDEV_OK and workflow-choice.",
+    validate: (result) => checked(result, ["SKILL_PANELDEV_OK", "workflow-choice"]),
   },
   {
     name: "load-api-integrations",
-    description: "Load the api-integrations skill and list what it supports",
+    description: "Apply the API integrations skill to handle missing credentials",
     category: "skills",
-    prompt: "Load the api-integrations skill and tell me what integrations it supports.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasSkill = lower.includes("oauth") || lower.includes("provider") || lower.includes("integration") ||
-        lower.includes("api") || lower.includes("service");
-      return {
-        passed: hasSkill,
-        reason: hasSkill ? undefined : `Expected integration listing, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Handle a missing credential for an API request. Finish with SKILL_API_OK and no-secret-paste.",
+    validate: (result) => checked(result, ["SKILL_API_OK", "no-secret-paste"]),
   },
   {
     name: "load-headless-sessions",
-    description: "Load the headless-sessions skill and describe its capabilities",
+    description: "Apply the headless-sessions skill to diagnose a stalled agent",
     category: "skills",
-    prompt: "Load the headless-sessions skill and describe what it can do.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      const lower = msg.toLowerCase();
-      const hasSkill = lower.includes("headless") || lower.includes("session") || lower.includes("create") || lower.includes("agentic");
-      return {
-        passed: hasSkill,
-        reason: hasSkill ? undefined : `Expected headless session capabilities, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Diagnose a headless agent that used a tool but produced no final message. Finish with SKILL_HEADLESS_OK and bounded-diagnostics.",
+    validate: (result) => checked(result, ["SKILL_HEADLESS_OK", "bounded-diagnostics"]),
   },
 ];

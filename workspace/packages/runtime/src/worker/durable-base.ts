@@ -124,6 +124,8 @@ export interface DurableObjectContext {
   getWebSockets(tag?: string): WebSocket[];
   // Run async init during construction or upgrade (blocks other events)
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
+  // Keep background work alive after an RPC/fetch handler returns.
+  waitUntil?(promise: Promise<unknown>): void;
 }
 
 export interface SqlStorage {
@@ -560,7 +562,7 @@ export abstract class DurableObjectBase {
    * `isOwnTitleExplicitlySet` before running any heuristic fallback.
    */
   protected async setOwnTitleExplicitly(title: string | null | undefined): Promise<void> {
-    await this.setOwnTitle(title);
+    await this.setOwnTitle(title, { explicit: true });
     try {
       this.ensureReady();
       this.setStateValue(DurableObjectBase.EXPLICIT_TITLE_STATE_KEY, "1");
@@ -578,7 +580,10 @@ export abstract class DurableObjectBase {
    * This is the heuristic / non-persisting setter — use
    * `setOwnTitleExplicitly` when an explicit tool call drives the change.
    */
-  protected async setOwnTitle(title: string | null | undefined): Promise<void> {
+  protected async setOwnTitle(
+    title: string | null | undefined,
+    options: { explicit?: boolean } = {}
+  ): Promise<void> {
     const normalized = title == null ? null : title.trim();
     const effective = normalized && normalized.length > 0 ? normalized : null;
     if (effective === this._titleSetForThisActivation) return;
@@ -603,7 +608,7 @@ export abstract class DurableObjectBase {
     const isTestSentinel =
       gatewayUrl.includes("test-server.invalid") || gatewayUrl.includes(".test/");
     try {
-      await bridge.call("main", "runtime.setTitle", [effective]);
+      await bridge.call("main", "runtime.setTitle", [effective, { explicit: options.explicit === true }]);
     } catch (err) {
       if (!isTestSentinel) {
         console.warn("[DurableObjectBase] runtime.setTitle failed:", err);

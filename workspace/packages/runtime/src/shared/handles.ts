@@ -85,8 +85,20 @@ export function createPanelHandle<
     get parentId() {
       return metadata.parentId;
     },
+    getInfo: async () => ({
+      id: metadata.id,
+      title: metadata.title,
+      source: metadata.source,
+      kind: metadata.kind,
+      parentId: metadata.parentId,
+    }),
     call,
     cdp,
+    click: (selector: string) => cdp.click(selector),
+    diagnostics: async (options) => ({
+      info: await handle.getInfo(),
+      consoleHistory: await cdp.consoleHistory(options),
+    }),
     stateArgs: {
       get: async <TState = Record<string, unknown>>() => {
         if (!ops?.stateArgs?.get) return {} as TState;
@@ -176,7 +188,9 @@ export function createPanelHandle<
 export function unavailableCdp(id: string): CdpAutomation {
   const unavailable = () => Promise.reject(new Error(`CDP is not available for panel ${id}`));
   return {
-    page: unavailable,
+    playwrightPage: unavailable,
+    lightweightPage: unavailable,
+    consoleHistory: unavailable,
     getCdpEndpoint: unavailable,
     navigate: unavailable,
     goBack: unavailable,
@@ -196,10 +210,20 @@ export function createNoPanelHandle(): PanelHandle {
     source: "",
     kind: "workspace",
     parentId: null,
+    getInfo: () =>
+      Promise.resolve({
+        id: "",
+        title: "",
+        source: "",
+        kind: "workspace",
+        parentId: null,
+      }),
     call: new Proxy({} as PanelHandle["call"], {
       get: () => noParent,
     }),
     cdp: unavailableCdp("parent"),
+    click: noParent,
+    diagnostics: noParent,
     stateArgs: {
       get: <TState = Record<string, unknown>>() => Promise.resolve({} as TState),
       set: noParent,
@@ -246,10 +270,20 @@ export function createNonPanelRuntimeHandle(options: {
     source: options.source ?? options.id,
     kind: "workspace",
     parentId: options.parentId ?? null,
+    getInfo: () =>
+      Promise.resolve({
+        id: options.id,
+        title: options.title ?? options.id,
+        source: options.source ?? options.id,
+        kind: "workspace",
+        parentId: options.parentId ?? null,
+      }),
     call: new Proxy({} as PanelHandle["call"], {
       get: () => unavailable,
     }),
     cdp: unavailableCdp(options.id),
+    click: unavailable,
+    diagnostics: unavailable,
     stateArgs: {
       get: <TState = Record<string, unknown>>() => Promise.resolve({} as TState),
       set: unavailable,

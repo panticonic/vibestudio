@@ -51,6 +51,22 @@ function createRpcCall() {
         ];
       case "panelCdp.getCdpEndpoint":
         return { wsEndpoint: "ws://localhost", token: "t" };
+      case "panelCdp.consoleHistory":
+        return {
+          entries: [
+            {
+              timestamp: 1,
+              level: "info",
+              message: "loaded",
+              line: 1,
+              sourceId: "app.tsx",
+              url: "https://example.com",
+            },
+          ],
+          errors: [],
+          dropped: { entries: 0, errors: 0 },
+          capacity: { entries: 1000, errors: 500 },
+        };
       default:
         return undefined;
     }
@@ -172,9 +188,17 @@ describe("PanelHandle", () => {
     expect(all.map((handle) => handle.id)).toEqual(["browser-1"]);
     expect(panelTree.get("arbitrary").id).toBe("arbitrary");
     expect(self.id).toBe("panel-self");
+    await expect(self.getInfo()).resolves.toMatchObject({
+      id: "panel-self",
+      parentId: "panel-parent",
+    });
     await (self.call as Record<string, () => Promise<unknown>>)["ping"]!();
     expect(rpcCall).toHaveBeenCalledWith("panel:self-entity", "ping", []);
     expect(parent?.id).toBe("panel-parent");
+    await expect(parent?.getInfo()).resolves.toMatchObject({
+      id: "panel-parent",
+      parentId: null,
+    });
     await (parent!.call as Record<string, () => Promise<unknown>>)["ping"]!();
     expect(rpcCall).toHaveBeenCalledWith("panel:parent-entity", "ping", []);
   });
@@ -205,6 +229,10 @@ describe("PanelHandle", () => {
 
     expect(handle.id).toBe("worker:agent");
     expect(handle.parent()?.id).toBe("panel-parent");
+    await expect(handle.getInfo()).resolves.toMatchObject({
+      id: "worker:agent",
+      parentId: "panel-parent",
+    });
     await expect(handle.cdp.getCdpEndpoint()).rejects.toThrow(
       "CDP is not available for panel worker:agent"
     );
@@ -249,14 +277,52 @@ describe("PanelHandle", () => {
     ]);
   });
 
-  it("loads the Playwright CDP client through the async module hook for worker/DO handles", async () => {
-    const page = { marker: "page" };
+  it("routes historical console access through panelCdp", async () => {
+    const rpcCall = createRpcCall();
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await expect(
+      getPanelHandle("panel-1").cdp.consoleHistory({ limit: 50, errorLimit: 50 })
+    ).resolves.toMatchObject({
+      entries: [expect.objectContaining({ message: "loaded" })],
+      capacity: { entries: 1000, errors: 500 },
+    });
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.consoleHistory", [
+      "panel-1",
+      { limit: 50, errorLimit: 50 },
+    ]);
+  });
+
+  it("exposes a unified panel diagnostics bundle", async () => {
+    const rpcCall = createRpcCall();
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await expect(getPanelHandle("panel-1").diagnostics({ errorLimit: 25 })).resolves.toMatchObject({
+      info: { id: "panel-1" },
+      consoleHistory: {
+        entries: [expect.objectContaining({ message: "loaded" })],
+      },
+    });
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.consoleHistory", [
+      "panel-1",
+      { errorLimit: 25 },
+    ]);
+  });
+
+  it("supports handle.click as a CDP automation convenience", async () => {
+    const click = vi.fn(async () => undefined);
+    const page = { click };
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
     }));
-    (globalThis as any).__natstackRequireAsync__ = vi.fn(async () => ({
-      BrowserImpl: { connect },
-    }));
+    (globalThis as any).__natstackRequireAsync__ = vi.fn(async (id: string) => {
+      if (id === "@workspace/playwright-core") return { BrowserImpl: { connect } };
+      throw new Error(`unexpected module: ${id}`);
+    });
     const rpcCall = vi.fn(async () => ({
       wsEndpoint: "ws://server/cdp/panel-1",
       token: "token-1",
@@ -264,22 +330,48 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
 
-    await expect(getPanelHandle("panel-1").cdp.page()).resolves.toBe(page);
+    await getPanelHandle("panel-1").click("button.submit");
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["panel-1"]);
+    expect(click).toHaveBeenCalledWith("button.submit");
+  });
+
+  it("loads the explicit Playwright CDP client through the async module hook", async () => {
+    const page = { marker: "page" };
+    const connect = vi.fn(async () => ({
+      contexts: () => [{ pages: () => [page] }],
+    }));
+    (globalThis as any).__natstackRequireAsync__ = vi.fn(async (id: string) => {
+      if (id === "@workspace/playwright-core") return { BrowserImpl: { connect } };
+      throw new Error(`unexpected module: ${id}`);
+    });
+    const rpcCall = vi.fn(async () => ({
+      wsEndpoint: "ws://server/cdp/panel-1",
+      token: "token-1",
+    }));
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await expect(getPanelHandle("panel-1").cdp.playwrightPage()).resolves.toBe(page);
+    await expect(getPanelHandle("panel-1").cdp.playwrightPage()).resolves.toBe(page);
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["panel-1"]);
     expect(connect).toHaveBeenCalledWith("ws://server/cdp/panel-1", {
       isElectronWebview: true,
       transportOptions: { authToken: "token-1" },
     });
+    expect((globalThis as any).__natstackRequireAsync__).toHaveBeenCalledWith(
+      "@workspace/playwright-core"
+    );
   });
 
-  it("loads the CDP client through the sync worker module map", async () => {
+  it("loads the explicit Playwright CDP client through the sync worker module map", async () => {
     const page = { marker: "worker-page" };
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
     }));
     (globalThis as any).__natstackRequire__ = vi.fn((id: string) => {
-      if (id === "@workspace/playwright-client") return { BrowserImpl: { connect } };
+      if (id === "@workspace/playwright-core") return { BrowserImpl: { connect } };
       throw new Error(`missing module: ${id}`);
     });
     const rpcCall = vi.fn(async () => ({
@@ -289,10 +381,10 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
 
-    await expect(getPanelHandle("panel-1").cdp.page()).resolves.toBe(page);
+    await expect(getPanelHandle("panel-1").cdp.playwrightPage()).resolves.toBe(page);
 
     expect((globalThis as any).__natstackRequire__).toHaveBeenCalledWith(
-      "@workspace/playwright-client"
+      "@workspace/playwright-core"
     );
     expect(connect).toHaveBeenCalledWith("ws://server/cdp/panel-1", {
       isElectronWebview: true,
@@ -300,7 +392,7 @@ describe("PanelHandle", () => {
     });
   });
 
-  it("falls back when the sync module map is present but lacks the CDP client", async () => {
+  it("loads the explicit lightweight CDP client only when requested", async () => {
     const page = { marker: "async-page" };
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
@@ -308,9 +400,11 @@ describe("PanelHandle", () => {
     (globalThis as any).__natstackRequire__ = vi.fn(() => {
       throw new Error("not in map");
     });
-    (globalThis as any).__natstackRequireAsync__ = vi.fn(async () => ({
-      BrowserImpl: { connect },
-    }));
+    (globalThis as any).__natstackRequireAsync__ = vi.fn(async (id: string) => {
+      if (id === "@workspace/playwright-core") throw new Error("full client unavailable");
+      if (id === "@workspace/playwright-client") return { BrowserImpl: { connect } };
+      throw new Error(`unexpected module: ${id}`);
+    });
     const rpcCall = vi.fn(async () => ({
       wsEndpoint: "ws://server/cdp/panel-1",
       token: "token-1",
@@ -318,9 +412,34 @@ describe("PanelHandle", () => {
     const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
 
-    await expect(getPanelHandle("panel-1").cdp.page()).resolves.toBe(page);
+    await expect(getPanelHandle("panel-1").cdp.lightweightPage()).resolves.toBe(page);
 
-    expect((globalThis as any).__natstackRequireAsync__).toHaveBeenCalledWith(
+    expect((globalThis as any).__natstackRequireAsync__).toHaveBeenNthCalledWith(
+      1,
+      "@workspace/playwright-client"
+    );
+  });
+
+  it("does not silently fall back when the explicit Playwright client is unavailable", async () => {
+    (globalThis as any).__natstackRequire__ = vi.fn(() => {
+      throw new Error("not in map");
+    });
+    (globalThis as any).__natstackRequireAsync__ = vi.fn(async (id: string) => {
+      if (id === "@workspace/playwright-core") throw new Error("full client unavailable");
+      if (id === "@workspace/playwright-client") return { BrowserImpl: { connect: vi.fn() } };
+      throw new Error(`unexpected module: ${id}`);
+    });
+    const rpcCall = vi.fn(async () => ({
+      wsEndpoint: "ws://server/cdp/panel-1",
+      token: "token-1",
+    }));
+    const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
+    _initPanelHandleBridge({ call: rpcCall, onEvent: vi.fn() } as never);
+
+    await expect(getPanelHandle("panel-1").cdp.playwrightPage()).rejects.toThrow(
+      "Unable to load @workspace/playwright-core"
+    );
+    expect((globalThis as any).__natstackRequireAsync__).not.toHaveBeenCalledWith(
       "@workspace/playwright-client"
     );
   });

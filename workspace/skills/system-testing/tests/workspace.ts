@@ -1,55 +1,32 @@
 import type { TestCase } from "../types.js";
-import { findLastAgentMessage } from "./_helpers.js";
+import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+
+function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
+  const msg = finalMessageHasAll(result, tokens);
+  if (!msg.passed) return msg;
+  return noIncompleteInvocations(result);
+}
 
 export const workspaceTests: TestCase[] = [
   {
     name: "list-workspaces",
     description: "List all workspaces",
     category: "workspace",
-    prompt: "List the available workspaces. Tell me their names.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      if (!msg) return { passed: false, reason: "No agent response received" };
-      const lower = msg.toLowerCase();
-      const hasWorkspace = lower.includes("workspace") || lower.includes("name") || lower.includes("list");
-      return {
-        passed: hasWorkspace,
-        reason: hasWorkspace ? undefined : `Expected workspace names, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise workspace listing. Finish with WORKSPACE_LIST_OK and count.",
+    validate: (result) => checked(result, ["WORKSPACE_LIST_OK", "count"]),
   },
   {
     name: "get-active",
     description: "Get the current workspace info",
     category: "workspace",
-    prompt: "Get the currently active workspace and tell me about it.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      if (!msg) return { passed: false, reason: "No agent response received" };
-      const lower = msg.toLowerCase();
-      const hasActive = lower.includes("workspace") || lower.includes("active") || lower.includes("current") ||
-        lower.includes("name") || lower.includes("id");
-      return {
-        passed: hasActive,
-        reason: hasActive ? undefined : `Expected active workspace info, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise active workspace inspection. Finish with WORKSPACE_ACTIVE_OK and context.",
+    validate: (result) => checked(result, ["WORKSPACE_ACTIVE_OK", "context"]),
   },
   {
     name: "get-config",
     description: "Get workspace configuration",
     category: "workspace",
-    prompt: "Get the workspace configuration. Tell me what's configured.",
-    validate: (result) => {
-      const msg = findLastAgentMessage(result);
-      if (!msg) return { passed: false, reason: "No agent response received" };
-      const lower = msg.toLowerCase();
-      const hasConfig = lower.includes("config") || lower.includes("workspace") || lower.includes("panel") ||
-        lower.includes("id") || lower.includes("setting");
-      return {
-        passed: hasConfig,
-        reason: hasConfig ? undefined : `Expected workspace config, got: ${msg.slice(0, 200)}`,
-      };
-    },
+    prompt: "Exercise workspace configuration inspection. Finish with WORKSPACE_CONFIG_OK and facts:2.",
+    validate: (result) => checked(result, ["WORKSPACE_CONFIG_OK", "facts:2"]),
   },
 ];

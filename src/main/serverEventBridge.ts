@@ -1,13 +1,16 @@
 import type { EventService } from "@natstack/shared/eventsService";
 import { isValidEventName, type EventName } from "@natstack/shared/events";
+import type { PanelTreeSnapshot } from "@natstack/shared/types";
 import type { PanelRuntimeLeaseChangedEvent } from "@natstack/shared/panel/panelLease";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
+import type { AppOrchestrator, AppAvailableEvent } from "./appOrchestrator.js";
 import { handleExternalOpenPayload, type ExternalOpenPayload } from "./oauthLoopbackHandoff.js";
 
 export interface ServerEventBridgeDeps {
   eventService: EventService;
   getPanelOrchestrator(): PanelOrchestrator | null;
+  getAppOrchestrator?(): AppOrchestrator | null;
   getServerClient(): ServerClient | null;
   openExternal(url: string): Promise<void>;
   warn(message: string): void;
@@ -28,6 +31,7 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
 
   return function handleServerEvent(event: string, payload: unknown): void {
     const panelOrchestrator = deps.getPanelOrchestrator();
+    const appOrchestrator = deps.getAppOrchestrator?.() ?? null;
 
     if (event === "build:complete") {
       const { source, error } = payload as { source?: unknown; error?: unknown };
@@ -87,12 +91,44 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
       return;
     }
 
-    if (bareEvent === "panel-tree-updated") {
-      void panelOrchestrator
-        ?.recoverShellSnapshot({ loadFocusedView: false })
+    if (bareEvent === "panel-title-updated") {
+      const { panelId, title, explicit } = payload as {
+        panelId?: unknown;
+        title?: unknown;
+        explicit?: unknown;
+      };
+      if (typeof panelId === "string" && typeof title === "string") {
+        panelOrchestrator?.applyServerPanelTitleUpdate({
+          panelId,
+          title,
+          explicit: explicit === true,
+        });
+      }
+      return;
+    }
+
+    if (bareEvent === "apps:available") {
+      void appOrchestrator
+        ?.applyAppAvailable(payload as AppAvailableEvent)
         .catch((err: unknown) => {
           deps.warn(
-            `[panelTree] failed to recover server tree snapshot: ${
+            `[apps] failed to apply app availability: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        });
+      if (isValidEventName(bareEvent)) {
+        emitNormalized(bareEvent, payload);
+      }
+      return;
+    }
+
+    if (bareEvent === "panel-tree-updated") {
+      void panelOrchestrator
+        ?.applyServerPanelTreeSnapshot(payload as PanelTreeSnapshot)
+        .catch((err: unknown) => {
+          deps.warn(
+            `[panelTree] failed to apply server tree snapshot: ${
               err instanceof Error ? err.message : String(err)
             }`
           );

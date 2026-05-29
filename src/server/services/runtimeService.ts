@@ -57,6 +57,12 @@ export interface RuntimeEntityHooks {
     ref: string | undefined;
   }) => Promise<string>;
 
+  /** Resolve effective version for "app" entities (no runtime prep). */
+  resolveAppEffectiveVersion: (args: {
+    source: string;
+    ref: string | undefined;
+  }) => Promise<string>;
+
   /** Cleanup hooks invoked on retire — closed at bootstrap. */
   onRetire: (record: EntityRecord) => Promise<void>;
 }
@@ -72,12 +78,24 @@ export interface RuntimeServiceDeps {
    * call `runtime.setTitle(title)` to populate the title that approval UIs
    * surface in place of the opaque entity id.
    */
-  setEntityTitle?: (entityId: string, title: string | undefined) => void | Promise<void>;
+  setEntityTitle?: (
+    entityId: string,
+    title: string | undefined,
+    options?: { explicit?: boolean }
+  ) => void | Promise<void>;
 }
 
 const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("panel"),
+    source: z.string(),
+    ref: z.string().optional(),
+    contextId: z.string().nullable().optional(),
+    key: z.string().optional(),
+    stateArgs: z.unknown().optional(),
+  }),
+  z.object({
+    kind: z.literal("app"),
     source: z.string(),
     ref: z.string().optional(),
     contextId: z.string().nullable().optional(),
@@ -134,7 +152,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     if (callerContextId === requested) {
       return requested;
     }
-    if (callerKind !== "panel" && callerKind !== "worker" && callerKind !== "do") {
+    if (
+      callerKind !== "panel" &&
+      callerKind !== "app" &&
+      callerKind !== "worker" &&
+      callerKind !== "do"
+    ) {
       // harness/extension callers reach here too; cross-context is gated.
       throw new Error(`Caller kind ${callerKind} cannot create cross-context entities`);
     }
@@ -169,6 +192,12 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     rawSpec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const spec = rawSpec;
+    if (spec.kind === "app") {
+      const callerKind = caller.runtime.kind;
+      if (callerKind !== "shell" && callerKind !== "server" && callerKind !== "harness") {
+        throw new Error("App runtime entities are host-managed");
+      }
+    }
     const contextId = await resolveContextPolicy(caller, spec.contextId, spec);
     const key = spec.key ?? randomUUID();
 
@@ -213,6 +242,16 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           ? existing.source.effectiveVersion
           : prepared.effectiveVersion;
       targetId = prepared.targetId;
+    } else if (spec.kind === "app") {
+      canonicalId = canonicalEntityId({ kind: "app", source: spec.source, key });
+      existing = await dispatchDO<EntityRecord | null>("entityResolve", [canonicalId]);
+      const resolvedVersion = await deps.hooks.resolveAppEffectiveVersion({
+        source: spec.source,
+        ref: spec.ref,
+      });
+      effectiveVersion =
+        existing?.status === "retired" ? existing.source.effectiveVersion : resolvedVersion;
+      targetId = canonicalId;
     } else {
       canonicalId = canonicalEntityId({ kind: "panel", key });
       existing = await dispatchDO<EntityRecord | null>("entityResolve", [canonicalId]);
@@ -266,7 +305,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   return {
     name: "runtime",
     description: "Runtime entity creation and retirement",
-    policy: { allowed: ["panel", "shell", "server", "worker", "do", "harness"] },
+    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "harness"] },
     methods: {
       createEntity: {
         args: z.tuple([CreateEntitySpecSchema]),
@@ -282,7 +321,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           "Return the contextId for an entity (or null if unknown). Cached read; falls back to DO.",
       },
       setTitle: {
-        args: z.tuple([z.string().nullable()]),
+        args: z.tuple([
+          z.string().nullable(),
+          z.object({ explicit: z.boolean().optional() }).optional(),
+        ]),
         description:
           "Set a server-controlled display title for the calling entity. Surfaced by approval UIs in place of the opaque id. Pass null/empty to clear.",
       },
@@ -303,12 +345,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           return await resolveContext(id);
         }
         case "setTitle": {
-          const [title] = args as [string | null];
+          const [title, options] = args as [string | null, { explicit?: boolean } | undefined];
           const callerKind = ctx.caller.runtime.kind;
-          if (callerKind !== "panel" && callerKind !== "worker" && callerKind !== "do") {
-            throw new Error(`runtime.setTitle is only available to panel/worker/do callers`);
+          if (
+            callerKind !== "panel" &&
+            callerKind !== "app" &&
+            callerKind !== "worker" &&
+            callerKind !== "do"
+          ) {
+            throw new Error(`runtime.setTitle is only available to panel/app/worker/do callers`);
           }
-          await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title);
+          await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title, {
+            explicit: options?.explicit === true,
+          });
           return;
         }
         default:

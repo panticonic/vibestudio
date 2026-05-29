@@ -44,7 +44,6 @@ export interface BuildBootstrapConfigOpts {
 export interface BuildPanelUrlOpts {
   source: string;
   contextId: string;
-  connectionId?: string;
   ref?: string;
   gatewayPort: number;
   externalHost: string;
@@ -82,12 +81,6 @@ export function resolveSource(
  */
 export function buildBootstrapConfig(opts: BuildBootstrapConfigOpts): unknown {
   return {
-    // `panelId` is the panel's RPC identity (the panel ENTITY id under the
-    // entity model) — this is what the panel uses as its `caller.runtime.id`
-    // on the WS connection. Kept as `panelId` for back-compat with panel
-    // runtime consumers; also exposed as `entityId` for callers that want to
-    // be explicit about the new naming.
-    panelId: opts.entityId,
     entityId: opts.entityId,
     slotId: opts.slotId,
     contextId: opts.contextId,
@@ -117,7 +110,6 @@ export function buildPanelUrl(opts: BuildPanelUrlOpts): string {
 
   const params = new URLSearchParams();
   params.set("contextId", opts.contextId);
-  if (opts.connectionId) params.set("connectionId", opts.connectionId);
   if (opts.ref) params.set("ref", opts.ref);
   const encodedPath = encodeURIComponent(opts.source).replace(/%2F/g, "/");
   return `${opts.protocol}://${opts.externalHost}:${opts.gatewayPort}/${encodedPath}/?${params.toString()}`;

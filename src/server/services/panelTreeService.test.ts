@@ -172,8 +172,8 @@ describe("panelTreeService", () => {
     );
   });
 
-  it("approval-gates panel creation under the requested parent", async () => {
-    const approvalQueue = approvalQueueMock("session");
+  it("delegates panel creation under the requested parent without approval", async () => {
+    const approvalQueue = approvalQueueMock("deny");
     const bridge = vi.fn(async (request: { method: string; args: unknown[] }) =>
       request.method === "metadata"
         ? { id: request.args[0] as string, title: "Parent", source: "panels/parent" }
@@ -189,14 +189,9 @@ describe("panelTreeService", () => {
       service.handler(ctx(), "create", ["panels/child", { parentId: "parent" }])
     ).resolves.toEqual({ id: "created", title: "Created", kind: "workspace" });
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        capability: PANEL_STRUCTURAL_CAPABILITY,
-        title: "Open panel",
-        grantResourceKey: "panel:parent:requester:panel:requester",
-      })
-    );
-    expect(bridge).toHaveBeenLastCalledWith({
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(bridge).toHaveBeenCalledTimes(1);
+    expect(bridge).toHaveBeenCalledWith({
       callerId: "panel:requester",
       callerKind: "panel",
       method: "create",
@@ -204,19 +199,20 @@ describe("panelTreeService", () => {
     });
   });
 
-  it("uses resolved requester panel metadata as the implicit create parent target", async () => {
-    const approvalQueue = approvalQueueMock("session");
+  it("delegates implicit child panel creation without resolving parent metadata for approval", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+    const resolveRequesterPanel = vi.fn(async () => ({
+      id: "requester-slot",
+      title: "Requester Panel",
+      source: "panels/requester",
+    }));
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "create" ? { id: "created", title: "Created", kind: "workspace" } : null
     );
     const service = createPanelTreeService({
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
-      resolveRequesterPanel: vi.fn(async () => ({
-        id: "requester-slot",
-        title: "Requester Panel",
-        source: "panels/requester",
-      })),
+      resolveRequesterPanel,
       bridge,
     });
 
@@ -226,13 +222,9 @@ describe("panelTreeService", () => {
       kind: "workspace",
     });
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(
-      expect.objectContaining({
-        title: "Open panel",
-        grantResourceKey: "panel:requester-slot:requester:panel:requester",
-        resource: expect.objectContaining({ value: "Requester Panel" }),
-      })
-    );
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(resolveRequesterPanel).not.toHaveBeenCalled();
+    expect(bridge).toHaveBeenCalledTimes(1);
   });
 
   it("does not delegate structural operations when approval is denied", async () => {
@@ -253,6 +245,41 @@ describe("panelTreeService", () => {
     expect(bridge).toHaveBeenCalledWith(
       expect.objectContaining({ method: "metadata", args: ["target"] })
     );
+  });
+
+  it("lets a panel set its own stateArgs without approval", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+    const bridge = vi.fn(async (request: { method: string }) =>
+      request.method === "metadata"
+        ? {
+            id: "requester-slot",
+            title: "Requester",
+            source: "panels/requester",
+            runtimeEntityId: "panel:requester",
+          }
+        : { mode: "edit" }
+    );
+    const service = createPanelTreeService({
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      resolveRequesterPanel: vi.fn(async () => ({
+        id: "requester-slot",
+        runtimeEntityId: "panel:requester",
+      })),
+      bridge,
+    });
+
+    await expect(
+      service.handler(ctx(), "setStateArgs", ["requester-slot", { mode: "edit" }])
+    ).resolves.toEqual({ mode: "edit" });
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(bridge).toHaveBeenLastCalledWith({
+      callerId: "panel:requester",
+      callerKind: "panel",
+      method: "setStateArgs",
+      args: ["requester-slot", { mode: "edit" }],
+    });
   });
 
   it("approval-gates object-shaped structural operations by target panel id", async () => {

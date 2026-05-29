@@ -33,7 +33,7 @@ import { useActionBar } from "./features/useActionBar";
 import { useMessageTypeRegistry } from "./features/useMessageTypeRegistry";
 import type { ConnectionConfig, AgenticChatActions, ToolProvider, SandboxConfig, ChatSandboxValue, ChatParticipantMetadata, ChatContextValue, ChatInputContextValue, ActionBarData, } from "../types";
 import { unwrapChatMethodResult } from "@workspace/agentic-core";
-import type { ChatMethodResult } from "@workspace/agentic-core";
+import type { ChatMethodResult, AgentSubscriptionConfig } from "@workspace/agentic-core";
 /** Pending agent info passed from launcher */
 interface PendingAgentInfo {
     agentId: string;
@@ -63,6 +63,49 @@ function actorForClient(clientId: string | undefined, metadata: ChatParticipantM
         displayName: metadata.name ?? id,
         metadata: { ...metadata },
     };
+}
+
+const SANDBOX_METHOD_TIMEOUT_MS = 20 * 60 * 1000;
+
+async function waitForMethodHandle<T>(
+    handle: { result: Promise<T>; cancel?: () => Promise<void> },
+    options?: { timeoutMs?: number; signal?: AbortSignal },
+): Promise<T> {
+    const timeoutMs = options?.timeoutMs ?? SANDBOX_METHOD_TIMEOUT_MS;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let abortCleanup: (() => void) | undefined;
+    const cancel = () => {
+        void handle.cancel?.().catch(() => undefined);
+    };
+    try {
+        const blockers: Array<Promise<never>> = [];
+        if (timeoutMs > 0) {
+            blockers.push(new Promise<never>((_, reject) => {
+                timeout = setTimeout(() => {
+                    cancel();
+                    reject(new Error(`Method call timed out after ${timeoutMs}ms`));
+                }, timeoutMs);
+            }));
+        }
+        if (options?.signal) {
+            if (options.signal.aborted) {
+                cancel();
+                throw new Error("Method call aborted");
+            }
+            blockers.push(new Promise<never>((_, reject) => {
+                const onAbort = () => {
+                    cancel();
+                    reject(new Error("Method call aborted"));
+                };
+                options.signal!.addEventListener("abort", onAbort, { once: true });
+                abortCleanup = () => options.signal!.removeEventListener("abort", onAbort);
+            }));
+        }
+        return await Promise.race([handle.result, ...blockers]);
+    } finally {
+        if (timeout) clearTimeout(timeout);
+        abortCleanup?.();
+    }
 }
 
 function parseInlineUiPayload(content: string): {
@@ -215,18 +258,20 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
                 idempotencyKey: opts?.idempotencyKey ?? crypto.randomUUID(),
             });
         },
-        callMethod: async (pid: string, method: string, callArgs: unknown) => {
-            const handle = core.clientRef.current!.callMethod(pid, method, callArgs);
-            const result = await (handle as {
+        callMethod: async (pid: string, method: string, callArgs: unknown, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
+            const handle = core.clientRef.current!.callMethod(pid, method, callArgs, options);
+            const result = await waitForMethodHandle(handle as {
                 result: Promise<ChatMethodResult>;
-            }).result;
+                cancel?: () => Promise<void>;
+            }, options);
             return unwrapChatMethodResult(result);
         },
-        callMethodResult: async (pid: string, method: string, callArgs: unknown) => {
-            const handle = core.clientRef.current!.callMethod(pid, method, callArgs);
-            return (handle as {
+        callMethodResult: async (pid: string, method: string, callArgs: unknown, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
+            const handle = core.clientRef.current!.callMethod(pid, method, callArgs, options);
+            return waitForMethodHandle(handle as {
                 result: Promise<ChatMethodResult>;
-            }).result;
+                cancel?: () => Promise<void>;
+            }, options);
         },
         participantByHandle: (rawHandle: string) => {
             const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
@@ -236,26 +281,28 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
                 return typeof metadataHandle === "string" && metadataHandle === handle;
             }) ?? null;
         },
-        callMethodByHandle: async (rawHandle: string, method: string, callArgs: unknown) => {
+        callMethodByHandle: async (rawHandle: string, method: string, callArgs: unknown, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
             const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
             const roster = core.clientRef.current?.roster ?? {};
             const participant = Object.values(roster).find((item) => item.metadata?.handle === handle);
             if (!participant) throw new Error(`No participant with handle @${handle}`);
-            const methodHandle = core.clientRef.current!.callMethod(participant.id, method, callArgs);
-            const result = await (methodHandle as {
+            const methodHandle = core.clientRef.current!.callMethod(participant.id, method, callArgs, options);
+            const result = await waitForMethodHandle(methodHandle as {
                 result: Promise<ChatMethodResult>;
-            }).result;
+                cancel?: () => Promise<void>;
+            }, options);
             return unwrapChatMethodResult(result);
         },
-        callMethodResultByHandle: async (rawHandle: string, method: string, callArgs: unknown) => {
+        callMethodResultByHandle: async (rawHandle: string, method: string, callArgs: unknown, options?: { timeoutMs?: number; signal?: AbortSignal }) => {
             const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
             const roster = core.clientRef.current?.roster ?? {};
             const participant = Object.values(roster).find((item) => item.metadata?.handle === handle);
             if (!participant) throw new Error(`No participant with handle @${handle}`);
-            const methodHandle = core.clientRef.current!.callMethod(participant.id, method, callArgs);
-            return (methodHandle as {
+            const methodHandle = core.clientRef.current!.callMethod(participant.id, method, callArgs, options);
+            return waitForMethodHandle(methodHandle as {
                 result: Promise<ChatMethodResult>;
-            }).result;
+                cancel?: () => Promise<void>;
+            }, options);
         },
         contextId: contextId ?? "",
         channelId: channelName,
@@ -493,7 +540,7 @@ export function useAgenticChat({ config, channelName, channelConfig, contextId, 
                             const client = core.clientRef.current;
                             if (client) {
                                 try {
-                                    await client.updateChannelConfig({ title });
+                                    await client.updateChannelConfig({ title, titleExplicit: true });
                                 }
                                 catch { /* best-effort */ }
                             }
@@ -849,20 +896,34 @@ Use package imports available to inline_ui plus relative imports for local helpe
         publishTypedAgenticEvent,
     ]);
     // --- Wrap platform actions ---
-    const handleAddAgent = useCallback(async (agentId?: string) => {
+    const handleAddAgent = useCallback(async (agentId?: string, config?: AgentSubscriptionConfig) => {
         if (!actions?.onAddAgent)
             return;
         const launcherContextId = core.clientRef.current?.contextId;
-        await actions.onAddAgent(channelName, launcherContextId, agentId);
+        await actions.onAddAgent(channelName, launcherContextId, agentId, config);
     }, [channelName, core.clientRef, actions]);
+    const handleReplaceAgent = useCallback(async (participantId: string, agentId?: string, config?: AgentSubscriptionConfig) => {
+        if (!actions?.onReplaceAgent)
+            return;
+        await actions.onReplaceAgent(channelName, participantId, agentId, config);
+    }, [channelName, actions]);
     const handleRemoveAgent = useCallback(async (handle: string) => {
         if (!actions?.onRemoveAgent)
             return;
         await actions.onRemoveAgent(channelName, handle);
     }, [channelName, actions]);
+    const handleConnectProvider = useCallback(async (providerId: string, modelBaseUrl: string, opts?: { browser?: "internal" | "external" }) => {
+        if (!actions?.onConnectProvider)
+            return { ok: false, error: "Connect is not available" };
+        return actions.onConnectProvider(providerId, modelBaseUrl, opts);
+    }, [actions]);
     const sessionEnabled = true; // Always persistent: transcript state is projected from the durable PubSub log.
     const onAddAgent = actions?.onAddAgent ? handleAddAgent : undefined;
+    const onReplaceAgent = actions?.onReplaceAgent ? handleReplaceAgent : undefined;
+    const onConnectProvider = actions?.onConnectProvider ? handleConnectProvider : undefined;
     const availableAgents = actions?.availableAgents;
+    const modelCatalog = actions?.modelCatalog;
+    const connectedModelRefs = actions?.connectedModelRefs;
     const onRemoveAgent = actions?.onRemoveAgent ? handleRemoveAgent : undefined;
     const onFocusPanel = actions?.onFocusPanel;
     const onReloadPanel = actions?.onReloadPanel;
@@ -897,13 +958,19 @@ Use package imports available to inline_ui plus relative imports for local helpe
         theme,
         onLoadEarlierMessages: core.loadEarlierMessages,
         onInterrupt: core.handleInterruptAgent,
+        onCancelInvocation: core.handleCancelInvocation,
         onCallMethod: core.handleCallMethod,
+        onCallMethodResult: core.handleCallMethodResult,
         onFeedbackDismiss: feedback.onFeedbackDismiss,
         onFeedbackError: feedback.onFeedbackError,
         onDebugConsoleChange: debug.setDebugConsoleAgent,
         onDismissDirtyWarning: core.onDismissDirtyWarning,
         onAddAgent,
+        onReplaceAgent,
+        onConnectProvider,
         availableAgents,
+        modelCatalog,
+        connectedModelRefs,
         onRemoveAgent,
         onFocusPanel,
         onReloadPanel,
@@ -915,9 +982,9 @@ Use package imports available to inline_ui plus relative imports for local helpe
         core.participants, core.allParticipants,
         core.debugEvents, debug.debugConsoleAgent, core.dirtyRepoWarnings, core.pendingAgents,
         feedback.activeFeedbacks, theme,
-        core.loadEarlierMessages, core.handleInterruptAgent, core.handleCallMethod,
+        core.loadEarlierMessages, core.handleInterruptAgent, core.handleCallMethod, core.handleCallMethodResult,
         feedback.onFeedbackDismiss, feedback.onFeedbackError, debug.setDebugConsoleAgent, core.onDismissDirtyWarning,
-        onAddAgent, availableAgents, onRemoveAgent, onFocusPanel, onReloadPanel,
+        onAddAgent, onReplaceAgent, onConnectProvider, availableAgents, modelCatalog, connectedModelRefs, onRemoveAgent, onFocusPanel, onReloadPanel,
         chatTools.toolApprovalValue,
     ]);
     return { contextValue, inputContextValue: core.inputContextValue };

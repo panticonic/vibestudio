@@ -355,7 +355,7 @@ export interface ConnectCredentialEnvelope {
   spec: ConnectCredentialRequest;
   handoffTarget: {
     callerId: string;
-    callerKind: "panel" | "shell";
+    callerKind: "app" | "panel" | "shell";
   };
 }
 
@@ -484,7 +484,24 @@ export type CredentialAuditEvent =
   | AuditEntry
   | ConnectionCredentialAuditEvent
   | ClientConfigAuditEvent
-  | OAuthConnectionTransactionAuditEvent;
+  | OAuthConnectionTransactionAuditEvent
+  | DevicePairingAuditEvent;
+
+export interface DevicePairingAuditEvent {
+  type:
+    | "device_pairing.invite_created"
+    | "device_pairing.redeemed"
+    | "device_pairing.device_revoked";
+  ts: number;
+  callerId: string;
+  serverId: string;
+  workspaceId: string;
+  deviceId?: string;
+  platform?: string;
+  label?: string;
+  expiresAt?: number;
+  method?: string;
+}
 
 export interface ConnectionCredentialAuditEvent {
   type:

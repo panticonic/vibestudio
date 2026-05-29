@@ -361,15 +361,22 @@ export class EventService {
   }
 }
 
+export type EventSnapshotProviders = {
+  [E in EventName]?: () => EventPayloads[E] | undefined;
+};
+
 /**
  * Create a ServiceDefinition that wraps an existing EventService instance.
  * The same EventService instance is used for both RPC handling and in-process emit().
  */
-export function createEventsServiceDefinition(eventService: EventService): ServiceDefinition {
+export function createEventsServiceDefinition(
+  eventService: EventService,
+  opts: { snapshots?: EventSnapshotProviders } = {},
+): ServiceDefinition {
   return {
     name: "events",
     description: "Event subscriptions",
-    policy: { allowed: ["shell", "panel", "server", "worker", "do", "extension"] },
+    policy: { allowed: ["shell", "app", "panel", "server", "worker", "do", "extension"] },
     methods: {
       subscribe: { args: z.tuple([z.string()]) },
       unsubscribe: { args: z.tuple([z.string()]) },
@@ -384,6 +391,10 @@ export function createEventsServiceDefinition(eventService: EventService): Servi
           }
           const subscriber = eventService.getOrCreateSubscriber(ctx);
           eventService.subscribe(eventName, ctx.caller.runtime.id, subscriber, ctx.connectionId);
+          const snapshot = opts.snapshots?.[eventName]?.();
+          if (snapshot !== undefined) {
+            subscriber.send(`event:${eventName}`, snapshot);
+          }
           return;
         }
         case "unsubscribe": {

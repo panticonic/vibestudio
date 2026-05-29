@@ -50,7 +50,11 @@ export type InferEventMap<T extends EventSchemaMap> = {
  * Git configuration for a panel or worker.
  */
 export interface GitConfig {
-  /** Git server base URL (e.g., http://localhost:63524) */
+  /**
+   * Git server base URL (e.g., http://localhost:63524).
+   * Prefer `git.client()` from `@workspace/runtime` for userland git
+   * operations; it applies the correct internal/external HTTP routing.
+   */
   serverUrl: string;
   /** Additional NatStack gateway URLs that should use the internal bearer token. */
   internalOrigins?: readonly string[];
@@ -97,8 +101,59 @@ export interface CdpEndpoint {
   token?: string;
 }
 
+export type CdpClientKind = "playwright" | "lightweight";
+
+export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
+
+export interface PanelConsoleHistoryEntry {
+  timestamp: number;
+  level: PanelConsoleHistoryLevel;
+  message: string;
+  line: number;
+  sourceId: string;
+  url: string;
+}
+
+export interface PanelConsoleHistoryOptions {
+  limit?: number;
+  errorLimit?: number;
+  levels?: PanelConsoleHistoryLevel[];
+}
+
+export interface PanelConsoleHistoryResult {
+  entries: PanelConsoleHistoryEntry[];
+  errors: PanelConsoleHistoryEntry[];
+  dropped: {
+    entries: number;
+    errors: number;
+  };
+  capacity: {
+    entries: number;
+    errors: number;
+  };
+}
+
+export interface PanelDiagnosticsResult {
+  info: {
+    id: string;
+    title: string;
+    source: string;
+    kind: "workspace" | "browser";
+    parentId: string | null;
+  };
+  consoleHistory: PanelConsoleHistoryResult;
+}
+
 export interface CdpAutomation {
-  page(): Promise<any>;
+  /** Explicit vendored @workspace/playwright-core page. */
+  playwrightPage(): Promise<any>;
+  /** Explicit lightweight @workspace/playwright-client page. */
+  lightweightPage(): Promise<any>;
+  /**
+   * Historical console messages captured by the Electron host from panel
+   * creation time. This is separate from live CDP console events.
+   */
+  consoleHistory(options?: PanelConsoleHistoryOptions): Promise<PanelConsoleHistoryResult>;
   getCdpEndpoint(): Promise<CdpEndpoint>;
   navigate(url: string): Promise<void>;
   goBack(): Promise<void>;
@@ -148,6 +203,15 @@ export interface PanelHandle<
   readonly kind: "workspace" | "browser";
   readonly parentId: string | null;
 
+  /** Current handle metadata. Refresh first when you need the latest host view. */
+  getInfo(): Promise<{
+    id: string;
+    title: string;
+    source: string;
+    kind: "workspace" | "browser";
+    parentId: string | null;
+  }>;
+
   /**
    * Typed RPC call proxy for methods the target chose to expose.
    * @example handle.call.notifyReady()
@@ -156,6 +220,12 @@ export interface PanelHandle<
 
   /** Chrome DevTools Protocol automation for this panel. */
   readonly cdp: CdpAutomation;
+
+  /**
+   * Convenience wrapper for `handle.cdp.click(selector)`.
+   * Useful when the handle itself is the target panel being automated.
+   */
+  click(selector: string): Promise<void>;
 
   readonly stateArgs: {
     get<TState = Record<string, unknown>>(): Promise<TState>;
@@ -204,6 +274,9 @@ export interface PanelHandle<
   isLoaded(): Promise<boolean>;
   reload(): Promise<void>;
   close(): Promise<void>;
+
+  /** Bounded post-mortem diagnostics for this panel target. */
+  diagnostics(options?: PanelConsoleHistoryOptions): Promise<PanelDiagnosticsResult>;
   archive(): Promise<void>;
   unload(): Promise<void>;
   movePanel(newParentId: string | null, targetPosition: number): Promise<void>;

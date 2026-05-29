@@ -382,7 +382,8 @@ export function TerminalApp() {
       const match = units.find(
         (unit) =>
           unit.name === "@workspace-extensions/shell" ||
-          unit.source.endsWith("/@workspace-extensions/shell")
+          unit.source === "extensions/shell" ||
+          unit.source.endsWith("/extensions/shell")
       );
       if (!cancelled) setShellUnit(match ? normalizeShellUnit(match) : null);
     }

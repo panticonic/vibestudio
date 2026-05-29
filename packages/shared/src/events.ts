@@ -15,10 +15,12 @@ import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
  */
 export type EventName =
   | `extensions:${string}`
+  | `apps:${string}`
   | "workspace:unit-log"
   | "workspace:revision-bumped"
   | "presence:panel-active"
   | "panel:runtimeLeaseChanged"
+  | "panel-title-updated"
   | "panel:snapshot"
   | "system-theme-changed"
   | "panel-tree-updated"
@@ -49,6 +51,10 @@ export interface NotificationAction {
   id: string;
   label: string;
   variant?: "solid" | "soft" | "ghost";
+  command?:
+    | { type: "app.applyUpdate"; appId: string }
+    | { type: "app.rollback"; appId: string; buildKey?: string }
+    | { type: "workspace.restartUnit"; name: string };
 }
 
 /**
@@ -62,7 +68,7 @@ export interface NotificationConsentData {
   /** Human-readable name of the caller */
   callerTitle: string;
   /** Runtime kind requesting consent. */
-  callerKind: "panel" | "worker" | "do";
+  callerKind: "panel" | "app" | "worker" | "do";
 }
 
 /**
@@ -90,6 +96,7 @@ export interface EventPayloads {
   "system-theme-changed": "light" | "dark";
   "panel-tree-updated": PanelTreeSnapshot;
   "panel:runtimeLeaseChanged": PanelRuntimeLeaseChangedEvent;
+  "panel-title-updated": { panelId: string; title: string; explicit?: boolean };
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;
   "toggle-address-bar": undefined;
@@ -104,6 +111,7 @@ export interface EventPayloads {
     callerId: string;
     callerKind:
       | "panel"
+      | "app"
       | "worker"
       | "do"
       | "extension"
@@ -118,6 +126,7 @@ export interface EventPayloads {
     callerId: string;
     callerKind:
       | "panel"
+      | "app"
       | "worker"
       | "do"
       | "extension"
@@ -166,15 +175,16 @@ export interface EventPayloads {
   "workspace:revision-bumped": { workspaceId: string; revision: number };
   "presence:panel-active": { panelId: string; ownerCallerId: string; updatedAt: number };
   [key: `extensions:${string}`]: unknown;
+  [key: `apps:${string}`]: unknown;
   "workspace:unit-log": {
     workspaceId: string;
     unitName: string;
-    kind: "extension" | "worker" | "panel";
+    kind: "extension" | "app" | "worker" | "panel";
     timestamp: number;
     level: "debug" | "info" | "warn" | "error";
     message: string;
     fields?: Record<string, unknown>;
-    source?: "stdout" | "stderr" | "ctx.log" | "console";
+    source?: "stdout" | "stderr" | "ctx.log" | "console" | "lifecycle" | "system";
   };
 }
 
@@ -185,6 +195,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "system-theme-changed",
   "panel-tree-updated",
   "panel:runtimeLeaseChanged",
+  "panel-title-updated",
   "panel:snapshot",
   "open-workspace-switcher",
   "toggle-address-bar",
@@ -214,10 +225,12 @@ export const VALID_EVENT_NAMES: EventName[] = [
  */
 export function isValidEventName(name: string): name is EventName {
   if (name.startsWith("extensions:")) return true;
+  if (name.startsWith("apps:")) return true;
   if (name === "workspace:unit-log") return true;
   if (name === "workspace:revision-bumped") return true;
   if (name === "presence:panel-active") return true;
   if (name === "panel:runtimeLeaseChanged") return true;
+  if (name === "panel-title-updated") return true;
   if (name === "panel:snapshot") return true;
   return VALID_EVENT_NAMES.includes(name as EventName);
 }

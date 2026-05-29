@@ -1,4 +1,4 @@
-import { TrajectoryVesselBase, type RespondPolicy } from "@workspace/agentic-do";
+import { AgentWorkerBase, type RespondPolicy } from "@workspace/agentic-do";
 import { complete, getModel as getPiModel, type Context } from "@earendil-works/pi-ai";
 import type { DurableObjectContext } from "@workspace/runtime/worker";
 import {
@@ -39,6 +39,7 @@ const GMAIL_SYSTEM_CATEGORIES: Record<string, string> = {
   CATEGORY_FORUMS: "Forums",
 };
 const GMAIL_TOOL_NAMES = new Set([
+  "set_title",
   "gmail_checkInbox",
   "gmail_search",
   "gmail_summarizeThread",
@@ -246,8 +247,8 @@ function threadCardState(
   };
 }
 
-export class GmailAgentWorker extends TrajectoryVesselBase {
-  static override schemaVersion = TrajectoryVesselBase.schemaVersion;
+export class GmailAgentWorker extends AgentWorkerBase {
+  static override schemaVersion = AgentWorkerBase.schemaVersion;
 
   private _gmail: GmailClient | null = null;
   private recoveredChannels = new Set<string>();
@@ -321,12 +322,12 @@ export class GmailAgentWorker extends TrajectoryVesselBase {
     return createGmailClient(this.credentials);
   }
 
-  protected override getModel(): string {
+  protected override getDefaultModel(): string {
     return "openai-codex:gpt-5.5";
   }
 
   protected async generateDraftReplyBody(channelId: string, thread: GmailThread): Promise<string> {
-    const modelName = this.getModel();
+    const modelName = this.getModel(channelId);
     const colonIdx = modelName.indexOf(":");
     if (colonIdx < 0) throw new Error(`Model must be "provider:model", got: ${modelName}`);
     const provider = modelName.slice(0, colonIdx);
@@ -363,7 +364,9 @@ export class GmailAgentWorker extends TrajectoryVesselBase {
       ],
     };
     const response = await complete(model, context, {
-      apiKey: await this.getApiKeyForChannel(channelId)(),
+      apiKey: await this.getApiKeyForChannel(channelId, {
+        resumeCurrentTurnOnMissingCredential: false,
+      })(),
       temperature: 0.2,
       maxTokens: 300,
     });
@@ -476,12 +479,13 @@ export class GmailAgentWorker extends TrajectoryVesselBase {
         { name: "listActionableThreads", description: "Return current actionable Gmail threads" },
         { name: "setPollInterval", description: "Configure Gmail polling interval" },
         { name: "getThread", description: "Fetch sanitized Gmail thread contents" },
+        ...this.getStandardAgentMethods(),
       ],
     };
   }
 
   override async subscribeChannel(
-    opts: Parameters<TrajectoryVesselBase["subscribeChannel"]>[0]
+    opts: Parameters<AgentWorkerBase["subscribeChannel"]>[0]
   ): Promise<{ ok: boolean; participantId: string }> {
     const result = await super.subscribeChannel(opts);
     this.ensureChannelState(opts.channelId);
@@ -515,6 +519,9 @@ export class GmailAgentWorker extends TrajectoryVesselBase {
     args: unknown
   ): Promise<{ result: unknown; isError?: boolean }> {
     try {
+      const standardResult = await this.handleStandardAgentMethodCall(channelId, methodName, args);
+      if (standardResult) return standardResult;
+
       switch (methodName) {
         case "checkNow":
           await this.ensureRecovered(channelId);

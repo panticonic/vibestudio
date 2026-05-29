@@ -38,6 +38,9 @@ export async function requirePanelAccessPermission(
     ctx.caller.runtime.kind === "panel" && deps.resolveRequesterPanel
       ? await deps.resolveRequesterPanel(ctx.caller)
       : null;
+  if (op === "stateArgs.set" && isSelfPanelTarget(ctx.caller, target, requesterPanel)) {
+    return { allowed: true };
+  }
   const decision = accessDecision(
     op,
     {
@@ -101,13 +104,34 @@ export async function requirePanelAccessPermission(
   }
 
   if (!result.allowed) {
-    return { allowed: false, capability: decision.capability, reason: result.reason };
+    const reason =
+      controller?.signal.aborted && result.reason === deniedReasonFor(op, target.id)
+        ? `${titleFor(op, targetLabel, decision.severity)} approval timed out for panel ${target.id}`
+        : result.reason;
+    return { allowed: false, capability: decision.capability, reason };
   }
   return {
     allowed: true,
     capability: decision.capability,
     prompted: result.decision !== undefined,
   };
+}
+
+function deniedReasonFor(op: PanelAccessOperation, targetId: string): string {
+  return `${op} denied for panel ${targetId}`;
+}
+
+function isSelfPanelTarget(
+  caller: VerifiedCaller,
+  target: PanelAccessPermissionTarget,
+  requesterPanel: PanelAccessPermissionTarget | null
+): boolean {
+  if (caller.runtime.kind !== "panel") return false;
+  if (target.runtimeEntityId && target.runtimeEntityId === caller.runtime.id) return true;
+  if (requesterPanel?.runtimeEntityId && target.runtimeEntityId) {
+    return requesterPanel.runtimeEntityId === target.runtimeEntityId;
+  }
+  return Boolean(requesterPanel?.id && requesterPanel.id === target.id);
 }
 
 function titleFor(

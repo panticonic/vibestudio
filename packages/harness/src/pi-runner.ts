@@ -77,6 +77,7 @@ import {
   brandId,
   createInitialTrajectoryState,
   encodeAgenticEventStoredValues,
+  hydrateStoredValueRefs,
   MAX_INLINE_TRAJECTORY_EVENT_BYTES,
   reduceTrajectory,
   TURN_SCOPED_OWNER_KINDS,
@@ -93,7 +94,12 @@ import {
   type TurnId,
 } from "@workspace/agentic-protocol";
 import { buildTurnSnapshot, type TurnSnapshot } from "./turn-snapshot.js";
-import { HookBus, type EventListener, type TransformContextListener } from "./hook-bus.js";
+import {
+  HookBus,
+  type CorrelatedAgentHarnessEvent,
+  type EventListener,
+  type TransformContextListener,
+} from "./hook-bus.js";
 import { CompactionTrigger, type CompactionTriggerOptions } from "./compaction-trigger.js";
 import { AgentWorkerError } from "./errors.js";
 
@@ -163,8 +169,17 @@ export interface PiRunnerOptions {
     snapshot: TurnSnapshot
   ) => Promise<TurnSnapshot | void> | TurnSnapshot | void;
   publicationPolicy?: (input: { event: AgenticEvent; publishToChannel?: boolean }) => boolean;
+  repairDurableOpenStateOnInit?: boolean;
+  onTurnPhase?: (event: { turnId: string; phase: "model_start" }) => void | Promise<void>;
   extraTools?: AgentTool<any>[];
   toolFilter?: (toolName: string) => boolean;
+  /**
+   * Channel-provided tools that this runner expects to see before model calls.
+   * These are diagnostics only: absence is logged/checkpointed loudly because
+   * it usually means the runner is about to call the model in a bare built-in
+   * tool mode while the conversation expects panel/headless methods such as eval.
+   */
+  expectedChannelToolNames?: readonly string[];
   compactionPolicy?: CompactionTriggerOptions;
   /**
    * Optional probe asking whether the credentials runtime holds a credential
@@ -199,6 +214,10 @@ export interface PiStateSnapshot {
 export interface RunnerTurnInput {
   content: string;
   images?: ImageContent[];
+}
+
+export interface RunnerTurnOptions {
+  turnId?: string;
 }
 
 interface RunnerDebugCheckpoint {
@@ -245,6 +264,8 @@ interface OpenToolInvocationDebug {
 
 interface RunnerDebugOperation {
   kind: "prompt" | "continue";
+  operationId?: string;
+  turnId?: string | null;
   startedAt: string;
   input?: {
     contentLength: number;
@@ -287,8 +308,21 @@ interface ChannelPublicationBroadcastState {
   activeEnvelopeIds: string[];
   lastScheduledAt?: string;
   lastCompletedAt?: string;
+  failureCount?: number;
   lastError?: {
     envelopeIds: string[];
+    message: string;
+    at: string;
+  };
+}
+
+interface CompactionDiagnosticState {
+  attempts: number;
+  failures: number;
+  consecutiveFailures: number;
+  lastAttemptAt?: string;
+  lastCompletedAt?: string;
+  lastFailure?: {
     message: string;
     at: string;
   };
@@ -353,10 +387,124 @@ function summarizeDebugValue(value: unknown, depth = 0): unknown {
   return String(value);
 }
 
+function summarizeAgentMessage(message: Record<string, unknown>): Record<string, unknown> {
+  return {
+    role: message["role"] ?? null,
+    timestamp: message["timestamp"] ?? null,
+    ...(message["stopReason"] ? { stopReason: message["stopReason"] } : {}),
+    ...(message["toolCallId"] ? { toolCallId: message["toolCallId"] } : {}),
+    ...(message["toolName"] ? { toolName: message["toolName"] } : {}),
+    content: summarizeDebugValue(message["content"]),
+  };
+}
+
+function summarizeSessionEntry(entry: unknown): unknown {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return summarizeDebugValue(entry);
+  const record = entry as Record<string, unknown>;
+  const message = record["message"];
+  return {
+    type: record["type"] ?? null,
+    id: record["id"] ?? null,
+    parentId: record["parentId"] ?? null,
+    timestamp: record["timestamp"] ?? null,
+    ...(message && typeof message === "object" && !Array.isArray(message)
+      ? { message: summarizeAgentMessage(message as Record<string, unknown>) }
+      : {}),
+  };
+}
+
+function providerPayloadToolNames(payload: unknown): string[] {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const record = payload as Record<string, unknown>;
+  const tools = Array.isArray(record["tools"]) ? record["tools"] : [];
+  const names = new Set<string>();
+  for (const tool of tools) {
+    if (!tool || typeof tool !== "object" || Array.isArray(tool)) continue;
+    const item = tool as Record<string, unknown>;
+    if (typeof item["name"] === "string") {
+      names.add(item["name"]);
+      continue;
+    }
+    const fn = item["function"];
+    if (fn && typeof fn === "object" && !Array.isArray(fn)) {
+      const name = (fn as Record<string, unknown>)["name"];
+      if (typeof name === "string") names.add(name);
+      continue;
+    }
+    const declarations = item["functionDeclarations"];
+    if (Array.isArray(declarations)) {
+      for (const declaration of declarations) {
+        if (!declaration || typeof declaration !== "object" || Array.isArray(declaration)) continue;
+        const name = (declaration as Record<string, unknown>)["name"];
+        if (typeof name === "string") names.add(name);
+      }
+    }
+  }
+  return [...names].sort();
+}
+
+function sortedToolNames(tools: readonly AgentTool<any>[]): string[] {
+  return [...new Set(tools.map((tool) => tool.name))].sort();
+}
+
+function diffToolNames(previous: readonly string[] | null, next: readonly string[]): {
+  added: string[];
+  removed: string[];
+} {
+  if (!previous) return { added: [], removed: [] };
+  const prev = new Set(previous);
+  const current = new Set(next);
+  return {
+    added: next.filter((name) => !prev.has(name)),
+    removed: previous.filter((name) => !current.has(name)),
+  };
+}
+
+function sameToolNames(previous: readonly string[] | null, next: readonly string[]): boolean {
+  return !!previous && previous.length === next.length && previous.every((name, index) => name === next[index]);
+}
+
+function uniqueToolsByName(tools: readonly AgentTool<any>[]): {
+  tools: AgentTool<any>[];
+  duplicates: string[];
+} {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  const unique: AgentTool<any>[] = [];
+  for (const tool of tools) {
+    if (seen.has(tool.name)) {
+      duplicates.add(tool.name);
+      continue;
+    }
+    seen.add(tool.name);
+    unique.push(tool);
+  }
+  return { tools: unique, duplicates: [...duplicates].sort() };
+}
+
+function missingNames(expected: readonly string[] | undefined, actual: readonly string[]): string[] {
+  if (!expected || expected.length === 0) return [];
+  const actualSet = new Set(actual);
+  return [...new Set(expected)].filter((name) => !actualSet.has(name)).sort();
+}
+
+function summarizeDebugList(values: unknown[] | null, itemSummarizer = summarizeDebugValue): Record<string, unknown> | null {
+  if (!values) return null;
+  const sample = values.slice(0, DEBUG_COLLECTION_LIMIT).map(itemSummarizer);
+  return {
+    count: values.length,
+    sample,
+    ...(values.length > sample.length ? { omittedItems: values.length - sample.length } : {}),
+  };
+}
+
 export class PiRunner {
   private harness: AgentHarness | null = null;
   private extensionRuntime: PiExtensionRuntime | null = null;
   private builtinTools: AgentTool<any>[] = [];
+  private lastHarnessToolNames: string[] | null = null;
+  private lastProviderPayloadToolNames: string[] | null = null;
+  private lastRosterToolNames: string[] = [];
   private harnessUnsub: (() => void) | null = null;
   private _approvalLevel: ApprovalLevel;
   private readonly preApprovedCallIds = new Set<string>();
@@ -371,6 +519,8 @@ export class PiRunner {
   private readonly gad: DurableObjectServiceClient;
   private running = false;
   private currentTurnId: TurnId | null = null;
+  private openedTurnIds = new Set<string>();
+  private turnCloseFailedIds = new Set<string>();
   private readonly channelTargetPromises = new Map<string, Promise<string>>();
   private readonly channelPublicationBroadcastChains = new Map<string, Promise<void>>();
   private readonly channelPublicationBroadcasts = new Map<
@@ -379,20 +529,34 @@ export class PiRunner {
   >();
   private readonly openInvocationIds = new Set<string>();
   private readonly openToolInvocations = new Map<string, OpenToolInvocationDebug>();
+  private readonly forceClosingTurnIds = new Set<string>();
   private readonly phaseCheckpoints: RunnerDebugCheckpoint[] = [];
   private readonly recentHarnessEvents: RunnerDebugEvent[] = [];
   private readonly recentTrajectoryEvents: RunnerDebugTrajectoryEvent[] = [];
   private readonly terminalInvocationIds = new Set<string>();
   private readonly lastErrors: RunnerDebugError[] = [];
+  private readonly compactionDiagnostics: CompactionDiagnosticState = {
+    attempts: 0,
+    failures: 0,
+    consecutiveFailures: 0,
+  };
   private currentOperation: RunnerDebugOperation | null = null;
   private awaitingProviderFirstEvent = false;
   private providerRequestCount = 0;
   private credentialRequestCount = 0;
   private restoredTrajectoryState: TrajectoryState | null = null;
-  private activeAssistantMessage: { messageId: string; lastText: string; started: boolean } | null =
+  private activeAssistantMessage: {
+    messageId: string;
+    lastText: string;
+    lastBlocks: MessageBlockInput[];
+    started: boolean;
+  } | null =
     null;
   private activeRunSignal: AbortSignal | null = null;
   private activeOperationAbortController: AbortController | null = null;
+  private activeOperationId: string | null = null;
+  private activeOperationSawAgentStart = false;
+  private activeOperationSawAgentEnd = false;
   private lastContinueDiagnostic: Record<string, unknown> | null = null;
   private harnessEventChain: Promise<void> = Promise.resolve();
   private harnessEventFailure: unknown = null;
@@ -480,28 +644,14 @@ export class PiRunner {
     return this.activeRunSignal ?? this.activeOperationAbortController?.signal;
   }
 
-  async getDebugState(): Promise<Record<string, unknown>> {
-    let sessionLeafId: string | null = null;
-    let sessionEntries: unknown[] | null = null;
-    let contextMessages: unknown[] | null = null;
-    try {
-      sessionLeafId = (await this.session?.getLeafId()) ?? null;
-    } catch (err) {
-      sessionLeafId = `error: ${err instanceof Error ? err.message : String(err)}`;
-    }
-    try {
-      sessionEntries = (await this.session?.getEntries()) ?? null;
-    } catch (err) {
-      sessionEntries = [{ error: err instanceof Error ? err.message : String(err) }];
-    }
-    try {
-      contextMessages = (await this.session?.buildContext())?.messages ?? null;
-    } catch (err) {
-      contextMessages = [{ error: err instanceof Error ? err.message : String(err) }];
-    }
+  getDebugState(): Record<string, unknown> {
+    const activeToolNames = this.extensionRuntime
+      ? this.computeActiveTools().map((tool) => tool.name)
+      : [];
     return {
       running: this.running,
       currentTurnId: this.currentTurnId,
+      activeToolNames,
       openInvocationIds: [...this.openInvocationIds],
       openToolInvocations: [...this.openToolInvocations.values()].map((invocation) => ({
         ...invocation,
@@ -525,6 +675,12 @@ export class PiRunner {
       recentHarnessEvents: [...this.recentHarnessEvents],
       recentTrajectoryEvents: [...this.recentTrajectoryEvents],
       lastErrors: [...this.lastErrors],
+      compaction: {
+        ...this.compactionDiagnostics,
+        lastFailure: this.compactionDiagnostics.lastFailure
+          ? { ...this.compactionDiagnostics.lastFailure }
+          : undefined,
+      },
       pendingProvenance: this.provenanceQueue.map((item) => ({
         kind: item.event.kind,
         eventId: item.eventId ?? null,
@@ -573,9 +729,10 @@ export class PiRunner {
           },
         ])
       ),
-      sessionLeafId,
-      sessionEntries,
-      contextMessages,
+      session: {
+        available: false,
+        reason: "session_debug_requires_async_io",
+      },
       approvalLevel: this._approvalLevel,
       model: this.resolvedModel
         ? {
@@ -594,28 +751,35 @@ export class PiRunner {
   ): Promise<boolean> {
     if (!this.options.gad || !this.currentTurnId) return false;
     const turnId = this.currentTurnId;
+    this.forceClosingTurnIds.add(turnId);
     this.running = false;
     this.activeAssistantMessage = null;
-    await this.flushProvenance();
-    await this.abandonOpenInvocations(summary);
-    await this.appendTrajectoryEvents([
-      {
-        event: {
-          kind: "turn.closed",
-          actor: this.agentActor(),
-          turnId,
-          payload: {
-            protocol: "agentic.trajectory.v1",
-            summary,
-            reason,
+    try {
+      await this.flushProvenance();
+      await this.abandonOpenInvocations(summary, turnId);
+      await this.appendTrajectoryEvents([
+        {
+          event: {
+            kind: "turn.closed",
+            actor: this.agentActor(),
+            turnId,
+            payload: {
+              protocol: "agentic.trajectory.v1",
+              summary,
+              reason,
+            },
+            createdAt: new Date().toISOString(),
           },
-          createdAt: new Date().toISOString(),
+          publishToChannel: true,
         },
-        publishToChannel: true,
-      },
-    ]);
-    if (this.currentTurnId === turnId) this.currentTurnId = null;
-    return true;
+      ]);
+      if (this.currentTurnId === turnId) this.currentTurnId = null;
+      this.openedTurnIds.delete(turnId);
+      this.turnCloseFailedIds.delete(turnId);
+      return true;
+    } finally {
+      this.forceClosingTurnIds.delete(turnId);
+    }
   }
 
   forgetOpenInvocation(invocationId: string): void {
@@ -676,6 +840,16 @@ export class PiRunner {
     return branch.some((entry: { id?: unknown }) => entry.id === ancestorEntryId);
   }
 
+  async getSessionBranchEntryIds(): Promise<string[]> {
+    if (!this.session) {
+      throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    }
+    const branch = await this.session.getBranch();
+    return branch
+      .map((entry: { id?: unknown }) => entry.id)
+      .filter((id): id is string => typeof id === "string");
+  }
+
   async init(): Promise<void> {
     const cwd = this.options.cwd ?? "/";
     this.currentResources = await loadNatStackResources({ rpc: this.options.rpc });
@@ -730,7 +904,7 @@ export class PiRunner {
 
     this.resolvedModel = resolveModel(this.options.model);
     this.session = await this.createSession();
-    await this.refreshRuntimeTools();
+    await this.refreshRuntimeTools("init");
 
     this.harness = new AgentHarness({
       env: createExecutionEnv(cwd, this.options.fs),
@@ -764,7 +938,9 @@ export class PiRunner {
 
     this.wireHarness();
     await this.surfaceOrphanMutationIntents();
-    await this.repairDurableOpenState();
+    if (this.options.repairDurableOpenStateOnInit !== false) {
+      await this.repairDurableOpenState();
+    }
   }
 
   private async createSession(): Promise<Session<TrajectorySessionMetadata | SessionMetadata>> {
@@ -789,8 +965,16 @@ export class PiRunner {
       branchId: gad.branchId,
       limit: 0,
     });
-    const state = events.reduce(reduceTrajectory, createInitialTrajectoryState());
+    const hydratedEvents = await Promise.all(events.map((event) => this.hydrateGadStoredRefs(event)));
+    const state = hydratedEvents.reduce(reduceTrajectory, createInitialTrajectoryState());
     this.restoredTrajectoryState = state;
+    const restoredOpenTurnId =
+      state.openTurnIdByBranch[gad.branchId] ??
+      Object.values(state.turns).find((turn) => turn.status === "open")?.turnId;
+    if (restoredOpenTurnId && state.turns[restoredOpenTurnId]?.status === "open") {
+      this.currentTurnId = restoredOpenTurnId;
+      this.openedTurnIds.add(restoredOpenTurnId);
+    }
     this.terminalInvocationIds.clear();
     for (const invocation of Object.values(state.invocations)) {
       if (this.isTerminalInvocationStatus(invocation.status)) {
@@ -814,8 +998,18 @@ export class PiRunner {
     return gad.trajectoryId ?? gad.workspaceId ?? gad.branchId;
   }
 
+  private async hydrateGadStoredRefs<T>(value: T): Promise<T> {
+    return hydrateStoredValueRefs(value, {
+      getText: (digest) => this.options.rpc.call<string | null>("main", "blobstore.getText", [digest]),
+    }) as Promise<T>;
+  }
+
   private sessionEntryEventId(entryId: string): string {
     return `${entryId}:pi-session-entry`;
+  }
+
+  private semanticEntryEventId(entryId: string, label: string, event: AgenticEvent): string {
+    return `${entryId}:${label}:${stableHash(stableJson(event))}`;
   }
 
   private async queueSessionEntryProvenance(entryId: string): Promise<void> {
@@ -859,11 +1053,18 @@ export class PiRunner {
       this.awaitingProviderFirstEvent = true;
       this.rememberCheckpoint("provider.request.ready", {
         providerRequestCount: this.providerRequestCount,
+        activeToolNames: this.computeActiveTools().map((tool) => tool.name),
       });
       try {
         const result = await this.hooks.emitBeforeProviderRequest(event, {
           signal: this.activeRunSignal ?? undefined,
         });
+        if (this.currentTurnId) {
+          await this.options.onTurnPhase?.({
+            turnId: this.currentTurnId,
+            phase: "model_start",
+          });
+        }
         this.rememberCheckpoint("provider.request.hooks_ok", {
           providerRequestCount: this.providerRequestCount,
           patchedStreamOptions: Boolean(result?.streamOptions),
@@ -877,6 +1078,62 @@ export class PiRunner {
         });
         throw err;
       }
+    });
+    this.harness.on("before_provider_payload", async (event) => {
+      const toolNames = providerPayloadToolNames(event.payload);
+      const expectedToolNames = this.lastHarnessToolNames ?? sortedToolNames(this.computeActiveTools());
+      const payloadDiff = diffToolNames(expectedToolNames, toolNames);
+      const missingExpected = missingNames(this.options.expectedChannelToolNames, toolNames);
+      this.rememberCheckpoint("provider.payload.ready", {
+        providerRequestCount: this.providerRequestCount,
+        toolNames,
+        expectedToolNames,
+        rosterToolNames: this.lastRosterToolNames,
+        ...(this.options.expectedChannelToolNames?.length
+          ? { expectedChannelToolNames: [...this.options.expectedChannelToolNames] }
+          : {}),
+        ...(missingExpected.length > 0 ? { missingExpectedChannelToolNames: missingExpected } : {}),
+        hasEval: toolNames.includes("eval"),
+      });
+      if (missingExpected.length > 0) {
+        console.warn("[PiRunner] Provider payload is missing expected channel tools", {
+          providerRequestCount: this.providerRequestCount,
+          missingExpectedChannelToolNames: missingExpected,
+          expectedChannelToolNames: this.options.expectedChannelToolNames,
+          rosterToolNames: this.lastRosterToolNames,
+          activeToolNames: expectedToolNames,
+          payloadToolNames: toolNames,
+          currentOperation: this.currentOperation,
+        });
+      }
+      if (!sameToolNames(expectedToolNames, toolNames)) {
+        console.warn("[PiRunner] Provider payload tool set differs from active harness tools", {
+          providerRequestCount: this.providerRequestCount,
+          missingFromPayload: payloadDiff.removed,
+          unexpectedInPayload: payloadDiff.added,
+          activeToolNames: expectedToolNames,
+          payloadToolNames: toolNames,
+          currentOperation: this.currentOperation,
+        });
+        this.rememberCheckpoint("provider.payload.tool_mismatch", {
+          providerRequestCount: this.providerRequestCount,
+          missingFromPayload: payloadDiff.removed,
+          unexpectedInPayload: payloadDiff.added,
+        });
+      }
+      const previousPayload = this.lastProviderPayloadToolNames;
+      if (!sameToolNames(previousPayload, toolNames) && previousPayload) {
+        const diff = diffToolNames(previousPayload, toolNames);
+        console.warn("[PiRunner] Provider payload advertised tool set changed", {
+          providerRequestCount: this.providerRequestCount,
+          added: diff.added,
+          removed: diff.removed,
+          payloadToolNames: toolNames,
+          currentOperation: this.currentOperation,
+        });
+      }
+      this.lastProviderPayloadToolNames = toolNames;
+      return undefined;
     });
     this.harness.on("before_agent_start", async () => {
       const signal = this.activeOperationSignal();
@@ -1045,14 +1302,72 @@ export class PiRunner {
     });
   }
 
-  private async refreshRuntimeTools(): Promise<void> {
+  private async applyHarnessTools(
+    tools: AgentTool<any>[],
+    reason: string,
+    details: Record<string, unknown> = {},
+  ): Promise<void> {
+    const names = sortedToolNames(tools);
+    const previous = this.lastHarnessToolNames;
+    const changed = !sameToolNames(previous, names);
+    const diff = diffToolNames(previous, names);
+    this.rememberCheckpoint("tools.apply", {
+      reason,
+      activeToolNames: names,
+      changed,
+      ...(changed && previous ? { added: diff.added, removed: diff.removed } : {}),
+      ...details,
+    });
+    if (changed && previous) {
+      console.warn("[PiRunner] Model-facing tool set changed", {
+        reason,
+        added: diff.added,
+        removed: diff.removed,
+        activeToolNames: names,
+        currentOperation: this.currentOperation,
+        ...details,
+      });
+    }
+    this.lastHarnessToolNames = names;
+    await this.harness!.setTools(tools, tools.map((tool) => tool.name));
+  }
+
+  private async refreshRuntimeTools(reason = "refreshRuntimeTools"): Promise<void> {
+    const rosterToolNames = [...new Set(this.options.rosterCallback().map((method) => method.name))].sort();
+    this.lastRosterToolNames = rosterToolNames;
+    const missingExpectedFromRoster = missingNames(this.options.expectedChannelToolNames, rosterToolNames);
     await this.extensionRuntime!.dispatch("session_start", { type: "session_start" });
+    const rawBase = this.extensionRuntime!.getActiveTools(this.builtinTools);
+    const rawCombined = [...rawBase, ...(this.options.extraTools ?? [])];
+    const rawFiltered = this.options.toolFilter
+      ? rawCombined.filter((tool) => this.options.toolFilter!(tool.name))
+      : rawCombined;
+    const { tools: uniqueTools, duplicates } = uniqueToolsByName(rawFiltered);
+    const tools = uniqueTools.map((tool) => this.wrapTool(tool));
+    this.rememberCheckpoint("tools.refreshed", {
+      reason,
+      activeToolNames: tools.map((tool) => tool.name),
+      rosterToolNames,
+      ...(this.options.expectedChannelToolNames?.length
+        ? { expectedChannelToolNames: [...this.options.expectedChannelToolNames] }
+        : {}),
+      ...(missingExpectedFromRoster.length > 0
+        ? { missingExpectedChannelToolNames: missingExpectedFromRoster }
+        : {}),
+      ...(duplicates.length > 0 ? { duplicateToolNames: duplicates } : {}),
+    });
+    if (missingExpectedFromRoster.length > 0) {
+      console.warn("[PiRunner] Channel roster is missing expected tools before model refresh", {
+        reason,
+        missingExpectedChannelToolNames: missingExpectedFromRoster,
+        expectedChannelToolNames: this.options.expectedChannelToolNames,
+        rosterToolNames,
+        activeToolNames: tools.map((tool) => tool.name),
+        currentOperation: this.currentOperation,
+      });
+    }
     if (this.harness) {
-      const tools = this.computeActiveTools();
-      await this.harness.setTools(
-        tools,
-        tools.map((tool) => tool.name)
-      );
+      await this.applyHarnessTools(tools, reason);
     }
   }
 
@@ -1062,7 +1377,8 @@ export class PiRunner {
     const filtered = this.options.toolFilter
       ? combined.filter((tool) => this.options.toolFilter!(tool.name))
       : combined;
-    return filtered.map((tool) => this.wrapTool(tool));
+    const { tools } = uniqueToolsByName(filtered);
+    return tools.map((tool) => this.wrapTool(tool));
   }
 
   private wrapTool(tool: AgentTool<any>): AgentTool<any> {
@@ -1086,21 +1402,34 @@ export class PiRunner {
   }
 
   private async prepareFollowingTurn(): Promise<void> {
-    await this.refreshRuntimeTools();
-    if (!this.options.onPrepareNextTurn || !this.harness || !this.session) return;
-    let snapshot = await this.buildSnapshot();
-    const replacement = await this.options.onPrepareNextTurn(snapshot);
-    if (replacement) snapshot = replacement;
+    if (!this.options.onPrepareNextTurn || !this.harness || !this.session) {
+      await this.refreshRuntimeTools("prepareFollowingTurn.no_hook");
+      return;
+    }
+    const beforeHook = await this.buildSnapshot();
+    const replacement = await this.options.onPrepareNextTurn(beforeHook);
+    await this.refreshRuntimeTools("prepareFollowingTurn.after_hook");
+    const refreshed = await this.buildSnapshot();
+    const snapshot = replacement
+      ? buildTurnSnapshot({
+          sessionLeafId: replacement.sessionLeafId,
+          messages: replacement.messages,
+          systemPrompt: replacement.systemPrompt,
+          model: replacement.model,
+          thinkingLevel: replacement.thinkingLevel,
+          tools: replacement.tools,
+          activeToolNames: replacement.activeToolNames,
+        })
+      : refreshed;
     if (snapshot.model !== this.harness.getModel()) {
       await this.harness.setModel(snapshot.model);
     }
     if (snapshot.thinkingLevel !== this.harness.getThinkingLevel()) {
       await this.harness.setThinkingLevel(snapshot.thinkingLevel);
     }
-    await this.harness.setTools(
-      snapshot.tools,
-      snapshot.tools.map((tool) => tool.name)
-    );
+    await this.applyHarnessTools(snapshot.tools, replacement ? "prepareFollowingTurn.replacement" : "prepareFollowingTurn.refreshed_snapshot", {
+      sessionLeafId: snapshot.sessionLeafId,
+    });
   }
 
   private async buildSnapshot(): Promise<TurnSnapshot> {
@@ -1122,9 +1451,26 @@ export class PiRunner {
     if (!this.harness || !this.session) return;
     const snapshot = await this.buildSnapshot();
     if (!this.compactionTrigger.shouldCompact(snapshot.messages, snapshot.model)) return;
+    this.compactionDiagnostics.attempts += 1;
+    this.compactionDiagnostics.lastAttemptAt = new Date().toISOString();
     try {
       await this.harness.compact();
+      this.compactionDiagnostics.consecutiveFailures = 0;
+      this.compactionDiagnostics.lastCompletedAt = new Date().toISOString();
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.compactionDiagnostics.failures += 1;
+      this.compactionDiagnostics.consecutiveFailures += 1;
+      this.compactionDiagnostics.lastFailure = {
+        message,
+        at: new Date().toISOString(),
+      };
+      this.rememberError("compaction", err);
+      this.rememberCheckpoint("compaction.failed", {
+        consecutiveFailures: this.compactionDiagnostics.consecutiveFailures,
+        failures: this.compactionDiagnostics.failures,
+        error: message,
+      });
       console.error("[PiRunner] compaction failed:", err);
     }
   }
@@ -1204,6 +1550,7 @@ export class PiRunner {
     capturedMessageEntryId?: string
   ): Promise<void> {
     const signal = _signal ?? this.activeRunSignal ?? undefined;
+    let correlatedEvent: CorrelatedAgentHarnessEvent = this.correlateHarnessEvent(event);
     try {
       this.rememberHarnessEvent(event);
       if (event.type === "agent_start") {
@@ -1213,6 +1560,8 @@ export class PiRunner {
         });
         this.running = true;
         await this.openCurrentTurn();
+        this.activeOperationSawAgentStart = true;
+        correlatedEvent = this.correlateHarnessEvent(event);
       }
       if (event.type === "message_start") {
         await this.handleMessageStart((event as { message: AgentMessage }).message);
@@ -1224,19 +1573,52 @@ export class PiRunner {
         await this.handleMessageEnd(event.message, capturedMessageEntryId);
       }
       if (event.type === "agent_end") {
-        await this.closeCurrentTurn();
-        this.running = false;
-        this.awaitingProviderFirstEvent = false;
+        if (correlatedEvent.natstack?.lifecycleMatched === false) {
+          this.rememberCheckpoint("agent.end.unmatched_ignored", {
+            operationId: correlatedEvent.natstack.operationId ?? null,
+            turnId: correlatedEvent.natstack.turnId ?? null,
+          });
+        } else {
+          await this.closeCurrentTurn();
+          this.running = false;
+          this.awaitingProviderFirstEvent = false;
+          this.options.uiCallbacks.setWorkingMessage(undefined);
+          this.activeOperationSawAgentEnd = true;
+        }
       }
-      await this.hooks.emitEvent(event, { signal });
+      await this.hooks.emitEvent(correlatedEvent, { signal });
     } catch (err) {
       this.failActiveRun(`harness.event.${event.type}`, err);
       throw err;
     } finally {
       if (event.type === "agent_end") {
-        this.activeRunSignal = null;
+        if (correlatedEvent.natstack?.lifecycleMatched !== false) {
+          this.activeRunSignal = null;
+          this.activeOperationSawAgentStart = false;
+        }
       }
     }
+  }
+
+  private correlateHarnessEvent(event: AgentHarnessEvent): CorrelatedAgentHarnessEvent {
+    const operationId = this.activeOperationId ?? undefined;
+    const turnId = this.currentTurnId ?? undefined;
+    const lifecycleMatched =
+      event.type === "agent_end" || event.type === "message_start" || event.type === "message_end"
+        ? operationId
+          ? this.activeOperationSawAgentStart
+          : undefined
+        : event.type === "agent_start"
+          ? true
+          : undefined;
+    return {
+      ...(event as Record<string, unknown>),
+      natstack: {
+        ...(operationId ? { operationId } : {}),
+        ...(turnId ? { turnId } : {}),
+        ...(lifecycleMatched !== undefined ? { lifecycleMatched } : {}),
+      },
+    } as CorrelatedAgentHarnessEvent;
   }
 
   private failActiveRun(scope: string, err: unknown): void {
@@ -1249,6 +1631,8 @@ export class PiRunner {
     this.activeAssistantMessage = null;
     this.awaitingProviderFirstEvent = false;
     this.activeRunSignal = null;
+    this.activeOperationSawAgentStart = false;
+    this.activeOperationSawAgentEnd = false;
     try {
       this.options.uiCallbacks.setWorkingMessage(undefined);
     } catch (callbackErr) {
@@ -1256,10 +1640,24 @@ export class PiRunner {
     }
   }
 
+  private assertOperationLifecycleComplete(scope: "prompt" | "continue", operationId: string): void {
+    if (this.activeOperationId !== operationId) return;
+    if (this.activeOperationSawAgentEnd) return;
+    const missing = this.activeOperationSawAgentStart ? "agent_end" : "agent_start";
+    const message = `Runner ${scope} completed without ${missing}`;
+    this.rememberCheckpoint(`${scope}.lifecycle_incomplete`, {
+      operationId,
+      missing,
+      turnId: this.currentTurnId,
+    });
+    throw new AgentWorkerError("runner_lifecycle", message);
+  }
+
   private async openCurrentTurn(): Promise<void> {
-    if (!this.options.gad || this.currentTurnId) return;
-    const turnId = brandId<TurnId>(uuidv7());
+    if (!this.options.gad) return;
+    const turnId = this.currentTurnId ?? brandId<TurnId>(uuidv7());
     this.currentTurnId = turnId;
+    if (this.openedTurnIds.has(turnId)) return;
     await this.appendTrajectoryEvents([
       {
         event: {
@@ -1275,11 +1673,13 @@ export class PiRunner {
         publishToChannel: true,
       },
     ]);
+    this.openedTurnIds.add(turnId);
   }
 
   private async closeCurrentTurn(): Promise<void> {
     if (!this.options.gad || !this.currentTurnId) return;
     const turnId = this.currentTurnId;
+    if (this.forceClosingTurnIds.has(turnId)) return;
     await this.flushProvenance();
     await this.appendTrajectoryEvents([
       {
@@ -1295,16 +1695,78 @@ export class PiRunner {
         },
         publishToChannel: true,
       },
-    ]);
+    ]).catch((err) => {
+      this.turnCloseFailedIds.add(turnId);
+      this.rememberError("trajectory.turn.close", err);
+      throw err;
+    });
     this.currentTurnId = null;
+    this.openedTurnIds.delete(turnId);
+    this.turnCloseFailedIds.delete(turnId);
   }
 
-  private async repairDurableOpenState(): Promise<void> {
+  private adoptTurnId(turnId?: string): boolean {
+    if (!turnId) return false;
+    if (this.currentTurnId && this.currentTurnId !== turnId) {
+      throw new AgentWorkerError(
+        "invalid_state",
+        `Cannot adopt turn ${turnId}; turn ${this.currentTurnId} is already open`
+      );
+    }
+    const adoptedFromIdle = this.currentTurnId == null;
+    this.currentTurnId = brandId<TurnId>(turnId);
+    return adoptedFromIdle;
+  }
+
+  private async settleFailedOperationTurn(
+    requestedTurnId: string | undefined,
+    reason: string,
+    summary: string
+  ): Promise<void> {
+    const currentTurnId = this.currentTurnId;
+    if (!currentTurnId) return;
+    if (requestedTurnId && currentTurnId !== requestedTurnId) return;
+    if (!this.openedTurnIds.has(currentTurnId)) {
+      this.currentTurnId = null;
+      this.rememberCheckpoint("turn.failed_unopened_cleared", {
+        turnId: currentTurnId,
+        requestedTurnId: requestedTurnId ?? null,
+      });
+      return;
+    }
+    if (this.turnCloseFailedIds.has(currentTurnId)) {
+      this.rememberCheckpoint("turn.failed_not_cleared_after_close_failure", {
+        turnId: currentTurnId,
+        requestedTurnId: requestedTurnId ?? null,
+      });
+      return;
+    }
+    try {
+      await this.forceCloseCurrentTurn(reason, summary);
+      this.rememberCheckpoint("turn.failed_closed", {
+        turnId: currentTurnId,
+        requestedTurnId: requestedTurnId ?? null,
+        reason,
+      });
+    } catch (err) {
+      this.rememberError("turn.failed_close", err);
+      this.rememberCheckpoint("turn.failed_close_error", {
+        turnId: currentTurnId,
+        requestedTurnId: requestedTurnId ?? null,
+        reason,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async repairDurableOpenState(opts: { closeOpenTurns?: boolean } = {}): Promise<void> {
     if (!this.options.gad || !this.restoredTrajectoryState) return;
+    const closeOpenTurns = opts.closeOpenTurns ?? true;
     const now = new Date().toISOString();
     const repairs: TrajectoryQueueItem[] = [];
     for (const invocation of Object.values(this.restoredTrajectoryState.invocations)) {
       if (this.isTerminalInvocationStatus(invocation.status)) continue;
+      if (this.terminalInvocationIds.has(invocation.invocationId)) continue;
       repairs.push({
         event: {
           kind: "invocation.abandoned",
@@ -1321,24 +1783,34 @@ export class PiRunner {
         publishToChannel: true,
       });
     }
-    for (const turn of Object.values(this.restoredTrajectoryState.turns)) {
-      if (turn.status !== "open") continue;
-      repairs.push({
-        event: {
-          kind: "turn.closed",
-          actor: turn.actor.kind === "agent" ? turn.actor : this.agentActor(),
-          turnId: turn.turnId,
-          payload: {
-            protocol: "agentic.trajectory.v1",
-            summary: "Runner restarted before turn closed",
-            reason: "runner_restarted",
+    const repairedTurnIds = new Set<string>();
+    if (closeOpenTurns) {
+      for (const turn of Object.values(this.restoredTrajectoryState.turns)) {
+        if (turn.status !== "open") continue;
+        repairedTurnIds.add(turn.turnId);
+        repairs.push({
+          event: {
+            kind: "turn.closed",
+            actor: turn.actor.kind === "agent" ? turn.actor : this.agentActor(),
+            turnId: turn.turnId,
+            payload: {
+              protocol: "agentic.trajectory.v1",
+              summary: "Runner restarted before turn closed",
+              reason: "runner_restarted",
+            },
+            createdAt: now,
           },
-          createdAt: now,
-        },
-        publishToChannel: true,
-      });
+          publishToChannel: true,
+        });
+      }
     }
     if (repairs.length > 0) await this.appendTrajectoryEvents(repairs);
+    if (this.currentTurnId && repairedTurnIds.has(this.currentTurnId)) {
+      this.currentTurnId = null;
+    }
+    for (const turnId of repairedTurnIds) {
+      this.openedTurnIds.delete(turnId);
+    }
     this.restoredTrajectoryState = null;
   }
 
@@ -1381,8 +1853,9 @@ export class PiRunner {
   private async handleMessageStart(message: AgentMessage): Promise<void> {
     if (!this.options.gad || this.messageRole(message) !== "assistant") return;
     const content = this.messageText(message);
+    const blocks = this.messageBlocksForTrajectory(this.messageBlocks(message));
     const messageId = this.activeAssistantMessage?.messageId ?? uuidv7();
-    this.activeAssistantMessage = { messageId, lastText: content, started: true };
+    this.activeAssistantMessage = { messageId, lastText: content, lastBlocks: blocks, started: true };
     await this.appendTrajectoryEvents([
       {
         event: {
@@ -1393,11 +1866,11 @@ export class PiRunner {
             protocol: "agentic.trajectory.v1",
             role: "assistant",
             content,
-            blocks: this.messageBlocksForTrajectory(this.messageBlocks(message)),
+            blocks,
           },
           createdAt: this.messageTimestamp(message),
         },
-        publishToChannel: this.shouldPublishMessageToChannel("assistant", content),
+        publishToChannel: this.shouldPublishMessageToChannel("assistant", content, blocks),
       },
     ]);
   }
@@ -1409,11 +1882,14 @@ export class PiRunner {
       return;
     }
     const content = this.messageText(message);
+    const blocks = this.messageBlocksForTrajectory(this.messageBlocks(message));
     const previous = this.activeAssistantMessage.lastText;
     const isAppendOnly = content.startsWith(previous);
     const delta = isAppendOnly ? content.slice(previous.length) : content;
+    const changedBlock = this.changedMessageBlock(this.activeAssistantMessage.lastBlocks, blocks);
     this.activeAssistantMessage.lastText = content;
-    if (!delta) return;
+    this.activeAssistantMessage.lastBlocks = blocks;
+    if (!delta && !changedBlock) return;
     await this.appendTrajectoryEvents([
       {
         event: {
@@ -1424,10 +1900,11 @@ export class PiRunner {
             protocol: "agentic.trajectory.v1",
             delta,
             ...(isAppendOnly ? {} : { replace: true }),
+            ...(changedBlock ? { block: changedBlock } : {}),
           },
           createdAt: new Date().toISOString(),
         },
-        publishToChannel: true,
+        publishToChannel: this.shouldPublishMessageToChannel("assistant", content, blocks),
       },
     ]);
   }
@@ -1439,22 +1916,24 @@ export class PiRunner {
   ): void {
     const role = this.messageRole(message);
     const blocks = this.messageBlocks(message);
+    const trajectoryBlocks = this.messageBlocksForTrajectory(blocks);
     const content = this.messageText(message);
-    this.provenanceQueue.push({
-      event: {
-        kind: "message.completed",
-        actor: this.actorForMessageRole(role),
-        causality: { messageId: brandId<MessageId>(visibleMessageId) },
-        payload: {
-          protocol: "agentic.trajectory.v1",
-          role,
-          content,
-          blocks: this.messageBlocksForTrajectory(blocks),
-        },
-        createdAt: this.messageTimestamp(message),
+    const completedEvent: AgenticEvent = {
+      kind: "message.completed",
+      actor: this.actorForMessageRole(role),
+      causality: { messageId: brandId<MessageId>(visibleMessageId) },
+      payload: {
+        protocol: "agentic.trajectory.v1",
+        role,
+        content,
+        blocks: trajectoryBlocks,
       },
-      eventId: messageEntryId,
-      publishToChannel: this.shouldPublishMessageToChannel(role, content),
+      createdAt: this.messageTimestamp(message),
+    };
+    this.provenanceQueue.push({
+      event: completedEvent,
+      eventId: this.semanticEntryEventId(messageEntryId, "message:completed", completedEvent),
+      publishToChannel: this.shouldPublishMessageToChannel(role, content, trajectoryBlocks),
     });
 
     for (const [blockIndex, block] of this.messageBlocks(message).entries()) {
@@ -1474,26 +1953,31 @@ export class PiRunner {
           ...(this.currentTurnId ? { turnId: this.currentTurnId } : {}),
           startedAt: this.messageTimestamp(message),
         });
-        this.provenanceQueue.push({
-          event: {
-            kind: "invocation.started",
-            actor: this.actorForMessageRole(role),
-            causality: {
-              messageId: brandId<MessageId>(visibleMessageId),
-              invocationId: brandId<InvocationId>(toolCallId),
-              modelToolCallId: toolCallId,
-            },
-            payload: {
-              protocol: "agentic.trajectory.v1",
-              name,
-              invocationType: "tool",
-              request,
-              transport: { kind: "local", awaiterId: toolCallId },
-              userVisible: true,
-            },
-            createdAt: this.messageTimestamp(message),
+        const startedEvent: AgenticEvent = {
+          kind: "invocation.started",
+          actor: this.actorForMessageRole(role),
+          causality: {
+            messageId: brandId<MessageId>(visibleMessageId),
+            invocationId: brandId<InvocationId>(toolCallId),
+            modelToolCallId: toolCallId,
           },
-          eventId: `${messageEntryId}:invocation:${toolCallId}:started`,
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            name,
+            invocationType: "tool",
+            request,
+            transport: { kind: "local", awaiterId: toolCallId },
+            userVisible: true,
+          },
+          createdAt: this.messageTimestamp(message),
+        };
+        this.provenanceQueue.push({
+          event: startedEvent,
+          eventId: this.semanticEntryEventId(
+            messageEntryId,
+            `invocation:${toolCallId}:started`,
+            startedEvent
+          ),
           publishToChannel: true,
         });
       }
@@ -1507,44 +1991,59 @@ export class PiRunner {
         this.openInvocationIds.delete(toolCallId);
         this.openToolInvocations.delete(toolCallId);
         if (this.terminalInvocationIds.has(toolCallId)) return;
-        this.provenanceQueue.push({
-          event: {
-            kind:
-              (message as { isError?: boolean }).isError === true
-                ? "invocation.failed"
-                : "invocation.completed",
-            actor: this.agentActor(),
-            causality: {
-              messageId: brandId<MessageId>(visibleMessageId),
-              invocationId: brandId<InvocationId>(toolCallId),
-              modelToolCallId: toolCallId,
-            },
-            payload:
-              (message as { isError?: boolean }).isError === true
-                ? {
-                    protocol: "agentic.trajectory.v1",
-                    reason: this.summarizeToolResult({
-                      content: (message as { content?: unknown }).content ?? [],
-                      details,
-                    } as AgentToolResult<unknown>),
-                    recoverable: true,
-                  }
-                : {
-                    protocol: "agentic.trajectory.v1",
-                    result: {
-                      toolCallId,
-                      toolName: typeof toolName === "string" ? toolName : "unknown",
-                      content: (message as { content?: unknown }).content ?? [],
-                      details,
-                    },
-                    summary: this.summarizeToolResult({
-                      content: (message as { content?: unknown }).content ?? [],
-                      details,
-                    } as AgentToolResult<unknown>),
-                  },
-            createdAt: this.messageTimestamp(message),
+        const terminalEvent: AgenticEvent = {
+          kind:
+            (message as { isError?: boolean }).isError === true
+              ? "invocation.failed"
+              : "invocation.completed",
+          actor: this.agentActor(),
+          causality: {
+            messageId: brandId<MessageId>(visibleMessageId),
+            invocationId: brandId<InvocationId>(toolCallId),
+            modelToolCallId: toolCallId,
           },
-          eventId: `${messageEntryId}:invocation:${toolCallId}:terminal`,
+          payload:
+            (message as { isError?: boolean }).isError === true
+              ? {
+                  protocol: "agentic.trajectory.v1",
+                  reason: this.summarizeToolResult({
+                    content: (message as { content?: unknown }).content ?? [],
+                    details,
+                  } as AgentToolResult<unknown>),
+                  error: {
+                    toolCallId,
+                    toolName: typeof toolName === "string" ? toolName : "unknown",
+                    text: this.toolResultText({
+                      content: (message as { content?: unknown }).content ?? [],
+                      details,
+                    } as AgentToolResult<unknown>),
+                    content: (message as { content?: unknown }).content ?? [],
+                    details,
+                  },
+                  recoverable: true,
+                }
+              : {
+                  protocol: "agentic.trajectory.v1",
+                  result: {
+                    toolCallId,
+                    toolName: typeof toolName === "string" ? toolName : "unknown",
+                    content: (message as { content?: unknown }).content ?? [],
+                    details,
+                  },
+                  summary: this.summarizeToolResult({
+                    content: (message as { content?: unknown }).content ?? [],
+                    details,
+                  } as AgentToolResult<unknown>),
+                },
+          createdAt: this.messageTimestamp(message),
+        };
+        this.provenanceQueue.push({
+          event: terminalEvent,
+          eventId: this.semanticEntryEventId(
+            messageEntryId,
+            `invocation:${toolCallId}:terminal`,
+            terminalEvent
+          ),
           publishToChannel: true,
         });
       }
@@ -1560,18 +2059,16 @@ export class PiRunner {
     } catch (err) {
       const outcome = await this.flushProvenanceIndividually(batch, err);
       if (outcome.sizeLimitError) {
-        if (outcome.sizeLimitError.error instanceof AgentWorkerError)
-          throw outcome.sizeLimitError.error;
-        throw this.provenanceSizeLimitError(
-          outcome.sizeLimitError.item,
-          outcome.sizeLimitError.error
-        );
+        const error = outcome.sizeLimitError.error instanceof AgentWorkerError
+          ? outcome.sizeLimitError.error
+          : this.provenanceSizeLimitError(outcome.sizeLimitError.item, outcome.sizeLimitError.error);
+        this.rememberError("trajectory.append.size_limit", error);
+        throw error;
       }
       if (outcome.permanentError) {
-        throw this.provenancePermanentError(
-          outcome.permanentError.item,
-          outcome.permanentError.error
-        );
+        const error = this.provenancePermanentError(outcome.permanentError.item, outcome.permanentError.error);
+        this.rememberError("trajectory.append.permanent", error);
+        throw error;
       }
       if (outcome.requeued > 0 || !isPermanentProvenanceError(err)) throw err;
     }
@@ -1728,6 +2225,14 @@ export class PiRunner {
             message,
             at: new Date().toISOString(),
           };
+          state.failureCount = (state.failureCount ?? 0) + 1;
+          this.rememberError("channel_publication.broadcast", err);
+          this.rememberCheckpoint("channel_publication.broadcast.failed", {
+            channelId,
+            envelopeIds,
+            failureCount: state.failureCount,
+            error: message,
+          });
           console.warn("[PiRunner] channel publication broadcast failed:", {
             channelId,
             envelopeIds,
@@ -2227,11 +2732,16 @@ export class PiRunner {
     };
   }
 
-  private shouldPublishMessageToChannel(role: MessageRole, content: string): boolean {
-    if (!content.trim()) return false;
+  private shouldPublishMessageToChannel(
+    role: MessageRole,
+    content: string,
+    blocks: MessageBlockInput[] = [],
+  ): boolean {
     // User messages are already durably published by PubSubClient.send().
     // Tool results are represented in the transcript by invocation events.
-    return role === "assistant" || role === "panel" || role === "system";
+    if (role !== "assistant" && role !== "panel" && role !== "system") return false;
+    return Boolean(content.trim()) ||
+      blocks.some((block) => block.type === "thinking" && Boolean(block.content?.trim()));
   }
 
   private messageTimestamp(message: AgentMessage): string {
@@ -2258,6 +2768,21 @@ export class PiRunner {
       })
       .filter(Boolean)
       .join("\n");
+  }
+
+  private changedMessageBlock(
+    previous: MessageBlockInput[],
+    next: MessageBlockInput[],
+  ): MessageBlockInput | undefined {
+    const max = Math.max(previous.length, next.length);
+    for (let index = 0; index < max; index++) {
+      const nextBlock = next[index];
+      if (!nextBlock) continue;
+      if (JSON.stringify(previous[index]) !== JSON.stringify(nextBlock)) {
+        return nextBlock;
+      }
+    }
+    return undefined;
   }
 
   private messageBlocksForTrajectory(blocks: unknown[]): MessageBlockInput[] {
@@ -2358,12 +2883,19 @@ export class PiRunner {
     return this.hooks.on("transform_context", listener);
   }
 
-  async prompt(input: RunnerTurnInput): Promise<void> {
+  async prompt(input: RunnerTurnInput, opts: RunnerTurnOptions = {}): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    this.adoptTurnId(opts.turnId);
+    const operationId = uuidv7();
+    this.activeOperationId = operationId;
+    this.activeOperationSawAgentStart = false;
+    this.activeOperationSawAgentEnd = false;
     const operationAbortController = new AbortController();
     this.activeOperationAbortController = operationAbortController;
     this.currentOperation = {
       kind: "prompt",
+      operationId,
+      turnId: this.currentTurnId,
       startedAt: new Date().toISOString(),
       input: {
         contentLength: input.content.length,
@@ -2374,14 +2906,20 @@ export class PiRunner {
     this.rememberCheckpoint("prompt.start", this.currentOperation.input);
     try {
       this.rememberCheckpoint("prompt.refresh_tools.start");
-      await this.refreshRuntimeTools();
+      await this.refreshRuntimeTools("prompt.preflight");
       this.rememberCheckpoint("prompt.refresh_tools.ok");
       this.rememberCheckpoint("prompt.harness.start");
       await this.runHarnessOperation("prompt", () =>
         this.harness!.prompt(input.content, input.images ? { images: input.images } : undefined)
       );
+      this.assertOperationLifecycleComplete("prompt", operationId);
       this.rememberCheckpoint("prompt.harness.ok");
     } catch (err) {
+      await this.settleFailedOperationTurn(
+        opts.turnId,
+        "work_failed",
+        "Agent turn failed before completion"
+      );
       this.rememberError("prompt", err);
       this.rememberCheckpoint("prompt.error", {
         error: err instanceof Error ? err.message : String(err),
@@ -2390,6 +2928,11 @@ export class PiRunner {
     } finally {
       if (this.activeOperationAbortController === operationAbortController) {
         this.activeOperationAbortController = null;
+      }
+      if (this.activeOperationId === operationId) {
+        this.activeOperationId = null;
+        this.activeOperationSawAgentStart = false;
+        this.activeOperationSawAgentEnd = false;
       }
       this.currentOperation = null;
     }
@@ -2449,12 +2992,19 @@ export class PiRunner {
     }
   }
 
-  async continueAgent(): Promise<void> {
+  async continueAgent(opts: RunnerTurnOptions = {}): Promise<void> {
     if (!this.harness) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    this.adoptTurnId(opts.turnId);
+    const operationId = uuidv7();
+    this.activeOperationId = operationId;
+    this.activeOperationSawAgentStart = false;
+    this.activeOperationSawAgentEnd = false;
     const operationAbortController = new AbortController();
     this.activeOperationAbortController = operationAbortController;
     this.currentOperation = {
       kind: "continue",
+      operationId,
+      turnId: this.currentTurnId,
       startedAt: new Date().toISOString(),
     };
     this.rememberCheckpoint("continue.start");
@@ -2463,12 +3013,18 @@ export class PiRunner {
       await this.prepareSessionForContinue();
       this.rememberCheckpoint("continue.preflight.ok");
       this.rememberCheckpoint("continue.refresh_tools.start");
-      await this.refreshRuntimeTools();
+      await this.refreshRuntimeTools("continue.preflight");
       this.rememberCheckpoint("continue.refresh_tools.ok");
       this.rememberCheckpoint("continue.harness.start");
       await this.runHarnessOperation("continue", () => this.harness!.continue());
+      this.assertOperationLifecycleComplete("continue", operationId);
       this.rememberCheckpoint("continue.harness.ok");
     } catch (err) {
+      await this.settleFailedOperationTurn(
+        opts.turnId,
+        "work_failed",
+        "Agent turn failed before completion"
+      );
       this.rememberError("continue", err);
       this.rememberCheckpoint("continue.error", {
         error: err instanceof Error ? err.message : String(err),
@@ -2478,8 +3034,60 @@ export class PiRunner {
       if (this.activeOperationAbortController === operationAbortController) {
         this.activeOperationAbortController = null;
       }
+      if (this.activeOperationId === operationId) {
+        this.activeOperationId = null;
+        this.activeOperationSawAgentStart = false;
+        this.activeOperationSawAgentEnd = false;
+      }
       this.currentOperation = null;
     }
+  }
+
+  async getContinueReadiness(): Promise<{
+    continuable: boolean;
+    reason?: string;
+    lastRole?: string | null;
+    lastStopReason?: string | null;
+    leafId?: string | null;
+  }> {
+    if (!this.session) throw new AgentWorkerError("invalid_state", "PiRunner not initialized");
+    const [leafId, branch, context] = await Promise.all([
+      this.session.getLeafId(),
+      this.session.getBranch(),
+      this.session.buildContext(),
+    ]);
+    const last = context.messages[context.messages.length - 1] as
+      | ({ role?: string; stopReason?: string } & AgentMessage)
+      | undefined;
+    if (!last) return { continuable: false, reason: "empty_context", leafId };
+    if (last.role === "user" || last.role === "toolResult") {
+      return { continuable: true, lastRole: last.role, leafId };
+    }
+    const leafEntry = branch[branch.length - 1] as
+      | { type?: string; id?: string; message?: AgentMessage }
+      | undefined;
+    if (
+      last.role === "assistant" &&
+      last.stopReason === "aborted" &&
+      !this.assistantMessageHasVisibleContent(last) &&
+      leafEntry?.type === "message" &&
+      leafEntry.id === leafId
+    ) {
+      return {
+        continuable: true,
+        reason: "repairable_empty_aborted_assistant_leaf",
+        lastRole: last.role,
+        lastStopReason: last.stopReason,
+        leafId,
+      };
+    }
+    return {
+      continuable: false,
+      reason: "unsupported_last_role",
+      lastRole: last.role ?? null,
+      lastStopReason: last.stopReason ?? null,
+      leafId,
+    };
   }
 
   private async prepareSessionForContinue(): Promise<void> {
@@ -2560,7 +3168,7 @@ export class PiRunner {
     await this.abandonOpenInvocations("User interrupted execution");
   }
 
-  private async abandonOpenInvocations(reason: string): Promise<void> {
+  private async abandonOpenInvocations(reason: string, turnId?: string): Promise<void> {
     if (this.openInvocationIds.size === 0) return;
     const now = new Date().toISOString();
     const items = [...this.openInvocationIds].map(
@@ -2568,6 +3176,7 @@ export class PiRunner {
         event: {
           kind: "invocation.abandoned",
           actor: this.agentActor(),
+          ...(turnId ? { turnId: brandId<TurnId>(turnId) } : {}),
           causality: {
             invocationId: brandId<InvocationId>(toolCallId),
             modelToolCallId: toolCallId,
@@ -2908,6 +3517,27 @@ function isPermanentProvenanceError(err: unknown): boolean {
     /Cannot resolve unknown approval/u.test(message) ||
     /Cannot resolve approval .* more than once/u.test(message)
   );
+}
+
+function stableJson(value: unknown): string {
+  if (value === undefined) return "undefined";
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => stableJson(item)).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return `{${entries
+    .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+    .join(",")}}`;
+}
+
+function stableHash(value: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= BigInt(value.charCodeAt(index));
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16).padStart(16, "0");
 }
 
 function isProvenanceSizeLimitError(err: unknown): boolean {

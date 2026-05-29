@@ -45,6 +45,15 @@ eval({ code: `
 
 `console.log/warn/error/info/debug` output streams to the agent in real-time as the code runs. The final console output is also included in the return value.
 
+## Large Return Values
+
+Durable eval results are capped at the channel-method boundary. If a return
+value is too large to inline safely, the terminal invocation event contains an
+omitted-result summary with byte count, preview, type/key summary, and a
+blobstore pointer to the full JSON. Store broad query results in `scope` and
+return compact summaries; fetch exact blobs or envelopes only after you know the
+artifact you need.
+
 ## Dynamic Imports
 
 ### Workspace packages — auto-resolved
@@ -67,7 +76,7 @@ To pin a specific git ref (branch, tag, or commit SHA), use the `imports` parame
 eval({ code: `...`, imports: { "@workspace-skills/paneldev": "my-branch" } })
 ```
 
-**Important:** Workspace packages are built from git, not from the working tree. If you edit source files, you must **commit and push** before changes take effect. Use `commitAndPush` from the paneldev skill or the GitClient API.
+**Important:** Workspace runtime units are built from git, not from the working tree. If you edit source files under `workspace/apps/`, `workspace/extensions/`, `workspace/packages/`, `workspace/panels/`, `workspace/workers/`, or `workspace/skills/`, you must **commit and push** before changes take effect. Use `commitAndPush` from the paneldev skill or the GitClient API.
 
 Context folders are isolated working trees with context-local refs, index, HEAD, config, and hooks. Only `.git/objects` is shared, through a validated symlink to the canonical source repo object store. Local commits can add immutable loose objects before push; approval gates canonical ref movement and source working tree updates. Do not manually edit `.git/objects`, and do not assume another context's push resets your current context.
 
@@ -190,7 +199,7 @@ Scope is serialized per-property when persisted:
 
 - **Kept:** primitives, plain objects, arrays, Date, Map, Set, RegExp
 - **Dropped:** functions, symbols, class instances, WeakRef/WeakMap/WeakSet, circular refs, depth > 20
-- **Partial restoration:** if `scope.browser` is a panel handle, after reload `scope.browser.id` and `scope.browser.title` survive but function-valued fields such as `scope.browser.cdp.page` are lost
+- **Partial restoration:** if `scope.browser` is a panel handle, after reload `scope.browser.id` and `scope.browser.title` survive but function-valued fields such as `scope.browser.cdp.playwrightPage` are lost
 
 On reload, a system message lists what was restored, partially restored, and lost.
 
@@ -259,22 +268,86 @@ eval({ code: `
 
 ## Git Operations
 
-Use `GitClient` from `@natstack/git` — do NOT use `node:child_process` or shell commands.
+Use the routed `git.client()` helper from `@workspace/runtime` — do NOT use `node:child_process`, shell commands, or manually construct `new GitClient(fs, { serverUrl: gitConfig.serverUrl, token })`.
 
 ```
 eval({ code: `
-  import { fs, gitConfig } from "@workspace/runtime";
-  import { GitClient } from "@natstack/git";
+  import { fs, git } from "@workspace/runtime";
 
-  const git = new GitClient(fs, { serverUrl: gitConfig.serverUrl, token: gitConfig.token });
-  await git.init("/my-repo", "main");
+  const client = git.client();
+  await client.init("/my-repo", "main");
   await fs.writeFile("/my-repo/hello.txt", "Hello world");
-  await git.addAll("/my-repo");
-  const sha = await git.commit({ dir: "/my-repo", message: "Initial commit" });
+  await client.addAll("/my-repo");
+  const sha = await client.commit({ dir: "/my-repo", message: "Initial commit" });
   console.log("Committed:", sha);
-  const log = await git.log("/my-repo");
+  const status = await client.status("/my-repo");
+  console.log("Changed files:", status.files);
+  const log = await client.log("/my-repo");
   console.log("History:", log);
 ` })
+```
+
+Use `client.status(dir)` for normal structured status. If you specifically need
+isomorphic-git's raw `[filepath, HEAD, WORKDIR, STAGE]` tuples, use
+`client.statusMatrix(dir)`.
+
+## Large Results And Diagnostics
+
+Do not return broad hydrated channel histories, full `scope.results`, large DOM
+dumps, or full GAD payloads from `eval`. Large values are intentionally stored as
+blob refs in trajectory/channel storage; broad hydrated reads can pull them back
+into the transcript and hide the useful part of the report.
+
+Prefer compact inspectors first:
+
+```ts
+import { gad } from "@workspace/runtime";
+
+return await gad.inspectChannelEnvelopes({ channelId, limit: 50 });
+return await gad.inspectTurnState({ branchId });
+return await gad.inspectInvocationState({ transportCallId });
+return await gad.inspectPublicationIntegrity({ channelId });
+```
+
+If you need a large artifact, return its digest, byte count, and a small head
+sample. Keep the full object in `scope` only for interactive follow-up.
+
+Preferred return shape for large artifacts:
+
+```ts
+const text = JSON.stringify(largeValue);
+scope.largeValue = largeValue;
+return {
+  omitted: true,
+  reason: "large diagnostic value retained in scope",
+  bytes: new TextEncoder().encode(text).byteLength,
+  type: Array.isArray(largeValue) ? "array" : typeof largeValue,
+  keys: largeValue && typeof largeValue === "object"
+    ? Object.keys(largeValue).slice(0, 20)
+    : [],
+  preview: text.slice(0, 1000),
+};
+```
+
+The method transport also caps oversized durable results and records a blob
+digest when storage is available. Agents should still return bounded summaries
+because compact results are easier to inspect and less likely to hide the
+important error message.
+
+## Extension Calls
+
+`extensions.use(name)` is synchronous and returns a method proxy. Do not `await`
+it and do not attach `.catch(...)` to it. Catch the actual extension method
+Promise instead:
+
+```ts
+import { extensions } from "@workspace/runtime";
+
+const typecheck = extensions.use("@workspace-extensions/typecheck-service");
+const result = await typecheck.checkPanel("panels/spectrolite").catch((error) => ({
+  error: String(error),
+}));
+return result;
 ```
 
 For read-only queries, RPC shortcuts work too:
@@ -325,7 +398,7 @@ eval({ code: `
 
   // Use openPanel when you need page automation
   const handle = await openPanel("https://example.com");
-  const page = await handle.cdp.page();
+  const page = await handle.cdp.playwrightPage();
   console.log(await page.title());
 ` })
 ```

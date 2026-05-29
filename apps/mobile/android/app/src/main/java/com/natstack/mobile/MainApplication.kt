@@ -18,10 +18,14 @@ class MainApplication : Application(), ReactApplication {
         object : DefaultReactNativeHost(this) {
             override fun getPackages(): List<ReactPackage> =
                 PackageList(this).packages.apply {
+                    add(NatStackMobileHostPackage())
                     add(OAuthLoopbackPackage())
                 }
 
             override fun getJSMainModuleName(): String = "index"
+
+            override fun getJSBundleFile(): String? =
+                NatStackBundleStore.activeBundlePath(this@MainApplication)
 
             override fun getUseDeveloperSupport(): Boolean = BuildConfig.REACT_NATIVE_DEV_SUPPORT
 

@@ -114,7 +114,9 @@ export interface ChatCoreState {
   // Actions
   sendMessage: (attachments?: AttachmentInput[], options?: { mentions?: string[]; replyTo?: string }) => Promise<void>;
   handleInterruptAgent: (agentId: string, messageId?: string, agentHandle?: string) => Promise<void>;
+  handleCancelInvocation: (transportCallId: string) => Promise<void>;
   handleCallMethod: (providerId: string, methodName: string, args: unknown) => void;
+  handleCallMethodResult: (providerId: string, methodName: string, args: unknown) => Promise<unknown>;
   stopTyping: () => Promise<void>;
 
   // Agent state
@@ -479,7 +481,7 @@ export function useChatCore({
       if (defaultTitle) {
         defaultTitleSetRef.current = true;
         document.title = defaultTitle;
-        void clientRef.current.updateChannelConfig({ title: defaultTitle }).catch(() => {});
+        void clientRef.current.updateChannelConfig({ title: defaultTitle, titleExplicit: false }).catch(() => {});
       }
     } catch (err) {
       setInput(text);
@@ -512,7 +514,7 @@ export function useChatCore({
     if (defaultTitle) {
       defaultTitleSetRef.current = true;
       document.title = defaultTitle;
-      void client.updateChannelConfig({ title: defaultTitle }).catch(() => {});
+      void client.updateChannelConfig({ title: defaultTitle, titleExplicit: false }).catch(() => {});
     }
 
     client.send(prompt, {
@@ -553,6 +555,27 @@ export function useChatCore({
     [],
   );
 
+  const handleCancelInvocation = useCallback(async (transportCallId: string) => {
+    const c = clientRef.current;
+    if (!c) return;
+    // Stop a method this panel is executing (e.g. an eval) immediately and
+    // in-process by firing its local AbortController. The executing method's
+    // own catch publishes invocation.failed, which settles the agent's pending
+    // result — so the turn still learns the call ended. We do this BEFORE the
+    // channel round-trip because the round-trip is unreliable for stopping
+    // local work (the DO may have no pending_calls row left to cancel, so it
+    // never broadcasts invocation.cancelled).
+    const abortedLocally = c.abortExecutingMethod(transportCallId);
+    try {
+      // Still notify the channel so its pending_calls bookkeeping is cleared
+      // and any remote provider executing the call is asked to stop. Best
+      // effort — when we already aborted locally this is just cleanup.
+      await c.cancelMethodCall(transportCallId);
+    } catch (err) {
+      if (!abortedLocally) console.warn("[Chat] Cancel invocation failed:", err);
+    }
+  }, []);
+
   const handleCallMethod = useCallback(
     (providerId: string, methodName: string, args: unknown) => {
       const c = clientRef.current;
@@ -561,6 +584,19 @@ export function useChatCore({
       void (handle as { result?: Promise<unknown> }).result?.catch((error: unknown) => {
         console.error(`Failed to call method ${methodName} on ${providerId}:`, error);
       });
+    },
+    [],
+  );
+
+  /** Like handleCallMethod, but awaits and returns the provider's result payload.
+   *  Used by settings UIs that need to read getAgentSettings / confirm setters. */
+  const handleCallMethodResult = useCallback(
+    async (providerId: string, methodName: string, args: unknown): Promise<unknown> => {
+      const c = clientRef.current;
+      if (!c) throw new Error("Not connected to channel");
+      const handle = c.callMethod(providerId, methodName, args);
+      const result = (handle as { result?: Promise<unknown> }).result;
+      return result ? await result : undefined;
     },
     [],
   );
@@ -638,7 +674,9 @@ export function useChatCore({
     messageTypes,
     sendMessage,
     handleInterruptAgent,
+    handleCancelInvocation,
     handleCallMethod,
+    handleCallMethodResult,
     stopTyping,
     debugEvents,
     dirtyRepoWarnings,

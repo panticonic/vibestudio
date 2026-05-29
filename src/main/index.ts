@@ -7,6 +7,7 @@ import {
   ipcMain,
   shell,
   type Session,
+  type WebContents,
 } from "electron";
 import * as path from "path";
 // Silence Electron security warnings in dev; panels run in isolated webviews.
@@ -50,18 +51,13 @@ process.on("unhandledRejection", (reason) => {
 dialog.showErrorBox = logSuppressedErrorDialog;
 
 app.setName(APP_NAME);
-if (!IS_HEADLESS_HOST && !app.requestSingleInstanceLock()) {
-  app.exit(0);
-  process.exit(0);
-}
-registerProtocol();
-installEarlyOpenUrlBuffer();
-enqueueFirstArgvLink(process.argv);
 
 import { PanelRegistry } from "@natstack/shared/panelRegistry";
 import { asPanelSlotId } from "@natstack/shared/panel/ids";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { PanelView } from "./panelView.js";
+import { AppOrchestrator } from "./appOrchestrator.js";
+import { resolveElectronViewCaller } from "./callerResolution.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
 import {
   setupMenu,
@@ -70,20 +66,24 @@ import {
   setMenuViewManager,
   setMenuEventService,
 } from "./menu.js";
-import { getAppRoot } from "./paths.js";
+import { getAppRoot, getResourcesPath } from "./paths.js";
 import { loadCentralEnv, deleteWorkspaceDir } from "@natstack/shared/workspace/loader";
 import { CentralDataManager } from "@natstack/shared/centralData";
 import {
   resolveStartupMode,
   resolveLocalStartupMode,
+  shouldRequestSingleInstanceLock,
   getRemoteUserDataDir,
   type StartupMode,
 } from "./startupMode.js";
 import { establishServerSession, type SessionConnection } from "./serverSession.js";
+import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
 import { EventService } from "@natstack/shared/eventsService";
 import type { EventName } from "@natstack/shared/events";
 import { createServerEventBridge } from "./serverEventBridge.js";
+import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
+import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { installPinnedTlsForAllPartitions } from "./tlsPinning.js";
 import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
 
@@ -93,6 +93,7 @@ import {
   createVerifiedCaller,
   ServiceDispatcher,
   parseServiceMethod,
+  type ServiceContext,
 } from "@natstack/shared/serviceDispatcher";
 // RpcServer type: inline import("...") used intentionally — main/ constructs
 // server objects via dynamic import at runtime; inline types are acceptable
@@ -155,6 +156,20 @@ try {
   process.exit(1);
 }
 
+if (
+  shouldRequestSingleInstanceLock(startupMode, {
+    isHeadlessHost: IS_HEADLESS_HOST,
+    isDevelopment: isDev(),
+  }) &&
+  !app.requestSingleInstanceLock()
+) {
+  app.exit(0);
+  process.exit(0);
+}
+registerProtocol();
+installEarlyOpenUrlBuffer();
+enqueueFirstArgvLink(process.argv);
+
 if (startupMode.kind === "local") {
   workspaceId = startupMode.workspaceId;
   app.setPath(
@@ -193,6 +208,7 @@ let cdpHostProvider: CdpHostProvider | null = null;
 let panelRegistry: PanelRegistry | null = null;
 let panelOrchestrator: PanelOrchestrator | null = null;
 let panelView: PanelView | null = null;
+let appOrchestrator: AppOrchestrator | null = null;
 let shellCore: ReturnType<
   typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
 > | null = null;
@@ -219,6 +235,116 @@ let browserDataStoreForCredentialCapture: {
     >;
   };
 } | null = null;
+
+type AppCapability = import("@natstack/shared/unitManifest").AppCapability;
+
+const APP_FS_READ_METHODS = new Set([
+  "readFile",
+  "readdir",
+  "stat",
+  "lstat",
+  "exists",
+  "realpath",
+  "readlink",
+  "handleRead",
+  "handleStat",
+]);
+
+const APP_FS_WRITE_METHODS = new Set([
+  "writeFile",
+  "appendFile",
+  "mkdir",
+  "rmdir",
+  "rm",
+  "unlink",
+  "rename",
+  "truncate",
+  "chmod",
+  "chown",
+  "utimes",
+  "handleWrite",
+  "mktemp",
+  "symlink",
+]);
+
+function openFlagsRequireWrite(flags: unknown): boolean {
+  if (flags === undefined || flags === null) return false;
+  if (typeof flags === "number") return true;
+  if (typeof flags !== "string") return true;
+  return flags.includes("w") || flags.includes("a") || flags.includes("+");
+}
+
+function appFsCapabilitiesForMethod(
+  method: string,
+  args: readonly unknown[]
+): readonly AppCapability[] {
+  if (APP_FS_READ_METHODS.has(method)) return ["fs-read"];
+  if (APP_FS_WRITE_METHODS.has(method)) return ["fs-write"];
+  if (method === "copyFile") return ["fs-read", "fs-write"];
+  if (method === "handleClose") return [];
+  if (method === "access") {
+    const mode = typeof args[1] === "number" ? args[1] : 0;
+    return mode & 2 ? ["fs-write"] : ["fs-read"];
+  }
+  if (method === "open") return [openFlagsRequireWrite(args[1]) ? "fs-write" : "fs-read"];
+  throw new Error(`Unsupported app fs method: ${method}`);
+}
+
+function authorizeAppServerCall(
+  callerId: string,
+  service: string,
+  method: string,
+  args: readonly unknown[]
+): void {
+  if (service !== "fs") return;
+  const required = appFsCapabilitiesForMethod(method, args);
+  if (required.length === 0) return;
+  const viewInfo = viewManager?.getViewInfo(callerId);
+  if (viewInfo?.type !== "app") {
+    throw new Error(`fs.${method} requires an active app view for ${callerId}`);
+  }
+  for (const capability of required) {
+    if (!viewInfo.capabilities.includes(capability)) {
+      throw new Error(`fs.${method} requires app capability '${capability}' for ${callerId}`);
+    }
+  }
+}
+
+const INCOMING_PAIR_LINK_CAPABILITY: AppCapability = "incoming-pair-links";
+
+function canAccessIncomingPairLinks(webContentsId: number): boolean {
+  if (!viewManager) return false;
+  const shellContents = viewManager.getShellWebContents();
+  if (shellContents && !shellContents.isDestroyed() && shellContents.id === webContentsId) {
+    return true;
+  }
+  const viewId = viewManager.findViewIdByWebContentsId(webContentsId);
+  if (!viewId) return false;
+  const viewInfo = viewManager.getViewInfo(viewId);
+  return viewInfo?.type === "app" && viewInfo.capabilities.includes(INCOMING_PAIR_LINK_CAPABILITY);
+}
+
+function sendIncomingPairLink(link: unknown): void {
+  if (!viewManager) return;
+  const shellContents = viewManager.getShellWebContents();
+  if (shellContents && !shellContents.isDestroyed()) {
+    shellContents.send("natstack:incoming-pair-link", link);
+  }
+  for (const viewId of viewManager.getViewIds()) {
+    if (viewId === "shell") continue;
+    const viewInfo = viewManager.getViewInfo(viewId);
+    if (
+      viewInfo?.type !== "app" ||
+      !viewInfo.capabilities.includes(INCOMING_PAIR_LINK_CAPABILITY)
+    ) {
+      continue;
+    }
+    const contents = viewManager.getWebContents(viewId);
+    if (contents && !contents.isDestroyed()) {
+      contents.send("natstack:incoming-pair-link", link);
+    }
+  }
+}
 
 function createCdpRegistrationAdapter() {
   return {
@@ -719,6 +845,25 @@ function installRemoteTlsPinning(mode: StartupMode): void {
   installPinnedTlsForAllPartitions(mode.remoteUrl.hostname, expectedFingerprint);
 }
 
+async function syncElectronHostTarget(serverClient: Pick<ServerClient, "call">): Promise<void> {
+  try {
+    const result = await serverClient.call("workspace", "hostTargets.launch", ["electron"]);
+    const launched =
+      typeof result === "object" &&
+      result !== null &&
+      (result as { launched?: unknown }).launched === true;
+    if (!launched) {
+      log.warn("[apps] No launchable Electron host target is selected");
+    }
+  } catch (error) {
+    log.warn(
+      `[apps] Failed to synchronize Electron host target: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+}
+
 // =============================================================================
 // Window Creation
 // =============================================================================
@@ -742,7 +887,7 @@ function createWindow(): void {
   // Initialize ViewManager with shell view (IPC transport — no WS args needed)
   viewManager = new ViewManager({
     window: mainWindow,
-    shellPreload: path.join(__dirname, "preload.cjs"),
+    shellPreload: path.join(__dirname, "bootstrapPreload.cjs"),
     shellOverlayPreload: path.join(__dirname, "shellOverlayPreload.cjs"),
     shellHtmlPath: path.join(__dirname, "index.html"),
     shellAdditionalArguments: [],
@@ -759,6 +904,7 @@ function createWindow(): void {
     mainWindow = null;
     viewManager = null;
     panelView = null; // Clear so getPanelView() returns null until recreated
+    appOrchestrator = null;
   });
 
   if (viewManager && panelRegistry && panelOrchestrator && serverSession) {
@@ -778,9 +924,22 @@ function createWindow(): void {
       autofillManager: autofillManager ?? undefined,
       autofillPreloadPath: path.join(__dirname, "autofillPreload.cjs"),
       panelPreloadPath: path.join(__dirname, "panelPreload.cjs"),
+      appPreloadPath: path.join(__dirname, "appPreload.cjs"),
       browserPreloadPath: path.join(__dirname, "browserPreload.cjs"),
       browserHistoryRecorder,
     });
+    appOrchestrator = new AppOrchestrator({
+      getPanelView: () => panelView,
+      statePath: startupMode.kind === "remote" ? getRemoteUserDataDir() : serverSession.statePath,
+    });
+    void syncElectronHostTarget(serverSession.serverClient);
+    void appOrchestrator
+      .loadBakedApp(path.join(getResourcesPath(), "baked-app"))
+      .catch((error: unknown) => {
+        log.error(
+          `[dist] Failed to load baked app payload: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
 
     // Wire autofill overlay to window, z-order changes, and panel switches
     if (autofillManager && mainWindow && viewManager) {
@@ -843,15 +1002,17 @@ function createWindow(): void {
 app.on("ready", async () => {
   performance.mark("startup:ready");
 
-  ipcMain.handle("natstack:drain-pair-link", () => getPendingConnectLink());
+  ipcMain.handle("natstack:drain-pair-link", (event) => {
+    if (!canAccessIncomingPairLinks(event.sender.id)) {
+      throw new Error("Incoming pairing links require app capability 'incoming-pair-links'");
+    }
+    return getPendingConnectLink();
+  });
   onConnectLink((link) => {
     if (IS_HEADLESS_HOST) return;
-    const wc = viewManager?.getShellWebContents();
-    if (wc && !wc.isDestroyed()) {
-      wc.send("natstack:incoming-pair-link", link);
-      mainWindow?.show();
-      mainWindow?.focus();
-    }
+    sendIncomingPairLink(link);
+    mainWindow?.show();
+    mainWindow?.focus();
   });
 
   // Default to browser CORS. For panel fetch/XHR responses, relax CORS only
@@ -881,16 +1042,9 @@ app.on("ready", async () => {
   //
   // Without these, Electron grants panel webContents the ability to request
   // geolocation, notifications, microphone, camera, mediaKeySystem, midi,
-  // pointerLock, display-capture, etc. — and on browser panels (which load
-  // arbitrary external URLs) any site could prompt the user. We default-deny
-  // a known-sensitive set on every session that gets created (default,
-  // persist:browser, persist:panel:*).
-  //
-  // TODO(security): the shell partition currently shares the default session
-  // with panels. Once shell is moved to its own partition (see the related
-  // hardening work in src/main/viewManager.ts and the shell BrowserWindow
-  // setup), the shell partition can be allowed to request these permissions
-  // while panel partitions stay default-deny.
+  // pointerLock, display-capture, etc. Browser panels load arbitrary external
+  // URLs, so unknown/panel senders stay denied. App senders are allowed only
+  // when their active app manifest declared the matching capability.
   // -------------------------------------------------------------------------
   const SENSITIVE_PERMISSIONS = new Set<string>([
     "geolocation",
@@ -905,9 +1059,43 @@ app.on("ready", async () => {
     "display-capture",
   ]);
 
+  const capabilityForElectronPermission = (
+    permission: string
+  ): import("@natstack/shared/unitManifest").AppCapability | null => {
+    switch (permission) {
+      case "notifications":
+        return "notifications";
+      case "openExternal":
+        return "open-external";
+      case "fullscreen":
+      case "pointerLock":
+      case "display-capture":
+        return "window-management";
+      default:
+        return null;
+    }
+  };
+
+  const appWebContentsHasPermissionCapability = (
+    contents: WebContents | null | undefined,
+    permission: string
+  ): boolean => {
+    if (!contents || !viewManager) return false;
+    const capability = capabilityForElectronPermission(permission);
+    if (!capability) return false;
+    const viewId = viewManager.findViewIdByWebContentsId(contents.id);
+    if (!viewId) return false;
+    const viewInfo = viewManager.getViewInfo(viewId);
+    return viewInfo?.type === "app" && viewInfo.capabilities.includes(capability);
+  };
+
   const installPermissionHandlers = (targetSession: Session): void => {
-    targetSession.setPermissionRequestHandler((_webContents, permission, callback) => {
+    targetSession.setPermissionRequestHandler((contents, permission, callback) => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
+        if (appWebContentsHasPermissionCapability(contents, permission)) {
+          callback(true);
+          return;
+        }
         console.warn(`[permissions] denied request for '${permission}'`);
         callback(false);
         return;
@@ -915,9 +1103,9 @@ app.on("ready", async () => {
       // Permissive default for non-sensitive permissions (clipboard read/etc.)
       callback(true);
     });
-    targetSession.setPermissionCheckHandler((_webContents, permission) => {
+    targetSession.setPermissionCheckHandler((contents, permission) => {
       if (SENSITIVE_PERMISSIONS.has(permission)) {
-        return false;
+        return appWebContentsHasPermissionCapability(contents, permission);
       }
       return true;
     });
@@ -989,31 +1177,13 @@ app.on("ready", async () => {
 
   performance.mark("startup:services-registered");
 
-  // Active shell subscriptions on the server side. The bridging events
-  // service (registered further down) keeps this in sync with what the shell
-  // has asked to receive. On serverClient reconnect the server forgets all
-  // subscriptions (fresh auth → fresh callerId → fresh subscriber), so we
-  // replay this set on every transition to "connected" — see
-  // `replayShellSubscriptionsToServer` below.
-  const shellEventSubscriptions = new Set<EventName>();
   let serverClientRef: import("./serverClient.js").ServerClient | null = null;
-  const replayShellSubscriptionsToServer = async () => {
-    if (!serverClientRef || shellEventSubscriptions.size === 0) return;
-    const events = [...shellEventSubscriptions];
-    log.info(`[events] replaying ${events.length} shell subscription(s) to server`);
-    await Promise.all(
-      events.map((event) =>
-        assertPresent(serverClientRef)
-          .call("events", "subscribe", [event])
-          .catch((err: unknown) => {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(`[events] replay subscribe(${event}) failed: ${msg}`);
-          })
-      )
-    );
-  };
+  const serverEventSubscriptions = createServerEventSubscriptionBridge({
+    getServerClient: () => serverClientRef,
+    log,
+  });
   const recoverShellStateFromServer = async (_kind: "resubscribe" | "cold-recover") => {
-    await replayShellSubscriptionsToServer();
+    await serverEventSubscriptions.replay({ force: true });
     if (!panelOrchestrator) return;
     await panelOrchestrator
       .recoverShellSnapshot({ loadFocusedView: false })
@@ -1026,6 +1196,7 @@ app.on("ready", async () => {
   const handleServerEvent = createServerEventBridge({
     eventService,
     getPanelOrchestrator: () => panelOrchestrator,
+    getAppOrchestrator: () => appOrchestrator,
     getServerClient: () => serverClientRef,
     openExternal: (url) => shell.openExternal(url),
     warn: (message) => log.warn(message),
@@ -1065,11 +1236,10 @@ app.on("ready", async () => {
           });
           // On every transition into "connected" (including the very first one
           // and any subsequent reconnect), replay shell subscriptions. The
-          // initial transition is a no-op because the shell hasn't subscribed
-          // to anything yet; subsequent reconnects actually matter because the
-          // server's EventService forgets subscriptions when the old WS closes.
+          // first callback may fire before `serverClientRef` is assigned; the
+          // post-establish replay below covers that startup ordering.
           if (status === "connected" && previousStatus !== "connected") {
-            void replayShellSubscriptionsToServer();
+            void serverEventSubscriptions.replay({ force: true });
           }
           previousStatus = status;
         },
@@ -1085,25 +1255,18 @@ app.on("ready", async () => {
     try {
       serverSession = await establish(startupMode);
     } catch (error) {
-      if (!shouldFallbackToLocalForRemoteCredential(error)) {
-        throw error;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      applyLocalStartupMode(message);
-      eventService.emit("server-connection-changed", {
-        status: "connecting",
-        isRemote: false,
-        remoteHost: undefined,
-      });
-      previousStatus = null;
+      if (!shouldFallbackToLocalForRemoteCredential(error)) throw error;
+      applyLocalStartupMode(error instanceof Error ? error.message : String(error));
       serverSession = await establish(startupMode);
     }
     serverClientRef = serverSession.serverClient;
-    shellEventSubscriptions.add("external-open:open");
-    shellEventSubscriptions.add("browser-panel:open");
-    shellEventSubscriptions.add("panel-tree-updated");
-    shellEventSubscriptions.add("panel:runtimeLeaseChanged");
-    await replayShellSubscriptionsToServer();
+    serverEventSubscriptions.add("apps:available");
+    serverEventSubscriptions.add("external-open:open");
+    serverEventSubscriptions.add("browser-panel:open");
+    serverEventSubscriptions.add("panel-tree-updated");
+    serverEventSubscriptions.add("panel-title-updated");
+    serverEventSubscriptions.add("panel:runtimeLeaseChanged");
+    await serverEventSubscriptions.replay({ force: true });
     workspaceId = serverSession.workspaceId;
 
     performance.mark("startup:server-spawned");
@@ -1157,6 +1320,31 @@ app.on("ready", async () => {
       dispatcher,
       serverClient: conn.serverClient,
       getShellWebContents: () => viewManager?.getShellWebContents() ?? null,
+      resolveCallerForWebContents: (webContentsId) => {
+        if (!viewManager) return null;
+        const shellContents = viewManager.getShellWebContents();
+        if (shellContents && !shellContents.isDestroyed() && shellContents.id === webContentsId) {
+          return { callerId: "shell", callerKind: "shell" };
+        }
+        const callerId = viewManager.findViewIdByWebContentsId(webContentsId);
+        if (!callerId) return null;
+        const viewInfo = viewManager.getViewInfo(callerId);
+        return resolveElectronViewCaller(callerId, viewInfo);
+      },
+      getCodeIdentityForCaller: (callerId) => {
+        const viewInfo = viewManager?.getViewInfo(callerId);
+        if (viewInfo?.type !== "app") return null;
+        const identity = viewInfo.appIdentity;
+        if (!identity?.source || !identity.effectiveVersion) return null;
+        return {
+          callerId,
+          callerKind: "app",
+          repoPath: identity.source,
+          effectiveVersion: identity.effectiveVersion,
+        };
+      },
+      getWebContentsForCaller: (callerId) => viewManager?.getWebContents(callerId) ?? null,
+      authorizeAppServerCall,
       eventService,
     });
     log.info(`[PanelHTTP] Using server's panel HTTP via gateway port ${conn.gatewayPort}`);
@@ -1198,6 +1386,9 @@ app.on("ready", async () => {
       authToken: () => conn.shellToken || conn.adminToken,
       hostConnectionId: panelOrchestrator.getRuntimeClientSessionId(),
       getViewManager: () => viewManager,
+      diagnosticsStore: new RuntimeDiagnosticsStore({
+        statePath: startupMode.kind === "remote" ? getRemoteUserDataDir() : serverSession.statePath,
+      }),
       onHostCommand: async (panelId, action, args) => {
         if (action === "openDevTools") {
           if (!viewManager) throw new Error("ViewManager not initialized");
@@ -1212,6 +1403,14 @@ app.on("ready", async () => {
         if (action === "accessibilityTree") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
           return cdpHostProvider.getAccessibilityTree(panelId);
+        }
+        if (action === "consoleHistory") {
+          if (!cdpHostProvider) throw new Error("CDP host provider not initialized");
+          return cdpHostProvider.getConsoleHistory(
+            panelId,
+            (args[0] as import("./cdpHostProvider.js").PanelConsoleHistoryOptions | undefined) ??
+              undefined
+          );
         }
         throw new Error(`Unknown host command: ${action}`);
       },
@@ -1241,6 +1440,7 @@ app.on("ready", async () => {
     const { createPanelShellService } = await import("./services/panelShellService.js");
     const { createViewService } = await import("./services/viewService.js");
     const { createMenuService } = await import("./services/menuService.js");
+    const { createNotificationService } = await import("./services/notificationService.js");
     const { createSettingsService } = await import("./services/settingsService.js");
     const { createAdblockService } = await import("./services/adblockService.js");
     // FS and git-local services removed — server owns these via panel service
@@ -1257,6 +1457,7 @@ app.on("ready", async () => {
           panelOrchestrator,
           serverClient: sc,
           getViewManager,
+          getAppOrchestrator: () => appOrchestrator,
           connectionMode: startupMode.kind === "remote" ? "remote" : "local",
           remoteHost: startupMode.kind === "remote" ? startupMode.remoteUrl.hostname : undefined,
         })
@@ -1286,13 +1487,18 @@ app.on("ready", async () => {
         })
       )
     );
+    electronContainer.register(
+      rpcService(createNotificationService({ eventService, getViewManager }))
+    );
     // Workspace operations live entirely on the server now (single source of
     // truth, accessible to panels/workers/shell). The shell renderer's
     // `workspace.*` calls reach the server by default because only true
     // Electron-local services are routed here. Workspace.select (relaunch) is
     // signalled from the server back to Electron main via
     // ServerProcessManager.onRelaunch (wired in serverSession.ts).
-    electronContainer.register(rpcService(createSettingsService({ serverClient: sc })));
+    electronContainer.register(
+      rpcService(createSettingsService({ serverClient: sc, getViewManager }))
+    );
     const { createRemoteCredService } = await import("./services/remoteCredService.js");
     electronContainer.register(
       rpcService(createRemoteCredService({ startupMode, getServerClient: () => serverClientRef }))
@@ -1351,38 +1557,35 @@ app.on("ready", async () => {
       })
     );
     // Events service — local subscription on main's EventService plus a
-    // fire-and-forget forward to the server. The forward makes main's
-    // serverClient WS a subscriber on the server's EventService for the same
-    // event, so anything the server emits (notification:show, oauth consent
-    // prompts, etc.) comes back over that WS and is re-emitted on main's
-    // EventService by handleServerEvent. Net effect: the shell sees one
-    // logical event bus across the main/server split.
+    // bridge-owned server subscription. Main owns the remote subscription set:
+    // renderer unmount/remount churn can remove local listeners, but it must
+    // not race a remote unsubscribe against a newer remote subscribe and leave
+    // server-originated approval/notification events stranded.
     //
-    // We also keep `shellEventSubscriptions` in sync with what the shell
-    // has subscribed to, so that on serverClient reconnect we can replay
-    // the set to the server's freshly-authenticated connection (the old
-    // subscriber dies with the old WS).
+    // The workspace shell now runs as an app view, so an app with
+    // `panel-hosting` has the same event-bus role.
     {
       const baseEventsService = createEventsServiceDefinition(eventService);
+      const shouldForwardServerEvents = (caller: ServiceContext["caller"]): boolean => {
+        if (caller.runtime.kind === "shell") return true;
+        if (caller.runtime.kind !== "app") return false;
+        const viewInfo = viewManager?.getViewInfo(caller.runtime.id);
+        return viewInfo?.type === "app" && viewInfo.capabilities.includes("panel-hosting");
+      };
       electronContainer.register(
         rpcService({
           ...baseEventsService,
           handler: async (ctx, method, args) => {
             const result = await baseEventsService.handler(ctx, method, args);
-            if (ctx.caller.runtime.kind !== "shell") return result;
+            if (!shouldForwardServerEvents(ctx.caller)) return result;
 
             if (method === "subscribe") {
-              shellEventSubscriptions.add(args[0] as EventName);
+              serverEventSubscriptions.add(args[0] as EventName);
             } else if (method === "unsubscribe") {
-              shellEventSubscriptions.delete(args[0] as EventName);
+              serverEventSubscriptions.delete(args[0] as EventName);
             } else if (method === "unsubscribeAll") {
-              shellEventSubscriptions.clear();
+              serverEventSubscriptions.clear();
             }
-
-            void sc.call("events", method, args as unknown[]).catch((err: unknown) => {
-              const msg = err instanceof Error ? err.message : String(err);
-              log.warn(`[events] forward ${method} to server failed: ${msg}`);
-            });
             return result;
           },
         })
@@ -1430,9 +1633,22 @@ app.on("ready", async () => {
      */
     const resolveCaller = (
       event: Electron.IpcMainInvokeEvent
-    ): { callerId: string; callerKind: "shell" | "panel" } => {
+    ): { callerId: string; callerKind: "shell" | "panel" | "app" } => {
       const callerId = resolveCallerId(event);
-      return { callerId, callerKind: callerId === "shell" ? "shell" : "panel" };
+      return resolveElectronViewCaller(callerId, viewManager?.getViewInfo(callerId));
+    };
+
+    const codeIdentityForCallerId = (callerId: string) => {
+      const viewInfo = viewManager?.getViewInfo(callerId);
+      if (viewInfo?.type !== "app") return null;
+      const identity = viewInfo.appIdentity;
+      if (!identity?.source || !identity.effectiveVersion) return null;
+      return {
+        callerId,
+        callerKind: "app" as const,
+        repoPath: identity.source,
+        effectiveVersion: identity.effectiveVersion,
+      };
     };
 
     /**
@@ -1448,6 +1664,23 @@ app.on("ready", async () => {
       }
     };
 
+    const requireAppCapabilityForIpc = (
+      event: Electron.IpcMainInvokeEvent,
+      capability: AppCapability,
+      channel: string
+    ): { callerId: string; callerKind: "shell" | "panel" | "app" } => {
+      const caller = resolveCaller(event);
+      if (caller.callerKind !== "app") return caller;
+      const viewInfo = viewManager?.getViewInfo(caller.callerId);
+      if (viewInfo?.type === "app" && viewInfo.capabilities.includes(capability)) {
+        return caller;
+      }
+      console.warn(
+        `[ipc] Rejecting ${channel} from app ${caller.callerId} without capability '${capability}'`
+      );
+      throw new Error(`Channel '${channel}' requires app capability '${capability}'`);
+    };
+
     ipcMain.handle("natstack:getPanelInit", async (event) => {
       const callerId = tryResolveCallerId(event);
       if (!callerId) return null;
@@ -1455,10 +1688,12 @@ app.on("ready", async () => {
     });
 
     // Panel lifecycle
-    ipcMain.handle("natstack:panel.close", async (_event, panelId: string) => {
+    ipcMain.handle("natstack:panel.close", async (event, panelId: string) => {
+      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.close");
       return assertPresent(panelOrchestrator).closePanel(panelId);
     });
-    ipcMain.handle("natstack:focusPanel", async (_event, panelId: string) => {
+    ipcMain.handle("natstack:focusPanel", async (event, panelId: string) => {
+      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:focusPanel");
       assertPresent(panelOrchestrator).focusPanel(panelId);
     });
     ipcMain.handle(
@@ -1468,11 +1703,16 @@ app.on("ready", async () => {
         source: string,
         opts?: { name?: string; focus?: boolean; stateArgs?: Record<string, unknown> }
       ) => {
-        const callerId = resolveCallerId(event);
+        const { callerId } = requireAppCapabilityForIpc(
+          event,
+          "panel-hosting",
+          "natstack:panel.create"
+        );
         return assertPresent(panelOrchestrator).createRuntimePanel(callerId, source, opts);
       }
     );
-    ipcMain.handle("natstack:panel.list", async (_event, parentId?: string | null) => {
+    ipcMain.handle("natstack:panel.list", async (event, parentId?: string | null) => {
+      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.list");
       return assertPresent(panelOrchestrator).listRuntimePanels(parentId);
     });
     ipcMain.handle("natstack:bridge.getInfo", async (event) => {
@@ -1488,30 +1728,35 @@ app.on("ready", async () => {
           : shellCore?.panelManager.updateStateArgs(asPanelSlotId(callerId), updates);
       }
     );
-    ipcMain.handle("natstack:panel.getStateArgs", async (_event, panelId: string) => {
+    ipcMain.handle("natstack:panel.getStateArgs", async (event, panelId: string) => {
+      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.getStateArgs");
       return assertPresent(panelOrchestrator).getStateArgs(panelId);
     });
     ipcMain.handle(
       "natstack:panel.setStateArgs",
-      async (_event, panelId: string, updates: Record<string, unknown>) => {
+      async (event, panelId: string, updates: Record<string, unknown>) => {
+        requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.setStateArgs");
         return assertPresent(panelOrchestrator).handleSetStateArgs(panelId, updates);
       }
     );
-    ipcMain.handle("natstack:panel.reload", async (_event, panelId: string) => {
+    ipcMain.handle("natstack:panel.reload", async (event, panelId: string) => {
+      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.reload");
       return assertPresent(panelOrchestrator).reloadPanel(panelId);
     });
-    ipcMain.handle("natstack:panel.snapshot", async (_event, panelId: string) => {
+    ipcMain.handle("natstack:panel.snapshot", async (event, panelId: string) => {
+      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.snapshot");
       return assertPresent(panelOrchestrator).snapshot(panelId);
     });
     ipcMain.handle(
       "natstack:panel.callAgent",
       async (
-        _event,
+        event,
         panelId: string,
         method: string,
         args?: unknown[],
         options?: { timeoutMs?: number }
       ) => {
+        requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.callAgent");
         return assertPresent(panelOrchestrator).callAgent(panelId, method, args ?? [], options);
       }
     );
@@ -1579,8 +1824,12 @@ app.on("ready", async () => {
       const { callerId, callerKind } = resolveCaller(event);
       const parsed = parseServiceMethod(method);
       if (!parsed) throw new Error(`Invalid method format: "${method}". Expected "service.method"`);
+      if (callerKind === "app" && parsed.service === "fs") {
+        authorizeAppServerCall(callerId, parsed.service, parsed.method, args);
+        return sc.callAs({ callerId, callerKind }, parsed.service, parsed.method, args);
+      }
       return dispatcher.dispatch(
-        { caller: createVerifiedCaller(callerId, callerKind) },
+        { caller: createVerifiedCaller(callerId, callerKind, codeIdentityForCallerId(callerId)) },
         parsed.service,
         parsed.method,
         args

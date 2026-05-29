@@ -8,6 +8,14 @@
 
 export { AgentWorkerBase } from "./agent-worker-base.js";
 export type { ModelCredentialSetupProps, ModelCredentialSummary } from "./agent-worker-base.js";
+export {
+  DEFAULT_APPROVAL_LEVEL,
+  DEFAULT_MODEL,
+  DEFAULT_RESPOND_POLICY,
+  DEFAULT_THINKING_LEVEL,
+  OPENAI_CODEX_ACCOUNT_CLAIM,
+  PROVIDER_CREDENTIAL_SETUPS,
+} from "./agent-config.js";
 export { TrajectoryVesselBase } from "./trajectory-vessel-base.js";
 export type { CustomMessageReducer, RespondPolicy } from "./trajectory-vessel-base.js";
 export { DOIdentity } from "./identity.js";

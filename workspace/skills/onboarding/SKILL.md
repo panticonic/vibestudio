@@ -27,6 +27,7 @@ Guide new users through understanding NatStack and getting their workspace set u
 | `web-research` | Optional Tavily / Brave / Exa API key setup so `web_search` upgrades past DuckDuckGo |
 | `sandbox` | Learning the eval tool, inline UI, runtime APIs |
 | `paneldev` | Building and launching panels, workers, full development workflow |
+| `appdev` | Authoring trusted workspace apps under `apps/`: Electron shell, mobile React Native, terminal clients |
 
 ## First: Detect User Experience Level
 

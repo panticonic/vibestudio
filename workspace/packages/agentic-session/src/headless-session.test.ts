@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { HeadlessSession } from "./headless-session.js";
 import type { ChatMessage, ConnectionConfig } from "@workspace/agentic-core";
+import { brandId, type TurnId } from "@workspace/agentic-protocol";
 
 function createConfig(): ConnectionConfig {
   return {
@@ -33,6 +34,7 @@ describe("HeadlessSession", () => {
     expect(snap.connected).toBe(false);
     expect(snap.messages).toEqual([]);
     expect(snap.invocations).toEqual([]);
+    expect(snap.cleanupErrors).toEqual([]);
     expect(snap.participants).toEqual({});
   });
 
@@ -147,6 +149,88 @@ describe("HeadlessSession", () => {
     ]);
   });
 
+  it("records cleanup errors from headless agent teardown", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const session = HeadlessSession.create({
+      config: createConfig(),
+    });
+    (session as any)._agentEntityId = "entity-1";
+    (session as any)._agentTargetId = "agent-target";
+    (session as any)._channelId = "ch-1";
+    (session as any)._agentRpcCall = vi.fn(async (_target: string, method: string) => {
+      if (method === "unsubscribeChannel") throw new Error("unsubscribe failed");
+      if (method === "runtime.retireEntity") throw new Error("retire failed");
+      return undefined;
+    });
+
+    await session.close();
+
+    expect(session.snapshot().cleanupErrors).toEqual([
+      expect.objectContaining({ phase: "unsubscribeHeadlessAgent", message: "unsubscribe failed" }),
+      expect.objectContaining({ phase: "retireHeadlessAgent", message: "retire failed" }),
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      "[HeadlessSession] unsubscribeHeadlessAgent failed:",
+      expect.any(Error)
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "[HeadlessSession] retireHeadlessAgent failed:",
+      expect.any(Error)
+    );
+    warn.mockRestore();
+  });
+
+  it("connects the headless client methods before subscribing the agent", async () => {
+    const order: string[] = [];
+    const originalConnect = HeadlessSession.prototype.connect;
+    const connect = vi
+      .spyOn(HeadlessSession.prototype, "connect")
+      .mockImplementation(async function (
+        this: HeadlessSession,
+        channelId: string,
+        options?: Parameters<HeadlessSession["connect"]>[1]
+      ) {
+        order.push(`connect:${channelId}:${Object.keys(options?.methods ?? {}).sort().join(",")}`);
+        (this as unknown as { _channelId: string; _client: unknown })._channelId = channelId;
+        (this as unknown as { _client: unknown })._client = { close: vi.fn() };
+      });
+    const rpcCall = vi.fn(async (target: string, method: string) => {
+      order.push(`rpc:${target}:${method}`);
+      if (target === "main" && method === "runtime.createEntity") {
+        return { id: "entity-1", targetId: "agent-target" };
+      }
+      if (target === "agent-target" && method === "subscribeChannel") {
+        return { ok: true, participantId: "do:agent" };
+      }
+      throw new Error(`unexpected RPC ${target}.${method}`);
+    });
+
+    try {
+      await HeadlessSession.createWithAgent({
+        config: createConfig(),
+        rpcCall,
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        objectKey: "agent-1",
+        contextId: "ctx-1",
+        channelId: "headless-1",
+        sandbox: {
+          rpc: { call: vi.fn() },
+          loadImport: vi.fn(),
+        },
+      });
+    } finally {
+      connect.mockRestore();
+      HeadlessSession.prototype.connect = originalConnect;
+    }
+
+    expect(order).toEqual([
+      "connect:headless-1:eval,set_title",
+      "rpc:main:runtime.createEntity",
+      "rpc:agent-target:subscribeChannel",
+    ]);
+  });
+
   it("callMethod returns the provider payload and callMethodResult returns the full envelope", async () => {
     const session = HeadlessSession.create({
       config: createConfig(),
@@ -181,6 +265,29 @@ describe("HeadlessSession", () => {
     });
   });
 
+  it("sandbox callMethod times out and cancels pending participant calls", async () => {
+    vi.useFakeTimers();
+    const session = HeadlessSession.create({
+      config: createConfig(),
+    });
+    const cancel = vi.fn(async () => undefined);
+    (session as any)._client = {
+      callMethod: vi.fn(() => ({
+        result: new Promise(() => undefined),
+        cancel,
+      })),
+    };
+    const chat = (session as any).buildChatSandboxValue();
+    const promise = chat.callMethod("agent-1", "getDebugState", {}, { timeoutMs: 5 });
+    const expectation = expect(promise).rejects.toThrow("Method call timed out after 5ms");
+
+    await vi.advanceTimersByTimeAsync(5);
+
+    await expectation;
+    expect(cancel).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it("sendAndWait starts waiting before publishing the prompt", async () => {
     const session = HeadlessSession.create({
       config: createConfig(),
@@ -207,5 +314,61 @@ describe("HeadlessSession", () => {
 
     await expect(session.sendAndWait("hello")).resolves.toBe(idleMessage);
     expect(order).toEqual(["wait", "send"]);
+  });
+
+  it("waitForIdle waits until the durable agent turn is closed", async () => {
+    vi.useFakeTimers();
+    const session = HeadlessSession.create({
+      config: createConfig(),
+    });
+    const turnId = brandId<TurnId>("turn-open");
+    const idleMessage = {
+      id: "agent-message",
+      senderId: "agent-1",
+      content: "done",
+      kind: "message" as const,
+      complete: true,
+    } satisfies ChatMessage;
+    (session as any)._channelId = "ch-1";
+    (session as any)._channelView = {
+      ...(session as any)._channelView,
+      turns: {
+        [turnId]: {
+          turnId,
+          actor: { kind: "agent", id: "agent-1" },
+          status: "open",
+          openedAt: "2026-05-27T00:00:00.000Z",
+        },
+      },
+    };
+
+    const wait = session.waitForIdle({ debounce: 5, timeoutMs: 1000 });
+    (session as any)._chatMessages = new Map([[idleMessage.id, idleMessage]]);
+    (session as any)._chatMessageOrder = [idleMessage.id];
+    (session as any).notifyListeners();
+    await vi.advanceTimersByTimeAsync(20);
+
+    let resolved = false;
+    void wait.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    (session as any)._channelView = {
+      ...(session as any)._channelView,
+      turns: {
+        [turnId]: {
+          ...(session as any)._channelView.turns[turnId],
+          status: "closed",
+          closedAt: "2026-05-27T00:00:01.000Z",
+        },
+      },
+    };
+    (session as any).notifyListeners();
+    await vi.advanceTimersByTimeAsync(5);
+
+    await expect(wait).resolves.toBe(idleMessage);
+    vi.useRealTimers();
   });
 });

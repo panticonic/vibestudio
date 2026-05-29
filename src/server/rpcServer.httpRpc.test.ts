@@ -46,6 +46,7 @@ function createTestSetup(opts?: { entityCache?: EntityCache }) {
   tokenManager.setAdminToken(adminToken);
   const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
   const shellToken = tokenManager.ensureToken("shell:test", "shell");
+  const shellRemoteToken = tokenManager.ensureToken("shell:remote-test", "shell-remote");
   const entityCache = opts?.entityCache ?? new EntityCache();
 
   const dispatchResults = new Map<string, unknown>();
@@ -90,6 +91,7 @@ function createTestSetup(opts?: { entityCache?: EntityCache }) {
     adminToken,
     workerToken,
     shellToken,
+    shellRemoteToken,
     entityCache,
     dispatcher,
     dispatched,
@@ -212,7 +214,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         args: [],
       });
       expect(status).toBe(401);
-      expect(body["error"]).toContain("issue a device credential");
+      expect(body["error"]).toContain("caller-scoped token or connection grant");
     });
 
     it("accepts worker token", async () => {
@@ -223,10 +225,44 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(status).toBe(200);
       expect(body["result"]).toBeDefined();
     });
+
+    it("normalizes shell-remote tokens to shell for HTTP RPC service policy", async () => {
+      const { status, body } = await postRpc(port, setup.shellRemoteToken, {
+        method: "build.status",
+        args: [],
+      });
+
+      expect(status).toBe(200);
+      expect(body["error"]).toBeUndefined();
+      expect(setup.dispatched[setup.dispatched.length - 1]?.ctx.caller.runtime).toEqual({
+        id: "shell:remote-test",
+        kind: "shell",
+      });
+    });
   });
 
   describe("verified runtime identity", () => {
     it("uses a verified concrete DO caller for service dispatch", async () => {
+      await gateway.stop();
+      await setup.server.stop();
+
+      const entityCache = new EntityCache();
+      entityCache._onActivate(
+        makeDoRecord(
+          "do:workers/agent-worker:AiChatWorker:agent-1",
+          "workers/agent-worker",
+          "hash-1"
+        )
+      );
+      setup = createTestSetup({ entityCache });
+      setup.server.initHandlers();
+      gateway = new Gateway({
+        tokenManager: setup.tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => setup.server,
+      });
+      port = await gateway.start(0);
+
       const serviceToken = setup.tokenManager.ensureToken(
         "do-service:workers/agent-worker:AiChatWorker",
         "worker"
@@ -251,7 +287,7 @@ describe("RpcServer HTTP POST /rpc", () => {
         caller: {
           runtime: {
             id: "do:workers/agent-worker:AiChatWorker:agent-1",
-            kind: "worker",
+            kind: "do",
           },
         },
       });

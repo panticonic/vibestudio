@@ -39,7 +39,7 @@ export function queueEmit(
   deps: BroadcastDeps,
   subscriberId: string,
   payload: unknown,
-  onFatalDelivery?: (err: { code?: string }) => void,
+  onFatalDelivery?: (err: { code?: string }) => boolean | void,
 ): Promise<void> {
   const prev = emitChains.get(subscriberId) ?? Promise.resolve();
   const next = prev.then(() =>
@@ -62,15 +62,15 @@ export function queueDoEnvelope(
   deps: BroadcastDeps,
   participantId: string,
   envelope: RpcChannelMessage,
-  onFatalDelivery?: (err: { code?: string }) => void,
+  onFatalDelivery?: (err: { code?: string }) => boolean | void,
 ): Promise<void> {
   const prev = deliveryChains.get(participantId) ?? Promise.resolve();
   const next: Promise<void> = prev.then(() =>
     deps.rpc.call(participantId, "onChannelEnvelope", [deps.objectKey, envelope])
       .then(() => {})
       .catch((err) => {
-        onFatalDelivery?.(err as { code?: string });
-        console.error(`[Channel] delivery failed for ${participantId}:`, err);
+        const handled = onFatalDelivery?.(err as { code?: string });
+        if (!handled) console.error(`[Channel] delivery failed for ${participantId}:`, err);
       }),
   );
   deliveryChains.set(participantId, next);
@@ -108,7 +108,9 @@ export function broadcast(
       ) {
         deps.sql.exec(`DELETE FROM participants WHERE id = ?`, pid);
         cleanupDeliveryChain(pid);
+        return true;
       }
+      return false;
     };
     const data = pid === senderId && envelope.ref !== undefined
       ? { channelId: deps.objectKey, message: { ...msg, ref: envelope.ref } }

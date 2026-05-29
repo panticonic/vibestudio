@@ -86,6 +86,15 @@ function togglePanelDevTools(): void {
   }
 }
 
+function toggleAppDevTools(shellContents: WebContents): void {
+  if (_menuViewManager?.openHostChromeAppDevTools()) {
+    return;
+  }
+  if (shellContents && !shellContents.isDestroyed()) {
+    shellContents.toggleDevTools();
+  }
+}
+
 function isPanelDevToolsInput(input: Electron.Input): boolean {
   if (input.type !== "keyDown") {
     return false;
@@ -219,11 +228,7 @@ export function buildCommonMenuItems(
     {
       label: "Toggle App DevTools",
       accelerator: "CmdOrCtrl+Alt+I",
-      click: () => {
-        if (shellContents && !shellContents.isDestroyed()) {
-          shellContents.toggleDevTools();
-        }
-      },
+      click: () => toggleAppDevTools(shellContents),
     },
   ];
 
@@ -429,11 +434,7 @@ export function setupMenu(
         {
           label: "Toggle App Developer Tools",
           accelerator: "CmdOrCtrl+Alt+I",
-          click: () => {
-            if (shellContents && !shellContents.isDestroyed()) {
-              shellContents.toggleDevTools();
-            }
-          },
+          click: () => toggleAppDevTools(shellContents),
         },
       ],
     },

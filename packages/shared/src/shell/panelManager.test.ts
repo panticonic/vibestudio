@@ -42,11 +42,12 @@ function createWorkspaceMemory() {
   }
   interface MemEntity {
     id: string;
-    kind: "panel" | "worker" | "do";
+    kind: "panel" | "app" | "worker" | "do";
     source: string;
     contextId: string;
     status: "active" | "retired";
     key: string;
+    displayTitle?: string | null;
   }
 
   const slots = new Map<PanelSlotId, MemSlot>();
@@ -67,11 +68,23 @@ function createWorkspaceMemory() {
 
   const workspaceState: WorkspaceStateClient = {
     async listSlots(): Promise<SlotRow[]> {
-      return [...slots.values()].map((s) => ({ ...s }));
+      return [...slots.values()].map((s) => ({
+        ...s,
+        current_entity_title: s.current_entity_id
+          ? (entities.get(s.current_entity_id)?.displayTitle ?? null)
+          : null,
+      }));
     },
     async getSlot(slotId): Promise<SlotRow | null> {
       const s = slots.get(slotId);
-      return s ? { ...s } : null;
+      return s
+        ? {
+            ...s,
+            current_entity_title: s.current_entity_id
+              ? (entities.get(s.current_entity_id)?.displayTitle ?? null)
+              : null,
+          }
+        : null;
     },
     async getSlotHistory(slotId): Promise<SlotHistoryRow[]> {
       const rows = history.get(slotId) ?? [];
@@ -297,6 +310,7 @@ describe("PanelManager", () => {
 
     const init = (await manager.getPanelInit(created.panelId)) as {
       entityId: string;
+      panelId?: string;
       slotId: string;
       contextId: string;
       sourceRepo: string;
@@ -307,6 +321,7 @@ describe("PanelManager", () => {
     const currentEntityId = createdSlot?.current_entity_id;
     expect(currentEntityId).toBeTruthy();
     expect(init.entityId).toBe(currentEntityId);
+    expect(init.panelId).toBeUndefined();
     expect(init.slotId).toBe(created.panelId);
     expect(init.contextId).toBe(created.contextId);
     expect(init.sourceRepo).toBe("panels/example");
@@ -752,6 +767,44 @@ describe("PanelManager", () => {
     await manager.syncSnapshot();
 
     expect(registry.getPanel(created.panelId)?.title).toBe("Server Chat Title");
+  });
+
+  it("restores persisted entity titles ahead of manifest titles when rebuilding the tree", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "chat");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "chat", natstack: { title: "Manifest Chat Title" } })
+    );
+
+    const seedRegistry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps(workspacePath);
+    const seedManager = new PanelManager({
+      registry: seedRegistry,
+      ...deps,
+    });
+    const created = await seedManager.create("panels/chat", {
+      isRoot: true,
+      addAsRoot: true,
+      name: "chat-root",
+    });
+    const slot = mem.state.slots.get(created.panelId);
+    const entityId = slot?.current_entity_id;
+    if (!entityId) throw new Error("expected current entity id");
+    mem.state.entities.get(entityId)!.displayTitle = "Runtime Chat Title";
+
+    const registry = new PanelRegistry({});
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+    });
+
+    await manager.syncSnapshot();
+
+    expect(registry.getPanel(created.panelId)?.title).toBe("Runtime Chat Title");
   });
 
   it("closes parent subtrees with one workspace close and retires every panel entity", async () => {

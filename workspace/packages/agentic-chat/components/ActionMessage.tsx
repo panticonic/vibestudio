@@ -1,12 +1,13 @@
-import React, { useMemo } from "react";
-import { Badge, Box, Code, Flex, Spinner, Text } from "@radix-ui/themes";
+import React, { useCallback, useMemo, useState } from "react";
+import { Badge, Box, Button, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import { CheckIcon, CopyIcon, StopIcon } from "@radix-ui/react-icons";
 import { prettifyToolName } from "@workspace/pubsub";
 import type { InvocationCardPayload } from "@workspace/agentic-core";
+import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { ExpandableChevron } from "./shared/Chevron";
 import { CollapsibleSection } from "./shared/CollapsibleSection";
-import { JsonValue } from "./shared/JsonValue";
-import { CodePreview } from "./shared/CodePreview";
-import { formatArgsSummary } from "./action-format";
+import { ToolArgumentsView, ToolDataView } from "./shared/ToolDataView";
+import { formatArgsSummary, formatInvocationPreview } from "./action-format";
 
 // ── Status helpers ─────────────────────────────────────────────────────────
 
@@ -43,8 +44,11 @@ function StatusDot({ statusKey }: { statusKey: StatusKey }) {
   );
 }
 
-/** Tool types whose `code` arg should be syntax-highlighted. */
-const CODE_TOOL_TYPES = new Set(["eval", "inline_ui", "feedback_custom"]);
+function formatDisplayName(toolName: string): string {
+  return prettifyToolName(toolName)
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
+}
 
 // ── ActionPill (collapsed view) ────────────────────────────────────────────
 
@@ -52,20 +56,23 @@ export const ActionPill = React.memo(function ActionPill({
   id,
   payload,
   onExpand,
+  onCancel,
 }: {
   id: string;
   payload: InvocationCardPayload;
   onExpand: (id: string) => void;
+  onCancel?: () => void;
 }) {
   const statusKey = getStatusKey(payload);
   const isPending = statusKey === "pending";
   const color = getStatusColor(statusKey);
 
-  const argsSummary = useMemo(
-    () => formatArgsSummary(payload.arguments, 50),
-    [payload.arguments],
+  const preview = useMemo(
+    () => formatInvocationPreview(payload.arguments, payload.execution.description, 120),
+    [payload.arguments, payload.execution.description],
   );
-  const displayName = useMemo(() => prettifyToolName(payload.name), [payload.name]);
+  const displayName = useMemo(() => formatDisplayName(payload.name), [payload.name]);
+  const title = preview ? `${displayName}: ${preview}` : displayName;
 
   return (
     <Flex
@@ -73,11 +80,12 @@ export const ActionPill = React.memo(function ActionPill({
       data-testid="invocation-pill"
       data-invocation-name={payload.name}
       data-invocation-status={statusKey}
-      title={payload.name}
+      title={title}
       align="center"
       gap="1"
       onClick={() => onExpand(id)}
       tabIndex={0}
+      aria-label={title}
       style={{
         cursor: "pointer",
         userSelect: "none",
@@ -91,19 +99,26 @@ export const ActionPill = React.memo(function ActionPill({
       <Text className="inline-pill-label" size="1" color={color} weight="medium">
         {displayName}
       </Text>
-      {argsSummary && (
-        <Text className="inline-pill-summary" size="1" color="gray" style={{
-          opacity: 0.85,
-        }}>
-          ({argsSummary})
+      {preview && (
+        <Text className="inline-pill-description" size="1" color="gray">
+          {preview}
         </Text>
       )}
-      {payload.execution.description && (
-        <Text className="inline-pill-description" size="1" color="gray" style={{
-          opacity: 0.85,
-        }}>
-          {payload.execution.description}
-        </Text>
+      {isPending && onCancel && (
+        <IconButton
+          size="1"
+          color="gray"
+          variant="ghost"
+          onClick={(e) => {
+            e.stopPropagation();
+            onCancel();
+          }}
+          aria-label="Cancel pending tool call"
+          title="Stop"
+          style={{ marginLeft: 4 }}
+        >
+          <StopIcon />
+        </IconButton>
       )}
     </Flex>
   );
@@ -114,23 +129,31 @@ export const ActionPill = React.memo(function ActionPill({
 export const ExpandedAction = React.memo(function ExpandedAction({
   payload,
   onCollapse,
+  onCancel,
+  chat,
 }: {
   payload: InvocationCardPayload;
   onCollapse: () => void;
+  onCancel?: () => void;
+  chat?: Partial<Pick<ChatSandboxValue, "rpc">> | null;
 }) {
   const statusKey = getStatusKey(payload);
   const isPending = statusKey === "pending";
   const isError = statusKey === "error";
   const color = getStatusColor(statusKey);
+  const [copiedDetails, setCopiedDetails] = useState(false);
 
-  const argsSummary = useMemo(
-    () => formatArgsSummary(payload.arguments, 80),
-    [payload.arguments],
-  );
-  const displayName = useMemo(() => prettifyToolName(payload.name), [payload.name]);
+  const displayName = useMemo(() => formatDisplayName(payload.name), [payload.name]);
 
   const exec = payload.execution;
   const hasArgs = Object.keys(payload.arguments).length > 0;
+  const detailsJson = useMemo(() => JSON.stringify(payload, null, 2), [payload]);
+  const copyDetails = useCallback(async (event: React.MouseEvent) => {
+    event.stopPropagation();
+    await navigator.clipboard.writeText(detailsJson);
+    setCopiedDetails(true);
+    window.setTimeout(() => setCopiedDetails(false), 1200);
+  }, [detailsJson]);
 
   return (
     <Box
@@ -158,6 +181,33 @@ export const ExpandedAction = React.memo(function ExpandedAction({
         <Badge color={color} size="1" variant="soft">
           {exec.status}
         </Badge>
+        <Button
+          size="1"
+          color="gray"
+          variant="ghost"
+          onClick={copyDetails}
+          aria-label="Copy invocation details"
+          title="Copy invocation details"
+          style={{ marginLeft: "auto" }}
+        >
+          {copiedDetails ? <CheckIcon /> : <CopyIcon />}
+          {copiedDetails ? "Copied" : "Copy details"}
+        </Button>
+        {isPending && onCancel && (
+          <IconButton
+            size="1"
+            color="gray"
+            variant="ghost"
+            onClick={(e) => {
+              e.stopPropagation();
+              onCancel();
+            }}
+            aria-label="Cancel pending tool call"
+            title="Stop"
+          >
+            <StopIcon />
+          </IconButton>
+        )}
       </Flex>
 
       <Flex direction="column" gap="2" mt="2" ml="4">
@@ -167,63 +217,27 @@ export const ExpandedAction = React.memo(function ExpandedAction({
           </Text>
         )}
 
-        {argsSummary && (
-          <Box style={{
-            padding: "4px 8px", backgroundColor: "var(--gray-a3)",
-            borderRadius: "4px", borderLeft: "2px solid var(--gray-a6)",
-          }}>
-            <Text size="1" style={{ fontFamily: "var(--code-font-family)" }}>
-              {argsSummary}
-            </Text>
-          </Box>
-        )}
-
-        {CODE_TOOL_TYPES.has(payload.name) && typeof payload.arguments?.["code"] === "string" && (
-          <CodePreview code={payload.arguments["code"] as string} />
-        )}
-
         {exec.consoleOutput && (
           <CollapsibleSection label="Console" defaultOpen={true} color="blue">
-            <Code size="1" style={{
-              display: "block", whiteSpace: "pre-wrap", wordBreak: "break-word",
-              padding: "8px", maxHeight: "300px", overflow: "auto", backgroundColor: "var(--gray-a3)",
-            }}>
-              {exec.consoleOutput}
-            </Code>
+            <ToolDataView value={exec.consoleOutput} label="Console output" chat={chat} />
           </CollapsibleSection>
         )}
 
         {hasArgs && (
-          <CollapsibleSection label="Args" defaultOpen={false}>
-            <Box style={{
-              backgroundColor: "var(--gray-a2)", borderRadius: "4px",
-              padding: "6px", maxHeight: "300px", overflow: "auto",
-            }}>
-              <JsonValue value={payload.arguments} />
-            </Box>
+          <CollapsibleSection label="Arguments" defaultOpen={true}>
+            <ToolArgumentsView args={payload.arguments} chat={chat} />
           </CollapsibleSection>
         )}
 
         {exec.result !== undefined && !isError && (
           <CollapsibleSection label="Result" defaultOpen={!isPending} color="green">
-            <Box style={{
-              backgroundColor: "var(--gray-a2)", borderRadius: "4px",
-              padding: "6px", maxHeight: "300px", overflow: "auto",
-            }}>
-              <JsonValue value={exec.result} />
-            </Box>
+            <ToolDataView value={exec.result} label="Result" chat={chat} />
           </CollapsibleSection>
         )}
 
         {isError && exec.result !== undefined && (
           <CollapsibleSection label="Error" defaultOpen={true} color="red">
-            <Box style={{
-              padding: "6px", backgroundColor: "var(--red-a3)", borderRadius: "4px",
-            }}>
-              <Text size="1" color="red" style={{ whiteSpace: "pre-wrap" }}>
-                {typeof exec.result === "string" ? exec.result : JSON.stringify(exec.result, null, 2)}
-              </Text>
-            </Box>
+            <ToolDataView value={exec.result} label="Error" chat={chat} />
           </CollapsibleSection>
         )}
 
@@ -246,8 +260,8 @@ export const ExpandedAction = React.memo(function ExpandedAction({
         )}
 
         {exec.resultTruncated && (
-          <Text size="1" color="gray" style={{ opacity: 0.6 }}>
-            Result truncated
+          <Text size="1" color="amber">
+            Result was marked truncated before it reached the chat renderer.
           </Text>
         )}
       </Flex>

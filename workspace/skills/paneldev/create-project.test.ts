@@ -27,7 +27,7 @@ function addFile(p: string, content: string | Uint8Array): void {
 
 vi.mock("@workspace/runtime", () => ({
   gitConfig: { serverUrl: "http://git.local", token: "token" },
-  git: { syncRepoToContexts: vi.fn() },
+  git: { client: vi.fn(() => ({})), syncRepoToContexts: vi.fn() },
   fs: {
     async exists(p: string): Promise<boolean> {
       const normalized = normalize(p);

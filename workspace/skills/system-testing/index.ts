@@ -1,5 +1,7 @@
 export { HeadlessRunner } from "./runner.js";
 export { TestRunner } from "./test-runner.js";
+export { summarizeFailures } from "./diagnostics.js";
+export type { FailureDiagnostic, FailureReport } from "./diagnostics.js";
 export type { TestCase, TestResult, TestSuiteResult, TestExecutionResult } from "./types.js";
 export type { SessionSnapshot } from "@workspace/agentic-session";
 
@@ -17,6 +19,12 @@ export { skillTests } from "./tests/skills.js";
 export { agentCapabilityTests } from "./tests/agent-capabilities.js";
 export { rpcTests } from "./tests/rpc-communication.js";
 export { edgeCaseTests } from "./tests/edge-cases.js";
+export { agenticRuntimeTests } from "./tests/agentic-runtime.js";
+export { interactionSurfaceTests } from "./tests/interaction-surfaces.js";
+export { docsProbeTests } from "./tests/docs-probes.js";
+export { projectLifecycleTests } from "./tests/project-lifecycle.js";
+export { cdpGadDiagnosticTests } from "./tests/cdp-gad-diagnostics.js";
+export { harnessResilienceTests } from "./tests/harness-resilience.js";
 
 // Convenience: all tests combined
 import { smokeTests as _smoke } from "./tests/smoke.js";
@@ -32,12 +40,23 @@ import { skillTests as _skills } from "./tests/skills.js";
 import { agentCapabilityTests as _agent } from "./tests/agent-capabilities.js";
 import { rpcTests as _rpc } from "./tests/rpc-communication.js";
 import { edgeCaseTests as _edge } from "./tests/edge-cases.js";
+import { agenticRuntimeTests as _agenticRuntime } from "./tests/agentic-runtime.js";
+import { interactionSurfaceTests as _interaction } from "./tests/interaction-surfaces.js";
+import { docsProbeTests as _docs } from "./tests/docs-probes.js";
+import { projectLifecycleTests as _projectLifecycle } from "./tests/project-lifecycle.js";
+import { cdpGadDiagnosticTests as _cdpGad } from "./tests/cdp-gad-diagnostics.js";
+import { harnessResilienceTests as _harnessResilience } from "./tests/harness-resilience.js";
 import type { TestCase } from "./types.js";
 
 export function allTests(): TestCase[] {
   return [
     ..._smoke, ..._fs, ..._git, ..._panels, ..._workers,
     ..._build, ..._oauth, ..._ws, ..._notif, ..._skills,
-    ..._agent, ..._rpc, ..._edge,
+    ..._agent, ..._rpc, ..._edge, ..._agenticRuntime, ..._interaction,
+    ..._projectLifecycle, ..._cdpGad, ..._harnessResilience, ..._docs,
   ];
+}
+
+export function testCategories(tests: TestCase[] = allTests()): string[] {
+  return [...new Set(tests.map((test) => test.category))];
 }

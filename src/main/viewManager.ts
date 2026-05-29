@@ -30,6 +30,7 @@ import {
 
 import { createDevLogger } from "@natstack/dev-log";
 import { ShellOverlayView, type ShellOverlayOptions } from "./shellOverlayView.js";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 
 const log = createDevLogger("ViewManager");
 
@@ -44,7 +45,7 @@ export interface ViewConfig {
   /** Unique view ID (typically panel ID) */
   id: string;
   /** View type for tracking */
-  type: "shell" | "panel";
+  type: "shell" | "panel" | "app";
   /** Session partition for browser views (shared session for cookies/auth). Omit for default session. */
   partition?: string;
   /** Preload script path. Set to null to disable preload (for browsers). */
@@ -55,16 +56,25 @@ export interface ViewConfig {
   parentId?: string;
   /** Whether to inject host theme CSS */
   injectHostThemeVariables?: boolean;
+  /** App capabilities declared by the active app manifest. */
+  appCapabilities?: readonly AppCapability[];
+  /** Full-window host chrome app. These views are not panel content. */
+  hostChrome?: boolean;
+  /** Workspace source path and effective version for app principals. */
+  appIdentity?: { source?: string; effectiveVersion?: string | null };
 }
 
 interface ManagedView {
   id: string;
   view: WebContentsView;
-  type: "shell" | "panel";
+  type: "shell" | "panel" | "app";
   parentId?: string;
   visible: boolean;
   bounds: ViewBounds;
   injectHostThemeVariables: boolean;
+  appCapabilities: readonly AppCapability[];
+  hostChrome: boolean;
+  appIdentity?: { source?: string; effectiveVersion?: string | null };
   themeCssKey?: string;
   /** Stored event handlers for proper cleanup */
   handlers?: {
@@ -72,6 +82,26 @@ interface ManagedView {
     contextMenu: (event: Electron.Event, params: Electron.ContextMenuParams) => void;
     renderProcessGone: (event: Electron.Event, details: Electron.RenderProcessGoneDetails) => void;
   };
+}
+
+export type NativePanelSlotBounds = ViewBounds;
+
+interface NativePanelSlotState {
+  nativeSlotId: string;
+  panelId: string;
+  bounds: ViewBounds;
+  focused: boolean;
+  ownerViewId: string;
+  ownerGeneration: number;
+}
+
+interface NativePanelSlotModel {
+  hostedShellReady: boolean;
+  activeSlots: Map<string, NativePanelSlotState>;
+  panelToSlot: Map<string, string>;
+  focusedNativeSlotId: string | null;
+  activeHostedShellViewId: string | null;
+  hostedShellGeneration: number;
 }
 
 /**
@@ -110,8 +140,17 @@ export class ViewManager {
     notificationBarHeight: 0,
     consentBarHeight: 0,
   };
+  private panelViewportBounds: ViewBounds | null = null;
   /** ID of the currently visible panel (to apply bounds updates) */
   private visiblePanelId: string | null = null;
+  private nativePanelSlots: NativePanelSlotModel = {
+    hostedShellReady: false,
+    activeSlots: new Map(),
+    panelToSlot: new Map(),
+    focusedNativeSlotId: null,
+    activeHostedShellViewId: null,
+    hostedShellGeneration: 0,
+  };
   /** Whether a shell overlay (dialog) is active — panel views are hidden while true */
   private shellOverlayActive = false;
 
@@ -142,14 +181,14 @@ export class ViewManager {
     showWindowOnShellLoad?: boolean;
   }) {
     this.window = options.window;
-    // Create shell view (React UI) - fills entire window
-    // nodeIntegration enabled for direct fs/git access (shell is trusted app UI)
+    // Create the minimal shipped bootstrap/recovery UI. The full shell is a
+    // workspace app; this surface only owns host recovery and approval actions.
     this.shellView = new WebContentsView({
       webPreferences: {
         preload: options.shellPreload,
-        nodeIntegration: true,
-        contextIsolation: false,
-        sandbox: false,
+        nodeIntegration: false,
+        contextIsolation: true,
+        sandbox: true,
         additionalArguments: options.shellAdditionalArguments,
       },
     });
@@ -175,6 +214,8 @@ export class ViewManager {
       visible: true,
       bounds: { x: 0, y: 0, width: 0, height: 0 },
       injectHostThemeVariables: false,
+      appCapabilities: [],
+      hostChrome: false,
     });
     this.webContentsIdToViewId.set(this.shellView.webContents.id, "shell");
 
@@ -204,7 +245,7 @@ export class ViewManager {
     });
 
     this.shellView.webContents.on("before-input-event", (event, input) => {
-      const panelId = this.visiblePanelId;
+      const panelId = this.getFocusedPanelId();
       if (!panelId || this.nativeShellOverlay.isVisible()) return;
       const focused = electronWebContents.getFocusedWebContents();
       if (focused && focused.id !== this.shellView.webContents.id) return;
@@ -223,7 +264,8 @@ export class ViewManager {
     // Update shell and panel bounds when window resizes
     this.window.on("resize", () => {
       this.updateShellBounds();
-      this.applyBoundsToVisiblePanel();
+      this.updateHostChromeBounds();
+      this.refreshActivePanelSlots();
     });
 
     // Track window visibility for protected view management
@@ -251,6 +293,20 @@ export class ViewManager {
     const width = size[0] ?? 0;
     const height = size[1] ?? 0;
     this.shellView.setBounds({ x: 0, y: 0, width, height });
+  }
+
+  private fullWindowBounds(): ViewBounds {
+    const size = this.window.getContentSize();
+    return { x: 0, y: 0, width: size[0] ?? 0, height: size[1] ?? 0 };
+  }
+
+  private updateHostChromeBounds(): void {
+    const bounds = this.fullWindowBounds();
+    for (const managed of this.views.values()) {
+      if (!managed.hostChrome || !managed.visible) continue;
+      managed.bounds = bounds;
+      managed.view.setBounds(bounds);
+    }
   }
 
   /**
@@ -312,6 +368,9 @@ export class ViewManager {
       visible: false,
       bounds: { x: 0, y: 0, width: 0, height: 0 },
       injectHostThemeVariables: config.injectHostThemeVariables ?? true,
+      appCapabilities: config.type === "app" ? [...(config.appCapabilities ?? [])] : [],
+      hostChrome: config.type === "app" ? (config.hostChrome ?? false) : false,
+      appIdentity: config.type === "app" ? config.appIdentity : undefined,
     };
     this.views.set(config.id, managed);
     this.webContentsIdToViewId.set(view.webContents.id, config.id);
@@ -339,6 +398,14 @@ export class ViewManager {
         }
       },
       renderProcessGone: (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) => {
+        if (managed.type === "app" && this.nativePanelSlots.activeHostedShellViewId === config.id) {
+          this.nativePanelSlots.hostedShellReady = false;
+          this.clearAllPanelSlots();
+          managed.visible = false;
+          managed.view.setVisible(false);
+          this.shellView.setVisible(true);
+          this.reconcileNativeLayerOrder();
+        }
         if (["crashed", "oom", "launch-failed"].includes(details.reason)) {
           for (const cb of this.crashCallbacks) {
             cb(config.id, details.reason);
@@ -476,6 +543,16 @@ export class ViewManager {
       return;
     }
 
+    if (managed.type === "app" && this.nativePanelSlots.activeHostedShellViewId === id) {
+      this.setHostedShellReady(id, false);
+    }
+    if (managed.type === "panel") {
+      const nativeSlotId = this.nativePanelSlots.panelToSlot.get(id);
+      if (nativeSlotId) {
+        this.clearPanelSlotInternal(nativeSlotId, { notifyHidden: false });
+      }
+    }
+
     this.webContentsIdToViewId.delete(managed.view.webContents.id);
 
     // View destruction is a normal operation - no need to log
@@ -510,6 +587,158 @@ export class ViewManager {
 
     managed.bounds = bounds;
     managed.view.setBounds(bounds);
+  }
+
+  setPanelViewportBounds(bounds: ViewBounds | null): void {
+    this.panelViewportBounds = bounds ? this.normalizeBounds(bounds) : null;
+    this.applyBoundsToVisiblePanel();
+  }
+
+  setHostedShellReady(ownerViewId: string, ready: boolean): void {
+    const owner = this.views.get(ownerViewId);
+    if (!owner || owner.type !== "app" || !owner.hostChrome) {
+      throw new Error(`Hosted shell owner is not an active panel-hosting app: ${ownerViewId}`);
+    }
+
+    if (ready) {
+      if (this.nativePanelSlots.activeHostedShellViewId !== ownerViewId) {
+        this.nativePanelSlots.hostedShellGeneration += 1;
+      } else if (!this.nativePanelSlots.hostedShellReady) {
+        this.nativePanelSlots.hostedShellGeneration += 1;
+      }
+      this.clearAllPanelSlots();
+      this.nativePanelSlots.activeHostedShellViewId = ownerViewId;
+      this.nativePanelSlots.hostedShellReady = true;
+      this.shellView.setVisible(false);
+      this.setViewVisible(ownerViewId, true);
+      this.reconcileNativeLayerOrder();
+      return;
+    }
+
+    if (
+      this.nativePanelSlots.activeHostedShellViewId &&
+      this.nativePanelSlots.activeHostedShellViewId !== ownerViewId
+    ) {
+      throw new Error(
+        `Hosted shell owner mismatch: active=${this.nativePanelSlots.activeHostedShellViewId} caller=${ownerViewId}`
+      );
+    }
+
+    this.nativePanelSlots.hostedShellReady = false;
+    this.clearAllPanelSlots();
+    owner.visible = false;
+    owner.view.setVisible(false);
+    this.shellView.setVisible(true);
+    this.reconcileNativeLayerOrder();
+  }
+
+  bindPanelSlot(
+    ownerViewId: string,
+    request: {
+      nativeSlotId: string;
+      panelId: string;
+      bounds: NativePanelSlotBounds;
+      focused?: boolean;
+    }
+  ): void {
+    this.assertActiveHostedShellOwner(ownerViewId);
+    const nativeSlotId = this.validateNonEmptyId(request.nativeSlotId, "nativeSlotId");
+    const panelId = this.validateNonEmptyId(request.panelId, "panelId");
+    const managed = this.views.get(panelId);
+    if (!managed || managed.type !== "panel") {
+      throw new Error(`Native panel slot target is not a panel view: ${panelId}`);
+    }
+
+    const existingSlotForPanel = this.nativePanelSlots.panelToSlot.get(panelId);
+    if (existingSlotForPanel && existingSlotForPanel !== nativeSlotId) {
+      const message = `Panel ${panelId} is already bound to native slot ${existingSlotForPanel}; cannot bind to ${nativeSlotId}`;
+      console.warn(`[ViewManager] ${message}`);
+      throw new Error(message);
+    }
+
+    const previousSlot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    if (previousSlot && previousSlot.panelId !== panelId) {
+      this.clearPanelSlotInternal(nativeSlotId);
+    }
+
+    const bounds = this.normalizeAndClampPanelSlotBounds(request.bounds);
+    const generation = this.nativePanelSlots.hostedShellGeneration;
+    const focused = request.focused === true;
+    this.nativePanelSlots.activeSlots.set(nativeSlotId, {
+      nativeSlotId,
+      panelId,
+      bounds,
+      focused,
+      ownerViewId,
+      ownerGeneration: generation,
+    });
+    this.nativePanelSlots.panelToSlot.set(panelId, nativeSlotId);
+    this.visiblePanelId = panelId;
+
+    managed.bounds = bounds;
+    managed.visible = true;
+    managed.view.setBounds(bounds);
+    managed.view.setVisible(!this.shellOverlayActive);
+
+    if (focused) {
+      this.setFocusedNativePanelSlot(nativeSlotId);
+    } else if (this.nativePanelSlots.focusedNativeSlotId === nativeSlotId) {
+      this.nativePanelSlots.focusedNativeSlotId = null;
+    }
+    this.reconcileNativeLayerOrder();
+  }
+
+  updatePanelSlot(
+    ownerViewId: string,
+    request: { nativeSlotId: string; bounds?: NativePanelSlotBounds; focused?: boolean }
+  ): void {
+    this.assertActiveHostedShellOwner(ownerViewId);
+    const nativeSlotId = this.validateNonEmptyId(request.nativeSlotId, "nativeSlotId");
+    const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    if (!slot) {
+      log.verbose(`Ignoring update for unknown native panel slot: ${nativeSlotId}`);
+      return;
+    }
+    this.assertSlotOwner(slot, ownerViewId);
+
+    const managed = this.views.get(slot.panelId);
+    if (!managed || managed.type !== "panel") {
+      this.clearPanelSlotInternal(nativeSlotId);
+      return;
+    }
+
+    if (request.bounds) {
+      const bounds = this.normalizeAndClampPanelSlotBounds(request.bounds);
+      slot.bounds = bounds;
+      managed.bounds = bounds;
+      managed.view.setBounds(bounds);
+    }
+    if (typeof request.focused === "boolean") {
+      slot.focused = request.focused;
+      if (request.focused) {
+        this.setFocusedNativePanelSlot(nativeSlotId);
+      } else if (this.nativePanelSlots.focusedNativeSlotId === nativeSlotId) {
+        this.nativePanelSlots.focusedNativeSlotId = null;
+      }
+    }
+    this.reconcileNativeLayerOrder();
+  }
+
+  clearPanelSlot(ownerViewId: string, nativeSlotId: string): void {
+    this.assertActiveHostedShellOwner(ownerViewId);
+    const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    if (slot) this.assertSlotOwner(slot, ownerViewId);
+    this.clearPanelSlotInternal(nativeSlotId);
+    this.reconcileNativeLayerOrder();
+  }
+
+  clearAllPanelSlots(): void {
+    for (const nativeSlotId of Array.from(this.nativePanelSlots.activeSlots.keys())) {
+      this.clearPanelSlotInternal(nativeSlotId);
+    }
+    this.nativePanelSlots.focusedNativeSlotId = null;
+    this.visiblePanelId = null;
+    this.reconcileNativeLayerOrder();
   }
 
   /**
@@ -553,8 +782,15 @@ export class ViewManager {
 
     managed.visible = visible;
 
-    // Track visible panel and apply calculated bounds
-    if (visible && managed.type !== "shell") {
+    if (visible && managed.hostChrome) {
+      const bounds = this.fullWindowBounds();
+      managed.bounds = bounds;
+      managed.view.setBounds(bounds);
+      managed.view.setVisible(true);
+      this.bringToFront(id);
+      this.focusVisibleView(managed);
+    } else if (visible && managed.type !== "shell") {
+      // Track visible panel and apply calculated bounds
       this.visiblePanelId = id;
       const bounds = this.calculatePanelBounds();
       managed.bounds = bounds;
@@ -590,20 +826,12 @@ export class ViewManager {
     if (this.shellOverlayActive === active) return;
     this.shellOverlayActive = active;
 
-    if (!this.visiblePanelId) return;
-    const managed = this.views.get(this.visiblePanelId);
-    if (!managed) return;
-
-    if (active) {
-      // Hide the panel view so the shell dialog shows through
-      managed.view.setVisible(false);
-    } else {
-      // Re-show the panel and restore z-order
-      managed.view.setVisible(true);
-      managed.view.setBounds(managed.bounds);
-      this.bringToFront(this.visiblePanelId);
-      this.focusVisibleView(managed);
+    for (const slot of this.nativePanelSlots.activeSlots.values()) {
+      const managed = this.views.get(slot.panelId);
+      if (!managed) continue;
+      managed.view.setVisible(!active);
     }
+    this.reconcileNativeLayerOrder();
   }
 
   private focusVisibleView(managed: ManagedView): void {
@@ -615,14 +843,17 @@ export class ViewManager {
 
   showNativeShellOverlay(options: ShellOverlayOptions): void {
     this.nativeShellOverlay.show(options);
+    this.reconcileNativeLayerOrder();
   }
 
   updateNativeShellOverlay(options: Partial<ShellOverlayOptions> & { id?: string }): void {
     this.nativeShellOverlay.update(options);
+    this.reconcileNativeLayerOrder();
   }
 
   hideNativeShellOverlay(id?: string): void {
     this.nativeShellOverlay.hide(id);
+    this.reconcileNativeLayerOrder();
   }
 
   isNativeShellOverlayVisible(): boolean {
@@ -633,6 +864,10 @@ export class ViewManager {
    * Calculate the bounds for the panel content area based on current layout state.
    */
   private calculatePanelBounds(): ViewBounds {
+    if (this.panelViewportBounds) {
+      return this.clampPanelBoundsToChrome(this.panelViewportBounds);
+    }
+
     const size = this.window.getContentSize();
     const windowWidth = size[0] ?? 0;
     const windowHeight = size[1] ?? 0;
@@ -664,10 +899,142 @@ export class ViewManager {
     this.applyBoundsToVisiblePanel();
   }
 
+  private normalizeBounds(bounds: ViewBounds): ViewBounds {
+    return {
+      x: Math.max(0, Math.round(bounds.x)),
+      y: Math.max(0, Math.round(bounds.y)),
+      width: Math.max(0, Math.round(bounds.width)),
+      height: Math.max(0, Math.round(bounds.height)),
+    };
+  }
+
+  private validateNonEmptyId(id: string, label: string): string {
+    if (typeof id !== "string" || id.trim().length === 0) {
+      throw new Error(`${label} must be a non-empty string`);
+    }
+    return id;
+  }
+
+  private assertActiveHostedShellOwner(ownerViewId: string): void {
+    if (!this.nativePanelSlots.hostedShellReady) {
+      throw new Error("Hosted shell is not ready for native panel slots");
+    }
+    if (this.nativePanelSlots.activeHostedShellViewId !== ownerViewId) {
+      throw new Error(
+        `Native panel slot caller is not active hosted shell: active=${this.nativePanelSlots.activeHostedShellViewId} caller=${ownerViewId}`
+      );
+    }
+  }
+
+  private assertSlotOwner(slot: NativePanelSlotState, ownerViewId: string): void {
+    if (
+      slot.ownerViewId !== ownerViewId ||
+      slot.ownerGeneration !== this.nativePanelSlots.hostedShellGeneration
+    ) {
+      throw new Error(
+        `Native panel slot owner mismatch: slot=${slot.nativeSlotId} owner=${slot.ownerViewId}/${slot.ownerGeneration} caller=${ownerViewId}/${this.nativePanelSlots.hostedShellGeneration}`
+      );
+    }
+  }
+
+  private normalizeAndClampPanelSlotBounds(bounds: ViewBounds): ViewBounds {
+    for (const [key, value] of Object.entries(bounds)) {
+      if (typeof value !== "number" || !Number.isFinite(value)) {
+        throw new Error(`Native panel slot bounds.${key} must be finite`);
+      }
+    }
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      throw new Error("Native panel slot bounds must have positive width and height");
+    }
+    const normalized = this.normalizeBounds(bounds);
+    const [windowWidth = 0, windowHeight = 0] = this.window.getContentSize();
+    return {
+      x: Math.min(normalized.x, Math.max(0, windowWidth)),
+      y: Math.min(normalized.y, Math.max(0, windowHeight)),
+      width: Math.min(normalized.width, Math.max(0, windowWidth - normalized.x)),
+      height: Math.min(normalized.height, Math.max(0, windowHeight - normalized.y)),
+    };
+  }
+
+  private clearPanelSlotInternal(
+    nativeSlotId: string,
+    options: { notifyHidden?: boolean } = {}
+  ): void {
+    const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    if (!slot) return;
+
+    this.nativePanelSlots.activeSlots.delete(nativeSlotId);
+    this.nativePanelSlots.panelToSlot.delete(slot.panelId);
+    if (this.nativePanelSlots.focusedNativeSlotId === nativeSlotId) {
+      this.nativePanelSlots.focusedNativeSlotId = null;
+    }
+    if (this.visiblePanelId === slot.panelId) {
+      this.visiblePanelId = this.getFocusedPanelId();
+    }
+
+    const managed = this.views.get(slot.panelId);
+    if (managed) {
+      managed.visible = false;
+      managed.view.setVisible(false);
+      if (options.notifyHidden !== false) {
+        for (const cb of this.viewHiddenCallbacks) {
+          cb(slot.panelId);
+        }
+      }
+    }
+  }
+
+  private setFocusedNativePanelSlot(nativeSlotId: string): void {
+    for (const slot of this.nativePanelSlots.activeSlots.values()) {
+      slot.focused = slot.nativeSlotId === nativeSlotId;
+    }
+    this.nativePanelSlots.focusedNativeSlotId = nativeSlotId;
+    const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    if (!slot) return;
+    const managed = this.views.get(slot.panelId);
+    if (managed) {
+      this.visiblePanelId = slot.panelId;
+      this.focusVisibleView(managed);
+    }
+  }
+
+  private getFocusedPanelId(): string | null {
+    const focusedSlotId = this.nativePanelSlots.focusedNativeSlotId;
+    if (focusedSlotId) {
+      return this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId ?? null;
+    }
+    return this.visiblePanelId;
+  }
+
+  private chromeTopOffset(): number {
+    const { titleBarHeight, saveBarHeight, notificationBarHeight, consentBarHeight } =
+      this.layoutState;
+    return titleBarHeight + notificationBarHeight + saveBarHeight + consentBarHeight;
+  }
+
+  private clampPanelBoundsToChrome(bounds: ViewBounds): ViewBounds {
+    const [windowWidth = 0, windowHeight = 0] = this.window.getContentSize();
+    const minY = this.chromeTopOffset();
+    const y = Math.max(bounds.y, minY);
+    const lostHeight = Math.max(0, y - bounds.y);
+    const maxWidth = Math.max(0, windowWidth - bounds.x);
+    const maxHeight = Math.max(0, windowHeight - y);
+
+    return {
+      x: bounds.x,
+      y,
+      width: Math.min(bounds.width, maxWidth),
+      height: Math.min(Math.max(0, bounds.height - lostHeight), maxHeight),
+    };
+  }
+
   /**
    * Apply calculated bounds to the currently visible panel.
    */
   private applyBoundsToVisiblePanel(): void {
+    if (this.nativePanelSlots.activeSlots.size > 0) {
+      return;
+    }
     if (!this.visiblePanelId) {
       return;
     }
@@ -680,6 +1047,11 @@ export class ViewManager {
     const bounds = this.calculatePanelBounds();
     managed.bounds = bounds;
     managed.view.setBounds(bounds);
+    if (this.shellOverlayActive) {
+      managed.view.setVisible(false);
+    } else {
+      managed.view.setVisible(true);
+    }
   }
 
   /**
@@ -719,6 +1091,43 @@ export class ViewManager {
     this.nativeShellOverlay.bringToFront();
   }
 
+  private reconcileNativeLayerOrder(): void {
+    if (this.window.isDestroyed()) return;
+
+    const readd = (managed: ManagedView) => {
+      this.window.contentView.removeChildView(managed.view);
+      this.window.contentView.addChildView(managed.view);
+    };
+
+    if (!this.nativePanelSlots.hostedShellReady) {
+      const shellManaged = this.views.get("shell");
+      if (shellManaged) readd(shellManaged);
+    }
+
+    const hostedShellId = this.nativePanelSlots.activeHostedShellViewId;
+    if (hostedShellId && this.nativePanelSlots.hostedShellReady) {
+      const hostedShell = this.views.get(hostedShellId);
+      if (hostedShell) readd(hostedShell);
+    }
+
+    for (const slot of this.nativePanelSlots.activeSlots.values()) {
+      if (slot.nativeSlotId === this.nativePanelSlots.focusedNativeSlotId) continue;
+      const managed = this.views.get(slot.panelId);
+      if (managed) readd(managed);
+    }
+    const focusedSlotId = this.nativePanelSlots.focusedNativeSlotId;
+    const focusedPanelId = focusedSlotId
+      ? this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId
+      : null;
+    const focusedManaged = focusedPanelId ? this.views.get(focusedPanelId) : null;
+    if (focusedManaged) readd(focusedManaged);
+
+    for (const cb of this.viewOrderChangedCallbacks) {
+      cb();
+    }
+    this.nativeShellOverlay.bringToFront();
+  }
+
   /**
    * Register a callback invoked after every bringToFront() call.
    * Used by AutofillManager to re-add the dropdown overlay on top.
@@ -741,6 +1150,10 @@ export class ViewManager {
    * For compositor recovery, use forceRepaint() or forceRepaintVisiblePanel().
    */
   refreshVisiblePanel(): void {
+    if (this.nativePanelSlots.activeSlots.size > 0) {
+      this.refreshActivePanelSlots();
+      return;
+    }
     if (!this.visiblePanelId) {
       return;
     }
@@ -750,11 +1163,15 @@ export class ViewManager {
       return;
     }
 
-    // Refresh bounds and z-order (compositor recovery handled by stall detector
-    // and forceRepaint — not here, to avoid operating on the wrong panel during switches)
+    // Refresh bounds, raw visibility, and z-order. The tracked visible state can
+    // be true while Chromium has dropped the native layer; reasserting
+    // setVisible(true) recovers that case without a full visibility cycle.
     const bounds = this.calculatePanelBounds();
     managed.bounds = bounds;
     managed.view.setBounds(bounds);
+    if (!this.shellOverlayActive) {
+      managed.view.setVisible(true);
+    }
     this.bringToFront(this.visiblePanelId);
   }
 
@@ -763,8 +1180,27 @@ export class ViewManager {
    * Convenience method for menu items that don't know the panel ID.
    */
   forceRepaintVisiblePanel(): boolean {
-    if (!this.visiblePanelId) return false;
-    return this.forceRepaint(this.visiblePanelId);
+    if (this.nativePanelSlots.activeSlots.size > 0) {
+      let repainted = false;
+      for (const slot of this.nativePanelSlots.activeSlots.values()) {
+        repainted = this.forceRepaint(slot.panelId) || repainted;
+      }
+      return repainted;
+    }
+    const panelId = this.visiblePanelId;
+    if (!panelId) return false;
+    return this.forceRepaint(panelId);
+  }
+
+  refreshActivePanelSlots(): void {
+    for (const slot of this.nativePanelSlots.activeSlots.values()) {
+      const managed = this.views.get(slot.panelId);
+      if (!managed || !managed.visible) continue;
+      managed.bounds = slot.bounds;
+      managed.view.setBounds(slot.bounds);
+      managed.view.setVisible(!this.shellOverlayActive);
+    }
+    this.reconcileNativeLayerOrder();
   }
 
   /**
@@ -876,6 +1312,10 @@ export class ViewManager {
     if (!managed) {
       return null;
     }
+    if (managed.type === "panel" && !managed.visible && !this.isPanelSlotted(id)) {
+      console.warn(`[ViewManager] Refusing to capture unslotted hidden panel: ${id}`);
+      return null;
+    }
 
     const contents = managed.view.webContents;
     if (contents.isDestroyed()) {
@@ -895,6 +1335,28 @@ export class ViewManager {
   isViewVisible(id: string): boolean {
     const managed = this.views.get(id);
     return managed?.visible ?? false;
+  }
+
+  isPanelSlotted(id: string): boolean {
+    return this.nativePanelSlots.panelToSlot.has(id);
+  }
+
+  getNativePanelSlotDebugInfo(): Array<{
+    nativeSlotId: string;
+    panelId: string;
+    bounds: ViewBounds;
+    focused: boolean;
+    ownerViewId: string;
+    ownerGeneration: number;
+  }> {
+    return Array.from(this.nativePanelSlots.activeSlots.values()).map((slot) => ({
+      nativeSlotId: slot.nativeSlotId,
+      panelId: slot.panelId,
+      bounds: { ...slot.bounds },
+      focused: slot.focused,
+      ownerViewId: slot.ownerViewId,
+      ownerGeneration: slot.ownerGeneration,
+    }));
   }
 
   /**
@@ -943,7 +1405,13 @@ export class ViewManager {
   /**
    * Get view info for debugging.
    */
-  getViewInfo(id: string): { type: string; visible: boolean; bounds: ViewBounds } | null {
+  getViewInfo(id: string): {
+    type: string;
+    visible: boolean;
+    bounds: ViewBounds;
+    capabilities: readonly AppCapability[];
+    appIdentity?: { source?: string; effectiveVersion?: string | null };
+  } | null {
     const managed = this.views.get(id);
     if (!managed) {
       return null;
@@ -953,7 +1421,25 @@ export class ViewManager {
       type: managed.type,
       visible: managed.visible,
       bounds: managed.bounds,
+      capabilities: managed.appCapabilities,
+      appIdentity: managed.appIdentity,
     };
+  }
+
+  getVisibleHostChromeAppId(): string | null {
+    for (const [id, managed] of this.views) {
+      if (managed.type === "app" && managed.hostChrome && managed.visible) {
+        return id;
+      }
+    }
+    return null;
+  }
+
+  openHostChromeAppDevTools(mode: "detach" | "right" | "bottom" = "detach"): boolean {
+    const appId = this.getVisibleHostChromeAppId();
+    if (!appId) return false;
+    this.openDevTools(appId, mode);
+    return true;
   }
 
   /**
@@ -1028,6 +1514,30 @@ export class ViewManager {
     }
 
     await contents.loadURL(url);
+  }
+
+  async updateAppView(
+    id: string,
+    url: string,
+    capabilities?: readonly AppCapability[],
+    identity?: { source?: string; effectiveVersion?: string | null }
+  ): Promise<void> {
+    const managed = this.views.get(id);
+    if (!managed) throw new Error(`View not found: ${id}`);
+    if (managed.type !== "app") throw new Error(`View is not an app view: ${id}`);
+    managed.appCapabilities = [...(capabilities ?? [])];
+    managed.hostChrome = capabilities?.includes("panel-hosting") ?? false;
+    if (!managed.hostChrome && this.nativePanelSlots.activeHostedShellViewId === id) {
+      this.nativePanelSlots.hostedShellReady = false;
+      this.clearAllPanelSlots();
+      managed.visible = false;
+      managed.view.setVisible(false);
+      this.shellView.setVisible(true);
+      this.reconcileNativeLayerOrder();
+    }
+    managed.appIdentity = identity;
+    await managed.view.webContents.loadURL(url);
+    if (managed.visible) this.updateLayout({});
   }
 
   /**
@@ -1152,12 +1662,24 @@ export class ViewManager {
    */
   private keepCompositorAlive(): void {
     if (this.window.isDestroyed()) return;
+    if (!this.windowVisible) return;
+
+    const slots = Array.from(this.nativePanelSlots.activeSlots.values());
+    if (slots.length > 0) {
+      for (const slot of slots) {
+        const managed = this.views.get(slot.panelId);
+        if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) continue;
+        managed.bounds = slot.bounds;
+        managed.view.setBounds(slot.bounds);
+        managed.view.webContents.invalidate();
+      }
+      return;
+    }
+
     const panelId = this.visiblePanelId;
-    if (!panelId || !this.windowVisible) return;
+    if (!panelId) return;
     const managed = this.views.get(panelId);
     if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
-
-    // Re-apply bounds to nudge the compositor without stealing focus
     const bounds = this.calculatePanelBounds();
     managed.bounds = bounds;
     managed.view.setBounds(bounds);
@@ -1204,11 +1726,20 @@ export class ViewManager {
    */
   private async detectAndRecoverStall(): Promise<void> {
     if (this.window.isDestroyed()) return;
+    if (!this.windowVisible) return;
+
+    const slots = Array.from(this.nativePanelSlots.activeSlots.values());
+    if (slots.length > 0) {
+      for (const slot of slots) {
+        await this.detectAndRecoverPanelSlotStall(slot);
+      }
+      return;
+    }
+
     const panelId = this.visiblePanelId;
-    if (!panelId || !this.windowVisible) return;
+    if (!panelId) return;
     const managed = this.views.get(panelId);
     if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
-
     try {
       const image = await managed.view.webContents.capturePage();
 
@@ -1222,6 +1753,28 @@ export class ViewManager {
         const bounds = this.calculatePanelBounds();
         managed.bounds = bounds;
         managed.view.setBounds(bounds);
+        managed.view.webContents.invalidate();
+        this.cycleCompositorVisibility(managed);
+      }
+    } catch {
+      // capturePage failed (webContents navigating, destroyed, etc.) — skip
+    }
+  }
+
+  private async detectAndRecoverPanelSlotStall(slot: NativePanelSlotState): Promise<void> {
+    const managed = this.views.get(slot.panelId);
+    if (!managed || !managed.visible || managed.view.webContents.isDestroyed()) return;
+
+    try {
+      const image = await managed.view.webContents.capturePage();
+      if (this.nativePanelSlots.activeSlots.get(slot.nativeSlotId)?.panelId !== slot.panelId) {
+        return;
+      }
+      if (image.isEmpty()) {
+        log.verbose(` Compositor stall detected on ${slot.panelId} (empty capture) — recovering`);
+        this.reconcileNativeLayerOrder();
+        managed.bounds = slot.bounds;
+        managed.view.setBounds(slot.bounds);
         managed.view.webContents.invalidate();
         this.cycleCompositorVisibility(managed);
       }

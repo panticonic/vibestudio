@@ -17,11 +17,20 @@ export type {
   ChatParticipantMetadata,
   ConnectionConfig,
   AgenticChatActions,
+  AvailableAgent,
+  ConnectProviderResult,
   ChatSandboxValue,
   SandboxConfig,
   ToolProviderDeps,
   ToolProvider,
 } from "./types.js";
+// Model catalog shared types (re-exported so chat/panel import one surface).
+export type {
+  AgentThinkingLevel as ModelAgentThinkingLevel,
+  ModelCatalog,
+  ModelCatalogEntry,
+  ModelCatalogProvider,
+} from "@natstack/shared/models/catalog";
 export type {
   AgentApprovalLevel,
   AgentRespondPolicy,

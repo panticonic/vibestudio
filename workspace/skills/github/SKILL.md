@@ -117,14 +117,14 @@ adapter handles `https://github.com/...` git remotes without exposing the PAT to
 panels or workers.
 
 ```ts
-import { credentials, fs } from "@workspace/runtime";
-import { GitClient } from "@natstack/git";
+import { git } from "@workspace/runtime";
 
-const git = new GitClient(fs, { http: credentials.gitHttp() });
-await git.clone({
+const client = git.client();
+await client.clone({
   url: "https://github.com/owner/repo.git",
   dir: "/repo",
 });
+const status = await client.status("/repo");
 ```
 
 For normal runtime code, prefer the runtime helper. It routes relative NatStack
@@ -138,6 +138,9 @@ const client = git.client();
 await client.clone({ url: "https://github.com/owner/repo.git", dir: "/repo" });
 await client.push({ dir: "/repo" });
 ```
+
+Use `client.status(dir)` for structured status. Use `client.statusMatrix(dir)`
+only when raw isomorphic-git HEAD/WORKDIR/STAGE tuples are needed.
 
 To make a GitHub remote available to future workspace contexts, configure it as
 a shared remote instead of only editing the current context's `.git/config`.

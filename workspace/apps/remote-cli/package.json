@@ -1,0 +1,21 @@
+{
+  "name": "@workspace-apps/remote-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "natstack": {
+    "displayName": "NatStack Remote CLI",
+    "app": {
+      "target": "terminal",
+      "entry": "index.ts",
+      "capabilities": [
+        "connection-management"
+      ]
+    }
+  },
+  "dependencies": {
+    "@natstack/rpc": "workspace:*",
+    "ws": "^8.18.3",
+    "@natstack/shared": "workspace:*"
+  }
+}

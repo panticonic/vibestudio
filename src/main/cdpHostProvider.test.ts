@@ -27,15 +27,16 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
     detach: vi.fn(),
     sendCommand,
   });
-  const contents = {
+  const contents = Object.assign(new EventEmitter(), {
     isDestroyed: vi.fn(() => false),
+    getURL: vi.fn(() => "https://example.com/app"),
     loadURL: vi.fn(async () => undefined),
     reload: vi.fn(),
     goBack: vi.fn(),
     goForward: vi.fn(),
     stop: vi.fn(),
     debugger: debuggerApi,
-  };
+  });
   const provider = new CdpHostProvider({
     serverUrl,
     authToken: "token",
@@ -373,6 +374,99 @@ describe("CdpHostProvider", () => {
       requestId: "h2",
       result: [{ nodeId: 1 }],
     });
+  });
+
+  it("captures historical console messages with separate error retention", async () => {
+    const { provider, socket, contents } = createHarness();
+    provider.registerTarget("panel-1", 42);
+    provider.start();
+    socket.emit("open");
+
+    contents.emit("console-message", {}, "info", "loaded", 12, "app.tsx");
+    contents.emit("console-message", {}, "error", "render failed", 34, "view.tsx");
+
+    await provider.handleProviderMessageForTest({
+      type: "host:command",
+      targetId: "panel-1",
+      requestId: "h-console",
+      action: "consoleHistory",
+      args: [{ limit: 10, errorLimit: 10 }],
+    });
+
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
+      type: "host:result",
+      targetId: "panel-1",
+      requestId: "h-console",
+      result: {
+        entries: [
+          expect.objectContaining({
+            level: "info",
+            message: "loaded",
+            line: 12,
+            sourceId: "app.tsx",
+            url: "https://example.com/app",
+          }),
+          expect.objectContaining({
+            level: "error",
+            message: "render failed",
+            line: 34,
+            sourceId: "view.tsx",
+            url: "https://example.com/app",
+          }),
+        ],
+        errors: [
+          expect.objectContaining({
+            level: "error",
+            message: "render failed",
+          }),
+        ],
+        dropped: { entries: 0, errors: 0 },
+        capacity: { entries: 1000, errors: 500 },
+      },
+    });
+  });
+
+  it("supports filtering historical console entries without removing the error buffer", () => {
+    const { provider, contents } = createHarness();
+    provider.registerTarget("panel-1", 42);
+
+    contents.emit("console-message", {}, "info", "context", 1, "app.tsx");
+    contents.emit("console-message", {}, "error", "boom", 2, "app.tsx");
+
+    expect(provider.getConsoleHistory("panel-1", { levels: ["info"] })).toMatchObject({
+      entries: [expect.objectContaining({ level: "info", message: "context" })],
+      errors: [expect.objectContaining({ level: "error", message: "boom" })],
+      dropped: { entries: 0, errors: 0 },
+      capacity: { entries: 1000, errors: 500 },
+    });
+  });
+
+  it("captures renderer lifecycle failures in the historical diagnostics buffer", () => {
+    const { provider, contents } = createHarness();
+    provider.registerTarget("panel-1", 42);
+
+    contents.emit("render-process-gone", {}, { reason: "crashed", exitCode: 9 });
+    contents.emit("did-fail-load", {}, -105, "Name not resolved", "https://bad.test", true);
+
+    const history = provider.getConsoleHistory("panel-1", { errorLimit: 10 });
+
+    expect(history.errors).toEqual([
+      expect.objectContaining({
+        level: "error",
+        message: "render-process-gone",
+        source: "lifecycle",
+        fields: { reason: "crashed", exitCode: 9 },
+      }),
+      expect.objectContaining({
+        level: "error",
+        message: "did-fail-load",
+        source: "lifecycle",
+        fields: expect.objectContaining({
+          errorCode: -105,
+          errorDescription: "Name not resolved",
+        }),
+      }),
+    ]);
   });
 
   it("runs broker navigation commands against the target webContents", async () => {

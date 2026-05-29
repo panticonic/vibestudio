@@ -10,7 +10,7 @@ export function terminalStartupPendingLabel(args: {
 }): string | undefined {
   if (!args.pending) return undefined;
   const suffix = args.elapsedSeconds >= 1 ? ` ${args.elapsedSeconds}s` : "";
-  if (isExtensionApprovalPending(args.shellUnit)) return `Waiting for extension approval...${suffix}`;
+  if (isUnitApprovalPending(args.shellUnit)) return `Waiting for unit approval...${suffix}`;
   if (isExtensionPreparing(args.shellUnit)) {
     return args.elapsedSeconds >= 20
       ? `Still preparing terminal...${suffix}`
@@ -39,10 +39,10 @@ export function terminalStartupDetail(args: {
       detail: "Start a shell session in this workspace.",
     };
   }
-  if (isExtensionApprovalPending(args.shellUnit)) {
+  if (isUnitApprovalPending(args.shellUnit)) {
     return {
-      title: "Approve shell extension",
-      detail: "The terminal is waiting for the shell extension approval bar before it can start.",
+      title: "Approve shell unit",
+      detail: "The terminal is waiting for the shell unit approval before it can start.",
     };
   }
   if (isExtensionPreparing(args.shellUnit)) {
@@ -67,7 +67,7 @@ export function terminalStartupDetail(args: {
   };
 }
 
-export function isExtensionApprovalPending(shellUnit: StartupUnitStatus): boolean {
+export function isUnitApprovalPending(shellUnit: StartupUnitStatus): boolean {
   return !!shellUnit?.pendingApproval || shellUnit?.status === "pending-approval";
 }
 

@@ -47,10 +47,10 @@ export class FrameImpl {
     // Evaluate click via CDP
     await this._cdpAdapter.evaluate({
       expression: `
-        (() => {
-          const element = document.querySelector('${selector}');
+        ((selector) => {
+          const element = document.querySelector(selector);
           if (element) element.click();
-        })()
+        })(${JSON.stringify(selector)})
       `,
       returnByValue: true,
     });
@@ -66,14 +66,14 @@ export class FrameImpl {
     // Evaluate fill via CDP
     await this._cdpAdapter.evaluate({
       expression: `
-        (() => {
-          const element = document.querySelector('${selector}');
+        ((selector, value) => {
+          const element = document.querySelector(selector);
           if (element) {
-            element.value = '${value.replace(/'/g, "\\'")}';
+            element.value = value;
             element.dispatchEvent(new Event('input', { bubbles: true }));
             element.dispatchEvent(new Event('change', { bubbles: true }));
           }
-        })()
+        })(${JSON.stringify(selector)}, ${JSON.stringify(value)})
       `,
       returnByValue: true,
     });

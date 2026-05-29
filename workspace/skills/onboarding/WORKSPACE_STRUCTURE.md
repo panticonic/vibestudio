@@ -20,6 +20,12 @@ source/
   agents/               ← Agent configurations
   workers/              ← Workerd Durable Object source
     agent-worker/       ← (git repo) Default AI chat worker
+  apps/                 ← Trusted workspace apps
+    shell/              ← @workspace-apps/shell (Electron shell target)
+    mobile/             ← @workspace-apps/mobile (React Native target)
+    remote-cli/         ← Optional terminal app target shape
+  extensions/           ← Trusted Node extension units
+    shell/              ← @workspace-extensions/shell
   about/                ← Built-in about/help pages
   templates/            ← Panel/worker scaffolding templates
   projects/             ← Plain editable repos, not runtime units
@@ -60,6 +66,30 @@ This means agents can freely read and write files in their context without affec
 
 Do not run destructive pruning on canonical source object stores unless the GC is context-aware. Context-only commits can be reachable from context refs even before their refs are pushed.
 
+## Trusted Apps And Extensions
+
+Apps and extensions use flat source paths. A package named
+`@workspace-apps/foo` lives at `apps/foo`; a package named
+`@workspace-extensions/bar` lives at `extensions/bar`. Do not add package
+scope segments to the filesystem path.
+
+Workspace app targets are:
+
+- `electron` — browser/Electron shell surfaces.
+- `react-native` — mobile workspace app bundles.
+- `terminal` — supervised Node CLI/client processes for terminal-client style
+  tooling.
+
+Capabilities are explicit in `package.json`. Connection management actions
+such as minting a pairing invite require the `connection-management`
+capability.
+
+For the full trust and client-auth model, see
+`docs/trusted-workspace-units.md` in the NatStack source checkout.
+
+For authoring apps, target contracts, capabilities, mobile bootstrap, and
+terminal-client guidance, read `skills/appdev/SKILL.md`.
+
 ## Plain Projects
 
 `projects/` is for repositories that should be editable in the workspace but
@@ -88,4 +118,7 @@ The `workspace/` directory in the NatStack source repo is a **template**, never 
 2. Each subdirectory within the source dirs is initialized as a git repo (`git init` + initial commit)
 3. State directories are scaffolded fresh
 
-In dev mode (`pnpm dev`), an ephemeral workspace is created from the template each run.
+In dev mode (`pnpm dev`), an ephemeral workspace is created from the template
+each run. Accepted pushes from that generated workspace are mirrored back into
+the checked-in `workspace/` template, so committed workspace-unit edits made
+during a dev session persist into the source checkout.

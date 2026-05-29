@@ -1,6 +1,7 @@
 // @ts-expect-error Script modules are plain .mjs and intentionally untyped.
 import {
   bootstrapWorkspace,
+  classifySelfUpdatePath,
   createDogfoodPairHooks,
   shouldRestart,
   workspaceDir,
@@ -43,7 +44,29 @@ describe("dogfood server supervisor", () => {
     expect(shouldRestart(["src/server/index.ts"])).toBe(true);
     expect(shouldRestart(["packages/git-server/src/server.ts"])).toBe(true);
     expect(shouldRestart(["docs/remote-server.md", "README.md"])).toBe(false);
-    expect(shouldRestart(["src/main/index.ts", "apps/mobile/App.tsx"])).toBe(false);
+    expect(
+      shouldRestart([
+        "src/main/index.ts",
+        "src/renderer/index.tsx",
+        "apps/mobile/App.tsx",
+        "workspace/apps/shell/index.ts",
+      ])
+    ).toBe(false);
+  });
+
+  it("explains self-update path classes", () => {
+    expect(classifySelfUpdatePath("docs/remote-server.md")).toEqual({
+      kind: "docs",
+      requiresRestart: false,
+    });
+    expect(classifySelfUpdatePath("workspace/extensions/shell/index.ts")).toEqual({
+      kind: "workspace-runtime",
+      requiresRestart: false,
+    });
+    expect(classifySelfUpdatePath("src/server/index.ts")).toEqual({
+      kind: "server-runtime",
+      requiresRestart: true,
+    });
   });
 
   it("restarts after an applied self-update mirror event", () => {
@@ -86,9 +109,8 @@ describe("dogfood server supervisor", () => {
     hooks.onRestartError(new Error("build failed"));
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("DOGFOOD REBUILD FAILED"));
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("git reset --hard HEAD~1 && pnpm dev:self:server")
-    );
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("git revert HEAD"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("pnpm dev:self:server"));
     warnSpy.mockRestore();
   });
 

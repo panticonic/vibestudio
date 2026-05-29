@@ -16,6 +16,12 @@ import {
 import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { CentralDataManager } from "@natstack/shared/centralData";
 import type { HostConfig } from "@natstack/shared/hostConfig";
+import type {
+  HostTarget,
+  HostTargetCandidate,
+  HostTargetSelection,
+  HostTargetSelectionInput,
+} from "@natstack/shared/hostTargets";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
 import { PanelRegistry } from "@natstack/shared/panelRegistry";
@@ -205,12 +211,39 @@ async function createServerPanelTreeBridge(
     grantConnection: (panelId) => call<{ token: string }>("auth", "grantConnection", [panelId]),
   });
 
-  const sync = async () => {
-    await panelManager.loadTree();
+  let panelTreeLoaded = false;
+  let panelTreeLoadPromise: Promise<void> | null = null;
+  const sync = async (options: { force?: boolean } = {}) => {
+    if (panelTreeLoaded && !options.force) return;
+    panelTreeLoadPromise ??= panelManager
+      .loadTree()
+      .then(() => {
+        panelTreeLoaded = true;
+      })
+      .finally(() => {
+        panelTreeLoadPromise = null;
+      });
+    await panelTreeLoadPromise;
   };
   const emitTreeSnapshot = () => {
     deps.eventService?.emit("panel-tree-updated", registry.getPanelTreeSnapshot());
   };
+  deps.registerEntityTitleListener?.(async (entityId, title, origin) => {
+    if (origin === "mirror") return;
+    const normalized = title?.trim();
+    if (!normalized) return;
+    const target = await panelManager.resolveTitleTargetSlot(entityId);
+    if (!target) return;
+    if (!target.titleIsAlreadyPersistedForSlot && origin !== "set-explicit") return;
+    if (!target.titleIsAlreadyPersistedForSlot) {
+      await panelManager.updateTitle(asPanelSlotId(target.slotId), normalized);
+    }
+    deps.eventService?.emit("panel-title-updated", {
+      panelId: target.slotId,
+      title: normalized,
+      explicit: origin === "set-explicit",
+    });
+  });
   const withRuntimeEntity = async <T extends { panelId: string }>(
     item: T
   ): Promise<T & { runtimeEntityId: string }> => ({
@@ -302,7 +335,11 @@ async function createServerPanelTreeBridge(
       case "metadata": {
         await sync();
         const panelId = String(args[0]);
-        const panel = registry.getPanel(panelId);
+        let panel = registry.getPanel(panelId);
+        if (!panel) {
+          await sync({ force: true });
+          panel = registry.getPanel(panelId);
+        }
         if (!panel) return null;
         const snapshot = getCurrentSnapshot(panel);
         return {
@@ -317,6 +354,7 @@ async function createServerPanelTreeBridge(
         };
       }
       case "create": {
+        await sync();
         const source = String(args[0]);
         const options = (args[1] ?? {}) as {
           parentId?: string | null;
@@ -336,7 +374,6 @@ async function createServerPanelTreeBridge(
         const created = isBrowser
           ? await panelManager.createBrowser(parentId ?? null, source, options)
           : await panelManager.create(source, { ...options, parentId });
-        await sync();
         emitTreeSnapshot();
         const runtimeEntityId = await panelManager.getCurrentEntityId(
           asPanelSlotId(created.panelId)
@@ -564,8 +601,58 @@ export interface CommonDeps {
   ) =>
     | Promise<import("./services/workspaceService.js").WorkspaceUnitLogRecord[]>
     | import("./services/workspaceService.js").WorkspaceUnitLogRecord[];
+  unitDiagnostics?: (
+    name: string,
+    opts?: {
+      since?: number;
+      level?: import("./services/workspaceService.js").WorkspaceUnitLogRecord["level"];
+      limit?: number;
+      errorLimit?: number;
+    }
+  ) =>
+    | Promise<import("./services/workspaceService.js").WorkspaceUnitDiagnostics>
+    | import("./services/workspaceService.js").WorkspaceUnitDiagnostics;
+  bakeAppDist?: (sourceOrName: string, opts?: { outDir?: string }) => Promise<unknown> | unknown;
+  listAppVersions?: (
+    sourceOrName: string
+  ) =>
+    | Promise<import("./services/workspaceService.js").WorkspaceAppVersions>
+    | import("./services/workspaceService.js").WorkspaceAppVersions;
+  rollbackAppVersion?: (sourceOrName: string, buildKey?: string) => Promise<unknown> | unknown;
+  listHostTargetCandidates?: (
+    target: HostTarget
+  ) => Promise<HostTargetCandidate[]> | HostTargetCandidate[];
+  getHostTargetSelection?: (
+    target: HostTarget
+  ) =>
+    | Promise<{ selection: HostTargetSelection | null; valid: boolean; reason?: string }>
+    | { selection: HostTargetSelection | null; valid: boolean; reason?: string };
+  setHostTargetSelection?: (
+    target: HostTarget,
+    input: HostTargetSelectionInput
+  ) => Promise<HostTargetSelection> | HostTargetSelection;
+  clearHostTargetSelection?: (target: HostTarget) => Promise<void> | void;
+  listHostTargetVersions?: (
+    target: HostTarget,
+    sourceOrName: string
+  ) =>
+    | Promise<import("./services/workspaceService.js").WorkspaceAppVersions>
+    | import("./services/workspaceService.js").WorkspaceAppVersions;
+  prepareHostTargetPinnedCommit?: (
+    target: HostTarget,
+    sourceOrName: string,
+    commit: string
+  ) => Promise<unknown> | unknown;
+  launchHostTarget?: (target: HostTarget) => Promise<boolean> | boolean;
   approvalQueue?: ApprovalQueue;
   getEffectiveVersion?: (source: string) => Promise<string | undefined>;
+  registerEntityTitleListener?: (
+    listener: (
+      entityId: string,
+      title: string | undefined,
+      origin: "set" | "set-explicit" | "mirror" | "clear"
+    ) => void | Promise<void>
+  ) => () => void;
 }
 
 export async function registerPanelServices(deps: CommonDeps): Promise<void> {
@@ -586,6 +673,17 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   const getPanelTreeBridge = () => {
     serverPanelTreeBridgePromise ??= createServerPanelTreeBridge(deps);
     return serverPanelTreeBridgePromise;
+  };
+  const serverCtx: ServiceContext = { caller: createVerifiedCaller("server", "server") };
+  const isKnownPanelSlot = async (targetId: string): Promise<boolean> => {
+    try {
+      const slot = (await deps.dispatcher.dispatch(serverCtx, "workspace-state", "slot.get", [
+        targetId,
+      ])) as SlotRow | null;
+      return Boolean(slot && slot.closed_at == null);
+    } catch {
+      return false;
+    }
   };
   const requestPanelMetadataForServices = async (
     panelId: string,
@@ -637,6 +735,17 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           listUnits: deps.listWorkspaceUnits,
           restartUnit: deps.restartWorkspaceUnit,
           listUnitLogs: deps.listWorkspaceUnitLogs,
+          unitDiagnostics: deps.unitDiagnostics,
+          bakeAppDist: deps.bakeAppDist,
+          listAppVersions: deps.listAppVersions,
+          rollbackAppVersion: deps.rollbackAppVersion,
+          listHostTargetCandidates: deps.listHostTargetCandidates,
+          getHostTargetSelection: deps.getHostTargetSelection,
+          setHostTargetSelection: deps.setHostTargetSelection,
+          clearHostTargetSelection: deps.clearHostTargetSelection,
+          listHostTargetVersions: deps.listHostTargetVersions,
+          prepareHostTargetPinnedCommit: deps.prepareHostTargetPinnedCommit,
+          launchHostTarget: deps.launchHostTarget,
           approvalQueue: deps.approvalQueue,
         })
       )
@@ -698,8 +807,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             if (!resolved) return null;
             return resolved.supportsCdp ? resolved.hostConnectionId : null;
           },
-          isPanelKnown: async (targetId) =>
-            Boolean(await requestPanelMetadataForServices(targetId)),
+          isPanelKnown: isKnownPanelSlot,
         });
         deps.panelRuntimeCoordinator?.onLeaseChanged((event) => {
           cdpBridge.handleRuntimeLeaseChanged(event);
@@ -742,6 +850,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           drive: async (panelId, requesterEntityId, command, args) => {
             await ensureCdpTargetReady(panelId);
             return bridge.sendTargetCommand(panelId, requesterEntityId, command, args);
+          },
+          consoleHistory: async (panelId, _requesterEntityId, options) => {
+            await ensureCdpTargetReady(panelId);
+            return bridge.sendHostCommand(panelId, "consoleHistory", [options ?? {}]) as Promise<
+              import("./services/panelCdpService.js").PanelConsoleHistoryResult
+            >;
           },
         });
 
@@ -904,11 +1018,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         // `worker` callers gives attackers a TOCTOU primitive. Restrict
         // both to trusted native-code callers only — internal server callers
         // needing these ops can bypass the dispatcher, and extensions already
-        // have equivalent raw Node access after install approval.
+        // have equivalent raw Node access after install approval. App callers
+        // are pre-gated by the Electron host's fs-read/fs-write capabilities.
         return {
           name: "fs",
           description: "Per-context filesystem operations (sandboxed to context folder)",
-          policy: { allowed: ["panel", "server", "worker", "do", "extension"] },
+          policy: { allowed: ["panel", "app", "server", "worker", "do", "extension"] },
           methods: {
             readFile: fsMethodSchema,
             writeFile: fsMethodSchema,

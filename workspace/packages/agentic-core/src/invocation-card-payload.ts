@@ -6,6 +6,7 @@
  */
 export interface InvocationCardPayload {
   id: string;
+  transportCallId?: string;
   name: string;
   arguments: Record<string, unknown>;
   execution: ToolExecutionState;

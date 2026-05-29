@@ -88,6 +88,30 @@ describe("createPanelTransport", () => {
     expect(serviceCall).not.toHaveBeenCalled();
   });
 
+  it("sends panel CDP requests over the panel WS transport", async () => {
+    const send = vi.fn(async () => {});
+    const serviceCall = vi.fn(async () => {});
+    g.__natstackTransport = {
+      send,
+      onMessage: vi.fn(() => vi.fn()),
+      onRecovery: vi.fn(() => vi.fn()),
+    };
+    g.__natstackShell = { serviceCall };
+    const transport = createPanelTransport();
+    const message: RpcMessage = {
+      type: "request",
+      fromId: "panel:chat-entity",
+      requestId: "req-cdp",
+      method: "panelCdp.getCdpEndpoint",
+      args: ["panel:target-slot"],
+    };
+
+    await transport.send("main", message);
+
+    expect(send).toHaveBeenCalledWith("main", message);
+    expect(serviceCall).not.toHaveBeenCalled();
+  });
+
   it("continues routing other Electron-local panel services through serviceCall", async () => {
     const send = vi.fn(async () => {});
     const serviceCall = vi.fn(async () => "ok");

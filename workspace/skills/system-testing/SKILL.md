@@ -14,7 +14,7 @@ Spin up headless agentic sessions to systematically test every NatStack capabili
 | runner.ts | `HeadlessRunner` — spawn headless sessions from eval with one line |
 | test-runner.ts | `TestRunner` — orchestrate test suites, collect full diagnostics |
 | types.ts | `TestCase`, `TestResult`, `TestSuiteResult`, `TestExecutionResult` |
-| tests/ | 66 pre-built test cases across 14 categories |
+| tests/ | 93 pre-built test cases across 19 categories |
 | [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) | Workflow for analyzing failures and pushing fixes |
 
 ## Quick Start
@@ -45,9 +45,134 @@ eval({
 
 Workspace packages like `@workspace-skills/system-testing` are auto-resolved — the build system builds them on first import. No `imports` parameter needed.
 
+## Full Suite
+
+Run the full suite category-by-category, with one eval call per category. Tests
+inside each category run in parallel, so every category still creates agent
+contention across panels, GAD, git, build services, tools, and runtime state.
+
+First initialize category progress:
+
+```
+eval({
+  code: `
+    import { allTests, testCategories } from "@workspace-skills/system-testing";
+    const tests = allTests();
+    const runId = crypto.randomUUID();
+    await scopes.push();
+    const results = {
+      total: 0,
+      passed: 0,
+      failed: 0,
+      errored: 0,
+      skipped: tests.length,
+      duration: 0,
+      results: [],
+    };
+    scope.systemTestingRun = {
+      runId,
+      categories: testCategories(tests),
+      completedCategories: [],
+      results,
+    };
+    scope.results = results;
+    return { runId, categories: scope.systemTestingRun.categories, testCount: tests.length };
+  `,
+})
+```
+
+Then repeat this eval until `remainingCategories` is `0`:
+
+Run this short orchestration snippet directly in eval. File-loaded eval remains
+preferred for substantive multi-line or multi-file code, but helper files should
+not be used merely to wrap this category loop. If an operation fails, report the
+error you actually observed, verbatim, with the operation that produced it.
+
+```
+eval({
+  code: `
+    import { HeadlessRunner, TestRunner, allTests, summarizeFailures, testCategories } from "@workspace-skills/system-testing";
+    import { contextId } from "@workspace/runtime";
+    const tests = allTests();
+    const run = scope.systemTestingRun;
+    if (!run || typeof run !== "object") {
+      throw new Error("No active systemTestingRun. Run the initialization eval first.");
+    }
+    const categories = Array.isArray(run.categories) ? run.categories : testCategories(tests);
+    const completed = new Set(Array.isArray(run.completedCategories) ? run.completedCategories : []);
+    const category = categories.find((item) => !completed.has(item));
+    if (!category) return { done: true, runId: run.runId, results: run.results ?? scope.results };
+
+    const runner = new HeadlessRunner(contextId);
+    const tester = new TestRunner(runner, {
+      onTestStart: (t) => console.log("Running: " + t.name + "..."),
+      onTestEnd: (t, r) => console.log((r.passed ? "PASS" : "FAIL") + ": " + t.name),
+      onTestResult: (_entry, aggregate) => {
+        console.log("Category progress: " + category + " " + aggregate.total + "/" + tests.filter((t) => t.category === category).length);
+      },
+      testTimeoutMs: 20 * 60 * 1000,
+    });
+
+    const partial = await tester.runSuiteParallel(tests, { category, concurrency: 24 });
+    const aggregate = run.results ?? scope.results ?? {
+      total: 0,
+      passed: 0,
+      failed: 0,
+      errored: 0,
+      skipped: tests.length,
+      duration: 0,
+      results: [],
+    };
+    aggregate.total += partial.total;
+    aggregate.passed += partial.passed;
+    aggregate.failed += partial.failed;
+    aggregate.errored += partial.errored;
+    aggregate.duration += partial.duration;
+    aggregate.results.push(...partial.results);
+    aggregate.skipped = tests.length - aggregate.total;
+    completed.add(category);
+    run.completedCategories = [...completed];
+    run.results = aggregate;
+    scope.systemTestingRun = run;
+    scope.results = aggregate;
+    return {
+      runId: run.runId,
+      category,
+      remainingCategories: categories.length - completed.size,
+      total: aggregate.total,
+      passed: aggregate.passed,
+      failed: aggregate.failed,
+      errored: aggregate.errored,
+      skipped: aggregate.skipped,
+      failureDiagnostics: partial.failed || partial.errored ? summarizeFailures(partial) : undefined,
+    };
+  `,
+})
+```
+
 ## Inspecting Results
 
-Every test result includes full diagnostics. **After running a suite, always inspect failures in detail:**
+Every test result includes full diagnostics. **After running a suite, always inspect failures in detail and include the evidence in your answer. Never report only filenames, artifact names, or "files to inspect"; those are pointers, not diagnosis.**
+
+For a bounded structured packet that is safe to paste into a handoff report:
+
+```typescript
+import { summarizeFailures } from "@workspace-skills/system-testing";
+
+return summarizeFailures(scope.results, {
+  failures: 12,
+  messages: 12,
+  invocations: 20,
+  debugEvents: 20,
+  text: 900,
+});
+```
+
+Each failure summary includes the prompt, validation reason, session error,
+final agent message, bounded conversation transcript, invocation statuses and
+errors, debug events, cleanup errors, participant state, and a coarse likely
+issue. Use that packet to explain the mismatch. If the packet is insufficient,
+query the specific failed session further; do not substitute a list of files.
 
 ### Summary
 
@@ -98,6 +223,59 @@ if (fail.execution.snapshot) {
 }
 ```
 
+### Cleanup diagnostics
+
+Each headless test closes its session after capturing messages. Cleanup
+failures are surfaced instead of swallowed:
+
+```typescript
+if (fail.execution.cleanupErrors?.length) {
+  console.log("Cleanup errors:");
+  for (const err of fail.execution.cleanupErrors) console.log(`  ${err}`);
+}
+if (fail.execution.snapshot?.cleanupErrors.length) {
+  console.log(JSON.stringify(fail.execution.snapshot.cleanupErrors, null, 2));
+}
+```
+
+Treat cleanup errors as infrastructure failures. They can indicate that the
+headless agent was not unsubscribed/retired cleanly, which may otherwise show
+up later as recovery or stale-turn artifacts.
+
+### Automatic runtime diagnostics
+
+When a test errors, `execution.diagnostics` is attached automatically. It
+contains build provenance for `@workspace-skills/system-testing` and, when a
+headless channel was created, a bounded `gad.inspectAgentHealth(...)` report.
+
+```typescript
+if (fail.execution.diagnostics) {
+  console.log(JSON.stringify(fail.execution.diagnostics, null, 2).slice(0, 4000));
+}
+```
+
+### Orchestrator failures before tests start
+
+If `tester.runSuite(...)` throws before `scope.results` is set, capture bounded
+runtime diagnostics from the orchestrating channel instead of retrying blindly:
+
+```typescript
+import { gad, rpc } from "@workspace/runtime";
+
+const channelId = "chat-...";
+const branchId = `branch:channel:${channelId}`;
+
+return {
+  health: await gad.inspectAgentHealth({ channelId, branchId }),
+  build: await rpc.call("main", "build.inspectBuildProvenance", [
+    "@workspace-skills/system-testing",
+  ]),
+};
+```
+
+You can also call `await runner.collectDiagnostics({ channelId, error })` to
+produce the same bounded packet explicitly.
+
 ### Agent debug port
 
 If a test shows an open turn but no assistant message, tool call, or
@@ -114,6 +292,13 @@ It reports dispatcher state, runner phase, persisted pending work, channel
 checkpoints, and recent lifecycle events. See
 `docs/agent-debug-port.md` for the full response shape and interpretation
 guide.
+
+For eval/tool projection mismatches, call the joined suspension diagnostic:
+
+```typescript
+const suspensions = await chat.callMethod(agentParticipantId, "inspectMethodSuspensions", {});
+console.log(JSON.stringify(suspensions, null, 2).slice(0, 4000));
+```
 
 ### Participants (who was in the channel)
 
@@ -144,8 +329,51 @@ if (fail.execution.snapshot) {
 | `agentCapabilityTests` | 6 | Multi-turn, error recovery, large output, dynamic import |
 | `rpcTests` | 2 | Cross-service calls |
 | `edgeCaseTests` | 3 | Invalid eval args, invalid imports, missing files |
+| `agenticRuntimeTests` | 7 | State args, routed git client, GAD conventions, bounded inspection, no-stall tool turns |
+| `interactionSurfaceTests` | 4 | MDX ActionButton, inline UI, action bar, custom messages |
+| `projectLifecycleTests` | 4 | Create, fork, commit, push, open, and inspect real workspace units |
+| `cdpGadDiagnosticTests` | 5 | CDP/Playwright UI mutation, lightweight console/DOM inspection, historical console diagnostics, panel state args, GAD integrity/state diagnostics |
+| `harnessResilienceTests` | 5 | Eval errors, huge returns, visible timeouts, invalid args, post-tool follow-ups |
+| `docsProbeTests` | 10 | Scenario probes that require agents to apply relevant skills, not summarize docs |
 
-Use `allTests()` to get all 57 tests combined.
+Use `allTests()` to get all 93 tests combined. For full-suite execution, prefer
+the category-progress pattern above: one eval per category, with
+`tester.runSuiteParallel(allTests(), { category, concurrency })` inside each
+category eval.
+
+## Expanded Regression Coverage
+
+The suite intentionally includes tests for failure modes that are easy to miss
+with ordinary smoke testing:
+
+- state args must update the caller panel immediately from the returned host
+  snapshot, while host-published events still update non-callers
+- browser-panel git operations must use `git.client()` instead of raw
+  `new GitClient(fs, { serverUrl: gitConfig.serverUrl, token })`
+- GAD raw SQL uses positional `(sql, bindings)` calls
+- channel/history inspection must stay bounded enough for agent context
+- large eval/tool results must complete visibly without pending invocation
+  spinners or silent turns
+- the standard agent participant debug method should be discoverable
+- rich interaction surfaces must exercise MDX, `inline_ui`,
+  `load_action_bar`, and custom messages without hand-writing raw channel rows
+- project lifecycle flows must create real projects, commit/push them, fork
+  panel and worker sources, open the result, and inspect snapshots/state
+- CDP/Playwright automation must be able to mutate browser UI, type/click,
+  evaluate DOM state, and take screenshots through runtime panel handles
+- historical console diagnostics must expose host-captured general logs and a
+  separate error buffer through `handle.cdp.consoleHistory()`
+- unit diagnostics must expose persisted worker/DO/extension logs and separate
+  error buffers through `workspace.units.diagnostics(name)`
+- GAD diagnostic APIs must provide bounded summaries for storage,
+  publication, turn, invocation, hash, branch, and file/state probes
+- harness failures must surface visibly for thrown evals, huge eval returns,
+  timeout-style errors, invalid tool arguments, and post-tool follow-up turns
+
+The `docsProbeTests` suite uses realistic user goals and asks agents to choose
+the relevant skills themselves. These tests avoid doc recitation and instead
+check concrete decisions, bounded evidence, and clear reports when documented
+paths do not work.
 
 For SQLite-backed userland storage, the canonical pattern is `this.sql` inside a Durable Object. See `workspace/workers/sample-do/index.ts` for the minimal example and `workspace/workers/sample-do/sampleDo.test.ts` for an end-to-end round-trip exercised via `createTestDO`.
 
@@ -160,13 +388,18 @@ await tester.runSuite(allTests(), { name: "fs-write-read" });
 
 Each test case:
 1. Spawns a fresh headless session (new channel + new AiChatWorker DO)
-2. Sends a natural-language prompt telling the test agent what to do
-3. Waits for the agent to become idle (debounce-based turn completion)
-4. Captures a full snapshot: messages, invocation diagnostics, debug events, participants
-5. Validates programmatically and returns structured results
-6. Closes the session
+2. Appends the shared system-test agent prompt from `runner.ts`
+3. Sends a short natural-language prompt telling the test agent what goal to accomplish
+4. Waits for the agent to become idle (debounce-based turn completion)
+5. Captures a full snapshot: messages, invocation diagnostics, debug events, cleanup diagnostics, participants
+6. Validates programmatically and returns structured results
+7. Closes the session
 
-The test agent is a standard AiChatWorker with full eval + set_title tools and full-auto approval. It has no knowledge of being tested — it just receives a task and does its best.
+The test agent is a standard AiChatWorker with full eval + set_title tools and
+full-auto approval. The shared system-test prompt tells it that it is testing
+the harness, should choose relevant skills itself, should report setup/tool/API
+mismatches clearly, should not hunt for unrelated workarounds, and should keep
+evidence bounded. Individual test prompts should stay short and goal-oriented.
 
 ## Auto-Start as Initial Panel
 
@@ -174,16 +407,21 @@ See `meta/natstack.yml` for the current testing agent configuration.
 
 ## Build Model
 
-**Workspace packages are built from git, not from the working tree.** When fixing bugs in workspace source files (`packages/`, `panels/`, `workers`, `skills/`), you must **commit and push** changes before they take effect. Editing a file alone does nothing — the build system extracts source from git commits.
+**Workspace runtime units are built from git, not from the working tree.** When fixing bugs in workspace source files (`apps/`, `extensions/`, `packages/`, `panels/`, `workers/`, `skills/`), you must **commit and push** changes before they take effect. Editing a file alone does nothing — the build system extracts source from git commits.
+
+For trusted app failures under `apps/`, read `skills/appdev/SKILL.md` before
+changing shell, mobile, or terminal app source. App bugs often involve approval
+identity, capabilities, native bootstrap, or target-specific build artifacts.
 
 For NatStack application source (`src/server/`, `src/main/`, root
 `packages/*`), use a plain checkout under `projects/natstack`. In normal mode
 that prepares a branch/patch but does not hot-patch the running server. In
 dogfood server mode (`pnpm dev:self:server`), the workspace contains
 `meta/dogfood.json`; pushes from `projects/natstack` mirror back to the
-launching checkout and server-relevant changes rebuild/restart the standalone
-server. See [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) for the full workflow
-and the userland detection snippet.
+launching checkout. Server-runtime changes rebuild/restart the standalone
+server; docs, desktop shell, mobile app, and workspace runtime-unit changes may
+mirror without a server restart. See [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md)
+for the full workflow and the userland detection snippet.
 
 ## Environment Compatibility
 

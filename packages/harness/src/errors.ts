@@ -17,6 +17,7 @@ export type AgentWorkerErrorCode =
   | "compaction"
   | "dispatch"
   | "provenance"
+  | "runner_lifecycle"
   | "transcript_shape";
 
 export class AgentWorkerError extends Error {

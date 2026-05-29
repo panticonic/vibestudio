@@ -27,7 +27,13 @@ export interface RemoteTlsOptions {
 }
 
 export type StartupMode =
-  | { kind: "local"; wsDir: string; workspaceId: string; isEphemeral: boolean }
+  | {
+      kind: "local";
+      wsDir: string;
+      workspaceId: string;
+      isEphemeral: boolean;
+      createdFromTemplate: boolean;
+    }
   | {
       kind: "remote";
       remoteUrl: URL;
@@ -39,6 +45,15 @@ export type StartupMode =
     };
 
 export type LocalStartupMode = Extract<StartupMode, { kind: "local" }>;
+
+export function shouldRequestSingleInstanceLock(
+  mode: StartupMode,
+  opts: { isHeadlessHost: boolean; isDevelopment: boolean }
+): boolean {
+  if (opts.isHeadlessHost) return false;
+  if (opts.isDevelopment && mode.kind === "local") return false;
+  return true;
+}
 
 export function isTrustworthyRemoteOrigin(remoteUrl: URL): boolean {
   if (remoteUrl.protocol === "https:") {
@@ -177,5 +192,6 @@ export function resolveLocalStartupMode(centralData: CentralDataManager): LocalS
     wsDir: startup.resolved.wsDir,
     workspaceId: startup.resolved.workspace.config.id,
     isEphemeral: startup.isEphemeral,
+    createdFromTemplate: startup.resolved.created,
   };
 }

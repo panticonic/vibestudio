@@ -1,23 +1,20 @@
 #!/usr/bin/env node
-import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import { discoverNatstackServers } from "@natstack/shared/tailscaleDiscovery";
-import {
-  parseConnectLink,
-  parseConnectServerUrl,
-  PAIRING_CODE_PATTERN,
-} from "@natstack/shared/connect";
 import {
   clearCliCredentials,
   loadCliCredentials,
   saveCliCredentials,
   credentialPath,
 } from "./credentialStore.js";
+import { completePairing, createPairingInvite, refreshShell } from "./remoteClient.js";
 
 interface Options {
   url?: string;
   code?: string;
+  link?: string;
   label?: string;
+  ttlMs?: number;
 }
 
 export async function main(argv: string[]): Promise<number> {
@@ -32,6 +29,7 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (command === "pair") return pair(rest);
+  if (command === "invite") return invite(rest);
   if (command === "status") return status();
   if (command === "logout") {
     clearCliCredentials();
@@ -46,59 +44,19 @@ export async function main(argv: string[]): Promise<number> {
 async function pair(argv: string[]): Promise<number> {
   const opts = parseOptions(argv);
   if (argv[0] && argv[0].startsWith("natstack://")) {
-    const parsed = parseConnectLink(argv[0]);
-    if (parsed.kind === "error") {
-      console.error(parsed.reason);
-      return 2;
-    }
-    opts.url = parsed.url;
-    opts.code = parsed.code;
+    opts.link = argv[0];
   } else if (argv[0] && !argv[0].startsWith("--")) {
     opts.url = argv[0];
   }
-  if (!opts.url || !opts.code) {
-    console.error("pair requires a natstack:// link or --url and --code");
-    return 2;
-  }
-  if (!PAIRING_CODE_PATTERN.test(opts.code)) {
-    console.error("pairing code has an unexpected format");
-    return 2;
-  }
-  const parsedUrl = parseConnectServerUrl(opts.url);
-  if (parsedUrl.kind === "error") {
-    console.error(parsedUrl.reason);
-    return 2;
-  }
-  const response = await fetch(new URL("/_r/s/auth/complete-pairing", parsedUrl.url), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code: opts.code,
-      label: opts.label ?? `${os.userInfo().username}@${os.hostname()}`,
-      platform: "desktop",
-    }),
-  });
-  const body = (await response.json().catch(() => ({}))) as {
-    deviceId?: unknown;
-    refreshToken?: unknown;
-    error?: unknown;
-  };
-  if (!response.ok || typeof body.deviceId !== "string" || typeof body.refreshToken !== "string") {
-    console.error(
-      typeof body.error === "string"
-        ? body.error
-        : `pairing failed (${response.status} ${response.statusText})`
-    );
+  let creds;
+  try {
+    creds = await completePairing(opts);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     return 1;
   }
-  saveCliCredentials({
-    schemaVersion: 1,
-    kind: "device",
-    url: parsedUrl.url,
-    deviceId: body.deviceId,
-    refreshToken: body.refreshToken,
-  });
-  console.log(`paired ${parsedUrl.url}`);
+  saveCliCredentials(creds);
+  console.log(`paired ${creds.url}`);
   console.log(`credentials: ${credentialPath()}`);
   return 0;
 }
@@ -109,20 +67,11 @@ async function status(): Promise<number> {
     console.log("not paired");
     return 1;
   }
-  const refresh = await fetch(new URL("/_r/s/auth/refresh-shell", creds.url), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId: creds.deviceId, refreshToken: creds.refreshToken }),
-  });
-  const refreshBody = (await refresh.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!refresh.ok) {
-    console.log(
-      `not connected: ${
-        typeof refreshBody["error"] === "string"
-          ? refreshBody["error"]
-          : `${refresh.status} ${refresh.statusText}`
-      }`
-    );
+  let refresh;
+  try {
+    refresh = await refreshShell(creds);
+  } catch (error) {
+    console.log(`not connected: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
   const response = await fetch(new URL("/healthz", creds.url));
@@ -134,14 +83,35 @@ async function status(): Promise<number> {
   console.log(`connected: ${creds.url}`);
   if (typeof body["version"] === "string") console.log(`version: ${body["version"]}`);
   const workspaceId =
-    typeof refreshBody["workspaceId"] === "string"
-      ? refreshBody["workspaceId"]
+    typeof refresh["workspaceId"] === "string"
+      ? refresh["workspaceId"]
       : typeof body["workspaceId"] === "string"
         ? body["workspaceId"]
         : undefined;
   if (workspaceId) console.log(`workspace: ${workspaceId}`);
-  if (typeof refreshBody["serverId"] === "string")
-    console.log(`server: ${refreshBody["serverId"]}`);
+  if (typeof refresh["serverId"] === "string") console.log(`server: ${refresh["serverId"]}`);
+  return 0;
+}
+
+async function invite(argv: string[]): Promise<number> {
+  const opts = parseOptions(argv);
+  const creds = loadCliCredentials();
+  if (!creds) {
+    console.error("not paired");
+    return 1;
+  }
+  let invite;
+  try {
+    invite = await createPairingInvite(creds, { ttlMs: opts.ttlMs });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  console.log(`Pairing code: ${invite.code}`);
+  console.log(`Pair URL: ${invite.deepLink}`);
+  if (typeof invite.expiresAt === "number") {
+    console.log(`Expires: ${new Date(invite.expiresAt).toISOString()}`);
+  }
   return 0;
 }
 
@@ -152,6 +122,10 @@ function parseOptions(argv: string[]): Options {
     if (arg === "--url") opts.url = argv[++i];
     else if (arg === "--code") opts.code = argv[++i];
     else if (arg === "--label") opts.label = argv[++i];
+    else if (arg === "--ttl-ms") {
+      const value = Number(argv[++i]);
+      if (Number.isFinite(value)) opts.ttlMs = value;
+    }
   }
   return opts;
 }
@@ -163,6 +137,7 @@ Usage:
   natstack-client discover
   natstack-client pair "natstack://connect?url=...&code=..."
   natstack-client pair --url <url> --code <code> [--label <label>]
+  natstack-client invite [--ttl-ms <milliseconds>]
   natstack-client status
   natstack-client logout
 

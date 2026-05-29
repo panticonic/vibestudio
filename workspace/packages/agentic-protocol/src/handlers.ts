@@ -1,4 +1,4 @@
-import type { ActorRef, AgenticEvent, EventKind, ParticipantRef, SandboxSourcePayload, UsagePayload } from "./events.js";
+import type { ActorRef, AgenticEvent, EventKind, MessageBlockInput, ParticipantRef, SandboxSourcePayload, UsagePayload } from "./events.js";
 import type { ApprovalId, InvocationId, MessageId, TurnId } from "./ids.js";
 
 export type MessageStatus = "started" | "streaming" | "completed" | "failed";
@@ -11,6 +11,7 @@ export interface ProjectedMessage {
   turnId?: TurnId;
   role: string;
   content: string;
+  blocks?: MessageBlockInput[];
   mentions?: string[];
   replyTo?: MessageId;
   status: MessageStatus;
@@ -23,6 +24,7 @@ export interface ProjectedMessage {
 
 export interface ProjectedInvocation {
   invocationId: InvocationId;
+  transportCallId?: string;
   actor: ActorRef;
   turnId?: TurnId;
   name?: string;
@@ -81,6 +83,7 @@ export interface ProjectedTurn {
   closedAt?: string;
   updatedAt?: string;
   summary?: string;
+  reason?: string;
 }
 
 export type MessageMap = Record<string, ProjectedMessage>;
@@ -111,6 +114,27 @@ function requireApprovalId(event: AgenticEvent): ApprovalId {
   return approvalId;
 }
 
+function mergeMessageBlock(
+  blocks: MessageBlockInput[] | undefined,
+  block: MessageBlockInput | undefined,
+): MessageBlockInput[] | undefined {
+  if (!block) return blocks;
+  const existing = blocks ?? [];
+  let replaceIndex = block.blockId
+    ? existing.findIndex((item) => item.blockId === block.blockId)
+    : -1;
+  if (!block.blockId) {
+    for (let index = existing.length - 1; index >= 0; index--) {
+      if (existing[index]?.type === block.type) {
+        replaceIndex = index;
+        break;
+      }
+    }
+  }
+  if (replaceIndex === -1) return [...existing, block];
+  return existing.map((item, index) => index === replaceIndex ? block : item);
+}
+
 export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extract<EventKind, `message.${string}`>>): MessageMap {
   const messageId = requireMessageId(event);
   const existing = messages[messageId] ?? {
@@ -125,6 +149,7 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
     const payload = event.payload;
     const role = ("role" in payload ? payload.role : undefined) ?? existing.role;
     const content = ("content" in payload ? payload.content : undefined) ?? existing.content;
+    const blocks = "blocks" in payload ? payload.blocks : existing.blocks;
     const mentions = "mentions" in payload ? payload.mentions : existing.mentions;
     const replyTo = "replyTo" in payload ? payload.replyTo : existing.replyTo;
     return {
@@ -135,6 +160,7 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
         turnId: existing.turnId ?? event.turnId,
         role,
         content,
+        blocks,
         mentions,
         replyTo,
         status: "started",
@@ -146,6 +172,10 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
 
   if (event.kind === "message.delta") {
     const payload = event.payload;
+    const nextBlocks = mergeMessageBlock(
+      existing.blocks,
+      "block" in payload ? payload.block : undefined,
+    );
     return {
       ...messages,
       [messageId]: {
@@ -155,6 +185,7 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
         content: "replace" in payload && payload.replace
           ? ("delta" in payload ? payload.delta : existing.content)
           : existing.content + ("delta" in payload ? payload.delta : ""),
+        blocks: nextBlocks,
         status: "streaming",
         updatedAt: event.createdAt,
       },
@@ -165,6 +196,7 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
     const payload = event.payload;
     const role = ("role" in payload ? payload.role : undefined) ?? existing.role;
     const content = ("content" in payload ? payload.content : undefined) ?? existing.content;
+    const blocks = "blocks" in payload ? payload.blocks : existing.blocks;
     const mentions = "mentions" in payload ? payload.mentions : existing.mentions;
     const replyTo = "replyTo" in payload ? payload.replyTo : existing.replyTo;
     return {
@@ -175,6 +207,7 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
         turnId: existing.turnId ?? event.turnId,
         role,
         content,
+        blocks,
         mentions,
         replyTo,
         status: "completed",
@@ -218,6 +251,7 @@ export function applyInvocationEvent(
       ...invocations,
       [invocationId]: {
         ...existing,
+        transportCallId: existing.transportCallId ?? event.causality?.transportCallId,
         actor: existing.actor ?? event.actor,
         turnId: existing.turnId ?? event.turnId,
         name: existing.name ?? ("name" in payload ? payload.name : undefined),
@@ -238,6 +272,7 @@ export function applyInvocationEvent(
       ...invocations,
       [invocationId]: {
         ...existing,
+        transportCallId: existing.transportCallId ?? event.causality?.transportCallId,
         actor: event.actor,
         turnId: existing.turnId ?? event.turnId,
         status: "running",
@@ -262,6 +297,7 @@ export function applyInvocationEvent(
       ...invocations,
       [invocationId]: {
         ...existing,
+        transportCallId: existing.transportCallId ?? event.causality?.transportCallId,
         actor: event.actor,
         turnId: existing.turnId ?? event.turnId,
         status: "running",
@@ -280,6 +316,7 @@ export function applyInvocationEvent(
       ...invocations,
       [invocationId]: {
         ...existing,
+        transportCallId: existing.transportCallId ?? event.causality?.transportCallId,
         actor: existing.actor ?? event.actor,
         turnId: existing.turnId ?? event.turnId,
         name: existing.name ?? inferred.name,
@@ -301,6 +338,7 @@ export function applyInvocationEvent(
     ...invocations,
     [invocationId]: {
       ...existing,
+      transportCallId: existing.transportCallId ?? event.causality?.transportCallId,
       actor: existing.actor ?? event.actor,
       turnId: existing.turnId ?? event.turnId,
       name: existing.name ?? inferred.name,

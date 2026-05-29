@@ -15,6 +15,7 @@ const g = globalThis as typeof globalThis & {
   __natstackGatewayConfig?: { serverUrl: string; token: string };
   __natstackEnv?: Record<string, string>;
   __natstackShell?: Record<string, unknown>;
+  __natstackStateArgs?: Record<string, unknown>;
 };
 
 function createTransport(options?: {
@@ -39,6 +40,26 @@ function createTransport(options?: {
   };
 }
 
+function stubPanelWindow(): EventTarget & { __natstackStateArgs?: Record<string, unknown> } {
+  const panelWindow = new EventTarget() as EventTarget & {
+    __natstackStateArgs?: Record<string, unknown>;
+  };
+  vi.stubGlobal("window", panelWindow);
+  if (typeof CustomEvent === "undefined") {
+    vi.stubGlobal(
+      "CustomEvent",
+      class<T> extends Event {
+        detail: T;
+        constructor(type: string, init?: CustomEventInit<T>) {
+          super(type);
+          this.detail = init?.detail as T;
+        }
+      }
+    );
+  }
+  return panelWindow;
+}
+
 describe("initRuntime", () => {
   afterEach(() => {
     delete g.__natstackEntityId;
@@ -52,6 +73,8 @@ describe("initRuntime", () => {
     delete g.__natstackGatewayConfig;
     delete g.__natstackEnv;
     delete g.__natstackShell;
+    delete g.__natstackStateArgs;
+    vi.unstubAllGlobals();
   });
 
   it("uses the injected canonical panel id as the RPC self id", () => {
@@ -77,8 +100,10 @@ describe("initRuntime", () => {
     expect(runtime.rpc.selfId).toBe("panel:panel-1");
   });
 
-  it("uses the stable slot id for current-panel state args", async () => {
+  it("uses the stable slot id and applies returned current-panel state args locally", async () => {
     const panelTreeSetStateArgsMock = vi.fn();
+    const stateArgsChanged = vi.fn();
+    const panelWindow = stubPanelWindow();
     g.__natstackEntityId = "panel:entity-1";
     g.__natstackSlotId = "slot-1";
     g.__natstackContextId = "ctx-1";
@@ -88,6 +113,7 @@ describe("initRuntime", () => {
       getInfo: vi.fn(),
       focusPanel: vi.fn(),
     };
+    panelWindow.addEventListener("natstack:stateArgsChanged", stateArgsChanged);
 
     initRuntime({
       createTransport: () =>
@@ -98,7 +124,7 @@ describe("initRuntime", () => {
             deliver("main", {
               type: "response",
               requestId: message.requestId,
-              result: undefined,
+              result: { mode: "live", fromHost: true },
             });
           },
         }),
@@ -111,6 +137,97 @@ describe("initRuntime", () => {
       "slot-1",
       { mode: "live" },
     ]);
+    expect(panelWindow.__natstackStateArgs).toEqual({ mode: "live", fromHost: true });
+    expect(stateArgsChanged).toHaveBeenCalledTimes(1);
+    expect((stateArgsChanged.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+      mode: "live",
+      fromHost: true,
+    });
+  });
+
+  it("applies host-published state args for non-caller updates", () => {
+    const panelWindow = stubPanelWindow();
+    const stateArgsChanged = vi.fn();
+    const shellListeners: Array<(event: string, payload: unknown) => void> = [];
+    g.__natstackEntityId = "panel:panel-1";
+    g.__natstackSlotId = "slot-1";
+    g.__natstackContextId = "ctx-1";
+    g.__natstackKind = "panel";
+    g.__natstackGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__natstackShell = {
+      addEventListener: vi.fn((listener: (event: string, payload: unknown) => void) => {
+        shellListeners.push(listener);
+        return 1;
+      }),
+      removeEventListener: vi.fn(),
+      setStateArgs: vi.fn(),
+      getInfo: vi.fn(),
+      focusPanel: vi.fn(),
+    };
+    panelWindow.addEventListener("natstack:stateArgsChanged", stateArgsChanged);
+
+    initRuntime({
+      createTransport,
+      fs: {} as never,
+    });
+    expect(shellListeners).toHaveLength(2);
+    for (const listener of shellListeners) {
+      listener("runtime:stateArgsChanged", { mode: "external" });
+    }
+
+    expect(panelWindow.__natstackStateArgs).toEqual({ mode: "external" });
+    expect(stateArgsChanged).toHaveBeenCalledTimes(1);
+    expect((stateArgsChanged.mock.calls[0]?.[0] as CustomEvent).detail).toEqual({
+      mode: "external",
+    });
+  });
+
+  it("normalizes loopback gateway and git URLs to the panel page origin", () => {
+    vi.stubGlobal("location", { origin: "http://localhost:3000" });
+    g.__natstackEntityId = "panel:panel-1";
+    g.__natstackSlotId = "slot-1";
+    g.__natstackContextId = "ctx-1";
+    g.__natstackKind = "panel";
+    g.__natstackGatewayConfig = { serverUrl: "http://127.0.0.1:3000", token: "token" };
+    g.__natstackShell = {
+      setStateArgs: vi.fn(),
+      getInfo: vi.fn(),
+      focusPanel: vi.fn(),
+    };
+
+    const { config, runtime } = initRuntime({
+      createTransport,
+      fs: {} as never,
+    });
+
+    expect(config.gatewayConfig.serverUrl).toBe("http://localhost:3000");
+    expect(config.gatewayConfig.aliases).toContain("http://127.0.0.1:3000");
+    expect(config.gitConfig?.serverUrl).toBe("http://localhost:3000/_git");
+    expect(config.gitConfig?.internalOrigins).toContain("http://127.0.0.1:3000/_git");
+    expect(runtime.gitConfig?.serverUrl).toBe("http://localhost:3000/_git");
+  });
+
+  it("does not normalize non-equivalent gateway origins", () => {
+    vi.stubGlobal("location", { origin: "http://localhost:3000" });
+    g.__natstackEntityId = "panel:panel-1";
+    g.__natstackSlotId = "slot-1";
+    g.__natstackContextId = "ctx-1";
+    g.__natstackKind = "panel";
+    g.__natstackGatewayConfig = { serverUrl: "http://127.0.0.1:4000", token: "token" };
+    g.__natstackShell = {
+      setStateArgs: vi.fn(),
+      getInfo: vi.fn(),
+      focusPanel: vi.fn(),
+    };
+
+    const { config } = initRuntime({
+      createTransport,
+      fs: {} as never,
+    });
+
+    expect(config.gatewayConfig.serverUrl).toBe("http://127.0.0.1:4000");
+    expect(config.gatewayConfig.aliases).toBeUndefined();
+    expect(config.gitConfig?.serverUrl).toBe("http://127.0.0.1:4000/_git");
   });
 
   it("uses the parent slot id for handle identity/CDP and the parent entity id for RPC", async () => {
@@ -149,6 +266,10 @@ describe("initRuntime", () => {
     expect(runtime.parentId).toBe("parent-slot");
     expect(runtime.parentEntityId).toBe("panel:parent-entity");
     expect(runtime.getParent()?.id).toBe("parent-slot");
+    await expect(runtime.getParent()?.getInfo()).resolves.toMatchObject({
+      id: "parent-slot",
+      parentId: null,
+    });
 
     await runtime.getParent()?.call["ping"]?.();
     await runtime.getParent()?.cdp.getCdpEndpoint();

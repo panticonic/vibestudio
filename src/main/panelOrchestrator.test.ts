@@ -27,6 +27,7 @@ function createOrchestrator(
   opts: {
     panelRestorePolicy?: "focused" | "none";
     runtimeClient?: ConstructorParameters<typeof PanelOrchestrator>[0]["runtimeClient"];
+    workspaceConfig?: ConstructorParameters<typeof PanelOrchestrator>[0]["workspaceConfig"];
   } = {}
 ) {
   const closedIds: string[] = [];
@@ -46,13 +47,14 @@ function createOrchestrator(
   };
   const shellCore = {
     close: vi.fn(async (panelId: string) => ({ closedIds: [panelId, ...closedIds] })),
-    create: vi.fn(async () => ({
+    create: vi.fn(async (_source?: string, _options?: unknown) => ({
       panelId: "created-panel",
       title: "created-panel",
       contextId: "ctx-created-panel",
       source: "panels/created-panel",
       options: {},
     })),
+    updateTitle: vi.fn(async (_panelId: string, _title: string) => {}),
     updateStateArgs: vi.fn(async (panelId: string, updates: Record<string, unknown>) => {
       const panel = registry.getPanel(panelId);
       const current = panel
@@ -62,6 +64,10 @@ function createOrchestrator(
     }),
     onStateArgsChanged: vi.fn(() => () => {}),
     notifyFocused: vi.fn(async () => {}),
+    getPanelInit: vi.fn(async (panelId: string) => ({
+      entityId: panelId,
+      gatewayConfig: { serverUrl: "http://127.0.0.1:1234", token: "token" },
+    })),
     getCurrentEntityId: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
     loadTree: vi.fn(async () => ({
       rootPanels: registry.getRootPanels(),
@@ -92,9 +98,11 @@ function createOrchestrator(
     gatewayPort: 1234,
     sendPanelEvent: vi.fn(),
     getPanelView: () => panelView as never,
-    workspaceConfig: opts.panelRestorePolicy
-      ? ({ id: "test", panelRestorePolicy: opts.panelRestorePolicy } as never)
-      : undefined,
+    workspaceConfig:
+      opts.workspaceConfig ??
+      (opts.panelRestorePolicy
+        ? ({ id: "test", panelRestorePolicy: opts.panelRestorePolicy } as never)
+        : undefined),
     runtimeClient: opts.runtimeClient,
   });
 
@@ -525,6 +533,144 @@ describe("PanelOrchestrator.recoverShellSnapshot", () => {
   });
 });
 
+describe("PanelOrchestrator.initializePanelTree", () => {
+  it("creates distinct root panels for duplicate init panel sources", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const { orchestrator, shellCore } = createOrchestrator(registry, vi.fn(), {
+      workspaceConfig: {
+        id: "test",
+        panelRestorePolicy: "none",
+        initPanels: [
+          { source: "panels/chat", stateArgs: { initialPrompt: "first" } },
+          { source: "panels/chat", stateArgs: { initialPrompt: "second" } },
+        ],
+      } as never,
+    });
+    shellCore.create.mockImplementation(async (_source?: string, options?: unknown) => {
+      const createOptions = options as { stateArgs?: Record<string, unknown> } | undefined;
+      const index = registry.getRootPanels().length + 1;
+      const panel = makePanel(`chat-${index}`, [], {
+        title: `Chat ${index}`,
+        snapshot: {
+          source: "panels/chat",
+          contextId: `ctx-chat-${index}`,
+          options: {},
+          stateArgs: createOptions?.stateArgs,
+        },
+      });
+      registry.addPanel(panel, null, { addAsRoot: true });
+      return {
+        panelId: panel.id,
+        title: panel.title,
+        contextId: getCurrentSnapshot(panel).contextId,
+        source: "panels/chat",
+        options: {},
+      };
+    });
+
+    await orchestrator.initializePanelTree();
+
+    expect(shellCore.create).toHaveBeenCalledTimes(2);
+    expect(registry.getRootPanels().map((panel) => panel.id)).toEqual(["chat-1", "chat-2"]);
+  });
+});
+
+describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
+  it("ignores server echo snapshots that match the optimistic local tree", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const root = makePanel("root", [], {
+      title: "Runtime title",
+      artifacts: { buildState: "ready", htmlPath: "http://localhost/panels/root/" },
+    });
+    registry.addPanel(root, null, { addAsRoot: true });
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+    const repopulate = vi.spyOn(registry, "repopulate");
+
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [
+        makePanel("root", [], {
+          title: "Runtime title",
+          artifacts: { buildState: "building", buildProgress: "Restoring..." },
+        }),
+      ],
+    });
+
+    expect(repopulate).not.toHaveBeenCalled();
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
+  });
+
+  it("applies server snapshots when the semantic tree changes", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
+    const { orchestrator } = createOrchestrator(registry);
+    const repopulate = vi.spyOn(registry, "repopulate");
+
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [makePanel("root", [makePanel("child")], { title: "New title" })],
+    });
+
+    expect(repopulate).toHaveBeenCalledOnce();
+    expect(registry.getPanel("root")?.title).toBe("New title");
+    expect(registry.getPanel("child")).toBeDefined();
+  });
+
+  it("patches title-only server snapshots without repopulating the tree", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+    const repopulate = vi.spyOn(registry, "repopulate");
+
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [makePanel("root", [], { title: "New title" })],
+    });
+
+    expect(repopulate).not.toHaveBeenCalled();
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
+    expect(registry.getPanel("root")?.title).toBe("New title");
+  });
+
+  it("prevents page-title fallback updates from overwriting explicit runtime titles", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
+    const { orchestrator, shellCore } = createOrchestrator(registry);
+
+    orchestrator.applyServerPanelTitleUpdate({
+      panelId: "root",
+      title: "Explicit title",
+      explicit: true,
+    });
+    await orchestrator.updatePanelTitle("root", "Fallback page title");
+
+    expect(shellCore.updateTitle).not.toHaveBeenCalled();
+    expect(registry.getPanel("root")?.title).toBe("Explicit title");
+  });
+});
+
+describe("PanelOrchestrator.getBootstrapConfig", () => {
+  it("returns the leased runtime connection id string", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel-1");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, shellCore, panelView } = createOrchestrator(registry);
+
+    await orchestrator.ensureLoaded(panel.id);
+    const loadedUrl = panelView.createViewForPanel.mock.calls[0]?.[1] ?? "";
+
+    const config = await orchestrator.getBootstrapConfig(panel.id);
+
+    expect(shellCore.getPanelInit).toHaveBeenCalledWith(panel.id);
+    expect(loadedUrl).not.toContain("connectionId=");
+    expect(config).toMatchObject({
+      entityId: panel.id,
+      connectionId: expect.stringMatching(/^desktop-panel-1-/),
+      clientLabel: "Desktop",
+    });
+  });
+});
+
 describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
   it("unloads local panel resources when the local runtime lease is released", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
@@ -604,7 +750,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
 
     expect(panelView.createViewForPanel).toHaveBeenCalledWith(
       panel.id,
-      expect.stringContaining("connectionId=assigned-runtime-conn"),
+      expect.not.stringContaining("connectionId="),
       "ctx-panel-1"
     );
     expect(serverClient.call).not.toHaveBeenCalledWith(

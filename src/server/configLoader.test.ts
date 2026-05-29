@@ -1,0 +1,25 @@
+import { describe, expect, it } from "vitest";
+import { CONFIG_LOADER_JS } from "./configLoader.js";
+
+describe("CONFIG_LOADER_JS", () => {
+  it("requires canonical entityId bootstrap identity without the old panelId alias", () => {
+    expect(CONFIG_LOADER_JS).toContain("const entityId = cfg?.entityId;");
+    expect(CONFIG_LOADER_JS).not.toContain("cfg?.panelId");
+  });
+
+  it("publishes runtime lease fields before loading the WebSocket transport", () => {
+    expect(CONFIG_LOADER_JS.indexOf("__natstackConnectionId")).toBeGreaterThan(-1);
+    expect(CONFIG_LOADER_JS.indexOf('s.src = "/__transport.js"')).toBeGreaterThan(-1);
+    expect(CONFIG_LOADER_JS.indexOf("__natstackConnectionId")).toBeLessThan(
+      CONFIG_LOADER_JS.indexOf('s.src = "/__transport.js"')
+    );
+  });
+
+  it("keeps runtime lease ids out of persisted/userland bootstrap state", () => {
+    expect(CONFIG_LOADER_JS).not.toContain('url.searchParams.get("connectionId")');
+    expect(CONFIG_LOADER_JS).toContain('typeof configuredConnectionId === "string"');
+    expect(CONFIG_LOADER_JS).toContain("delete stored.connectionId");
+    expect(CONFIG_LOADER_JS).toContain("delete stored.leaseConnectionId");
+    expect(CONFIG_LOADER_JS).toContain("delete globalThis.__natstackConnectionId");
+  });
+});

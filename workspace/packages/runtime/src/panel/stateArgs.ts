@@ -54,7 +54,11 @@ export function useStateArgs<T = Record<string, unknown>>(): T {
  * 2. Validates against manifest schema
  * 3. Updates the current snapshot
  * 4. Persists to the shell-owned panel store
- * 5. Updates the local runtime snapshot and triggers useStateArgs re-render
+ * 5. Returns the authoritative snapshot, which this caller applies locally.
+ *
+ * Host-published runtime:stateArgsChanged events still update panels for
+ * mutations made elsewhere, but the mutating panel must not depend on receiving
+ * its own broadcast echo.
  */
 export async function setStateArgs(updates: Record<string, unknown>): Promise<void> {
   if (!selfSlotId) {
@@ -67,7 +71,10 @@ export async function setStateArgsForPanel(
   panelId: string,
   updates: Record<string, unknown>
 ): Promise<void> {
-  await setStateArgsForPanelRaw(panelId, updates);
+  const nextStateArgs = await setStateArgsForPanelRaw(panelId, updates);
+  if (panelId === selfSlotId) {
+    applyStateArgsSnapshot(nextStateArgs);
+  }
 }
 
 async function setStateArgsForPanelRaw(

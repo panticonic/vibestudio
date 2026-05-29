@@ -41,7 +41,8 @@ export class SilentAgentWorker extends AiChatWorker {
       : null;
     return new PiRunner({
       ...opts,
-      publicationPolicy: () => false,
+      publicationPolicy: ({ event, publishToChannel }) =>
+        Boolean(publishToChannel) && (event.kind === "turn.opened" || event.kind === "turn.closed"),
       extraTools: [...(opts.extraTools ?? []), this.createSayTool(channelId)],
       toolFilter: (toolName) => {
         if (opts.toolFilter && !opts.toolFilter(toolName)) return false;

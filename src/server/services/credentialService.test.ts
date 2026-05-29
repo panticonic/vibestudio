@@ -13,8 +13,12 @@ import type { ClientConfigRecord } from "../../../packages/shared/src/credential
 import { createCredentialService } from "./credentialService.js";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
+import { createApprovalQueue } from "./approvalQueue.js";
 
-function verifiedTestCaller(callerId: string, callerKind: "panel" | "worker" | "do" | "shell") {
+function verifiedTestCaller(
+  callerId: string,
+  callerKind: "app" | "panel" | "worker" | "do" | "shell"
+) {
   if (callerKind !== "panel" && callerKind !== "worker") {
     if (callerKind !== "do") {
       return createVerifiedCaller(callerId, callerKind);
@@ -631,6 +635,70 @@ describe("credentialService", () => {
     );
   });
 
+  it("resolves queued credential use approvals covered by a trusted version grant", async () => {
+    const store = new MemoryCredentialStore();
+    const seedService = createCredentialService({
+      credentialStore: store as never,
+    });
+    const stored = (await seedService.handler(
+      { caller: verifiedTestCaller("worker:owner", "worker") },
+      "storeCredential",
+      [
+        {
+          label: "Example API",
+          audience: [{ url: "https://api.example.test/", match: "origin" }],
+          injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+          material: { type: "bearer-token", token: "secret-token" },
+        },
+      ]
+    )) as StoredCredentialSummary;
+    const emit = vi.fn();
+    const approvalQueue = createApprovalQueue({ eventService: { emit } as never });
+    const service = createCredentialService({
+      credentialStore: store as never,
+      approvalQueue,
+      sessionGrantStore: new CredentialSessionGrantStore(),
+    });
+    const callerA = createVerifiedCaller("worker:consumer-a", "worker", {
+      callerId: "worker:consumer-a",
+      callerKind: "worker",
+      repoPath: "/consumer",
+      effectiveVersion: "hash-1",
+    });
+    const callerB = createVerifiedCaller("worker:consumer-b", "worker", {
+      callerId: "worker:consumer-b",
+      callerKind: "worker",
+      repoPath: "/consumer",
+      effectiveVersion: "hash-1",
+    });
+
+    const first = service.handler({ caller: callerA }, "resolveCredential", [
+      { url: "https://api.example.test/v1" },
+    ]);
+    await vi.waitFor(() => expect(approvalQueue.listPending()).toHaveLength(1));
+    const second = service.handler({ caller: callerB }, "resolveCredential", [
+      { url: "https://api.example.test/v1" },
+    ]);
+    await vi.waitFor(() => expect(approvalQueue.listPending()).toHaveLength(2));
+
+    approvalQueue.resolve(approvalQueue.listPending()[0]!.approvalId, "version");
+
+    await expect(first).resolves.toMatchObject({ id: stored.id });
+    await expect(second).resolves.toMatchObject({ id: stored.id });
+    expect(approvalQueue.listPending()).toEqual([]);
+    expect((await store.loadUrlBound(stored.id))?.grants).toContainEqual(
+      expect.objectContaining({
+        bindingId: "fetch",
+        use: "fetch",
+        resource: "https://api.example.test/",
+        action: "use",
+        scope: "version",
+        repoPath: "/consumer",
+        effectiveVersion: "hash-1",
+      })
+    );
+  });
+
   it("creates URL-bound credentials through generic OAuth PKCE and discards refresh tokens", async () => {
     const store = new MemoryCredentialStore();
     const emit = vi.fn();
@@ -867,6 +935,76 @@ describe("credentialService", () => {
       expect(eventService.emitToConnection).toHaveBeenCalledWith(
         "shell:owner",
         "owner-conn",
+        "external-open:open",
+        expect.objectContaining({
+          callerId: "worker:test",
+          callerKind: "worker",
+        })
+      )
+    );
+    const authorizeUrl = new URL(emit.mock.calls[0]![1].url);
+    await deliverOAuthCallback(
+      authorizeUrl.searchParams.get("redirect_uri")!,
+      new URLSearchParams({
+        code: "code-1",
+        state: authorizeUrl.searchParams.get("state")!,
+      })
+    );
+    await pending;
+  });
+
+  it("credentials.connect can open OAuth externally for a worker-requested app handoff", async () => {
+    const emit = vi.fn();
+    const eventService = targetedOpenEventService(emit);
+    const service = createCredentialService({
+      credentialStore: new MemoryCredentialStore() as never,
+      eventService: eventService as never,
+      approvalQueue: approvingQueue() as never,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              access_token: "token",
+              expires_in: 3600,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } }
+          )
+      )
+    );
+
+    const pending = service.handler(
+      { caller: verifiedTestCaller("worker:test", "worker") },
+      "connect",
+      [
+        {
+          spec: {
+            flow: {
+              type: "oauth2-auth-code-pkce",
+              authorizeUrl: "https://auth.example.test/oauth/authorize",
+              tokenUrl: "https://auth.example.test/oauth/token",
+              clientId: "client-1",
+            },
+            credential: {
+              label: "Example OAuth",
+              audience: [{ url: "https://api.example.test/", match: "origin" }],
+              injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            },
+            browser: "external",
+          },
+          handoffTarget: {
+            callerId: "@workspace-apps/shell",
+            callerKind: "app",
+          },
+        },
+      ]
+    ) as Promise<StoredCredentialSummary>;
+
+    await vi.waitFor(() =>
+      expect(eventService.emitToCaller).toHaveBeenCalledWith(
+        "@workspace-apps/shell",
         "external-open:open",
         expect.objectContaining({
           callerId: "worker:test",

@@ -65,6 +65,10 @@ function makeWorkerCtx(callerId: string): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "worker") };
 }
 
+function makeAppCtx(callerId: string): ServiceContext {
+  return { caller: createVerifiedCaller(callerId, "app") };
+}
+
 function makeDoCtx(callerId: string): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "do") };
 }
@@ -187,6 +191,18 @@ describe("FsService", () => {
       await expect(
         service.handleCall(ctx, "readFile", ["/skills/onboarding/SKILL.md", "utf8"])
       ).resolves.toBe("skill");
+    });
+
+    it("uses an active app entity context for app callers", async () => {
+      const ctx = makeAppCtx("@workspace-apps/shell");
+      registerContext(ctx.caller.runtime.id, "app", "ctx-app");
+
+      await service.handleCall(ctx, "writeFile", ["/app.txt", "from-app"]);
+
+      expect(existsSync(path.join(tmpRoot, "ctx-app", "app.txt"))).toBe(true);
+      await expect(service.handleCall(ctx, "readFile", ["/app.txt", "utf8"])).resolves.toBe(
+        "from-app"
+      );
     });
   });
 

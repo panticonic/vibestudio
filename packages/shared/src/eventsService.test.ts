@@ -98,4 +98,40 @@ describe("EventService", () => {
       })
     );
   });
+
+  it("sends a snapshot immediately when subscribing to a stateful event", async () => {
+    const eventService = new EventService();
+    const snapshot = {
+      pending: [
+        {
+          kind: "capability" as const,
+          approvalId: "approval-1",
+          callerId: "panel-one",
+          callerKind: "panel" as const,
+          repoPath: "panels/test",
+          effectiveVersion: "ev",
+          requestedAt: 1,
+          capability: "internal-git-write",
+          title: "Write project files",
+          resource: { type: "git-repo", label: "Repository", value: "panels/test" },
+        },
+      ],
+    };
+    const service = createEventsServiceDefinition(eventService, {
+      snapshots: {
+        "shell-approval:pending-changed": () => snapshot,
+      },
+    });
+    const conn = makeWsClient("shell", "shell", "conn-1");
+
+    await service.handler(conn.ctx, "subscribe", ["shell-approval:pending-changed"]);
+
+    expect(conn.ws.send).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: "ws:event",
+        event: "event:shell-approval:pending-changed",
+        payload: snapshot,
+      })
+    );
+  });
 });

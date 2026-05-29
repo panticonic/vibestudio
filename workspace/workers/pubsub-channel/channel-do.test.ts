@@ -6,9 +6,14 @@ import { PubSubChannel } from "./channel-do.js";
 
 type TestDO<T> = Awaited<ReturnType<typeof createTestDO<T>>>;
 
-function setRpcCaller(instance: PubSubChannel, callerId: string | null, callerKind: string | null): void {
+function setRpcCaller(
+  instance: PubSubChannel,
+  callerId: string | null,
+  callerKind: string | null
+): void {
   (instance as unknown as { _currentRpcCallerId: string | null })._currentRpcCallerId = callerId;
-  (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind = callerKind;
+  (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind =
+    callerKind;
 }
 
 function agenticEvent(kind = "message.completed") {
@@ -21,7 +26,10 @@ function agenticEvent(kind = "message.completed") {
   };
 }
 
-function messageTypeRegisteredEvent(typeId: string, code = "export default function App() { return null; }") {
+function messageTypeRegisteredEvent(
+  typeId: string,
+  code = "export default function App() { return null; }"
+) {
   return {
     kind: "messageType.registered",
     actor: { kind: "panel", id: "panel:user" },
@@ -35,25 +43,35 @@ function messageTypeRegisteredEvent(typeId: string, code = "export default funct
   };
 }
 
-async function createGadBackedChannel(options: {
-  emitted?: unknown[];
-  channelKey?: string;
-  gad?: TestDO<GadWorkspaceDO>;
-  blobstorePutText?: (value: string) => Promise<{ digest: string; size: number }>;
-} = {}) {
-  const gad = options.gad ?? await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
-  const channel = await createTestDO(PubSubChannel, { __objectKey: options.channelKey ?? "channel-1" });
+async function createGadBackedChannel(
+  options: {
+    emitted?: unknown[];
+    channelKey?: string;
+    gad?: TestDO<GadWorkspaceDO>;
+    blobstorePutText?: (value: string) => Promise<{ digest: string; size: number }>;
+    rpcCall?: (target: string, method: string, args: unknown[]) => Promise<unknown> | unknown;
+  } = {}
+) {
+  const gad = options.gad ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" }));
+  const channel = await createTestDO(PubSubChannel, {
+    __objectKey: options.channelKey ?? "channel-1",
+  });
   const gadTarget = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
-  (channel.instance as unknown as {
-    _rpc: {
-      emit: (target: string, event: string, payload: unknown) => Promise<void>;
-      call: (target: string, method: string, args: unknown[]) => Promise<unknown>;
-    };
-  })._rpc = {
+  const blobs = new Map<string, string>();
+  (
+    channel.instance as unknown as {
+      _rpc: {
+        emit: (target: string, event: string, payload: unknown) => Promise<void>;
+        call: (target: string, method: string, args: unknown[]) => Promise<unknown>;
+      };
+    }
+  )._rpc = {
     emit: vi.fn(async (_target, _event, payload) => {
       options.emitted?.push(payload);
     }),
     call: vi.fn(async (target, method, args) => {
+      const custom = await options.rpcCall?.(target, method, args);
+      if (custom !== undefined) return custom;
       if (target === "main" && method === "workers.resolveService") {
         return {
           kind: "durable-object",
@@ -68,17 +86,27 @@ async function createGadBackedChannel(options: {
         return undefined;
       }
       if (target === "main" && method === "blobstore.putText") {
-        if (options.blobstorePutText) return options.blobstorePutText(String(args[0] ?? ""));
-        return { digest: "test-digest", size: String(args[0] ?? "").length };
+        const value = String(args[0] ?? "");
+        const blob = options.blobstorePutText
+          ? await options.blobstorePutText(value)
+          : { digest: `test-digest-${blobs.size + 1}`, size: value.length };
+        blobs.set(blob.digest, value);
+        return blob;
+      }
+      if (target === "main" && method === "blobstore.getText") {
+        return blobs.get(String(args[0] ?? "")) ?? null;
       }
       if (target === gadTarget) {
-        const callable = gad.instance as unknown as Record<string, (...methodArgs: unknown[]) => unknown>;
+        const callable = gad.instance as unknown as Record<
+          string,
+          (...methodArgs: unknown[]) => unknown
+        >;
         return await callable[method]!(...args);
       }
       throw new Error(`unexpected rpc call ${target}.${method}`);
     }),
   };
-  return { gad, ...channel };
+  return { gad, blobs, ...channel };
 }
 
 describe("PubSubChannel", () => {
@@ -87,15 +115,22 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:user", "panel");
 
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
-    const result = await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent(), {
-      idempotencyKey: "publish-1",
-    });
+    const result = await instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticEvent(),
+      {
+        idempotencyKey: "publish-1",
+      }
+    );
 
     expect(result.id).toBe(2);
-    const rows = gad.sql.exec(
-      `SELECT seq, envelope_id, payload_kind, payload_ref_json, metadata_json
-       FROM channel_envelopes ORDER BY seq ASC`,
-    ).toArray();
+    const rows = gad.sql
+      .exec(
+        `SELECT seq, envelope_id, payload_kind, payload_ref_json, metadata_json
+       FROM channel_envelopes ORDER BY seq ASC`
+      )
+      .toArray();
     expect(rows).toHaveLength(2);
     expect(rows[1]).toMatchObject({
       seq: 2,
@@ -105,6 +140,53 @@ describe("PubSubChannel", () => {
       kind: "message.completed",
     });
     expect(JSON.parse(rows[1]!["metadata_json"] as string)).toMatchObject({ name: "User" });
+  });
+
+  it("does not persist full method schemas in durable participant metadata", async () => {
+    const { instance, gad } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:user", "panel");
+
+    await instance.subscribe("panel:user", {
+      contextId: "ctx-1",
+      name: "User",
+      type: "panel",
+      handle: "user",
+      methods: [
+        {
+          name: "eval",
+          description: "x".repeat(4096),
+          parameters: {
+            type: "object",
+            properties: {
+              code: { type: "string", description: "y".repeat(4096) },
+            },
+          },
+          returns: { type: "object", description: "z".repeat(4096) },
+        },
+      ],
+    });
+    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent(), {
+      idempotencyKey: "publish-with-methods",
+    });
+
+    const rows = gad.sql
+      .exec(
+        `SELECT from_json, payload_ref_json, metadata_json
+         FROM channel_envelopes ORDER BY seq ASC`
+      )
+      .toArray();
+    const durableJson = JSON.stringify(rows);
+
+    expect(durableJson).not.toContain("properties");
+    expect(durableJson).not.toContain("returns");
+    expect(durableJson).not.toContain("description");
+    expect(durableJson).not.toContain("yyyy");
+    expect(JSON.parse(rows[0]!["payload_ref_json"] as string)).toMatchObject({
+      metadata: { methods: [{ name: "eval" }] },
+    });
+    expect(JSON.parse(rows[1]!["metadata_json"] as string)).toMatchObject({
+      methods: [{ name: "eval" }],
+    });
   });
 
   it("fails durable publishes when blobstore storage fails", async () => {
@@ -121,7 +203,9 @@ describe("PubSubChannel", () => {
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
     let error: unknown;
     try {
-      await instance.publish("panel:user", "custom.large", { value: "must be stored" });
+      await instance.publish("panel:user", "custom.large", {
+        value: `must be stored ${"x".repeat(160 * 1024)}`,
+      });
     } catch (err) {
       error = err;
     }
@@ -134,8 +218,16 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:user", "panel");
 
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
-    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent("message.completed"));
-    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent("message.completed"));
+    await instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticEvent("message.completed")
+    );
+    await instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticEvent("message.completed")
+    );
 
     const afterOne = await instance.getReplayAfter(1);
     expect(afterOne.logEvents.map((event) => event.id)).toEqual([2, 3]);
@@ -160,10 +252,61 @@ describe("PubSubChannel", () => {
     await instance.publish("panel:live", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
     await new Promise((resolve) => setTimeout(resolve, 5));
 
-    expect(emitted.some((payload) => {
-      const message = (payload as { message?: { kind?: string; event?: { type?: string } } }).message;
-      return message?.kind === "log" && message.event?.type === AGENTIC_EVENT_PAYLOAD_KIND;
-    })).toBe(true);
+    expect(
+      emitted.some((payload) => {
+        const message = (payload as { message?: { kind?: string; event?: { type?: string } } })
+          .message;
+        return message?.kind === "log" && message.event?.type === AGENTIC_EVENT_PAYLOAD_KIND;
+      })
+    ).toBe(true);
+  });
+
+  it("evicts missing DO subscribers during replay delivery without noisy fatal logs", async () => {
+    const missingDoId = "do:workers/agent-worker:AiChatWorker:headless-missing";
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { instance, sql } = await createGadBackedChannel({
+      rpcCall: async (target, method) => {
+        if (target === "main" && method === "workers.resolveDurableObject") {
+          return {
+            kind: "durable-object",
+            source: "workers/agent-worker",
+            className: "AiChatWorker",
+            objectKey: "headless-missing",
+            targetId: missingDoId,
+          };
+        }
+        if (target === missingDoId && method === "onChannelEnvelope") {
+          const err = new Error("runtime entity not registered") as Error & { code?: string };
+          err.code = "DO_NOT_CREATED";
+          throw err;
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      setRpcCaller(instance, "panel:user", "panel");
+      await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+      await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+
+      setRpcCaller(instance, missingDoId, "durable-object");
+      await instance.subscribe(missingDoId, {
+        contextId: "ctx-1",
+        name: "Missing agent",
+        type: "agent",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      expect(
+        sql.exec(`SELECT id FROM participants WHERE id = ?`, missingDoId).toArray()
+      ).toEqual([]);
+      expect(consoleError).not.toHaveBeenCalledWith(
+        expect.stringContaining("[Channel] delivery failed"),
+        expect.anything()
+      );
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("reports an envelope-only schema", async () => {
@@ -182,13 +325,25 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:user", "panel");
 
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
-    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent("message.completed"));
+    await instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticEvent("message.completed")
+    );
 
-    expect(sql.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_envelopes'`).toArray()).toEqual([]);
+    expect(
+      sql
+        .exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'channel_envelopes'`)
+        .toArray()
+    ).toEqual([]);
     const replay = await instance.getReplayAfter(1);
-    expect(replay.logEvents.map((event) => ({ id: event.id, type: event.type, senderId: event.senderId }))).toEqual([
-      { id: 2, type: AGENTIC_EVENT_PAYLOAD_KIND, senderId: "panel:user" },
-    ]);
+    expect(
+      replay.logEvents.map((event) => ({
+        id: event.id,
+        type: event.type,
+        senderId: event.senderId,
+      }))
+    ).toEqual([{ id: 2, type: AGENTIC_EVENT_PAYLOAD_KIND, senderId: "panel:user" }]);
     expect(replay.ready).toMatchObject({
       totalCount: 2,
       envelopeCount: 2,
@@ -203,8 +358,16 @@ describe("PubSubChannel", () => {
   it("forks the GAD-backed channel log during postClone", async () => {
     const parent = await createGadBackedChannel({ channelKey: "channel-parent" });
     setRpcCaller(parent.instance, "panel:user", "panel");
-    await parent.instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
-    await parent.instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent("message.completed"));
+    await parent.instance.subscribe("panel:user", {
+      contextId: "ctx-1",
+      name: "User",
+      type: "panel",
+    });
+    await parent.instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticEvent("message.completed")
+    );
     await parent.instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, {
       ...agenticEvent("message.completed"),
       causality: { messageId: "msg-2" },
@@ -219,10 +382,11 @@ describe("PubSubChannel", () => {
     const replay = await fork.instance.getReplayAfter(0);
     expect(replay.logEvents.map((event) => event.id)).toEqual([2, 3]);
     const messages = replay.logEvents.filter((event) => event.type === AGENTIC_EVENT_PAYLOAD_KIND);
-    expect(messages.map((event) => (event.payload as { causality: { messageId: string } }).causality.messageId)).toEqual([
-      "msg-1",
-      "msg-2",
-    ]);
+    expect(
+      messages.map(
+        (event) => (event.payload as { causality: { messageId: string } }).causality.messageId
+      )
+    ).toEqual(["msg-1", "msg-2"]);
     expect(replay.ready).toMatchObject({
       totalCount: 2,
       envelopeCount: 2,
@@ -244,7 +408,11 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:caller", "panel");
     await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
     setRpcCaller(instance, "panel:provider", "panel");
-    await instance.subscribe("panel:provider", { contextId: "ctx-1", name: "Provider", type: "panel" });
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
 
     setRpcCaller(instance, "panel:caller", "panel");
     await instance.callMethod(
@@ -253,18 +421,24 @@ describe("PubSubChannel", () => {
       "transport-1",
       "eval",
       { code: "1 + 1" },
-      { invocationId: "invocation-1", transportCallId: "transport-1", turnId: "turn-1" },
+      { invocationId: "invocation-1", transportCallId: "transport-1", turnId: "turn-1" }
     );
 
     await instance.cancelMethodCall("transport-1");
 
-    const rows = gad.sql.exec(
-      `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
-      AGENTIC_EVENT_PAYLOAD_KIND,
-    ).toArray();
-    const events = rows.map((row: Record<string, unknown>) => JSON.parse(row["payload_ref_json"] as string));
+    const rows = gad.sql
+      .exec(
+        `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
+        AGENTIC_EVENT_PAYLOAD_KIND
+      )
+      .toArray();
+    const events = rows.map((row: Record<string, unknown>) =>
+      JSON.parse(row["payload_ref_json"] as string)
+    );
     const started = events.find((event: { kind?: string }) => event.kind === "invocation.started");
-    const cancelled = events.find((event: { kind?: string }) => event.kind === "invocation.cancelled");
+    const cancelled = events.find(
+      (event: { kind?: string }) => event.kind === "invocation.cancelled"
+    );
 
     expect(started).toMatchObject({
       turnId: "turn-1",
@@ -277,18 +451,205 @@ describe("PubSubChannel", () => {
     });
   });
 
+  it("does not block channel cancellation behind an in-flight DO method call", async () => {
+    let resolveMethod!: (value: unknown) => void;
+    let resolveMethodStarted!: () => void;
+    const methodStarted = new Promise<void>((resolve) => {
+      resolveMethodStarted = resolve;
+    });
+    const methodResult = new Promise<unknown>((resolve) => {
+      resolveMethod = resolve;
+    });
+    let methodStartedRecorded = false;
+    const targetPid = "do:workers/agent-worker:AiChatWorker:agent-1";
+    const { instance, gad } = await createGadBackedChannel({
+      rpcCall: (target, method) => {
+        if (target === "main" && method === "workers.resolveDurableObject") return {};
+        if (target === targetPid && method === "onChannelEnvelope") return null;
+        if (target === targetPid && method === "onMethodCall") {
+          if (!methodStartedRecorded) {
+            methodStartedRecorded = true;
+            resolveMethodStarted();
+          }
+          return methodResult;
+        }
+        return undefined;
+      },
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
+    setRpcCaller(instance, null, null);
+    await instance.subscribe(targetPid, {
+      contextId: "ctx-1",
+      name: "Agent",
+      type: "agent",
+      handle: "agent",
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await expect(
+      Promise.race([
+        instance.callMethod("panel:caller", targetPid, "transport-do", "pause", {}, {
+          invocationId: "invocation-do",
+          transportCallId: "transport-do",
+          turnId: "turn-do",
+        }).then(() => "returned"),
+        new Promise((resolve) => setTimeout(() => resolve("blocked"), 25)),
+      ])
+    ).resolves.toBe("returned");
+    await methodStarted;
+
+    await instance.cancelMethodCall("transport-do");
+    resolveMethod({ result: { paused: true } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const events = gad.sql
+      .exec(
+        `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
+        AGENTIC_EVENT_PAYLOAD_KIND
+      )
+      .toArray()
+      .map((row: Record<string, unknown>) => JSON.parse(row["payload_ref_json"] as string));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "invocation.started",
+          causality: { invocationId: "invocation-do", transportCallId: "transport-do" },
+        }),
+        expect.objectContaining({
+          kind: "invocation.cancelled",
+          causality: { invocationId: "invocation-do", transportCallId: "transport-do" },
+        }),
+      ])
+    );
+    expect(events.some((event: { kind?: string }) => event.kind === "invocation.completed")).toBe(false);
+  });
+
+  it("persists method terminal events even when the caller participant has left", async () => {
+    const { instance, gad } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      "panel:provider",
+      "transport-left",
+      "eval",
+      { code: "1 + 1" },
+      { invocationId: "invocation-left", transportCallId: "transport-left", turnId: "turn-left" }
+    );
+    await instance.unsubscribe("panel:caller");
+
+    const resultId = await instance.handleMethodResult("transport-left", { ok: true }, false);
+
+    expect(resultId).toBeTypeOf("number");
+    const rows = gad.sql
+      .exec(
+        `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
+        AGENTIC_EVENT_PAYLOAD_KIND
+      )
+      .toArray();
+    const events = rows.map((row: Record<string, unknown>) =>
+      JSON.parse(row["payload_ref_json"] as string)
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "invocation.started",
+          turnId: "turn-left",
+          causality: { invocationId: "invocation-left", transportCallId: "transport-left" },
+        }),
+        expect.objectContaining({
+          kind: "invocation.completed",
+          turnId: "turn-left",
+          causality: { invocationId: "invocation-left", transportCallId: "transport-left" },
+          payload: expect.objectContaining({ protocol: AGENTIC_PROTOCOL_VERSION }),
+        }),
+      ])
+    );
+  });
+
+  it("caps oversized method results before publishing terminal invocation events", async () => {
+    const { instance, gad, blobs } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      "panel:provider",
+      "transport-large",
+      "eval",
+      { code: "huge()" },
+      { invocationId: "invocation-large", transportCallId: "transport-large", turnId: "turn-large" }
+    );
+
+    await instance.handleMethodResult("transport-large", { text: "x".repeat(80 * 1024) }, false);
+
+    const rows = gad.sql
+      .exec(
+        `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
+        AGENTIC_EVENT_PAYLOAD_KIND
+      )
+      .toArray();
+    const events = rows.map((row: Record<string, unknown>) =>
+      JSON.parse(row["payload_ref_json"] as string)
+    );
+    const completed = events.find(
+      (event: { kind?: string; causality?: { invocationId?: string } }) =>
+        event.kind === "invocation.completed" &&
+        event.causality?.invocationId === "invocation-large"
+    );
+    const resultRef = completed?.payload?.result as { digest?: string } | undefined;
+    expect(resultRef).toMatchObject({
+      protocol: "natstack.blob-ref.v1",
+      digest: expect.any(String),
+      encoding: "json",
+    });
+    const cappedResult = JSON.parse(blobs.get(resultRef!.digest!)!);
+    expect(cappedResult).toMatchObject({
+      omitted: true,
+      reason: "method result exceeds durable inline budget",
+      method: "eval",
+      transportCallId: "transport-large",
+      stored: expect.objectContaining({ digest: expect.any(String), encoding: "json" }),
+    });
+    expect(JSON.stringify(completed).length).toBeLessThan(1_000);
+  });
+
   it("hydrates the message type registry from GAD instead of trusting a partial local cache", async () => {
     const { instance, gad } = await createGadBackedChannel();
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
 
-    (instance as unknown as {
-      cacheMessageTypeMutation: (seq: number, mutation: {
-        kind: "upsertMessageType";
-        typeId: string;
-        row: { displayMode: "row"; source: { type: "code"; code: string } };
-      }) => void;
-    }).cacheMessageTypeMutation(1, {
+    (
+      instance as unknown as {
+        cacheMessageTypeMutation: (
+          seq: number,
+          mutation: {
+            kind: "upsertMessageType";
+            typeId: string;
+            row: { displayMode: "row"; source: { type: "code"; code: string } };
+          }
+        ) => void;
+      }
+    ).cacheMessageTypeMutation(1, {
       kind: "upsertMessageType",
       typeId: "weather",
       row: {
@@ -336,22 +697,28 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
 
-    await expect(instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, {
-      kind: "messageType.registered",
-      actor: { kind: "panel", id: "panel:user" },
-      payload: {
-        protocol: AGENTIC_PROTOCOL_VERSION,
-        typeId: "broken",
-        displayMode: "bad",
-        source: { type: "code", code: "export default function Broken() { return null; }" },
-      },
-      createdAt: new Date().toISOString(),
-    })).rejects.toThrow(/Invalid registry payload/);
+    await expect(
+      instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, {
+        kind: "messageType.registered",
+        actor: { kind: "panel", id: "panel:user" },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          typeId: "broken",
+          displayMode: "bad",
+          source: { type: "code", code: "export default function Broken() { return null; }" },
+        },
+        createdAt: new Date().toISOString(),
+      })
+    ).rejects.toThrow(/Invalid registry payload/);
 
-    const rows = gad.sql.exec(
-      `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
-      AGENTIC_EVENT_PAYLOAD_KIND,
-    ).toArray();
-    expect(rows.map((row) => JSON.parse(row["payload_ref_json"] as string).kind)).not.toContain("messageType.registered");
+    const rows = gad.sql
+      .exec(
+        `SELECT payload_ref_json FROM channel_envelopes WHERE payload_kind = ? ORDER BY seq ASC`,
+        AGENTIC_EVENT_PAYLOAD_KIND
+      )
+      .toArray();
+    expect(rows.map((row) => JSON.parse(row["payload_ref_json"] as string).kind)).not.toContain(
+      "messageType.registered"
+    );
   });
 });

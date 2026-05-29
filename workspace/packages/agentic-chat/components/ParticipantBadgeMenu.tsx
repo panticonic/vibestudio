@@ -7,6 +7,7 @@ import type { ChatParticipantMetadata } from "../types";
 import { MethodArgumentsModal } from "./MethodArgumentsModal";
 import { schemaHasRequiredParams } from "./JsonSchemaForm";
 import { ContextUsageRing } from "./ContextUsageRing";
+import { AgentDialog } from "./AgentDialog";
 
 export interface ParticipantBadgeMenuProps {
   participant: Participant<ChatParticipantMetadata>;
@@ -46,6 +47,7 @@ export function ParticipantBadgeMenu({
 }: ParticipantBadgeMenuProps) {
   const [modalOpen, setModalOpen] = useState(false);
   const [selectedMethod, setSelectedMethod] = useState<MethodAdvertisement | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Get methods marked as menu items
   const menuMethods = useMemo(() => {
@@ -145,7 +147,8 @@ export function ParticipantBadgeMenu({
   // Simple badge without dropdown when no menu items, no debug console, no remove
   const showDebugConsole = isAgent && onOpenDebugConsole;
   const showRemove = isAgent && onRemoveAgent;
-  if (!hasMenuItems && !showDebugConsole && !showRemove) {
+  const showSettings = isAgent;
+  if (!hasMenuItems && !showDebugConsole && !showRemove && !showSettings) {
     return (
       <span style={{ position: "relative" }}>
         <Badge color={color}>
@@ -197,10 +200,19 @@ export function ParticipantBadgeMenu({
               )}
             </DropdownMenu.Item>
           ))}
+          {/* Settings for agents */}
+          {showSettings && (
+            <>
+              {menuMethods.length > 0 && <DropdownMenu.Separator />}
+              <DropdownMenu.Item onSelect={() => setSettingsOpen(true)}>
+                Settings…
+              </DropdownMenu.Item>
+            </>
+          )}
           {/* Debug Console for agents */}
           {showDebugConsole && (
             <>
-              {menuMethods.length > 0 && <DropdownMenu.Separator />}
+              {(menuMethods.length > 0 || showSettings) && <DropdownMenu.Separator />}
               <DropdownMenu.Item onSelect={() => onOpenDebugConsole(participant.metadata.handle)}>
                 Debug Console
               </DropdownMenu.Item>
@@ -230,6 +242,14 @@ export function ParticipantBadgeMenu({
           method={selectedMethod}
           providerName={participant.metadata.name}
           onSubmit={handleModalSubmit}
+        />
+      )}
+
+      {showSettings && (
+        <AgentDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          editParticipantId={participant.id}
         />
       )}
     </>

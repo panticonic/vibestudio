@@ -19,7 +19,7 @@ How to use the chat panel's code execution sandbox — the eval tool, inline UI 
 | [FEEDBACK.md](FEEDBACK.md) | Feedback forms — block until user responds |
 | [RUNTIME_API.md](RUNTIME_API.md) | Full runtime API reference — fs, db, workers, ai, git, browser data, userland approval prompts |
 | [CHAT_API.md](CHAT_API.md) | Chat API — publish messages, call methods, interact with the conversation |
-| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md) | Browser automation — Playwright API via CDP |
+| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md) | Browser automation — lazy Playwright-style API via CDP |
 | [PATTERNS.md](PATTERNS.md) | Common patterns and recipes |
 | [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity |
 
@@ -50,7 +50,8 @@ These are pre-bundled with the panel and work as bare `import` statements:
 |--------|-----------------|
 | `@workspace/runtime` | rpc, fs, db, workers, ai, workspace, contextId, panel navigation, `requestApproval` |
 | `@workspace/panel-browser` | Browser data import/export (cookies, passwords, bookmarks, history) |
-| `@workspace/playwright-client` | Playwright browser automation |
+| `@workspace/playwright-core` | Vendored Playwright-style CDP client; loaded by `handle.cdp.playwrightPage()` |
+| `@workspace/playwright-client` | Explicit lightweight CDP client for constrained worker contexts |
 | `react`, `react/jsx-runtime` | React hooks and component APIs |
 | `@radix-ui/themes` | UI components (Button, Flex, Card, Table, etc.) |
 | `@radix-ui/react-icons` | Icon components |
@@ -80,8 +81,9 @@ To pin a workspace package to a specific git ref, use the `imports` parameter ex
 
 ```
 eval({ code: `
-  import { GitClient } from "@natstack/git";
+  import { git } from "@workspace/runtime";
   import { createProject } from "@workspace-skills/paneldev";
+  const client = git.client();
   // workspace packages: just import, auto-resolved
 ` })
 ```
@@ -101,7 +103,7 @@ should go through `inline_ui`, `load_action_bar`, `feedback_form`, or
 ## Critical Rules
 
 1. **Static imports only** — `import { rpc } from "@workspace/runtime"` (NOT `await import(...)`). File-loaded relative imports must also be static/literal.
-2. **Workspace packages are auto-resolved** — `import { GitClient } from "@natstack/git"` just works. npm packages require `imports: { "lodash": "npm:4" }`
+2. **Workspace packages are auto-resolved** — `import { git } from "@workspace/runtime"` just works. Use `git.client()` for git operations; npm packages require `imports: { "lodash": "npm:4" }`
 3. **Components must `export default`** — named exports alone won't work for inline_ui/load_action_bar/feedback_custom components
 4. **Inline UI components receive `{ props, chat, scope, scopes }`** — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
 5. **Feedback components receive `{ onSubmit, onCancel, onError, chat }`**

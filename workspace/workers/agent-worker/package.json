@@ -8,6 +8,11 @@
     "durable": {
       "classes": [{ "className": "AiChatWorker" }]
     },
+    "agent": {
+      "displayName": "Chat Agent",
+      "description": "General-purpose coding & chat agent",
+      "icon": "💬"
+    },
     "exposeModules": [
       "@workspace/runtime",
       "@workspace/pubsub",

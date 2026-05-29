@@ -1,8 +1,8 @@
 import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileSync } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
@@ -44,33 +44,43 @@ function doCtx(callerId = "do:workers/agent-worker:AiChatWorker:agent-1") {
   };
 }
 
-function makeHost(overrides: {
-  approvalDecision?: "once" | "session" | "version" | "repo" | "deny";
-  activeEv?: string | null;
-  depEv?: string | null;
-  activeDepEv?: string | null;
-  activeExternalDeps?: Record<string, string>;
-  candidateExternalDeps?: Record<string, string>;
-  activeRuntimeDepsKey?: string | null;
-  extensionTransport?: { call: ReturnType<typeof vi.fn> };
-  getContextIdForCaller?: (callerId: string) => string | null;
-  gitDefaultBranch?: "main" | "master";
-  installed?: boolean;
-  enabled?: boolean;
-  status?: "running" | "stopped" | "building" | "error" | "pending-approval";
-  activeBundleKey?: string | null;
-} = {}) {
+function makeHost(
+  overrides: {
+    approvalDecision?: "once" | "session" | "version" | "repo" | "deny";
+    activeEv?: string | null;
+    depEv?: string | null;
+    activeDepEv?: string | null;
+    activeExternalDeps?: Record<string, string>;
+    candidateExternalDeps?: Record<string, string>;
+    activeRuntimeDepsKey?: string | null;
+    extensionTransport?: { call: ReturnType<typeof vi.fn> };
+    buildTargets?: string[];
+    registerBuildProvider?: ReturnType<typeof vi.fn>;
+    unregisterBuildProvider?: ReturnType<typeof vi.fn>;
+    recordUnitLog?: ReturnType<typeof vi.fn>;
+    getContextIdForCaller?: (callerId: string) => string | null;
+    gitDefaultBranch?: "main" | "master";
+    installed?: boolean;
+    status?: "running" | "stopped" | "building" | "error" | "pending-approval";
+    activeBundleKey?: string | null;
+  } = {}
+) {
   const statePath = tempDir();
   const extensionNode = {
     name: "@workspace-extensions/git-tools",
     kind: "extension",
-    relativePath: "extensions/@workspace-extensions/git-tools",
-    path: path.join(statePath, "source", "extensions", "@workspace-extensions", "git-tools"),
+    relativePath: "extensions/git-tools",
+    path: path.join(statePath, "source", "extensions", "git-tools"),
     dependencies: overrides.candidateExternalDeps ?? {},
     internalDeps: ["@workspace/runtime"],
     manifest: {
       displayName: "Git Tools",
-      extension: { activationEvents: ["*"] },
+      extension: {
+        activationEvents: ["*"],
+        ...(overrides.buildTargets
+          ? { contributes: { buildTargets: overrides.buildTargets } }
+          : {}),
+      },
     },
   };
   fs.mkdirSync(extensionNode.path, { recursive: true });
@@ -81,9 +91,14 @@ function makeHost(overrides: {
       version: "1.0.0",
       natstack: {
         displayName: "Git Tools",
-        extension: { activationEvents: ["*"] },
+        extension: {
+          activationEvents: ["*"],
+          ...(overrides.buildTargets
+            ? { contributes: { buildTargets: overrides.buildTargets } }
+            : {}),
+        },
       },
-    }),
+    })
   );
   if (overrides.gitDefaultBranch) {
     execFileSync("git", ["-c", `init.defaultBranch=${overrides.gitDefaultBranch}`, "init", "-q"], {
@@ -102,34 +117,53 @@ function makeHost(overrides: {
         "-m",
         "initial extension",
       ],
-      { cwd: extensionNode.path },
+      { cwd: extensionNode.path }
     );
   }
   const approvalQueue = {
     request: vi.fn(async () => overrides.approvalDecision ?? "once"),
   };
   const eventService = { emit: vi.fn(), getOrCreateSubscriber: vi.fn(), subscribe: vi.fn() };
+  const buildArtifacts = (key: string) => [
+    {
+      path: "bundle.js",
+      role: "primary",
+      contentType: "text/javascript; charset=utf-8",
+      encoding: "utf8",
+      content: `export default ${JSON.stringify(key)};`,
+    },
+  ];
   const buildSystem = {
     getBuild: vi.fn(async () => ({
-      bundlePath: path.join(statePath, "builds", "candidate-key", "bundle.js"),
       dir: path.join(statePath, "builds", "candidate-key"),
+      artifacts: buildArtifacts("candidate-key"),
       metadata: {
         ev: "ev-candidate",
-        runtimeDepsKey: "runtime-candidate",
-        extensionRuntimeAbi: "2",
+        details: {
+          kind: "extension",
+          runtimeDepsKey: "runtime-candidate",
+          runtimeAbi: "2",
+          externalDeps: {},
+        },
       },
     })),
-    getBuildByKey: vi.fn((key: string) => key === "bundle-key" || key === "candidate-key"
-      ? {
-          bundlePath: path.join(statePath, "builds", key, "bundle.js"),
-          dir: path.join(statePath, "builds", key),
-          metadata: {
-            ev: key === "candidate-key" ? "ev-candidate" : (overrides.activeEv ?? "ev-current"),
-            runtimeDepsKey: key === "candidate-key" ? "runtime-candidate" : "runtime-key",
-            extensionRuntimeAbi: "2",
-          },
-        }
-      : null),
+    getBuildByKey: vi.fn((key: string) =>
+      key === "bundle-key" || key === "candidate-key"
+        ? {
+            dir: path.join(statePath, "builds", key),
+            artifacts: buildArtifacts(key),
+            metadata: {
+              ev: key === "candidate-key" ? "ev-candidate" : (overrides.activeEv ?? "ev-current"),
+              details: {
+                kind: "extension",
+                runtimeDepsKey: key === "candidate-key" ? "runtime-candidate" : "runtime-key",
+                runtimeAbi: "2",
+                externalDeps: overrides.activeExternalDeps ?? {},
+              },
+            },
+          }
+        : null
+    ),
     getEffectiveVersion: vi.fn((name: string) => {
       if (name === extensionNode.name) return overrides.activeEv ?? "ev-current";
       if (name === "@workspace/runtime") return overrides.depEv ?? "ev-runtime";
@@ -157,51 +191,34 @@ function makeHost(overrides: {
         throw new Error("extensionTransport.call should not be invoked in this test");
       }),
     },
+    registerBuildProvider: overrides.registerBuildProvider,
+    unregisterBuildProvider: overrides.unregisterBuildProvider,
+    recordUnitLog: overrides.recordUnitLog,
   });
   if (overrides.installed !== false) {
     host.registry.upsert({
+      unitKind: "extension",
       name: extensionNode.name,
       version: "1.0.0",
       source: { kind: "internal-git", repo: extensionNode.relativePath, ref: "main" },
       installedAt: Date.now(),
       activeEv: overrides.activeEv ?? "ev-current",
       activeSha: "abc123",
-      activeBundleKey: overrides.activeBundleKey === undefined ? "bundle-key" : overrides.activeBundleKey,
-      activeDependencyEvs: { "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime" },
+      activeBundleKey:
+        overrides.activeBundleKey === undefined ? "bundle-key" : overrides.activeBundleKey,
+      activeDependencyEvs: {
+        "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
+      },
       activeExternalDeps: overrides.activeExternalDeps ?? {},
-      activeRuntimeDepsKey: overrides.activeRuntimeDepsKey === undefined ? "runtime-key" : overrides.activeRuntimeDepsKey,
-      enabled: overrides.enabled ?? true,
+      activeRuntimeDepsKey:
+        overrides.activeRuntimeDepsKey === undefined
+          ? "runtime-key"
+          : overrides.activeRuntimeDepsKey,
       status: overrides.status ?? "running",
       lastError: overrides.status === "error" ? "previous failure" : null,
     });
   }
   return { host, approvalQueue, buildSystem, extensionNode, eventService, statePath };
-}
-
-function commitMetaConfig(workspacePath: string, content: string): string {
-  const metaPath = path.join(workspacePath, "meta");
-  fs.mkdirSync(metaPath, { recursive: true });
-  if (!fs.existsSync(path.join(metaPath, ".git"))) {
-    execFileSync("git", ["init", "-q"], { cwd: metaPath });
-  }
-  fs.writeFileSync(path.join(metaPath, "natstack.yml"), content);
-  execFileSync("git", ["add", "natstack.yml"], { cwd: metaPath });
-  execFileSync(
-    "git",
-    [
-      "-c",
-      "user.name=NatStack Test",
-      "-c",
-      "user.email=test@natstack.local",
-      "commit",
-      "-q",
-      "--allow-empty",
-      "-m",
-      "update meta",
-    ],
-    { cwd: metaPath },
-  );
-  return String(execFileSync("git", ["rev-parse", "HEAD"], { cwd: metaPath })).trim();
 }
 
 describe("ExtensionHost invocation attribution", () => {
@@ -211,12 +228,13 @@ describe("ExtensionHost invocation attribution", () => {
     };
     const { host } = makeHost({
       extensionTransport,
-      getContextIdForCaller: (callerId) => callerId === "panel-1" ? "ctx-panel" : null,
+      getContextIdForCaller: (callerId) => (callerId === "panel-1" ? "ctx-panel" : null),
     });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
-    await expect(host.invoke(panelCtx("panel-1"), "@workspace-extensions/git-tools", "ping", []))
-      .resolves.toBe("ok");
+    await expect(
+      host.invoke(panelCtx("panel-1"), "@workspace-extensions/git-tools", "ping", [])
+    ).resolves.toBe("ok");
 
     expect(extensionTransport.call).toHaveBeenCalledWith(
       "@workspace-extensions/git-tools",
@@ -232,8 +250,51 @@ describe("ExtensionHost invocation attribution", () => {
           callerId: "panel-1",
           contextId: "ctx-panel",
         }),
-      }),
+      })
     );
+  });
+});
+
+describe("ExtensionHost reload approval", () => {
+  it("requests a one-unit management approval for panel reloads", async () => {
+    const { host, approvalQueue, extensionNode } = makeHost();
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await expect(host.reload(panelCtx("panel-1"), extensionNode.name)).resolves.toBeUndefined();
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        callerId: "panel-1",
+        callerKind: "panel",
+        repoPath: "panels/test",
+        effectiveVersion: "ev-test",
+        trigger: "management",
+        title: "Reload extension",
+        units: [
+          expect.objectContaining({
+            unitKind: "extension",
+            unitName: extensionNode.name,
+            source: expect.objectContaining({ repo: extensionNode.relativePath, ref: "main" }),
+            ev: "ev-current",
+          }),
+        ],
+        configWrite: null,
+      })
+    );
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ name: extensionNode.name }));
+  });
+
+  it("does not prompt trusted shell reloads", async () => {
+    const { host, approvalQueue, extensionNode } = makeHost();
+    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await expect(
+      host.reload({ caller: createVerifiedCaller("shell-1", "shell") }, extensionNode.name)
+    ).resolves.toBeUndefined();
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({ name: extensionNode.name }));
   });
 });
 
@@ -248,35 +309,51 @@ describe("ExtensionHost source push authorization", () => {
     };
 
     await expect(host.authorizeSourcePush(request)).resolves.toEqual({ allowed: true });
-    await expect(host.authorizeSourcePush({ ...request, commit: "def457" })).resolves.toEqual({ allowed: true });
-    await expect(host.authorizeSourcePush({
-      ...request,
-      caller: panelCtx("panel-2").caller,
-      commit: "def458",
-    })).resolves.toEqual({ allowed: true });
+    await expect(host.authorizeSourcePush({ ...request, commit: "def457" })).resolves.toEqual({
+      allowed: true,
+    });
+    await expect(
+      host.authorizeSourcePush({
+        ...request,
+        caller: panelCtx("panel-2").caller,
+        commit: "def458",
+      })
+    ).resolves.toEqual({ allowed: true });
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
-    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
-      extensionDiff: expect.objectContaining({
-        previousSha: "abc123",
-        sha: "def456",
-        push: expect.objectContaining({
-          ref: "main",
-          pushedBy: "panel-1",
-        }),
-      }),
-    }));
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        callerId: "panel-1",
+        callerKind: "panel",
+        repoPath: "panels/test",
+        effectiveVersion: "ev-test",
+        trigger: "source-push",
+        title: `${extensionNode.name} source push`,
+        units: [
+          expect.objectContaining({
+            unitKind: "extension",
+            unitName: extensionNode.name,
+            ev: "ev-current",
+            source: expect.objectContaining({ repo: extensionNode.relativePath, ref: "main" }),
+          }),
+        ],
+        configWrite: null,
+      })
+    );
   });
 
   it("does not gate non-active extension branches", async () => {
     const { host, approvalQueue, extensionNode } = makeHost();
 
-    await expect(host.authorizeSourcePush({
-      caller: panelCtx("panel-1").caller,
-      repoPath: extensionNode.relativePath,
-      branch: "feature",
-      commit: "def456",
-    })).resolves.toEqual({ allowed: true });
+    await expect(
+      host.authorizeSourcePush({
+        caller: panelCtx("panel-1").caller,
+        repoPath: extensionNode.relativePath,
+        branch: "feature",
+        commit: "def456",
+      })
+    ).resolves.toEqual({ allowed: true });
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
   });
@@ -284,91 +361,43 @@ describe("ExtensionHost source push authorization", () => {
   it("allows DO callers to request extension source-push approval", async () => {
     const { host, approvalQueue, extensionNode } = makeHost({ approvalDecision: "session" });
 
-    await expect(host.authorizeSourcePush({
-      caller: doCtx().caller,
-      repoPath: extensionNode.relativePath,
-      branch: "main",
-      commit: "def456",
-    })).resolves.toEqual({ allowed: true });
+    await expect(
+      host.authorizeSourcePush({
+        caller: doCtx().caller,
+        repoPath: extensionNode.relativePath,
+        branch: "main",
+        commit: "def456",
+      })
+    ).resolves.toEqual({ allowed: true });
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
-      callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
-      callerKind: "do",
-      repoPath: "workers/agent-worker",
-    }));
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callerId: "do:workers/agent-worker:AiChatWorker:agent-1",
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+      })
+    );
   });
 
-  it("keys meta-push approvals to the exact pushed commit and declared extension ref", async () => {
-    const { host, approvalQueue, extensionNode, statePath } = makeHost({ approvalDecision: "once" });
-    const commit = commitMetaConfig(
-      path.join(statePath, "source"),
-      [
-        "extensions:",
-        `  - source: ${extensionNode.relativePath}`,
-        "    ref: feature",
-      ].join("\n"),
-    );
+  it("leaves meta-push gating to the workspace unit push authorizer", async () => {
+    const { host, approvalQueue } = makeHost();
 
-    await expect(host.authorizeSourcePush({
-      caller: panelCtx("panel-1").caller,
-      repoPath: "meta",
-      branch: "main",
-      commit,
-    })).resolves.toEqual({ allowed: true });
+    await expect(
+      host.authorizeSourcePush({
+        caller: panelCtx("panel-1").caller,
+        repoPath: "meta",
+        branch: "main",
+        commit: "def456",
+      })
+    ).resolves.toEqual({ allowed: true });
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "extension-batch",
-      dedupKey: expect.stringContaining(commit),
-      extensions: [
-        expect.objectContaining({
-          extensionName: extensionNode.name,
-          source: expect.objectContaining({ repo: extensionNode.relativePath, ref: "feature" }),
-        }),
-      ],
-    }));
-  });
-
-  it("does not let a meta dev-session grant auto-trust newly declared extensions", async () => {
-    const { host, approvalQueue, extensionNode, statePath } = makeHost({
-      installed: false,
-      approvalDecision: "session",
-    });
-    const workspacePath = path.join(statePath, "source");
-    const configOnlyCommit = commitMetaConfig(workspacePath, "extensions: []\n");
-
-    await expect(host.authorizeSourcePush({
-      caller: panelCtx("panel-1").caller,
-      repoPath: "meta",
-      branch: "main",
-      commit: configOnlyCommit,
-    })).resolves.toEqual({ allowed: true });
-
-    const extensionCommit = commitMetaConfig(
-      workspacePath,
-      [
-        "extensions:",
-        `  - source: ${extensionNode.relativePath}`,
-      ].join("\n"),
-    );
-    await expect(host.authorizeSourcePush({
-      caller: panelCtx("panel-1").caller,
-      repoPath: "meta",
-      branch: "main",
-      commit: extensionCommit,
-    })).resolves.toEqual({ allowed: true });
-
-    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
-    expect(approvalQueue.request).toHaveBeenLastCalledWith(expect.objectContaining({
-      kind: "extension-batch",
-      extensions: [expect.objectContaining({ extensionName: extensionNode.name })],
-    }));
+    expect(approvalQueue.request).not.toHaveBeenCalled();
   });
 });
 
-const declare = (
-  name: string,
-  opts: { ref?: string; enabled?: boolean } = {},
-) => [{ source: name, ref: opts.ref ?? "main", enabled: opts.enabled ?? true }];
+const declare = (name: string, opts: { ref?: string } = {}) => [
+  { source: name, ref: opts.ref ?? "main" },
+];
 
 describe("ExtensionHost reconcileDeclared", () => {
   it("leaves declared extensions pending when the joint approval is denied", async () => {
@@ -381,11 +410,13 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.reconcileDeclared(declare(extensionNode.name));
     await host.whenSettled();
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "extension-batch",
-      trigger: "startup",
-      extensions: [expect.objectContaining({ extensionName: extensionNode.name })],
-    }));
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        trigger: "startup",
+        units: [expect.objectContaining({ unitKind: "extension", unitName: extensionNode.name })],
+      })
+    );
     expect(host.registry.get(extensionNode.name)).toMatchObject({
       activeBundleKey: null,
       status: "pending-approval",
@@ -404,14 +435,15 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.reconcileDeclared(declare(extensionNode.name));
     await host.whenSettled();
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "extension-batch",
-      trigger: "startup",
-    }));
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        trigger: "startup",
+      })
+    );
     expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ name: extensionNode.name }));
     expect(host.registry.get(extensionNode.name)).toMatchObject({
-      enabled: true,
       activeBundleKey: "candidate-key",
     });
   });
@@ -426,13 +458,18 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.reconcileDeclared(declare(extensionNode.name));
     await host.whenSettled();
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "extension-batch",
-      extensions: [expect.objectContaining({
-        extensionName: extensionNode.name,
-        source: expect.objectContaining({ ref: "master" }),
-      })],
-    }));
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        units: [
+          expect.objectContaining({
+            unitKind: "extension",
+            unitName: extensionNode.name,
+            source: expect.objectContaining({ ref: "master" }),
+          }),
+        ],
+      })
+    );
     expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "master");
     expect(host.registry.get(extensionNode.name)).toMatchObject({
       activeBundleKey: "candidate-key",
@@ -454,7 +491,7 @@ describe("ExtensionHost reconcileDeclared", () => {
     approvalQueue.request.mockImplementationOnce(() => approval.promise);
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
     vi.spyOn(host.processes, "isRunning").mockImplementation((name) =>
-      Boolean(host.registry.get(name)?.activeBundleKey),
+      Boolean(host.registry.get(name)?.activeBundleKey)
     );
 
     await host.reconcileDeclared(declare(extensionNode.name));
@@ -469,7 +506,7 @@ describe("ExtensionHost reconcileDeclared", () => {
       "extension.invoke",
       "blame",
       [],
-      expect.objectContaining({ extensionName: extensionNode.name }),
+      expect.objectContaining({ extensionName: extensionNode.name })
     );
   });
 
@@ -484,39 +521,6 @@ describe("ExtensionHost reconcileDeclared", () => {
     expect(start).toHaveBeenCalledWith(expect.objectContaining({ name: extensionNode.name }));
   });
 
-  it("stops an approved declared extension when declared enabled:false", async () => {
-    const { host, approvalQueue, extensionNode } = makeHost();
-    const stop = vi.spyOn(host.processes, "stop").mockResolvedValue(undefined);
-    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
-
-    await host.reconcileDeclared(declare(extensionNode.name, { enabled: false }));
-
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(stop).toHaveBeenCalledWith(extensionNode.name);
-    expect(host.registry.get(extensionNode.name)).toMatchObject({
-      enabled: false,
-      status: "stopped",
-    });
-  });
-
-  it("records a new disabled declaration without prompting or activating it", async () => {
-    const { host, approvalQueue, buildSystem, extensionNode } = makeHost({ installed: false });
-    const start = vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
-
-    await host.reconcileDeclared(declare(extensionNode.name, { enabled: false }));
-    await host.whenSettled();
-
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(buildSystem.getBuild).not.toHaveBeenCalled();
-    expect(start).not.toHaveBeenCalled();
-    expect(host.registry.get(extensionNode.name)).toMatchObject({
-      enabled: false,
-      status: "stopped",
-      activeBundleKey: null,
-      source: { repo: extensionNode.relativePath, ref: "main" },
-    });
-  });
-
   it("removes a registry entry that is no longer declared", async () => {
     const { host, extensionNode } = makeHost();
     const stop = vi.spyOn(host.processes, "stop").mockResolvedValue(undefined);
@@ -527,7 +531,7 @@ describe("ExtensionHost reconcileDeclared", () => {
     expect(host.registry.get(extensionNode.name)).toBeNull();
   });
 
-  it("rebuilds an already-approved extension whose dependency EV changed, without prompting", async () => {
+  it("requires approval before rebuilding an extension whose dependency EV changed", async () => {
     const { host, approvalQueue, buildSystem, extensionNode } = makeHost({
       activeEv: "ev-current",
       depEv: "ev-runtime-next",
@@ -536,8 +540,20 @@ describe("ExtensionHost reconcileDeclared", () => {
     vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
 
     await host.reconcileDeclared(declare(extensionNode.name));
+    await host.whenSettled();
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        units: [
+          expect.objectContaining({
+            unitKind: "extension",
+            unitName: extensionNode.name,
+            dependencyEvs: { "@workspace/runtime": "ev-runtime-next" },
+          }),
+        ],
+      })
+    );
     expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "main");
   });
 
@@ -550,18 +566,20 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.reconcileDeclared(declare(extensionNode.name, { ref: "feature" }));
     await host.whenSettled();
 
-    expect(approvalQueue.request).toHaveBeenCalledWith(expect.objectContaining({
-      kind: "extension-batch",
-      extensions: [
-        expect.objectContaining({
-          extensionName: extensionNode.name,
-          source: expect.objectContaining({ repo: extensionNode.relativePath, ref: "feature" }),
-        }),
-      ],
-    }));
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        units: [
+          expect.objectContaining({
+            unitKind: "extension",
+            unitName: extensionNode.name,
+            source: expect.objectContaining({ repo: extensionNode.relativePath, ref: "feature" }),
+          }),
+        ],
+      })
+    );
     expect(buildSystem.getBuild).toHaveBeenCalledWith(extensionNode.name, "feature");
     expect(host.registry.get(extensionNode.name)).toMatchObject({
-      enabled: true,
       activeBundleKey: "candidate-key",
       source: { repo: extensionNode.relativePath, ref: "feature" },
     });
@@ -577,21 +595,121 @@ describe("ExtensionHost activation", () => {
 
     expect(buildSystem.getBuildByKey).toHaveBeenCalledWith("bundle-key");
     expect(buildSystem.getBuild).not.toHaveBeenCalled();
-    expect(start).toHaveBeenCalledWith(expect.objectContaining({
-      name: extensionNode.name,
-      bundlePath: expect.stringContaining("bundle-key"),
-    }));
+    expect(start).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: extensionNode.name,
+        bundlePath: expect.stringContaining("bundle-key"),
+      })
+    );
+  });
+
+  it("registers contributed build providers through the activated extension transport", async () => {
+    const registerBuildProvider = vi.fn();
+    const extensionTransport = {
+      call: vi.fn(async () => ({
+        artifacts: [
+          {
+            path: "index.android.bundle",
+            role: "primary",
+            contentType: "application/javascript",
+            encoding: "utf8",
+            platform: "android",
+            stream: { method: "buildArtifact", args: ["artifact-1"] },
+          },
+        ],
+        metadata: { rnHostAbi: "rn-host-1" },
+      })),
+      streamCallTarget: vi.fn(async () => new Response("bundle")),
+    };
+    const { host, extensionNode } = makeHost({
+      buildTargets: ["react-native"],
+      registerBuildProvider,
+      extensionTransport,
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await host.activate(extensionNode.name);
+
+    expect(registerBuildProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: extensionNode.name,
+        target: "react-native",
+        activeEv: "ev-current",
+        activeBuildKey: "bundle-key",
+      })
+    );
+    const provider = registerBuildProvider.mock.calls[0]![0] as {
+      build(input: unknown): Promise<unknown>;
+      streamArtifact(artifact: unknown, input: unknown): Promise<Response>;
+    };
+    const output = await provider.build({ target: "react-native" });
+    expect(output).toMatchObject({
+      artifacts: [expect.objectContaining({ path: "index.android.bundle", platform: "android" })],
+    });
+    const response = await provider.streamArtifact(
+      (output as { artifacts: unknown[] }).artifacts[0],
+      { target: "react-native" }
+    );
+    await expect(response.text()).resolves.toBe("bundle");
+    expect(extensionTransport.call).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invoke",
+      "build",
+      [expect.objectContaining({ target: "react-native" })],
+      expect.objectContaining({
+        extensionName: extensionNode.name,
+        method: "build",
+        caller: expect.objectContaining({ callerId: "server:build-system", callerKind: "server" }),
+      })
+    );
+    expect(extensionTransport.streamCallTarget).toHaveBeenCalledWith(
+      extensionNode.name,
+      "extension.invokeStream",
+      "buildArtifact",
+      ["artifact-1"],
+      expect.objectContaining({
+        extensionName: extensionNode.name,
+        method: "buildArtifact",
+        caller: expect.objectContaining({ callerId: "server:build-system", callerKind: "server" }),
+      })
+    );
+  });
+
+  it("unregisters stale build providers when an activated extension stops contributing a target", async () => {
+    const registerBuildProvider = vi.fn();
+    const unregisterBuildProvider = vi.fn();
+    const { host, extensionNode } = makeHost({
+      buildTargets: ["react-native"],
+      registerBuildProvider,
+      unregisterBuildProvider,
+    });
+    vi.spyOn(host.processes, "start").mockResolvedValue(undefined);
+
+    await host.activate(extensionNode.name);
+    expect(registerBuildProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: extensionNode.name,
+        target: "react-native",
+      })
+    );
+
+    delete extensionNode.manifest.extension.contributes;
+    await host.activate(extensionNode.name);
+
+    expect(unregisterBuildProvider).toHaveBeenCalledWith("react-native", extensionNode.name);
   });
 
   it("surfaces running extension inspector URLs in workspace unit status", () => {
     const { host, extensionNode } = makeHost();
-    vi.spyOn(host.processes, "listRunning").mockReturnValue([{
-      name: extensionNode.name,
-      methods: ["blame"],
-      hasFetch: true,
-      health: null,
-      inspectorUrl: "ws://127.0.0.1:9229/abcdef",
-    }]);
+    vi.spyOn(host.processes, "listRunning").mockReturnValue([
+      {
+        name: extensionNode.name,
+        methods: ["blame"],
+        hasFetch: true,
+        health: null,
+        inspectorUrl: "ws://127.0.0.1:9229/abcdef",
+      },
+    ]);
 
     expect(host.listWorkspaceUnits()[0]).toMatchObject({
       name: extensionNode.name,
@@ -604,21 +722,31 @@ describe("ExtensionHost activation", () => {
   it("invokes extension APIs over the connected WebSocket transport when available", async () => {
     let hostRef: ExtensionHost;
     const extensionTransport = {
-      call: vi.fn(async (name: string, _method: string, _apiMethod: string, _args: unknown[], invocation: { invocationToken?: string }) => {
-        expect(invocation.invocationToken).toEqual(expect.any(String));
-        expect(hostRef.resolveActiveInvocation(name, invocation.invocationToken!)).toEqual(expect.objectContaining({
-          extensionName: name,
-          method: "blame",
-        }));
-        return "transport-result";
-      }),
+      call: vi.fn(
+        async (
+          name: string,
+          _method: string,
+          _apiMethod: string,
+          _args: unknown[],
+          invocation: { invocationToken?: string }
+        ) => {
+          expect(invocation.invocationToken).toEqual(expect.any(String));
+          expect(hostRef.resolveActiveInvocation(name, invocation.invocationToken!)).toEqual(
+            expect.objectContaining({
+              extensionName: name,
+              method: "blame",
+            })
+          );
+          return "transport-result";
+        }
+      ),
     };
     const { host, extensionNode } = makeHost({ extensionTransport });
     hostRef = host;
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"]),
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"])
     ).resolves.toBe("transport-result");
 
     expect(extensionTransport.call).toHaveBeenCalledWith(
@@ -630,7 +758,7 @@ describe("ExtensionHost activation", () => {
         extensionName: extensionNode.name,
         method: "blame",
         invocationToken: expect.any(String),
-      }),
+      })
     );
     const invocation = extensionTransport.call.mock.calls[0]![4] as { invocationToken: string };
     expect(host.resolveActiveInvocation(extensionNode.name, invocation.invocationToken)).toBeNull();
@@ -642,7 +770,7 @@ describe("ExtensionHost activation", () => {
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
-      host.invoke(panelCtx("panel-1"), `workspace/${extensionNode.relativePath}`, "blame", []),
+      host.invoke(panelCtx("panel-1"), `workspace/${extensionNode.relativePath}`, "blame", [])
     ).resolves.toBe("transport-result");
 
     expect(extensionTransport.call).toHaveBeenCalledWith(
@@ -650,20 +778,24 @@ describe("ExtensionHost activation", () => {
       "extension.invoke",
       "blame",
       [],
-      expect.objectContaining({ extensionName: extensionNode.name }),
+      expect.objectContaining({ extensionName: extensionNode.name })
     );
   });
 
   it("records extension invocation failures with stack context", async () => {
     const err = new Error("boom");
     (err as NodeJS.ErrnoException).code = "EBOOM";
-    const extensionTransport = { call: vi.fn(async () => { throw err; }) };
+    const extensionTransport = {
+      call: vi.fn(async () => {
+        throw err;
+      }),
+    };
     const { host, extensionNode } = makeHost({ extensionTransport });
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
-    await expect(
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []),
-    ).rejects.toThrow(`Extension ${extensionNode.name}.blame invocation failed: boom`);
+    await expect(host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])).rejects.toThrow(
+      `Extension ${extensionNode.name}.blame invocation failed: boom`
+    );
 
     expect(host.listWorkspaceUnitLogs(extensionNode.name, { level: "error" })).toEqual([
       expect.objectContaining({
@@ -690,7 +822,7 @@ describe("ExtensionHost activation", () => {
     vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
 
     await expect(
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"]),
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", ["README.md"])
     ).rejects.toMatchObject({ code: "ENOEXT" });
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
@@ -698,25 +830,12 @@ describe("ExtensionHost activation", () => {
     expect(extensionTransport.call).not.toHaveBeenCalled();
   });
 
-  it("fails with ENOEXT when invoking a disabled extension", async () => {
-    const { host, approvalQueue, extensionNode } = makeHost({
-      enabled: false,
-      status: "stopped",
-    });
-    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
-
-    await expect(
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []),
-    ).rejects.toMatchObject({ code: "ENOEXT" });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-  });
-
-  it("fails with ENOTREADY when an enabled extension is not running", async () => {
+  it("fails with ENOTREADY when an extension is not running", async () => {
     const { host, extensionNode } = makeHost();
     vi.spyOn(host.processes, "isRunning").mockReturnValue(false);
 
     await expect(
-      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", []),
+      host.invoke(panelCtx("panel-1"), extensionNode.name, "blame", [])
     ).rejects.toMatchObject({ code: "ENOTREADY" });
   });
 
@@ -732,11 +851,11 @@ describe("ExtensionHost activation", () => {
         expect(body).toMatchObject({ __stream: true });
         expect(typeof body?.id).toBe("string");
         while (true) {
-          const next = await service.handler(
-            { caller: createVerifiedCaller(extensionNode.name, "extension" ) } as any,
+          const next = (await service.handler(
+            { caller: createVerifiedCaller(extensionNode.name, "extension") } as any,
             "fetchRequestBodyChunk",
-            [body!.id!],
-          ) as { done: boolean; chunk?: { __bin: true; data: string } };
+            [body!.id!]
+          )) as { done: boolean; chunk?: { __bin: true; data: string } };
           if (next.done) break;
           expect(next.chunk).toMatchObject({ __bin: true });
           capturedChunks.push(Buffer.from(next.chunk!.data, "base64"));
@@ -772,7 +891,7 @@ describe("ExtensionHost activation", () => {
       res as any,
       extensionNode.name,
       "/upload",
-      panelCtx("panel-1").caller,
+      panelCtx("panel-1").caller
     );
 
     expect(extensionTransport.call).toHaveBeenCalledWith(
@@ -781,7 +900,7 @@ describe("ExtensionHost activation", () => {
       expect.objectContaining({
         body: expect.objectContaining({ __stream: true }),
       }),
-      expect.objectContaining({ method: "fetch" }),
+      expect.objectContaining({ method: "fetch" })
     );
     expect(Buffer.concat(capturedChunks)).toEqual(requestBody);
     expect(res.statusCode).toBe(201);
@@ -833,7 +952,11 @@ describe("ExtensionHost activation", () => {
         this.statusCode = status;
         this.headers = headers;
       }
-      _write(chunk: Buffer | string, _encoding: BufferEncoding, callback: (error?: Error | null) => void) {
+      _write(
+        chunk: Buffer | string,
+        _encoding: BufferEncoding,
+        callback: (error?: Error | null) => void
+      ) {
         this.chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
         callback();
       }
@@ -848,7 +971,7 @@ describe("ExtensionHost activation", () => {
       res as any,
       extensionNode.name,
       "/download",
-      panelCtx("panel-1").caller,
+      panelCtx("panel-1").caller
     );
 
     expect(res.statusCode).toBe(200);
@@ -858,12 +981,13 @@ describe("ExtensionHost activation", () => {
     expect(extensionTransport.call).toHaveBeenCalledWith(
       extensionNode.name,
       "extension.fetchResponseBodyChunk",
-      "response-stream-1",
+      "response-stream-1"
     );
   });
 
   it("accepts extension event, health, and log requests over RPC", async () => {
-    const { host, extensionNode, eventService } = makeHost();
+    const recordUnitLog = vi.fn();
+    const { host, extensionNode, eventService } = makeHost({ recordUnitLog });
     const service = host.createServiceDefinition();
     const extensionCtx = { caller: createVerifiedCaller(extensionNode.name, "extension") };
 
@@ -872,22 +996,25 @@ describe("ExtensionHost activation", () => {
     await service.handler(extensionCtx as any, "ready", [{ methods: ["confirm"], hasFetch: true }]);
     await service.handler(extensionCtx as any, "emit", ["changed", { ok: true }]);
     await service.handler(extensionCtx as any, "health", ["degraded", { summary: "Waiting" }]);
-    await service.handler(extensionCtx as any, "log", ["warn", "Something happened", { code: "TEST" }]);
+    await service.handler(extensionCtx as any, "log", [
+      "warn",
+      "Something happened",
+      { code: "TEST" },
+    ]);
 
     expect(markReady).toHaveBeenCalledWith(extensionNode.name, {
       methods: ["confirm"],
       hasFetch: true,
     });
-    expect(eventService.emit).toHaveBeenCalledWith(
-      `extensions:${extensionNode.name}::changed`,
-      { ok: true },
-    );
+    expect(eventService.emit).toHaveBeenCalledWith(`extensions:${extensionNode.name}::changed`, {
+      ok: true,
+    });
     expect(eventService.emit).toHaveBeenCalledWith(
       "extensions:health",
       expect.objectContaining({
         name: extensionNode.name,
         health: expect.objectContaining({ state: "degraded", summary: "Waiting" }),
-      }),
+      })
     );
     expect(eventService.emit).toHaveBeenCalledWith(
       "workspace:unit-log",
@@ -896,7 +1023,19 @@ describe("ExtensionHost activation", () => {
         level: "warn",
         message: "Something happened",
         fields: { code: "TEST" },
-      }),
+      })
     );
+    expect(recordUnitLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        unitName: extensionNode.name,
+        level: "warn",
+        message: "Something happened",
+      })
+    );
+  });
+
+  it("allows server callers to invoke extension providers through the dispatcher", () => {
+    const { host } = makeHost();
+    expect(host.createServiceDefinition().policy?.allowed).toContain("server");
   });
 });

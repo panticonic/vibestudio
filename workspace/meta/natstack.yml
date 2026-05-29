@@ -57,65 +57,32 @@ initPanels:
   # System testing agent — runs headless tests and reports problems
   - source: panels/chat
     stateArgs:
+      agentConfig:
+        model: "openai-codex:gpt-5.3-codex-spark"
       initialPrompt: |
-        Read the system-testing skill docs, then run the smoke test suite using the
-        code example in the docs. For every failure, inspect the full execution —
-        conversation log, method history, debug events, and participant state.
-        Output a detailed handoff-ready rundown of all problems encountered.
+        Read the system-testing skill docs, then run the full system test suite.
+        Use the documented workflow as you understand it. Report what happened,
+        including any setup, tool, documentation, harness, or runtime problems.
       systemPrompt: |
         You are a NatStack system testing agent. Your job is to run tests, diagnose failures,
         and produce a clear report. You do NOT fix bugs — you hand off to a developer.
 
-        ## How to run tests
-        First, read the skill docs: `read("skills/system-testing/SKILL.md")`
-
-        The system-testing skill exports code (HeadlessRunner, TestRunner, test suites)
-        that you run inside eval. Workspace packages are auto-resolved — just write
-        the `import` statement:
-        ```
-        eval({
-          code: `
-            import { HeadlessRunner, TestRunner, smokeTests } from "@workspace-skills/system-testing";
-            import { contextId } from "@workspace/runtime";
-            const runner = new HeadlessRunner(contextId);
-            const tester = new TestRunner(runner, {
-              onTestStart: (t) => console.log("Running: " + t.name + "..."),
-              onTestEnd: (t, r) => console.log((r.passed ? "PASS" : "FAIL") + ": " + t.name),
-            });
-            const results = await tester.runSuite(smokeTests);
-            scope.results = results;
-            return {
-              total: results.total,
-              passed: results.passed,
-              failed: results.failed,
-              errored: results.errored,
-              skipped: results.skipped,
-            };
-          `,
-        })
-        ```
+        Start by reading the system-testing skill docs. Use those docs to decide
+        how to run the suite. Do not assume this prompt contains the operational
+        details.
 
         ## When something goes wrong
-        Stop as soon as you encounter a problem — whether it's an import failure, a test
-        failure, or an infrastructure issue. Do NOT attempt to fix anything. Instead:
-
-        1. Describe exactly what happened (error messages, return values, observed behavior)
-        2. Show the code you ran and the exact output
-        3. For test failures, inspect and include:
-           - The full conversation (every message the test agent sent/received)
-           - The method history (every tool call, its arguments, return value, errors, timing)
-           - The debug events (harness lifecycle: spawn, start, stop, crash)
-           - The participant state (did the agent join? did it disconnect?)
-        4. Classify root cause: infrastructure bug vs documentation bug vs test bug
-        5. List the source files another agent should inspect to fix it
+        When you encounter a problem, report the exact operation and exact error
+        or observed behavior. Do not invent an explanation when the evidence is
+        missing. Do not attempt to fix anything.
 
         ## Output format
         Produce a structured handoff report with:
         - **Summary**: one-line description of what happened
         - **Test results**: pass/fail counts and names
-        - **Failure details**: per-failure diagnostics (conversation, method history, debug events)
+        - **Failure details**: the concrete evidence you captured
         - **Root cause classification**: infrastructure / docs / test for each failure
-        - **Files to inspect**: specific source files relevant to each issue
+        - **Evidence-backed code areas**: only when tied to observed evidence
         - **Recommended fix order**: which issues to tackle first
       systemPromptMode: append
 
@@ -167,16 +134,21 @@ routes: []
 
 # =============================================================================
 # Declarative extension set. This list is the single source of truth for which
-# extensions the workspace uses and the only install/enable/disable/uninstall
-# surface. Editing it triggers one joint approval (at startup, or combined with
-# the meta-push prompt) before any newly-declared extension runs. Each entry:
+# extensions the workspace uses. Editing it triggers one joint approval (at
+# startup, or combined with the meta-push prompt) before any newly-declared
+# extension runs. Each entry:
 #   source:  repo path or package name (required)
 #   ref:     git ref to float to (default "main")
-#   enabled: whether it should run (default true)
 # =============================================================================
 extensions:
-  - source: extensions/@workspace-extensions/image-service
-  - source: extensions/@workspace-extensions/file-tools
-  - source: extensions/@workspace-extensions/typecheck-service
-  - source: extensions/@workspace-extensions/browser-data
-  - source: extensions/@workspace-extensions/shell
+  - source: extensions/image-service
+  - source: extensions/file-tools
+  - source: extensions/typecheck-service
+  - source: extensions/browser-data
+  - source: extensions/shell
+  - source: extensions/react-native
+
+apps:
+  - source: apps/shell
+  - source: apps/mobile
+  - source: apps/remote-cli

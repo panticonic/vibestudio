@@ -230,6 +230,63 @@ describe("panelCdpService", () => {
     ]);
   });
 
+  it("gates historical console access with the same automation capability", async () => {
+    const approvalQueue = approvalQueueMock("session");
+    const consoleHistory = vi.fn(async () => ({
+      entries: [
+        {
+          timestamp: 1,
+          level: "info" as const,
+          message: "loaded",
+          line: 1,
+          sourceId: "app.tsx",
+          url: "https://example.com",
+        },
+      ],
+      errors: [],
+      dropped: { entries: 0, errors: 0 },
+      capacity: { entries: 1000, errors: 500 },
+    }));
+    const service = createPanelCdpService({
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      getTarget: () => ({ id: "target", title: "Target" }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target", token: "t" })),
+      consoleHistory,
+    });
+
+    await expect(
+      service.handler(ctx(), "consoleHistory", ["target", { limit: 20, errorLimit: 20 }])
+    ).resolves.toMatchObject({
+      entries: [expect.objectContaining({ message: "loaded" })],
+      capacity: { entries: 1000, errors: 500 },
+    });
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: PANEL_AUTOMATE_CAPABILITY })
+    );
+    expect(consoleHistory).toHaveBeenCalledWith("target", "panel:requester", {
+      limit: 20,
+      errorLimit: 20,
+    });
+  });
+
+  it("does not read console history when approval is denied", async () => {
+    const consoleHistory = vi.fn();
+    const service = createPanelCdpService({
+      approvalQueue: approvalQueueMock("deny"),
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      getTarget: () => ({ id: "target", title: "Target" }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target", token: "t" })),
+      consoleHistory,
+    });
+
+    await expect(service.handler(ctx(), "consoleHistory", ["target"])).rejects.toThrow(
+      "cdp denied for panel target"
+    );
+    expect(consoleHistory).not.toHaveBeenCalled();
+  });
+
   it("rejects non-http navigation before prompting or driving", async () => {
     const approvalQueue = approvalQueueMock("session");
     const drive = vi.fn(async () => undefined);

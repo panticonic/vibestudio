@@ -9,6 +9,11 @@ import { executeSandbox as defaultExecuteSandbox } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult, ScopeManager } from "@workspace/eval";
 import type { MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
 import type { SandboxConfig, ChatSandboxValue } from "./types.js";
+
+const MAX_EVAL_TEXT_PART_CHARS = 64 * 1024;
+const EVAL_RETURN_SCOPE_KEY = "__lastEvalReturn";
+const EVAL_CONSOLE_SCOPE_KEY = "__lastEvalConsole";
+
 export interface BuildEvalToolOptions {
     sandbox: SandboxConfig;
     rpc: SandboxConfig["rpc"];
@@ -66,7 +71,7 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
             };
             const path = typedArgs.path?.trim();
             const code = path
-                ? await opts.rpc.call("main", "fs.readFile", [path, "utf8"]) as string
+                ? await loadEvalSource(opts.rpc, path)
                 : typedArgs.code;
             if (!code)
                 throw new Error("Missing code or path");
@@ -77,6 +82,7 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
             try {
                 const result: SandboxResult = await runSandbox(code, {
                     syntax: typedArgs.syntax,
+                    signal: ctx.signal,
                     imports: typedArgs.imports,
                     loadImport: sandbox.loadImport,
                     sourcePath: path,
@@ -97,6 +103,8 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
                                 opts.rpc.call("main", "build.listSkills", []).catch(() => null),
                             ]);
                             return {
+                                preInjected: ["chat", "scope", "scopes", "help"],
+                                runtimeUsage: 'Runtime exports are not globals. Import them with static syntax, e.g. `import { contextId, fs, rpc } from "@workspace/runtime";`.',
                                 services,
                                 runtime,
                                 imports: {
@@ -114,12 +122,13 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
                         });
                     },
                 });
-                const scopeKeys = Object.keys(opts.getScope());
+                const scope = opts.getScope();
+                const scopeKeys = Object.keys(scope);
                 const scopeLine = scopeKeys.length > 0
                     ? `[scope] keys: ${scopeKeys.join(", ")} (${scopeKeys.length} total)`
                     : "[scope] (empty)";
                 if (!result.success) {
-                    throw new Error(`${result.error || "Eval failed"}\n${scopeLine}`);
+                    throw new Error(`${withSandboxErrorHint(result.error || "Eval failed")}\n${scopeLine}`);
                 }
                 // Format as structured text parts so the AI sees clean, readable text
                 const parts: Array<{
@@ -127,18 +136,21 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
                     text: string;
                 }> = [];
                 if (result.consoleOutput) {
-                    parts.push({ type: "text", text: `[eval] Console:\n${result.consoleOutput}` });
+                    const formattedConsole = boundEvalText("Console", result.consoleOutput, {
+                        onOversize: () => {
+                            scope[EVAL_CONSOLE_SCOPE_KEY] = result.consoleOutput;
+                        },
+                        scopeKey: EVAL_CONSOLE_SCOPE_KEY,
+                    });
+                    parts.push({ type: "text", text: `[eval] Console:\n${formattedConsole}` });
                 }
                 if (result.returnValue !== undefined && result.returnValue !== null) {
-                    let formatted: string;
-                    try {
-                        formatted = typeof result.returnValue === "string"
-                            ? result.returnValue
-                            : JSON.stringify(result.returnValue, null, 2);
-                    }
-                    catch {
-                        formatted = String(result.returnValue);
-                    }
+                    const formatted = formatEvalReturnValue(result.returnValue, {
+                        onOversize: () => {
+                            scope[EVAL_RETURN_SCOPE_KEY] = result.returnValue;
+                        },
+                        scopeKey: EVAL_RETURN_SCOPE_KEY,
+                    });
                     parts.push({ type: "text", text: `[eval] Return value:\n${formatted}` });
                 }
                 if (result.panelJournalFooter) {
@@ -156,4 +168,94 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
             }
         },
     };
+}
+
+async function loadEvalSource(
+    rpc: SandboxConfig["rpc"],
+    path: string
+): Promise<string> {
+    try {
+        return await rpc.call("main", "fs.readFile", [path, "utf8"]) as string;
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(
+            `Failed to load eval source from path "${path}". ` +
+            `Eval path is resolved inside the current context filesystem, not the host filesystem. ` +
+            `If you created a helper file, create it through this same chat/context filesystem and pass that context path. ` +
+            `Underlying error: ${message}`
+        );
+    }
+}
+
+function formatEvalReturnValue(
+    value: unknown,
+    opts: { onOversize: () => void; scopeKey: string }
+): string {
+    let formatted: string;
+    try {
+        formatted = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    }
+    catch {
+        formatted = String(value);
+    }
+    return boundEvalText("Return value", formatted, opts, value);
+}
+
+function boundEvalText(
+    label: string,
+    text: string,
+    opts: { onOversize: () => void; scopeKey: string },
+    valueForSummary?: unknown
+): string {
+    if (text.length <= MAX_EVAL_TEXT_PART_CHARS)
+        return text;
+    opts.onOversize();
+    const previewChars = Math.min(8192, MAX_EVAL_TEXT_PART_CHARS);
+    return [
+        `[${label} omitted from tool transcript: ${text.length} characters exceeds ${MAX_EVAL_TEXT_PART_CHARS}.]`,
+        `Full value stored at scope.${opts.scopeKey}. Return or inspect slices explicitly, e.g. scope.${opts.scopeKey}.`,
+        summarizeLargeValue(valueForSummary),
+        "",
+        "[preview]",
+        text.slice(0, previewChars),
+    ].filter(Boolean).join("\n");
+}
+
+function summarizeLargeValue(value: unknown): string {
+    if (Array.isArray(value)) {
+        return `Summary: array length ${value.length}.`;
+    }
+    if (value && typeof value === "object") {
+        const keys = Object.keys(value as Record<string, unknown>);
+        return `Summary: object with ${keys.length} key(s): ${keys.slice(0, 20).join(", ")}${keys.length > 20 ? ", ..." : ""}.`;
+    }
+    return "";
+}
+
+function withSandboxErrorHint(error: string): string {
+    const missingRuntimeBinding = error.match(/^([A-Za-z_$][\w$]*) is not defined\b/);
+    if (!missingRuntimeBinding)
+        return error;
+    const name = missingRuntimeBinding[1];
+    if (!name)
+        return error;
+    const runtimeExports = new Set([
+        "contextId",
+        "fs",
+        "db",
+        "rpc",
+        "ai",
+        "workers",
+        "workspace",
+        "credentials",
+        "git",
+        "gad",
+        "parent",
+        "getParent",
+        "focusPanel",
+    ]);
+    if (!runtimeExports.has(name))
+        return error;
+    return `${error}\nHint: \`${name}\` is not pre-injected in eval. Add a static import: \`import { ${name} } from "@workspace/runtime";\``;
 }

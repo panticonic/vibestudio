@@ -4,8 +4,7 @@
 <dict>
 	<!--
 		Associated Domains: drives the iOS universal-link OAuth callback flow
-		that replaces the legacy `natstack://` custom-scheme handler (see
-		docs/audit/02-authentication-sessions.md mobile findings and
+		(see docs/audit/02-authentication-sessions.md mobile findings and
 		docs/audit/08-mobile-supply-chain.md H-1 / H-2).
 
 		`auth.snugenv.com` is the dedicated OAuth-callback sub-host. The AASA

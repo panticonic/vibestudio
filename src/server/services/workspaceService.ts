@@ -28,6 +28,12 @@ import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@natstack/shared/serviceDispatcher";
 import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { ApprovalPrincipal } from "@natstack/shared/approvals";
+import type {
+  HostTarget,
+  HostTargetCandidate,
+  HostTargetSelection,
+  HostTargetSelectionInput,
+} from "@natstack/shared/hostTargets";
 import type { ApprovalQueue } from "./approvalQueue.js";
 
 /**
@@ -116,16 +122,79 @@ export interface WorkspaceServiceDeps {
     name: string,
     opts?: { since?: number; level?: WorkspaceUnitLogRecord["level"]; limit?: number }
   ) => Promise<WorkspaceUnitLogRecord[]> | WorkspaceUnitLogRecord[];
+  unitDiagnostics?: (
+    name: string,
+    opts?: {
+      since?: number;
+      level?: WorkspaceUnitLogRecord["level"];
+      limit?: number;
+      errorLimit?: number;
+    }
+  ) => Promise<WorkspaceUnitDiagnostics> | WorkspaceUnitDiagnostics;
+  /** Bake an active approved app build into the packaging payload directory. */
+  bakeAppDist?: (sourceOrName: string, opts?: { outDir?: string }) => Promise<unknown> | unknown;
+  /** List active and rollback-capable versions for an app unit. */
+  listAppVersions?: (sourceOrName: string) => Promise<WorkspaceAppVersions> | WorkspaceAppVersions;
+  /** Roll an app unit back to a previous active build. */
+  rollbackAppVersion?: (sourceOrName: string, buildKey?: string) => Promise<unknown> | unknown;
+  /** List app candidates that can be selected as the active app for a host target. */
+  listHostTargetCandidates?: (
+    target: HostTarget
+  ) => Promise<HostTargetCandidate[]> | HostTargetCandidate[];
+  /** Read the active per-workspace selection for a host target. */
+  getHostTargetSelection?: (
+    target: HostTarget
+  ) =>
+    | Promise<{ selection: HostTargetSelection | null; valid: boolean; reason?: string }>
+    | { selection: HostTargetSelection | null; valid: boolean; reason?: string };
+  /** Persist a per-workspace selection for a host target. */
+  setHostTargetSelection?: (
+    target: HostTarget,
+    input: HostTargetSelectionInput
+  ) => Promise<HostTargetSelection> | HostTargetSelection;
+  /** Clear a persisted per-workspace selection for a host target. */
+  clearHostTargetSelection?: (target: HostTarget) => Promise<void> | void;
+  /** List retained versions for a host-target candidate. */
+  listHostTargetVersions?: (
+    target: HostTarget,
+    sourceOrName: string
+  ) => Promise<WorkspaceAppVersions> | WorkspaceAppVersions;
+  /** Materialize a retained build for a specific commit through the build system. */
+  prepareHostTargetPinnedCommit?: (
+    target: HostTarget,
+    sourceOrName: string,
+    commit: string
+  ) => Promise<unknown> | unknown;
+  /** Launch/reload the selected target app in this host. */
+  launchHostTarget?: (target: HostTarget) => Promise<boolean> | boolean;
   /** Queue used to gate userland workspace mutations. */
   approvalQueue?: Pick<ApprovalQueue, "requestUserland">;
 }
 
+export interface WorkspaceAppVersionRecord {
+  version: string;
+  target: string;
+  capabilities: string[];
+  activeEv: string | null;
+  activeSha: string | null;
+  activeBundleKey: string;
+  activeDependencyEvs: Record<string, string>;
+  activeExternalDeps: Record<string, string>;
+  activeRuntimeDepsKey: string | null;
+  activatedAt: number;
+}
+
+export interface WorkspaceAppVersions {
+  current: WorkspaceAppVersionRecord | null;
+  previous: WorkspaceAppVersionRecord[];
+  retentionLimit: number;
+}
+
 export interface WorkspaceUnitStatus {
   name: string;
-  kind: "panel" | "worker" | "extension";
+  kind: "panel" | "worker" | "extension" | "app";
   source: string;
   displayName?: string;
-  enabled?: boolean;
   status: "running" | "stopped" | "error" | "pending-approval" | "building" | "available";
   version?: string;
   ev?: string | null;
@@ -149,6 +218,11 @@ export interface WorkspaceUnitStatus {
    */
   availableUpdate?: { reason: "dependency"; checkedAt: number } | null;
   lastError?: string | null;
+  lastErrorDetails?: unknown;
+  target?: string;
+  canRollback?: boolean;
+  rollbackRetentionLimit?: number;
+  previousVersions?: WorkspaceAppVersionRecord[];
   health?: unknown;
   methods?: string[];
   hasFetch?: boolean;
@@ -159,12 +233,26 @@ export interface WorkspaceUnitStatus {
 export interface WorkspaceUnitLogRecord {
   workspaceId: string;
   unitName: string;
-  kind: "extension" | "worker" | "panel";
+  kind: "extension" | "worker" | "panel" | "app";
   timestamp: number;
   level: "debug" | "info" | "warn" | "error";
   message: string;
   fields?: Record<string, unknown>;
-  source?: "stdout" | "stderr" | "ctx.log" | "console";
+  source?: "stdout" | "stderr" | "ctx.log" | "console" | "lifecycle" | "system";
+}
+
+export interface WorkspaceUnitDiagnostics {
+  unit: WorkspaceUnitStatus | null;
+  logs: WorkspaceUnitLogRecord[];
+  errors: WorkspaceUnitLogRecord[];
+  dropped: {
+    entries: number;
+    errors: number;
+  };
+  capacity: {
+    entries: number;
+    errors: number;
+  };
 }
 
 type WorkspaceApprovalOperation =
@@ -174,8 +262,57 @@ type WorkspaceApprovalOperation =
   | "setInitPanels"
   | "setConfigField";
 
+const HostTargetSchema = z.enum(["electron", "react-native", "terminal"]);
+const HostTargetSelectionInputSchema = z.object({
+  source: z.string().min(1),
+  mode: z.enum(["follow-ref", "pinned-build", "pinned-commit"]).optional(),
+  ref: z.string().min(1).optional(),
+  buildKey: z.string().min(1).optional(),
+  commit: z.string().min(1).optional(),
+  autoSelected: z.boolean().optional(),
+});
+
 function isTrustedWorkspaceCaller(ctx: ServiceContext): boolean {
   return ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server";
+}
+
+async function requireAppUnitManagementAccess(
+  deps: WorkspaceServiceDeps,
+  ctx: ServiceContext,
+  method: string,
+  name: string
+): Promise<void> {
+  if (isTrustedWorkspaceCaller(ctx)) return;
+  if (ctx.caller.runtime.kind !== "app") {
+    throw new ServiceError(
+      "workspace",
+      method,
+      `workspace.${method} is not accessible to ${ctx.caller.runtime.kind} callers`,
+      "EACCES"
+    );
+  }
+  if (ctx.caller.runtime.id === "@workspace-apps/shell") return;
+  const rows = deps.listUnits ? await deps.listUnits() : [];
+  const row = rows.find(
+    (unit) => unit.kind === "app" && (unit.name === name || unit.source === name)
+  );
+  if (!row) {
+    throw new ServiceError("workspace", method, `Unknown app unit: ${name}`, "ENOENT");
+  }
+  const normalizedSource = row.source.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  const callerId = ctx.caller.runtime.id;
+  if (
+    callerId === row.name ||
+    callerId === normalizedSource ||
+    callerId.startsWith(`app:${normalizedSource}:`)
+  )
+    return;
+  throw new ServiceError(
+    "workspace",
+    method,
+    `workspace.${method} can only manage the calling app`,
+    "EACCES"
+  );
 }
 
 function truncateApprovalValue(value: string, max = 200): string {
@@ -202,13 +339,14 @@ function resolveWorkspacePrincipal(
 ): ApprovalPrincipal {
   if (
     ctx.caller.runtime.kind !== "panel" &&
+    ctx.caller.runtime.kind !== "app" &&
     ctx.caller.runtime.kind !== "worker" &&
     ctx.caller.runtime.kind !== "do"
   ) {
     throw new ServiceError(
       "workspace",
       method,
-      "Workspace mutation approvals are only available to panel, worker, and DO callers",
+      "Workspace mutation approvals are only available to panel, app, worker, and DO callers",
       "EACCES"
     );
   }
@@ -320,11 +458,11 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
     ? {
         create: {
           args: z.tuple([z.string(), z.object({ forkFrom: z.string().optional() }).optional()]),
-          policy: { allowed: ["shell", "panel", "worker", "do", "server"] },
+          policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
         },
         delete: {
           args: z.tuple([z.string()]),
-          policy: { allowed: ["shell", "panel", "worker", "do", "server"] },
+          policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
         },
       }
     : {};
@@ -332,7 +470,9 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
   return {
     name: "workspace",
     description: "Workspace catalog, configuration, and lifecycle (list, create, switch, etc.)",
-    policy: { allowed: ["shell", "panel", "worker", "do", "extension", "server"] },
+    policy: {
+      allowed: ["shell", "shell-remote", "app", "panel", "worker", "do", "extension", "server"],
+    },
     methods: {
       // Read methods
       getInfo: { args: z.tuple([]) },
@@ -346,7 +486,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
       // app.relaunch() — disruptive and reachable only via shell UI.
       select: {
         args: z.tuple([z.string()]),
-        policy: { allowed: ["shell", "panel", "worker", "do", "server"] },
+        policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
       },
       setInitPanels: {
         args: z.tuple([
@@ -357,13 +497,13 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
             })
           ),
         ]),
-        policy: { allowed: ["shell", "panel", "worker", "do", "server"] },
+        policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
       },
       // SECURITY: arbitrary config-field writes — server-internal use
       // by default, but userland can request a one-shot approval.
       setConfigField: {
         args: z.tuple([z.string(), z.unknown()]),
-        policy: { allowed: ["shell", "panel", "worker", "do", "server"] },
+        policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
       },
       // Agent resource loading — read AGENTS.md and skill definitions directly
       // from the workspace source tree. Kept server-side because they touch
@@ -385,6 +525,57 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
             })
             .optional(),
         ]),
+      },
+      "units.diagnostics": {
+        args: z.tuple([
+          z.string(),
+          z
+            .object({
+              since: z.number().optional(),
+              level: z.enum(["debug", "info", "warn", "error"]).optional(),
+              limit: z.number().int().positive().max(1000).optional(),
+              errorLimit: z.number().int().positive().max(500).optional(),
+            })
+            .optional(),
+        ]),
+      },
+      "units.versions": {
+        args: z.tuple([z.string()]),
+      },
+      "units.rollback": {
+        args: z.tuple([z.string(), z.object({ buildKey: z.string().optional() }).optional()]),
+      },
+      "units.bakeAppDist": {
+        args: z.tuple([z.string(), z.object({ outDir: z.string().optional() }).optional()]),
+        policy: { allowed: ["shell", "server"] },
+      },
+      "hostTargets.list": {
+        args: z.tuple([HostTargetSchema]),
+        policy: { allowed: ["shell", "shell-remote", "server"] },
+      },
+      "hostTargets.getSelection": {
+        args: z.tuple([HostTargetSchema]),
+        policy: { allowed: ["shell", "shell-remote", "server"] },
+      },
+      "hostTargets.setSelection": {
+        args: z.tuple([HostTargetSchema, HostTargetSelectionInputSchema]),
+        policy: { allowed: ["shell", "shell-remote", "server"] },
+      },
+      "hostTargets.clearSelection": {
+        args: z.tuple([HostTargetSchema]),
+        policy: { allowed: ["shell", "shell-remote", "server"] },
+      },
+      "hostTargets.versions": {
+        args: z.tuple([HostTargetSchema, z.string()]),
+        policy: { allowed: ["shell", "shell-remote", "server"] },
+      },
+      "hostTargets.preparePinnedCommit": {
+        args: z.tuple([HostTargetSchema, z.string(), z.string()]),
+        policy: { allowed: ["shell", "shell-remote", "server"] },
+      },
+      "hostTargets.launch": {
+        args: z.tuple([HostTargetSchema]),
+        policy: { allowed: ["shell", "shell-remote", "server"] },
       },
     },
     handler: async (ctx, method, args) => {
@@ -582,6 +773,121 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
             { since?: number; level?: WorkspaceUnitLogRecord["level"]; limit?: number } | undefined,
           ];
           return await deps.listUnitLogs(name, opts);
+        }
+
+        case "units.diagnostics": {
+          if (!deps.unitDiagnostics) {
+            const [name, opts] = args as [
+              string,
+              (
+                | { since?: number; level?: WorkspaceUnitLogRecord["level"]; limit?: number }
+                | undefined
+              ),
+            ];
+            const logs = deps.listUnitLogs ? await deps.listUnitLogs(name, opts) : [];
+            return {
+              unit: null,
+              logs,
+              errors: logs.filter((entry) => entry.level === "error"),
+              dropped: { entries: 0, errors: 0 },
+              capacity: { entries: 0, errors: 0 },
+            };
+          }
+          const [name, opts] = args as [
+            string,
+            (
+              | {
+                  since?: number;
+                  level?: WorkspaceUnitLogRecord["level"];
+                  limit?: number;
+                  errorLimit?: number;
+                }
+              | undefined
+            ),
+          ];
+          return await deps.unitDiagnostics(name, opts);
+        }
+
+        case "units.versions": {
+          if (!deps.listAppVersions) return { current: null, previous: [] };
+          const [name] = args as [string];
+          await requireAppUnitManagementAccess(deps, ctx, method, name);
+          return await deps.listAppVersions(name);
+        }
+
+        case "units.rollback": {
+          if (!deps.rollbackAppVersion) throw new Error("App rollback is not available");
+          const [name, opts] = args as [string, { buildKey?: string } | undefined];
+          await requireAppUnitManagementAccess(deps, ctx, method, name);
+          return await deps.rollbackAppVersion(name, opts?.buildKey);
+        }
+
+        case "units.bakeAppDist": {
+          if (ctx.caller.runtime.kind !== "shell" && ctx.caller.runtime.kind !== "server") {
+            throw new ServiceError(
+              "workspace",
+              method,
+              `workspace.${method} is not accessible to ${ctx.caller.runtime.kind} callers`,
+              "EACCES"
+            );
+          }
+          if (!deps.bakeAppDist) {
+            throw new Error("App dist bake is not available");
+          }
+          const [sourceOrName, opts] = args as [string, { outDir?: string } | undefined];
+          return await deps.bakeAppDist(sourceOrName, opts);
+        }
+
+        case "hostTargets.list": {
+          if (!deps.listHostTargetCandidates) return [];
+          const [target] = args as [HostTarget];
+          return await deps.listHostTargetCandidates(target);
+        }
+
+        case "hostTargets.getSelection": {
+          if (!deps.getHostTargetSelection) {
+            return {
+              selection: null,
+              valid: false,
+              reason: "Host target selection is unavailable",
+            };
+          }
+          const [target] = args as [HostTarget];
+          return await deps.getHostTargetSelection(target);
+        }
+
+        case "hostTargets.setSelection": {
+          if (!deps.setHostTargetSelection) throw new Error("Host target selection is unavailable");
+          const [target, input] = args as [HostTarget, HostTargetSelectionInput];
+          return await deps.setHostTargetSelection(target, input);
+        }
+
+        case "hostTargets.clearSelection": {
+          if (!deps.clearHostTargetSelection) return;
+          const [target] = args as [HostTarget];
+          return await deps.clearHostTargetSelection(target);
+        }
+
+        case "hostTargets.versions": {
+          if (!deps.listHostTargetVersions) {
+            return { current: null, previous: [], retentionLimit: 0 };
+          }
+          const [target, sourceOrName] = args as [HostTarget, string];
+          return await deps.listHostTargetVersions(target, sourceOrName);
+        }
+
+        case "hostTargets.preparePinnedCommit": {
+          if (!deps.prepareHostTargetPinnedCommit) {
+            throw new Error("Pinned commit preparation is unavailable");
+          }
+          const [target, sourceOrName, commit] = args as [HostTarget, string, string];
+          return await deps.prepareHostTargetPinnedCommit(target, sourceOrName, commit);
+        }
+
+        case "hostTargets.launch": {
+          if (!deps.launchHostTarget) return false;
+          const [target] = args as [HostTarget];
+          return { launched: await deps.launchHostTarget(target) };
         }
 
         default:

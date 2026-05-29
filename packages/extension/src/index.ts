@@ -1,3 +1,5 @@
+import type { UnitRegistryEntryBase } from "@natstack/unit-host";
+
 export interface Disposable {
   dispose(): void;
 }
@@ -12,9 +14,11 @@ export interface ExtensionInvocation {
     callerId: string;
     callerKind:
       | "panel"
+      | "app"
       | "worker"
       | "do"
       | "shell"
+      | "server"
       | "shell-remote"
       | "extension"
       | "http";
@@ -23,7 +27,7 @@ export interface ExtensionInvocation {
   };
   chainCaller?: {
     callerId: string;
-    callerKind: "panel" | "worker" | "do";
+    callerKind: "panel" | "app" | "worker" | "do";
     repoPath: string;
     effectiveVersion: string;
     contextId?: string;
@@ -51,24 +55,13 @@ export interface ExtensionSource {
   ref: string;
 }
 
-export interface RegistryEntry {
-  name: string;
-  version: string;
+export interface RegistryEntry extends UnitRegistryEntryBase {
+  unitKind: "extension";
   source: ExtensionSource;
-  installedAt: number;
-  activeEv: string | null;
-  activeSha: string | null;
-  activeBundleKey: string | null;
-  activeDependencyEvs: Record<string, string>;
-  activeExternalDeps: Record<string, string>;
-  activeRuntimeDepsKey: string | null;
-  enabled: boolean;
-  status: "running" | "stopped" | "error" | "pending-approval" | "building";
-  lastError: string | null;
 }
 
 /**
- * Open registry of the workspace's installed extensions, mapping each
+ * Open registry of the workspace's declared extensions, mapping each
  * extension's package name to its public API type. Each extension augments
  * this interface from its own module:
  *
@@ -119,14 +112,14 @@ export interface ExtensionsClientRpc {
 
 const IGNORED_PROXY_PROPS = new Set<PropertyKey>([
   "then",
-  "catch",
-  "finally",
   "constructor",
   Symbol.toPrimitive,
   Symbol.toStringTag,
   "inspect",
   "toJSON",
 ]);
+
+const PROMISE_MISUSE_PROPS = new Set<PropertyKey>(["catch", "finally"]);
 
 /**
  * Build the invocation proxy for a single extension. Method access becomes a
@@ -142,6 +135,17 @@ export function createExtensionProxy<T extends object>(
   return new Proxy(Object.create(null), {
     get(_target, prop) {
       if (IGNORED_PROXY_PROPS.has(prop) || typeof prop !== "string") return undefined;
+      if (PROMISE_MISUSE_PROPS.has(prop)) {
+        return () => {
+          throw new Error(
+            `extensions.use(${JSON.stringify(
+              name,
+            )}) is synchronous and returns an extension method proxy. ` +
+              `Call an extension method and catch that Promise instead, e.g. ` +
+              `extensions.use(${JSON.stringify(name)}).method(...).catch(...).`,
+          );
+        };
+      }
       return async (...args: unknown[]) => {
         const streaming = await resolveStreaming(prop);
         return streaming

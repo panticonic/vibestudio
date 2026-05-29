@@ -69,6 +69,7 @@ function buildInlineItems(
         id: msg.id,
         invocation: msg.invocation,
         complete: msg.complete ?? false,
+        senderId: msg.senderId,
       };
     }
     if (msg.contentType === "typing") {
@@ -202,6 +203,7 @@ export interface MessageListProps {
   loadingMore?: boolean;
   onLoadEarlierMessages?: () => void;
   onInterrupt?: (agentId: string, messageId?: string, agentHandle?: string) => void;
+  onCancelInvocation?: (transportCallId: string) => void;
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => void;
   onReply?: (messageId: string) => void;
@@ -239,6 +241,7 @@ export const MessageList = React.memo(function MessageList({
   loadingMore,
   onLoadEarlierMessages,
   onInterrupt,
+  onCancelInvocation,
   onFocusPanel,
   onReloadPanel,
   onReply,
@@ -506,7 +509,7 @@ export const MessageList = React.memo(function MessageList({
       if (customRenderInlineGroup) {
         return <Flex className="message-item" direction="column">{customRenderInlineGroup(item.inlineItems)}</Flex>;
       }
-      return <Flex className="message-item" direction="column"><InlineGroup key={item.key} items={item.inlineItems} messageTypeComponents={messageTypeComponents} chat={chat} scope={scope} scopes={scopes} onInterrupt={handleTypingInterrupt} /></Flex>;
+      return <Flex className="message-item" direction="column"><InlineGroup key={item.key} items={item.inlineItems} messageTypeComponents={messageTypeComponents} chat={chat} scope={scope} scopes={scopes} onInterrupt={handleTypingInterrupt} onCancelInvocation={onCancelInvocation} /></Flex>;
     }
 
     const { msg, index: msgIndex } = item;
@@ -559,7 +562,7 @@ export const MessageList = React.memo(function MessageList({
       </Flex>
     );
   }, [getSenderInfo, inlineUiComponents, messageTypeComponents, chat, scope, scopes, mdxActions, allParticipants, messagesById, onReply,
-      handleInterruptMessage, handleCopyMessage, handleClearCopiedMessage, handleTypingInterrupt, onFocusPanel, onReloadPanel,
+      handleInterruptMessage, handleCopyMessage, handleClearCopiedMessage, handleTypingInterrupt, onCancelInvocation, onFocusPanel, onReloadPanel,
       customRenderMessage, customRenderInlineGroup]);
 
   // --- Render ---
@@ -613,7 +616,7 @@ export const MessageList = React.memo(function MessageList({
                   <Flex className="message-item" direction="column">
                     {customRenderInlineGroup
                       ? customRenderInlineGroup(activeTypingItems)
-                      : <InlineGroup items={activeTypingItems} messageTypeComponents={messageTypeComponents} chat={chat} scope={scope} scopes={scopes} onInterrupt={handleTypingInterrupt} />}
+                      : <InlineGroup items={activeTypingItems} messageTypeComponents={messageTypeComponents} chat={chat} scope={scope} scopes={scopes} onInterrupt={handleTypingInterrupt} onCancelInvocation={onCancelInvocation} />}
                   </Flex>
                 </div>
               )}

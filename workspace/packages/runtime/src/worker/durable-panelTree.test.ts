@@ -301,10 +301,11 @@ describe("DurableObjectBase panelTree handles", () => {
       async probeParent(): Promise<{ id: string; title: string | undefined } | null> {
         const parent = this.getParent();
         if (!parent) return null;
+        const info = await parent.getInfo();
         await parent.call["ping"]?.();
         await parent.cdp.getCdpEndpoint();
         await parent.reload();
-        return { id: parent.id, title: parent.title };
+        return { id: info.id, title: info.title };
       }
     }
 

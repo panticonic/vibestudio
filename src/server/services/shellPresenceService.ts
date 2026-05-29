@@ -50,7 +50,7 @@ export function createShellPresenceService(
   const definition: ServiceDefinition = {
     name: "shellPresence",
     description: "Tracks active shell clients for push notification delivery decisions",
-    policy: { allowed: ["shell", "server"] },
+    policy: { allowed: ["shell", "app", "server"] },
     methods: {
       heartbeat: { args: z.tuple([]) },
     },

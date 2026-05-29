@@ -11,9 +11,14 @@
  *    - meta/natstack.yml: Init panels and shared git remotes
  *    - meta/AGENTS.md: Agent system prompt
  *    - panels/: Panel source code
+ *    - apps/: Trusted workspace-owned frontend apps
  *    - projects/: Plain editable repositories that are not runtime units
  *    - .cache/: Build cache
  */
+
+import type { AppCapability, WorkspaceAppTarget } from "../unitManifest.js";
+
+export type { AppCapability, WorkspaceAppTarget };
 
 /**
  * Standard model roles with fallback behavior
@@ -151,6 +156,7 @@ export type PanelRestorePolicy = "focused" | "none";
  */
 export type WorkspaceServiceCallerKind =
   | "panel"
+  | "app"
   | "shell"
   | "server"
   | "worker"
@@ -189,24 +195,35 @@ export type WorkspaceServiceDecl = {
 /**
  * Extension declaration in `workspace/meta/natstack.yml`. The declared list is
  * the single source of truth for which extensions a workspace uses and the only
- * install/enable/disable/uninstall surface — editing it (a gated meta write)
- * triggers the joint extension approval and registry reconciliation.
+ * install/remove surface. Editing it (a gated meta write) triggers the joint
+ * unit approval and registry reconciliation.
  */
 export interface WorkspaceExtensionDecl {
   /**
    * Extension identity: a workspace-relative repo path
-   * (e.g. `"extensions/@workspace-extensions/image-service"`) OR the package
+   * (e.g. `"extensions/image-service"`) OR the package
    * name (e.g. `"@workspace-extensions/image-service"`). Both resolve via the
    * build graph.
    */
   source: string;
   /** Git ref the extension floats to. Defaults to `"main"`. */
   ref?: string;
+}
+
+/**
+ * App declaration in `workspace/meta/natstack.yml`. Apps are the frontend
+ * counterpart to extensions: privileged, workspace-coupled units that are
+ * build-gated, approval-gated, and hot-loaded onto a shipped host.
+ */
+export interface WorkspaceAppDecl {
   /**
-   * Whether the extension should be running. Defaults to `true`. `false` keeps
-   * it installed/approved but stopped.
+   * App identity: a workspace-relative repo path
+   * (e.g. `"apps/shell"`) OR the package name
+   * (e.g. `"@workspace-apps/shell"`). Both resolve via the build graph.
    */
-  enabled?: boolean;
+  source: string;
+  /** Git ref the app floats to. Defaults to `"main"`. */
+  ref?: string;
 }
 
 /** HTTP route declaration in `workspace/meta/natstack.yml`. */
@@ -255,11 +272,16 @@ export interface WorkspaceConfig {
   /**
    * Declarative extension set for this workspace — the single source of truth
    * for which extensions are in use. Editing this list is the only way to
-   * install/enable/disable/uninstall an extension; the edit is a gated meta
-   * write that triggers the joint approval and reconciliation. Absent or empty
-   * means no extensions (reconciliation removes any left in the registry).
+   * install or remove an extension; the edit is a gated meta write that
+   * triggers the joint approval and reconciliation. Absent or empty means no
+   * extensions (reconciliation removes any left in the registry).
    */
   extensions?: WorkspaceExtensionDecl[];
+  /**
+   * Declarative privileged frontend app set for this workspace. Absent or
+   * empty means no apps; the reconciler removes anything not declared here.
+   */
+  apps?: WorkspaceAppDecl[];
 }
 
 /**

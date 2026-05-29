@@ -64,6 +64,16 @@ export function parseConnectServerUrl(raw: string): { kind: "ok"; url: string } 
     return { kind: "error", reason: "Server URL is missing a hostname" };
   }
 
+  if (
+    server.username ||
+    server.password ||
+    (server.pathname !== "" && server.pathname !== "/") ||
+    server.search ||
+    server.hash
+  ) {
+    return { kind: "error", reason: "Server URL must be an origin without a path, query, or fragment" };
+  }
+
   if (server.protocol === "http:" && !isTrustedCleartextHost(server.hostname)) {
     return {
       kind: "error",

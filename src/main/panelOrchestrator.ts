@@ -9,10 +9,12 @@
 import { createDevLogger } from "@natstack/dev-log";
 import { randomUUID } from "crypto";
 import type {
+  Panel,
   PanelFocusResult,
   PanelNavigationState,
   PanelRecoverySnapshot,
   PanelSnapshot,
+  PanelTreeSnapshot,
 } from "@natstack/shared/types";
 import type { PanelRegistry } from "@natstack/shared/panelRegistry";
 import type { EventService } from "@natstack/shared/eventsService";
@@ -117,6 +119,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   private readonly stateArgsPushUnsubs = new Map<string, () => void>();
   private nextAgentRequestId = 1;
   private viewRevision = 0;
+  private lastAppliedServerPanelTreeRevision = 0;
+  private readonly explicitTitlePanelIds = new Set<string>();
   private readonly restorePolicy: PanelRestorePolicy;
 
   constructor(deps: PanelOrchestratorDeps) {
@@ -231,7 +235,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   /**
    * Create a root panel from an arbitrary source path.
    * Unlike createAboutPanel (which prefixes with "about/"), this method
-   * uses the source string as-is, making it suitable for mobile shells
+   * uses the source string as-is, making it suitable for workspace apps
    * that need to create panels from any source.
    */
   async createRootPanel(
@@ -502,11 +506,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
 
   async getBootstrapConfig(callerId: string): Promise<unknown> {
     const config = await this.shellCore.getPanelInit(asPanelSlotId(callerId));
-    const connectionId = this.runtimeConnectionBySlot.get(callerId);
-    if (!connectionId || !config || typeof config !== "object") return config;
+    const lease = this.runtimeConnectionBySlot.get(callerId);
+    if (!lease || !config || typeof config !== "object") return config;
     return {
       ...(config as Record<string, unknown>),
-      connectionId,
+      connectionId: lease.connectionId,
       clientLabel: "Desktop",
     };
   }
@@ -641,6 +645,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   }
 
   async updatePanelTitle(panelId: string, title: string): Promise<void> {
+    if (this.explicitTitlePanelIds.has(panelId)) return;
     await this.shellCore.updateTitle(asPanelSlotId(panelId), title);
   }
 
@@ -961,6 +966,100 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     this.registry.applyRuntimeLeaseSnapshot(snapshot);
   }
 
+  async applyServerPanelTreeSnapshot(snapshot: PanelTreeSnapshot): Promise<void> {
+    if (snapshot.revision <= this.lastAppliedServerPanelTreeRevision) return;
+    this.lastAppliedServerPanelTreeRevision = snapshot.revision;
+    if (this.panelTreesMatchSemantically(this.registry.getRootPanels(), snapshot.rootPanels)) {
+      return;
+    }
+    if (this.panelTreesMatchIgnoringTitles(this.registry.getRootPanels(), snapshot.rootPanels)) {
+      this.applyPanelTitlesFromSnapshot(snapshot.rootPanels);
+      return;
+    }
+    this.registry.repopulate(snapshot.rootPanels);
+    await this.syncRuntimeLeaseSnapshot().catch((error: unknown) => {
+      log.warn(
+        `[applyServerPanelTreeSnapshot] Failed to sync runtime leases: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
+  }
+
+  applyServerPanelTitleUpdate(update: {
+    panelId: string;
+    title: string;
+    explicit?: boolean;
+  }): void {
+    const panel = this.registry.getPanel(update.panelId);
+    if (!panel) return;
+    if (update.explicit) {
+      this.explicitTitlePanelIds.add(update.panelId);
+    }
+    if (panel.title === update.title) return;
+    this.registry.updateTitle(update.panelId, update.title);
+  }
+
+  private panelTreesMatchSemantically(
+    current: readonly Panel[],
+    incoming: readonly Panel[]
+  ): boolean {
+    if (current.length !== incoming.length) return false;
+    return current.every((panel, index) =>
+      this.panelsMatchSemantically(panel, assertPresent(incoming[index]))
+    );
+  }
+
+  private panelsMatchSemantically(current: Panel, incoming: Panel): boolean {
+    if (current.id !== incoming.id) return false;
+    if (current.title !== incoming.title) return false;
+    if ((current.positionId ?? null) !== (incoming.positionId ?? null)) return false;
+    if ((current.selectedChildId ?? null) !== (incoming.selectedChildId ?? null)) return false;
+    if (!this.panelSnapshotsMatchSemantically(current, incoming)) return false;
+    return this.panelTreesMatchSemantically(current.children, incoming.children);
+  }
+
+  private panelTreesMatchIgnoringTitles(
+    current: readonly Panel[],
+    incoming: readonly Panel[]
+  ): boolean {
+    if (current.length !== incoming.length) return false;
+    return current.every((panel, index) =>
+      this.panelsMatchIgnoringTitle(panel, assertPresent(incoming[index]))
+    );
+  }
+
+  private panelsMatchIgnoringTitle(current: Panel, incoming: Panel): boolean {
+    if (current.id !== incoming.id) return false;
+    if ((current.positionId ?? null) !== (incoming.positionId ?? null)) return false;
+    if ((current.selectedChildId ?? null) !== (incoming.selectedChildId ?? null)) return false;
+    if (!this.panelSnapshotsMatchSemantically(current, incoming)) return false;
+    return this.panelTreesMatchIgnoringTitles(current.children, incoming.children);
+  }
+
+  private applyPanelTitlesFromSnapshot(panels: readonly Panel[]): void {
+    for (const incoming of panels) {
+      this.applyServerPanelTitleUpdate({ panelId: incoming.id, title: incoming.title });
+      this.applyPanelTitlesFromSnapshot(incoming.children);
+    }
+  }
+
+  private panelSnapshotsMatchSemantically(current: Panel, incoming: Panel): boolean {
+    try {
+      const currentSnapshot = getCurrentSnapshot(current);
+      const incomingSnapshot = getCurrentSnapshot(incoming);
+      return (
+        currentSnapshot.source === incomingSnapshot.source &&
+        currentSnapshot.contextId === incomingSnapshot.contextId &&
+        currentSnapshot.options.ref === incomingSnapshot.options.ref &&
+        JSON.stringify(currentSnapshot.stateArgs ?? null) ===
+          JSON.stringify(incomingSnapshot.stateArgs ?? null)
+      );
+    } catch {
+      return false;
+    }
+  }
+
   async recoverShellSnapshot(
     opts: { loadFocusedView?: boolean } = {}
   ): Promise<PanelRecoverySnapshot> {
@@ -1114,7 +1213,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       source,
       contextId: getPanelContextId(panel),
       ref: getPanelRef(panel),
-      connectionId: this.runtimeConnectionBySlot.get(panelId)?.connectionId,
       gatewayPort: this.deps.gatewayPort,
       externalHost: this.externalHost,
       protocol: this.deps.protocol,
@@ -1207,12 +1305,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       return source.slice("browser:".length);
     }
 
-    const connectionId = await this.acquireRuntimeLease(panelId, leaseMode);
+    await this.acquireRuntimeLease(panelId, leaseMode);
     return buildPanelUrl({
       source,
       contextId: getPanelContextId(panel),
       ref: getPanelRef(panel),
-      connectionId,
       gatewayPort: this.deps.gatewayPort,
       externalHost: this.externalHost,
       protocol: this.deps.protocol,
@@ -1244,12 +1341,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       return;
     }
 
-    const connectionId = await this.acquireRuntimeLease(panelId, leaseMode);
+    await this.acquireRuntimeLease(panelId, leaseMode);
     const panelUrl = buildPanelUrl({
       source: snapshot.source,
       contextId: snapshot.contextId,
       ref: snapshot.options.ref,
-      connectionId,
       gatewayPort: this.deps.gatewayPort,
       externalHost: this.externalHost,
       protocol: this.deps.protocol,
@@ -1302,7 +1398,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       source: snapshot.source,
       contextId: snapshot.contextId,
       ref: snapshot.options.ref,
-      connectionId: lease.connectionId,
       gatewayPort: this.deps.gatewayPort,
       externalHost: this.externalHost,
       protocol: this.deps.protocol,

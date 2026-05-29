@@ -1,8 +1,13 @@
 const { getDefaultConfig, mergeConfig } = require("@react-native/metro-config");
 const path = require("path");
+const { createNativeBoundary } = require("./metroNativeBoundary.cjs");
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "..", "..");
+const workspaceAppRoot = process.env.NATSTACK_WORKSPACE_APP_ROOT
+  ? path.resolve(process.env.NATSTACK_WORKSPACE_APP_ROOT)
+  : path.resolve(monorepoRoot, "workspace", "apps", "mobile");
+const nativeBoundary = createNativeBoundary(workspaceAppRoot);
 
 /**
  * Metro bundler configuration for NatStack mobile.
@@ -18,17 +23,19 @@ const monorepoRoot = path.resolve(projectRoot, "..", "..");
  */
 const nodeBuiltinPolyfills = {
   path: require.resolve("path-browserify"),
-  crypto: path.resolve(projectRoot, "src", "polyfills", "crypto.js"),
-  fs: path.resolve(projectRoot, "src", "polyfills", "fs.js"),
-  "node:crypto": path.resolve(projectRoot, "src", "polyfills", "crypto.js"),
+  crypto: path.resolve(workspaceAppRoot, "src", "polyfills", "crypto.js"),
+  fs: path.resolve(workspaceAppRoot, "src", "polyfills", "fs.js"),
+  "node:crypto": path.resolve(workspaceAppRoot, "src", "polyfills", "crypto.js"),
   "node:path": require.resolve("path-browserify"),
-  "node:fs": path.resolve(projectRoot, "src", "polyfills", "fs.js"),
+  "node:fs": path.resolve(workspaceAppRoot, "src", "polyfills", "fs.js"),
 };
 
 const config = {
   watchFolders: [
     // Allow Metro to resolve workspace packages
     path.resolve(monorepoRoot, "packages"),
+    // Workspace-owned RN app JS loaded by the native host
+    workspaceAppRoot,
     // Root node_modules for hoisted dependencies
     path.resolve(monorepoRoot, "node_modules"),
   ],
@@ -41,6 +48,8 @@ const config = {
     ],
 
     resolveRequest: (context, moduleName, platform) => {
+      nativeBoundary.guardNativeModuleImport(moduleName, context.originModulePath);
+
       // Node.js built-in polyfills for shared code running in React Native
       if (nodeBuiltinPolyfills[moduleName]) {
         return { type: "sourceFile", filePath: nodeBuiltinPolyfills[moduleName] };
@@ -62,13 +71,13 @@ const config = {
       //     which assume a Node runtime. Mobile-safe replacements live in
       //     src/nodeShims — unused APIs throw if accidentally reached.
       if (moduleName === "path" || moduleName === "node:path") {
-        return { type: "sourceFile", filePath: path.resolve(projectRoot, "src/nodeShims/path.ts") };
+        return { type: "sourceFile", filePath: path.resolve(workspaceAppRoot, "src/nodeShims/path.ts") };
       }
       if (moduleName === "fs" || moduleName === "node:fs") {
-        return { type: "sourceFile", filePath: path.resolve(projectRoot, "src/nodeShims/fs.ts") };
+        return { type: "sourceFile", filePath: path.resolve(workspaceAppRoot, "src/nodeShims/fs.ts") };
       }
       if (moduleName === "crypto" || moduleName === "node:crypto") {
-        return { type: "sourceFile", filePath: path.resolve(projectRoot, "src/nodeShims/crypto.ts") };
+        return { type: "sourceFile", filePath: path.resolve(workspaceAppRoot, "src/nodeShims/crypto.ts") };
       }
 
       // 0b. Resolve @natstack/* packages to their TypeScript source.

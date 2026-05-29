@@ -210,23 +210,12 @@ async function waitForAndroidBoot(device, timeoutMs = 180_000) {
 }
 
 async function writeDevBootstrap(serverUrl, pairingCode) {
-  const response = await fetch(`${serverUrl.replace(/\/$/, "")}/_r/s/auth/complete-pairing`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code: pairingCode, label: "Mobile dev bootstrap", platform: "mobile-dev" }),
-  });
-  const credential = await response.json();
-  if (!response.ok) {
-    throw new Error(`Failed to complete dev pairing: ${credential?.error ?? response.status}`);
-  }
   await runCommand("node", [
     "scripts/write-mobile-dev-bootstrap.mjs",
     "--server-url",
     serverUrl,
-    "--device-id",
-    credential.deviceId,
-    "--refresh-token",
-    credential.refreshToken,
+    "--pairing-code",
+    pairingCode,
     "--auto-connect",
     "true",
   ], { label: "bootstrap" });
