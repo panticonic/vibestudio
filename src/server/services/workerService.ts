@@ -63,6 +63,7 @@ export function createWorkerService(deps: {
               source: n.relativePath,
               title: n.manifest.title,
               classes: assertPresent(n.manifest.durable).classes,
+              agent: n.manifest.agent,
             }));
         }
 

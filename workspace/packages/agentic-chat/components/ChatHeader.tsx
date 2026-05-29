@@ -1,14 +1,13 @@
 import React, { useRef } from "react";
-import { Badge, Button, Card, DropdownMenu, Flex, IconButton, Text } from "@radix-ui/themes";
-import { PlusIcon } from "@radix-ui/react-icons";
+import { Badge, Card, Flex, Text } from "@radix-ui/themes";
 import type { Participant } from "@workspace/pubsub";
 import type { ToolApprovalProps } from "@workspace/tool-ui";
-import { useIsMobile } from "@workspace/react/responsive";
 import { useChatContext } from "../context/ChatContext";
 import type { ChatParticipantMetadata, PendingAgent } from "../types";
 import { ParticipantBadgeMenu } from "./ParticipantBadgeMenu";
 import { PendingAgentBadge } from "./PendingAgentBadge";
 import { ToolPermissionsDropdown } from "./ToolPermissionsDropdown";
+import { AgentLauncher } from "./AgentLauncher";
 
 const NOOP = () => {};
 
@@ -43,11 +42,8 @@ export function ChatHeader() {
     toolApproval,
     onCallMethod,
     onDebugConsoleChange,
-    onAddAgent,
-    availableAgents,
     onRemoveAgent,
   } = useChatContext();
-  const isMobile = useIsMobile();
 
   // Memoize participant active status: single reverse scan instead of O(P*M) filter per render.
   // Stabilised with a ref — return the previous Map reference when the values haven't
@@ -83,11 +79,8 @@ export function ChatHeader() {
       pendingAgents={pendingAgents}
       onCallMethod={onCallMethod}
       toolApproval={toolApproval}
-      onAddAgent={onAddAgent}
-      availableAgents={availableAgents}
       onRemoveAgent={onRemoveAgent}
       onDebugConsoleChange={onDebugConsoleChange}
-      isMobile={isMobile}
     />
   );
 }
@@ -104,11 +97,8 @@ interface ChatHeaderInnerProps {
   pendingAgents: Map<string, PendingAgent>;
   onCallMethod?: (providerId: string, methodName: string, args: unknown) => void;
   toolApproval?: ToolApprovalProps;
-  onAddAgent?: (agentId?: string) => void;
-  availableAgents?: Array<{ id: string; name: string; proposedHandle: string }>;
   onRemoveAgent?: (handle: string) => void;
   onDebugConsoleChange?: (agentHandle: string | null) => void;
-  isMobile: boolean;
 }
 
 function chatHeaderInnerPropsEqual(
@@ -124,11 +114,8 @@ function chatHeaderInnerPropsEqual(
     prev.pendingAgents === next.pendingAgents &&
     prev.onCallMethod === next.onCallMethod &&
     prev.toolApproval === next.toolApproval &&
-    prev.onAddAgent === next.onAddAgent &&
-    prev.availableAgents === next.availableAgents &&
     prev.onRemoveAgent === next.onRemoveAgent &&
     prev.onDebugConsoleChange === next.onDebugConsoleChange &&
-    prev.isMobile === next.isMobile &&
     mapsShallowEqual(prev.participantActiveStatus, next.participantActiveStatus)
   );
 }
@@ -143,11 +130,8 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
   pendingAgents,
   onCallMethod,
   toolApproval,
-  onAddAgent,
-  availableAgents,
   onRemoveAgent,
   onDebugConsoleChange,
-  isMobile,
 }: ChatHeaderInnerProps) {
   return (
     <Card
@@ -218,43 +202,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
                   onOpenDebugConsole={onDebugConsoleChange ?? undefined}
                 />
               ))}
-          {onAddAgent && availableAgents && availableAgents.length > 0 ? (
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger>
-                {isMobile ? (
-                  <IconButton variant="soft" size="1" aria-label="Add Agent">
-                    <PlusIcon />
-                  </IconButton>
-                ) : (
-                  <Button variant="soft" size="1">
-                    Add Agent
-                  </Button>
-                )}
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Content>
-                {availableAgents.map((agent) => (
-                  <DropdownMenu.Item key={agent.id} onSelect={() => onAddAgent(agent.id)}>
-                    {agent.name}
-                  </DropdownMenu.Item>
-                ))}
-              </DropdownMenu.Content>
-            </DropdownMenu.Root>
-          ) : onAddAgent ? (
-            isMobile ? (
-              <IconButton
-                variant="soft"
-                size="1"
-                onClick={() => onAddAgent()}
-                aria-label="Add Agent"
-              >
-                <PlusIcon />
-              </IconButton>
-            ) : (
-              <Button variant="soft" size="1" onClick={() => onAddAgent()}>
-                Add Agent
-              </Button>
-            )
-          ) : null}
+          <AgentLauncher />
           {toolApproval && (
             <ToolPermissionsDropdown
               settings={toolApproval.settings}

@@ -910,6 +910,7 @@ async function main() {
   const { createGitService } = await import("./services/gitService.js");
   const { createTestService } = await import("./services/testService.js");
   const { createWorkerService } = await import("./services/workerService.js");
+  const { createModelCatalogService } = await import("./services/modelCatalogService.js");
 
   // Resolve testSetup.ts relative to this module's location
   const serverDir = path.dirname(__filename);
@@ -937,6 +938,7 @@ async function main() {
   }
   const presence = createPresenceTracker({ eventService });
   container.register(rpcService(createPresenceService({ presence })));
+  container.register(rpcService(createModelCatalogService()));
 
   {
     let tokensDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =

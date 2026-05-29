@@ -1,4 +1,5 @@
 import type { ApprovalLevel, ThinkingLevel } from "@natstack/harness";
+import { toAgentCredentialSetup } from "@natstack/shared/models/providerConnect";
 
 import type { ModelCredentialSetupProps } from "./trajectory-vessel-base.js";
 
@@ -14,35 +15,16 @@ export const DEFAULT_APPROVAL_LEVEL: ApprovalLevel = 2;
 
 export const DEFAULT_RESPOND_POLICY = "all" as const;
 
-export const PROVIDER_CREDENTIAL_SETUPS: Record<string, ModelCredentialSetupProps> = {
-  "openai-codex": {
-    credentialLabel: "ChatGPT Codex model credential",
-    accountIdentityJwtClaimRoot: OPENAI_CODEX_ACCOUNT_CLAIM,
-    accountIdentityJwtClaimField: "chatgpt_account_id",
-    redirectPolicy: "loopback-required",
-    redirect: {
-      type: "loopback",
-      host: "localhost",
-      port: 1455,
-      callbackPath: "/auth/callback",
-    },
-    clientLoopbackRedirect: {
-      type: "client-loopback",
-      host: "localhost",
-      port: 1455,
-      callbackPath: "/auth/callback",
-    },
-    flow: {
-      type: "oauth2-auth-code-pkce",
-      authorizeUrl: "https://auth.openai.com/oauth/authorize",
-      tokenUrl: "https://auth.openai.com/oauth/token",
-      clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
-      scopes: ["openid", "profile", "email", "offline_access"],
-      extraAuthorizeParams: {
-        id_token_add_organizations: "true",
-        codex_cli_simplified_flow: "true",
-        originator: "codex_cli_rs",
-      },
-    },
-  },
-};
+/**
+ * Agent-side model credential connect setups. Derived from the shared provider
+ * connect presets (`@natstack/shared/models/providerConnect`) so the panel
+ * picker and the agent share one source. Today only `openai-codex` is wired for
+ * agent-initiated (mid-turn) connect; api-key providers are connected ahead of
+ * time via the panel model picker, then merely resolved here.
+ */
+export const PROVIDER_CREDENTIAL_SETUPS: Record<string, ModelCredentialSetupProps> = (() => {
+  const setups: Record<string, ModelCredentialSetupProps> = {};
+  const codex = toAgentCredentialSetup("openai-codex");
+  if (codex) setups["openai-codex"] = codex;
+  return setups;
+})();

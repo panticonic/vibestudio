@@ -33,7 +33,7 @@ import { useActionBar } from "./features/useActionBar";
 import { useMessageTypeRegistry } from "./features/useMessageTypeRegistry";
 import type { ConnectionConfig, AgenticChatActions, ToolProvider, SandboxConfig, ChatSandboxValue, ChatParticipantMetadata, ChatContextValue, ChatInputContextValue, ActionBarData, } from "../types";
 import { unwrapChatMethodResult } from "@workspace/agentic-core";
-import type { ChatMethodResult } from "@workspace/agentic-core";
+import type { ChatMethodResult, AgentSubscriptionConfig } from "@workspace/agentic-core";
 /** Pending agent info passed from launcher */
 interface PendingAgentInfo {
     agentId: string;
@@ -896,20 +896,34 @@ Use package imports available to inline_ui plus relative imports for local helpe
         publishTypedAgenticEvent,
     ]);
     // --- Wrap platform actions ---
-    const handleAddAgent = useCallback(async (agentId?: string) => {
+    const handleAddAgent = useCallback(async (agentId?: string, config?: AgentSubscriptionConfig) => {
         if (!actions?.onAddAgent)
             return;
         const launcherContextId = core.clientRef.current?.contextId;
-        await actions.onAddAgent(channelName, launcherContextId, agentId);
+        await actions.onAddAgent(channelName, launcherContextId, agentId, config);
     }, [channelName, core.clientRef, actions]);
+    const handleReplaceAgent = useCallback(async (participantId: string, agentId?: string, config?: AgentSubscriptionConfig) => {
+        if (!actions?.onReplaceAgent)
+            return;
+        await actions.onReplaceAgent(channelName, participantId, agentId, config);
+    }, [channelName, actions]);
     const handleRemoveAgent = useCallback(async (handle: string) => {
         if (!actions?.onRemoveAgent)
             return;
         await actions.onRemoveAgent(channelName, handle);
     }, [channelName, actions]);
+    const handleConnectProvider = useCallback(async (providerId: string, modelBaseUrl: string, opts?: { browser?: "internal" | "external" }) => {
+        if (!actions?.onConnectProvider)
+            return { ok: false, error: "Connect is not available" };
+        return actions.onConnectProvider(providerId, modelBaseUrl, opts);
+    }, [actions]);
     const sessionEnabled = true; // Always persistent: transcript state is projected from the durable PubSub log.
     const onAddAgent = actions?.onAddAgent ? handleAddAgent : undefined;
+    const onReplaceAgent = actions?.onReplaceAgent ? handleReplaceAgent : undefined;
+    const onConnectProvider = actions?.onConnectProvider ? handleConnectProvider : undefined;
     const availableAgents = actions?.availableAgents;
+    const modelCatalog = actions?.modelCatalog;
+    const connectedModelRefs = actions?.connectedModelRefs;
     const onRemoveAgent = actions?.onRemoveAgent ? handleRemoveAgent : undefined;
     const onFocusPanel = actions?.onFocusPanel;
     const onReloadPanel = actions?.onReloadPanel;
@@ -946,12 +960,17 @@ Use package imports available to inline_ui plus relative imports for local helpe
         onInterrupt: core.handleInterruptAgent,
         onCancelInvocation: core.handleCancelInvocation,
         onCallMethod: core.handleCallMethod,
+        onCallMethodResult: core.handleCallMethodResult,
         onFeedbackDismiss: feedback.onFeedbackDismiss,
         onFeedbackError: feedback.onFeedbackError,
         onDebugConsoleChange: debug.setDebugConsoleAgent,
         onDismissDirtyWarning: core.onDismissDirtyWarning,
         onAddAgent,
+        onReplaceAgent,
+        onConnectProvider,
         availableAgents,
+        modelCatalog,
+        connectedModelRefs,
         onRemoveAgent,
         onFocusPanel,
         onReloadPanel,
@@ -963,9 +982,9 @@ Use package imports available to inline_ui plus relative imports for local helpe
         core.participants, core.allParticipants,
         core.debugEvents, debug.debugConsoleAgent, core.dirtyRepoWarnings, core.pendingAgents,
         feedback.activeFeedbacks, theme,
-        core.loadEarlierMessages, core.handleInterruptAgent, core.handleCallMethod,
+        core.loadEarlierMessages, core.handleInterruptAgent, core.handleCallMethod, core.handleCallMethodResult,
         feedback.onFeedbackDismiss, feedback.onFeedbackError, debug.setDebugConsoleAgent, core.onDismissDirtyWarning,
-        onAddAgent, availableAgents, onRemoveAgent, onFocusPanel, onReloadPanel,
+        onAddAgent, onReplaceAgent, onConnectProvider, availableAgents, modelCatalog, connectedModelRefs, onRemoveAgent, onFocusPanel, onReloadPanel,
         chatTools.toolApprovalValue,
     ]);
     return { contextValue, inputContextValue: core.inputContextValue };

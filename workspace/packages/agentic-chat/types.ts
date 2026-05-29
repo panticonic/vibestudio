@@ -44,6 +44,10 @@ import type {
   MessageTypeDefinition,
   PendingAgent,
   DirtyRepoDetails,
+  AvailableAgent,
+  ConnectProviderResult,
+  ModelCatalog,
+  AgentSubscriptionConfig,
 } from "@workspace/agentic-core";
 
 // ===========================================================================
@@ -169,14 +173,32 @@ export interface ChatContextValue {
   onInterrupt: (agentId: string, messageId?: string, agentHandle?: string) => void;
   onCancelInvocation: (transportCallId: string) => void;
   onCallMethod: (providerId: string, methodName: string, args: unknown) => void;
+  /** Awaits and returns the provider's result payload (for settings UIs). */
+  onCallMethodResult: (providerId: string, methodName: string, args: unknown) => Promise<unknown>;
   onFeedbackDismiss: (callId: string) => void;
   onFeedbackError: (callId: string, error: Error) => void;
   onDebugConsoleChange: (agentHandle: string | null) => void;
   onDismissDirtyWarning: (agentName: string) => void;
 
   // Optional actions (platform-specific)
-  onAddAgent?: (agentId?: string) => void;
-  availableAgents?: Array<{ id: string; name: string; proposedHandle: string }>;
+  onAddAgent?: (agentId?: string, config?: AgentSubscriptionConfig) => void;
+  /** Replace an existing agent (by participant id), reusing its handle. */
+  onReplaceAgent?: (
+    participantId: string,
+    agentId?: string,
+    config?: AgentSubscriptionConfig
+  ) => Promise<void> | void;
+  /** Connect a model provider credential; resolves to success/failure. */
+  onConnectProvider?: (
+    providerId: string,
+    modelBaseUrl: string,
+    opts?: { browser?: "internal" | "external" }
+  ) => Promise<ConnectProviderResult>;
+  availableAgents?: AvailableAgent[];
+  /** Static pi model catalog; connection status merged in the UI. */
+  modelCatalog?: ModelCatalog | null;
+  /** Model refs ("provider:modelId") with a usable credential (panel-scoped). */
+  connectedModelRefs?: string[];
   onRemoveAgent?: (handle: string) => void;
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => void;

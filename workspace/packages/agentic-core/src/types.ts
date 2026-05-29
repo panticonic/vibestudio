@@ -19,6 +19,8 @@ import type { RecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordin
 import type { ScopesApi } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult } from "@workspace/eval";
 import type { ChatMethodResult } from "./invocation-result.js";
+import type { AgentSubscriptionConfig } from "./agent-subscription-config.js";
+import type { ModelCatalog } from "@natstack/shared/models/catalog";
 
 // The canonical participant metadata shape lives in @workspace/pubsub so that
 // lower-level packages (like @workspace/agentic-do, which can't depend on
@@ -41,12 +43,57 @@ export interface ConnectionConfig {
   recoveryCoordinator?: Pick<RecoveryCoordinator, "registerColdRecoverHandler">;
 }
 
+/** A selectable agent type, enriched from worker manifest `agent` metadata. */
+export interface AvailableAgent {
+  /** Worker source path, e.g. "workers/agent-worker". */
+  id: string;
+  className: string;
+  name: string;
+  description?: string;
+  /** Emoji/icon for the agent gallery. */
+  icon?: string;
+  proposedHandle: string;
+}
+
+/** Result of connecting a model provider's credential. */
+export interface ConnectProviderResult {
+  ok: boolean;
+  error?: string;
+}
+
 /** Inject platform-specific navigation */
 export interface AgenticChatActions {
   onNewConversation?: () => void;
-  onAddAgent?: (channelName: string, contextId?: string, agentId?: string) => Promise<{ agentId: string; handle: string } | void>;
+  /** Add a new agent to the channel, optionally with a full subscription config. */
+  onAddAgent?: (
+    channelName: string,
+    contextId?: string,
+    agentId?: string,
+    config?: AgentSubscriptionConfig
+  ) => Promise<{ agentId: string; handle: string } | void>;
+  /**
+   * Replace an existing agent (resolved by its participant id) with a fresh DO,
+   * reusing the same handle. Used for "switch agent" and "restart with new model"
+   * (model is not live-mutable). History is restored via channel replay.
+   */
+  onReplaceAgent?: (
+    channelName: string,
+    participantId: string,
+    agentId?: string,
+    config?: AgentSubscriptionConfig
+  ) => Promise<{ agentId: string; handle: string } | void>;
   onRemoveAgent?: (channelName: string, handle: string) => Promise<void>;
-  availableAgents?: Array<{ id: string; name: string; proposedHandle: string }>;
+  /** Connect a model provider's credential (model picker "Connect" affordance). */
+  onConnectProvider?: (
+    providerId: string,
+    modelBaseUrl: string,
+    opts?: { browser?: "internal" | "external" }
+  ) => Promise<ConnectProviderResult>;
+  availableAgents?: AvailableAgent[];
+  /** Static pi model catalog; connection status is merged panel-side. */
+  modelCatalog?: ModelCatalog | null;
+  /** Model refs ("provider:modelId") the panel has a usable credential for. */
+  connectedModelRefs?: string[];
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => Promise<void>;
   onBecomeVisible?: () => void;

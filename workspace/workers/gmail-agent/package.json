@@ -8,6 +8,11 @@
     "durable": {
       "classes": [{ "className": "GmailAgentWorker" }]
     },
+    "agent": {
+      "displayName": "Gmail Agent",
+      "description": "Reads and triages your Gmail",
+      "icon": "📧"
+    },
     "exposeModules": [
       "@earendil-works/pi-ai",
       "@workspace/runtime",

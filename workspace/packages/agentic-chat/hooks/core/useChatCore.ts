@@ -116,6 +116,7 @@ export interface ChatCoreState {
   handleInterruptAgent: (agentId: string, messageId?: string, agentHandle?: string) => Promise<void>;
   handleCancelInvocation: (transportCallId: string) => Promise<void>;
   handleCallMethod: (providerId: string, methodName: string, args: unknown) => void;
+  handleCallMethodResult: (providerId: string, methodName: string, args: unknown) => Promise<unknown>;
   stopTyping: () => Promise<void>;
 
   // Agent state
@@ -587,6 +588,19 @@ export function useChatCore({
     [],
   );
 
+  /** Like handleCallMethod, but awaits and returns the provider's result payload.
+   *  Used by settings UIs that need to read getAgentSettings / confirm setters. */
+  const handleCallMethodResult = useCallback(
+    async (providerId: string, methodName: string, args: unknown): Promise<unknown> => {
+      const c = clientRef.current;
+      if (!c) throw new Error("Not connected to channel");
+      const handle = c.callMethod(providerId, methodName, args);
+      const result = (handle as { result?: Promise<unknown> }).result;
+      return result ? await result : undefined;
+    },
+    [],
+  );
+
   const addPendingAgent = useCallback((handle: string, agentId: string) => {
     setPendingAgents((prev) => {
       const next = new Map(prev);
@@ -662,6 +676,7 @@ export function useChatCore({
     handleInterruptAgent,
     handleCancelInvocation,
     handleCallMethod,
+    handleCallMethodResult,
     stopTyping,
     debugEvents,
     dirtyRepoWarnings,
