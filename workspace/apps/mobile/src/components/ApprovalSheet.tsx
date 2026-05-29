@@ -383,7 +383,6 @@ export function ApprovalSheet({
               >
                 <ApprovalHeader
                   approval={current}
-                  categoryLabel={categoryLabel}
                   accentColor={accentColor}
                   queueLength={queueLength}
                   queueIndex={browseIndex}
@@ -509,7 +508,6 @@ export function ApprovalSheet({
 
 function ApprovalHeader({
   approval,
-  categoryLabel,
   accentColor,
   queueLength,
   queueIndex,
@@ -519,7 +517,6 @@ function ApprovalHeader({
   onNext,
 }: {
   approval: PendingApproval;
-  categoryLabel: string;
   accentColor: string;
   queueLength: number;
   queueIndex: number;
@@ -528,7 +525,6 @@ function ApprovalHeader({
   onPrev: () => void;
   onNext: () => void;
 }) {
-  const colors = useAtomValue(themeColorsAtom);
   const CategoryIcon = getCategoryIcon(approval);
   return (
     <View style={styles.headerRow}>
