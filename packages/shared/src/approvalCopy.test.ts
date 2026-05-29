@@ -4,6 +4,7 @@ import {
   formatGitRemoteSummary,
   formatInjection,
   formatServiceName,
+  getApprovalAttribution,
   getApprovalCategoryLabel,
   getApprovalCopy,
   getStandardActionCopy,
@@ -45,7 +46,7 @@ describe("approvalCopy", () => {
         details: [{ label: "URL", value: "https://github.com/foo/bar" }],
       },
       category: "Browser action",
-      title: "Open external site",
+      title: "Open github.com/foo/...",
       summaryIncludes: "github.com/foo/...",
     },
     {
@@ -63,8 +64,8 @@ describe("approvalCopy", () => {
         oauthTokenOrigin: "https://oauth2.googleapis.com",
       },
       category: "Connection request",
-      title: "Connect service",
-      summaryIncludes: "connect Google Calendar",
+      title: "Connect Google Calendar",
+      summaryIncludes: "Connects Google Calendar",
     },
     {
       name: "credential git-write",
@@ -90,7 +91,7 @@ describe("approvalCopy", () => {
         },
       },
       category: "Git write",
-      title: "Push to remote",
+      title: "Push to github.com/acme/project",
       summaryIncludes: "github.com/acme/project",
     },
     {
@@ -108,8 +109,8 @@ describe("approvalCopy", () => {
         ],
       },
       category: "Service setup",
-      title: "Configure service",
-      summaryIncludes: "Save OAuth client settings",
+      title: "Set up Google Calendar",
+      summaryIncludes: "Saves OAuth client settings",
     },
     {
       name: "credential-input",
@@ -125,7 +126,7 @@ describe("approvalCopy", () => {
         fields: [{ name: "apiKey", label: "API Key", type: "secret", required: true }],
       },
       category: "Service setup",
-      title: "Add service",
+      title: "Add Acme API",
       summaryIncludes: "api.acme.test/v1/...",
     },
     {
@@ -144,7 +145,7 @@ describe("approvalCopy", () => {
         oauthAudienceDomainMismatch: true,
       },
       category: "Connection request",
-      title: "Connect service",
+      title: "Connect Google Calendar",
       summaryIncludes: "calendar.google.com",
       warning: "The sign-in domain differs from the service domain.",
     },
@@ -250,7 +251,7 @@ describe("approvalCopy", () => {
       },
       category: "Panel automation",
       title: "Drive privileged panel",
-      summaryIncludes: "automate Shell",
+      summaryIncludes: "Automates Shell",
       warning:
         "This target is privileged. Approving gives the requester control of a trusted shell panel.",
     },
@@ -269,27 +270,14 @@ describe("approvalCopy", () => {
       },
       category: "Panel change",
       title: "Close panel",
-      summaryIncludes: "change Child panel",
+      summaryIncludes: "Changes Child panel",
     },
   ];
-
-  const requesterLabel = (approval: PendingApproval): string => {
-    switch (approval.callerKind) {
-      case "app":
-        return "App";
-      case "worker":
-        return "Worker";
-      case "do":
-        return "DO";
-      default:
-        return "Panel";
-    }
-  };
 
   it.each(fixtures)(
     "formats $name copy",
     ({ approval, category, title, summaryIncludes, warning, detailsOpen }) => {
-      const copy = getApprovalCopy(approval, requesterLabel(approval));
+      const copy = getApprovalCopy(approval);
 
       expect(getApprovalCategoryLabel(approval)).toBe(category);
       expect(copy.title).toBe(title);
@@ -298,6 +286,38 @@ describe("approvalCopy", () => {
       expect(shouldOpenApprovalDetails(approval)).toBe(detailsOpen ?? false);
     }
   );
+
+  it("derives semantic attribution chips, never raw ids", () => {
+    const byName = (name: string) => fixtures.find((fixture) => fixture.name === name)!.approval;
+
+    // Git uses the credential identity; non-oauth use names the audience.
+    expect(getApprovalAttribution(byName("credential git-write"))).toEqual({
+      relation: "using",
+      target: "GitHub PAT",
+    });
+    // OAuth connect headlines the credential, so the chip surfaces the account.
+    expect(getApprovalAttribution(byName("credential OAuth"))).toEqual({
+      relation: "as",
+      target: "me@example.com",
+    });
+    // Capability/unit-batch requests have no secondary chip.
+    expect(getApprovalAttribution(byName("capability"))).toEqual({});
+
+    // Userland delegated through an extension surfaces the issuer label.
+    const delegated: PendingApproval = {
+      ...base,
+      kind: "userland",
+      issuer: { kind: "extension", id: "ext:gh", label: "GitHub extension" },
+      subject: { id: "team-x:foo", label: "Foo" },
+      title: "Allow foo?",
+      promptOptions: "choices",
+      options: [{ value: "allow", label: "Allow", tone: "primary" }],
+    };
+    expect(getApprovalAttribution(delegated)).toEqual({
+      relation: "for",
+      target: "GitHub extension",
+    });
+  });
 
   it("formats standard action labels by approval subtype", () => {
     const [capability, oauth, gitWrite] = fixtures.map((fixture) => fixture.approval);

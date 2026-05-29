@@ -115,8 +115,12 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
 
   async function sendApproval(approval: PendingApproval): Promise<boolean> {
     const category = categoryFor(approval);
-    const copy = getApprovalCopy(approval, callerLabel(approval));
-    const body = copy.warning ? `${copy.summary} ${copy.warning}` : copy.summary;
+    const copy = getApprovalCopy(approval);
+    const description = copy.warning ? `${copy.summary} ${copy.warning}` : copy.summary;
+    // Prefer the server-resolved caller title over the bare kind word so the
+    // notification names who's asking semantically, never a raw id.
+    const requester = approval.callerTitle?.trim() || callerLabel(approval);
+    const body = `${requester} · ${description}`;
     const results = await deps.push.sendBatch({
       title: copy.title,
       body,

@@ -40,7 +40,7 @@ import type {
 import {
   formatAccount,
   formatInjection,
-  getApprovalCategoryLabel,
+  getApprovalAttribution,
   getApprovalCopy,
   getStandardActionCopy,
   originForUrl,
@@ -253,8 +253,8 @@ export function ConsentApprovalBar() {
   };
 
   if (!currentCaller) return null;
-  const callerLabel = currentCaller.kindLabel;
-  const copy = getApprovalCopy(current, callerLabel);
+  const copy = getApprovalCopy(current);
+  const attribution = getApprovalAttribution(current);
   const isUnitApproval = current.kind === "unit-batch";
   const isSevereCapability = current.kind === "capability" && current.severity === "severe";
   const accent = isSevereCapability ? "red" : isUnitApproval ? "amber" : "sky";
@@ -307,11 +307,6 @@ export function ConsentApprovalBar() {
               >
                 {copy.title}
               </Text>
-              {current.kind === "credential" ? (
-                <Badge color="gray" variant="soft" highContrast>
-                  {current.credentialLabel}
-                </Badge>
-              ) : null}
               {queueLength > 1 ? (
                 <QueueNavigator
                   index={browseIndex}
@@ -324,36 +319,22 @@ export function ConsentApprovalBar() {
               ) : null}
             </Flex>
 
-            <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
-              <Text size="1" color="gray" style={{ flexShrink: 0 }}>
-                Requested by
-              </Text>
+            <Flex align="center" gap="1" wrap="wrap" style={{ minWidth: 0 }}>
               <CallerChip caller={currentCaller} onShow={showRequestingPanel} />
-              <Text
-                size="1"
-                style={{
-                  textTransform: "uppercase",
-                  letterSpacing: "0.06em",
-                  fontWeight: 600,
-                  color: "var(--app-approval-text)",
-                  opacity: 0.75,
-                  flexShrink: 0,
-                }}
-              >
-                {getApprovalCategoryLabel(current)}
+              <Text size="1" color="gray" style={{ flexShrink: 0 }}>
+                {currentCaller.kindLabel.toLowerCase()}
               </Text>
+              {attribution.target ? (
+                <>
+                  <Text size="1" color="gray" style={{ flexShrink: 0 }}>
+                    {attribution.relation ?? "for"}
+                  </Text>
+                  <span className="approval-caller-chip" data-clickable="false">
+                    <span className="approval-caller-chip-title">{attribution.target}</span>
+                  </span>
+                </>
+              ) : null}
             </Flex>
-
-            <Text
-              size="2"
-              style={{
-                lineHeight: 1.4,
-                overflowWrap: "anywhere",
-                color: "var(--gray-12)",
-              }}
-            >
-              {copy.summary}
-            </Text>
 
             {copy.warning ? (
               <Flex align="center" gap="1" style={{ color: "var(--red-11)" }}>

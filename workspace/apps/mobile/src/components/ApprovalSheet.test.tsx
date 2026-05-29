@@ -93,10 +93,10 @@ function renderSheet(
 
 describe("ApprovalSheet", () => {
   it.each([
-    [capability, "Open external site"],
-    [credential, "Connect service"],
-    [clientConfig, "Configure service"],
-    [credentialInput, "Add service"],
+    [capability, "Open github.com/foo/..."],
+    [credential, "Connect Google Calendar"],
+    [clientConfig, "Set up Google Calendar"],
+    [credentialInput, "Add Acme API"],
     [userland, "Allow foo?"],
   ] as const)("renders %s", (approval, title) => {
     const { getByText } = renderSheet(approval);
@@ -171,7 +171,7 @@ describe("ApprovalSheet", () => {
     const onResolveUserland = jest.fn(async () => undefined);
     const { getByText, getByTestId } = renderSheet(userland, { onResolveUserland });
 
-    expect(getByText("Worker request")).toBeTruthy();
+    expect(getByText("worker")).toBeTruthy();
     expect(getByText(/Remembered for worker/)).toBeTruthy();
 
     fireEvent.press(getByTestId("approval-userland-allow"));
@@ -191,7 +191,7 @@ describe("ApprovalSheet", () => {
     const { getByText, getByTestId } = renderSheet(titledPanel);
     expect(getByTestId("approval-caller-chip")).toBeTruthy();
     expect(getByText("My Project")).toBeTruthy();
-    expect(getByText("Requested by")).toBeTruthy();
+    expect(getByText("panel")).toBeTruthy();
   });
 
   it("calls onNavigateToPanel when the caller is a panel and the chip is pressed", () => {
@@ -297,7 +297,7 @@ describe("ApprovalSheet", () => {
 
   it("replaces sheet content when approval id changes", () => {
     const { getByText, rerender } = renderSheet(capability);
-    expect(getByText("Open external site")).toBeTruthy();
+    expect(getByText("Open github.com/foo/...")).toBeTruthy();
 
     rerender(
       <ApprovalSheet
@@ -308,7 +308,7 @@ describe("ApprovalSheet", () => {
         onResolveUserland={jest.fn()}
       />
     );
-    expect(getByText("Add service")).toBeTruthy();
+    expect(getByText("Add Acme API")).toBeTruthy();
   });
 
   it("shows inline error when resolve fails", async () => {
