@@ -97,7 +97,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("dispatches a service route in-process", async () => {
-    h.registry.registerService([
+    h.registry.registerHttpServiceRoutes([
       {
         serviceName: "ping",
         path: "/ping",
@@ -187,7 +187,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("returns 405 when path matches but method does not", async () => {
-    h.registry.registerService([
+    h.registry.registerHttpServiceRoutes([
       {
         serviceName: "only-get",
         path: "/x",
@@ -204,7 +204,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("rejects admin-token-auth route without token", async () => {
-    h.registry.registerService([
+    h.registry.registerHttpServiceRoutes([
       {
         serviceName: "admin",
         path: "/secret",
@@ -242,7 +242,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("accepts caller-token routes with worker tokens", async () => {
-    h.registry.registerService([
+    h.registry.registerHttpServiceRoutes([
       {
         serviceName: "caller",
         path: "/token",
@@ -263,7 +263,7 @@ describe("RouteRegistry × Gateway integration", () => {
   });
 
   it("rejects admin and unknown tokens for caller-token routes", async () => {
-    h.registry.registerService([
+    h.registry.registerHttpServiceRoutes([
       {
         serviceName: "caller-reject",
         path: "/token",

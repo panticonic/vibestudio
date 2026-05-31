@@ -148,7 +148,7 @@ describe("RouteRegistry", () => {
         path: "/oauth/callback",
         handler,
       };
-      reg.registerService([decl]);
+      reg.registerHttpServiceRoutes([decl]);
       const res = reg.lookup("/_r/s/auth/oauth/callback", "GET", false);
       expect(res).toMatchObject({ kind: "service", serviceName: "auth" });
       if (res && res !== "method-not-allowed" && res.kind === "service") {
@@ -158,7 +158,7 @@ describe("RouteRegistry", () => {
 
     it("extracts :params", () => {
       const reg = new RouteRegistry();
-      reg.registerService([
+      reg.registerHttpServiceRoutes([
         {
           serviceName: "svc",
           path: "/webhook/:id",
@@ -174,7 +174,7 @@ describe("RouteRegistry", () => {
 
     it("returns method-not-allowed for method mismatch with path match", () => {
       const reg = new RouteRegistry();
-      reg.registerService([
+      reg.registerHttpServiceRoutes([
         {
           serviceName: "svc",
           path: "/x",
@@ -189,14 +189,14 @@ describe("RouteRegistry", () => {
   describe("auth & ws gating", () => {
     it("defaults to public auth", () => {
       const reg = new RouteRegistry();
-      reg.registerService([{ serviceName: "s", path: "/x", handler: () => {} }]);
+      reg.registerHttpServiceRoutes([{ serviceName: "s", path: "/x", handler: () => {} }]);
       const res = reg.lookup("/_r/s/s/x", "GET", false);
       expect(res).toMatchObject({ auth: "public" });
     });
 
     it("admin-token auth is surfaced to the gateway", () => {
       const reg = new RouteRegistry();
-      reg.registerService([
+      reg.registerHttpServiceRoutes([
         {
           serviceName: "s",
           path: "/x",
@@ -210,7 +210,7 @@ describe("RouteRegistry", () => {
 
     it("caller-token auth is surfaced to the gateway", () => {
       const reg = new RouteRegistry();
-      reg.registerService([
+      reg.registerHttpServiceRoutes([
         {
           serviceName: "s",
           path: "/x",
@@ -224,13 +224,13 @@ describe("RouteRegistry", () => {
 
     it("non-ws routes are not matched for upgrade requests", () => {
       const reg = new RouteRegistry();
-      reg.registerService([{ serviceName: "s", path: "/x", handler: () => {} }]);
+      reg.registerHttpServiceRoutes([{ serviceName: "s", path: "/x", handler: () => {} }]);
       expect(reg.lookup("/_r/s/s/x", "GET", true)).toBeNull();
     });
 
     it("ws routes only match upgrade when websocket=true", () => {
       const reg = new RouteRegistry();
-      reg.registerService([
+      reg.registerHttpServiceRoutes([
         {
           serviceName: "s",
           path: "/x",

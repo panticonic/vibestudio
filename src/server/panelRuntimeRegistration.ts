@@ -666,7 +666,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     hostConfig,
   } = deps;
   const path = await import("path");
-  const { rpcService } = await import("@natstack/shared/managedService");
   let serverPanelTreeBridgePromise: Promise<
     (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown>
   > | null = null;
@@ -718,43 +717,41 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     const wsConfigPath = path.join(workspacePath, "meta/natstack.yml");
     const wsConfigManager = createWorkspaceConfigManager(wsConfigPath, workspaceConfig);
 
-    container.register(
-      rpcService(
-        createWorkspaceService({
-          workspace,
-          getConfig: wsConfigManager.get,
-          setConfigField: wsConfigManager.set as (key: string, value: unknown) => void,
-          centralData: centralData ?? null,
-          createWorkspace: (name, opts) => {
-            if (!centralData) throw new Error("Workspace creation not available");
-            return createAndRegisterWorkspace(name, centralData, opts);
-          },
-          deleteWorkspaceDir,
-          requestRelaunch: deps.requestRelaunch,
-          requestWorkspaceList: deps.requestWorkspaceList,
-          listUnits: deps.listWorkspaceUnits,
-          restartUnit: deps.restartWorkspaceUnit,
-          listUnitLogs: deps.listWorkspaceUnitLogs,
-          unitDiagnostics: deps.unitDiagnostics,
-          bakeAppDist: deps.bakeAppDist,
-          listAppVersions: deps.listAppVersions,
-          rollbackAppVersion: deps.rollbackAppVersion,
-          listHostTargetCandidates: deps.listHostTargetCandidates,
-          getHostTargetSelection: deps.getHostTargetSelection,
-          setHostTargetSelection: deps.setHostTargetSelection,
-          clearHostTargetSelection: deps.clearHostTargetSelection,
-          listHostTargetVersions: deps.listHostTargetVersions,
-          prepareHostTargetPinnedCommit: deps.prepareHostTargetPinnedCommit,
-          launchHostTarget: deps.launchHostTarget,
-          approvalQueue: deps.approvalQueue,
-        })
-      )
+    container.registerRpc(
+      createWorkspaceService({
+        workspace,
+        getConfig: wsConfigManager.get,
+        setConfigField: wsConfigManager.set as (key: string, value: unknown) => void,
+        centralData: centralData ?? null,
+        createWorkspace: (name, opts) => {
+          if (!centralData) throw new Error("Workspace creation not available");
+          return createAndRegisterWorkspace(name, centralData, opts);
+        },
+        deleteWorkspaceDir,
+        requestRelaunch: deps.requestRelaunch,
+        requestWorkspaceList: deps.requestWorkspaceList,
+        listUnits: deps.listWorkspaceUnits,
+        restartUnit: deps.restartWorkspaceUnit,
+        listUnitLogs: deps.listWorkspaceUnitLogs,
+        unitDiagnostics: deps.unitDiagnostics,
+        bakeAppDist: deps.bakeAppDist,
+        listAppVersions: deps.listAppVersions,
+        rollbackAppVersion: deps.rollbackAppVersion,
+        listHostTargetCandidates: deps.listHostTargetCandidates,
+        getHostTargetSelection: deps.getHostTargetSelection,
+        setHostTargetSelection: deps.setHostTargetSelection,
+        clearHostTargetSelection: deps.clearHostTargetSelection,
+        listHostTargetVersions: deps.listHostTargetVersions,
+        prepareHostTargetPinnedCommit: deps.prepareHostTargetPinnedCommit,
+        launchHostTarget: deps.launchHostTarget,
+        approvalQueue: deps.approvalQueue,
+      })
     );
   }
 
   {
     const { PanelHttpServer } = await import("./panelHttpServer.js");
-    container.register({
+    container.registerManaged({
       name: "panelHttpServer",
       async start() {
         const server = new PanelHttpServer(
@@ -773,7 +770,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         await instance?.server?.stop();
       },
     });
-    container.register({
+    container.registerManaged({
       name: "cdpBridge",
       dependencies: ["panelHttpServer"],
       async start(resolve) {
@@ -823,7 +820,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   {
     let panelCdpDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
-    container.register({
+    container.registerManaged({
       name: "panelCdp",
       dependencies: ["cdpBridge", "shellPresence"],
       async start(resolve) {
@@ -928,7 +925,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
   {
     let panelTreeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
-    container.register({
+    container.registerManaged({
       name: "panelTree",
       dependencies: ["shellPresence"],
       async start(resolve) {
@@ -954,7 +951,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     });
   }
 
-  container.register({
+  container.registerManaged({
     name: "panelHttpWiring",
     dependencies: ["panelHttpServer", "buildSystem", "rpcServer"],
     async start(resolve) {
@@ -999,7 +996,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   {
     const { handleFsCall } = await import("@natstack/shared/fsService");
     let fsServiceInstance: import("@natstack/shared/fsService").FsService;
-    container.register({
+    container.registerManaged({
       name: "fsRpc",
       dependencies: ["fsService"],
       async start(resolve) {

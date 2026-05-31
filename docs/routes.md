@@ -161,9 +161,13 @@ export function createAuthService(deps): { definition: ServiceDefinition; routes
 }
 ```
 
-Bootstrap wires both through `rpcServiceWithRoutes(...)` in
-`src/server/rpcServiceWithRoutes.ts`. Route concerns stay server-local —
-`@natstack/shared` has no knowledge of routes.
+Bootstrap wires both through `serviceWithHttpRoutes(...)` in
+`src/server/serviceWithHttpRoutes.ts`, registered with
+`container.registerManaged(...)`. That helper registers the RPC `definition`
+on the dispatcher (via the container lifecycle) and the HTTP routes on the
+`RouteRegistry` (via `registerHttpServiceRoutes(...)`) — two distinct
+mechanisms. Route concerns stay server-local — `@natstack/shared` has no
+knowledge of routes.
 
 Handlers receive the raw Node `IncomingMessage` / `ServerResponse`. For
 WebSocket routes, set `websocket: true` and provide an `onUpgrade(req, socket, head, params)`.
@@ -201,7 +205,7 @@ URLs via `getPublicUrl()` / `buildPublicUrl(pathname)` in
 2. `NATSTACK_PUBLIC_URL` env var
 3. Computed fallback: `${protocol}://${externalHost}:${gatewayPort}`
 
-Set `--public-url` (or the env var) to the URL that *users' browsers* use
+Set `--public-url` (or the env var) to the URL that _users' browsers_ use
 to reach the server. It can differ from the server's bind address when a
 reverse proxy or DNS-facing hostname is in front.
 
@@ -209,10 +213,10 @@ reverse proxy or DNS-facing hostname is in front.
 
 The gateway performs pure URL rewrites; workerd's router is untouched.
 
-| Request to gateway | Rewritten upstream path |
-|---|---|
-| `/_r/w/workers/foo/callback` with DO `{ className: "X", objectKey: "s" }` | `/_w/workers/foo/X/s/callback` |
-| `/_r/w/workers/foo/hello` with regular target `foo` | `/foo/hello` |
-| `/_r/s/auth/oauth/callback` | (in-process call into the handler) |
+| Request to gateway                                                        | Rewritten upstream path            |
+| ------------------------------------------------------------------------- | ---------------------------------- |
+| `/_r/w/workers/foo/callback` with DO `{ className: "X", objectKey: "s" }` | `/_w/workers/foo/X/s/callback`     |
+| `/_r/w/workers/foo/hello` with regular target `foo`                       | `/foo/hello`                       |
+| `/_r/s/auth/oauth/callback`                                               | (in-process call into the handler) |
 
 Query strings are preserved on worker rewrites.

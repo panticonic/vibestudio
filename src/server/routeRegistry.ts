@@ -21,7 +21,8 @@
  *   - Worker routes: registered at the end of `createRegularInstance` iff the
  *     instance's name equals the canonical name (= source's last segment),
  *     unregistered in `destroyInstance` for the canonical instance.
- *   - Service routes: registered at bootstrap alongside container.register().
+ *   - HTTP service routes: registered at bootstrap via
+ *     registerHttpServiceRoutes(), alongside container.registerManaged().
  *
  * Gateway consumes `lookup()` to dispatch requests and upgrades; it performs
  * pure URL rewrites for worker routes (to `/_w/...` for DO or `/<instance>/...`
@@ -352,10 +353,15 @@ export class RouteRegistry {
   }
 
   // =========================================================================
-  // Service routes — server-local
+  // HTTP service routes — server-local `/_r/s/<serviceName>/...` routes.
+  //
+  // These are HTTP routes dispatched by the gateway, NOT RPC service
+  // registration (that lives on the ServiceDispatcher). A single service may
+  // both register an RPC definition with the dispatcher and register HTTP
+  // routes here; the two are independent.
   // =========================================================================
 
-  registerService(routes: ServiceRouteDecl[]): void {
+  registerHttpServiceRoutes(routes: ServiceRouteDecl[]): void {
     for (const r of routes) {
       const entry: ServiceRouteEntry = {
         kind: "service",
@@ -382,7 +388,7 @@ export class RouteRegistry {
     }
   }
 
-  unregisterService(serviceName: string): void {
+  unregisterHttpServiceRoutes(serviceName: string): void {
     this.serviceRoutes.delete(serviceName);
   }
 

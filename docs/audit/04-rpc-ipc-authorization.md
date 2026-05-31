@@ -131,16 +131,16 @@ Two separate IPC surfaces:
 
 ## 3. Trust model and where trust is assumed vs enforced
 
-| Assumption | Where it is made | Where it is checked | Result |
-|---|---|---|---|
-| The bearer token only lives in authenticated panel pages and the Electron renderer. | `configLoader.ts` stores it in `sessionStorage`. | Not rechecked anywhere. | Any XSS on any panel page exfiltrates the token and impersonates that caller. |
-| `callerKind` in the `ServiceContext` is always produced by the transport. | `rpcServer.ts handleAuth` uses the token entry. | `dispatcher.dispatch` never re-validates. | In IPC mode, `natstack:serviceCall` passes an attacker-friendly heuristic kind directly to dispatch. |
-| The WS frame has already been authenticated. | `handleMessage` dispatches on `msg.type`. | Yes — any message before `ws:auth` is discarded and the socket is closed. | OK. |
-| The event `fromId` of relayed messages is trustworthy. | Consumers of `ws:routed`/`runtime:*` events treat `fromId` as the origin. | Neither WS nor HTTP relay paths overwrite `fromId` with the caller's id. | Sender can impersonate any other caller on events. |
-| Legacy DO dispatch token envelope is required for DO calls. | Superseded architecture. | Removed from source. | DO calls now use unified RPC target IDs plus the server-owned workerd relay. |
-| The gateway's admin token is opaque to downstream proxies. | `gateway.ts proxyRequest`. | Headers are forwarded verbatim (`gateway.ts:240`). | `Authorization: Bearer <admin>` reaches workerd if a panel/worker route is visited with it. |
-| Only the shell IPC renderer hits `natstack:rpc:send`. | `ipcDispatcher.ts:86`. | No `event.sender.id` check. | In principle any webContents with `preload: "index.cjs"` (the shell preload) bypasses the callerKind heuristic — today only the shell has that preload, so it's a structural invariant, not an enforced one. |
-| Panels can only bind to their own context. | `ensurePanelToken` registers the caller context. | `fs.bindContext` overrides with any string. | Cross-context fs access by pivoting `contextId`. |
+| Assumption                                                                          | Where it is made                                                          | Where it is checked                                                       | Result                                                                                                                                                                                                       |
+| ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The bearer token only lives in authenticated panel pages and the Electron renderer. | `configLoader.ts` stores it in `sessionStorage`.                          | Not rechecked anywhere.                                                   | Any XSS on any panel page exfiltrates the token and impersonates that caller.                                                                                                                                |
+| `callerKind` in the `ServiceContext` is always produced by the transport.           | `rpcServer.ts handleAuth` uses the token entry.                           | `dispatcher.dispatch` never re-validates.                                 | In IPC mode, `natstack:serviceCall` passes an attacker-friendly heuristic kind directly to dispatch.                                                                                                         |
+| The WS frame has already been authenticated.                                        | `handleMessage` dispatches on `msg.type`.                                 | Yes — any message before `ws:auth` is discarded and the socket is closed. | OK.                                                                                                                                                                                                          |
+| The event `fromId` of relayed messages is trustworthy.                              | Consumers of `ws:routed`/`runtime:*` events treat `fromId` as the origin. | Neither WS nor HTTP relay paths overwrite `fromId` with the caller's id.  | Sender can impersonate any other caller on events.                                                                                                                                                           |
+| Legacy DO dispatch token envelope is required for DO calls.                         | Superseded architecture.                                                  | Removed from source.                                                      | DO calls now use unified RPC target IDs plus the server-owned workerd relay.                                                                                                                                 |
+| The gateway's admin token is opaque to downstream proxies.                          | `gateway.ts proxyRequest`.                                                | Headers are forwarded verbatim (`gateway.ts:240`).                        | `Authorization: Bearer <admin>` reaches workerd if a panel/worker route is visited with it.                                                                                                                  |
+| Only the shell IPC renderer hits `natstack:rpc:send`.                               | `ipcDispatcher.ts:86`.                                                    | No `event.sender.id` check.                                               | In principle any webContents with `preload: "index.cjs"` (the shell preload) bypasses the callerKind heuristic — today only the shell has that preload, so it's a structural invariant, not an enforced one. |
+| Panels can only bind to their own context.                                          | `ensurePanelToken` registers the caller context.                          | `fs.bindContext` overrides with any string.                               | Cross-context fs access by pivoting `contextId`.                                                                                                                                                             |
 
 ---
 
@@ -217,6 +217,7 @@ same authenticated RPC relay used by other participants.
   ```
 
   `dispatcher.dispatch` only validates zod args. There is no `checkServiceAccess` call on this path.
+
 - Attack path in Electron mode: sandboxed panel calls `__natstackElectron.serviceCall("menu.X", …)` or `app.relaunch` or `settings.setModelRoles(...)`, or any service declared `{ allowed: ["shell"] }`. Even if the service handler `throw`s on unknown method, reaching the handler means policy was bypassed.
 - Remediation: add `checkServiceAccess(parsed.service, callerKind, dispatcher, parsed.method)` before `dispatcher.dispatch`. Ideally move the check inside `ServiceDispatcher.dispatch` itself so every transport inherits it (WS server can then stop calling it at the handler level).
 
@@ -232,6 +233,7 @@ same authenticated RPC relay used by other participants.
   ```
 
   `handleMessage` uses `callerKind: "shell" as const` for local dispatch and forwards to `serverClient.call` for server services (line 139) with no identity token attached.
+
 - Attack path: any webContents that happens to have the shell preload loaded (currently only the shell, but this is a convention, not an enforcement) can run any service as `shell`. There is no `event.sender.id === shellContents.id` check.
 - Remediation: guard `ipcMain.on("natstack:rpc:send", …)` with `if (event.sender.id !== viewManager.getShellWebContents().id) return;`. Also consider not trusting a bare `"shell"` kind for server-side forwarding — the `serverClient.call` path should attach a bearer token that the server validates as admin/shell.
 
@@ -297,9 +299,19 @@ are routed only by the server-owned workerd relay.
 - Snippet:
 
   ```ts
-  const proxyReq = request({ hostname: "127.0.0.1", port: targetPort, path, method,
-    headers: { ...req.headers, ...(hostHeader ? { host: hostHeader } : {}) } },
-    (proxyRes) => { res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers); proxyRes.pipe(res); });
+  const proxyReq = request(
+    {
+      hostname: "127.0.0.1",
+      port: targetPort,
+      path,
+      method,
+      headers: { ...req.headers, ...(hostHeader ? { host: hostHeader } : {}) },
+    },
+    (proxyRes) => {
+      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers);
+      proxyRes.pipe(res);
+    }
+  );
   ```
 
 - Current code strips `Authorization`, `Cookie`, `Proxy-Authorization`, and `x-natstack-*` before forwarding to workerd, then injects a gateway-scoped workerd bearer. This finding is remediated in the gateway path.
@@ -361,7 +373,9 @@ are routed only by the server-owned workerd relay.
       await credentialStore.remove(params.providerId, params.connectionId);
     } else {
       const creds = await credentialStore.list(params.providerId);
-      for (const cred of creds) { await credentialStore.remove(params.providerId, cred.connectionId); }
+      for (const cred of creds) {
+        await credentialStore.remove(params.providerId, cred.connectionId);
+      }
     }
   }
   ```
@@ -498,6 +512,7 @@ are routed only by the server-owned workerd relay.
 ## 6. Appendix: files reviewed
 
 Bridge/transport core:
+
 - `/home/werg/natstack/packages/rpc/src/types.ts`
 - `/home/werg/natstack/packages/rpc/src/bridge.ts`
 - `/home/werg/natstack/packages/rpc/src/transport-helpers.ts`
@@ -505,6 +520,7 @@ Bridge/transport core:
 - `/home/werg/natstack/packages/rpc/src/bridge.test.ts` (skimmed)
 
 Server RPC:
+
 - `/home/werg/natstack/src/server/rpcServer.ts`
 - `/home/werg/natstack/src/server/wsServerTransport.ts`
 - `/home/werg/natstack/src/server/rpcServer.test.ts`
@@ -512,18 +528,20 @@ Server RPC:
 - `/home/werg/natstack/src/server/workerdRpcRelay.ts`
 
 Gateway / route registry / panel HTTP:
+
 - `/home/werg/natstack/src/server/gateway.ts`
 - `/home/werg/natstack/src/server/routeRegistry.ts`
 - `/home/werg/natstack/src/server/routeRegistry.test.ts` (partial)
 - `/home/werg/natstack/src/server/panelHttpServer.ts`
 - `/home/werg/natstack/src/server/panelHttpServer.test.ts`
-- `/home/werg/natstack/src/server/rpcServiceWithRoutes.ts`
+- `/home/werg/natstack/src/server/serviceWithHttpRoutes.ts`
 - `/home/werg/natstack/src/server/browserTransportEntry.ts`
 - `/home/werg/natstack/src/server/headlessServiceRegistration.ts`
 - `/home/werg/natstack/src/server/panelRuntimeRegistration.ts`
 - `/home/werg/natstack/src/server/configLoader.ts`
 
 Service policy / dispatcher / token manager:
+
 - `/home/werg/natstack/packages/shared/src/servicePolicy.ts`
 - `/home/werg/natstack/packages/shared/src/serviceDispatcher.ts`
 - `/home/werg/natstack/packages/shared/src/serviceDefinition.ts`
@@ -539,6 +557,7 @@ Service policy / dispatcher / token manager:
 - `/home/werg/natstack/src/main/ipc/dbHandlers.test.ts`
 
 Services sampled:
+
 - `/home/werg/natstack/src/server/services/gitService.ts`
 - `/home/werg/natstack/src/server/services/buildService.ts`
 - `/home/werg/natstack/src/server/services/workspaceService.ts`
@@ -558,11 +577,13 @@ Services sampled:
 - Main-service policy headers: `menuService.ts`, `settingsService.ts`, `adblockService.ts`, `appService.ts`, `panelShellService.ts`, `viewService.ts`, `remoteCredService.ts`, `authService.ts`, `browserService.ts`, `browserDataService.ts` (policy lines only).
 
 Electron IPC:
+
 - `/home/werg/natstack/src/main/ipcDispatcher.ts`
 - `/home/werg/natstack/src/main/index.ts` (ipc handler region, lines ~680-860)
 - `/home/werg/natstack/src/main/viewManager.ts` (preload region, lines ~120-260)
 
 Preload / browser transport:
+
 - `/home/werg/natstack/src/preload/ipcTransport.ts`
 - `/home/werg/natstack/src/preload/wsTransport.ts`
 - `/home/werg/natstack/src/preload/panelPreload.ts`

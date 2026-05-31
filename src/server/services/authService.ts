@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { TokenManager } from "@natstack/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
-import type { ServiceWithRoutes } from "../rpcServiceWithRoutes.js";
+import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
 import type { DeviceAuthStore } from "./deviceAuthStore.js";
 import type { ConnectionGrantService } from "@natstack/shared/connectionGrants";
 import type { AuditLog } from "@natstack/shared/credentials/audit";

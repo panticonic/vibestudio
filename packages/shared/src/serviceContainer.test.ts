@@ -5,7 +5,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { ServiceContainer } from "./serviceContainer.js";
 import type { ManagedService } from "./managedService.js";
-import { rpcService } from "./managedService.js";
 
 vi.mock("./devLog.js", () => ({
   createDevLogger: vi.fn().mockReturnValue({
@@ -40,9 +39,11 @@ describe("ServiceContainer", () => {
     const container = new ServiceContainer();
     const order: string[] = [];
 
-    container.register(createService("c", ["a", "b"], "c", { onStart: () => order.push("c") }));
-    container.register(createService("a", [], "a", { onStart: () => order.push("a") }));
-    container.register(createService("b", ["a"], "b", { onStart: () => order.push("b") }));
+    container.registerManaged(
+      createService("c", ["a", "b"], "c", { onStart: () => order.push("c") })
+    );
+    container.registerManaged(createService("a", [], "a", { onStart: () => order.push("a") }));
+    container.registerManaged(createService("b", ["a"], "b", { onStart: () => order.push("b") }));
 
     await container.startAll();
 
@@ -52,8 +53,8 @@ describe("ServiceContainer", () => {
   it("resolves dependency instances in start()", async () => {
     const container = new ServiceContainer();
 
-    container.register(createService("db", [], { connection: "sqlite" }));
-    container.register({
+    container.registerManaged(createService("db", [], { connection: "sqlite" }));
+    container.registerManaged({
       name: "repo",
       dependencies: ["db"],
       start: vi.fn(async (resolve: <D>(name: string) => D) => {
@@ -71,9 +72,9 @@ describe("ServiceContainer", () => {
     const container = new ServiceContainer();
     const order: string[] = [];
 
-    container.register(createService("a", [], "a", { onStop: () => order.push("a") }));
-    container.register(createService("b", ["a"], "b", { onStop: () => order.push("b") }));
-    container.register(createService("c", ["b"], "c", { onStop: () => order.push("c") }));
+    container.registerManaged(createService("a", [], "a", { onStop: () => order.push("a") }));
+    container.registerManaged(createService("b", ["a"], "b", { onStop: () => order.push("b") }));
+    container.registerManaged(createService("c", ["b"], "c", { onStop: () => order.push("c") }));
 
     await container.startAll();
     await container.stopAll();
@@ -85,11 +86,13 @@ describe("ServiceContainer", () => {
     const container = new ServiceContainer();
     const stopped: string[] = [];
 
-    container.register(createService("a", [], "a", { onStop: () => stopped.push("a") }));
-    container.register({
+    container.registerManaged(createService("a", [], "a", { onStop: () => stopped.push("a") }));
+    container.registerManaged({
       name: "b",
       dependencies: ["a"],
-      start: vi.fn(async () => { throw new Error("boom"); }),
+      start: vi.fn(async () => {
+        throw new Error("boom");
+      }),
       stop: vi.fn(),
     });
 
@@ -100,8 +103,8 @@ describe("ServiceContainer", () => {
   it("detects dependency cycles", async () => {
     const container = new ServiceContainer();
 
-    container.register(createService("a", ["b"]));
-    container.register(createService("b", ["a"]));
+    container.registerManaged(createService("a", ["b"]));
+    container.registerManaged(createService("b", ["a"]));
 
     await expect(container.startAll()).rejects.toThrow(/cycle/i);
   });
@@ -109,7 +112,7 @@ describe("ServiceContainer", () => {
   it("detects missing dependencies", async () => {
     const container = new ServiceContainer();
 
-    container.register(createService("a", ["missing"]));
+    container.registerManaged(createService("a", ["missing"]));
 
     await expect(container.startAll()).rejects.toThrow(/missing/i);
   });
@@ -117,13 +120,13 @@ describe("ServiceContainer", () => {
   it("throws on duplicate registration", () => {
     const container = new ServiceContainer();
 
-    container.register(createService("a"));
-    expect(() => container.register(createService("a"))).toThrow(/already registered/);
+    container.registerManaged(createService("a"));
+    expect(() => container.registerManaged(createService("a"))).toThrow(/already registered/);
   });
 
   it("get() throws for unknown services", async () => {
     const container = new ServiceContainer();
-    container.register(createService("a"));
+    container.registerManaged(createService("a"));
     await container.startAll();
 
     expect(() => container.get("unknown")).toThrow(/not available/);
@@ -131,7 +134,7 @@ describe("ServiceContainer", () => {
 
   it("has() returns correct values", async () => {
     const container = new ServiceContainer();
-    container.register(createService("a"));
+    container.registerManaged(createService("a"));
     await container.startAll();
 
     expect(container.has("a")).toBe(true);
@@ -143,8 +146,13 @@ describe("ServiceContainer", () => {
     const dispatcher = { registerService } as any;
     const container = new ServiceContainer(dispatcher);
 
-    const serviceDef = { name: "myRpc", methods: {}, handler: vi.fn(), policy: { allowed: ["shell" as const] } };
-    container.register({
+    const serviceDef = {
+      name: "myRpc",
+      methods: {},
+      handler: vi.fn(),
+      policy: { allowed: ["shell" as const] },
+    };
+    container.registerManaged({
       name: "a",
       start: vi.fn(async () => "a"),
       getServiceDefinition: () => serviceDef,
@@ -160,7 +168,7 @@ describe("ServiceContainer", () => {
     const dispatcher = { registerService } as any;
     const container = new ServiceContainer(dispatcher);
 
-    container.register(createService("a"));
+    container.registerManaged(createService("a"));
     await container.startAll();
 
     expect(registerService).not.toHaveBeenCalled();
@@ -169,10 +177,10 @@ describe("ServiceContainer", () => {
   it("works without a dispatcher", async () => {
     const container = new ServiceContainer();
 
-    container.register({
+    container.registerManaged({
       name: "a",
       start: vi.fn(async () => "a"),
-      getServiceDefinition: () => ({ name: "rpc", methods: {}, handler: vi.fn() } as any),
+      getServiceDefinition: () => ({ name: "rpc", methods: {}, handler: vi.fn() }) as any,
     });
 
     await container.startAll();
@@ -184,8 +192,13 @@ describe("ServiceContainer", () => {
     const dispatcher = { registerService } as any;
     const container = new ServiceContainer(dispatcher);
 
-    const serviceDef = { name: "myRpc", methods: {}, handler: vi.fn(), policy: { allowed: ["shell" as const] } };
-    container.register({
+    const serviceDef = {
+      name: "myRpc",
+      methods: {},
+      handler: vi.fn(),
+      policy: { allowed: ["shell" as const] },
+    };
+    container.registerManaged({
       name: "noStart",
       getServiceDefinition: () => serviceDef,
     });
@@ -201,8 +214,8 @@ describe("ServiceContainer", () => {
     const container = new ServiceContainer();
     const order: string[] = [];
 
-    container.register(createService("a", [], "a", { onStart: () => order.push("a") }));
-    container.register({
+    container.registerManaged(createService("a", [], "a", { onStart: () => order.push("a") }));
+    container.registerManaged({
       name: "b",
       optionalDependencies: ["a"],
       start: vi.fn(async (resolve: <D>(name: string, optional?: boolean) => D | undefined) => {
@@ -224,7 +237,7 @@ describe("ServiceContainer", () => {
     const container = new ServiceContainer();
     const order: string[] = [];
 
-    container.register({
+    container.registerManaged({
       name: "b",
       optionalDependencies: ["a"],
       start: vi.fn(async (resolve: <D>(name: string, optional?: boolean) => D | undefined) => {
@@ -245,11 +258,13 @@ describe("ServiceContainer", () => {
   it("clears instances after partial startup failure", async () => {
     const container = new ServiceContainer();
 
-    container.register(createService("a", [], "a-value"));
-    container.register({
+    container.registerManaged(createService("a", [], "a-value"));
+    container.registerManaged({
       name: "b",
       dependencies: ["a"],
-      start: vi.fn(async () => { throw new Error("boom"); }),
+      start: vi.fn(async () => {
+        throw new Error("boom");
+      }),
     });
 
     await expect(container.startAll()).rejects.toThrow("boom");
@@ -261,10 +276,12 @@ describe("ServiceContainer", () => {
     const container = new ServiceContainer();
     const stoppedInstances: unknown[] = [];
 
-    container.register({
+    container.registerManaged({
       name: "a",
       start: vi.fn(async () => ({ id: "instance-a" })),
-      stop: vi.fn(async (instance: unknown) => { stoppedInstances.push(instance); }),
+      stop: vi.fn(async (instance: unknown) => {
+        stoppedInstances.push(instance);
+      }),
     });
 
     await container.startAll();
@@ -273,22 +290,22 @@ describe("ServiceContainer", () => {
     expect(stoppedInstances).toEqual([{ id: "instance-a" }]);
   });
 
-  it("rpcService() creates a definition-only ManagedService", async () => {
+  it("registerRpc() registers the RPC definition with the dispatcher", async () => {
     const registerService = vi.fn();
     const dispatcher = { registerService } as any;
     const container = new ServiceContainer(dispatcher);
 
-    const def = { name: "events", methods: {}, handler: vi.fn(), policy: { allowed: ["shell" as const] } };
-    const service = rpcService(def, ["db"]);
+    const def = {
+      name: "events",
+      methods: {},
+      handler: vi.fn(),
+      policy: { allowed: ["shell" as const] },
+    };
 
-    expect(service.name).toBe("events");
-    expect(service.dependencies).toEqual(["db"]);
-    expect(service.start).toBeUndefined();
-    expect(service.getServiceDefinition!()).toBe(def);
-
-    // Works in container with dependency
-    container.register(createService("db"));
-    container.register(service);
+    // registerRpc orders the service after its declared dependency and
+    // auto-registers the definition on the dispatcher at startAll() time.
+    container.registerManaged(createService("db"));
+    container.registerRpc(def, ["db"]);
     await container.startAll();
 
     expect(container.has("events")).toBe(true);

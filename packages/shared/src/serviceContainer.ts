@@ -10,6 +10,7 @@
  */
 
 import type { ManagedService } from "./managedService.js";
+import type { ServiceDefinition } from "./serviceDefinition.js";
 import type { ServiceDispatcher } from "./serviceDispatcher.js";
 import { createDevLogger } from "@natstack/dev-log";
 
@@ -27,9 +28,13 @@ export class ServiceContainer {
   }
 
   /**
-   * Register a service. Must be called before startAll().
+   * Register a managed service with explicit lifecycle hooks (start/stop) and/or
+   * declared dependencies. Must be called before startAll().
+   *
+   * Use this for services that need lifecycle management or dependency ordering.
+   * For a plain RPC service definition with no lifecycle, prefer registerRpc().
    */
-  register(service: ManagedService): void {
+  registerManaged(service: ManagedService): void {
     if (this.started) {
       throw new Error(`Cannot register service "${service.name}" after container has started`);
     }
@@ -37,6 +42,22 @@ export class ServiceContainer {
       throw new Error(`Service "${service.name}" is already registered`);
     }
     this.services.set(service.name, service);
+  }
+
+  /**
+   * Register a plain RPC service from a ServiceDefinition. The definition is
+   * registered on the dispatcher when the container starts (see startAll()).
+   *
+   * This is the common case: a service that only exposes RPC methods and needs
+   * no start/stop lifecycle. Pass `deps` to order it after other services.
+   * For lifecycle hooks, use registerManaged() with a full ManagedService.
+   */
+  registerRpc(definition: ServiceDefinition, deps?: string[]): void {
+    this.registerManaged({
+      name: definition.name,
+      dependencies: deps,
+      getServiceDefinition: () => definition,
+    });
   }
 
   /**

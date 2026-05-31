@@ -100,7 +100,6 @@ import {
 // in entry points per the boundary rule (no static module-level imports).
 import { z } from "zod";
 import { ServiceContainer } from "@natstack/shared/serviceContainer";
-import { rpcService } from "@natstack/shared/managedService";
 import { createEventsServiceDefinition } from "@natstack/shared/eventsService";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
@@ -1451,63 +1450,53 @@ app.on("ready", async () => {
     const { serverClient: sc } = conn;
 
     // Shell-only services
-    electronContainer.register(
-      rpcService(
-        createAppService({
-          panelOrchestrator,
-          serverClient: sc,
-          getViewManager,
-          getAppOrchestrator: () => appOrchestrator,
-          connectionMode: startupMode.kind === "remote" ? "remote" : "local",
-          remoteHost: startupMode.kind === "remote" ? startupMode.remoteUrl.hostname : undefined,
-        })
-      )
+    electronContainer.registerRpc(
+      createAppService({
+        panelOrchestrator,
+        serverClient: sc,
+        getViewManager,
+        getAppOrchestrator: () => appOrchestrator,
+        connectionMode: startupMode.kind === "remote" ? "remote" : "local",
+        remoteHost: startupMode.kind === "remote" ? startupMode.remoteUrl.hostname : undefined,
+      })
     );
-    electronContainer.register(
-      rpcService(
-        createPanelShellService({
-          panelOrchestrator,
-          panelRegistry,
-          get panelView(): PanelView {
-            return getPanelView();
-          },
-          getViewManager,
-          serverClient: sc,
-        })
-      )
+    electronContainer.registerRpc(
+      createPanelShellService({
+        panelOrchestrator,
+        panelRegistry,
+        get panelView(): PanelView {
+          return getPanelView();
+        },
+        getViewManager,
+        serverClient: sc,
+      })
     );
-    electronContainer.register(rpcService(createViewService({ getViewManager })));
-    electronContainer.register(
-      rpcService(
-        createMenuService({
-          panelOrchestrator,
-          panelRegistry,
-          getViewManager,
-          serverClient: sc,
-        })
-      )
+    electronContainer.registerRpc(createViewService({ getViewManager }));
+    electronContainer.registerRpc(
+      createMenuService({
+        panelOrchestrator,
+        panelRegistry,
+        getViewManager,
+        serverClient: sc,
+      })
     );
-    electronContainer.register(
-      rpcService(createNotificationService({ eventService, getViewManager }))
-    );
+    electronContainer.registerRpc(createNotificationService({ eventService, getViewManager }));
     // Workspace operations live entirely on the server now (single source of
     // truth, accessible to panels/workers/shell). The shell renderer's
     // `workspace.*` calls reach the server by default because only true
     // Electron-local services are routed here. Workspace.select (relaunch) is
     // signalled from the server back to Electron main via
     // ServerProcessManager.onRelaunch (wired in serverSession.ts).
-    electronContainer.register(
-      rpcService(createSettingsService({ serverClient: sc, getViewManager }))
-    );
+    electronContainer.registerRpc(createSettingsService({ serverClient: sc, getViewManager }));
     const { createRemoteCredService } = await import("./services/remoteCredService.js");
-    electronContainer.register(
-      rpcService(createRemoteCredService({ startupMode, getServerClient: () => serverClientRef }))
+    electronContainer.registerRpc(
+      createRemoteCredService({ startupMode, getServerClient: () => serverClientRef })
     );
-    electronContainer.register(rpcService(createAdblockService({ adBlockManager })));
+    electronContainer.registerRpc(createAdblockService({ adBlockManager }));
     // Browser-data persistence lives on the server; Electron keeps only the
     // host-bound autofill adapter.
     {
-      electronContainer.register({
+      electronContainer.registerManaged({
         name: "browser-data-host",
         async start() {
           const browserDataClient = createBrowserDataRpcClient(sc);
@@ -1529,7 +1518,7 @@ app.on("ready", async () => {
         },
       });
       const { createBrowserSessionSyncService } = await import("./services/browserSessionSync.js");
-      electronContainer.register(
+      electronContainer.registerManaged(
         createBrowserSessionSyncService({
           eventService,
           serverClient: sc,
@@ -1539,23 +1528,21 @@ app.on("ready", async () => {
     }
 
     // Register autofill service (uses lazy resolution since autofillManager is created in browser-data start)
-    electronContainer.register(
-      rpcService({
-        name: "autofill",
-        description: "Password autofill management",
-        policy: { allowed: ["shell"] },
-        methods: {
-          confirmSave: {
-            args: z.tuple([z.string(), z.enum(["save", "never", "dismiss"])]),
-          },
+    electronContainer.registerRpc({
+      name: "autofill",
+      description: "Password autofill management",
+      policy: { allowed: ["shell"] },
+      methods: {
+        confirmSave: {
+          args: z.tuple([z.string(), z.enum(["save", "never", "dismiss"])]),
         },
-        handler: async (_ctx, method, args) => {
-          if (!autofillManager) throw new Error("Autofill not initialized");
-          const def = autofillManager.getServiceDefinition();
-          return def.handler(_ctx, method, args);
-        },
-      })
-    );
+      },
+      handler: async (_ctx, method, args) => {
+        if (!autofillManager) throw new Error("Autofill not initialized");
+        const def = autofillManager.getServiceDefinition();
+        return def.handler(_ctx, method, args);
+      },
+    });
     // Events service — local subscription on main's EventService plus a
     // bridge-owned server subscription. Main owns the remote subscription set:
     // renderer unmount/remount churn can remove local listeners, but it must
@@ -1572,24 +1559,22 @@ app.on("ready", async () => {
         const viewInfo = viewManager?.getViewInfo(caller.runtime.id);
         return viewInfo?.type === "app" && viewInfo.capabilities.includes("panel-hosting");
       };
-      electronContainer.register(
-        rpcService({
-          ...baseEventsService,
-          handler: async (ctx, method, args) => {
-            const result = await baseEventsService.handler(ctx, method, args);
-            if (!shouldForwardServerEvents(ctx.caller)) return result;
+      electronContainer.registerRpc({
+        ...baseEventsService,
+        handler: async (ctx, method, args) => {
+          const result = await baseEventsService.handler(ctx, method, args);
+          if (!shouldForwardServerEvents(ctx.caller)) return result;
 
-            if (method === "subscribe") {
-              serverEventSubscriptions.add(args[0] as EventName);
-            } else if (method === "unsubscribe") {
-              serverEventSubscriptions.delete(args[0] as EventName);
-            } else if (method === "unsubscribeAll") {
-              serverEventSubscriptions.clear();
-            }
-            return result;
-          },
-        })
-      );
+          if (method === "subscribe") {
+            serverEventSubscriptions.add(args[0] as EventName);
+          } else if (method === "unsubscribe") {
+            serverEventSubscriptions.delete(args[0] as EventName);
+          } else if (method === "unsubscribeAll") {
+            serverEventSubscriptions.clear();
+          }
+          return result;
+        },
+      });
     }
 
     await electronContainer.startAll();

@@ -35,19 +35,9 @@ export interface ManagedService<T = unknown> {
 
   /**
    * Optional RPC service definition to register on the dispatcher.
-   * If provided, registered after start() completes.
+   * If provided, the definition is registered on the ServiceDispatcher after
+   * start() completes. This is RPC registration only — HTTP `/_r/s/...` routes
+   * are a separate concern handled server-side (see serviceWithHttpRoutes).
    */
   getServiceDefinition?(): ServiceDefinition;
-}
-
-/**
- * Create a ManagedService from a ServiceDefinition.
- * For services that only need RPC registration without lifecycle.
- */
-export function rpcService(def: ServiceDefinition, deps?: string[]): ManagedService {
-  return {
-    name: def.name,
-    dependencies: deps,
-    getServiceDefinition: () => def,
-  };
 }

@@ -141,7 +141,7 @@ describe("auth service device credentials", () => {
         ],
       }),
     });
-    routeRegistry.registerService(authService.routes ?? []);
+    routeRegistry.registerHttpServiceRoutes(authService.routes ?? []);
     gateway = new Gateway({
       externalHost: "127.0.0.1",
       bindHost: "127.0.0.1",
@@ -465,7 +465,7 @@ describe("auth service pairing invite flow", () => {
     });
     dispatcher.registerService(authService.definition);
     dispatcher.markInitialized();
-    routeRegistry.registerService(authService.routes ?? []);
+    routeRegistry.registerHttpServiceRoutes(authService.routes ?? []);
     const rpcServer = new RpcServer({ tokenManager, dispatcher, entityCache });
     rpcServer.initHandlers();
     const gateway = new Gateway({

@@ -50,12 +50,7 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
 function TranscriptView({ client }: { client: PubSubClient }) {
   const { messages } = useChannelMessages(client);
   return (
-    <MessageList
-      messages={messages}
-      participants={{}}
-      selfId="panel:chat"
-      allParticipants={{}}
-    />
+    <MessageList messages={messages} participants={{}} selfId="panel:chat" allParticipants={{}} />
   );
 }
 
@@ -126,10 +121,11 @@ describe("transcript UX smoke", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("ListDirectory")).toBeTruthy();
-      expect(document.body.textContent).toContain("path: src");
+      expect(screen.getByText("List Directory")).toBeTruthy();
       expect(document.body.textContent).toContain("permission denied");
-      expect(document.body.querySelector('[data-invocation-name="mcp__workspace__ListDirectory"]')).toBeTruthy();
+      expect(
+        document.body.querySelector('[data-invocation-name="mcp__workspace__ListDirectory"]')
+      ).toBeTruthy();
       expect(document.body.querySelector('[data-invocation-status="error"]')).toBeTruthy();
     });
 

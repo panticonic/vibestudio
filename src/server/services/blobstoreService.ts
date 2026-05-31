@@ -10,7 +10,7 @@ import { createDevLogger } from "@natstack/dev-log";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ServicePolicy } from "@natstack/shared/servicePolicy";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
-import type { ServiceWithRoutes } from "../rpcServiceWithRoutes.js";
+import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
 import { assertPresent } from "../../lintHelpers";
 
 const log = createDevLogger("BlobstoreService");

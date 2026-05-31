@@ -1,12 +1,17 @@
 /**
- * `rpcServiceWithRoutes` — ManagedService adapter for the `{ definition,
- * routes? }` factory shape (Phase 1.3 convention).
+ * `serviceWithHttpRoutes` — ManagedService adapter for service factories that
+ * expose both an RPC `ServiceDefinition` and HTTP `/_r/s/...` routes.
  *
  * Server-local because route concerns don't belong in `@natstack/shared`.
- * Factories that need to expose HTTP routes (currently only auth's OAuth
- * callback; more later) return the pair; bootstrap wraps it with this helper
- * so the service definition lands on the dispatcher AND routes land on the
- * registry in one declaration.
+ * Factories that need to expose HTTP routes (auth's OAuth callback, blobstore,
+ * credentials; more later) return the `{ definition, routes? }` pair; bootstrap
+ * wraps it with this helper so the RPC definition lands on the dispatcher (via
+ * the container lifecycle) AND the HTTP routes land on the route registry in
+ * one `container.registerManaged(...)` declaration.
+ *
+ * RPC vs HTTP route: the `definition` is registered as an RPC service on the
+ * ServiceDispatcher; the `routes` are registered as HTTP `/_r/s/<name>/...`
+ * routes on the RouteRegistry. These are two distinct mechanisms.
  *
  * Failure semantics: `stop()` unregisters routes, but only runs on clean
  * shutdown (container.stopAll). On crash / SIGKILL the registry entries go
@@ -33,27 +38,32 @@ export interface ServiceWithRoutes {
 /**
  * Turn a `{ definition, routes? }` factory output into a ManagedService that
  * registers the RPC definition on the dispatcher (via the container) and the
- * routes on the shared route registry. Route registration runs at
- * `container.startAll()` time, unregistration in `stop()`.
+ * HTTP routes on the shared route registry. HTTP routes are registered only
+ * when `routes.length > 0`. Route registration runs at `container.startAll()`
+ * time, unregistration in `stop()`.
+ *
+ * Register the returned service with `container.registerManaged(...)`.
  */
-export function rpcServiceWithRoutes(
+export function serviceWithHttpRoutes(
   pair: ServiceWithRoutes,
   routeRegistry: RouteRegistry,
   deps?: string[]
 ): ManagedService {
   const serviceName = pair.definition.name;
+  const routes = pair.routes ?? [];
+  const hasRoutes = routes.length > 0;
   return {
     name: serviceName,
     dependencies: deps,
     async start() {
       await pair.start?.();
-      if (pair.routes && pair.routes.length > 0) {
-        routeRegistry.registerService(pair.routes);
+      if (hasRoutes) {
+        routeRegistry.registerHttpServiceRoutes(routes);
       }
     },
     async stop() {
-      if (pair.routes && pair.routes.length > 0) {
-        routeRegistry.unregisterService(serviceName);
+      if (hasRoutes) {
+        routeRegistry.unregisterHttpServiceRoutes(serviceName);
       }
       await pair.stop?.();
     },

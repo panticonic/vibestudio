@@ -464,7 +464,6 @@ async function main() {
   const eventService = new EventService();
   const { RpcServer } = await import("./rpcServer.js");
   const { ServiceContainer } = await import("@natstack/shared/serviceContainer");
-  const { rpcService } = await import("@natstack/shared/managedService");
   const { initBuildSystemV2 } = await import("./buildV2/index.js");
 
   loadCentralEnv();
@@ -854,13 +853,13 @@ async function main() {
   // ── Lifecycle services ──
 
   // Foundation: pre-created instances wrapped for container participation
-  container.register({
+  container.registerManaged({
     name: "tokenManager",
     async start() {
       return tokenManager;
     },
   });
-  container.register({
+  container.registerManaged({
     name: "gitServer",
     async start() {
       await gitServer.init();
@@ -870,7 +869,7 @@ async function main() {
   });
 
   // Build system
-  container.register({
+  container.registerManaged({
     name: "buildSystem",
     async start() {
       return await initBuildSystemV2(
@@ -886,7 +885,7 @@ async function main() {
   });
 
   // Git watcher
-  container.register({
+  container.registerManaged({
     name: "gitWatcher",
     dependencies: ["gitServer"],
     async start() {
@@ -923,7 +922,7 @@ async function main() {
 
   {
     let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
-    container.register({
+    container.registerManaged({
       name: "build",
       dependencies: ["buildSystem"],
       start: async (resolve) => {
@@ -937,13 +936,13 @@ async function main() {
     });
   }
   const presence = createPresenceTracker({ eventService });
-  container.register(rpcService(createPresenceService({ presence })));
-  container.register(rpcService(createModelCatalogService()));
+  container.registerRpc(createPresenceService({ presence }));
+  container.registerRpc(createModelCatalogService());
 
   {
     let tokensDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
       null;
-    container.register({
+    container.registerManaged({
       name: "tokens",
       dependencies: ["tokenManager", "fsService"],
       async start() {
@@ -965,23 +964,21 @@ async function main() {
       },
     });
   }
-  container.register(
-    rpcService(
-      createGitService({
-        gitServer,
-        tokenManager,
-        workspacePath,
-        workspaceConfig,
-        contextFolderManager,
-        egressProxy,
-        approvalQueue,
-        grantStore: capabilityGrantStore,
-      }),
-      ["gitServer"]
-    )
+  container.registerRpc(
+    createGitService({
+      gitServer,
+      tokenManager,
+      workspacePath,
+      workspaceConfig,
+      contextFolderManager,
+      egressProxy,
+      approvalQueue,
+      grantStore: capabilityGrantStore,
+    }),
+    ["gitServer"]
   );
-  container.register(
-    rpcService(createTestService({ contextFolderManager, workspacePath, panelTestSetupPath }))
+  container.registerRpc(
+    createTestService({ contextFolderManager, workspacePath, panelTestSetupPath })
   );
   const runtimeDiagnostics = new RuntimeDiagnosticsStore({ statePath });
   // Per-worker-source ring buffer feeding `workspace.units.logs`. Same shape
@@ -1001,81 +998,75 @@ async function main() {
   };
   {
     const { createWorkerLogService } = await import("./services/workerLogService.js");
-    container.register(
-      rpcService(
-        createWorkerLogService({
-          onLog: (entry) => {
-            if (!entry.source) return;
-            const record: import("./services/workspaceService.js").WorkspaceUnitLogRecord = {
-              workspaceId: workspace.config.id,
-              unitName: entry.source,
-              kind: "worker",
-              timestamp: entry.timestamp,
-              level: entry.level,
-              message: entry.message,
-              source: "console",
-            };
-            runtimeDiagnostics.record({
-              workspaceId: workspace.config.id,
-              entityId: entry.callerId,
-              kind: entry.callerId.startsWith("do:") ? "do" : "worker",
-              timestamp: entry.timestamp,
-              level: entry.level === "warn" ? "warn" : entry.level,
-              message: entry.message,
-              source: "console",
-              fields: entry.source ? { source: entry.source } : undefined,
-            });
-            runtimeDiagnostics.record({
-              workspaceId: workspace.config.id,
-              entityId: entry.source,
-              kind: "worker",
-              timestamp: entry.timestamp,
-              level: entry.level === "warn" ? "warn" : entry.level,
-              message: entry.message,
-              source: "console",
-              fields: { callerId: entry.callerId },
-            });
-            workerUnitLogsAppend(entry.source, record);
-            eventService.emit("workspace:unit-log", record);
-          },
-        })
-      )
-    );
-  }
-  container.register(
-    rpcService(
-      createEventsServiceDefinition(eventService, {
-        snapshots: {
-          "shell-approval:pending-changed": () => ({ pending: approvalQueue.listPending() }),
+    container.registerRpc(
+      createWorkerLogService({
+        onLog: (entry) => {
+          if (!entry.source) return;
+          const record: import("./services/workspaceService.js").WorkspaceUnitLogRecord = {
+            workspaceId: workspace.config.id,
+            unitName: entry.source,
+            kind: "worker",
+            timestamp: entry.timestamp,
+            level: entry.level,
+            message: entry.message,
+            source: "console",
+          };
+          runtimeDiagnostics.record({
+            workspaceId: workspace.config.id,
+            entityId: entry.callerId,
+            kind: entry.callerId.startsWith("do:") ? "do" : "worker",
+            timestamp: entry.timestamp,
+            level: entry.level === "warn" ? "warn" : entry.level,
+            message: entry.message,
+            source: "console",
+            fields: entry.source ? { source: entry.source } : undefined,
+          });
+          runtimeDiagnostics.record({
+            workspaceId: workspace.config.id,
+            entityId: entry.source,
+            kind: "worker",
+            timestamp: entry.timestamp,
+            level: entry.level === "warn" ? "warn" : entry.level,
+            message: entry.message,
+            source: "console",
+            fields: { callerId: entry.callerId },
+          });
+          workerUnitLogsAppend(entry.source, record);
+          eventService.emit("workspace:unit-log", record);
         },
       })
-    )
+    );
+  }
+  container.registerRpc(
+    createEventsServiceDefinition(eventService, {
+      snapshots: {
+        "shell-approval:pending-changed": () => ({ pending: approvalQueue.listPending() }),
+      },
+    })
   );
 
   // ── Approval-gated host capabilities ──
   {
     const { createExternalOpenService } = await import("./services/externalOpenService.js");
-    container.register(
-      rpcService(
-        createExternalOpenService({
-          eventService,
-          approvalQueue,
-          grantStore: capabilityGrantStore,
-        })
-      )
+    container.registerRpc(
+      createExternalOpenService({
+        eventService,
+        approvalQueue,
+        grantStore: capabilityGrantStore,
+      })
     );
   }
 
   // ── Notification service ──
   const { createNotificationService } = await import("./services/notificationService.js");
   const notificationResult = createNotificationService({ eventService });
-  container.register(rpcService(notificationResult.definition));
+  container.registerRpc(notificationResult.definition);
 
   // ── Push + shell presence services ──
   {
     const { createPushService } = await import("./services/pushService.js");
     const pushResult = createPushService();
-    container.register({
+    container.registerManaged({
       name: "push",
       start: async () => pushResult,
       getServiceDefinition: () => pushResult.definition,
@@ -1084,7 +1075,7 @@ async function main() {
   {
     const { createShellPresenceService } = await import("./services/shellPresenceService.js");
     const shellPresenceResult = createShellPresenceService();
-    container.register({
+    container.registerManaged({
       name: "shellPresence",
       start: async () => shellPresenceResult,
       getServiceDefinition: () => shellPresenceResult.definition,
@@ -1092,7 +1083,7 @@ async function main() {
   }
   {
     const { createApprovalPushBridge } = await import("./services/approvalPushBridge.js");
-    container.register({
+    container.registerManaged({
       name: "approvalPushBridge",
       dependencies: ["push", "shellPresence"],
       start: async (resolve) => {
@@ -1118,30 +1109,26 @@ async function main() {
 
   // ── Shell approval service (consent bar queue) ──
   const { createShellApprovalService } = await import("./services/shellApprovalService.js");
-  container.register(rpcService(createShellApprovalService({ approvalQueue })));
+  container.registerRpc(createShellApprovalService({ approvalQueue }));
   const { createCorsApprovalService } = await import("./services/corsApprovalService.js");
-  container.register(
-    rpcService(
-      createCorsApprovalService({
-        approvalQueue,
-        grantStore: capabilityGrantStore,
-      })
-    )
+  container.registerRpc(
+    createCorsApprovalService({
+      approvalQueue,
+      grantStore: capabilityGrantStore,
+    })
   );
   const { createUserlandApprovalService } = await import("./services/userlandApprovalService.js");
-  container.register(
-    rpcService(
-      createUserlandApprovalService({
-        approvalQueue,
-        grantStore: userlandApprovalGrantStore,
-      })
-    )
+  container.registerRpc(
+    createUserlandApprovalService({
+      approvalQueue,
+      grantStore: userlandApprovalGrantStore,
+    })
   );
 
   // ── Credential service ──
   {
     const { createCredentialService } = await import("./services/credentialService.js");
-    const { rpcServiceWithRoutes } = await import("./rpcServiceWithRoutes.js");
+    const { serviceWithHttpRoutes } = await import("./serviceWithHttpRoutes.js");
     const captureSessionCredential = async <T extends Record<string, unknown>>(
       payload: Record<string, unknown>
     ): Promise<T> => {
@@ -1232,8 +1219,8 @@ async function main() {
     }) as ReturnType<typeof createCredentialService> & {
       routes?: import("./routeRegistry.js").ServiceRouteDecl[];
     };
-    container.register(
-      rpcServiceWithRoutes(
+    container.registerManaged(
+      serviceWithHttpRoutes(
         {
           definition: credentialService,
           routes: credentialService.routes,
@@ -1248,7 +1235,7 @@ async function main() {
     const { createScopeService } = await import("./services/scopeService.js");
     let scopeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
       null;
-    container.register({
+    container.registerManaged({
       name: "scope",
       dependencies: ["doDispatch"],
       async start(resolve) {
@@ -1271,7 +1258,7 @@ async function main() {
     let workspaceStateDefinition:
       | import("@natstack/shared/serviceDefinition").ServiceDefinition
       | null = null;
-    container.register({
+    container.registerManaged({
       name: "workspace-state",
       dependencies: ["doDispatch"],
       async start(resolve) {
@@ -1312,7 +1299,7 @@ async function main() {
     const { createRuntimeService } = await import("./services/runtimeService.js");
     let runtimeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
       null;
-    container.register({
+    container.registerManaged({
       name: "runtime",
       dependencies: ["doDispatch", "workerdManager", "buildSystem"],
       async start(resolve) {
@@ -1371,7 +1358,7 @@ async function main() {
   {
     const { createWebhookIngressService } = await import("./services/webhookIngressService.js");
     let webhookIngress: ReturnType<typeof createWebhookIngressService> | null = null;
-    container.register({
+    container.registerManaged({
       name: "webhookIngress",
       dependencies: ["rpcServer"],
       async start(resolve) {
@@ -1394,12 +1381,12 @@ async function main() {
           },
         });
         if (webhookIngress.routes.length > 0) {
-          routeRegistry.registerService(webhookIngress.routes);
+          routeRegistry.registerHttpServiceRoutes(webhookIngress.routes);
         }
         return webhookIngress;
       },
       async stop() {
-        routeRegistry.unregisterService("webhookIngress");
+        routeRegistry.unregisterHttpServiceRoutes("webhookIngress");
       },
       getServiceDefinition() {
         if (!webhookIngress) throw new Error("webhookIngress service not initialized");
@@ -1447,7 +1434,7 @@ async function main() {
   // ── RPC server (always present) ──
   let rpcServerForGateway: import("./rpcServer.js").RpcServer | null = null;
 
-  container.register({
+  container.registerManaged({
     name: "rpcServer",
     dependencies: ["tokenManager", "fsService"],
     async start(resolve) {
@@ -1477,7 +1464,7 @@ async function main() {
   {
     const { createPanelRuntimeService } = await import("./services/panelRuntimeService.js");
     let panelRuntimeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition;
-    container.register({
+    container.registerManaged({
       name: "panelRuntime",
       async start() {
         panelRuntimeDefinition = createPanelRuntimeService({
@@ -1493,7 +1480,7 @@ async function main() {
   }
 
   // ── Extension host RPC service ──
-  container.register({
+  container.registerManaged({
     name: "extensionHost",
     dependencies: ["buildSystem", "tokenManager"],
     async start(resolve) {
@@ -1566,7 +1553,7 @@ async function main() {
   // ── Workers RPC service ──
 
   // ── App host (workspace-owned privileged frontend apps) ──
-  container.register({
+  container.registerManaged({
     name: "appHost",
     dependencies: ["buildSystem"],
     async start(resolve) {
@@ -1603,7 +1590,7 @@ async function main() {
 
   {
     let workerServiceDef: import("@natstack/shared/serviceDefinition").ServiceDefinition;
-    container.register({
+    container.registerManaged({
       name: "workersRpc",
       dependencies: ["buildSystem", "workerdManager", "doDispatch"],
       async start(resolve) {
@@ -1676,7 +1663,7 @@ async function main() {
   // the main process has its OWN FsService for panel-facing FS RPC)
   {
     const { FsService } = await import("@natstack/shared/fsService");
-    container.register({
+    container.registerManaged({
       name: "fsService",
       async start() {
         return new FsService(contextFolderManager, entityCache);
@@ -1692,7 +1679,7 @@ async function main() {
   {
     let workerdManagerInstance: import("./workerdManager.js").WorkerdManager | null = null;
     let buildSystemForWorkerd: import("./buildV2/index.js").BuildSystemV2 | null = null;
-    container.register({
+    container.registerManaged({
       name: "workerdManager",
       dependencies: ["buildSystem", "fsService"],
       async start(resolve) {
@@ -1804,7 +1791,7 @@ async function main() {
   }
 
   {
-    container.register({
+    container.registerManaged({
       name: "doDispatch",
       dependencies: ["workerdManager"],
       async start(resolve) {
@@ -2176,16 +2163,14 @@ async function main() {
       await import("../../workspace/packages/runtime/src/shared/runtimeSurface.panel.js");
     const { workerRuntimeSurface } =
       await import("../../workspace/packages/runtime/src/shared/runtimeSurface.worker.js");
-    container.register(
-      rpcService(
-        createMetaService({
-          dispatcher,
-          runtimeSurfaces: {
-            panel: panelRuntimeSurface,
-            workerRuntime: workerRuntimeSurface,
-          },
-        })
-      )
+    container.registerRpc(
+      createMetaService({
+        dispatcher,
+        runtimeSurfaces: {
+          panel: panelRuntimeSurface,
+          workerRuntime: workerRuntimeSurface,
+        },
+      })
     );
   }
 
@@ -2193,16 +2178,16 @@ async function main() {
     // Settings service for trusted remote hosts and mobile workspace apps.
     const { createSettingsServiceStandalone } =
       await import("./services/settingsServiceStandalone.js");
-    container.register(rpcService(createSettingsServiceStandalone({ dispatcher })));
+    container.registerRpc(createSettingsServiceStandalone({ dispatcher }));
   }
 
   // ── Per-workspace content-addressable blobstore ──
   {
     const { createBlobstoreService } = await import("./services/blobstoreService.js");
     const { createAuthService } = await import("./services/authService.js");
-    const { rpcServiceWithRoutes } = await import("./rpcServiceWithRoutes.js");
-    container.register(
-      rpcServiceWithRoutes(
+    const { serviceWithHttpRoutes } = await import("./serviceWithHttpRoutes.js");
+    container.registerManaged(
+      serviceWithHttpRoutes(
         createAuthService({
           tokenManager,
           deviceAuthStore,
@@ -2245,7 +2230,9 @@ async function main() {
     );
 
     const blobsDir = path.join(getUserDataPath(), "blobs");
-    container.register(rpcServiceWithRoutes(createBlobstoreService({ blobsDir }), routeRegistry));
+    container.registerManaged(
+      serviceWithHttpRoutes(createBlobstoreService({ blobsDir }), routeRegistry)
+    );
   }
 
   // ── Gateway ingress ──
