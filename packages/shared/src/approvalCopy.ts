@@ -12,6 +12,14 @@ function truncateId(id: string, head = 8, tail = 4): string {
   return `${id.slice(0, head)}…${id.slice(-tail)}`;
 }
 
+/** Drop common id prefixes for a friendlier fallback label when no title exists. */
+function prettifyApprovalId(id: string): string {
+  const stripped = id.replace(/^(do-service:|do:|worker:|panel:|app:|extension:)/, "");
+  const segments = stripped.split(":");
+  const last = segments[segments.length - 1] ?? stripped;
+  return truncateId(last);
+}
+
 export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.kind === "credential") {
     if (isOAuthCredentialConnectionApproval(approval)) {
@@ -281,27 +289,76 @@ export function getStandardActionCopy(
   };
 }
 
+/**
+ * The secondary attribution chip: who/what the request runs on behalf of, or
+ * the identity it uses. The primary requester (panel/worker/app) is resolved
+ * and rendered by the shell from its own semantic caller info — never from a
+ * raw id here. This is only the *second* chip, shown as "<relation> <target>".
+ */
+export interface ApprovalAttribution {
+  relation?: "for" | "using" | "with" | "as";
+  target?: string;
+}
+
+export function getApprovalAttribution(approval: PendingApproval): ApprovalAttribution {
+  if (approval.kind === "userland") {
+    const issuer = approval.issuer;
+    if (issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId)) {
+      return { relation: "for", target: issuer.label ?? prettifyApprovalId(issuer.id) };
+    }
+    return {};
+  }
+  if (approval.kind === "credential") {
+    // git + non-oauth use: the headline names the destination, so the chip
+    // names the credential identity in play. OAuth connect headlines already
+    // name the credential, so surface the account instead when we have one.
+    if (approval.credentialUse === "git-http") {
+      return { relation: "using", target: approval.credentialLabel };
+    }
+    if (isOAuthCredentialConnectionApproval(approval)) {
+      const account = formatAccount(approval);
+      return account && account !== approval.credentialId ? { relation: "as", target: account } : {};
+    }
+    return { relation: "with", target: formatAudienceSummary(approval) };
+  }
+  return {};
+}
+
+/**
+ * Headline + (push/bootstrap) summary copy.
+ *
+ * `title` is the headline: the capability stated in plain language with its
+ * object folded in ("Open github.com/foo", "Push to github.com/foo/bar",
+ * "Connect Google Calendar"). It carries no requester — attribution is the
+ * shell's job (see {@link getApprovalAttribution}).
+ *
+ * `summary` is a short, requester-free description retained for surfaces that
+ * can't render chrome (push notifications, the bootstrap fallback). The shell
+ * approval cards no longer render it inline; everything else lives in details.
+ */
 export function getApprovalCopy(
-  approval: PendingApproval,
-  callerLabel: string
+  approval: PendingApproval
 ): { title: string; summary: string; warning?: string } {
-  const requester = `${callerLabel} ${truncateId(approval.callerId)}`;
   if (approval.kind === "unit-batch") {
     const count = approval.units.length;
     const unitLabel = unitBatchLabel(approval);
     const fallbackTitle =
       approval.trigger === "management"
-        ? `Manage workspace ${unitLabel.plural}`
+        ? `Manage ${count} workspace ${count === 1 ? unitLabel.singular : unitLabel.plural}`
         : approval.trigger === "source-push"
-        ? `${unitLabel.singular[0]?.toUpperCase() ?? "U"}${unitLabel.singular.slice(1)} source push`
-        : approval.trigger === "meta-push" ? `Workspace ${unitLabel.plural} changed` : `Approve workspace ${unitLabel.plural}`;
+        ? `Update ${unitLabel.singular} source`
+        : approval.trigger === "meta-push"
+        ? "Apply workspace config change"
+        : count > 0
+        ? `Run ${count} workspace ${count === 1 ? unitLabel.singular : unitLabel.plural}`
+        : "Apply workspace config change";
     const fallbackSummary = count > 0
       ? approval.trigger === "management"
-        ? `This request manages ${count} workspace ${unitLabel.singular}${count === 1 ? "" : "s"}.`
+        ? `Manages ${count} workspace ${unitLabel.singular}${count === 1 ? "" : "s"}.`
         : approval.trigger === "source-push"
-        ? `This push updates trusted workspace ${unitLabel.singular} source code.`
-        : `This workspace declares ${count} ${unitLabel.singular}${count === 1 ? "" : "s"} that need approval before they run.`
-      : "This push changes workspace configuration.";
+        ? `Updates trusted workspace ${unitLabel.singular} source code.`
+        : `Declares ${count} ${unitLabel.singular}${count === 1 ? "" : "s"} that need approval before they run.`
+      : "Changes workspace configuration.";
     return {
       title: approval.title || fallbackTitle,
       summary: approval.description || fallbackSummary,
@@ -321,12 +378,12 @@ export function getApprovalCopy(
       if (destination === "meta") {
         return {
           title: "Edit workspace config",
-          summary: `${requester} wants to push changes to sensitive workspace config.`,
+          summary: "Pushes changes to sensitive workspace config.",
         };
       }
       return {
-        title: "Write project files",
-        summary: `${requester} wants to push changes to ${destination}.`,
+        title: `Write to ${destination}`,
+        summary: `Pushes changes to ${destination}.`,
       };
     }
     if (approval.capability === "workspace-shared-git-remote") {
@@ -335,22 +392,22 @@ export function getApprovalCopy(
         approval.details?.find((detail) => detail.label === "Operation")?.value ??
         "change a shared remote";
       return {
-        title: approval.title || "Configure shared remote",
-        summary: `${requester} wants to ${operation.toLowerCase()} for ${destination}.`,
+        title: approval.title || `Configure shared remote for ${destination}`,
+        summary: `Wants to ${operation.toLowerCase()} for ${destination}.`,
       };
     }
     if (approval.capability === "workspace-project-import") {
       const destination = approval.resource?.value ?? "this project";
       return {
-        title: approval.title || "Add project repo",
-        summary: `${requester} wants to import ${destination} from a remote git repository.`,
+        title: approval.title || `Import ${destination}`,
+        summary: `Imports ${destination} from a remote git repository.`,
       };
     }
     if (approval.capability === "panel.automate") {
       const target = approval.resource?.value ?? "this panel";
       return {
-        title: approval.title || "Automate panel",
-        summary: `${requester} wants to automate ${target}.`,
+        title: approval.title || `Automate ${target}`,
+        summary: `Automates ${target}.`,
         ...(approval.severity === "severe"
           ? {
               warning:
@@ -362,8 +419,8 @@ export function getApprovalCopy(
     if (approval.capability === "panel.structural") {
       const target = approval.resource?.value ?? "this panel";
       return {
-        title: approval.title || "Change panel tree",
-        summary: `${requester} wants to change ${target}.`,
+        title: approval.title || `Change ${target}`,
+        summary: `Changes ${target}.`,
         ...(approval.severity === "severe"
           ? {
               warning:
@@ -376,46 +433,39 @@ export function getApprovalCopy(
     const destination = formatCapabilityDestination(approval, isOAuth);
     if (isOAuth) {
       return {
-        title: "Connect to service",
-        summary: `${requester} wants to connect to ${destination} in your browser.`,
+        title: `Sign in at ${destination}`,
+        summary: `Opens a sign-in flow at ${destination} in your browser.`,
       };
     }
     return {
-      title: "Open external site",
-      summary: `${requester} wants to open ${destination} in your system browser.`,
+      title: `Open ${destination}`,
+      summary: `Opens ${destination} in your system browser.`,
     };
   }
   if (approval.kind === "client-config") {
     return {
-      title: "Configure service",
+      title: `Set up ${formatServiceName(approval.configId)}`,
       summary:
-        "Save OAuth client settings. Secrets stay encrypted and are only used for OAuth token exchange and refresh.",
+        "Saves OAuth client settings. Secrets stay encrypted and are only used for OAuth token exchange and refresh.",
     };
   }
   if (approval.kind === "credential-input") {
     const audience = formatCredentialInputAudienceSummary(approval);
     return {
-      title: "Add service",
-      summary: `${requester} wants to save ${approval.credentialLabel} for ${audience}. Secrets stay encrypted and are only sent to matching requests.`,
+      title: `Add ${approval.credentialLabel}`,
+      summary: `Saves ${approval.credentialLabel} for ${audience}. Secrets stay encrypted and are only sent to matching requests.`,
     };
   }
   if (approval.kind === "userland") {
-    // Header text is renderer-controlled. Provider-supplied title, summary,
-    // and warning render inside the "From <issuer>" framed body so they
-    // cannot impersonate the verified-issuer chrome.
-    const callerKindLabel = userlandCallerKindLabel(approval.callerKind);
-    const issuer = approval.issuer;
-    const issuerDiffers = issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId);
-    if (issuerDiffers && issuer) {
-      const issuerLabel = `${issuer.kind} ${truncateId(issuer.id)}`;
-      return {
-        title: `${callerKindLabel} requests your decision`,
-        summary: `${requester} is being asked by ${issuerLabel} about ${approval.subject.id}. Your choice will be remembered until revoked.`,
-      };
-    }
+    // The provider-supplied title IS the headline: it's the decision the user
+    // actually needs to scan. The fact that a userland process is asking is
+    // demoted to trusted chrome around it (the requester chip) so provider text
+    // can describe the request without impersonating the verified-issuer chrome.
+    const subjectName = approval.subject.label ?? approval.subject.id;
     return {
-      title: `${callerKindLabel} requests your decision`,
-      summary: `${requester} is asking about ${approval.subject.id}. Your choice will be remembered until revoked.`,
+      title: approval.title,
+      summary: approval.summary ?? `Decision about ${subjectName}.`,
+      warning: approval.warning,
     };
   }
   if (approval.kind === "device-code") {
@@ -423,8 +473,7 @@ export function getApprovalCopy(
       title: `Sign in to ${approval.credentialLabel}`,
       summary:
         `Enter code ${approval.userCode} at ${originForUrl(approval.verificationUri)} `
-        + `to finish connecting ${approval.credentialLabel}. `
-        + `${requester} initiated this request.`,
+        + `to finish connecting ${approval.credentialLabel}.`,
     };
   }
 
@@ -434,24 +483,24 @@ export function getApprovalCopy(
     const remote = operation?.remote ? formatGitRemoteSummary(operation.remote) : audience;
     const label = operation?.label ?? "git operation";
     return {
-      title: operation?.action === "write" ? "Push to remote" : "Read from remote",
-      summary: `${requester} wants to ${label} on ${remote} using ${approval.credentialLabel}.`,
+      title: operation?.action === "write" ? `Push to ${remote}` : `Read from ${remote}`,
+      summary: `Wants to ${label} on ${remote} using ${approval.credentialLabel}.`,
     };
   }
   if (isOAuthCredentialConnectionApproval(approval)) {
     return {
-      title: "Connect service",
+      title: `Connect ${approval.credentialLabel}`,
       summary: approval.replacementCredentialLabel
-        ? `${requester} wants to replace your existing ${approval.replacementCredentialLabel} credential with ${approval.credentialLabel} and use it with ${audience}.`
-        : `${requester} wants to connect ${approval.credentialLabel} and use it with ${audience}.`,
+        ? `Replaces your existing ${approval.replacementCredentialLabel} credential with ${approval.credentialLabel} for ${audience}.`
+        : `Connects ${approval.credentialLabel} for ${audience}.`,
       warning: approval.oauthAudienceDomainMismatch
         ? "The sign-in domain differs from the service domain."
         : undefined,
     };
   }
   return {
-    title: "Use connected service",
-    summary: `${requester} wants to use ${approval.credentialLabel} with ${audience}.`,
+    title: `Use ${approval.credentialLabel}`,
+    summary: `Uses ${approval.credentialLabel} with ${audience}.`,
     warning: approval.oauthAudienceDomainMismatch
       ? "The sign-in domain differs from the service domain."
       : undefined,

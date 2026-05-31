@@ -38,10 +38,11 @@ import type {
   UserlandApprovalOption,
 } from "@natstack/shared/approvals";
 import {
+  type ApprovalAttribution,
   formatAccount,
   formatCredentialInputAudienceSummary,
   formatInjection,
-  getApprovalCategoryLabel,
+  getApprovalAttribution,
   getApprovalCopy,
   getStandardActionCopy,
   originForUrl,
@@ -217,8 +218,8 @@ export function ApprovalSheet({
   const dragOffset = useRef(0);
 
   const callerInfo = current ? resolveCallerInfo(current) : null;
-  const copy = current && callerInfo ? getApprovalCopy(current, callerInfo.kindLabel) : null;
-  const categoryLabel = current ? getApprovalCategoryLabel(current) : "";
+  const copy = current && callerInfo ? getApprovalCopy(current) : null;
+  const attribution = current ? getApprovalAttribution(current) : null;
   const severeCapability = current?.kind === "capability" && current.severity === "severe";
   const accentColor = severeCapability
     ? colors.danger
@@ -255,9 +256,10 @@ export function ApprovalSheet({
       }),
     ]).start();
     if (copy) {
-      AccessibilityInfo.announceForAccessibility(
-        `${categoryLabel}. ${copy.title}. ${copy.summary}`
-      );
+      const requester = callerInfo
+        ? `Requested by ${callerInfo.label}, ${callerInfo.kindLabel.toLowerCase()}. `
+        : "";
+      AccessibilityInfo.announceForAccessibility(`${copy.title}. ${requester}${copy.summary}`);
     }
   }, [currentApprovalId]);
 
@@ -383,7 +385,6 @@ export function ApprovalSheet({
               >
                 <ApprovalHeader
                   approval={current}
-                  categoryLabel={categoryLabel}
                   accentColor={accentColor}
                   queueLength={queueLength}
                   queueIndex={browseIndex}
@@ -395,17 +396,11 @@ export function ApprovalSheet({
                 <Text style={[styles.title, { color: colors.text }]}>{copy.title}</Text>
                 <CallerRow
                   caller={callerInfo}
-                  categoryLabel={categoryLabel}
+                  attribution={attribution ?? {}}
                   canNavigate={!!onNavigateToPanel && !!callerInfo.panelId}
                   onPress={showRequestingPanel}
                 />
-                <Text style={[styles.summary, { color: colors.textSecondary }]}>
-                  {copy.summary}
-                </Text>
                 {copy.warning ? <WarningBand message={copy.warning} /> : null}
-                {current.kind === "userland" ? (
-                  <IssuerPanel approval={current} caller={callerInfo} />
-                ) : null}
                 {current.kind === "device-code" ? <DeviceCodePanel approval={current} /> : null}
                 {error ? <InlineError message={error} /> : null}
                 {current.kind === "client-config" || current.kind === "credential-input" ? (
@@ -509,7 +504,6 @@ export function ApprovalSheet({
 
 function ApprovalHeader({
   approval,
-  categoryLabel,
   accentColor,
   queueLength,
   queueIndex,
@@ -519,7 +513,6 @@ function ApprovalHeader({
   onNext,
 }: {
   approval: PendingApproval;
-  categoryLabel: string;
   accentColor: string;
   queueLength: number;
   queueIndex: number;
@@ -528,14 +521,12 @@ function ApprovalHeader({
   onPrev: () => void;
   onNext: () => void;
 }) {
-  const colors = useAtomValue(themeColorsAtom);
   const CategoryIcon = getCategoryIcon(approval);
   return (
     <View style={styles.headerRow}>
       <View style={[styles.categoryIcon, { backgroundColor: accentColor }]} testID="approval-category-icon">
         <CategoryIcon size={17} color="#ffffff" />
       </View>
-      {approval.kind === "credential" ? <Pill>{approval.credentialLabel}</Pill> : null}
       {queueLength > 1 ? (
         <QueueNavigator
           index={queueIndex}
@@ -599,12 +590,12 @@ function QueueNavigator({
 
 function CallerRow({
   caller,
-  categoryLabel,
+  attribution,
   canNavigate,
   onPress,
 }: {
   caller: CallerInfo;
-  categoryLabel: string;
+  attribution: ApprovalAttribution;
   canNavigate: boolean;
   onPress: () => void;
 }) {
@@ -627,7 +618,6 @@ function CallerRow({
   );
   return (
     <View style={styles.callerRow}>
-      <Text style={[styles.callerRowLabel, { color: colors.textSecondary }]}>Requested by</Text>
       {canNavigate ? (
         <Pressable
           accessibilityRole="button"
@@ -641,7 +631,26 @@ function CallerRow({
       ) : (
         <View testID="approval-caller-chip">{chip}</View>
       )}
-      <Text style={[styles.categoryLabel, { color: colors.accent }]}>{categoryLabel}</Text>
+      <Text style={[styles.callerRowLabel, { color: colors.textSecondary }]}>
+        {caller.kindLabel.toLowerCase()}
+      </Text>
+      {attribution.target ? (
+        <>
+          <Text style={[styles.callerRowLabel, { color: colors.textSecondary }]}>
+            {attribution.relation ?? "for"}
+          </Text>
+          <View
+            style={[
+              styles.callerChip,
+              { backgroundColor: colors.background, borderColor: colors.border },
+            ]}
+          >
+            <Text numberOfLines={1} style={[styles.callerChipLabel, { color: colors.text }]}>
+              {attribution.target}
+            </Text>
+          </View>
+        </>
+      ) : null}
     </View>
   );
 }
@@ -686,53 +695,6 @@ function InlineError({ message }: { message: string }) {
     >
       <AlertTriangle size={14} color={colors.danger} />
       <Text style={[styles.warningText, { color: colors.danger }]}>{message}</Text>
-    </View>
-  );
-}
-
-function IssuerPanel({
-  approval,
-  caller,
-}: {
-  approval: PendingUserlandApproval;
-  caller: CallerInfo;
-}) {
-  const colors = useAtomValue(themeColorsAtom);
-  const issuer = approval.issuer;
-  const showIssuer =
-    issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId);
-  return (
-    <View
-      style={[
-        styles.issuerPanel,
-        { backgroundColor: colors.background, borderColor: colors.border },
-      ]}
-    >
-      <View style={styles.issuerHeader}>
-        <User size={14} color={colors.textSecondary} />
-        <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-          From {caller.kindLabel.toLowerCase()}{" "}
-          <Text style={[styles.helperEmphasis, { color: colors.text }]}>{caller.label}</Text>
-          {showIssuer && issuer
-            ? `  ·  on behalf of ${issuer.kind} ${issuer.label ?? prettifyId(issuer.id)}`
-            : null}
-        </Text>
-      </View>
-      <Text style={[styles.providerTitle, { color: colors.text }]}>{approval.title}</Text>
-      <Text style={[styles.helperText, { color: colors.textSecondary }]}>
-        Subject:{" "}
-        {approval.subject.label ? (
-          <Text style={[styles.helperEmphasis, { color: colors.text }]}>
-            {approval.subject.label}
-          </Text>
-        ) : (
-          <Text style={styles.codeText}>{truncateId(approval.subject.id)}</Text>
-        )}
-      </Text>
-      {approval.warning ? <WarningBand message={approval.warning} /> : null}
-      {approval.summary ? (
-        <Text style={[styles.providerSummary, { color: colors.text }]}>{approval.summary}</Text>
-      ) : null}
     </View>
   );
 }
@@ -969,8 +931,19 @@ function CapabilityDetails({ approval }: { approval: PendingCapabilityApproval }
 }
 
 function UserlandDetails({ approval }: { approval: PendingUserlandApproval }) {
+  const issuer = approval.issuer;
+  const showIssuer =
+    issuer && (issuer.kind !== approval.callerKind || issuer.id !== approval.callerId);
   return (
     <>
+      {showIssuer && issuer ? (
+        <DetailRow
+          icon={User}
+          label="Asked by"
+          value={`${issuer.kind} · ${issuer.label ?? prettifyId(issuer.id)}`}
+          code
+        />
+      ) : null}
       <DetailRow icon={Lock} label="Subject" value={approval.subject.id} code />
       {approval.subject.label ? (
         <DetailRow icon={Lock} label="Label" value={approval.subject.label} code />
@@ -1609,12 +1582,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     width: 32,
   },
-  categoryLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 0,
-    textTransform: "uppercase",
-  },
   queueNavigator: {
     alignItems: "center",
     flexDirection: "row",
@@ -1666,12 +1633,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
-  summary: {
-    fontSize: 15,
-    fontWeight: "400",
-    lineHeight: 22,
-    marginTop: 8,
-  },
   warningBand: {
     alignItems: "flex-start",
     borderRadius: 8,
@@ -1692,22 +1653,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     marginTop: 14,
     padding: 12,
-  },
-  issuerHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: 6,
-  },
-  providerTitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    lineHeight: 22,
-    marginTop: 10,
-  },
-  providerSummary: {
-    fontSize: 14,
-    lineHeight: 20,
-    marginTop: 8,
   },
   helperText: {
     fontSize: 12,
@@ -1785,9 +1730,6 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     fontSize: 11,
     lineHeight: 16,
-  },
-  helperEmphasis: {
-    fontWeight: "600",
   },
   codeText: {
     fontFamily: Platform.select({ ios: "Menlo", android: "monospace", default: "monospace" }),

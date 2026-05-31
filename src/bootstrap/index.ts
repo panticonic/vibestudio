@@ -73,7 +73,8 @@ function render(): void {
     }
     approvalsContainer.className = "";
     for (const approval of pending) {
-      const copy = getApprovalCopy(approval, callerLabel(approval));
+      const copy = getApprovalCopy(approval);
+      const requester = approval.callerTitle?.trim() || callerLabel(approval);
       const card = document.createElement("article");
       card.className = "approval";
 
@@ -83,7 +84,7 @@ function render(): void {
 
       const meta = document.createElement("div");
       meta.className = "meta";
-      meta.textContent = `${getApprovalCategoryLabel(approval)}: ${copy.summary}`;
+      meta.textContent = `${requester} · ${getApprovalCategoryLabel(approval)} — ${copy.summary}`;
 
       const approve = document.createElement("button");
       approve.className = "primary";
