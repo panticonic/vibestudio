@@ -106,6 +106,7 @@ export const credentials = helpfulNamespace("credentials", credentialApi);
 // Git client helper. Relative repo paths route to NatStack's internal git
 // server; absolute external remotes route through host-mediated credentials.
 import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
+import { createContextAwareGitClient } from "../shared/contextGitClient.js";
 export type { GitClient, GitClientOptions } from "@natstack/git";
 export interface GitRemoteSpec {
     name: string;
@@ -154,17 +155,23 @@ const gitApi = {
         credentialId?: string;
     } = {}) {
         if (!gitConfig) {
-            return new GitClient(fs, { http: credentialGitHttp({ credentialId: options.credentialId }) });
+            return createContextAwareGitClient(
+                new GitClient(fs, { http: credentialGitHttp({ credentialId: options.credentialId }) }),
+                rpc,
+            );
         }
-        return new GitClient(fs, {
-            serverUrl: gitConfig.serverUrl,
-            http: createRoutingHttpClient({
-                internalOrigin: gitConfig.serverUrl,
-                internalOrigins: gitConfig.internalOrigins,
-                internal: createBearerHttpClient(gitConfig.token),
-                external: credentialGitHttp({ credentialId: options.credentialId }),
+        return createContextAwareGitClient(
+            new GitClient(fs, {
+                serverUrl: gitConfig.serverUrl,
+                http: createRoutingHttpClient({
+                    internalOrigin: gitConfig.serverUrl,
+                    internalOrigins: gitConfig.internalOrigins,
+                    internal: createBearerHttpClient(gitConfig.token),
+                    external: credentialGitHttp({ credentialId: options.credentialId }),
+                }),
             }),
-        });
+            rpc,
+        );
     },
 };
 export const git = helpfulNamespace("git", gitApi);

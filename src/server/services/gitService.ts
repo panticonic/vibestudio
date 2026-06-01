@@ -12,6 +12,7 @@ import type { GitServer } from "@natstack/git-server";
 import type { TokenManager } from "@natstack/shared/tokenManager";
 import type { WorkspaceConfig, WorkspaceGitRemoteConfig } from "@natstack/shared/workspace/types";
 import type { ContextFolderManager } from "@natstack/shared/contextFolderManager";
+import type { EntityCache } from "@natstack/shared/runtime/entityCache";
 import {
   getDeclaredRemoteForRepo,
   normalizeRemoteUrl,
@@ -47,7 +48,11 @@ type GitServiceDeps = {
   tokenManager: TokenManager;
   workspacePath?: string;
   workspaceConfig?: WorkspaceConfig;
-  contextFolderManager?: Pick<ContextFolderManager, "syncDeclaredRemotes" | "syncRepoToContexts">;
+  contextFolderManager?: Pick<
+    ContextFolderManager,
+    "ensureContextFolder" | "syncDeclaredRemotes" | "syncRepoToContexts"
+  >;
+  entityCache?: Pick<EntityCache, "resolveContext">;
   egressProxy?: Pick<EgressProxy, "forwardGitHttp">;
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
@@ -110,6 +115,8 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
       getWorkspaceTree: { args: z.tuple([]) },
       findRepoForPath: { args: z.tuple([z.string()]) },
       status: { args: z.tuple([z.string()]) },
+      contextStatus: { args: z.tuple([z.string()]) },
+      contextAddAll: { args: z.tuple([z.string()]) },
       listBranches: { args: z.tuple([z.string()]) },
       listCommits: { args: z.tuple([z.string(), z.string(), z.number()]) },
       resolveRef: { args: z.tuple([z.string(), z.string()]) },
@@ -145,6 +152,10 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
         }
         case "status":
           return g.status(args[0] as string);
+        case "contextStatus":
+          return contextGitStatus(ctx, deps, args[0] as string);
+        case "contextAddAll":
+          return contextGitAddAll(ctx, deps, args[0] as string);
         case "listBranches":
           return g.listBranches(args[0] as string);
         case "listCommits": {
@@ -382,6 +393,122 @@ function collectWorkspaceRepoPaths(nodes: WorkspaceTreeNode[]): Set<string> {
     }
   }
   return repos;
+}
+
+type ContextRepoStatus = {
+  branch: string | null;
+  commit: string | null;
+  dirty: boolean;
+  files: Array<{
+    path: string;
+    status: "unmodified" | "modified" | "added" | "deleted" | "untracked" | "ignored";
+    staged: boolean;
+    unstaged: boolean;
+  }>;
+};
+
+async function resolveContextRepoDir(
+  ctx: ServiceContext,
+  deps: GitServiceDeps,
+  repoPathInput: string
+): Promise<{ repoPath: string; repoDir: string }> {
+  if (!deps.contextFolderManager || !deps.entityCache) {
+    throw new Error("Context git operations are unavailable");
+  }
+
+  const contextCallerId =
+    ctx.caller.runtime.kind === "extension" && ctx.chainCaller
+      ? ctx.chainCaller.callerId
+      : ctx.caller.runtime.id;
+  const contextId = deps.entityCache.resolveContext(contextCallerId);
+  if (!contextId) {
+    throw new Error(`No context registered for caller ${contextCallerId}`);
+  }
+
+  const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
+  const contextRoot = await deps.contextFolderManager.ensureContextFolder(contextId);
+  const repoDir = resolve(contextRoot, repoPath);
+  const rel = relative(resolve(contextRoot), repoDir);
+  if (rel.length > 0 && (rel.startsWith("..") || isAbsolute(rel))) {
+    throw new Error("Invalid repo path: escapes context root");
+  }
+
+  return { repoPath, repoDir };
+}
+
+async function contextGitStatus(
+  ctx: ServiceContext,
+  deps: GitServiceDeps,
+  repoPathInput: string
+): Promise<ContextRepoStatus> {
+  const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput);
+  const [branchResult, commitResult, porcelain] = await Promise.allSettled([
+    Promise.resolve(runContextGit(repoDir, ["branch", "--show-current"])),
+    Promise.resolve(runContextGit(repoDir, ["rev-parse", "--verify", "HEAD"])),
+    Promise.resolve(runContextGit(repoDir, ["status", "--porcelain=v1"])),
+  ]);
+
+  const branch =
+    branchResult.status === "fulfilled" && branchResult.value.trim()
+      ? branchResult.value.trim()
+      : null;
+  const commit =
+    commitResult.status === "fulfilled" && commitResult.value.trim()
+      ? commitResult.value.trim()
+      : null;
+  const statusOutput = porcelain.status === "fulfilled" ? porcelain.value : "";
+  const files = statusOutput
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => porcelainLineToFileStatus(line));
+
+  return {
+    branch,
+    commit,
+    dirty: files.length > 0,
+    files,
+  };
+}
+
+async function contextGitAddAll(
+  ctx: ServiceContext,
+  deps: GitServiceDeps,
+  repoPathInput: string
+): Promise<void> {
+  const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput);
+  execGitFileSync(["add", "-A", "--", "."], { cwd: repoDir, stdio: "pipe" });
+}
+
+function runContextGit(repoDir: string, args: readonly string[]): string {
+  return execGitFileSync(args, { cwd: repoDir, encoding: "utf-8" });
+}
+
+function porcelainLineToFileStatus(line: string): ContextRepoStatus["files"][number] {
+  const index = line.slice(0, 1);
+  const workingTree = line.slice(1, 2);
+  const rawPath = line.slice(3).trim();
+  const path = rawPath.includes(" -> ") ? rawPath.split(" -> ").pop()!.trim() : rawPath;
+
+  const staged = index !== " " && index !== "?";
+  const unstaged = workingTree !== " " && workingTree !== "?";
+  let status: ContextRepoStatus["files"][number]["status"] = "modified";
+
+  if (index === "?" && workingTree === "?") {
+    status = "untracked";
+  } else if (index === "A" || workingTree === "A") {
+    status = "added";
+  } else if (index === "D" || workingTree === "D") {
+    status = "deleted";
+  } else if (index === "!" && workingTree === "!") {
+    status = "ignored";
+  }
+
+  return {
+    path,
+    status,
+    staged,
+    unstaged,
+  };
 }
 
 async function importWorkspaceRepo(

@@ -60,6 +60,7 @@ import {
   type UserlandApprovalRequest,
 } from "../approvals.js";
 import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
+import { createContextAwareGitClient } from "../shared/contextGitClient.js";
 import type { PanelHandle } from "../core/index.js";
 import type { WorkerEnv } from "./types.js";
 import type { RuntimeFs } from "../types.js";
@@ -365,19 +366,25 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     },
     client(options: { credentialId?: string } = {}) {
       if (!gitConfig) {
-        return new GitClient(runtimeFs, {
-          http: credentials.gitHttp({ credentialId: options.credentialId }),
-        });
+        return createContextAwareGitClient(
+          new GitClient(runtimeFs, {
+            http: credentials.gitHttp({ credentialId: options.credentialId }),
+          }),
+          rpc
+        );
       }
-      return new GitClient(runtimeFs, {
-        serverUrl: gitConfig.serverUrl,
-        http: createRoutingHttpClient({
-          internalOrigin: gitConfig.serverUrl,
-          internalOrigins: gitConfig.internalOrigins,
-          internal: createBearerHttpClient(gitConfig.token),
-          external: credentials.gitHttp({ credentialId: options.credentialId }),
+      return createContextAwareGitClient(
+        new GitClient(runtimeFs, {
+          serverUrl: gitConfig.serverUrl,
+          http: createRoutingHttpClient({
+            internalOrigin: gitConfig.serverUrl,
+            internalOrigins: gitConfig.internalOrigins,
+            internal: createBearerHttpClient(gitConfig.token),
+            external: credentials.gitHttp({ credentialId: options.credentialId }),
+          }),
         }),
-      });
+        rpc
+      );
     },
   });
   const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));

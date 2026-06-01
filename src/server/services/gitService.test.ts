@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createGitService } from "./gitService.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
+import { EntityCache } from "@natstack/shared/runtime/entityCache";
+import { execGitFileSync } from "@natstack/shared/gitRuntime";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -50,6 +52,97 @@ function appSourceCaller() {
 }
 
 describe("gitService", () => {
+  it("runs status against the caller context repo instead of source workspace", async () => {
+    const contextsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-context-git-"));
+    const contextRoot = path.join(contextsRoot, "ctx-1");
+    const repoDir = path.join(contextRoot, "panels", "spectrolite");
+    fs.mkdirSync(repoDir, { recursive: true });
+    execGitFileSync(["init"], { cwd: repoDir, stdio: "pipe" });
+    execGitFileSync(["config", "user.email", "test@example.com"], { cwd: repoDir, stdio: "pipe" });
+    execGitFileSync(["config", "user.name", "Test User"], { cwd: repoDir, stdio: "pipe" });
+    fs.writeFileSync(path.join(repoDir, "index.ts"), "one\n");
+    execGitFileSync(["add", "--", "index.ts"], { cwd: repoDir, stdio: "pipe" });
+    execGitFileSync(["commit", "-m", "initial"], { cwd: repoDir, stdio: "pipe" });
+    fs.writeFileSync(path.join(repoDir, "index.ts"), "two\n");
+
+    const entityCache = new EntityCache();
+    entityCache._onActivate({
+      id: "panel-source",
+      kind: "panel",
+      source: { repoPath: "panels/source", effectiveVersion: "version-1" },
+      contextId: "ctx-1",
+      key: "panel-source",
+      createdAt: Date.now(),
+      status: "active",
+      cleanupComplete: true,
+    });
+    const service = createGitService({
+      gitServer: {} as never,
+      tokenManager: {} as never,
+      contextFolderManager: {
+        ensureContextFolder: vi.fn(async () => contextRoot),
+        syncDeclaredRemotes: vi.fn(),
+        syncRepoToContexts: vi.fn(),
+      },
+      entityCache,
+    });
+
+    const status = await service.handler({ caller: panelSourceCaller() }, "contextStatus", [
+      "panels/spectrolite",
+    ]);
+
+    expect(status).toMatchObject({
+      dirty: true,
+      files: [{ path: "index.ts", status: "modified", staged: false, unstaged: true }],
+    });
+  });
+
+  it("stages all caller context repo changes with native git", async () => {
+    const contextsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-context-git-"));
+    const contextRoot = path.join(contextsRoot, "ctx-1");
+    const repoDir = path.join(contextRoot, "panels", "spectrolite");
+    fs.mkdirSync(repoDir, { recursive: true });
+    execGitFileSync(["init"], { cwd: repoDir, stdio: "pipe" });
+    execGitFileSync(["config", "user.email", "test@example.com"], { cwd: repoDir, stdio: "pipe" });
+    execGitFileSync(["config", "user.name", "Test User"], { cwd: repoDir, stdio: "pipe" });
+    fs.writeFileSync(path.join(repoDir, "index.ts"), "one\n");
+    execGitFileSync(["add", "--", "index.ts"], { cwd: repoDir, stdio: "pipe" });
+    execGitFileSync(["commit", "-m", "initial"], { cwd: repoDir, stdio: "pipe" });
+    fs.writeFileSync(path.join(repoDir, "index.ts"), "two\n");
+    fs.writeFileSync(path.join(repoDir, "extra.ts"), "extra\n");
+
+    const entityCache = new EntityCache();
+    entityCache._onActivate({
+      id: "panel-source",
+      kind: "panel",
+      source: { repoPath: "panels/source", effectiveVersion: "version-1" },
+      contextId: "ctx-1",
+      key: "panel-source",
+      createdAt: Date.now(),
+      status: "active",
+      cleanupComplete: true,
+    });
+    const service = createGitService({
+      gitServer: {} as never,
+      tokenManager: {} as never,
+      contextFolderManager: {
+        ensureContextFolder: vi.fn(async () => contextRoot),
+        syncDeclaredRemotes: vi.fn(),
+        syncRepoToContexts: vi.fn(),
+      },
+      entityCache,
+    });
+
+    await service.handler({ caller: panelSourceCaller() }, "contextAddAll", ["panels/spectrolite"]);
+
+    const porcelain = execGitFileSync(["status", "--porcelain=v1"], {
+      cwd: repoDir,
+      encoding: "utf-8",
+    });
+    expect(porcelain).toContain("M  index.ts");
+    expect(porcelain).toContain("A  extra.ts");
+  });
+
   it("gates panel-created repositories through git write permission", async () => {
     const approvalQueue = createApprovalQueueMock();
     const service = createGitService({

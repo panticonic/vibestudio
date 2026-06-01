@@ -978,6 +978,7 @@ async function main() {
       workspacePath,
       workspaceConfig,
       contextFolderManager,
+      entityCache,
       egressProxy,
       approvalQueue,
       grantStore: capabilityGrantStore,
