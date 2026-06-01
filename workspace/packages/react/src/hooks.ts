@@ -131,8 +131,8 @@ export function usePanelRpcGlobalEvent<T = unknown>(
   handler: (fromPanelId: string, payload: T) => void
 ): void {
   useEffect(() => {
-    const unsubscribe = runtime.rpc.onEvent(eventName, (fromPanelId, payload) => {
-      handler(fromPanelId, payload as T);
+    const unsubscribe = runtime.rpc.on(eventName, (event) => {
+      handler(event.caller.callerId, event.payload as T);
     });
     return unsubscribe;
   }, [eventName, handler]);

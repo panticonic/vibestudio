@@ -1,32 +1,35 @@
 /**
- * HTTP POST-based RPC bridge for Cloudflare Workers/DOs.
+ * HTTP POST-based RPC client for Cloudflare Workers/DOs.
  *
- * Implements the RpcBridge interface over HTTP POST requests instead of
- * WebSocket connections. Used by environments that don't maintain persistent
- * connections (e.g., Durable Objects calling back to the server).
+ * Used by environments that do not maintain persistent connections.
  */
 
-import type { RpcBridge, RpcCallOptions, AuthenticatedCaller } from "@natstack/rpc";
+import type {
+  AuthenticatedCaller,
+  RpcContextHandler,
+  RpcContextMethods,
+  RpcCallOptions,
+  RpcClient,
+  RpcEventContext,
+  RpcRequestContext,
+} from "@natstack/rpc";
 
 const rpcFetch = globalThis.fetch.bind(globalThis);
 const RPC_RUNTIME_ID_HEADER = "X-Natstack-Runtime-Id";
 
-export interface HttpRpcBridgeConfig {
+export interface HttpRpcClientConfig {
   selfId: string;
   serverUrl: string;
   authToken: string;
 }
 
-export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
+export function createHttpRpcClient(config: HttpRpcClientConfig): RpcClient & {
   handleIncomingPost(body: unknown): Promise<unknown>;
 } {
   const { selfId, serverUrl, authToken } = config;
-  const methodHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
-  const callerAwareHandlers = new Map<
-    string,
-    (ctx: AuthenticatedCaller, ...args: unknown[]) => Promise<unknown>
-  >();
-  const eventListeners = new Map<string, Set<(fromId: string, payload: unknown) => void>>();
+  const selfCaller: AuthenticatedCaller = { callerId: selfId, callerKind: "unknown" };
+  const methodHandlers = new Map<string, (request: RpcRequestContext) => Promise<unknown>>();
+  const eventListeners = new Map<string, Set<(event: RpcEventContext) => void>>();
 
   async function postToServer(payload: object): Promise<unknown> {
     const maxRetries = 3;
@@ -37,35 +40,29 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${authToken}`,
+            Authorization: `Bearer ${authToken}`,
             [RPC_RUNTIME_ID_HEADER]: selfId,
           },
           body: JSON.stringify(payload),
         });
-      } catch (err: any) {
-        // Network error (ECONNREFUSED, etc.) — retry
+      } catch (err) {
         if (attempt < maxRetries - 1) {
-          await new Promise(r => setTimeout(r, 100 * Math.pow(2, attempt)));
+          await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, attempt)));
           continue;
         }
         throw err;
       }
 
-      // Server error — retry
       if (res.status >= 500 && attempt < maxRetries - 1) {
-        await new Promise(r => setTimeout(r, 100 * Math.pow(2, attempt)));
+        await new Promise((resolve) => setTimeout(resolve, 100 * Math.pow(2, attempt)));
         continue;
       }
+      if (res.status === 401) throw new Error("RPC authentication failed");
 
-      // Auth error — don't retry
-      if (res.status === 401) {
-        throw new Error("RPC authentication failed");
-      }
-
-      const json = await res.json() as Record<string, unknown>;
+      const json = (await res.json()) as Record<string, unknown>;
       if (json["error"]) {
         const err = new Error(json["error"] as string);
-        if (json["errorCode"]) (err as any).code = json["errorCode"];
+        if (json["errorCode"]) (err as Error & { code?: unknown }).code = json["errorCode"];
         throw err;
       }
       return json["result"];
@@ -73,43 +70,26 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
     throw new Error("RPC request failed after retries");
   }
 
-  return {
+  const client: RpcClient & { handleIncomingPost(body: unknown): Promise<unknown> } = {
     selfId,
 
-    exposeMethod(method, handler) {
-      methodHandlers.set(method, handler as any);
+    expose<TArgs extends unknown[], TReturn>(
+      method: string,
+      handler: RpcContextHandler<TArgs, TReturn>,
+    ): void {
+      methodHandlers.set(method, async (request) => handler(request as RpcRequestContext & { args: TArgs }));
     },
 
-    // DOs/workers normally read the trusted caller via `this.rpcCallerId`
-    // (set from X-Natstack-Rpc-Caller-Id headers by DurableObjectBase). This
-    // satisfies the RpcBridge interface and supports local + relayed dispatch;
-    // the caller context here is best-effort (the relay's reported fromId).
-    exposeMethodWithCaller(method, handler) {
-      callerAwareHandlers.set(method, handler as any);
-    },
-
-    expose(methods) {
+    exposeAll(methods: RpcContextMethods): void {
       for (const [name, handler] of Object.entries(methods)) {
-        methodHandlers.set(name, handler as any);
+        methodHandlers.set(name, async (request) => handler(request));
       }
     },
 
-    /**
-     * Streaming method handlers can't be registered on the HTTP
-     * bridge: HTTP is one-shot POST/response with no inbound channel,
-     * so there's nowhere for a peer-initiated `stream-request` to
-     * arrive. Streaming method handlers belong on the server-side
-     * RpcServer (which serves `/rpc/stream`) or on the WS-side bridge
-     * (which dispatches peer-initiated `stream-request` messages).
-     *
-     * We throw rather than silently no-op so that a caller wiring
-     * the handler in the wrong place gets immediate feedback.
-     */
-    exposeStreamingMethod(method, _handler) {
+    exposeStreaming(method: string): void {
       throw new Error(
-        `exposeStreamingMethod("${method}") is not supported on the HTTP RPC bridge — ` +
-          `register the handler on the server-side RpcServer (for /rpc/stream) ` +
-          `or on a transport-based RpcBridge instead.`,
+        `exposeStreaming("${method}") is not supported on the HTTP RPC client; ` +
+          `register the handler on the server-side RpcServer or a transport-based RpcClient.`,
       );
     },
 
@@ -119,17 +99,20 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
       args: unknown[],
       options?: RpcCallOptions,
     ): Promise<T> {
-      if (options?.signal?.aborted) {
-        throw new Error("RPC call aborted by caller");
-      }
+      if (options?.signal?.aborted) throw new Error("RPC call aborted by caller");
       if (targetId === selfId) {
-        // Local dispatch — caller is self.
-        const callerAware = callerAwareHandlers.get(method);
-        if (callerAware) return callerAware({ callerId: selfId, callerKind: "unknown" }, ...args) as T;
         const handler = methodHandlers.get(method);
         if (!handler) throw new Error(`No handler for method '${method}'`);
-        return handler(...args) as T;
+        return handler({
+          caller: selfCaller,
+          origin: selfCaller,
+          method,
+          args,
+          signal: options?.signal ?? new AbortController().signal,
+          rpc: client,
+        }) as Promise<T>;
       }
+
       const request = postToServer({ type: "call", targetId, method, args }) as Promise<T>;
       if (!options?.timeoutMs && !options?.signal) return request;
 
@@ -146,13 +129,12 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
           cleanup();
           fn();
         };
-        const onAbort = (): void => {
-          settle(() => reject(new Error("RPC call aborted by caller")));
-        };
+        const onAbort = (): void => settle(() => reject(new Error("RPC call aborted by caller")));
         if (typeof options?.timeoutMs === "number" && options.timeoutMs >= 0) {
-          timeout = setTimeout(() => {
-            settle(() => reject(new Error(`RPC call timed out after ${options.timeoutMs}ms`)));
-          }, options.timeoutMs);
+          timeout = setTimeout(
+            () => settle(() => reject(new Error(`RPC call timed out after ${options.timeoutMs}ms`))),
+            options.timeoutMs,
+          );
         }
         options?.signal?.addEventListener("abort", onAbort, { once: true });
         request.then(
@@ -162,27 +144,18 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
       });
     },
 
-    /**
-     * Streaming call over HTTP. Posts to `/rpc/stream` and returns the
-     * raw binary-framed response. The server accepts generic
-     * Response-returning service methods plus the credentials.proxyFetch
-     * fast path, and `decodeFramedResponseToStreaming` decodes the wire
-     * frames into a `Response` with a real ReadableStream body.
-     */
-    async streamCall(
+    async stream(
       targetId: string,
       method: string,
       args: unknown[],
       options?: { signal?: AbortSignal },
     ): Promise<Response> {
-      if (targetId === selfId) {
-        throw new Error("streamCall is not supported for local dispatch");
-      }
+      if (targetId === selfId) throw new Error("stream is not supported for local dispatch");
       const wireResponse = await rpcFetch(`${serverUrl}/rpc/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${authToken}`,
+          Authorization: `Bearer ${authToken}`,
           [RPC_RUNTIME_ID_HEADER]: selfId,
         },
         body: JSON.stringify({ targetId, method, args }),
@@ -193,65 +166,98 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
         throw new Error("RPC streaming authentication failed");
       }
       if (!wireResponse.ok) {
-        let detail = "";
-        try {
-          detail = await wireResponse.text();
-        } catch {
-          // ignore
-        }
+        const detail = await wireResponse.text().catch(() => "");
         throw new Error(
           `RPC streaming endpoint returned HTTP ${wireResponse.status}${detail ? `: ${detail}` : ""}`,
         );
       }
-      // Decode the binary-framed body into a Response with a real
-      // ReadableStream. The caller sees the same Response API
-      // regardless of which bridge they went through.
-      const wireBody = wireResponse.body;
-      if (!wireBody) {
-        throw new Error("RPC streaming response has no body");
-      }
-      const { decodeFramedResponseToStreaming } = await import(
-        "@natstack/shared/credentials/streamFraming"
-      );
-      // The HTTP bridge doesn't have the requested URL handy here —
-      // pass the empty string and let the HEAD frame's finalUrl be
-      // the source of truth.
-      return decodeFramedResponseToStreaming(wireBody, "", options?.signal ?? null);
+      if (!wireResponse.body) throw new Error("RPC streaming response has no body");
+      const { decodeFramedResponseToStreaming } = await import("@natstack/rpc/protocol/streamCodec");
+      return decodeFramedResponseToStreaming(wireResponse.body, "", options?.signal ?? null);
     },
 
     async emit(targetId: string, event: string, payload: unknown): Promise<void> {
       await postToServer({ type: "emit", targetId, event, payload });
     },
 
-    onEvent(event: string, listener: (fromId: string, payload: unknown) => void): () => void {
+    on(event: string, listener: (event: RpcEventContext) => void): () => void {
       if (!eventListeners.has(event)) eventListeners.set(event, new Set());
       eventListeners.get(event)!.add(listener);
       return () => eventListeners.get(event)?.delete(listener);
     },
 
+    peer(targetId: string) {
+      return {
+        id: targetId,
+        call: new Proxy({}, {
+          get(_target, method) {
+            if (typeof method !== "string") return undefined;
+            return (...args: unknown[]) => client.call(targetId, method, args);
+          },
+        }) as never,
+        on: (event: string, listener: (event: never) => void): (() => void) =>
+          client.on(event, (ev: RpcEventContext) => {
+            if (ev.caller.callerId === targetId) listener(ev as never);
+          }),
+        emit: (event: string, payload: unknown) => client.emit(targetId, event, payload),
+        withContract: () => client.peer(targetId) as never,
+      };
+    },
+
+    status: () => "connected" as const,
+    ready: () => Promise.resolve(),
+    onStatusChange: () => () => {},
+    parent: async () => null,
+    children: async () => [],
+    tree: {
+      root: async () => null,
+      self: () => client.peer(selfId),
+      siblings: async () => [],
+    },
+    automation() {
+      throw new Error("RPC automation adapter is not configured");
+    },
+
     async handleIncomingPost(body: unknown): Promise<unknown> {
-      const msg = body as any;
+      const msg = body as {
+        type?: string;
+        fromId?: string;
+        method?: string;
+        args?: unknown[];
+        event?: string;
+        payload?: unknown;
+      };
       if (msg.type === "call") {
-        const callerAware = callerAwareHandlers.get(msg.method);
-        const handler = methodHandlers.get(msg.method);
-        if (!callerAware && !handler) return { error: `No handler for method '${msg.method}'` };
+        const handler = methodHandlers.get(msg.method ?? "");
+        if (!handler) return { error: `No handler for method '${msg.method}'` };
+        const caller: AuthenticatedCaller = {
+          callerId: msg.fromId ?? "",
+          callerKind: "unknown",
+        };
         try {
-          const result = callerAware
-            ? await callerAware({ callerId: (msg.fromId as string) ?? "", callerKind: "unknown" }, ...(msg.args ?? []))
-            : await handler!(...(msg.args ?? []));
+          const result = await handler({
+            caller,
+            origin: caller,
+            method: msg.method ?? "",
+            args: msg.args ?? [],
+            signal: new AbortController().signal,
+            rpc: client,
+          });
           return { result };
-        } catch (err: any) {
-          return { error: err.message, errorCode: err.code };
+        } catch (err) {
+          const error = err as Error & { code?: string };
+          return { error: error.message, errorCode: error.code };
         }
       }
       if (msg.type === "emit") {
-        const listeners = eventListeners.get(msg.event);
+        const listeners = eventListeners.get(msg.event ?? "");
+        const caller: AuthenticatedCaller = { callerId: msg.fromId ?? "", callerKind: "unknown" };
         if (listeners) {
           for (const listener of listeners) {
             try {
-              listener(msg.fromId ?? "", msg.payload);
+              listener({ caller, origin: caller, event: msg.event ?? "", payload: msg.payload });
             } catch (err) {
-              console.error(`[RpcBridge] Event listener error for '${msg.event}':`, err);
+              console.error(`[HttpRpcClient] Event listener error for '${msg.event}':`, err);
             }
           }
         }
@@ -260,4 +266,6 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
       return { error: "Unknown message type" };
     },
   };
+
+  return client;
 }

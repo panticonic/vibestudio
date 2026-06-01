@@ -25,8 +25,8 @@ import { Buffer } from "buffer";
 if (typeof globalThis.Buffer === "undefined") {
   (globalThis as any).Buffer = Buffer;
 }
-import type { RpcBridge } from "@natstack/rpc";
-import { createHttpRpcBridge } from "../shared/httpRpcBridge.js";
+import type { RpcClient } from "@natstack/rpc";
+import { createHttpRpcClient } from "../shared/httpRpcBridge.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/externalOpen";
 import { fs, _initFsWithRpc } from "./fs.js";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
@@ -169,7 +169,7 @@ let cachedRuntime: WorkerRuntime | null = null;
 let cachedWorkerId: string | null = null;
 let workerConsoleBridgeInstalled = false;
 
-function installWorkerConsoleBridge(rpc: RpcBridge): void {
+function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
   if (workerConsoleBridgeInstalled) return;
   workerConsoleBridgeInstalled = true;
   const original = {
@@ -225,7 +225,7 @@ function installWorkerConsoleBridge(rpc: RpcBridge): void {
 }
 export interface WorkerRuntime {
   readonly id: string;
-  readonly rpc: RpcBridge;
+  readonly rpc: RpcClient;
   readonly fs: RuntimeFs;
   readonly doTargetId: typeof doTargetId;
   readonly createDurableObjectServiceClient: (
@@ -264,7 +264,7 @@ export interface WorkerRuntime {
   revokeApproval(subjectId: string): Promise<boolean>;
   listApprovals(): Promise<UserlandApprovalGrant[]>;
   /** Expose a method callable by other callers (panels, workers, server). */
-  exposeMethod: RpcBridge["exposeMethod"];
+  expose: (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) => void;
   /** Get a handle to the parent panel/worker (null if no parent). */
   getParent(): PanelHandle | null;
   /** Tree handles for panels visible to this runtime. */
@@ -315,7 +315,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   const parentId = (env.PARENT_ID as string) || null;
   const parentEntityId = (env.PARENT_ENTITY_ID as string) || parentId;
   const parentKind = parseParentKind(env.PARENT_KIND);
-  const rpc = createHttpRpcBridge({
+  const rpc = createHttpRpcClient({
     selfId,
     serverUrl,
     authToken: env.RPC_AUTH_TOKEN,
@@ -424,7 +424,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     requestApproval: (req: UserlandApprovalRequest) => requestUserlandApproval(rpc, req),
     revokeApproval: (subjectId: string) => revokeUserlandApproval(rpc, subjectId),
     listApprovals: () => listUserlandApprovals(rpc),
-    exposeMethod: rpc.exposeMethod.bind(rpc),
+    expose: (method, handler) => rpc.expose(method, (request) => handler(...request.args)),
     getParent: () => createWorkerParentPanelHandle(panelTree, parentId, parentEntityId, parentKind),
     panelTree,
     handleRpcPost: (body: unknown) => rpc.handleIncomingPost(body),
@@ -443,7 +443,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
 }
 
 function createWorkerPanelTree(
-  rpc: RpcBridge,
+  rpc: Pick<RpcClient, "call" | "emit" | "on">,
   selfId: string,
   parentId: string | null,
   parentEntityId: string | null,
@@ -662,7 +662,7 @@ function parseGatewayAliases(value: unknown): string[] {
  * Handle incoming RPC POST requests for a worker.
  *
  * Workers must wire this into their fetch handler so that the server
- * (or other callers) can invoke methods exposed via `runtime.exposeMethod()`.
+ * (or other callers) can invoke methods exposed via `runtime.expose()`.
  *
  * @returns A Response promise if the request is an RPC call, or null if not.
  */

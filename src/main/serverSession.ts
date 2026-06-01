@@ -325,7 +325,7 @@ export async function establishServerSession(args: {
         );
         app.exit(1);
       },
-      onEvent: onServerEvent,
+      onServerEvent,
     });
 
     log.info(`[Server] Connected to remote server at ${remoteUrl.href}`);
@@ -411,7 +411,7 @@ export async function establishServerSession(args: {
       onDisconnect: () => {
         console.error("[App] Server process disconnected");
       },
-      onEvent: onServerEvent,
+      onServerEvent,
     });
   }
 

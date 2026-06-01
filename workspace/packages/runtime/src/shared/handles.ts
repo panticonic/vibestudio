@@ -1,4 +1,4 @@
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient, RpcEventContext } from "@natstack/rpc";
 import type {
   CdpAutomation,
   PanelContract,
@@ -42,8 +42,10 @@ export interface PanelHandleHostOps {
   callAgent?(id: string, method: string, args: unknown[]): Promise<unknown>;
 }
 
+type PanelHandleRpc = Pick<RpcClient, "call" | "emit" | "on">;
+
 export function createCallProxy<T extends Rpc.ExposedMethods>(
-  rpc: RpcBridge,
+  rpc: Pick<RpcClient, "call">,
   targetId: string | (() => string)
 ): TypedCallProxy<T> {
   return new Proxy({} as TypedCallProxy<T>, {
@@ -59,7 +61,7 @@ export function createPanelHandle<
   E extends Rpc.RpcEventMap = Rpc.RpcEventMap,
   EmitE extends Rpc.RpcEventMap = Rpc.RpcEventMap,
 >(options: {
-  rpc: RpcBridge;
+  rpc: PanelHandleRpc;
   metadata: PanelHandleMetadata;
   cdp: CdpAutomation;
   ops?: PanelHandleHostOps;
@@ -114,9 +116,9 @@ export function createPanelHandle<
     async emit(event: string, payload: unknown) {
       await rpc.emit(rpcTargetId(), event, payload);
     },
-    onEvent(event: string, listener: (payload: unknown) => void): () => void {
-      return rpc.onEvent(event, (fromId, payload) => {
-        if (fromId === rpcTargetId()) listener(payload);
+    on(event: string, listener: (payload: unknown) => void): () => void {
+      return rpc.on(event, (ev: RpcEventContext) => {
+        if (ev.caller.callerId === rpcTargetId()) listener(ev.payload);
       });
     },
     withContract<C extends PanelContract, Role extends PanelHandleContractRole>(
@@ -229,7 +231,7 @@ export function createNoPanelHandle(): PanelHandle {
       set: noParent,
     },
     emit: noParent,
-    onEvent: () => () => {},
+    on: () => () => {},
     withContract: () => handle as never,
     refresh: () => Promise.resolve(handle),
     children: () => Promise.resolve([]),
@@ -289,7 +291,7 @@ export function createNonPanelRuntimeHandle(options: {
       set: unavailable,
     },
     emit: unavailable,
-    onEvent: () => () => {},
+    on: () => () => {},
     withContract: () => handle as never,
     refresh: () => Promise.resolve(handle),
     children: () => Promise.resolve([]),

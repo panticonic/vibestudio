@@ -4,7 +4,7 @@ import { classifyChord, parseNavKey } from "./inputRouter.js";
 import { SessionManager, type RpcLike } from "./SessionManager.js";
 import { registerHostService } from "./HostService.js";
 import { encodeFrame, HOST_METHODS, SESSION_METHODS } from "@workspace/terminal-host-protocol";
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient, RpcRequestContext } from "@natstack/rpc";
 
 const enc = (s: string): Uint8Array => new TextEncoder().encode(s);
 
@@ -131,26 +131,24 @@ describe("SessionManager", () => {
 
 describe("HostService caller ownership", () => {
   function setup() {
-    type Ctx = { callerId: string; callerKind: string };
-    const handlers = new Map<string, (ctx: Ctx, ...a: unknown[]) => unknown>();
-    const bridge = {
-      exposeMethodWithCaller: (m: string, h: (ctx: Ctx, ...a: unknown[]) => unknown) =>
-        handlers.set(m, h),
-    } as unknown as RpcBridge;
-    const { rpc } = fakeRpc(); // createEntity → targetId "do:term:1"
-    const sessions = new SessionManager({ rpc, hostPrincipalId: "app:host", viewport: { columns: 40, rows: 6 } });
+    const handlers = new Map<string, (req: RpcRequestContext) => unknown>();
+    const hostRpc = {
+      expose: (m: string, h: (req: RpcRequestContext) => unknown) => handlers.set(m, h),
+    } as unknown as RpcClient;
+    const { rpc: workerRpc } = fakeRpc(); // createEntity -> targetId "do:term:1"
+    const sessions = new SessionManager({ rpc: workerRpc, hostPrincipalId: "app:host", viewport: { columns: 40, rows: 6 } });
     const rejected: Array<{ method: string; caller: string; session: string }> = [];
-    registerHostService(bridge, {
+    registerHostService(hostRpc, {
       sessions,
       setRealRawMode: () => {},
       isOverlayOpen: () => false,
       onRejected: (method, caller, session) => rejected.push({ method, caller, session }),
     });
-    return { handlers, sessions, rejected };
+    return { handlers, sessions, rejected, hostRpc };
   }
 
-  it("authorizes by strict owner-match, accepts the trusted gateway relay, rejects others", async () => {
-    const { handlers, sessions, rejected } = setup();
+  it("authorizes by strict owner-match and rejects all other callers", async () => {
+    const { handlers, sessions, rejected, hostRpc } = setup();
     const rec = await sessions.open({ source: "s", className: "C", title: "T" });
     expect(sessions.ownerOf(rec.sessionId)).toBe("do:term:1"); // the worker's principal
 
@@ -158,16 +156,39 @@ describe("HostService caller ownership", () => {
     const frame = encodeFrame(rec.sessionId, "stdout", new TextEncoder().encode("hi\n"), 0);
 
     // An unrelated principal (e.g. a panel) → rejected, nothing applied.
-    onFrame({ callerId: "panel:evil", callerKind: "panel" }, frame);
+    onFrame({
+      caller: { callerId: "panel:evil", callerKind: "panel" },
+      origin: { callerId: "panel:evil", callerKind: "panel" },
+      method: HOST_METHODS.onFrame,
+      args: [frame],
+      signal: new AbortController().signal,
+      rpc: hostRpc,
+    } as RpcRequestContext);
     expect(rejected).toEqual([
       { method: HOST_METHODS.onFrame, caller: "panel:evil", session: rec.sessionId },
     ]);
 
     // Strict owner → accepted.
-    onFrame({ callerId: "do:term:1", callerKind: "do" }, frame);
-    // Trusted gateway relay (today's DO path, caller collapsed to "main") → accepted.
-    onFrame({ callerId: "main", callerKind: "server" }, frame);
-    expect(rejected).toHaveLength(1); // only the panel was rejected
+    onFrame({
+      caller: { callerId: "do:term:1", callerKind: "do" },
+      origin: { callerId: "panel:owner", callerKind: "panel" },
+      method: HOST_METHODS.onFrame,
+      args: [frame],
+      signal: new AbortController().signal,
+      rpc: hostRpc,
+    } as RpcRequestContext);
+    onFrame({
+      caller: { callerId: "main", callerKind: "server" },
+      origin: { callerId: "panel:owner", callerKind: "panel" },
+      method: HOST_METHODS.onFrame,
+      args: [frame],
+      signal: new AbortController().signal,
+      rpc: hostRpc,
+    } as RpcRequestContext);
+    expect(rejected).toEqual([
+      { method: HOST_METHODS.onFrame, caller: "panel:evil", session: rec.sessionId },
+      { method: HOST_METHODS.onFrame, caller: "main", session: rec.sessionId },
+    ]);
 
     // Apply a fresh-seq frame directly (await the async VT write) for the grid assertion.
     await sessions.onFrame(encodeFrame(rec.sessionId, "stdout", new TextEncoder().encode("hi\n"), 10));
@@ -175,13 +196,18 @@ describe("HostService caller ownership", () => {
   });
 
   it("rejects setRawMode from an unrelated principal", () => {
-    const { handlers, rejected } = setup();
+    const { handlers, rejected, hostRpc } = setup();
     const setRaw = handlers.get(HOST_METHODS.setRawMode)! as (
-      ctx: { callerId: string; callerKind: string },
-      sessionId: string,
-      enabled: boolean,
+      req: RpcRequestContext,
     ) => { ok: boolean; reason?: string };
-    const result = setRaw({ callerId: "panel:evil", callerKind: "panel" }, "term-x", true);
+    const result = setRaw({
+      caller: { callerId: "panel:evil", callerKind: "panel" },
+      origin: { callerId: "panel:evil", callerKind: "panel" },
+      method: HOST_METHODS.setRawMode,
+      args: ["term-x", true],
+      signal: new AbortController().signal,
+      rpc: hostRpc,
+    } as RpcRequestContext);
     expect(result).toEqual({ ok: false, reason: "not-authorized" });
     expect(rejected.some((r) => r.method === HOST_METHODS.setRawMode)).toBe(true);
   });

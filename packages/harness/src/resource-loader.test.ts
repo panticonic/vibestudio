@@ -21,7 +21,7 @@ function createMockRpc(responses: Record<string, unknown>): RpcCaller {
   });
   return {
     call: call as RpcCaller["call"],
-    streamCall: vi.fn(async () => new Response()) as unknown as RpcCaller["streamCall"],
+    stream: vi.fn(async () => new Response()) as unknown as RpcCaller["stream"],
   };
 }
 
@@ -88,7 +88,7 @@ describe("loadNatStackResources", () => {
     });
     const rpc: RpcCaller = {
       call: call as RpcCaller["call"],
-      streamCall: vi.fn(async () => new Response()) as unknown as RpcCaller["streamCall"],
+      stream: vi.fn(async () => new Response()) as unknown as RpcCaller["stream"],
     };
 
     const loadPromise = loadNatStackResources({ rpc, signal: controller.signal });
@@ -147,7 +147,7 @@ describe("loadNatStackResources", () => {
     });
     const rpc: RpcCaller = {
       call: call as RpcCaller["call"],
-      streamCall: vi.fn(async () => new Response()) as unknown as RpcCaller["streamCall"],
+      stream: vi.fn(async () => new Response()) as unknown as RpcCaller["stream"],
     };
 
     const loadPromise = loadNatStackResources({ rpc });

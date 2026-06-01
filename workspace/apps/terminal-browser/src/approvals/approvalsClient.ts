@@ -1,4 +1,4 @@
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 import { RPC_METHODS, type ApprovalDecisionId } from "@natstack/shared/approvalContract";
 import type { PendingApproval } from "@natstack/shared/approvals";
 
@@ -15,10 +15,10 @@ export interface ApprovalsClient {
   onChange(listener: () => void): () => void;
 }
 
-export function createApprovalsClient(bridge: RpcBridge): ApprovalsClient {
+export function createApprovalsClient(rpc: RpcClient): ApprovalsClient {
   return {
     async list() {
-      const pending = await bridge.call<PendingApproval[]>(
+      const pending = await rpc.call<PendingApproval[]>(
         "main",
         RPC_METHODS.shellApproval.listPending,
         [],
@@ -26,13 +26,13 @@ export function createApprovalsClient(bridge: RpcBridge): ApprovalsClient {
       return Array.isArray(pending) ? pending : [];
     },
     async resolve(approvalId, decision) {
-      await bridge.call("main", RPC_METHODS.shellApproval.resolve, [approvalId, decision]);
+      await rpc.call("main", RPC_METHODS.shellApproval.resolve, [approvalId, decision]);
     },
     async resolveUserland(approvalId, choice) {
-      await bridge.call("main", RPC_METHODS.shellApproval.resolveUserland, [approvalId, choice]);
+      await rpc.call("main", RPC_METHODS.shellApproval.resolveUserland, [approvalId, choice]);
     },
     onChange(listener) {
-      return bridge.onEvent("shell-approval:pending-changed", () => listener());
+      return rpc.on("shell-approval:pending-changed", () => listener());
     },
   };
 }

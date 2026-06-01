@@ -8,7 +8,7 @@
  * in @workspace/agentic-do — composable modules that extend this base.
  */
 
-import { createHttpRpcBridge } from "../shared/httpRpcBridge.js";
+import { createHttpRpcClient } from "../shared/httpRpcBridge.js";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
 import { _initFsWithRpc } from "./fs.js";
@@ -19,7 +19,7 @@ import {
   type PanelHandleMetadata,
 } from "../shared/handles.js";
 import { createCdpAutomation } from "../panel/cdpAutomation.js";
-import type { AuthenticatedCaller, RpcBridge } from "@natstack/rpc";
+import type { AuthenticatedCaller, RpcClient } from "@natstack/rpc";
 import type { RuntimeFs } from "../types.js";
 import type { PanelHandle } from "../core/index.js";
 
@@ -41,7 +41,7 @@ import type { PanelHandle } from "../core/index.js";
 
 let consoleBridgeInstalled = false;
 
-function installConsoleBridge(rpc: RpcBridge): void {
+function installConsoleBridge(rpc: Pick<RpcClient, "call">): void {
   if (consoleBridgeInstalled) return;
   consoleBridgeInstalled = true;
   const original = {
@@ -169,7 +169,7 @@ export abstract class DurableObjectBase {
   protected env: Record<string, unknown>;
 
   private _schemaReady = false;
-  private _rpc: (RpcBridge & { handleIncomingPost(body: unknown): Promise<unknown> }) | null = null;
+  private _rpc: (RpcClient & { handleIncomingPost(body: unknown): Promise<unknown> }) | null = null;
   protected _currentRpcCallerId: string | null = null;
   protected _currentRpcCallerKind: string | null = null;
   protected _currentRpcCallerPanelId: string | null = null;
@@ -264,7 +264,7 @@ export abstract class DurableObjectBase {
   // --- RPC bridge + shared clients (lazy) ---
 
   /** RPC bridge for calling services and other workers/DOs */
-  protected get rpc(): RpcBridge & { handleIncomingPost(body: unknown): Promise<unknown> } {
+  protected get rpc(): RpcClient & { handleIncomingPost(body: unknown): Promise<unknown> } {
     if (!this._rpc) {
       const token = this.env["RPC_AUTH_TOKEN"];
       if (typeof token !== "string" || token.length === 0) {
@@ -285,7 +285,7 @@ export abstract class DurableObjectBase {
       if (!serverUrl) {
         throw new Error("RPC not available: GATEWAY_URL not configured");
       }
-      this._rpc = createHttpRpcBridge({
+      this._rpc = createHttpRpcClient({
         selfId: `do:${source}:${className}:${this.objectKey}`,
         serverUrl,
         authToken: token,
@@ -603,7 +603,7 @@ export abstract class DurableObjectBase {
     const normalized = title == null ? null : title.trim();
     const effective = normalized && normalized.length > 0 ? normalized : null;
     if (effective === this._titleSetForThisActivation) return;
-    let bridge: RpcBridge;
+    let bridge: Pick<RpcClient, "call">;
     try {
       bridge = this.rpc;
     } catch (err) {

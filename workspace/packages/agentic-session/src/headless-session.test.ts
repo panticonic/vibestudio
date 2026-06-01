@@ -9,7 +9,7 @@ function createConfig(): ConnectionConfig {
     rpc: {
       selfId: "headless-test",
       call: vi.fn(),
-      onEvent: vi.fn(() => vi.fn()),
+      on: vi.fn(() => vi.fn()),
     },
   };
 }

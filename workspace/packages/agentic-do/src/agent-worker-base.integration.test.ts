@@ -1572,9 +1572,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
-        streamCall: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
         emit: ReturnType<typeof vi.fn>;
-        onEvent: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
         handleIncomingPost: ReturnType<typeof vi.fn>;
       };
       runners: Map<string, { runner: unknown }>;
@@ -1589,9 +1589,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     };
     worker._rpc = {
       call: rpcCall,
-      streamCall: vi.fn(),
+      stream: vi.fn(),
       emit: vi.fn(),
-      onEvent: vi.fn(),
+      on: vi.fn(),
       handleIncomingPost: vi.fn(),
     };
     const executeToolDirect = vi.fn(async () => {
@@ -1787,9 +1787,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
-        streamCall: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
         emit: ReturnType<typeof vi.fn>;
-        onEvent: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
         handleIncomingPost: ReturnType<typeof vi.fn>;
       };
       createMethodResultWaiter(
@@ -1807,9 +1807,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     };
     worker._rpc = {
       call: rpcCall,
-      streamCall: vi.fn(),
+      stream: vi.fn(),
       emit: vi.fn(),
-      onEvent: vi.fn(),
+      on: vi.fn(),
       handleIncomingPost: vi.fn(),
     };
     insertSuspension(sql, {
@@ -1857,9 +1857,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
-        streamCall: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
         emit: ReturnType<typeof vi.fn>;
-        onEvent: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
         handleIncomingPost: ReturnType<typeof vi.fn>;
       };
       createMethodResultWaiter(
@@ -1880,9 +1880,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
         if (method === "blobstore.putText") throw new Error("blobstore down");
         return null;
       }),
-      streamCall: vi.fn(),
+      stream: vi.fn(),
       emit: vi.fn(),
-      onEvent: vi.fn(),
+      on: vi.fn(),
       handleIncomingPost: vi.fn(),
     };
     insertSuspension(sql, {
@@ -1998,9 +1998,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
-        streamCall: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
         emit: ReturnType<typeof vi.fn>;
-        onEvent: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
         handleIncomingPost: ReturnType<typeof vi.fn>;
       };
       runners: Map<string, { runner: unknown }>;
@@ -2014,9 +2014,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     };
     worker._rpc = {
       call: rpcCall,
-      streamCall: vi.fn(),
+      stream: vi.fn(),
       emit: vi.fn(),
-      onEvent: vi.fn(),
+      on: vi.fn(),
       handleIncomingPost: vi.fn(),
     };
     worker.runners.set("chat-1", {
@@ -2084,9 +2084,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
-        streamCall: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
         emit: ReturnType<typeof vi.fn>;
-        onEvent: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
         handleIncomingPost: ReturnType<typeof vi.fn>;
       };
       handleCompletedMethodResult(
@@ -2098,9 +2098,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     };
     worker._rpc = {
       call: vi.fn(async () => null),
-      streamCall: vi.fn(),
+      stream: vi.fn(),
       emit: vi.fn(),
-      onEvent: vi.fn(),
+      on: vi.fn(),
       handleIncomingPost: vi.fn(),
     };
     insertSuspension(sql, {
@@ -3167,16 +3167,16 @@ describe("TrajectoryVesselBase custom message recovery", () => {
     (instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
-        streamCall: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
         emit: ReturnType<typeof vi.fn>;
-        onEvent: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
         handleIncomingPost: ReturnType<typeof vi.fn>;
       };
     })._rpc = {
       call: blobstoreGetText,
-      streamCall: vi.fn(),
+      stream: vi.fn(),
       emit: vi.fn(),
-      onEvent: vi.fn(),
+      on: vi.fn(),
       handleIncomingPost: vi.fn(),
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
@@ -3741,9 +3741,9 @@ describe("AgentWorkerBase model credential resume", () => {
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
-        streamCall: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
         emit: ReturnType<typeof vi.fn>;
-        onEvent: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
         handleIncomingPost: ReturnType<typeof vi.fn>;
       };
       subscriptions: {
@@ -3758,9 +3758,9 @@ describe("AgentWorkerBase model credential resume", () => {
 
     worker._rpc = {
       call: vi.fn(async () => null),
-      streamCall: vi.fn(),
+      stream: vi.fn(),
       emit: vi.fn(),
-      onEvent: vi.fn(),
+      on: vi.fn(),
       handleIncomingPost: vi.fn(),
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
@@ -3790,9 +3790,9 @@ describe("AgentWorkerBase model credential resume", () => {
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
-        streamCall: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
         emit: ReturnType<typeof vi.fn>;
-        onEvent: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
         handleIncomingPost: ReturnType<typeof vi.fn>;
       };
       getModelBaseUrl(channelId: string): string;
@@ -3812,9 +3812,9 @@ describe("AgentWorkerBase model credential resume", () => {
           );
         });
       }),
-      streamCall: vi.fn(),
+      stream: vi.fn(),
       emit: vi.fn(),
-      onEvent: vi.fn(),
+      on: vi.fn(),
       handleIncomingPost: vi.fn(),
     };
     worker.getModelBaseUrl = vi.fn().mockReturnValue("https://model.example/v1");

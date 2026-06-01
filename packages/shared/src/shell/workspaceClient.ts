@@ -5,7 +5,7 @@
  * (like workspace.select which requires app restart on Electron) are
  * intentionally excluded; each platform handles those independently.
  */
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 import type { WorkspaceEntry } from "../types.js";
 import type {
   HostTarget,
@@ -14,8 +14,8 @@ import type {
   HostTargetSelectionInput,
 } from "../hostTargets.js";
 export class WorkspaceClient {
-  private rpc: RpcBridge;
-  constructor(rpc: RpcBridge) {
+  private rpc: Pick<RpcClient, "call">;
+  constructor(rpc: Pick<RpcClient, "call">) {
     this.rpc = rpc;
   }
   list(): Promise<WorkspaceEntry[]> {

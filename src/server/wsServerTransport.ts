@@ -4,7 +4,7 @@
  * Implements the RpcTransport interface from @natstack/rpc, wrapping a
  * server-held WebSocket connection to a specific authenticated client.
  * The RpcServer creates one of these per client after authentication,
- * then wraps it in an RpcBridge so the server can call methods exposed
+ * then wraps it in an RpcClient so the server can call methods exposed
  * by the client.
  *
  * Message flow:

@@ -1,16 +1,8 @@
-jest.mock(
-  "@natstack/shared/shell/transport",
-  () => ({
-    BaseWsTransport: class {},
-  }),
-  { virtual: true }
-);
+import { buildWsUrl, MobileRpcClient, type MobileConnectionGrant } from "./mobileTransport";
 
-import { buildWsUrl, MobileTransport, type MobileConnectionGrant } from "./mobileTransport";
-
-describe("MobileTransport", () => {
+describe("MobileRpcClient", () => {
   it("accepts workspace mobile app principals from native grants", async () => {
-    const transport = new MobileTransport({
+    const transport = new MobileRpcClient({
       serverUrl: "https://server.example",
       issueConnectionGrant: async () => ({
         callerId: "app:apps/field-mobile:dev_123",
@@ -30,7 +22,7 @@ describe("MobileTransport", () => {
   });
 
   it("rejects non-canonical app principals from native grants", async () => {
-    const transport = new MobileTransport({
+    const transport = new MobileRpcClient({
       serverUrl: "https://server.example",
       issueConnectionGrant: async () => ({
         callerId: "app:other-app:dev_123",

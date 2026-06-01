@@ -5,11 +5,11 @@
  * (setApiKey, removeApiKey, setModelRole) were removed in the Phase 8
  * migration to the chat agent path.
  */
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 import type { SettingsData } from "../types.js";
 export class SettingsClient {
-    private rpc: RpcBridge;
-    constructor(rpc: RpcBridge) {
+    private rpc: Pick<RpcClient, "call">;
+    constructor(rpc: Pick<RpcClient, "call">) {
         this.rpc = rpc;
     }
     getData(): Promise<SettingsData> {

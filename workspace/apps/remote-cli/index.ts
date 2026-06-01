@@ -1,6 +1,11 @@
-import { createRpcBridge, type RpcMessage } from "@natstack/rpc";
+import {
+  createRpcClient,
+  envelopeFromMessage,
+  type EnvelopeRpcTransport,
+  type RpcClient,
+  type RpcEnvelope,
+} from "@natstack/rpc";
 import { createConnectDeepLink } from "@natstack/shared/connect";
-import { createHandlerRegistry } from "@natstack/rpc";
 import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
 import WebSocket from "ws";
 
@@ -47,23 +52,32 @@ async function connect() {
   const token = requiredEnv("NATSTACK_TERMINAL_APP_RPC_TOKEN");
   const connectionId = requiredEnv("NATSTACK_TERMINAL_APP_CONNECTION_ID");
   const ws = new WebSocket(gatewayWebSocketUrl());
-  const registry = createHandlerRegistry({ context: appId });
-  const bridge = createRpcBridge({
-    selfId: appId,
-    transport: {
-      async send(_targetId: string, message: RpcMessage): Promise<void> {
-        if (ws.readyState !== WebSocket.OPEN) {
-          throw new Error("Terminal app WebSocket RPC is not connected");
-        }
-        ws.send(JSON.stringify({ type: "ws:rpc", message } satisfies WsClientMessage));
-      },
-      onMessage(sourceId: string, handler: (message: RpcMessage) => void): () => void {
-        return registry.onMessage(sourceId, handler);
-      },
-      onAnyMessage(handler: (sourceId: string, message: RpcMessage) => void): () => void {
-        return registry.onAnyMessage(handler);
-      },
+  const listeners = new Set<(envelope: RpcEnvelope) => void>();
+  const transport: EnvelopeRpcTransport = {
+    async send(envelope: RpcEnvelope): Promise<void> {
+      if (ws.readyState !== WebSocket.OPEN) {
+        throw new Error("Terminal app WebSocket RPC is not connected");
+      }
+      ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope,
+          message: envelope.message,
+        } satisfies WsClientMessage)
+      );
     },
+    onMessage(handler: (envelope: RpcEnvelope) => void): () => void {
+      listeners.add(handler);
+      return () => listeners.delete(handler);
+    },
+    status: () => (ws.readyState === WebSocket.OPEN ? "connected" : "disconnected"),
+    ready: () => Promise.resolve(),
+    onStatusChange: () => () => {},
+  };
+  const rpc: RpcClient = createRpcClient({
+    selfId: appId,
+    callerKind: "app",
+    transport,
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -105,25 +119,54 @@ async function connect() {
     } catch {
       return;
     }
-    if (message.type === "ws:rpc") registry.deliver("main", message.message, "server");
-    if (message.type === "ws:routed")
-      registry.deliver(message.fromId, message.message, message.fromKind);
+    if (message.type === "ws:rpc") {
+      const envelope =
+        message.envelope ??
+        (message.message
+          ? envelopeFromMessage({
+              selfId: appId,
+              from: "main",
+              target: appId,
+              callerKind: "server",
+              message: message.message,
+            })
+          : null);
+      if (envelope) {
+        for (const listener of listeners) listener(envelope);
+      }
+    }
+    if (message.type === "ws:routed") {
+      const envelope =
+        message.envelope ??
+        (message.message
+          ? envelopeFromMessage({
+              selfId: appId,
+              from: message.fromId ?? "unknown",
+              target: appId,
+              callerKind: message.fromKind ?? "unknown",
+              message: message.message,
+            })
+          : null);
+      if (envelope) {
+        for (const listener of listeners) listener(envelope);
+      }
+    }
     if (message.type === "ws:event" && message.event === "apps:lifecycle") {
       console.log(`[apps:lifecycle] ${JSON.stringify(message.payload)}`);
     }
   });
   ws.on("close", () => process.exit(0));
-  return { bridge, close: () => ws.close(1000, "terminal app closing") };
+  return { rpc, close: () => ws.close(1000, "terminal app closing") };
 }
 
 export async function main(): Promise<void> {
-  const { bridge, close } = await connect();
+  const { rpc, close } = await connect();
   printBootstrapSummary();
-  const workspace = await bridge.call("main", "workspace.getInfo", []);
+  const workspace = await rpc.call("main", "workspace.getInfo", []);
   console.log(`Connected as ${requiredEnv("NATSTACK_TERMINAL_APP_ID")}`);
   console.log(`Workspace: ${(workspace as { config?: { id?: string } }).config?.id ?? "unknown"}`);
 
-  const units = await bridge.call("main", "workspace.units.list", []);
+  const units = await rpc.call("main", "workspace.units.list", []);
   const unitRows = Array.isArray(units) ? units : [];
   console.log(`Workspace units: ${unitRows.length}`);
   for (const unit of unitRows) {
@@ -145,7 +188,7 @@ export async function main(): Promise<void> {
   const command = process.env["NATSTACK_TERMINAL_APP_COMMAND"] ?? "invite";
   if (command === "status") return;
   if (command === "invite") {
-    const invite = (await bridge.call("main", "auth.createPairingInvite", [
+    const invite = (await rpc.call("main", "auth.createPairingInvite", [
       { ttlMs: 10 * 60 * 1000 },
     ])) as PairingInviteLike;
     console.log(formatPairingInvite(invite));

@@ -5,15 +5,17 @@
 import { WebSocket } from "ws";
 import * as fs from "fs";
 import {
-  BaseWsTransport,
-  type ConnectionStatus,
-  type WsLike,
-} from "@natstack/shared/shell/transport";
-import type { RpcMessage } from "@natstack/rpc";
+  createRpcClient,
+  type RpcClient,
+  type RpcConnectionStatus,
+  type RpcMessage,
+} from "@natstack/rpc";
+import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
+import type { WsLike } from "@natstack/rpc/protocol/wsAdapter";
 import type { CallerKind } from "@natstack/shared/serviceDispatcher";
 import { createPinnedTlsSocket } from "./tlsPinning.js";
 
-export type { ConnectionStatus };
+export type ConnectionStatus = RpcConnectionStatus;
 
 export interface ScopedServerCaller {
   callerId: string;
@@ -60,8 +62,8 @@ export interface ServerClientOptions {
   onDisconnect?: () => void;
   /** Called when connection status changes (for UI indicators) */
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
-  /** Called when the server sends an event */
-  onEvent?: (event: string, payload: unknown) => void;
+  /** Called when the server sends a host event */
+  onServerEvent?: (event: string, payload: unknown) => void;
   /** Called after auth when the transport needs subscriptions or state replayed. */
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   /** Enable automatic reconnection on disconnect (default: false for local, true if wsUrl is set) */
@@ -135,14 +137,12 @@ export async function createServerClient(
   const shouldReconnect = options?.reconnect ?? !!(options?.wsUrl || options?.getWsUrl);
   const refreshAuthToken = options?.refreshAuthToken;
 
-  const transport = new BaseWsTransport({
+  const transport = wsClientTransport({
     selfId: "admin",
     getWsUrl,
     reconnect: shouldReconnect,
     logPrefix: "ServerClient",
-    onConnectionStatusChanged: options?.onConnectionStatusChanged,
-    onDisconnect: options?.onDisconnect,
-    onEvent: options?.onEvent,
+    onServerEvent: options?.onServerEvent,
     onRecovery: options?.onRecovery,
     adapter: {
       now: () => Date.now(),
@@ -156,11 +156,21 @@ export async function createServerClient(
       createSocket: (url) => new NodeWsLike(new WebSocket(url, createWsOptions(url, options?.tls))),
     },
   });
+  transport.onStatusChange!((status) => {
+    options?.onConnectionStatusChanged?.(status);
+    if (status === "disconnected") options?.onDisconnect?.();
+  });
 
   await transport.connectAndWait();
+  const rpc = createRpcClient({
+    selfId: "admin",
+    callerKind: "server",
+    transport,
+  });
 
   type ScopedClient = {
-    transport: BaseWsTransport;
+    transport: ReturnType<typeof wsClientTransport>;
+    rpc: RpcClient;
     close(): Promise<void>;
   };
   const scopedClients = new Map<string, Promise<ScopedClient>>();
@@ -172,10 +182,10 @@ export async function createServerClient(
     if (caller.callerKind !== "app") {
       throw new Error(`Scoped server RPC is not available for ${caller.callerKind} callers`);
     }
-    const grant = await transport.callMain<{ token: string }>("auth.grantConnection", [
+    const grant = await rpc.call<{ token: string }>("main", "auth.grantConnection", [
       caller.callerId,
     ]);
-    const scopedTransport = new BaseWsTransport({
+    const scopedTransport = wsClientTransport({
       selfId: caller.callerId,
       getWsUrl,
       reconnect: false,
@@ -186,18 +196,24 @@ export async function createServerClient(
         createSocket: (url) =>
           new NodeWsLike(new WebSocket(url, createWsOptions(url, options?.tls))),
       },
-      onDisconnect: () => {
-        scopedClients.delete(scopedKey(caller));
-      },
     });
-    scopedTransport.onMessage((fromId, message) => {
+    const scopedRpc = createRpcClient({
+      selfId: caller.callerId,
+      callerKind: caller.callerKind,
+      transport: scopedTransport,
+    });
+    scopedTransport.onStatusChange!((status) => {
+      if (status === "disconnected") scopedClients.delete(scopedKey(caller));
+    });
+    scopedTransport.onMessage((envelope) => {
       for (const listener of scopedListeners.get(scopedKey(caller)) ?? []) {
-        listener(fromId, message);
+        listener(envelope.from, envelope.message);
       }
     });
     await scopedTransport.connectAndWait();
     return {
       transport: scopedTransport,
+      rpc: scopedRpc,
       close: () => scopedTransport.close(),
     };
   };
@@ -207,7 +223,7 @@ export async function createServerClient(
     const existing = scopedClients.get(key);
     if (existing) {
       const client = await existing;
-      if (client.transport.isConnected()) return client;
+      if (client.transport.status!() === "connected") return client;
       scopedClients.delete(key);
       void client.close();
     }
@@ -221,7 +237,7 @@ export async function createServerClient(
 
   return {
     call(service: string, method: string, args: unknown[]): Promise<unknown> {
-      return transport.callMain(`${service}.${method}`, args);
+      return rpc.call("main", `${service}.${method}`, args);
     },
     async callAs(
       caller: ScopedServerCaller,
@@ -229,9 +245,9 @@ export async function createServerClient(
       method: string,
       args: unknown[]
     ): Promise<unknown> {
-      if (caller.callerKind === "shell") return transport.callMain(`${service}.${method}`, args);
+      if (caller.callerKind === "shell") return rpc.call("main", `${service}.${method}`, args);
       const client = await getScopedClient(caller);
-      return client.transport.callMain(`${service}.${method}`, args);
+      return client.rpc.call("main", `${service}.${method}`, args);
     },
     addMessageListener(caller: ScopedServerCaller, listener: ServerMessageListener): () => void {
       const key = scopedKey(caller);
@@ -247,10 +263,10 @@ export async function createServerClient(
       };
     },
     isConnected(): boolean {
-      return transport.isConnected();
+      return transport.status!() === "connected";
     },
     getConnectionStatus(): ConnectionStatus {
-      return transport.getConnectionStatus();
+      return transport.status!();
     },
     async close(): Promise<void> {
       await Promise.allSettled(

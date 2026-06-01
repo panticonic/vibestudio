@@ -20,7 +20,7 @@ function createConfig(): ConnectionConfig {
     rpc: {
       selfId: "panel:panel-1",
       call,
-      onEvent: vi.fn(() => vi.fn()),
+      on: vi.fn(() => vi.fn()),
     },
   };
 }

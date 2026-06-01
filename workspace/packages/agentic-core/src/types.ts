@@ -36,7 +36,7 @@ export interface ConnectionConfig {
   clientId: string;
   rpc: {
     call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;
-    onEvent(event: string, listener: (fromId: string, payload: unknown) => void): () => void;
+    on(event: string, listener: (event: { payload: unknown }) => void): () => void;
     selfId: string;
   };
   protocol?: string;

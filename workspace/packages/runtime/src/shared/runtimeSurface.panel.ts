@@ -28,7 +28,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
     getTheme: valueEntry(),
     onThemeChange: valueEntry(),
     onFocus: valueEntry(),
-    exposeMethod: valueEntry(),
+    expose: valueEntry(),
     contextId: valueEntry(),
     recoveryCoordinator: valueEntry("Panel transport recovery phase coordinator."),
     parentId: valueEntry(),

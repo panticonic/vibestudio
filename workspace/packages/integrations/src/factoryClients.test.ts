@@ -42,9 +42,9 @@ function makeMockEnv(
       }
       throw new Error(`unexpected method: ${method}`);
     }) as RpcCaller["call"],
-    streamCall: async (_target: string, method: string, args: unknown[]) => {
+    stream: async (_target: string, method: string, args: unknown[]) => {
       if (method !== "credentials.proxyFetch") {
-        throw new Error(`unexpected streamCall method: ${method}`);
+        throw new Error(`unexpected stream method: ${method}`);
       }
       const params = args[0] as {
         url: string;
@@ -169,7 +169,7 @@ describe("factory client retry semantics", () => {
         }
         throw new Error(`unexpected method: ${method}`);
       }) as RpcCaller["call"],
-      streamCall: async () => jsonResponse({ login: "u", id: 1 }),
+      stream: async () => jsonResponse({ login: "u", id: 1 }),
     };
     const github = createGitHubClient(createCredentialClient(rpc));
 

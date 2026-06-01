@@ -5,7 +5,7 @@
  *   import { browserData } from "@workspace/panel-browser";
  *   const browsers = await browserData.detectBrowsers();
  *
- * Or explicitly with an RPC bridge:
+ * Or explicitly with an RPC client:
  *   import { createBrowserDataApi } from "@workspace/panel-browser";
  *   import { rpc } from "@workspace/runtime";
  *   const browserData = createBrowserDataApi(rpc);
@@ -13,7 +13,7 @@
  * Note: `openPanel(url)` (for opening external URL panels with CDP access)
  * is available from `@workspace/runtime`, not this package.
  */
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 import { createExtensionProxy } from "@natstack/extension";
 // ---- Types (mirrored from @natstack/browser-data for browser context) ----
 export type BrowserName = "firefox" | "zen" | "chrome" | "chrome-beta" | "chrome-dev" | "chrome-canary" | "chromium" | "edge" | "edge-beta" | "edge-dev" | "brave" | "vivaldi" | "opera" | "opera-gx" | "arc" | "safari";
@@ -203,9 +203,9 @@ export interface BrowserDataApi {
     exportAll(): Promise<string>;
 }
 const BROWSER_DATA_EXTENSION = "@workspace-extensions/browser-data";
-export function createBrowserDataApi(rpc: RpcBridge): BrowserDataApi {
+export function createBrowserDataApi(rpc: Pick<RpcClient, "call" | "stream">): BrowserDataApi {
     if (!rpc) {
-        throw new Error("createBrowserDataApi requires an RPC bridge. " +
+        throw new Error("createBrowserDataApi requires an RPC client. " +
             "In eval context: import { rpc } from '@workspace/runtime'. " +
             "In inline_ui components: use chat.rpc.");
     }
@@ -215,7 +215,7 @@ export function createBrowserDataApi(rpc: RpcBridge): BrowserDataApi {
     // every call goes through extensions.invoke.
     return createExtensionProxy<BrowserDataApi>(rpc, BROWSER_DATA_EXTENSION, () => false);
 }
-// Auto-initialize using the runtime's RPC bridge via __natstackRequire__
+// Auto-initialize using the runtime's RPC client via __natstackRequire__
 // (the module system for panel bundles and eval/inline_ui blocks).
 // Routing to the correct backend (Electron IPC vs server WebSocket) is
 // handled by the panel transport layer — callers don't need to know
@@ -225,7 +225,7 @@ export function getBrowserData(): BrowserDataApi {
     if (_browserData)
         return _browserData;
     const require = (globalThis as Record<string, unknown>)["__natstackRequire__"] as ((id: string) => {
-        rpc: RpcBridge;
+        rpc: Pick<RpcClient, "call" | "stream">;
     }) | undefined;
     if (!require) {
         throw new Error("browserData requires __natstackRequire__ (panel runtime). " +

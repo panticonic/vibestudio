@@ -8,14 +8,14 @@
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 import type { ChannelEvent } from "@natstack/harness/types";
 import type { BroadcastEnvelope } from "./types.js";
 import type { RpcChannelMessage } from "@workspace/pubsub";
 
 export interface BroadcastDeps {
   sql: SqlStorage;
-  rpc: RpcBridge;
+  rpc: Pick<RpcClient, "call" | "emit">;
   objectKey: string;
 }
 

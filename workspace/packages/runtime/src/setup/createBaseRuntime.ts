@@ -6,7 +6,12 @@
  *
  * Does NOT include: stateArgs, panel handles, panel-specific features.
  */
-import { createRpcBridge, type RpcTransport } from "@natstack/rpc";
+import {
+    createRpcClient,
+    envelopeFromMessage,
+    type EnvelopeRpcTransport,
+    type RpcTransport,
+} from "@natstack/rpc";
 import { createWorkerdClient } from "../shared/workerd.js";
 import type { GitConfig, WorkspaceTree, BranchInfo, CommitInfo, } from "../core/index.js";
 import type { GatewayConfig } from "../shared/globals.js";
@@ -26,7 +31,10 @@ export interface BaseRuntimeDeps {
 export function createBaseRuntime(deps: BaseRuntimeDeps) {
     deps.setupGlobals?.();
     const primaryTransport = deps.createTransport();
-    const rpc = createRpcBridge({ selfId: deps.selfId, transport: primaryTransport });
+    const rpc = createRpcClient({
+        selfId: deps.selfId,
+        transport: envelopeTransportFromLegacy(deps.selfId, primaryTransport),
+    });
     const fs = deps.fs;
     const callMain = <T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, [...args]);
     const workers = createWorkerdClient(rpc);
@@ -46,7 +54,7 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
             return appearance;
         return null;
     };
-    const onThemeEvent = (_fromId: string, payload: unknown) => {
+    const onThemeEvent = (payload: unknown) => {
         const theme = parseThemeAppearance(payload);
         if (!theme)
             return;
@@ -56,14 +64,14 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     };
     // Theme events come from:
     // - Electron: via __natstackElectron.addEventListener
-    // - Server WS: via rpc.onEvent (for both Electron and standalone)
-    const themeUnsubscribers = [rpc.onEvent("runtime:theme", onThemeEvent)];
+    // - Server WS: via rpc.on (for both Electron and standalone)
+    const themeUnsubscribers = [rpc.on("runtime:theme", (event) => onThemeEvent(event.payload))];
     // Focus listeners — maintained as a direct set so Electron IPC events
     // can trigger them without going through the RPC bridge.
     const focusCallbacks = new Set<() => void>();
     const focusUnsubscribers: Array<() => void> = [];
     // Also listen for focus via RPC (standalone mode, server-sent events)
-    const rpcFocusUnsub = rpc.onEvent("runtime:focus", () => {
+    const rpcFocusUnsub = rpc.on("runtime:focus", () => {
         for (const cb of focusCallbacks)
             cb();
     });
@@ -85,7 +93,7 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     if (electron?.addEventListener) {
         electronListenerId = electron.addEventListener((event: string, payload: unknown) => {
             if (event === "runtime:theme") {
-                onThemeEvent("main", payload);
+                onThemeEvent(payload);
             }
             else if (event === "runtime:focus") {
                 // Directly invoke focus callbacks — no RPC bridge roundtrip needed
@@ -110,9 +118,10 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
         reason: string;
         source?: "electron" | "server";
     }) => void): (() => void) => {
-        return rpc.onEvent("runtime:connection-error", (fromId: string, payload: unknown) => {
-            if (fromId !== "main")
+        return rpc.on("runtime:connection-error", (event) => {
+            if (event.caller.callerId !== "main")
                 return;
+            const payload = event.payload;
             const data = payload as {
                 code?: unknown;
                 reason?: unknown;
@@ -144,7 +153,9 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
             return () => { themeListeners.delete(callback); };
         },
         onFocus,
-        exposeMethod: rpc.exposeMethod.bind(rpc),
+        expose: (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) => {
+            rpc.expose(method, (request) => handler(...request.args));
+        },
         gatewayConfig: deps.gatewayConfig ?? null,
         gitConfig: deps.gitConfig ?? null,
         contextId: deps.contextId,
@@ -152,3 +163,22 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     };
 }
 export type BaseRuntime = ReturnType<typeof createBaseRuntime>;
+
+function envelopeTransportFromLegacy(selfId: string, transport: RpcTransport): EnvelopeRpcTransport {
+    return {
+        async send(envelope) {
+            await transport.send(envelope.target, envelope.message);
+        },
+        onMessage(handler) {
+            return transport.onAnyMessage((sourceId, message, callerKind) => {
+                handler(envelopeFromMessage({
+                    selfId,
+                    from: sourceId,
+                    target: selfId,
+                    message,
+                    callerKind,
+                }));
+            });
+        },
+    };
+}

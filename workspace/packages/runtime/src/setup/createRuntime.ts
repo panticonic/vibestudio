@@ -72,7 +72,7 @@ export function createRuntime(deps: RuntimeDeps) {
 
   _initStateArgsRuntime(slotId, (service, method, args) => base.rpc.call(service, method, args));
   registerAgentApi(shell);
-  exposeAgentApi(base.exposeMethod);
+  exposeAgentApi(base.expose);
   if (typeof shell?.addEventListener === "function") {
     shell.addEventListener((event: string, payload: unknown) => {
       if (event === "runtime:stateArgsChanged") {
@@ -209,7 +209,7 @@ export function createRuntime(deps: RuntimeDeps) {
 
     onFocus: base.onFocus,
 
-    exposeMethod: base.exposeMethod,
+    expose: base.expose,
 
     gitConfig: base.gitConfig,
     contextId: base.contextId,

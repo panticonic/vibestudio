@@ -534,20 +534,20 @@ export function MainScreen() {
       refreshTree();
       activatePanel(panelId);
     });
-    const unsubNav = shellClient.transport.onEvent(
+    const unsubNav = shellClient.transport.on(
       "event:navigate-to-panel",
-      (_from: string, payload: unknown) => {
-        const { panelId } = payload as {
+      (event) => {
+        const { panelId } = event.payload as {
           panelId: string;
         };
         if (panelId) activatePanel(panelId);
       }
     );
     void refreshPendingApprovals().catch(() => {});
-    const unsubExternal = shellClient.transport.onEvent(
+    const unsubExternal = shellClient.transport.on(
       "event:external-open:open",
-      (_from: string, payload: unknown) => {
-        void handleExternalOpen(shellClient, payload as ExternalOpenPayload).catch(
+      (event) => {
+        void handleExternalOpen(shellClient, event.payload as ExternalOpenPayload).catch(
           (error: unknown) => {
             const message = error instanceof Error ? error.message : String(error);
             console.warn("[MainScreen] Failed to open external URL:", error);
@@ -561,10 +561,10 @@ export function MainScreen() {
         );
       }
     );
-    const unsubNotification = shellClient.transport.onEvent(
+    const unsubNotification = shellClient.transport.on(
       "event:notification:show",
-      (_from: string, payload: unknown) => {
-        const notif = payload as {
+      (event) => {
+        const notif = event.payload as {
           id?: string;
           title?: string;
           message?: string;
@@ -593,10 +593,10 @@ export function MainScreen() {
         }
       }
     );
-    const unsubAppLifecycle = shellClient.transport.onEvent(
+    const unsubAppLifecycle = shellClient.transport.on(
       "event:apps:lifecycle",
-      (_from: string, payload: unknown) => {
-        handleMobileAppLifecycleEvent(payload as AppLifecyclePayload, {
+      (event) => {
+        handleMobileAppLifecycleEvent(event.payload as AppLifecyclePayload, {
           shellClient,
           pushToast,
           prompted: promptedAppUpdatesRef.current,
@@ -605,13 +605,13 @@ export function MainScreen() {
         });
       }
     );
-    const unsubApproval = shellClient.transport.onEvent(
+    const unsubApproval = shellClient.transport.on(
       "event:shell-approval:pending-changed",
       () => {
         void refreshPendingApprovals().catch(() => {});
       }
     );
-    const unsubWorkspaceRevision = shellClient.transport.onEvent(
+    const unsubWorkspaceRevision = shellClient.transport.on(
       "event:workspace:revision-bumped",
       () => {
         void shellClient.panels

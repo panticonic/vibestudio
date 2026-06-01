@@ -35,7 +35,11 @@ export class ShellOverlayView {
     if (!this.isOwnSender(event.sender.id)) return;
     const message = payload as { type?: unknown; payload?: unknown };
     if (typeof message?.type !== "string" || !this.overlayId) return;
-    this.onEvent({ overlayId: this.overlayId, type: message.type, payload: message.payload });
+    this.onOverlayEvent({
+      overlayId: this.overlayId,
+      type: message.type,
+      payload: message.payload,
+    });
   };
 
   private readonly handleHide = (event: Electron.IpcMainEvent) => {
@@ -45,7 +49,7 @@ export class ShellOverlayView {
 
   constructor(
     private readonly preloadPath: string,
-    private readonly onEvent: (event: ShellOverlayEvent) => void
+    private readonly onOverlayEvent: (event: ShellOverlayEvent) => void
   ) {
     ipcMain.on("natstack:shell-overlay:event", this.handleOverlayEvent);
     ipcMain.on("natstack:shell-overlay:hide", this.handleHide);

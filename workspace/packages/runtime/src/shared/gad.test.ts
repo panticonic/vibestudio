@@ -16,7 +16,7 @@ describe("createGadClient", () => {
         }
         return { rows: [] };
       }),
-      streamCall: vi.fn(),
+      stream: vi.fn(),
     };
     const gad = createGadClient(rpc as never);
 
@@ -87,7 +87,7 @@ describe("createGadClient", () => {
         }
         return { rows: [] };
       }),
-      streamCall: vi.fn(),
+      stream: vi.fn(),
     };
     const gad = createGadClient(rpc as never);
 

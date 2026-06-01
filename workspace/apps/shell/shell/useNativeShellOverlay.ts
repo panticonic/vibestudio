@@ -8,7 +8,7 @@ import {
 
 export function useNativeShellOverlay(
   options: (NativeShellOverlayOptions & { open: boolean }) | null,
-  onEvent?: (event: NativeShellOverlayEvent) => void
+  onOverlayEvent?: (event: NativeShellOverlayEvent) => void
 ): void {
   const visibleIdRef = useRef<string | null>(null);
   const lastOptionsKeyRef = useRef<string | null>(null);
@@ -48,13 +48,13 @@ export function useNativeShellOverlay(
   ]);
 
   useEffect(() => {
-    if (!onEvent) return;
-    return nativeShellOverlay.onEvent((event) => {
+    if (!onOverlayEvent) return;
+    return nativeShellOverlay.on((event) => {
       if (!options?.id || event.overlayId === options.id) {
-        onEvent(event);
+        onOverlayEvent(event);
       }
     });
-  }, [onEvent, options?.id]);
+  }, [onOverlayEvent, options?.id]);
 }
 
 function getOverlayOptionsKey(options: NativeShellOverlayOptions): string {

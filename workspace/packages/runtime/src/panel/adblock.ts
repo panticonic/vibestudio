@@ -4,7 +4,7 @@
  * Provides a clean API for panels to interact with the ad blocking system,
  * including per-panel stats and control.
  */
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 /**
  * Ad blocking statistics.
  */
@@ -38,7 +38,7 @@ export interface AdBlockApi {
 /**
  * Create the ad blocking API using the provided RPC bridge.
  */
-export function createAdBlockApi(rpc: RpcBridge): AdBlockApi {
+export function createAdBlockApi(rpc: Pick<RpcClient, "call">): AdBlockApi {
     return {
         async getStats(): Promise<AdBlockStats> {
             return rpc.call<AdBlockStats>("main", "adblock.getStats", []);

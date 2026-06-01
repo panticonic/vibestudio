@@ -1,7 +1,7 @@
 import { Box, Button, Flex, Text, Theme } from "@radix-ui/themes";
 import { useIsMobile, usePanelTheme } from "@workspace/react";
 import {
-  exposeMethod,
+  expose,
   getStateArgs,
   setStateArgs,
   workspace,
@@ -594,23 +594,23 @@ export function TerminalApp() {
       listSessions: async () => Object.values(sessions),
     };
 
-    exposeMethod("terminal.openSession", terminalApi.openSession);
-    exposeMethod("terminal.splitPane", terminalApi.splitPane);
-    exposeMethod("terminal.sendText", terminalApi.sendText);
-    exposeMethod("terminal.getScrollback", terminalApi.getScrollback);
-    exposeMethod("terminal.getRenderedText", terminalApi.getRenderedText);
-    exposeMethod("terminal.focusSession", terminalApi.focusSession);
-    exposeMethod("terminal.runCommand", terminalApi.runCommand);
-    exposeMethod("terminal.listSessions", terminalApi.listSessions);
-    exposeMethod("terminal.getMeta", async (args: { sessionId: string; key?: string }) =>
+    expose("terminal.openSession", terminalApi.openSession);
+    expose("terminal.splitPane", terminalApi.splitPane);
+    expose("terminal.sendText", terminalApi.sendText);
+    expose("terminal.getScrollback", terminalApi.getScrollback);
+    expose("terminal.getRenderedText", terminalApi.getRenderedText);
+    expose("terminal.focusSession", terminalApi.focusSession);
+    expose("terminal.runCommand", terminalApi.runCommand);
+    expose("terminal.listSessions", terminalApi.listSessions);
+    expose("terminal.getMeta", async (args: { sessionId: string; key?: string }) =>
       actions.getMeta(args.sessionId, args.key)
     );
-    exposeMethod(
+    expose(
       "terminal.setMeta",
       async (args: { sessionId: string; key: string; value: unknown }) =>
         actions.setMeta(args.sessionId, args.key, args.value)
     );
-    exposeMethod("terminal.deleteMeta", async (args: { sessionId: string; key: string }) =>
+    expose("terminal.deleteMeta", async (args: { sessionId: string; key: string }) =>
       actions.deleteMeta(args.sessionId, args.key)
     );
     window.__natstackTerminalTestApi = terminalApi;

@@ -106,8 +106,8 @@ export interface ExtensionsClient {
  */
 export interface ExtensionsClientRpc {
   call(target: string, method: string, args: unknown[]): Promise<unknown>;
-  streamCall(target: string, method: string, args: unknown[]): Promise<Response>;
-  onEvent?: (event: string, listener: (fromId: string, payload: unknown) => void) => () => void;
+  stream(target: string, method: string, args: unknown[]): Promise<Response>;
+  on?: (event: string, listener: (event: { payload: unknown }) => void) => () => void;
 }
 
 const IGNORED_PROXY_PROPS = new Set<PropertyKey>([
@@ -128,7 +128,7 @@ const PROMISE_MISUSE_PROPS = new Set<PropertyKey>(["catch", "finally"]);
  * resolution (which may await the registry) never races the first call.
  */
 export function createExtensionProxy<T extends object>(
-  rpc: Pick<ExtensionsClientRpc, "call" | "streamCall">,
+  rpc: Pick<ExtensionsClientRpc, "call" | "stream">,
   name: string,
   resolveStreaming: (method: string) => boolean | Promise<boolean>,
 ): T {
@@ -149,7 +149,7 @@ export function createExtensionProxy<T extends object>(
       return async (...args: unknown[]) => {
         const streaming = await resolveStreaming(prop);
         return streaming
-          ? rpc.streamCall("main", "extensions.invokeStream", [name, prop, args])
+          ? rpc.stream("main", "extensions.invokeStream", [name, prop, args])
           : rpc.call("main", "extensions.invoke", [name, prop, args]);
       };
     },
@@ -191,8 +191,8 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
     },
     on(name, event, cb) {
       const eventName = `extensions:${name}::${event}`;
-      const unsubscribe = rpc.onEvent
-        ? rpc.onEvent(`event:${eventName}`, (_fromId, payload) => cb(payload))
+      const unsubscribe = rpc.on
+        ? rpc.on(`event:${eventName}`, (event) => cb(event.payload))
         : () => {};
       void rpc.call("main", "extensions.on", [name, event]);
       return { dispose: unsubscribe };
@@ -294,9 +294,9 @@ export interface ExtensionRpcLike {
   /** Call any unified RPC target, including `main`, `worker:*`, and `do:*`. */
   call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
   /** Open a streaming RPC call to any unified RPC target. */
-  streamCall(targetId: string, method: string, args: unknown[], options?: { signal?: AbortSignal }): Promise<Response>;
+  stream(targetId: string, method: string, args: unknown[], options?: { signal?: AbortSignal }): Promise<Response>;
   /** Subscribe to host-delivered events where supported by the runtime. */
-  onEvent(eventName: string, cb: (fromId: string, payload: unknown) => void): () => void;
+  on(eventName: string, cb: (event: { payload: unknown }) => void): () => void;
 }
 
 export interface ExtensionContext {

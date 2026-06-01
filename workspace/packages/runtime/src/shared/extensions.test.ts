@@ -15,7 +15,7 @@ describe("createExtensionsClient", () => {
       "open",
       [{ command: "bash", cwd: "/repo" }],
     ]);
-    expect(rpc.streamCall).not.toHaveBeenCalled();
+    expect(rpc.stream).not.toHaveBeenCalled();
   });
 
   it("routes manifest-declared streaming methods through invokeStream", async () => {
@@ -30,7 +30,7 @@ describe("createExtensionsClient", () => {
     expect(rpc.call).toHaveBeenCalledWith("main", "extensions.streamingMethods", [
       "@workspace-extensions/shell",
     ]);
-    expect(rpc.streamCall).toHaveBeenCalledWith("main", "extensions.invokeStream", [
+    expect(rpc.stream).toHaveBeenCalledWith("main", "extensions.invokeStream", [
       "@workspace-extensions/shell",
       "attach",
       ["session-1", { after: "42" }],
@@ -55,7 +55,7 @@ describe("createExtensionsClient", () => {
       "extensions.streamingMethods",
       expect.anything()
     );
-    expect(rpc.streamCall).toHaveBeenCalledWith("main", "extensions.invokeStream", [
+    expect(rpc.stream).toHaveBeenCalledWith("main", "extensions.invokeStream", [
       "@workspace-extensions/shell",
       "attach",
       ["session-1"],
@@ -70,7 +70,7 @@ describe("createExtensionsClient", () => {
     expect(shell["then"]).toBeUndefined();
     expect(shell["toJSON"]).toBeUndefined();
     expect(rpc.call).not.toHaveBeenCalled();
-    expect(rpc.streamCall).not.toHaveBeenCalled();
+    expect(rpc.stream).not.toHaveBeenCalled();
   });
 
   it("reports Promise-style catch misuse on extension proxies clearly", () => {
@@ -82,7 +82,7 @@ describe("createExtensionsClient", () => {
       'extensions.use("@workspace-extensions/shell") is synchronous'
     );
     expect(rpc.call).not.toHaveBeenCalled();
-    expect(rpc.streamCall).not.toHaveBeenCalled();
+    expect(rpc.stream).not.toHaveBeenCalled();
   });
 });
 
@@ -91,19 +91,17 @@ function createRpc(
   streamingMethods: string[] = []
 ): RpcCaller & {
   call: ReturnType<typeof vi.fn>;
-  streamCall: ReturnType<typeof vi.fn>;
+  stream: ReturnType<typeof vi.fn>;
 } {
   return {
     call: vi.fn(async (_target: string, method: string) =>
       method === "extensions.streamingMethods" ? streamingMethods : undefined
     ),
-    streamCall: vi.fn(async () => response),
+    stream: vi.fn(async () => response),
     emit: vi.fn(async () => undefined),
-    onEvent: vi.fn(),
-    exposeMethod: vi.fn(),
-    exposeStreamingMethod: vi.fn(),
+    on: vi.fn(),
   } as unknown as RpcCaller & {
     call: ReturnType<typeof vi.fn>;
-    streamCall: ReturnType<typeof vi.fn>;
+    stream: ReturnType<typeof vi.fn>;
   };
 }

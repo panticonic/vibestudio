@@ -17,7 +17,7 @@ const CALL_ID_1 = "00000000-0000-4000-8000-000000000001";
 const CALL_ID_SLOW = "00000000-0000-4000-8000-000000000002";
 const TRANSPORT_ID_1 = "00000000-0000-4000-8000-000000000011";
 
-function invocationEvent(kind: string, callId: string, payload: Record<string, unknown>, opts?: { transportCallId?: string; turnId?: string }) {
+function invocation(kind: string, callId: string, payload: Record<string, unknown>, opts?: { transportCallId?: string; turnId?: string }) {
   return {
     kind,
     actor: { kind: "panel", id: "panel:panel-1" },
@@ -47,16 +47,16 @@ function messageEvent(id: string, content: string, actorId = "agent-1") {
 
 interface MockRpc {
   call: ReturnType<typeof vi.fn>;
-  onEvent: ReturnType<typeof vi.fn>;
+  on: ReturnType<typeof vi.fn>;
   selfId: string;
 }
 
 /**
- * Creates a mock RPC object. The `onEvent` mock captures the listener
- * so tests can emit events by calling `emit(fromId, payload)`.
+ * Creates a mock RPC object. The `on` mock captures the listener
+ * so tests can emit events by calling `emit(payload)`.
  */
 function createMockRpc() {
-  let eventListener: ((fromId: string, payload: unknown) => void) | null = null;
+  let eventListener: ((event: { payload: unknown }) => void) | null = null;
   const removeListener = vi.fn();
 
   const rpc: MockRpc = {
@@ -66,8 +66,8 @@ function createMockRpc() {
       }
       return undefined;
     }),
-    onEvent: vi.fn().mockImplementation(
-      (_event: string, listener: (fromId: string, payload: unknown) => void) => {
+    on: vi.fn().mockImplementation(
+      (_event: string, listener: (event: { payload: unknown }) => void) => {
         eventListener = listener;
         return removeListener;
       },
@@ -78,7 +78,7 @@ function createMockRpc() {
   function emit(msg: Record<string, unknown>) {
     if (!eventListener) throw new Error("No event listener registered");
     if (msg["kind"] === "ready") {
-      eventListener("server", {
+      eventListener({ payload: {
         channelId: CHANNEL,
         message: {
           kind: "control",
@@ -92,11 +92,11 @@ function createMockRpc() {
             hasMoreBefore: msg["hasMoreBefore"],
           },
         },
-      });
+      }});
       return;
     }
     if (msg["stream"] === "log") {
-      eventListener("server", {
+      eventListener({ payload: {
         channelId: CHANNEL,
         message: {
           kind: "log",
@@ -112,11 +112,11 @@ function createMockRpc() {
             attachments: msg["attachments"],
           },
         },
-      });
+      }});
       return;
     }
     if (msg["stream"] === "signal") {
-      eventListener("server", {
+      eventListener({ payload: {
         channelId: CHANNEL,
         message: {
           kind: "signal",
@@ -125,10 +125,10 @@ function createMockRpc() {
           senderId: msg["senderId"],
           ts: msg["ts"],
         },
-      });
+      }});
       return;
     }
-    eventListener("server", { channelId: CHANNEL, message: msg });
+    eventListener({ payload: { channelId: CHANNEL, message: msg }});
   }
 
   return { rpc, emit, removeListener };
@@ -198,7 +198,7 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mockRpc.onEvent).toHaveBeenCalledWith("channel:message", expect.any(Function));
+      expect(mockRpc.on).toHaveBeenCalledWith("channel:message", expect.any(Function));
       expect(mockRpc.call).toHaveBeenCalledWith(
         DO_TARGET,
         "subscribe",
@@ -650,7 +650,7 @@ describe("connectViaRpc", () => {
         stream: "log", phase: "live",
         id: 200,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocationEvent("invocation.started", CALL_ID_1, {
+        payload: invocation("invocation.started", CALL_ID_1, {
           name: "compute",
           request: { x: 7 },
           transport: { kind: "channel", channelId: CHANNEL, target: { kind: "panel", id: SELF_ID, participantId: SELF_ID }, transportCallId: TRANSPORT_ID_1 },
@@ -722,7 +722,7 @@ describe("connectViaRpc", () => {
         stream: "log", phase: "live",
         id: 201,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocationEvent("invocation.started", CALL_ID_1, {
+        payload: invocation("invocation.started", CALL_ID_1, {
           name: "compute",
           request: {
             protocol: "natstack.blob-ref.v1",
@@ -771,7 +771,7 @@ describe("connectViaRpc", () => {
         stream: "log", phase: "live",
         id: 202,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocationEvent("invocation.completed", handle.invocationId, {
+        payload: invocation("invocation.completed", handle.invocationId, {
           result: {
             protocol: "natstack.blob-ref.v1",
             digest: "def456",
@@ -945,7 +945,7 @@ describe("connectViaRpc", () => {
         stream: "log", phase: "live",
         id: 300,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocationEvent("invocation.started", CALL_ID_SLOW, {
+        payload: invocation("invocation.started", CALL_ID_SLOW, {
           name: "slowWork",
           request: {},
           transport: { kind: "channel", channelId: CHANNEL, target: { kind: "panel", id: SELF_ID, participantId: SELF_ID } },
@@ -966,7 +966,7 @@ describe("connectViaRpc", () => {
         stream: "log", phase: "live",
         id: 301,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocationEvent("invocation.cancelled", CALL_ID_SLOW, { reason: "cancelled" }),
+        payload: invocation("invocation.cancelled", CALL_ID_SLOW, { reason: "cancelled" }),
         senderId: "caller-1",
         ts: Date.now(),
       });
@@ -1008,7 +1008,7 @@ describe("connectViaRpc", () => {
         stream: "log", phase: "live",
         id: 400,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocationEvent("invocation.started", CALL_ID_SLOW, {
+        payload: invocation("invocation.started", CALL_ID_SLOW, {
           name: "slowWork",
           request: {},
           transport: { kind: "channel", channelId: CHANNEL, target: { kind: "panel", id: SELF_ID, participantId: SELF_ID }, transportCallId: TRANSPORT_ID_1 },

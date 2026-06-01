@@ -32,7 +32,7 @@ describe("panel credential OAuth API", () => {
     });
     initPanelCredentials({
       call: callMock as RpcCaller["call"],
-      streamCall: vi.fn(async () => new Response()) as unknown as RpcCaller["streamCall"],
+      stream: vi.fn(async () => new Response()) as unknown as RpcCaller["stream"],
     });
 
     await expect(connect({

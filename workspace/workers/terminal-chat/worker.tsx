@@ -87,8 +87,8 @@ export class TerminalChatWorker extends DurableObjectBase {
           clientId: rpc.selfId,
           rpc: {
             call: <R,>(t: string, m: string, a: unknown[]) => rpc.call<R>(t, m, a),
-            onEvent: (event: string, listener: (fromId: string, payload: unknown) => void) =>
-              rpc.onEvent(event, listener),
+            on: (event: string, listener: (event: { payload: unknown }) => void) =>
+              rpc.on(event, listener),
             selfId: rpc.selfId,
           },
         },

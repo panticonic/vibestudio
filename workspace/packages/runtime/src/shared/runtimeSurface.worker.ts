@@ -117,7 +117,7 @@ export const workerRuntimeSurface: RuntimeSurface = {
     requestApproval: valueEntry(),
     revokeApproval: valueEntry(),
     listApprovals: valueEntry(),
-    exposeMethod: valueEntry(),
+    expose: valueEntry(),
     getParent: valueEntry(),
     panelTree: namespaceEntry(["self", "get", "list", "roots", "children", "parent", "open"]),
     handleRpcPost: valueEntry(),

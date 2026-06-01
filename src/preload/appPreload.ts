@@ -76,7 +76,7 @@ const natstackApp = {
 contextBridge.exposeInMainWorld("__natstackApp", natstackApp);
 contextBridge.exposeInMainWorld("__natstackTransport", appTransport);
 contextBridge.exposeInMainWorld("__natstackShellOverlay", {
-  onEvent(handler: (event: unknown) => void) {
+  on(handler: (event: unknown) => void) {
     const listener = (_event: IpcRendererEvent, payload: unknown) => handler(payload);
     ipcRenderer.on("natstack:shell-overlay:event", listener);
     return () => ipcRenderer.off("natstack:shell-overlay:event", listener);

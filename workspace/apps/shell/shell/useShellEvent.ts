@@ -72,8 +72,8 @@ export function useShellEvent<E extends EventName>(
     addSubscription(event);
 
     const channel = `event:${event}`;
-    const cleanup = onRpcEvent(channel, (_fromId, payload) => {
-      callbackRef.current(payload as EventPayloads[E]);
+    const cleanup = onRpcEvent(channel, (ev) => {
+      callbackRef.current(ev.payload as EventPayloads[E]);
     });
 
     return () => {

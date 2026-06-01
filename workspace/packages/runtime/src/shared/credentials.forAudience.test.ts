@@ -19,7 +19,7 @@ function makeRpc(
       }
       throw new Error(`unexpected method: ${method}`);
     }) as RpcCaller["call"],
-    streamCall: async () => new Response(),
+    stream: async () => new Response(),
   };
   return { rpc, resolveCalls };
 }
@@ -127,7 +127,7 @@ describe("CredentialClient.forAudience", () => {
         if (method === "credentials.resolveCredential") return cred as unknown as T;
         throw new Error(`unexpected method: ${method}`);
       }) as RpcCaller["call"],
-      streamCall: async (_target: string, method: string, args: unknown[]) => {
+      stream: async (_target: string, method: string, args: unknown[]) => {
         proxyCalls.push({ method, args });
         return new Response("", { status: 200, statusText: "OK" });
       },

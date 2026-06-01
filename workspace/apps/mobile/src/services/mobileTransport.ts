@@ -1,39 +1,35 @@
 /**
- * MobileTransport -- WebSocket RPC transport for React Native.
+ * Mobile RPC client for React Native.
  */
 
-import type {
-  RpcBridge,
-  RpcCallOptions,
-  AuthenticatedCaller,
-  RpcEventListener,
-  RpcMessage,
-  StreamingMethodHandler,
-} from "@natstack/rpc";
 import {
-  BaseWsTransport,
-  type ConnectionStatus,
-  type WsLike,
-} from "@natstack/shared/shell/transport";
-import type { RecoveryKind } from "@natstack/shared/shell/recoveryCoordinator";
+  createRpcClient,
+  type RpcCallOptions,
+  type RpcClient,
+  type RpcConnectionStatus,
+  type RpcEventContext,
+} from "@natstack/rpc";
+import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
+import type { WsLike } from "@natstack/rpc/protocol/wsAdapter";
+import type { RecoveryKind } from "@natstack/rpc/protocol/recoveryCoordinator";
 import { isWorkspaceMobileAppCallerId } from "./auth";
 
-export type { ConnectionStatus };
+export type ConnectionStatus = RpcConnectionStatus;
 
 export interface MobileConnectionGrant {
   connectionGrant: string;
   callerId: string;
 }
 
-export interface MobileTransportConfig {
+export interface MobileRpcClientConfig {
   /** Server URL, e.g. "https://natstack.example.com" or "http://192.168.1.5:3000" */
   serverUrl: string;
   /** Mint a fresh one-time app-scoped connection grant from the native host. */
   issueConnectionGrant: () => Promise<MobileConnectionGrant>;
 }
 
-export function createMobileTransport(config: MobileTransportConfig): MobileTransport {
-  return new MobileTransport(config);
+export function createMobileRpcClient(config: MobileRpcClientConfig): MobileRpcClient {
+  return new MobileRpcClient(config);
 }
 
 class BrowserWsLike implements WsLike {
@@ -73,18 +69,24 @@ class BrowserWsLike implements WsLike {
   }
 }
 
-export class MobileTransport implements RpcBridge {
-  private config: MobileTransportConfig;
-  private transport: BaseWsTransport | null = null;
-  private lastCloseInfo: { code?: number; reason?: string } | null = null;
+type MobileWsTransport = ReturnType<typeof wsClientTransport>;
+
+export class MobileRpcClient implements Pick<RpcClient, "selfId" | "call" | "emit" | "on" | "stream"> {
+  private config: MobileRpcClientConfig;
+  private transport: MobileWsTransport | null = null;
+  private rpc: RpcClient | null = null;
   private currentCallerId: string | null = null;
   private preissuedGrant: string | null = null;
   private statusState: ConnectionStatus = "disconnected";
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
   private readonly recoveryListeners = new Map<RecoveryKind, Set<() => void | Promise<void>>>();
-  private readonly eventListeners = new Map<string, Set<RpcEventListener>>();
+  private readonly eventSubscriptions = new Map<
+    string,
+    Set<(event: RpcEventContext) => void>
+  >();
+  private readonly activeEventUnsubs = new Map<string, () => void>();
 
-  constructor(config: MobileTransportConfig) {
+  constructor(config: MobileRpcClientConfig) {
     this.config = config;
   }
 
@@ -93,30 +95,25 @@ export class MobileTransport implements RpcBridge {
   }
 
   get status(): ConnectionStatus {
-    return this.transport?.getConnectionStatus() ?? this.statusState;
-  }
-
-  getLastCloseInfo(): { code?: number; reason?: string } | null {
-    return this.lastCloseInfo;
+    return this.transport?.status?.() ?? this.statusState;
   }
 
   connect(): void {
     this.setStatus("connecting");
-    void this.ensureTransport().then(
-      (transport) => transport.connect(),
-      (error) => {
-        console.warn("[MobileTransport] Failed to initialize native app principal:", error);
+    void this.ensureRpc()
+      .then(() => this.transport?.connect())
+      .catch((error) => {
+        console.warn("[MobileRpcClient] Failed to initialize native app principal:", error);
         this.setStatus("disconnected");
-      }
-    );
+      });
   }
 
   reconnect(): void {
-    if (this.transport) {
-      this.transport.reconnect();
-      return;
-    }
-    this.connect();
+    void this.transport?.close().finally(() => {
+      this.transport = null;
+      this.rpc = null;
+      this.connect();
+    });
   }
 
   disconnect(): void {
@@ -134,30 +131,55 @@ export class MobileTransport implements RpcBridge {
     };
   }
 
-  updateConfig(config: MobileTransportConfig): void {
+  updateConfig(config: MobileRpcClientConfig): void {
     this.config = config;
-    if (this.transport) {
-      void this.transport.close();
-    }
+    void this.transport?.close();
     this.transport = null;
+    this.rpc = null;
     this.currentCallerId = null;
     this.preissuedGrant = null;
+    this.activeEventUnsubs.clear();
     this.setStatus("disconnected");
   }
 
-  call<T = unknown>(
+  async call<T = unknown>(
     targetId: string,
     method: string,
     args: unknown[],
     options?: RpcCallOptions
   ): Promise<T> {
-    return this.ensureTransport().then((transport) =>
-      transport.call<T>(targetId, method, args, options)
-    );
+    return (await this.ensureRpc()).call<T>(targetId, method, args, options);
   }
 
-  emit(targetId: string, event: string, payload: unknown): Promise<void> {
-    return this.ensureTransport().then((transport) => transport.emit(targetId, event, payload));
+  async stream(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: { signal?: AbortSignal }
+  ): Promise<Response> {
+    return (await this.ensureRpc()).stream(targetId, method, args, options);
+  }
+
+  async emit(targetId: string, event: string, payload: unknown): Promise<void> {
+    return (await this.ensureRpc()).emit(targetId, event, payload);
+  }
+
+  on(event: string, listener: (event: RpcEventContext) => void): () => void {
+    let listeners = this.eventSubscriptions.get(event);
+    if (!listeners) {
+      listeners = new Set();
+      this.eventSubscriptions.set(event, listeners);
+    }
+    listeners.add(listener);
+    this.attachEventSubscription(event);
+    return () => {
+      listeners?.delete(listener);
+      if (listeners?.size === 0) {
+        this.eventSubscriptions.delete(event);
+        this.activeEventUnsubs.get(event)?.();
+        this.activeEventUnsubs.delete(event);
+      }
+    };
   }
 
   onReconnect(listener: () => void): () => void {
@@ -176,55 +198,19 @@ export class MobileTransport implements RpcBridge {
     };
   }
 
-  onEvent(event: string, listener: RpcEventListener): () => void {
-    let listeners = this.eventListeners.get(event);
-    if (!listeners) {
-      listeners = new Set();
-      this.eventListeners.set(event, listeners);
-    }
-    listeners.add(listener);
-    return () => {
-      listeners?.delete(listener);
-    };
-  }
-
-  exposeMethod<TArgs extends unknown[], TReturn>(
-    _method: string,
-    _handler: (...args: TArgs) => TReturn | Promise<TReturn>
-  ): void {
-    // Mobile workspace apps do not expose methods to the server.
-  }
-
-  exposeMethodWithCaller<TArgs extends unknown[], TReturn>(
-    _method: string,
-    _handler: (ctx: AuthenticatedCaller, ...args: TArgs) => TReturn | Promise<TReturn>
-  ): void {
-    // Mobile workspace apps do not expose methods to the server.
-  }
-
-  expose(_methods: Record<string, (...args: never[]) => unknown>): void {
-    // Mobile workspace apps do not expose methods to the server.
-  }
-
-  exposeStreamingMethod(_method: string, _handler: StreamingMethodHandler): void {
-    throw new Error("streaming RPC is not supported by MobileTransport");
-  }
-
-  streamCall(): Promise<Response> {
-    return Promise.reject(new Error("streaming RPC is not supported by MobileTransport"));
-  }
-
-  _handleMessage(_sourceId: string, _message: RpcMessage): void {
-    // MobileTransport receives messages directly from the WebSocket.
-  }
-
-  private async ensureTransport(): Promise<BaseWsTransport> {
-    if (this.transport) return this.transport;
+  private async ensureRpc(): Promise<RpcClient> {
+    if (this.rpc) return this.rpc;
     const grant = await this.issueNativeGrant();
     this.currentCallerId = grant.callerId;
     this.preissuedGrant = grant.connectionGrant;
-    this.transport = this.createBaseTransport(grant.callerId);
-    return this.transport;
+    this.transport = this.createTransport(grant.callerId);
+    this.rpc = createRpcClient({
+      selfId: grant.callerId,
+      callerKind: "app",
+      transport: this.transport,
+    });
+    for (const event of this.eventSubscriptions.keys()) this.attachEventSubscription(event);
+    return this.rpc;
   }
 
   private async issueNativeGrant(): Promise<MobileConnectionGrant> {
@@ -252,48 +238,34 @@ export class MobileTransport implements RpcBridge {
     return (await this.issueNativeGrant()).connectionGrant;
   }
 
-  private createBaseTransport(callerId: string): BaseWsTransport {
-    return new BaseWsTransport({
+  private createTransport(callerId: string): MobileWsTransport {
+    const transport = wsClientTransport({
       selfId: callerId,
       getWsUrl: () => buildWsUrl(this.config.serverUrl),
       terminalCloseCodes: [4001, 4005, 4006],
-      logPrefix: "MobileTransport",
-      onConnectionStatusChanged: (status) => this.setStatus(status),
+      logPrefix: "MobileRpcClient",
       onRecovery: (kind) => {
         for (const listener of this.recoveryListeners.get(kind) ?? []) {
           void listener();
-        }
-      },
-      onEvent: (event, payload) => {
-        for (const listener of this.eventListeners.get(event) ?? []) {
-          listener("main", payload);
         }
       },
       adapter: {
         now: () => Date.now(),
         getAuthToken: () => this.nextGrantToken(),
         refreshAuthToken: () => this.nextGrantToken(),
-        createSocket: (url) => {
-          this.lastCloseInfo = null;
-          const ws = new WebSocket(url);
-          const wrapped = new BrowserWsLike(ws);
-          const originalClose = Object.getOwnPropertyDescriptor(
-            BrowserWsLike.prototype,
-            "onclose"
-          )?.set;
-          Object.defineProperty(wrapped, "onclose", {
-            set: (handler: ((event: { code?: number; reason?: string }) => void) | null) => {
-              originalClose?.call(wrapped, (event: { code?: number; reason?: string }) => {
-                this.lastCloseInfo = { code: event.code, reason: event.reason };
-                handler?.(event);
-              });
-            },
-            get: () => null,
-          });
-          return wrapped;
-        },
+        createSocket: (url) => new BrowserWsLike(new WebSocket(url)),
       },
     });
+    transport.onStatusChange?.((status) => this.setStatus(status));
+    return transport;
+  }
+
+  private attachEventSubscription(event: string): void {
+    if (!this.rpc || this.activeEventUnsubs.has(event)) return;
+    const unsubscribe = this.rpc.on(event, (ev) => {
+      for (const listener of this.eventSubscriptions.get(event) ?? []) listener(ev);
+    });
+    this.activeEventUnsubs.set(event, unsubscribe);
   }
 
   private setStatus(status: ConnectionStatus): void {

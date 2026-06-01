@@ -251,7 +251,7 @@ export interface PanelHandle<
    * Listen for events from the target panel (typed if event map provided).
    * @returns Unsubscribe function
    */
-  onEvent<EventName extends Extract<keyof E, string>>(
+  on<EventName extends Extract<keyof E, string>>(
     event: EventName,
     listener: (payload: E[EventName]) => void
   ): () => void;
@@ -260,7 +260,7 @@ export interface PanelHandle<
    * Listen for events from the target panel (untyped fallback).
    * @returns Unsubscribe function
    */
-  onEvent(event: string, listener: (payload: unknown) => void): () => void;
+  on(event: string, listener: (payload: unknown) => void): () => void;
 
   withContract<C extends PanelContract, Role extends PanelHandleContractRole>(
     contract: C,

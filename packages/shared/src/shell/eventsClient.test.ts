@@ -1,20 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventsClient } from "./eventsClient.js";
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRpc(): RpcBridge & { call: ReturnType<typeof vi.fn> } {
+function makeRpc(): Pick<RpcClient, "call"> & { call: ReturnType<typeof vi.fn> } {
   return {
     call: vi.fn(),
-    emit: vi.fn(),
-    onEvent: vi.fn(),
-    exposeMethod: vi.fn(),
-    expose: vi.fn(),
-    selfId: "test",
-  } as unknown as RpcBridge & { call: ReturnType<typeof vi.fn> };
+  } as Pick<RpcClient, "call"> & { call: ReturnType<typeof vi.fn> };
 }
 
 // ---------------------------------------------------------------------------

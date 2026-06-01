@@ -72,11 +72,11 @@ export function registerAgentApi(shell: any): void {
 }
 
 export function exposeAgentApi(
-  exposeMethod: (method: string, handler: (...args: unknown[]) => unknown | Promise<unknown>) => void
+  expose: (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) => void
 ): void {
-  exposeMethod("_agent.snapshot", () => agentApi.snapshot());
-  exposeMethod("_agent.tree", () => agentApi.tree());
-  exposeMethod("_agent.state", () => agentApi.state());
-  exposeMethod("_agent.routes", () => agentApi.routes());
-  exposeMethod("_agent.setMode", (mode) => agentApi.setMode(mode as AgentDataMode));
+  expose("_agent.snapshot", () => agentApi.snapshot());
+  expose("_agent.tree", () => agentApi.tree());
+  expose("_agent.state", () => agentApi.state());
+  expose("_agent.routes", () => agentApi.routes());
+  expose("_agent.setMode", (mode) => agentApi.setMode(mode as AgentDataMode));
 }

@@ -848,13 +848,13 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       call: <T = unknown>(targetId: string, method: string, args: unknown[]): Promise<T> => {
         return this.rpc.call<T>(targetId, method, args);
       },
-      streamCall: (
+      stream: (
         targetId: string,
         method: string,
         args: unknown[],
         options?: { signal?: AbortSignal }
       ): Promise<Response> => {
-        return this.rpc.streamCall(targetId, method, args, options);
+        return this.rpc.stream(targetId, method, args, options);
       },
     };
     this.gad = createGadServiceClient(lazyRpc);
@@ -3136,7 +3136,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       }
 
       // Route through the credentialed client. The shared client uses
-      // `rpc.streamCall` so model SSE responses arrive as a real
+      // `rpc.stream` so model SSE responses arrive as a real
       // ReadableStream (HTTP transport) — without this the model SDK
       // would either block until the completion finishes or buffer
       // the entire event stream before yielding the first token.
@@ -3979,13 +3979,13 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         call: <T = unknown>(target: string, method: string, args: unknown[]): Promise<T> => {
           return this.rpc.call<T>(target, method, args);
         },
-        streamCall: (
+        stream: (
           target: string,
           method: string,
           args: unknown[],
           options?: { signal?: AbortSignal }
         ): Promise<Response> => {
-          return this.rpc.streamCall(target, method, args, options);
+          return this.rpc.stream(target, method, args, options);
         },
       },
       fs: this.fs,
@@ -4052,7 +4052,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       },
       // Credentialed fetcher — `this.credentials.fetch` is bound to
       // this DO's RPC bridge (`this.rpc`) via createCredentialClient
-      // and routes through `rpc.streamCall` so HTTP transport gives
+      // and routes through `rpc.stream` so HTTP transport gives
       // real streaming and other transports synthesize a Response
       // uniformly. The harness never sees credential values.
       fetcher: this.credentials.fetch.bind(this.credentials) as typeof fetch,

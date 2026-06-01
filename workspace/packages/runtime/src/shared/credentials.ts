@@ -213,10 +213,10 @@ async function proxyFetch(rpc: RpcCaller, url: string | URL, init?: RequestInit,
         bodyBase64: encoded.bodyBase64,
         credentialId: opts?.credentialId,
     };
-    // Every bridge has `streamCall` — HTTP delivers real streaming via
+    // Every client has `stream` — HTTP delivers real streaming via
     // `/rpc/stream`; transport-based bridges wrap their buffered call
     // in a uniform Response API. Callers don't branch on transport.
-    const response = await rpc.streamCall("main", "credentials.proxyFetch", [args], { signal: init?.signal ?? undefined });
+    const response = await rpc.stream("main", "credentials.proxyFetch", [args], { signal: init?.signal ?? undefined });
     // The HTTP bridge already constructed a Response with `url` set
     // from the upstream's HEAD frame. The transport-based bridge does
     // the same. We just need to make sure `response.url` reflects the

@@ -4,7 +4,14 @@
  * This module provides a typed API for shell to call main process services.
  * Uses a direct @workspace/rpc bridge from the shell transport global.
  */
-import { createRpcBridge, type RpcBridge, type RpcTransport, type RpcMessage } from "@natstack/rpc";
+import {
+  createRpcClient,
+  envelopeFromMessage,
+  type EnvelopeRpcTransport,
+  type RpcClient,
+  type RpcEnvelope,
+  type RpcEventContext,
+} from "@natstack/rpc";
 import { RPC_METHODS } from "@natstack/shared/approvalContract";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
@@ -20,19 +27,27 @@ const g = globalThis as unknown as {
   __natstackIncomingPairLink?: IncomingPairLinkBridge;
 };
 if (!g.__natstackTransport) throw new Error("Shell transport not available");
-const transport: RpcTransport = {
-  send: g.__natstackTransport.send,
-  onMessage: (_sourceId, handler) =>
-    assertPresent(g.__natstackTransport).onMessage((fromId, msg) => {
-      if (fromId === "main") handler(msg as RpcMessage);
+const transport: EnvelopeRpcTransport = {
+  send: (envelope) => assertPresent(g.__natstackTransport).send(envelope.target, envelope.message),
+  onMessage: (handler) =>
+    assertPresent(g.__natstackTransport).onMessage((fromId, message) => {
+      handler(
+        envelopeFromMessage({
+          selfId: "shell",
+          from: fromId,
+          target: "shell",
+          callerKind: fromId === "main" ? "server" : "unknown",
+          message: message as RpcEnvelope["message"],
+        }),
+      );
     }),
-  onAnyMessage: (handler) =>
-    assertPresent(g.__natstackTransport).onMessage((fromId, msg) =>
-      handler(fromId, msg as RpcMessage)
-    ),
+  status: () => "connected",
+  ready: () => Promise.resolve(),
+  onStatusChange: () => () => {},
 };
-const rpc: RpcBridge = createRpcBridge({
+const rpc: RpcClient = createRpcClient({
   selfId: "shell",
+  callerKind: "shell",
   transport,
 });
 import type {
@@ -243,7 +258,7 @@ export interface NativePanelSlotBounds {
   height: number;
 }
 type NativeShellOverlayBridge = {
-  onEvent: (handler: (event: NativeShellOverlayEvent) => void) => () => void;
+  on: (handler: (event: NativeShellOverlayEvent) => void) => () => void;
 };
 export const view = {
   forwardMouseClick: (viewId: string, point: { x: number; y: number }) =>
@@ -288,14 +303,14 @@ export const view = {
   browserStop: (browserId: string) => rpc.call<undefined>("main", "view.browserStop", [browserId]),
 };
 export const nativeShellOverlay = {
-  onEvent: (handler: (event: NativeShellOverlayEvent) => void) => {
+  on: (handler: (event: NativeShellOverlayEvent) => void) => {
     const bridge = (
       globalThis as unknown as {
         __natstackShellOverlay?: NativeShellOverlayBridge;
       }
     ).__natstackShellOverlay;
     if (!bridge) return () => {};
-    return bridge.onEvent(handler);
+    return bridge.on(handler);
   },
 };
 export const incomingPairLink = {
@@ -580,4 +595,7 @@ export const shellPresence = {
  * Register a listener for RPC events.
  * Used by the useShellEvent hook.
  */
-export const onRpcEvent = rpc.onEvent.bind(rpc);
+export const onRpcEvent = (
+  event: string,
+  listener: (event: RpcEventContext) => void,
+): (() => void) => rpc.on(event, listener);

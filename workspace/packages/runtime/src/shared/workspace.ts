@@ -119,7 +119,7 @@ export interface WorkspaceUnitsClient {
     }): Promise<unknown>;
 }
 type WorkspaceRpc = RpcCaller & {
-    onEvent?: (event: string, listener: (fromId: string, payload: unknown) => void) => () => void;
+    on?: (event: string, listener: (event: { payload: unknown }) => void) => () => void;
 };
 export interface WorkspaceClient {
     /** List all workspaces sorted by last opened. */
@@ -193,13 +193,13 @@ function createUnitsWatch(rpc: WorkspaceRpc, listUnits: () => Promise<WorkspaceU
                 });
             };
             const unsubscribers = [
-                rpc.onEvent?.("event:extensions:status", pushSnapshot),
-                rpc.onEvent?.("event:extensions:health", pushSnapshot),
-                rpc.onEvent?.("event:extensions:error", pushSnapshot),
-                rpc.onEvent?.("event:apps:available", pushSnapshot),
-                rpc.onEvent?.("event:apps:status", pushSnapshot),
-                rpc.onEvent?.("event:apps:lifecycle", pushSnapshot),
-                rpc.onEvent?.("event:workspace:unit-log", pushSnapshot),
+                rpc.on?.("event:extensions:status", pushSnapshot),
+                rpc.on?.("event:extensions:health", pushSnapshot),
+                rpc.on?.("event:extensions:error", pushSnapshot),
+                rpc.on?.("event:apps:available", pushSnapshot),
+                rpc.on?.("event:apps:status", pushSnapshot),
+                rpc.on?.("event:apps:lifecycle", pushSnapshot),
+                rpc.on?.("event:workspace:unit-log", pushSnapshot),
             ].filter((unsubscribe): unsubscribe is () => void => typeof unsubscribe === "function");
             pushSnapshot();
             return {

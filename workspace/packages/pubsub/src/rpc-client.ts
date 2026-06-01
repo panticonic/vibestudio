@@ -145,7 +145,7 @@ interface PresencePayload {
 export interface RpcConnectOptions<T extends ParticipantMetadata = ParticipantMetadata> {
   rpc: {
     call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;
-    onEvent(event: string, listener: (fromId: string, payload: unknown) => void): () => void;
+    on(event: string, listener: (event: { payload: unknown }) => void): () => void;
     selfId: string;
   };
   channel: string;
@@ -876,9 +876,9 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   const MAX_GAP_SIZE = 500;
 
   // Register event listener for channel messages
-  const removeEventListener = rpc.onEvent("channel:message", (_fromId: string, payload: unknown) => {
+  const removeEventListener = rpc.on("channel:message", (event: { payload: unknown }) => {
     if (closed) return;
-    const data = payload as { channelId?: string; message?: RpcChannelMessage };
+    const data = event.payload as { channelId?: string; message?: RpcChannelMessage };
     if (data.channelId !== channel) return;
     if (data.message) {
       const raw = data.message;

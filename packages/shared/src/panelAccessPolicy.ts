@@ -16,7 +16,7 @@ export type PanelAccessOperation =
   | "focus"
   | "rpc.call"
   | "rpc.emit"
-  | "rpc.onEvent"
+  | "rpc.on"
   | "cdp"
   | "navigate"
   | "reload"
@@ -65,7 +65,7 @@ const openOperations = new Set<PanelAccessOperation>([
   "focus",
   "rpc.call",
   "rpc.emit",
-  "rpc.onEvent",
+  "rpc.on",
 ]);
 
 const automateOperations = new Set<PanelAccessOperation>([

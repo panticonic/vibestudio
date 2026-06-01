@@ -7,7 +7,7 @@
  * Shared between panels and workers — no Node.js or browser-specific dependencies.
  */
 import { Buffer } from "buffer";
-import type { RpcCaller } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 import type { RuntimeFs, FileStats, Dirent, FileHandle } from "../types.js";
 import { toFileStats } from "./fs-utils.js";
 // ---------------------------------------------------------------------------
@@ -60,7 +60,7 @@ const FS_CONSTANTS = {
     W_OK: 2,
     X_OK: 1,
 } as const;
-export function createRpcFs(rpc: RpcCaller): RuntimeFs {
+export function createRpcFs(rpc: Pick<RpcClient, "call">): RuntimeFs {
     function call<T>(method: string, ...args: unknown[]): Promise<T> {
         return rpc.call<T>("main", `fs.${method}`, [...args]);
     }

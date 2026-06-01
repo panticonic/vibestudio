@@ -27,7 +27,7 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
   const channelTarget = `do:workers/pubsub-channel:PubSubChannel:${channelId}`;
   const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "workspace-gad" });
   const channel = await createTestDO(PubSubChannel, { __objectKey: channelId });
-  const listeners = new Map<string, (fromId: string, payload: unknown) => void>();
+  const listeners = new Map<string, (event: { payload: unknown }) => void>();
   const blobs = new Map<string, string>();
   let blobCounter = 0;
   const putTextBlob = (value: string) => {
@@ -43,7 +43,7 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
     };
   })._rpc = {
     emit: vi.fn(async (target, event, payload) => {
-      listeners.get(target)?.(event, payload);
+      listeners.get(target)?.({ payload });
     }),
     call: vi.fn(async (target, method, args) => {
       if (target === "main" && method === "workers.resolveService") {
@@ -95,7 +95,7 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
         }
         throw new Error(`unexpected client rpc call ${target}.${method}`);
       }),
-      onEvent: vi.fn((_event: string, listener: (fromId: string, payload: unknown) => void) => {
+      on: vi.fn((_event: string, listener: (event: { payload: unknown }) => void) => {
         listeners.set(opts.id, listener);
         return () => listeners.delete(opts.id);
       }),

@@ -1,4 +1,10 @@
-import { createRpcBridge, type RpcBridge, type RpcMessage, type RpcTransport } from "@natstack/rpc";
+import {
+  createRpcClient,
+  envelopeFromMessage,
+  type EnvelopeRpcTransport,
+  type RpcClient,
+  type RpcEnvelope,
+} from "@natstack/rpc";
 import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
 import { RPC_METHODS } from "@natstack/shared/approvalContract";
 import { getApprovalCategoryLabel, getApprovalCopy } from "@natstack/shared/approvalCopy";
@@ -18,17 +24,26 @@ const output = document.getElementById("recovery-output") as HTMLPreElement | nu
 const workspaceSelect = document.getElementById("workspace-select") as HTMLSelectElement | null;
 const workspaceName = document.getElementById("workspace-name") as HTMLInputElement | null;
 
-const transport: RpcTransport = {
-  send: bootstrapTransport.send,
-  onMessage: (_sourceId, handler) =>
+const transport: EnvelopeRpcTransport = {
+  send: (envelope) => bootstrapTransport.send(envelope.target, envelope.message),
+  onMessage: (handler) =>
     bootstrapTransport.onMessage((fromId, message) => {
-      if (fromId === "main") handler(message as RpcMessage);
+      handler(
+        envelopeFromMessage({
+          selfId: "bootstrap",
+          from: fromId,
+          target: "bootstrap",
+          callerKind: fromId === "main" ? "server" : "unknown",
+          message: message as RpcEnvelope["message"],
+        })
+      );
     }),
-  onAnyMessage: (handler) =>
-    bootstrapTransport.onMessage((fromId, message) => handler(fromId, message as RpcMessage)),
+  status: () => "connected",
+  ready: () => Promise.resolve(),
+  onStatusChange: () => () => {},
 };
 
-const rpc: RpcBridge = createRpcBridge({ selfId: "bootstrap", transport });
+const rpc: RpcClient = createRpcClient({ selfId: "bootstrap", callerKind: "app", transport });
 let pending: PendingApproval[] = [];
 let rendering = false;
 

@@ -5,11 +5,11 @@ import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
-  createHandlerRegistry,
-  createRpcBridge,
-  type RpcBridge,
-  type RpcMessage,
-  type RpcTransport,
+  createRpcClient,
+  envelopeFromMessage,
+  type EnvelopeRpcTransport,
+  type RpcClient,
+  type RpcEnvelope,
   type StreamingMethodFrame,
 } from "@natstack/rpc";
 import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
@@ -143,8 +143,8 @@ function serviceProxy(service: string): Record<string, (...args: unknown[]) => P
 function createExtensionsClient(): ExtensionsClient {
   const proxyRpc = {
     call: (_target: string, method: string, args: unknown[]) => rpcCall(method, args),
-    streamCall: (_target: string, method: string, args: unknown[]) =>
-      getRuntimeBridge().streamCall("main", method, args),
+    stream: (_target: string, method: string, args: unknown[]) =>
+      getRuntimeBridge().stream("main", method, args),
   };
   const streamingCache = new Map<string, Promise<Set<string>>>();
   const declaredStreaming = (name: string): Promise<Set<string>> => {
@@ -375,10 +375,10 @@ function createContext() {
     rpc: {
       call: <T>(targetId: string, method: string, ...args: unknown[]) =>
         rpcCall<T>(method, args, targetId),
-      streamCall: (targetId: string, method: string, args: unknown[], options?: { signal?: AbortSignal }) =>
-        getRuntimeBridge().streamCall(targetId, method, args, options),
-      onEvent: (eventName: string, cb: (fromId: string, payload: unknown) => void) =>
-        getRuntimeBridge().onEvent(eventName, cb),
+      stream: (targetId: string, method: string, args: unknown[], options?: { signal?: AbortSignal }) =>
+        getRuntimeBridge().stream(targetId, method, args, options),
+      on: (eventName: string, cb: (event: { payload: unknown }) => void) =>
+        getRuntimeBridge().on(eventName, cb),
     },
     workers: {
       listServices: () => rpcCall("workers.listServices", []),
@@ -455,9 +455,9 @@ function createContext() {
   return ctx;
 }
 
-let runtimeBridge: RpcBridge | null = null;
+let runtimeBridge: RpcClient | null = null;
 
-function getRuntimeBridge(): RpcBridge {
+function getRuntimeBridge(): RpcClient {
   if (!runtimeBridge) throw new Error("Extension WebSocket RPC is not connected");
   return runtimeBridge;
 }
@@ -471,32 +471,43 @@ function gatewayWebSocketUrl(): string {
   return gatewayUrl.toString();
 }
 
-async function connectRuntimeBridge(): Promise<RpcBridge> {
+async function connectRuntimeBridge(): Promise<RpcClient> {
   const token = requiredEnv("NATSTACK_EXTENSION_RPC_TOKEN");
   const extensionName = requiredEnv("NATSTACK_EXTENSION_NAME");
   const ws = new WebSocket(gatewayWebSocketUrl());
-  const registry = createHandlerRegistry({ context: `extension:${extensionName}` });
+  const listeners = new Set<(envelope: RpcEnvelope) => void>();
+  const transport: EnvelopeRpcTransport = {
+    async send(envelope: RpcEnvelope): Promise<void> {
+      if (ws.readyState !== WebSocket.OPEN) {
+        throw new Error("Extension WebSocket RPC is not connected");
+      }
+      const invocationToken = invocationStore.getStore()?.invocationToken;
+      const stampedMessage =
+        invocationToken && (envelope.message.type === "request" || envelope.message.type === "stream-request")
+          ? { ...envelope.message, parentInvocationToken: invocationToken }
+          : envelope.message;
+      const stampedEnvelope = stampedMessage === envelope.message ? envelope : { ...envelope, message: stampedMessage };
+      ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope: stampedEnvelope,
+          message: stampedMessage,
+        } satisfies WsClientMessage),
+      );
+    },
+    onMessage(handler: (envelope: RpcEnvelope) => void): () => void {
+      listeners.add(handler);
+      return () => listeners.delete(handler);
+    },
+    status: () => (ws.readyState === WebSocket.OPEN ? "connected" : "disconnected"),
+    ready: () => Promise.resolve(),
+    onStatusChange: () => () => {},
+  };
 
-  const bridge = createRpcBridge({
+  const bridge = createRpcClient({
     selfId: extensionName,
-    transport: {
-      async send(_targetId: string, message: RpcMessage): Promise<void> {
-        if (ws.readyState !== WebSocket.OPEN) {
-          throw new Error("Extension WebSocket RPC is not connected");
-        }
-        const invocationToken = invocationStore.getStore()?.invocationToken;
-        const stamped = invocationToken && (message.type === "request" || message.type === "stream-request")
-          ? { ...message, parentInvocationToken: invocationToken }
-          : message;
-        ws.send(JSON.stringify({ type: "ws:rpc", message: stamped } satisfies WsClientMessage));
-      },
-      onMessage(sourceId: string, handler: (message: RpcMessage) => void): () => void {
-        return registry.onMessage(sourceId, handler);
-      },
-      onAnyMessage(handler: (sourceId: string, message: RpcMessage) => void): () => void {
-        return registry.onAnyMessage(handler);
-      },
-    } satisfies RpcTransport,
+    callerKind: "extension",
+    transport,
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -534,7 +545,20 @@ async function connectRuntimeBridge(): Promise<RpcBridge> {
       return;
     }
     if (message.type === "ws:rpc") {
-      registry.deliver("main", message.message);
+      const envelope =
+        message.envelope ??
+        (message.message
+          ? envelopeFromMessage({
+              selfId: extensionName,
+              from: "main",
+              target: extensionName,
+              callerKind: "server",
+              message: message.message,
+            })
+          : null);
+      if (envelope) {
+        for (const listener of listeners) listener(envelope);
+      }
     } else if (message.type === "ws:event") {
       const callbacks = extensionEventCallbacks.get(message.event);
       if (!callbacks) return;
@@ -685,7 +709,8 @@ async function main(): Promise<void> {
     ? defaultExport.fetch.bind(defaultExport)
     : null;
 
-  runtimeBridge.exposeMethod("extension.invoke", async (method: string, args: unknown[], invocation: ExtensionInvocation) => {
+  runtimeBridge.expose("extension.invoke", async (req) => {
+    const [method, args, invocation] = req.args as [string, unknown[], ExtensionInvocation];
     return invocationStore.run(invocation, async () => {
       const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
         ? apiObject[method]
@@ -707,8 +732,8 @@ async function main(): Promise<void> {
     });
   });
 
-  runtimeBridge.exposeStreamingMethod("extension.invokeStream", async (args, sink, abortSignal) => {
-    const [method, methodArgs, invocation] = args as [string, unknown[], ExtensionInvocation];
+  runtimeBridge.exposeStreaming("extension.invokeStream", async (req, sink) => {
+    const [method, methodArgs, invocation] = req.args as [string, unknown[], ExtensionInvocation];
     await invocationStore.run(invocation, async () => {
       const fn = Object.prototype.hasOwnProperty.call(apiObject, method)
         ? apiObject[method]
@@ -720,32 +745,35 @@ async function main(): Promise<void> {
       }
       const result = await fn(...methodArgs);
       if (result instanceof Response) {
-        await streamResponse(result, sink, abortSignal);
+        await streamResponse(result, sink, req.signal);
         return;
       }
       if (result instanceof ReadableStream) {
-        await streamResponse(new Response(result), sink, abortSignal);
+        await streamResponse(new Response(result), sink, req.signal);
         return;
       }
       throw new Error(`Extension method ${method} did not return a Response or ReadableStream`);
     });
   });
 
-  runtimeBridge.exposeMethod("extension.fetchResponseBodyChunk", async (streamId: string) => {
+  runtimeBridge.expose("extension.fetchResponseBodyChunk", async (req) => {
+    const [streamId] = req.args as [string];
     return readNextResponseBodyChunk(streamId);
   });
 
-  runtimeBridge.exposeMethod("extension.fetchResponseBodyClose", async (streamId: string) => {
+  runtimeBridge.expose("extension.fetchResponseBodyClose", async (req) => {
+    const [streamId] = req.args as [string];
     await closeResponseBodyStream(streamId);
     return null;
   });
 
-  runtimeBridge.exposeMethod(
+  runtimeBridge.expose(
     "extension.fetch",
-    async (
-      requestEnvelope: { url: string; method: string; headers: Record<string, string>; body?: BodyEnvelope },
-      invocation: ExtensionInvocation,
-    ) => {
+    async (req) => {
+      const [requestEnvelope, invocation] = req.args as [
+        { url: string; method: string; headers: Record<string, string>; body?: BodyEnvelope },
+        ExtensionInvocation,
+      ];
       if (!fetchHandler) {
         const err = new Error(`Extension has no fetch handler: ${ctx.name}`) as NodeJS.ErrnoException;
         err.code = "ENOFETCH";

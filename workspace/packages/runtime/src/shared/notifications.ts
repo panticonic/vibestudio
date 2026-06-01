@@ -23,7 +23,7 @@ type NotificationShowOptions = {
 };
 
 type RpcCallerWithEvents = RpcCaller & {
-    onEvent?: (event: string, listener: (fromId: string, payload: unknown) => void) => () => void;
+    on?: (event: string, listener: (event: { payload: unknown }) => void) => () => void;
 };
 
 export interface NotificationClient {
@@ -41,9 +41,9 @@ export function createNotificationClient(rpc: RpcCaller): NotificationClient {
     async function ensureActionSubscription(): Promise<void> {
         if (actionSubscription) return actionSubscription;
         actionSubscription = (async () => {
-            if (!rpcWithEvents.onEvent) return;
-            unsubscribeActionEvents ??= rpcWithEvents.onEvent("event:notification:action", (_fromId, payload) => {
-                const action = parseNotificationAction(payload);
+            if (!rpcWithEvents.on) return;
+            unsubscribeActionEvents ??= rpcWithEvents.on("event:notification:action", (event) => {
+                const action = parseNotificationAction(event.payload);
                 if (!action) return;
                 const handlers = actionHandlers.get(action.id);
                 if (action.actionId === "dismiss") {

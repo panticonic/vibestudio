@@ -7,7 +7,7 @@
  */
 
 import type { RuntimeFs } from "../types.js";
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 import { createRpcFs } from "../shared/rpcFs.js";
 
 let _fs: RuntimeFs | null = null;
@@ -16,7 +16,7 @@ const _ready = new Promise<void>((resolve) => {
   _resolve = resolve;
 });
 
-export function _initFsWithRpc(rpc: RpcBridge): RuntimeFs {
+export function _initFsWithRpc(rpc: Pick<RpcClient, "call">): RuntimeFs {
   _fs = createRpcFs(rpc);
   _resolve?.();
   return _fs;

@@ -3,7 +3,8 @@
  */
 
 import type { RpcEvent, RpcMessage } from "@natstack/rpc";
-import { BaseWsTransport, type WsLike } from "@natstack/shared/shell/transport";
+import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
+import type { WsLike } from "@natstack/rpc/protocol/wsAdapter";
 import type { RecoveryKind } from "@natstack/shared/shell/recoveryCoordinator";
 
 type AnyMessageHandler = (fromId: string, message: unknown) => void;
@@ -171,7 +172,7 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
     return authToken;
   };
 
-  const base = new BaseWsTransport({
+  const base = wsClientTransport({
     selfId: config.viewId,
     getWsUrl: () => config.wsUrl ?? `ws://127.0.0.1:${config.wsPort}`,
     connectionId: config.connectionId,
@@ -192,21 +193,25 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
       createSocket: (url) => new BrowserWsLike(new WebSocket(url)),
     },
   });
-  base.onMessage(deliver);
-  base.onEvent("runtime:routed-event-error", (fromId, payload) => {
-    deliver(fromId, {
+  base.onMessage((envelope) => deliver(envelope.from, envelope.message));
+  base.onMessage((envelope) => {
+    if (envelope.message.type !== "event") return;
+    if (envelope.message.event !== "runtime:routed-event-error") return;
+    deliver(envelope.from, {
       type: "event",
-      fromId,
+      fromId: envelope.from,
       event: "runtime:routed-event-error",
-      payload,
+      payload: envelope.message.payload,
     } as RpcEvent);
   });
-  base.onEvent("runtime:routed-response-error", (fromId, payload) => {
-    deliver(fromId, {
+  base.onMessage((envelope) => {
+    if (envelope.message.type !== "event") return;
+    if (envelope.message.event !== "runtime:routed-response-error") return;
+    deliver(envelope.from, {
       type: "event",
-      fromId,
+      fromId: envelope.from,
       event: "runtime:routed-response-error",
-      payload,
+      payload: envelope.message.payload,
     } as RpcEvent);
   });
   base.connect();
@@ -221,10 +226,16 @@ export function createWsTransport(config: WsTransportConfig): TransportBridge {
       ) {
         return Promise.reject(new Error("Invalid RPC message"));
       }
-      if (!base.isConnected()) {
+      if (base.status?.() !== "connected") {
         await base.connectAndWait();
       }
-      return base.send(targetId, rpcMessage);
+      return base.send({
+        from: config.viewId,
+        target: targetId,
+        delivery: { caller: { callerId: config.viewId, callerKind: "unknown" } },
+        provenance: [{ callerId: config.viewId, callerKind: "unknown" }],
+        message: rpcMessage,
+      });
     },
     onMessage(handler) {
       listeners.add(handler);

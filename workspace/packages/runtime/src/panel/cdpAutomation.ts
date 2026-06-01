@@ -1,4 +1,4 @@
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient } from "@natstack/rpc";
 import type {
   CdpAutomation,
   CdpClientKind,
@@ -67,7 +67,7 @@ async function loadPlaywrightClient(client: CdpClientKind): Promise<PlaywrightCl
   );
 }
 
-export function createCdpAutomation(rpc: RpcBridge, id: string): CdpAutomation {
+export function createCdpAutomation(rpc: Pick<RpcClient, "call">, id: string): CdpAutomation {
   const getCdpEndpoint = async (): Promise<CdpEndpoint> => {
     return rpc.call<CdpEndpoint>("main", "panelCdp.getCdpEndpoint", [id]);
   };

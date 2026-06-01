@@ -28,7 +28,7 @@ import {
   type UpdateHistoryTitleRequest,
 } from "@natstack/browser-data/client";
 import { createBridgeAdapter, type MobilePanelRuntimeHost } from "./bridgeAdapter";
-import { MobileTransport, type ConnectionStatus } from "./mobileTransport";
+import { MobileRpcClient, type ConnectionStatus } from "./mobileTransport";
 import { createMobileShellCore } from "../shellCore/createMobileShellCore";
 import type { Credentials } from "./auth";
 import { issueConnectionGrant } from "./auth";
@@ -46,14 +46,14 @@ class MobilePanels {
   constructor(
     private readonly deps: {
       serverUrl: string;
-      transport: MobileTransport;
+      transport: MobileRpcClient;
       onTreeUpdated?: (tree: Panel[]) => void;
       navigateToPanel: (panelId: string) => void;
       clientSessionId: string;
     }
   ) {
     this.browserData = createBrowserDataRpcClient({
-      call: (service, method, args) =>
+      call: (service: string, method: string, args: unknown[]) =>
         this.deps.transport.call("main", `${service}.${method}`, args),
     });
   }
@@ -376,7 +376,7 @@ class MobilePanels {
   }
 }
 export class ShellClient {
-  readonly transport: MobileTransport;
+  readonly transport: MobileRpcClient;
   readonly panels: MobilePanels;
   readonly workspaces: WorkspaceClient;
   readonly settings: SettingsClient;
@@ -390,7 +390,7 @@ export class ShellClient {
   constructor(config: ShellClientConfig) {
     this.credentials = config.credentials;
     this.serverUrl = config.credentials.serverUrl;
-    this.transport = new MobileTransport({
+    this.transport = new MobileRpcClient({
       serverUrl: config.credentials.serverUrl,
       issueConnectionGrant,
     });
@@ -412,8 +412,8 @@ export class ShellClient {
     this.workspaces = new WorkspaceClient(this.transport);
     this.settings = new SettingsClient(this.transport);
     this.events = new EventsClient(this.transport, this.recovery);
-    this.transport.onEvent("event:panel:runtimeLeaseChanged", (_from: string, payload: unknown) => {
-      this.panels.applyRuntimeLeaseEvent(payload as PanelRuntimeLeaseChangedEvent);
+    this.transport.on("event:panel:runtimeLeaseChanged", (event) => {
+      this.panels.applyRuntimeLeaseEvent(event.payload as PanelRuntimeLeaseChangedEvent);
     });
     this.recovery.registerResubscribeHandler("mobile-panel-tree", async () => {
       await drainWorkspaceMutationQueue(this);
@@ -488,12 +488,7 @@ export class ShellClient {
         } else if (status === "disconnected") {
           clearTimeout(timeout);
           unsub();
-          const info = this.transport.getLastCloseInfo();
-          const detail = info?.reason
-            ? `${info.reason} (code ${info.code ?? "?"})`
-            : info?.code
-              ? `close code ${info.code}`
-              : `could not reach ${this.serverUrl} — check LAN / firewall / server running`;
+          const detail = `could not reach ${this.serverUrl} - check LAN / firewall / server running`;
           reject(new Error(`Connection failed: ${detail}`));
         }
       });

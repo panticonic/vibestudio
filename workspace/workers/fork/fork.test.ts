@@ -28,7 +28,7 @@ function createMockRuntime() {
       }
       return undefined as T;
     },
-    streamCall: async () => new Response(),
+    stream: async () => new Response(),
   };
 
   const runtime: ForkRuntime = {

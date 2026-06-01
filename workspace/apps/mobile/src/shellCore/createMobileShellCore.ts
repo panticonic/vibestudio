@@ -19,14 +19,14 @@ import type {
   PanelSearchIndex,
   PanelSearchResult,
 } from "@natstack/shared/panelSearchTypes";
-import type { MobileTransport } from "../services/mobileTransport";
+import type { MobileRpcClient } from "../services/mobileTransport";
 import { parseHostConfig } from "../services/panelUrls";
 import { createMobileLocalViewStateStore } from "./localViewState";
 
 export function createMobileShellCore(deps: {
   workspaceId: string;
   serverUrl: string;
-  transport: MobileTransport;
+  transport: MobileRpcClient;
   onTreeUpdated?: (tree: Panel[]) => void;
 }) {
   const registry = new PanelRegistry({

@@ -1,4 +1,4 @@
-import type { RpcBridge } from "@natstack/rpc";
+import type { RpcClient, RpcEventContext } from "@natstack/rpc";
 import type { PanelHandle as CorePanelHandle, Rpc } from "../core/index.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/externalOpen";
 import { createCdpAutomation } from "./cdpAutomation.js";
@@ -43,7 +43,9 @@ export interface PanelTreeApi {
   ): Promise<PanelHandle>;
 }
 
-let _rpc: RpcBridge | null = null;
+type PanelRuntimeRpc = Pick<RpcClient, "call" | "emit" | "on">;
+
+let _rpc: PanelRuntimeRpc | null = null;
 let _selfId: string | null = null;
 let _selfRpcTargetId: string | null = null;
 let _parentId: string | null = null;
@@ -52,7 +54,7 @@ const metadataCache = new Map<string, PanelHandleMetadata>();
 const shell = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
 
 export function _initPanelHandleBridge(
-  rpc: RpcBridge,
+  rpc: PanelRuntimeRpc,
   options: {
     selfId?: string | null;
     selfRpcTargetId?: string | null;
@@ -85,7 +87,7 @@ export function _initPanelHandleBridge(
   }
 }
 
-function getRpc(): RpcBridge {
+function getRpc(): PanelRuntimeRpc {
   if (!_rpc) throw new Error("Panel bridge not initialized");
   return _rpc;
 }
@@ -224,8 +226,8 @@ export function onChildCreated(
   }
   const rpc = getRpc();
   unsubs.push(
-    rpc.onEvent("runtime:child-created", (_fromId, payload) => {
-      const data = payload as { childId?: string; url?: string } | null;
+    rpc.on("runtime:child-created", (event: RpcEventContext) => {
+      const data = event.payload as { childId?: string; url?: string } | null;
       if (data?.childId && data?.url) handler({ childId: data.childId, url: data.url });
     })
   );

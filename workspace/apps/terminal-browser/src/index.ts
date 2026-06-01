@@ -1,6 +1,12 @@
 import React from "react";
 import { render } from "ink";
-import { createRpcBridge, createHandlerRegistry, type RpcMessage, type RpcBridge } from "@natstack/rpc";
+import {
+  createRpcClient,
+  envelopeFromMessage,
+  type EnvelopeRpcTransport,
+  type RpcClient,
+  type RpcEnvelope,
+} from "@natstack/rpc";
 import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
 import WebSocket from "ws";
 import { SessionManager } from "./host/SessionManager.js";
@@ -51,17 +57,30 @@ async function connect(appId: string, logSink: LogSink) {
   const token = requiredEnv("NATSTACK_TERMINAL_APP_RPC_TOKEN");
   const connectionId = requiredEnv("NATSTACK_TERMINAL_APP_CONNECTION_ID");
   const ws = new WebSocket(gatewayWebSocketUrl());
-  const registry = createHandlerRegistry({ context: appId });
-  const bridge = createRpcBridge({
-    selfId: appId,
-    transport: {
-      async send(_targetId: string, message: RpcMessage): Promise<void> {
-        if (ws.readyState !== WebSocket.OPEN) throw new Error("terminal-browser RPC not connected");
-        ws.send(JSON.stringify({ type: "ws:rpc", message } satisfies WsClientMessage));
-      },
-      onMessage: (sourceId, handler) => registry.onMessage(sourceId, handler),
-      onAnyMessage: (handler) => registry.onAnyMessage(handler),
+  const listeners = new Set<(envelope: RpcEnvelope) => void>();
+  const transport: EnvelopeRpcTransport = {
+    async send(envelope: RpcEnvelope): Promise<void> {
+      if (ws.readyState !== WebSocket.OPEN) throw new Error("terminal-browser RPC not connected");
+      ws.send(
+        JSON.stringify({
+          type: "ws:rpc",
+          envelope,
+          message: envelope.message,
+        } satisfies WsClientMessage),
+      );
     },
+    onMessage(handler: (envelope: RpcEnvelope) => void): () => void {
+      listeners.add(handler);
+      return () => listeners.delete(handler);
+    },
+    status: () => (ws.readyState === WebSocket.OPEN ? "connected" : "disconnected"),
+    ready: () => Promise.resolve(),
+    onStatusChange: () => () => {},
+  };
+  const rpc: RpcClient = createRpcClient({
+    selfId: appId,
+    callerKind: "app",
+    transport,
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -100,9 +119,37 @@ async function connect(appId: string, logSink: LogSink) {
     } catch {
       return;
     }
-    if (message.type === "ws:rpc") registry.deliver("main", message.message, "server");
-    else if (message.type === "ws:routed")
-      registry.deliver(message.fromId, message.message, message.fromKind);
+    if (message.type === "ws:rpc") {
+      const envelope =
+        message.envelope ??
+        (message.message
+          ? envelopeFromMessage({
+              selfId: appId,
+              from: "main",
+              target: appId,
+              callerKind: "server",
+              message: message.message,
+            })
+          : null);
+      if (envelope) {
+        for (const listener of listeners) listener(envelope);
+      }
+    } else if (message.type === "ws:routed") {
+      const envelope =
+        message.envelope ??
+        (message.message
+          ? envelopeFromMessage({
+              selfId: appId,
+              from: message.fromId ?? "unknown",
+              target: appId,
+              callerKind: message.fromKind ?? "unknown",
+              message: message.message,
+            })
+          : null);
+      if (envelope) {
+        for (const listener of listeners) listener(envelope);
+      }
+    }
     else if (message.type === "ws:event") {
       if (message.event === "apps:lifecycle" || message.event === "apps:status") {
         logSink.push({ level: "info", source: message.event, message: JSON.stringify(message.payload) });
@@ -110,7 +157,7 @@ async function connect(appId: string, logSink: LogSink) {
     }
   });
   ws.on("close", () => process.exit(0));
-  return { bridge, close: () => ws.close(1000, "terminal-browser closing") };
+  return { rpc, close: () => ws.close(1000, "terminal-browser closing") };
 }
 
 export async function main(): Promise<void> {
@@ -127,15 +174,15 @@ export async function main(): Promise<void> {
 
   const appId = requiredEnv("NATSTACK_TERMINAL_APP_ID");
   const logSink = createLogSink();
-  const { bridge, close } = await connect(appId, logSink);
+  const { rpc, close } = await connect(appId, logSink);
 
-  const workspace = (await bridge.call("main", "workspace.getInfo", []).catch(() => null)) as {
+  const workspace = (await rpc.call("main", "workspace.getInfo", []).catch(() => null)) as {
     config?: { id?: string };
   } | null;
   const workspaceId = workspace?.config?.id ?? "default";
 
   const sessions = new SessionManager({
-    rpc: bridge as RpcBridge,
+    rpc,
     hostPrincipalId: appId,
     viewport: {
       columns: process.stdout.columns ?? 80,
@@ -144,7 +191,7 @@ export async function main(): Promise<void> {
   });
 
   const hostState = { overlayOpen: false };
-  registerHostService(bridge as RpcBridge, {
+  registerHostService(rpc, {
     sessions,
     // Host keeps the real TTY in raw mode while running; only allow enabling.
     setRealRawMode: (enabled) => {
@@ -153,7 +200,7 @@ export async function main(): Promise<void> {
     isOverlayOpen: () => hostState.overlayOpen,
   });
 
-  const approvals = createApprovalsClient(bridge as RpcBridge);
+  const approvals = createApprovalsClient(rpc);
   const HostRoot: React.FC = () => {
     const [, force] = React.useState(0);
     React.useEffect(() => logSink.subscribe(() => force((n) => n + 1)), []);

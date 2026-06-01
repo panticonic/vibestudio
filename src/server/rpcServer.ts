@@ -9,8 +9,10 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
 import {
-  createRpcBridge,
-  type RpcBridge,
+  createRpcClient,
+  envelopeFromMessage,
+  type EnvelopeRpcTransport,
+  type RpcClient,
   type RpcEvent,
   type RpcMessage,
   type RpcRequest,
@@ -65,6 +67,27 @@ function parseDOTarget(targetId: string): { source: string; className: string; o
   return { source, className, objectKey };
 }
 
+function envelopeTransportFromWsServer(transport: WsServerTransportInternal): EnvelopeRpcTransport {
+  return {
+    async send(envelope) {
+      await transport.send(envelope.target, envelope.message);
+    },
+    onMessage(handler) {
+      return transport.onAnyMessage((sourceId, message, callerKind) => {
+        handler(
+          envelopeFromMessage({
+            selfId: "server",
+            from: sourceId,
+            target: "server",
+            message,
+            callerKind: callerKind ?? "unknown",
+          })
+        );
+      });
+    },
+  };
+}
+
 /** Server-side state for a connected WS client */
 export interface WsClientState extends WsClientInfo {
   ws: WebSocket;
@@ -101,7 +124,7 @@ type RelayErrorCode =
 class ConnectionRegistry {
   private clients = new Map<WebSocket, WsClientState>();
   private callerConnections = new Map<string, Map<string, WsClientState>>();
-  private bridges = new Map<string, Map<string, RpcBridge>>();
+  private bridges = new Map<string, Map<string, RpcClient>>();
   private transports = new Map<string, Map<string, WsServerTransportInternal>>();
 
   getBySocket(ws: WebSocket): WsClientState | undefined {
@@ -160,7 +183,7 @@ class ConnectionRegistry {
   setBridge(
     callerId: string,
     connectionId: string,
-    bridge: RpcBridge,
+    bridge: RpcClient,
     transport: WsServerTransportInternal
   ): void {
     let bridges = this.bridges.get(callerId);
@@ -178,11 +201,11 @@ class ConnectionRegistry {
     transports.set(connectionId, transport);
   }
 
-  getBridge(callerId: string, connectionId: string): RpcBridge | undefined {
+  getBridge(callerId: string, connectionId: string): RpcClient | undefined {
     return this.bridges.get(callerId)?.get(connectionId);
   }
 
-  getPrimaryBridge(callerId: string): RpcBridge | undefined {
+  getPrimaryBridge(callerId: string): RpcClient | undefined {
     const primary = this.pickPrimary(callerId);
     return primary ? this.getBridge(callerId, primary.connectionId) : undefined;
   }
@@ -485,7 +508,7 @@ export class RpcServer {
   private setBridge(
     callerId: string,
     connectionId: string,
-    bridge: RpcBridge,
+    bridge: RpcClient,
     transport: WsServerTransportInternal
   ): void {
     this.connections.setBridge(callerId, connectionId, bridge, transport);
@@ -715,11 +738,12 @@ export class RpcServer {
       });
     }
 
-    // Create per-client RPC bridge for server→client calls
+    // Create per-client RPC client for server→client calls
     const transport = createWsServerTransport({ ws, clientId: `${callerId}:${connectionId}` });
-    const bridge = createRpcBridge({
+    const bridge = createRpcClient({
       selfId: "server",
-      transport,
+      callerKind: "server",
+      transport: envelopeTransportFromWsServer(transport),
     });
     this.setBridge(callerId, connectionId, bridge, transport);
 
@@ -800,32 +824,44 @@ export class RpcServer {
     }
 
     switch (msg.type) {
-      case "ws:rpc":
+      case "ws:rpc": {
+        const rpcMessage = msg.envelope?.message ?? msg.message;
+        if (!rpcMessage) return;
         // If the message belongs to a server-initiated call via the client's RPC bridge,
-        // route it to the bridge transport. Streaming responses use `stream-frame`; without
-        // this branch, server -> extension streamCall callers wait forever for HEAD.
+        // route it to the client transport. Streaming responses use `stream-frame`; without
+        // this branch, server -> extension stream callers wait forever for HEAD.
         if (
-          msg.message.type === "response" ||
-          msg.message.type === "event" ||
-          msg.message.type === "stream-frame"
+          rpcMessage.type === "response" ||
+          rpcMessage.type === "event" ||
+          rpcMessage.type === "stream-frame"
         ) {
           const transport = this.connections.getTransport(
             client.caller.runtime.id,
             client.connectionId
           );
           if (transport) {
-            transport.deliver(client.caller.runtime.id, msg.message);
+            transport.deliver(client.caller.runtime.id, rpcMessage);
             // Bridge-delivered messages are not new service requests.
             return;
           }
         }
-        void this.handleRpc(client, msg.message);
+        void this.handleRpc(client, rpcMessage);
         break;
+      }
       case "ws:tool-result":
         this.handleToolResult(msg.callId, msg.result as ToolExecutionResult);
         break;
       case "ws:route":
-        this.handleRoute(client, msg.targetId, msg.message, msg.targetConnectionId);
+        if (msg.envelope) {
+          this.handleRoute(
+            client,
+            msg.envelope.target,
+            msg.envelope.message,
+            msg.targetConnectionId
+          );
+        } else if (msg.targetId && msg.message) {
+          this.handleRoute(client, msg.targetId, msg.message, msg.targetConnectionId);
+        }
         break;
       case "ws:auth":
         // Ignore duplicate auth messages
@@ -1313,14 +1349,12 @@ export class RpcServer {
   // ===========================================================================
 
   /**
-   * Get the RPC bridge for a connected client.
+   * Get the RPC client for a connected client.
    * Returns undefined if the client is not connected.
    *
-   * The server can use this bridge to call methods exposed by the client:
-   *   const bridge = rpcServer.getClientBridge(callerId);
-   *   const result = await bridge.call(callerId, "someMethod", arg1, arg2);
+   * The server can use this client to call methods exposed by the client.
    */
-  getClientBridge(callerId: string): RpcBridge | undefined {
+  getClientBridge(callerId: string): RpcClient | undefined {
     return this.connections.getPrimaryBridge(callerId);
   }
 
@@ -1936,7 +1970,7 @@ export class RpcServer {
 
     // WS has no separate-status-code path — pre-flight failures
     // become ERROR frames just like in-flight failures. The client's
-    // `streamCall` promise rejects with the error message either way.
+    // `stream` promise rejects with the error message either way.
     const check = this.validateStreamingProxyFetch({
       method: request.method,
       callerKind: client.caller.runtime.kind,
@@ -2059,7 +2093,7 @@ export class RpcServer {
     if (!bridge) {
       throw createRelayError(`Target bridge not reachable: ${targetId}`, "TARGET_NOT_REACHABLE");
     }
-    return bridge.streamCall(targetId, method, args);
+    return bridge.stream(targetId, method, args);
   }
 
   private async relayCall(

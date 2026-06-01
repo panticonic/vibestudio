@@ -4,15 +4,15 @@ import { createNotificationClient } from "./notifications.js";
 
 describe("notification client", () => {
   it("routes action button clicks to local callbacks without serializing functions", async () => {
-    let actionListener: ((fromId: string, payload: unknown) => void) | undefined;
+    let actionListener: ((event: { payload: unknown }) => void) | undefined;
     const onClick = vi.fn();
     const rpc = {
       call: vi.fn(async (_target: string, method: string, args: unknown[]) => {
         if (method === "notification.show") return (args[0] as { id: string }).id;
         return undefined;
       }),
-      streamCall: vi.fn(),
-      onEvent: vi.fn((event: string, listener: (fromId: string, payload: unknown) => void) => {
+      stream: vi.fn(),
+      on: vi.fn((event: string, listener: (event: { payload: unknown }) => void) => {
         if (event === "event:notification:action") actionListener = listener;
         return vi.fn();
       }),
@@ -35,21 +35,21 @@ describe("notification client", () => {
     };
     expect(shown.actions?.[0]?.["onClick"]).toBeUndefined();
 
-    actionListener?.("main", { id, actionId: "reveal" });
+    actionListener?.({ payload: { id, actionId: "reveal" } });
 
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
   it("generates stable action IDs when callers only provide labels", async () => {
-    let actionListener: ((fromId: string, payload: unknown) => void) | undefined;
+    let actionListener: ((event: { payload: unknown }) => void) | undefined;
     const onClick = vi.fn();
     const rpc = {
       call: vi.fn(async (_target: string, method: string, args: unknown[]) => {
         if (method === "notification.show") return (args[0] as { id: string }).id;
         return undefined;
       }),
-      streamCall: vi.fn(),
-      onEvent: vi.fn((event: string, listener: (fromId: string, payload: unknown) => void) => {
+      stream: vi.fn(),
+      on: vi.fn((event: string, listener: (event: { payload: unknown }) => void) => {
         if (event === "event:notification:action") actionListener = listener;
         return vi.fn();
       }),
@@ -66,7 +66,7 @@ describe("notification client", () => {
       actions: [expect.objectContaining({ id: "reveal-in-folder-0", label: "Reveal in folder" })],
     })]);
 
-    actionListener?.("main", { id, actionId: "reveal-in-folder-0" });
+    actionListener?.({ payload: { id, actionId: "reveal-in-folder-0" } });
 
     expect(onClick).toHaveBeenCalledTimes(1);
   });

@@ -2,7 +2,7 @@ import type { PanelManager } from "@natstack/shared/shell/panelManager";
 import type { PanelRegistry } from "@natstack/shared/panelRegistry";
 import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
 import { asPanelSlotId } from "@natstack/shared/panel/ids";
-import type { MobileTransport } from "./mobileTransport";
+import type { MobileRpcClient } from "./mobileTransport";
 
 export interface BridgeAdapterCallbacks {
     navigateToPanel(panelId: string): void;
@@ -29,7 +29,7 @@ function chooseNextPanel(registry: PanelRegistry, closingPanelId: string): strin
 export function createBridgeAdapter(deps: {
     panelManager: PanelManager;
     registry: PanelRegistry;
-    transport: MobileTransport;
+    transport: MobileRpcClient;
     callbacks: BridgeAdapterCallbacks;
 }) {
     let runtimeHost: MobilePanelRuntimeHost | null = null;

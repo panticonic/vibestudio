@@ -56,7 +56,7 @@ describe("createFindTool", () => {
           details: { engine: "ripgrep" },
         });
       }),
-      streamCall: vi.fn(async () => new Response()),
+      stream: vi.fn(async () => new Response()),
     };
     const tool = createFindTool(CWD, fs, { rpc });
 
