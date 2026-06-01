@@ -133,6 +133,39 @@ describe("buildEvalTool", () => {
     expect(scope["__lastEvalReturn"]).toBe(huge);
   });
 
+  it("summarizes oversized diagnostic arrays before the preview", async () => {
+    const diagnostics = Array.from({ length: 400 }, (_, index) => ({
+      file: index % 2 === 0 ? "/ctx/panels/spectrolite/index.tsx" : "/ctx/panels/spectrolite/App.tsx",
+      line: index + 1,
+      column: 7,
+      severity: index % 3 === 0 ? "warning" : "error",
+      code: index % 2 === 0 ? 2307 : 7026,
+      message: index % 2 === 0
+        ? "Cannot find module 'react' or its corresponding type declarations."
+        : "JSX element implicitly has type 'any' because no interface 'JSX.IntrinsicElements' exists.",
+      payload: "x".repeat(500),
+    }));
+    const tool = createEvalTool({
+      executeSandbox: async () => ({
+        success: true,
+        consoleOutput: "",
+        returnValue: { diagnostics },
+      }),
+    });
+
+    const result = await tool.execute({ code: "return diagnostics;" }, {
+      stream: async () => undefined,
+    } as never);
+    const rendered = JSON.stringify(result);
+
+    expect(rendered).toContain("diagnostics array length 400");
+    expect(rendered).toContain("By severity:");
+    expect(rendered).toContain("Top codes:");
+    expect(rendered).toContain("Missing modules: react=200");
+    expect(rendered).toContain("Examples:");
+    expect(rendered).toContain("[preview]");
+  });
+
   it("passes the method abort signal into sandbox execution", async () => {
     const controller = new AbortController();
     let capturedSignal: AbortSignal | undefined;

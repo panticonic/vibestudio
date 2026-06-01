@@ -10,7 +10,8 @@ import type { SandboxOptions, SandboxResult, ScopeManager } from "@workspace/eva
 import type { MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
 import type { SandboxConfig, ChatSandboxValue } from "./types.js";
 
-const MAX_EVAL_TEXT_PART_CHARS = 64 * 1024;
+const MAX_EVAL_TEXT_PART_CHARS = 128 * 1024;
+const MAX_EVAL_PREVIEW_CHARS = 16 * 1024;
 const EVAL_RETURN_SCOPE_KEY = "__lastEvalReturn";
 const EVAL_CONSOLE_SCOPE_KEY = "__lastEvalConsole";
 
@@ -211,7 +212,7 @@ function boundEvalText(
     if (text.length <= MAX_EVAL_TEXT_PART_CHARS)
         return text;
     opts.onOversize();
-    const previewChars = Math.min(8192, MAX_EVAL_TEXT_PART_CHARS);
+    const previewChars = Math.min(MAX_EVAL_PREVIEW_CHARS, MAX_EVAL_TEXT_PART_CHARS);
     return [
         `[${label} omitted from tool transcript: ${text.length} characters exceeds ${MAX_EVAL_TEXT_PART_CHARS}.]`,
         `Full value stored at scope.${opts.scopeKey}. Return or inspect slices explicitly, e.g. scope.${opts.scopeKey}.`,
@@ -223,14 +224,139 @@ function boundEvalText(
 }
 
 function summarizeLargeValue(value: unknown): string {
+    const nestedDiagnostics = value && typeof value === "object"
+        ? (value as Record<string, unknown>)["diagnostics"]
+        : undefined;
+    if (Array.isArray(nestedDiagnostics)) {
+        return summarizeDiagnosticArray(nestedDiagnostics) ?? summarizeArray(nestedDiagnostics);
+    }
     if (Array.isArray(value)) {
-        return `Summary: array length ${value.length}.`;
+        return summarizeDiagnosticArray(value) ?? summarizeArray(value);
     }
     if (value && typeof value === "object") {
         const keys = Object.keys(value as Record<string, unknown>);
         return `Summary: object with ${keys.length} key(s): ${keys.slice(0, 20).join(", ")}${keys.length > 20 ? ", ..." : ""}.`;
     }
     return "";
+}
+
+function summarizeArray(value: unknown[]): string {
+    const lines = [`Summary: array length ${value.length}.`];
+    const objectKeys = mostCommon(
+        value.flatMap((item) => item && typeof item === "object" ? Object.keys(item as Record<string, unknown>) : []),
+        10,
+    );
+    if (objectKeys.length > 0) {
+        lines.push(`Common keys: ${objectKeys.map(({ key, count }) => `${key} (${count})`).join(", ")}.`);
+    }
+    const examples = value.slice(0, 3).map((item) => compactJson(item, 300));
+    if (examples.length > 0) {
+        lines.push("Examples:");
+        lines.push(...examples.map((example, index) => `${index + 1}. ${example}`));
+    }
+    return lines.join("\n");
+}
+
+function summarizeDiagnosticArray(value: unknown[]): string | null {
+    const diagnostics = value
+        .filter((item): item is Record<string, unknown> => isDiagnosticLike(item));
+    if (diagnostics.length === 0) return null;
+
+    const lines = [
+        `Summary: diagnostics array length ${value.length}; ${diagnostics.length} diagnostic-like item(s).`,
+    ];
+    lines.push(`By severity: ${formatCounts(mostCommon(diagnostics.map((d) => stringField(d, "severity") ?? "unknown"), 8))}.`);
+
+    const codes = mostCommon(
+        diagnostics
+            .map((d) => stringField(d, "code"))
+            .filter((code): code is string => Boolean(code)),
+        8,
+    );
+    if (codes.length > 0) lines.push(`Top codes: ${formatCounts(codes)}.`);
+
+    const files = mostCommon(
+        diagnostics
+            .map((d) => stringField(d, "file"))
+            .filter((file): file is string => Boolean(file)),
+        8,
+    );
+    if (files.length > 0) lines.push(`Top files: ${formatCounts(files)}.`);
+
+    const modules = mostCommon(
+        diagnostics
+            .map((d) => extractMissingModule(stringField(d, "message") ?? ""))
+            .filter((moduleName): moduleName is string => Boolean(moduleName)),
+        8,
+    );
+    if (modules.length > 0) lines.push(`Missing modules: ${formatCounts(modules)}.`);
+
+    lines.push("Examples:");
+    lines.push(...diagnostics.slice(0, 5).map((diagnostic, index) => {
+        const severity = stringField(diagnostic, "severity") ?? "diagnostic";
+        const code = stringField(diagnostic, "code");
+        const file = stringField(diagnostic, "file");
+        const line = stringField(diagnostic, "line");
+        const column = stringField(diagnostic, "column");
+        const location = file ? `${file}${line ? `:${line}${column ? `:${column}` : ""}` : ""}` : "(no file)";
+        const message = truncateSingleLine(stringField(diagnostic, "message") ?? compactJson(diagnostic, 180), 220);
+        return `${index + 1}. ${severity}${code ? ` TS${code}` : ""} ${location}: ${message}`;
+    }));
+    return lines.join("\n");
+}
+
+function isDiagnosticLike(value: unknown): value is Record<string, unknown> {
+    if (!value || typeof value !== "object") return false;
+    const record = value as Record<string, unknown>;
+    return typeof record["message"] === "string" && (
+        "severity" in record ||
+        "code" in record ||
+        "file" in record ||
+        "line" in record
+    );
+}
+
+function stringField(record: Record<string, unknown>, key: string): string | undefined {
+    const value = record[key];
+    if (value === undefined || value === null) return undefined;
+    return String(value);
+}
+
+function extractMissingModule(message: string): string | null {
+    return message.match(/Cannot find module ['"]([^'"]+)['"]/)?.[1] ?? null;
+}
+
+function mostCommon(values: string[], limit: number): Array<{ key: string; count: number }> {
+    const counts = new Map<string, number>();
+    for (const value of values) {
+        if (!value) continue;
+        counts.set(value, (counts.get(value) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+        .sort(([aKey, aCount], [bKey, bCount]) => bCount - aCount || aKey.localeCompare(bKey))
+        .slice(0, limit)
+        .map(([key, count]) => ({ key, count }));
+}
+
+function formatCounts(counts: Array<{ key: string; count: number }>): string {
+    return counts.map(({ key, count }) => `${key}=${count}`).join(", ");
+}
+
+function compactJson(value: unknown, maxChars: number): string {
+    let text: string;
+    try {
+        text = typeof value === "string" ? value : JSON.stringify(value);
+    }
+    catch {
+        text = String(value);
+    }
+    return truncateSingleLine(text, maxChars);
+}
+
+function truncateSingleLine(value: string, maxChars: number): string {
+    const oneLine = value.replace(/\s+/g, " ").trim();
+    if (oneLine.length <= maxChars) return oneLine;
+    return `${oneLine.slice(0, Math.max(0, maxChars - 1))}…`;
 }
 
 function withSandboxErrorHint(error: string): string {

@@ -25,19 +25,31 @@ describe("scope serialization", () => {
     );
   });
 
+  it("persists eval return values below the doubled top-level cap", () => {
+    const scope = new Map<string, unknown>([
+      ["__lastEvalReturn", "x".repeat(200 * 1024)],
+    ]);
+
+    const serialized = serializeScope(scope);
+    const restored = deserializeScope(serialized.json);
+
+    expect(restored.get("__lastEvalReturn")).toBe("x".repeat(200 * 1024));
+    expect(serialized.droppedPaths).toEqual([]);
+  });
+
   it("drops the largest persisted keys when the total scope payload is too large", () => {
     const scope = new Map<string, unknown>([
-      ["first", "a".repeat(120 * 1024)],
-      ["second", "b".repeat(120 * 1024)],
-      ["third", "c".repeat(120 * 1024)],
-      ["fourth", "d".repeat(120 * 1024)],
+      ["first", "a".repeat(240 * 1024)],
+      ["second", "b".repeat(240 * 1024)],
+      ["third", "c".repeat(240 * 1024)],
+      ["fourth", "d".repeat(240 * 1024)],
       ["small", "kept"],
     ]);
 
     const serialized = serializeScope(scope);
     const restored = deserializeScope(serialized.json);
 
-    expect(serialized.json.length).toBeLessThanOrEqual(384 * 1024);
+    expect(serialized.json.length).toBeLessThanOrEqual(768 * 1024);
     expect(restored.get("small")).toBe("kept");
     expect(serialized.droppedPaths.some((entry) => entry.reason.includes("serialized scope"))).toBe(true);
   });

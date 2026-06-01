@@ -7,8 +7,8 @@
  */
 
 const MAX_DEPTH = 20;
-const MAX_SCOPE_VALUE_JSON_CHARS = 128 * 1024;
-const MAX_SCOPE_JSON_CHARS = 384 * 1024;
+const MAX_SCOPE_VALUE_JSON_CHARS = 256 * 1024;
+const MAX_SCOPE_JSON_CHARS = 768 * 1024;
 
 export interface SerializedScope {
   /** JSON string of serializable data */
