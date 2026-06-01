@@ -119,6 +119,9 @@ export function DocumentEditor({
   dependencies,
 }: DocumentEditorProps) {
   const [markdown, setMarkdown] = useState<string | null>(null);
+  const markdownRef = useRef<string | null>(null);
+  markdownRef.current = markdown;
+  const bufferedMarkdownRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sourceRecoveryError, setSourceRecoveryError] = useState<string | null>(null);
   const [richEditorKey, setRichEditorKey] = useState(0);
@@ -179,6 +182,7 @@ export function DocumentEditor({
       if (signal?.cancelled) return;
       const transformed = wikilinksToJsx(raw);
       lastDiskRef.current = raw;
+      bufferedMarkdownRef.current = transformed;
       setMarkdown(transformed);
       setError(null);
       // Cancel any in-flight state merge; the on-disk content is authoritative.
@@ -195,7 +199,11 @@ export function DocumentEditor({
         lastDiskRef.current = null;
         setError(null);
         setFileMissing(true);
-        setMarkdown((prev) => prev ?? "");
+        setMarkdown((prev) => {
+          const next = prev ?? "";
+          bufferedMarkdownRef.current = next;
+          return next;
+        });
         return;
       }
       setError(`Failed to read ${relPath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -214,6 +222,7 @@ export function DocumentEditor({
     setDiskConflict(null);
     setFileMissing(false);
     lastDiskRef.current = null;
+    bufferedMarkdownRef.current = null;
     const signal = { cancelled: false };
     void loadFromDisk(signal);
     return () => { signal.cancelled = true; };
@@ -230,6 +239,16 @@ export function DocumentEditor({
         if (raw === lastDiskRef.current) return;
         lastDiskRef.current = raw;
         if (fileMissing) setFileMissing(false);
+        const currentMarkdown = editorRef.current?.getMarkdown() ?? markdownRef.current;
+        const currentOnDisk = currentMarkdown === null ? null : wikilinksFromJsx(currentMarkdown);
+        const bufferedOnDisk = bufferedMarkdownRef.current === null ? null : wikilinksFromJsx(bufferedMarkdownRef.current);
+        if (raw === currentOnDisk || raw === bufferedOnDisk) {
+          // This is our own flush (or an editor normalization that produced the
+          // same on-disk bytes). React may not have propagated
+          // hasUnflushedChanges=false yet, so don't report a false conflict.
+          setError(null);
+          return;
+        }
         if (hasUnflushedChangesRef.current) {
           // Don't silently drop the user's in-buffer work — surface a
           // conflict banner instead so they pick the winner.
@@ -243,6 +262,7 @@ export function DocumentEditor({
         const merged = Object.keys(docStateRef.current).length > 0
           ? replaceFrontmatterState(transformed, docStateRef.current)
           : transformed;
+        bufferedMarkdownRef.current = merged;
         setMarkdown(merged);
         setError(null);
         // Frontmatter from disk wins for state keys the user hasn't
@@ -289,6 +309,7 @@ export function DocumentEditor({
       clearTimeout(mergeTimerRef.current);
       mergeTimerRef.current = null;
     }
+    bufferedMarkdownRef.current = merged;
     setMarkdown(merged);
     setDocState(parseFrontmatter(merged).state);
     editorRef.current?.setMarkdown(merged);
@@ -303,6 +324,7 @@ export function DocumentEditor({
       const onDisk = wikilinksFromJsx(markdown);
       await fs.writeFile(fullPath, onDisk);
       lastDiskRef.current = onDisk;
+      bufferedMarkdownRef.current = markdown;
       setFileMissing(false);
       setError(null);
       onReload(relPath, markdown);
@@ -381,11 +403,13 @@ export function DocumentEditor({
     const merged = Object.keys(stateMap).length > 0
       ? replaceFrontmatterState(next, stateMap)
       : next;
+    bufferedMarkdownRef.current = merged;
     onChange(relPath, merged);
     scheduleDocCompile(merged);
   }, [onChange, relPath, scheduleDocCompile]);
 
   const handleSourceRecoveryChange = useCallback((next: string) => {
+    bufferedMarkdownRef.current = next;
     setMarkdown(next);
     onChange(relPath, next);
     scheduleDocCompile(next);
@@ -452,6 +476,7 @@ export function DocumentEditor({
       // editing focus is preserved. Next time the editor fires an
       // onChange (user types), handleChange re-merges state into its
       // emitted markdown so the buffer stays correct.
+      bufferedMarkdownRef.current = newMdx;
       onChangeRef.current(relPathRef.current, newMdx);
       scheduleDocCompile(newMdx);
     }, DOC_STATE_MERGE_MS);
@@ -468,6 +493,7 @@ export function DocumentEditor({
     const current = editor.getMarkdown();
     const newMdx = replaceFrontmatterState(current, docStateRef.current);
     if (newMdx === current) return;
+    bufferedMarkdownRef.current = newMdx;
     onChangeRef.current(relPathRef.current, newMdx);
     void writeBufferToDisk(repoRoot, relPathRef.current, newMdx).catch((err) => {
       console.warn(`[Spectrolite] state merge write failed for ${relPathRef.current}:`, err);
@@ -583,7 +609,10 @@ export function DocumentEditor({
     // mutation via execCommand. Trigger a synthetic change so Lexical's
     // editorState picks up the new text via getMarkdown.
     const md = editorRef.current?.getMarkdown();
-    if (md != null) onChange(relPath, md);
+    if (md != null) {
+      bufferedMarkdownRef.current = md;
+      onChange(relPath, md);
+    }
   }, [onChange, relPath]);
 
   useEffect(() => {
