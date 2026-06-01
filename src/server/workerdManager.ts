@@ -718,6 +718,9 @@ export class WorkerdManager {
     for (const [serviceKey, doService] of this.doServices) {
       const { className } = doService;
       let bundleContent: string;
+      // Terminal (Ink) DOs ship a `yoga.wasm` artifact that workerd must load as
+      // a pre-compiled wasm module binding (the only way to run WASM in workerd).
+      let yogaWasmBase64: string | null = null;
       try {
         if (isInternalDOSource(doService.source)) {
           const buildResult = getInternalDOBundle();
@@ -727,6 +730,7 @@ export class WorkerdManager {
           const buildResult = await this.deps.getBuild(doService.source);
           bundleContent = primaryTextArtifactContent(buildResult);
           doService.buildKey = buildResult.metadata.ev;
+          yogaWasmBase64 = buildResult.artifacts.find((a) => a.role === "wasm")?.content ?? null;
         }
       } catch (err) {
         log.warn(`Skipping DO service "${serviceKey}" — build not available:`, err);
@@ -780,7 +784,12 @@ export class WorkerdManager {
       }
 
       const workerDef: Record<string, unknown> = {
-        modules: [{ name: "worker.js", esModule: bundleContent }],
+        modules: [
+          { name: "worker.js", esModule: bundleContent },
+          // Pre-compiled wasm module binding for terminal (Ink/yoga) DOs. The
+          // worker bundle imports "yoga.wasm" and instantiates it synchronously.
+          ...(yogaWasmBase64 ? [{ name: "yoga.wasm", wasm: yogaWasmBase64 }] : []),
+        ],
         bindings,
         compatibilityDate: "2025-12-01",
         // `nodejs_compat` gives worker DOs access to the Node-compatible
@@ -1122,6 +1131,12 @@ ${doBlock}${cases.join("\n")}
         if (k === "esModule" && typeof v === "string") {
           const filename = `bundle-${this.bundleFileCounter++}.js`;
           fs.writeFileSync(path.join(this.configDir, filename), v);
+          return `${indent}${k} = embed "${filename}",`;
+        }
+        // wasm module bindings: value is base64; decode to binary + embed.
+        if (k === "wasm" && typeof v === "string") {
+          const filename = `module-${this.bundleFileCounter++}.wasm`;
+          fs.writeFileSync(path.join(this.configDir, filename), Buffer.from(v, "base64"));
           return `${indent}${k} = embed "${filename}",`;
         }
         return `${indent}${k} = ${this.capnpValue(v, depth + 1)},`;

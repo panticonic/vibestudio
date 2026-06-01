@@ -1,0 +1,22 @@
+{
+  "name": "@workspace/terminal-shim",
+  "version": "0.1.0",
+  "description": "workerd runtime shim for Ink terminal apps (yoga loader + node shims + Ink session)",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./yoga": "./src/yoga/yoga-layout-shim.ts",
+    "./node/signal-exit": "./src/node/signal-exit.ts",
+    "./node/terminal-size": "./src/node/terminal-size.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "yoga-layout": "^3.2.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

@@ -18,6 +18,13 @@ export interface TerminalAppLaunch {
   effectiveVersion: string | null;
   gatewayUrl: string;
   build: TerminalAppBuild;
+  /**
+   * Interactive (TUI) apps get the server's real terminal via stdio "inherit"
+   * (stdin/stdout/stderr) instead of piped capture. Required for apps that
+   * render a full-screen UI and read raw keystrokes (e.g. terminal-browser).
+   * Only yields a usable TTY when the server runs attached to a terminal.
+   */
+  interactive?: boolean;
 }
 
 export interface TerminalAppRunnerDeps {
@@ -74,11 +81,13 @@ export class TerminalAppRunner {
         NATSTACK_TERMINAL_APP_RPC_TOKEN: rpcGrant.token,
         NATSTACK_TERMINAL_APP_CONNECTION_ID: connectionId,
       },
-      { preferNode: true }
+      { preferNode: true, stdio: launch.interactive ? "inherit" : "pipe" }
     );
     const exitHandler = (code: number | null) => this.handleExit(launch.appId, code);
     this.running.set(launch.appId, { launch, proc, stopping: false, exitHandler });
     proc.on("exit", exitHandler);
+    // In interactive (inherit) mode the child writes straight to the user's
+    // terminal, so stdout/stderr are null here — nothing to capture.
     proc.stdout?.on("data", (chunk) => this.handleOutput(launch.appId, "info", "stdout", chunk));
     proc.stderr?.on("data", (chunk) => this.handleOutput(launch.appId, "error", "stderr", chunk));
     this.deps.onStatus(launch.appId, "running", null);

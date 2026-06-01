@@ -6,7 +6,7 @@
  * connections (e.g., Durable Objects calling back to the server).
  */
 
-import type { RpcBridge, RpcCallOptions } from "@natstack/rpc";
+import type { RpcBridge, RpcCallOptions, AuthenticatedCaller } from "@natstack/rpc";
 
 const rpcFetch = globalThis.fetch.bind(globalThis);
 const RPC_RUNTIME_ID_HEADER = "X-Natstack-Runtime-Id";
@@ -22,6 +22,10 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
 } {
   const { selfId, serverUrl, authToken } = config;
   const methodHandlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+  const callerAwareHandlers = new Map<
+    string,
+    (ctx: AuthenticatedCaller, ...args: unknown[]) => Promise<unknown>
+  >();
   const eventListeners = new Map<string, Set<(fromId: string, payload: unknown) => void>>();
 
   async function postToServer(payload: object): Promise<unknown> {
@@ -76,6 +80,14 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
       methodHandlers.set(method, handler as any);
     },
 
+    // DOs/workers normally read the trusted caller via `this.rpcCallerId`
+    // (set from X-Natstack-Rpc-Caller-Id headers by DurableObjectBase). This
+    // satisfies the RpcBridge interface and supports local + relayed dispatch;
+    // the caller context here is best-effort (the relay's reported fromId).
+    exposeMethodWithCaller(method, handler) {
+      callerAwareHandlers.set(method, handler as any);
+    },
+
     expose(methods) {
       for (const [name, handler] of Object.entries(methods)) {
         methodHandlers.set(name, handler as any);
@@ -111,7 +123,9 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
         throw new Error("RPC call aborted by caller");
       }
       if (targetId === selfId) {
-        // Local dispatch
+        // Local dispatch — caller is self.
+        const callerAware = callerAwareHandlers.get(method);
+        if (callerAware) return callerAware({ callerId: selfId, callerKind: "unknown" }, ...args) as T;
         const handler = methodHandlers.get(method);
         if (!handler) throw new Error(`No handler for method '${method}'`);
         return handler(...args) as T;
@@ -218,10 +232,13 @@ export function createHttpRpcBridge(config: HttpRpcBridgeConfig): RpcBridge & {
     async handleIncomingPost(body: unknown): Promise<unknown> {
       const msg = body as any;
       if (msg.type === "call") {
+        const callerAware = callerAwareHandlers.get(msg.method);
         const handler = methodHandlers.get(msg.method);
-        if (!handler) return { error: `No handler for method '${msg.method}'` };
+        if (!callerAware && !handler) return { error: `No handler for method '${msg.method}'` };
         try {
-          const result = await handler(...(msg.args ?? []));
+          const result = callerAware
+            ? await callerAware({ callerId: (msg.fromId as string) ?? "", callerKind: "unknown" }, ...(msg.args ?? []))
+            : await handler!(...(msg.args ?? []));
           return { result };
         } catch (err: any) {
           return { error: err.message, errorCode: err.code };

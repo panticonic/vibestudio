@@ -28,6 +28,7 @@ import {
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
   validateUnitManifest,
+  isTerminalWorker,
 } from "@natstack/shared/unitManifest";
 import * as buildStore from "./buildStore.js";
 import {
@@ -1910,6 +1911,125 @@ export const createInterface = stubFn;
   };
 }
 
+// ---------------------------------------------------------------------------
+// Terminal-worker (Ink) build support
+// ---------------------------------------------------------------------------
+
+interface YogaPaths {
+  wasmEsm: string;
+  wrapAssembly: string;
+  enums: string;
+}
+
+/**
+ * Locate yoga-layout's internal files from the worker's resolve dir. yoga's
+ * `exports` map blocks deep imports, so we resolve the package main and derive
+ * the sibling paths (`<root>/dist/src/index.js` → `<root>/dist/...`).
+ */
+function resolveYogaPaths(resolveDir: string): YogaPaths {
+  const req = createRequire(path.join(resolveDir, "__terminal_resolve__.js"));
+  const main = req.resolve("yoga-layout"); // <root>/dist/src/index.js
+  const root = path.resolve(path.dirname(main), "../..");
+  return {
+    wasmEsm: path.join(root, "dist", "binaries", "yoga-wasm-base64-esm.js"),
+    wrapAssembly: path.join(root, "dist", "src", "wrapAssembly.js"),
+    enums: path.join(root, "dist", "src", "generated", "YGEnums.js"),
+  };
+}
+
+/**
+ * Build plugin for Ink terminal workers. Routes Ink's `import Yoga from
+ * 'yoga-layout'` to the terminal-shim sync loader, resolves that loader's deep
+ * yoga imports (which yoga's exports map blocks), shims the two npm packages
+ * that break in workerd, and marks `yoga.wasm` external (workerd supplies it as
+ * a module binding). Register BEFORE the workspace plugin so these intercepts win.
+ */
+function createTerminalWorkerAliasPlugin(resolveDir: string): esbuild.Plugin {
+  const yoga = resolveYogaPaths(resolveDir);
+  return {
+    name: "terminal-worker-alias",
+    setup(build) {
+      // Ink's `yoga-layout` default import → the terminal-shim sync loader.
+      build.onResolve({ filter: /^yoga-layout$/ }, async (args) => {
+        const r = await build.resolve("@workspace/terminal-shim/yoga", {
+          kind: args.kind,
+          resolveDir,
+        });
+        if (r.errors.length > 0) return r;
+        return { path: r.path, external: r.external };
+      });
+      // The loader's deep yoga imports (blocked by yoga's exports map).
+      build.onResolve({ filter: /^yoga-layout\/dist\// }, (args) => {
+        if (args.path.endsWith("yoga-wasm-base64-esm.js")) return { path: yoga.wasmEsm };
+        if (args.path.endsWith("wrapAssembly.js")) return { path: yoga.wrapAssembly };
+        if (args.path.endsWith("YGEnums.js")) return { path: yoga.enums };
+        return null;
+      });
+      // npm packages that break in workerd → terminal-shim replacements.
+      build.onResolve({ filter: /^signal-exit$/ }, async (args) => {
+        const r = await build.resolve("@workspace/terminal-shim/node/signal-exit", {
+          kind: args.kind,
+          resolveDir,
+        });
+        return r.errors.length > 0 ? r : { path: r.path, external: r.external };
+      });
+      build.onResolve({ filter: /^terminal-size$/ }, async (args) => {
+        const r = await build.resolve("@workspace/terminal-shim/node/terminal-size", {
+          kind: args.kind,
+          resolveDir,
+        });
+        return r.errors.length > 0 ? r : { path: r.path, external: r.external };
+      });
+      // Provided by workerd as a pre-compiled wasm module binding.
+      build.onResolve({ filter: /^yoga\.wasm$/ }, () => ({ path: "yoga.wasm", external: true }));
+    },
+  };
+}
+
+// yoga.wasm is identical for a given yoga-layout install; extract once per path.
+const yogaWasmCache = new Map<string, Promise<Buffer>>();
+
+/**
+ * Extract yoga's raw wasm bytes from its base64-inlined emscripten module by
+ * importing the factory and capturing the binary it hands to
+ * `WebAssembly.instantiate`. Format-independent. The global patch is held only
+ * for our single `factory()` call (workers don't instantiate wasm at build time).
+ */
+async function extractYogaWasm(resolveDir: string): Promise<Buffer> {
+  const { wasmEsm } = resolveYogaPaths(resolveDir);
+  let cached = yogaWasmCache.get(wasmEsm);
+  if (cached) return cached;
+  cached = (async () => {
+    const mod = await import(pathToFileURL(wasmEsm).href);
+    const factory = mod.default as (opts?: unknown) => Promise<unknown>;
+    const orig = WebAssembly.instantiate;
+    let captured: Buffer | null = null;
+    (WebAssembly as { instantiate: unknown }).instantiate = function (
+      src: BufferSource,
+      imports?: WebAssembly.Imports
+    ) {
+      if (src instanceof ArrayBuffer) captured = Buffer.from(new Uint8Array(src));
+      else if (ArrayBuffer.isView(src)) {
+        captured = Buffer.from(new Uint8Array(src.buffer, src.byteOffset, src.byteLength));
+      }
+      return (orig as typeof WebAssembly.instantiate).call(
+        WebAssembly,
+        src as BufferSource,
+        imports as WebAssembly.Imports
+      );
+    };
+    try {
+      await factory();
+    } finally {
+      (WebAssembly as { instantiate: unknown }).instantiate = orig;
+    }
+    if (!captured) throw new Error("terminal worker build: failed to extract yoga.wasm bytes");
+    return captured;
+  })();
+  yogaWasmCache.set(wasmEsm, cached);
+  return cached;
+}
+
 /**
  * Node built-in modules that must stay external in the worker bundle so that
  * workerd's `nodejs_compat` compat flag satisfies them at runtime. These are
@@ -2000,6 +2120,7 @@ async function buildWorker(
   const extractedManifest = extractedPkg.natstack ?? {};
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList(extractedManifest.dedupeModules);
+  const terminalWorker = isTerminalWorker(extractedManifest);
 
   // Generate the expose entry (always — even with empty exposeModules, this
   // sets up __natstackRequire__/__natstackModuleMap__ so eval has a working
@@ -2014,6 +2135,9 @@ async function buildWorker(
   fs.writeFileSync(wrapperPath, wrapperCode);
 
   const plugins: esbuild.Plugin[] = [
+    // Terminal (Ink) workers: intercept yoga-layout / signal-exit / terminal-size
+    // BEFORE the workspace resolver so these aliases win. No-op for other workers.
+    ...(terminalWorker ? [createTerminalWorkerAliasPlugin(resolveDir)] : []),
     createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, WORKER_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
     createWorkerBufferShimPlugin(resolveDir),
@@ -2056,7 +2180,9 @@ async function buildWorker(
       // createWorkerNodeStubPlugin plugin and replaced with throwing
       // stubs — transitively imported by aws-sdk/proxy-agent/etc. from
       // dead code paths we never reach at runtime.
-      external: [...WORKER_NODE_BUILTIN_EXTERNALS],
+      // Terminal workers import "yoga.wasm" — workerd provides it as a
+      // pre-compiled wasm module binding, so it stays external.
+      external: [...WORKER_NODE_BUILTIN_EXTERNALS, ...(terminalWorker ? ["yoga.wasm"] : [])],
       plugins,
       nodePaths,
       tsconfigRaw: { compilerOptions: {} },
@@ -2064,6 +2190,40 @@ async function buildWorker(
 
     const bundlePath = path.join(outdir, "bundle.js");
     const bundle = fs.readFileSync(bundlePath, "utf-8");
+
+    if (terminalWorker) {
+      // Emit the JS bundle plus the extracted yoga.wasm so workerdManager can
+      // attach it as a module binding for this DO. Mirrors buildPanel's
+      // multi-artifact pattern.
+      const yogaWasm = await extractYogaWasm(resolveDir);
+      const artifacts: BuildArtifacts = {
+        entries: [
+          {
+            path: "bundle.js",
+            role: "primary",
+            contentType: "text/javascript; charset=utf-8",
+            encoding: "utf8",
+            content: bundle,
+          },
+          {
+            path: "yoga.wasm",
+            role: "wasm",
+            contentType: "application/wasm",
+            encoding: "base64",
+            content: yogaWasm.toString("base64"),
+          },
+        ],
+      };
+      const metadata: BuildMetadata = {
+        kind: node.kind as BuildMetadata["kind"],
+        name: node.name,
+        ev,
+        sourcemap,
+        details: { kind: "generic" },
+        builtAt: new Date().toISOString(),
+      };
+      return buildStore.put(buildKey, artifacts, metadata);
+    }
 
     return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap);
   } finally {

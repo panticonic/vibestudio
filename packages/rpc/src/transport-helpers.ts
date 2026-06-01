@@ -1,6 +1,6 @@
-import type { RpcMessage } from "./types.js";
+import type { CallerKind, RpcMessage } from "./types.js";
 
-type AnyHandler = (sourceId: string, message: RpcMessage) => void;
+type AnyHandler = (sourceId: string, message: RpcMessage, callerKind?: CallerKind) => void;
 type SourceHandler = (message: RpcMessage) => void;
 
 export function createHandlerRegistry(options?: { context?: string }) {
@@ -9,10 +9,10 @@ export function createHandlerRegistry(options?: { context?: string }) {
 
   const contextPrefix = options?.context ? `${options.context} ` : "";
 
-  const deliver = (sourceId: string, message: RpcMessage) => {
+  const deliver = (sourceId: string, message: RpcMessage, callerKind?: CallerKind) => {
     for (const handler of anyHandlers) {
       try {
-        handler(sourceId, message);
+        handler(sourceId, message, callerKind);
       } catch (error) {
         console.error(`Error in ${contextPrefix}RPC onAnyMessage handler:`, error);
       }

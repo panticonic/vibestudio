@@ -148,9 +148,15 @@ export interface RpcTransport {
 
   /**
    * Register a handler for messages from any source.
+   *
+   * `callerKind` is the gateway-verified kind of the source when the transport
+   * can supply it (optional/additive — paths that don't stamp it omit it, and
+   * the bridge surfaces `"unknown"`). Pairs with the trusted `sourceId`.
    * Returns an unsubscribe function.
    */
-  onAnyMessage(handler: (sourceId: string, message: RpcMessage) => void): () => void;
+  onAnyMessage(
+    handler: (sourceId: string, message: RpcMessage, callerKind?: CallerKind) => void
+  ): () => void;
 }
 
 export interface RpcBridgeConfig {
@@ -166,6 +172,29 @@ export interface RpcBridgeConfig {
    * tests if you want to assert timeout behavior quickly.
    */
   streamIdleTimeoutMs?: number;
+}
+
+/**
+ * The authenticated identity of an INBOUND caller — i.e. "who called me".
+ *
+ * This is the single, canonical inbound-caller shape across every layer:
+ * - the point-to-point bridge passes it to `exposeMethodWithCaller` handlers;
+ * - `DurableObjectBase.caller` returns it (sourced from signed headers);
+ * - the server's `VerifiedCaller.caller` exposes it (a thin view over its
+ *   richer capability/code identity).
+ *
+ * `callerId`/`callerKind` are gateway-verified (the principal the server
+ * authenticated and stamped onto routed messages), NOT the self-reported
+ * `RpcRequest.fromId`. `callerKind` is `"unknown"` on delivery paths where the
+ * kind isn't carried (local dispatch, or transports that don't stamp it);
+ * authorization code should treat `"unknown"` as least-privileged.
+ *
+ * Distinct from `RpcCaller`, which is the OUTBOUND interface ("a thing you can
+ * make calls through").
+ */
+export interface AuthenticatedCaller {
+  callerId: string;
+  callerKind: CallerKind | "unknown";
 }
 
 /**
@@ -185,6 +214,26 @@ export interface RpcBridge {
   exposeMethod<TArgs extends unknown[], TReturn>(
     method: string,
     handler: (...args: TArgs) => TReturn | Promise<TReturn>
+  ): void;
+
+  /**
+   * Expose a method whose handler also receives the AUTHENTICATED caller.
+   *
+   * The `ctx.callerId` is the gateway-verified principal of the caller (the
+   * same `client.caller.runtime.id` the server stamps onto routed messages) —
+   * NOT the self-reported `RpcRequest.fromId`, which is untrusted. Use this for
+   * handlers that act on a resource named in the payload and must verify the
+   * caller owns it (e.g. session ownership, participant identity).
+   *
+   * @example
+   * bridge.exposeMethodWithCaller("terminal.onFrame", (ctx, frame) => {
+   *   if (ctx.callerId !== sessions.ownerOf(frame.sessionId)) return; // reject
+   *   sessions.onFrame(frame);
+   * });
+   */
+  exposeMethodWithCaller<TArgs extends unknown[], TReturn>(
+    method: string,
+    handler: (ctx: AuthenticatedCaller, ...args: TArgs) => TReturn | Promise<TReturn>
   ): void;
 
   /**
@@ -244,7 +293,7 @@ export interface RpcBridge {
  * Internal RPC bridge interface (for transport delivery).
  */
 export interface RpcBridgeInternal extends RpcBridge {
-  _handleMessage(sourceId: string, message: RpcMessage): void;
+  _handleMessage(sourceId: string, message: RpcMessage, callerKind?: CallerKind): void;
 }
 
 export type CallerKind =

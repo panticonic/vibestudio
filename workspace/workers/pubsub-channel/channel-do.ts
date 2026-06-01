@@ -617,7 +617,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   private assertParticipantCaller(participantId: string, method: string): void {
-    const callerId = this.rpcCallerId;
+    const callerId = this.caller?.callerId;
     if (callerId && callerId !== participantId) {
       throw new Error(
         `${method}: participant ${participantId} cannot be used by caller ${callerId}`
@@ -626,21 +626,21 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   private isPrivilegedRpcCaller(): boolean {
-    const callerId = this.rpcCallerId;
-    const callerKind = this.rpcCallerKind;
+    const caller = this.caller;
     return (
-      callerId === "main" ||
-      callerKind === "server" ||
-      callerKind === "shell" ||
-      callerKind === "harness"
+      caller?.callerId === "main" ||
+      caller?.callerKind === "server" ||
+      caller?.callerKind === "shell" ||
+      caller?.callerKind === "harness"
     );
   }
 
   private assertAdminCaller(method: string): void {
     if (this.isPrivilegedRpcCaller()) return;
-    const callerId = this.rpcCallerId ?? "unknown";
-    const callerKind = this.rpcCallerKind ?? "unknown";
-    throw new Error(`${method}: privileged caller required (got ${callerKind} ${callerId})`);
+    const caller = this.caller;
+    throw new Error(
+      `${method}: privileged caller required (got ${caller?.callerKind ?? "unknown"} ${caller?.callerId ?? "unknown"})`
+    );
   }
 
   // ── Presence events ─────────────────────────────────────────────────────

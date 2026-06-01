@@ -957,6 +957,7 @@ export class RpcServer {
             this.sendToWs(originClient.ws, {
               type: "ws:routed",
               fromId: client.caller.runtime.id,
+              fromKind: client.caller.runtime.kind,
               message,
             });
           },
@@ -1044,6 +1045,7 @@ export class RpcServer {
         this.sendToWs(connection.ws, {
           type: "ws:routed",
           fromId: client.caller.runtime.id,
+          fromKind: client.caller.runtime.kind,
           message: outboundMessage,
         });
       }
@@ -1053,6 +1055,7 @@ export class RpcServer {
     this.sendToWs(targetClient.ws, {
       type: "ws:routed",
       fromId: client.caller.runtime.id,
+      fromKind: client.caller.runtime.kind,
       message: outboundMessage,
     });
   }

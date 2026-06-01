@@ -11,6 +11,7 @@ import type { ServiceDefinition, MethodDef } from "./serviceDefinition.js";
 import type { ServicePolicy } from "./servicePolicy.js";
 import { checkServiceAccess } from "./servicePolicy.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
+import type { AuthenticatedCaller } from "@natstack/rpc";
 export type { CallerKind } from "./principalKinds.js";
 
 /**
@@ -80,6 +81,16 @@ export function createVerifiedCaller(
     runtime: { id: callerId, kind: callerKind },
     ...(code ? { code } : {}),
   };
+}
+
+/**
+ * Project a server-side `VerifiedCaller` to the canonical inbound-caller shape
+ * (`AuthenticatedCaller`) shared with the bridge and Durable Objects. This is
+ * the single vocabulary for "who's calling" across all three layers; the
+ * server's `VerifiedCaller` keeps its richer capability/code identity on top.
+ */
+export function authenticatedCallerOf(caller: VerifiedCaller): AuthenticatedCaller {
+  return { callerId: caller.runtime.id, callerKind: caller.runtime.kind };
 }
 
 /**

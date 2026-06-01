@@ -87,6 +87,8 @@ export interface AppRegistryEntry extends UnitRegistryEntryBase {
   unitKind: "app";
   target: WorkspaceAppTarget;
   capabilities: AppCapability[];
+  /** Terminal apps that render an interactive TUI (inherit the real TTY). */
+  interactive?: boolean;
   previousVersions: AppVersionRecord[];
   lastErrorDetails?: AppUpdateErrorDiagnostic | null;
   activationTrust?: AppActivationTrustRecord | null;
@@ -1058,6 +1060,7 @@ export class AppHost {
         extra: {
           target,
           capabilities,
+          interactive: this.appInteractive(node),
           activationTrust: null,
         },
       });
@@ -1909,6 +1912,10 @@ export class AppHost {
     return [...(node.manifest.app?.capabilities ?? [])].sort();
   }
 
+  private appInteractive(node: AppGraphNode): boolean {
+    return (node.manifest.app as { interactive?: unknown } | undefined)?.interactive === true;
+  }
+
   private currentDependencyEvs(node: AppGraphNode): Record<string, string> {
     return collectTransitiveUnitDependencyEvs(
       this.deps.buildSystem.getGraph().allNodes(),
@@ -2004,6 +2011,7 @@ export class AppHost {
       effectiveVersion: entry.activeEv,
       gatewayUrl: this.deps.getGatewayUrl(),
       build,
+      interactive: entry.interactive ?? false,
     });
   }
 

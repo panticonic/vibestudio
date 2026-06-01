@@ -26,7 +26,7 @@ export interface BuildArtifacts {
   entries: BuildArtifactInput[];
 }
 
-export type BuildArtifactRole = "primary" | "asset" | "html" | "css" | "map";
+export type BuildArtifactRole = "primary" | "asset" | "html" | "css" | "map" | "wasm";
 export type BuildArtifactEncoding = "utf8" | "base64";
 
 export interface BuildArtifactInput {

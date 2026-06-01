@@ -1,0 +1,27 @@
+{
+  "name": "@workspace-apps/terminal-browser",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "natstack": {
+    "displayName": "NatStack Terminal",
+    "app": {
+      "target": "terminal",
+      "entry": "src/index.ts",
+      "interactive": true,
+      "capabilities": ["connection-management"]
+    }
+  },
+  "dependencies": {
+    "@natstack/rpc": "workspace:*",
+    "@natstack/shared": "workspace:*",
+    "@workspace/terminal-host-protocol": "workspace:*",
+    "@xterm/headless": "^5.5.0",
+    "ink": "^6.0.0",
+    "react": "^19.0.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
+  }
+}
