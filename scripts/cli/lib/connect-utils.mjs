@@ -23,7 +23,7 @@ export function createConnectDeepLink(gatewayUrl, pairingCode) {
 }
 
 export function createStartRemotePairCommand(gatewayUrl, pairingCode) {
-  return `pnpm start:remote --pair ${shellQuote(createConnectDeepLink(gatewayUrl, pairingCode))}`;
+  return `natstack remote start --pair ${shellQuote(createConnectDeepLink(gatewayUrl, pairingCode))}`;
 }
 
 export function parseConnectLink(rawUrl) {

@@ -5,6 +5,7 @@ import process from "process";
 import net from "net";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
+import { createServerInvocation, serverEntryArg, serverEntryDescription } from "./lib/server-entry.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const mobileDir = path.join(repoRoot, "apps", "mobile");
@@ -77,10 +78,10 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`start-mobile-dev
+  console.log(`natstack mobile dev
 
 Usage:
-  node scripts/start-mobile-dev.mjs [runner options] [-- server options]
+  natstack mobile dev [runner options] [-- server options]
 
 Runner options:
   --avd <name>      Start this AVD if no device is connected
@@ -91,7 +92,7 @@ Runner options:
   --no-launch       Do not launch the Android app after setup
   --help            Show this help message
 
-Everything after '--' is forwarded to dist/server.mjs.
+Everything after '--' is forwarded to ${serverEntryDescription()}.
 `);
 }
 
@@ -317,7 +318,7 @@ async function main() {
     } catch {}
 
     const serverArgs = [
-      "dist/server.mjs",
+      serverEntryArg(),
       "--app-root",
       repoRoot,
       "--ready-file",
@@ -325,7 +326,8 @@ async function main() {
       "--ephemeral",
       ...options.serverArgs,
     ];
-    const serverChild = spawnManaged("node", serverArgs, {
+    const serverInvocation = createServerInvocation(serverArgs);
+    const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
       cwd: repoRoot,
       env: {
         ...process.env,

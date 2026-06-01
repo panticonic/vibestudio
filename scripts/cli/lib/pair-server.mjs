@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pickMobileHost, printConnectBanner } from "./connect-utils.mjs";
+import { createServerInvocation, serverEntryArg, serverEntryDescription } from "./server-entry.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -141,7 +142,7 @@ Options:
 
 ${config.additionalHelp ? `${config.additionalHelp}\n\n` : ""}\
 When invoking the script directly with node, everything after '--' is forwarded
-to dist/server.mjs.
+to ${serverEntryDescription()}.
 `);
 }
 
@@ -249,9 +250,10 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       }
     }
     hasSpawned = true;
+    const invocation = createServerInvocation(serverArgs);
     child = hooks.spawnServer
-      ? hooks.spawnServer({ serverArgs, env, repoRoot })
-      : spawn(process.execPath, serverArgs, {
+      ? hooks.spawnServer({ serverArgs, env, repoRoot, invocation })
+      : spawn(invocation.command, invocation.args, {
           cwd: repoRoot,
           stdio: ["inherit", "pipe", "inherit"],
           env,
@@ -499,7 +501,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
 
 function buildServerArgs(options, host) {
   const args = [
-    "dist/server.mjs",
+    serverEntryArg(),
     "--host",
     host,
     "--gateway-port",

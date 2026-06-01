@@ -53,12 +53,12 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`install-mobile-internal
+  console.log(`natstack mobile build/install
 
 Usage:
-  pnpm mobile:apk:internal
-  pnpm mobile:install:internal
-  pnpm mobile:install:internal --device <adb-serial> --launch
+  natstack mobile build
+  natstack mobile install
+  natstack mobile install --device <adb-serial> --launch
 
 Options:
   --device <serial>    Target a specific adb device.

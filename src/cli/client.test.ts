@@ -14,11 +14,11 @@ vi.mock("@natstack/shared/tailscaleDiscovery", () => ({
   discoverNatstackServers: mocks.discoverNatstackServers,
 }));
 
-describe("natstack-client", () => {
+describe("natstack CLI", () => {
   let tmpDir = "";
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-client-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-cli-"));
     vi.stubEnv("HOME", tmpDir);
     mocks.discoverNatstackServers.mockReset();
     mocks.discoverNatstackServers.mockResolvedValue([]);
@@ -45,6 +45,7 @@ describe("natstack-client", () => {
 
     const { main } = await import("./client.js");
     const code = await main([
+      "remote",
       "pair",
       createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24)),
     ]);
@@ -86,6 +87,7 @@ describe("natstack-client", () => {
 
     const { main } = await import("./client.js");
     const code = await main([
+      "remote",
       "pair",
       "--url",
       "https://host.tailnet.ts.net",
@@ -104,7 +106,7 @@ describe("natstack-client", () => {
     fs.writeFileSync(filePath, "{}");
 
     const { main } = await import("./client.js");
-    await expect(main(["logout"])).resolves.toBe(0);
+    await expect(main(["remote", "logout"])).resolves.toBe(0);
     expect(fs.existsSync(filePath)).toBe(false);
   });
 
@@ -119,9 +121,35 @@ describe("natstack-client", () => {
 
     const log = vi.mocked(console.log);
     const { main } = await import("./client.js");
-    await expect(main(["discover"])).resolves.toBe(0);
+    await expect(main(["remote", "discover"])).resolves.toBe(0);
 
     expect(log).toHaveBeenCalledWith("https://host.tailnet.ts.net");
+  });
+
+  it("shows the unified CLI groups in top-level help", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["--help"])).resolves.toBe(0);
+
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("natstack remote start"));
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining("natstack mobile install"));
+    expect(console.log).not.toHaveBeenCalledWith(expect.stringContaining("natstack-client"));
+  });
+
+  it("keeps remote pairing available under the unified command", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ deviceId: "dev_cli", refreshToken: "refresh_cli" }))
+      )
+    );
+
+    const { main } = await import("./client.js");
+    await expect(
+      main(["remote", "pair", "--url", "https://host.tailnet.ts.net", "--code", "A".repeat(24)])
+    ).resolves.toBe(0);
+
+    expect(console.log).toHaveBeenCalledWith("paired https://host.tailnet.ts.net");
   });
 
   it("reports a failed or expired pairing code as non-zero", async () => {
@@ -134,8 +162,14 @@ describe("natstack-client", () => {
 
     const { main } = await import("./client.js");
     await expect(
-      main(["pair", "--url", "https://host.tailnet.ts.net", "--code", "A".repeat(24)])
+      main(["remote", "pair", "--url", "https://host.tailnet.ts.net", "--code", "A".repeat(24)])
     ).resolves.toBe(1);
+  });
+
+  it("rejects old top-level remote commands", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["pair", "--url", "https://host.tailnet.ts.net"])).resolves.toBe(2);
+    expect(console.error).toHaveBeenCalledWith("Unknown command: pair");
   });
 
   it("checks the stored device refresh credential for status", async () => {
@@ -162,7 +196,7 @@ describe("natstack-client", () => {
     );
 
     const { main } = await import("./client.js");
-    await expect(main(["status"])).resolves.toBe(0);
+    await expect(main(["remote", "status"])).resolves.toBe(0);
   });
 
   it("creates a pairing invite using the stored device credential", async () => {
@@ -205,7 +239,7 @@ describe("natstack-client", () => {
     );
 
     const { main } = await import("./client.js");
-    await expect(main(["invite", "--ttl-ms", "60000"])).resolves.toBe(0);
+    await expect(main(["remote", "invite", "--ttl-ms", "60000"])).resolves.toBe(0);
 
     expect(bodies).toEqual([
       {

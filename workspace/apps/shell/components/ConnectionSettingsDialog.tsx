@@ -338,7 +338,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
                   </Button>
                 </Flex>
                 <TextField.Root
-                  placeholder="Code from pnpm pair"
+                  placeholder="Code from natstack remote serve"
                   value={pairingCode}
                   onChange={(e) => setPairingCode(e.target.value)}
                 />
@@ -607,7 +607,7 @@ function ServerDiscovery(props: {
           <Flex justify="between" align="center">
             <Text size="1" color="gray">
               {props.servers.length === 0 && !props.busy
-                ? "No NatStack servers found on your tailnet. Run pnpm pair on the server."
+                ? "No NatStack servers found on your tailnet. Run natstack remote serve on the server."
                 : "Discovered NatStack servers"}
             </Text>
             <Button size="1" variant="soft" disabled={props.busy} onClick={props.onRefresh}>

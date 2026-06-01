@@ -1,5 +1,5 @@
 // @ts-expect-error Script modules are plain .mjs and intentionally untyped.
-import { runPairServer } from "../scripts/pair-server.mjs";
+import { runPairServer } from "../scripts/cli/lib/pair-server.mjs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import fs from "node:fs";
@@ -33,6 +33,7 @@ const config = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe("pair-server runner", () => {
@@ -97,6 +98,35 @@ describe("pair-server runner", () => {
     } finally {
       fs.rmSync(readyDir, { recursive: true, force: true });
     }
+  });
+
+  it("uses the live TypeScript server entry when requested", async () => {
+    vi.stubEnv("NATSTACK_SERVER_ENTRY", "live");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const child = new FakeChild();
+
+    runPairServer(config, ["--host", "127.0.0.1", "--port", "3456"], {
+      spawnServer({
+        serverArgs,
+        invocation,
+      }: {
+        serverArgs: string[];
+        invocation: { command: string; args: string[] };
+      }) {
+        expect(serverArgs[0]).toBe("src/server/index.ts");
+        expect(invocation).toMatchObject({
+          command: "pnpm",
+          args: ["exec", "tsx", ...serverArgs],
+        });
+        setTimeout(() => child.emit("exit", 0, null), 10);
+        return child;
+      },
+      onChildExit: () => true,
+    });
+
+    await waitFor(() => child.listenerCount("exit") > 0);
+    child.emit("exit", 0, null);
   });
 });
 

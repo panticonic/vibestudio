@@ -29,11 +29,11 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`mobile-logs
+  console.log(`natstack mobile logs
 
 Usage:
-  pnpm mobile:logs:internal
-  pnpm mobile:logs:internal --device <adb-serial>
+  natstack mobile logs
+  natstack mobile logs --device <adb-serial>
 
 Options:
   --device <serial>  Target a specific adb device.

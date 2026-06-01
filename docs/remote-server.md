@@ -52,6 +52,8 @@ pnpm server:dev \
 ```
 
 `pnpm server:dev` sets `NODE_ENV=development` before launching `dist/server.mjs`.
+For source-live standalone server work, use `pnpm server:live` or
+`pnpm cli remote serve ...`; those run `src/server/index.ts` through `tsx`.
 That matters for local smoke tests from a repo checkout because a freshly
 initialized managed workspace will include the checked-in workspace runtime
 units, including apps, extensions, panels, workers, packages, and skills.
@@ -64,8 +66,9 @@ Common development entrypoints:
 | --- | --- | --- |
 | `pnpm dev` | Developing the local Electron app from a source checkout | Creates an ephemeral workspace from `workspace/`; accepted workspace-unit pushes mirror back to that template |
 | `pnpm server:dev` | Running only `dist/server.mjs` from a source checkout | Uses the checked-in `workspace/` template when `--init` creates a managed workspace |
-| `pnpm mobile:pair:dev` | Pairing a phone against a disposable source-checkout workspace | Creates an ephemeral phone-reachable workspace from `workspace/` |
-| `pnpm mobile:dev` | Full Android dev loop with Metro, install, launch, and local server | Starts Metro, a local ephemeral server, installs/launches the app, and wires ADB reverse ports |
+| `pnpm server:live` | Running the standalone server directly from TypeScript | Uses the checked-in `workspace/` template when `--init` creates a managed workspace |
+| `pnpm cli mobile pair --dev` | Pairing a phone against a disposable source-checkout workspace | Creates an ephemeral phone-reachable workspace from `workspace/` |
+| `pnpm cli mobile dev` | Full Android dev loop with Metro, install, launch, and local server | Starts Metro, a local ephemeral server, installs/launches the app, wires ADB reverse ports, and runs the server from TypeScript |
 | `pnpm dev:self:server` | Letting a paired client edit this NatStack checkout | Uses a persistent dogfood workspace with `projects/natstack` mirroring back to the host checkout |
 
 Use `--help` for a full list of options:
@@ -173,7 +176,7 @@ non-loopback `http://` remotes are intentionally rejected by the client.
 
 ## Connecting the Electron App
 
-Run `pnpm pair` on the server. The readiness banner prints a pairing code and a
+Run `natstack remote serve` on the server. The readiness banner prints a pairing code and a
 `Pair URL:` deep link:
 
 ```text
@@ -193,13 +196,13 @@ From a source checkout, the quickest laptop flow is:
 
 ```bash
 pnpm build
-pnpm start:remote --pair "natstack://connect?url=...&code=..."
+natstack remote start --pair "natstack://connect?url=...&code=..."
 ```
 
 Later launches can reuse the saved device credential:
 
 ```bash
-pnpm start:remote
+natstack remote start
 ```
 
 Plain `pnpm start` still starts local mode unless remote credentials have been
@@ -273,7 +276,7 @@ each launch, credentials resolve in this order:
 ### Option A: Pairing code (recommended)
 
 Use the default **Pair with code** tab. Paste the `Pair URL` or enter the URL
-and code shown by `pnpm pair`, then **Save & relaunch**.
+and code shown by `natstack remote serve`, then **Save & relaunch**.
 
 If another trusted client is already connected, create a new link from
 **Remote server** → **Paired devices** → **Pair another device** instead of
@@ -282,13 +285,13 @@ running a new server pairing command.
 For terminal-driven pairing, run:
 
 ```bash
-pnpm start:remote --pair "natstack://connect?url=...&code=..."
+natstack remote start --pair "natstack://connect?url=...&code=..."
 ```
 
 From an already-paired terminal client, mint another invite with:
 
 ```bash
-natstack-client invite
+natstack remote invite
 ```
 
 The server records invite creation, redemption, and device revocation in the
@@ -385,10 +388,10 @@ are described in [trusted-workspace-units.md](./trusted-workspace-units.md).
 
 Use this checklist after changes to pairing or remote bootstrap:
 
-1. Start the server with `pnpm pair --host 127.0.0.1 --port 3030`.
+1. Start the server with `natstack remote serve --host 127.0.0.1 --port 3030`.
 2. Pair one desktop or CLI client with the printed `Pair URL`.
 3. From that paired client, create another invite with **Pair another device**
-   or `natstack-client invite`.
+   or `natstack remote invite`.
 4. Pair a second client with the new invite.
 5. Revoke one device from **Paired devices** and confirm that device can no
    longer refresh a shell or app connection grant.

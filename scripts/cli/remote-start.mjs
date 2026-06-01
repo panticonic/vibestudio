@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { parseConnectLink, parseConnectServerUrl } from "./connect-utils.mjs";
+import { parseConnectLink, parseConnectServerUrl } from "./lib/connect-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -82,16 +82,16 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`start-remote
+  console.log(`natstack remote start
 
 Pair this laptop with a running NatStack server, or launch Electron using the
 previously paired CLI device credential.
 
 Usage:
-  pnpm start:remote --pair "natstack://connect?url=...&code=..."
-  pnpm start:remote
-  pnpm start:remote --url <url> --token <admin-token>
-  pnpm start:remote --url <url> --device-id <id> --refresh-token <token>
+  natstack remote start --pair "natstack://connect?url=...&code=..."
+  natstack remote start
+  natstack remote start --url <url> --token <admin-token>
+  natstack remote start --url <url> --device-id <id> --refresh-token <token>
 
 Options:
   --pair <link>             Exchange a natstack://connect link, save a device credential, then launch.
@@ -158,7 +158,7 @@ function resolveLaunchCredentials(options, cliCreds) {
   }
   if (cliCreds) return cliCreds;
   throw new Error(
-    `No remote credentials found. Pair first with:\n  pnpm start:remote --pair "natstack://connect?url=...&code=..."`
+    `No remote credentials found. Pair first with:\n  natstack remote start --pair "natstack://connect?url=...&code=..."`
   );
 }
 

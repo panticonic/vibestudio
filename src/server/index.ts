@@ -177,6 +177,8 @@ function printHelp(): void {
 natstack-server — Headless and standalone NatStack server
 
 Usage:
+  natstack-server [options]
+  pnpm server:live [options]
   node dist/server.mjs [options]
 
 Options:
@@ -2651,7 +2653,7 @@ async function main() {
               "or a local gateway that is not listening on the configured port.",
               "",
               "First try rerunning:",
-              "  pnpm mobile:pair",
+              `  natstack mobile pair --host tailscale --port ${gatewayPort}`,
               "",
               "If it still falls back to HTTP, check both:",
               "  tailscale serve status",
@@ -2670,12 +2672,12 @@ async function main() {
             "Recommended one-time fix:",
             "  sudo tailscale set --operator=$USER",
             "Then restart your terminal/session if Tailscale asks, and run:",
-            "  pnpm mobile:pair",
+            `  natstack mobile pair --host tailscale --port ${gatewayPort}`,
             "",
             "Manual alternative for this port only:",
             `  sudo tailscale serve --bg ${gatewayPort}`,
             "Then run:",
-            "  pnpm mobile:pair",
+            `  natstack mobile pair --host tailscale --port ${gatewayPort}`,
             "",
             "Until this is fixed, the QR below uses a Tailscale HTTP fallback.",
             "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
@@ -2688,7 +2690,7 @@ async function main() {
             "Enable HTTPS Certificates here:",
             "  https://login.tailscale.com/admin/dns",
             "Then run:",
-            "  pnpm mobile:pair",
+            `  natstack mobile pair --host tailscale --port ${gatewayPort}`,
             "",
             "Until this is fixed, the QR below uses a Tailscale HTTP fallback.",
             "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
@@ -2705,7 +2707,7 @@ async function main() {
               : "  Open the Tailscale admin console -> Settings -> Serve.",
             "",
             "Then run:",
-            "  pnpm mobile:pair",
+            `  natstack mobile pair --host tailscale --port ${gatewayPort}`,
             "",
             "Until this is fixed, the QR below uses a Tailscale HTTP fallback.",
             "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
@@ -2721,7 +2723,7 @@ async function main() {
             "  tailscale serve reset",
             "",
             "Then run:",
-            "  pnpm mobile:pair",
+            `  natstack mobile pair --host tailscale --port ${gatewayPort}`,
           ]);
         } else if (serveProvision?.kind === "error") {
           printReadinessActionBlock("Tailscale Serve setup failed", [
@@ -2734,7 +2736,7 @@ async function main() {
             "Basic pairing may work, but mobile OAuth/browser redirects need HTTPS.",
             "",
             "Fix Tailscale Serve, then run:",
-            "  pnpm mobile:pair",
+            `  natstack mobile pair --host tailscale --port ${gatewayPort}`,
           ]);
         } else if (!publicUrlVerified && !explicitPublicUrl && detectedVpn?.setupHint) {
           printReadinessActionBlock("HTTPS mobile URL is not ready", [

@@ -27,7 +27,7 @@ device credential is revoked or expired, desktop startup should recover by
 falling back to local mode or asking for re-pairing rather than leaving the app
 dead.
 
-`pnpm start:remote --pair "natstack://connect?url=...&code=..."` exchanges a
+`natstack remote start --pair "natstack://connect?url=...&code=..."` exchanges a
 pairing invite, stores a CLI device credential, and launches Electron against
 the remote server.
 

@@ -86,6 +86,25 @@ NatStack is built as a hierarchical, tree-based browser where every "tab" is a s
 pnpm install
 ```
 
+During development, run the CLI live from TypeScript:
+
+```bash
+pnpm cli --help
+pnpm cli remote serve --host tailscale --port 3030
+pnpm server:live --help
+```
+
+For a stable `natstack` command on your PATH:
+
+```bash
+pnpm build
+pnpm link --global
+```
+
+The linked command runs built files from `dist/`; re-run `pnpm build` after
+server, Electron, shared runtime, or built CLI changes. `pnpm cli ...` runs the
+CLI and standalone server live from TypeScript. See [docs/cli.md](docs/cli.md).
+
 ## Scripts
 
 - `pnpm dev` - Build and start in development mode with DevTools
@@ -227,15 +246,15 @@ sudo tailscale serve --bg 3030
 Then start pairing:
 
 ```bash
-pnpm mobile:install:internal --launch
+natstack mobile install --launch
 pnpm build
-pnpm pair --host tailscale --port 3030
+natstack mobile pair --host tailscale --port 3030
 ```
 
 See [docs/mobile-vpn.md](docs/mobile-vpn.md) for host selection, workspace
 flags, dev-vs-persistent workspace mode, and reconnect behavior. Use
-`pnpm mobile:pair` when you want mobile-specific install/log reminders, and
-click the printed `Pair URL` to connect a laptop without copying an admin token.
+`natstack remote start --pair "<Pair URL>"` to connect a laptop without copying
+an admin token.
 After one desktop client is connected, use **Remote server** → **Paired
 devices** → **Pair another device** to create additional pairing links.
 

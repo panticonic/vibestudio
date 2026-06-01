@@ -1,291 +1,82 @@
 # Android Phone over VPN
 
-This is the trusted, low-friction workflow for running the NatStack Android app
-on a real phone while the server runs on a machine reachable over your VPN.
+Use the unified CLI for the mobile workflow. This page only covers the VPN and
+Tailscale details that are specific to real-phone testing.
 
-The workflow uses:
+## Happy Path
 
-- an **internal Android build** (`com.natstack.mobile.internal`) that allows
-  cleartext HTTP to VPN/LAN hosts;
-- a **stable gateway port** so the phone can keep using the same server URL;
-- a **QR/deep-link pairing command** that saves the server URL and durable
-  device credential in the app;
-- **Tailscale Serve over HTTPS** so the phone connects via MagicDNS and OAuth
-  callbacks land on the same URL.
+Build and install the trusted internal app:
 
-## Auto-detected Tailscale path (recommended)
+```bash
+natstack mobile build
+natstack mobile install --launch
+```
 
-If Tailscale is running on the server machine, first configure Serve once on
-that server:
+Expose the gateway over Tailscale HTTPS, then start the QR/deep-link pairing
+server:
 
 ```bash
 sudo tailscale serve --bg 3030
+natstack mobile pair --host tailscale --port 3030
 ```
 
-Then `pnpm mobile:pair --host tailscale --port 3030` detects the MagicDNS
-hostname (e.g. `pop-os.tailnet-xyz.ts.net`), verifies the HTTPS URL is actually
-reachable, and uses it as the QR target. The phone connects via
-`https://<host>.<tailnet>.ts.net`, panel chrome and OAuth callbacks share the
-same URL, and registering OAuth providers becomes a one-time copy-paste of
-`https://<host>.<tailnet>.ts.net/_r/s/credentials/oauth/callback`.
+Scan the QR code with the Android camera and accept the connection prompt in
+NatStack. The app saves a durable device credential and reconnects later as long
+as the server comes back on the same host and port.
 
-The general `pnpm pair` command uses the same server and QR/deep-link flow for
-phones and laptops. Use `pnpm mobile:pair` when you specifically want the APK
-install and mobile-log reminder lines.
-
-First-time requirements:
-
-- **Tailscale Serve enabled on your tailnet.** Serve is a per-tailnet feature
-  that has to be turned on once from the admin console. If it isn't, mobile
-  OAuth silently falls back to a `localhost` redirect that the phone can't
-  reach — see [If the readiness banner says ACTION NEEDED](#if-the-readiness-banner-says-action-needed)
-  below.
-- HTTPS Certificates feature enabled in your tailnet admin console
-  (https://login.tailscale.com/admin/dns). Provisioned `tailscale serve`
-  uses Let's Encrypt certs minted via this feature.
-- Run `sudo tailscale serve --bg <gateway-port>` once manually on the server.
-  The `--bg` Serve configuration persists across NatStack restarts and normal
-  machine reboots. If it disappears after reboot, check Tailscale state
-  persistence with `tailscale serve status` and `systemctl status tailscaled`.
-
-The readiness banner reports what's happening:
-
-```
-natstack-server ready:
-  …
-  Gateway:     http://100.x.y.z:3030                              # IP+HTTP fallback
-  Public URL:  https://host.tailnet.ts.net (auto-detected tailscale) (verified reachable)
-  Mobile URL:  https://host.tailnet.ts.net                         # what the QR encodes
-  OAuth callback (register with each provider):
-    https://host.tailnet.ts.net/_r/s/credentials/oauth/callback
-  Tailscale: configured `tailscale serve` to forward https://host.tailnet.ts.net/ → 127.0.0.1:3030.
-             Persistent across reboots; remove with `tailscale serve reset`.
-```
-
-To skip auto-detection (you use a
-reverse proxy / Cloudflare Tunnel), pass `--no-vpn-detect` or set
-`NATSTACK_NO_VPN_DETECT=1`. Setting `--public-url` also implicitly skips
-detection.
-
-### If the readiness banner says ACTION NEEDED
-
-When Tailscale Serve isn't enabled on the tailnet, `pnpm mobile:pair` prints a
-bordered block during startup and again right after the QR banner:
-
-```
-========================================================================
-  ACTION NEEDED — Tailscale Serve is not enabled
-========================================================================
-  Mobile OAuth needs a public HTTPS URL. Without Tailscale Serve,
-  redirects fall back to localhost and won't work on your phone.
-
-  Enable Tailscale Serve (one click):
-    https://login.tailscale.com/f/serve?node=<your-node-id>
-
-  Then restart `pnpm mobile:pair`.
-========================================================================
-```
-
-The activation URL is per-tailnet and is extracted from the daemon's own
-"Serve is not enabled" message. Open it in a browser, click **Enable**, then
-run the server-side Serve command and restart pairing:
+For a disposable local dev workspace with Metro, app install, launch, ADB
+reverse ports, and server startup in one command:
 
 ```bash
-sudo tailscale serve --bg 3030
-pnpm mobile:pair --host tailscale --port 3030
+natstack mobile dev
 ```
 
-The next run will:
+## Tailscale Requirements
 
-1. verify `https://<host>.<tailnet>.ts.net/healthz` returns `{ ok: true }`,
-2. mark the public URL as **verified reachable**,
-3. switch OAuth redirects to `https://<host>.<tailnet>.ts.net/_r/s/credentials/oauth/callback`
-   so logins from the phone complete.
+- Tailscale must be running on the server and phone.
+- Tailscale Serve must be enabled for the tailnet.
+- HTTPS Certificates must be enabled in the Tailscale admin console.
+- `sudo tailscale serve --bg <gateway-port>` must be run once on the server.
 
-**For agents driving this setup:** treat the `ACTION NEEDED` block as a hard
-stop on the Tailscale HTTPS path. Do not continue with `--host tailscale` until
-`sudo tailscale serve --bg <gateway-port>` has been run successfully on the
-server and the pair command verifies the HTTPS URL.
+With `--host tailscale`, NatStack detects the MagicDNS hostname, verifies
+`https://<host>.<tailnet>.ts.net/healthz`, and uses that URL for pairing, panel
+chrome, OAuth callbacks, and webhook delivery.
 
-## 1. Build and install the phone app
-
-Connect the phone over USB with Android debugging enabled, then run:
-
-```bash
-pnpm mobile:install:internal --launch
-```
-
-To target a specific adb device:
-
-```bash
-pnpm mobile:install:internal --device <adb-serial> --launch
-```
-
-To only produce the APK:
-
-```bash
-pnpm mobile:apk:internal
-```
-
-The APK is written to:
+Register this OAuth callback with providers:
 
 ```text
-apps/mobile/android/app/build/outputs/apk/internal/app-internal.apk
+https://<host>.<tailnet>.ts.net/_r/s/credentials/oauth/callback
 ```
 
-If install fails with `adb does not see any Android device or emulator`, check:
+## If Serve Is Not Enabled
 
-- the phone is connected by USB;
-- Developer options are enabled;
-- USB debugging is enabled;
-- the phone is unlocked;
-- the USB debugging authorization prompt on the phone has been accepted.
+When Tailscale Serve is disabled, `natstack mobile pair --host tailscale` prints
+an `ACTION NEEDED` block with an activation URL. Treat that as a hard stop for
+the HTTPS path:
 
-Confirm from the server machine:
+1. Open the printed Tailscale activation URL.
+2. Enable Serve for the tailnet.
+3. Run `sudo tailscale serve --bg 3030`.
+4. Restart `natstack mobile pair --host tailscale --port 3030`.
+
+## Useful Flags
 
 ```bash
-adb devices -l
+natstack mobile install --device <adb-serial> --launch
+natstack mobile pair --host lan --port 3030
+natstack mobile pair --host 100.x.y.z --workspace my-workspace
+natstack mobile pair --workspace-dir /path/to/workspace
+natstack mobile pair --dev
+natstack mobile logs --device <adb-serial>
 ```
 
-If more than one device is listed, pass the target serial:
+The internal APK is `com.natstack.mobile.internal`, is debug-signed, and allows
+HTTP to trusted VPN/LAN hosts. Release builds keep the stricter Android network
+policy.
 
-```bash
-pnpm mobile:install:internal --device <adb-serial> --launch
-```
+## Native Auth Note
 
-## 2. Start the server for phone pairing
-
-Make sure the server machine and phone are both connected to the VPN, then run:
-
-```bash
-pnpm build
-sudo tailscale serve --bg 3030
-pnpm mobile:pair --host tailscale --port 3030
-```
-
-`mobile:pair` starts `dist/server.mjs` with:
-
-- `--serve-panels`
-- `--init`
-- `--print-credentials`
-- `--gateway-port 3030`
-- the requested VPN/Tailscale host, or a LAN host when no strict host is passed
-
-The command prints a `natstack://connect?...` deep link and QR code. Scan it
-with the Android camera and accept the app's connection prompt.
-
-If a desktop client is already connected to the same server, you can also open
-**Remote server** → **Paired devices** → **Pair another device** there and use
-the generated link. The server creates the same single-use device pairing code
-without requiring access to the server terminal.
-
-For UI and panel development, prefer the disposable dev variant:
-
-```bash
-pnpm build
-pnpm mobile:pair:dev
-```
-
-This starts the same phone-reachable gateway, but passes `--ephemeral` to the
-server. The server creates a fresh `dev-<random>` workspace from the checked-in
-`workspace/` template and deletes it on shutdown, matching the desktop
-`pnpm dev` workflow. Use this when you need template or panel CSS changes to be
-visible immediately instead of reusing an older persisted mobile workspace.
-
-For panel/WebView diagnostics while using the trusted HTTP workflow, launch the
-app and tail its logs:
-
-```bash
-pnpm mobile:logs:internal
-```
-
-Use `--device <adb-serial>` if more than one Android target is connected.
-
-## Host selection
-
-By default, `mobile:pair` prefers a Tailscale/VPN interface and falls back to a
-LAN address. Be explicit when you need a particular route. `--host tailscale`
-is strict: it requires a Tailscale interface and a verified HTTPS Serve URL.
-
-```bash
-pnpm mobile:pair --host tailscale
-pnpm mobile:pair --host lan
-pnpm mobile:pair --host 100.x.y.z
-pnpm mobile:pair --host pop-os
-pnpm mobile:pair --host server.tailnet.ts.net
-```
-
-Use a different stable port when needed:
-
-```bash
-pnpm mobile:pair --host 100.x.y.z --port 3031
-```
-
-Environment equivalents:
-
-```bash
-NATSTACK_MOBILE_HOST=100.x.y.z NATSTACK_MOBILE_PORT=3030 pnpm mobile:pair
-```
-
-## Workspace selection
-
-Use the normal server workspace flags:
-
-```bash
-pnpm mobile:pair --workspace my-workspace
-pnpm mobile:pair --workspace-dir /path/to/workspace
-```
-
-`--init` is on by default so a missing workspace is created from the template.
-Pass `--no-init` to require the workspace to already exist.
-
-For development, use `pnpm mobile:pair:dev` or `pnpm mobile:pair --dev` instead
-of a named workspace. Dev mode intentionally cannot be combined with
-`--workspace` or `--workspace-dir`, because its purpose is to always start from a
-fresh template copy.
-
-## Reconnecting later
-
-The app saves the paired server URL and durable device credential in the device
-credential store.
-If the server comes back on the same host and gateway port, the phone can
-reconnect without scanning a new QR code.
-
-For a long-running trusted server, the equivalent direct server command is:
-
-```bash
-node dist/server.mjs \
-  --host 100.x.y.z \
-  --gateway-port 3030 \
-  --serve-panels \
-  --init \
-  --print-credentials
-```
-
-Set `NATSTACK_ADMIN_TOKEN` if you want to pin the admin token yourself.
-Otherwise the server persists the generated admin token under NatStack's
-central config and reuses it on later starts.
-
-## Notes
-
-- The internal APK is separate from the release app and shows as
-  **NatStack Internal**.
-- The internal APK allows HTTP to arbitrary hosts. Use it only on trusted
-  networks/VPNs.
-- QR pairing accepts HTTP for loopback, private LAN IPs, Tailscale IPs /
-  `*.ts.net`, single-label local names such as `pop-os`, and `.local` names.
-  When the auto-detected `Mobile URL:` is HTTPS, the QR uses that and the
-  HTTP rules don't matter.
-- The native mobile host refreshes short-lived app grants through
-  `/_r/s/auth/refresh-principal-grant` for the `react-native-app` principal.
-  The durable device credential stays in the native keychain; React Native JS
-  receives only one-time connection grants.
-- `/_r/s/auth/refresh-app-grant` is a compatibility alias for older builds.
-  It returns deprecation headers; new native hosts should use
-  `refresh-principal-grant`.
-- Release builds keep the stricter network policy in
-  `apps/mobile/android/app/src/main/res/xml/network_security_config.xml`.
-- The auto-detected URL is also used by OAuth flows on mobile, panel chrome,
-  and webhook delivery. When you register OAuth providers, register the
-  callback URL printed in the banner (`/_r/s/credentials/oauth/callback`)
-  exactly — provider consoles do exact-match validation.
+The native mobile host refreshes short-lived app grants through
+`/_r/s/auth/refresh-principal-grant` for the `react-native-app` principal. The
+durable device credential stays in the native keychain; React Native JS receives
+only one-time connection grants.

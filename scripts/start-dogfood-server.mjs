@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as YAML from "yaml";
-import { printPairHelp, runPairServer } from "./pair-server.mjs";
+import { printPairHelp, runPairServer } from "./cli/lib/pair-server.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const projectPath = process.env.NATSTACK_DOGFOOD_PROJECT || "projects/natstack";

@@ -25,12 +25,12 @@ function parseArgs(argv) {
 }
 
 function printHelp() {
-  console.log(`start-mobile-emulator
+  console.log(`natstack mobile emulator
 
 Usage:
-  pnpm mobile:emulator
-  pnpm mobile:emulator -- --avd <name>
-  pnpm mobile:emulator -- <extra emulator args>
+  natstack mobile emulator
+  natstack mobile emulator --avd <name>
+  natstack mobile emulator -- <extra emulator args>
 
 Defaults:
   AVD: NatStack_Test

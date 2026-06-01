@@ -54,11 +54,11 @@ behavior.
 
 Recommended path:
 
-1. Run `pnpm pair` or `natstack-server --print-credentials` on the server.
+1. Run `natstack remote serve` or `natstack-server --print-credentials` on the server.
 2. Click the printed `Pair URL`, or open the connection badge → **Remote server** → **Pair with code** and paste the URL/code.
 3. Save and relaunch. The app stores a durable device credential in the OS-protected credential store.
 
-Once any desktop client is connected, open **Remote server** → **Paired devices** → **Pair another device** to mint a fresh pairing link for another laptop or phone without returning to the server terminal. A paired terminal can do the same with `natstack-client invite`.
+Once any desktop client is connected, open **Remote server** → **Paired devices** → **Pair another device** to mint a fresh pairing link for another laptop or phone without returning to the server terminal. A paired terminal can do the same with `natstack remote invite`.
 
 Admin-token bootstrap remains available for recovery and automation. Launch once with:
 
@@ -80,7 +80,7 @@ Once connected, open the connection badge in the title bar → **Remote server**
 
 ### Mobile
 
-Use a `natstack://connect?...` pairing link from `pnpm mobile:pair`, `pnpm pair`, or **Pair another device** in an already-connected desktop client. The native mobile host exchanges the code for a durable device credential stored via `react-native-keychain`.
+Use a `natstack://connect?...` pairing link from `natstack mobile pair`, `natstack remote serve`, or **Pair another device** in an already-connected desktop client. The native mobile host exchanges the code for a durable device credential stored via `react-native-keychain`.
 
 ## 3. Self-signed HTTPS
 

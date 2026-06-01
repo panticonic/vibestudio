@@ -63,7 +63,7 @@ describe("connect deep links", () => {
   });
 
   it("stays in parity with the plain Node script helpers", async () => {
-    const scriptUrl = new URL("../../../scripts/connect-utils.mjs", import.meta.url);
+    const scriptUrl = new URL("../../../scripts/cli/lib/connect-utils.mjs", import.meta.url);
     const script = (await import(scriptUrl.href)) as {
       createConnectDeepLink: (url: string, code: string) => string;
       createStartRemotePairCommand: (url: string, code: string) => string;
@@ -84,7 +84,7 @@ describe("connect deep links", () => {
     expect(
       script.createStartRemotePairCommand("https://host.tailnet.ts.net", "A".repeat(24))
     ).toBe(
-      `pnpm start:remote --pair '${createConnectDeepLink(
+      `natstack remote start --pair '${createConnectDeepLink(
         "https://host.tailnet.ts.net",
         "A".repeat(24)
       )}'`
@@ -95,7 +95,7 @@ describe("connect deep links", () => {
   });
 
   it("requires an actual Tailscale interface when the script selector is tailscale", async () => {
-    const scriptUrl = new URL("../../../scripts/connect-utils.mjs", import.meta.url);
+    const scriptUrl = new URL("../../../scripts/cli/lib/connect-utils.mjs", import.meta.url);
     const script = (await import(scriptUrl.href)) as {
       pickMobileHost: (
         preference: string,
@@ -115,7 +115,7 @@ describe("connect deep links", () => {
   });
 
   it("selects a Tailscale address for the script tailscale selector", async () => {
-    const scriptUrl = new URL("../../../scripts/connect-utils.mjs", import.meta.url);
+    const scriptUrl = new URL("../../../scripts/cli/lib/connect-utils.mjs", import.meta.url);
     const script = (await import(scriptUrl.href)) as {
       pickMobileHost: (
         preference: string,

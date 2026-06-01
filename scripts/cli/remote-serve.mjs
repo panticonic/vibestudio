@@ -1,20 +1,20 @@
 #!/usr/bin/env node
-import { runPairServer } from "./pair-server.mjs";
+import { runPairServer } from "./lib/pair-server.mjs";
 
 try {
   runPairServer({
-    commandName: "pair",
+    commandName: "natstack remote serve",
     logPrefix: "pair",
     hostEnv: ["NATSTACK_PAIR_HOST", "NATSTACK_MOBILE_HOST", "NATSTACK_DEV_HOST"],
     portEnv: ["NATSTACK_PAIR_PORT", "NATSTACK_MOBILE_PORT"],
     devEnv: "NATSTACK_MOBILE_DEV",
-    restartCommand: "pnpm pair",
+    restartCommand: "natstack remote serve",
     usage: [
-      "pnpm pair",
-      "pnpm pair --dev",
-      "pnpm pair --host tailscale --port 3030",
-      "pnpm pair --host 100.x.y.z --workspace my-workspace",
-      "pnpm pair --host server.tailnet.ts.net --public-url http://server.tailnet.ts.net:3030",
+      "natstack remote serve",
+      "natstack remote serve --dev",
+      "natstack remote serve --host tailscale --port 3030",
+      "natstack remote serve --host 100.x.y.z --workspace my-workspace",
+      "natstack remote serve --host server.tailnet.ts.net --public-url http://server.tailnet.ts.net:3030",
     ],
     startupHint:
       "[pair] Scan with the NatStack mobile app, click the Pair URL on a laptop, or paste the pairing code.",

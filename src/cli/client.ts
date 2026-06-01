@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { pathToFileURL } from "node:url";
+import { spawn } from "node:child_process";
+import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { discoverNatstackServers } from "@natstack/shared/tailscaleDiscovery";
 import {
   clearCliCredentials,
@@ -17,28 +19,86 @@ interface Options {
   ttlMs?: number;
 }
 
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
 export async function main(argv: string[]): Promise<number> {
   const [command, ...rest] = argv;
   if (!command || command === "--help" || command === "help") {
     printHelp();
     return 0;
   }
-  if (command === "discover") {
-    const servers = await discoverNatstackServers();
-    for (const server of servers) console.log(server.url);
+  if (command === "remote") return remote(rest);
+  if (command === "mobile") return mobile(rest);
+  console.error(`Unknown command: ${command}`);
+  printHelp();
+  return 2;
+}
+
+async function remote(argv: string[]): Promise<number> {
+  const [subcommand, ...rest] = argv;
+  if (!subcommand || subcommand === "--help" || subcommand === "help") {
+    printRemoteHelp();
     return 0;
   }
-  if (command === "pair") return pair(rest);
-  if (command === "invite") return invite(rest);
-  if (command === "status") return status();
-  if (command === "logout") {
+  if (subcommand === "start" || subcommand === "desktop") {
+    return runScript("remote-start.mjs", rest);
+  }
+  if (subcommand === "serve" || subcommand === "server") {
+    return runScript("remote-serve.mjs", rest);
+  }
+  if (subcommand === "pair") return pair(rest);
+  if (subcommand === "invite") return invite(rest);
+  if (subcommand === "status") return status();
+  if (subcommand === "logout") {
     clearCliCredentials();
     console.log("logged out");
     return 0;
   }
-  console.error(`Unknown command: ${command}`);
-  printHelp();
+  if (subcommand === "discover") {
+    const servers = await discoverNatstackServers();
+    for (const server of servers) console.log(server.url);
+    return 0;
+  }
+  console.error(`Unknown remote command: ${subcommand}`);
+  printRemoteHelp();
   return 2;
+}
+
+async function mobile(argv: string[]): Promise<number> {
+  const [subcommand, ...rest] = argv;
+  if (!subcommand || subcommand === "--help" || subcommand === "help") {
+    printMobileHelp();
+    return 0;
+  }
+  if (subcommand === "pair") return runScript("mobile-pair.mjs", rest);
+  if (subcommand === "dev") return runScript("mobile-dev.mjs", rest);
+  if (subcommand === "build" || subcommand === "apk") {
+    return runScript("mobile-install.mjs", ["--build-only", ...rest]);
+  }
+  if (subcommand === "install") return runScript("mobile-install.mjs", rest);
+  if (subcommand === "logs") return runScript("mobile-logs.mjs", rest);
+  if (subcommand === "emulator") return runScript("mobile-emulator.mjs", rest);
+  console.error(`Unknown mobile command: ${subcommand}`);
+  printMobileHelp();
+  return 2;
+}
+
+function runScript(scriptName: string, argv: string[]): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(repoRoot, "scripts", "cli", scriptName), ...argv], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: "inherit",
+    });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => {
+      if (signal) {
+        process.kill(process.pid, signal);
+        return;
+      }
+      resolve(code ?? 0);
+    });
+  });
 }
 
 async function pair(argv: string[]): Promise<number> {
@@ -131,17 +191,59 @@ function parseOptions(argv: string[]): Options {
 }
 
 function printHelp(): void {
-  console.log(`natstack-client
+  console.log(`natstack
 
 Usage:
-  natstack-client discover
-  natstack-client pair "natstack://connect?url=...&code=..."
-  natstack-client pair --url <url> --code <code> [--label <label>]
-  natstack-client invite [--ttl-ms <milliseconds>]
-  natstack-client status
-  natstack-client logout
+  natstack remote start [--pair <link>]
+  natstack remote serve [--host tailscale] [--port 3030]
+  natstack remote pair "natstack://connect?url=...&code=..."
+  natstack remote invite [--ttl-ms <milliseconds>]
+  natstack remote status
+  natstack mobile pair [--host tailscale] [--port 3030]
+  natstack mobile build
+  natstack mobile install [--launch]
+  natstack mobile dev
 
 Credentials are stored as a 0600 JSON file at ${credentialPath()}.
+`);
+}
+
+function printRemoteHelp(): void {
+  console.log(`natstack remote
+
+Usage:
+  natstack remote start [--pair <link>]
+  natstack remote start
+  natstack remote serve [--host tailscale] [--port 3030]
+  natstack remote pair "natstack://connect?url=...&code=..."
+  natstack remote invite [--ttl-ms <milliseconds>]
+  natstack remote status
+  natstack remote logout
+  natstack remote discover
+
+Notes:
+  start launches Electron against the paired remote server.
+  start uses built Electron artifacts even when invoked through pnpm cli.
+  serve starts a QR/deep-link pairing server for phones and laptops.
+  pair saves the CLI device credential without launching Electron.
+`);
+}
+
+function printMobileHelp(): void {
+  console.log(`natstack mobile
+
+Usage:
+  natstack mobile pair [--host tailscale] [--port 3030]
+  natstack mobile dev [--avd <name>] [--device <serial>]
+  natstack mobile build
+  natstack mobile install [--device <serial>] [--launch]
+  natstack mobile logs [--device <serial>]
+  natstack mobile emulator [--avd <name>]
+
+Notes:
+  pair starts the QR/deep-link pairing server.
+  dev starts Metro, a disposable local server, installs the debug APK, and launches it.
+  build and install use the trusted internal Android variant.
 `);
 }
 
