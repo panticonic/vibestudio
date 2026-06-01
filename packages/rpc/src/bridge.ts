@@ -12,6 +12,8 @@ import type {
   RpcStreamCancel,
   StreamingMethodHandler,
   RpcCallOptions,
+  AuthenticatedCaller,
+  CallerKind,
 } from "./types.js";
 
 function generateRequestId(): string {
@@ -44,6 +46,11 @@ function base64ToBytes(value: string): Uint8Array {
 
 export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
   const exposedMethods: ExposedMethods = {};
+  // Handlers that additionally receive the authenticated caller context.
+  const callerAwareMethods = new Map<
+    string,
+    (ctx: AuthenticatedCaller, ...args: unknown[]) => unknown | Promise<unknown>
+  >();
   const streamingHandlers = new Map<string, StreamingMethodHandler>();
 
   const pendingRequests = new Map<
@@ -140,9 +147,12 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
 
   const eventListeners = new Map<string, Set<RpcEventListener>>();
 
-  const handleRequest = (sourceId: string, request: RpcRequest) => {
+  const handleRequest = (sourceId: string, request: RpcRequest, callerKind?: CallerKind) => {
+    // Caller-aware handlers take precedence; they receive the gateway-verified
+    // caller id (`sourceId`) and kind, NOT the self-reported `request.fromId`.
+    const callerAware = callerAwareMethods.get(request.method);
     const handler = exposedMethods[request.method];
-    if (!handler) {
+    if (!callerAware && !handler) {
       const response: RpcResponse = {
         type: "response",
         requestId: request.requestId,
@@ -153,7 +163,11 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
     }
 
     Promise.resolve()
-      .then(() => handler(...request.args))
+      .then(() =>
+        callerAware
+          ? callerAware({ callerId: sourceId, callerKind: callerKind ?? "unknown" }, ...request.args)
+          : handler!(...request.args)
+      )
       .then((result) => {
         const response: RpcResponse = {
           type: "response",
@@ -369,6 +383,16 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
     ): void {
       // Cast is safe: we're widening the type for storage, but runtime behavior is unchanged
       exposedMethods[method] = handler as (...args: unknown[]) => unknown | Promise<unknown>;
+    },
+
+    exposeMethodWithCaller<TArgs extends unknown[], TReturn>(
+      method: string,
+      handler: (ctx: AuthenticatedCaller, ...args: TArgs) => TReturn | Promise<TReturn>
+    ): void {
+      callerAwareMethods.set(
+        method,
+        handler as (ctx: AuthenticatedCaller, ...args: unknown[]) => unknown | Promise<unknown>
+      );
     },
 
     expose(methods: Record<string, (...args: any[]) => any>): void {
@@ -610,10 +634,10 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
       };
     },
 
-    _handleMessage(sourceId: string, message: RpcMessage): void {
+    _handleMessage(sourceId: string, message: RpcMessage, callerKind?: CallerKind): void {
       switch (message.type) {
         case "request":
-          handleRequest(sourceId, message);
+          handleRequest(sourceId, message, callerKind);
           return;
         case "response":
           handleResponse(message);
@@ -634,8 +658,8 @@ export function createRpcBridge(config: RpcBridgeConfig): RpcBridgeInternal {
     },
   };
 
-  config.transport.onAnyMessage((sourceId, message) => {
-    bridge._handleMessage(sourceId, message);
+  config.transport.onAnyMessage((sourceId, message, callerKind) => {
+    bridge._handleMessage(sourceId, message, callerKind);
   });
 
   return bridge;

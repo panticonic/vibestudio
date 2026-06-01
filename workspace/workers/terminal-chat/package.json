@@ -1,0 +1,26 @@
+{
+  "name": "@workspace-workers/terminal-chat",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "natstack": {
+    "entry": "worker.tsx",
+    "durable": {
+      "classes": [{ "className": "TerminalChatWorker" }]
+    },
+    "terminal": {
+      "renderer": "ink"
+    },
+    "persistent": true,
+    "exposeModules": ["@workspace/runtime"]
+  },
+  "dependencies": {
+    "@natstack/shared": "workspace:*",
+    "@workspace/runtime": "workspace:*",
+    "@workspace/agentic-session": "workspace:*",
+    "@workspace/terminal-shim": "workspace:*",
+    "@workspace/terminal-host-protocol": "workspace:*",
+    "ink": "^6.0.0",
+    "react": "^19.0.0"
+  }
+}

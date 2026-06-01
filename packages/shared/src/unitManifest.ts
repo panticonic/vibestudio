@@ -9,6 +9,53 @@
 export type UnitKind = "extension" | "app";
 export type WorkspaceAppTarget = "electron" | "react-native" | "terminal";
 
+/**
+ * Optional worker manifest fields for terminal-renderable workers.
+ *
+ * Workers are not centrally validated (their manifests are read ad-hoc by the
+ * builder), so these are lightweight typed shapes + predicates shared by the
+ * build pipeline (`buildWorker`) and the workerd config generator
+ * (`workerdManager`). A terminal worker renders with Ink inside workerd; the
+ * build aliases `yoga-layout` to the terminal-shim loader and emits a
+ * `yoga.wasm` artifact, and workerd is given that wasm as a module binding.
+ */
+export interface WorkerTerminalConfig {
+  /** Only "ink" is supported for now. */
+  renderer: "ink";
+  /** Optional default viewport hint (host is authoritative at runtime). */
+  viewport?: { columns: number; rows: number };
+}
+
+/** Read the `natstack.terminal` block from a worker manifest, if present. */
+export function workerTerminalConfig(
+  natstack: Record<string, unknown> | undefined | null,
+): WorkerTerminalConfig | null {
+  const terminal = natstack?.["terminal"];
+  if (!terminal || typeof terminal !== "object" || Array.isArray(terminal)) return null;
+  const renderer = (terminal as Record<string, unknown>)["renderer"];
+  if (renderer !== "ink") return null;
+  return terminal as WorkerTerminalConfig;
+}
+
+/** A worker whose `natstack.terminal.renderer` is "ink" renders inside workerd via Ink. */
+export function isTerminalWorker(
+  natstack: Record<string, unknown> | undefined | null,
+): boolean {
+  return workerTerminalConfig(natstack) !== null;
+}
+
+/**
+ * A persistent (resident, non-hibernating) worker. NatStack runs workerd
+ * locally, so keeping a DO resident costs only host memory — used by terminal
+ * session workers that hold a live Ink render tree that cannot be cheaply
+ * rebuilt on every hibernation.
+ */
+export function isPersistentWorker(
+  natstack: Record<string, unknown> | undefined | null,
+): boolean {
+  return natstack?.["persistent"] === true;
+}
+
 export const APP_CAPABILITIES_BY_TARGET = {
   electron: [
     "native-menus",
@@ -237,6 +284,22 @@ function validateAppBlock(
       `App ${options.unitName} natstack.app.entry is only supported for terminal apps`,
       "MANIFEST_APP_TERMINAL_ENTRY",
     );
+  }
+
+  // Interactive (TUI) terminal apps get the real TTY (stdio inherit) at launch.
+  if (appRecord["interactive"] !== undefined) {
+    if (typeof appRecord["interactive"] !== "boolean") {
+      throw new UnitManifestError(
+        `App ${options.unitName} natstack.app.interactive must be a boolean`,
+        "MANIFEST_APP_INTERACTIVE",
+      );
+    }
+    if (target !== "terminal" && appRecord["interactive"] === true) {
+      throw new UnitManifestError(
+        `App ${options.unitName} natstack.app.interactive is only supported for terminal apps`,
+        "MANIFEST_APP_INTERACTIVE_TARGET",
+      );
+    }
   }
 
   for (const forbidden of ["main", "preload", "window"]) {

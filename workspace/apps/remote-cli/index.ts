@@ -105,8 +105,9 @@ async function connect() {
     } catch {
       return;
     }
-    if (message.type === "ws:rpc") registry.deliver("main", message.message);
-    if (message.type === "ws:routed") registry.deliver(message.fromId, message.message);
+    if (message.type === "ws:rpc") registry.deliver("main", message.message, "server");
+    if (message.type === "ws:routed")
+      registry.deliver(message.fromId, message.message, message.fromKind);
     if (message.type === "ws:event" && message.event === "apps:lifecycle") {
       console.log(`[apps:lifecycle] ${JSON.stringify(message.payload)}`);
     }

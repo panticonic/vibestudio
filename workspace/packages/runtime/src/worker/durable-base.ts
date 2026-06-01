@@ -19,7 +19,7 @@ import {
   type PanelHandleMetadata,
 } from "../shared/handles.js";
 import { createCdpAutomation } from "../panel/cdpAutomation.js";
-import type { RpcBridge } from "@natstack/rpc";
+import type { AuthenticatedCaller, RpcBridge } from "@natstack/rpc";
 import type { RuntimeFs } from "../types.js";
 import type { PanelHandle } from "../core/index.js";
 
@@ -322,6 +322,22 @@ export abstract class DurableObjectBase {
 
   protected get rpcCallerKind(): string | null {
     return this._currentRpcCallerKind;
+  }
+
+  /**
+   * The authenticated caller of the in-flight method, in the canonical
+   * `AuthenticatedCaller` shape shared with the bridge and server. Sourced from
+   * the signed `X-Natstack-Rpc-Caller-*` headers the server injects. Null when
+   * there is no active RPC caller (e.g. alarm/lifecycle). Prefer this over the
+   * raw `rpcCallerId`/`rpcCallerKind` pair for authorization checks.
+   */
+  protected get caller(): AuthenticatedCaller | null {
+    const callerId = this._currentRpcCallerId;
+    if (!callerId) return null;
+    return {
+      callerId,
+      callerKind: (this._currentRpcCallerKind as AuthenticatedCaller["callerKind"]) ?? "unknown",
+    };
   }
 
   protected get rpcCallerPanelId(): string | null {

@@ -544,6 +544,19 @@ export class HeadlessSession {
     }
   }
 
+  /**
+   * Subscribe to message-state updates. Fires on every channel update,
+   * including streaming deltas (so a renderer can show partial agent output).
+   * Returns an unsubscribe function. Used by non-React renderers (e.g. the Ink
+   * terminal chat) the same way the React hooks consume the message stream.
+   */
+  onMessage(listener: (msg: ChatMessage) => void): () => void {
+    this._messageListeners.add(listener);
+    return () => {
+      this._messageListeners.delete(listener);
+    };
+  }
+
   async send(text: string, options?: { attachments?: AttachmentInput[]; idempotencyKey?: string }): Promise<string> {
     if (!this._client) throw new Error("Not connected");
     const result = await this._client.send(text, options);

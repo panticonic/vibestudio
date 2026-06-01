@@ -5,6 +5,7 @@
 import type {
   RpcBridge,
   RpcCallOptions,
+  AuthenticatedCaller,
   RpcEventListener,
   RpcMessage,
   StreamingMethodHandler,
@@ -190,6 +191,13 @@ export class MobileTransport implements RpcBridge {
   exposeMethod<TArgs extends unknown[], TReturn>(
     _method: string,
     _handler: (...args: TArgs) => TReturn | Promise<TReturn>
+  ): void {
+    // Mobile workspace apps do not expose methods to the server.
+  }
+
+  exposeMethodWithCaller<TArgs extends unknown[], TReturn>(
+    _method: string,
+    _handler: (ctx: AuthenticatedCaller, ...args: TArgs) => TReturn | Promise<TReturn>
   ): void {
     // Mobile workspace apps do not expose methods to the server.
   }

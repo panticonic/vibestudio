@@ -7,7 +7,7 @@
  * Reuses RpcMessage from @workspace/rpc for the inner request/response payloads.
  */
 
-import type { RpcMessage } from "@natstack/rpc";
+import type { CallerKind, RpcMessage } from "@natstack/rpc";
 import type { ToolExecutionResult } from "../types.js";
 import type { ClientPlatform } from "../panel/panelLease.js";
 
@@ -79,6 +79,8 @@ export interface WsEventMessage {
 export interface WsRoutedMessage {
   type: "ws:routed";
   fromId: string;
+  /** Gateway-verified kind of the source caller (trusted; pairs with fromId). */
+  fromKind?: CallerKind;
   message: RpcMessage;
 }
 

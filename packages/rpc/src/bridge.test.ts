@@ -208,3 +208,53 @@ describe("createRpcBridge", () => {
     });
   });
 });
+
+describe("exposeMethodWithCaller", () => {
+  it("passes the trusted transport sourceId, not the self-reported fromId", async () => {
+    const transport = createMockTransport();
+    const bridge = createRpcBridge({ selfId: "host", transport });
+    const handler = captureOnAnyMessageHandler(transport);
+
+    let seenCaller: string | null = null;
+    let seenArg: unknown = null;
+    bridge.exposeMethodWithCaller("terminal.onFrame", (ctx, frame: unknown) => {
+      seenCaller = ctx.callerId;
+      seenArg = frame;
+      return { ok: true };
+    });
+
+    // Deliver from authenticated "worker-A" but with a SPOOFED fromId.
+    const request: RpcRequest = {
+      type: "request",
+      requestId: "r1",
+      fromId: "worker-B-SPOOFED",
+      method: "terminal.onFrame",
+      args: [{ sessionId: "s1" }],
+    };
+    handler("worker-A", request);
+
+    // Wait for the async dispatch + response send.
+    await vi.waitFor(() => {
+      expect(vi.mocked(transport.send)).toHaveBeenCalled();
+    });
+
+    expect(seenCaller).toBe("worker-A"); // trusted sourceId, NOT "worker-B-SPOOFED"
+    expect(seenArg).toEqual({ sessionId: "s1" });
+    const sent = vi.mocked(transport.send).mock.calls[0]![1] as RpcResponse;
+    expect(sent).toMatchObject({ type: "response", requestId: "r1", result: { ok: true } });
+  });
+
+  it("caller-aware handlers take precedence over a plain handler of the same name", async () => {
+    const transport = createMockTransport();
+    const bridge = createRpcBridge({ selfId: "host", transport });
+    const handler = captureOnAnyMessageHandler(transport);
+
+    bridge.exposeMethod("m", () => "plain");
+    bridge.exposeMethodWithCaller("m", (ctx) => `caller:${ctx.callerId}`);
+
+    handler("caller-X", { type: "request", requestId: "r2", fromId: "x", method: "m", args: [] });
+    await vi.waitFor(() => expect(vi.mocked(transport.send)).toHaveBeenCalled());
+    const sent = vi.mocked(transport.send).mock.calls[0]![1] as RpcResponse;
+    expect((sent as { result?: unknown }).result).toBe("caller:caller-X");
+  });
+});

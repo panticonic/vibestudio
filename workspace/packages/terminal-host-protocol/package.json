@@ -1,0 +1,16 @@
+{
+  "name": "@workspace/terminal-host-protocol",
+  "version": "0.1.0",
+  "description": "Typed protocol between the trusted terminal browser and sandboxed terminal session workers",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
