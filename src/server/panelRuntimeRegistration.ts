@@ -427,18 +427,31 @@ export async function createServerPanelTreeBridge(
       }
       case "close":
       case "archive": {
+        const panelId = String(args[0]);
         const result = await panelManager.close(asPanelSlotId(String(args[0])));
         emitTreeSnapshot();
-        return result;
+        return {
+          panelId,
+          operation: "close",
+          status: "closed",
+          loaded: false,
+          rebuilt: false,
+          reloaded: false,
+          closedIds: Array.isArray((result as { closedIds?: unknown }).closedIds)
+            ? (result as { closedIds: unknown[] }).closedIds
+            : undefined,
+        };
       }
       case "unload": {
         const panelId = String(args[0]);
         const lease = deps.panelRuntimeCoordinator?.unloadSlot(panelId) ?? null;
         return {
           panelId,
+          operation: "unload",
           status: lease ? "unloaded" : "already_unloaded",
           loaded: false,
-          focused: false,
+          rebuilt: false,
+          reloaded: false,
         };
       }
       case "movePanel": {
@@ -468,9 +481,11 @@ export async function createServerPanelTreeBridge(
         await cdpBridge.sendTargetCommand(panelId, request.callerId, "reload", []);
         const result = {
           panelId,
+          operation: "reload",
           status: "reloaded",
-          focused: false,
           loaded: true,
+          rebuilt: false,
+          reloaded: true,
         };
         emitTreeSnapshot();
         return result;
@@ -540,6 +555,11 @@ export async function createServerPanelTreeBridge(
         const panelId = String(args[0]);
         const cdpBridge = await ensureHostCommandTargetReady(panelId);
         return cdpBridge.sendHostCommand(panelId, "rebuildPanel", []);
+      }
+      case "rebuildAndReload": {
+        const panelId = String(args[0]);
+        const cdpBridge = await ensureHostCommandTargetReady(panelId);
+        return cdpBridge.sendHostCommand(panelId, "rebuildAndReload", []);
       }
       default:
         throw new Error(`Unknown panelTree bridge method: ${method}`);

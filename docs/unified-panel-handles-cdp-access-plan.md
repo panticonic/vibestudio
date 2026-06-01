@@ -17,7 +17,7 @@ sharing one userland runtime. Today's connectivity model is fragmented and restr
 - **Two divergent handle types.** `ParentHandle` (`workspace/packages/runtime/src/core/types.ts:119-162`)
   is RPC-only (`id/call/emit/on`, with typed-contract generics). `PanelHandle`
   (`workspace/packages/runtime/src/panel/handle.ts:15-34`) is control/metadata/CDP only, with
-  *no* RPC. A child can RPC its parent but can't CDP it; a parent can CDP a child but the two
+  _no_ RPC. A child can RPC its parent but can't CDP it; a parent can CDP a child but the two
   surfaces don't match.
 - **CDP is ancestor→descendant + browser-kind only.** `cdpServer.canAccessBrowser()`
   (`src/main/cdpServer.ts:204`) grants only the owner + tree ancestors;
@@ -35,7 +35,7 @@ sharing one userland runtime. Today's connectivity model is fragmented and restr
   members exist in the registry with no `webContents`, and `unloadPanel` tears views down.
   CDP to such a panel fails.
 
-**Goal.** One unified handle abstraction obtainable for *any* panel-tree member from a
+**Goal.** One unified handle abstraction obtainable for _any_ panel-tree member from a
 `panelTree` API, usable by panels, workers, and DOs, where any live panel can be driven over
 CDP/RPC — with **all CDP and control/destructive operations gated by an interactive user
 approval** (automatically remembered per requester entity→target; escalated for privileged
@@ -49,7 +49,7 @@ targets) — and
 2. **`panelTree` API** for arbitrary tree members, exported into panel, worker, and DO
    runtimes. Workers/DOs are **first-class clients** — including CDP — via the server-proxied
    system (§10/§3); they reach it on their existing server connection, no special bridging.
-   They can never be CDP/RPC *targets* (no `webContents`).
+   They can never be CDP/RPC _targets_ (no `webContents`).
 3. **All CDP + control/destructive ops are approval-gated for every target, including
    parent→child.** The tree relationship buys no bypass. Only the trusted shell/host
    principal bypasses (it can't prompt itself). Approvals are **automatically remembered per
@@ -57,9 +57,9 @@ targets) — and
    history transitions mint a new requester entity id, remembered approvals intentionally do
    **not** survive requester navigation.
 4. **Privilege is a severity input, not a wall.** `shell: true` targets are attachable, but
-   gated ops on them require a **severe** (danger-tone) approval vs. a *standard* one.
+   gated ops on them require a **severe** (danger-tone) approval vs. a _standard_ one.
 5. **Open (never prompts):** read/metadata, `ensureLoaded`/`focus`, and consensual RPC
-   `call`/`emit`/`on` to methods the target *chose* to expose.
+   `call`/`emit`/`on` to methods the target _chose_ to expose.
 6. **Approvals are always interactive.** We do **not** build a headless / non-interactive /
    pre-grant path. A human is present to approve; if no approver responds, the op is denied.
    Therefore "zero interactive clients" only means zero clients hosting/displaying the target;
@@ -70,11 +70,11 @@ targets) — and
 8. Rename the automation namespace `handle.browser.*` → `handle.cdp.*`, and `browser`→
    `target`/`panel` throughout the CDP layer.
 9. **(Scope extension, §9) Multi-host model with an always-on headless host as the default
-   home.** Panel runtimes are held by exactly one *host* via the existing server-arbitrated
+   home.** Panel runtimes are held by exactly one _host_ via the existing server-arbitrated
    lease; an always-connected headless Electron host is the default lessee for any panel no
    interactive client has taken over, so CDP/agentic work has a CDP-capable home even when no
    interactive client is hosting/displaying that panel. Note 6 (interactive approvals) still
-   holds — headless *hosting* is not headless *approval*; a human still approves the
+   holds — headless _hosting_ is not headless _approval_; a human still approves the
    automate/structural grant.
 10. **(§3/§4) All CDP is proxied through the server.** Remove the direct Electron-main CDP
     server; the server owns a single CDP broker (generalize `cdpBridge`), Electron hosts connect
@@ -88,31 +88,34 @@ targets) — and
 ## 3. Architecture: one server-proxied CDP system (READ FIRST — load-bearing)
 
 **Decision: all CDP is proxied through the server. There is no direct client↔host CDP and no
-main-local CDP server.** The server owns a single CDP *broker*; Electron hosts (desktop main,
-headless §9) connect to it as *debugger providers* exposing their local `webContents.debugger`;
+main-local CDP server.** The server owns a single CDP _broker_; Electron hosts (desktop main,
+headless §9) connect to it as _debugger providers_ exposing their local `webContents.debugger`;
 clients (panels, workers, DOs) connect as CDP clients. Auth/approval runs **in-process in the
 server**, reusing the existing capability system — so the cross-process approval gymnastics of
 earlier drafts are gone, and workers/DOs are first-class (they already have a server
 connection).
 
 What this replaces / builds on:
+
 - **Remove** the standalone Electron-main CDP server (`new CdpServer()`, `index.ts:1099`): today
   desktop clients connect directly to a main loopback WS that attaches `webContents.debugger`.
-  Its attach/forward logic *migrates into the host provider agent* (§4.4).
+  Its attach/forward logic _migrates into the host provider agent_ (§4.4).
 - **Keep** the server broker — it already has the right shape: `cdpBridge`
   (`src/server/cdpBridge.ts`, wired at `panelHttpServer.ts:339`) brokers between Playwright
-  clients (`/cdp/{browserId}`) and a *debugger provider* (`/api/cdp-bridge`).
+  clients (`/cdp/{browserId}`) and a _debugger provider_ (`/api/cdp-bridge`).
 - **Replace the provider.** The current provider is a browser extension driving
   `chrome.debugger` (`extension/background.js`) — **believed dead / non-functional; verify and
   remove.** The new provider is the Electron host agent (§4.4).
 
 New shape:
+
 ```
 Client (panel/worker/DO, Playwright)
   → Server CDP broker   /cdp/{browserId}    ← in-process auth: accessDecision + capability approval
   → Host CDP provider   /api/cdp-host        ← the lease-holding Electron host (main or headless)
   → webContents.debugger → panel WebContentsView
 ```
+
 The broker routes a client's `/cdp/{browserId}` connection to whichever host currently **holds
 the lease** for that target (the lease coordinator tracks holders, §9). **Browser panels
 participate in the same lease model as workspace panels** even though they do not need a panel
@@ -128,6 +131,7 @@ away — no reconnect logic.
 ## 4. Authorization + approval — the core refactor
 
 ### 4.1 Shared policy module (single source of truth)
+
 Extract one pure function into `packages/shared` (e.g. `panelAccessPolicy.ts`):
 
 ```
@@ -139,12 +143,12 @@ accessDecision(op, requester, target) -> {
 ```
 
 - **Op classes:**
-  - *open* (no capability): read/metadata, `ensureLoaded`, `focus`, consensual RPC
+  - _open_ (no capability): read/metadata, `ensureLoaded`, `focus`, consensual RPC
     `call`/`emit`/`on`.
-  - *automate* (`panel.automate`): `cdp.*`, `navigate`, `reload`, `goBack`, `goForward`,
+  - _automate_ (`panel.automate`): `cdp.*`, `navigate`, `reload`, `goBack`, `goForward`,
     `stop`.
-  - *structural* (`panel.structural`): `archive`, `close`, `unload`, `movePanel`, `takeOver`,
-    `openDevTools`, `rebuildPanel`, `updatePanelState`/`stateArgs.set`.
+  - _structural_ (`panel.structural`): `archive`, `close`, `unload`, `movePanel`, `takeOver`,
+    `openDevTools`, `rebuildPanel`, `rebuildAndReload`, `updatePanelState`/`stateArgs.set`.
 - **Severity:** `severe` iff target is privileged (`shell:true`), else `standard`.
 - **Bypass (allow, no capability):** requester is the trusted shell/host
   (`CallerKind` `shell`/`shell-remote`, or a requester whose own panel is `shell:true`).
@@ -157,10 +161,11 @@ The server CDP broker (§3) consumes this one function, in-process. There is no 
 divergence anymore — auth happens in exactly one place.
 
 Two capabilities, because CDP attach already confers total in-panel control (so gating
-individual drive verbs is pointless — shared `panel.automate`), but *structural* ops mutate
+individual drive verbs is pointless — shared `panel.automate`), but _structural_ ops mutate
 the tree/host and must not be silently authorized by an automate grant (`panel.structural`).
 
 ### 4.2 Reuse the server capability system, in-process
+
 Do **not** call `userlandApprovalService` directly. Use `requestCapabilityPermission`
 (`src/server/services/capabilityPermission.ts`) — the same helper behind `cors-response-read`
 and `external-browser-open`. Because the CDP broker now lives **in the server**, this is a
@@ -192,6 +197,7 @@ the policy's severity output is invisible to the user.
 `allowed: ["shell","server","panel","worker","do"]`); every userland client reaches it on its
 own RPC connection, so `ctx.caller` is the genuine requester. Trusted shell/server callers hit
 the same service and bypass in `accessDecision` rather than using a separate CDP path. It:
+
 1. runs §4.1 `accessDecision("cdp", requester=ctx.caller, target)`;
 2. if a capability is required, runs `requestCapabilityPermission` **in-process** (§4.2) —
    prompts on first use, instant on a remembered grant; deny → reject `"CDP access denied"`;
@@ -228,7 +234,7 @@ connects to the broker's provider endpoint (as the extension did at `/api/cdp-br
 design in §14),
 authenticates with its host/admin token, registers the `browserId`s it currently holds (per the
 lease), and forwards CDP commands to its local `webContents.debugger`, streaming events back.
-This is the *existing* `cdpServer` machinery — `ensureDebuggerAttached`, `sendDebuggerCommand`,
+This is the _existing_ `cdpServer` machinery — `ensureDebuggerAttached`, `sendDebuggerCommand`,
 the per-target serialized `debuggerCommandQueues`, the `Page.captureScreenshot` handling
 (`cdpServer.ts:343-520`) — **moved out of the standalone main server into the provider**,
 reusing `cdpBridge`'s provider-side protocol (`handleExtensionConnection`,
@@ -347,7 +353,7 @@ target's runtime: `cdp.*`, RPC `call`/`emit`, and `_agent` introspection
   build_error / view_creation_failed). Inverse of `unloadPanel`. **Verify** a not-yet-visible
   `WebContentsView` is debugger-attachable so loading-without-focus still permits CDP.
 - **"Loaded" is now host/lease-scoped (§9).** A panel's live runtime is held by exactly one
-  *host* via the existing server-arbitrated lease (`panelRuntimeCoordinator`). `ensureLoaded`
+  _host_ via the existing server-arbitrated lease (`panelRuntimeCoordinator`). `ensureLoaded`
   means "ensure a CDP-capable host holds this panel" — with the always-on headless host (§9)
   this is nearly always already true, so `no_host` should not arise; a panel currently leased
   by a non-CDP client (mobile) yields a `leased_elsewhere` result and the take-over policy
@@ -356,7 +362,7 @@ target's runtime: `cdp.*`, RPC `call`/`emit`, and `_agent` introspection
   grant check passes, ensures a CDP-capable host holds the target — by assigning/confirming a
   lease (the default headless host, §9, or a desktop host) so the host loads the panel via its
   existing lease-acquisition path. `handle.cdp.page()` on an unloaded panel just works, with no
-  caller action and no reverse server→main request (it's lease-driven). Loading runs *after*
+  caller action and no reverse server→main request (it's lease-driven). Loading runs _after_
   the grant check (never load a panel the requester isn't authorized to drive).
 - **Explicit `ensureLoaded()` / `isLoaded()`** stay on the handle (open class — no prompt) for
   non-CDP needs, e.g. before RPC `call`/`emit` to an unloaded panel. Documented, but CDP
@@ -370,6 +376,7 @@ with an always-connected headless host as the default home for panel runtimes. A
 explicit scope extension.
 
 ### 9.1 What exists today (the seam we build on)
+
 - **`PanelOrchestrator` exists only in desktop Electron main** (`src/main/index.ts`); the
   server has **no** orchestrator and **no** view host (no `WebContentsView` under `src/server`).
   Mobile renders panels in iOS WebViews and has **no CDP** (`bridgeAdapter.ts:135`). So CDP +
@@ -377,17 +384,18 @@ explicit scope extension.
 - The orchestrator is already decoupled from its render surface via an injected
   `getPanelView()` returning a `PanelViewLike` (`panelOrchestrator.ts:65,118`); if absent it
   **silently no-ops** (`loadSnapshotIntoView`: `const view = this.getPanelView(); if (!view)
-  return;`).
+return;`).
 - A **server-arbitrated runtime-lease system already exists**: `src/server/panelRuntimeCoordinator.ts`
-  + `services/panelRuntimeService.ts` is the authority. The orchestrator
-  `syncRuntimeLeaseSnapshot()` / `applyRuntimeLeaseChanged()` and, on transfer, unloads its
-  local view (`unloadPanelIfPresent(slotId, "lease-transfer")`); it reports `leased_elsewhere`
-  + `holderLabel`, and supports `acquire` vs `takeOver` (`panelOrchestrator.ts:693-702,
-  844-900`). Leases are **exclusive**: one host holds a panel's live runtime at a time.
+  - `services/panelRuntimeService.ts` is the authority. The orchestrator
+    `syncRuntimeLeaseSnapshot()` / `applyRuntimeLeaseChanged()` and, on transfer, unloads its
+    local view (`unloadPanelIfPresent(slotId, "lease-transfer")`); it reports `leased_elsewhere`
+  - `holderLabel`, and supports `acquire` vs `takeOver` (`panelOrchestrator.ts:693-702,
+844-900`). Leases are **exclusive**: one host holds a panel's live runtime at a time.
 - **`shellPresenceService`** already tracks connected interactive clients
   (`isAnyShellActive()` / `getActiveShellCount()`, heartbeat, 6s prune).
 
 ### 9.2 The model: hosts as lease holders, headless as default home
+
 - A **host** is anything that can instantiate a panel's runtime and offers a `PanelViewLike`:
   interactive desktop Electron, (future) headless host, mobile WebView. Each host runs the
   lease-syncing orchestrator and acquires the lease for panels it instantiates; the server
@@ -395,11 +403,11 @@ explicit scope extension.
   not** CDP-capable. Browser panels also acquire leases; for browser panels the lease represents
   view/debugger ownership rather than a panel runtime bootstrap connection.
 - **Always-on headless host = the default lessee.** A panel that no interactive client has
-  leased is held by the headless host. When a desktop/mobile client wants to *display* it, it
+  leased is held by the headless host. When a desktop/mobile client wants to _display_ it, it
   `takeOver`-leases (existing path → headless unloads via `lease-transfer`); when that client
   releases or disconnects, the panel **falls back** to the headless host (re-acquire). This is
   policy on top of the existing coordinator, not new transport.
-- **Spin-up policy:** the headless host is the default *target* for spin-up; load **lazily**
+- **Spin-up policy:** the headless host is the default _target_ for spin-up; load **lazily**
   (when a panel must be live for CDP/RPC/agent work and no client holds it) rather than eagerly
   instantiating the whole tree, plus idle teardown to bound resource use. Eager-restore can be
   a tunable (`panelRestorePolicy` already exists, default `"focused"`).
@@ -410,6 +418,7 @@ explicit scope extension.
   registers once under the stable host id and can serve all panel leases held by that host.
 
 ### 9.3 Implementation: headless host = headless Electron (Option A)
+
 Run the **existing** `PanelOrchestrator` + `cdpServer` in a **windowless Electron main** with
 an offscreen `PanelViewLike` (hidden/offscreen `WebContentsView`). This reuses the entire
 view + debugger + CDP stack unchanged — one code path — versus Option B (a Chromium-in-Node
@@ -418,6 +427,7 @@ headless host connects to the server like any other client, is **always present*
 registers as a host the lease coordinator can assign to.
 
 ### 9.4 How this resolves the CDP/loading questions
+
 - **Client-awareness:** host selection becomes explicit. Extend `shellPresenceService` (or add
   a host registry) to report host **capabilities** (hosts-views, supports-CDP) so a request
   resolves to a concrete holder. CDP requests resolve to a CDP-capable holder.
@@ -436,6 +446,7 @@ registers as a host the lease coordinator can assign to.
   host.)
 
 ### 9.5 Hard problems to flag (not hand-wave)
+
 - **Leasing is re-instantiation, not live migration.** A lease transfer unloads then reloads
   the panel on the new host; in-memory DOM/JS state is lost (only persisted `stateArgs`/registry
   state survives). This matches today's `lease-transfer` unload behavior, but "move a panel to
@@ -452,9 +463,10 @@ registers as a host the lease coordinator can assign to.
   GC + a cap.
 
 ### 9.6 Suggested phasing
+
 The server CDP broker + host provider agent (§4.3/§4.4) is the desktop host's day-one provider,
 so it is **not** deferred — it replaces the standalone main `CdpServer` in the core work. The
-*headless host* is the scope extension: (a) host-capability presence (hosts-views/supports-CDP);
+_headless host_ is the scope extension: (a) host-capability presence (hosts-views/supports-CDP);
 (b) a windowless Electron host running the existing orchestrator **and a CDP provider agent**;
 (c) default-lessee + fallback-on-release policy in `panelRuntimeCoordinator`; (d) the
 mobile-held-target reject (§9.4). Lease-change handling is just "error the CDP connection" (§9.5)
@@ -519,17 +531,17 @@ exist, so the headless extension is mostly policy + the windowless host process.
 
 ## 12. Open risks / verify before/while building
 
-- **Grant enforcement** (§4.2/§4.3) — *resolved after the §4.2 keying extension:* the CDP broker
+- **Grant enforcement** (§4.2/§4.3) — _resolved after the §4.2 keying extension:_ the CDP broker
   is in the server, so auth is a direct **in-process** `requestCapabilityPermission` — no
   `serverClient` hop, no main-local token, no signing. The durable grant (server) is the
   revocable authority, keyed by requester entity→target and re-evaluated on every
   `getCdpEndpoint`; the 60s handshake token is server-local.
-- **Worker→main routing** (§6) — *no longer needed.* The server-proxy makes CDP a server
+- **Worker→main routing** (§6) — _no longer needed._ The server-proxy makes CDP a server
   service and structural ops server-authoritative (hosts converge via server tree snapshots and
   lease events), so workers/DOs need neither IPC nor a `"main"` relay. (Confirmed that relay
   doesn't exist — `rpcServer` has no main route, main connects as `admin` with no WS server-state
   — and this design avoids needing it.)
-- **Server↔host provider channel** (§4.4) — *designed in §14:* dedicated provider WS per host,
+- **Server↔host provider channel** (§4.4) — _designed in §14:_ dedicated provider WS per host,
   routed by stable `lease.hostConnectionId`, reusing the `cdpBridge` relay + extension
   protocol. Remaining to validate in build: the headless orchestrator's new
   "load-on-lease-assignment" behavior (§14.4) and `getCdpEndpoint` awaiting provider-ready
@@ -537,20 +549,20 @@ exist, so the headless extension is mostly policy + the windowless host process.
 - **CDP now hops through the server** — desktop-local CDP loses the direct main loopback; every
   CDP command crosses client→server→host. Accepted tradeoff; watch latency/throughput for
   chatty Playwright sessions and large payloads (e.g. screenshots).
-- **Host debugger coexistence** (§7) — *confirmed shape:* host `getAccessibilityTree`
+- **Host debugger coexistence** (§7) — _confirmed shape:_ host `getAccessibilityTree`
   (`cdpServer.ts:259`) and client CDP share one per-target serialized queue
   (`debuggerCommandQueues`, `sendDebuggerCommand:506`); migrating into the provider must keep
   the queue keyed per target.
-- **Hidden-view / headless screenshots** — *resolved:* `debugger.attach` is
+- **Hidden-view / headless screenshots** — _resolved:_ `debugger.attach` is
   visibility-independent (hidden views attach fine); the provider runs `Page.captureScreenshot`
   against its `webContents`, and a headless host uses Electron offscreen rendering / native
   capture — so the desktop `withViewVisible` dance (`cdpServer.ts:363-369`) is not required
   headless. Verify offscreen capture quality/perf on the headless host.
-- **(§9) Mobile-held target + CDP** — *resolved:* reject with `cdp_unavailable_mobile_held`
+- **(§9) Mobile-held target + CDP** — _resolved:_ reject with `cdp_unavailable_mobile_held`
   (no take-over). Implementation note: enforcement must know the current holder's
   CDP-capability — derive it from the lease `holderLabel`/host-capability presence (§9.4), not
   from the panel itself.
-- **(§9) Lease-change mid-automation** — *resolved:* the provider for that `browserId` drops, so
+- **(§9) Lease-change mid-automation** — _resolved:_ the provider for that `browserId` drops, so
   the client CDP connection **errors and closes**; no reconnect, no lease-holding (§9.5).
 - **(§9) Runtime re-instantiation** — lease transfer loses in-memory state; only persisted
   `stateArgs`/registry survive.
@@ -588,17 +600,20 @@ between Playwright clients and a single browser-extension provider) into a broke
 clients and **per-host debugger providers**, routed by lease ownership.
 
 ### 14.1 Routing key = stable `lease.hostConnectionId`
+
 `PanelRuntimeCoordinator` already maps a target to a lease, but today's lease `connectionId` is
 not a usable provider routing key because Electron currently mints a fresh per-panel id on every
 load. Extend the lease model to include a stable `hostConnectionId` (or equivalent) identifying
 the host/provider socket, while retaining any per-panel runtime connection id needed for
 workspace panel bootstrap. The broker routes each client connection through the stable host id:
+
 ```
 client → /cdp/{browserId}
   lease       = coordinator.getLease(browserId)
   providerWS  = providers.get(lease.hostConnectionId)
   relay client ⇄ providerWS  (tagged with browserId)
 ```
+
 The key structural changes to `cdpBridge`: replace the singular `extensionWs` ("one extension
 at a time", `cdpBridge.ts:80,424`) with `providers: Map<hostConnectionId, WS>`, and look up
 per-`browserId` via the lease. The lease coordinator stays the single source of truth, so a
@@ -606,6 +621,7 @@ provider can never serve a panel it doesn't hold (the broker only routes what th
 no separate browserId→provider registry, no divergence.
 
 ### 14.2 Connection & identity
+
 - Each Electron host (desktop main, headless §9) opens **one dedicated provider WS** to the
   server's existing `panelHttpServer` HTTP surface, at `/api/cdp-host` (renamed from
   `/api/cdp-bridge`).
@@ -623,7 +639,7 @@ no separate browserId→provider registry, no divergence.
   `hostConnectionId`; if the identity check fails, close the provider WS and do not add it to
   `providers`.
 
-**Decision — dedicated WS, not multiplexed over `serverClient`.** Multiplexing is *not* simpler:
+**Decision — dedicated WS, not multiplexed over `serverClient`.** Multiplexing is _not_ simpler:
 `serverClient` has no inbound-request path (broker→host would have to be modeled as event +
 reverse call, splitting one round trip), the broker could no longer reuse its WS-frame relay,
 and CDP event/screenshot volume would share the JSON-RPC control channel. Only hosts are
@@ -631,6 +647,7 @@ providers (1–2 sockets total), and the dedicated WS's auth/reconnect is a near
 patterns. So dedicated.
 
 ### 14.3 Protocol: reuse the extension protocol verbatim
+
 The broker↔provider frames already exist (`cdp:command` / `cdp:result` / `cdp:error` /
 `cdp:event` / `cdp:detach`, `cdpBridge.ts:501-636`). The provider implements the **host** side
 against `webContents.debugger` instead of `chrome.debugger` — exactly the migrated `cdpServer`
@@ -642,7 +659,9 @@ debuggee binding differs. The provider attaches its local debugger lazily on the
 last client for that browserId disconnects, refcounted broker-side as today).
 
 ### 14.4 Transparent load = lease assignment (no server→host requests)
+
 When `getCdpEndpoint` (§4.3) needs a CDP-capable holder:
+
 1. if the target is held by a non-CDP host (currently mobile), reject
    `cdp_unavailable_mobile_held` and leave the lease untouched;
 2. otherwise, when there is no holder, the server **assigns the lease** to the headless host's
@@ -655,16 +674,18 @@ When `getCdpEndpoint` (§4.3) needs a CDP-capable holder:
    endpoint.
 
 Loading is thus driven through lease/event sync plus the new host load-on-assignment behavior —
-the server never issues a request *to* a host (which would need the non-existent
+the server never issues a request _to_ a host (which would need the non-existent
 reverse-routing).
 
 ### 14.5 Failure / lease change → error out (decided)
+
 The broker subscribes to `panel:runtimeLeaseChanged`. On a holder change or a provider WS drop,
 it **closes the affected client `/cdp/{browserId}` connections** (a provider drop already flushes
 that host's pending commands, `cdpBridge.ts:462-494`). The client CDP socket errors; no
 reconnect, no lease-holding.
 
 ### 14.6 `hostConnectionId` stability (required)
+
 Leases are routed by stable `hostConnectionId` and survive brief drops via the existing grace
 window (`markDisconnected`/`markConnected`/`expired`, `coordinator.ts:151-163`). The host
 reuses a stable `hostConnectionId` and re-registers its provider WS on reconnect, so routing
@@ -673,6 +694,7 @@ load. The current per-panel random runtime `connectionId` is not stable enough f
 routing and must not be used as the provider map key.
 
 ### 14.7 Trust model
+
 The provider WS is authenticated (host token), but the broker does **not** trust it for
 authorization: client-side `accessDecision` + capability approval happen at `getCdpEndpoint`
 (§4.3, in-process), and routing is gated by the lease coordinator. A provider can only ever

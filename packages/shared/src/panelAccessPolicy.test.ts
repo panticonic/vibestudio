@@ -9,18 +9,16 @@ import {
 describe("panelAccessPolicy", () => {
   it("leaves open metadata, loading, focus, and consensual RPC operations ungated", () => {
     for (const op of ["metadata", "ensureLoaded", "focus", "rpc.call"] as const) {
-      expect(
-        accessDecision(op, { id: "panel-a", kind: "panel" }, { id: "panel-b" })
-      ).toEqual({ allow: true });
+      expect(accessDecision(op, { id: "panel-a", kind: "panel" }, { id: "panel-b" })).toEqual({
+        allow: true,
+      });
     }
   });
 
   it("gates CDP and browser-driving verbs with panel.automate", () => {
     for (const op of ["cdp", "navigate", "reload", "goBack", "goForward", "stop"] as const) {
       expect(panelAccessCapabilityForOperation(op)).toBe(PANEL_AUTOMATE_CAPABILITY);
-      expect(
-        accessDecision(op, { id: "panel-a", kind: "panel" }, { id: "panel-b" })
-      ).toEqual({
+      expect(accessDecision(op, { id: "panel-a", kind: "panel" }, { id: "panel-b" })).toEqual({
         allow: true,
         capability: PANEL_AUTOMATE_CAPABILITY,
         severity: "standard",
@@ -38,13 +36,12 @@ describe("panelAccessPolicy", () => {
       "takeOver",
       "openDevTools",
       "rebuildPanel",
+      "rebuildAndReload",
       "updatePanelState",
       "stateArgs.set",
     ] as const) {
       expect(panelAccessCapabilityForOperation(op)).toBe(PANEL_STRUCTURAL_CAPABILITY);
-      expect(
-        accessDecision(op, { id: "parent", kind: "panel" }, { id: "child" })
-      ).toEqual({
+      expect(accessDecision(op, { id: "parent", kind: "panel" }, { id: "child" })).toEqual({
         allow: true,
         capability: PANEL_STRUCTURAL_CAPABILITY,
         severity: "standard",
@@ -53,12 +50,12 @@ describe("panelAccessPolicy", () => {
   });
 
   it("does not grant relationship bypasses", () => {
-    expect(
-      accessDecision("cdp", { id: "parent", kind: "panel" }, { id: "child" })
-    ).toMatchObject({ capability: PANEL_AUTOMATE_CAPABILITY });
-    expect(
-      accessDecision("close", { id: "parent", kind: "panel" }, { id: "child" })
-    ).toMatchObject({ capability: PANEL_STRUCTURAL_CAPABILITY });
+    expect(accessDecision("cdp", { id: "parent", kind: "panel" }, { id: "child" })).toMatchObject({
+      capability: PANEL_AUTOMATE_CAPABILITY,
+    });
+    expect(accessDecision("close", { id: "parent", kind: "panel" }, { id: "child" })).toMatchObject(
+      { capability: PANEL_STRUCTURAL_CAPABILITY }
+    );
   });
 
   it("escalates privileged targets to severe approvals", () => {

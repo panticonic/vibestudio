@@ -1396,8 +1396,10 @@ app.on("ready", async () => {
           return null;
         }
         if (action === "rebuildPanel") {
-          await panelOrchestrator?.retryBuild(panelId);
-          return null;
+          return panelOrchestrator?.rebuildPanel(panelId) ?? null;
+        }
+        if (action === "rebuildAndReload") {
+          return panelOrchestrator?.rebuildAndReloadPanel(panelId) ?? null;
         }
         if (action === "accessibilityTree") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");

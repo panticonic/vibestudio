@@ -38,7 +38,7 @@ const transport: EnvelopeRpcTransport = {
           target: "shell",
           callerKind: fromId === "main" ? "server" : "unknown",
           message: message as RpcEnvelope["message"],
-        }),
+        })
       );
     }),
   status: () => "connected",
@@ -71,6 +71,7 @@ import type {
   PanelChromeState,
 } from "@natstack/shared/panelChrome";
 import type { PanelRuntimeLease } from "@natstack/shared/panel/panelLease";
+import type { PanelLifecycleResult } from "@natstack/shared/types";
 import type {
   HostTarget,
   HostTargetCandidate,
@@ -131,17 +132,18 @@ export const panel = {
       typed?: boolean;
     }
   ) => rpc.call<undefined>("main", "panel.markBrowserNavigationIntent", [panelId, intent]),
-  reload: (panelId: string) => rpc.call<undefined>("main", "panel.reload", [panelId]),
+  reload: (panelId: string) => rpc.call<PanelLifecycleResult>("main", "panel.reload", [panelId]),
   reloadView: (panelId: string) => rpc.call<undefined>("main", "panel.reloadView", [panelId]),
   forceReloadView: (panelId: string) =>
     rpc.call<undefined>("main", "panel.forceReloadView", [panelId]),
-  rebuildPanel: (panelId: string) => rpc.call<undefined>("main", "panel.rebuildPanel", [panelId]),
+  rebuildPanel: (panelId: string) =>
+    rpc.call<PanelLifecycleResult>("main", "panel.rebuildPanel", [panelId]),
+  rebuildAndReload: (panelId: string) =>
+    rpc.call<PanelLifecycleResult>("main", "panel.rebuildAndReload", [panelId]),
   goBack: (panelId: string) => rpc.call<undefined>("main", "panel.goBack", [panelId]),
   goForward: (panelId: string) => rpc.call<undefined>("main", "panel.goForward", [panelId]),
-  unload: (panelId: string) => rpc.call<undefined>("main", "panel.unload", [panelId]),
+  unload: (panelId: string) => rpc.call<PanelLifecycleResult>("main", "panel.unload", [panelId]),
   archive: (panelId: string) => rpc.call<undefined>("main", "panel.archive", [panelId]),
-  retryDirtyBuild: (panelId: string) =>
-    rpc.call<undefined>("main", "panel.retryDirtyBuild", [panelId]),
   initGitRepo: (panelId: string) => rpc.call<undefined>("main", "panel.initGitRepo", [panelId]),
   updatePanelState: (
     panelId: string,
@@ -597,5 +599,5 @@ export const shellPresence = {
  */
 export const onRpcEvent = (
   event: string,
-  listener: (event: RpcEventContext) => void,
+  listener: (event: RpcEventContext) => void
 ): (() => void) => rpc.on(event, listener);

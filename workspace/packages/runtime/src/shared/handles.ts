@@ -1,4 +1,5 @@
 import type { RpcClient, RpcEventContext } from "@natstack/rpc";
+import type { PanelLifecycleResult } from "@natstack/shared/types";
 import type {
   CdpAutomation,
   PanelContract,
@@ -27,14 +28,15 @@ export interface PanelHandleHostOps {
   parent?(id: string, parentId: string | null): PanelHandle | null;
   ensureLoaded?(id: string): Promise<unknown>;
   isLoaded?(id: string): Promise<boolean>;
-  reload?(id: string): Promise<void>;
-  close?(id: string): Promise<void>;
+  reload?(id: string): Promise<PanelLifecycleResult>;
+  close?(id: string): Promise<PanelLifecycleResult>;
   archive?(id: string): Promise<void>;
-  unload?(id: string): Promise<void>;
+  unload?(id: string): Promise<PanelLifecycleResult>;
   movePanel?(id: string, newParentId: string | null, targetPosition: number): Promise<void>;
   takeOver?(id: string): Promise<void>;
   openDevTools?(id: string, mode?: "detach" | "right" | "bottom"): Promise<void>;
-  rebuildPanel?(id: string): Promise<void>;
+  rebuildPanel?(id: string): Promise<PanelLifecycleResult>;
+  rebuildAndReload?(id: string): Promise<PanelLifecycleResult>;
   updatePanelState?(id: string, state: Record<string, unknown>): Promise<void>;
   focus?(id: string): Promise<unknown>;
   stateArgs?: {
@@ -150,11 +152,11 @@ export function createPanelHandle<
     isLoaded: () => ops?.isLoaded?.(metadata.id) ?? Promise.resolve(false),
     reload: async () => {
       if (!ops?.reload) throw new Error("reload is not available for this handle");
-      await ops.reload(metadata.id);
+      return ops.reload(metadata.id);
     },
     close: async () => {
       if (!ops?.close) throw new Error("close is not available for this handle");
-      await ops.close(metadata.id);
+      return ops.close(metadata.id);
     },
     archive: async () => {
       if (!ops?.archive) throw new Error("archive is not available for this handle");
@@ -162,7 +164,7 @@ export function createPanelHandle<
     },
     unload: async () => {
       if (!ops?.unload) throw new Error("unload is not available for this handle");
-      await ops.unload(metadata.id);
+      return ops.unload(metadata.id);
     },
     movePanel: async (newParentId: string | null, targetPosition: number) => {
       if (!ops?.movePanel) throw new Error("movePanel is not available for this handle");
@@ -178,7 +180,13 @@ export function createPanelHandle<
     },
     rebuildPanel: async () => {
       if (!ops?.rebuildPanel) throw new Error("rebuildPanel is not available for this handle");
-      await ops.rebuildPanel(metadata.id);
+      return ops.rebuildPanel(metadata.id);
+    },
+    rebuildAndReload: async () => {
+      if (!ops?.rebuildAndReload) {
+        throw new Error("rebuildAndReload is not available for this handle");
+      }
+      return ops.rebuildAndReload(metadata.id);
     },
     updatePanelState: async (state: Record<string, unknown>) => {
       if (!ops?.updatePanelState) {
@@ -261,6 +269,7 @@ export function createNoPanelHandle(): PanelHandle {
     takeOver: noParent,
     openDevTools: noParent,
     rebuildPanel: noParent,
+    rebuildAndReload: noParent,
     updatePanelState: noParent,
     focus: () => Promise.resolve(undefined),
     snapshot: () => Promise.resolve(undefined),
@@ -324,6 +333,7 @@ export function createNonPanelRuntimeHandle(options: {
     takeOver: unavailable,
     openDevTools: unavailable,
     rebuildPanel: unavailable,
+    rebuildAndReload: unavailable,
     updatePanelState: unavailable,
     focus: () => Promise.resolve(undefined),
     snapshot: () => Promise.resolve(undefined),

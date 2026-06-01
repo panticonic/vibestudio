@@ -26,6 +26,7 @@ import type { RuntimeFs, ThemeAppearance } from "../types.js";
 import { _applyStateArgsFromHost, _initStateArgsRuntime } from "../panel/stateArgs.js";
 import { exposeAgentApi, registerAgentApi } from "../panel/agentApi.js";
 import type { PanelEntityId, PanelSlotId } from "@natstack/shared/panel/ids";
+import type { PanelLifecycleResult } from "@natstack/shared/types";
 
 export interface RuntimeDeps {
   selfId: PanelEntityId;
@@ -136,15 +137,16 @@ export function createRuntime(deps: RuntimeDeps) {
         return false;
       }
     },
-    reload: (id) => panelCall("reload", [id]),
-    close: (id) => panelCall("close", [id]),
+    reload: (id) => panelCall<PanelLifecycleResult>("reload", [id]),
+    close: (id) => panelCall<PanelLifecycleResult>("close", [id]),
     archive: (id) => panelCall("archive", [id]),
-    unload: (id) => panelCall("unload", [id]),
+    unload: (id) => panelCall<PanelLifecycleResult>("unload", [id]),
     movePanel: (id, newParentId, targetPosition) =>
       panelCall("movePanel", [{ panelId: id, newParentId, targetPosition }]),
     takeOver: (id) => panelCall("takeOver", [id]),
     openDevTools: (id, mode) => panelCall("openDevTools", [id, mode]),
-    rebuildPanel: (id) => panelCall("rebuildPanel", [id]),
+    rebuildPanel: (id) => panelCall<PanelLifecycleResult>("rebuildPanel", [id]),
+    rebuildAndReload: (id) => panelCall<PanelLifecycleResult>("rebuildAndReload", [id]),
     updatePanelState: (id, state) => panelCall("updatePanelState", [id, state]),
     focus: (id) => panelCall("focus", [id]),
     stateArgs: {

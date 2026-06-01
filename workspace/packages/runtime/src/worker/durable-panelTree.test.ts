@@ -305,6 +305,7 @@ describe("DurableObjectBase panelTree handles", () => {
         await parent.call["ping"]?.();
         await parent.cdp.getCdpEndpoint();
         await parent.reload();
+        await parent.rebuildAndReload();
         return { id: info.id, title: info.title };
       }
     }
@@ -344,6 +345,12 @@ describe("DurableObjectBase panelTree handles", () => {
         type: "call",
         targetId: "main",
         method: "panelTree.reload",
+        args: ["parent-slot"],
+      },
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.rebuildAndReload",
         args: ["parent-slot"],
       },
     ]);

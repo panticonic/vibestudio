@@ -162,11 +162,11 @@ export function createPanelShellService(deps: {
       reloadView: { args: z.tuple([z.string()]) },
       forceReloadView: { args: z.tuple([z.string()]) },
       rebuildPanel: { args: z.tuple([z.string()]) },
+      rebuildAndReload: { args: z.tuple([z.string()]) },
       goBack: { args: z.tuple([z.string()]) },
       goForward: { args: z.tuple([z.string()]) },
       unload: { args: z.tuple([z.string()]) },
       archive: { args: z.tuple([z.string()]) },
-      retryDirtyBuild: { args: z.tuple([z.string()]) },
       initGitRepo: { args: z.tuple([z.string()]) },
       updatePanelState: { args: z.tuple([z.string(), z.record(z.unknown())]) },
       createAboutPanel: { args: z.tuple([z.unknown()]) },
@@ -334,8 +334,7 @@ export function createPanelShellService(deps: {
 
         case "reload": {
           const panelId = args[0] as string;
-          await lifecycle.reloadPanel(panelId);
-          return;
+          return lifecycle.reloadPanel(panelId);
         }
 
         case "reloadView": {
@@ -352,8 +351,12 @@ export function createPanelShellService(deps: {
 
         case "rebuildPanel": {
           const panelId = args[0] as string;
-          await lifecycle.retryBuild(panelId);
-          return;
+          return lifecycle.rebuildPanel(panelId);
+        }
+
+        case "rebuildAndReload": {
+          const panelId = args[0] as string;
+          return lifecycle.rebuildAndReloadPanel(panelId);
         }
 
         case "goBack": {
@@ -383,8 +386,7 @@ export function createPanelShellService(deps: {
         case "unload": {
           const panelId = args[0] as string;
           log.verbose(` Unload requested for panel: ${panelId}`);
-          await lifecycle.unloadPanel(panelId);
-          return;
+          return lifecycle.unloadPanel(panelId);
         }
 
         case "archive": {
@@ -397,12 +399,6 @@ export function createPanelShellService(deps: {
             );
             throw error;
           }
-          return;
-        }
-
-        case "retryDirtyBuild": {
-          const panelId = args[0] as string;
-          await lifecycle.retryBuild(panelId);
           return;
         }
 

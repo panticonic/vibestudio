@@ -265,6 +265,7 @@ describe("worker panelTree handles", () => {
     await parent?.call["ping"]?.();
     await parent?.cdp.getCdpEndpoint();
     await parent?.reload();
+    await parent?.rebuildAndReload();
     runtime.destroy();
 
     expect(calls).toEqual([
@@ -284,6 +285,12 @@ describe("worker panelTree handles", () => {
         type: "call",
         targetId: "main",
         method: "panelTree.reload",
+        args: ["parent-slot"],
+      },
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.rebuildAndReload",
         args: ["parent-slot"],
       },
     ]);

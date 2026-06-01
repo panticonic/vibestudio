@@ -12,6 +12,7 @@
  */
 
 import type { AppCapability } from "./unitManifest.js";
+import type { PanelLifecycleResult } from "./types.js";
 
 /**
  * Shared Electron session partition for all browser panels.
@@ -24,7 +25,7 @@ export const BROWSER_SESSION_PARTITION = "persist:browser";
  * Minimal panel lifecycle interface — the subset that common bridge handlers need.
  */
 export interface BridgePanelLifecycle {
-  closePanel(panelId: string): void | Promise<void>;
+  closePanel(panelId: string): PanelLifecycleResult | Promise<PanelLifecycleResult>;
   getInfo(panelId: string): unknown;
   focusPanel?(panelId: string): void;
   updatePanelState?(

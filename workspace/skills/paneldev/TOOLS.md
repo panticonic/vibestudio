@@ -394,13 +394,23 @@ eval({ code: `
   import { openPanel } from "@workspace/runtime";
   await commitAndPush("panels/my-app", "Update");
   const handle = await openPanel("panels/my-app");
-  await handle.rebuildPanel();
-  await handle.reload();
+  const lifecycle = await handle.rebuildAndReload();
+  console.log(lifecycle.status, lifecycle.effectiveVersion);
 `
 })
 ```
 
-When iterating on an already-open panel after committed code changes, reuse its handle from `scope` or rediscover it with `listPanels()`, then call `handle.rebuildPanel()` followed by `handle.reload()`. `handle.rebuildPanel()` is target-only and does not recurse into children. `handle.reload()` is a browser-style renderer reload; it does not rebuild code by itself and can cancel an eval running inside that same target after the command is sent.
+When iterating on an already-open panel after committed code changes, reuse its
+handle from `scope` or rediscover it with `listPanels()`, then call
+`handle.rebuildAndReload()`. It is target-only and does not recurse into
+children. `handle.rebuildPanel()` only invalidates/prebuilds the target bundle;
+it does not reload the renderer. `handle.reload()` is a browser-style renderer
+reload; it does not rebuild code by itself and can cancel an eval running inside
+that same target after the command is sent.
+
+Lifecycle calls return a structured result with `panelId`, `operation`,
+`status`, `loaded`, `rebuilt`, `reloaded`, `buildRevision`, and
+`effectiveVersion` when the host can report those values.
 
 ---
 

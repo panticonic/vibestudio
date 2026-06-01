@@ -81,6 +81,33 @@ function createRpcCall() {
           dropped: { entries: 0, errors: 0 },
           capacity: { entries: 1000, errors: 500 },
         };
+      case "panelTree.reload":
+        return {
+          panelId: args[0],
+          operation: "reload",
+          status: "reloaded",
+          loaded: true,
+          rebuilt: false,
+          reloaded: true,
+        };
+      case "panelTree.rebuildPanel":
+        return {
+          panelId: args[0],
+          operation: "rebuild",
+          status: "rebuild_requested",
+          loaded: true,
+          rebuilt: true,
+          reloaded: false,
+        };
+      case "panelTree.rebuildAndReload":
+        return {
+          panelId: args[0],
+          operation: "rebuildAndReload",
+          status: "rebuilt_and_reloaded",
+          loaded: true,
+          rebuilt: true,
+          reloaded: true,
+        };
       default:
         return undefined;
     }
@@ -238,13 +265,25 @@ describe("PanelHandle", () => {
     });
 
     const parent = panelTree.self().parent();
-    await parent?.rebuildPanel();
-    await parent?.reload();
+    await expect(parent?.rebuildPanel()).resolves.toMatchObject({
+      panelId: "panel-parent",
+      operation: "rebuild",
+    });
+    await expect(parent?.reload()).resolves.toMatchObject({
+      panelId: "panel-parent",
+      operation: "reload",
+    });
+    await expect(parent?.rebuildAndReload()).resolves.toMatchObject({
+      panelId: "panel-parent",
+      operation: "rebuildAndReload",
+    });
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-parent"]);
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.reload", ["panel-parent"]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.rebuildAndReload", ["panel-parent"]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-self"]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.reload", ["panel-self"]);
+    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildAndReload", ["panel-self"]);
   });
 
   it("hydrates arbitrary parent handles from discovered tree metadata", async () => {

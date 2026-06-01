@@ -14,6 +14,7 @@ import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
 import { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS } from "@natstack/shared/workspace/sourceDirs";
+import type { PanelLifecycleResult } from "@natstack/shared/types";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -539,10 +540,16 @@ export async function closePanel(app: ElectronApplication, panelId: string): Pro
 /**
  * Reload a panel via the TestApi.
  */
-export async function reloadPanel(app: ElectronApplication, panelId: string): Promise<void> {
+export async function reloadPanel(
+  app: ElectronApplication,
+  panelId: string
+): Promise<PanelLifecycleResult> {
   return app.evaluate(async (_electron, id) => {
-    const testApi = (globalThis as { __testApi?: { reloadPanel: (id: string) => Promise<void> } })
-      .__testApi;
+    const testApi = (
+      globalThis as {
+        __testApi?: { reloadPanel: (id: string) => Promise<PanelLifecycleResult> };
+      }
+    ).__testApi;
     if (!testApi) {
       throw new Error("Test API not available. Make sure NATSTACK_TEST_MODE=1 is set.");
     }

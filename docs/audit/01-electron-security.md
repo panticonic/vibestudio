@@ -9,13 +9,13 @@
 
 ## Executive summary
 
-| Severity   | Count |
-| ---------- | ----- |
-| Critical   | 4     |
-| High       | 6     |
-| Medium     | 5     |
-| Low        | 3     |
-| Info       | 2     |
+| Severity | Count |
+| -------- | ----- |
+| Critical | 4     |
+| High     | 6     |
+| Medium   | 5     |
+| Low      | 3     |
+| Info     | 2     |
 
 The renderer-to-main trust boundary is materially weaker than the code comments claim. The biggest structural issue is that `ServiceDispatcher.dispatch()` does not enforce the `policy.allowed` whitelist — it is defined on every service definition but never consulted on the Electron side. The IPC handler (`natstack:serviceCall`) further blurs the line by blanket-labelling every non-shell sender as `callerKind: "panel"` and trusting that. The combined effect is that any app panel can call `remoteCred.save`, `remoteCred.relaunch`, `view.browserNavigate(shellId, 'javascript:...')`, `app.openDevTools` on the shell, `menu.*`, `settings.*`, and can read/write the entire browser-data database (passwords, history, cookies) via `browser-data.*` and `autofill.confirmSave` — by design of the catch-all handler, not despite it.
 
@@ -81,7 +81,7 @@ ipcMain.handle("natstack:serviceCall", async (event, method: string, args: unkno
   const callerId = resolveCallerId(event);
   const parsed = parseServiceMethod(method);
   if (!parsed) throw new Error(`Invalid method format...`);
-  const callerKind = callerId === "shell" ? "shell" as const : "panel" as const;
+  const callerKind = callerId === "shell" ? ("shell" as const) : ("panel" as const);
   return dispatcher.dispatch({ callerId, callerKind }, parsed.service, parsed.method, args);
 });
 ```
@@ -89,7 +89,7 @@ ipcMain.handle("natstack:serviceCall", async (event, method: string, args: unkno
 Services that declare `policy: { allowed: ["shell"] }` are still reachable from a `callerKind: "panel"` request:
 
 - `app` (`app.openDevTools`, `app.clearBuildCache`, `app.getShellPages`, `app.setThemeMode`)
-- `panel` (tree mutation: `panel.archive`, `panel.create`, `panel.movePanel`, `panel.reload`, `panel.openDevTools`)
+- `panel` (tree mutation: `panel.archive`, `panel.create`, `panel.movePanel`, `panel.reload`, `panel.rebuildPanel`, `panel.rebuildAndReload`, `panel.openDevTools`)
 - `view` (`view.setBounds`, `view.setVisible`, `view.setThemeCss`, `view.browserNavigate` etc.)
 - `menu`
 - `settings`
@@ -110,7 +110,10 @@ window.__natstackElectron.serviceCall("remoteCred.relaunch");
 The app now relaunches pointed at the attacker's "server", receives a new admin token, and authenticates. From there the attacker runs the whole NatStack backend including arbitrary code execution via panel builds. Alternatively:
 
 ```js
-window.__natstackElectron.serviceCall("view.browserNavigate", ["shell", "data:text/html,<script>..."]);
+window.__natstackElectron.serviceCall("view.browserNavigate", [
+  "shell",
+  "data:text/html,<script>...",
+]);
 ```
 
 redirects the shell itself (which runs with `nodeIntegration: true`, `contextIsolation: false`) to attacker HTML — and the shell is a Node process.
@@ -138,7 +141,7 @@ methods: {
 }
 ```
 
-Even if [CRITICAL-1] is fixed, this policy *intentionally* grants every panel full read of:
+Even if [CRITICAL-1] is fixed, this policy _intentionally_ grants every panel full read of:
 
 - `browserDataStore.passwords.getAll()` (plaintext — `p.password` is returned verbatim in `exportPasswords`, line 429-442)
 - cookie jar including cookies with `httpOnly` and `secure` attributes
@@ -180,7 +183,7 @@ ipcMain.handle("natstack:reload",    ...);
 ipcMain.handle("natstack:stop",      ...);
 ```
 
-The comment `// auth check` is misleading: `resolveCallerId` only confirms the sender is a *known* view, not that it owns `browserId`. Any panel can navigate any other panel (including the shell view id `"shell"`) to any URL.
+The comment `// auth check` is misleading: `resolveCallerId` only confirms the sender is a _known_ view, not that it owns `browserId`. Any panel can navigate any other panel (including the shell view id `"shell"`) to any URL.
 
 Contrast with `natstack:getCdpEndpoint` which correctly enforces ownership via `cdpServer.canAccessBrowser`. The parallel `view.browserNavigate` service method in `src/main/services/viewService.ts:53-57` has the same flaw.
 
@@ -239,7 +242,7 @@ container.innerHTML = `<div style="color: red; padding: 20px; font-family: monos
 </div>`;
 ```
 
-Any path that lets an attacker control an error message — for example, a malformed RPC response that surfaces as an error during `initializeApp()` — results in HTML injection in a Node-enabled context. The JSX `<pre>` below would be safer, but this uses `innerHTML`. Since the shell loads bundled HTML only, the practical attack surface is narrow today, but the combination of *all three* of (a) nodeIntegration, (b) CORS stripped, (c) any `innerHTML` sink makes this one bug away from full RCE.
+Any path that lets an attacker control an error message — for example, a malformed RPC response that surfaces as an error during `initializeApp()` — results in HTML injection in a Node-enabled context. The JSX `<pre>` below would be safer, but this uses `innerHTML`. Since the shell loads bundled HTML only, the practical attack surface is narrow today, but the combination of _all three_ of (a) nodeIntegration, (b) CORS stripped, (c) any `innerHTML` sink makes this one bug away from full RCE.
 
 Additionally, the strip-CORS middleware runs for **every** request in `session.defaultSession`, including requests from app panels on that session — any app panel can now make cross-origin fetches to Gmail/GitHub/etc. without consent, reading the response body, provided the user has cookies for those sites in the default session (they shouldn't, since app panels don't browse to external sites, but the panel can still use `fetch()` against them).
 
@@ -261,7 +264,7 @@ ipcMain.on("natstack:rpc:send", (event, targetId: string, message: unknown) => {
 });
 ```
 
-The handler accepts from *any* webContents but always labels the caller as `"shell"`. In `handleMessage`, if `service` is in `SERVER_SERVICES`, the call is forwarded verbatim to the server via `serverClient.call(service, method, args)`, where it is further dispatched on the server's `ServiceDispatcher` — this time *with* policy enforcement. But the admin token attached to that WS session means the server will see `callerKind: "shell"` on every such call. A panel that finds a way to raise `ipcRenderer.send` (for example via a contextBridge leak, or if a future preload revision exposes `send`) would be indistinguishable from the shell on the server side.
+The handler accepts from _any_ webContents but always labels the caller as `"shell"`. In `handleMessage`, if `service` is in `SERVER_SERVICES`, the call is forwarded verbatim to the server via `serverClient.call(service, method, args)`, where it is further dispatched on the server's `ServiceDispatcher` — this time _with_ policy enforcement. But the admin token attached to that WS session means the server will see `callerKind: "shell"` on every such call. A panel that finds a way to raise `ipcRenderer.send` (for example via a contextBridge leak, or if a future preload revision exposes `send`) would be indistinguishable from the shell on the server side.
 
 Practical exposure today is lower because panel preloads expose only `invoke` — not `send("natstack:rpc:send", ...)`. However browser panels have `browserPreload.ts` with `__natstack_autofill.ping()` which uses `send`, showing that panels can use `ipcRenderer.send` if it's ever exposed; and the autofill preloads import `ipcRenderer` directly. A single careless `contextBridge.exposeInMainWorld` refactor would expose `send` to an untrusted context and promote this to CRITICAL.
 
@@ -346,7 +349,7 @@ ipcMain.handle("natstack:bridge.openFolderDialog", async (_event, opts?: { title
     properties: ["openDirectory", "createDirectory"],
     title: opts?.title ?? "Select Folder",
   });
-  return result.canceled ? null : result.filePaths[0] ?? null;
+  return result.canceled ? null : (result.filePaths[0] ?? null);
 });
 ```
 
@@ -395,13 +398,13 @@ function installRemoteCertificateOverride(mode: StartupMode): void {
 
 Two issues:
 
-1. **`app.on("session-created")` vs. partition-session creation.** `session.fromPartition("persist:browser")` creates the browser partition session **lazily** — typically the first time a view is created with that partition. If `app.on("session-created")` fires *before* `installRemoteCertificateOverride` is called, those partitioned sessions won't get the pinned verify proc. Timing: `installRemoteCertificateOverride` runs at top-level module init (before `app.whenReady`), while sessions typically aren't created until `app.ready` — so this should be safe *today*, but it is fragile and an initialization-order change would silently disable pinning on partition sessions.
-2. **Intentional scope gap.** Even when the hook fires correctly, the verify proc only accepts certs whose `request.hostname` is the managed host; for other hostnames it calls `callback(-3)` (chain-not-verified), which forces rejection. Browser panels in `persist:browser` partition need to verify *arbitrary* hostnames against the system CA. That means the remote-mode pinning in effect *breaks* browser panels in remote mode unless those panels' requests somehow don't pass through the verify proc — which they do when they reach the partition session. This conflict is not resolved in-code.
+1. **`app.on("session-created")` vs. partition-session creation.** `session.fromPartition("persist:browser")` creates the browser partition session **lazily** — typically the first time a view is created with that partition. If `app.on("session-created")` fires _before_ `installRemoteCertificateOverride` is called, those partitioned sessions won't get the pinned verify proc. Timing: `installRemoteCertificateOverride` runs at top-level module init (before `app.whenReady`), while sessions typically aren't created until `app.ready` — so this should be safe _today_, but it is fragile and an initialization-order change would silently disable pinning on partition sessions.
+2. **Intentional scope gap.** Even when the hook fires correctly, the verify proc only accepts certs whose `request.hostname` is the managed host; for other hostnames it calls `callback(-3)` (chain-not-verified), which forces rejection. Browser panels in `persist:browser` partition need to verify _arbitrary_ hostnames against the system CA. That means the remote-mode pinning in effect _breaks_ browser panels in remote mode unless those panels' requests somehow don't pass through the verify proc — which they do when they reach the partition session. This conflict is not resolved in-code.
 
 **Remediation:**
 
 - Call `installRemoteCertificateOverride` after `app.whenReady()` always; register a matching handler via `app.on("session-created", installForSession)` before any session is created to avoid the lazy-creation race.
-- In the verify proc, fall back to Chromium's default verification for non-managed hosts instead of outright rejecting with `-3`. Concretely: when `!sameManagedHost`, call `callback(-3)` only if this is a session that should be restricted (e.g. default session for shell) — and for `persist:browser` partitions, install a *different* verify proc (or none) so that browser-panel sites verify normally.
+- In the verify proc, fall back to Chromium's default verification for non-managed hosts instead of outright rejecting with `-3`. Concretely: when `!sameManagedHost`, call `callback(-3)` only if this is a session that should be restricted (e.g. default session for shell) — and for `persist:browser` partitions, install a _different_ verify proc (or none) so that browser-panel sites verify normally.
 - Add a regression test that (a) the pinned session rejects mismatched certs, and (b) the `persist:browser` session still accepts a real CA-signed cert.
 
 ---
@@ -483,9 +486,9 @@ if (!isManagedHost(url, this.externalHost)) {
 
 ### [MEDIUM-4] No `setPermissionRequestHandler` / `setPermissionCheckHandler`
 
-**Files:** none — these are *not* set anywhere.
+**Files:** none — these are _not_ set anywhere.
 
-Electron defaults grant panel webContents the ability to request geolocation, notifications, microphone, camera, mediaKeySystem, midi, pointerLock, display-capture, clipboard-sanitized-write, etc. Browser panels load *arbitrary* external URLs; on the `persist:browser` partition, an attacker site can prompt for microphone/camera and the user may grant it. Even on the default session, lack of a permission handler is a defense-in-depth gap.
+Electron defaults grant panel webContents the ability to request geolocation, notifications, microphone, camera, mediaKeySystem, midi, pointerLock, display-capture, clipboard-sanitized-write, etc. Browser panels load _arbitrary_ external URLs; on the `persist:browser` partition, an attacker site can prompt for microphone/camera and the user may grant it. Even on the default session, lack of a permission handler is a defense-in-depth gap.
 
 **Remediation:**
 

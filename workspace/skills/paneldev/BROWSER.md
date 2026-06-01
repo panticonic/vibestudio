@@ -43,10 +43,10 @@ the fuller Playwright client is required. There is no generic
 
 API scope:
 
-| Client | Entry point | Scope | Use when |
-|--------|-------------|-------|----------|
-| Vendored Playwright | `handle.cdp.playwrightPage()` | Fuller Playwright-style page/locator surface: `url`, `title`, `goto`, `locator`, locator `click/fill/innerText/textContent/count`, `waitForSelector`, `waitForLoadState`, `evaluate`, `screenshot` | Eval diagnostics, UI tests, browser workflows, login flows, anything where robust selectors/waits matter |
-| Lightweight CDP | `handle.cdp.lightweightPage()` | Small CDP wrapper for basic `goto`, `click`, `fill`, `evaluate`, `waitForSelector`, `screenshot`, console event capture, DOM `inspect(selector)`, and simple locator helpers | Constrained worker/DO contexts or code paths where you intentionally avoid the vendored client |
+| Client              | Entry point                    | Scope                                                                                                                                                                                              | Use when                                                                                                 |
+| ------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Vendored Playwright | `handle.cdp.playwrightPage()`  | Fuller Playwright-style page/locator surface: `url`, `title`, `goto`, `locator`, locator `click/fill/innerText/textContent/count`, `waitForSelector`, `waitForLoadState`, `evaluate`, `screenshot` | Eval diagnostics, UI tests, browser workflows, login flows, anything where robust selectors/waits matter |
+| Lightweight CDP     | `handle.cdp.lightweightPage()` | Small CDP wrapper for basic `goto`, `click`, `fill`, `evaluate`, `waitForSelector`, `screenshot`, console event capture, DOM `inspect(selector)`, and simple locator helpers                       | Constrained worker/DO contexts or code paths where you intentionally avoid the vendored client           |
 
 Use historical console diagnostics for post-mortem panel debugging. CDP live
 console events start only after a CDP client connects; they cannot recover
@@ -84,9 +84,10 @@ panel itself is building an automation tool. For agents and diagnostics, use
 `handle.cdp.playwrightPage()` so the client loads only when CDP is actually
 requested.
 
-`handle.reload()` is panel lifecycle reload and tears down the target renderer.
-For Chromium page reloads, use `handle.cdp.reload()`. Reloading an ancestor of
-the panel currently executing eval can cancel that eval; run ancestor reloads
+`handle.reload()` is panel lifecycle reload for the named panel's renderer; it
+does not rebuild code and does not unload the panel's runtime lease. For
+Chromium page reloads, use `handle.cdp.reload()`. Reloading the panel currently
+executing eval can cancel that eval after the command is sent; run that reload
 from a stable/root context when possible.
 
 Tree relationships do not bypass approval. To drive a parent or sibling, obtain
@@ -109,18 +110,18 @@ introspection before calling `handle.call`, `handle.snapshot()`, `handle.tree()`
 
 ## Methods
 
-| Method | Description |
-|--------|-------------|
-| `handle.cdp.playwrightPage()` | Load vendored Playwright CDP client and return the page |
-| `handle.cdp.lightweightPage()` | Load the smaller CDP wrapper and return the page |
+| Method                                             | Description                                                              |
+| -------------------------------------------------- | ------------------------------------------------------------------------ |
+| `handle.cdp.playwrightPage()`                      | Load vendored Playwright CDP client and return the page                  |
+| `handle.cdp.lightweightPage()`                     | Load the smaller CDP wrapper and return the page                         |
 | `handle.cdp.consoleHistory({ limit, errorLimit })` | Read host-captured historical console logs and the separate error buffer |
-| `handle.diagnostics({ limit, errorLimit })` | Read handle metadata plus host-captured console/lifecycle diagnostics |
-| `handle.click(selector)` | Click in the target panel through CDP |
-| `handle.cdp.navigate(url)` | Load a URL in the target panel |
-| `handle.cdp.goBack()` / `goForward()` | Chromium history |
-| `handle.cdp.reload()` | Chromium page reload |
-| `handle.cdp.stop()` | Stop loading |
-| `handle.close()` | Close the panel |
+| `handle.diagnostics({ limit, errorLimit })`        | Read handle metadata plus host-captured console/lifecycle diagnostics    |
+| `handle.click(selector)`                           | Click in the target panel through CDP                                    |
+| `handle.cdp.navigate(url)`                         | Load a URL in the target panel                                           |
+| `handle.cdp.goBack()` / `goForward()`              | Chromium history                                                         |
+| `handle.cdp.reload()`                              | Chromium page reload                                                     |
+| `handle.cdp.stop()`                                | Stop loading                                                             |
+| `handle.close()`                                   | Close the panel                                                          |
 
 Opening panels, CDP, and structural operations prompt on first use per requester
 entity and target panel/root. Privileged shell/about targets use a severe

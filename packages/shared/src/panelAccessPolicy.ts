@@ -31,6 +31,7 @@ export type PanelAccessOperation =
   | "takeOver"
   | "openDevTools"
   | "rebuildPanel"
+  | "rebuildAndReload"
   | "updatePanelState"
   | "stateArgs.set";
 
@@ -86,6 +87,7 @@ const structuralOperations = new Set<PanelAccessOperation>([
   "takeOver",
   "openDevTools",
   "rebuildPanel",
+  "rebuildAndReload",
   "updatePanelState",
   "stateArgs.set",
 ]);

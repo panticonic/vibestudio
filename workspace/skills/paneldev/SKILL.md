@@ -12,15 +12,15 @@ mobile React Native, or terminal targets), use the `appdev` skill instead.
 
 ## Files
 
-| Document                               | Content                                                                                                                                           |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [WORKFLOW.md](WORKFLOW.md)             | Canonical agent workflow: scaffold, open, inspect, edit, push, reload, close                                                                      |
-| [PANEL_API.md](PANEL_API.md)           | Runtime panel API reference                                                                                                                       |
+| Document                               | Content                                                                                                                                 |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| [WORKFLOW.md](WORKFLOW.md)             | Canonical agent workflow: scaffold, open, inspect, edit, push, rebuild/reload, close                                                    |
+| [PANEL_API.md](PANEL_API.md)           | Runtime panel API reference                                                                                                             |
 | [WORKERS.md](WORKERS.md)               | Workers & Durable Objects: AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
-| [RPC.md](RPC.md)                       | Typed parent-child contracts                                                                                                                      |
-| [BROWSER.md](BROWSER.md)               | Browser automation (Playwright/CDP)                                                                                                               |
-| [TOOLS.md](TOOLS.md)                   | Agent tools reference                                                                                                                             |
-| [create-project.ts](create-project.ts) | Project scaffolding and git helpers (importable via eval `imports` parameter)                                                                     |
+| [RPC.md](RPC.md)                       | Typed parent-child contracts                                                                                                            |
+| [BROWSER.md](BROWSER.md)               | Browser automation (Playwright/CDP)                                                                                                     |
+| [TOOLS.md](TOOLS.md)                   | Agent tools reference                                                                                                                   |
+| [create-project.ts](create-project.ts) | Project scaffolding and git helpers (importable via eval `imports` parameter)                                                           |
 
 ## Interaction Patterns
 
@@ -65,7 +65,7 @@ eval({ code: `
 | Create project       | `eval` — `import { createProject } from "@workspace-skills/paneldev"` then `createProject({ projectType, name, title })`                             |
 | Fork panel           | `eval` — `import { forkProject } from "@workspace-skills/paneldev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })` |
 | Fork worker          | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                         |
-| Commit & push        | `eval` — `import { commitAndPush } from "@workspace-skills/paneldev"` then `commitAndPush("panels/my-app", "message", { force?: true })`              |
+| Commit & push        | `eval` — `import { commitAndPush } from "@workspace-skills/paneldev"` then `commitAndPush("panels/my-app", "message", { force?: true })`             |
 | Launch panel         | `eval` — `commitAndPush(...)` + `scope.handle = await openPanel(source)`                                                                             |
 | Launch worker        | `eval` — `workers.create({ source: "workers/my-worker", contextId })`                                                                                |
 | Read a file          | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                     |
@@ -81,7 +81,7 @@ eval({ code: `
 
 ## Environment Compatibility
 
-- Panel lifecycle operations (`openPanel`, `listPanels`, `focusPanel`, handle reload/close) require **panel context**.
+- Panel lifecycle operations (`openPanel`, `listPanels`, `focusPanel`, handle `rebuildAndReload`/reload/close) require **panel context**.
 - Project scaffolding (`createProject`), git operations (`commitAndPush`), and typecheck work in **headless** sessions via eval + RPC.
 - `test.run` is restricted to server-origin callers; panel-side eval cannot run tests directly.
 
@@ -94,7 +94,7 @@ check provenance before changing the fix:
 - Was the edit made in the same context/worktree the runtime imports from?
 - Was it committed and pushed?
 - Did the build system rebuild that source?
-- Did the panel/worker reload after the build?
+- Did the already-open panel run `handle.rebuildAndReload()` after the commit?
 - In dogfood mode, did the mirror apply or skip because the host checkout was dirty?
 
 Dirty state is context-local. A running panel can remain dirty in its own

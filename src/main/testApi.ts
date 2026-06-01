@@ -8,7 +8,7 @@
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { PanelRegistry } from "@natstack/shared/panelRegistry";
 import type { PanelView } from "./panelView.js";
-import type { Panel } from "@natstack/shared/types";
+import type { Panel, PanelLifecycleResult } from "@natstack/shared/types";
 import { webContents as electronWebContents } from "electron";
 
 export type PanelDiagnostic = {
@@ -68,10 +68,10 @@ export interface TestApi {
   ): Promise<{ id: string; title: string }>;
 
   /** Close a panel and all its children */
-  closePanel(id: string): Promise<void>;
+  closePanel(id: string): Promise<PanelLifecycleResult>;
 
   /** Reload a panel in place */
-  reloadPanel(id: string): Promise<void>;
+  reloadPanel(id: string): Promise<PanelLifecycleResult>;
 
   /** Check if a panel's view is loaded */
   isPanelLoaded(panelId: string): boolean;

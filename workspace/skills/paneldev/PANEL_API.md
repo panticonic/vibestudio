@@ -12,8 +12,8 @@ the Electron host that currently holds the target panel's runtime lease.
 import { openPanel, listPanels } from "@workspace/runtime";
 
 const handle = await openPanel("panels/my-app", { stateArgs: { mode: "fixture" } });
-await handle.rebuildPanel();
-await handle.reload();
+const lifecycle = await handle.rebuildAndReload();
+console.log(lifecycle.status, lifecycle.effectiveVersion);
 await handle.stateArgs.set({ mode: "live" });
 const snapshot = await handle.snapshot();
 ```
@@ -27,8 +27,9 @@ const snapshot = await handle.snapshot();
 | `source`                                        | Workspace source or URL                                                                                             |
 | `kind`                                          | `"workspace"` or `"browser"`                                                                                        |
 | `children()`                                    | Fresh direct child handles                                                                                          |
-| `rebuildPanel()`                                | Invalidate/rebuild this workspace panel's bundle; not recursive                                                     |
+| `rebuildPanel()`                                | Invalidate/rebuild this workspace panel's bundle; target-only and not recursive                                     |
 | `reload()`                                      | Browser-style reload of this panel's current renderer; does not rebuild code                                        |
+| `rebuildAndReload()`                            | Rebuild this panel's bundle and reload this panel's renderer; target-only and not recursive                         |
 | `close()`                                       | Close this panel                                                                                                    |
 | `stateArgs.get()` / `stateArgs.set(updates)`    | Host-owned state args                                                                                               |
 | `snapshot()`                                    | Agent-readable AX/synthetic snapshot                                                                                |
@@ -77,6 +78,26 @@ if (parent) {
 with the active panel runtime entity. For git-backed workspace units this is the
 commit/effective-version hash used for approvals and runtime identity. Use
 `refresh()` before comparing metadata around rebuilds, navigation, or reloads.
+
+Lifecycle calls return:
+
+```ts
+type PanelLifecycleResult = {
+  panelId: string;
+  operation: "reload" | "rebuild" | "rebuildAndReload" | "unload" | "close";
+  status: string;
+  loaded: boolean;
+  rebuilt: boolean;
+  reloaded: boolean;
+  buildRevision?: number;
+  effectiveVersion?: string | null;
+};
+```
+
+Use `rebuildAndReload()` after committed code changes. Use `rebuildPanel()` only
+when you want to invalidate/prebuild the target bundle without touching the
+current renderer. Use `reload()` only when the bundle is already correct and the
+target renderer should do a browser-style reload.
 
 ## Agent Inspection
 

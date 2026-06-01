@@ -5,6 +5,7 @@
 
 import type { ZodType } from "zod";
 import type * as Rpc from "./rpc.js";
+import type { PanelLifecycleResult } from "@natstack/shared/types";
 
 // =============================================================================
 // Event Schema Types (zod-based validation)
@@ -280,17 +281,18 @@ export interface PanelHandle<
   parent(): PanelHandle | null;
   ensureLoaded(): Promise<unknown>;
   isLoaded(): Promise<boolean>;
-  reload(): Promise<void>;
-  close(): Promise<void>;
+  reload(): Promise<PanelLifecycleResult>;
+  close(): Promise<PanelLifecycleResult>;
 
   /** Bounded post-mortem diagnostics for this panel target. */
   diagnostics(options?: PanelConsoleHistoryOptions): Promise<PanelDiagnosticsResult>;
   archive(): Promise<void>;
-  unload(): Promise<void>;
+  unload(): Promise<PanelLifecycleResult>;
   movePanel(newParentId: string | null, targetPosition: number): Promise<void>;
   takeOver(): Promise<void>;
   openDevTools(mode?: "detach" | "right" | "bottom"): Promise<void>;
-  rebuildPanel(): Promise<void>;
+  rebuildPanel(): Promise<PanelLifecycleResult>;
+  rebuildAndReload(): Promise<PanelLifecycleResult>;
   updatePanelState(state: Record<string, unknown>): Promise<void>;
   focus(): Promise<unknown>;
   snapshot(): Promise<unknown>;

@@ -170,6 +170,24 @@ export interface PanelRuntimeStatus {
   connectionId?: string;
 }
 
+export type PanelLifecycleOperation =
+  | "reload"
+  | "rebuild"
+  | "rebuildAndReload"
+  | "unload"
+  | "close";
+
+export interface PanelLifecycleResult {
+  panelId: string;
+  operation: PanelLifecycleOperation;
+  status: string;
+  loaded: boolean;
+  rebuilt: boolean;
+  reloaded: boolean;
+  buildRevision?: number;
+  effectiveVersion?: string | null;
+}
+
 export interface PanelExplicitState {
   build: PanelBuildStatus;
   view: PanelViewStatus;

@@ -64,6 +64,7 @@ import { createContextAwareGitClient } from "../shared/contextGitClient.js";
 import type { PanelHandle } from "../core/index.js";
 import type { WorkerEnv } from "./types.js";
 import type { RuntimeFs } from "../types.js";
+import type { PanelLifecycleResult } from "@natstack/shared/types";
 export type { WorkerEnv, ExecutionContext } from "./types.js";
 export type {
   ClientConfigStatus,
@@ -562,15 +563,16 @@ function createWorkerPanelTree(
         return false;
       }
     },
-    reload: (id) => callPanel("reload", [id]),
-    close: (id) => callPanel("close", [id]),
+    reload: (id) => callPanel<PanelLifecycleResult>("reload", [id]),
+    close: (id) => callPanel<PanelLifecycleResult>("close", [id]),
     archive: (id) => callPanel("archive", [id]),
-    unload: (id) => callPanel("unload", [id]),
+    unload: (id) => callPanel<PanelLifecycleResult>("unload", [id]),
     movePanel: (id, newParentId, targetPosition) =>
       callPanel("movePanel", [{ panelId: id, newParentId, targetPosition }]),
     takeOver: (id) => callPanel("takeOver", [id]),
     openDevTools: (id, mode) => callPanel("openDevTools", [id, mode]),
-    rebuildPanel: (id) => callPanel("rebuildPanel", [id]),
+    rebuildPanel: (id) => callPanel<PanelLifecycleResult>("rebuildPanel", [id]),
+    rebuildAndReload: (id) => callPanel<PanelLifecycleResult>("rebuildAndReload", [id]),
     updatePanelState: (id, state) => callPanel("updatePanelState", [id, state]),
     focus: (id) => callPanel("focus", [id]),
     stateArgs: {

@@ -124,6 +124,7 @@ function titleFor(
   if (op === "takeOver") return "Take over panel";
   if (op === "openDevTools") return "Open panel DevTools";
   if (op === "rebuildPanel") return "Rebuild panel";
+  if (op === "rebuildAndReload") return "Rebuild and reload panel";
   if (op === "stateArgs.set" || op === "updatePanelState") return "Change panel state";
   return `Change ${targetLabel}`;
 }
@@ -161,6 +162,9 @@ function descriptionFor(op: PanelAccessOperation, targetLabel: string): string {
   }
   if (op === "rebuildPanel") {
     return `Allow this requester to rebuild ${targetLabel}.`;
+  }
+  if (op === "rebuildAndReload") {
+    return `Allow this requester to rebuild and reload ${targetLabel}.`;
   }
   if (op === "stateArgs.set" || op === "updatePanelState") {
     return `Allow this requester to change state for ${targetLabel}.`;

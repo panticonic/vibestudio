@@ -11,6 +11,7 @@ import { randomUUID } from "crypto";
 import type {
   Panel,
   PanelFocusResult,
+  PanelLifecycleResult,
   PanelNavigationState,
   PanelRecoverySnapshot,
   PanelSnapshot,
@@ -342,9 +343,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   // Panel destruction
   // =========================================================================
 
-  async closePanel(panelId: string): Promise<void> {
+  async closePanel(panelId: string): Promise<PanelLifecycleResult> {
     const panel = this.registry.getPanel(panelId);
     if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    const result = this.lifecycleResult(panelId, "close", "closed", {
+      loaded: false,
+      reloaded: false,
+    });
 
     // Determine sibling to focus before removal
     const parentId = this.registry.findParentId(panelId);
@@ -381,26 +386,43 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     if (siblingToFocus) {
       this.eventService.emit("navigate-to-panel", { panelId: siblingToFocus });
     }
+    return result;
   }
 
   // =========================================================================
   // Build lifecycle
   // =========================================================================
 
-  async reloadPanel(panelId: string): Promise<void> {
+  async reloadPanel(panelId: string): Promise<PanelLifecycleResult> {
     this.rejectAgentCallsForPanel(panelId, new Error("target-reloading"));
     const view = this.getPanelView();
     if (view?.hasView(panelId)) {
       view.reloadView(panelId);
+      return this.lifecycleResult(panelId, "reload", "reloaded", {
+        loaded: true,
+        reloaded: true,
+      });
     } else {
-      await this.rebuildUnloadedPanel(panelId);
+      const result = await this.rebuildUnloadedPanel(panelId);
+      return {
+        ...result,
+        operation: "reload",
+        status: result.rebuilt ? "loaded_after_rebuild" : result.status,
+      };
     }
   }
 
-  async rebuildUnloadedPanel(panelId: string, options: { force?: boolean } = {}): Promise<void> {
+  async rebuildUnloadedPanel(
+    panelId: string,
+    options: { force?: boolean } = {}
+  ): Promise<PanelLifecycleResult> {
     const panel = this.registry.getPanel(panelId);
     if (!panel) throw new Error(`Panel not found: ${panelId}`);
-    if (!options.force && panel.artifacts?.buildState !== "pending") return;
+    if (!options.force && panel.artifacts?.buildState !== "pending") {
+      return this.lifecycleResult(panelId, "rebuild", "skipped_not_pending", {
+        loaded: this.hasPanelView(panelId),
+      });
+    }
 
     // Re-registers the panel principal and issues a fresh connection grant.
     await this.shellCore.getPanelInit(asPanelSlotId(panelId));
@@ -415,7 +437,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       }
       this.registry.updateArtifacts(panelId, { buildState: "ready", htmlPath: url });
       this.registry.notifyPanelTreeUpdate();
-      return;
+      return this.lifecycleResult(panelId, "rebuild", "browser_loaded", {
+        loaded: Boolean(this.getPanelView()?.hasView(panelId)),
+      });
     }
 
     this.registry.updateArtifacts(panelId, {
@@ -432,6 +456,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       await view.createViewForPanel(panelId, panelUrl, getPanelContextId(panel));
       this.bumpViewRevision();
     }
+    return this.lifecycleResult(panelId, "rebuild", "rebuild_requested", {
+      loaded: Boolean(this.getPanelView()?.hasView(panelId)),
+      rebuilt: true,
+    });
   }
 
   invalidateReadyPanels(): void {
@@ -462,8 +490,18 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     }
   }
 
-  async retryBuild(panelId: string): Promise<void> {
-    await this.rebuildUnloadedPanel(panelId, { force: true });
+  async rebuildPanel(panelId: string): Promise<PanelLifecycleResult> {
+    return this.rebuildUnloadedPanel(panelId, { force: true });
+  }
+
+  async rebuildAndReloadPanel(panelId: string): Promise<PanelLifecycleResult> {
+    const rebuild = await this.rebuildPanel(panelId);
+    const reload = await this.reloadPanel(panelId);
+    return this.lifecycleResult(panelId, "rebuildAndReload", "rebuilt_and_reloaded", {
+      loaded: reload.loaded,
+      rebuilt: rebuild.rebuilt,
+      reloaded: reload.reloaded,
+    });
   }
 
   applyBuildComplete(source: string, error?: string): void {
@@ -914,12 +952,20 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   async unloadPanel(
     panelId: string,
     transition: "unload" | "lease-transfer" = "unload"
-  ): Promise<void> {
+  ): Promise<PanelLifecycleResult> {
     const panel = this.registry.getPanel(panelId);
     if (!panel) throw new Error(`Panel not found: ${panelId}`);
 
     this.unloadPanelTree(panelId, transition);
     this.registry.notifyPanelTreeUpdate();
+    return this.lifecycleResult(
+      panelId,
+      "unload",
+      transition === "unload" ? "unloaded" : "lease_transferred",
+      {
+        loaded: false,
+      }
+    );
   }
 
   private async unloadPanelIfPresent(
@@ -1461,6 +1507,27 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
 
   private getBuildRevision(source: string, ref?: string): number | undefined {
     return this.panelHttpServer?.getBuildRevision?.(source, ref);
+  }
+
+  private lifecycleResult(
+    panelId: string,
+    operation: PanelLifecycleResult["operation"],
+    status: string,
+    flags: Partial<Pick<PanelLifecycleResult, "loaded" | "rebuilt" | "reloaded">> = {}
+  ): PanelLifecycleResult {
+    const panel = this.registry.getPanel(panelId);
+    const source = panel ? getPanelSource(panel) : undefined;
+    const ref = panel ? getPanelRef(panel) : undefined;
+    return {
+      panelId,
+      operation,
+      status,
+      loaded: flags.loaded ?? Boolean(this.getPanelView()?.hasView(panelId)),
+      rebuilt: flags.rebuilt ?? false,
+      reloaded: flags.reloaded ?? false,
+      buildRevision: source ? this.getBuildRevision(source, ref) : undefined,
+      effectiveVersion: panel?.effectiveVersion ?? null,
+    };
   }
 
   private releaseLocalPanelRuntime(

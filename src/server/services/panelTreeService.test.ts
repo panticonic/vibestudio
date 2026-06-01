@@ -353,6 +353,27 @@ describe("panelTreeService", () => {
     );
   });
 
+  it("uses specific approval copy for rebuild-and-reload", async () => {
+    const approvalQueue = approvalQueueMock("once");
+    const bridge = vi.fn(async (request: { method: string }) =>
+      request.method === "metadata" ? { id: "target", title: "Target" } : undefined
+    );
+    const service = createPanelTreeService({
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      bridge,
+    });
+
+    await expect(service.handler(ctx(), "rebuildAndReload", ["target"])).resolves.toBeUndefined();
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Rebuild and reload panel",
+        description: "Allow this requester to rebuild and reload Target.",
+      })
+    );
+  });
+
   it("leaves read-only built-in agent introspection open", async () => {
     const approvalQueue = approvalQueueMock("deny");
     const bridge = vi.fn(async () => ({ ok: true }));

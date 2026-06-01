@@ -28,6 +28,21 @@ build_key = hash(BUILD_CACHE_VERSION, unitName, ev, sourcemap)
 
 `BUILD_CACHE_VERSION` (currently `"10"`) is incremented when build logic changes (plugins, esbuild options, shims) to invalidate all cached builds. Unit name is included to prevent different units with identical EVs from sharing builds.
 
+### Runtime Provenance
+
+Running panels, workers, skills, packages, extensions, and apps should report
+the exact build identity they are using. For git-backed workspace units, the
+runtime-facing provenance is the unit's effective version plus the artifact
+build key/revision when available.
+
+For panels, `PanelHandle.getInfo()` includes `effectiveVersion` and build
+metadata, and lifecycle calls such as `rebuildPanel()`, `reload()`, and
+`rebuildAndReload()` return a `PanelLifecycleResult` with `operation`, `status`,
+`loaded`, `rebuilt`, `reloaded`, `buildRevision`, and `effectiveVersion`.
+`reload()` is a renderer reload only. After committed panel code changes, use
+`rebuildAndReload()` so the target panel invalidates/rebuilds its bundle and
+then reloads that same target renderer.
+
 ### Content-Addressed Build Store
 
 Builds are stored immutably at `{userData}/builds/{build_key}/`:
@@ -66,15 +81,15 @@ src/server/buildV2/
 
 Scans seven workspace directories:
 
-| Directory | Kind | Scope |
-|-----------|------|-------|
-| `workspace/packages/` | `package` | `@workspace/*` |
-| `workspace/panels/` | `panel` | `@workspace-panels/*` |
-| `workspace/about/` | `panel` | `@workspace-about/*` |
-| `workspace/workers/` | `worker` | `@workspace-workers/*` |
+| Directory               | Kind        | Scope                     |
+| ----------------------- | ----------- | ------------------------- |
+| `workspace/packages/`   | `package`   | `@workspace/*`            |
+| `workspace/panels/`     | `panel`     | `@workspace-panels/*`     |
+| `workspace/about/`      | `panel`     | `@workspace-about/*`      |
+| `workspace/workers/`    | `worker`    | `@workspace-workers/*`    |
 | `workspace/extensions/` | `extension` | `@workspace-extensions/*` |
-| `workspace/skills/` | `package` | `@workspace-skills/*` |
-| `workspace/templates/` | `template` | — |
+| `workspace/skills/`     | `package`   | `@workspace-skills/*`     |
+| `workspace/templates/`  | `template`  | —                         |
 
 Each unit's `package.json` is read. Dependencies matching any workspace scope (`@workspace/`, `@workspace-panels/`, `@workspace-about/`, `@workspace-workers/`, `@workspace-extensions/`, `@workspace-skills/`) become internal edges in the DAG. Both `dependencies` and `peerDependencies` are included (peers first, so regular deps override on conflict).
 
@@ -101,6 +116,7 @@ Ref specs affect EV computation: the dep's tree hash is resolved at the specifie
 **Cold-start optimization** (`computeEffectiveVersionsWithCache`): Compares current ref state (main-branch commit SHA per repo) against persisted ref state. If a unit's commit hasn't changed and no dependency was recomputed, the previous EV is reused. Makes cold start O(changed repos) not O(all repos).
 
 **Persisted state** (in `{userData}/`):
+
 - `ev-map.json` — derived state, safe to delete (triggers full recompute)
 - `ref-state.json` — per-unit commit SHAs for cold-start diff
 
@@ -109,6 +125,7 @@ Ref specs affect EV computation: the dep's tree hash is resolved at the specifie
 Before building, source is extracted from git at the correct commit into a temp directory. This ensures builds match the EV regardless of working tree state.
 
 **Two-phase extraction:**
+
 1. **Resolve commits** — For each node in the transitive dependency closure, resolve the commit SHA. Prefers pre-captured commits from `commitMap` (built by push trigger from persisted ref state), falls back to resolving from git (cold-start/on-demand paths). All SHAs captured atomically before any extraction.
 2. **Extract** — `git archive --format=tar <sha>` piped to `tar -x -C <dir>` for each node. Preserves workspace-relative paths.
 
@@ -127,6 +144,7 @@ The union is hashed and installed to `{userData}/external-deps/{hash}/node_modul
 Two build strategies, selected by unit kind:
 
 **Panel/About build** (browser target):
+
 - `platform: "browser"`, `format: "esm"`, `target: "es2022"`
 - `jsx: "automatic"` (React 17+ transform)
 - Code splitting enabled
@@ -139,6 +157,7 @@ Two build strategies, selected by unit kind:
 - Output: `bundle.js` + `bundle.css` + `index.html` + `assets/`
 
 **Extension build** (node target):
+
 - `platform: "node"`, `target: "node20"`, `format: "esm"`
 - Code splitting disabled
 - No fs/path shims
@@ -146,12 +165,14 @@ Two build strategies, selected by unit kind:
 - Output: `bundle.js` in the build store with `package.json` `{"type":"module"}`
 
 **Library build** (CJS, for sandbox eval):
+
 - `platform: "browser"`, `format: "cjs"`
 - Code splitting disabled (single `bundle.js`)
 - Caller supplies `externals[]` — specifiers already in the module map
 - Used by `imports` parameter of the eval tool to load workspace packages on-demand
 
 **Npm library build** (CJS, for sandbox eval):
+
 - Validates specifier against npm naming rules (rejects paths, URLs, git refs)
 - Installs an arbitrary npm package via `ensureExternalDeps` (cached, `--ignore-scripts`)
 - Bundles with esbuild as CJS using a virtual entry file (`module.exports = require("pkg")`)
@@ -169,10 +190,12 @@ Two build strategies, selected by unit kind:
 Subscribes to git push events from the git server. Only processes pushes to `main`/`master` branches, plus non-main pushes that match a branch/ref-pinned dependency edge.
 
 **On main-branch push:**
+
 1. Check if `package.json` deps or natstack manifest changed (sorted JSON comparison to avoid key-order false positives). If changed → full rediscovery.
 2. Otherwise: incremental path. Build a `commitMap` (pushed node at push commit, all other nodes at their persisted ref state commits). Recompute EVs from the pushed node upward. Build changed units using the `commitMap`.
 
 **Full rediscovery** (triggered by dep/manifest changes or non-main ref pushes):
+
 1. Re-scan workspace (`discoverPackageGraph`)
 2. Snapshot all commit SHAs, pre-set content hashes
 3. Compute EVs using pre-set hashes
@@ -185,15 +208,15 @@ Concurrent pushes are serialized via a promise queue.
 
 The build system is registered as the `"build"` RPC service:
 
-| Method | Description |
-|--------|-------------|
-| `getBuild(unitPath)` | Get build result (from cache or build on demand) |
+| Method                                        | Description                                            |
+| --------------------------------------------- | ------------------------------------------------------ |
+| `getBuild(unitPath)`                          | Get build result (from cache or build on demand)       |
 | `getBuildNpm(specifier, version, externals?)` | Install + bundle an npm package as CJS for sandbox use |
-| `getEffectiveVersion(name)` | Get current EV for a unit |
-| `recompute()` | Force full EV recomputation |
-| `gc(activeUnits)` | Garbage collect unreferenced builds |
-| `getAboutPages()` | List about pages with metadata (for launcher UI) |
-| `hasUnit(name)` | Check if a unit exists in the graph |
+| `getEffectiveVersion(name)`                   | Get current EV for a unit                              |
+| `recompute()`                                 | Force full EV recomputation                            |
+| `gc(activeUnits)`                             | Garbage collect unreferenced builds                    |
+| `getAboutPages()`                             | List about pages with metadata (for launcher UI)       |
+| `hasUnit(name)`                               | Check if a unit exists in the graph                    |
 
 `unitPath` resolution tries: package name → workspace-relative path → basename match.
 
@@ -247,16 +270,16 @@ Unit metadata lives in `package.json` under the `natstack` key:
 }
 ```
 
-| Field | Default | Description |
-|-------|---------|-------------|
-| `title` | package name | Display title (used in HTML `<title>` and launcher) |
-| `shell` | `false` | Grants shell service access (about pages) |
-| `hiddenInLauncher` | `false` | Hide from launcher UI |
-| `sourcemap` | `true` | Include inline source maps |
-| `entry` | auto-detected | Explicit entry point path |
-| `externals` | `{}` | Import map entries (externalized from bundle) |
-| `exposeModules` | `[]` | Modules registered on `__natstackModuleMap__` |
-| `dedupeModules` | `[]` | Additional packages to deduplicate (react/react-dom always deduped) |
+| Field              | Default       | Description                                                         |
+| ------------------ | ------------- | ------------------------------------------------------------------- |
+| `title`            | package name  | Display title (used in HTML `<title>` and launcher)                 |
+| `shell`            | `false`       | Grants shell service access (about pages)                           |
+| `hiddenInLauncher` | `false`       | Hide from launcher UI                                               |
+| `sourcemap`        | `true`        | Include inline source maps                                          |
+| `entry`            | auto-detected | Explicit entry point path                                           |
+| `externals`        | `{}`          | Import map entries (externalized from bundle)                       |
+| `exposeModules`    | `[]`          | Modules registered on `__natstackModuleMap__`                       |
+| `dedupeModules`    | `[]`          | Additional packages to deduplicate (react/react-dom always deduped) |
 
 ---
 

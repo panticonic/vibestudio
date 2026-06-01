@@ -28,6 +28,7 @@ const METHOD_ACCESS: Partial<Record<string, PanelAccessOperation>> = {
   takeOver: "takeOver",
   openDevTools: "openDevTools",
   rebuildPanel: "rebuildPanel",
+  rebuildAndReload: "rebuildAndReload",
   updatePanelState: "updatePanelState",
   setStateArgs: "stateArgs.set",
 };
@@ -76,6 +77,7 @@ const methodSchemas = {
   takeOver: { args: z.tuple([z.string()]) },
   openDevTools: { args: z.tuple([z.string(), z.enum(["detach", "right", "bottom"]).optional()]) },
   rebuildPanel: { args: z.tuple([z.string()]) },
+  rebuildAndReload: { args: z.tuple([z.string()]) },
   updatePanelState: { args: z.tuple([z.string(), z.record(z.unknown())]) },
   snapshot: { args: z.tuple([z.string()]) },
   callAgent: { args: z.tuple([z.string(), z.string(), z.array(z.unknown()).optional()]) },
@@ -153,6 +155,7 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
         case "takeOver":
         case "openDevTools":
         case "rebuildPanel":
+        case "rebuildAndReload":
         case "updatePanelState":
         case "snapshot":
         case "callAgent":

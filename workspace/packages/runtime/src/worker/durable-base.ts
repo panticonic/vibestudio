@@ -20,6 +20,7 @@ import {
 } from "../shared/handles.js";
 import { createCdpAutomation } from "../panel/cdpAutomation.js";
 import type { AuthenticatedCaller, RpcClient } from "@natstack/rpc";
+import type { PanelLifecycleResult } from "@natstack/shared/types";
 import type { RuntimeFs } from "../types.js";
 import type { PanelHandle } from "../core/index.js";
 
@@ -469,15 +470,16 @@ export abstract class DurableObjectBase {
           return false;
         }
       },
-      reload: (id) => this.panelCall("reload", [id]),
-      close: (id) => this.panelCall("close", [id]),
+      reload: (id) => this.panelCall<PanelLifecycleResult>("reload", [id]),
+      close: (id) => this.panelCall<PanelLifecycleResult>("close", [id]),
       archive: (id) => this.panelCall("archive", [id]),
-      unload: (id) => this.panelCall("unload", [id]),
+      unload: (id) => this.panelCall<PanelLifecycleResult>("unload", [id]),
       movePanel: (id, newParentId, targetPosition) =>
         this.panelCall("movePanel", [{ panelId: id, newParentId, targetPosition }]),
       takeOver: (id) => this.panelCall("takeOver", [id]),
       openDevTools: (id, mode) => this.panelCall("openDevTools", [id, mode]),
-      rebuildPanel: (id) => this.panelCall("rebuildPanel", [id]),
+      rebuildPanel: (id) => this.panelCall<PanelLifecycleResult>("rebuildPanel", [id]),
+      rebuildAndReload: (id) => this.panelCall<PanelLifecycleResult>("rebuildAndReload", [id]),
       updatePanelState: (id, state) => this.panelCall("updatePanelState", [id, state]),
       focus: (id) => this.panelCall("focus", [id]),
       stateArgs: {
@@ -785,10 +787,13 @@ export abstract class DurableObjectBase {
         this._currentVerifiedCaller = verifiedCallerFromBody;
         try {
           if (this.caller?.callerKind !== "server") {
-            return new Response(JSON.stringify({ error: "Lifecycle calls require server caller" }), {
-              status: 403,
-              headers: { "Content-Type": "application/json" },
-            });
+            return new Response(
+              JSON.stringify({ error: "Lifecycle calls require server caller" }),
+              {
+                status: 403,
+                headers: { "Content-Type": "application/json" },
+              }
+            );
           }
           const result =
             method === "__lifecycle/prepare"

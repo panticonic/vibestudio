@@ -1,4 +1,5 @@
 import type { RpcClient, RpcEventContext } from "@natstack/rpc";
+import type { PanelLifecycleResult } from "@natstack/shared/types";
 import type { PanelHandle as CorePanelHandle, Rpc } from "../core/index.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/externalOpen";
 import { createCdpAutomation } from "./cdpAutomation.js";
@@ -154,23 +155,30 @@ const ops: PanelHandleHostOps = {
     }
   },
   reload: async (id) => {
-    await panelCall("reload", [id]);
+    const result = await panelCall<PanelLifecycleResult>("reload", [id]);
     currentJournal()?.append({ type: "reload", id });
+    return result;
   },
   close: async (id) => {
-    await panelCall("close", [id]);
+    const result = await panelCall<PanelLifecycleResult>("close", [id]);
     currentJournal()?.append({ type: "close", id });
+    return result;
   },
   archive: async (id) => {
     await panelCall("archive", [id]);
     currentJournal()?.append({ type: "close", id });
   },
-  unload: (id) => panelCall("unload", [id]),
+  unload: (id) => panelCall<PanelLifecycleResult>("unload", [id]),
   movePanel: (id, newParentId, targetPosition) =>
     panelCall("movePanel", [{ panelId: id, newParentId, targetPosition }]),
   takeOver: (id) => panelCall("takeOver", [id]),
   openDevTools: (id, mode) => panelCall("openDevTools", [id, mode]),
-  rebuildPanel: (id) => panelCall("rebuildPanel", [id]),
+  rebuildPanel: (id) => panelCall<PanelLifecycleResult>("rebuildPanel", [id]),
+  rebuildAndReload: async (id) => {
+    const result = await panelCall<PanelLifecycleResult>("rebuildAndReload", [id]);
+    currentJournal()?.append({ type: "reload", id });
+    return result;
+  },
   updatePanelState: (id, state) => panelCall("updatePanelState", [id, state]),
   focus: (id) => panelCall("focus", [id]),
   stateArgs: {
