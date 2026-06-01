@@ -139,6 +139,7 @@ export function DocumentEditor({
   const [docExportsVersion, setDocExportsVersion] = useState(0);
   const [docCompileError, setDocCompileError] = useState<string | null>(null);
   const docCompileTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const docCompileRunRef = useRef(0);
 
   // In-memory state map mirrors the doc's frontmatter `state:` block.
   // Mutations from `useDocState` setters land here immediately so that
@@ -338,13 +339,14 @@ export function DocumentEditor({
   // globalThis even when the current source has a syntax error so
   // existing inline JSX nodes don't briefly lose their components while
   // the user is mid-typing a new export.
-  const recompileDoc = useCallback(async (mdxSource: string) => {
+  const recompileDoc = useCallback(async (mdxSource: string, runId: number) => {
     let module: CompiledDocModule | null;
     try {
       module = await compileDocModule(mdxSource);
     } catch {
       module = null;
     }
+    if (runId !== docCompileRunRef.current) return;
     if (!module) {
       setDocCompileError("Doc compile failed (existing components keep last-known render).");
       return;
@@ -362,6 +364,7 @@ export function DocumentEditor({
   }, []);
 
   const scheduleDocCompile = useCallback((mdxSource: string) => {
+    const runId = ++docCompileRunRef.current;
     if (docCompileTimerRef.current) clearTimeout(docCompileTimerRef.current);
     // Fast path: docs with no `export` declarations can't bring new
     // names into scope, so skip the compile entirely.
@@ -376,7 +379,7 @@ export function DocumentEditor({
     }
     docCompileTimerRef.current = setTimeout(() => {
       docCompileTimerRef.current = null;
-      void recompileDoc(mdxSource);
+      void recompileDoc(mdxSource, runId);
     }, DOC_MODULE_COMPILE_MS);
   }, [docExportNames.length, recompileDoc]);
 
