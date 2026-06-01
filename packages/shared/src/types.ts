@@ -108,8 +108,19 @@ export interface AppInfo {
 
 export interface PanelInfo {
   panelId: string;
+  title?: string;
+  source?: string;
+  kind?: "workspace" | "browser";
+  parentId?: string | null;
   partition: string;
   contextId: string;
+  runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
+  ref?: string;
+  build?: {
+    effectiveVersion?: string | null;
+    ref?: string;
+  };
 }
 
 // Panel-related types (shared between main and renderer)
@@ -263,6 +274,8 @@ export interface PanelSnapshotHistory {
 export interface Panel {
   id: string;
   title: string;
+  runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
 
   // Tree structure
   children: Panel[];

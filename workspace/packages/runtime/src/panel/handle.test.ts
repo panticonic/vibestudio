@@ -23,6 +23,7 @@ function createRpcCall() {
                 parentId,
                 contextId: "ctx",
                 runtimeEntityId: "panel:child-entity",
+                effectiveVersion: "ev-child",
               },
             ]
           : [
@@ -34,6 +35,7 @@ function createRpcCall() {
                 parentId: null,
                 contextId: "ctx",
                 runtimeEntityId: "panel:browser-entity",
+                effectiveVersion: "ev-browser",
               },
             ];
       }
@@ -47,8 +49,20 @@ function createRpcCall() {
             parentId: null,
             contextId: "ctx",
             runtimeEntityId: "panel:root-entity",
+            effectiveVersion: "ev-root",
           },
         ];
+      case "panelTree.metadata":
+        return {
+          id: args[0],
+          title: String(args[0]).includes("parent") ? "Parent" : "Panel",
+          source: String(args[0]).includes("parent") ? "panels/parent" : "panels/self",
+          kind: "workspace",
+          parentId: String(args[0]).includes("parent") ? null : "panel-parent",
+          contextId: "ctx-meta",
+          runtimeEntityId: `panel:${String(args[0])}-entity`,
+          effectiveVersion: `ev-${String(args[0])}`,
+        };
       case "panelCdp.getCdpEndpoint":
         return { wsEndpoint: "ws://localhost", token: "t" };
       case "panelCdp.consoleHistory":
@@ -118,9 +132,14 @@ describe("PanelHandle", () => {
   it("routes hydrated handle RPC to the current runtime entity", async () => {
     const rpcCall = createRpcCall();
     const rpcEmit = vi.fn(async () => undefined);
-    const eventHandlers: Array<(event: { caller: { callerId: string }; payload: unknown }) => void> = [];
+    const eventHandlers: Array<
+      (event: { caller: { callerId: string }; payload: unknown }) => void
+    > = [];
     const rpcOn = vi.fn(
-      (_event: string, handler: (event: { caller: { callerId: string }; payload: unknown }) => void) => {
+      (
+        _event: string,
+        handler: (event: { caller: { callerId: string }; payload: unknown }) => void
+      ) => {
         eventHandlers.push(handler);
         return vi.fn();
       }
@@ -186,6 +205,10 @@ describe("PanelHandle", () => {
 
     expect(roots).toHaveLength(1);
     expect(roots[0]?.id).toBe("root-1");
+    await expect(roots[0]?.getInfo()).resolves.toMatchObject({
+      runtimeEntityId: "panel:root-entity",
+      effectiveVersion: "ev-root",
+    });
     expect(all.map((handle) => handle.id)).toEqual(["browser-1"]);
     expect(panelTree.get("arbitrary").id).toBe("arbitrary");
     expect(self.id).toBe("panel-self");

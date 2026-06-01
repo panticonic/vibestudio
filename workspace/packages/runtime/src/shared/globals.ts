@@ -37,6 +37,8 @@ declare global {
   var __natstackGatewayConfig: GatewayConfig | undefined;
   /** Source repo path for this endpoint */
   var __natstackSourceRepo: string | undefined;
+  /** Exact effective version/git commit for the source currently running. */
+  var __natstackEffectiveVersion: string | null | undefined;
   /** Environment variables */
   var __natstackEnv: Record<string, string> | undefined;
 }
@@ -53,6 +55,7 @@ export interface InjectedConfig {
   gatewayConfig: GatewayConfig;
   gitConfig: GitConfig | null;
   env: Record<string, string>;
+  effectiveVersion: string | null;
 }
 
 // Access globals via globalThis to support VM sandbox environments
@@ -68,6 +71,7 @@ const g = globalThis as unknown as {
   __natstackInitialTheme?: "light" | "dark";
   __natstackGatewayConfig?: GatewayConfig;
   __natstackSourceRepo?: string;
+  __natstackEffectiveVersion?: string | null;
   __natstackGitConfig?: unknown;
   __natstackEnv?: Record<string, string>;
 };
@@ -120,12 +124,12 @@ export function getInjectedConfig(): InjectedConfig {
   }
 
   const sourceRepo = g.__natstackSourceRepo ?? g.__natstackEnv?.["__NATSTACK_SOURCE_REPO"] ?? "";
+  const effectiveVersion =
+    g.__natstackEffectiveVersion ?? g.__natstackEnv?.["__NATSTACK_EFFECTIVE_VERSION"] ?? null;
   const gatewayConfig = normalizeGatewayConfigForBrowser(g.__natstackGatewayConfig);
   const gitConfig: GitConfig = {
     serverUrl: `${gatewayConfig.serverUrl.replace(/\/$/, "")}/_git`,
-    internalOrigins: gatewayConfig.aliases?.map(
-      (url) => `${url.replace(/\/$/, "")}/_git`
-    ),
+    internalOrigins: gatewayConfig.aliases?.map((url) => `${url.replace(/\/$/, "")}/_git`),
     token: gatewayConfig.token,
     sourceRepo,
   };
@@ -148,5 +152,6 @@ export function getInjectedConfig(): InjectedConfig {
     gatewayConfig,
     gitConfig,
     env: g.__natstackEnv ?? {},
+    effectiveVersion,
   };
 }

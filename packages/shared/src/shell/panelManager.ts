@@ -158,6 +158,10 @@ export class PanelManager {
    * Kept in sync with the local registry after every navigation / sync.
    */
   private readonly currentEntityBySlot = new Map<PanelSlotId, PanelEntityId>();
+  private readonly currentEntitySourceBySlot = new Map<
+    PanelSlotId,
+    { repoPath: string; effectiveVersion: string }
+  >();
   /**
    * Per-slot navigation history of {entryKey -> options} so back/forward
    * navigation can reconstruct snapshots with their original options. The
@@ -278,10 +282,13 @@ export class PanelManager {
 
     this.recordOptionsForEntry(slotId, historyEntryKey, snapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
+    this.currentEntitySourceBySlot.set(slotId, handle.source);
 
     const panel: Panel = {
       id: slotId,
       title: manifest.title,
+      runtimeEntityId: entityId,
+      effectiveVersion: handle.source.effectiveVersion,
       children: [],
       positionId,
       snapshot,
@@ -357,11 +364,14 @@ export class PanelManager {
 
     this.recordOptionsForEntry(slotId, historyEntryKey, snapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
+    this.currentEntitySourceBySlot.set(slotId, handle.source);
 
     const title = opts?.name ?? parsed.hostname;
     const panel: Panel = {
       id: slotId,
       title,
+      runtimeEntityId: entityId,
+      effectiveVersion: handle.source.effectiveVersion,
       children: [],
       positionId,
       snapshot,
@@ -433,6 +443,7 @@ export class PanelManager {
     for (const id of closedIds) {
       this.registry.removePanel(id);
       this.currentEntityBySlot.delete(id);
+      this.currentEntitySourceBySlot.delete(id);
       this.slotOptionsByEntryKey.delete(id);
     }
     return { closedIds };
@@ -585,11 +596,14 @@ export class PanelManager {
 
     this.recordOptionsForEntry(slotId, historyEntryKey, nextSnapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
+    this.currentEntitySourceBySlot.set(slotId, handle.source);
 
     const livePanel = this.registry.getPanel(slotId);
     const nextHistory = this.pushHistory(panel, nextSnapshot);
     if (livePanel) {
       livePanel.title = manifest.title;
+      livePanel.runtimeEntityId = entityId;
+      livePanel.effectiveVersion = handle.source.effectiveVersion;
       this.registry.replaceCurrentSnapshot(slotId, nextSnapshot, nextHistory);
     }
 
@@ -652,7 +666,9 @@ export class PanelManager {
       ref: targetSnapshot.options.ref,
     });
     await this.workspaceState.setSlotCurrent(slotId, targetEntryKey);
-    this.currentEntityBySlot.set(slotId, asPanelEntityId(handle.id));
+    const entityId = asPanelEntityId(handle.id);
+    this.currentEntityBySlot.set(slotId, entityId);
+    this.currentEntitySourceBySlot.set(slotId, handle.source);
 
     const livePanel = this.registry.getPanel(slotId);
     const nextHistoryState = {
@@ -660,6 +676,8 @@ export class PanelManager {
       index: targetIndex,
     };
     if (livePanel) {
+      livePanel.runtimeEntityId = entityId;
+      livePanel.effectiveVersion = handle.source.effectiveVersion;
       this.registry.replaceCurrentSnapshot(slotId, targetSnapshot, nextHistoryState);
     }
     return this.registry.getPanel(slotId) ?? null;
@@ -802,6 +820,7 @@ export class PanelManager {
       entityId,
       slotId,
       contextId: getPanelContextId(panel),
+      effectiveVersion: (await this.getCurrentEntitySource(slotId))?.effectiveVersion ?? null,
       parentId,
       parentEntityId,
       source: getPanelSource(panel),
@@ -820,6 +839,18 @@ export class PanelManager {
     return this.resolveCurrentEntityIdForSlot(slotId);
   }
 
+  async getCurrentEntitySource(
+    slotId: PanelSlotId
+  ): Promise<{ repoPath: string; effectiveVersion: string } | null> {
+    const cached = this.currentEntitySourceBySlot.get(slotId);
+    if (cached) return cached;
+    const entityId = await this.resolveCurrentEntityIdForSlot(slotId);
+    const record = await this.workspaceState.resolveActiveEntity(entityId);
+    const source = record?.source ?? null;
+    if (source) this.currentEntitySourceBySlot.set(slotId, source);
+    return source;
+  }
+
   // ===========================================================================
   // Private — tree reconstruction
   // ===========================================================================
@@ -833,6 +864,13 @@ export class PanelManager {
       histories.set(slot.slot_id, rows);
     }
     const metadataBySource = await this.fetchPanelMetadataForHistories(histories);
+
+    const entitySourceById = new Map<string, { repoPath: string; effectiveVersion: string }>();
+    for (const slot of openSlots) {
+      if (!slot.current_entity_id) continue;
+      const record = await this.workspaceState.resolveActiveEntity(slot.current_entity_id);
+      if (record?.source) entitySourceById.set(slot.current_entity_id, record.source);
+    }
 
     const slotById = new Map(openSlots.map((slot) => [slot.slot_id, slot]));
 
@@ -849,6 +887,8 @@ export class PanelManager {
       if (currentEntityId) {
         this.currentEntityBySlot.set(slot.slot_id, currentEntityId);
       }
+      const entitySource = currentEntityId ? entitySourceById.get(currentEntityId) : undefined;
+      if (entitySource) this.currentEntitySourceBySlot.set(slot.slot_id, entitySource);
       const title = this.titleFor(
         slot.slot_id,
         snapshot.source,
@@ -858,6 +898,8 @@ export class PanelManager {
       return {
         id: slot.slot_id,
         title,
+        runtimeEntityId: currentEntityId,
+        effectiveVersion: entitySource?.effectiveVersion ?? null,
         children: [],
         positionId: slot.position_id,
         snapshot,
@@ -1065,9 +1107,12 @@ export class PanelManager {
 
     this.recordOptionsForEntry(slotId, newEntryKey, nextSnapshot.options);
     this.currentEntityBySlot.set(slotId, entityId);
+    this.currentEntitySourceBySlot.set(slotId, handle.source);
 
     const livePanel = this.registry.getPanel(slotId);
     if (livePanel) {
+      livePanel.runtimeEntityId = entityId;
+      livePanel.effectiveVersion = handle.source.effectiveVersion;
       const history = panel.history ?? { entries: [getCurrentSnapshot(panel)], index: 0 };
       const entries = history.entries.slice();
       entries[history.index] = nextSnapshot;

@@ -207,9 +207,11 @@ function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
           }
         })
         .join(" ");
-      rpc.call("main", "workerLog.write", [level, message, source ? { source } : undefined]).catch((err) => {
-        original.warn("[console-bridge] forward failed:", err);
-      });
+      rpc
+        .call("main", "workerLog.write", [level, message, source ? { source } : undefined])
+        .catch((err) => {
+          original.warn("[console-bridge] forward failed:", err);
+        });
     } finally {
       forwarding = false;
     }
@@ -332,11 +334,14 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   installWorkerConsoleBridge(rpc);
 
   const runtimeFs = _initFsWithRpc(rpc);
-  const workers = helpfulNamespace("workers", createWorkerdClient(rpc, {
-    parentId: selfId,
-    parentEntityId: selfId,
-    parentKind: "worker",
-  }));
+  const workers = helpfulNamespace(
+    "workers",
+    createWorkerdClient(rpc, {
+      parentId: selfId,
+      parentEntityId: selfId,
+      parentKind: "worker",
+    })
+  );
   const workspaceApi = helpfulNamespace("workspace", createWorkspaceClient(rpc));
   const credentials = helpfulNamespace("credentials", createCredentialClient(rpc));
   const gatewayAliases = parseGatewayAliases(env.GATEWAY_URL_ALIASES);
@@ -472,6 +477,8 @@ function createWorkerPanelTree(
     parentId: string | null;
     contextId: string;
     runtimeEntityId?: string | null;
+    effectiveVersion?: string | null;
+    ref?: string | null;
     children?: PanelListItem[];
   };
   type PanelMetadataResult = {
@@ -481,6 +488,9 @@ function createWorkerPanelTree(
     kind?: "workspace" | "browser";
     parentId?: string | null;
     runtimeEntityId?: string | null;
+    contextId?: string | null;
+    effectiveVersion?: string | null;
+    ref?: string | null;
   };
   const callPanel = <T>(method: string, args: unknown[]) =>
     rpc.call<T>("main", `panelTree.${method}`, args);
@@ -497,7 +507,10 @@ function createWorkerPanelTree(
       source: item.source,
       kind: item.kind,
       parentId: item.parentId,
+      contextId: item.contextId,
       rpcTargetId: item.runtimeEntityId ?? item.panelId,
+      effectiveVersion: item.effectiveVersion ?? null,
+      ref: item.ref ?? null,
     });
   const metadataForId = (id: string): PanelHandleMetadata =>
     rememberMetadata({
@@ -514,7 +527,10 @@ function createWorkerPanelTree(
     source: meta.source,
     kind: meta.kind,
     parentId: meta.parentId,
+    contextId: meta.contextId ?? null,
     rpcTargetId: meta.runtimeEntityId ?? meta.id ?? id,
+    effectiveVersion: meta.effectiveVersion ?? null,
+    ref: meta.ref ?? null,
   });
   rememberMetadata({ id: selfId, title: selfId, source: selfId, kind: "workspace", parentId });
   if (parentKind === "panel" && parentId) {
@@ -585,7 +601,8 @@ function createWorkerPanelTree(
       createNonPanelRuntimeHandle({
         id: selfId,
         parentId,
-        parent: () => createWorkerParentPanelHandle(panelTree, parentId, parentEntityId, parentKind),
+        parent: () =>
+          createWorkerParentPanelHandle(panelTree, parentId, parentEntityId, parentKind),
       }),
     get: (id) =>
       createPanelHandle({
@@ -605,7 +622,9 @@ function createWorkerPanelTree(
     },
     parent: (id) => {
       const resolvedParentId =
-        id === selfId ? (parentId ?? metadataCache.get(id)?.parentId) : metadataCache.get(id)?.parentId;
+        id === selfId
+          ? (parentId ?? metadataCache.get(id)?.parentId)
+          : metadataCache.get(id)?.parentId;
       return resolvedParentId ? panelTree.get(resolvedParentId) : null;
     },
     async open(source, options) {
@@ -615,6 +634,7 @@ function createWorkerPanelTree(
         title: string;
         kind: "workspace" | "browser";
         runtimeEntityId?: string | null;
+        effectiveVersion?: string | null;
       }>("create", [source, { ...options, parentId: targetParentId }]);
       return hydrate({
         panelId: result.id,
@@ -624,6 +644,7 @@ function createWorkerPanelTree(
         parentId: targetParentId,
         contextId: "",
         runtimeEntityId: result.runtimeEntityId ?? result.id,
+        effectiveVersion: result.effectiveVersion ?? null,
       });
     },
   };

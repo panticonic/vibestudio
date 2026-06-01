@@ -25,6 +25,7 @@ import {
   getCurrentSnapshot,
   getPanelSource,
   getPanelContextId,
+  getPanelRef,
   replaceCurrentSnapshot as replacePanelCurrentSnapshot,
   replacePanelHistory,
 } from "./panel/accessors.js";
@@ -44,6 +45,8 @@ export interface PanelListItem {
   kind: "workspace" | "browser";
   parentId: string | null;
   contextId: string;
+  runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
 }
 
 export interface PanelRegistryOptions {
@@ -151,8 +154,19 @@ export class PanelRegistry implements PanelRelationshipProvider {
     const contextId = getPanelContextId(panel);
     return {
       panelId: panel.id,
+      title: panel.title,
+      source: getPanelSource(panel),
+      kind: getPanelSource(panel).startsWith("browser:") ? "browser" : "workspace",
+      parentId: this.findParentId(panel.id),
       partition: contextIdToPartition(contextId),
       contextId,
+      runtimeEntityId: panel.runtimeEntityId ?? null,
+      effectiveVersion: panel.effectiveVersion ?? null,
+      ref: getPanelRef(panel),
+      build: {
+        effectiveVersion: panel.effectiveVersion ?? null,
+        ref: getPanelRef(panel),
+      },
     };
   }
 
@@ -167,6 +181,8 @@ export class PanelRegistry implements PanelRelationshipProvider {
       kind: getPanelSource(panel).startsWith("browser:") ? "browser" : "workspace",
       parentId: this.findParentId(panel.id),
       contextId: getPanelContextId(panel),
+      runtimeEntityId: panel.runtimeEntityId ?? null,
+      effectiveVersion: panel.effectiveVersion ?? null,
     }));
   }
 
@@ -183,6 +199,8 @@ export class PanelRegistry implements PanelRelationshipProvider {
       kind: getPanelSource(panel).startsWith("browser:") ? "browser" : "workspace",
       parentId,
       contextId: getPanelContextId(panel),
+      runtimeEntityId: panel.runtimeEntityId ?? null,
+      effectiveVersion: panel.effectiveVersion ?? null,
     }));
   }
 

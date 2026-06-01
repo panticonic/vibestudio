@@ -15,7 +15,10 @@ export interface PanelHandleMetadata {
   source?: string;
   kind?: "workspace" | "browser";
   parentId?: string | null;
+  contextId?: string | null;
   rpcTargetId?: string | null;
+  effectiveVersion?: string | null;
+  ref?: string | null;
 }
 
 export interface PanelHandleHostOps {
@@ -93,6 +96,14 @@ export function createPanelHandle<
       source: metadata.source,
       kind: metadata.kind,
       parentId: metadata.parentId,
+      contextId: metadata.contextId,
+      runtimeEntityId: metadata.rpcTargetId,
+      effectiveVersion: metadata.effectiveVersion,
+      ref: metadata.ref ?? undefined,
+      build: {
+        effectiveVersion: metadata.effectiveVersion,
+        ref: metadata.ref ?? undefined,
+      },
     }),
     call,
     cdp,
@@ -219,6 +230,10 @@ export function createNoPanelHandle(): PanelHandle {
         source: "",
         kind: "workspace",
         parentId: null,
+        contextId: null,
+        runtimeEntityId: null,
+        effectiveVersion: null,
+        build: { effectiveVersion: null },
       }),
     call: new Proxy({} as PanelHandle["call"], {
       get: () => noParent,
@@ -264,8 +279,7 @@ export function createNonPanelRuntimeHandle(options: {
   parentId?: string | null;
   parent?: () => PanelHandle | null;
 }): PanelHandle {
-  const unavailable = () =>
-    Promise.reject(new Error(`${options.id} is not a panel target`));
+  const unavailable = () => Promise.reject(new Error(`${options.id} is not a panel target`));
   const handle: PanelHandle = {
     id: options.id,
     title: options.title ?? options.id,
@@ -279,6 +293,10 @@ export function createNonPanelRuntimeHandle(options: {
         source: options.source ?? options.id,
         kind: "workspace",
         parentId: options.parentId ?? null,
+        contextId: null,
+        runtimeEntityId: options.id,
+        effectiveVersion: null,
+        build: { effectiveVersion: null },
       }),
     call: new Proxy({} as PanelHandle["call"], {
       get: () => unavailable,
@@ -326,7 +344,10 @@ function normalizeMetadata(metadata: PanelHandleMetadata): Required<PanelHandleM
     source,
     kind,
     parentId: metadata.parentId ?? null,
+    contextId: metadata.contextId ?? null,
     rpcTargetId: metadata.rpcTargetId ?? metadata.id,
+    effectiveVersion: metadata.effectiveVersion ?? null,
+    ref: metadata.ref ?? null,
   };
 }
 

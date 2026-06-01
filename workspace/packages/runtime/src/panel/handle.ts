@@ -17,6 +17,8 @@ export interface PanelListItem {
   parentId: string | null;
   contextId: string;
   runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
+  ref?: string | null;
 }
 
 export type PanelHandle<
@@ -60,6 +62,7 @@ export function _initPanelHandleBridge(
     selfRpcTargetId?: string | null;
     parentId?: string | null;
     parentRpcTargetId?: string | null;
+    effectiveVersion?: string | null;
   } = {}
 ): void {
   _rpc = rpc;
@@ -74,6 +77,7 @@ export function _initPanelHandleBridge(
       source: _selfId,
       parentId: _parentId,
       rpcTargetId: _selfRpcTargetId ?? _selfId,
+      effectiveVersion: options.effectiveVersion ?? null,
     });
   }
   if (_parentId) {
@@ -103,7 +107,10 @@ function itemToMetadata(item: PanelListItem): PanelHandleMetadata {
     source: item.source,
     kind: item.kind ?? (item.source.startsWith("browser:") ? "browser" : "workspace"),
     parentId: item.parentId,
+    contextId: item.contextId,
     rpcTargetId: item.runtimeEntityId ?? item.panelId,
+    effectiveVersion: item.effectiveVersion ?? null,
+    ref: item.ref ?? null,
   };
 }
 
@@ -295,6 +302,7 @@ export const panelTree: PanelTreeApi = {
       title: string;
       kind: "workspace" | "browser";
       runtimeEntityId?: string | null;
+      effectiveVersion?: string | null;
     }>("create", [source, { ...options, parentId }]);
     const handle = hydratePanelHandle({
       panelId: result.id,
@@ -304,6 +312,7 @@ export const panelTree: PanelTreeApi = {
       parentId,
       contextId: "",
       runtimeEntityId: result.runtimeEntityId ?? result.id,
+      effectiveVersion: result.effectiveVersion ?? null,
     });
     currentJournal()?.append({ type: "open", source, id: handle.id, kind: handle.kind });
     return handle;

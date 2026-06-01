@@ -151,6 +151,8 @@ type DurablePanelListItem = {
   parentId: string | null;
   contextId: string;
   runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
+  ref?: string | null;
   children?: DurablePanelListItem[];
 };
 
@@ -161,6 +163,9 @@ type DurablePanelMetadataResult = {
   kind?: "workspace" | "browser";
   parentId?: string | null;
   runtimeEntityId?: string | null;
+  contextId?: string | null;
+  effectiveVersion?: string | null;
+  ref?: string | null;
 };
 
 export interface LifecyclePrepareInput {
@@ -435,7 +440,10 @@ export abstract class DurableObjectBase {
       source: meta.source,
       kind: meta.kind,
       parentId: meta.parentId,
+      contextId: meta.contextId ?? null,
       rpcTargetId: meta.runtimeEntityId ?? meta.id ?? id,
+      effectiveVersion: meta.effectiveVersion ?? null,
+      ref: meta.ref ?? null,
     };
   }
 
@@ -500,7 +508,10 @@ export abstract class DurableObjectBase {
       source: item.source,
       kind: item.kind,
       parentId: item.parentId,
+      contextId: item.contextId,
       rpcTargetId: item.runtimeEntityId ?? item.panelId,
+      effectiveVersion: item.effectiveVersion ?? null,
+      ref: item.ref ?? null,
     });
   }
 
@@ -569,6 +580,7 @@ export abstract class DurableObjectBase {
           title: string;
           kind: "workspace" | "browser";
           runtimeEntityId?: string | null;
+          effectiveVersion?: string | null;
         }>("create", [source, { ...options, parentId }]);
         return this.hydratePanelListItem({
           panelId: result.id,
@@ -578,6 +590,7 @@ export abstract class DurableObjectBase {
           parentId,
           contextId: "",
           runtimeEntityId: result.runtimeEntityId ?? result.id,
+          effectiveVersion: result.effectiveVersion ?? null,
         });
       },
     };
@@ -664,7 +677,10 @@ export abstract class DurableObjectBase {
     const isTestSentinel =
       gatewayUrl.includes("test-server.invalid") || gatewayUrl.includes(".test/");
     try {
-      await bridge.call("main", "runtime.setTitle", [effective, { explicit: options.explicit === true }]);
+      await bridge.call("main", "runtime.setTitle", [
+        effective,
+        { explicit: options.explicit === true },
+      ]);
     } catch (err) {
       if (!isTestSentinel) {
         console.warn("[DurableObjectBase] runtime.setTitle failed:", err);

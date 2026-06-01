@@ -19,20 +19,20 @@ const snapshot = await handle.snapshot();
 
 `PanelHandle` fields:
 
-| Member | Description |
-|--------|-------------|
-| `id` | Host panel id |
-| `getInfo()` | Copyable metadata `{ id, title, source, kind, parentId }` |
-| `source` | Workspace source or URL |
-| `kind` | `"workspace"` or `"browser"` |
-| `children()` | Fresh direct child handles |
-| `reload()` | Rebuild/remount the panel |
-| `close()` | Close this panel |
-| `stateArgs.get()` / `stateArgs.set(updates)` | Host-owned state args |
-| `snapshot()` | Agent-readable AX/synthetic snapshot |
-| `tree()` / `state()` / `routes()` / `setMode()` | Workspace `_agent` methods |
-| `cdp` | Approval-gated CDP automation namespace for panel-tree targets |
-| `click(selector)` | Convenience wrapper for `cdp.click(selector)` |
+| Member                                          | Description                                                                                                         |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `id`                                            | Host panel id                                                                                                       |
+| `getInfo()`                                     | Copyable metadata `{ id, title, source, kind, parentId, contextId, runtimeEntityId, effectiveVersion, ref, build }` |
+| `source`                                        | Workspace source or URL                                                                                             |
+| `kind`                                          | `"workspace"` or `"browser"`                                                                                        |
+| `children()`                                    | Fresh direct child handles                                                                                          |
+| `reload()`                                      | Rebuild/remount the panel                                                                                           |
+| `close()`                                       | Close this panel                                                                                                    |
+| `stateArgs.get()` / `stateArgs.set(updates)`    | Host-owned state args                                                                                               |
+| `snapshot()`                                    | Agent-readable AX/synthetic snapshot                                                                                |
+| `tree()` / `state()` / `routes()` / `setMode()` | Workspace `_agent` methods                                                                                          |
+| `cdp`                                           | Approval-gated CDP automation namespace for panel-tree targets                                                      |
+| `click(selector)`                               | Convenience wrapper for `cdp.click(selector)`                                                                       |
 
 ## State Args
 
@@ -64,11 +64,17 @@ import { panelTree } from "@workspace/runtime";
 
 const parent = panelTree.self().parent();
 if (parent) {
+  await parent.refresh(); // hydrate exact source/runtime metadata from the host
   const info = await parent.getInfo();
   const args = await parent.stateArgs.get();
-  console.log(info.id, args);
+  console.log(info.id, info.source, info.effectiveVersion, args);
 }
 ```
+
+`effectiveVersion` is the exact immutable source version currently associated
+with the active panel runtime entity. For git-backed workspace units this is the
+commit/effective-version hash used for approvals and runtime identity. Use
+`refresh()` before comparing metadata around rebuilds, navigation, or reloads.
 
 ## Agent Inspection
 

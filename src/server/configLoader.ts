@@ -113,6 +113,7 @@ export const CONFIG_LOADER_JS = `(async () => {
     __natstackInitialTheme: cfg.theme,
     __natstackGatewayConfig: gatewayConfig,
     __natstackSourceRepo: cfg.sourceRepo,
+    __natstackEffectiveVersion: cfg.effectiveVersion ?? cfg.env?.__NATSTACK_EFFECTIVE_VERSION ?? null,
     __natstackEnv: cfg.env,
     __natstackStateArgs: effectiveStateArgs,
     __natstackConnectionId: connectionId,

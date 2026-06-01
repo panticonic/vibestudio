@@ -50,7 +50,10 @@ interface PanelTreeItem {
   source?: string;
   kind?: "workspace" | "browser";
   parentId?: string | null;
+  contextId?: string | null;
   runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
+  ref?: string | null;
 }
 
 export function createRuntime(deps: RuntimeDeps) {
@@ -91,7 +94,10 @@ export function createRuntime(deps: RuntimeDeps) {
       source: item.source ?? id,
       kind: item.kind ?? (item.source?.startsWith("browser:") ? "browser" : "workspace"),
       parentId: item.parentId ?? null,
+      contextId: item.contextId ?? null,
       rpcTargetId: item.runtimeEntityId ?? id,
+      effectiveVersion: item.effectiveVersion ?? null,
+      ref: item.ref ?? null,
     };
   };
   const metadataForId = (id: string): PanelHandleMetadata => ({
@@ -100,7 +106,9 @@ export function createRuntime(deps: RuntimeDeps) {
     source: id,
     kind: "workspace",
     parentId: null,
+    contextId: null,
     rpcTargetId: id,
+    effectiveVersion: null,
   });
   const hydrateRuntimeHandle = (metadata: PanelHandleMetadata): PanelHandle =>
     createPanelHandle({
@@ -148,22 +156,22 @@ export function createRuntime(deps: RuntimeDeps) {
   };
 
   const parentHandleOrNull = parentRuntimeId
-      ? (() => {
-          const parentSlotId = deps.parentId ?? parentRuntimeId;
-          return createPanelHandle({
-            rpc: base.rpc,
-            metadata: {
-              id: parentSlotId,
-              title: parentSlotId,
-              source: parentSlotId,
-              kind: "workspace",
-              parentId: null,
-              rpcTargetId: parentRuntimeId,
-            },
-            cdp: createCdpAutomation(base.rpc, parentSlotId),
-            ops: panelHandleOps,
-          });
-        })()
+    ? (() => {
+        const parentSlotId = deps.parentId ?? parentRuntimeId;
+        return createPanelHandle({
+          rpc: base.rpc,
+          metadata: {
+            id: parentSlotId,
+            title: parentSlotId,
+            source: parentSlotId,
+            kind: "workspace",
+            parentId: null,
+            rpcTargetId: parentRuntimeId,
+          },
+          cdp: createCdpAutomation(base.rpc, parentSlotId),
+          ops: panelHandleOps,
+        });
+      })()
     : null;
   const parent: PanelHandle = parentHandleOrNull ?? createNoPanelHandle();
 

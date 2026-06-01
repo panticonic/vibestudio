@@ -210,6 +210,14 @@ export interface PanelHandle<
     source: string;
     kind: "workspace" | "browser";
     parentId: string | null;
+    contextId: string | null;
+    runtimeEntityId: string | null;
+    effectiveVersion: string | null;
+    ref?: string;
+    build: {
+      effectiveVersion: string | null;
+      ref?: string;
+    };
   }>;
 
   /**

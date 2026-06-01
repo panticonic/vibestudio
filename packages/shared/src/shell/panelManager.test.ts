@@ -314,6 +314,7 @@ describe("PanelManager", () => {
       slotId: string;
       contextId: string;
       sourceRepo: string;
+      effectiveVersion: string;
       gatewayConfig: { serverUrl: string; token: string };
       stateArgs: Record<string, unknown>;
     };
@@ -325,11 +326,20 @@ describe("PanelManager", () => {
     expect(init.slotId).toBe(created.panelId);
     expect(init.contextId).toBe(created.contextId);
     expect(init.sourceRepo).toBe("panels/example");
+    expect(init.effectiveVersion).toBe("test");
     expect(init.gatewayConfig).toEqual({
       serverUrl: "http://127.0.0.1:42773",
       token: `rpc-${currentEntityId}`,
     });
     expect(init.stateArgs).toEqual({ greeting: "hello" });
+    expect(registry.getInfo(created.panelId)).toMatchObject({
+      panelId: created.panelId,
+      source: "panels/example",
+      contextId: init.contextId,
+      runtimeEntityId: currentEntityId,
+      effectiveVersion: "test",
+      build: { effectiveVersion: "test" },
+    });
 
     const onStateArgsChanged = vi.fn();
     const unsubscribe = manager.onStateArgsChanged(created.panelId, onStateArgsChanged);

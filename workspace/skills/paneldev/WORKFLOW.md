@@ -40,6 +40,19 @@ or parent panels, prefer running lifecycle operations from a stable panel/root
 context, or use `await handle.rebuildPanel(); await handle.refresh();` when you
 only need a rebuild plus fresh metadata before a later reload.
 
+Before reloading a parent or ancestor, verify the target:
+
+```ts
+const info = await handle.refresh().then((h) => h.getInfo());
+console.log(info.id, info.source, info.contextId, info.runtimeEntityId, info.effectiveVersion);
+```
+
+`effectiveVersion` is the git/effective-version hash for the source currently
+running in that panel's active runtime entity. `reload()` targets the handle's
+slot id; if the caller is a descendant of that target, the host may tear down
+the caller's transport and cancel the eval even though the requested target was
+the ancestor.
+
 5. Tune running state without reopening:
 
 ```ts

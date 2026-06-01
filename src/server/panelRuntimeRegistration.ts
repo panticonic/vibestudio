@@ -246,10 +246,15 @@ async function createServerPanelTreeBridge(
   });
   const withRuntimeEntity = async <T extends { panelId: string }>(
     item: T
-  ): Promise<T & { runtimeEntityId: string }> => ({
-    ...item,
-    runtimeEntityId: await panelManager.getCurrentEntityId(asPanelSlotId(item.panelId)),
-  });
+  ): Promise<T & { runtimeEntityId: string; effectiveVersion?: string | null }> => {
+    const slotId = asPanelSlotId(item.panelId);
+    const source = await panelManager.getCurrentEntitySource(slotId);
+    return {
+      ...item,
+      runtimeEntityId: await panelManager.getCurrentEntityId(slotId),
+      effectiveVersion: source?.effectiveVersion ?? null,
+    };
+  };
   const panelToListItem = (
     panel: import("@natstack/shared/types").Panel,
     parentId: string | null
@@ -349,6 +354,11 @@ async function createServerPanelTreeBridge(
           kind: getPanelSource(panel).startsWith("browser:") ? "browser" : "workspace",
           parentId: registry.findParentId(panelId),
           runtimeEntityId: await panelManager.getCurrentEntityId(asPanelSlotId(panelId)),
+          effectiveVersion:
+            (await panelManager.getCurrentEntitySource(asPanelSlotId(panelId)))?.effectiveVersion ??
+            null,
+          contextId: getPanelContextId(panel),
+          ref: snapshot.options.ref,
           privileged:
             snapshot.privileged === true || (snapshot as { shell?: boolean }).shell === true,
         };
@@ -378,11 +388,15 @@ async function createServerPanelTreeBridge(
         const runtimeEntityId = await panelManager.getCurrentEntityId(
           asPanelSlotId(created.panelId)
         );
+        const entitySource = await panelManager.getCurrentEntitySource(
+          asPanelSlotId(created.panelId)
+        );
         return {
           id: created.panelId,
           title: created.title,
           kind: isBrowser ? "browser" : "workspace",
           runtimeEntityId,
+          effectiveVersion: entitySource?.effectiveVersion ?? null,
         };
       }
       case "focus":
