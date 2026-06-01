@@ -110,7 +110,12 @@ export function ConsentApprovalBar() {
 
   useShellEvent(
     "shell-approval:pending-changed",
-    useCallback(() => {
+    useCallback((event) => {
+      if (Array.isArray(event?.pending)) {
+        pendingAccessRefreshSeq.current++;
+        setPendingAccess(event.pending);
+        return;
+      }
       void refreshPendingAccess();
     }, [refreshPendingAccess])
   );

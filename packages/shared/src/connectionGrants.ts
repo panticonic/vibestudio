@@ -68,7 +68,7 @@ export class ConnectionGrantService {
   validate(token: string): ConnectionGrantValidation | null {
     const grant = this.grants.get(token);
     if (!grant) return null;
-    if (grant.expiresAt <= Date.now()) {
+    if (!grant.redeemed && grant.expiresAt <= Date.now()) {
       this.grants.delete(token);
       return null;
     }
@@ -109,7 +109,7 @@ export class ConnectionGrantService {
   private gcExpired(): void {
     const now = Date.now();
     for (const [token, grant] of this.grants) {
-      if (grant.expiresAt <= now) this.grants.delete(token);
+      if (!grant.redeemed && grant.expiresAt <= now) this.grants.delete(token);
     }
   }
 }

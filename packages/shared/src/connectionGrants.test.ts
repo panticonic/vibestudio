@@ -47,7 +47,7 @@ describe("ConnectionGrantService", () => {
     grants.stop();
   });
 
-  it("keeps redeemed grants valid only until the original bounded expiry or principal revocation", async () => {
+  it("keeps redeemed grants valid for the active principal until revocation", async () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(makePanelRecord("panel:one"));
     const grants = new ConnectionGrantService({ entityCache });
@@ -60,7 +60,11 @@ describe("ConnectionGrantService", () => {
       issuedBy: "shell:test",
     });
     await new Promise((resolve) => setTimeout(resolve, 15));
-    expect(grants.validate(token)).toBeNull();
+    expect(grants.validate(token)).toEqual({
+      principalId: "panel:one",
+      principalKind: "panel",
+      issuedBy: "shell:test",
+    });
     grants.stop();
   });
 

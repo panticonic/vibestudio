@@ -204,6 +204,26 @@ describe("PanelHandle", () => {
     expect(rpcCall).toHaveBeenCalledWith("panel:parent-entity", "ping", []);
   });
 
+  it("targets parent slot, not self, when reloading and rebuilding parent handles", async () => {
+    const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
+    const rpcCall = createRpcCall();
+    _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
+      selfId: "panel-self",
+      selfRpcTargetId: "panel:self-entity",
+      parentId: "panel-parent",
+      parentRpcTargetId: "panel:parent-entity",
+    });
+
+    const parent = panelTree.self().parent();
+    await parent?.rebuildPanel();
+    await parent?.reload();
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-parent"]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.reload", ["panel-parent"]);
+    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-self"]);
+    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.reload", ["panel-self"]);
+  });
+
   it("hydrates arbitrary parent handles from discovered tree metadata", async () => {
     const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
     _initPanelHandleBridge({ call: createRpcCall(), on: vi.fn() } as never, {

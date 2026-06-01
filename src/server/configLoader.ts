@@ -40,9 +40,10 @@ export const CONFIG_LOADER_JS = `(async () => {
   };
   installRandomUuidPolyfill();
 
+  const storageKey = () => "__natstackPanelInit:" + location.href;
   const parseStoredInit = () => {
     try {
-      const raw = sessionStorage.getItem("__natstackPanelInit");
+      const raw = sessionStorage.getItem(storageKey());
       return raw ? JSON.parse(raw) : null;
     } catch {
       return null;
@@ -55,7 +56,7 @@ export const CONFIG_LOADER_JS = `(async () => {
         delete stored.connectionId;
         delete stored.leaseConnectionId;
       }
-      sessionStorage.setItem("__natstackPanelInit", JSON.stringify(stored));
+      sessionStorage.setItem(storageKey(), JSON.stringify(stored));
     } catch {
       /* ignore */
     }

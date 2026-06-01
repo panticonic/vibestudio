@@ -121,6 +121,49 @@ async function postRpc(
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("Gateway /_git auth", () => {
+  it("accepts redeemed panel connection grants after the original grant ttl", async () => {
+    const tokenManager = new TokenManager();
+    const entityCache = new EntityCache();
+    entityCache._onActivate(makePanelRecord("panel:terminal", "panels/terminal", "ev-panel"));
+    const connectionGrants = new ConnectionGrantService({ entityCache });
+    const { token } = connectionGrants.grant("panel:terminal", "shell:test", 50);
+    expect(connectionGrants.redeem(token)).toEqual({
+      principalId: "panel:terminal",
+      issuedBy: "shell:test",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+
+    const gitHandler = {
+      handleHttpRequest: vi.fn((_req, res, caller) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ caller }));
+      }),
+    };
+    const gateway = new Gateway({
+      tokenManager,
+      connectionGrants,
+      entityCache,
+      externalHost: "localhost",
+      getGitHandler: () => gitHandler,
+    });
+    const port = await gateway.start(0);
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/_git/panels/terminal/info/refs`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        caller: { runtime: { id: string; kind: string }; code?: { repoPath: string } };
+      };
+      expect(body.caller.runtime).toEqual({ id: "panel:terminal", kind: "panel" });
+      expect(body.caller.code?.repoPath).toBe("panels/terminal");
+    } finally {
+      await gateway.stop();
+      connectionGrants.stop();
+    }
+  });
+
   it("accepts redeemed panel connection grants for git HTTP requests", async () => {
     const tokenManager = new TokenManager();
     const entityCache = new EntityCache();

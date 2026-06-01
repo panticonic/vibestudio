@@ -22,4 +22,14 @@ describe("CONFIG_LOADER_JS", () => {
     expect(CONFIG_LOADER_JS).toContain("delete stored.leaseConnectionId");
     expect(CONFIG_LOADER_JS).toContain("delete globalThis.__natstackConnectionId");
   });
+
+  it("keys persisted panel init by document URL instead of one shared session key", () => {
+    expect(CONFIG_LOADER_JS).toContain(
+      'const storageKey = () => "__natstackPanelInit:" + location.href;'
+    );
+    expect(CONFIG_LOADER_JS).toContain("sessionStorage.getItem(storageKey())");
+    expect(CONFIG_LOADER_JS).toContain("sessionStorage.setItem(storageKey()");
+    expect(CONFIG_LOADER_JS).not.toContain('sessionStorage.getItem("__natstackPanelInit")');
+    expect(CONFIG_LOADER_JS).not.toContain('sessionStorage.setItem("__natstackPanelInit"');
+  });
 });

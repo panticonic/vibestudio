@@ -285,7 +285,7 @@ describe("ConsentApprovalBar queue browsing", () => {
     expect(secondUnitDetails?.open).toBe(false);
   });
 
-  it("refreshes pending approvals from the server instead of trusting stale event payloads", async () => {
+  it("renders pending approvals directly from event payloads", async () => {
     shellClient.listPending.mockResolvedValueOnce([
       userlandApproval({ approvalId: "a1", title: "First approval" }),
     ]);
@@ -305,19 +305,20 @@ describe("ConsentApprovalBar queue browsing", () => {
       .mock.calls.find(([event]) => event === "shell-approval:pending-changed")?.[1];
     expect(eventCallback).toBeTruthy();
 
-    shellClient.listPending.mockResolvedValueOnce([]);
     await act(async () => {
       eventCallback?.({
         pending: [
           userlandApproval({ approvalId: "a1", title: "First approval" }),
-          userlandApproval({ approvalId: "a2", title: "Stale covered approval" }),
+          userlandApproval({ approvalId: "a2", title: "Event approval" }),
         ],
       } as never);
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("First approval")).toBeNull();
-      expect(screen.queryByText("Stale covered approval")).toBeNull();
+      expect(screen.getByText("First approval")).toBeTruthy();
+      expect(screen.getByText("1 / 2")).toBeTruthy();
     });
+    expect(screen.queryByText("Event approval")).toBeNull();
+    expect(shellClient.listPending).toHaveBeenCalledTimes(1);
   });
 });
