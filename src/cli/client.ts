@@ -85,11 +85,15 @@ async function mobile(argv: string[]): Promise<number> {
 
 function runScript(scriptName: string, argv: string[]): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(repoRoot, "scripts", "cli", scriptName), ...argv], {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: "inherit",
-    });
+    const child = spawn(
+      process.execPath,
+      [path.join(repoRoot, "scripts", "cli", scriptName), ...argv],
+      {
+        cwd: repoRoot,
+        env: process.env,
+        stdio: "inherit",
+      }
+    );
     child.on("error", reject);
     child.on("exit", (code, signal) => {
       if (signal) {
