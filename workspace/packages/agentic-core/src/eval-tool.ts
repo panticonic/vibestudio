@@ -137,19 +137,21 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
                     text: string;
                 }> = [];
                 if (result.consoleOutput) {
-                    const formattedConsole = boundEvalText("Console", result.consoleOutput, {
+                    const formattedConsole = await boundEvalText("Console", result.consoleOutput, {
                         onOversize: () => {
                             scope[EVAL_CONSOLE_SCOPE_KEY] = result.consoleOutput;
                         },
+                        spillText: (text) => spillEvalText(opts.rpc, text),
                         scopeKey: EVAL_CONSOLE_SCOPE_KEY,
                     });
                     parts.push({ type: "text", text: `[eval] Console:\n${formattedConsole}` });
                 }
                 if (result.returnValue !== undefined && result.returnValue !== null) {
-                    const formatted = formatEvalReturnValue(result.returnValue, {
+                    const formatted = await formatEvalReturnValue(result.returnValue, {
                         onOversize: () => {
                             scope[EVAL_RETURN_SCOPE_KEY] = result.returnValue;
                         },
+                        spillText: (text) => spillEvalText(opts.rpc, text),
                         scopeKey: EVAL_RETURN_SCOPE_KEY,
                     });
                     parts.push({ type: "text", text: `[eval] Return value:\n${formatted}` });
@@ -191,8 +193,8 @@ async function loadEvalSource(
 
 function formatEvalReturnValue(
     value: unknown,
-    opts: { onOversize: () => void; scopeKey: string }
-): string {
+    opts: { onOversize: () => void; spillText: (text: string) => Promise<EvalBlobRef | null>; scopeKey: string }
+): Promise<string> {
     let formatted: string;
     try {
         formatted = typeof value === "string" ? value : JSON.stringify(value, null, 2);
@@ -203,19 +205,39 @@ function formatEvalReturnValue(
     return boundEvalText("Return value", formatted, opts, value);
 }
 
-function boundEvalText(
+interface EvalBlobRef {
+    digest: string;
+    size: number;
+}
+
+async function spillEvalText(
+    rpc: SandboxConfig["rpc"],
+    text: string
+): Promise<EvalBlobRef | null> {
+    try {
+        return await rpc.call("main", "blobstore.putText", [text]) as EvalBlobRef;
+    }
+    catch {
+        return null;
+    }
+}
+
+async function boundEvalText(
     label: string,
     text: string,
-    opts: { onOversize: () => void; scopeKey: string },
+    opts: { onOversize: () => void; spillText: (text: string) => Promise<EvalBlobRef | null>; scopeKey: string },
     valueForSummary?: unknown
-): string {
+): Promise<string> {
     if (text.length <= MAX_EVAL_TEXT_PART_CHARS)
         return text;
-    opts.onOversize();
+    const stored = await opts.spillText(text);
+    if (!stored) opts.onOversize();
     const previewChars = Math.min(MAX_EVAL_PREVIEW_CHARS, MAX_EVAL_TEXT_PART_CHARS);
     return [
         `[${label} omitted from tool transcript: ${text.length} characters exceeds ${MAX_EVAL_TEXT_PART_CHARS}.]`,
-        `Full value stored at scope.${opts.scopeKey}. Return or inspect slices explicitly, e.g. scope.${opts.scopeKey}.`,
+        stored
+            ? `Full text stored in blobstore: digest=${stored.digest}, size=${stored.size}. Read slices with rpc.call("main", "blobstore.getRange", [digest, offset, length]) or grep with blobstore.grep.`
+            : `Blobstore unavailable; full value stored at scope.${opts.scopeKey}. Return or inspect slices explicitly, e.g. scope.${opts.scopeKey}.`,
         summarizeLargeValue(valueForSummary),
         "",
         "[preview]",
@@ -360,6 +382,10 @@ function truncateSingleLine(value: string, maxChars: number): string {
 }
 
 function withSandboxErrorHint(error: string): string {
+    const missingRelativeModule = error.match(/Module "(\.{1,2}\/[^"]+)" not available/);
+    if (missingRelativeModule) {
+        return `${error}\nHint: inline eval has no source file for resolving relative imports. Put the code in a context-relative file and call eval with { path }, or import workspace packages by package name.`;
+    }
     const missingRuntimeBinding = error.match(/^([A-Za-z_$][\w$]*) is not defined\b/);
     if (!missingRuntimeBinding)
         return error;

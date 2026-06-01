@@ -107,14 +107,38 @@ describe("buildEvalTool", () => {
     ).rejects.toThrow('import { contextId } from "@workspace/runtime"');
   });
 
-  it("bounds huge return values and stores the full value in scope", async () => {
+  it("adds a file-loaded eval hint for missing relative imports", async () => {
+    const tool = createEvalTool({
+      executeSandbox: async () => ({
+        success: false,
+        consoleOutput: "",
+        error: 'Module "./panels/spectrolite/mdx/docModule" not available. For npm packages, add the imports parameter.',
+      }),
+    });
+
+    await expect(
+      tool.execute(
+        { code: 'import "./panels/spectrolite/mdx/docModule";' },
+        { stream: async () => undefined } as never
+      )
+    ).rejects.toThrow("inline eval has no source file for resolving relative imports");
+  });
+
+  it("bounds huge return values and stores the full value in blobstore", async () => {
     const scope: Record<string, unknown> = {};
+    const stored: string[] = [];
     const huge = Array.from({ length: 100 }, (_, index) => ({
       seq: index + 1,
       metadata: "x".repeat(2000),
     }));
     const tool = createEvalTool({
       getScope: () => scope,
+      rpc: {
+        call: async (_target: string, _method: string, args: unknown[]) => {
+          stored.push(String(args[0]));
+          return { digest: "digest-huge", size: stored[0]?.length ?? 0 };
+        },
+      } as never,
       executeSandbox: async () => ({
         success: true,
         consoleOutput: "",
@@ -129,8 +153,9 @@ describe("buildEvalTool", () => {
 
     expect(rendered.length).toBeLessThan(80_000);
     expect(rendered).toContain("omitted from tool transcript");
-    expect(rendered).toContain("scope.__lastEvalReturn");
-    expect(scope["__lastEvalReturn"]).toBe(huge);
+    expect(rendered).toContain("digest=digest-huge");
+    expect(scope["__lastEvalReturn"]).toBeUndefined();
+    expect(stored[0]).toContain('"metadata"');
   });
 
   it("summarizes oversized diagnostic arrays before the preview", async () => {

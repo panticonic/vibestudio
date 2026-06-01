@@ -18,6 +18,11 @@ File-loaded eval reads the entry file from the current context, supports static
 relative imports from that file, and resolves bare imports from the nearest
 `package.json` when it can find one.
 
+Inline `code` eval has no source file, so relative imports such as
+`./panels/my-app/module` are not resolvable there. Put multi-file eval code in a
+context-relative file and pass `path`, or import workspace packages by package
+name.
+
 ## Parameters
 
 | Param     | Type                             | Default | Description                                                            |
@@ -54,7 +59,12 @@ blobstore pointer to the full JSON. Store broad query results in `scope` and
 return compact summaries; fetch exact blobs or envelopes only after you know the
 artifact you need.
 
-## Dynamic Imports
+## Imports
+
+Use static `import` syntax for `@workspace/runtime`, workspace skills, and
+workspace packages. Dynamic `await import(...)` may work for ordinary browser
+ESM, but it is not the supported path for workspace package loading because the
+eval loader plans those dependencies statically.
 
 ### Workspace packages — auto-resolved
 
@@ -240,6 +250,9 @@ eval({ code: `
 ` })
 ```
 
+Pass an encoding such as `"utf-8"` when reading text. Without an encoding,
+`fs.readFile` returns bytes, so string methods like `.replace()` will fail.
+
 ## Database Access
 
 ```
@@ -291,6 +304,11 @@ Use `client.status(dir)` for normal structured status. If you specifically need
 isomorphic-git's raw `[filepath, HEAD, WORKDIR, STAGE]` tuples, use
 `client.statusMatrix(dir)`.
 
+Common signatures: `client.status(dir: string)`,
+`client.fetch({ dir, remote?, ref? })`, and
+`client.push({ dir, remote?, ref?, force? })`. `client.methods` lists the
+discoverable client methods when `Object.keys(client)` is too sparse.
+
 ## Large Results And Diagnostics
 
 Do not return broad hydrated channel histories, full `scope.results`, large DOM
@@ -309,17 +327,19 @@ return await gad.inspectInvocationState({ transportCallId });
 return await gad.inspectPublicationIntegrity({ channelId });
 ```
 
-If you need a large artifact, return its digest, byte count, and a small head
-sample. Keep the full object in `scope` only for interactive follow-up.
+If you need a large artifact, store the full text in blobstore and return its
+digest, byte count, and a small head sample. Keep full objects in `scope` only
+for short-lived interactive follow-up.
 
 Preferred return shape for large artifacts:
 
 ```ts
 const text = JSON.stringify(largeValue);
-scope.largeValue = largeValue;
+const stored = await rpc.call("main", "blobstore.putText", [text]);
 return {
   omitted: true,
-  reason: "large diagnostic value retained in scope",
+  reason: "large diagnostic value stored in blobstore",
+  digest: stored.digest,
   bytes: new TextEncoder().encode(text).byteLength,
   type: Array.isArray(largeValue) ? "array" : typeof largeValue,
   keys: largeValue && typeof largeValue === "object"
@@ -332,7 +352,9 @@ return {
 The method transport also caps oversized durable results and records a blob
 digest when storage is available. Agents should still return bounded summaries
 because compact results are easier to inspect and less likely to hide the
-important error message.
+important error message. Read stored text with
+`rpc.call("main", "blobstore.getRange", [digest, offset, length])` or search it
+server-side with `rpc.call("main", "blobstore.grep", [digest, pattern])`.
 
 ## Extension Calls
 
@@ -398,7 +420,7 @@ eval({ code: `
 
   // Use openPanel when you need page automation
   const handle = await openPanel("https://example.com");
-  const page = await handle.cdp.playwrightPage();
+  const page = await handle.cdp.lightweightPage();
   console.log(await page.title());
 ` })
 ```
