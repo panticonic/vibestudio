@@ -30,6 +30,9 @@ import {
   DurableObjectBase,
   type DurableObjectContext,
   type DORef,
+  type LifecyclePrepareInput,
+  type LifecyclePrepareResult,
+  type LifecycleResumeInput,
 } from "@workspace/runtime/worker";
 import { createExtensionsClient } from "@natstack/extension";
 import type {
@@ -74,7 +77,18 @@ import {
   type DurableObjectServiceClient,
 } from "@natstack/shared/userlandServiceRpc";
 
-const SAFE_TOOL_NAMES_DEFAULT: ReadonlySet<string> = new Set(["read", "ls", "grep", "find"]);
+const HARNESS_MODEL_REPLAY_TOOL_SAFETY: ReadonlyMap<string, ReplayToolSafety> = new Map([
+  ["read", "pure-read"],
+  ["ls", "pure-read"],
+  ["grep", "pure-read"],
+  ["find", "pure-read"],
+  ["ask_user", "journal-before-dispatch"],
+  ["edit", "unsafe"],
+  ["write", "unsafe"],
+  ["web_search", "unsafe"],
+  ["web_fetch", "unsafe"],
+  ["web_read", "unsafe"],
+]);
 const URL_BOUND_MODEL_CREDENTIAL_SENTINEL = "natstack-url-bound-model-credential";
 const URL_BOUND_MODEL_CREDENTIAL_SENTINEL_CLAIM =
   "https://natstack.local/url-bound-model-credential";
@@ -681,11 +695,23 @@ type AgentTurnRunStatus =
   | "failed"
   | "interrupted";
 
+type ReplayToolSafety =
+  | "journal-before-dispatch"
+  | "idempotent-by-key"
+  | "pure-read"
+  | "unsafe";
+
 interface AgentTurnRunRow {
   turnId: string;
   channelId: string;
   status: AgentTurnRunStatus;
   resumeCursorEntryId: string | null;
+  turnOpenCursorEntryId: string | null;
+  modelStartCursorEntryId: string | null;
+  checkpointPhase: string | null;
+  checkpointEntryId: string | null;
+  checkpointGeneration: number | null;
+  pendingToolCallIdsJson: string | null;
   failureCode: string | null;
   failureMessage: string | null;
   openedAt: number;
@@ -1188,6 +1214,15 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       channelId: raw["channel_id"] as string,
       status: raw["status"] as AgentTurnRunStatus,
       resumeCursorEntryId: (raw["resume_cursor_entry_id"] as string | null) ?? null,
+      turnOpenCursorEntryId: (raw["turn_open_cursor_entry_id"] as string | null) ?? null,
+      modelStartCursorEntryId: (raw["model_start_cursor_entry_id"] as string | null) ?? null,
+      checkpointPhase: (raw["checkpoint_phase"] as string | null) ?? null,
+      checkpointEntryId: (raw["checkpoint_entry_id"] as string | null) ?? null,
+      checkpointGeneration:
+        typeof raw["checkpoint_generation"] === "number"
+          ? (raw["checkpoint_generation"] as number)
+          : null,
+      pendingToolCallIdsJson: (raw["pending_tool_call_ids_json"] as string | null) ?? null,
       failureCode: (raw["failure_code"] as string | null) ?? null,
       failureMessage: (raw["failure_message"] as string | null) ?? null,
       openedAt: Number(raw["opened_at"]),
@@ -1229,19 +1264,131 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     );
   }
 
-  private insertTurnRun(channelId: string, turnId: string): void {
+  private hasAnyNonTerminalTurnRuns(): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM agent_turn_runs
+           WHERE status NOT IN ('closed', 'failed', 'interrupted')
+           LIMIT 1`
+        )
+        .toArray().length > 0
+    );
+  }
+
+  private insertTurnRun(
+    channelId: string,
+    turnId: string,
+    checkpoint?: { entryId?: string | null; phase?: "turn_open" | "model_start" }
+  ): Promise<void> {
     const now = Date.now();
+    const checkpointEntryId = checkpoint?.entryId ?? null;
+    const phase = checkpoint?.phase ?? "turn_open";
+    const generation = this.identity.bootGeneration;
     this.sql.exec(
       `INSERT INTO agent_turn_runs (
          turn_id, channel_id, status, resume_cursor_entry_id,
+         turn_open_cursor_entry_id, model_start_cursor_entry_id,
+         checkpoint_phase, checkpoint_entry_id, checkpoint_generation, pending_tool_call_ids_json,
          failure_code, failure_message, opened_at, updated_at, closed_at
-       ) VALUES (?, ?, 'starting', NULL, NULL, NULL, ?, ?, NULL)
+       ) VALUES (?, ?, 'starting', NULL, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)
        ON CONFLICT(turn_id) DO NOTHING`,
       turnId,
       channelId,
+      checkpointEntryId,
+      phase,
+      checkpointEntryId,
+      generation,
       now,
       now
     );
+    const leaseActive = this.markCheckpointableWorkActive({ channelId, turnId }).catch((err) => {
+      this.recordLastError("lifecycle.lease_active", err, channelId);
+    });
+    this.ctx.waitUntil?.(leaseActive);
+    return leaseActive;
+  }
+
+  private async captureTurnCheckpoint(
+    channelId: string,
+    turnId: string,
+    runner: Pick<PiRunner, "session"> | undefined,
+    phase: "turn_open" | "model_start"
+  ): Promise<string | null> {
+    let entryId: string | null = null;
+    try {
+      entryId = (await runner?.session?.getLeafId?.()) ?? null;
+    } catch (err) {
+      this.recordLastError(`turn_checkpoint.${phase}`, err, channelId);
+    }
+    this.recordTurnCheckpoint(turnId, phase, entryId, this.pendingToolCallIdsForTurn(turnId));
+    return entryId;
+  }
+
+  private recordTurnCheckpoint(
+    turnId: string,
+    phase: "turn_open" | "model_start",
+    entryId: string | null,
+    pendingToolCallIds: string[]
+  ): void {
+    const now = Date.now();
+    this.sql.exec(
+      `UPDATE agent_turn_runs
+       SET turn_open_cursor_entry_id = CASE WHEN ? = 'turn_open' THEN ? ELSE turn_open_cursor_entry_id END,
+           model_start_cursor_entry_id = CASE WHEN ? = 'model_start' THEN ? ELSE model_start_cursor_entry_id END,
+           checkpoint_phase = ?,
+           checkpoint_entry_id = ?,
+           checkpoint_generation = ?,
+           pending_tool_call_ids_json = ?,
+           updated_at = ?
+       WHERE turn_id = ?`,
+      phase,
+      entryId,
+      phase,
+      entryId,
+      phase,
+      entryId,
+      this.identity.bootGeneration,
+      pendingToolCallIds.length > 0 ? JSON.stringify(pendingToolCallIds) : null,
+      now,
+      turnId
+    );
+  }
+
+  private pendingToolCallIdsForTurn(turnId: string): string[] {
+    return (
+      this.sql
+        .exec(
+          `SELECT transport_call_id FROM agent_method_suspensions
+           WHERE turn_id = ?
+             AND terminal_kind = 'none'
+             AND delivery_status NOT IN ('cancelled', 'superseded', 'ignored', 'stale')
+           ORDER BY created_at, transport_call_id`,
+          turnId
+        )
+        .toArray() as Array<{ transport_call_id: string }>
+    ).map((row) => row.transport_call_id);
+  }
+
+  private recordResumeAttemptOnce(
+    turnId: string,
+    generation: number | null,
+    reason: string
+  ): boolean {
+    if (generation === null) return true;
+    const inserted = this.sql
+      .exec(
+        `INSERT OR IGNORE INTO agent_turn_resume_attempts
+           (turn_id, generation, reason, attempted_at)
+         VALUES (?, ?, ?, ?)
+         RETURNING turn_id`,
+        turnId,
+        generation,
+        reason,
+        Date.now()
+      )
+      .toArray();
+    return inserted.length === 1;
   }
 
   private transitionTurn(
@@ -1291,7 +1438,18 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         ...expectedFrom
       )
       .toArray();
-    return updated.length === 1;
+    const changed = updated.length === 1;
+    if (
+      changed &&
+      (to === "closed" || to === "failed" || to === "interrupted") &&
+      !this.hasAnyNonTerminalTurnRuns()
+    ) {
+      const leaseInactive = this.markCheckpointableWorkInactive().catch((err) => {
+        this.recordLastError("lifecycle.lease_inactive", err, current.channelId);
+      });
+      this.ctx.waitUntil?.(leaseInactive);
+    }
+    return changed;
   }
 
   private assertTurnTransition(from: AgentTurnRunStatus, to: AgentTurnRunStatus): void {
@@ -1299,8 +1457,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (from === to) return;
     if (terminal.includes(from)) throw new Error(`illegal turn transition ${from} -> ${to}`);
     const allowed: Record<AgentTurnRunStatus, AgentTurnRunStatus[]> = {
-      starting: ["running_model", "waiting_external", "failed", "interrupted"],
-      running_model: ["waiting_external", "closing", "failed", "interrupted"],
+      starting: ["running_model", "waiting_external", "continuing", "failed", "interrupted"],
+      running_model: ["waiting_external", "continuing", "closing", "failed", "interrupted"],
       waiting_external: ["continuing", "running_model", "failed", "interrupted"],
       continuing: ["running_model", "waiting_external", "closing", "failed", "interrupted"],
       closing: ["closed", "failed", "interrupted"],
@@ -1371,6 +1529,16 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         case "starting": {
           if (this.turnHasOpenExternalWait(row.turnId)) {
             this.transitionTurn(row.turnId, ["starting"], "waiting_external");
+          } else if (
+            await this.tryReplayInterruptedModelTurn(
+              channelId,
+              runner,
+              row,
+              row.turnOpenCursorEntryId,
+              "starting_replay"
+            )
+          ) {
+            submittedContinue = true;
           } else {
             this.transitionTurn(row.turnId, ["starting"], "interrupted", {
               failureCode: "runner_restarted_before_model",
@@ -1444,25 +1612,44 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           this.recordDebugPhase(channelId, "turn_ledger.continuing_recovered", {
             turnId: row.turnId,
           });
-          this.getOrCreateDispatcher(channelId, runner).submitContinue({ turnId: row.turnId });
-          submittedContinue = true;
+          if (this.recordResumeAttemptOnce(row.turnId, this.identity.bootGeneration, "ledger")) {
+            this.getOrCreateDispatcher(channelId, runner).submitContinue({ turnId: row.turnId });
+            submittedContinue = true;
+          } else {
+            this.recordDebugPhase(channelId, "turn_ledger.continuing_duplicate_resume_skipped", {
+              turnId: row.turnId,
+              generation: this.identity.bootGeneration,
+            });
+          }
           break;
         }
         case "running_model": {
-          this.transitionTurn(row.turnId, ["running_model"], "interrupted", {
-            failureCode: "runner_restarted_mid_model",
-            failureMessage: "Runner restarted during model generation.",
-          });
-          await this.enqueueTurnOutbox({
-            channelId,
-            turnId: row.turnId,
-            kind: "emit_diagnostic",
-            dedupKey: "running-model-interrupted",
-            payload: {
-              message: "Agent turn was interrupted during model generation.",
-            },
-          });
-          await this.drainTurnOutbox(channelId, runner);
+          if (
+            await this.tryReplayInterruptedModelTurn(
+              channelId,
+              runner,
+              row,
+              row.modelStartCursorEntryId ?? row.checkpointEntryId,
+              "running_model_replay"
+            )
+          ) {
+            submittedContinue = true;
+          } else {
+            this.transitionTurn(row.turnId, ["running_model"], "interrupted", {
+              failureCode: "runner_restarted_mid_model",
+              failureMessage: "Runner restarted during model generation.",
+            });
+            await this.enqueueTurnOutbox({
+              channelId,
+              turnId: row.turnId,
+              kind: "emit_diagnostic",
+              dedupKey: "running-model-interrupted",
+              payload: {
+                message: "Agent turn was interrupted during model generation.",
+              },
+            });
+            await this.drainTurnOutbox(channelId, runner);
+          }
           break;
         }
         case "closing": {
@@ -1483,6 +1670,67 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       }
     }
     return submittedContinue;
+  }
+
+  private async tryReplayInterruptedModelTurn(
+    channelId: string,
+    runner: PiRunner,
+    row: AgentTurnRunRow,
+    cursorEntryId: string | null,
+    reason: string
+  ): Promise<boolean> {
+    if (!this.canReplayInterruptedModelTurn()) return false;
+    const safety = this.replayToolSurfaceSafety(channelId);
+    if (!safety.safe) {
+      this.recordDebugPhase(channelId, "turn_ledger.model_replay_unsafe_tool_surface", {
+        turnId: row.turnId,
+        status: row.status,
+        unsafeTools: safety.unsafeTools,
+        reason,
+      });
+      return false;
+    }
+    if (!cursorEntryId) {
+      this.recordDebugPhase(channelId, "turn_ledger.model_replay_missing_cursor", {
+        turnId: row.turnId,
+        status: row.status,
+        reason,
+      });
+      return false;
+    }
+    const entries = await runner.session?.getEntries?.();
+    const target = entries?.find((entry) => entry.id === cursorEntryId);
+    if (!target) {
+      this.recordDebugPhase(channelId, "turn_ledger.model_replay_invalid_cursor", {
+        turnId: row.turnId,
+        status: row.status,
+        cursorEntryId,
+        reason,
+      });
+      return false;
+    }
+    await runner.session?.moveTo?.(target.id);
+    const transitioned = this.transitionTurn(row.turnId, [row.status], "continuing", {
+      resumeCursorEntryId: target.id,
+    });
+    if (!transitioned) return false;
+    if (!this.recordResumeAttemptOnce(row.turnId, this.identity.bootGeneration, reason)) {
+      this.recordDebugPhase(channelId, "turn_ledger.model_replay_duplicate_skipped", {
+        turnId: row.turnId,
+        generation: this.identity.bootGeneration,
+        reason,
+      });
+      return false;
+    }
+    this.recordDebugPhase(channelId, "turn_ledger.model_replay_submitted", {
+      turnId: row.turnId,
+      cursorEntryId: target.id,
+      status: row.status,
+      generation: this.identity.bootGeneration,
+      reason,
+    });
+    this.getOrCreateDispatcher(channelId, runner).submitContinue({ turnId: row.turnId });
+    return true;
   }
 
   private assertSuspensionTransition(
@@ -2544,9 +2792,41 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         name: descriptor.name,
         type: descriptor.type,
         handle: descriptor.handle,
+        natstackDiagnostic: this.lifecycleDiagnosticForTurnLedgerMessage(message),
       },
       idempotencyKey: `turn-ledger-diagnostic:${turnId}`,
     });
+  }
+
+  private lifecycleDiagnosticForTurnLedgerMessage(message: string): Record<string, unknown> | undefined {
+    if (message === "Agent turn was interrupted before model generation began.") {
+      return {
+        type: "lifecycle_recovery",
+        status: "interrupted",
+        title: "Restart interrupted the turn",
+        detail: "The agent restarted before it began responding. No tool work was replayed.",
+        reason: "runner_restarted_before_model",
+      };
+    }
+    if (message === "Agent turn was interrupted during model generation.") {
+      return {
+        type: "lifecycle_recovery",
+        status: "interrupted",
+        title: "Restart interrupted the response",
+        detail: "The partial response was discarded because replay is not enabled for this agent.",
+        reason: "runner_restarted_mid_model",
+      };
+    }
+    if (message.startsWith("Recovered tool result could not continue the agent:")) {
+      return {
+        type: "lifecycle_recovery",
+        status: "failed",
+        title: "Recovery could not continue",
+        detail: message.replace(/^Recovered tool result could not continue the agent:\s*/, ""),
+        reason: "recovery_continue_failed",
+      };
+    }
+    return undefined;
   }
 
   private async enqueueTurnOutbox(opts: {
@@ -2720,6 +3000,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         channel_id TEXT NOT NULL,
         status TEXT NOT NULL,
         resume_cursor_entry_id TEXT,
+        turn_open_cursor_entry_id TEXT,
+        model_start_cursor_entry_id TEXT,
+        checkpoint_phase TEXT,
+        checkpoint_entry_id TEXT,
+        checkpoint_generation INTEGER,
+        pending_tool_call_ids_json TEXT,
         failure_code TEXT,
         failure_message TEXT,
         opened_at INTEGER NOT NULL,
@@ -2730,6 +3016,21 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     this.sql.exec(`
       CREATE INDEX IF NOT EXISTS idx_agent_turn_runs_channel_status
         ON agent_turn_runs(channel_id, status)
+    `);
+    this.ensureColumn("agent_turn_runs", "turn_open_cursor_entry_id", "TEXT");
+    this.ensureColumn("agent_turn_runs", "model_start_cursor_entry_id", "TEXT");
+    this.ensureColumn("agent_turn_runs", "checkpoint_phase", "TEXT");
+    this.ensureColumn("agent_turn_runs", "checkpoint_entry_id", "TEXT");
+    this.ensureColumn("agent_turn_runs", "checkpoint_generation", "INTEGER");
+    this.ensureColumn("agent_turn_runs", "pending_tool_call_ids_json", "TEXT");
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS agent_turn_resume_attempts (
+        turn_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        reason TEXT NOT NULL,
+        attempted_at INTEGER NOT NULL,
+        PRIMARY KEY (turn_id, generation)
+      )
     `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS agent_turn_outbox (
@@ -2821,9 +3122,18 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       const source = (this.env as Record<string, string>)["WORKER_SOURCE"];
       const className = (this.env as Record<string, string>)["WORKER_CLASS_NAME"];
       const sessionId = (this.env as Record<string, string>)["WORKERD_SESSION_ID"];
+      const bootGenerationRaw = (this.env as Record<string, string>)["WORKERD_BOOT_GENERATION"];
+      const bootGeneration =
+        typeof bootGenerationRaw === "string" && bootGenerationRaw.length > 0
+          ? Number.parseInt(bootGenerationRaw, 10)
+          : null;
       if (source && className && sessionId) {
         const doRef: DORef = { source, className, objectKey: key };
-        this.identity.bootstrap(doRef, sessionId);
+        this.identity.bootstrap(
+          doRef,
+          sessionId,
+          Number.isFinite(bootGeneration) ? bootGeneration : null
+        );
         this._bootstrapped = true;
       }
     } catch (err) {
@@ -2836,6 +3146,55 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   protected get doRef(): DORef {
     return this.identity.ref;
+  }
+
+  override async prepareForRestart(
+    _input: LifecyclePrepareInput
+  ): Promise<LifecyclePrepareResult> {
+    this.ensureBootstrapped();
+    for (const [channelId, entry] of this.runners.entries()) {
+      const turnId =
+        (entry.runner as { getCurrentTurnId?: () => string | null }).getCurrentTurnId?.() ??
+        this.currentTurnRunForChannel(channelId)?.turnId;
+      if (turnId) {
+        const row = this.loadTurnRun(turnId);
+        await this.captureTurnCheckpoint(
+          channelId,
+          turnId,
+          entry.runner,
+          row?.status === "running_model" ? "model_start" : "turn_open"
+        );
+      }
+      this.abortContexts.set(channelId, {
+        reason: "interrupt-channel",
+        detail: "workerd-restart",
+        at: Date.now(),
+      });
+      const abort = (entry.runner as { abort?: () => Promise<unknown> }).abort;
+      await abort?.call(entry.runner)?.catch((err) => {
+        this.recordLastError("lifecycle.prepare.abort", err, channelId);
+      });
+    }
+    return { status: "ready" };
+  }
+
+  override async resumeAfterRestart(_input: LifecycleResumeInput): Promise<void> {
+    this.ensureBootstrapped();
+    const channels = this.sql
+      .exec(
+        `SELECT DISTINCT channel_id FROM agent_turn_runs
+         WHERE status NOT IN ('closed', 'failed', 'interrupted')
+         ORDER BY channel_id`
+      )
+      .toArray()
+      .map((row) => row["channel_id"])
+      .filter((channelId): channelId is string => typeof channelId === "string");
+    for (const channelId of channels) {
+      await this.getOrCreateRunner(channelId);
+    }
+    if (channels.length === 0) {
+      await this.markCheckpointableWorkInactive();
+    }
   }
 
   protected createChannelClient(channelId: string): ChannelClient {
@@ -2940,7 +3299,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         });
         const shouldResumeCurrentTurn = opts?.resumeCurrentTurnOnMissingCredential !== false;
         if (shouldResumeCurrentTurn) {
-          const credentialTurnId = this.transitionCurrentTurnToWaiting(
+          const credentialTurnId = await this.transitionCurrentTurnToWaiting(
             channelId,
             this.currentTurnIdForChannel(channelId) ?? undefined
           );
@@ -4184,6 +4543,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       },
       onTurnPhase: async ({ turnId, phase }) => {
         if (phase !== "model_start") return;
+        await this.captureTurnCheckpoint(channelId, turnId, runner, "model_start");
         this.transitionTurn(
           turnId,
           ["starting", "continuing", "waiting_external"],
@@ -4237,6 +4597,46 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   protected createRunner(_channelId: string, opts: PiRunnerOptions): PiRunner {
     return new PiRunner(opts);
+  }
+
+  protected canReplayInterruptedModelTurn(): boolean {
+    return false;
+  }
+
+  protected getRunnerToolReplaySafety(
+    _channelId: string,
+    tool: NonNullable<PiRunnerOptions["extraTools"]>[number]
+  ): ReplayToolSafety {
+    const annotated = tool as typeof tool & { natstackReplay?: { safety?: ReplayToolSafety } };
+    return annotated.natstackReplay?.safety ?? "unsafe";
+  }
+
+  protected getHarnessToolReplaySafety(_channelId: string, toolName: string): ReplayToolSafety {
+    return HARNESS_MODEL_REPLAY_TOOL_SAFETY.get(toolName) ?? "unsafe";
+  }
+
+  private replayToolSurfaceSafety(channelId: string): {
+    safe: boolean;
+    unsafeTools: string[];
+  } {
+    const filter = this.getRunnerToolFilter(channelId);
+    const accepts = (toolName: string) => !filter || filter(toolName);
+    const entries: Array<{ name: string; safety: ReplayToolSafety }> = [];
+
+    for (const [name, safety] of HARNESS_MODEL_REPLAY_TOOL_SAFETY) {
+      if (accepts(name)) entries.push({ name, safety: this.getHarnessToolReplaySafety(channelId, name) });
+    }
+    for (const method of this.buildRoster(channelId)) {
+      if (accepts(method.name)) entries.push({ name: method.name, safety: "journal-before-dispatch" });
+    }
+    for (const tool of [...this.getBuiltInTools(channelId), ...(this.getRunnerTools(channelId) ?? [])]) {
+      if (accepts(tool.name)) {
+        entries.push({ name: tool.name, safety: this.getRunnerToolReplaySafety(channelId, tool) });
+      }
+    }
+
+    const unsafeTools = [...new Set(entries.filter((entry) => entry.safety === "unsafe").map((entry) => entry.name))];
+    return { safe: unsafeTools.length === 0, unsafeTools };
   }
 
   private agentActorForChannel(channelId: string) {
@@ -4421,7 +4821,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     this.transitionTurn(turnId, ["closing"], "closed");
   }
 
-  private transitionCurrentTurnToWaiting(channelId: string, turnId?: string): string {
+  private async transitionCurrentTurnToWaiting(channelId: string, turnId?: string): Promise<string> {
     const currentTurnId = this.currentTurnIdForChannel(channelId);
     const id = turnId ?? currentTurnId;
     if (!id) {
@@ -4434,7 +4834,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     }
     let row = this.loadTurnRun(id);
     if (!row) {
-      this.insertTurnRun(channelId, id);
+      await this.insertTurnRun(channelId, id);
       row = this.loadTurnRun(id);
     }
     if (!row) throw new Error(`Could not create turn ledger row for ${id}`);
@@ -4750,7 +5150,13 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           return turnId;
         }
         const turnId = crypto.randomUUID();
-        this.insertTurnRun(channelId, turnId);
+        let entryId: string | null = null;
+        try {
+          entryId = (await runner.session?.getLeafId?.()) ?? null;
+        } catch (err) {
+          this.recordLastError("turn_checkpoint.turn_open", err, channelId);
+        }
+        await this.insertTurnRun(channelId, turnId, { phase: "turn_open", entryId });
         this.recordDebugPhase(channelId, "turn_ledger.started", {
           turnId,
           workKind: work.kind,
@@ -4941,7 +5347,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
     const invocationId = toolCallId;
     const transportCallId = crypto.randomUUID();
-    const suspensionTurnId = this.transitionCurrentTurnToWaiting(channelId, turnId);
+    const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
     const recorded = await this.recordMethodSuspension({
       channelId,
       transportCallId,
@@ -5020,7 +5426,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
     const invocationId = toolCallId || crypto.randomUUID();
     const transportCallId = crypto.randomUUID();
-    const suspensionTurnId = this.transitionCurrentTurnToWaiting(channelId, turnId);
+    const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
     const recorded = await this.recordMethodSuspension({
       channelId,
       transportCallId,
@@ -5474,7 +5880,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
     const transportCallId = crypto.randomUUID();
     const turnId = this.currentTurnIdForChannel(channelId);
-    const suspensionTurnId = this.transitionCurrentTurnToWaiting(channelId, turnId);
+    const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
     const recorded = await this.recordMethodSuspension({
       channelId,
       transportCallId,
@@ -6445,11 +6851,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const deliveryCursors = this.sql.exec(`SELECT * FROM delivery_cursor`).toArray();
     return { subscriptions, deliveryCursors };
   }
-
-  // Reference SAFE_TOOL_NAMES_DEFAULT to suppress unused-import warnings;
-  // it's exported from the harness package via DEFAULT_SAFE_TOOL_NAMES, but
-  // we keep a local reference here for documentation/symmetry.
-  protected static readonly _SAFE_TOOL_NAMES_REFERENCE = SAFE_TOOL_NAMES_DEFAULT;
 }
 
 function validateAgentMessages(messages: AgentMessage[], source: string): AgentMessage[] {

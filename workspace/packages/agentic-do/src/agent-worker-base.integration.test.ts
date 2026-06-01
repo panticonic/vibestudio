@@ -51,6 +51,40 @@ class TestAgentWorker extends AgentWorkerBase {
   ): Promise<void> {
     return this.handleRunnerAgentEndForTurnLedger(channelId, runner, event);
   }
+
+  public testInsertTurnRunWithCheckpoint(
+    channelId: string,
+    turnId: string,
+    checkpoint?: { entryId?: string | null; phase?: "turn_open" | "model_start" }
+  ): void {
+    (
+      this as unknown as {
+        insertTurnRun(
+          channelId: string,
+          turnId: string,
+          checkpoint?: { entryId?: string | null; phase?: "turn_open" | "model_start" }
+        ): void;
+      }
+    ).insertTurnRun(channelId, turnId, checkpoint);
+  }
+
+  public testCaptureTurnCheckpoint(
+    channelId: string,
+    turnId: string,
+    runner: Pick<PiRunner, "session">,
+    phase: "turn_open" | "model_start"
+  ): Promise<string | null> {
+    return (
+      this as unknown as {
+        captureTurnCheckpoint(
+          channelId: string,
+          turnId: string,
+          runner: Pick<PiRunner, "session">,
+          phase: "turn_open" | "model_start"
+        ): Promise<string | null>;
+      }
+    ).captureTurnCheckpoint(channelId, turnId, runner, phase);
+  }
 }
 
 class InterruptTestAgentWorker extends TestAgentWorker {
@@ -60,6 +94,87 @@ class InterruptTestAgentWorker extends TestAgentWorker {
 
   public testInterruptAllRunners(): Promise<void> {
     return this.interruptAllRunners();
+  }
+}
+
+class ReplayEnabledTestAgentWorker extends TestAgentWorker {
+  protected override canReplayInterruptedModelTurn(): boolean {
+    return true;
+  }
+
+  protected override getBuiltInTools(_channelId: string): NonNullable<PiRunnerOptions["extraTools"]> {
+    return [];
+  }
+
+  protected override getRunnerToolFilter(_channelId: string): PiRunnerOptions["toolFilter"] {
+    const unsafeHarnessTools = new Set(["edit", "write", "web_search", "web_fetch", "web_read"]);
+    return (toolName) => !unsafeHarnessTools.has(toolName);
+  }
+}
+
+class ReplayEnabledUnfilteredAgentWorker extends TestAgentWorker {
+  protected override canReplayInterruptedModelTurn(): boolean {
+    return true;
+  }
+
+  protected override getBuiltInTools(_channelId: string): NonNullable<PiRunnerOptions["extraTools"]> {
+    return [];
+  }
+}
+
+class ReplayEnabledUnsafeToolAgentWorker extends ReplayEnabledTestAgentWorker {
+  protected override getRunnerTools(_channelId: string): PiRunnerOptions["extraTools"] {
+    return [
+      {
+        name: "unsafe_mutation",
+        label: "unsafe_mutation",
+        description: "Mutates external state without durable journaling.",
+        parameters: { type: "object", properties: {}, additionalProperties: false } as never,
+        execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+      },
+    ];
+  }
+}
+
+class LeaseBarrierTestAgentWorker extends TestAgentWorker {
+  leaseStarted = 0;
+  resolveLease: (() => void) | null = null;
+  private leasePromise = new Promise<void>((resolve) => {
+    this.resolveLease = resolve;
+  });
+
+  protected override markCheckpointableWorkActive(_detail?: unknown): Promise<void> {
+    this.leaseStarted += 1;
+    return this.leasePromise;
+  }
+
+  public testDispatcher(channelId: string, runner: TurnDispatcherRunner) {
+    return this.getOrCreateDispatcher(channelId, runner as PiRunner);
+  }
+
+  public testTransitionCurrentTurnToWaiting(channelId: string, turnId: string): Promise<string> {
+    return (
+      this as unknown as {
+        transitionCurrentTurnToWaiting(channelId: string, turnId?: string): Promise<string>;
+      }
+    ).transitionCurrentTurnToWaiting(channelId, turnId);
+  }
+}
+
+class ReplayEnabledSafeToolAgentWorker extends ReplayEnabledTestAgentWorker {
+  protected override getRunnerTools(_channelId: string): PiRunnerOptions["extraTools"] {
+    return [
+      {
+        name: "safe_lookup",
+        label: "safe_lookup",
+        description: "Pure read tool.",
+        parameters: { type: "object", properties: {}, additionalProperties: false } as never,
+        natstackReplay: { safety: "pure-read" },
+        execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+      } as NonNullable<PiRunnerOptions["extraTools"]>[number] & {
+        natstackReplay: { safety: "pure-read" };
+      },
+    ];
   }
 }
 
@@ -336,6 +451,54 @@ describe("AgentWorkerBase method suspension ledger", () => {
       setTypingState: vi.fn(),
     };
   }
+
+  it("awaits lifecycle lease activation before starting model work", async () => {
+    const { instance } = await createTestDO(LeaseBarrierTestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as LeaseBarrierTestAgentWorker;
+    const prompt = vi.fn(async () => undefined);
+    const runner: TurnDispatcherRunner = {
+      subscribe: vi.fn(() => () => undefined),
+      buildUserMessage: vi.fn(() => ({ role: "user", content: "hello" }) as AgentMessage),
+      prompt,
+      continueAgent: vi.fn(async () => undefined),
+      steerMessage: vi.fn(async () => undefined),
+      clearSteeringQueue: vi.fn(async () => undefined),
+    };
+
+    worker.testDispatcher("chat-1", runner).submit({ text: "hello" } as never);
+
+    await expect.poll(() => worker.leaseStarted).toBe(1);
+    expect(prompt).not.toHaveBeenCalled();
+
+    worker.resolveLease?.();
+
+    await expect.poll(() => prompt.mock.calls.length).toBe(1);
+  });
+
+  it("awaits lifecycle lease activation when external-wait recovery creates a missing turn row", async () => {
+    const { instance } = await createTestDO(LeaseBarrierTestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as LeaseBarrierTestAgentWorker;
+    let settled = false;
+
+    const promise = worker
+      .testTransitionCurrentTurnToWaiting("chat-1", "turn-missing")
+      .then((turnId) => {
+        settled = true;
+        return turnId;
+      });
+
+    await expect.poll(() => worker.leaseStarted).toBe(1);
+    expect(settled).toBe(false);
+
+    worker.resolveLease?.();
+
+    await expect(promise).resolves.toBe("turn-missing");
+    expect(settled).toBe(true);
+  });
 
   it("CASes suspension delivery status against the caller-observed state", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
@@ -831,9 +994,11 @@ describe("AgentWorkerBase method suspension ledger", () => {
     const legal: Array<[string, string]> = [
       ["starting", "running_model"],
       ["starting", "waiting_external"],
+      ["starting", "continuing"],
       ["starting", "failed"],
       ["starting", "interrupted"],
       ["running_model", "waiting_external"],
+      ["running_model", "continuing"],
       ["running_model", "closing"],
       ["running_model", "failed"],
       ["running_model", "interrupted"],
@@ -866,6 +1031,31 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(() => worker.transitionTurn("terminal", ["failed"], "running_model")).toThrow(
       "illegal turn transition"
     );
+  });
+
+  it("persists turn-open and model-start replay checkpoints", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as TestAgentWorker;
+
+    worker.testInsertTurnRunWithCheckpoint("chat-1", "turn-checkpoint", {
+      phase: "turn_open",
+      entryId: "leaf-open",
+    });
+    await worker.testCaptureTurnCheckpoint(
+      "chat-1",
+      "turn-checkpoint",
+      { session: { getLeafId: vi.fn().mockResolvedValue("leaf-model") } } as unknown as PiRunner,
+      "model_start"
+    );
+
+    expect(turnStatus(sql, "turn-checkpoint")).toMatchObject({
+      turn_open_cursor_entry_id: "leaf-open",
+      model_start_cursor_entry_id: "leaf-model",
+      checkpoint_phase: "model_start",
+      checkpoint_entry_id: "leaf-model",
+    });
   });
 
   it("returns false (never throws) when the current status is outside expectedFrom", async () => {
@@ -1143,6 +1333,224 @@ describe("AgentWorkerBase method suspension ledger", () => {
       "Agent turn was interrupted during model generation.",
       expect.objectContaining({ idempotencyKey: "turn-ledger-diagnostic:turn-running" })
     );
+  });
+
+  it("replays running_model turns only when the subclass opts in and a cursor exists", async () => {
+    const { instance, sql, call } = await createTestDO(ReplayEnabledTestAgentWorker, {
+      __objectKey: "agent-test",
+      WORKER_SOURCE: "workers/test-agent",
+      WORKER_CLASS_NAME: "ReplayEnabledTestAgentWorker",
+      WORKERD_SESSION_ID: "session-1",
+      WORKERD_BOOT_GENERATION: "42",
+    });
+    await call("getState");
+    const submitContinue = vi.fn();
+    const moveTo = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      dispatchers: Map<string, unknown>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.dispatchers.set("chat-1", { submitContinue, getDebugState: () => ({ busy: false }) });
+    insertTurnRun(sql, { turnId: "turn-replay", status: "running_model" });
+    sql.exec(
+      `UPDATE agent_turn_runs
+       SET model_start_cursor_entry_id = ?, checkpoint_entry_id = ?, checkpoint_generation = ?
+       WHERE turn_id = ?`,
+      "entry-model",
+      "entry-model",
+      42,
+      "turn-replay"
+    );
+    const runner = {
+      session: {
+        getEntries: vi.fn().mockResolvedValue([{ id: "entry-model", type: "message" }]),
+        moveTo,
+      },
+    } as unknown as PiRunner;
+
+    await expect(worker.recoverFromTurnLedger("chat-1", runner)).resolves.toBe(true);
+    await expect(worker.recoverFromTurnLedger("chat-1", runner)).resolves.toBe(false);
+
+    expect(moveTo).toHaveBeenCalledWith("entry-model");
+    expect(submitContinue).toHaveBeenCalledTimes(1);
+    expect(submitContinue).toHaveBeenCalledWith({ turnId: "turn-replay" });
+    expect(turnStatus(sql, "turn-replay")).toMatchObject({
+      status: "continuing",
+      resume_cursor_entry_id: "entry-model",
+    });
+    expect(
+      sql
+        .exec(
+          `SELECT turn_id, generation, reason FROM agent_turn_resume_attempts WHERE turn_id = ?`,
+          "turn-replay"
+        )
+        .toArray()
+    ).toEqual([{ turn_id: "turn-replay", generation: 42, reason: "running_model_replay" }]);
+  });
+
+  it("does not replay running_model turns when a reachable tool is unsafe", async () => {
+    const { instance, sql, call } = await createTestDO(ReplayEnabledUnsafeToolAgentWorker, {
+      __objectKey: "agent-test",
+      WORKER_SOURCE: "workers/test-agent",
+      WORKER_CLASS_NAME: "ReplayEnabledUnsafeToolAgentWorker",
+      WORKERD_BOOT_GENERATION: "42",
+    });
+    await call("getState");
+    const send = vi.fn().mockResolvedValue(undefined);
+    const submitContinue = vi.fn();
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      dispatchers: Map<string, unknown>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(diagnosticChannel(send));
+    worker.dispatchers.set("chat-1", { submitContinue, getDebugState: () => ({ busy: false }) });
+    insertTurnRun(sql, { turnId: "turn-unsafe", status: "running_model" });
+    sql.exec(
+      `UPDATE agent_turn_runs SET model_start_cursor_entry_id = ? WHERE turn_id = ?`,
+      "entry-model",
+      "turn-unsafe"
+    );
+
+    await expect(
+      worker.recoverFromTurnLedger("chat-1", {
+        session: {
+          getEntries: vi.fn().mockResolvedValue([{ id: "entry-model", type: "message" }]),
+          moveTo: vi.fn(),
+        },
+      } as unknown as PiRunner)
+    ).resolves.toBe(false);
+
+    expect(submitContinue).not.toHaveBeenCalled();
+    expect(turnStatus(sql, "turn-unsafe")).toMatchObject({
+      status: "interrupted",
+      failure_code: "runner_restarted_mid_model",
+    });
+    expect(send).toHaveBeenCalledWith(
+      "do:agent",
+      expect.any(String),
+      "Agent turn was interrupted during model generation.",
+      expect.objectContaining({ idempotencyKey: "turn-ledger-diagnostic:turn-unsafe" })
+    );
+  });
+
+  it("does not replay when unsafe default harness tools remain reachable", async () => {
+    const { instance, sql, call } = await createTestDO(ReplayEnabledUnfilteredAgentWorker, {
+      __objectKey: "agent-test",
+      WORKER_SOURCE: "workers/test-agent",
+      WORKER_CLASS_NAME: "ReplayEnabledUnfilteredAgentWorker",
+      WORKERD_BOOT_GENERATION: "42",
+    });
+    await call("getState");
+    const send = vi.fn().mockResolvedValue(undefined);
+    const submitContinue = vi.fn();
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      dispatchers: Map<string, unknown>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(diagnosticChannel(send));
+    worker.dispatchers.set("chat-1", { submitContinue, getDebugState: () => ({ busy: false }) });
+    insertTurnRun(sql, { turnId: "turn-harness-unsafe", status: "running_model" });
+    sql.exec(
+      `UPDATE agent_turn_runs SET model_start_cursor_entry_id = ? WHERE turn_id = ?`,
+      "entry-model",
+      "turn-harness-unsafe"
+    );
+
+    await expect(
+      worker.recoverFromTurnLedger("chat-1", {
+        session: {
+          getEntries: vi.fn().mockResolvedValue([{ id: "entry-model", type: "message" }]),
+          moveTo: vi.fn(),
+        },
+      } as unknown as PiRunner)
+    ).resolves.toBe(false);
+
+    expect(submitContinue).not.toHaveBeenCalled();
+    expect(turnStatus(sql, "turn-harness-unsafe")).toMatchObject({
+      status: "interrupted",
+      failure_code: "runner_restarted_mid_model",
+    });
+  });
+
+  it("allows running_model replay when every reachable tool is annotated safe", async () => {
+    const { instance, sql, call } = await createTestDO(ReplayEnabledSafeToolAgentWorker, {
+      __objectKey: "agent-test",
+      WORKER_SOURCE: "workers/test-agent",
+      WORKER_CLASS_NAME: "ReplayEnabledSafeToolAgentWorker",
+      WORKERD_BOOT_GENERATION: "42",
+    });
+    await call("getState");
+    const submitContinue = vi.fn();
+    const moveTo = vi.fn().mockResolvedValue(undefined);
+    const worker = instance as unknown as {
+      dispatchers: Map<string, unknown>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.dispatchers.set("chat-1", { submitContinue, getDebugState: () => ({ busy: false }) });
+    insertTurnRun(sql, { turnId: "turn-safe", status: "running_model" });
+    sql.exec(
+      `UPDATE agent_turn_runs SET model_start_cursor_entry_id = ? WHERE turn_id = ?`,
+      "entry-model",
+      "turn-safe"
+    );
+
+    await expect(
+      worker.recoverFromTurnLedger("chat-1", {
+        session: {
+          getEntries: vi.fn().mockResolvedValue([{ id: "entry-model", type: "message" }]),
+          moveTo,
+        },
+      } as unknown as PiRunner)
+    ).resolves.toBe(true);
+
+    expect(moveTo).toHaveBeenCalledWith("entry-model");
+    expect(submitContinue).toHaveBeenCalledWith({ turnId: "turn-safe" });
+    expect(turnStatus(sql, "turn-safe")).toMatchObject({
+      status: "continuing",
+      resume_cursor_entry_id: "entry-model",
+    });
+  });
+
+  it("keeps running_model replay disabled by default even with a valid cursor", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const submitContinue = vi.fn();
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      dispatchers: Map<string, unknown>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(diagnosticChannel(send));
+    worker.dispatchers.set("chat-1", { submitContinue, getDebugState: () => ({ busy: false }) });
+    insertTurnRun(sql, { turnId: "turn-no-replay", status: "running_model" });
+    sql.exec(
+      `UPDATE agent_turn_runs SET model_start_cursor_entry_id = ? WHERE turn_id = ?`,
+      "entry-model",
+      "turn-no-replay"
+    );
+
+    await worker.recoverFromTurnLedger("chat-1", {
+      session: {
+        getEntries: vi.fn().mockResolvedValue([{ id: "entry-model", type: "message" }]),
+        moveTo: vi.fn(),
+      },
+    } as unknown as PiRunner);
+
+    expect(submitContinue).not.toHaveBeenCalled();
+    expect(turnStatus(sql, "turn-no-replay")).toMatchObject({
+      status: "interrupted",
+      failure_code: "runner_restarted_mid_model",
+    });
   });
 
   it("drains close_turn_projection for closing turns and marks them closed", async () => {

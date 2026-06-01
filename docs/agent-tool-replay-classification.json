@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "defaultPolicy": "unsafe",
+  "classes": {
+    "journal-before-dispatch": {
+      "replaySafe": true,
+      "description": "A durable intent or suspension row is committed before any external side effect is dispatched."
+    },
+    "idempotent-by-key": {
+      "replaySafe": true,
+      "description": "The effect accepts a stable idempotency key and replay uses the same key."
+    },
+    "pure-read": {
+      "replaySafe": true,
+      "description": "The tool has no external side effects beyond repeatable reads."
+    },
+    "unsafe": {
+      "replaySafe": false,
+      "description": "The tool can perform an unjournaled or nondeterministic side effect."
+    }
+  },
+  "surfaces": [
+    {
+      "id": "agentic-do.set-title",
+      "paths": ["workspace/packages/agentic-do/src/trajectory-vessel-base.ts"],
+      "class": "unsafe",
+      "notes": "Built-in title mutation is disabled for model replay unless a subclass filters or reclassifies it."
+    },
+    {
+      "id": "agentic-do.channel-method",
+      "paths": ["workspace/packages/agentic-do/src/trajectory-vessel-base.ts"],
+      "class": "journal-before-dispatch",
+      "notes": "agent_method_suspensions rows are written before channel.callMethod dispatch."
+    },
+    {
+      "id": "harness.approval-gate",
+      "paths": ["packages/harness/src/extensions/approval-gate.ts"],
+      "class": "journal-before-dispatch",
+      "notes": "Replay-safe only when invoked through the agent suspension ledger."
+    },
+    {
+      "id": "harness.ask-user",
+      "paths": ["packages/harness/src/extensions/ask-user.ts"],
+      "class": "journal-before-dispatch",
+      "notes": "Replay-safe only when invoked through the agent suspension ledger."
+    },
+    {
+      "id": "harness.fs.read",
+      "paths": [
+        "packages/harness/src/tools/read.ts",
+        "packages/harness/src/tools/ls.ts",
+        "packages/harness/src/tools/grep.ts",
+        "packages/harness/src/tools/find.ts"
+      ],
+      "class": "pure-read",
+      "notes": "Read-only filesystem inspection tools."
+    },
+    {
+      "id": "harness.fs.write",
+      "paths": [
+        "packages/harness/src/tools/write.ts",
+        "packages/harness/src/tools/edit.ts",
+        "packages/harness/src/tools/edit-diff.ts",
+        "packages/harness/src/tools/truncate.ts"
+      ],
+      "class": "unsafe",
+      "notes": "Filesystem mutations need journal-before-dispatch wrapping before model replay can be enabled."
+    },
+    {
+      "id": "harness.web",
+      "paths": ["packages/harness/src/extensions/web"],
+      "class": "unsafe",
+      "notes": "Network reads are nondeterministic and may consume quota; classify per provider before replay."
+    },
+    {
+      "id": "extensions.dynamic-tools",
+      "paths": ["packages/extension-host/src", "workspace/skills"],
+      "class": "unsafe",
+      "notes": "Dynamically loaded tools are unsafe until they declare replay semantics."
+    }
+  ]
+}
