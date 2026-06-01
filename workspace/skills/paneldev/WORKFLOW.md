@@ -48,10 +48,9 @@ console.log(info.id, info.source, info.contextId, info.runtimeEntityId, info.eff
 ```
 
 `effectiveVersion` is the git/effective-version hash for the source currently
-running in that panel's active runtime entity. `reload()` targets the handle's
-slot id; if the caller is a descendant of that target, the host may tear down
-the caller's transport and cancel the eval even though the requested target was
-the ancestor.
+running in that panel's active runtime entity. `reload()` reloads exactly the
+panel named by the handle's `id`. It must not unload the target's runtime lease
+or rebuild/reload the panel's descendants.
 
 5. Tune running state without reopening:
 

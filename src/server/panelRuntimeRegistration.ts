@@ -137,7 +137,7 @@ export function resolveImplicitCreateParentId(input: {
   return input.hasPanel(callerSlotId) ? asPanelSlotId(callerSlotId) : undefined;
 }
 
-async function createServerPanelTreeBridge(
+export async function createServerPanelTreeBridge(
   deps: CommonDeps
 ): Promise<
   (request: import("./services/panelTreeService.js").PanelTreeBridgeRequest) => Promise<unknown>
@@ -464,17 +464,16 @@ async function createServerPanelTreeBridge(
         return;
       case "reload": {
         const panelId = String(args[0]);
-        const currentHolder = deps.panelRuntimeCoordinator?.resolveHostForSlot(panelId) ?? null;
-        if (currentHolder && !currentHolder.supportsCdp) {
-          throw Object.assign(
-            new Error(`Cannot reload panel ${panelId} while it is held by a non-CDP host`),
-            { code: "panel_reload_unavailable_mobile_held" }
-          );
-        }
-        deps.panelRuntimeCoordinator?.unloadSlot(panelId);
-        const result = await ensureDefaultLoaded(panelId);
+        const cdpBridge = await ensureHostCommandTargetReady(panelId);
+        await cdpBridge.sendTargetCommand(panelId, request.callerId, "reload", []);
+        const result = {
+          panelId,
+          status: "reloaded",
+          focused: false,
+          loaded: true,
+        };
         emitTreeSnapshot();
-        return { ...result, status: result.loaded ? "reloaded" : result.status };
+        return result;
       }
       case "snapshot": {
         const panelId = String(args[0]);
