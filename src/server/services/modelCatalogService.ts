@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { getModels, getProviders, getSupportedThinkingLevels } from "@earendil-works/pi-ai";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import {
   isTemplatedBaseUrl,
@@ -14,6 +13,8 @@ import type {
 } from "@natstack/shared/models/catalog";
 
 const AGENT_THINKING_LEVELS = new Set<string>(["minimal", "low", "medium", "high"]);
+
+type PiAiModule = typeof import("@earendil-works/pi-ai");
 
 /**
  * Flagship-newest curation. pi carries no release-date/rank field, so we keep a
@@ -74,7 +75,12 @@ function pickFlagship(rule: FlagshipRule, models: { id: string }[]): string | nu
   return candidates.reduce((best, m) => (compareVersions(m.id, best.id) > 0 ? m : best)).id;
 }
 
-function buildCatalog(): ModelCatalog {
+async function loadPiAi(): Promise<PiAiModule> {
+  return import("@earendil-works/pi-ai");
+}
+
+async function buildCatalog(): Promise<ModelCatalog> {
+  const { getModels, getProviders, getSupportedThinkingLevels } = await loadPiAi();
   const providerIds = getProviders();
   const providers: ModelCatalogProvider[] = [];
   const models: ModelCatalogEntry[] = [];
@@ -140,7 +146,7 @@ export function createModelCatalogService(): ServiceDefinition {
     handler: async (_ctx, method) => {
       switch (method) {
         case "listCatalog":
-          if (!cached) cached = buildCatalog();
+          if (!cached) cached = await buildCatalog();
           return cached;
         default:
           throw new Error(`Unknown models method: ${method}`);
