@@ -1,5 +1,6 @@
 import { useEffect, useId, useState } from "react";
 import { Badge, Box, Button, Card, Code, Dialog, Flex, Heading, Text } from "@radix-ui/themes";
+import { useShellOverlay } from "../shell/useShellOverlay";
 
 export interface ConsentDialogProps {
   providerId: string;
@@ -263,6 +264,7 @@ export default function ConsentDialog({
   onDeny,
   open,
 }: ConsentDialogProps) {
+  useShellOverlay(open);
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | undefined>(undefined);
 
   useEffect(() => {

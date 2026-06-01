@@ -558,9 +558,14 @@ async function main() {
   const { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } =
     await import("./services/deviceAuthStore.js");
   const deviceAuthStore = new DeviceAuthStore(path.join(statePath, "auth", "devices.json"));
-  const startupPairingCode = !ipcChannel
-    ? deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS)
-    : null;
+  const startupPairingCodes = !ipcChannel
+    ? [
+        deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
+        deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
+      ]
+    : [];
+  const startupPairingCode = startupPairingCodes[0] ?? null;
+  const startupQrPairingCode = startupPairingCodes[1] ?? null;
 
   const workerdGatewayToken = randomBytes(32).toString("hex");
   const { CredentialStore } = await import("../../packages/shared/src/credentials/store.js");
@@ -2753,6 +2758,9 @@ async function main() {
     }
     if (startupPairingCode) {
       console.log(`  Pairing code: ${startupPairingCode}`);
+      if (startupQrPairingCode) {
+        console.log(`  QR pairing code: ${startupQrPairingCode}`);
+      }
       console.log(
         `  Pairing TTL:  ${Math.round(DEFAULT_PAIRING_CODE_TTL_MS / 60_000)} minutes (server exits if unused)`
       );
@@ -2773,6 +2781,12 @@ async function main() {
         connectUrl: pairingTargetUrl,
         adminToken,
         pairingCode: startupPairingCode,
+        qrPairingCode: startupQrPairingCode,
+        pairingCodes: {
+          desktop: startupPairingCode,
+          mobile: startupQrPairingCode,
+          qr: startupQrPairingCode,
+        },
         serverId: deviceAuthStore.getServerId(),
         serverBootId,
         tokenFilePath,
@@ -2790,6 +2804,7 @@ async function main() {
     if (args.printCredentials) {
       console.log(`\nNATSTACK_ADMIN_TOKEN=${adminToken}`);
       if (startupPairingCode) console.log(`NATSTACK_PAIRING_CODE=${startupPairingCode}`);
+      if (startupQrPairingCode) console.log(`NATSTACK_QR_PAIRING_CODE=${startupQrPairingCode}`);
     }
   }
 
@@ -2842,9 +2857,12 @@ async function main() {
       if (record?.["type"] === "shutdown") void shutdown();
     });
   } else {
-    if (startupPairingCode) {
+    if (startupPairingCodes.length > 0) {
       startupPairingExpiryTimer = setTimeout(() => {
-        if (!deviceAuthStore.hasPendingPairingCode(startupPairingCode)) return;
+        const allStartupCodesStillPending = startupPairingCodes.every((code) =>
+          deviceAuthStore.hasPendingPairingCode(code)
+        );
+        if (!allStartupCodesStillPending) return;
         console.warn(
           `[Server] Startup pairing code expired after ${Math.round(
             DEFAULT_PAIRING_CODE_TTL_MS / 60_000

@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge, Box, Button, Callout, Code, Flex, Table, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
+import QRCode from "qrcode-terminal/vendor/QRCode/index.js";
+import QRErrorCorrectLevel from "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js";
 import { remoteCred, type DeviceRecord, type PairingInvite } from "../shell/client";
 
 export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: string }) {
@@ -77,17 +79,21 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
           <Callout.Text>
             <Flex direction="column" gap="2">
               <Text>
-                Pairing code <Code>{invite.code}</Code> expires at{" "}
-                {formatTime(invite.expiresAt)}.
+                Pairing code <Code>{invite.code}</Code> expires at {formatTime(invite.expiresAt)}.
               </Text>
               {invite.deepLink ? (
-                <Flex gap="2" align="center" wrap="wrap">
-                  <Box style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
-                    <Code>{invite.deepLink}</Code>
-                  </Box>
-                  <Button size="1" variant="soft" onClick={() => void copyInvite()}>
-                    {copyLabel}
-                  </Button>
+                <Flex gap="3" align="start" wrap="wrap">
+                  <PairingQrCode value={invite.deepLink} />
+                  <Flex direction="column" gap="2" style={{ minWidth: 0, flex: "1 1 260px" }}>
+                    <Box style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
+                      <Code>{invite.deepLink}</Code>
+                    </Box>
+                    <Box>
+                      <Button size="1" variant="soft" onClick={() => void copyInvite()}>
+                        {copyLabel}
+                      </Button>
+                    </Box>
+                  </Flex>
                 </Flex>
               ) : null}
             </Flex>
@@ -177,4 +183,54 @@ export function PairedDevicesSection({ currentDeviceId }: { currentDeviceId?: st
 function formatTime(value: number | undefined): string {
   if (!value) return "never";
   return new Date(value).toLocaleString();
+}
+
+function PairingQrCode({ value }: { value: string }) {
+  const matrix = useMemo(() => createQrMatrix(value), [value]);
+  const quietZone = 4;
+  const viewSize = matrix.length + quietZone * 2;
+  const path = matrix
+    .flatMap((row, rowIndex) =>
+      row.map((dark, colIndex) =>
+        dark ? `M${colIndex + quietZone} ${rowIndex + quietZone}h1v1h-1z` : ""
+      )
+    )
+    .join("");
+
+  return (
+    <Box
+      style={{
+        background: "white",
+        border: "1px solid var(--gray-a5)",
+        borderRadius: 6,
+        flex: "0 0 auto",
+        lineHeight: 0,
+        padding: 8,
+      }}
+    >
+      <svg
+        aria-label="Pairing QR code"
+        height="176"
+        role="img"
+        shapeRendering="crispEdges"
+        viewBox={`0 0 ${viewSize} ${viewSize}`}
+        width="176"
+      >
+        <title>Pairing QR code</title>
+        <rect fill="white" height={viewSize} width={viewSize} />
+        <path d={path} fill="#11181c" />
+      </svg>
+    </Box>
+  );
+}
+
+function createQrMatrix(value: string): boolean[][] {
+  const qrcode = new QRCode(-1, QRErrorCorrectLevel.L);
+  qrcode.addData(value);
+  qrcode.make();
+
+  const moduleCount = qrcode.getModuleCount();
+  return Array.from({ length: moduleCount }, (_unused, row) =>
+    Array.from({ length: moduleCount }, (_unusedColumn, col) => qrcode.isDark(row, col))
+  );
 }

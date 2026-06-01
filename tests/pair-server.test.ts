@@ -48,10 +48,14 @@ describe("pair-server runner", () => {
         const readyIndex = serverArgs.indexOf("--ready-file");
         readyFile = serverArgs[readyIndex + 1] ?? "";
         setTimeout(() => {
-          fs.writeFileSync(readyFile, JSON.stringify({
-            connectUrl: "http://127.0.0.1:3456",
-            pairingCode: "PAIRING_READY_CODE_123",
-          }));
+          fs.writeFileSync(
+            readyFile,
+            JSON.stringify({
+              connectUrl: "http://127.0.0.1:3456",
+              pairingCode: "PAIRING_READY_CODE_123",
+              qrPairingCode: "PAIRING_QR_CODE_123",
+            })
+          );
         }, 10);
         return child;
       },
@@ -62,7 +66,14 @@ describe("pair-server runner", () => {
     const output = logText(logSpy);
     expect(output).toContain("Pair Test");
     expect(output).toContain("Gateway:    http://127.0.0.1:3456");
-    expect(output).toContain("natstack://connect?url=http%3A%2F%2F127.0.0.1%3A3456&code=PAIRING_READY_CODE_123");
+    expect(output).toContain("Pair code:  PAIRING_READY_CODE_123");
+    expect(output).toContain("QR code:    PAIRING_QR_CODE_123");
+    expect(output).toContain(
+      "natstack://connect?url=http%3A%2F%2F127.0.0.1%3A3456&code=PAIRING_READY_CODE_123"
+    );
+    expect(output).toContain(
+      "natstack://connect?url=http%3A%2F%2F127.0.0.1%3A3456&code=PAIRING_QR_CODE_123"
+    );
 
     child.emit("exit", 0, null);
     expect(fs.existsSync(path.dirname(readyFile))).toBe(false);
@@ -82,10 +93,13 @@ describe("pair-server runner", () => {
         spawnServer({ serverArgs }: { serverArgs: string[] }) {
           expect(serverArgs).toEqual(["dist/server.mjs", "--ready-file", readyFile]);
           setTimeout(() => {
-            fs.writeFileSync(readyFile, JSON.stringify({
-              connectUrl: "http://127.0.0.1:3456",
-              pairingCode: "PAIRING_CUSTOM_CODE_123",
-            }));
+            fs.writeFileSync(
+              readyFile,
+              JSON.stringify({
+                connectUrl: "http://127.0.0.1:3456",
+                pairingCode: "PAIRING_CUSTOM_CODE_123",
+              })
+            );
           }, 10);
           return child;
         },
@@ -98,6 +112,36 @@ describe("pair-server runner", () => {
     } finally {
       fs.rmSync(readyDir, { recursive: true, force: true });
     }
+  });
+
+  it("waits briefly for a QR-specific pairing code when reading stdout", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const child = new FakeChild();
+
+    runPairServer(config, ["--host", "127.0.0.1", "--port", "3456"], {
+      spawnServer() {
+        setTimeout(() => {
+          child.stdout.write("Mobile URL: http://127.0.0.1:3456\n");
+          child.stdout.write("Pairing code: PAIRING_STDOUT_CODE_123\n");
+          child.stdout.write("QR pairing code: PAIRING_STDOUT_QR_123\n");
+        }, 10);
+        return child;
+      },
+      onChildExit: () => true,
+    });
+
+    await waitFor(() => logText(logSpy).includes("PAIRING_STDOUT_QR_123"));
+    const output = logText(logSpy);
+    expect(output).toContain(
+      "natstack://connect?url=http%3A%2F%2F127.0.0.1%3A3456&code=PAIRING_STDOUT_CODE_123"
+    );
+    expect(output).toContain(
+      "natstack://connect?url=http%3A%2F%2F127.0.0.1%3A3456&code=PAIRING_STDOUT_QR_123"
+    );
+
+    child.emit("exit", 0, null);
   });
 
   it("uses the live TypeScript server entry when requested", async () => {
@@ -131,7 +175,10 @@ describe("pair-server runner", () => {
 });
 
 function logText(spy: { mock: { calls: unknown[][] } }): string {
-  return spy.mock.calls.flat().map((value) => String(value)).join("\n");
+  return spy.mock.calls
+    .flat()
+    .map((value) => String(value))
+    .join("\n");
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {

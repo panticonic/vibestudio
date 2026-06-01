@@ -71,7 +71,10 @@ export function parseConnectServerUrl(rawUrl) {
     server.search ||
     server.hash
   ) {
-    return { kind: "error", reason: "Server URL must be an origin without a path, query, or fragment" };
+    return {
+      kind: "error",
+      reason: "Server URL must be an origin without a path, query, or fragment",
+    };
   }
   if (server.protocol === "http:" && !isTrustedCleartextHost(server.hostname)) {
     return {
@@ -182,20 +185,29 @@ export function printConnectBanner({
   title,
   gatewayUrl,
   pairingCode,
+  qrPairingCode = null,
   deepLinkLabel = "Deep link",
   clientCommandLabel = null,
   instructions = "Open the QR code with the Android camera. NatStack will confirm and save the connection.",
 }) {
   const deepLink = createConnectDeepLink(gatewayUrl, pairingCode);
+  const effectiveQrPairingCode = qrPairingCode || pairingCode;
+  const qrDeepLink = createConnectDeepLink(gatewayUrl, effectiveQrPairingCode);
   const divider = "=".repeat(72);
   console.log(`\n${divider}`);
   console.log(`  ${title}`);
   console.log(divider);
   console.log(`  Gateway:    ${gatewayUrl}`);
   console.log(`  Pair code:  ${pairingCode}`);
+  if (effectiveQrPairingCode !== pairingCode) {
+    console.log(`  QR code:    ${effectiveQrPairingCode}`);
+  }
   console.log(`  ${deepLinkLabel}:  ${deepLink}`);
+  if (effectiveQrPairingCode !== pairingCode) {
+    console.log(`  QR ${deepLinkLabel}:  ${qrDeepLink}`);
+  }
   console.log();
-  qrcode.generate(deepLink, { small: true });
+  qrcode.generate(qrDeepLink, { small: true });
   console.log(divider);
   if (clientCommandLabel) {
     console.log(`  ${clientCommandLabel}:`);

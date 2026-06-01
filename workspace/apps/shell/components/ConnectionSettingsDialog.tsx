@@ -10,6 +10,7 @@ import {
   type RemoteCredCurrent,
   type TestConnectionResult,
 } from "../shell/client";
+import { useShellOverlay } from "../shell/useShellOverlay";
 import { PairedDevicesSection } from "./PairedDevicesSection";
 import { AppUpdatesSection } from "./AppUpdatesSection";
 
@@ -19,6 +20,7 @@ interface Props {
 }
 
 export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
+  useShellOverlay(open);
   const [current, setCurrent] = useState<RemoteCredCurrent | null>(null);
   const [tab, setTab] = useState("pair");
   const [url, setUrl] = useState("");

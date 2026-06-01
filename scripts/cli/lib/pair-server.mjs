@@ -205,12 +205,15 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
   let gatewayUrl = null;
   let mobileUrl = null;
   let pairingCode = null;
+  let qrPairingCode = null;
   let bannerPrinted = false;
   let pendingServeActivationUrl = null;
   let publicUrlNotReachable = null;
   const serveActionLines = [];
   let pendingTimer = null;
+  let qrPendingTimer = null;
   let waitElapsed = false;
+  let qrWaitElapsed = false;
   let readyPoll = null;
   let readyPollStartedAt = 0;
 
@@ -218,6 +221,14 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     if (readyPoll !== null) {
       clearInterval(readyPoll);
       readyPoll = null;
+    }
+    if (pendingTimer !== null) {
+      clearTimeout(pendingTimer);
+      pendingTimer = null;
+    }
+    if (qrPendingTimer !== null) {
+      clearTimeout(qrPendingTimer);
+      qrPendingTimer = null;
     }
     if (ownedReadyDir) {
       try {
@@ -235,8 +246,10 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       gatewayUrl = null;
       mobileUrl = null;
       pairingCode = null;
+      qrPairingCode = null;
       bannerPrinted = false;
       waitElapsed = false;
+      qrWaitElapsed = false;
       if (ownedReadyDir) {
         try {
           fs.unlinkSync(readyFile);
@@ -247,6 +260,10 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       if (pendingTimer !== null) {
         clearTimeout(pendingTimer);
         pendingTimer = null;
+      }
+      if (qrPendingTimer !== null) {
+        clearTimeout(qrPendingTimer);
+        qrPendingTimer = null;
       }
     }
     hasSpawned = true;
@@ -273,6 +290,13 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     }
     if (typeof payload?.pairingCode === "string" && payload.pairingCode) {
       pairingCode = payload.pairingCode;
+    }
+    if (typeof payload?.qrPairingCode === "string" && payload.qrPairingCode) {
+      qrPairingCode = payload.qrPairingCode;
+    } else if (typeof payload?.pairingCodes?.qr === "string" && payload.pairingCodes.qr) {
+      qrPairingCode = payload.pairingCodes.qr;
+    } else if (typeof payload?.pairingCodes?.mobile === "string" && payload.pairingCodes.mobile) {
+      qrPairingCode = payload.pairingCodes.mobile;
     }
     tryPrintBanner();
   };
@@ -336,6 +360,14 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       }, 500);
       return;
     }
+    if (!qrPairingCode && !qrWaitElapsed && qrPendingTimer === null) {
+      qrPendingTimer = setTimeout(() => {
+        qrPendingTimer = null;
+        qrWaitElapsed = true;
+        tryPrintBanner();
+      }, 100);
+      return;
+    }
     if (requirePublicUrl && !mobileUrl) {
       strictPublicUrlFailure = true;
       const divider = "=".repeat(72);
@@ -356,10 +388,15 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
       clearTimeout(pendingTimer);
       pendingTimer = null;
     }
+    if (qrPendingTimer !== null) {
+      clearTimeout(qrPendingTimer);
+      qrPendingTimer = null;
+    }
     printConnectBanner({
       title: config.bannerTitle,
       gatewayUrl: mobileUrl ?? gatewayUrl,
       pairingCode,
+      qrPairingCode,
       deepLinkLabel: config.deepLinkLabel,
       clientCommandLabel: config.clientCommandLabel,
       instructions: config.instructions,
@@ -436,6 +473,10 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     if (publicUrlMatch) publicUrlNotReachable = publicUrlMatch[1];
     const pairingMatch = line.match(/(?:NATSTACK_PAIRING_CODE=|Pairing code:\s+)([A-Za-z0-9_-]+)/);
     if (pairingMatch) pairingCode = pairingMatch[1];
+    const qrPairingMatch = line.match(
+      /(?:NATSTACK_QR_PAIRING_CODE=|QR pairing code:\s+)([A-Za-z0-9_-]+)/
+    );
+    if (qrPairingMatch) qrPairingCode = qrPairingMatch[1];
     const serveActivationMatch = line.match(/(https:\/\/login\.tailscale\.com\/f\/serve\?\S+)/);
     if (serveActivationMatch) pendingServeActivationUrl = serveActivationMatch[1];
     if (isServeActionLine(line)) {

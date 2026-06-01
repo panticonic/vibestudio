@@ -30,6 +30,7 @@
     "@tanstack/react-virtual": "^3.13.0",
     "@workspace/react": "workspace:*",
     "jotai": "^2.14.0",
+    "qrcode-terminal": "^0.12.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
   }
