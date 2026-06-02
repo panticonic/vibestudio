@@ -9,11 +9,11 @@ function checked(result: Parameters<typeof finalMessageHasAll>[0], markers: stri
 
 export const cdpGadDiagnosticTests: TestCase[] = [
   {
-    name: "cdp-click-type-evaluate",
-    description: "Automate a browser page",
+    name: "cdp-lightweight-click-type-evaluate",
+    description: "Automate a browser page with the lightweight CDP client",
     category: "cdp-gad-diagnostics",
-    prompt: "Automate a tiny disposable browser page. Finish with CDP_PLAYWRIGHT_OK, clicked, evaluated, and screenshot.",
-    validate: (result) => checked(result, ["CDP_PLAYWRIGHT_OK", "clicked", "evaluated", "screenshot"]),
+    prompt: "Automate a tiny disposable browser page with handle.cdp.lightweightPage(). Finish with CDP_LIGHTWEIGHT_INTERACTION_OK, clicked, evaluated, and screenshot.",
+    validate: (result) => checked(result, ["CDP_LIGHTWEIGHT_INTERACTION_OK", "clicked", "evaluated", "screenshot"]),
   },
   {
     name: "cdp-lightweight-console-dom-inspection",

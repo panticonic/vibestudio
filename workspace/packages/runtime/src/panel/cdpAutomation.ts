@@ -119,11 +119,11 @@ export function createCdpAutomation(rpc: Pick<RpcClient, "call">, id: string): C
       return rpc.call<void>("main", "panelCdp.stop", [id]);
     },
     click: async (selector) => {
-      const p = await connectPage("playwright");
+      const p = await connectPage("lightweight");
       await p.click(selector);
     },
     screenshot: async (options) => {
-      const p = await connectPage("playwright");
+      const p = await connectPage("lightweight");
       return p.screenshot(options);
     },
   };

@@ -5,7 +5,7 @@ import type { SessionSnapshot } from "@workspace/agentic-session";
 
 type MaybePromise<T> = T | Promise<T>;
 type RunSuiteFilter = { category?: string; name?: string; concurrency?: number };
-const DEFAULT_PARALLEL_CONCURRENCY = 24;
+const DEFAULT_PARALLEL_CONCURRENCY = 4;
 
 export class TestRunner {
   constructor(

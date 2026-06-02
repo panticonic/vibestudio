@@ -83,7 +83,7 @@ eval({
       testTimeoutMs: 20 * 60 * 1000,
     });
 
-    const partial = await tester.runSuiteParallel(tests, { category, concurrency: 24 });
+    const partial = await tester.runSuiteParallel(tests, { category, concurrency: 4 });
     const aggregate = run.results ?? scope.results ?? {
       total: 0,
       passed: 0,

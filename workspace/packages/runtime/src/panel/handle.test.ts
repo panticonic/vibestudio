@@ -403,7 +403,7 @@ describe("PanelHandle", () => {
       contexts: () => [{ pages: () => [page] }],
     }));
     (globalThis as any).__natstackRequireAsync__ = vi.fn(async (id: string) => {
-      if (id === "@workspace/playwright-core") return { BrowserImpl: { connect } };
+      if (id === "@workspace/playwright-client") return { BrowserImpl: { connect } };
       throw new Error(`unexpected module: ${id}`);
     });
     const rpcCall = vi.fn(async () => ({
@@ -417,6 +417,9 @@ describe("PanelHandle", () => {
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["panel-1"]);
     expect(click).toHaveBeenCalledWith("button.submit");
+    expect((globalThis as any).__natstackRequireAsync__).toHaveBeenCalledWith(
+      "@workspace/playwright-client"
+    );
   });
 
   it("loads the explicit Playwright CDP client through the async module hook", async () => {

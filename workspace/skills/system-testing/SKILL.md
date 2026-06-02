@@ -113,7 +113,7 @@ eval({
       testTimeoutMs: 20 * 60 * 1000,
     });
 
-    const partial = await tester.runSuiteParallel(tests, { category, concurrency: 24 });
+    const partial = await tester.runSuiteParallel(tests, { category, concurrency: 4 });
     const aggregate = run.results ?? scope.results ?? {
       total: 0,
       passed: 0,
@@ -332,13 +332,13 @@ if (fail.execution.snapshot) {
 | `agenticRuntimeTests` | 7 | State args, routed git client, GAD conventions, bounded inspection, no-stall tool turns |
 | `interactionSurfaceTests` | 4 | MDX ActionButton, inline UI, action bar, custom messages |
 | `projectLifecycleTests` | 4 | Create, fork, commit, push, open, and inspect real workspace units |
-| `cdpGadDiagnosticTests` | 5 | CDP/Playwright UI mutation, lightweight console/DOM inspection, historical console diagnostics, panel state args, GAD integrity/state diagnostics |
+| `cdpGadDiagnosticTests` | 5 | CDP UI mutation, lightweight console/DOM inspection, historical console diagnostics, panel state args, GAD integrity/state diagnostics |
 | `harnessResilienceTests` | 5 | Eval errors, huge returns, visible timeouts, invalid args, post-tool follow-ups |
 | `docsProbeTests` | 10 | Scenario probes that require agents to apply relevant skills, not summarize docs |
 
 Use `allTests()` to get all 93 tests combined. For full-suite execution, prefer
 the category-progress pattern above: one eval per category, with
-`tester.runSuiteParallel(allTests(), { category, concurrency })` inside each
+`tester.runSuiteParallel(allTests(), { category, concurrency: 4 })` inside each
 category eval.
 
 ## Expanded Regression Coverage
