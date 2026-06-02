@@ -1,3 +1,5 @@
+import { AGENTIC_PROTOCOL_VERSION } from "./constants.js";
+import type { InvocationOutcome, TurnReasonCode } from "./constants.js";
 import type {
   ApprovalId,
   BlockId,
@@ -94,9 +96,29 @@ export type { StoredValueRef as BlobRefPayload } from "./stored-values.js";
 export type StoredAgenticEvent = Omit<AgenticEvent, "payload"> & { payload: unknown };
 
 export type MessagePayload =
-  | { protocol: "agentic.trajectory.v1"; role: MessageRole; content?: string; blocks?: MessageBlockInput[]; mentions?: string[]; replyTo?: MessageId }
-  | { protocol: "agentic.trajectory.v1"; delta: string; replace?: boolean; block?: MessageBlockInput }
-  | { protocol: "agentic.trajectory.v1"; role?: MessageRole; content: string; blocks?: MessageBlockInput[]; usage?: UsagePayload; mentions?: string[]; replyTo?: MessageId }
+  | {
+      protocol: "agentic.trajectory.v1";
+      role: MessageRole;
+      content?: string;
+      blocks?: MessageBlockInput[];
+      mentions?: string[];
+      replyTo?: MessageId;
+    }
+  | {
+      protocol: "agentic.trajectory.v1";
+      delta: string;
+      replace?: boolean;
+      block?: MessageBlockInput;
+    }
+  | {
+      protocol: "agentic.trajectory.v1";
+      role?: MessageRole;
+      content: string;
+      blocks?: MessageBlockInput[];
+      usage?: UsagePayload;
+      mentions?: string[];
+      replyTo?: MessageId;
+    }
   | { protocol: "agentic.trajectory.v1"; reason: string; recoverable?: boolean };
 
 export interface MessageBlockInput {
@@ -120,6 +142,43 @@ export type InvocationTransport =
   | { kind: "channel"; channelId: ChannelId; target: ParticipantRef; transportCallId?: string }
   | { kind: "http"; targetUrl: string; idempotencyKey: string };
 
+export type InvocationCompletedPayload = {
+  protocol: "agentic.trajectory.v1";
+  result?: unknown;
+  usage?: UsagePayload;
+  summary?: string;
+  terminalOutcome: "success";
+  terminalReasonCode?: string;
+};
+
+export type InvocationTerminalFailureOutcome = Exclude<InvocationOutcome, "success">;
+
+type InvocationFailurePayloadBase<Outcome extends InvocationTerminalFailureOutcome> = {
+  protocol: "agentic.trajectory.v1";
+  reason: string;
+  error?: unknown;
+  recoverable?: boolean;
+  terminalOutcome: Outcome;
+  terminalReasonCode?: string;
+};
+
+export type InvocationFailedPayload = InvocationFailurePayloadBase<
+  Extract<InvocationOutcome, "tool_error" | "infrastructure_error">
+>;
+
+export type InvocationCancelledPayload = InvocationFailurePayloadBase<
+  Extract<InvocationOutcome, "cancelled" | "stale_dispatch">
+>;
+
+export type InvocationAbandonedPayload = InvocationFailurePayloadBase<"abandoned">;
+
+export type InvocationFailurePayload =
+  | InvocationFailedPayload
+  | InvocationCancelledPayload
+  | InvocationAbandonedPayload;
+
+export type InvocationTerminalPayload = InvocationCompletedPayload | InvocationFailurePayload;
+
 export type InvocationPayload =
   | {
       protocol: "agentic.trajectory.v1";
@@ -133,8 +192,54 @@ export type InvocationPayload =
     }
   | { protocol: "agentic.trajectory.v1"; message?: string; progress?: number; data?: unknown }
   | { protocol: "agentic.trajectory.v1"; output: unknown; channel?: "stdout" | "stderr" | "data" }
-  | { protocol: "agentic.trajectory.v1"; result?: unknown; usage?: UsagePayload; summary?: string }
-  | { protocol: "agentic.trajectory.v1"; reason: string; error?: unknown; recoverable?: boolean };
+  | InvocationCompletedPayload
+  | InvocationFailurePayload;
+
+export function invocationCompletedPayload(
+  opts: Omit<InvocationCompletedPayload, "protocol" | "terminalOutcome"> = {}
+): InvocationCompletedPayload {
+  return {
+    protocol: AGENTIC_PROTOCOL_VERSION,
+    ...opts,
+    terminalOutcome: "success",
+  };
+}
+
+function invocationFailurePayload<Outcome extends InvocationTerminalFailureOutcome>(
+  outcome: Outcome,
+  reason: string,
+  opts: Omit<InvocationFailurePayloadBase<Outcome>, "protocol" | "terminalOutcome" | "reason"> = {}
+): InvocationFailurePayloadBase<Outcome> {
+  return {
+    protocol: AGENTIC_PROTOCOL_VERSION,
+    reason,
+    ...opts,
+    terminalOutcome: outcome,
+  };
+}
+
+export function invocationFailedPayload(
+  outcome: Extract<InvocationOutcome, "tool_error" | "infrastructure_error">,
+  reason: string,
+  opts: Omit<InvocationFailedPayload, "protocol" | "terminalOutcome" | "reason"> = {}
+): InvocationFailedPayload {
+  return invocationFailurePayload(outcome, reason, opts);
+}
+
+export function invocationCancelledPayload(
+  outcome: Extract<InvocationOutcome, "cancelled" | "stale_dispatch">,
+  reason: string,
+  opts: Omit<InvocationCancelledPayload, "protocol" | "terminalOutcome" | "reason"> = {}
+): InvocationCancelledPayload {
+  return invocationFailurePayload(outcome, reason, opts);
+}
+
+export function invocationAbandonedPayload(
+  reason: string,
+  opts: Omit<InvocationAbandonedPayload, "protocol" | "terminalOutcome" | "reason"> = {}
+): InvocationAbandonedPayload {
+  return invocationFailurePayload("abandoned", reason, opts);
+}
 
 export type ApprovalPayload =
   | {
@@ -241,7 +346,7 @@ export interface ExternalParticipantObservedPayload {
 export interface TurnPayload {
   protocol: "agentic.trajectory.v1";
   summary?: string;
-  reason?: string;
+  reason?: TurnReasonCode;
 }
 
 export interface BranchPayload {
@@ -307,25 +412,51 @@ export interface KnowledgePayload {
   metadata?: Record<string, unknown>;
 }
 
-export type PayloadFor<K extends EventKind> =
-  K extends `message.${string}` ? MessagePayload :
-  K extends `invocation.${string}` ? InvocationPayload :
-  K extends `approval.${string}` ? ApprovalPayload :
-  K extends `ui.${string}` ? UiPayload :
-  K extends "messageType.registered" ? MessageTypeRegisteredPayload :
-  K extends "messageType.cleared" ? MessageTypeClearedPayload :
-  K extends "custom.started" ? CustomStartedPayload :
-  K extends "custom.updated" ? CustomUpdatedPayload :
-  K extends "external.envelope_published" ? ExternalEnvelopePublishedPayload :
-  K extends "external.envelope_observed" ? ExternalEnvelopeObservedPayload :
-  K extends "external.participant_observed" ? ExternalParticipantObservedPayload :
-  K extends `branch.${string}` ? BranchPayload :
-  K extends `turn.${string}` ? TurnPayload :
-  K extends `state.${string}` ? StatePayload :
-  K extends "system.compaction_recorded" ? CompactionPayload :
-  K extends "system.event" ? SystemPayload :
-  K extends `knowledge.${string}` ? KnowledgePayload :
-  never;
+export type InvocationPayloadFor<K extends EventKind> = K extends "invocation.completed"
+  ? InvocationCompletedPayload
+  : K extends "invocation.failed"
+    ? InvocationFailedPayload
+    : K extends "invocation.cancelled"
+      ? InvocationCancelledPayload
+      : K extends "invocation.abandoned"
+        ? InvocationAbandonedPayload
+        : InvocationPayload;
+
+export type PayloadFor<K extends EventKind> = K extends `message.${string}`
+  ? MessagePayload
+  : K extends `invocation.${string}`
+    ? InvocationPayloadFor<K>
+    : K extends `approval.${string}`
+      ? ApprovalPayload
+      : K extends `ui.${string}`
+        ? UiPayload
+        : K extends "messageType.registered"
+          ? MessageTypeRegisteredPayload
+          : K extends "messageType.cleared"
+            ? MessageTypeClearedPayload
+            : K extends "custom.started"
+              ? CustomStartedPayload
+              : K extends "custom.updated"
+                ? CustomUpdatedPayload
+                : K extends "external.envelope_published"
+                  ? ExternalEnvelopePublishedPayload
+                  : K extends "external.envelope_observed"
+                    ? ExternalEnvelopeObservedPayload
+                    : K extends "external.participant_observed"
+                      ? ExternalParticipantObservedPayload
+                      : K extends `branch.${string}`
+                        ? BranchPayload
+                        : K extends `turn.${string}`
+                          ? TurnPayload
+                          : K extends `state.${string}`
+                            ? StatePayload
+                            : K extends "system.compaction_recorded"
+                              ? CompactionPayload
+                              : K extends "system.event"
+                                ? SystemPayload
+                                : K extends `knowledge.${string}`
+                                  ? KnowledgePayload
+                                  : never;
 
 export interface AgenticEvent<K extends EventKind = EventKind> {
   kind: K;

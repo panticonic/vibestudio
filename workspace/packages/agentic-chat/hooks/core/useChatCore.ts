@@ -90,7 +90,12 @@ export interface ChatCoreState {
   dismissConnectionError: () => void;
   client: PubSubClient<ChatParticipantMetadata> | null;
   clientRef: React.RefObject<PubSubClient<ChatParticipantMetadata> | null>;
-  connectToChannel: (options: { channelId: string; methods: Record<string, MethodDefinition>; channelConfig?: ChannelConfig; contextId?: string }) => Promise<PubSubClient<ChatParticipantMetadata>>;
+  connectToChannel: (options: {
+    channelId: string;
+    methods: Record<string, MethodDefinition>;
+    channelConfig?: ChannelConfig;
+    contextId?: string;
+  }) => Promise<PubSubClient<ChatParticipantMetadata>>;
   hasConnectedRef: React.MutableRefObject<boolean>;
 
   // Participants
@@ -112,11 +117,22 @@ export interface ChatCoreState {
   messageTypes: MessageTypeDefinition[];
 
   // Actions
-  sendMessage: (attachments?: AttachmentInput[], options?: { mentions?: string[]; replyTo?: string }) => Promise<void>;
-  handleInterruptAgent: (agentId: string, messageId?: string, agentHandle?: string) => Promise<void>;
+  sendMessage: (
+    attachments?: AttachmentInput[],
+    options?: { mentions?: string[]; replyTo?: string }
+  ) => Promise<void>;
+  handleInterruptAgent: (
+    agentId: string,
+    messageId?: string,
+    agentHandle?: string
+  ) => Promise<void>;
   handleCancelInvocation: (transportCallId: string) => Promise<void>;
   handleCallMethod: (providerId: string, methodName: string, args: unknown) => void;
-  handleCallMethodResult: (providerId: string, methodName: string, args: unknown) => Promise<unknown>;
+  handleCallMethodResult: (
+    providerId: string,
+    methodName: string,
+    args: unknown
+  ) => Promise<unknown>;
   stopTyping: () => Promise<void>;
 
   // Agent state
@@ -143,7 +159,11 @@ export interface ChatCoreState {
 // Hook
 // =============================================================================
 
-const DEFAULT_METADATA: ChatParticipantMetadata = { name: "Chat Panel", type: "panel", handle: "user" };
+const DEFAULT_METADATA: ChatParticipantMetadata = {
+  name: "Chat Panel",
+  type: "panel",
+  handle: "user",
+};
 
 export function useChatCore({
   config,
@@ -198,16 +218,27 @@ export function useChatCore({
             });
 
             // Dirty repo warnings
-            if (payload.debugType === "lifecycle" && payload.event === "warning" && payload.reason === "dirty-repo") {
+            if (
+              payload.debugType === "lifecycle" &&
+              payload.event === "warning" &&
+              payload.reason === "dirty-repo"
+            ) {
               const details = payload.details as DirtyRepoDetails | undefined;
               if (details) {
-                setDirtyRepoWarnings((prev) => { const n = new Map(prev); n.set(payload.handle, details); return n; });
+                setDirtyRepoWarnings((prev) => {
+                  const n = new Map(prev);
+                  n.set(payload.handle, details);
+                  return n;
+                });
               }
             }
 
             // Track expected idle stops so roster handler can suppress disconnect message.
-            if (payload.debugType === "lifecycle" && payload.event === "stopped" &&
-                payload.reason === "idle") {
+            if (
+              payload.debugType === "lifecycle" &&
+              payload.event === "stopped" &&
+              payload.reason === "idle"
+            ) {
               expectedStopsRef.current.add(payload.handle);
             }
 
@@ -218,13 +249,16 @@ export function useChatCore({
                 if (!existing) return prev;
                 const n = new Map(prev);
                 n.set(payload.handle, {
-                  ...existing, status: "error",
-                  error: { message: payload.error ?? "Agent failed to start", details: payload.buildError ? JSON.stringify(payload.buildError) : undefined },
+                  ...existing,
+                  status: "error",
+                  error: {
+                    message: payload.error ?? "Agent failed to start",
+                    details: payload.buildError ? JSON.stringify(payload.buildError) : undefined,
+                  },
                 });
                 return n;
               });
             }
-
           }
         },
         onReconnect: () => {
@@ -243,12 +277,18 @@ export function useChatCore({
   const [client, setClient] = useState<PubSubClient<ChatParticipantMetadata> | null>(null);
   const [connected, setConnected] = useState(false);
   const [status, setStatus] = useState("Connecting...");
-  const [connectionError, setConnectionError] = useState<{ message: string; at: number } | null>(null);
+  const [connectionError, setConnectionError] = useState<{ message: string; at: number } | null>(
+    null
+  );
   const dismissConnectionError = useCallback(() => setConnectionError(null), []);
   const [selfId, setSelfId] = useState<string | null>(null);
-  const [participants, setParticipants] = useState<Record<string, Participant<ChatParticipantMetadata>>>({});
+  const [participants, setParticipants] = useState<
+    Record<string, Participant<ChatParticipantMetadata>>
+  >({});
   const [debugEvents, setDebugEvents] = useState<Array<AgentDebugPayload & { ts: number }>>([]);
-  const [dirtyRepoWarnings, setDirtyRepoWarnings] = useState<Map<string, DirtyRepoDetails>>(new Map());
+  const [dirtyRepoWarnings, setDirtyRepoWarnings] = useState<Map<string, DirtyRepoDetails>>(
+    new Map()
+  );
   const [pendingAgents, setPendingAgents] = useState<Map<string, PendingAgent>>(new Map());
 
   const clientRef = useRef<PubSubClient<ChatParticipantMetadata> | null>(null);
@@ -295,7 +335,12 @@ export function useChatCore({
 
   // --- Connect ---
   const connectToChannel = useCallback(
-    async (options: { channelId: string; methods: Record<string, MethodDefinition>; channelConfig?: ChannelConfig; contextId?: string }): Promise<PubSubClient<ChatParticipantMetadata>> => {
+    async (options: {
+      channelId: string;
+      methods: Record<string, MethodDefinition>;
+      channelConfig?: ChannelConfig;
+      contextId?: string;
+    }): Promise<PubSubClient<ChatParticipantMetadata>> => {
       setStatus("Connecting...");
       const newClient = await connection.connect({
         channelId: options.channelId,
@@ -332,7 +377,7 @@ export function useChatCore({
         setParticipants(next);
 
         // Unsuppress disconnect detection once we see ourselves in the roster
-        if (suppressDisconnectRef.current && (config.clientId in next)) {
+        if (suppressDisconnectRef.current && config.clientId in next) {
           suppressDisconnectRef.current = false;
         }
 
@@ -348,7 +393,7 @@ export function useChatCore({
           const changeIsExpectedLeave =
             update.change?.type === "leave" &&
             ((update as { change?: { leaveReason?: string } }).change?.leaveReason === "graceful" ||
-             (update as { change?: { leaveReason?: string } }).change?.leaveReason === "replaced");
+              (update as { change?: { leaveReason?: string } }).change?.leaveReason === "replaced");
 
           for (const [pid, prevP] of Object.entries(prev)) {
             if (next[pid]) continue;
@@ -367,15 +412,18 @@ export function useChatCore({
             };
             setDisconnectMessages((msgs) => {
               if (msgs.some((m) => m.disconnectedAgent?.handle === handle)) return msgs;
-              return [...msgs, {
-                id: `system-disconnect-${pid}-${Date.now()}`,
-                senderId: "system",
-                content: "",
-                kind: "system",
-                complete: true,
-                disconnectedAgent: info,
-                senderMetadata: { name: info.name, type: info.type, handle: info.handle },
-              }];
+              return [
+                ...msgs,
+                {
+                  id: `system-disconnect-${pid}-${Date.now()}`,
+                  senderId: "system",
+                  content: "",
+                  kind: "system",
+                  complete: true,
+                  disconnectedAgent: info,
+                  senderMetadata: { name: info.name, type: info.type, handle: info.handle },
+                },
+              ];
             });
           }
         }
@@ -384,10 +432,12 @@ export function useChatCore({
         const agentHandles = new Set(
           Object.values(next)
             .filter((p) => isAgentParticipantType(p.metadata.type))
-            .map((p) => p.metadata.handle),
+            .map((p) => p.metadata.handle)
         );
         setDisconnectMessages((msgs) => {
-          const filtered = msgs.filter((m) => !m.disconnectedAgent || !agentHandles.has(m.disconnectedAgent.handle));
+          const filtered = msgs.filter(
+            (m) => !m.disconnectedAgent || !agentHandles.has(m.disconnectedAgent.handle)
+          );
           return filtered.length === msgs.length ? msgs : filtered;
         });
 
@@ -397,7 +447,12 @@ export function useChatCore({
           let changed = false;
           const nextPending = new Map(prevPending);
           for (const handle of prevPending.keys()) {
-            if (agentHandles.has(handle) || Object.values(next).some((p) => (p?.metadata?.handle as string | undefined) === handle)) {
+            if (
+              agentHandles.has(handle) ||
+              Object.values(next).some(
+                (p) => (p?.metadata?.handle as string | undefined) === handle
+              )
+            ) {
               nextPending.delete(handle);
               changed = true;
             }
@@ -414,7 +469,11 @@ export function useChatCore({
         let changed = false;
         const nextPending = new Map(prevPending);
         for (const handle of prevPending.keys()) {
-          if (Object.values(initialRoster).some((p) => (p?.metadata?.handle as string | undefined) === handle)) {
+          if (
+            Object.values(initialRoster).some(
+              (p) => (p?.metadata?.handle as string | undefined) === handle
+            )
+          ) {
             nextPending.delete(handle);
             changed = true;
           }
@@ -424,13 +483,17 @@ export function useChatCore({
 
       return newClient;
     },
-    [connection, config.clientId],
+    [connection, config.clientId]
   );
 
   // --- Dispose connection on unmount ---
   useEffect(() => {
     return () => {
-      try { connection.disconnect(); } catch { /* best-effort */ }
+      try {
+        connection.disconnect();
+      } catch {
+        /* best-effort */
+      }
     };
   }, [connection]);
 
@@ -442,55 +505,74 @@ export function useChatCore({
     typingActiveRef.current = false;
     const c = clientRef.current;
     if (c?.connected) {
-      try { await c.setTyping(false); } catch { /* best-effort */ }
+      try {
+        await c.setTyping(false);
+      } catch {
+        /* best-effort */
+      }
     }
   }, []);
 
-  const handleInputChange = useCallback((value: string) => {
-    setInput(value);
-    inputRef.current = value;
-    void stopTyping().catch(() => {});
-  }, [stopTyping]);
+  const handleInputChange = useCallback(
+    (value: string) => {
+      setInput(value);
+      inputRef.current = value;
+      void stopTyping().catch((err) => {
+        console.warn("[useChatCore] Failed to stop typing after input change:", err);
+      });
+    },
+    [stopTyping]
+  );
 
   // --- Send message ---
-  const sendMessage = useCallback(async (
-    attachments?: AttachmentInput[],
-    options?: { mentions?: string[]; replyTo?: string },
-  ): Promise<void> => {
-    const currentInput = inputRef.current;
-    const hasText = currentInput.trim().length > 0;
-    const hasAttachments = attachments && attachments.length > 0;
-    if ((!hasText && !hasAttachments) || !clientRef.current) return;
-    const text = currentInput.trim();
-    const previousReplyTo = options?.replyTo ?? null;
-    setInput("");
-    inputRef.current = "";
-    setReplyTo(null);
-    void stopTyping().catch(() => {});
-    try {
-      const hadPriorTranscriptMessages = hasTranscriptMessagesRef.current;
-      const { pubsubId } = await clientRef.current.send(text || "", {
-        attachments: hasAttachments ? attachments : undefined,
-        mentions: options?.mentions && options.mentions.length > 0 ? options.mentions : undefined,
-        replyTo: options?.replyTo,
+  const sendMessage = useCallback(
+    async (
+      attachments?: AttachmentInput[],
+      options?: { mentions?: string[]; replyTo?: string }
+    ): Promise<void> => {
+      const currentInput = inputRef.current;
+      const hasText = currentInput.trim().length > 0;
+      const hasAttachments = attachments && attachments.length > 0;
+      if ((!hasText && !hasAttachments) || !clientRef.current) return;
+      const text = currentInput.trim();
+      const previousReplyTo = options?.replyTo ?? null;
+      setInput("");
+      inputRef.current = "";
+      setReplyTo(null);
+      void stopTyping().catch((err) => {
+        console.warn("[useChatCore] Failed to stop typing before send:", err);
       });
-      await backfillAfterLocalPublish(pubsubId);
-      const defaultTitle = !defaultTitleSetRef.current && !hadPriorTranscriptMessages
-        ? titleFromFirstUserMessage(text)
-        : null;
-      if (defaultTitle) {
-        defaultTitleSetRef.current = true;
-        document.title = defaultTitle;
-        void clientRef.current.updateChannelConfig({ title: defaultTitle, titleExplicit: false }).catch(() => {});
+      try {
+        const hadPriorTranscriptMessages = hasTranscriptMessagesRef.current;
+        const { pubsubId } = await clientRef.current.send(text || "", {
+          attachments: hasAttachments ? attachments : undefined,
+          mentions: options?.mentions && options.mentions.length > 0 ? options.mentions : undefined,
+          replyTo: options?.replyTo,
+        });
+        await backfillAfterLocalPublish(pubsubId);
+        const defaultTitle =
+          !defaultTitleSetRef.current && !hadPriorTranscriptMessages
+            ? titleFromFirstUserMessage(text)
+            : null;
+        if (defaultTitle) {
+          defaultTitleSetRef.current = true;
+          document.title = defaultTitle;
+          void clientRef.current
+            .updateChannelConfig({ title: defaultTitle, titleExplicit: false })
+            .catch((err) => {
+              console.warn("[useChatCore] Failed to persist default channel title:", err);
+            });
+        }
+      } catch (err) {
+        setInput(text);
+        inputRef.current = text;
+        setReplyTo(previousReplyTo);
+        console.error("[Chat] Send failed, draft restored:", err);
+        throw err;
       }
-    } catch (err) {
-      setInput(text);
-      inputRef.current = text;
-      setReplyTo(previousReplyTo);
-      console.error("[Chat] Send failed, draft restored:", err);
-      throw err;
-    }
-  }, [backfillAfterLocalPublish, stopTyping]);
+    },
+    [backfillAfterLocalPublish, stopTyping]
+  );
 
   // --- Auto-send initial prompt once connected ---
   const initialPromptSentRef = useRef(false);
@@ -498,28 +580,34 @@ export function useChatCore({
     if (!client) return;
     const hasPriorMessages = hasTranscriptMessagesRef.current;
     const prompt = initialPrompt;
-    if (!prompt || !shouldAutoSendInitialPrompt({
-      prompt,
-      connected,
-      alreadySent: initialPromptSentRef.current,
-      hasPriorMessages,
-    })) {
+    if (
+      !prompt ||
+      !shouldAutoSendInitialPrompt({
+        prompt,
+        connected,
+        alreadySent: initialPromptSentRef.current,
+        hasPriorMessages,
+      })
+    ) {
       return;
     }
     initialPromptSentRef.current = true;
 
-    const defaultTitle = !defaultTitleSetRef.current
-      ? titleFromFirstUserMessage(prompt)
-      : null;
+    const defaultTitle = !defaultTitleSetRef.current ? titleFromFirstUserMessage(prompt) : null;
     if (defaultTitle) {
       defaultTitleSetRef.current = true;
       document.title = defaultTitle;
-      void client.updateChannelConfig({ title: defaultTitle, titleExplicit: false }).catch(() => {});
+      void client
+        .updateChannelConfig({ title: defaultTitle, titleExplicit: false })
+        .catch((err) => {
+          console.warn("[useChatCore] Failed to persist initial prompt channel title:", err);
+        });
     }
 
-    client.send(prompt, {
-      idempotencyKey: `initial-prompt:${channelName}`,
-    })
+    client
+      .send(prompt, {
+        idempotencyKey: `initial-prompt:${channelName}`,
+      })
       .then(({ pubsubId }) => backfillAfterLocalPublish(pubsubId))
       .catch((err) => console.warn("[Chat] Failed to send initial prompt:", err));
   }, [backfillAfterLocalPublish, connected, client, channelName, initialPrompt]);
@@ -537,12 +625,12 @@ export function useChatCore({
       const roster = allParticipantsRef.current;
       if (!roster[agentId] && agentHandle) {
         const byHandle = Object.values(roster).find(
-          (p) => p.metadata.handle === agentHandle && isAgentParticipantType(p.metadata.type),
+          (p) => p.metadata.handle === agentHandle && isAgentParticipantType(p.metadata.type)
         );
         if (byHandle) targetId = Object.keys(roster).find((k) => roster[k] === byHandle) ?? agentId;
       } else if (!roster[agentId]) {
         const byHandle = Object.values(roster).find(
-          (p) => p.metadata.handle === agentId && isAgentParticipantType(p.metadata.type),
+          (p) => p.metadata.handle === agentId && isAgentParticipantType(p.metadata.type)
         );
         if (byHandle) targetId = Object.keys(roster).find((k) => roster[k] === byHandle) ?? agentId;
       }
@@ -552,7 +640,7 @@ export function useChatCore({
         console.warn("[Chat] Interrupt failed:", err);
       }
     },
-    [],
+    []
   );
 
   const handleCancelInvocation = useCallback(async (transportCallId: string) => {
@@ -560,11 +648,11 @@ export function useChatCore({
     if (!c) return;
     // Stop a method this panel is executing (e.g. an eval) immediately and
     // in-process by firing its local AbortController. The executing method's
-    // own catch publishes invocation.failed, which settles the agent's pending
-    // result — so the turn still learns the call ended. We do this BEFORE the
-    // channel round-trip because the round-trip is unreliable for stopping
-    // local work (the DO may have no pending_calls row left to cancel, so it
-    // never broadcasts invocation.cancelled).
+    // own abort path publishes invocation.cancelled, which settles the agent's
+    // pending result — so the turn still learns the call ended. We do this
+    // BEFORE the channel round-trip because the round-trip is unreliable for
+    // stopping local work (the DO may have no pending_calls row left to cancel,
+    // so it never broadcasts invocation.cancelled).
     const abortedLocally = c.abortExecutingMethod(transportCallId);
     try {
       // Still notify the channel so its pending_calls bookkeeping is cleared
@@ -576,17 +664,14 @@ export function useChatCore({
     }
   }, []);
 
-  const handleCallMethod = useCallback(
-    (providerId: string, methodName: string, args: unknown) => {
-      const c = clientRef.current;
-      if (!c) return;
-      const handle = c.callMethod(providerId, methodName, args);
-      void (handle as { result?: Promise<unknown> }).result?.catch((error: unknown) => {
-        console.error(`Failed to call method ${methodName} on ${providerId}:`, error);
-      });
-    },
-    [],
-  );
+  const handleCallMethod = useCallback((providerId: string, methodName: string, args: unknown) => {
+    const c = clientRef.current;
+    if (!c) return;
+    const handle = c.callMethod(providerId, methodName, args);
+    void (handle as { result?: Promise<unknown> }).result?.catch((error: unknown) => {
+      console.error(`Failed to call method ${methodName} on ${providerId}:`, error);
+    });
+  }, []);
 
   /** Like handleCallMethod, but awaits and returns the provider's result payload.
    *  Used by settings UIs that need to read getAgentSettings / confirm setters. */
@@ -598,7 +683,7 @@ export function useChatCore({
       const result = (handle as { result?: Promise<unknown> }).result;
       return result ? await result : undefined;
     },
-    [],
+    []
   );
 
   const addPendingAgent = useCallback((handle: string, agentId: string) => {
@@ -614,9 +699,12 @@ export function useChatCore({
       const next = new Map<string, PendingAgent>();
       for (const agent of agents) {
         const existing = prev.get(agent.handle);
-        next.set(agent.handle, existing?.status === "error"
-          ? { ...existing, agentId: agent.agentId }
-          : { agentId: agent.agentId, status: "starting" });
+        next.set(
+          agent.handle,
+          existing?.status === "error"
+            ? { ...existing, agentId: agent.agentId }
+            : { agentId: agent.agentId, status: "starting" }
+        );
       }
       return next;
     });
@@ -639,16 +727,19 @@ export function useChatCore({
     });
   }, []);
 
-  const inputContextValue: ChatInputContextValue = useMemo(() => ({
-    input,
-    pendingImages,
-    onInputChange: handleInputChange,
-    onSendMessage: sendMessage,
-    onImagesChange: setPendingImages,
-    replyTo,
-    replyToMessage: replyTo ? messages.find((message) => message.id === replyTo) ?? null : null,
-    setReplyTo,
-  }), [input, pendingImages, handleInputChange, sendMessage, replyTo, messages]);
+  const inputContextValue: ChatInputContextValue = useMemo(
+    () => ({
+      input,
+      pendingImages,
+      onInputChange: handleInputChange,
+      onSendMessage: sendMessage,
+      onImagesChange: setPendingImages,
+      replyTo,
+      replyToMessage: replyTo ? (messages.find((message) => message.id === replyTo) ?? null) : null,
+      setReplyTo,
+    }),
+    [input, pendingImages, handleInputChange, sendMessage, replyTo, messages]
+  );
 
   return {
     messages,

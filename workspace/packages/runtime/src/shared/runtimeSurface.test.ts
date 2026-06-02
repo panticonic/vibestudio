@@ -61,8 +61,13 @@ function extractObjectKeys(source: string, prefix: string): Set<string> {
 }
 
 function extractHelpfulNamespaceTargets(source: string): Set<string> {
+  // Tolerate prettier wrapping a long `helpfulNamespace(` call onto multiple
+  // lines (e.g. the `workers` namespace in worker/index.ts), where the opening
+  // quote is separated from `(` by a newline + indentation.
   return new Set(
-    Array.from(source.matchAll(/helpfulNamespace\("([A-Za-z0-9_]+)"/g)).map((match) => match[1]!),
+    Array.from(source.matchAll(/helpfulNamespace\(\s*"([A-Za-z0-9_]+)"/g)).map(
+      (match) => match[1]!,
+    ),
   );
 }
 

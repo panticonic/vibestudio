@@ -6,6 +6,7 @@ import {
   MAX_INLINE_TRAJECTORY_EVENT_BYTES,
   assertNoStoredValueRefs,
   agenticSlice,
+  agenticEventEnvelopeSchema,
   agenticEventSchema,
   brandId,
   checkTrajectoryIntegrity,
@@ -40,7 +41,9 @@ const user = { kind: "user" as const, id: "user-1" };
 const agentParticipant = { ...agent, participantId: "participant-agent-1" };
 const userParticipant = { ...user, participantId: "participant-user-1" };
 
-function messageEvent(overrides: Partial<AgenticEvent<"message.completed">> = {}): AgenticEvent<"message.completed"> {
+function messageEvent(
+  overrides: Partial<AgenticEvent<"message.completed">> = {}
+): AgenticEvent<"message.completed"> {
   return {
     kind: "message.completed",
     actor: user,
@@ -53,7 +56,7 @@ function messageEvent(overrides: Partial<AgenticEvent<"message.completed">> = {}
 
 async function trajectoryEvent(
   event: AgenticEvent,
-  overrides: Partial<TrajectoryEvent> = {},
+  overrides: Partial<TrajectoryEvent> = {}
 ): Promise<TrajectoryEvent> {
   const base = {
     ...event,
@@ -66,19 +69,18 @@ async function trajectoryEvent(
   } as TrajectoryEvent;
   return {
     ...base,
-    eventHash: overrides.eventHash ?? await computeEventHash({
-      prevEventHash: base.prevEventHash,
-      branchId: base.branchId,
-      seq: base.seq,
-      event,
-    }),
+    eventHash:
+      overrides.eventHash ??
+      (await computeEventHash({
+        prevEventHash: base.prevEventHash,
+        branchId: base.branchId,
+        seq: base.seq,
+        event,
+      })),
   };
 }
 
-function envelope(
-  payload: AgenticEvent,
-  seq = 1,
-): ChannelEnvelope<AgenticEvent> {
+function envelope(payload: AgenticEvent, seq = 1): ChannelEnvelope<AgenticEvent> {
   return {
     envelopeId: brandId<EnvelopeId>(`env-${seq}`),
     channelId: brandId<ChannelId>("channel-1"),
@@ -101,6 +103,124 @@ describe("@workspace/agentic-protocol schemas", () => {
     expect(result.success ? "" : result.error.issues[0]?.message).toContain("messageId");
   });
 
+  it("requires terminalOutcome on invocation terminal events", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "invocation.failed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-1") },
+      // schema rejection fixture: terminalOutcome is missing
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "failed without typed outcome",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects terminalOutcome values that do not match the invocation kind", () => {
+    const result = agenticEventSchema.safeParse({
+      kind: "invocation.failed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-1") },
+      // schema rejection fixture: terminalOutcome does not match event kind
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "wrong terminal kind",
+        terminalOutcome: "cancelled",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.success ? "" : result.error.issues[0]?.message).toContain("inconsistent");
+  });
+
+  it("types terminal invocation payloads by event kind", () => {
+    const abandonedPayload: AgenticEvent<"invocation.abandoned">["payload"] = {
+      protocol: AGENTIC_PROTOCOL_VERSION,
+      reason: "abandoned",
+      // @ts-expect-error abandoned invocation events must use terminalOutcome: "abandoned"
+      terminalOutcome: "tool_error",
+    };
+    expect(abandonedPayload.terminalOutcome).toBe("tool_error");
+  });
+
+  it("does not require terminalOutcome on message.failed", () => {
+    expect(
+      agenticEventSchema.parse({
+        kind: "message.failed",
+        actor: agent,
+        causality: { messageId: brandId<MessageId>("msg-failed") },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          reason: "message failed",
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      }).kind
+    ).toBe("message.failed");
+  });
+
+  it("requires terminalOutcome on stored invocation terminal events", () => {
+    const result = storedAgenticEventSchema.safeParse({
+      kind: "invocation.failed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-stored") },
+      // schema rejection fixture: terminalOutcome is missing
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "stored failure without typed outcome",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.success ? "" : result.error.issues[0]?.message).toContain("terminalOutcome");
+  });
+
+  it("rejects mismatched terminalOutcome on stored invocation terminal events", () => {
+    const result = storedAgenticEventSchema.safeParse({
+      kind: "invocation.failed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-stored") },
+      // schema rejection fixture: terminalOutcome does not match event kind
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "stored failure with wrong outcome",
+        terminalOutcome: "cancelled",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.success ? "" : result.error.issues[0]?.message).toContain("inconsistent");
+  });
+
+  it("rejects malformed invocation terminal events inside agentic envelopes", () => {
+    const result = agenticEventEnvelopeSchema.safeParse({
+      envelopeId: brandId<EnvelopeId>("env-terminal"),
+      channelId: brandId<ChannelId>("channel-1"),
+      seq: 1,
+      from: agentParticipant,
+      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: {
+        kind: "invocation.cancelled",
+        actor: agent,
+        causality: { invocationId: brandId<InvocationId>("inv-envelope") },
+        // schema rejection fixture: terminalOutcome is missing
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          reason: "missing outcome",
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      },
+      publishedAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("requires turnId for owner-authored turn-scoped trajectory events", async () => {
     const event = await trajectoryEvent(messageEvent({ actor: agent }));
     const result = trajectoryEventSchema.safeParse(event);
@@ -109,10 +229,12 @@ describe("@workspace/agentic-protocol schemas", () => {
   });
 
   it("accepts owner-authored turn-scoped trajectory events with turnId", async () => {
-    const event = await trajectoryEvent(messageEvent({
-      actor: agent,
-      turnId: brandId<TurnId>("turn-1"),
-    }));
+    const event = await trajectoryEvent(
+      messageEvent({
+        actor: agent,
+        turnId: brandId<TurnId>("turn-1"),
+      })
+    );
     expect(trajectoryEventSchema.parse(event)["turnId"]).toBe("turn-1");
   });
 
@@ -129,25 +251,29 @@ describe("@workspace/agentic-protocol schemas", () => {
   });
 
   it("rejects non-object stored event payloads unless the whole payload is a stored ref", () => {
-    expect(storedAgenticEventSchema.safeParse({
-      kind: "turn.closed",
-      actor: agent,
-      payload: null,
-      createdAt: "2026-05-20T12:00:00.000Z",
-    }).success).toBe(false);
+    expect(
+      storedAgenticEventSchema.safeParse({
+        kind: "turn.closed",
+        actor: agent,
+        payload: null,
+        createdAt: "2026-05-20T12:00:00.000Z",
+      }).success
+    ).toBe(false);
 
-    expect(storedAgenticEventSchema.parse({
-      kind: "turn.closed",
-      actor: agent,
-      payload: {
-        protocol: "natstack.blob-ref.v1",
-        digest: "payload-digest",
-        size: 64,
-        encoding: "json",
-        originalBytes: 64,
-      },
-      createdAt: "2026-05-20T12:00:00.000Z",
-    }).payload).toMatchObject({ digest: "payload-digest" });
+    expect(
+      storedAgenticEventSchema.parse({
+        kind: "turn.closed",
+        actor: agent,
+        payload: {
+          protocol: "natstack.blob-ref.v1",
+          digest: "payload-digest",
+          size: 64,
+          encoding: "json",
+          originalBytes: 64,
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      }).payload
+    ).toMatchObject({ digest: "payload-digest" });
   });
 
   it("rejects stored events missing reducer-critical payload fields", () => {
@@ -232,12 +358,14 @@ describe("@workspace/agentic-protocol schemas", () => {
       type: "panel",
       name: "Panel",
       handle: "panel",
-      methods: [{
-        name: "eval",
-        description: "large method description",
-        parameters: { type: "object", properties: { code: { type: "string" } } },
-        returns: { type: "object" },
-      }],
+      methods: [
+        {
+          name: "eval",
+          description: "large method description",
+          parameters: { type: "object", properties: { code: { type: "string" } } },
+          returns: { type: "object" },
+        },
+      ],
       arbitraryLargeField: "x".repeat(1024),
     };
     const event: AgenticEvent<"invocation.started"> = {
@@ -251,7 +379,12 @@ describe("@workspace/agentic-protocol schemas", () => {
         transport: {
           kind: "channel",
           channelId: brandId<ChannelId>("channel-1"),
-          target: { kind: "panel", id: "panel-1", participantId: "panel-1", metadata: fullMetadata },
+          target: {
+            kind: "panel",
+            id: "panel-1",
+            participantId: "panel-1",
+            metadata: fullMetadata,
+          },
         },
       },
       createdAt: "2026-05-20T12:00:00.000Z",
@@ -270,7 +403,9 @@ describe("@workspace/agentic-protocol schemas", () => {
       handle: "panel",
       methods: [{ name: "eval" }],
     });
-    expect("transport" in sanitized.payload ? sanitized.payload.transport?.kind : undefined).toBe("channel");
+    expect("transport" in sanitized.payload ? sanitized.payload.transport?.kind : undefined).toBe(
+      "channel"
+    );
     if ("transport" in sanitized.payload && sanitized.payload.transport?.kind === "channel") {
       expect(sanitized.payload.transport.target.metadata).toEqual({
         type: "panel",
@@ -312,9 +447,9 @@ describe("@workspace/agentic-protocol stored values", () => {
       )
     ).rejects.toThrow("test payload stored value missing at $.outer.value: json-digest");
 
-    await expect(
-      hydrateStoredValueRefs(stored, { getText: async () => null })
-    ).resolves.toEqual({ outer: { value: null } });
+    await expect(hydrateStoredValueRefs(stored, { getText: async () => null })).resolves.toEqual({
+      outer: { value: null },
+    });
   });
 
   it("asserts when stored refs cross forbidden boundaries", () => {
@@ -336,7 +471,9 @@ describe("@workspace/agentic-protocol stored values", () => {
         },
         "toolResult admission"
       )
-    ).toThrow("toolResult admission contains unresolved stored value refs: $.content[0].text -> digest-1");
+    ).toThrow(
+      "toolResult admission contains unresolved stored value refs: $.content[0].text -> digest-1"
+    );
   });
 
   it("encodes every unbounded agentic payload field as a stored ref", async () => {
@@ -365,6 +502,7 @@ describe("@workspace/agentic-protocol stored values", () => {
         causality: { invocationId: brandId<InvocationId>(`inv-${field}`) },
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
+          terminalOutcome: "success",
           [field]: { field, nested: ["value"] },
         } as AgenticEvent["payload"],
         createdAt: "2026-05-20T12:00:00.000Z",
@@ -490,7 +628,7 @@ describe("@workspace/agentic-protocol reducers", () => {
     ]);
   });
 
-  it("drops malformed agentic envelopes without stopping transcript reduction", () => {
+  it("records malformed agentic envelope errors without stopping transcript reduction", () => {
     const malformed = {
       envelopeId: brandId<EnvelopeId>("env-bad"),
       channelId: brandId<ChannelId>("channel-1"),
@@ -500,44 +638,60 @@ describe("@workspace/agentic-protocol reducers", () => {
       payload: { kind: "message.completed", payload: { content: "missing required fields" } },
       publishedAt: "2026-05-20T12:00:00.000Z",
     } as ChannelEnvelope<AgenticEvent>;
-    const valid = envelope(messageEvent({
-      causality: { messageId: brandId<MessageId>("msg-good") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "user", content: "kept" },
-      createdAt: "2026-05-20T12:00:01.000Z",
-    }), 2);
+    const valid = envelope(
+      messageEvent({
+        causality: { messageId: brandId<MessageId>("msg-good") },
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "user", content: "kept" },
+        createdAt: "2026-05-20T12:00:01.000Z",
+      }),
+      2
+    );
 
     const state = [malformed, valid].reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(state.ignoredEnvelopeIds).toEqual(["env-bad"]);
+    expect(state.ignoredEnvelopeErrors["env-bad"]).toContain("payload.actor");
     expect(state.messages["msg-good"]?.content).toBe("kept");
   });
 
   it("keeps channel view and trajectory visible projection aligned for a single-agent visible stream", async () => {
-    const turnOpened = await trajectoryEvent({
-      kind: "turn.opened",
-      actor: agent,
-      turnId: brandId<TurnId>("turn-1"),
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
-      createdAt: "2026-05-20T12:00:00.000Z",
-    }, { eventId: brandId<EventId>("evt-turn"), seq: 0 });
-    const started = await trajectoryEvent({
-      kind: "message.started",
-      actor: agent,
-      turnId: brandId<TurnId>("turn-1"),
-      causality: { messageId: brandId<MessageId>("msg-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "" },
-      createdAt: "2026-05-20T12:00:01.000Z",
-    }, { eventId: brandId<EventId>("evt-start"), seq: 1, prevEventHash: turnOpened.eventHash });
-    const completed = await trajectoryEvent({
-      kind: "message.completed",
-      actor: agent,
-      turnId: brandId<TurnId>("turn-1"),
-      causality: { messageId: brandId<MessageId>("msg-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "done" },
-      createdAt: "2026-05-20T12:00:02.000Z",
-    }, { eventId: brandId<EventId>("evt-complete"), seq: 2, prevEventHash: started.eventHash });
+    const turnOpened = await trajectoryEvent(
+      {
+        kind: "turn.opened",
+        actor: agent,
+        turnId: brandId<TurnId>("turn-1"),
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      },
+      { eventId: brandId<EventId>("evt-turn"), seq: 0 }
+    );
+    const started = await trajectoryEvent(
+      {
+        kind: "message.started",
+        actor: agent,
+        turnId: brandId<TurnId>("turn-1"),
+        causality: { messageId: brandId<MessageId>("msg-1") },
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "" },
+        createdAt: "2026-05-20T12:00:01.000Z",
+      },
+      { eventId: brandId<EventId>("evt-start"), seq: 1, prevEventHash: turnOpened.eventHash }
+    );
+    const completed = await trajectoryEvent(
+      {
+        kind: "message.completed",
+        actor: agent,
+        turnId: brandId<TurnId>("turn-1"),
+        causality: { messageId: brandId<MessageId>("msg-1") },
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "done" },
+        createdAt: "2026-05-20T12:00:02.000Z",
+      },
+      { eventId: brandId<EventId>("evt-complete"), seq: 2, prevEventHash: started.eventHash }
+    );
 
-    const trajectory = [turnOpened, started, completed].reduce(reduceTrajectory, createInitialTrajectoryState());
+    const trajectory = [turnOpened, started, completed].reduce(
+      reduceTrajectory,
+      createInitialTrajectoryState()
+    );
     const channel = [started, completed]
       .map((event, index) => envelope(agenticSlice(event), index + 1))
       .reduce(reduceChannelView, createInitialChannelViewState());
@@ -546,26 +700,35 @@ describe("@workspace/agentic-protocol reducers", () => {
   });
 
   it("keeps turns open but marked waiting when external input is required", async () => {
-    const turnOpened = await trajectoryEvent({
-      kind: "turn.opened",
-      actor: agent,
-      turnId: brandId<TurnId>("turn-wait"),
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "Running model" },
-      createdAt: "2026-05-20T12:00:00.000Z",
-    }, { eventId: brandId<EventId>("evt-turn"), seq: 0 });
-    const waiting = await trajectoryEvent({
-      kind: "turn.waiting",
-      actor: agent,
-      turnId: brandId<TurnId>("turn-wait"),
-      payload: {
-        protocol: AGENTIC_PROTOCOL_VERSION,
-        summary: "Waiting for model credential refresh",
-        reason: "model_credential_reconnect_required",
+    const turnOpened = await trajectoryEvent(
+      {
+        kind: "turn.opened",
+        actor: agent,
+        turnId: brandId<TurnId>("turn-wait"),
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "Running model" },
+        createdAt: "2026-05-20T12:00:00.000Z",
       },
-      createdAt: "2026-05-20T12:00:01.000Z",
-    }, { eventId: brandId<EventId>("evt-waiting"), seq: 1, prevEventHash: turnOpened.eventHash });
+      { eventId: brandId<EventId>("evt-turn"), seq: 0 }
+    );
+    const waiting = await trajectoryEvent(
+      {
+        kind: "turn.waiting",
+        actor: agent,
+        turnId: brandId<TurnId>("turn-wait"),
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          summary: "Waiting for model credential refresh",
+          reason: "model_credential_reconnect_required",
+        },
+        createdAt: "2026-05-20T12:00:01.000Z",
+      },
+      { eventId: brandId<EventId>("evt-waiting"), seq: 1, prevEventHash: turnOpened.eventHash }
+    );
 
-    const trajectory = [turnOpened, waiting].reduce(reduceTrajectory, createInitialTrajectoryState());
+    const trajectory = [turnOpened, waiting].reduce(
+      reduceTrajectory,
+      createInitialTrajectoryState()
+    );
     const channel = [turnOpened, waiting]
       .map((event, index) => envelope(agenticSlice(event), index + 1))
       .reduce(reduceChannelView, createInitialChannelViewState());
@@ -595,12 +758,18 @@ describe("@workspace/agentic-protocol reducers", () => {
       kind: "invocation.completed",
       actor: agent,
       causality: { invocationId: brandId<InvocationId>("inv-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: "contents" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: "contents",
+        terminalOutcome: "success",
+      },
       createdAt: "2026-05-20T12:00:01.000Z",
     };
 
-    const state = [envelope(started, 1), envelope(completed, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(started, 1), envelope(completed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(state.invocations["inv-1"]?.status).toBe("completed");
     expect(state.invocations["inv-1"]?.result).toBe("contents");
@@ -618,7 +787,7 @@ describe("@workspace/agentic-protocol reducers", () => {
       kind: "invocation.completed",
       actor: agent,
       causality: { invocationId: brandId<InvocationId>("inv-cross") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: "done" },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: "done", terminalOutcome: "success" },
       createdAt: "2026-05-20T12:00:01.000Z",
     };
 
@@ -630,8 +799,10 @@ describe("@workspace/agentic-protocol reducers", () => {
         participantId: "provider-1",
       },
     };
-    const state = [providerEnvelope, envelope(completed, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [providerEnvelope, envelope(completed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(Object.keys(state.invocations)).toEqual(["inv-cross"]);
     expect(state.invocations["inv-cross"]).toMatchObject({
@@ -651,8 +822,10 @@ describe("@workspace/agentic-protocol reducers", () => {
     };
     const duplicatedEnvelope = envelope(event, 1);
 
-    const state = [duplicatedEnvelope, duplicatedEnvelope]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [duplicatedEnvelope, duplicatedEnvelope].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(state.timeline).toHaveLength(1);
     expect(state.invocations["inv-1"]?.outputs).toEqual(["line 1"]);
@@ -684,18 +857,27 @@ describe("@workspace/agentic-protocol reducers", () => {
       createdAt: "2026-05-20T12:00:01.000Z",
     };
 
-    const state = [envelope(inline, 1), envelope(actionBar, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(inline, 1), envelope(actionBar, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(state.inlineUi["participant-agent-1"]?.["inline-1"]?.props).toEqual({ ok: true });
-    expect(state.actionBars["participant-agent-1"]?.source).toEqual({ type: "file", path: "ActionBar.tsx" });
+    expect(state.actionBars["participant-agent-1"]?.source).toEqual({
+      type: "file",
+      path: "ActionBar.tsx",
+    });
   });
 
   it("merges custom message updates before starts and keeps updates sorted by seq", () => {
     const update2: AgenticEvent<"custom.updated"> = {
       kind: "custom.updated",
       actor: agent,
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, messageId: brandId<MessageId>("custom-1"), update: { tempF: 72 } },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        messageId: brandId<MessageId>("custom-1"),
+        update: { tempF: 72 },
+      },
       createdAt: "2026-05-20T12:00:02.000Z",
     };
     const duplicateUpdate2: AgenticEvent<"custom.updated"> = {
@@ -717,7 +899,11 @@ describe("@workspace/agentic-protocol reducers", () => {
     const update1: AgenticEvent<"custom.updated"> = {
       kind: "custom.updated",
       actor: agent,
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, messageId: brandId<MessageId>("custom-1"), update: { tempF: 71 } },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        messageId: brandId<MessageId>("custom-1"),
+        update: { tempF: 71 },
+      },
       createdAt: "2026-05-20T12:00:01.500Z",
     };
 
@@ -774,7 +960,10 @@ describe("@workspace/agentic-protocol reducers", () => {
       ...oldRegister,
       payload: {
         ...oldRegister.payload,
-        source: { type: "code", code: "export default function ReplayedWeather() { return null; }" },
+        source: {
+          type: "code",
+          code: "export default function ReplayedWeather() { return null; }",
+        },
       },
       createdAt: "2026-05-20T12:00:15.000Z",
     };
@@ -817,10 +1006,10 @@ describe("@workspace/agentic-protocol reducers", () => {
       createdAt: "2026-05-20T12:00:05.000Z",
     };
 
-    const state = [
-      envelope(newerStarted, 10),
-      envelope(olderStarted, 5),
-    ].reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(newerStarted, 10), envelope(olderStarted, 5)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(state.customMessages["custom-start-order"]).toMatchObject({
       typeId: "weather.v2",
@@ -834,13 +1023,22 @@ describe("@workspace/agentic-protocol reducers", () => {
 
 describe("@workspace/agentic-protocol hash helpers", () => {
   it("detects tampering in a per-branch hash chain", async () => {
-    const first = await trajectoryEvent(messageEvent(), { eventId: brandId<EventId>("evt-1"), seq: 0 });
-    const second = await trajectoryEvent(messageEvent({
-      causality: { messageId: brandId<MessageId>("msg-2") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "user", content: "next" },
-    }), { eventId: brandId<EventId>("evt-2"), seq: 1, prevEventHash: first.eventHash });
+    const first = await trajectoryEvent(messageEvent(), {
+      eventId: brandId<EventId>("evt-1"),
+      seq: 0,
+    });
+    const second = await trajectoryEvent(
+      messageEvent({
+        causality: { messageId: brandId<MessageId>("msg-2") },
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "user", content: "next" },
+      }),
+      { eventId: brandId<EventId>("evt-2"), seq: 1, prevEventHash: first.eventHash }
+    );
 
-    await expect(checkTrajectoryIntegrity([first, second])).resolves.toEqual({ ok: true, errors: [] });
+    await expect(checkTrajectoryIntegrity([first, second])).resolves.toEqual({
+      ok: true,
+      errors: [],
+    });
 
     const tampered = {
       ...second,

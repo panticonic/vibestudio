@@ -222,6 +222,78 @@ describe("pi-agent-core steering integration", () => {
       "turn-end",
     ]);
   });
+
+  it("stops the agent loop at the iteration boundary when the run is aborted", async () => {
+    // Guards the pi-agent-core patch (patches/@earendil-works__pi-agent-core).
+    // The loop's built-in abort handling only stops when the *model stream*
+    // reports `stopReason: "aborted"`. When the run is aborted during/after
+    // tool execution, the loop must terminate at the top of the next iteration
+    // rather than feeding the aborted tool results back and calling the model
+    // again. Here the model ALWAYS returns a tool call, so without the patch
+    // the loop would churn forever (the streamFn cap below turns that into a
+    // clear failure instead of a hang).
+    const ac = new AbortController();
+    let modelCalls = 0;
+    let agentEnded = false;
+
+    const tools: NonNullable<Parameters<typeof runAgentLoop>[1]["tools"]> = [
+      {
+        name: "probe",
+        label: "Probe",
+        description: "probe",
+        parameters: { type: "object", additionalProperties: false },
+        // Simulate the user pressing stop while a tool is running.
+        execute: vi.fn(async () => {
+          ac.abort();
+          return { content: [{ type: "text" as const, text: "ok" }], details: {} };
+        }),
+      },
+    ];
+
+    const config: AgentLoopConfig = {
+      model: {
+        id: "gpt-5",
+        provider: "openai-codex",
+        modelId: "gpt-5",
+        api: "openai",
+      } as unknown as AgentLoopConfig["model"],
+      convertToLlm: (messages) => messages as never,
+    } as AgentLoopConfig;
+
+    const streamFn = vi.fn(async () => {
+      modelCalls++;
+      if (modelCalls > 3) {
+        throw new Error("agent loop kept calling the model after abort");
+      }
+      const message = {
+        role: "assistant",
+        content: [{ type: "toolCall", id: `call_${modelCalls}`, name: "probe", arguments: {} }],
+        timestamp: modelCalls + 1,
+      };
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: "done" };
+        },
+        result: async () => message,
+      };
+    });
+
+    await runAgentLoop(
+      [{ role: "user", content: "start", timestamp: 1 } as AgentMessage],
+      { systemPrompt: "test", messages: [], tools },
+      config,
+      async (event) => {
+        if (event.type === "agent_end") agentEnded = true;
+      },
+      ac.signal,
+      streamFn as never
+    );
+
+    // Model called once; abort fires during its tool; the loop then terminates
+    // at the next iteration boundary instead of calling the model again.
+    expect(modelCalls).toBe(1);
+    expect(agentEnded).toBe(true);
+  });
 });
 
 describe("PiRunner", () => {
@@ -354,10 +426,11 @@ describe("PiRunner", () => {
   it("clears adopted turn ids when continue setup fails before turn.opened", async () => {
     const runner = new PiRunner(createOptions());
     await runner.init();
-    (runner as unknown as { prepareSessionForContinue(): Promise<void> }).prepareSessionForContinue =
-      vi.fn(async () => {
-        throw new Error("continue preflight failed");
-      });
+    (
+      runner as unknown as { prepareSessionForContinue(): Promise<void> }
+    ).prepareSessionForContinue = vi.fn(async () => {
+      throw new Error("continue preflight failed");
+    });
 
     await expect(runner.continueAgent({ turnId: "turn-adopted" })).rejects.toThrow(
       "continue preflight failed"
@@ -446,9 +519,9 @@ describe("PiRunner", () => {
     };
     internals.gad = { call: appendTrajectoryBatch };
 
-    await expect(runner.prompt({ content: "hello" }, { turnId: "turn-open-failed" })).rejects.toThrow(
-      "turn open append failed"
-    );
+    await expect(
+      runner.prompt({ content: "hello" }, { turnId: "turn-open-failed" })
+    ).rejects.toThrow("turn open append failed");
 
     expect((await runner.getDebugState())["currentTurnId"]).toBeNull();
     expect(appendTrajectoryBatch).toHaveBeenCalledWith(
@@ -554,16 +627,18 @@ describe("PiRunner", () => {
   });
 
   it("includes active channel tools in debug state", async () => {
-    const runner = new PiRunner(createOptions({
-      rosterCallback: () => [
-        {
-          participantHandle: "sandbox",
-          name: "eval",
-          description: "Run code in the panel sandbox",
-          parameters: { type: "object" },
-        },
-      ],
-    }));
+    const runner = new PiRunner(
+      createOptions({
+        rosterCallback: () => [
+          {
+            participantHandle: "sandbox",
+            name: "eval",
+            description: "Run code in the panel sandbox",
+            parameters: { type: "object" },
+          },
+        ],
+      })
+    );
     await runner.init();
 
     const debug = await runner.getDebugState();
@@ -575,10 +650,12 @@ describe("PiRunner", () => {
 
   it("warns when expected channel tools are absent from the roster", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const runner = new PiRunner(createOptions({
-      rosterCallback: () => [],
-      expectedChannelToolNames: ["eval"],
-    }));
+    const runner = new PiRunner(
+      createOptions({
+        rosterCallback: () => [],
+        expectedChannelToolNames: ["eval"],
+      })
+    );
     await runner.init();
 
     expect(warn).toHaveBeenCalledWith(
@@ -588,7 +665,9 @@ describe("PiRunner", () => {
         rosterToolNames: [],
       })
     );
-    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain('"missingExpectedChannelToolNames":["eval"]');
+    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain(
+      '"missingExpectedChannelToolNames":["eval"]'
+    );
 
     warn.mockRestore();
     runner.dispose();
@@ -650,7 +729,9 @@ describe("PiRunner", () => {
     const debug = await runner.getDebugState();
     expect(JSON.stringify(debug["phase"])).toContain("provider.payload.ready");
     expect(JSON.stringify(debug["phase"])).toContain('"hasEval":true');
-    expect(JSON.stringify(debug["phase"])).toContain('"toolNames":["eval","feedback_form","inline_ui"]');
+    expect(JSON.stringify(debug["phase"])).toContain(
+      '"toolNames":["eval","feedback_form","inline_ui"]'
+    );
     expect(warn).toHaveBeenCalledWith(
       "[PiRunner] Provider payload tool set differs from active harness tools",
       expect.objectContaining({
@@ -663,17 +744,19 @@ describe("PiRunner", () => {
 
   it("warns when provider payload omits expected channel tools", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const runner = new PiRunner(createOptions({
-      rosterCallback: () => [
-        {
-          participantHandle: "sandbox",
-          name: "eval",
-          description: "Run code in the panel sandbox",
-          parameters: { type: "object" },
-        },
-      ],
-      expectedChannelToolNames: ["eval"],
-    }));
+    const runner = new PiRunner(
+      createOptions({
+        rosterCallback: () => [
+          {
+            participantHandle: "sandbox",
+            name: "eval",
+            description: "Run code in the panel sandbox",
+            parameters: { type: "object" },
+          },
+        ],
+        expectedChannelToolNames: ["eval"],
+      })
+    );
     await runner.init();
     await (
       runner as unknown as {
@@ -702,21 +785,27 @@ describe("PiRunner", () => {
   it("logs a loud diagnostic when the model-facing tool set changes", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     let allowEval = true;
-    const runner = new PiRunner(createOptions({
-      rosterCallback: () => [
-        {
-          participantHandle: "sandbox",
-          name: "eval",
-          description: "Run code in the panel sandbox",
-          parameters: { type: "object" },
-        },
-      ],
-      toolFilter: (name) => allowEval || name !== "eval",
-    }));
+    const runner = new PiRunner(
+      createOptions({
+        rosterCallback: () => [
+          {
+            participantHandle: "sandbox",
+            name: "eval",
+            description: "Run code in the panel sandbox",
+            parameters: { type: "object" },
+          },
+        ],
+        toolFilter: (name) => allowEval || name !== "eval",
+      })
+    );
     await runner.init();
-    await (runner as unknown as { refreshRuntimeTools(reason?: string): Promise<void> }).refreshRuntimeTools("test.initial");
+    await (
+      runner as unknown as { refreshRuntimeTools(reason?: string): Promise<void> }
+    ).refreshRuntimeTools("test.initial");
     allowEval = false;
-    await (runner as unknown as { refreshRuntimeTools(reason?: string): Promise<void> }).refreshRuntimeTools("test.remove_eval");
+    await (
+      runner as unknown as { refreshRuntimeTools(reason?: string): Promise<void> }
+    ).refreshRuntimeTools("test.remove_eval");
 
     expect(warn).toHaveBeenCalledWith(
       "[PiRunner] Model-facing tool set changed",
@@ -737,22 +826,28 @@ describe("PiRunner", () => {
       parameters: { type: "object" },
       execute: vi.fn(),
     } as unknown as NonNullable<PiRunnerOptions["extraTools"]>[number];
-    const runner = new PiRunner(createOptions({
-      rosterCallback: () => [
-        {
-          participantHandle: "panel",
-          name: "set_title",
-          description: "panel title tool",
-          parameters: { type: "object" },
-        },
-      ],
-      extraTools: [setTitleTool],
-    }));
+    const runner = new PiRunner(
+      createOptions({
+        rosterCallback: () => [
+          {
+            participantHandle: "panel",
+            name: "set_title",
+            description: "panel title tool",
+            parameters: { type: "object" },
+          },
+        ],
+        extraTools: [setTitleTool],
+      })
+    );
     await runner.init();
 
-    const names = ((await runner.getDebugState())["activeToolNames"] as string[]).filter((name) => name === "set_title");
+    const names = ((await runner.getDebugState())["activeToolNames"] as string[]).filter(
+      (name) => name === "set_title"
+    );
     expect(names).toHaveLength(1);
-    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain('"duplicateToolNames":["set_title"]');
+    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain(
+      '"duplicateToolNames":["set_title"]'
+    );
 
     runner.dispose();
   });
@@ -824,7 +919,10 @@ describe("PiRunner", () => {
   it("keeps empty assistant error provenance private", async () => {
     const runner = new PiRunner(createOptions()) as unknown as {
       queueMessageProvenance(message: unknown, messageEntryId: string): void;
-      provenanceQueue: Array<{ event: { kind: string; payload: Record<string, unknown> }; publishToChannel?: boolean }>;
+      provenanceQueue: Array<{
+        event: { kind: string; payload: Record<string, unknown> };
+        publishToChannel?: boolean;
+      }>;
       dispose(): void;
     };
 
@@ -860,7 +958,10 @@ describe("PiRunner", () => {
   it("publishes failed assistant provenance when the assistant message has visible content", async () => {
     const runner = new PiRunner(createOptions()) as unknown as {
       queueMessageProvenance(message: unknown, messageEntryId: string): void;
-      provenanceQueue: Array<{ event: { kind: string; payload: Record<string, unknown> }; publishToChannel?: boolean }>;
+      provenanceQueue: Array<{
+        event: { kind: string; payload: Record<string, unknown> };
+        publishToChannel?: boolean;
+      }>;
       dispose(): void;
     };
 
@@ -967,7 +1068,11 @@ describe("PiRunner", () => {
         kind: "invocation.completed",
         actor: { kind: "agent", id: "test", metadata: hugeMetadata },
         causality: { invocationId: "call_1" },
-        payload: { protocol: "agentic.trajectory.v1", result: { content: "small output" } },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          result: { content: "small output" },
+          terminalOutcome: "success",
+        },
         createdAt: new Date(0).toISOString(),
       },
     };
@@ -1080,7 +1185,7 @@ describe("PiRunner", () => {
       currentTurnId: string | null;
       running: boolean;
       activeAssistantMessage: { messageId: string; lastText: string; started: boolean } | null;
-      forceCloseCurrentTurn(reason?: string, summary?: string): Promise<boolean>;
+      forceCloseCurrentTurn(reason?: "user_interrupted", summary?: string): Promise<boolean>;
     };
     runner.options.gad = {
       trajectoryId: "trajectory:test",
@@ -1096,7 +1201,9 @@ describe("PiRunner", () => {
       started: true,
     };
 
-    await expect(runner.forceCloseCurrentTurn("failed", "failed")).rejects.toThrow("append failed");
+    await expect(runner.forceCloseCurrentTurn("user_interrupted", "failed")).rejects.toThrow(
+      "append failed"
+    );
 
     expect(runner.currentTurnId).toBe("turn-open");
     expect(runner.running).toBe(false);
@@ -1166,9 +1273,9 @@ describe("PiRunner", () => {
     };
     internals.gad = { call: appendTrajectoryBatch };
 
-    await expect(runner.prompt({ content: "hello" }, { turnId: "turn-close-failed" })).rejects.toThrow(
-      "turn close append failed"
-    );
+    await expect(
+      runner.prompt({ content: "hello" }, { turnId: "turn-close-failed" })
+    ).rejects.toThrow("turn close append failed");
 
     expect(internals.currentTurnId).toBe("turn-close-failed");
     expect(appendTrajectoryBatch).toHaveBeenCalledWith(
@@ -1191,12 +1298,18 @@ describe("PiRunner", () => {
     const appendGate = new Promise<void>((resolve) => {
       releaseAppend = resolve;
     });
-    const batches: Array<Array<{ event: { kind: string; turnId?: string; payload?: unknown } }>> = [];
-    const appendTrajectoryBatch = vi.fn(async (_method: string, input: { events: Array<{ event: { kind: string; turnId?: string; payload?: unknown } }> }) => {
-      batches.push(input.events);
-      await appendGate;
-      return { events: [], published: [] };
-    });
+    const batches: Array<Array<{ event: { kind: string; turnId?: string; payload?: unknown } }>> =
+      [];
+    const appendTrajectoryBatch = vi.fn(
+      async (
+        _method: string,
+        input: { events: Array<{ event: { kind: string; turnId?: string; payload?: unknown } }> }
+      ) => {
+        batches.push(input.events);
+        await appendGate;
+        return { events: [], published: [] };
+      }
+    );
     const runner = new PiRunner(createOptions()) as unknown as {
       options: PiRunnerOptions;
       gad: { call: typeof appendTrajectoryBatch };
@@ -1220,22 +1333,83 @@ describe("PiRunner", () => {
 
     const forceClose = runner.forceCloseCurrentTurn(
       "user_interrupted",
-      "Agent turn interrupted by user"
+      "Turn closed after user interruption"
     );
     await runner.closeCurrentTurn();
     releaseAppend();
     await forceClose;
 
     const events = batches.flat().map((item) => item.event);
-    expect(events.map((event) => event.kind)).toEqual([
-      "invocation.abandoned",
-      "turn.closed",
-    ]);
-    expect(events[0]).toMatchObject({ turnId: "turn-open" });
+    expect(events.map((event) => event.kind)).toEqual(["invocation.cancelled", "turn.closed"]);
+    expect(events[0]).toMatchObject({
+      turnId: "turn-open",
+      payload: {
+        terminalOutcome: "cancelled",
+        terminalReasonCode: "user_interrupted",
+      },
+    });
     expect(events[1]?.payload).toMatchObject({
       reason: "user_interrupted",
-      summary: "Agent turn interrupted by user",
+      summary: "Turn closed after user interruption",
     });
+  });
+
+  it("settles open invocations as infrastructure errors when operation failure closes a turn", async () => {
+    const appendTrajectoryBatch = vi.fn(async () => undefined);
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      currentTurnId: string | null;
+      running: boolean;
+      openedTurnIds: Set<string>;
+      openInvocationIds: Set<string>;
+      openToolInvocations: Map<string, unknown>;
+      settleFailedOperationTurn(
+        requestedTurnId: string | undefined,
+        reason: "work_failed",
+        summary: string
+      ): Promise<void>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+    runner.currentTurnId = "turn-open";
+    runner.running = true;
+    runner.openedTurnIds.add("turn-open");
+    runner.openInvocationIds.add("call_1");
+    runner.openToolInvocations.set("call_1", { toolName: "eval", turnId: "turn-open" });
+
+    await runner.settleFailedOperationTurn(
+      "turn-open",
+      "work_failed",
+      "Agent turn failed before completion"
+    );
+
+    const calls = appendTrajectoryBatch.mock.calls as unknown as Array<
+      [unknown, { events: Array<{ event: unknown }> }]
+    >;
+    const events = calls
+      .flatMap((call) => call[1].events)
+      .map((item) => item.event as { kind: string; payload: Record<string, unknown> });
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: "invocation.failed",
+        payload: expect.objectContaining({
+          terminalOutcome: "infrastructure_error",
+          terminalReasonCode: "work_failed",
+        }),
+      }),
+      expect.objectContaining({
+        kind: "turn.closed",
+        payload: expect.objectContaining({
+          reason: "work_failed",
+          summary: "Agent turn failed before completion",
+        }),
+      }),
+    ]);
   });
 
   it("spills oversized invocation results to blobstore before appending provenance", async () => {
@@ -1264,6 +1438,7 @@ describe("PiRunner", () => {
             protocol: "agentic.trajectory.v1",
             result: { toolCallId: "call_1", content: [{ type: "text", text: largeText }] },
             summary: "large result",
+            terminalOutcome: "success",
           },
           createdAt: new Date(0).toISOString(),
         },
@@ -1312,15 +1487,14 @@ describe("PiRunner", () => {
         },
       },
       {
-        eventId: expect.stringMatching(
-          /^entry-result:invocation:call_1:terminal:[0-9a-f]{16}$/u
-        ),
+        eventId: expect.stringMatching(/^entry-result:invocation:call_1:terminal:[0-9a-f]{16}$/u),
         publishToChannel: true,
         event: {
           kind: "invocation.completed",
           causality: { invocationId: "call_1", messageId: "entry-result" },
           payload: {
             result: expect.objectContaining({ toolCallId: "call_1", toolName: "eval" }),
+            terminalOutcome: "success",
           },
         },
       },
@@ -1331,7 +1505,11 @@ describe("PiRunner", () => {
     const runner = new PiRunner(createOptions()) as unknown as {
       session: { getLeafId(): Promise<string> };
       provenanceQueue: Array<Record<string, unknown>>;
-      handleMessageEnd(message: unknown, capturedMessageEntryId?: string): Promise<void>;
+      handleMessageEnd(
+        message: unknown,
+        capturedMessageEntryId?: string,
+        signal?: AbortSignal
+      ): Promise<void>;
     };
     runner.session = {
       getLeafId: vi.fn(async () => {
@@ -1353,12 +1531,45 @@ describe("PiRunner", () => {
     expect(runner.provenanceQueue).toMatchObject([
       { eventId: expect.stringMatching(/^entry-at-emit:message:completed:[0-9a-f]{16}$/u) },
       {
-        eventId: expect.stringMatching(
-          /^entry-at-emit:invocation:call_1:terminal:[0-9a-f]{16}$/u
-        ),
+        eventId: expect.stringMatching(/^entry-at-emit:invocation:call_1:terminal:[0-9a-f]{16}$/u),
       },
     ]);
     expect(runner.session.getLeafId).not.toHaveBeenCalled();
+  });
+
+  it("ignores aborted tool results before they become invocation failures", async () => {
+    const runner = new PiRunner(createOptions()) as unknown as {
+      session: { getLeafId(): Promise<string> };
+      provenanceQueue: Array<Record<string, unknown>>;
+      handleMessageEnd(
+        message: unknown,
+        capturedMessageEntryId?: string,
+        signal?: AbortSignal
+      ): Promise<void>;
+      getDebugState(): Promise<Record<string, unknown>>;
+    };
+    runner.session = { getLeafId: vi.fn(async () => "late-tool-result") };
+    runner.provenanceQueue = [];
+    const controller = new AbortController();
+    controller.abort(new Error("Agent run aborted"));
+
+    await runner.handleMessageEnd(
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "eval",
+        content: [{ type: "text", text: "Agent turn was interrupted before tool dispatch." }],
+        isError: true,
+      },
+      "entry-at-emit",
+      controller.signal
+    );
+
+    expect(runner.provenanceQueue).toEqual([]);
+    expect(runner.session.getLeafId).not.toHaveBeenCalled();
+    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain(
+      "message_end.aborted_tool_result_ignored"
+    );
   });
 
   it("content-addresses derived message provenance for repeated session entry ids", () => {
@@ -1447,9 +1658,7 @@ describe("PiRunner", () => {
             eventId: expect.stringMatching(/^entry-tool:message:completed:[0-9a-f]{16}$/u),
           }),
           expect.objectContaining({
-            eventId: expect.stringMatching(
-              /^entry-tool:invocation:call_1:terminal:[0-9a-f]{16}$/u
-            ),
+            eventId: expect.stringMatching(/^entry-tool:invocation:call_1:terminal:[0-9a-f]{16}$/u),
           }),
         ],
       })
@@ -1586,9 +1795,7 @@ describe("PiRunner", () => {
     ).toBe(false);
     expect(runner.provenanceQueue).toContainEqual(
       expect.objectContaining({
-        eventId: expect.stringMatching(
-          /^entry-assistant:invocation:call_2:started:[0-9a-f]{16}$/u
-        ),
+        eventId: expect.stringMatching(/^entry-assistant:invocation:call_2:started:[0-9a-f]{16}$/u),
         event: expect.objectContaining({
           kind: "invocation.started",
           causality: expect.objectContaining({ invocationId: "call_2" }),
@@ -2204,7 +2411,10 @@ describe("PiRunner", () => {
     const runner = new PiRunner(createOptions()) as unknown as {
       options: PiRunnerOptions;
       restoredTrajectoryState: {
-        invocations: Record<string, { invocationId: string; status: string; actor: { kind: "agent"; id: string } }>;
+        invocations: Record<
+          string,
+          { invocationId: string; status: string; actor: { kind: "agent"; id: string } }
+        >;
         turns: Record<string, never>;
       };
       terminalInvocationIds: Set<string>;
@@ -2275,10 +2485,16 @@ describe("PiRunner", () => {
           targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
         };
       }
-      if (target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" && method === "listTrajectoryEvents") {
+      if (
+        target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" &&
+        method === "listTrajectoryEvents"
+      ) {
         return events;
       }
-      if (target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" && method === "appendTrajectoryBatch") {
+      if (
+        target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" &&
+        method === "appendTrajectoryBatch"
+      ) {
         appended.push(...((args[0] as { events?: unknown[] }).events ?? []));
         return { events: [], published: [] };
       }
@@ -2349,7 +2565,10 @@ describe("PiRunner", () => {
         eventHash: "hash-user",
         kind: "system.event",
         actor,
-        payload: { protocol: "agentic.trajectory.v1", details: putBlob(entry("user-entry", null, "user")) },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          details: putBlob(entry("user-entry", null, "user")),
+        },
         createdAt: "2026-05-27T00:00:00.000Z",
       },
       {
@@ -2377,10 +2596,16 @@ describe("PiRunner", () => {
           targetId: "do:workers/gad-store:GadWorkspaceDO:workspace-gad",
         };
       }
-      if (target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" && method === "listTrajectoryEvents") {
+      if (
+        target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" &&
+        method === "listTrajectoryEvents"
+      ) {
         return events;
       }
-      if (target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" && method === "appendTrajectoryBatch") {
+      if (
+        target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" &&
+        method === "appendTrajectoryBatch"
+      ) {
         return { events: [], published: [] };
       }
       if (target === "do:workers/gad-store:GadWorkspaceDO:workspace-gad" && method === "query") {

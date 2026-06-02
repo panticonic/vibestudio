@@ -1,8 +1,23 @@
-import type { ActorRef, AgenticEvent, EventKind, MessageBlockInput, ParticipantRef, SandboxSourcePayload, UsagePayload } from "./events.js";
+import type {
+  ActorRef,
+  AgenticEvent,
+  EventKind,
+  MessageBlockInput,
+  ParticipantRef,
+  SandboxSourcePayload,
+  UsagePayload,
+} from "./events.js";
 import type { ApprovalId, InvocationId, MessageId, TurnId } from "./ids.js";
+import type { InvocationOutcome } from "./constants.js";
 
 export type MessageStatus = "started" | "streaming" | "completed" | "failed";
-export type InvocationStatus = "started" | "running" | "completed" | "failed" | "cancelled" | "abandoned";
+export type InvocationStatus =
+  | "started"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "abandoned";
 export type ApprovalStatus = "requested" | "granted" | "denied";
 
 export interface ProjectedMessage {
@@ -40,6 +55,8 @@ export interface ProjectedInvocation {
   completedAt?: string;
   updatedAt?: string;
   terminalReason?: string;
+  terminalOutcome?: InvocationOutcome;
+  terminalReasonCode?: string;
 }
 
 export interface ProjectedApproval {
@@ -95,7 +112,12 @@ export type InlineUiMap = Record<string, ProjectedInlineUi>;
 export type TurnMap = Record<string, ProjectedTurn>;
 
 function isTerminalInvocationStatus(status: InvocationStatus | undefined): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled" || status === "abandoned";
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "abandoned"
+  );
 }
 
 function requireMessageId(event: AgenticEvent): MessageId {
@@ -118,7 +140,7 @@ function requireApprovalId(event: AgenticEvent): ApprovalId {
 
 function mergeMessageBlock(
   blocks: MessageBlockInput[] | undefined,
-  block: MessageBlockInput | undefined,
+  block: MessageBlockInput | undefined
 ): MessageBlockInput[] | undefined {
   if (!block) return blocks;
   const existing = blocks ?? [];
@@ -134,10 +156,13 @@ function mergeMessageBlock(
     }
   }
   if (replaceIndex === -1) return [...existing, block];
-  return existing.map((item, index) => index === replaceIndex ? block : item);
+  return existing.map((item, index) => (index === replaceIndex ? block : item));
 }
 
-export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extract<EventKind, `message.${string}`>>): MessageMap {
+export function applyMessageEvent(
+  messages: MessageMap,
+  event: AgenticEvent<Extract<EventKind, `message.${string}`>>
+): MessageMap {
   const messageId = requireMessageId(event);
   const existing = messages[messageId] ?? {
     messageId,
@@ -176,7 +201,7 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
     const payload = event.payload;
     const nextBlocks = mergeMessageBlock(
       existing.blocks,
-      "block" in payload ? payload.block : undefined,
+      "block" in payload ? payload.block : undefined
     );
     return {
       ...messages,
@@ -184,9 +209,12 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
         ...existing,
         actor: event.actor,
         turnId: existing.turnId ?? event.turnId,
-        content: "replace" in payload && payload.replace
-          ? ("delta" in payload ? payload.delta : existing.content)
-          : existing.content + ("delta" in payload ? payload.delta : ""),
+        content:
+          "replace" in payload && payload.replace
+            ? "delta" in payload
+              ? payload.delta
+              : existing.content
+            : existing.content + ("delta" in payload ? payload.delta : ""),
         blocks: nextBlocks,
         status: "streaming",
         updatedAt: event.createdAt,
@@ -236,7 +264,7 @@ export function applyMessageEvent(messages: MessageMap, event: AgenticEvent<Extr
 
 export function applyInvocationEvent(
   invocations: InvocationMap,
-  event: AgenticEvent<Extract<EventKind, `invocation.${string}`>>,
+  event: AgenticEvent<Extract<EventKind, `invocation.${string}`>>
 ): InvocationMap {
   const invocationId = requireInvocationId(event);
   const existing = invocations[invocationId] ?? {
@@ -259,8 +287,15 @@ export function applyInvocationEvent(
         turnId: existing.turnId ?? event.turnId,
         name: existing.name ?? ("name" in payload ? payload.name : undefined),
         request: existing.request ?? ("request" in payload ? payload.request : undefined),
-        requiresApproval: existing.requiresApproval ?? ("requiresApproval" in payload ? payload.requiresApproval : undefined),
-        userVisible: existing.userVisible === true ? true : ("userVisible" in payload ? payload.userVisible : existing.userVisible),
+        requiresApproval:
+          existing.requiresApproval ??
+          ("requiresApproval" in payload ? payload.requiresApproval : undefined),
+        userVisible:
+          existing.userVisible === true
+            ? true
+            : "userVisible" in payload
+              ? payload.userVisible
+              : existing.userVisible,
         status: "started",
         startedAt: existing.startedAt ?? event.createdAt,
         updatedAt: event.createdAt,
@@ -327,6 +362,12 @@ export function applyInvocationEvent(
         status: "completed",
         result,
         terminalReason: "summary" in payload ? payload.summary : existing.terminalReason,
+        terminalOutcome:
+          "terminalOutcome" in payload ? payload.terminalOutcome : existing.terminalOutcome,
+        terminalReasonCode:
+          "terminalReasonCode" in payload
+            ? payload.terminalReasonCode
+            : existing.terminalReasonCode,
         completedAt: event.createdAt,
         updatedAt: event.createdAt,
       },
@@ -351,6 +392,10 @@ export function applyInvocationEvent(
       updatedAt: event.createdAt,
       result,
       terminalReason: "reason" in payload ? payload.reason : undefined,
+      terminalOutcome:
+        "terminalOutcome" in payload ? payload.terminalOutcome : existing.terminalOutcome,
+      terminalReasonCode:
+        "terminalReasonCode" in payload ? payload.terminalReasonCode : existing.terminalReasonCode,
     },
   };
 }
@@ -358,11 +403,12 @@ export function applyInvocationEvent(
 function inferInvocationMetadata(value: unknown): { name?: string; request?: unknown } {
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const record = value as Record<string, unknown>;
-  const name = typeof record["toolName"] === "string"
-    ? record["toolName"]
-    : typeof record["name"] === "string"
-      ? record["name"]
-      : undefined;
+  const name =
+    typeof record["toolName"] === "string"
+      ? record["toolName"]
+      : typeof record["name"] === "string"
+        ? record["name"]
+        : undefined;
   let request: unknown;
   const details = record["details"];
   if (details && typeof details === "object" && !Array.isArray(details)) {
@@ -374,7 +420,7 @@ function inferInvocationMetadata(value: unknown): { name?: string; request?: unk
 
 export function applyApprovalEvent(
   approvals: ApprovalMap,
-  event: AgenticEvent<Extract<EventKind, `approval.${string}`>>,
+  event: AgenticEvent<Extract<EventKind, `approval.${string}`>>
 ): ApprovalMap {
   const approvalId = requireApprovalId(event);
   const existing = approvals[approvalId] ?? {
@@ -418,7 +464,7 @@ export function applyApprovalEvent(
 export function applyUiEvent(
   inlineUi: InlineUiMap,
   actionBar: ProjectedActionBar | undefined,
-  event: AgenticEvent<Extract<EventKind, `ui.${string}`>>,
+  event: AgenticEvent<Extract<EventKind, `ui.${string}`>>
 ): { inlineUi: InlineUiMap; actionBar?: ProjectedActionBar } {
   const payload = event.payload;
   if (event.kind === "ui.inline_rendered" && payload.uiType === "inline") {

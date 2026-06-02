@@ -515,9 +515,7 @@ function sanitizeRegistryMutation(mutation: RegistryMutationInput): RegistryMuta
   };
 }
 
-function isActorRefLike(
-  value: unknown
-): value is {
+function isActorRefLike(value: unknown): value is {
   kind: "user" | "agent" | "system" | "panel" | "external";
   id: string;
   metadata?: Record<string, unknown>;
@@ -697,6 +695,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
         transport_call_id TEXT,
         kind TEXT,
         status TEXT NOT NULL,
+        terminal_outcome TEXT,
+        terminal_reason_code TEXT,
         request_ref_json TEXT,
         result_ref_json TEXT,
         started_event_id TEXT,
@@ -1747,6 +1747,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
                 i.transport_call_id,
                 i.kind,
                 i.status,
+                i.terminal_outcome,
+                i.terminal_reason_code,
                 i.started_event_id,
                 i.completed_event_id,
                 i.updated_at,
@@ -1758,7 +1760,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
           AND json_extract(e.causality_json, '$.invocationId') = i.invocation_id
          ${where}
          GROUP BY i.branch_id, i.invocation_id, i.transport_call_id, i.kind, i.status,
-                  i.started_event_id, i.completed_event_id, i.updated_at
+                  i.terminal_outcome, i.terminal_reason_code, i.started_event_id,
+                  i.completed_event_id, i.updated_at
          ORDER BY i.updated_at DESC
          LIMIT ?`,
         ...bindings,
@@ -3128,14 +3131,17 @@ export class GadWorkspaceDO extends DurableObjectBase {
     }
     this.sql.exec(
       `INSERT INTO trajectory_invocations (
-         invocation_id, branch_id, turn_id, transport_call_id, kind, status, request_ref_json, result_ref_json,
-         started_event_id, completed_event_id, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         invocation_id, branch_id, turn_id, transport_call_id, kind, status, terminal_outcome,
+         terminal_reason_code, request_ref_json, result_ref_json, started_event_id, completed_event_id,
+         updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(branch_id, invocation_id) DO UPDATE SET
          turn_id = COALESCE(trajectory_invocations.turn_id, excluded.turn_id),
          transport_call_id = COALESCE(excluded.transport_call_id, trajectory_invocations.transport_call_id),
          kind = COALESCE(excluded.kind, trajectory_invocations.kind),
          status = excluded.status,
+         terminal_outcome = COALESCE(excluded.terminal_outcome, trajectory_invocations.terminal_outcome),
+         terminal_reason_code = COALESCE(excluded.terminal_reason_code, trajectory_invocations.terminal_reason_code),
          request_ref_json = COALESCE(excluded.request_ref_json, trajectory_invocations.request_ref_json),
          result_ref_json = COALESCE(excluded.result_ref_json, trajectory_invocations.result_ref_json),
          started_event_id = COALESCE(trajectory_invocations.started_event_id, excluded.started_event_id),
@@ -3147,6 +3153,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
       event.causality?.transportCallId ?? null,
       asString(payload["name"]),
       event.kind.replace("invocation.", ""),
+      asString(payload["terminalOutcome"]),
+      asString(payload["terminalReasonCode"]),
       event.kind === "invocation.started" ? json(payload["request"]) : null,
       event.kind === "invocation.completed" ? json(payload["result"]) : null,
       event.kind === "invocation.started" ? event.eventId : null,

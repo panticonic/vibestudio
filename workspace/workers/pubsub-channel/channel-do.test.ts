@@ -3,6 +3,9 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
+  invocationAbandonedPayload,
+  invocationCancelledPayload,
+  invocationCompletedPayload,
 } from "@workspace/agentic-protocol";
 import { GadWorkspaceDO } from "../gad-store/index.js";
 import { PubSubChannel } from "./channel-do.js";
@@ -238,6 +241,7 @@ describe("PubSubChannel", () => {
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
           result: { text: largeResult },
+          terminalOutcome: "success",
         },
       },
       { idempotencyKey: "large-publish" }
@@ -245,7 +249,10 @@ describe("PubSubChannel", () => {
 
     const replay = await instance.getReplayAfter(1);
     const event = replay.logEvents.find((item) => item.type === AGENTIC_EVENT_PAYLOAD_KIND);
-    const payload = ((event?.payload as { payload?: unknown })?.payload ?? {}) as Record<string, unknown>;
+    const payload = ((event?.payload as { payload?: unknown })?.payload ?? {}) as Record<
+      string,
+      unknown
+    >;
     expect(blobs.size).toBeGreaterThan(0);
     expect(payload["result"]).toEqual({ text: largeResult });
   });
@@ -334,9 +341,9 @@ describe("PubSubChannel", () => {
       });
       await new Promise((resolve) => setTimeout(resolve, 5));
 
-      expect(
-        sql.exec(`SELECT id FROM participants WHERE id = ?`, missingDoId).toArray()
-      ).toEqual([]);
+      expect(sql.exec(`SELECT id FROM participants WHERE id = ?`, missingDoId).toArray()).toEqual(
+        []
+      );
       expect(consoleError).not.toHaveBeenCalledWith(
         expect.stringContaining("[Channel] delivery failed"),
         expect.anything()
@@ -488,6 +495,237 @@ describe("PubSubChannel", () => {
     });
   });
 
+  it("settles pending method calls as an error from malformed terminal invocation events", async () => {
+    const { instance } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      "panel:provider",
+      "transport-malformed",
+      "eval",
+      { code: "1 + 1" },
+      {
+        invocationId: "invocation-malformed",
+        transportCallId: "transport-malformed",
+        turnId: "turn-malformed",
+      }
+    );
+
+    // The publish is still rejected loudly so the producer sees its bug...
+    setRpcCaller(instance, "panel:provider", "panel");
+    await expect(
+      instance.publish("panel:provider", AGENTIC_EVENT_PAYLOAD_KIND, {
+        kind: "invocation.failed",
+        actor: { kind: "panel", id: "panel:provider" },
+        turnId: "turn-malformed",
+        causality: {
+          invocationId: "invocation-malformed",
+          transportCallId: "transport-malformed",
+        },
+        // schema rejection fixture: terminalOutcome is intentionally omitted
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          reason: "malformed terminal event",
+        },
+        createdAt: new Date().toISOString(),
+      })
+    ).rejects.toThrow(/terminalOutcome/u);
+
+    // ...but the matching pending call must NOT be left hanging. A terminal we
+    // cannot trust means the call failed; settle it as an error so the caller
+    // fails fast instead of awaiting a result that can never be delivered.
+    const pending = (
+      instance as unknown as { sql: { exec: (...args: unknown[]) => { toArray(): unknown[] } } }
+    ).sql
+      .exec(
+        `SELECT transport_call_id FROM pending_calls WHERE transport_call_id = ?`,
+        "transport-malformed"
+      )
+      .toArray();
+    expect(pending).toHaveLength(0);
+  });
+
+  it("settles pending method calls from a valid terminal invocation event", async () => {
+    const { instance } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      "panel:provider",
+      "transport-ok",
+      "eval",
+      { code: "1 + 1" },
+      { invocationId: "invocation-ok", transportCallId: "transport-ok", turnId: "turn-ok" }
+    );
+
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.publish("panel:provider", AGENTIC_EVENT_PAYLOAD_KIND, {
+      kind: "invocation.completed",
+      actor: { kind: "panel", id: "panel:provider" },
+      turnId: "turn-ok",
+      causality: { invocationId: "invocation-ok", transportCallId: "transport-ok" },
+      payload: invocationCompletedPayload({ result: 2 }),
+      createdAt: new Date().toISOString(),
+    });
+
+    const pending = (
+      instance as unknown as { sql: { exec: (...args: unknown[]) => { toArray(): unknown[] } } }
+    ).sql
+      .exec(
+        `SELECT transport_call_id FROM pending_calls WHERE transport_call_id = ?`,
+        "transport-ok"
+      )
+      .toArray();
+    expect(pending).toHaveLength(0);
+  });
+
+  it("settles pending method calls from abandoned invocation events", async () => {
+    const { instance } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      "panel:provider",
+      "transport-abandoned",
+      "eval",
+      { code: "await forever()" },
+      {
+        invocationId: "invocation-abandoned",
+        transportCallId: "transport-abandoned",
+        turnId: "turn-abandoned",
+      }
+    );
+
+    setRpcCaller(instance, "panel:provider", "panel");
+    const result = await instance.publish("panel:provider", AGENTIC_EVENT_PAYLOAD_KIND, {
+      kind: "invocation.abandoned",
+      actor: { kind: "panel", id: "panel:provider" },
+      turnId: "turn-abandoned",
+      causality: {
+        invocationId: "invocation-abandoned",
+        transportCallId: "transport-abandoned",
+      },
+      payload: invocationAbandonedPayload("runner restarted", {
+        terminalReasonCode: "runner_restarted_before_invocation_completed",
+      }),
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(result.id).toBeTypeOf("number");
+    const pending = (
+      instance as unknown as { sql: { exec: (...args: unknown[]) => { toArray(): unknown[] } } }
+    ).sql
+      .exec(
+        `SELECT transport_call_id FROM pending_calls WHERE transport_call_id = ?`,
+        "transport-abandoned"
+      )
+      .toArray();
+    expect(pending).toHaveLength(0);
+
+    const events = (
+      await instance.getReplayAfter(0)
+    ).logEvents.map((event) => event.payload as { kind?: string; payload?: unknown });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "invocation.abandoned",
+          payload: expect.objectContaining({
+            terminalOutcome: "abandoned",
+            terminalReasonCode: "runner_restarted_before_invocation_completed",
+          }),
+        }),
+      ])
+    );
+    expect(events.some((event) => event.kind === "invocation.failed")).toBe(false);
+  });
+
+  it("preserves cancelled outcome when provider cancellation settles a pending method call", async () => {
+    const { instance } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      "panel:provider",
+      "transport-cancelled",
+      "eval",
+      { code: "await forever()" },
+      {
+        invocationId: "invocation-cancelled",
+        transportCallId: "transport-cancelled",
+        turnId: "turn-cancelled",
+      }
+    );
+
+    setRpcCaller(instance, "panel:provider", "panel");
+    const result = await instance.publish("panel:provider", AGENTIC_EVENT_PAYLOAD_KIND, {
+      kind: "invocation.cancelled",
+      actor: { kind: "panel", id: "panel:provider" },
+      turnId: "turn-cancelled",
+      causality: {
+        invocationId: "invocation-cancelled",
+        transportCallId: "transport-cancelled",
+      },
+      payload: invocationCancelledPayload("cancelled", "cancelled", {
+        terminalReasonCode: "cancelled",
+      }),
+      createdAt: new Date().toISOString(),
+    });
+
+    expect(result.id).toBeTypeOf("number");
+    const events = (
+      await instance.getReplayAfter(0)
+    ).logEvents.map((event) => event.payload as { kind?: string; payload?: unknown });
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "invocation.cancelled",
+          payload: expect.objectContaining({
+            terminalOutcome: "cancelled",
+            terminalReasonCode: "cancelled",
+          }),
+        }),
+      ])
+    );
+    expect(events.some((event) => event.kind === "invocation.failed")).toBe(false);
+  });
+
   it("does not block channel cancellation behind an in-flight DO method call", async () => {
     let resolveMethod!: (value: unknown) => void;
     let resolveMethodStarted!: () => void;
@@ -527,11 +765,20 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:caller", "panel");
     await expect(
       Promise.race([
-        instance.callMethod("panel:caller", targetPid, "transport-do", "pause", {}, {
-          invocationId: "invocation-do",
-          transportCallId: "transport-do",
-          turnId: "turn-do",
-        }).then(() => "returned"),
+        instance
+          .callMethod(
+            "panel:caller",
+            targetPid,
+            "transport-do",
+            "pause",
+            {},
+            {
+              invocationId: "invocation-do",
+              transportCallId: "transport-do",
+              turnId: "turn-do",
+            }
+          )
+          .then(() => "returned"),
         new Promise((resolve) => setTimeout(() => resolve("blocked"), 25)),
       ])
     ).resolves.toBe("returned");
@@ -557,10 +804,16 @@ describe("PubSubChannel", () => {
         expect.objectContaining({
           kind: "invocation.cancelled",
           causality: { invocationId: "invocation-do", transportCallId: "transport-do" },
+          payload: expect.objectContaining({
+            terminalOutcome: "cancelled",
+            terminalReasonCode: "cancelled",
+          }),
         }),
       ])
     );
-    expect(events.some((event: { kind?: string }) => event.kind === "invocation.completed")).toBe(false);
+    expect(events.some((event: { kind?: string }) => event.kind === "invocation.completed")).toBe(
+      false
+    );
   });
 
   it("persists method terminal events even when the caller participant has left", async () => {
@@ -609,7 +862,10 @@ describe("PubSubChannel", () => {
           kind: "invocation.completed",
           turnId: "turn-left",
           causality: { invocationId: "invocation-left", transportCallId: "transport-left" },
-          payload: expect.objectContaining({ protocol: AGENTIC_PROTOCOL_VERSION }),
+          payload: expect.objectContaining({
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            terminalOutcome: "success",
+          }),
         }),
       ])
     );

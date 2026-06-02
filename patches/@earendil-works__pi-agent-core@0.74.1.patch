@@ -1,5 +1,5 @@
 diff --git a/dist/agent-loop.js b/dist/agent-loop.js
-index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..01adf4a40a634d90ca3db197dfe82214e7d4fc98 100644
+index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..d59047031319a585ea6640b1b3fea8d352b0ee2a 100644
 --- a/dist/agent-loop.js
 +++ b/dist/agent-loop.js
 @@ -78,6 +78,7 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
@@ -10,7 +10,25 @@ index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..01adf4a40a634d90ca3db197dfe82214
      // Check for steering messages at start (user may have typed while waiting)
      let pendingMessages = (await config.getSteeringMessages?.()) || [];
      // Outer loop: continues when queued follow-up messages arrive after agent would stop
-@@ -101,6 +102,24 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
+@@ -85,6 +86,17 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
+         let hasMoreToolCalls = true;
+         // Inner loop: process tool calls and steering messages
+         while (hasMoreToolCalls || pendingMessages.length > 0) {
++            // Honor an abort between iterations. The model-stream `stopReason`
++            // check below only stops the run when the *provider* reports the
++            // abort; if the run is aborted during/after tool execution (tools
++            // see the aborted signal and fail), the loop would otherwise feed
++            // those failures back and call the model again. Terminate the run
++            // at the iteration boundary so an interrupt stops the agent
++            // promptly instead of churning.
++            if (signal?.aborted) {
++                await emit({ type: "agent_end", messages: newMessages });
++                return;
++            }
+             if (!firstTurn) {
+                 await emit({ type: "turn_start" });
+             }
+@@ -101,6 +113,24 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
                  }
                  pendingMessages = [];
              }
@@ -35,7 +53,7 @@ index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..01adf4a40a634d90ca3db197dfe82214
              // Stream assistant response
              const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
              newMessages.push(message);
-@@ -123,25 +142,12 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
+@@ -123,25 +153,12 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
                  }
              }
              await emit({ type: "turn_end", message, toolResults });
@@ -75,7 +93,7 @@ index 24eafe939d2a0444dccf82f49b50d5e3d1b826e9..0602180d6d5a3d95765baf473aae7c46
      promptFromTemplate(name: string, args?: string[]): Promise<AssistantMessage>;
      steer(text: string, options?: {
 diff --git a/dist/harness/agent-harness.js b/dist/harness/agent-harness.js
-index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..903613b45bc9ea6c35acfa54cfb0c3bca0ad7a9f 100644
+index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..a05e365dbac2264a0f8b81512942eb7786fe191c 100644
 --- a/dist/harness/agent-harness.js
 +++ b/dist/harness/agent-harness.js
 @@ -1,5 +1,5 @@

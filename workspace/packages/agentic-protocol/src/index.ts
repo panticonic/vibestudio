@@ -2,10 +2,25 @@ export {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   GENESIS_EVENT_HASH,
+  INVOCATION_OUTCOMES,
+  LIFECYCLE_MESSAGE_REASON_CODES,
   TERMINAL_APPROVAL_KINDS,
   TERMINAL_INVOCATION_KINDS,
   TERMINAL_MESSAGE_KINDS,
+  TURN_REASON_CODES,
   TURN_SCOPED_OWNER_KINDS,
+  isLifecycleMessageReasonCode,
+  isInvocationOutcome,
+  isTerminalInvocationKind,
+  isTurnReasonCode,
+  invocationTerminalKindForOutcome,
+  validateInvocationTerminalOutcomeForKind,
+} from "./constants.js";
+export type {
+  InvocationOutcome,
+  LifecycleMessageReasonCode,
+  TerminalInvocationKind,
+  TurnReasonCode,
 } from "./constants.js";
 
 export type {
@@ -40,6 +55,13 @@ export type {
   ExternalEnvelopePublishedPayload,
   ExternalParticipantObservedPayload,
   InvocationPayload,
+  InvocationAbandonedPayload,
+  InvocationCancelledPayload,
+  InvocationCompletedPayload,
+  InvocationFailedPayload,
+  InvocationFailurePayload,
+  InvocationTerminalFailureOutcome,
+  InvocationTerminalPayload,
   InvocationTransport,
   KnowledgePayload,
   MessageBlockInput,
@@ -58,7 +80,13 @@ export type {
   TurnPayload,
   UsagePayload,
 } from "./events.js";
-export { agenticSlice } from "./events.js";
+export {
+  agenticSlice,
+  invocationAbandonedPayload,
+  invocationCancelledPayload,
+  invocationCompletedPayload,
+  invocationFailedPayload,
+} from "./events.js";
 
 export type {
   BlobWriter,
@@ -153,10 +181,7 @@ export type {
   ProjectedCustomMessageUpdate,
   ProjectedMessageTypeDefinition,
 } from "./reducer-channel.js";
-export {
-  createInitialChannelViewState,
-  reduceChannelView,
-} from "./reducer-channel.js";
+export { createInitialChannelViewState, reduceChannelView } from "./reducer-channel.js";
 
 export {
   canonicalJson,

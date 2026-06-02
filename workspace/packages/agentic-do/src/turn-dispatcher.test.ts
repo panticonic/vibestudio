@@ -961,3 +961,44 @@ describe("TurnDispatcher — race scenarios", () => {
     expect(runner.runTurnCalls).toHaveLength(1);
   });
 });
+
+describe("TurnDispatcher — interrupt gating", () => {
+  it("drops auto-continuations after an interrupt so a stopped agent stays stopped", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({ runner: runner.runner, notifyTyping: () => {} });
+
+    // User pressed stop. A suspension result / recovery pass that resolves
+    // afterwards must NOT restart the agent loop.
+    d.interrupt();
+    d.submitContinue({ turnId: "turn-1" });
+    await flush();
+
+    expect(runner.continueCalls).toHaveLength(0);
+    expect(runner.runTurnCalls).toHaveLength(0);
+  });
+
+  it("re-engages on the next user message and resumes normal continues", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({ runner: runner.runner, notifyTyping: () => {} });
+
+    d.interrupt();
+    d.submitContinue({ turnId: "stale" });
+    await flush();
+    expect(runner.continueCalls).toHaveLength(0);
+
+    // A fresh user message clears the interrupt gate and runs.
+    const msg = makeMsg("continue please");
+    d.submit(msg);
+    await flush();
+    expect(runner.runTurnCalls).toHaveLength(1);
+
+    // Finish the turn; a subsequent continue now flows normally again.
+    emitRunLifecycle(runner, [msg]);
+    runner.runTurnCalls[0]!.deferred.resolve();
+    await flush();
+
+    d.submitContinue({ turnId: "turn-2" });
+    await flush();
+    expect(runner.continueCalls).toHaveLength(1);
+  });
+});

@@ -16,7 +16,8 @@ import { useChatContext } from "../context/ChatContext";
  * Reads from ChatContext.
  */
 export function ChatFeedbackArea() {
-  const { activeFeedbacks, onFeedbackDismiss, onFeedbackError, chat, scope, scopes, scopeManager } = useChatContext();
+  const { activeFeedbacks, onFeedbackDismiss, onFeedbackError, chat, scope, scopes, scopeManager } =
+    useChatContext();
 
   // DOM event delegation — silent best-effort persist after user interaction.
   const onInteraction = useCallback(() => {
@@ -97,36 +98,53 @@ interface TsxFeedbackItemProps {
 }
 
 function TsxFeedbackItem({
-  feedback, FeedbackComponent, chat, scope, scopes, scopeManager,
-  onDismiss, onError, onInteraction,
+  feedback,
+  FeedbackComponent,
+  chat,
+  scope,
+  scopes,
+  scopeManager,
+  onDismiss,
+  onError,
+  onInteraction,
 }: TsxFeedbackItemProps) {
   // Wrap chat/scopes so unhandled async rejections route to onError.
   // Memoized per feedback — onError changes when callId changes (new feedback).
-  const wrappedChat = useMemo(
-    () => wrapChatForErrorReporting(chat, onError),
-    [chat, onError],
-  );
+  const wrappedChat = useMemo(() => wrapChatForErrorReporting(chat, onError), [chat, onError]);
   const wrappedScopes = useMemo(
     () => wrapScopesForErrorReporting(scopes, onError),
-    [scopes, onError],
+    [scopes, onError]
+  );
+  const completeAfterPersist = useCallback(
+    (result: Parameters<typeof feedback.complete>[0]) => {
+      void (async () => {
+        try {
+          await scopeManager?.persist();
+          feedback.complete(result);
+        } catch (err) {
+          const error = err instanceof Error ? err : new Error(String(err));
+          console.warn("[ChatFeedbackArea] Scope persist before feedback completion failed:", err);
+          onError(error);
+          feedback.complete({
+            type: "error",
+            message: `Scope persist failed: ${error.message}`,
+          });
+        }
+      })();
+    },
+    [feedback, onError, scopeManager]
   );
 
   return (
-    <FeedbackContainer
-      title={feedback.title}
-      onDismiss={onDismiss}
-      onError={onError}
-    >
-      <div onClickCapture={onInteraction} onInputCapture={onInteraction} onChangeCapture={onInteraction}>
+    <FeedbackContainer title={feedback.title} onDismiss={onDismiss} onError={onError}>
+      <div
+        onClickCapture={onInteraction}
+        onInputCapture={onInteraction}
+        onChangeCapture={onInteraction}
+      >
         <FeedbackComponent
-          onSubmit={(value) => {
-            const done = () => feedback.complete({ type: "submit", value });
-            scopeManager ? void scopeManager.persist().catch(() => {}).then(done) : done();
-          }}
-          onCancel={() => {
-            const done = () => feedback.complete({ type: "cancel" });
-            scopeManager ? void scopeManager.persist().catch(() => {}).then(done) : done();
-          }}
+          onSubmit={(value) => completeAfterPersist({ type: "submit", value })}
+          onCancel={() => completeAfterPersist({ type: "cancel" })}
           onError={(message) => feedback.complete({ type: "error", message })}
           chat={wrappedChat as unknown as Record<string, unknown>}
           scope={scope}

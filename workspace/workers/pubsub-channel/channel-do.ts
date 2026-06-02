@@ -16,10 +16,18 @@ import type { BootstrapSnapshot, ParticipantSnapshot } from "@workspace/pubsub";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
+  invocationAbandonedPayload,
+  invocationCancelledPayload as invocationCancelledPayloadValue,
+  invocationCompletedPayload,
+  invocationFailedPayload,
+  isTerminalInvocationKind,
   participantRefFromMetadata,
   publicParticipantMetadata,
+  agenticEventSchema,
+  storedAgenticEventSchema,
   type AgenticEvent,
   type InvocationId,
+  type InvocationOutcome,
   type ParticipantRef,
   type TurnId,
 } from "@workspace/agentic-protocol";
@@ -237,8 +245,45 @@ export class PubSubChannel extends DurableObjectBase {
     transportCallId: string | undefined,
     turnId: string | undefined,
     result: unknown,
-    isError: boolean
+    isError: boolean,
+    terminalOutcome?: InvocationOutcome,
+    terminalReasonCode?: string
   ): AgenticEvent {
+    const reason = typeof result === "string" && result ? result : "method failed";
+    if (terminalOutcome === "cancelled" || terminalOutcome === "stale_dispatch") {
+      return {
+        kind: "invocation.cancelled",
+        actor: this.participantRef(callerId),
+        ...(turnId ? { turnId: turnId as TurnId } : {}),
+        causality: {
+          invocationId: invocationId as InvocationId,
+          ...(transportCallId ? { transportCallId } : {}),
+        },
+        payload: invocationCancelledPayloadValue(terminalOutcome, reason, {
+          ...(typeof result === "string" ? {} : { error: result }),
+          ...(terminalReasonCode ? { terminalReasonCode } : {}),
+        }),
+        createdAt: new Date().toISOString(),
+      } as AgenticEvent;
+    }
+    if (terminalOutcome === "abandoned") {
+      return {
+        kind: "invocation.abandoned",
+        actor: this.participantRef(callerId),
+        ...(turnId ? { turnId: turnId as TurnId } : {}),
+        causality: {
+          invocationId: invocationId as InvocationId,
+          ...(transportCallId ? { transportCallId } : {}),
+        },
+        payload: invocationAbandonedPayload(reason, {
+          ...(typeof result === "string" ? {} : { error: result }),
+          ...(terminalReasonCode ? { terminalReasonCode } : {}),
+        }),
+        createdAt: new Date().toISOString(),
+      } as AgenticEvent;
+    }
+    const failedOutcome =
+      terminalOutcome === "infrastructure_error" ? "infrastructure_error" : "tool_error";
     return {
       kind: isError ? "invocation.failed" : "invocation.completed",
       actor: this.participantRef(callerId),
@@ -248,8 +293,11 @@ export class PubSubChannel extends DurableObjectBase {
         ...(transportCallId ? { transportCallId } : {}),
       },
       payload: isError
-        ? { protocol: AGENTIC_PROTOCOL_VERSION, reason: "method failed", error: result }
-        : { protocol: AGENTIC_PROTOCOL_VERSION, result },
+        ? invocationFailedPayload(failedOutcome, "method failed", {
+            error: result,
+            terminalReasonCode: terminalReasonCode ?? "method_failed",
+          })
+        : invocationCompletedPayload({ result }),
       createdAt: new Date().toISOString(),
     } as AgenticEvent;
   }
@@ -269,7 +317,9 @@ export class PubSubChannel extends DurableObjectBase {
         invocationId: invocationId as InvocationId,
         ...(transportCallId ? { transportCallId } : {}),
       },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason },
+      payload: invocationCancelledPayloadValue("cancelled", reason, {
+        terminalReasonCode: "cancelled",
+      }),
       createdAt: new Date().toISOString(),
     };
   }
@@ -284,6 +334,8 @@ export class PubSubChannel extends DurableObjectBase {
     content: unknown;
     isError: boolean;
     complete: boolean;
+    terminalOutcome?: InvocationOutcome;
+    terminalReasonCode?: string;
   } | null {
     if (
       type !== AGENTIC_EVENT_PAYLOAD_KIND ||
@@ -292,14 +344,16 @@ export class PubSubChannel extends DurableObjectBase {
       Array.isArray(payload)
     )
       return null;
-    const eventObj = payload as AgenticEvent;
+    const result = agenticEventSchema.safeParse(payload);
+    if (!result.success) return null;
+    const eventObj = result.data;
     if (!eventObj.kind.startsWith("invocation.")) return null;
     const invocationId = eventObj.causality?.invocationId;
     if (typeof invocationId !== "string" || invocationId.length === 0) return null;
     const transportCallId = eventObj.causality?.transportCallId ?? invocationId;
     const turnId = typeof eventObj.turnId === "string" ? eventObj.turnId : undefined;
     if (eventObj.kind === "invocation.completed") {
-      const result = "result" in eventObj.payload ? eventObj.payload.result : undefined;
+      const result = eventObj.payload.result;
       return {
         transportCallId,
         invocationId,
@@ -309,15 +363,20 @@ export class PubSubChannel extends DurableObjectBase {
         complete: true,
       };
     }
-    if (eventObj.kind === "invocation.failed" || eventObj.kind === "invocation.cancelled") {
-      const payloadObj = eventObj.payload as Record<string, unknown>;
+    if (
+      eventObj.kind === "invocation.failed" ||
+      eventObj.kind === "invocation.cancelled" ||
+      eventObj.kind === "invocation.abandoned"
+    ) {
       return {
         transportCallId,
         invocationId,
         turnId,
-        content: payloadObj["error"] ?? payloadObj["reason"] ?? "Invocation failed",
+        content: eventObj.payload.error ?? eventObj.payload.reason,
         isError: true,
         complete: true,
+        terminalOutcome: eventObj.payload.terminalOutcome,
+        terminalReasonCode: eventObj.payload.terminalReasonCode,
       };
     }
     return {
@@ -887,11 +946,16 @@ export class PubSubChannel extends DurableObjectBase {
         onFatal
       );
       if (deliverToDo) {
-        void queueDoEnvelope(this.broadcastDeps, subscriberId, {
-          kind: "log",
-          phase: "replay",
-          event,
-        }, onFatal);
+        void queueDoEnvelope(
+          this.broadcastDeps,
+          subscriberId,
+          {
+            kind: "log",
+            phase: "replay",
+            event,
+          },
+          onFatal
+        );
       }
     }
     for (const snapshot of envelope.snapshots) {
@@ -1124,6 +1188,20 @@ export class PubSubChannel extends DurableObjectBase {
       }
     }
 
+    if (type === AGENTIC_EVENT_PAYLOAD_KIND) {
+      const agenticPayload = storedAgenticEventSchema.safeParse(payload);
+      if (!agenticPayload.success) {
+        const message = agenticPayload.error.issues[0]?.message ?? "invalid agentic event payload";
+        // A malformed *terminal* invocation event is rejected here, before the
+        // pending-call interception below. If we only threw, a caller awaiting
+        // this call's result would never be settled — an unbounded hang. Fail
+        // the matching pending call loudly so the caller errors out, then still
+        // throw so the producer's publish surfaces the validation error.
+        await this.settlePendingCallForMalformedTerminal(payload, message);
+        throw new Error(message);
+      }
+    }
+
     // Intercept terminal invocation results only if there's a matching pending
     // DO-initiated call. Streaming progress remains in the channel log.
     const invocationResult = this.invocationResultFromPublishedPayload(type, payload);
@@ -1139,7 +1217,9 @@ export class PubSubChannel extends DurableObjectBase {
           const resultId = await this.handleMethodResult(
             invocationResult.transportCallId,
             invocationResult.content,
-            invocationResult.isError
+            invocationResult.isError,
+            invocationResult.terminalOutcome,
+            invocationResult.terminalReasonCode
           );
           if (idempotencyKey && resultId !== undefined) {
             this.sql.exec(
@@ -1693,12 +1773,60 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /**
+   * When a malformed agentic event is rejected at publish time, settle any
+   * pending DO-initiated call it was the terminal result for — as an error —
+   * so the caller fails fast instead of hanging forever waiting for a result
+   * that can never be delivered. Uses a loose structural read of the payload
+   * (it failed strict validation) and mirrors the valid path's
+   * `transportCallId ?? invocationId` fallback. Non-terminal kinds, or no
+   * matching pending row, are left untouched.
+   */
+  private async settlePendingCallForMalformedTerminal(
+    payload: unknown,
+    validationMessage: string
+  ): Promise<void> {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
+    const kind = (payload as { kind?: unknown }).kind;
+    if (typeof kind !== "string" || !isTerminalInvocationKind(kind)) return;
+    const causality = (payload as { causality?: unknown }).causality;
+    if (!causality || typeof causality !== "object" || Array.isArray(causality)) return;
+    const c = causality as { transportCallId?: unknown; invocationId?: unknown };
+    const callId =
+      (typeof c.transportCallId === "string" && c.transportCallId.length > 0
+        ? c.transportCallId
+        : undefined) ??
+      (typeof c.invocationId === "string" && c.invocationId.length > 0
+        ? c.invocationId
+        : undefined);
+    if (!callId) return;
+    const pending = this.sql
+      .exec(`SELECT transport_call_id FROM pending_calls WHERE transport_call_id = ?`, callId)
+      .toArray();
+    if (pending.length === 0) return;
+    try {
+      await this.handleMethodResult(
+        callId,
+        `malformed terminal invocation event (${kind}): ${validationMessage}`,
+        true
+      );
+    } catch (err) {
+      console.error(
+        `[Channel] Failed to settle pending call after malformed terminal: ` +
+          `channel=${this.objectKey} transportCallId=${callId}`,
+        err
+      );
+    }
+  }
+
+  /**
    * Handle an invocation result from a participant.
    */
   async handleMethodResult(
     transportCallId: string,
     content: unknown,
-    isError: boolean
+    isError: boolean,
+    terminalOutcome?: InvocationOutcome,
+    terminalReasonCode?: string
   ): Promise<number | undefined> {
     const pending = consumeCall(this.sql, transportCallId);
     if (!pending) {
@@ -1715,7 +1843,9 @@ export class PubSubChannel extends DurableObjectBase {
       pending.turnId,
       pending.method,
       content,
-      isError
+      isError,
+      terminalOutcome,
+      terminalReasonCode
     );
     this.scheduleNextAlarm();
     return resultId;
@@ -1789,7 +1919,9 @@ export class PubSubChannel extends DurableObjectBase {
     turnId: string | undefined,
     methodName: string | undefined,
     result: unknown,
-    isError: boolean
+    isError: boolean,
+    terminalOutcome?: InvocationOutcome,
+    terminalReasonCode?: string
   ): Promise<number | undefined> {
     const caller = this.sql.exec(`SELECT id FROM participants WHERE id = ?`, callerId).toArray();
     const callerPresent = caller.length > 0;
@@ -1807,7 +1939,9 @@ export class PubSubChannel extends DurableObjectBase {
       transportCallId,
       turnId,
       boundedResult,
-      isError ?? false
+      isError ?? false,
+      terminalOutcome,
+      terminalReasonCode
     );
     const event = await this.appendLogEvent(AGENTIC_EVENT_PAYLOAD_KIND, payload, callerId);
     if (callerPresent) {

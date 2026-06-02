@@ -74,6 +74,11 @@ export class TurnDispatcher {
   private drainGeneration = 0;
   private lastTypingOn = false;
   private disposed = false;
+  // Set when the user interrupts. Suppresses auto-continuation (suspension
+  // resumes / recovery continues) so an aborted agent does not keep churning
+  // through new turns. Cleared by the next user message (`submit`), which is
+  // the only thing that should re-start the agent after an interrupt.
+  private interrupted = false;
   private activeWork: ActiveWork | null = null;
   private readonly unsub: () => void;
   private readonly log: Pick<Console, "warn" | "error">;
@@ -85,6 +90,8 @@ export class TurnDispatcher {
 
   submit(input: RunnerTurnInput, opts?: { mode?: "auto" | "sequential" }): void {
     if (this.disposed) return;
+    // A fresh user message re-engages the agent after an interrupt.
+    this.interrupted = false;
     const sequential = opts?.mode === "sequential";
     if (!sequential && this.running) {
       const message = this.opts.runner.buildUserMessage(input);
@@ -107,9 +114,30 @@ export class TurnDispatcher {
 
   submitContinue(opts: RunnerTurnOptions = {}): void {
     if (this.disposed) return;
+    // Drop auto-continuations once the user has interrupted. A suspension
+    // result or recovery pass that resolves after the interrupt must not
+    // re-start the agent loop — only a new user message may.
+    if (this.interrupted) {
+      this.log.warn("[TurnDispatcher] dropping continue after user interrupt", {
+        turnId: opts.turnId ?? null,
+      });
+      this.notifyTyping();
+      return;
+    }
     this.pending.push({ kind: "continue", ...(opts.turnId ? { turnId: opts.turnId } : {}) });
     this.notifyTyping();
     this.ensureDrain();
+  }
+
+  /**
+   * Interrupt: clear all queued/active work like `reset()`, and additionally
+   * suppress further auto-continuation until the next user message. Used by the
+   * worker's pause/interrupt path so a stopped agent stays stopped instead of
+   * being resumed by a late suspension result or recovery continue.
+   */
+  interrupt(): void {
+    this.interrupted = true;
+    this.reset();
   }
 
   reset(): void {

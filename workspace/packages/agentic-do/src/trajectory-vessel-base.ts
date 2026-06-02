@@ -50,6 +50,9 @@ import {
   hydrateStoredValueRefs,
   publicParticipantMetadata,
   type AgenticEvent,
+  type InvocationOutcome,
+  type LifecycleMessageReasonCode,
+  type TurnReasonCode,
 } from "@workspace/agentic-protocol";
 import {
   PiRunner,
@@ -137,6 +140,13 @@ export type RespondPolicy = "all" | "mentioned" | "mentioned-strict" | "from-par
 type CachedParticipant = Awaited<ReturnType<ChannelClient["getParticipants"]>>[number];
 type AgentSettingSource = "state" | "config" | "default";
 export type CustomMessageReducer = (state: unknown, update: unknown) => unknown;
+type LifecycleRecoveryDiagnostic = {
+  type: "lifecycle_recovery";
+  status: "recovered" | "interrupted" | "failed";
+  title: string;
+  detail: string;
+  reason: LifecycleMessageReasonCode;
+};
 
 function gadBranchIdForChannel(channelId: string): string {
   return `branch:channel:${channelId}`;
@@ -153,6 +163,35 @@ function isTranscriptShapeError(error: unknown): boolean {
   if (error instanceof Error && error.name === "TranscriptShapeError") return true;
   if (error instanceof AgentWorkerError && error.code === "transcript_shape") return true;
   return /\bMalformed (?:agent|GAD) (?:append|transcript)\b/.test(String(error));
+}
+
+class AgentLifecycleError extends Error {
+  outcome: Extract<InvocationOutcome, "stale_dispatch" | "cancelled">;
+  reasonCode: string;
+
+  constructor(
+    message: string,
+    outcome: Extract<InvocationOutcome, "stale_dispatch" | "cancelled">,
+    reasonCode: string
+  ) {
+    super(message);
+    this.name = "AgentLifecycleError";
+    this.outcome = outcome;
+    this.reasonCode = reasonCode;
+  }
+}
+
+function lifecycleToolResult(error: AgentLifecycleError): AgentToolResult<any> {
+  return {
+    isError: true,
+    content: [{ type: "text", text: error.message }],
+    details: {
+      __natstack_terminal: {
+        outcome: error.outcome,
+        reasonCode: error.reasonCode,
+      },
+    },
+  } as AgentToolResult<any>;
 }
 
 function pushBounded<T>(items: T[], item: T, limit = DEBUG_RING_LIMIT): void {
@@ -516,7 +555,7 @@ function modelCredentialReconnectFailure(err: unknown): AgentFailureInfo | null 
     err && typeof err === "object" && typeof (err as { message?: unknown }).message === "string"
       ? (err as { message: string }).message
       : undefined;
-  const message = err instanceof Error ? err.message : objectMessage ?? String(err);
+  const message = err instanceof Error ? err.message : (objectMessage ?? String(err));
   return { message: message || code, code };
 }
 
@@ -657,7 +696,13 @@ function trimTrailingEmptyAbortedAssistant(messages: AgentMessage[]): AgentMessa
 
 function isCredentialRequiredAssistantMessage(message: AgentMessage | undefined): boolean {
   const candidate = message as
-    | { role?: string; stopReason?: string; errorMessage?: string; code?: unknown; errorCode?: unknown }
+    | {
+        role?: string;
+        stopReason?: string;
+        errorMessage?: string;
+        code?: unknown;
+        errorCode?: unknown;
+      }
     | undefined;
   return (
     candidate?.role === "assistant" &&
@@ -726,11 +771,7 @@ type AgentTurnRunStatus =
   | "failed"
   | "interrupted";
 
-type ReplayToolSafety =
-  | "journal-before-dispatch"
-  | "idempotent-by-key"
-  | "pure-read"
-  | "unsafe";
+type ReplayToolSafety = "journal-before-dispatch" | "idempotent-by-key" | "pure-read" | "unsafe";
 
 interface AgentTurnRunRow {
   turnId: string;
@@ -803,6 +844,7 @@ interface RecoveryStaleDiagnostic {
   hasToolResult: boolean;
   sessionLeafBeforeCall?: string | null;
   activeBranchEntryIds?: string[];
+  activeBranchEntryIdsError?: string;
   currentBranchTail?: string | null;
   resultEventId?: number | null;
   resultReceivedAt?: number | null;
@@ -864,9 +906,10 @@ function failedAgentEndFailure(event: RunnerEvent | undefined): AgentFailureInfo
     errorCode?: unknown;
   } | null;
   if (!last || last.role !== "assistant" || last.stopReason !== "error") return null;
-  const message = typeof last.errorMessage === "string" && last.errorMessage.trim()
-    ? last.errorMessage
-    : "Runner failed before model generation began.";
+  const message =
+    typeof last.errorMessage === "string" && last.errorMessage.trim()
+      ? last.errorMessage
+      : "Runner failed before model generation began.";
   return {
     message,
     ...(errorCodeFromUnknown(last) ? { code: errorCodeFromUnknown(last) } : {}),
@@ -879,9 +922,11 @@ function runnerEventMetadata(event: RunnerEvent | undefined): {
   lifecycleMatched?: boolean;
 } {
   return (
-    (event as
-      | { natstack?: { operationId?: string; turnId?: string; lifecycleMatched?: boolean } }
-      | undefined)?.natstack ?? {}
+    (
+      event as
+        | { natstack?: { operationId?: string; turnId?: string; lifecycleMatched?: boolean } }
+        | undefined
+    )?.natstack ?? {}
   );
 }
 
@@ -2397,13 +2442,21 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (!invocationOpen && row.sessionLeafBeforeCall) {
       const onActiveBranch = await runner.isLeafDescendantOf(row.sessionLeafBeforeCall);
       if (!onActiveBranch) {
-        const activeBranchEntryIds = await runner.getSessionBranchEntryIds().catch(() => []);
+        let activeBranchEntryIds: string[] = [];
+        let activeBranchEntryIdsError: string | undefined;
+        try {
+          activeBranchEntryIds = await runner.getSessionBranchEntryIds();
+        } catch (err) {
+          this.recordLastError("channel_method.recovery.branch_entry_ids", err);
+          activeBranchEntryIdsError = err instanceof Error ? err.message : String(err);
+        }
         return {
           reason: "session branch moved",
           invocationOpen,
           hasToolResult,
           sessionLeafBeforeCall: row.sessionLeafBeforeCall,
           activeBranchEntryIds,
+          ...(activeBranchEntryIdsError ? { activeBranchEntryIdsError } : {}),
           currentBranchTail: activeBranchEntryIds[activeBranchEntryIds.length - 1] ?? null,
           resultEventId: row.resultEventId,
           resultReceivedAt: row.resultReceivedAt,
@@ -2446,7 +2499,14 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   private runOnChannelRecoveryChain(channelId: string, fn: () => Promise<void>): Promise<void> {
     const prev = this.recoveryChainByChannel.get(channelId) ?? Promise.resolve();
-    const next = prev.catch(() => undefined).then(fn);
+    const next = prev
+      .catch((err) => {
+        this.recordLastError("channel_method.recovery.previous_failed", err, channelId);
+        this.recordDebugPhase(channelId, "channel_method.recovery.previous_failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .then(fn);
     this.recoveryChainByChannel.set(channelId, next);
     return next;
   }
@@ -2635,8 +2695,19 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           this.markStale(chosen.transportCallId, "missing_turn_metadata");
           continue;
         }
-        const cursorEntryId =
-          chosen.recoveredEntryId ?? (await runner.session?.getLeafId().catch(() => null)) ?? null;
+        let liveLeafId: string | null = null;
+        if (!chosen.recoveredEntryId && runner.session) {
+          try {
+            liveLeafId = await runner.session.getLeafId();
+          } catch (err) {
+            this.recordLastError("channel_method.recovery.cursor_leaf", err, channelId);
+            this.recordDebugPhase(channelId, "channel_method.recovery.cursor_leaf_failed", {
+              transportCallId: chosen.transportCallId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        const cursorEntryId = chosen.recoveredEntryId ?? liveLeafId;
         this.transitionTurn(chosen.turnId, ["waiting_external", "running_model"], "continuing", {
           resumeCursorEntryId: cursorEntryId,
         });
@@ -2829,7 +2900,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     });
   }
 
-  private lifecycleDiagnosticForTurnLedgerMessage(message: string): Record<string, unknown> | undefined {
+  private lifecycleDiagnosticForTurnLedgerMessage(
+    message: string
+  ): LifecycleRecoveryDiagnostic | undefined {
     if (message === "Agent turn was interrupted before model generation began.") {
       return {
         type: "lifecycle_recovery",
@@ -3179,9 +3252,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     return this.identity.ref;
   }
 
-  override async prepareForRestart(
-    _input: LifecyclePrepareInput
-  ): Promise<LifecyclePrepareResult> {
+  override async prepareForRestart(_input: LifecyclePrepareInput): Promise<LifecyclePrepareResult> {
     this.ensureBootstrapped();
     for (const [channelId, entry] of this.runners.entries()) {
       const turnId =
@@ -3347,7 +3418,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         }
         this.emitModelCredentialRequiredCard(channelId, providerId, modelBaseUrl, {
           resumeAfterConnect: shouldResumeCurrentTurn,
-          ...(shouldResumeCurrentTurn ? { turnId: this.currentTurnIdForChannel(channelId) ?? undefined } : {}),
+          ...(shouldResumeCurrentTurn
+            ? { turnId: this.currentTurnIdForChannel(channelId) ?? undefined }
+            : {}),
         });
         throw new AgentWorkerError(
           "auth",
@@ -3986,7 +4059,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     return message;
   }
 
-  private toolResultForAdmission(result: AgentToolResult<any>, context: string): AgentToolResult<any> {
+  private toolResultForAdmission(
+    result: AgentToolResult<any>,
+    context: string
+  ): AgentToolResult<any> {
     this.assertNoStoredRefsForAdmission(result, context);
     return result;
   }
@@ -4032,7 +4108,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         ...(event.id !== undefined ? { eventId: event.id } : {}),
       };
     }
-    if (agentic.kind === "invocation.failed" || agentic.kind === "invocation.cancelled") {
+    if (
+      agentic.kind === "invocation.failed" ||
+      agentic.kind === "invocation.cancelled" ||
+      agentic.kind === "invocation.abandoned"
+    ) {
       return {
         callId,
         content: payload["error"] ?? payload["reason"] ?? "Invocation failed",
@@ -4213,10 +4293,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (entry) {
       this.recordAbort(channelId, "channel-unsubscribe");
       await entry.runner
-        .forceCloseCurrentTurn(
-          "channel_unsubscribe",
-          "Agent channel unsubscribed before turn closed"
-        )
+        .forceCloseCurrentTurn("channel_unsubscribe", "Turn closed after channel unsubscribe")
         .catch((err) => {
           this.recordLastError("runner.force_close.unsubscribe", err, channelId);
           this.recordDebugPhase(channelId, "runner.force_close.unsubscribe_failed", {
@@ -4426,10 +4503,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         this.appendMethodSuspensionUpdate(invocationResult.callId, rawContent);
         const cb = this.streamCallbacks.get(invocationResult.callId);
         if (cb) {
-          cb(await this.hydrateStoredTransportValue(
-            rawContent,
-            `invocation payload channel=${channelId} call=${invocationResult.callId}`
-          ));
+          cb(
+            await this.hydrateStoredTransportValue(
+              rawContent,
+              `invocation payload channel=${channelId} call=${invocationResult.callId}`
+            )
+          );
         }
       } else {
         await this.handleCompletedMethodResult(
@@ -4655,18 +4734,25 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const entries: Array<{ name: string; safety: ReplayToolSafety }> = [];
 
     for (const [name, safety] of HARNESS_MODEL_REPLAY_TOOL_SAFETY) {
-      if (accepts(name)) entries.push({ name, safety: this.getHarnessToolReplaySafety(channelId, name) });
+      if (accepts(name))
+        entries.push({ name, safety: this.getHarnessToolReplaySafety(channelId, name) });
     }
     for (const method of this.buildRoster(channelId)) {
-      if (accepts(method.name)) entries.push({ name: method.name, safety: "journal-before-dispatch" });
+      if (accepts(method.name))
+        entries.push({ name: method.name, safety: "journal-before-dispatch" });
     }
-    for (const tool of [...this.getBuiltInTools(channelId), ...(this.getRunnerTools(channelId) ?? [])]) {
+    for (const tool of [
+      ...this.getBuiltInTools(channelId),
+      ...(this.getRunnerTools(channelId) ?? []),
+    ]) {
       if (accepts(tool.name)) {
         entries.push({ name: tool.name, safety: this.getRunnerToolReplaySafety(channelId, tool) });
       }
     }
 
-    const unsafeTools = [...new Set(entries.filter((entry) => entry.safety === "unsafe").map((entry) => entry.name))];
+    const unsafeTools = [
+      ...new Set(entries.filter((entry) => entry.safety === "unsafe").map((entry) => entry.name)),
+    ];
     return { safe: unsafeTools.length === 0, unsafeTools };
   }
 
@@ -4700,7 +4786,17 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") return;
     if (role !== "toolResult") return;
-    const entryId = await runner.session?.getLeafId().catch(() => null);
+    let entryId: string | null = null;
+    if (runner.session) {
+      try {
+        entryId = await runner.session.getLeafId();
+      } catch (err) {
+        this.recordLastError("turn_ledger.tool_result_leaf", err, channelId);
+        this.recordDebugPhase(channelId, "turn_ledger.tool_result_leaf_failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
     this.markLiveToolResultAdmitted(channelId, message, entryId ?? null);
   }
 
@@ -4852,7 +4948,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     this.transitionTurn(turnId, ["closing"], "closed");
   }
 
-  private async transitionCurrentTurnToWaiting(channelId: string, turnId?: string): Promise<string> {
+  private async transitionCurrentTurnToWaiting(
+    channelId: string,
+    turnId?: string
+  ): Promise<string> {
     const currentTurnId = this.currentTurnIdForChannel(channelId);
     const id = turnId ?? currentTurnId;
     if (!id) {
@@ -4874,14 +4973,22 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       this.recordDebugPhase(channelId, "turn_ledger.external_wait_after_interrupt", {
         turnId: id,
       });
-      throw new Error("Agent turn was interrupted before tool dispatch.");
+      throw new AgentLifecycleError(
+        "Agent turn was interrupted before tool dispatch.",
+        "stale_dispatch",
+        "aborted_before_dispatch"
+      );
     }
     if (row.status === "closed" || row.status === "failed") {
       this.recordDebugPhase(channelId, "turn_ledger.external_wait_after_terminal", {
         turnId: id,
         status: row.status,
       });
-      throw new Error(`Agent turn is already ${row.status}; cannot dispatch tool call.`);
+      throw new AgentLifecycleError(
+        `Agent turn is already ${row.status}; cannot dispatch tool call.`,
+        "stale_dispatch",
+        "aborted_before_dispatch"
+      );
     }
     if (
       !this.transitionTurn(
@@ -4895,12 +5002,14 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         this.recordDebugPhase(channelId, "turn_ledger.external_wait_interrupt_race", {
           turnId: id,
         });
-        throw new Error("Agent turn was interrupted before tool dispatch.");
+        throw new AgentLifecycleError(
+          "Agent turn was interrupted before tool dispatch.",
+          "stale_dispatch",
+          "aborted_before_dispatch"
+        );
       }
       throw new Error(
-        `Could not transition turn ${id} to waiting_external from ${
-          latest?.status ?? "missing"
-        }`
+        `Could not transition turn ${id} to waiting_external from ${latest?.status ?? "missing"}`
       );
     }
     return id;
@@ -5217,7 +5326,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       },
       onInvariantViolation: async (code, detail) => {
         this.recordInvariantViolation(channelId, code, detail);
-        if (code === "dispatcher_drain_loop_crashed" || code === "dispatcher_on_work_failure_failed") {
+        if (
+          code === "dispatcher_drain_loop_crashed" ||
+          code === "dispatcher_on_work_failure_failed"
+        ) {
           await this.emitInfrastructureDiagnostic(
             channelId,
             code,
@@ -5273,7 +5385,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   private missingExpectedChannelTools(channelId: string): string[] {
     const expected = this.getExpectedChannelToolNames(channelId);
     if (!expected?.length) return [];
-    const available = new Set((this.cachedRoster.get(channelId) ?? []).map((method) => method.name));
+    const available = new Set(
+      (this.cachedRoster.get(channelId) ?? []).map((method) => method.name)
+    );
     return [...new Set(expected)].filter((name) => !available.has(name));
   }
 
@@ -5294,10 +5408,14 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       missing = this.missingExpectedChannelTools(channelId);
       if (missing.length === 0) return;
       if (Date.now() >= deadline) break;
-      await sleep(Math.min(EXPECTED_CHANNEL_TOOL_READY_POLL_MS, Math.max(0, deadline - Date.now())));
+      await sleep(
+        Math.min(EXPECTED_CHANNEL_TOOL_READY_POLL_MS, Math.max(0, deadline - Date.now()))
+      );
     } while (true);
 
-    const rosterToolNames = [...new Set((this.cachedRoster.get(channelId) ?? []).map((m) => m.name))].sort();
+    const rosterToolNames = [
+      ...new Set((this.cachedRoster.get(channelId) ?? []).map((m) => m.name)),
+    ].sort();
     const participants = this.cachedParticipants.get(channelId) ?? [];
     const detail = {
       channelId,
@@ -5365,71 +5483,90 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     onStreamUpdate?: (content: unknown) => void,
     turnId?: string
   ): Promise<AgentToolResult<any>> {
-    if (signal?.aborted) throw new Error("aborted");
-    const channel = this.createChannelClient(channelId);
-    const participants = await channel.getParticipants();
-    const target = participants.find((p) => p.metadata["handle"] === participantHandle);
-    if (!target) {
-      throw new Error(`No participant with handle "${participantHandle}" in channel ${channelId}`);
-    }
-    const callerId = this.subscriptions.getParticipantId(channelId);
-    if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
-    if (signal?.aborted) throw new Error("Agent turn was interrupted before tool dispatch.");
-
-    const invocationId = toolCallId;
-    const transportCallId = crypto.randomUUID();
-    const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
-    const recorded = await this.recordMethodSuspension({
-      channelId,
-      transportCallId,
-      invocationId,
-      kind: "channelMethod",
-      method,
-      participantHandle,
-      targetParticipantId: target.participantId,
-      args,
-      turnId: suspensionTurnId,
-      fallbackToolName: method,
-    });
-    if (!recorded) throw new Error(`Failed to record durable suspension for ${method}`);
-    const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
-      method,
-      participantHandle,
-      targetParticipantId: target.participantId,
-      args,
-      turnId: suspensionTurnId,
-      signal,
-    });
-    if (onStreamUpdate) this.streamCallbacks.set(transportCallId, onStreamUpdate);
     try {
-      try {
-        await channel.callMethod(callerId, target.participantId, transportCallId, method, args, {
-          invocationId,
-          transportCallId,
-          turnId: suspensionTurnId,
-        });
-      } catch (err) {
-        this.markMethodSuspensionDispatchFailed(transportCallId, err);
-        waiter.cancel(err);
-        void waiter.promise.catch(() => undefined);
-        throw err;
+      if (signal?.aborted) {
+        throw new AgentLifecycleError(
+          "Agent turn was interrupted before tool dispatch.",
+          "stale_dispatch",
+          "aborted_before_dispatch"
+        );
       }
-      const completion = await waiter.promise;
-      const toolResult = completion.isError
-        ? methodErrorResult(completion.result)
-        : toAgentToolResult(completion.result);
-      return this.toolResultForAdmission(
-        toolResult,
-        `live channel method result channel=${channelId} invocation=${invocationId}`
-      );
+      const channel = this.createChannelClient(channelId);
+      const participants = await channel.getParticipants();
+      const target = participants.find((p) => p.metadata["handle"] === participantHandle);
+      if (!target) {
+        throw new Error(
+          `No participant with handle "${participantHandle}" in channel ${channelId}`
+        );
+      }
+      const callerId = this.subscriptions.getParticipantId(channelId);
+      if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
+      if (signal?.aborted) {
+        throw new AgentLifecycleError(
+          "Agent turn was interrupted before tool dispatch.",
+          "stale_dispatch",
+          "aborted_before_dispatch"
+        );
+      }
+
+      const invocationId = toolCallId;
+      const transportCallId = crypto.randomUUID();
+      const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
+      const recorded = await this.recordMethodSuspension({
+        channelId,
+        transportCallId,
+        invocationId,
+        kind: "channelMethod",
+        method,
+        participantHandle,
+        targetParticipantId: target.participantId,
+        args,
+        turnId: suspensionTurnId,
+        fallbackToolName: method,
+      });
+      if (!recorded) throw new Error(`Failed to record durable suspension for ${method}`);
+      const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
+        method,
+        participantHandle,
+        targetParticipantId: target.participantId,
+        args,
+        turnId: suspensionTurnId,
+        signal,
+      });
+      if (onStreamUpdate) this.streamCallbacks.set(transportCallId, onStreamUpdate);
+      try {
+        try {
+          await channel.callMethod(callerId, target.participantId, transportCallId, method, args, {
+            invocationId,
+            transportCallId,
+            turnId: suspensionTurnId,
+          });
+        } catch (err) {
+          this.markMethodSuspensionDispatchFailed(transportCallId, err);
+          waiter.cancel(err);
+          void waiter.promise.catch(() => undefined);
+          throw err;
+        }
+        const completion = await waiter.promise;
+        const toolResult = completion.isError
+          ? methodErrorResult(completion.result, "method_failed")
+          : toAgentToolResult(completion.result);
+        return this.toolResultForAdmission(
+          toolResult,
+          `live channel method result channel=${channelId} invocation=${invocationId}`
+        );
+      } catch (err) {
+        this.cancelMethodSuspension(transportCallId, "waiter_rejected");
+        waiter.cancel(err);
+        await this.cancelChannelMethodCall(channelId, transportCallId);
+        throw err;
+      } finally {
+        this.streamCallbacks.delete(transportCallId);
+        this.recordIfSuspensionStillPending(channelId, transportCallId);
+      }
     } catch (err) {
-      this.cancelMethodSuspension(transportCallId, "waiter_rejected");
-      waiter.cancel(err);
-      await this.cancelChannelMethodCall(channelId, transportCallId);
+      if (err instanceof AgentLifecycleError) return lifecycleToolResult(err);
       throw err;
-    } finally {
-      this.streamCallbacks.delete(transportCallId);
-      this.recordIfSuspensionStillPending(channelId, transportCallId);
     }
   }
 
@@ -5440,74 +5577,91 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     signal: AbortSignal | undefined,
     turnId?: string
   ): Promise<string | AgentToolResult<any>> {
-    if (signal?.aborted) throw new Error("aborted");
-    const callerId = this.subscriptions.getParticipantId(channelId);
-    if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
-    const channel = this.createChannelClient(channelId);
-    // Find a panel-type participant to ask.
-    const participants = await channel.getParticipants();
-    const panel = participants.find((p) => {
-      const t = p.metadata["type"] as string | undefined;
-      return t === "panel" || t === "client";
-    });
-    if (!panel) {
-      throw new Error(`No panel participant in channel ${channelId} to ask`);
-    }
-    if (signal?.aborted) throw new Error("Agent turn was interrupted before tool dispatch.");
-
-    const invocationId = toolCallId || crypto.randomUUID();
-    const transportCallId = crypto.randomUUID();
-    const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
-    const recorded = await this.recordMethodSuspension({
-      channelId,
-      transportCallId,
-      invocationId,
-      kind: "askUser",
-      method: "feedback_form",
-      targetParticipantId: panel.participantId,
-      args: params,
-      turnId: suspensionTurnId,
-      fallbackToolName: "feedback_form",
-    });
-    if (!recorded) throw new Error("Failed to record durable askUser suspension");
-    const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
-      method: "feedback_form",
-      targetParticipantId: panel.participantId,
-      args: params,
-      turnId: suspensionTurnId,
-      signal,
-    });
     try {
-      try {
-        await channel.callMethod(
-          callerId,
-          panel.participantId,
-          transportCallId,
-          "feedback_form",
-          params,
-          {
-            invocationId,
-            transportCallId,
-            turnId: suspensionTurnId,
-          }
+      if (signal?.aborted) {
+        throw new AgentLifecycleError(
+          "Agent turn was interrupted before tool dispatch.",
+          "stale_dispatch",
+          "aborted_before_dispatch"
         );
-      } catch (err) {
-        this.markMethodSuspensionDispatchFailed(transportCallId, err);
-        waiter.cancel(err);
-        void waiter.promise.catch(() => undefined);
-        throw err;
       }
-      const completion = await waiter.promise;
-      if (completion.isError) return methodErrorResult(completion.result);
-      return resultToAnswerText(completion.result);
+      const callerId = this.subscriptions.getParticipantId(channelId);
+      if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
+      const channel = this.createChannelClient(channelId);
+      // Find a panel-type participant to ask.
+      const participants = await channel.getParticipants();
+      const panel = participants.find((p) => {
+        const t = p.metadata["type"] as string | undefined;
+        return t === "panel" || t === "client";
+      });
+      if (!panel) {
+        throw new Error(`No panel participant in channel ${channelId} to ask`);
+      }
+      if (signal?.aborted) {
+        throw new AgentLifecycleError(
+          "Agent turn was interrupted before tool dispatch.",
+          "stale_dispatch",
+          "aborted_before_dispatch"
+        );
+      }
+
+      const invocationId = toolCallId || crypto.randomUUID();
+      const transportCallId = crypto.randomUUID();
+      const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
+      const recorded = await this.recordMethodSuspension({
+        channelId,
+        transportCallId,
+        invocationId,
+        kind: "askUser",
+        method: "feedback_form",
+        targetParticipantId: panel.participantId,
+        args: params,
+        turnId: suspensionTurnId,
+        fallbackToolName: "feedback_form",
+      });
+      if (!recorded) throw new Error("Failed to record durable askUser suspension");
+      const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
+        method: "feedback_form",
+        targetParticipantId: panel.participantId,
+        args: params,
+        turnId: suspensionTurnId,
+        signal,
+      });
+      try {
+        try {
+          await channel.callMethod(
+            callerId,
+            panel.participantId,
+            transportCallId,
+            "feedback_form",
+            params,
+            {
+              invocationId,
+              transportCallId,
+              turnId: suspensionTurnId,
+            }
+          );
+        } catch (err) {
+          this.markMethodSuspensionDispatchFailed(transportCallId, err);
+          waiter.cancel(err);
+          void waiter.promise.catch(() => undefined);
+          throw err;
+        }
+        const completion = await waiter.promise;
+        if (completion.isError) return methodErrorResult(completion.result, "method_failed");
+        return resultToAnswerText(completion.result);
+      } catch (err) {
+        this.cancelMethodSuspension(transportCallId, "waiter_rejected");
+        waiter.cancel(err);
+        await this.cancelChannelMethodCall(channelId, transportCallId);
+        throw err;
+      } finally {
+        this.streamCallbacks.delete(transportCallId);
+        this.recordIfSuspensionStillPending(channelId, transportCallId);
+      }
     } catch (err) {
-      this.cancelMethodSuspension(transportCallId, "waiter_rejected");
-      waiter.cancel(err);
-      await this.cancelChannelMethodCall(channelId, transportCallId);
+      if (err instanceof AgentLifecycleError) return lifecycleToolResult(err);
       throw err;
-    } finally {
-      this.streamCallbacks.delete(transportCallId);
-      this.recordIfSuspensionStillPending(channelId, transportCallId);
     }
   }
 
@@ -5651,22 +5805,24 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       ...(opts?.turnId ? { turnId: opts.turnId as never } : {}),
       createdAt: new Date().toISOString(),
     };
-    void channel.publishAgenticEvent(participantId, event, {
-      idempotencyKey: cardId,
-      senderMetadata: { type: "agent", name: participantId },
-    }).catch((err) => {
-      console.error(
-        `[TrajectoryVesselBase] Failed to emit model credential card for ${providerId}:`,
-        err
-      );
-      this.credentialPromptCardsEmitted.delete(key);
-    });
+    void channel
+      .publishAgenticEvent(participantId, event, {
+        idempotencyKey: cardId,
+        senderMetadata: { type: "agent", name: participantId },
+      })
+      .catch((err) => {
+        console.error(
+          `[TrajectoryVesselBase] Failed to emit model credential card for ${providerId}:`,
+          err
+        );
+        this.credentialPromptCardsEmitted.delete(key);
+      });
   }
 
   private publishTurnWaitingEvent(
     channelId: string,
     turnId: string,
-    payload: { reason: string; summary: string }
+    payload: { reason: TurnReasonCode; summary: string }
   ): void {
     const participantId = this.subscriptions.getParticipantId(channelId);
     if (!participantId) return;
@@ -5888,91 +6044,108 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     signal?: AbortSignal,
     meta?: { toolName?: string; toolInput?: unknown; mode?: "approval" | "ui-prompt" }
   ): Promise<unknown> {
-    if (signal?.aborted) throw new Error("aborted");
-    const invocationId = toolCallId || crypto.randomUUID();
-    const recoveredReply = this.consumeRecoveredUiPromptReply(channelId, invocationId);
-    if (recoveredReply) {
-      if (recoveredReply.isError) {
-        throw new Error(resultToAnswerText(recoveredReply.result));
-      }
-      return this.coerceUiPromptResult(kind, recoveredReply.result);
-    }
-
-    const callerId = this.subscriptions.getParticipantId(channelId);
-    if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
-    const channel = this.createChannelClient(channelId);
-    const participants = await channel.getParticipants();
-    const panel = participants.find((p) => {
-      const t = p.metadata["type"] as string | undefined;
-      return t === "panel" || t === "client";
-    });
-    if (!panel) throw new Error(`No panel participant in channel ${channelId}`);
-    if (signal?.aborted) throw new Error("Agent turn was interrupted before tool dispatch.");
-
-    const transportCallId = crypto.randomUUID();
-    const turnId = this.currentTurnIdForChannel(channelId);
-    const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
-    const recorded = await this.recordMethodSuspension({
-      channelId,
-      transportCallId,
-      invocationId,
-      kind: meta?.mode === "approval" ? "approval" : "uiPrompt",
-      method: "ui_prompt",
-      targetParticipantId: panel.participantId,
-      args: {
-        prompt: { kind, ...params },
-        resumeToolInput: meta?.toolInput,
-      },
-      turnId: suspensionTurnId,
-      fallbackToolName: meta?.toolName ?? "ui_prompt",
-      requireOpenInvocation: true,
-    });
-    if (!recorded) {
-      throw new Error("Cannot dispatch UI prompt without a durable suspension row");
-    }
-    const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
-      method: "ui_prompt",
-      targetParticipantId: panel.participantId,
-      args: { kind, ...params },
-      turnId: suspensionTurnId,
-      signal,
-    });
     try {
-      try {
-        await channel.callMethod(
-          callerId,
-          panel.participantId,
-          transportCallId,
-          "ui_prompt",
-          {
-            kind,
-            ...params,
-          },
-          {
-            invocationId,
-            transportCallId,
-            turnId: suspensionTurnId,
-          }
+      if (signal?.aborted) {
+        throw new AgentLifecycleError(
+          "Agent turn was interrupted before tool dispatch.",
+          "stale_dispatch",
+          "aborted_before_dispatch"
         );
+      }
+      const invocationId = toolCallId || crypto.randomUUID();
+      const recoveredReply = this.consumeRecoveredUiPromptReply(channelId, invocationId);
+      if (recoveredReply) {
+        if (recoveredReply.isError) {
+          throw new Error(resultToAnswerText(recoveredReply.result));
+        }
+        return this.coerceUiPromptResult(kind, recoveredReply.result);
+      }
+
+      const callerId = this.subscriptions.getParticipantId(channelId);
+      if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
+      const channel = this.createChannelClient(channelId);
+      const participants = await channel.getParticipants();
+      const panel = participants.find((p) => {
+        const t = p.metadata["type"] as string | undefined;
+        return t === "panel" || t === "client";
+      });
+      if (!panel) throw new Error(`No panel participant in channel ${channelId}`);
+      if (signal?.aborted) {
+        throw new AgentLifecycleError(
+          "Agent turn was interrupted before tool dispatch.",
+          "stale_dispatch",
+          "aborted_before_dispatch"
+        );
+      }
+
+      const transportCallId = crypto.randomUUID();
+      const turnId = this.currentTurnIdForChannel(channelId);
+      const suspensionTurnId = await this.transitionCurrentTurnToWaiting(channelId, turnId);
+      const recorded = await this.recordMethodSuspension({
+        channelId,
+        transportCallId,
+        invocationId,
+        kind: meta?.mode === "approval" ? "approval" : "uiPrompt",
+        method: "ui_prompt",
+        targetParticipantId: panel.participantId,
+        args: {
+          prompt: { kind, ...params },
+          resumeToolInput: meta?.toolInput,
+        },
+        turnId: suspensionTurnId,
+        fallbackToolName: meta?.toolName ?? "ui_prompt",
+        requireOpenInvocation: true,
+      });
+      if (!recorded) {
+        throw new Error("Cannot dispatch UI prompt without a durable suspension row");
+      }
+      const waiter = this.createMethodResultWaiter(channelId, transportCallId, invocationId, {
+        method: "ui_prompt",
+        targetParticipantId: panel.participantId,
+        args: { kind, ...params },
+        turnId: suspensionTurnId,
+        signal,
+      });
+      try {
+        try {
+          await channel.callMethod(
+            callerId,
+            panel.participantId,
+            transportCallId,
+            "ui_prompt",
+            {
+              kind,
+              ...params,
+            },
+            {
+              invocationId,
+              transportCallId,
+              turnId: suspensionTurnId,
+            }
+          );
+        } catch (err) {
+          this.markMethodSuspensionDispatchFailed(transportCallId, err);
+          waiter.cancel(err);
+          void waiter.promise.catch(() => undefined);
+          throw err;
+        }
+        const completion = await waiter.promise;
+        if (completion.isError) {
+          throw new Error(resultToAnswerText(completion.result));
+        }
+        return this.coerceUiPromptResult(kind, completion.result);
       } catch (err) {
-        this.markMethodSuspensionDispatchFailed(transportCallId, err);
+        this.cancelMethodSuspension(transportCallId, "waiter_rejected");
         waiter.cancel(err);
-        void waiter.promise.catch(() => undefined);
+        await this.cancelChannelMethodCall(channelId, transportCallId);
         throw err;
+      } finally {
+        this.streamCallbacks.delete(transportCallId);
+        this.recordIfSuspensionStillPending(channelId, transportCallId);
       }
-      const completion = await waiter.promise;
-      if (completion.isError) {
-        throw new Error(resultToAnswerText(completion.result));
-      }
-      return this.coerceUiPromptResult(kind, completion.result);
     } catch (err) {
-      this.cancelMethodSuspension(transportCallId, "waiter_rejected");
-      waiter.cancel(err);
-      await this.cancelChannelMethodCall(channelId, transportCallId);
+      if (err instanceof AgentLifecycleError) return lifecycleToolResult(err);
       throw err;
-    } finally {
-      this.streamCallbacks.delete(transportCallId);
-      this.recordIfSuspensionStillPending(channelId, transportCallId);
     }
   }
 
@@ -6255,10 +6428,14 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     this.abortModelCredentialResolution(channelId, "Model credential resolution aborted by user");
     const entry = this.runners.get(channelId);
     if (entry) {
-      // Drop any pending/steered messages — interrupt means the user wants
-      // everything stopped, not just the current turn. Dispatcher's reset()
-      // also clears pi-core's steering queue and broadcasts typing=false.
-      this.dispatchers.get(channelId)?.reset();
+      // Drop any pending/steered messages AND suppress auto-continuation until
+      // the next user message — interrupt means the user wants everything
+      // stopped, not just the current turn. Without this, a suspension result
+      // or recovery pass that resolves after the interrupt re-submits a
+      // `continue`, restarting the agent loop with a fresh (non-aborted) signal
+      // so it keeps churning. `interrupt()` also clears pi-core's steering
+      // queue and broadcasts typing=false (via reset()).
+      this.dispatchers.get(channelId)?.interrupt();
       this.lastUserInterruptAt.set(channelId, Date.now());
       await this.notifyDispatchesInterrupted(channelId);
       this.recordAbort(channelId, reason);
@@ -6284,7 +6461,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           "interrupted",
           {
             failureCode: "user_interrupted",
-            failureMessage: "Agent turn interrupted by user",
+            failureMessage: "Turn closed after user interruption",
           }
         );
       }
@@ -6293,7 +6470,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       // pause operation must still close the durable turn and clear typing;
       // do that synchronously before asking the runner to abort best-effort.
       await entry.runner
-        .forceCloseCurrentTurn("user_interrupted", "Agent turn interrupted by user")
+        .forceCloseCurrentTurn("user_interrupted", "Turn closed after user interruption")
         .catch(async (err) => {
           this.recordLastError("runner.force_close", err, channelId);
           this.recordDebugPhase(channelId, "runner.force_close.failed", {
@@ -6920,10 +7097,15 @@ function validateAgentMessages(messages: AgentMessage[], source: string): AgentM
   return trimTrailingEmptyAbortedAssistant(messages);
 }
 
-function methodErrorResult(result: unknown): AgentToolResult<any> {
+function methodErrorResult(result: unknown, reasonCode = "method_failed"): AgentToolResult<any> {
   return {
     content: [{ type: "text", text: resultToAnswerText(result) }],
-    details: undefined,
+    details: {
+      __natstack_terminal: {
+        outcome: "tool_error",
+        reasonCode,
+      },
+    },
     isError: true,
   } as unknown as AgentToolResult<any>;
 }

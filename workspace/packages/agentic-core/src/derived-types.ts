@@ -10,11 +10,10 @@
  */
 
 import type { Attachment } from "@workspace/pubsub";
+import type { LifecycleMessageReasonCode, TurnReasonCode } from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
 
-export type SandboxSource =
-  | { type: "code"; code: string }
-  | { type: "file"; path: string };
+export type SandboxSource = { type: "code"; code: string } | { type: "file"; path: string };
 
 export interface InlineUiCardPayload {
   id: string;
@@ -39,7 +38,12 @@ interface BaseMessageTypeDefinition {
   typeId: string;
   imports?: Record<string, string>;
   schemaSourceOrPath?: unknown;
-  registeredBy?: { kind: string; id: string; displayName?: string; metadata?: Record<string, unknown> };
+  registeredBy?: {
+    kind: string;
+    id: string;
+    displayName?: string;
+    metadata?: Record<string, unknown>;
+  };
   updatedAtSeq: number;
 }
 
@@ -127,7 +131,7 @@ export interface LifecycleNotice {
   status: LifecycleNoticeStatus;
   title: string;
   detail?: string;
-  reason?: string;
+  reason?: LifecycleMessageReasonCode | TurnReasonCode;
 }
 
 // ===========================================================================

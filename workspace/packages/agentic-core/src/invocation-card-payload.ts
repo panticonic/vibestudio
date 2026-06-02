@@ -4,6 +4,8 @@
  * Channel envelopes carry typed invocation events. The chat projection derives
  * this card payload for the React transcript; it is not a channel protocol.
  */
+import type { InvocationOutcome } from "@workspace/agentic-protocol";
+
 export interface InvocationCardPayload {
   id: string;
   transportCallId?: string;
@@ -14,6 +16,8 @@ export interface InvocationCardPayload {
 
 export interface ToolExecutionState {
   status: "pending" | "complete" | "error" | "cancelled" | "abandoned";
+  terminalOutcome?: InvocationOutcome;
+  terminalReasonCode?: string;
   description: string;
   consoleOutput?: string;
   result?: unknown;
@@ -48,5 +52,11 @@ export function parseInvocationCardPayload(content: string): InvocationCardPaylo
     return null;
   }
   if (typeof exec["description"] !== "string") return null;
+  if (exec["terminalOutcome"] !== undefined && typeof exec["terminalOutcome"] !== "string") {
+    return null;
+  }
+  if (exec["terminalReasonCode"] !== undefined && typeof exec["terminalReasonCode"] !== "string") {
+    return null;
+  }
   return parsed as InvocationCardPayload;
 }

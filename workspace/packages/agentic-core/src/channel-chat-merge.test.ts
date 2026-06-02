@@ -55,8 +55,10 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:02.000Z",
     };
 
-    const state = [envelope(registered, 1), envelope(cleared, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(registered, 1), envelope(cleared, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(messageTypeDefinitionsFromChannelView(state)).toEqual([
       expect.objectContaining({
@@ -80,19 +82,29 @@ describe("chatMessagesFromChannelView", () => {
       kind: "invocation.started",
       actor: agent,
       causality: { invocationId: brandId<InvocationId>("inv-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "read_file", request: { path: "README.md" } },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "read_file",
+        request: { path: "README.md" },
+      },
       createdAt: "2026-05-20T12:00:01.000Z",
     };
     const completed: AgenticEvent<"invocation.completed"> = {
       kind: "invocation.completed",
       actor: agent,
       causality: { invocationId: brandId<InvocationId>("inv-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: "contents" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: "contents",
+        terminalOutcome: "success",
+      },
       createdAt: "2026-05-20T12:00:02.000Z",
     };
 
-    const state = [envelope(message, 1), envelope(started, 2), envelope(completed, 3)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(message, 1), envelope(started, 2), envelope(completed, 3)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     const chatMessages = chatMessagesFromChannelView(state);
     expect(chatMessages.map((chatMessage) => chatMessage.id)).toEqual([
@@ -138,7 +150,8 @@ describe("chatMessagesFromChannelView", () => {
       causality: { invocationId: brandId<InvocationId>("inv-grep") },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
-        reason: "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
+        reason:
+          "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
         error: {
           text: "Path not found: /packages workers panels. The `path` argument accepts one directory or file.",
           content: [
@@ -148,12 +161,16 @@ describe("chatMessagesFromChannelView", () => {
             },
           ],
         },
+        terminalOutcome: "tool_error",
+        terminalReasonCode: "method_failed",
       },
       createdAt: "2026-05-20T12:00:02.000Z",
     };
 
-    const state = [envelope(started, 1), envelope(failed, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(started, 1), envelope(failed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     const invocation = chatMessagesFromChannelView(state)[0]?.invocation;
     expect(invocation).toMatchObject({
@@ -165,7 +182,8 @@ describe("chatMessagesFromChannelView", () => {
       },
       execution: {
         status: "error",
-        description: "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
+        description:
+          "[extensions.invoke] Extension @workspace-extensions/file-tools.grep invocation failed",
         result: {
           text: "Path not found: /packages workers panels. The `path` argument accepts one directory or file.",
         },
@@ -190,8 +208,7 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:00.000Z",
     };
 
-    const state = [envelope(message, 1)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(message, 1)].reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(chatMessagesFromChannelView(state)).toEqual([
       expect.objectContaining({
@@ -234,8 +251,10 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:01.000Z",
     };
 
-    const state = [envelope(completed, 1), envelope(failed, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(completed, 1), envelope(failed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(chatMessagesFromChannelView(state)).toEqual([
       expect.objectContaining({
@@ -269,14 +288,19 @@ describe("chatMessagesFromChannelView", () => {
       actor: agent,
       turnId,
       causality: { invocationId: brandId<InvocationId>("inv-stalled") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "Runner restarted before invocation completed" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "Runner restarted before invocation completed",
+        terminalOutcome: "abandoned",
+        terminalReasonCode: "runner_restarted_before_invocation_completed",
+      },
       createdAt: "2026-05-20T12:00:02.000Z",
     };
     const closed: AgenticEvent<"turn.closed"> = {
       kind: "turn.closed",
       actor: agent,
       turnId,
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "runner_restarted" },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "runner_restarted" },
       createdAt: "2026-05-20T12:00:03.000Z",
     };
 
@@ -300,6 +324,68 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("renders restart-aborted tool dispatch as a visible interrupted invocation", () => {
+    const turnId = brandId<TurnId>("turn-restart-aborted-tool");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      turnId,
+      causality: { invocationId: brandId<InvocationId>("inv-aborted-dispatch") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "eval", request: { code: "run()" } },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const cancelled: AgenticEvent<"invocation.cancelled"> = {
+      kind: "invocation.cancelled",
+      actor: agent,
+      turnId,
+      causality: { invocationId: brandId<InvocationId>("inv-aborted-dispatch") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "Agent turn was interrupted before tool dispatch.",
+        recoverable: true,
+        terminalOutcome: "stale_dispatch",
+        terminalReasonCode: "aborted_before_dispatch",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const closed: AgenticEvent<"turn.closed"> = {
+      kind: "turn.closed",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "runner_restarted" },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [opened, started, cancelled, closed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state).map((message) => message.id)).toEqual([
+      "invocation:inv-aborted-dispatch",
+      "turn:turn-restart-aborted-tool:recovered",
+    ]);
+    expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
+      contentType: "invocation",
+      complete: true,
+      invocation: {
+        id: "inv-aborted-dispatch",
+        execution: {
+          status: "cancelled",
+          terminalOutcome: "stale_dispatch",
+          terminalReasonCode: "aborted_before_dispatch",
+          isError: false,
+        },
+      },
+    });
+  });
+
   it("projects restart diagnostics as lifecycle notices", () => {
     const message: AgenticEvent<"message.completed"> = {
       kind: "message.completed",
@@ -310,7 +396,8 @@ describe("chatMessagesFromChannelView", () => {
             type: "lifecycle_recovery",
             status: "interrupted",
             title: "Restart interrupted the response",
-            detail: "The partial response was discarded because replay is not enabled for this agent.",
+            detail:
+              "The partial response was discarded because replay is not enabled for this agent.",
             reason: "runner_restarted_mid_model",
           },
         },
@@ -399,7 +486,10 @@ describe("chatMessagesFromChannelView", () => {
         protocol: AGENTIC_PROTOCOL_VERSION,
         uiType: "inline",
         id: "credential-refresh",
-        source: { type: "code", code: "export default function CredentialRefresh() { return null; }" },
+        source: {
+          type: "code",
+          code: "export default function CredentialRefresh() { return null; }",
+        },
       },
       createdAt: "2026-05-20T12:00:01.000Z",
     };
@@ -437,12 +527,17 @@ describe("chatMessagesFromChannelView", () => {
       payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "eval", request: { code: "run()" } },
       createdAt: "2026-05-20T12:00:01.000Z",
     };
-    const abandoned: AgenticEvent<"invocation.abandoned"> = {
-      kind: "invocation.abandoned",
+    const cancelled: AgenticEvent<"invocation.cancelled"> = {
+      kind: "invocation.cancelled",
       actor: agent,
       turnId,
       causality: { invocationId: brandId<InvocationId>("inv-cancelled") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "Agent turn interrupted by user" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "User interrupted execution",
+        terminalOutcome: "cancelled",
+        terminalReasonCode: "user_interrupted",
+      },
       createdAt: "2026-05-20T12:00:02.000Z",
     };
     const closed: AgenticEvent<"turn.closed"> = {
@@ -451,19 +546,19 @@ describe("chatMessagesFromChannelView", () => {
       turnId,
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
-        summary: "Agent turn interrupted by user",
+        summary: "Turn closed after user interruption",
         reason: "user_interrupted",
       },
       createdAt: "2026-05-20T12:00:03.000Z",
     };
 
-    const state = [opened, started, abandoned, closed]
+    const state = [opened, started, cancelled, closed]
       .map((event, index) => envelope(event, index + 1))
       .reduce(reduceChannelView, createInitialChannelViewState());
     const messages = chatMessagesFromChannelView(state);
 
     expect(messages.map((message) => message.id)).toEqual(["invocation:inv-cancelled"]);
-    expect(messages[0]?.invocation?.execution.status).toBe("abandoned");
+    expect(messages[0]?.invocation?.execution.status).toBe("cancelled");
     expect(messages[0]?.complete).toBe(true);
   });
 
@@ -481,12 +576,15 @@ describe("chatMessagesFromChannelView", () => {
           content: [{ type: "text", text: "2" }],
         },
         summary: "2",
+        terminalOutcome: "success",
       },
       createdAt: "2026-05-20T12:00:02.000Z",
     };
 
-    const state = [envelope(completed, 1)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(completed, 1)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
       contentType: "invocation",
@@ -532,14 +630,17 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         result: storedResult,
+        terminalOutcome: "success",
       },
       createdAt: "2026-05-20T12:00:02.000Z",
     };
 
-    expect(() => [envelope(started, 1), envelope(completed, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState())).toThrow(
-      /contains unresolved stored value refs/
-    );
+    expect(() =>
+      [envelope(started, 1), envelope(completed, 2)].reduce(
+        reduceChannelView,
+        createInitialChannelViewState()
+      )
+    ).toThrow(/contains unresolved stored value refs/);
   });
 
   it("projects invocation progress, output, and errors without losing the exact invocation name", () => {
@@ -579,6 +680,8 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         reason: "exit code 1",
+        terminalOutcome: "tool_error",
+        terminalReasonCode: "eval_exception",
       },
       createdAt: "2026-05-20T12:00:04.000Z",
     };
@@ -642,6 +745,7 @@ describe("chatMessagesFromChannelView", () => {
           details: { input: { path: "src" } },
           content: [{ type: "text", text: "src/index.ts" }],
         },
+        terminalOutcome: "success",
       },
       createdAt: "2026-05-20T12:00:03.000Z",
     };
@@ -650,8 +754,10 @@ describe("chatMessagesFromChannelView", () => {
       ...envelope(output, 2),
       from: { ...provider, participantId: "provider-1" },
     };
-    const state = [envelope(started, 1), providerEnvelope, envelope(completed, 3)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(started, 1), providerEnvelope, envelope(completed, 3)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
       contentType: "invocation",
@@ -699,6 +805,8 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         reason: "cancelled",
+        terminalOutcome: "cancelled",
+        terminalReasonCode: "cancelled",
       },
       createdAt: "2026-05-20T12:00:03.000Z",
     };
@@ -709,6 +817,7 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         result: { ok: true },
+        terminalOutcome: "success",
       },
       createdAt: "2026-05-20T12:00:04.000Z",
     };
@@ -747,7 +856,10 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:01.000Z",
     };
 
-    const openState = [envelope(opened, 1)].reduce(reduceChannelView, createInitialChannelViewState());
+    const openState = [envelope(opened, 1)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
     expect(chatMessagesFromChannelView(openState)[0]).toMatchObject({
       id: "turn:turn-1",
       contentType: "typing",
@@ -755,9 +867,13 @@ describe("chatMessagesFromChannelView", () => {
       senderId: "agent-1",
     });
 
-    const closedState = [envelope(opened, 1), envelope(closed, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
-    expect(chatMessagesFromChannelView(closedState).some((msg) => msg.contentType === "typing")).toBe(false);
+    const closedState = [envelope(opened, 1), envelope(closed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+    expect(
+      chatMessagesFromChannelView(closedState).some((msg) => msg.contentType === "typing")
+    ).toBe(false);
   });
 
   it("orders open turn typing by the latest event in that turn", () => {
@@ -780,7 +896,11 @@ describe("chatMessagesFromChannelView", () => {
       actor: agent,
       turnId: brandId<TurnId>("turn-1"),
       causality: { invocationId: brandId<InvocationId>("inv-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "read", request: { path: "skills/onboarding/SKILL.md" } },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "read",
+        request: { path: "skills/onboarding/SKILL.md" },
+      },
       createdAt: "2026-05-20T12:00:02.000Z",
     };
 
@@ -835,12 +955,13 @@ describe("chatMessagesFromChannelView", () => {
           toolName: "write_file",
           details: { input: { path: "src/app.ts", content: "updated" } },
         },
+        terminalOutcome: "tool_error",
+        terminalReasonCode: "method_failed",
       },
       createdAt: "2026-05-20T12:00:04.000Z",
     } as AgenticEvent<"invocation.failed">;
 
-    const state = [envelope(failed, 1)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(failed, 1)].reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
       contentType: "invocation",
@@ -872,8 +993,10 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:03.000Z",
     };
 
-    const state = [envelope(rendered, 1)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(rendered, 1)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
       id: "inline-ui:participant-agent-1:ui-1",
@@ -918,8 +1041,10 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:05.000Z",
     };
 
-    const state = [envelope(requested, 1), envelope(resolved, 2)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(requested, 1), envelope(resolved, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
 
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
       id: "approval:approval-1",
@@ -952,8 +1077,7 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:03.000Z",
     };
 
-    const state = [envelope(loaded, 1)]
-      .reduce(reduceChannelView, createInitialChannelViewState());
+    const state = [envelope(loaded, 1)].reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(actionBarPayloadFromChannelView(state)).toEqual({
       id: "bar-1",
@@ -971,7 +1095,7 @@ describe("chatMessagesFromChannelView", () => {
       size: 1024,
       encoding: "json",
       originalBytes: 1024,
-      preview: "{\"type\":\"code\",\"code\":\"export default function App(){}\"}",
+      preview: '{"type":"code","code":"export default function App(){}"}',
     };
     const inline: AgenticEvent<"ui.inline_rendered"> = {
       kind: "ui.inline_rendered",
@@ -1007,9 +1131,11 @@ describe("chatMessagesFromChannelView", () => {
       createdAt: "2026-05-20T12:00:05.000Z",
     };
 
-    expect(() => [envelope(inline, 1), envelope(actionBar, 2), envelope(messageType, 3)]
-      .reduce(reduceChannelView, createInitialChannelViewState())).toThrow(
-      /contains unresolved stored value refs/
-    );
+    expect(() =>
+      [envelope(inline, 1), envelope(actionBar, 2), envelope(messageType, 3)].reduce(
+        reduceChannelView,
+        createInitialChannelViewState()
+      )
+    ).toThrow(/contains unresolved stored value refs/);
   });
 });

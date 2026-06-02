@@ -116,7 +116,9 @@ class ReplayEnabledTestAgentWorker extends TestAgentWorker {
     return true;
   }
 
-  protected override getBuiltInTools(_channelId: string): NonNullable<PiRunnerOptions["extraTools"]> {
+  protected override getBuiltInTools(
+    _channelId: string
+  ): NonNullable<PiRunnerOptions["extraTools"]> {
     return [];
   }
 
@@ -131,7 +133,9 @@ class ReplayEnabledUnfilteredAgentWorker extends TestAgentWorker {
     return true;
   }
 
-  protected override getBuiltInTools(_channelId: string): NonNullable<PiRunnerOptions["extraTools"]> {
+  protected override getBuiltInTools(
+    _channelId: string
+  ): NonNullable<PiRunnerOptions["extraTools"]> {
     return [];
   }
 }
@@ -539,21 +543,22 @@ describe("AgentWorkerBase method suspension ledger", () => {
     ).toBe(true);
     expect(
       sql
-        .exec(`SELECT delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`, "call-cas")
+        .exec(
+          `SELECT delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`,
+          "call-cas"
+        )
         .toArray()[0]
     ).toMatchObject({ delivery_status: "delivered_live" });
 
     expect(
-      worker.markSuspensionDeliveryStatus(
-        "call-cas",
-        "pending",
-        "recovering",
-        "resume_started"
-      )
+      worker.markSuspensionDeliveryStatus("call-cas", "pending", "recovering", "resume_started")
     ).toBe(false);
     expect(
       sql
-        .exec(`SELECT delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`, "call-cas")
+        .exec(
+          `SELECT delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`,
+          "call-cas"
+        )
         .toArray()[0]
     ).toMatchObject({ delivery_status: "delivered_live" });
 
@@ -613,7 +618,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
 
     expect(turnStatus(sql, "turn-final")).toMatchObject({ status: "running_model" });
     expect(
-      sql.exec(`SELECT kind, status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-final").toArray()
+      sql
+        .exec(`SELECT kind, status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-final")
+        .toArray()
     ).toEqual([]);
   });
 
@@ -634,7 +641,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(repairDurableOpenState).toHaveBeenCalledWith({ closeOpenTurns: true });
     expect(turnStatus(sql, "turn-final")).toMatchObject({ status: "closed" });
     expect(
-      sql.exec(`SELECT kind, status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-final").toArray()
+      sql
+        .exec(`SELECT kind, status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-final")
+        .toArray()
     ).toEqual([expect.objectContaining({ kind: "close_turn_projection", status: "done" })]);
   });
 
@@ -934,9 +943,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
     worker.createChannelClient = vi.fn().mockReturnValue({
-      getParticipants: vi.fn().mockResolvedValue([
-        { participantId: "panel-1", metadata: { type: "panel" } },
-      ]),
+      getParticipants: vi
+        .fn()
+        .mockResolvedValue([{ participantId: "panel-1", metadata: { type: "panel" } }]),
       callMethod,
     });
     worker.runners.set("chat-1", {
@@ -1156,7 +1165,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
       expect.objectContaining({ idempotencyKey: "turn-ledger-diagnostic:turn-start-bare" })
     );
     expect(
-      sql.exec(`SELECT status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-start-bare").toArray()
+      sql
+        .exec(`SELECT status FROM agent_turn_outbox WHERE turn_id = ?`, "turn-start-bare")
+        .toArray()
     ).toEqual([expect.objectContaining({ status: "done" })]);
   });
 
@@ -1646,13 +1657,15 @@ describe("AgentWorkerBase method suspension ledger", () => {
     });
 
     await worker.drainTurnOutbox("chat-1");
-    expect(sql.exec(`SELECT status, attempts, last_error FROM agent_turn_outbox`).toArray()[0])
-      .toMatchObject({ status: "failed", attempts: 1, last_error: "send failed" });
+    expect(
+      sql.exec(`SELECT status, attempts, last_error FROM agent_turn_outbox`).toArray()[0]
+    ).toMatchObject({ status: "failed", attempts: 1, last_error: "send failed" });
 
     failingSend.mockResolvedValueOnce(undefined);
     await worker.drainTurnOutbox("chat-1");
-    expect(sql.exec(`SELECT status, attempts, last_error FROM agent_turn_outbox`).toArray()[0])
-      .toMatchObject({ status: "done", attempts: 1, last_error: null });
+    expect(
+      sql.exec(`SELECT status, attempts, last_error FROM agent_turn_outbox`).toArray()[0]
+    ).toMatchObject({ status: "done", attempts: 1, last_error: null });
     await worker.drainTurnOutbox("chat-1");
     expect(failingSend).toHaveBeenCalledTimes(2);
   });
@@ -3333,7 +3346,16 @@ describe("AgentWorkerBase method suspension ledger", () => {
         undefined,
         "turn-interrupted-dispatch"
       )
-    ).rejects.toThrow("Agent turn was interrupted before tool dispatch.");
+    ).resolves.toMatchObject({
+      isError: true,
+      content: [{ type: "text", text: "Agent turn was interrupted before tool dispatch." }],
+      details: {
+        __natstack_terminal: {
+          outcome: "stale_dispatch",
+          reasonCode: "aborted_before_dispatch",
+        },
+      },
+    });
 
     expect(callMethod).not.toHaveBeenCalled();
     expect(sql.exec(`SELECT COUNT(*) AS count FROM agent_method_suspensions`).toArray()[0]).toEqual(
@@ -3433,7 +3455,7 @@ describe("AgentWorkerBase interrupt recovery", () => {
     expect(dispatcherDispose).toHaveBeenCalledTimes(1);
     expect(forceCloseCurrentTurn).toHaveBeenCalledWith(
       "channel_unsubscribe",
-      "Agent channel unsubscribed before turn closed"
+      "Turn closed after channel unsubscribe"
     );
     expect(dispose).toHaveBeenCalledTimes(1);
     expect(calls).toEqual(["forceCloseCurrentTurn", "dispose"]);
@@ -3445,7 +3467,7 @@ describe("AgentWorkerBase interrupt recovery", () => {
     const { instance } = await createTestDO(InterruptTestAgentWorker, {
       __objectKey: "agent-test",
     });
-    const reset = vi.fn();
+    const dispatcherInterrupt = vi.fn();
     const forceCloseCurrentTurn = vi.fn().mockResolvedValue(true);
     const interrupt = vi.fn(() => new Promise<void>(() => {}));
     const worker = instance as unknown as {
@@ -3462,14 +3484,14 @@ describe("AgentWorkerBase interrupt recovery", () => {
         getDebugState: vi.fn(async () => ({})),
       },
     });
-    worker.dispatchers.set("chat-1", { reset });
+    worker.dispatchers.set("chat-1", { interrupt: dispatcherInterrupt });
 
     await worker.testInterruptRunner("chat-1");
 
-    expect(reset).toHaveBeenCalledTimes(1);
+    expect(dispatcherInterrupt).toHaveBeenCalledTimes(1);
     expect(forceCloseCurrentTurn).toHaveBeenCalledWith(
       "user_interrupted",
-      "Agent turn interrupted by user"
+      "Turn closed after user interruption"
     );
     expect(interrupt).toHaveBeenCalledTimes(1);
     expect(worker.abortContexts.get("chat-1")?.reason).toBe("interrupt-channel");
@@ -3496,7 +3518,7 @@ describe("AgentWorkerBase interrupt recovery", () => {
         getDebugState: vi.fn(async () => ({})),
       },
     });
-    worker.dispatchers.set("chat-1", { reset: vi.fn(), getDebugState: vi.fn(() => ({})) });
+    worker.dispatchers.set("chat-1", { interrupt: vi.fn(), getDebugState: vi.fn(() => ({})) });
 
     await expect(worker.testInterruptRunner("chat-1")).resolves.toBeUndefined();
 
@@ -3536,7 +3558,7 @@ describe("AgentWorkerBase interrupt recovery", () => {
           interrupt: vi.fn().mockResolvedValue(undefined),
         },
       });
-      worker.dispatchers.set(channelId, { reset: vi.fn() });
+      worker.dispatchers.set(channelId, { interrupt: vi.fn() });
     }
 
     await worker.testInterruptAllRunners();
@@ -3935,15 +3957,17 @@ describe("TrajectoryVesselBase custom message recovery", () => {
       }
       return null;
     });
-    (instance as unknown as {
-      _rpc: {
-        call: ReturnType<typeof vi.fn>;
-        stream: ReturnType<typeof vi.fn>;
-        emit: ReturnType<typeof vi.fn>;
-        on: ReturnType<typeof vi.fn>;
-        handleIncomingPost: ReturnType<typeof vi.fn>;
-      };
-    })._rpc = {
+    (
+      instance as unknown as {
+        _rpc: {
+          call: ReturnType<typeof vi.fn>;
+          stream: ReturnType<typeof vi.fn>;
+          emit: ReturnType<typeof vi.fn>;
+          on: ReturnType<typeof vi.fn>;
+          handleIncomingPost: ReturnType<typeof vi.fn>;
+        };
+      }
+    )._rpc = {
       call: blobstoreGetText,
       stream: vi.fn(),
       emit: vi.fn(),
@@ -4153,7 +4177,11 @@ describe("AgentWorkerBase dispatched method results", () => {
             kind: "invocation.completed",
             actor: { kind: "panel", id: "panel:panel-1" },
             causality: { invocationId: opts.invocationId, transportCallId: opts.transportCallId },
-            payload: { protocol: "agentic.trajectory.v1", result: { ok: true } },
+            payload: {
+              protocol: "agentic.trajectory.v1",
+              result: { ok: true },
+              terminalOutcome: "success",
+            },
             createdAt: new Date().toISOString(),
           },
           senderId: "panel:panel-1",
@@ -4232,6 +4260,8 @@ describe("AgentWorkerBase dispatched method results", () => {
               protocol: "agentic.trajectory.v1",
               reason: "method failed",
               error: { error: "Authentication failed for internal push" },
+              terminalOutcome: "tool_error",
+              terminalReasonCode: "method_failed",
             },
             createdAt: new Date().toISOString(),
           },
@@ -4254,6 +4284,74 @@ describe("AgentWorkerBase dispatched method results", () => {
 
     expect(result.isError).toBe(true);
     expect(result.content[0]!.text).toBe("Authentication failed for internal push");
+  });
+
+  it("returns abandoned participant method results as terminal tool errors", async () => {
+    const { instance } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      subscriptions: {
+        getParticipantId(channelId: string): string | null;
+      };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      handleIncomingChannelEvent(channelId: string, event: unknown): Promise<void>;
+      invokeChannelMethod(
+        channelId: string,
+        toolCallId: string,
+        participantHandle: string,
+        method: string,
+        args: unknown,
+        signal?: AbortSignal,
+        onStreamUpdate?: (content: unknown) => void,
+        turnId?: string
+      ): Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>;
+    };
+
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue({
+      getParticipants: vi.fn().mockResolvedValue([
+        {
+          participantId: "panel:panel-1",
+          metadata: { handle: "user", type: "panel" },
+        },
+      ]),
+      callMethod: vi.fn(async (_callerId, _targetId, _callId, _method, _args, opts) => {
+        await worker.handleIncomingChannelEvent("chat-1", {
+          id: 1,
+          messageId: "result-abandoned",
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          payload: {
+            kind: "invocation.abandoned",
+            actor: { kind: "panel", id: "panel:panel-1" },
+            causality: { invocationId: opts.invocationId, transportCallId: opts.transportCallId },
+            payload: {
+              protocol: "agentic.trajectory.v1",
+              reason: "Runner restarted before invocation completed",
+              terminalOutcome: "abandoned",
+              terminalReasonCode: "runner_restarted_before_invocation_completed",
+            },
+            createdAt: new Date().toISOString(),
+          },
+          senderId: "panel:panel-1",
+          ts: Date.now(),
+        });
+      }),
+    });
+
+    const result = await worker.invokeChannelMethod(
+      "chat-1",
+      "tool-1",
+      "user",
+      "eval",
+      { code: "await forever()" },
+      undefined,
+      undefined,
+      "turn-1"
+    );
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe("Runner restarted before invocation completed");
   });
 
   it("clears stale typing and ignores method results without a durable suspension row", async () => {
@@ -4287,6 +4385,8 @@ describe("AgentWorkerBase dispatched method results", () => {
           protocol: "agentic.trajectory.v1",
           reason: "method failed",
           error: "Authentication failed",
+          terminalOutcome: "tool_error",
+          terminalReasonCode: "method_failed",
         },
         createdAt: new Date().toISOString(),
       },
@@ -4328,6 +4428,7 @@ describe("AgentWorkerBase dispatched method results", () => {
         payload: {
           protocol: "agentic.trajectory.v1",
           result: { ok: true },
+          terminalOutcome: "success",
         },
         createdAt: new Date().toISOString(),
       },

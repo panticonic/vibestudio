@@ -5,7 +5,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { connectViaRpc } from "./rpc-client.js";
 import type { PubSubClient } from "./client.js";
-import { AGENTIC_EVENT_PAYLOAD_KIND, agenticEventSchema } from "@workspace/agentic-protocol";
+import {
+  AGENTIC_EVENT_PAYLOAD_KIND,
+  agenticEventSchema,
+  invocationAbandonedPayload,
+  invocationCancelledPayload,
+  invocationCompletedPayload,
+  invocationFailedPayload,
+} from "@workspace/agentic-protocol";
 import { z } from "zod";
 
 const CHANNEL = "test-channel";
@@ -17,7 +24,28 @@ const CALL_ID_1 = "00000000-0000-4000-8000-000000000001";
 const CALL_ID_SLOW = "00000000-0000-4000-8000-000000000002";
 const TRANSPORT_ID_1 = "00000000-0000-4000-8000-000000000011";
 
-function invocation(kind: string, callId: string, payload: Record<string, unknown>, opts?: { transportCallId?: string; turnId?: string }) {
+function invocation(
+  kind: string,
+  callId: string,
+  payload: Record<string, unknown>,
+  opts?: { transportCallId?: string; turnId?: string }
+) {
+  const terminalPayload =
+    kind === "invocation.completed"
+      ? invocationCompletedPayload()
+      : kind === "invocation.failed"
+        ? invocationFailedPayload("tool_error", String(payload["reason"] ?? "method failed"), {
+            terminalReasonCode: "method_failed",
+          })
+        : kind === "invocation.cancelled"
+          ? invocationCancelledPayload("cancelled", String(payload["reason"] ?? "cancelled"), {
+              terminalReasonCode: "cancelled",
+            })
+          : kind === "invocation.abandoned"
+            ? invocationAbandonedPayload(String(payload["reason"] ?? "abandoned"), {
+                terminalReasonCode: "runner_restarted_before_invocation_completed",
+              })
+            : { protocol: "agentic.trajectory.v1" };
   return {
     kind,
     actor: { kind: "panel", id: "panel:panel-1" },
@@ -26,7 +54,7 @@ function invocation(kind: string, callId: string, payload: Record<string, unknow
       invocationId: callId,
       ...(opts?.transportCallId ? { transportCallId: opts.transportCallId } : {}),
     },
-    payload: { protocol: "agentic.trajectory.v1", ...payload },
+    payload: { ...terminalPayload, ...payload },
     createdAt: new Date().toISOString(),
   };
 }
@@ -66,69 +94,75 @@ function createMockRpc() {
       }
       return undefined;
     }),
-    on: vi.fn().mockImplementation(
-      (_event: string, listener: (event: { payload: unknown }) => void) => {
+    on: vi
+      .fn()
+      .mockImplementation((_event: string, listener: (event: { payload: unknown }) => void) => {
         eventListener = listener;
         return removeListener;
-      },
-    ),
+      }),
     selfId: SELF_ID,
   };
 
   function emit(msg: Record<string, unknown>) {
     if (!eventListener) throw new Error("No event listener registered");
     if (msg["kind"] === "ready") {
-      eventListener({ payload: {
-        channelId: CHANNEL,
-        message: {
-          kind: "control",
-          type: "ready",
-          ready: {
-            contextId: msg["contextId"],
-            channelConfig: msg["channelConfig"],
-            totalCount: msg["totalCount"],
-            envelopeCount: msg["envelopeCount"],
-            firstEnvelopeSeq: msg["firstEnvelopeSeq"],
-            hasMoreBefore: msg["hasMoreBefore"],
+      eventListener({
+        payload: {
+          channelId: CHANNEL,
+          message: {
+            kind: "control",
+            type: "ready",
+            ready: {
+              contextId: msg["contextId"],
+              channelConfig: msg["channelConfig"],
+              totalCount: msg["totalCount"],
+              envelopeCount: msg["envelopeCount"],
+              firstEnvelopeSeq: msg["firstEnvelopeSeq"],
+              hasMoreBefore: msg["hasMoreBefore"],
+            },
           },
         },
-      }});
+      });
       return;
     }
     if (msg["stream"] === "log") {
-      eventListener({ payload: {
-        channelId: CHANNEL,
-        message: {
-          kind: "log",
-          phase: msg["phase"] === "replay" ? "replay" : "live",
-          event: {
-            id: msg["id"],
-            messageId: `test-${msg["id"]}`,
+      eventListener({
+        payload: {
+          channelId: CHANNEL,
+          message: {
+            kind: "log",
+            phase: msg["phase"] === "replay" ? "replay" : "live",
+            event: {
+              id: msg["id"],
+              messageId: `test-${msg["id"]}`,
+              type: msg["type"],
+              payload: msg["payload"],
+              senderId: msg["senderId"],
+              ts: msg["ts"],
+              senderMetadata: msg["senderMetadata"],
+              attachments: msg["attachments"],
+            },
+          },
+        },
+      });
+      return;
+    }
+    if (msg["stream"] === "signal") {
+      eventListener({
+        payload: {
+          channelId: CHANNEL,
+          message: {
+            kind: "signal",
             type: msg["type"],
             payload: msg["payload"],
             senderId: msg["senderId"],
             ts: msg["ts"],
-            senderMetadata: msg["senderMetadata"],
-            attachments: msg["attachments"],
           },
         },
-      }});
+      });
       return;
     }
-    if (msg["stream"] === "signal") {
-      eventListener({ payload: {
-        channelId: CHANNEL,
-        message: {
-          kind: "signal",
-          type: msg["type"],
-          payload: msg["payload"],
-          senderId: msg["senderId"],
-          ts: msg["ts"],
-        },
-      }});
-      return;
-    }
-    eventListener({ payload: { channelId: CHANNEL, message: msg }});
+    eventListener({ payload: { channelId: CHANNEL, message: msg } });
   }
 
   return { rpc, emit, removeListener };
@@ -141,12 +175,13 @@ function createMockRpc() {
 async function emitReplayAndReady(
   emit: (msg: Record<string, unknown>) => void,
   participants: Array<{ id: string; name: string; type: string }>,
-  messages: Array<{ id: number; content: string; senderId: string }> = [],
+  messages: Array<{ id: number; content: string; senderId: string }> = []
 ) {
   // Emit presence join replay events for each participant
   for (const p of participants) {
     emit({
-      stream: "log", phase: "replay",
+      stream: "log",
+      phase: "replay",
       id: 100 + participants.indexOf(p),
       type: "presence",
       payload: { action: "join", metadata: { name: p.name, type: p.type } },
@@ -158,7 +193,8 @@ async function emitReplayAndReady(
   // Emit message replay events
   for (const m of messages) {
     emit({
-      stream: "log", phase: "replay",
+      stream: "log",
+      phase: "replay",
       id: m.id,
       type: AGENTIC_EVENT_PAYLOAD_KIND,
       payload: messageEvent(`msg-${m.id}`, m.content, m.senderId),
@@ -199,18 +235,14 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
 
       expect(mockRpc.on).toHaveBeenCalledWith("channel:message", expect.any(Function));
-      expect(mockRpc.call).toHaveBeenCalledWith(
-        DO_TARGET,
-        "subscribe",
-        [
-          SELF_ID,
-          expect.objectContaining({
-            __participantSessionId: expect.any(String),
-            replay: true,
-            replayMessageLimit: 200,
-          }),
-        ],
-      );
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "subscribe", [
+        SELF_ID,
+        expect.objectContaining({
+          __participantSessionId: expect.any(String),
+          replay: true,
+          replayMessageLimit: 200,
+        }),
+      ]);
 
       client.close();
     });
@@ -252,21 +284,21 @@ describe("connectViaRpc", () => {
               mode: "initial",
               logEvents: [
                 {
-                id: 101,
-                messageId: "presence-101",
-                type: "presence",
-                payload: { action: "join", metadata: { name: "Claude", type: "agent" } },
-                senderId: "agent-1",
-                ts: Date.now(),
-              },
-              {
-                id: 201,
-                messageId: "msg-201",
-                type: AGENTIC_EVENT_PAYLOAD_KIND,
-                payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
-                senderId: "agent-1",
-                ts: Date.now(),
-              },
+                  id: 101,
+                  messageId: "presence-101",
+                  type: "presence",
+                  payload: { action: "join", metadata: { name: "Claude", type: "agent" } },
+                  senderId: "agent-1",
+                  ts: Date.now(),
+                },
+                {
+                  id: 201,
+                  messageId: "msg-201",
+                  type: AGENTIC_EVENT_PAYLOAD_KIND,
+                  payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
+                  senderId: "agent-1",
+                  ts: Date.now(),
+                },
               ],
               snapshots: [],
               ready: {
@@ -314,7 +346,8 @@ describe("connectViaRpc", () => {
       // If the queued event delivery catches up after the ack fallback, replay
       // and ready are deduped rather than surfacing a second boundary.
       emit({
-        stream: "log", phase: "replay",
+        stream: "log",
+        phase: "replay",
         id: 201,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: messageEvent("msg-201", "from replay"),
@@ -389,7 +422,8 @@ describe("connectViaRpc", () => {
     it("seeds late event subscribers with streamed replay after ready", async () => {
       const client = connectViaRpc({ rpc: mockRpc as any, channel: CHANNEL });
       emit({
-        stream: "log", phase: "replay",
+        stream: "log",
+        phase: "replay",
         id: 201,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
@@ -426,7 +460,8 @@ describe("connectViaRpc", () => {
       const next = iter.next();
 
       emit({
-        stream: "log", phase: "replay",
+        stream: "log",
+        phase: "replay",
         id: 201,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
@@ -462,7 +497,8 @@ describe("connectViaRpc", () => {
       const next = iter.next();
 
       emit({
-        stream: "log", phase: "replay",
+        stream: "log",
+        phase: "replay",
         id: 201,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
@@ -478,7 +514,8 @@ describe("connectViaRpc", () => {
       await client.ready();
 
       emit({
-        stream: "log", phase: "live",
+        stream: "log",
+        phase: "live",
         id: 202,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: messageEvent("00000000-0000-4000-8000-000000000202", "from live"),
@@ -513,9 +550,7 @@ describe("connectViaRpc", () => {
         }
       });
 
-      await emitReplayAndReady(emit, [
-        { id: "agent-1", name: "Claude", type: "agent" },
-      ]);
+      await emitReplayAndReady(emit, [{ id: "agent-1", name: "Claude", type: "agent" }]);
 
       await client.ready();
 
@@ -543,16 +578,12 @@ describe("connectViaRpc", () => {
       const pubsubId = await client.publish("custom.event", { id: "m1", content: "hello" });
 
       expect(pubsubId).toBe(42);
-      expect(mockRpc.call).toHaveBeenCalledWith(
-        DO_TARGET,
-        "publish",
-        [
-          SELF_ID,
-          "custom.event",
-          { id: "m1", content: "hello" },
-          expect.objectContaining({}),
-        ],
-      );
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "publish", [
+        SELF_ID,
+        "custom.event",
+        { id: "m1", content: "hello" },
+        expect.objectContaining({}),
+      ]);
     });
 
     it("send() publishes a typed agentic event envelope payload", async () => {
@@ -565,18 +596,14 @@ describe("connectViaRpc", () => {
 
       expect(result.pubsubId).toBe(42);
       expect(result.messageId).toMatch(/^[0-9a-f-]{36}$/);
-      expect(mockRpc.call).toHaveBeenCalledWith(
-        DO_TARGET,
-        "publish",
-        [
-          SELF_ID,
-          AGENTIC_EVENT_PAYLOAD_KIND,
-          expect.objectContaining({
-            kind: "message.completed",
-          }),
-          expect.objectContaining({ idempotencyKey: "send-1" }),
-        ],
-      );
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "publish", [
+        SELF_ID,
+        AGENTIC_EVENT_PAYLOAD_KIND,
+        expect.objectContaining({
+          kind: "message.completed",
+        }),
+        expect.objectContaining({ idempotencyKey: "send-1" }),
+      ]);
 
       const [, , args] = mockRpc.call.mock.calls[0]!;
       const payload = (args as unknown[])[2];
@@ -596,7 +623,8 @@ describe("connectViaRpc", () => {
       const iter = client.events();
 
       emit({
-        stream: "log", phase: "live",
+        stream: "log",
+        phase: "live",
         id: 50,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: messageEvent("00000000-0000-4000-8000-000000000050", "world"),
@@ -647,14 +675,25 @@ describe("connectViaRpc", () => {
 
       // Simulate an invocation start arriving from another participant.
       emit({
-        stream: "log", phase: "live",
+        stream: "log",
+        phase: "live",
         id: 200,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocation("invocation.started", CALL_ID_1, {
-          name: "compute",
-          request: { x: 7 },
-          transport: { kind: "channel", channelId: CHANNEL, target: { kind: "panel", id: SELF_ID, participantId: SELF_ID }, transportCallId: TRANSPORT_ID_1 },
-        }, { transportCallId: TRANSPORT_ID_1, turnId: "turn-1" }),
+        payload: invocation(
+          "invocation.started",
+          CALL_ID_1,
+          {
+            name: "compute",
+            request: { x: 7 },
+            transport: {
+              kind: "channel",
+              channelId: CHANNEL,
+              target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+              transportCallId: TRANSPORT_ID_1,
+            },
+          },
+          { transportCallId: TRANSPORT_ID_1, turnId: "turn-1" }
+        ),
         senderId: "caller-1",
         ts: Date.now(),
       });
@@ -667,14 +706,16 @@ describe("connectViaRpc", () => {
       // Wait for the result publish call
       await vi.waitFor(() => {
         const publishCalls = mockRpc.call.mock.calls.filter(
-          (c: unknown[]) => c[1] === "publish" && ((c[2] as unknown[])[1] as string) === AGENTIC_EVENT_PAYLOAD_KIND,
+          (c: unknown[]) =>
+            c[1] === "publish" && ((c[2] as unknown[])[1] as string) === AGENTIC_EVENT_PAYLOAD_KIND
         );
         expect(publishCalls.length).toBeGreaterThanOrEqual(1);
       });
 
       // Find the invocation completion publish call.
       const resultCall = mockRpc.call.mock.calls.find(
-        (c: unknown[]) => c[1] === "publish" && ((c[2] as unknown[])[1] as string) === AGENTIC_EVENT_PAYLOAD_KIND,
+        (c: unknown[]) =>
+          c[1] === "publish" && ((c[2] as unknown[])[1] as string) === AGENTIC_EVENT_PAYLOAD_KIND
       );
       expect(resultCall).toBeDefined();
       // Args: doTarget, "publish", pid, type, payload, opts
@@ -719,20 +760,31 @@ describe("connectViaRpc", () => {
       });
 
       emit({
-        stream: "log", phase: "live",
+        stream: "log",
+        phase: "live",
         id: 201,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocation("invocation.started", CALL_ID_1, {
-          name: "compute",
-          request: {
-            protocol: "natstack.blob-ref.v1",
-            digest: "abc123",
-            size: encodedRequest.length,
-            encoding: "json",
-            originalBytes: encodedRequest.length,
+        payload: invocation(
+          "invocation.started",
+          CALL_ID_1,
+          {
+            name: "compute",
+            request: {
+              protocol: "natstack.blob-ref.v1",
+              digest: "abc123",
+              size: encodedRequest.length,
+              encoding: "json",
+              originalBytes: encodedRequest.length,
+            },
+            transport: {
+              kind: "channel",
+              channelId: CHANNEL,
+              target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+              transportCallId: TRANSPORT_ID_1,
+            },
           },
-          transport: { kind: "channel", channelId: CHANNEL, target: { kind: "panel", id: SELF_ID, participantId: SELF_ID }, transportCallId: TRANSPORT_ID_1 },
-        }, { transportCallId: TRANSPORT_ID_1 }),
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
         senderId: "caller-1",
         ts: Date.now(),
       });
@@ -740,7 +792,7 @@ describe("connectViaRpc", () => {
       await vi.waitFor(() => {
         expect(executeFn).toHaveBeenCalledWith(
           request,
-          expect.objectContaining({ callId: TRANSPORT_ID_1 }),
+          expect.objectContaining({ callId: TRANSPORT_ID_1 })
         );
       });
 
@@ -768,18 +820,24 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
 
       emit({
-        stream: "log", phase: "live",
+        stream: "log",
+        phase: "live",
         id: 202,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocation("invocation.completed", handle.invocationId, {
-          result: {
-            protocol: "natstack.blob-ref.v1",
-            digest: "def456",
-            size: encodedResult.length,
-            encoding: "json",
-            originalBytes: encodedResult.length,
+        payload: invocation(
+          "invocation.completed",
+          handle.invocationId,
+          {
+            result: {
+              protocol: "natstack.blob-ref.v1",
+              digest: "def456",
+              size: encodedResult.length,
+              encoding: "json",
+              originalBytes: encodedResult.length,
+            },
           },
-        }, { transportCallId: handle.transportCallId }),
+          { transportCallId: handle.transportCallId }
+        ),
         senderId: "provider-1",
         ts: Date.now(),
       });
@@ -823,7 +881,6 @@ describe("connectViaRpc", () => {
       // Verify connected is false
       expect(client.connected).toBe(false);
     });
-
   });
 
   // ── 5. Method cancel propagation ──────────────────────────────────────
@@ -858,14 +915,17 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
       await Promise.resolve();
 
-      expect(mockRpc.call).toHaveBeenCalledWith(
-        DO_TARGET,
-        "callMethod",
-        [SELF_ID, "provider-1", handle.callId, "slowWork", {}, {
+      expect(mockRpc.call).toHaveBeenCalledWith(DO_TARGET, "callMethod", [
+        SELF_ID,
+        "provider-1",
+        handle.callId,
+        "slowWork",
+        {},
+        {
           invocationId: handle.invocationId,
           transportCallId: handle.transportCallId,
-        }],
-      );
+        },
+      ]);
 
       controller.abort();
 
@@ -896,7 +956,9 @@ describe("connectViaRpc", () => {
 
       const cancelPromise = handle.cancel();
       let settled = false;
-      void cancelPromise.then(() => { settled = true; });
+      void cancelPromise.then(() => {
+        settled = true;
+      });
 
       await Promise.resolve();
       expect(settled).toBe(false);
@@ -942,13 +1004,18 @@ describe("connectViaRpc", () => {
 
       // Trigger the method call
       emit({
-        stream: "log", phase: "live",
+        stream: "log",
+        phase: "live",
         id: 300,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: invocation("invocation.started", CALL_ID_SLOW, {
           name: "slowWork",
           request: {},
-          transport: { kind: "channel", channelId: CHANNEL, target: { kind: "panel", id: SELF_ID, participantId: SELF_ID } },
+          transport: {
+            kind: "channel",
+            channelId: CHANNEL,
+            target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+          },
         }),
         senderId: "caller-1",
         ts: Date.now(),
@@ -963,7 +1030,8 @@ describe("connectViaRpc", () => {
 
       // Send invocation cancellation
       emit({
-        stream: "log", phase: "live",
+        stream: "log",
+        phase: "live",
         id: 301,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: invocation("invocation.cancelled", CALL_ID_SLOW, { reason: "cancelled" }),
@@ -993,7 +1061,7 @@ describe("connectViaRpc", () => {
                 if (ctx.signal.aborted) return resolve();
                 ctx.signal.addEventListener("abort", () => resolve());
               });
-              return { cancelled: true };
+              throw new Error("cancelled");
             },
           },
         },
@@ -1005,14 +1073,25 @@ describe("connectViaRpc", () => {
       mockRpc.call.mockResolvedValue(undefined);
 
       emit({
-        stream: "log", phase: "live",
+        stream: "log",
+        phase: "live",
         id: 400,
         type: AGENTIC_EVENT_PAYLOAD_KIND,
-        payload: invocation("invocation.started", CALL_ID_SLOW, {
-          name: "slowWork",
-          request: {},
-          transport: { kind: "channel", channelId: CHANNEL, target: { kind: "panel", id: SELF_ID, participantId: SELF_ID }, transportCallId: TRANSPORT_ID_1 },
-        }, { transportCallId: TRANSPORT_ID_1 }),
+        payload: invocation(
+          "invocation.started",
+          CALL_ID_SLOW,
+          {
+            name: "slowWork",
+            request: {},
+            transport: {
+              kind: "channel",
+              channelId: CHANNEL,
+              target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+              transportCallId: TRANSPORT_ID_1,
+            },
+          },
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
         senderId: "caller-1",
         ts: Date.now(),
       });
@@ -1029,9 +1108,26 @@ describe("connectViaRpc", () => {
       expect(capturedSignal!.aborted).toBe(true);
       // The local abort itself issues no cancelMethodCall RPC.
       const cancelCalls = mockRpc.call.mock.calls.filter(
-        (c: unknown[]) => c[1] === "cancelMethodCall",
+        (c: unknown[]) => c[1] === "cancelMethodCall"
       );
       expect(cancelCalls.length).toBe(0);
+      await vi.waitFor(() => {
+        const publishCall = mockRpc.call.mock.calls.find(
+          (c: unknown[]) =>
+            c[1] === "publish" &&
+            ((c[2] as unknown[])[1] as string) === AGENTIC_EVENT_PAYLOAD_KIND
+        );
+        const payload = (publishCall?.[2] as unknown[] | undefined)?.[2] as
+          | { kind?: string; payload?: { terminalOutcome?: string; terminalReasonCode?: string } }
+          | undefined;
+        expect(payload).toMatchObject({
+          kind: "invocation.cancelled",
+          payload: {
+            terminalOutcome: "cancelled",
+            terminalReasonCode: "cancelled",
+          },
+        });
+      });
 
       client.close();
     });

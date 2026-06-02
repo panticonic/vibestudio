@@ -1,7 +1,11 @@
 import { AgentWorkerBase } from "@workspace/agentic-do";
 import type { ChannelEvent, ParticipantDescriptor } from "@natstack/harness/types";
 import path from "node:path";
-import { AGENTIC_PROTOCOL_VERSION, type AgenticEvent } from "@workspace/agentic-protocol";
+import {
+  AGENTIC_PROTOCOL_VERSION,
+  invocationCompletedPayload,
+  type AgenticEvent,
+} from "@workspace/agentic-protocol";
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -142,15 +146,14 @@ export class TestAgentWorker extends AgentWorkerBase {
         actor,
         turnId: turnId as never,
         causality: { invocationId: invocationId as never },
-        payload: {
-          protocol: AGENTIC_PROTOCOL_VERSION,
+        payload: invocationCompletedPayload({
           result: {
             toolCallId: invocationId,
             toolName: "eval",
             details: { input: { code } },
             content: [{ type: "text", text: "deterministic eval result" }],
           },
-        },
+        }),
         createdAt: new Date().toISOString(),
       },
       "invocation-completed"

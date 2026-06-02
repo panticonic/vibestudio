@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   NatStackExtensionUIContext,
+  NatStackUiToolResultError,
   type NatStackScopedUiContext,
 } from "./natstack-extension-context.js";
 
@@ -22,13 +23,9 @@ describe("NatStackExtensionUIContext", () => {
     const cbs = createCallbacks();
     const ctx = new NatStackExtensionUIContext(cbs, { toolCallId: "tool-1" });
     const result = await ctx.select("Pick", ["a", "b"]);
-    expect(cbs.selectForTool).toHaveBeenCalledWith(
-      "tool-1",
-      "Pick",
-      ["a", "b"],
-      undefined,
-      { toolCallId: "tool-1" },
-    );
+    expect(cbs.selectForTool).toHaveBeenCalledWith("tool-1", "Pick", ["a", "b"], undefined, {
+      toolCallId: "tool-1",
+    });
     expect(result).toBe("a");
   });
 
@@ -41,7 +38,7 @@ describe("NatStackExtensionUIContext", () => {
       "Proceed?",
       "Are you sure?",
       undefined,
-      { toolCallId: "tool-1" },
+      { toolCallId: "tool-1" }
     );
     expect(result).toBe(true);
   });
@@ -50,13 +47,9 @@ describe("NatStackExtensionUIContext", () => {
     const cbs = createCallbacks();
     const ctx = new NatStackExtensionUIContext(cbs, { toolCallId: "tool-1" });
     const result = await ctx.input("Name", "Type here");
-    expect(cbs.inputForTool).toHaveBeenCalledWith(
-      "tool-1",
-      "Name",
-      "Type here",
-      undefined,
-      { toolCallId: "tool-1" },
-    );
+    expect(cbs.inputForTool).toHaveBeenCalledWith("tool-1", "Name", "Type here", undefined, {
+      toolCallId: "tool-1",
+    });
     expect(result).toBe("input value");
   });
 
@@ -64,12 +57,9 @@ describe("NatStackExtensionUIContext", () => {
     const cbs = createCallbacks();
     const ctx = new NatStackExtensionUIContext(cbs, { toolCallId: "tool-1" });
     const result = await ctx.editor("Notes", "prefill");
-    expect(cbs.editorForTool).toHaveBeenCalledWith(
-      "tool-1",
-      "Notes",
-      "prefill",
-      { toolCallId: "tool-1" },
-    );
+    expect(cbs.editorForTool).toHaveBeenCalledWith("tool-1", "Notes", "prefill", {
+      toolCallId: "tool-1",
+    });
     expect(result).toBe("editor value");
   });
 
@@ -91,14 +81,36 @@ describe("NatStackExtensionUIContext", () => {
         toolName: "write",
         toolInput: { path: "a.txt" },
         mode: "approval",
+      }
+    );
+  });
+
+  it("throws lifecycle tool results instead of returning them as truthy UI values", async () => {
+    const cbs = createCallbacks();
+    const result = {
+      isError: true,
+      content: [
+        { type: "text" as const, text: "Agent turn was interrupted before tool dispatch." },
+      ],
+      details: {
+        __natstack_terminal: {
+          outcome: "stale_dispatch",
+          reasonCode: "aborted_before_dispatch",
+        },
       },
+    };
+    cbs.confirmForTool = vi.fn().mockResolvedValue(result);
+    const ctx = new NatStackExtensionUIContext(cbs, { toolCallId: "tool-1" });
+
+    await expect(ctx.confirm("Proceed?", "Are you sure?")).rejects.toBeInstanceOf(
+      NatStackUiToolResultError
     );
   });
 
   it("throws outside tool_call dispatch for interactive methods", async () => {
     const ctx = new NatStackExtensionUIContext(createCallbacks());
     await expect(ctx.confirm("Proceed?", "No tool call")).rejects.toThrow(
-      /outside tool_call dispatch/,
+      /outside tool_call dispatch/
     );
   });
 
@@ -175,5 +187,4 @@ describe("NatStackExtensionUIContext", () => {
     const result = ctx.setTheme();
     expect(result.success).toBe(false);
   });
-
 });

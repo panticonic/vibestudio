@@ -14,8 +14,8 @@ import {
   invocationStarted,
 } from "../hooks/transcriptTestHarness.js";
 import {
-  AGENTIC_PROTOCOL_VERSION,
   brandId,
+  invocationFailedPayload,
   type AgenticEvent,
   type InvocationId,
 } from "@workspace/agentic-protocol";
@@ -105,14 +105,13 @@ describe("transcript UX smoke", () => {
       kind: "invocation.failed",
       actor: { kind: "agent", id: "agent:onboarding", displayName: "Onboarding Agent" },
       causality: { invocationId: brandId<InvocationId>("call-list") },
-      payload: {
-        protocol: AGENTIC_PROTOCOL_VERSION,
-        reason: "permission denied",
+      payload: invocationFailedPayload("tool_error", "permission denied", {
         error: {
           toolName: "mcp__workspace__ListDirectory",
           details: { input: { path: "src" } },
         },
-      },
+        terminalReasonCode: "method_failed",
+      }),
       createdAt: new Date().toISOString(),
     };
 

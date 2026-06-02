@@ -10,7 +10,14 @@ import type {
   SandboxSourcePayload,
 } from "./events.js";
 import type { ChannelEnvelope, ChannelRosterEntry } from "./envelopes.js";
-import type { ApprovalMap, InlineUiMap, InvocationMap, MessageMap, ProjectedActionBar, TurnMap } from "./handlers.js";
+import type {
+  ApprovalMap,
+  InlineUiMap,
+  InvocationMap,
+  MessageMap,
+  ProjectedActionBar,
+  TurnMap,
+} from "./handlers.js";
 import {
   applyApprovalEvent,
   applyInvocationEvent,
@@ -73,6 +80,7 @@ export interface ChannelViewState {
   timeline: ChannelTimelineEntry[];
   seenEnvelopeIds: Record<string, true>;
   ignoredEnvelopeIds: string[];
+  ignoredEnvelopeErrors: Record<string, string>;
 }
 
 export function createInitialChannelViewState(): ChannelViewState {
@@ -89,12 +97,13 @@ export function createInitialChannelViewState(): ChannelViewState {
     timeline: [],
     seenEnvelopeIds: {},
     ignoredEnvelopeIds: [],
+    ignoredEnvelopeErrors: {},
   };
 }
 
 export function reduceChannelView(
   state: ChannelViewState,
-  envelope: ChannelEnvelope,
+  envelope: ChannelEnvelope
 ): ChannelViewState {
   if (state.seenEnvelopeIds[envelope.envelopeId]) {
     return state;
@@ -107,17 +116,28 @@ export function reduceChannelView(
       cursor: envelope.seq,
       seenEnvelopeIds: { ...state.seenEnvelopeIds, [envelope.envelopeId]: true },
       ignoredEnvelopeIds: [...state.ignoredEnvelopeIds, envelope.envelopeId],
+      ignoredEnvelopeErrors: {
+        ...state.ignoredEnvelopeErrors,
+        [envelope.envelopeId]: `unsupported payloadKind: ${envelope.payloadKind ?? "<missing>"}`,
+      },
     };
   }
 
   const result = agenticEventEnvelopeSchema.safeParse(envelope);
   if (!result.success) {
+    const message = result.error.issues
+      .map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`)
+      .join("; ");
     return {
       ...state,
       channelId: envelope.channelId,
       cursor: envelope.seq,
       seenEnvelopeIds: { ...state.seenEnvelopeIds, [envelope.envelopeId]: true },
       ignoredEnvelopeIds: [...state.ignoredEnvelopeIds, envelope.envelopeId],
+      ignoredEnvelopeErrors: {
+        ...state.ignoredEnvelopeErrors,
+        [envelope.envelopeId]: message,
+      },
     };
   }
   const parsed = result.data;
@@ -158,7 +178,7 @@ export function reduceChannelView(
     const { inlineUi: nextInlineUi, actionBar } = applyUiEvent(
       inlineUi,
       next.actionBars[participantId],
-      event as never,
+      event as never
     );
     next = {
       ...next,
@@ -242,16 +262,19 @@ export function reduceChannelView(
       lastSeq: -1,
     };
     if (existing.updates.some((update) => update.seq === parsed.seq)) {
-      next = next.customMessages[payload.messageId] ? next : {
-        ...next,
-        customMessages: {
-          ...next.customMessages,
-          [payload.messageId]: existing,
-        },
-      };
+      next = next.customMessages[payload.messageId]
+        ? next
+        : {
+            ...next,
+            customMessages: {
+              ...next.customMessages,
+              [payload.messageId]: existing,
+            },
+          };
     } else {
-      const updates = [...existing.updates, { update: payload.update, seq: parsed.seq }]
-        .sort((a, b) => a.seq - b.seq);
+      const updates = [...existing.updates, { update: payload.update, seq: parsed.seq }].sort(
+        (a, b) => a.seq - b.seq
+      );
       next = {
         ...next,
         customMessages: {
@@ -308,7 +331,10 @@ export function reduceChannelView(
           ...next.roster,
           [key]: {
             participant: payload.participant,
-            joinedAt: payload.action === "joined" ? event.createdAt : existing?.joinedAt ?? event.createdAt,
+            joinedAt:
+              payload.action === "joined"
+                ? event.createdAt
+                : (existing?.joinedAt ?? event.createdAt),
             leftAt: payload.action === "left" ? event.createdAt : existing?.leftAt,
             roles: payload.roles ?? existing?.roles ?? [],
           },

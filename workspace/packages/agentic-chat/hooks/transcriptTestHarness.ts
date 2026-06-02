@@ -5,6 +5,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   brandId,
   encodeChannelPayloadStoredValues,
+  invocationCompletedPayload,
   type AgenticEvent,
   type InvocationId,
   type MessageId,
@@ -14,13 +15,17 @@ import { GadWorkspaceDO } from "../../../workers/gad-store/index.js";
 import { PubSubChannel } from "../../../workers/pubsub-channel/channel-do.js";
 
 export const TRANSCRIPT_TEST_CHANNEL_ID = "transcript-pipeline";
-export const TRANSCRIPT_TEST_CHANNEL_TARGET =
-  `do:workers/pubsub-channel:PubSubChannel:${TRANSCRIPT_TEST_CHANNEL_ID}`;
+export const TRANSCRIPT_TEST_CHANNEL_TARGET = `do:workers/pubsub-channel:PubSubChannel:${TRANSCRIPT_TEST_CHANNEL_ID}`;
 export const TRANSCRIPT_TEST_GAD_TARGET = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
 
-function setRpcCaller(instance: PubSubChannel, callerId: string | null, callerKind: string | null): void {
+function setRpcCaller(
+  instance: PubSubChannel,
+  callerId: string | null,
+  callerKind: string | null
+): void {
   (instance as unknown as { _currentRpcCallerId: string | null })._currentRpcCallerId = callerId;
-  (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind = callerKind;
+  (instance as unknown as { _currentRpcCallerKind: string | null })._currentRpcCallerKind =
+    callerKind;
 }
 
 export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNEL_ID) {
@@ -36,12 +41,14 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
     return { digest, size: value.length };
   };
 
-  (channel.instance as unknown as {
-    _rpc: {
-      emit: (target: string, event: string, payload: unknown) => Promise<void>;
-      call: (target: string, method: string, args: unknown[]) => Promise<unknown>;
-    };
-  })._rpc = {
+  (
+    channel.instance as unknown as {
+      _rpc: {
+        emit: (target: string, event: string, payload: unknown) => Promise<void>;
+        call: (target: string, method: string, args: unknown[]) => Promise<unknown>;
+      };
+    }
+  )._rpc = {
     emit: vi.fn(async (target, event, payload) => {
       listeners.get(target)?.({ payload });
     }),
@@ -63,19 +70,17 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
         return blobs.get(String(args[0] ?? "")) ?? null;
       }
       if (target === TRANSCRIPT_TEST_GAD_TARGET) {
-        const callable = gad.instance as unknown as Record<string, (...methodArgs: unknown[]) => unknown>;
+        const callable = gad.instance as unknown as Record<
+          string,
+          (...methodArgs: unknown[]) => unknown
+        >;
         return await callable[method]!(...args);
       }
       throw new Error(`unexpected channel rpc call ${target}.${method}`);
     }),
   };
 
-  function createParticipantRpc(opts: {
-    id: string;
-    name: string;
-    type: string;
-    handle: string;
-  }) {
+  function createParticipantRpc(opts: { id: string; name: string; type: string; handle: string }) {
     return {
       selfId: opts.id,
       call: vi.fn(async (target: string, method: string, args: unknown[]) => {
@@ -90,7 +95,10 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
               ? "agent"
               : null;
           setRpcCaller(channel.instance, participantId, participantKind);
-          const callable = channel.instance as unknown as Record<string, (...methodArgs: unknown[]) => unknown>;
+          const callable = channel.instance as unknown as Record<
+            string,
+            (...methodArgs: unknown[]) => unknown
+          >;
           return await callable[method]!(...args);
         }
         throw new Error(`unexpected client rpc call ${target}.${method}`);
@@ -126,7 +134,7 @@ export async function createTranscriptHarness(channelId = TRANSCRIPT_TEST_CHANNE
 
 export async function appendTrajectoryEventsAndBroadcast(
   harness: Awaited<ReturnType<typeof createTranscriptHarness>>,
-  events: AgenticEvent[],
+  events: AgenticEvent[]
 ) {
   const result = await harness.gad.call<{
     published: Array<{ channelId: string; envelopeId: string }>;
@@ -134,19 +142,21 @@ export async function appendTrajectoryEventsAndBroadcast(
     trajectoryId: "trajectory:test",
     branchId: "branch:test",
     owner: { kind: "agent", id: "agent:onboarding" },
-    events: await Promise.all(events.map(async (event) => ({
-      event: await encodeChannelPayloadStoredValues(
-        { ...event, turnId: "turn:test" },
-        {
-          putText: async (value) => harness.putTextBlob(value),
-        },
-      ),
-      publish: { channelIds: [harness.channelId] },
-    }))),
+    events: await Promise.all(
+      events.map(async (event) => ({
+        event: await encodeChannelPayloadStoredValues(
+          { ...event, turnId: "turn:test" },
+          {
+            putText: async (value) => harness.putTextBlob(value),
+          }
+        ),
+        publish: { channelIds: [harness.channelId] },
+      }))
+    ),
   });
   await harness.channel.call(
     "broadcastStoredEnvelopes",
-    result.published.map((publication) => publication.envelopeId),
+    result.published.map((publication) => publication.envelopeId)
   );
   return result;
 }
@@ -172,7 +182,7 @@ export function assistantMessage(id: string, content: string): AgenticEvent<"mes
 export function invocationStarted(
   id: string,
   name: string,
-  request: Record<string, unknown>,
+  request: Record<string, unknown>
 ): AgenticEvent<"invocation.started"> {
   return {
     kind: "invocation.started",
@@ -189,16 +199,13 @@ export function invocationStarted(
 
 export function invocationCompleted(
   id: string,
-  result: unknown,
+  result: unknown
 ): AgenticEvent<"invocation.completed"> {
   return {
     kind: "invocation.completed",
     actor: { kind: "agent", id: "agent:onboarding", displayName: "Onboarding Agent" },
     causality: { invocationId: brandId<InvocationId>(id) },
-    payload: {
-      protocol: AGENTIC_PROTOCOL_VERSION,
-      result,
-    },
+    payload: invocationCompletedPayload({ result }),
     createdAt: new Date().toISOString(),
   };
 }

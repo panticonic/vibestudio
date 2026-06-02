@@ -515,7 +515,11 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("invocation.completed", {
             turnId: "turn-1" as never,
             causality: { invocationId: "call-1" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: blobRef("result-ok", '"ok"') },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              result: blobRef("result-ok", '"ok"'),
+              terminalOutcome: "success",
+            },
           }),
         },
       ],
@@ -1371,10 +1375,24 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("invocation.completed", {
             turnId: "turn-1" as never,
             causality: { invocationId: "inv-1" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: blobRef("result-ok", '"ok"') },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              result: blobRef("result-ok", '"ok"'),
+              terminalOutcome: "success",
+            },
           }),
         },
       ],
+    });
+
+    const inspection = await call<any>("inspectInvocationState", {
+      invocationId: "inv-1",
+    });
+    expect(inspection.rows[0]).toMatchObject({
+      invocation_id: "inv-1",
+      status: "completed",
+      terminal_outcome: "success",
+      terminal_reason_code: null,
     });
 
     await expect(
@@ -1388,12 +1406,41 @@ describe("GadWorkspaceDO trajectory persistence", () => {
             event: event("invocation.failed", {
               turnId: "turn-1" as never,
               causality: { invocationId: "inv-1" as never },
-              payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: "too late" },
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                reason: "too late",
+                terminalOutcome: "tool_error",
+                terminalReasonCode: "eval_exception",
+              },
             }),
           },
         ],
       })
     ).rejects.toThrow(/duplicate terminal invocation/u);
+  });
+
+  it("rejects terminal invocation events without typed terminal outcome", async () => {
+    const { call } = await createTestDO(GadWorkspaceDO);
+    await expect(
+      call("appendTrajectoryBatch", {
+        trajectoryId: "traj-1",
+        branchId: "main",
+        owner,
+        events: [
+          {
+            eventId: "event-invalid-terminal",
+            event: event("invocation.failed", {
+              turnId: "turn-1" as never,
+              causality: { invocationId: "inv-invalid" as never },
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                reason: "missing typed outcome",
+              } as unknown as AgenticEvent<"invocation.failed">["payload"],
+            }),
+          },
+        ],
+      })
+    ).rejects.toThrow(/terminalOutcome/u);
   });
 
   it("enforces terminal approval idempotency at projection time", async () => {
@@ -1475,6 +1522,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
                 encoding: "json",
                 originalBytes: 42,
               },
+              terminalOutcome: "success",
             },
           }),
         },
@@ -1506,7 +1554,11 @@ describe("GadWorkspaceDO trajectory persistence", () => {
             event: event("invocation.completed", {
               turnId: "turn-1" as never,
               causality: { invocationId: "inv-1" as never },
-              payload: { protocol: AGENTIC_PROTOCOL_VERSION, result: { raw: true } },
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                result: { raw: true },
+                terminalOutcome: "success",
+              },
             }),
           },
         ],
@@ -1605,6 +1657,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
                 encoding: "json",
                 originalBytes: 20,
               },
+              terminalOutcome: "success",
             },
           }),
         },
@@ -1865,7 +1918,11 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-fork" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "fork here" },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              role: "assistant",
+              content: "fork here",
+            },
           }),
         },
         {
