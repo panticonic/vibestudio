@@ -727,6 +727,66 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     expect(registry.getPanel("root")?.title).toBe("New title");
   });
 
+  it("prevents non-explicit server title updates from overwriting explicit runtime titles", () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
+    const { orchestrator } = createOrchestrator(registry);
+
+    orchestrator.applyServerPanelTitleUpdate({
+      panelId: "root",
+      title: "Explicit title",
+      explicit: true,
+    });
+    orchestrator.applyServerPanelTitleUpdate({
+      panelId: "root",
+      title: "Agentic Chat",
+    });
+
+    expect(registry.getPanel("root")?.title).toBe("Explicit title");
+  });
+
+  it("prevents title-only server snapshots from overwriting explicit runtime titles", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+    const repopulate = vi.spyOn(registry, "repopulate");
+
+    orchestrator.applyServerPanelTitleUpdate({
+      panelId: "root",
+      title: "Explicit title",
+      explicit: true,
+    });
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [makePanel("root", [], { title: "Agentic Chat" })],
+    });
+
+    expect(repopulate).not.toHaveBeenCalled();
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
+    expect(registry.getPanel("root")?.title).toBe("Explicit title");
+  });
+
+  it("preserves explicit runtime titles when applying structural server snapshots", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
+    const { orchestrator } = createOrchestrator(registry);
+    const repopulate = vi.spyOn(registry, "repopulate");
+
+    orchestrator.applyServerPanelTitleUpdate({
+      panelId: "root",
+      title: "Explicit title",
+      explicit: true,
+    });
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [makePanel("root", [makePanel("child")], { title: "Agentic Chat" })],
+    });
+
+    expect(repopulate).toHaveBeenCalledOnce();
+    expect(registry.getPanel("root")?.title).toBe("Explicit title");
+    expect(registry.getPanel("child")).toBeDefined();
+  });
+
   it("prevents page-title fallback updates from overwriting explicit runtime titles", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });

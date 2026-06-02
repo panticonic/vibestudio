@@ -1015,14 +1015,15 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   async applyServerPanelTreeSnapshot(snapshot: PanelTreeSnapshot): Promise<void> {
     if (snapshot.revision <= this.lastAppliedServerPanelTreeRevision) return;
     this.lastAppliedServerPanelTreeRevision = snapshot.revision;
-    if (this.panelTreesMatchSemantically(this.registry.getRootPanels(), snapshot.rootPanels)) {
+    const rootPanels = this.preserveExplicitTitlesInSnapshot(snapshot.rootPanels);
+    if (this.panelTreesMatchSemantically(this.registry.getRootPanels(), rootPanels)) {
       return;
     }
-    if (this.panelTreesMatchIgnoringTitles(this.registry.getRootPanels(), snapshot.rootPanels)) {
-      this.applyPanelTitlesFromSnapshot(snapshot.rootPanels);
+    if (this.panelTreesMatchIgnoringTitles(this.registry.getRootPanels(), rootPanels)) {
+      this.applyPanelTitlesFromSnapshot(rootPanels);
       return;
     }
-    this.registry.repopulate(snapshot.rootPanels);
+    this.registry.repopulate(rootPanels);
     await this.syncRuntimeLeaseSnapshot().catch((error: unknown) => {
       log.warn(
         `[applyServerPanelTreeSnapshot] Failed to sync runtime leases: ${
@@ -1039,6 +1040,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
   }): void {
     const panel = this.registry.getPanel(update.panelId);
     if (!panel) return;
+    if (!update.explicit && this.explicitTitlePanelIds.has(update.panelId)) return;
     if (update.explicit) {
       this.explicitTitlePanelIds.add(update.panelId);
     }
@@ -1088,6 +1090,23 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
       this.applyServerPanelTitleUpdate({ panelId: incoming.id, title: incoming.title });
       this.applyPanelTitlesFromSnapshot(incoming.children);
     }
+  }
+
+  private preserveExplicitTitlesInSnapshot(panels: readonly Panel[]): Panel[] {
+    let changed = false;
+    const preservePanel = (panel: Panel): Panel => {
+      const children = panel.children.map(preservePanel);
+      const childrenChanged = children.some((child, index) => child !== panel.children[index]);
+      const currentPanel = this.explicitTitlePanelIds.has(panel.id)
+        ? this.registry.getPanel(panel.id)
+        : null;
+      const title = currentPanel?.title ?? panel.title;
+      if (!childrenChanged && title === panel.title) return panel;
+      changed = true;
+      return { ...panel, title, children };
+    };
+    const nextPanels = panels.map(preservePanel);
+    return changed ? nextPanels : (panels as Panel[]);
   }
 
   private panelSnapshotsMatchSemantically(current: Panel, incoming: Panel): boolean {
