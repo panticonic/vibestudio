@@ -33,6 +33,7 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
 3. **Use filesystem tools for file edits** — Read, Edit, Write (not eval)
 4. **Use eval only for runtime operations** — project creation, git, typecheck, tests, launching panels
 5. **Static imports in eval** — `import { rpc, openPanel } from "@workspace/runtime"`; dynamic `await import(...)` may work in some builds, but it is not the supported path for runtime or skill packages.
+6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Use `listPanels()` to reuse existing panels instead of opening another copy.
 
 ## Quick Start Workflow
 

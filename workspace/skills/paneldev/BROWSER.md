@@ -23,6 +23,25 @@ await handle.close();
 await openExternal("https://docs.example.com");
 ```
 
+Agents own browser panels they open. If the panel is temporary, close it in
+`finally` with `await handle.close()`. Reuse one handle and one CDP page object
+for a workflow; repeated `openPanel()` calls create duplicate panels, and
+repeated `handle.cdp.*Page()` calls can create duplicate CDP connections. Leave
+a browser panel open only when the user explicitly asked to inspect or continue
+using it, or the workflow explicitly needs it to remain open.
+
+```ts
+let handle;
+try {
+  handle = await openPanel("https://example.com", { focus: true });
+  const page = await handle.cdp.lightweightPage();
+  await page.waitForSelector("body");
+  console.log(await page.title());
+} finally {
+  await handle?.close().catch((err) => console.warn("panel cleanup failed", err));
+}
+```
+
 Choose one named CDP client explicitly. This keeps ordinary panel startup fast while
 making the automation surface unambiguous:
 

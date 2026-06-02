@@ -50,3 +50,10 @@ naturally drop out of the agent's tool list.
 The agent's prompt notes that these UI tools are runtime-dependent, so it
 automatically falls back to plain message replies for the same content when
 running headless.
+
+Headless agents still own runtime resources they create. If a headless session
+opens panels, browser panels, or CDP page clients through eval, its prompt or
+harness should require cleanup: reuse handles, close temporary panels in
+`finally`, and close/dispose page clients when the API exposes a close method.
+Do not rely on channel unsubscribe alone to clean up panels the agent opened.
+Leave panels open only when the user or harness explicitly requested that state.

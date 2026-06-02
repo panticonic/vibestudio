@@ -108,6 +108,7 @@ should go through `inline_ui`, `load_action_bar`, `feedback_form`, or
 4. **Inline UI components receive `{ props, chat, scope, scopes }`** — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
 5. **Feedback components receive `{ onSubmit, onCancel, onError, chat }`**
 6. **Workspace code is built from git, not from the working tree** — `workspace/` source (`packages/`, `panels/`, `workers/`, `skills/`) is extracted from git commits for builds. Editing files has NO effect until you **commit and push**. This applies to eval imports too: if you edit `@workspace/agentic-session` source, it won't change the imported module until the edit is committed and pushed.
+7. **Close temporary panels you open** — when eval opens a browser/workspace panel for diagnostics, scraping, setup, or testing, keep its handle and call `await handle.close()` in `finally` when done. Reuse an existing handle instead of opening duplicates. Leave a panel open only when the user explicitly asked to inspect or continue using it, or the workflow explicitly needs it to remain open.
 
 ## Environment Compatibility
 

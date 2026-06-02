@@ -16,6 +16,7 @@ const lifecycle = await handle.rebuildAndReload();
 console.log(lifecycle.status, lifecycle.effectiveVersion);
 await handle.stateArgs.set({ mode: "live" });
 const snapshot = await handle.snapshot();
+await handle.close(); // close temporary panels opened for diagnostics/tests
 ```
 
 `PanelHandle` fields:
@@ -116,6 +117,13 @@ Approval-gated panel operations wait for a visible shell approval decision. If
 no decision arrives before the approval deadline, the request fails with an
 approval-timeout error. That timeout means the consent prompt was not resolved;
 it is not a model prompt timeout.
+
+Agents must close panels they open for temporary diagnostics, setup, scraping,
+or tests. Use `try/finally` around `openPanel()` and call `await handle.close()`
+when done. The normal exceptions are an explicit user request to leave the
+panel open, a primary workspace panel the user asked to build or inspect, or a
+workflow that explicitly needs the panel across follow-up calls. Duplicate,
+child, URL, and diagnostic panels should not be left open without such a reason.
 
 ## Runtime Provenance
 

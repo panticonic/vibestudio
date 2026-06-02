@@ -41,6 +41,44 @@ Two lines to get started:
 2. `scope.page = await scope.browser.cdp.lightweightPage()` — connects the lightweight CDP client, stores page in scope
 
 All subsequent eval calls reuse `scope.page` directly — no re-creation needed.
+Do not call `openPanel()` or `handle.cdp.lightweightPage()` repeatedly for the
+same target. Repeated opens create duplicate panels; repeated CDP client calls
+create duplicate CDP connections.
+
+## Cleanup Ownership
+
+Agents own the panels they open. For temporary browser panels used for
+diagnostics, scraping, setup, or tests, close the panel when finished:
+
+```ts
+import { openPanel } from "@workspace/runtime";
+
+let browser;
+try {
+  browser = await openPanel("https://example.com", { focus: true });
+  const page = await browser.cdp.lightweightPage();
+  await page.waitForSelector("body");
+  scope.result = await page.title();
+} finally {
+  await browser?.close().catch((err) => console.warn("panel cleanup failed", err));
+}
+```
+
+Keep a panel open only when the user explicitly asked to inspect it or continue
+using it, or the workflow explicitly needs it across follow-up calls. If a
+workflow spans multiple eval calls, store one handle in `scope` and close it in
+a final cleanup call when the workflow is done:
+
+```ts
+await scope.browser?.close();
+delete scope.browser;
+delete scope.page;
+```
+
+When a page or browser object exposes its own `close()` method, call it before
+closing the panel. The reliable cleanup primitive is still `handle.close()`,
+because it tears down the panel and its associated CDP target. Do not leave
+throwaway `about:blank`, URL, or diagnostic panels behind.
 
 ## Reconnection After Panel Reload
 
@@ -200,8 +238,8 @@ const jpeg = await scope.page.screenshot({ format: "jpeg", quality: 80 });
 ### Close
 
 ```typescript
-await scope.page.close()      // close the page
-await scope.browser.close()   // close the browser panel
+await scope.page.close?.()     // close the CDP page/client if available
+await scope.browser.close()    // close the browser panel
 ```
 
 ### PanelHandle Methods

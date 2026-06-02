@@ -2,6 +2,12 @@
 
 Use one runtime concept: `PanelHandle`. `openPanel(source, options)` opens both workspace panels and URLs and returns a handle. In userland, opening a panel is a structural tree mutation and may prompt on first use for the requester entity and parent/root target. `listPanels()` rediscovers existing handles. Keep the handle, then call `rebuildAndReload()` after committed code changes so the named panel rebuilds and its renderer fetches the rebuilt bundle.
 
+Agents are responsible for panels they open. Keep the primary development panel
+open when the user is reviewing it, but close temporary browser panels,
+diagnostic panels, duplicate launches, and child panels when finished. Prefer
+`listPanels()` and existing handles over opening another panel for the same
+source.
+
 ## Loop
 
 1. Scaffold with eval:
@@ -90,6 +96,20 @@ reuse the existing handle. Remember that handles carry metadata snapshots; call
 `await handle.refresh()` or rediscover with `listPanels()` after rebuild/reload
 transitions if the title/source looks like a placeholder slot id.
 
+When a panel was opened only to inspect, test, or collect diagnostics, close it
+in `finally`:
+
+```ts
+let sitePanel;
+try {
+  sitePanel = await openPanel("https://example.com", { focus: true });
+  const page = await sitePanel.cdp.lightweightPage();
+  await page.title();
+} finally {
+  await sitePanel?.close().catch((err) => console.warn("panel cleanup failed", err));
+}
+```
+
 ## Browser Panels
 
 URLs also use `openPanel`:
@@ -100,6 +120,7 @@ import { openPanel } from "@workspace/runtime";
 const sitePanel = await openPanel("https://example.com", { focus: true });
 const page = await sitePanel.cdp.playwrightPage();
 await page.title();
+await sitePanel.close();
 ```
 
 CDP automation lives under `handle.cdp` and is available for panel-tree targets through the server broker after approval. Use `handle.ensureLoaded()` before RPC to unloaded targets; CDP loads automatically after approval.

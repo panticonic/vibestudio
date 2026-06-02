@@ -49,6 +49,11 @@ Deep-link every Google Console step where possible. Offer both:
 - **Internal**: `openPanel(url, { focus: true })`
 - **External**: `openExternal(url)` through the approval-gated browser-open API
 
+If the agent opens an internal browser panel only for setup guidance,
+verification, or diagnostics, keep the handle and close it when that step is
+complete. Leave it open only when the user needs to continue interacting with
+Google Cloud or the OAuth flow in that panel.
+
 Read [SETUP.md](SETUP.md) for the full guided setup and
 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for common Google OAuth errors.
 

@@ -52,6 +52,9 @@ do not avoid broad user authorization concerns.
      `openPanel(url, { focus: true })`.
    - External: `openGitHubTokenSettings({ tokenKind, accessLevel, browser: "external" })` or
      `openExternal(url)`.
+   If the agent opens an internal browser panel only to guide setup or verify a
+   page, keep the handle and close it when that step is complete. Leave it open
+   only when the user needs to continue interacting with GitHub in that panel.
 5. Call `requestGitHubTokenCredential()` so the shell-owned approval UI collects
    the PAT. Do not ask the user to paste the PAT into chat or a panel-owned form.
    Access levels choose the right mode automatically. Use explicit
