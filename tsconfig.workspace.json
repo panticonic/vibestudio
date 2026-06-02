@@ -43,6 +43,12 @@
       "@natstack/extension": [
         "packages/extension/src/index.ts"
       ],
+      "@natstack/extension-host": [
+        "packages/extension-host/src/index.ts"
+      ],
+      "@natstack/extension-host/child-runtime": [
+        "packages/extension-host/src/childRuntime.ts"
+      ],
       "@natstack/git": [
         "packages/git/src/index.ts"
       ],
