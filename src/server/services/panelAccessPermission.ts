@@ -1,5 +1,9 @@
 import type { PanelAccessOperation, PanelAccessTarget } from "@natstack/shared/panelAccessPolicy";
-import { accessDecision } from "@natstack/shared/panelAccessPolicy";
+import {
+  PANEL_AUTOMATE_CAPABILITY,
+  PANEL_STRUCTURAL_CAPABILITY,
+  accessDecision,
+} from "@natstack/shared/panelAccessPolicy";
 import type { ServiceContext, VerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import {
   panelCapabilityResourceKey,
@@ -57,8 +61,16 @@ export async function requirePanelAccessPermission(
   const requesterEntityId = ctx.caller.runtime.id;
   const targetLabel = target.title ?? target.id;
   const resourceKey = panelCapabilityResourceKey(target.id, requesterEntityId);
+  const identity = ctx.caller.code;
   const existingGrant =
-    ctx.caller.code && deps.grantStore.hasGrant(decision.capability, resourceKey, ctx.caller.code);
+    identity && deps.grantStore.hasGrant(decision.capability, resourceKey, identity);
+  const impliedByAutomationGrant =
+    identity &&
+    decision.capability === PANEL_STRUCTURAL_CAPABILITY &&
+    deps.grantStore.hasGrant(PANEL_AUTOMATE_CAPABILITY, resourceKey, identity);
+  if (existingGrant || impliedByAutomationGrant) {
+    return { allowed: true, capability: decision.capability };
+  }
   if (!existingGrant && deps.hasApprovalSession && !deps.hasApprovalSession()) {
     return {
       allowed: false,

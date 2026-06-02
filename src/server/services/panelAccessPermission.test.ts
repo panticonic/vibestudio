@@ -108,23 +108,63 @@ describe("panelAccessPermission", () => {
     );
   });
 
-  it("uses a separate structural capability", async () => {
+  it("prompts for structural operations when there is no automation grant", async () => {
     const approvalQueue = approvalQueueMock("session");
     const deps = {
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
     };
 
-    await requirePanelAccessPermission(deps, panelCtx(), "cdp", { id: "target" });
-    await requirePanelAccessPermission(deps, panelCtx(), "close", { id: "target" });
+    await requirePanelAccessPermission(deps, panelCtx(), "movePanel", { id: "target" });
 
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
-      1,
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: PANEL_STRUCTURAL_CAPABILITY })
+    );
+  });
+
+  it("allows structural operations when the requester already has automation access", async () => {
+    const approvalQueue = approvalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const ctx = panelCtx("panel:one");
+    const target = { id: "target", title: "Target" };
+
+    await requirePanelAccessPermission(deps, ctx, "cdp", target);
+    await requirePanelAccessPermission(deps, ctx, "close", target);
+    await requirePanelAccessPermission(deps, ctx, "archive", target);
+    await requirePanelAccessPermission(deps, ctx, "unload", target);
+    await requirePanelAccessPermission(deps, ctx, "movePanel", target);
+    await requirePanelAccessPermission(deps, ctx, "takeOver", target);
+    await requirePanelAccessPermission(deps, ctx, "openDevTools", target);
+    await requirePanelAccessPermission(deps, ctx, "rebuildPanel", target);
+    await requirePanelAccessPermission(deps, ctx, "rebuildAndReload", target);
+    await requirePanelAccessPermission(deps, ctx, "updatePanelState", target);
+    await requirePanelAccessPermission(deps, ctx, "stateArgs.set", target);
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({ capability: PANEL_AUTOMATE_CAPABILITY })
     );
-    expect(approvalQueue.request).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ capability: PANEL_STRUCTURAL_CAPABILITY })
+  });
+
+  it("reuses automation access for navigation without an extra prompt", async () => {
+    const approvalQueue = approvalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const ctx = panelCtx("panel:one");
+    const target = { id: "target", title: "Target" };
+
+    await requirePanelAccessPermission(deps, ctx, "cdp", target);
+    await requirePanelAccessPermission(deps, ctx, "navigate", target);
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: PANEL_AUTOMATE_CAPABILITY })
     );
   });
 
