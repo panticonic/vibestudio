@@ -14,6 +14,7 @@ type ListPendingFn = () => Promise<unknown[]>;
 const shellClient = vi.hoisted(() => ({
   heartbeat: vi.fn(() => Promise.resolve()),
   listPending: vi.fn<ListPendingFn>(() => Promise.resolve([])),
+  resolve: vi.fn(() => Promise.resolve()),
   subscribe: vi.fn(() => Promise.resolve()),
   unsubscribe: vi.fn(() => Promise.resolve()),
 }));
@@ -21,7 +22,7 @@ const shellClient = vi.hoisted(() => ({
 vi.mock("../shell/client", () => ({
   shellApproval: {
     listPending: shellClient.listPending,
-    resolve: vi.fn(() => Promise.resolve()),
+    resolve: shellClient.resolve,
     resolveUserland: vi.fn(() => Promise.resolve()),
     submitClientConfig: vi.fn(() => Promise.resolve()),
     submitCredentialInput: vi.fn(() => Promise.resolve()),
@@ -60,6 +61,8 @@ describe("ConsentApprovalBar shell presence", () => {
     vi.useFakeTimers();
     shellClient.heartbeat.mockClear();
     shellClient.listPending.mockClear();
+    shellClient.resolve.mockClear();
+    shellClient.resolve.mockImplementation(() => Promise.resolve());
     shellClient.subscribe.mockClear();
     shellClient.unsubscribe.mockClear();
   });
@@ -173,6 +176,8 @@ describe("ConsentApprovalBar queue browsing", () => {
   beforeEach(() => {
     shellClient.heartbeat.mockClear();
     shellClient.listPending.mockClear();
+    shellClient.resolve.mockClear();
+    shellClient.resolve.mockImplementation(() => Promise.resolve());
     vi.mocked(useShellEvent).mockClear();
   });
 
@@ -283,6 +288,96 @@ describe("ConsentApprovalBar queue browsing", () => {
 
     expect(firstUnitDetails?.open).toBe(false);
     expect(secondUnitDetails?.open).toBe(false);
+  });
+
+  it("removes a unit-batch approval immediately when approving or denying", async () => {
+    shellClient.resolve.mockImplementation(() => new Promise(() => undefined));
+    shellClient.listPending.mockResolvedValueOnce([
+      unitBatchApproval({
+        approvalId: "apps-approval",
+        title: "Approve workspace apps",
+        units: [
+          {
+            unitKind: "app",
+            unitName: "@workspace-apps/mobile",
+            displayName: "NatStack Mobile",
+            version: "0.1.0",
+            target: "react-native",
+            source: { kind: "internal-git", repo: "apps/mobile", ref: "main" },
+            ev: "ev-app",
+            capabilities: ["clipboard", "keychain", "notifications", "open-external"],
+          },
+        ],
+      }),
+      unitBatchApproval({ approvalId: "extensions-approval", title: "Approve workspace extensions" }),
+    ]);
+
+    render(
+      <Theme>
+        <ConsentApprovalBar />
+      </Theme>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Approve workspace apps")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Approve all"));
+    await waitFor(() => {
+      expect(screen.queryByText("Approve workspace apps")).toBeNull();
+      expect(screen.getByText("Approve workspace extensions")).toBeTruthy();
+    });
+    expect(shellClient.resolve).toHaveBeenCalledWith("apps-approval", "once");
+
+    fireEvent.click(screen.getByText("Deny all"));
+    await waitFor(() => {
+      expect(screen.queryByText("Approve workspace extensions")).toBeNull();
+    });
+    expect(shellClient.resolve).toHaveBeenCalledWith("extensions-approval", "deny");
+  });
+
+  it("restores a unit-batch approval with visible feedback when resolve fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    shellClient.resolve.mockRejectedValueOnce(new Error("resolve blocked"));
+    shellClient.listPending.mockResolvedValueOnce([
+      unitBatchApproval({
+        approvalId: "apps-approval",
+        title: "Approve workspace apps",
+        units: [
+          {
+            unitKind: "app",
+            unitName: "@workspace-apps/mobile",
+            displayName: "NatStack Mobile",
+            version: "0.1.0",
+            target: "react-native",
+            source: { kind: "internal-git", repo: "apps/mobile", ref: "main" },
+            ev: "ev-app",
+            capabilities: ["clipboard", "keychain", "notifications", "open-external"],
+          },
+        ],
+      }),
+    ]);
+
+    render(
+      <Theme>
+        <ConsentApprovalBar />
+      </Theme>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Approve workspace apps")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByText("Approve all"));
+    await waitFor(() => {
+      expect(screen.getByText("Approval action failed: resolve blocked")).toBeTruthy();
+    });
+    expect(screen.getByText("Approve workspace apps")).toBeTruthy();
+    expect(errorSpy).toHaveBeenCalledWith(
+      "[ConsentApprovalBar] resolve failed:",
+      expect.any(Error)
+    );
+    errorSpy.mockRestore();
   });
 
   it("uses distinct approval tones for app and extension source pushes", async () => {

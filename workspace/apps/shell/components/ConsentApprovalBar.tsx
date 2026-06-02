@@ -78,6 +78,10 @@ function prettifyId(callerId: string): string {
 export function ConsentApprovalBar() {
   const [pendingAccess, setPendingAccess] = useState<PendingApproval[]>([]);
   const [secretConfigValues, setSecretConfigValues] = useState<Record<string, string>>({});
+  const [decisionError, setDecisionError] = useState<{
+    approvalId: string;
+    message: string;
+  } | null>(null);
   const pendingAccessRefreshSeq = useRef(0);
   const { navigateToId } = useNavigation();
 
@@ -139,6 +143,9 @@ export function ConsentApprovalBar() {
 
   useEffect(() => {
     setSecretConfigValues({});
+    setDecisionError((error) =>
+      error && error.approvalId !== current?.approvalId ? null : error
+    );
   }, [current?.approvalId]);
 
   const resolveCallerInfo = useCallback((approval: PendingApproval): CallerInfo => {
@@ -229,10 +236,25 @@ export function ConsentApprovalBar() {
   if (!current) return null;
 
   const decide = (decision: ApprovalDecision) => {
+    const approval = current;
+    setDecisionError(null);
+    setPendingAccess((items) => items.filter((item) => item.approvalId !== approval.approvalId));
     void shellApproval
-      .resolve(current.approvalId, decision)
+      .resolve(approval.approvalId, decision)
       .then(() => refreshPendingAccess())
-      .catch((err: unknown) => console.error("[ConsentApprovalBar] resolve failed:", err));
+      .catch((err: unknown) => {
+        console.error("[ConsentApprovalBar] resolve failed:", err);
+        const message = err instanceof Error ? err.message : String(err);
+        setPendingAccess((items) =>
+          items.some((item) => item.approvalId === approval.approvalId)
+            ? items
+            : [approval, ...items]
+        );
+        setDecisionError({
+          approvalId: approval.approvalId,
+          message: message || "Approval decision failed.",
+        });
+      });
   };
   const submitClientConfig = () => {
     if (current?.kind !== "client-config") return;
@@ -345,6 +367,14 @@ export function ConsentApprovalBar() {
                 <ExclamationTriangleIcon width={13} height={13} />
                 <Text size="1" style={{ lineHeight: 1.35 }}>
                   {copy.warning}
+                </Text>
+              </Flex>
+            ) : null}
+            {decisionError && decisionError.approvalId === current.approvalId ? (
+              <Flex align="center" gap="1" style={{ color: "var(--red-11)" }}>
+                <ExclamationTriangleIcon width={13} height={13} />
+                <Text size="1" style={{ lineHeight: 1.35 }}>
+                  Approval action failed: {decisionError.message}
                 </Text>
               </Flex>
             ) : null}
