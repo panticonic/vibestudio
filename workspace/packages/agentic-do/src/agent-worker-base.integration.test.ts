@@ -3363,6 +3363,57 @@ describe("AgentWorkerBase method suspension ledger", () => {
     );
   });
 
+  it("throws instead of returning a tool error when the live turn signal is already aborted", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const callMethod = vi.fn();
+    const worker = instance as unknown as {
+      subscriptions: {
+        getParticipantId(channelId: string): string | null;
+      };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      invokeChannelMethod(
+        channelId: string,
+        toolCallId: string,
+        participantHandle: string,
+        method: string,
+        args: unknown,
+        signal?: AbortSignal,
+        onStreamUpdate?: (content: unknown) => void,
+        turnId?: string
+      ): Promise<unknown>;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue({
+      getParticipants: vi.fn().mockResolvedValue([
+        {
+          participantId: "panel:panel-1",
+          metadata: { handle: "user", type: "panel" },
+        },
+      ]),
+      callMethod,
+    });
+    const controller = new AbortController();
+    controller.abort(new Error("Request was aborted"));
+
+    await expect(
+      worker.invokeChannelMethod(
+        "chat-1",
+        "tool-aborted",
+        "user",
+        "eval",
+        { code: "1" },
+        controller.signal
+      )
+    ).rejects.toThrow("Request was aborted");
+
+    expect(callMethod).not.toHaveBeenCalled();
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM agent_method_suspensions`).toArray()[0]).toEqual(
+      { count: 0 }
+    );
+  });
+
   it("activation cleanup clears stale typing for persisted subscriptions", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",

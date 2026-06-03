@@ -215,6 +215,17 @@ function lifecycleToolResult(error: AgentLifecycleError): AgentToolResult<any> {
   } as AgentToolResult<any>;
 }
 
+function throwIfAbortSignalAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) return;
+  const reason = signal.reason;
+  if (reason instanceof Error) throw reason;
+  const error = new Error(
+    typeof reason === "string" && reason.length > 0 ? reason : "Request was aborted"
+  );
+  error.name = "AbortError";
+  throw error;
+}
+
 function pushBounded<T>(items: T[], item: T, limit = DEBUG_RING_LIMIT): void {
   items.push(item);
   if (items.length > limit) items.splice(0, items.length - limit);
@@ -5505,13 +5516,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     turnId?: string
   ): Promise<AgentToolResult<any>> {
     try {
-      if (signal?.aborted) {
-        throw new AgentLifecycleError(
-          "Agent turn was interrupted before tool dispatch.",
-          "stale_dispatch",
-          "aborted_before_dispatch"
-        );
-      }
+      throwIfAbortSignalAborted(signal);
       const channel = this.createChannelClient(channelId);
       const participants = await channel.getParticipants();
       const target = participants.find((p) => p.metadata["handle"] === participantHandle);
@@ -5522,13 +5527,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       }
       const callerId = this.subscriptions.getParticipantId(channelId);
       if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
-      if (signal?.aborted) {
-        throw new AgentLifecycleError(
-          "Agent turn was interrupted before tool dispatch.",
-          "stale_dispatch",
-          "aborted_before_dispatch"
-        );
-      }
+      throwIfAbortSignalAborted(signal);
 
       const invocationId = toolCallId;
       const transportCallId = crypto.randomUUID();
@@ -5599,13 +5598,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     turnId?: string
   ): Promise<string | AgentToolResult<any>> {
     try {
-      if (signal?.aborted) {
-        throw new AgentLifecycleError(
-          "Agent turn was interrupted before tool dispatch.",
-          "stale_dispatch",
-          "aborted_before_dispatch"
-        );
-      }
+      throwIfAbortSignalAborted(signal);
       const callerId = this.subscriptions.getParticipantId(channelId);
       if (!callerId) throw new Error(`Not subscribed to channel ${channelId}`);
       const channel = this.createChannelClient(channelId);
@@ -5618,13 +5611,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       if (!panel) {
         throw new Error(`No panel participant in channel ${channelId} to ask`);
       }
-      if (signal?.aborted) {
-        throw new AgentLifecycleError(
-          "Agent turn was interrupted before tool dispatch.",
-          "stale_dispatch",
-          "aborted_before_dispatch"
-        );
-      }
+      throwIfAbortSignalAborted(signal);
 
       const invocationId = toolCallId || crypto.randomUUID();
       const transportCallId = crypto.randomUUID();
@@ -6066,13 +6053,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     meta?: { toolName?: string; toolInput?: unknown; mode?: "approval" | "ui-prompt" }
   ): Promise<unknown> {
     try {
-      if (signal?.aborted) {
-        throw new AgentLifecycleError(
-          "Agent turn was interrupted before tool dispatch.",
-          "stale_dispatch",
-          "aborted_before_dispatch"
-        );
-      }
+      throwIfAbortSignalAborted(signal);
       const invocationId = toolCallId || crypto.randomUUID();
       const recoveredReply = this.consumeRecoveredUiPromptReply(channelId, invocationId);
       if (recoveredReply) {
@@ -6091,13 +6072,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         return t === "panel" || t === "client";
       });
       if (!panel) throw new Error(`No panel participant in channel ${channelId}`);
-      if (signal?.aborted) {
-        throw new AgentLifecycleError(
-          "Agent turn was interrupted before tool dispatch.",
-          "stale_dispatch",
-          "aborted_before_dispatch"
-        );
-      }
+      throwIfAbortSignalAborted(signal);
 
       const transportCallId = crypto.randomUUID();
       const turnId = this.currentTurnIdForChannel(channelId);
