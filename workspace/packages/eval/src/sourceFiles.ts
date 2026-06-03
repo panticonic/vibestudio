@@ -115,7 +115,6 @@ export function getPackageSpecifier(specifier: string): string | null {
 interface PackageJsonShape {
   imports?: Record<string, unknown>;
   dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
   optionalDependencies?: Record<string, string>;
 }
@@ -130,8 +129,7 @@ interface TsConfigShape {
 function getPackageDependencyVersion(pkg: PackageJsonShape, packageName: string): string | undefined {
   return pkg.dependencies?.[packageName]
     ?? pkg.peerDependencies?.[packageName]
-    ?? pkg.optionalDependencies?.[packageName]
-    ?? pkg.devDependencies?.[packageName];
+    ?? pkg.optionalDependencies?.[packageName];
 }
 
 function normalizeDependencyRef(specifier: string, version: string | undefined): string | undefined {

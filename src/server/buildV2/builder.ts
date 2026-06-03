@@ -2877,6 +2877,20 @@ function validateNpmSpecifier(specifier: string): void {
   }
 }
 
+function validateSandboxNpmLibrarySpecifier(specifier: string): void {
+  if (
+    specifier === "vitest" ||
+    specifier === "vite" ||
+    specifier === "vite-node" ||
+    specifier.startsWith("@vitest/")
+  ) {
+    throw new Error(
+      `Unsupported npm package for panel eval: ${specifier}. ` +
+        "Test/build toolchains must run through a server-side test runner or extension, not the browser sandbox package loader."
+    );
+  }
+}
+
 /**
  * Validate that a version string is a strict semver-shaped registry
  * specifier. Rejects everything that npm would otherwise interpret as a
@@ -2940,6 +2954,7 @@ export async function buildNpmLibrary(
   externals: string[]
 ): Promise<string> {
   validateNpmSpecifier(specifier);
+  validateSandboxNpmLibrarySpecifier(specifier);
   validateNpmVersion(version);
 
   const buildKey = npmBuildKey(specifier, version, externals);

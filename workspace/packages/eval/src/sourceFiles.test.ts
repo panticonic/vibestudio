@@ -148,6 +148,31 @@ describe("source file bundles", () => {
     expect(result.error).toContain("packages/app/package.json");
   });
 
+  it("does not infer eval imports from devDependencies", async () => {
+    const code = `import { describe } from "vitest"; return typeof describe;`;
+    const loadCalls: Array<{ specifier: string; ref: string | undefined }> = [];
+    const result = await executeSandbox(code, {
+      syntax: "typescript",
+      sourcePath: "packages/app/src/main.ts",
+      loadSourceFile: async (path) => {
+        if (path === "packages/app/src/main.ts") return code;
+        if (path === "packages/app/package.json") {
+          return JSON.stringify({ devDependencies: { vitest: "^3.2.4" } });
+        }
+        throw new Error(`Missing ${path}`);
+      },
+      loadImport: async (specifier, ref) => {
+        loadCalls.push({ specifier, ref });
+        return `module.exports = {};`;
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("not declared");
+    expect(result.error).toContain("packages/app/package.json");
+    expect(loadCalls).toEqual([]);
+  });
+
   it("resolves package.json imports aliases to source files", async () => {
     const code = `import { label } from "#labels"; return label;`;
     const result = await executeSandbox(code, {
