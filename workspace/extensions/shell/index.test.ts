@@ -2,14 +2,17 @@ import { readFile, stat, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ExtensionContext } from "@natstack/extension";
+import type { ExtensionContext, UserlandApprovalRequest } from "@natstack/extension";
 import { activate } from "./index.js";
 import type { SessionInfoEvent } from "./types.js";
 
 async function makeApi(approval: "allow" | "deny" | Array<"allow" | "deny"> = "allow") {
   const root = await mkdtemp(join(tmpdir(), "natstack-shell-test-"));
   const approvals = Array.isArray(approval) ? [...approval] : undefined;
-  const request = vi.fn(async () => ({ kind: "choice" as const, choice: approvals?.shift() ?? approval }));
+  const request = vi.fn(async (_req: UserlandApprovalRequest) => ({
+    kind: "choice" as const,
+    choice: approvals?.shift() ?? approval,
+  }));
   const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const ctx = {
     workspace: { getInfo: async () => ({ id: "ws", name: "ws", path: root, contextsPath: join(root, ".contexts") }) },
@@ -32,6 +35,25 @@ describe("@workspace-extensions/shell", () => {
     const { api, request } = await makeApi("deny");
     await expect(api.exec({ command: "node", args: ["-e", "console.log('nope')"] })).rejects.toMatchObject({ code: "EACCES" });
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds long exec approval copy to userland approval schema limits", async () => {
+    const { api, request } = await makeApi("allow");
+    await expect(
+      api.exec({
+        command: "node",
+        args: ["-e", "", "x".repeat(600)],
+      })
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    const approval = request.mock.calls[0]![0];
+    expect(approval.subject.label).toBeDefined();
+    expect(approval.summary).toBeDefined();
+    expect(approval.subject.label!.length).toBeLessThanOrEqual(80);
+    expect(approval.summary!.length).toBeLessThanOrEqual(1000);
+    for (const detail of approval.details ?? []) {
+      expect(detail.value.length).toBeLessThanOrEqual(200);
+    }
   });
 
   it("maps denied open approval to EACCES before spawning a session", async () => {
