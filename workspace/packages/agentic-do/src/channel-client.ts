@@ -139,6 +139,25 @@ export class ChannelClient {
     async cancelCall(callId: string): Promise<void> {
         await this.call("cancelMethodCall", callId);
     }
+    /**
+     * Phase 2: read the channel DO's canonical, terminal-once settled result for
+     * a method call — the cross-DO recovery authority. Lets a reconnecting caller
+     * or a hibernated agent re-learn a result whose ephemeral live delivery it
+     * missed. Returns null if not (yet) settled.
+     */
+    async getSettledResult(callId: string): Promise<{
+        content: unknown;
+        isError: boolean;
+        terminalOutcome: string | null;
+        terminalReasonCode: string | null;
+    } | null> {
+        return this.call("getSettledResult", callId) as Promise<{
+            content: unknown;
+            isError: boolean;
+            terminalOutcome: string | null;
+            terminalReasonCode: string | null;
+        } | null>;
+    }
     async timeoutCall(callId: string, reason?: string): Promise<void> {
         await this.call("timeoutMethodCall", callId, reason);
     }

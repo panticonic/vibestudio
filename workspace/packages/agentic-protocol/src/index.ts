@@ -1,9 +1,11 @@
 export {
+  AGENT_INTERRUPTED_BEFORE_TOOL_DISPATCH,
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   GENESIS_EVENT_HASH,
   INVOCATION_OUTCOMES,
   LIFECYCLE_MESSAGE_REASON_CODES,
+  LIFECYCLE_RECOVERY_NOTICES,
   TERMINAL_APPROVAL_KINDS,
   TERMINAL_INVOCATION_KINDS,
   TERMINAL_MESSAGE_KINDS,
@@ -14,11 +16,14 @@ export {
   isTerminalInvocationKind,
   isTurnReasonCode,
   invocationTerminalKindForOutcome,
+  lifecycleRecoveryNoticeForMessage,
   validateInvocationTerminalOutcomeForKind,
 } from "./constants.js";
 export type {
   InvocationOutcome,
   LifecycleMessageReasonCode,
+  LifecycleNoticeStatus,
+  LifecycleRecoveryNotice,
   TerminalInvocationKind,
   TurnReasonCode,
 } from "./constants.js";

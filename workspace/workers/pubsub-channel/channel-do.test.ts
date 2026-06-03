@@ -598,6 +598,116 @@ describe("PubSubChannel", () => {
     expect(pending).toHaveLength(0);
   });
 
+  // Phase 2: the channel DO is the canonical, terminal-once recovery authority.
+  it("records a canonical settled result that can be replayed and is terminal-once", async () => {
+    const { instance } = await createGadBackedChannel();
+    const worker = instance as unknown as {
+      handleMethodResult(
+        callId: string,
+        content: unknown,
+        isError: boolean,
+        outcome?: string,
+        reason?: string
+      ): Promise<number | undefined>;
+      getSettledResult(callId: string): {
+        content: unknown;
+        isError: boolean;
+        terminalOutcome: string | null;
+        terminalReasonCode: string | null;
+      } | null;
+    };
+
+    // A result with no live pending call is still recorded for replay.
+    await worker.handleMethodResult("transport-replay", { value: 42 }, false, "success");
+    expect(worker.getSettledResult("transport-replay")).toMatchObject({
+      content: { value: 42 },
+      isError: false,
+      terminalOutcome: "success",
+    });
+
+    // Terminal-once: a competing later terminal does NOT overwrite the canonical one.
+    await worker.handleMethodResult("transport-replay", { value: 99 }, true, "tool_error");
+    expect(worker.getSettledResult("transport-replay")).toMatchObject({
+      content: { value: 42 },
+      isError: false,
+      terminalOutcome: "success",
+    });
+
+    // An unsettled call has no canonical record.
+    expect(worker.getSettledResult("transport-never")).toBeNull();
+  });
+
+  // Phase 2: a target leaving must record the canonical terminal so a hibernated
+  // caller can recover the "abandoned" outcome on wake instead of hanging.
+  it("records a settled result when the target leaves before the call completes", async () => {
+    const { instance } = await createGadBackedChannel();
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, "panel:caller", "panel");
+    await instance.callMethod(
+      "panel:caller",
+      "panel:provider",
+      "transport-left",
+      "eval",
+      { code: "1 + 1" },
+      { invocationId: "invocation-left", transportCallId: "transport-left", turnId: "turn-left" }
+    );
+
+    const worker = instance as unknown as {
+      failPendingCallsTargeting(
+        targetId: string,
+        reason: "graceful" | "disconnect" | "replaced"
+      ): Promise<void>;
+      getSettledResult(callId: string): {
+        content: unknown;
+        isError: boolean;
+        terminalOutcome: string | null;
+        terminalReasonCode: string | null;
+      } | null;
+    };
+    await worker.failPendingCallsTargeting("panel:provider", "disconnect");
+
+    const settled = worker.getSettledResult("transport-left");
+    expect(settled).toMatchObject({
+      isError: true,
+      terminalOutcome: "abandoned",
+      terminalReasonCode: "disconnect",
+    });
+  });
+
+  // Phase 2: a fork must not inherit the parent's terminal records — otherwise a
+  // forked child's agent could reconcile an inherited suspension against a
+  // parent-era result and wrongly resume.
+  it("clears settled_results on postClone so a fork cannot resurrect parent calls", async () => {
+    const parent = await createGadBackedChannel({ channelKey: "channel-parent" });
+    const parentWorker = parent.instance as unknown as {
+      handleMethodResult(
+        callId: string,
+        content: unknown,
+        isError: boolean,
+        outcome?: string
+      ): Promise<number | undefined>;
+      getSettledResult(callId: string): unknown | null;
+    };
+    await parentWorker.handleMethodResult("transport-parent", { value: 7 }, false, "success");
+    expect(parentWorker.getSettledResult("transport-parent")).not.toBeNull();
+
+    const fork = await createGadBackedChannel({ channelKey: "channel-fork", gad: parent.gad });
+    await fork.instance.postClone("channel-parent", 3);
+
+    const forkWorker = fork.instance as unknown as {
+      getSettledResult(callId: string): unknown | null;
+    };
+    expect(forkWorker.getSettledResult("transport-parent")).toBeNull();
+  });
+
   it("settles pending method calls from abandoned invocation events", async () => {
     const { instance } = await createGadBackedChannel();
 

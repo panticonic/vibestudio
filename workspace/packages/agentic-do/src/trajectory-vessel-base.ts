@@ -44,10 +44,13 @@ import type {
 } from "@natstack/harness/types";
 import { isClientParticipantType } from "@workspace/pubsub";
 import {
+  AGENT_INTERRUPTED_BEFORE_TOOL_DISPATCH,
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
+  LIFECYCLE_RECOVERY_NOTICES,
   assertNoStoredValueRefs,
   hydrateStoredValueRefs,
+  lifecycleRecoveryNoticeForMessage,
   publicParticipantMetadata,
   type AgenticEvent,
   type InvocationOutcome,
@@ -75,6 +78,7 @@ import { DOIdentity } from "./identity.js";
 import { SubscriptionManager } from "./subscription-manager.js";
 import { ChannelClient } from "./channel-client.js";
 import { TurnDispatcher } from "./turn-dispatcher.js";
+import { RunController, isTerminalRunPhase } from "./run-controller.js";
 import {
   createGadServiceClient,
   type DurableObjectServiceClient,
@@ -815,7 +819,6 @@ interface AgentTurnRunRow {
   checkpointPhase: string | null;
   checkpointEntryId: string | null;
   checkpointGeneration: number | null;
-  pendingToolCallIdsJson: string | null;
   failureCode: string | null;
   failureMessage: string | null;
   openedAt: number;
@@ -994,13 +997,26 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   /** One PiRunner per channel — created lazily on first user message. */
   private runners = new Map<string, RunnerEntry>();
+  /**
+   * Phase 1 shadow projection: the consolidated, channel-scoped run-state owner.
+   * Driven from the durable transition chokepoints (`insertTurnRun` /
+   * `transitionTurn`) so it always mirrors `agent_turn_runs.status`. Currently a
+   * read-through projection; later migration steps make it the sole writer.
+   */
+  private runControllers = new Map<string, RunController>();
+
+  protected runControllerFor(channelId: string): RunController {
+    let controller = this.runControllers.get(channelId);
+    if (!controller) {
+      controller = new RunController();
+      this.runControllers.set(channelId, controller);
+    }
+    return controller;
+  }
 
   /** Last intentional abort reason per channel, used to annotate pi-core's
    *  generic "Request was aborted" terminal event. */
   private abortContexts = new Map<string, AgentAbortContext>();
-
-  /** Last explicit user stop per channel. Suppresses late dispatch continuations. */
-  private lastUserInterruptAt = new Map<string, number>();
 
   /** Streaming callbacks keyed by invocation id. When an invocation output
    *  arrives before completion, the callback is invoked with the content.
@@ -1330,7 +1346,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         typeof raw["checkpoint_generation"] === "number"
           ? (raw["checkpoint_generation"] as number)
           : null,
-      pendingToolCallIdsJson: (raw["pending_tool_call_ids_json"] as string | null) ?? null,
       failureCode: (raw["failure_code"] as string | null) ?? null,
       failureMessage: (raw["failure_message"] as string | null) ?? null,
       openedAt: Number(raw["opened_at"]),
@@ -1397,9 +1412,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       `INSERT INTO agent_turn_runs (
          turn_id, channel_id, status, resume_cursor_entry_id,
          turn_open_cursor_entry_id, model_start_cursor_entry_id,
-         checkpoint_phase, checkpoint_entry_id, checkpoint_generation, pending_tool_call_ids_json,
+         checkpoint_phase, checkpoint_entry_id, checkpoint_generation,
          failure_code, failure_message, opened_at, updated_at, closed_at
-       ) VALUES (?, ?, 'starting', NULL, ?, NULL, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)
+       ) VALUES (?, ?, 'starting', NULL, ?, NULL, ?, ?, ?, NULL, NULL, ?, ?, NULL)
        ON CONFLICT(turn_id) DO NOTHING`,
       turnId,
       channelId,
@@ -1410,6 +1425,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       now,
       now
     );
+    // Phase 1 shadow projection: a freshly-opened turn starts at `starting`.
+    this.runControllerFor(channelId).projectNewTurn(turnId);
     const leaseActive = this.markCheckpointableWorkActive({ channelId, turnId }).catch((err) => {
       this.recordLastError("lifecycle.lease_active", err, channelId);
     });
@@ -1429,15 +1446,14 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     } catch (err) {
       this.recordLastError(`turn_checkpoint.${phase}`, err, channelId);
     }
-    this.recordTurnCheckpoint(turnId, phase, entryId, this.pendingToolCallIdsForTurn(turnId));
+    this.recordTurnCheckpoint(turnId, phase, entryId);
     return entryId;
   }
 
   private recordTurnCheckpoint(
     turnId: string,
     phase: "turn_open" | "model_start",
-    entryId: string | null,
-    pendingToolCallIds: string[]
+    entryId: string | null
   ): void {
     const now = Date.now();
     this.sql.exec(
@@ -1447,7 +1463,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
            checkpoint_phase = ?,
            checkpoint_entry_id = ?,
            checkpoint_generation = ?,
-           pending_tool_call_ids_json = ?,
            updated_at = ?
        WHERE turn_id = ?`,
       phase,
@@ -1457,25 +1472,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       phase,
       entryId,
       this.identity.bootGeneration,
-      pendingToolCallIds.length > 0 ? JSON.stringify(pendingToolCallIds) : null,
       now,
       turnId
     );
-  }
-
-  private pendingToolCallIdsForTurn(turnId: string): string[] {
-    return (
-      this.sql
-        .exec(
-          `SELECT transport_call_id FROM agent_method_suspensions
-           WHERE turn_id = ?
-             AND terminal_kind = 'none'
-             AND delivery_status NOT IN ('cancelled', 'superseded', 'ignored', 'stale')
-           ORDER BY created_at, transport_call_id`,
-          turnId
-        )
-        .toArray() as Array<{ transport_call_id: string }>
-    ).map((row) => row.transport_call_id);
   }
 
   private recordResumeAttemptOnce(
@@ -1547,6 +1546,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       )
       .toArray();
     const changed = updated.length === 1;
+    if (changed) {
+      // Phase 1 shadow projection: mirror the authoritative durable status.
+      this.runControllerFor(current.channelId).project(turnId, to);
+    }
     if (
       changed &&
       (to === "closed" || to === "failed" || to === "interrupted") &&
@@ -1628,6 +1631,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       .toArray()
       .map((row) => this.turnRunRow(row));
     if (rows.length === 0) {
+      await this.reconcilePendingSuspensionsFromChannel(channelId);
       await this.sweepStuckDelivery(channelId, runner);
       return this.recoverDeliveredAndOrphanedSuspensions(channelId);
     }
@@ -1658,7 +1662,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
               kind: "emit_diagnostic",
               dedupKey: "starting-interrupted",
               payload: {
-                message: "Agent turn was interrupted before model generation began.",
+                message: LIFECYCLE_RECOVERY_NOTICES.runner_restarted_before_model.message,
               },
             });
             await this.drainTurnOutbox(channelId, runner);
@@ -1666,6 +1670,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           break;
         }
         case "waiting_external": {
+          // Re-learn any result that settled in the channel while we were asleep
+          // (missed live delivery) before sweeping/recovering local suspensions.
+          await this.reconcilePendingSuspensionsFromChannel(channelId);
           await this.sweepStuckDelivery(channelId, runner);
           const recovered = await this.recoverDeliveredAndOrphanedSuspensions(channelId);
           submittedContinue = submittedContinue || recovered;
@@ -1721,7 +1728,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
             turnId: row.turnId,
           });
           if (this.recordResumeAttemptOnce(row.turnId, this.identity.bootGeneration, "ledger")) {
-            this.getOrCreateDispatcher(channelId, runner).submitContinue({ turnId: row.turnId });
+            this.submitRecoveryContinue(channelId, runner, "ledger_continuing_recovered", row.turnId);
             submittedContinue = true;
           } else {
             this.recordDebugPhase(channelId, "turn_ledger.continuing_duplicate_resume_skipped", {
@@ -1753,7 +1760,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
               kind: "emit_diagnostic",
               dedupKey: "running-model-interrupted",
               payload: {
-                message: "Agent turn was interrupted during model generation.",
+                message: LIFECYCLE_RECOVERY_NOTICES.runner_restarted_mid_model.message,
               },
             });
             await this.drainTurnOutbox(channelId, runner);
@@ -1837,7 +1844,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       generation: this.identity.bootGeneration,
       reason,
     });
-    this.getOrCreateDispatcher(channelId, runner).submitContinue({ turnId: row.turnId });
+    this.submitRecoveryContinue(channelId, runner, reason, row.turnId);
     return true;
   }
 
@@ -2543,6 +2550,121 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     return next;
   }
 
+  /**
+   * Map a channel `settled_results.terminal_outcome` to the agent-side
+   * suspension `terminal_kind`. The call-outcome vocabulary (channel-arbitrated)
+   * is richer than the agent-wait vocabulary; cancel-like outcomes collapse to
+   * `cancelled`, everything else is `completed`/`failed` by the error flag.
+   */
+  private terminalKindForSettledOutcome(
+    terminalOutcome: string | null,
+    isError: boolean
+  ): Exclude<MethodSuspensionTerminalKind, "none"> {
+    if (
+      terminalOutcome === "cancelled" ||
+      terminalOutcome === "stale_dispatch" ||
+      terminalOutcome === "abandoned"
+    ) {
+      return "cancelled";
+    }
+    return isError ? "failed" : "completed";
+  }
+
+  /**
+   * Phase 2 recovery authority — re-learn results the agent missed while asleep.
+   *
+   * A genuinely-pending suspension (`terminal_kind = 'none'`, `delivery_status =
+   * 'pending'`) means the agent is still waiting on a method result. If that
+   * result *did* settle in the channel DO while this agent was hibernating — so
+   * the ephemeral live delivery was missed — the canonical record survives in the
+   * channel's terminal-once `settled_results` store. On wake we re-read it for
+   * each pending suspension and, when present, ingest it through the normal
+   * terminal path (`handleCompletedMethodResult`), which records the terminal on
+   * the row and kicks recovery. When the channel reports no settled result the
+   * call is genuinely still in flight, so the suspension correctly stays pending
+   * (waiting, never hung).
+   *
+   * This is the cross-DO, read-derived resolution from the roadmap: the channel's
+   * `settled_results` is canonical for "the result exists"; the agent never
+   * unilaterally declares the call terminal — it idempotently records the
+   * channel's reference. Re-running on a later wake is safe: the row is no longer
+   * pending, so it is skipped.
+   */
+  private async reconcilePendingSuspensionsFromChannel(channelId: string): Promise<boolean> {
+    if (this.transcriptPoisonedChannels.has(channelId)) return false;
+    const pending = this.sql
+      .exec(
+        `SELECT * FROM agent_method_suspensions
+           WHERE channel_id = ?
+             AND terminal_kind = 'none'
+             AND delivery_status = 'pending'`,
+        channelId
+      )
+      .toArray()
+      .map((row) => this.methodSuspensionRow(row))
+      .filter((row) => row.transportCallId.length > 0);
+    if (pending.length === 0) return false;
+
+    const channel = this.createChannelClient(channelId);
+    let ingested = false;
+    for (const row of pending) {
+      let settled: Awaited<ReturnType<ChannelClient["getSettledResult"]>>;
+      try {
+        settled = await channel.getSettledResult(row.transportCallId);
+      } catch (err) {
+        this.recordLastError("channel_method.reconcile.get_settled", err, channelId);
+        this.recordDebugPhase(channelId, "channel_method.reconcile.get_settled_failed", {
+          callId: row.transportCallId,
+          invocationId: row.invocationId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
+      if (!settled) continue;
+      // Never resurrect a durably-terminal turn. The in-memory interrupt gate is
+      // lost across hibernation, so on a cold wake it cannot protect us; the
+      // durable turn status is the authority. A user interrupt durably cancels a
+      // turn's suspensions (so they fail the `terminal_kind = 'none'` filter
+      // above), but a tool that raced the interrupt could have recorded a fresh
+      // pending suspension on a turn that then became `interrupted`/`failed`.
+      // Ingesting + resuming that would be exactly the "stopped agent churns
+      // again" bug — so drop it structurally here, independent of the gate.
+      if (row.turnId) {
+        const turn = this.loadTurnRun(row.turnId);
+        if (turn && isTerminalRunPhase(turn.status)) {
+          this.recordDebugPhase(channelId, "channel_method.reconcile.skipped_terminal_turn", {
+            callId: row.transportCallId,
+            invocationId: row.invocationId,
+            turnId: row.turnId,
+            turnStatus: turn.status,
+          });
+          continue;
+        }
+      }
+      // Re-check under fresh durable state: a concurrent live delivery may have
+      // already settled this row between our read above and now.
+      const current = this.loadMethodSuspension(row.transportCallId);
+      if (!current || current.terminalKind !== "none" || current.deliveryStatus !== "pending") {
+        continue;
+      }
+      this.recordDebugPhase(channelId, "channel_method.reconcile.ingested_settled", {
+        callId: row.transportCallId,
+        invocationId: row.invocationId,
+        terminalOutcome: settled.terminalOutcome,
+        isError: settled.isError,
+      });
+      await this.handleCompletedMethodResult(
+        channelId,
+        row.transportCallId,
+        settled.content,
+        settled.isError,
+        this.terminalKindForSettledOutcome(settled.terminalOutcome, settled.isError)
+      );
+      ingested = true;
+    }
+    return ingested;
+  }
+
   private async recoverDeliveredAndOrphanedSuspensions(channelId: string): Promise<boolean> {
     if (this.transcriptPoisonedChannels.has(channelId)) {
       this.recordDebugPhase(channelId, "channel_method.recovery.skipped_poisoned");
@@ -2820,7 +2942,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const participantId = this.subscriptions.getParticipantId(channelId);
     if (!participantId) return;
     const descriptor = this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId));
-    const content = `Recovered tool result could not continue the agent: ${
+    const content = `${LIFECYCLE_RECOVERY_NOTICES.recovery_continue_failed.message} ${
       error instanceof Error ? error.message : String(error)
     }`;
     await this.createChannelClient(channelId)
@@ -2935,34 +3057,17 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   private lifecycleDiagnosticForTurnLedgerMessage(
     message: string
   ): LifecycleRecoveryDiagnostic | undefined {
-    if (message === "Agent turn was interrupted before model generation began.") {
-      return {
-        type: "lifecycle_recovery",
-        status: "interrupted",
-        title: "Restart interrupted the turn",
-        detail: "The agent restarted before it began responding. No tool work was replayed.",
-        reason: "runner_restarted_before_model",
-      };
-    }
-    if (message === "Agent turn was interrupted during model generation.") {
-      return {
-        type: "lifecycle_recovery",
-        status: "interrupted",
-        title: "Restart interrupted the response",
-        detail: "The partial response was discarded because replay is not enabled for this agent.",
-        reason: "runner_restarted_mid_model",
-      };
-    }
-    if (message.startsWith("Recovered tool result could not continue the agent:")) {
-      return {
-        type: "lifecycle_recovery",
-        status: "failed",
-        title: "Recovery could not continue",
-        detail: message.replace(/^Recovered tool result could not continue the agent:\s*/, ""),
-        reason: "recovery_continue_failed",
-      };
-    }
-    return undefined;
+    // Classification + prose live in one shared place (agentic-protocol); the
+    // typed `reason` code is the authoritative control-flow signal.
+    const notice = lifecycleRecoveryNoticeForMessage(message);
+    if (!notice) return undefined;
+    return {
+      type: "lifecycle_recovery",
+      status: notice.status,
+      title: notice.title,
+      detail: notice.detail,
+      reason: notice.reason,
+    };
   }
 
   private async enqueueTurnOutbox(opts: {
@@ -3062,6 +3167,16 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (!resumeTurnId) {
       throw new Error("Cannot submit recovery continue without an existing agent turn");
     }
+    // Consolidated admission gate: a recovery continue for a user-interrupted or
+    // terminal turn is dropped here, at the single resume chokepoint, so a late
+    // suspension result can never resurrect a stopped agent.
+    if (this.runControllerFor(channelId).isResumeBlocked(resumeTurnId)) {
+      this.recordDebugPhase(channelId, "channel_method.recovery_continue.gated", {
+        reason,
+        turnId: resumeTurnId,
+      });
+      return;
+    }
     this.recordDebugPhase(channelId, "channel_method.recovery_continue.submitted", {
       reason,
       turnId: resumeTurnId,
@@ -3141,7 +3256,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         checkpoint_phase TEXT,
         checkpoint_entry_id TEXT,
         checkpoint_generation INTEGER,
-        pending_tool_call_ids_json TEXT,
         failure_code TEXT,
         failure_message TEXT,
         opened_at INTEGER NOT NULL,
@@ -3158,7 +3272,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     this.ensureColumn("agent_turn_runs", "checkpoint_phase", "TEXT");
     this.ensureColumn("agent_turn_runs", "checkpoint_entry_id", "TEXT");
     this.ensureColumn("agent_turn_runs", "checkpoint_generation", "INTEGER");
-    this.ensureColumn("agent_turn_runs", "pending_tool_call_ids_json", "TEXT");
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS agent_turn_resume_attempts (
         turn_id TEXT NOT NULL,
@@ -4804,6 +4917,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   }
 
   private currentTurnIdForChannel(channelId: string): string | undefined {
+    // Step 2: the consolidated RunController is the authoritative source for the
+    // active turn; fall back to the runner's in-memory id while writers migrate.
+    const controllerTurn = this.runControllerFor(channelId).currentTurnId;
+    if (controllerTurn) return controllerTurn;
     const runner = this.runners.get(channelId)?.runner as
       | { getCurrentTurnId?: () => string | null }
       | undefined;
@@ -5006,7 +5123,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         turnId: id,
       });
       throw new AgentLifecycleError(
-        "Agent turn was interrupted before tool dispatch.",
+        AGENT_INTERRUPTED_BEFORE_TOOL_DISPATCH,
         "stale_dispatch",
         "aborted_before_dispatch"
       );
@@ -5035,7 +5152,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           turnId: id,
         });
         throw new AgentLifecycleError(
-          "Agent turn was interrupted before tool dispatch.",
+          AGENT_INTERRUPTED_BEFORE_TOOL_DISPATCH,
           "stale_dispatch",
           "aborted_before_dispatch"
         );
@@ -6432,7 +6549,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       // so it keeps churning. `interrupt()` also clears pi-core's steering
       // queue and broadcasts typing=false (via reset()).
       this.dispatchers.get(channelId)?.interrupt();
-      this.lastUserInterruptAt.set(channelId, Date.now());
       await this.notifyDispatchesInterrupted(channelId);
       this.recordAbort(channelId, reason);
       // Abort the active runner signal before moving the durable turn to a
@@ -6451,6 +6567,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         (entry.runner as { getCurrentTurnId?: () => string | null }).getCurrentTurnId?.() ??
         this.currentTurnRunForChannel(channelId)?.turnId;
       if (turnId) {
+        // Consolidated authoritative gate: record the user interrupt on this
+        // turn so every resume path drops intrinsically (in addition to the
+        // durable terminal `interrupted` status written just below).
+        this.runControllerFor(channelId).gateInterrupt(turnId);
         this.transitionTurn(
           turnId,
           ["starting", "running_model", "waiting_external", "continuing", "closing"],
@@ -6932,6 +7052,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       },
       volatile: {
         runners: Object.fromEntries(runnerEntries),
+        runControllers: Object.fromEntries(
+          [...this.runControllers.entries()]
+            .filter(([id]) => !channelId || id === channelId)
+            .map(([id, controller]) => [id, controller.getDebugState()])
+        ),
         dispatchers: Object.fromEntries(
           [...this.dispatchers.entries()]
             .filter(([id]) => !channelId || id === channelId)
@@ -6973,7 +7098,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         transcriptPoisonedChannels: [...this.transcriptPoisonedChannels],
         transcriptPoisonNotified: [...this.transcriptPoisonNotified],
         credentialPromptCardsEmitted: [...this.credentialPromptCardsEmitted],
-        lastUserInterruptAt: [...this.lastUserInterruptAt.entries()],
         suspensions: this.getSuspensionDebugState(channelId),
         cachedRoster: Object.fromEntries([...this.cachedRoster.entries()].filter(channelFilter)),
         cachedParticipants: this.summarizeCachedParticipants(channelId),

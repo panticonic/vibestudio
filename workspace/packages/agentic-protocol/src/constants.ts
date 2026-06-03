@@ -46,6 +46,85 @@ export const LIFECYCLE_MESSAGE_REASON_CODES = [
 
 export type LifecycleMessageReasonCode = (typeof LIFECYCLE_MESSAGE_REASON_CODES)[number];
 
+export type LifecycleNoticeStatus = "recovered" | "interrupted" | "failed";
+
+export interface LifecycleRecoveryNotice {
+  reason: LifecycleMessageReasonCode;
+  status: LifecycleNoticeStatus;
+  title: string;
+  /** Static detail; the recovery-continue-failed case appends the dynamic error. */
+  detail: string;
+}
+
+/**
+ * Single source of truth for agent lifecycle/recovery notice prose, keyed by the
+ * typed reason code. Producers emit `*.message`; consumers classify content via
+ * `lifecycleRecoveryNoticeForMessage`. The reason code — not the prose — is the
+ * authoritative control-flow signal (see `natstackDiagnostic`); this table just
+ * de-duplicates the human strings that previously lived in 3+ places.
+ */
+export const LIFECYCLE_RECOVERY_NOTICES = {
+  runner_restarted_before_model: {
+    reason: "runner_restarted_before_model",
+    status: "interrupted",
+    title: "Restart interrupted the turn",
+    detail: "The agent restarted before it began responding. No tool work was replayed.",
+    message: "Agent turn was interrupted before model generation began.",
+  },
+  runner_restarted_mid_model: {
+    reason: "runner_restarted_mid_model",
+    status: "interrupted",
+    title: "Restart interrupted the response",
+    detail: "The partial response was discarded because replay is not enabled for this agent.",
+    message: "Agent turn was interrupted during model generation.",
+  },
+  recovery_continue_failed: {
+    reason: "recovery_continue_failed",
+    status: "failed",
+    title: "Recovery could not continue",
+    detail: "",
+    // Prefix — the dynamic error message follows.
+    message: "Recovered tool result could not continue the agent:",
+  },
+} as const satisfies Record<
+  Exclude<LifecycleMessageReasonCode, "model_credential_required">,
+  LifecycleRecoveryNotice & { message: string }
+>;
+
+/**
+ * The stale-pre-dispatch lifecycle phrase. Its control flow is already typed at
+ * the invocation level (`terminalOutcome: "stale_dispatch"` /
+ * `reasonCode: "aborted_before_dispatch"`); this is the single source for the
+ * human string that was duplicated across the dispatch-abort throw sites.
+ */
+export const AGENT_INTERRUPTED_BEFORE_TOOL_DISPATCH =
+  "Agent turn was interrupted before tool dispatch.";
+
+/**
+ * Classify a lifecycle/recovery message string into its typed notice. Shared by
+ * the agent vessel (which attaches it as `natstackDiagnostic`) and the chat
+ * projection (fallback when the diagnostic metadata is absent), so the matching
+ * logic lives in exactly one place.
+ */
+export function lifecycleRecoveryNoticeForMessage(
+  content: string
+): (LifecycleRecoveryNotice & { detail: string }) | undefined {
+  if (content === LIFECYCLE_RECOVERY_NOTICES.runner_restarted_before_model.message) {
+    return LIFECYCLE_RECOVERY_NOTICES.runner_restarted_before_model;
+  }
+  if (content === LIFECYCLE_RECOVERY_NOTICES.runner_restarted_mid_model.message) {
+    return LIFECYCLE_RECOVERY_NOTICES.runner_restarted_mid_model;
+  }
+  const failedPrefix = LIFECYCLE_RECOVERY_NOTICES.recovery_continue_failed.message;
+  if (content.startsWith(failedPrefix)) {
+    return {
+      ...LIFECYCLE_RECOVERY_NOTICES.recovery_continue_failed,
+      detail: content.slice(failedPrefix.length).trim(),
+    };
+  }
+  return undefined;
+}
+
 export function isInvocationOutcome(value: unknown): value is InvocationOutcome {
   return INVOCATION_OUTCOMES.includes(value as InvocationOutcome);
 }

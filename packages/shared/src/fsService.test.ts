@@ -319,18 +319,33 @@ describe("FsService", () => {
   });
 
   describe("extension callers", () => {
-    it("resolve fs paths as unrestricted host paths without a bound context", async () => {
+    it("fails loud for an extension fs call without an on-behalf-of context or host-fs capability", async () => {
       const ctx = makeExtensionCtx("@workspace-extensions/fs-test");
       const absolutePath = path.join(tmpRoot, "outside-context.txt");
       writeFileSync(absolutePath, "extension-visible");
 
-      await expect(service.handleCall(ctx, "readFile", [absolutePath, "utf8"])).resolves.toBe(
-        "extension-visible"
-      );
-      await service.handleCall(ctx, "writeFile", [absolutePath, "updated"]);
-      await expect(service.handleCall(ctx, "readFile", [absolutePath, "utf8"])).resolves.toBe(
-        "updated"
-      );
+      // Phase 3: no silent unrestricted-host-fs fallback — the call throws
+      // instead of reading `/`.
+      await expect(
+        service.handleCall(ctx, "readFile", [absolutePath, "utf8"])
+      ).rejects.toThrow(/host-fs-access capability/i);
+    });
+
+    it("grants unrestricted host fs only to an extension holding the explicit host-fs capability", async () => {
+      const capableService = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        hostFsCapableExtensions: ["@workspace-extensions/fs-test"],
+      });
+      const ctx = makeExtensionCtx("@workspace-extensions/fs-test");
+      const absolutePath = path.join(tmpRoot, "outside-context.txt");
+      writeFileSync(absolutePath, "extension-visible");
+
+      await expect(
+        capableService.handleCall(ctx, "readFile", [absolutePath, "utf8"])
+      ).resolves.toBe("extension-visible");
+      await capableService.handleCall(ctx, "writeFile", [absolutePath, "updated"]);
+      await expect(
+        capableService.handleCall(ctx, "readFile", [absolutePath, "utf8"])
+      ).resolves.toBe("updated");
     });
 
     it("binds extension fs calls to the chained caller context when present", async () => {

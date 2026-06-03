@@ -33,6 +33,7 @@ import {
   isLifecycleMessageReasonCode,
   isStoredValueRef,
   isTurnReasonCode,
+  lifecycleRecoveryNoticeForMessage,
 } from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
 
@@ -344,31 +345,16 @@ function lifecycleNoticeFromMessage(message: ProjectedMessage): LifecycleNotice 
       };
     }
   }
-  if (message.content === "Agent turn was interrupted before model generation began.") {
+  // Fallback when the typed `natstackDiagnostic` metadata is absent: classify
+  // the message via the shared protocol matcher (single source of prose + codes)
+  // rather than re-matching the sentences here.
+  const recoveryNotice = lifecycleRecoveryNoticeForMessage(message.content);
+  if (recoveryNotice) {
     return {
-      status: "interrupted",
-      title: "Restart interrupted the turn",
-      detail: "The agent restarted before it began responding. No tool work was replayed.",
-      reason: "runner_restarted_before_model",
-    };
-  }
-  if (message.content === "Agent turn was interrupted during model generation.") {
-    return {
-      status: "interrupted",
-      title: "Restart interrupted the response",
-      detail: "The partial response was discarded because replay is not enabled for this agent.",
-      reason: "runner_restarted_mid_model",
-    };
-  }
-  if (message.content.startsWith("Recovered tool result could not continue the agent:")) {
-    return {
-      status: "failed",
-      title: "Recovery could not continue",
-      detail: message.content.replace(
-        /^Recovered tool result could not continue the agent:\s*/,
-        ""
-      ),
-      reason: "recovery_continue_failed",
+      status: recoveryNotice.status,
+      title: recoveryNotice.title,
+      detail: recoveryNotice.detail,
+      reason: recoveryNotice.reason,
     };
   }
   return null;

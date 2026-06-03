@@ -1196,6 +1196,90 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(worker.recoverDeliveredAndOrphanedSuspensions).toHaveBeenCalled();
   });
 
+  it("re-learns a channel-settled result missed during hibernation (Phase 2 recovery authority)", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const getSettledResult = vi.fn().mockResolvedValue({
+      content: { ok: true },
+      isError: false,
+      terminalOutcome: "completed",
+      terminalReasonCode: null,
+    });
+    const worker = instance as unknown as {
+      sweepStuckDelivery: ReturnType<typeof vi.fn>;
+      recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
+      getOrCreateRunner: ReturnType<typeof vi.fn>;
+      createChannelClient: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
+    worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
+    worker.getOrCreateRunner = vi.fn().mockResolvedValue({} as PiRunner);
+    worker.createChannelClient = vi.fn().mockReturnValue({ getSettledResult });
+
+    insertTurnRun(sql, { turnId: "turn-missed", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "missed-call",
+      turnId: "turn-missed",
+      deliveryStatus: "pending",
+    });
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    // The agent re-read the channel's canonical settled result for the pending
+    // call and durably ingested it onto the suspension row — closing the
+    // "result settled while asleep, live delivery missed" hang.
+    expect(getSettledResult).toHaveBeenCalledWith("missed-call");
+    const row = sql
+      .exec(
+        `SELECT terminal_kind, result_is_error FROM agent_method_suspensions WHERE transport_call_id = ?`,
+        "missed-call"
+      )
+      .toArray()[0]!;
+    expect(row["terminal_kind"]).toBe("completed");
+    expect(row["result_is_error"]).toBe(0);
+  });
+
+  it("leaves a genuinely-pending suspension untouched when the channel has no settled result", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const getSettledResult = vi.fn().mockResolvedValue(null);
+    const worker = instance as unknown as {
+      sweepStuckDelivery: ReturnType<typeof vi.fn>;
+      recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
+      getOrCreateRunner: ReturnType<typeof vi.fn>;
+      createChannelClient: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
+    worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
+    worker.getOrCreateRunner = vi.fn().mockResolvedValue({} as PiRunner);
+    worker.createChannelClient = vi.fn().mockReturnValue({ getSettledResult });
+
+    insertTurnRun(sql, { turnId: "turn-still-waiting", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "still-waiting",
+      turnId: "turn-still-waiting",
+      deliveryStatus: "pending",
+    });
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    // No canonical result exists yet — the call is genuinely in flight. The
+    // suspension must stay pending (waiting, not fabricated, not hung).
+    expect(getSettledResult).toHaveBeenCalledWith("still-waiting");
+    const row = sql
+      .exec(
+        `SELECT terminal_kind, delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`,
+        "still-waiting"
+      )
+      .toArray()[0]!;
+    expect(row["terminal_kind"]).toBe("none");
+    expect(row["delivery_status"]).toBe("pending");
+  });
+
   it("reconciles admitted waiting_external turns to continuing with the exact cursor", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
@@ -1227,6 +1311,107 @@ describe("AgentWorkerBase method suspension ledger", () => {
       status: "continuing",
       resume_cursor_entry_id: "entry-exact",
     });
+  });
+
+  // Characterization (Phase 1 keystone): an interrupted turn is terminal and
+  // must never be resurrected by recovery, even if an in-flight suspension was
+  // admitted before the user stopped it. The consolidated RunController gate
+  // must preserve exactly this invariant.
+  it("does not resume an interrupted turn even when a suspension was admitted", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      sweepStuckDelivery: ReturnType<typeof vi.fn>;
+      recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
+    worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
+    insertTurnRun(sql, { turnId: "turn-interrupted", status: "interrupted" });
+    insertSuspension(sql, {
+      callId: "wait-after-interrupt",
+      turnId: "turn-interrupted",
+      deliveryStatus: "transcript_admitted",
+    });
+    sql.exec(
+      `UPDATE agent_method_suspensions SET admitted_entry_id = ? WHERE transport_call_id = ?`,
+      "entry-exact",
+      "wait-after-interrupt"
+    );
+
+    const resumed = await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    expect(resumed).toBe(false);
+    expect(turnStatus(sql, "turn-interrupted")).toMatchObject({ status: "interrupted" });
+  });
+
+  // Phase 1 Step 1: the RunController shadow projection must mirror the durable
+  // status set by the authoritative `transitionTurn` chokepoint.
+  it("shadow-projects the durable turn phase into the RunController", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      sweepStuckDelivery: ReturnType<typeof vi.fn>;
+      recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+      getDebugState(channelId?: string): Promise<Record<string, unknown>>;
+    };
+    worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
+    worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
+    insertTurnRun(sql, { turnId: "turn-proj", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "proj-1",
+      turnId: "turn-proj",
+      deliveryStatus: "transcript_admitted",
+    });
+    sql.exec(
+      `UPDATE agent_method_suspensions SET admitted_entry_id = ? WHERE transport_call_id = ?`,
+      "entry-x",
+      "proj-1"
+    );
+
+    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+
+    const debug = await worker.getDebugState("chat-1");
+    const controllers = (
+      debug["volatile"] as {
+        runControllers?: Record<string, { phase?: string; turnId?: string }>;
+      }
+    ).runControllers;
+    expect(controllers?.["chat-1"]).toMatchObject({ turnId: "turn-proj", phase: "continuing" });
+  });
+
+  // Phase 1 Step 4/5: the RunController gate is the single authoritative
+  // admission point — a recovery continue for a user-interrupted turn is dropped
+  // at `submitRecoveryContinue`, so a late suspension result cannot resurrect a
+  // stopped agent.
+  it("gates a recovery continue for an interrupted turn at the single chokepoint", async () => {
+    const { instance } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const submitContinue = vi.fn();
+    const worker = instance as unknown as {
+      runControllerFor(channelId: string): { gateInterrupt(turnId: string): void };
+      submitRecoveryContinue(
+        channelId: string,
+        runner: unknown,
+        reason: string,
+        turnId?: string
+      ): void;
+      dispatchers: Map<string, unknown>;
+    };
+    worker.dispatchers.set("chat-1", { submitContinue, getDebugState: () => ({ busy: false }) });
+
+    // Not gated yet → the continue is admitted.
+    worker.submitRecoveryContinue("chat-1", {} as never, "test", "turn-x");
+    expect(submitContinue).toHaveBeenCalledTimes(1);
+
+    // After the user interrupt gates the turn → further continues are dropped.
+    worker.runControllerFor("chat-1").gateInterrupt("turn-x");
+    worker.submitRecoveryContinue("chat-1", {} as never, "late-result", "turn-x");
+    expect(submitContinue).toHaveBeenCalledTimes(1);
   });
 
   it("fails waiting_external turns whose child waits resolved without a cursor", async () => {

@@ -237,6 +237,8 @@ function serializeDirent(d: fsSync.Dirent) {
 export class FsService {
   private readonly contextFolderManager: ContextFolderManager;
   private readonly entityCache: EntityCache;
+  /** Extensions granted explicit unrestricted host-fs access (Phase 3 capability). */
+  private readonly hostFsCapableExtensions?: ReadonlySet<string>;
 
   /** handleId → TrackedHandle */
   private readonly openHandles = new Map<number, TrackedHandle>();
@@ -245,10 +247,14 @@ export class FsService {
 
   constructor(
     contextFolderManager: ContextFolderManager,
-    entityCache: EntityCache = new EntityCache()
+    entityCache: EntityCache = new EntityCache(),
+    opts?: { hostFsCapableExtensions?: Iterable<string> }
   ) {
     this.contextFolderManager = contextFolderManager;
     this.entityCache = entityCache;
+    this.hostFsCapableExtensions = opts?.hostFsCapableExtensions
+      ? new Set(opts.hostFsCapableExtensions)
+      : undefined;
   }
 
   // =========================================================================
@@ -319,12 +325,23 @@ export class FsService {
             this.contextFolderManager.isAllowedSharedGitObjectsSymlink(args),
         };
       }
-      return {
-        root: "",
-        panelId: `extension:${ctx.caller.runtime.id}`,
-        unrestricted: true,
-        exposeHostPaths: true,
-      };
+      // Phase 3: an extension acting on its own behalf (no chainCaller) used to
+      // SILENTLY get unrestricted host filesystem access — conflating two trust
+      // models and escalating privilege without any signal. Host-fs authority is
+      // now an explicit, named capability an extension must hold; otherwise the
+      // call fails loud rather than reading `/`.
+      if (this.extensionHasHostFsCapability(ctx.caller.runtime.id)) {
+        return {
+          root: "",
+          panelId: `extension:${ctx.caller.runtime.id}`,
+          unrestricted: true,
+          exposeHostPaths: true,
+        };
+      }
+      throw new Error(
+        `Extension ${ctx.caller.runtime.id} attempted a filesystem call outside an ` +
+          `on-behalf-of context and without the host-fs-access capability`
+      );
     } else {
       // Server-originated calls pass contextId as first arg
       contextId = args.shift() as string;
@@ -344,6 +361,18 @@ export class FsService {
       isAllowedSharedGitObjectsSymlink: (args) =>
         this.contextFolderManager.isAllowedSharedGitObjectsSymlink(args),
     };
+  }
+
+  /**
+   * Whether an extension holds the explicit `host-fs-access` capability that
+   * grants unrestricted host filesystem access when acting on its own behalf
+   * (no on-behalf-of context). This is a *distinct* grant from native-code
+   * install approval — being native does not imply host-fs authority. The
+   * allowlist is injected via deps (`hostFsCapableExtensions`); empty by default,
+   * so the privileged path is opt-in rather than a silent fallback.
+   */
+  private extensionHasHostFsCapability(extensionId: string): boolean {
+    return this.hostFsCapableExtensions?.has(extensionId) ?? false;
   }
 
   // =========================================================================

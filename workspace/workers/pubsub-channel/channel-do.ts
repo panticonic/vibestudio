@@ -137,6 +137,23 @@ export class PubSubChannel extends DurableObjectBase {
       // Existing databases may already have the column, and freshly-created
       // databases get it from CREATE TABLE above.
     }
+    // Phase 2: the canonical, terminal-once record that "this method result
+    // exists". The channel DO is the single arbiter (first terminal write wins,
+    // keyed by transport_call_id); it lets a reconnecting caller — or a
+    // hibernated agent on wake — re-learn an already-settled result that the
+    // ephemeral live delivery (invocation.* / pending_calls) no longer holds.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS settled_results (
+        transport_call_id TEXT PRIMARY KEY,
+        invocation_id TEXT,
+        turn_id TEXT,
+        content_json TEXT,
+        is_error INTEGER NOT NULL,
+        terminal_outcome TEXT,
+        terminal_reason_code TEXT,
+        settled_at INTEGER NOT NULL
+      )
+    `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS dedup_keys (
         key TEXT PRIMARY KEY,
@@ -1126,6 +1143,20 @@ export class PubSubChannel extends DurableObjectBase {
           ? `Target ${targetId} disconnected from the channel before the call completed`
           : `Target ${targetId} was replaced by a new session before the call completed`;
     for (const { transportCallId, invocationId, turnId, callerId } of cancelled) {
+      // Record the canonical terminal BEFORE delivery (terminal-once, like
+      // handleMethodResult): a hibernated caller that misses the live
+      // invocation.failed broadcast must still be able to recover this outcome
+      // via getSettledResult() on wake instead of waiting forever. "abandoned"
+      // marks a target-left termination; the agent maps it to a cancelled wait.
+      this.recordSettledResult(
+        transportCallId,
+        invocationId,
+        turnId,
+        { error: errorMessage },
+        true,
+        "abandoned",
+        reason
+      );
       try {
         await this.deliverCallResult(
           callerId,
@@ -1829,10 +1860,23 @@ export class PubSubChannel extends DurableObjectBase {
     terminalReasonCode?: string
   ): Promise<number | undefined> {
     const pending = consumeCall(this.sql, transportCallId);
+    // Phase 2: record the canonical, terminal-once result BEFORE delivery, so a
+    // reconnecting caller or a hibernated agent can re-learn it even once the
+    // ephemeral pending call is gone. First terminal write wins (idempotent).
+    this.recordSettledResult(
+      transportCallId,
+      pending?.invocationId,
+      pending?.turnId,
+      content,
+      isError,
+      terminalOutcome,
+      terminalReasonCode
+    );
     if (!pending) {
       console.warn(
-        `[Channel] Ignoring invocation result without pending call: ` +
-          `channel=${this.objectKey} transportCallId=${transportCallId} isError=${isError}`
+        `[Channel] invocation result without a live pending call (recorded in ` +
+          `settled_results for replay): channel=${this.objectKey} ` +
+          `transportCallId=${transportCallId} isError=${isError}`
       );
       return undefined;
     }
@@ -1852,6 +1896,66 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /**
+   * Phase 2: persist the canonical terminal outcome of a method call. The
+   * channel DO is the single arbiter — `INSERT OR IGNORE` makes the first
+   * terminal write win, so competing terminals (caller abort vs provider result
+   * vs timeout) collapse to one canonical record keyed by `transport_call_id`.
+   */
+  private recordSettledResult(
+    transportCallId: string,
+    invocationId: string | undefined,
+    turnId: string | undefined,
+    content: unknown,
+    isError: boolean,
+    terminalOutcome?: InvocationOutcome,
+    terminalReasonCode?: string
+  ): void {
+    this.sql.exec(
+      `INSERT OR IGNORE INTO settled_results
+         (transport_call_id, invocation_id, turn_id, content_json, is_error,
+          terminal_outcome, terminal_reason_code, settled_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      transportCallId,
+      invocationId ?? null,
+      turnId ?? null,
+      content === undefined ? null : JSON.stringify(content),
+      isError ? 1 : 0,
+      terminalOutcome ?? null,
+      terminalReasonCode ?? null,
+      Date.now()
+    );
+  }
+
+  /**
+   * Phase 2 recovery authority: re-learn a terminally-settled method result.
+   * Used by reconnecting callers / hibernated agents to recover a result whose
+   * ephemeral live delivery they missed. Returns null if not (yet) settled.
+   */
+  getSettledResult(transportCallId: string): {
+    content: unknown;
+    isError: boolean;
+    terminalOutcome: string | null;
+    terminalReasonCode: string | null;
+  } | null {
+    const rows = this.sql
+      .exec(
+        `SELECT content_json, is_error, terminal_outcome, terminal_reason_code
+           FROM settled_results WHERE transport_call_id = ?`,
+        transportCallId
+      )
+      .toArray();
+    if (rows.length === 0) return null;
+    const row = rows[0]!;
+    const contentJson = row["content_json"] as string | null;
+    return {
+      content: contentJson != null ? JSON.parse(contentJson) : undefined,
+      isError: (row["is_error"] as number) === 1,
+      terminalOutcome: (row["terminal_outcome"] as string | null) ?? null,
+      terminalReasonCode: (row["terminal_reason_code"] as string | null) ?? null,
+    };
+  }
+
+  /**
    * Cancel a pending method call.
    */
   async cancelMethodCall(callId: string): Promise<void> {
@@ -1859,6 +1963,17 @@ export class PubSubChannel extends DurableObjectBase {
     this.scheduleNextAlarm();
     // Notify the provider so it can abort the executing method
     if (cancelled) {
+      // Phase 2: a cancellation is a terminal outcome — record it canonically
+      // (first-writer-wins) so a reconnecting caller learns the call was cancelled.
+      this.recordSettledResult(
+        cancelled.transportCallId,
+        cancelled.invocationId,
+        cancelled.turnId,
+        "cancelled",
+        true,
+        "cancelled",
+        "cancelled"
+      );
       const providerId = cancelled.targetId;
       await this.ensureMethodRoot(
         cancelled.invocationId,
@@ -1891,6 +2006,17 @@ export class PubSubChannel extends DurableObjectBase {
     const cancelled = cancelCallDb(this.sql, callId);
     if (!cancelled) return;
     this.scheduleNextAlarm();
+    // Phase 2: a timeout is a terminal outcome — record it canonically so a
+    // reconnecting caller can learn the call timed out rather than hang.
+    this.recordSettledResult(
+      cancelled.transportCallId,
+      cancelled.invocationId,
+      cancelled.turnId,
+      reason ?? "timed out",
+      true,
+      "infrastructure_error",
+      "timed_out"
+    );
     await this.ensureMethodRoot(
       cancelled.invocationId,
       cancelled.callerId,
@@ -2149,6 +2275,12 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DELETE FROM pending_calls`);
     // Clear dedup keys
     this.sql.exec(`DELETE FROM dedup_keys`);
+    // Clear settled results: these are the terminal records for the parent's
+    // calls, keyed by transport_call_id. We just wiped the in-flight pending_calls
+    // for the same calls; keeping their terminal records would let a forked
+    // child's agent reconcile() match an inherited suspension to a parent-era
+    // result and wrongly resume. A fresh fork re-drives any genuinely-open work.
+    this.sql.exec(`DELETE FROM settled_results`);
   }
 
   // ── State introspection ─────────────────────────────────────────────────
