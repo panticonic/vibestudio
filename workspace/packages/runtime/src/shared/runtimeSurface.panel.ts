@@ -33,13 +33,19 @@ export const panelRuntimeSurface: RuntimeSurface = {
     recoveryCoordinator: valueEntry("Panel transport recovery phase coordinator."),
     parentId: valueEntry(),
     fs: valueEntry(),
-    createGatewayFetch: valueEntry("Create a gateway-authenticated fetch helper from an explicit config."),
+    createGatewayFetch: valueEntry(
+      "Create a gateway-authenticated fetch helper from an explicit config."
+    ),
     gatewayConfig: valueEntry("Gateway base URL and bearer token for NatStack service routes."),
-    gatewayFetch: valueEntry("Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."),
+    gatewayFetch: valueEntry(
+      "Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."
+    ),
     gitConfig: valueEntry("Git HTTP endpoint and token derived from the gateway config."),
     env: valueEntry(),
     doTargetId: valueEntry("Build a unified RPC target ID for a Durable Object reference."),
-    createDurableObjectServiceClient: valueEntry("Resolve a Durable Object-backed service and call it through unified RPC."),
+    createDurableObjectServiceClient: valueEntry(
+      "Resolve a Durable Object-backed service and call it through unified RPC."
+    ),
     workers: namespaceEntry([
       "create",
       "destroy",
@@ -118,7 +124,8 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "completeWorkspaceDependencies",
       "setSharedRemote",
       "removeSharedRemote",
-      "syncRepoToContexts",
+      "ensureRepoPresentInContexts",
+      "publishWorkspaceRepo",
       "client",
     ]),
     gad: namespaceEntry([

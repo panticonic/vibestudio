@@ -325,7 +325,7 @@ export class ContextFolderManager {
    * context. Existing context repos are left in place and only have declared
    * remotes synced.
    */
-  async syncRepoToContexts(repoPath: string): Promise<void> {
+  async ensureRepoPresentInContexts(repoPath: string): Promise<void> {
     let contextEntries: import("fs").Dirent[];
     try {
       contextEntries = await fs.readdir(this.contextsRoot, { withFileTypes: true });

@@ -82,7 +82,7 @@ describe("gitService", () => {
       contextFolderManager: {
         ensureContextFolder: vi.fn(async () => contextRoot),
         syncDeclaredRemotes: vi.fn(),
-        syncRepoToContexts: vi.fn(),
+        ensureRepoPresentInContexts: vi.fn(),
       },
       entityCache,
     });
@@ -128,7 +128,7 @@ describe("gitService", () => {
       contextFolderManager: {
         ensureContextFolder: vi.fn(async () => contextRoot),
         syncDeclaredRemotes: vi.fn(),
-        syncRepoToContexts: vi.fn(),
+        ensureRepoPresentInContexts: vi.fn(),
       },
       entityCache,
     });
@@ -141,6 +141,28 @@ describe("gitService", () => {
     });
     expect(porcelain).toContain("M  index.ts");
     expect(porcelain).toContain("A  extra.ts");
+  });
+
+  it("ensures a repo is present in existing context folders", async () => {
+    const ensureRepoPresentInContexts = vi.fn(async () => undefined);
+    const service = createGitService({
+      gitServer: {} as never,
+      tokenManager: {} as never,
+      contextFolderManager: {
+        ensureContextFolder: vi.fn(),
+        syncDeclaredRemotes: vi.fn(),
+        ensureRepoPresentInContexts,
+      },
+    });
+
+    const result = await service.handler(
+      { caller: panelSourceCaller() },
+      "ensureRepoPresentInContexts",
+      ["packages/runtime"]
+    );
+
+    expect(result).toEqual({ ensured: "packages/runtime" });
+    expect(ensureRepoPresentInContexts).toHaveBeenCalledWith("packages/runtime");
   });
 
   it("gates panel-created repositories through repo creation permission", async () => {

@@ -192,7 +192,13 @@ export const credentials = helpfulNamespace("credentials", credentialApi);
 // server; absolute external remotes route through host-mediated credentials.
 import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
 import { createContextAwareGitClient } from "../shared/contextGitClient.js";
+import {
+  publishWorkspaceRepo as publishWorkspaceRepoWithClient,
+  type PublishWorkspaceRepoOptions,
+  type PublishWorkspaceRepoResult,
+} from "../shared/workspaceGitPublish.js";
 export type { GitClient, GitClientOptions } from "@natstack/git";
+export type { PublishWorkspaceRepoOptions, PublishWorkspaceRepoResult };
 export interface GitRemoteSpec {
   name: string;
   url: string;
@@ -241,8 +247,15 @@ const gitApi = {
   ): Promise<Record<string, unknown> | undefined> {
     return rpc.call("main", "git.removeSharedRemote", [repoPath, remoteName]);
   },
-  syncRepoToContexts(repoPath: string): Promise<{ synced: string }> {
-    return rpc.call("main", "git.syncRepoToContexts", [repoPath]);
+  ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }> {
+    return rpc.call("main", "git.ensureRepoPresentInContexts", [repoPath]);
+  },
+  publishWorkspaceRepo(
+    repoPath: string,
+    message: string,
+    options: PublishWorkspaceRepoOptions = {}
+  ): Promise<PublishWorkspaceRepoResult> {
+    return publishWorkspaceRepoWithClient(gitApi.client(), repoPath, message, options);
   },
   client(
     options: {

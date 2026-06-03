@@ -61,6 +61,11 @@ import {
 } from "../approvals.js";
 import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
 import { createContextAwareGitClient } from "../shared/contextGitClient.js";
+import {
+  publishWorkspaceRepo as publishWorkspaceRepoWithClient,
+  type PublishWorkspaceRepoOptions,
+  type PublishWorkspaceRepoResult,
+} from "../shared/workspaceGitPublish.js";
 import type { PanelHandle } from "../core/index.js";
 import type { WorkerEnv } from "./types.js";
 import type { RuntimeFs } from "../types.js";
@@ -171,7 +176,12 @@ export interface RuntimeGitApi {
     repoPath: string,
     remoteName: string
   ): Promise<Record<string, unknown> | undefined>;
-  syncRepoToContexts(repoPath: string): Promise<{ synced: string }>;
+  ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }>;
+  publishWorkspaceRepo(
+    repoPath: string,
+    message: string,
+    options?: PublishWorkspaceRepoOptions
+  ): Promise<PublishWorkspaceRepoResult>;
   client(options?: { credentialId?: string }): GitClient;
 }
 // Cache runtime per worker ID to avoid creating multiple bridges
@@ -375,8 +385,15 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     ): Promise<Record<string, unknown> | undefined> {
       return callMain("git.removeSharedRemote", repoPath, remoteName);
     },
-    syncRepoToContexts(repoPath: string): Promise<{ synced: string }> {
-      return callMain("git.syncRepoToContexts", repoPath);
+    ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }> {
+      return callMain("git.ensureRepoPresentInContexts", repoPath);
+    },
+    publishWorkspaceRepo(
+      repoPath: string,
+      message: string,
+      options: PublishWorkspaceRepoOptions = {}
+    ): Promise<PublishWorkspaceRepoResult> {
+      return publishWorkspaceRepoWithClient(git.client(), repoPath, message, options);
     },
     client(options: { credentialId?: string } = {}) {
       if (!gitConfig) {

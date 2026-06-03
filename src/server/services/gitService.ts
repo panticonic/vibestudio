@@ -50,7 +50,7 @@ type GitServiceDeps = {
   workspaceConfig?: WorkspaceConfig;
   contextFolderManager?: Pick<
     ContextFolderManager,
-    "ensureContextFolder" | "syncDeclaredRemotes" | "syncRepoToContexts"
+    "ensureContextFolder" | "syncDeclaredRemotes" | "ensureRepoPresentInContexts"
   >;
   entityCache?: Pick<EntityCache, "resolveContext">;
   egressProxy?: Pick<EgressProxy, "forwardGitHttp">;
@@ -127,7 +127,7 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
       completeWorkspaceDependencies: {
         args: z.union([z.tuple([]), z.tuple([completeWorkspaceDependenciesSchema.optional()])]),
       },
-      syncRepoToContexts: { args: z.tuple([z.string()]) },
+      ensureRepoPresentInContexts: { args: z.tuple([z.string()]) },
     },
     handler: async (ctx, method, args) => {
       const g = deps.gitServer;
@@ -294,11 +294,11 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
           return completeWorkspaceDependencies(ctx, deps, options);
         }
 
-        case "syncRepoToContexts": {
+        case "ensureRepoPresentInContexts": {
           const [repoPath] = args as [string];
           const validRepoPath = normalizeWorkspaceRepoPath(repoPath);
-          await deps.contextFolderManager?.syncRepoToContexts(validRepoPath);
-          return { synced: validRepoPath };
+          await deps.contextFolderManager?.ensureRepoPresentInContexts(validRepoPath);
+          return { ensured: validRepoPath };
         }
 
         default:
@@ -549,7 +549,7 @@ async function importWorkspaceRepo(
     });
     await propagateSharedRemote(deps, validRepoPath);
     deps.gitServer.invalidateTreeCache();
-    await deps.contextFolderManager?.syncRepoToContexts(validRepoPath);
+    await deps.contextFolderManager?.ensureRepoPresentInContexts(validRepoPath);
     return { path: validRepoPath, remote: normalizedRemote };
   } catch (err) {
     await fsPromises.rm(absolutePath, { recursive: true, force: true }).catch(() => undefined);
