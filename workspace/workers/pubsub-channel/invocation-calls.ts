@@ -70,6 +70,35 @@ export function consumeCall(sql: SqlStorage, transportCallId: string): {
 }
 
 /**
+ * Read a pending call without consuming it. Used by progress submission, which
+ * appends an `invocation.output` event for a still-pending call but must not
+ * remove the call (only the terminal result consumes it).
+ */
+export function peekCall(sql: SqlStorage, transportCallId: string): {
+  transportCallId: string;
+  invocationId: string;
+  turnId?: string;
+  callerId: string;
+  targetId: string;
+  method: string;
+} | null {
+  const rows = sql.exec(
+    `SELECT transport_call_id, invocation_id, turn_id, caller_id, target_id, method FROM pending_calls WHERE transport_call_id = ?`,
+    transportCallId,
+  ).toArray();
+  if (rows.length === 0) return null;
+  const row = rows[0]!;
+  return {
+    transportCallId: row["transport_call_id"] as string,
+    invocationId: row["invocation_id"] as string,
+    turnId: row["turn_id"] ? row["turn_id"] as string : undefined,
+    callerId: row["caller_id"] as string,
+    targetId: row["target_id"] as string,
+    method: row["method"] as string,
+  };
+}
+
+/**
  * Cancel a pending call by ID.
  */
 export function cancelCall(sql: SqlStorage, transportCallId: string): {

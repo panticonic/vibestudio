@@ -537,6 +537,13 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           if (msg.id > 0) lastSeenSeq = msg.id;
         }
 
+        // Method lifecycle (caller settle / provider abort) runs first, before
+        // the replayMode:skip short-circuit — a cold reconnect must still settle
+        // in-flight calls from replayed invocation.* events.
+        if (msg.stream === "log" && msg.type === AGENTIC_EVENT_PAYLOAD_KIND) {
+          handleInvocationLifecycle(msg.payload, convertWireAttachments(msg.attachments));
+        }
+
         if (msg.stream === "log" && msg.phase === "replay" && replayMode === "skip") {
           break;
         }
@@ -672,6 +679,14 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       for (const snapshot of envelope.snapshots) {
         applyRosterSnapshot(snapshot);
       }
+    } else {
+      // Skip drops user-facing replay, but still settle in-flight method calls
+      // from replayed invocation.* lifecycle events.
+      for (const event of envelope.logEvents) {
+        if (isInvocationLifecycleEvent(event)) {
+          handleServerMessage(eventToClientIngress(event, "replay"));
+        }
+      }
     }
     handleServerMessage({
       stream: "control",
@@ -692,15 +707,84 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     ingestReplayEnvelope(result.envelope, "ack");
   }
 
+  /** True for the durable method-lifecycle events the channel emits. */
+  function isInvocationLifecycleEvent(event: ServerLogEvent): boolean {
+    if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return false;
+    const kind = (event.payload as { kind?: string } | undefined)?.kind;
+    return (
+      kind === "invocation.output" ||
+      kind === "invocation.completed" ||
+      kind === "invocation.failed" ||
+      kind === "invocation.cancelled" ||
+      kind === "invocation.abandoned"
+    );
+  }
+
+  /**
+   * Settle a pending `callMethod` (caller role) or abort an executing method
+   * (provider role) from a durable `invocation.*` log event. This replaces the
+   * removed method-`*` wire transports. The feedback-cancel UX is handled
+   * separately by observing `invocation.cancelled` on the events stream (see
+   * useChatFeedback).
+   */
+  function handleInvocationLifecycle(
+    payload: unknown,
+    attachments: Attachment[] | undefined
+  ): void {
+    const ev = payload as
+      | { kind?: string; causality?: { invocationId?: string; transportCallId?: string }; payload?: Record<string, unknown> }
+      | undefined;
+    if (!ev || typeof ev !== "object") return;
+    const kind = ev.kind;
+    const callId = ev.causality?.transportCallId ?? ev.causality?.invocationId;
+    if (!callId) return;
+    const body = ev.payload ?? {};
+
+    // Caller: settle / stream a pending callMethod.
+    if (methodCallStates.has(callId)) {
+      if (kind === "invocation.output") {
+        void enqueueMethodResultChunk({
+          callId,
+          content: body["output"],
+          complete: false,
+          isError: false,
+          ...(attachments ? { attachments } : {}),
+        });
+      } else if (
+        kind === "invocation.completed" ||
+        kind === "invocation.failed" ||
+        kind === "invocation.cancelled" ||
+        kind === "invocation.abandoned"
+      ) {
+        const isError = kind !== "invocation.completed";
+        const content = isError ? (body["error"] ?? body["reason"]) : body["result"];
+        void enqueueMethodResultChunk({
+          callId,
+          content,
+          complete: true,
+          isError,
+          ...(attachments ? { attachments } : {}),
+        });
+      }
+    }
+
+    // Provider: abort the executing method on cancel/abandon (completion facts
+    // are not abort commands). Methods that ignore ctx.signal (e.g. feedback)
+    // are resolved by their own observation of invocation.cancelled.
+    if (
+      (kind === "invocation.cancelled" || kind === "invocation.abandoned") &&
+      executingMethods.has(callId)
+    ) {
+      abortExecutingMethod(callId);
+    }
+  }
+
   async function applyMethodResultChunk(result: {
     callId: string;
     content: unknown;
     complete: boolean;
     isError: boolean;
-    progress?: number;
     attachments?: Attachment[];
-    attachmentsReplayable?: boolean;
-    contentType?: string;
   }): Promise<void> {
     const state = methodCallStates.get(result.callId);
     if (!state) return;
@@ -721,13 +805,8 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     const chunk: MethodResultChunk = {
       content,
       ...(result.attachments ? { attachments: result.attachments } : {}),
-      ...(result.attachmentsReplayable !== undefined
-        ? { attachmentsReplayable: result.attachmentsReplayable }
-        : {}),
-      contentType: result.contentType,
       complete: result.complete,
       isError: result.isError,
-      progress: result.progress,
     };
 
     state.stream.emit(chunk);
@@ -755,10 +834,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       state.resolve({
         content: chunk.content,
         ...(chunk.attachments ? { attachments: chunk.attachments } : {}),
-        ...(chunk.attachmentsReplayable !== undefined
-          ? { attachmentsReplayable: chunk.attachmentsReplayable }
-          : {}),
-        contentType: chunk.contentType,
       });
     }
     methodCallStates.delete(result.callId);
@@ -788,38 +863,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     return next;
   }
 
-  async function recoverSettledMethodCalls(): Promise<void> {
-    const pending = [...methodCallStates.values()].filter((state) => !state.complete);
-    for (const state of pending) {
-      try {
-        const settled = await callChannel<{
-          content: unknown;
-          isError: boolean;
-          terminalOutcome: string | null;
-          terminalReasonCode: string | null;
-          contentType?: string | null;
-          attachmentsReplayable?: boolean;
-        } | null>("getSettledResult", state.transportCallId);
-        if (!settled) continue;
-        await enqueueMethodResultChunk({
-          callId: state.callId,
-          content: settled.content,
-          complete: true,
-          isError: settled.isError,
-          ...(settled.attachmentsReplayable !== undefined
-            ? { attachmentsReplayable: settled.attachmentsReplayable }
-            : {}),
-          ...(settled.contentType ? { contentType: settled.contentType } : {}),
-        });
-      } catch (err) {
-        console.warn(
-          `[PubSubClient] Failed to recover settled method result for ${state.transportCallId}:`,
-          err
-        );
-      }
-    }
-  }
-
   async function submitMethodResult(
     invocationId: string,
     transportCallId: string,
@@ -830,7 +873,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       terminalOutcome?: string;
       terminalReasonCode?: string;
       attachments?: AttachmentInput[];
-      contentType?: string;
     }
   ): Promise<void> {
     if (!pid) {
@@ -844,7 +886,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       ...(opts?.terminalOutcome ? { terminalOutcome: opts.terminalOutcome } : {}),
       ...(opts?.terminalReasonCode ? { terminalReasonCode: opts.terminalReasonCode } : {}),
       ...(opts?.attachments ? { attachments: toStoredAttachments(opts.attachments) } : {}),
-      ...(opts?.contentType ? { contentType: opts.contentType } : {}),
     });
   }
 
@@ -854,9 +895,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     content: unknown,
     opts?: {
       turnId?: string;
-      progress?: number;
       attachments?: AttachmentInput[];
-      contentType?: string;
     }
   ): Promise<void> {
     if (!pid) {
@@ -867,9 +906,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     await callChannel("submitMethodProgress", pid, transportCallId, content, {
       invocationId,
       ...(opts?.turnId ? { turnId: opts.turnId } : {}),
-      ...(typeof opts?.progress === "number" ? { progress: opts.progress } : {}),
       ...(opts?.attachments ? { attachments: toStoredAttachments(opts.attachments) } : {}),
-      ...(opts?.contentType ? { contentType: opts.contentType } : {}),
     });
   }
 
@@ -914,8 +951,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       },
       streamWithAttachments: async (
         content: unknown,
-        attachments: AttachmentInput[],
-        streamOpts?: { contentType?: string }
+        attachments: AttachmentInput[]
       ) => {
         await submitMethodProgress(
           event.invocationId,
@@ -924,27 +960,16 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           {
             turnId: event.turnId,
             attachments,
-            contentType: streamOpts?.contentType,
           }
         );
       },
       resultWithAttachments: <R>(
         content: R,
-        attachments: AttachmentInput[],
-        resultOpts?: { contentType?: string }
+        attachments: AttachmentInput[]
       ) => ({
         content,
         attachments,
-        contentType: resultOpts?.contentType,
       }),
-      progress: async (percent: number) => {
-        await submitMethodProgress(
-          event.invocationId,
-          event.transportCallId,
-          undefined,
-          { turnId: event.turnId, progress: percent }
-        );
-      },
     };
 
     try {
@@ -978,7 +1003,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
         const withAttachments = result as {
           content: unknown;
           attachments: AttachmentInput[];
-          contentType?: string;
         };
         await submitMethodResult(
           event.invocationId,
@@ -988,7 +1012,6 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
           {
             turnId: event.turnId,
             attachments: withAttachments.attachments,
-            contentType: withAttachments.contentType,
           }
         );
       } else {
@@ -1102,40 +1125,15 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
         return;
       }
       if (raw.kind === "log" && raw.phase === "replay" && raw.event && !replayComplete) {
-        if (replayMode === "skip") return;
+        if (replayMode === "skip") {
+          // Skip drops user-facing replay, but still settle in-flight method
+          // calls from replayed invocation.* lifecycle events.
+          if (isInvocationLifecycleEvent(raw.event)) {
+            handleServerMessage(eventToClientIngress(raw.event, "replay"));
+          }
+          return;
+        }
         streamedReplayLogEvents.push(raw.event);
-        return;
-      }
-      if (raw.kind === "method-result") {
-        const attachments = convertWireAttachments(raw.attachments);
-        void enqueueMethodResultChunk({
-          callId: raw.callId,
-          content: raw.content,
-          complete: true,
-          isError: raw.isError,
-          attachments,
-          attachmentsReplayable: attachments ? true : undefined,
-          contentType: raw.contentType,
-        });
-        return;
-      }
-      if (raw.kind === "method-progress") {
-        const attachments = convertWireAttachments(raw.attachments);
-        void enqueueMethodResultChunk({
-          callId: raw.callId,
-          content: raw.content,
-          complete: false,
-          isError: false,
-          progress: raw.progress,
-          attachments,
-          attachmentsReplayable: attachments ? true : undefined,
-          contentType: raw.contentType,
-        });
-        return;
-      }
-      if (raw.kind === "method-cancel") {
-        if (raw.targetId && raw.targetId !== pid) return;
-        abortExecutingMethod(raw.callId);
         return;
       }
       const msg: ClientIngressMessage | null =
@@ -1248,7 +1246,8 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       const resubMeta = { ...subscribeMetadata, sinceId: lastSeenSeq, replay: true };
       const result = await callChannel<SubscribeResult | undefined>("subscribe", pid, resubMeta);
       applySubscribeAckFallback(result);
-      await recoverSettledMethodCalls();
+      // In-flight method calls are recovered from replayed invocation.* events
+      // (handleInvocationLifecycle), not a settled-results read-back.
       consecutiveTouchFailures = 0;
       reconnectAttempts = 0;
       reconnecting = false;
@@ -1532,7 +1531,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
   // `ctx.signal` from the controller stored in `executingMethods` keyed by the
   // inbound transport call id (see handleMethodCallExec). Firing it here stops
   // the local execution immediately; the method's abort path submits a
-  // terminal method-result, which settles the caller's pending result.
+  // terminal invocation result, which settles the caller's pending result.
   function abortExecutingMethod(callId: string): boolean {
     const controller = executingMethods.get(callId);
     if (!controller) return false;

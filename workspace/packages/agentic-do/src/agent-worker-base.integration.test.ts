@@ -1428,27 +1428,21 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(worker.recoverDeliveredAndOrphanedSuspensions).toHaveBeenCalled();
   });
 
-  it("re-learns a channel-settled result missed during hibernation (Phase 2 recovery authority)", async () => {
+  it("ingests a replayed invocation terminal for a pending suspension on wake", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
     });
-    const getSettledResult = vi.fn().mockResolvedValue({
-      content: { ok: true },
-      isError: false,
-      terminalOutcome: "completed",
-      terminalReasonCode: null,
-    });
     const worker = instance as unknown as {
-      sweepStuckDelivery: ReturnType<typeof vi.fn>;
-      recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
-      getOrCreateRunner: ReturnType<typeof vi.fn>;
-      createChannelClient: ReturnType<typeof vi.fn>;
-      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+      channelsInReplay: Set<string>;
+      handleCompletedMethodResult(
+        channelId: string,
+        callId: string,
+        result: unknown,
+        isError: boolean,
+        terminalKind?: string,
+        eventId?: number
+      ): Promise<void>;
     };
-    worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
-    worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
-    worker.getOrCreateRunner = vi.fn().mockResolvedValue({} as PiRunner);
-    worker.createChannelClient = vi.fn().mockReturnValue({ getSettledResult });
 
     insertTurnRun(sql, { turnId: "turn-missed", status: "waiting_external" });
     insertSuspension(sql, {
@@ -1457,12 +1451,11 @@ describe("AgentWorkerBase method suspension ledger", () => {
       deliveryStatus: "pending",
     });
 
-    await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
+    // Replay re-delivers the terminal that settled while the agent was asleep.
+    // (channelsInReplay defers the recovery continuation to the ready hook.)
+    worker.channelsInReplay.add("chat-1");
+    await worker.handleCompletedMethodResult("chat-1", "missed-call", { ok: true }, false, "completed", 5);
 
-    // The agent re-read the channel's canonical settled result for the pending
-    // call and durably ingested it onto the suspension row — closing the
-    // "result settled while asleep, live delivery missed" hang.
-    expect(getSettledResult).toHaveBeenCalledWith("missed-call");
     const row = sql
       .exec(
         `SELECT terminal_kind, result_is_error FROM agent_method_suspensions WHERE transport_call_id = ?`,
@@ -1473,22 +1466,19 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(row["result_is_error"]).toBe(0);
   });
 
-  it("leaves a genuinely-pending suspension untouched when the channel has no settled result", async () => {
+  it("leaves a genuinely-pending suspension untouched when no terminal has replayed", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
     });
-    const getSettledResult = vi.fn().mockResolvedValue(null);
     const worker = instance as unknown as {
       sweepStuckDelivery: ReturnType<typeof vi.fn>;
       recoverDeliveredAndOrphanedSuspensions: ReturnType<typeof vi.fn>;
       getOrCreateRunner: ReturnType<typeof vi.fn>;
-      createChannelClient: ReturnType<typeof vi.fn>;
       recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
     };
     worker.sweepStuckDelivery = vi.fn().mockResolvedValue(undefined);
     worker.recoverDeliveredAndOrphanedSuspensions = vi.fn().mockResolvedValue(false);
     worker.getOrCreateRunner = vi.fn().mockResolvedValue({} as PiRunner);
-    worker.createChannelClient = vi.fn().mockReturnValue({ getSettledResult });
 
     insertTurnRun(sql, { turnId: "turn-still-waiting", status: "waiting_external" });
     insertSuspension(sql, {
@@ -1499,9 +1489,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
 
     await worker.recoverFromTurnLedger("chat-1", {} as PiRunner);
 
-    // No canonical result exists yet — the call is genuinely in flight. The
-    // suspension must stay pending (waiting, not fabricated, not hung).
-    expect(getSettledResult).toHaveBeenCalledWith("still-waiting");
+    // No terminal has replayed — the call is genuinely in flight. The suspension
+    // must stay pending (waiting, not fabricated, not hung). Recovery does not
+    // read any channel side-table.
     const row = sql
       .exec(
         `SELECT terminal_kind, delivery_status FROM agent_method_suspensions WHERE transport_call_id = ?`,
@@ -4670,6 +4660,52 @@ describe("AgentWorkerBase fork subscription state", () => {
   });
 });
 
+/** Build a {kind:"log"} channel envelope carrying a durable invocation.* terminal. */
+function invocationTerminalEnvelope(opts: {
+  terminal: "invocation.completed" | "invocation.failed" | "invocation.cancelled" | "invocation.abandoned";
+  invocationId: string;
+  transportCallId: string;
+  content: unknown;
+  terminalReasonCode?: string;
+}) {
+  const outcome =
+    opts.terminal === "invocation.completed"
+      ? "success"
+      : opts.terminal === "invocation.failed"
+        ? "tool_error"
+        : opts.terminal === "invocation.abandoned"
+          ? "abandoned"
+          : "cancelled";
+  const payload =
+    opts.terminal === "invocation.completed"
+      ? { protocol: "agentic.trajectory.v1", terminalOutcome: outcome, result: opts.content }
+      : {
+          protocol: "agentic.trajectory.v1",
+          terminalOutcome: outcome,
+          reason: typeof opts.content === "string" ? opts.content : "method failed",
+          error: opts.content,
+          ...(opts.terminalReasonCode ? { terminalReasonCode: opts.terminalReasonCode } : {}),
+        };
+  return {
+    kind: "log" as const,
+    phase: "live" as const,
+    event: {
+      id: 1,
+      messageId: "",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: {
+        kind: opts.terminal,
+        actor: { kind: "panel", id: "panel:panel-1" },
+        causality: { invocationId: opts.invocationId, transportCallId: opts.transportCallId },
+        payload,
+        createdAt: new Date().toISOString(),
+      },
+      senderId: "panel:panel-1",
+      ts: Date.now(),
+    },
+  };
+}
+
 describe("AgentWorkerBase dispatched method results", () => {
   it("waits for the canonical invocation completion before completing the tool call", async () => {
     const { instance } = await createTestDO(TestAgentWorker, {
@@ -4710,17 +4746,12 @@ describe("AgentWorkerBase dispatched method results", () => {
       callMethod: vi.fn(async (_callerId, _targetId, callId, _method, _args, opts) => {
         capturedCallId = callId;
         capturedOpts = opts;
-        await worker.onChannelEnvelope("chat-1", {
-          kind: "method-result",
-          callId: opts.transportCallId,
+        await worker.onChannelEnvelope("chat-1", invocationTerminalEnvelope({
+          terminal: "invocation.completed",
           invocationId: opts.invocationId,
+          transportCallId: opts.transportCallId,
           content: { ok: true },
-          isError: false,
-          terminalOutcome: "success",
-          terminalReasonCode: null,
-          senderId: "panel:panel-1",
-          ts: Date.now(),
-        });
+        }));
       }),
     });
     const abort = vi.fn().mockResolvedValue(undefined);
@@ -4783,17 +4814,13 @@ describe("AgentWorkerBase dispatched method results", () => {
         },
       ]),
       callMethod: vi.fn(async (_callerId, _targetId, _callId, _method, _args, opts) => {
-        await worker.onChannelEnvelope("chat-1", {
-          kind: "method-result",
-          callId: opts.transportCallId,
+        await worker.onChannelEnvelope("chat-1", invocationTerminalEnvelope({
+          terminal: "invocation.failed",
           invocationId: opts.invocationId,
+          transportCallId: opts.transportCallId,
           content: { error: "Authentication failed for internal push" },
-          isError: true,
-          terminalOutcome: "tool_error",
           terminalReasonCode: "method_failed",
-          senderId: "panel:panel-1",
-          ts: Date.now(),
-        });
+        }));
       }),
     });
 
@@ -4844,17 +4871,13 @@ describe("AgentWorkerBase dispatched method results", () => {
         },
       ]),
       callMethod: vi.fn(async (_callerId, _targetId, _callId, _method, _args, opts) => {
-        await worker.onChannelEnvelope("chat-1", {
-          kind: "method-result",
-          callId: opts.transportCallId,
+        await worker.onChannelEnvelope("chat-1", invocationTerminalEnvelope({
+          terminal: "invocation.abandoned",
           invocationId: opts.invocationId,
+          transportCallId: opts.transportCallId,
           content: "Runner restarted before invocation completed",
-          isError: true,
-          terminalOutcome: "abandoned",
           terminalReasonCode: "runner_restarted_before_invocation_completed",
-          senderId: "panel:panel-1",
-          ts: Date.now(),
-        });
+        }));
       }),
     });
 
@@ -4893,17 +4916,13 @@ describe("AgentWorkerBase dispatched method results", () => {
       setTypingState,
     });
 
-    await worker.onChannelEnvelope("chat-1", {
-      kind: "method-result",
-      callId: "transport-lost",
+    await worker.onChannelEnvelope("chat-1", invocationTerminalEnvelope({
+      terminal: "invocation.failed",
       invocationId: "tool-1",
+      transportCallId: "transport-lost",
       content: "Authentication failed",
-      isError: true,
-      terminalOutcome: "tool_error",
       terminalReasonCode: "method_failed",
-      senderId: "panel:panel-1",
-      ts: Date.now(),
-    });
+    }));
 
     expect(setTypingState).toHaveBeenCalledWith("do:agent", false);
     expect(worker.runners.has("chat-1")).toBe(false);

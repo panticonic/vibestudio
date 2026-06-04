@@ -15,9 +15,6 @@ import type { ChannelEvent } from "@workspace/harness/types";
 import type {
   BootstrapSnapshot,
   ParticipantSnapshot,
-  RpcMethodCancelMessage,
-  RpcMethodProgressMessage,
-  RpcMethodResultMessage,
 } from "@workspace/pubsub";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
@@ -39,9 +36,6 @@ import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-con
 import type { SubscribeResult, ChannelConfig, PresencePayload, StoredAttachment } from "./types.js";
 import {
   broadcast,
-  broadcastMethodCancel,
-  broadcastMethodProgress,
-  broadcastMethodResult,
   buildChannelEvent,
   channelEventToRpcSignal,
   queueEmit,
@@ -58,6 +52,7 @@ import {
 import {
   storeCall,
   consumeCall,
+  peekCall,
   cancelCall as cancelCallDb,
   cancelCallsForTarget,
 } from "./invocation-calls.js";
@@ -68,33 +63,6 @@ const PARTICIPANT_STALE_MS = 5 * 60 * 1000; // 5 minutes
 const PARTICIPANT_CLEANUP_INTERVAL_MS = 60 * 1000; // 1 minute
 /** Default channel-envelope replay window. */
 const REPLAY_LIMIT = 50;
-const MAX_INLINE_METHOD_RESULT_BYTES = 64 * 1024;
-const METHOD_RESULT_PREVIEW_CHARS = 120;
-
-interface MethodTransportStats {
-  resultBroadcasts: number;
-  progressBroadcasts: number;
-  providerCancelBroadcasts: number;
-  settledRecoveryHits: number;
-  duplicateTerminalDrops: number;
-  lateProgressDrops: number;
-  rejectedTerminalSubmissions: number;
-  rejectedProgressSubmissions: number;
-}
-
-function jsonByteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
-}
-
-function summarizeOversizedResult(value: unknown): Record<string, unknown> {
-  if (Array.isArray(value)) {
-    return { type: "array", length: value.length };
-  }
-  if (value && typeof value === "object") {
-    return { type: "object", keys: Object.keys(value as Record<string, unknown>).slice(0, 50) };
-  }
-  return { type: typeof value };
-}
 
 function parseDOParticipantId(
   participantId: string
@@ -109,20 +77,10 @@ function parseDOParticipantId(
 }
 
 export class PubSubChannel extends DurableObjectBase {
-  static override schemaVersion = 103;
+  static override schemaVersion = 104;
   private _channelLog: ChannelLogStore | null = null;
   private _registryHydrated = false;
   private _registryHydrationPromise: Promise<void> | null = null;
-  private readonly methodTransportStats: MethodTransportStats = {
-    resultBroadcasts: 0,
-    progressBroadcasts: 0,
-    providerCancelBroadcasts: 0,
-    settledRecoveryHits: 0,
-    duplicateTerminalDrops: 0,
-    lateProgressDrops: 0,
-    rejectedTerminalSubmissions: 0,
-    rejectedProgressSubmissions: 0,
-  };
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -160,21 +118,6 @@ export class PubSubChannel extends DurableObjectBase {
       )
     `);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS settled_results (
-        transport_call_id TEXT PRIMARY KEY,
-        invocation_id TEXT,
-        turn_id TEXT,
-        target_id TEXT,
-        content_json TEXT,
-        is_error INTEGER NOT NULL,
-        terminal_outcome TEXT,
-        terminal_reason_code TEXT,
-        content_type TEXT,
-        had_attachments INTEGER NOT NULL DEFAULT 0,
-        settled_at INTEGER NOT NULL
-      )
-    `);
-    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS dedup_keys (
         key TEXT PRIMARY KEY,
         result_id INTEGER,
@@ -199,7 +142,6 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DROP TABLE IF EXISTS messages`);
     this.sql.exec(`DROP TABLE IF EXISTS participants`);
     this.sql.exec(`DROP TABLE IF EXISTS pending_calls`);
-    this.sql.exec(`DROP TABLE IF EXISTS settled_results`);
     this.sql.exec(`DROP TABLE IF EXISTS dedup_keys`);
     this.sql.exec(`DROP TABLE IF EXISTS message_types`);
     this.createTables();
@@ -226,10 +168,6 @@ export class PubSubChannel extends DurableObjectBase {
     return this._channelLog;
   }
 
-  getMethodTransportStats(): MethodTransportStats {
-    return { ...this.methodTransportStats };
-  }
-
   private pendingCallTarget(transportCallId: string): string | null {
     const rows = this.sql
       .exec(`SELECT target_id FROM pending_calls WHERE transport_call_id = ?`, transportCallId)
@@ -237,57 +175,27 @@ export class PubSubChannel extends DurableObjectBase {
     return rows.length > 0 ? (rows[0]!["target_id"] as string) : null;
   }
 
-  private settledResultTarget(transportCallId: string): { exists: boolean; targetId: string | null } {
-    const rows = this.sql
-      .exec(`SELECT target_id FROM settled_results WHERE transport_call_id = ?`, transportCallId)
-      .toArray();
-    if (rows.length === 0) return { exists: false, targetId: null };
-    return {
-      exists: true,
-      targetId: (rows[0]!["target_id"] as string | null) ?? null,
-    };
-  }
-
-  private methodSubmitterState(
+  /**
+   * Provider-identity authorization for a submit. Throws if a pending call
+   * exists whose target is a *different* participant (only the call's target may
+   * submit its result/progress). Returns whether a pending call exists for the
+   * submitting target — callers use `false` to drop (result: diagnose; progress:
+   * quiet no-op), since the call has already been consumed by its terminal.
+   */
+  private assertSubmitterIsTarget(
     participantId: string,
     transportCallId: string,
-    operation: "submitMethodResult" | "submitMethodProgress",
-    allowSettledDuplicate: boolean
-  ): "pending" | "settled" {
+    operation: "submitMethodResult" | "submitMethodProgress"
+  ): boolean {
     const targetId = this.pendingCallTarget(transportCallId);
-    if (targetId) {
-      if (targetId === participantId) return "pending";
-      if (operation === "submitMethodResult") {
-        this.methodTransportStats.rejectedTerminalSubmissions += 1;
-      } else {
-        this.methodTransportStats.rejectedProgressSubmissions += 1;
-      }
+    if (!targetId) return false;
+    if (targetId !== participantId) {
       throw new Error(
         `${operation} rejected: participant ${participantId} is not target ${targetId} ` +
           `for method call ${transportCallId}`
       );
     }
-    const settled = this.settledResultTarget(transportCallId);
-    if (settled.exists) {
-      if (settled.targetId && settled.targetId !== participantId) {
-        if (operation === "submitMethodResult") {
-          this.methodTransportStats.rejectedTerminalSubmissions += 1;
-        } else {
-          this.methodTransportStats.rejectedProgressSubmissions += 1;
-        }
-        throw new Error(
-          `${operation} rejected: participant ${participantId} is not settled target ` +
-            `${settled.targetId} for method call ${transportCallId}`
-        );
-      }
-      if (allowSettledDuplicate || operation === "submitMethodProgress") return "settled";
-    }
-    if (operation === "submitMethodResult") {
-      this.methodTransportStats.rejectedTerminalSubmissions += 1;
-    } else {
-      this.methodTransportStats.rejectedProgressSubmissions += 1;
-    }
-    throw new Error(`${operation} rejected: method call ${transportCallId} is not pending`);
+    return true;
   }
 
   /** Look up a participant's metadata from the participants table. */
@@ -400,6 +308,29 @@ export class PubSubChannel extends DurableObjectBase {
             terminalReasonCode: terminalReasonCode ?? "method_failed",
           })
         : invocationCompletedPayload({ result }),
+      createdAt: new Date().toISOString(),
+    } as AgenticEvent;
+  }
+
+  private invocationOutputPayload(
+    callerId: string,
+    invocationId: string,
+    transportCallId: string | undefined,
+    turnId: string | undefined,
+    output: unknown
+  ): AgenticEvent {
+    return {
+      kind: "invocation.output",
+      actor: this.participantRef(callerId),
+      ...(turnId ? { turnId: turnId as TurnId } : {}),
+      causality: {
+        invocationId: invocationId as InvocationId,
+        ...(transportCallId ? { transportCallId } : {}),
+      },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        output,
+      },
       createdAt: new Date().toISOString(),
     } as AgenticEvent;
   }
@@ -1163,19 +1094,17 @@ export class PubSubChannel extends DurableObjectBase {
           ? `Target ${targetId} disconnected from the channel before the call completed`
           : `Target ${targetId} was replaced by a new session before the call completed`;
     for (const { transportCallId, invocationId, turnId, callerId, targetId } of cancelled) {
-      // Record the canonical terminal BEFORE delivery (terminal-once, like
-      // handleMethodResult): a hibernated caller that misses the live
-      // invocation.failed broadcast must still be able to recover this outcome
-      // via getSettledResult() on wake instead of waiting forever. "abandoned"
-      // marks a target-left termination; the agent maps it to a cancelled wait.
+      // Append the canonical `invocation.abandoned` terminal to the durable log.
+      // A hibernated caller that misses the live broadcast recovers this outcome
+      // by replaying the log on wake. "abandoned" marks a target-left
+      // termination; the agent maps it to a cancelled wait.
       try {
         await this.settleConsumedMethodCall(
           { callerId, invocationId, transportCallId, turnId, targetId },
           { error: errorMessage },
           true,
           "abandoned",
-          reason,
-          { senderId: "system" }
+          reason
         );
       } catch (err) {
         console.warn(
@@ -1687,10 +1616,7 @@ export class PubSubChannel extends DurableObjectBase {
       await this.handleMethodResult(
         transportCallId,
         { error: `Target ${targetPid} not found` },
-        true,
-        undefined,
-        undefined,
-        { senderId: "system" }
+        true
       );
       return;
     }
@@ -1758,8 +1684,9 @@ export class PubSubChannel extends DurableObjectBase {
 
   /**
    * Submit a terminal method result from a participant executing a channel call.
-   * This is the first-class result transport; invocation.* log events are
-   * appended later for display/history only.
+   * Appends the canonical `invocation.completed`/`failed` durable log event;
+   * the channel log store spills large content and the durable envelope carries
+   * any attachments. The pending call is consumed (terminal-once).
    */
   async submitMethodResult(
     participantId: string,
@@ -1772,18 +1699,17 @@ export class PubSubChannel extends DurableObjectBase {
       terminalOutcome?: InvocationOutcome;
       terminalReasonCode?: string;
       attachments?: StoredAttachment[];
-      contentType?: string;
     }
   ): Promise<{ id?: number }> {
     this.assertParticipantCaller(participantId, "submitMethodResult");
-    const submitterState = this.methodSubmitterState(
-      participantId,
-      transportCallId,
-      "submitMethodResult",
-      true
-    );
-    if (submitterState === "settled") {
-      this.methodTransportStats.duplicateTerminalDrops += 1;
+    // Provider-identity auth. If no pending call exists the terminal already
+    // settled (consumed) — drop with a diagnostic; the canonical terminal is
+    // already in the durable log from the original settle.
+    if (!this.assertSubmitterIsTarget(participantId, transportCallId, "submitMethodResult")) {
+      console.warn(
+        `[Channel] submitMethodResult dropped: no pending call (already terminal or unknown): ` +
+          `channel=${this.objectKey} transportCallId=${transportCallId} isError=${isError}`
+      );
       return { id: undefined };
     }
     const id = await this.handleMethodResult(
@@ -1792,18 +1718,16 @@ export class PubSubChannel extends DurableObjectBase {
       isError,
       opts?.terminalOutcome,
       opts?.terminalReasonCode,
-      {
-        attachments: opts?.attachments,
-        contentType: opts?.contentType,
-        senderId: participantId,
-      }
+      { attachments: opts?.attachments }
     );
     return { id };
   }
 
   /**
-   * Submit an ephemeral method progress/output chunk. Progress is best-effort
-   * live transport only; terminal recovery remains exclusively settled_results.
+   * Submit a method progress/output chunk. Appends a durable `invocation.output`
+   * log event for a *still-pending* call (reduced into the invocation card's
+   * console output and consumed by the agent). A chunk that races its own
+   * terminal (no pending call) is a quiet no-op.
    */
   async submitMethodProgress(
     participantId: string,
@@ -1812,40 +1736,40 @@ export class PubSubChannel extends DurableObjectBase {
     opts?: {
       invocationId?: string;
       turnId?: string;
-      progress?: number;
       attachments?: StoredAttachment[];
-      contentType?: string;
     }
   ): Promise<void> {
     this.assertParticipantCaller(participantId, "submitMethodProgress");
-    const submitterState = this.methodSubmitterState(
-      participantId,
-      transportCallId,
-      "submitMethodProgress",
-      false
-    );
-    if (submitterState === "settled") {
-      this.methodTransportStats.lateProgressDrops += 1;
+    // Provider-identity auth; no pending call ⇒ progress lost the race with its
+    // terminal ⇒ quiet no-op (best-effort).
+    if (!this.assertSubmitterIsTarget(participantId, transportCallId, "submitMethodProgress")) {
       return;
     }
-    const message: RpcMethodProgressMessage = {
-      kind: "method-progress",
-      callId: transportCallId,
-      ...(opts?.invocationId ? { invocationId: opts.invocationId } : {}),
-      ...(opts?.turnId ? { turnId: opts.turnId } : {}),
-      content,
-      ...(typeof opts?.progress === "number" ? { progress: opts.progress } : {}),
-      ...(opts?.contentType ? { contentType: opts.contentType } : {}),
+    const pending = peekCall(this.sql, transportCallId);
+    if (!pending) return;
+    await this.ensureMethodRoot(
+      pending.invocationId,
+      pending.callerId,
+      pending.targetId,
+      pending.transportCallId,
+      pending.turnId
+    );
+    const payload = this.invocationOutputPayload(
+      pending.callerId,
+      pending.invocationId,
+      pending.transportCallId,
+      pending.turnId,
+      content
+    );
+    const event = await this.appendLogEvent(AGENTIC_EVENT_PAYLOAD_KIND, payload, pending.callerId, undefined, {
       ...(opts?.attachments ? { attachments: opts.attachments } : {}),
-      senderId: participantId,
-      ts: Date.now(),
-    };
-    this.methodTransportStats.progressBroadcasts += 1;
-    broadcastMethodProgress(this.broadcastDeps, message, participantId);
+    });
+    broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, pending.callerId);
   }
 
   /**
-   * Handle a terminal invocation result from a participant.
+   * Handle a terminal invocation result from a participant — consume the pending
+   * call and append the canonical `invocation.*` terminal.
    */
   async handleMethodResult(
     transportCallId: string,
@@ -1855,35 +1779,16 @@ export class PubSubChannel extends DurableObjectBase {
     terminalReasonCode?: string,
     transportOpts?: {
       attachments?: StoredAttachment[];
-      contentType?: string;
-      appendDisplay?: boolean;
-      senderId?: string;
     }
   ): Promise<number | undefined> {
     const pending = consumeCall(this.sql, transportCallId);
     if (!pending) {
-      const boundedContent = await this.boundMethodResultForDurableEvent(
-        undefined,
-        transportCallId,
-        content
-      );
-      const inserted = this.recordSettledResult(
-        transportCallId,
-        undefined,
-        undefined,
-        undefined,
-        boundedContent,
-        isError,
-        terminalOutcome,
-        terminalReasonCode,
-        transportOpts?.contentType,
-        !!transportOpts?.attachments?.length
-      );
-      if (!inserted) this.methodTransportStats.duplicateTerminalDrops += 1;
+      // Lost a race with another terminal (cancel/timeout/duplicate) that already
+      // consumed the call and logged its terminal. Drop with a diagnostic — the
+      // canonical terminal is already durable.
       console.warn(
-        `[Channel] invocation result without a live pending call (recorded in ` +
-          `settled_results for replay): channel=${this.objectKey} ` +
-          `transportCallId=${transportCallId} isError=${isError}`
+        `[Channel] method result without a live pending call (already terminal): ` +
+          `channel=${this.objectKey} transportCallId=${transportCallId} isError=${isError}`
       );
       return undefined;
     }
@@ -1915,206 +1820,50 @@ export class PubSubChannel extends DurableObjectBase {
     terminalReasonCode?: string,
     transportOpts?: {
       attachments?: StoredAttachment[];
-      contentType?: string;
-      appendDisplay?: boolean;
-      senderId?: string;
     }
   ): Promise<number | undefined> {
-    const boundedContent = await this.boundMethodResultForDurableEvent(
-      pending.method,
-      pending.transportCallId,
-      content
-    );
-    const inserted = this.recordSettledResult(
-      pending.transportCallId,
-      pending.invocationId,
-      pending.turnId,
-      pending.targetId,
-      boundedContent,
-      isError,
-      terminalOutcome,
-      terminalReasonCode,
-      transportOpts?.contentType,
-      !!transportOpts?.attachments?.length
-    );
-    if (!inserted) {
-      this.methodTransportStats.duplicateTerminalDrops += 1;
-      return undefined;
-    }
-
-    const senderId = transportOpts?.senderId ?? pending.targetId;
-    const message: RpcMethodResultMessage = {
-      kind: "method-result",
-      callId: pending.transportCallId,
-      invocationId: pending.invocationId,
-      ...(pending.turnId ? { turnId: pending.turnId } : {}),
-      content: boundedContent,
-      isError,
-      terminalOutcome: terminalOutcome ?? null,
-      terminalReasonCode: terminalReasonCode ?? null,
-      ...(transportOpts?.contentType ? { contentType: transportOpts.contentType } : {}),
-      ...(transportOpts?.attachments ? { attachments: transportOpts.attachments } : {}),
-      senderId,
-      ts: Date.now(),
-    };
-    this.methodTransportStats.resultBroadcasts += 1;
-    broadcastMethodResult(this.broadcastDeps, message, senderId);
-
-    if (transportOpts?.appendDisplay === false) return undefined;
-
     return this.deliverCallResult(
       pending.callerId,
       pending.invocationId,
       pending.transportCallId,
       pending.turnId,
-      pending.method,
-      boundedContent,
+      content,
       isError,
       terminalOutcome,
-      terminalReasonCode
+      terminalReasonCode,
+      transportOpts?.attachments
     );
   }
 
-  private broadcastProviderCancel(
-    cancelled: {
-      transportCallId: string;
-      invocationId: string;
-      turnId?: string;
-      targetId: string;
-    },
-    reason: string
-  ): void {
-    const message: RpcMethodCancelMessage = {
-      kind: "method-cancel",
-      callId: cancelled.transportCallId,
-      invocationId: cancelled.invocationId,
-      ...(cancelled.turnId ? { turnId: cancelled.turnId } : {}),
-      targetId: cancelled.targetId,
-      reason,
-      senderId: "system",
-      ts: Date.now(),
-    };
-    this.methodTransportStats.providerCancelBroadcasts += 1;
-    broadcastMethodCancel(this.broadcastDeps, message, "system", cancelled.targetId);
-  }
-
   /**
-   * Phase 2: persist the canonical terminal outcome of a method call. The
-   * channel DO is the single arbiter — `INSERT OR IGNORE` makes the first
-   * terminal write win, so competing terminals (caller abort vs provider result
-   * vs timeout) collapse to one canonical record keyed by `transport_call_id`.
-   */
-  private recordSettledResult(
-    transportCallId: string,
-    invocationId: string | undefined,
-    turnId: string | undefined,
-    targetId: string | undefined,
-    content: unknown,
-    isError: boolean,
-    terminalOutcome?: InvocationOutcome,
-    terminalReasonCode?: string,
-    contentType?: string,
-    hadAttachments?: boolean
-  ): boolean {
-    const existing = this.sql
-      .exec(`SELECT 1 FROM settled_results WHERE transport_call_id = ?`, transportCallId)
-      .toArray();
-    if (existing.length > 0) return false;
-    this.sql.exec(
-      `INSERT OR IGNORE INTO settled_results
-         (transport_call_id, invocation_id, turn_id, target_id, content_json, is_error,
-          terminal_outcome, terminal_reason_code, content_type, had_attachments, settled_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      transportCallId,
-      invocationId ?? null,
-      turnId ?? null,
-      targetId ?? null,
-      content === undefined ? null : JSON.stringify(content),
-      isError ? 1 : 0,
-      terminalOutcome ?? null,
-      terminalReasonCode ?? null,
-      contentType ?? null,
-      hadAttachments ? 1 : 0,
-      Date.now()
-    );
-    return true;
-  }
-
-  /**
-   * Phase 2 recovery authority: re-learn a terminally-settled method result.
-   * Used by reconnecting callers / hibernated agents to recover a result whose
-   * ephemeral live delivery they missed. Returns null if not (yet) settled.
-   */
-  getSettledResult(transportCallId: string): {
-    content: unknown;
-    isError: boolean;
-    terminalOutcome: string | null;
-    terminalReasonCode: string | null;
-    contentType: string | null;
-    attachmentsReplayable?: boolean;
-  } | null {
-    const rows = this.sql
-      .exec(
-        `SELECT content_json, is_error, terminal_outcome, terminal_reason_code,
-                content_type, had_attachments
-           FROM settled_results WHERE transport_call_id = ?`,
-        transportCallId
-      )
-      .toArray();
-    if (rows.length === 0) return null;
-    this.methodTransportStats.settledRecoveryHits += 1;
-    const row = rows[0]!;
-    const contentJson = row["content_json"] as string | null;
-    return {
-      content: contentJson != null ? JSON.parse(contentJson) : undefined,
-      isError: (row["is_error"] as number) === 1,
-      terminalOutcome: (row["terminal_outcome"] as string | null) ?? null,
-      terminalReasonCode: (row["terminal_reason_code"] as string | null) ?? null,
-      contentType: (row["content_type"] as string | null) ?? null,
-      ...(((row["had_attachments"] as number | null) ?? 0) === 1
-        ? { attachmentsReplayable: false }
-        : {}),
-    };
-  }
-
-  /**
-   * Cancel a pending method call.
+   * Cancel a pending method call. Durable-first: consume the call, then append
+   * the canonical `invocation.cancelled` terminal and broadcast that exact
+   * persisted event as the first cancellation effect. The provider aborts its
+   * executor by observing this terminal.
    */
   async cancelMethodCall(callId: string): Promise<void> {
     const cancelled = cancelCallDb(this.sql, callId);
     this.scheduleNextAlarm();
-    // Notify the provider so it can abort the executing method
-    if (cancelled) {
-      await this.settleConsumedMethodCall(
-        cancelled,
-        "cancelled",
-        true,
-        "cancelled",
-        "cancelled",
-        { appendDisplay: false, senderId: "system" }
-      );
-      const providerId = cancelled.targetId;
-      this.broadcastProviderCancel(cancelled, "cancelled");
-      await this.ensureMethodRoot(
+    if (!cancelled) return;
+    await this.ensureMethodRoot(
+      cancelled.invocationId,
+      cancelled.callerId,
+      cancelled.targetId,
+      cancelled.transportCallId,
+      cancelled.turnId
+    );
+    const event = await this.appendLogEvent(
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      this.invocationCancelledPayload(
+        "system",
         cancelled.invocationId,
-        cancelled.callerId,
-        providerId,
         cancelled.transportCallId,
-        cancelled.turnId
-      );
-      const event = await this.appendLogEvent(
-        AGENTIC_EVENT_PAYLOAD_KIND,
-        this.invocationCancelledPayload(
-          "system",
-          cancelled.invocationId,
-          cancelled.transportCallId,
-          cancelled.turnId,
-          "cancelled"
-        ),
-        "system"
-      );
-      broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, "system");
-    }
+        cancelled.turnId,
+        "cancelled"
+      ),
+      "system"
+    );
+    broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, "system");
   }
 
   /**
@@ -2126,15 +1875,6 @@ export class PubSubChannel extends DurableObjectBase {
     const cancelled = cancelCallDb(this.sql, callId);
     if (!cancelled) return;
     this.scheduleNextAlarm();
-    await this.settleConsumedMethodCall(
-      cancelled,
-      reason ?? "timed out",
-      true,
-      "infrastructure_error",
-      "timed_out",
-      { appendDisplay: false, senderId: "system" }
-    );
-    this.broadcastProviderCancel(cancelled, reason ?? "timed out");
     await this.ensureMethodRoot(
       cancelled.invocationId,
       cancelled.callerId,
@@ -2161,17 +1901,18 @@ export class PubSubChannel extends DurableObjectBase {
     invocationId: string,
     transportCallId: string | undefined,
     turnId: string | undefined,
-    _methodName: string | undefined,
     result: unknown,
     isError: boolean,
     terminalOutcome?: InvocationOutcome,
-    terminalReasonCode?: string
+    terminalReasonCode?: string,
+    attachments?: StoredAttachment[]
   ): Promise<number | undefined> {
     const caller = this.sql.exec(`SELECT id FROM participants WHERE id = ?`, callerId).toArray();
     const callerPresent = caller.length > 0;
 
-    // Display/history only. Terminal transport and canonical storage happen in
-    // settleConsumedMethodCall before this append.
+    // Sole terminal path. The channel-log store spills large `result` to a blob
+    // ref on append (hydrated on read/replay); attachments ride the durable
+    // envelope field. This durable event is the canonical terminal.
     await this.ensureMethodRoot(invocationId, callerId, undefined, transportCallId, turnId);
     const payload = this.invocationResultPayload(
       callerId,
@@ -2183,61 +1924,13 @@ export class PubSubChannel extends DurableObjectBase {
       terminalOutcome,
       terminalReasonCode
     );
-    const event = await this.appendLogEvent(AGENTIC_EVENT_PAYLOAD_KIND, payload, callerId);
+    const event = await this.appendLogEvent(AGENTIC_EVENT_PAYLOAD_KIND, payload, callerId, undefined, {
+      ...(attachments ? { attachments } : {}),
+    });
     if (callerPresent) {
       broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, callerId);
     }
     return event.id;
-  }
-
-  private async boundMethodResultForDurableEvent(
-    methodName: string | undefined,
-    transportCallId: string | undefined,
-    result: unknown
-  ): Promise<unknown> {
-    let serialized: string;
-    try {
-      serialized = JSON.stringify(result);
-    } catch (err) {
-      return {
-        omitted: true,
-        reason: "method result is not JSON serializable",
-        method: methodName ?? null,
-        transportCallId: transportCallId ?? null,
-        error: err instanceof Error ? err.message : String(err),
-        preview: String(result).slice(0, METHOD_RESULT_PREVIEW_CHARS),
-        summary: summarizeOversizedResult(result),
-      };
-    }
-
-    const bytes = jsonByteLength(serialized);
-    if (bytes <= MAX_INLINE_METHOD_RESULT_BYTES) return result;
-
-    const capped: Record<string, unknown> = {
-      omitted: true,
-      reason: "method result exceeds durable inline budget",
-      method: methodName ?? null,
-      transportCallId: transportCallId ?? null,
-      bytes,
-      inlineLimitBytes: MAX_INLINE_METHOD_RESULT_BYTES,
-      summary: summarizeOversizedResult(result),
-    };
-    try {
-      const stored = await this.rpc.call<{ digest: string; size: number }>(
-        "main",
-        "blobstore.putText",
-        [serialized]
-      );
-      capped["stored"] = {
-        digest: stored.digest,
-        size: stored.size,
-        encoding: "json",
-      };
-    } catch (err) {
-      capped["storageError"] = err instanceof Error ? err.message : String(err);
-    }
-    capped["preview"] = serialized.slice(0, METHOD_RESULT_PREVIEW_CHARS);
-    return capped;
   }
 
   /**
@@ -2389,12 +2082,6 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DELETE FROM pending_calls`);
     // Clear dedup keys
     this.sql.exec(`DELETE FROM dedup_keys`);
-    // Clear settled results: these are the terminal records for the parent's
-    // calls, keyed by transport_call_id. We just wiped the in-flight pending_calls
-    // for the same calls; keeping their terminal records would let a forked
-    // child's agent reconcile() match an inherited suspension to a parent-era
-    // result and wrongly resume. A fresh fork re-drives any genuinely-open work.
-    this.sql.exec(`DELETE FROM settled_results`);
   }
 
   // ── State introspection ─────────────────────────────────────────────────

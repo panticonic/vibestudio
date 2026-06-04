@@ -477,12 +477,13 @@ describe("@workspace/agentic-protocol stored values", () => {
   });
 
   it("encodes every unbounded agentic payload field as a stored ref", async () => {
+    // NOTE: `output` is intentionally NOT force-spilled — it streams many small
+    // method-progress chunks, so it is size-thresholded instead (asserted below).
     const unboundedFields = [
       "request",
       "result",
       "details",
       "data",
-      "output",
       "error",
       "replacement",
       "body",
@@ -519,6 +520,29 @@ describe("@workspace/agentic-protocol stored values", () => {
     }
 
     expect(writes).toHaveLength(unboundedFields.length);
+  });
+
+  it("keeps small invocation.output inline but spills large output by size", async () => {
+    const writes: string[] = [];
+    const writer = {
+      putText: async (value: string) => {
+        writes.push(value);
+        return { digest: `digest-${writes.length}`, size: value.length };
+      },
+    };
+    const make = (output: unknown): AgenticEvent => ({
+      kind: "invocation.output",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-out") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, output } as AgenticEvent["payload"],
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    const small = await encodeAgenticEventStoredValues(make("streamed line"), writer);
+    expect((small.event.payload as Record<string, unknown>)["output"]).toBe("streamed line");
+
+    const large = await encodeAgenticEventStoredValues(make("x".repeat(140 * 1024)), writer);
+    expect(isStoredValueRef((large.event.payload as Record<string, unknown>)["output"])).toBe(true);
   });
 
   it("encodes large message content, deltas, and block content as stored refs", async () => {

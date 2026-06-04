@@ -357,10 +357,6 @@ export interface MethodResultValue {
   content: unknown;
   /** Binary attachments */
   attachments?: Attachment[];
-  /** False when a recovered terminal result cannot replay ephemeral live attachments. */
-  attachmentsReplayable?: boolean;
-  /** MIME type for content */
-  contentType?: string;
 }
 
 /**
@@ -371,8 +367,6 @@ export interface MethodResultChunk extends MethodResultValue {
   complete: boolean;
   /** Whether this chunk represents an error */
   isError: boolean;
-  /** Progress percentage (0-100) */
-  progress?: number;
 }
 
 /**
@@ -423,7 +417,7 @@ export interface DiscoveredMethod {
 
 /**
  * Context provided to method execute functions.
- * Includes utilities for streaming results, progress, and cancellation.
+ * Includes utilities for streaming results and cancellation.
  */
 export interface MethodExecutionContext {
   /** Unique call ID */
@@ -439,19 +433,12 @@ export interface MethodExecutionContext {
   /** Stream a partial result */
   stream(content: unknown): Promise<void>;
   /** Stream a partial result with binary attachments */
-  streamWithAttachments(
-    content: unknown,
-    attachments: AttachmentInput[],
-    options?: { contentType?: string }
-  ): Promise<void>;
+  streamWithAttachments(content: unknown, attachments: AttachmentInput[]): Promise<void>;
   /** Create a final result with binary attachments */
   resultWithAttachments<T>(
     content: T,
-    attachments: AttachmentInput[],
-    options?: { contentType?: string }
+    attachments: AttachmentInput[]
   ): MethodResultWithAttachments<T>;
-  /** Report progress (0-100) */
-  progress(percent: number): Promise<void>;
 }
 
 /**
@@ -461,7 +448,6 @@ export interface MethodExecutionContext {
 export interface MethodResultWithAttachments<T> {
   content: T;
   attachments: AttachmentInput[];
-  contentType?: string;
 }
 
 /**
@@ -671,19 +657,6 @@ export interface AgenticClient<T extends AgenticParticipantMetadata = AgenticPar
     payload: unknown,
     options?: { idempotencyKey?: string }
   ): Promise<void>;
-
-  sendMethodResult(
-    callId: string,
-    content: unknown,
-    options?: {
-      complete?: boolean;
-      isError?: boolean;
-      progress?: number;
-      attachments?: AttachmentInput[];
-      contentType?: string;
-    }
-  ): Promise<void>;
-
 }
 
 /**

@@ -11,7 +11,8 @@ import { useFeedbackManager, type FeedbackResult, type ActiveFeedbackTsx, type A
 import { compileComponent } from "@workspace/eval";
 import type { SandboxOptions } from "@workspace/eval";
 import type { FeedbackComponentProps } from "@workspace/tool-ui";
-import { parseSignalEvent, type ChatSandboxValue } from "@workspace/agentic-core";
+import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
+import { type ChatSandboxValue } from "@workspace/agentic-core";
 interface UseChatFeedbackOptions {
     chat: ChatSandboxValue;
     loadImport?: SandboxOptions["loadImport"];
@@ -137,29 +138,24 @@ export function useChatFeedback({ chat, loadImport, clientRef, connected, }: Use
         let cancelled = false;
         const consume = async () => {
             try {
-                for await (const event of client.events({ includeSignals: true })) {
+                // A cancelled in-flight feedback invocation surfaces as a durable
+                // invocation.cancelled / invocation.abandoned agentic event (the
+                // channel emits it on cancel/interrupt). Resolve the matching
+                // feedback UI as cancelled. Feedback handlers ignore ctx.signal,
+                // so this observation is their cancellation path.
+                for await (const event of client.events()) {
                     if (cancelled)
                         break;
-                    const wire = event as {
-                        delivery?: "log" | "signal";
-                        content?: string;
-                        contentType?: string;
-                        payload?: {
-                            content?: string;
-                            contentType?: string;
-                        };
-                    };
-                    if (wire.delivery !== "signal")
+                    const wire = event as { type?: string; payload?: AgenticEvent };
+                    if (wire.type !== AGENTIC_EVENT_PAYLOAD_KIND || !wire.payload)
                         continue;
-                    const payload = parseSignalEvent<{
-                        callId: string;
-                    }>({
-                        content: wire.content ?? wire.payload?.content ?? "",
-                        contentType: wire.contentType ?? wire.payload?.contentType,
-                    }, "natstack-dispatch-cancel");
-                    if (!payload?.callId)
+                    const ev = wire.payload;
+                    if (ev.kind !== "invocation.cancelled" && ev.kind !== "invocation.abandoned")
                         continue;
-                    const feedback = activeFeedbacksRef.current.get(payload.callId);
+                    const callId = ev.causality?.transportCallId ?? ev.causality?.invocationId;
+                    if (!callId)
+                        continue;
+                    const feedback = activeFeedbacksRef.current.get(callId);
                     if (!feedback)
                         continue;
                     feedback.complete({ type: "cancel" });
@@ -167,7 +163,7 @@ export function useChatFeedback({ chat, loadImport, clientRef, connected, }: Use
             }
             catch (err) {
                 if (!cancelled)
-                    console.error("[useChatFeedback] dispatch cancel listener failed:", err);
+                    console.error("[useChatFeedback] invocation cancel listener failed:", err);
             }
         };
         void consume();

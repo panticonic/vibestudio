@@ -611,7 +611,7 @@ function modelCredentialReconnectFailure(err: unknown): AgentFailureInfo | null 
   ) {
     return null;
   }
-  return { message: message || code, code };
+  return { message: message || code || "Unknown error", code };
 }
 
 function shouldProxyUrlBoundModelFetch(url: URL, baseUrls: readonly string[]): boolean {
@@ -1652,7 +1652,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       .toArray()
       .map((row) => this.turnRunRow(row));
     if (rows.length === 0) {
-      await this.reconcilePendingSuspensionsFromChannel(channelId);
+      // Missed terminals are recovered from replayed invocation.* log events
+      // (the control:ready hook), not a channel side-table read-back.
       await this.sweepStuckDelivery(channelId, runner);
       return this.recoverDeliveredAndOrphanedSuspensions(channelId);
     }
@@ -1691,9 +1692,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           break;
         }
         case "waiting_external": {
-          // Re-learn any result that settled in the channel while we were asleep
-          // (missed live delivery) before sweeping/recovering local suspensions.
-          await this.reconcilePendingSuspensionsFromChannel(channelId);
+          // Missed terminals are recovered from replayed invocation.* log events
+          // (the control:ready hook); just sweep + recover from the local ledger.
           await this.sweepStuckDelivery(channelId, runner);
           const recovered = await this.recoverDeliveredAndOrphanedSuspensions(channelId);
           submittedContinue = submittedContinue || recovered;
@@ -2571,120 +2571,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     return next;
   }
 
-  /**
-   * Map a channel `settled_results.terminal_outcome` to the agent-side
-   * suspension `terminal_kind`. The call-outcome vocabulary (channel-arbitrated)
-   * is richer than the agent-wait vocabulary; cancel-like outcomes collapse to
-   * `cancelled`, everything else is `completed`/`failed` by the error flag.
-   */
-  private terminalKindForSettledOutcome(
-    terminalOutcome: string | null,
-    isError: boolean
-  ): Exclude<MethodSuspensionTerminalKind, "none"> {
-    if (
-      terminalOutcome === "cancelled" ||
-      terminalOutcome === "stale_dispatch" ||
-      terminalOutcome === "abandoned"
-    ) {
-      return "cancelled";
-    }
-    return isError ? "failed" : "completed";
-  }
-
-  /**
-   * Phase 2 recovery authority — re-learn results the agent missed while asleep.
-   *
-   * A genuinely-pending suspension (`terminal_kind = 'none'`, `delivery_status =
-   * 'pending'`) means the agent is still waiting on a method result. If that
-   * result *did* settle in the channel DO while this agent was hibernating — so
-   * the ephemeral live delivery was missed — the canonical record survives in the
-   * channel's terminal-once `settled_results` store. On wake we re-read it for
-   * each pending suspension and, when present, ingest it through the normal
-   * terminal path (`handleCompletedMethodResult`), which records the terminal on
-   * the row and kicks recovery. When the channel reports no settled result the
-   * call is genuinely still in flight, so the suspension correctly stays pending
-   * (waiting, never hung).
-   *
-   * This is the cross-DO, read-derived resolution from the roadmap: the channel's
-   * `settled_results` is canonical for "the result exists"; the agent never
-   * unilaterally declares the call terminal — it idempotently records the
-   * channel's reference. Re-running on a later wake is safe: the row is no longer
-   * pending, so it is skipped.
-   */
-  private async reconcilePendingSuspensionsFromChannel(channelId: string): Promise<boolean> {
-    if (this.transcriptPoisonedChannels.has(channelId)) return false;
-    const pending = this.sql
-      .exec(
-        `SELECT * FROM agent_method_suspensions
-           WHERE channel_id = ?
-             AND terminal_kind = 'none'
-             AND delivery_status = 'pending'`,
-        channelId
-      )
-      .toArray()
-      .map((row) => this.methodSuspensionRow(row))
-      .filter((row) => row.transportCallId.length > 0);
-    if (pending.length === 0) return false;
-
-    const channel = this.createChannelClient(channelId);
-    let ingested = false;
-    for (const row of pending) {
-      let settled: Awaited<ReturnType<ChannelClient["getSettledResult"]>>;
-      try {
-        settled = await channel.getSettledResult(row.transportCallId);
-      } catch (err) {
-        this.recordLastError("channel_method.reconcile.get_settled", err, channelId);
-        this.recordDebugPhase(channelId, "channel_method.reconcile.get_settled_failed", {
-          callId: row.transportCallId,
-          invocationId: row.invocationId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        continue;
-      }
-      if (!settled) continue;
-      // Never resurrect a durably-terminal turn. The in-memory interrupt gate is
-      // lost across hibernation, so on a cold wake it cannot protect us; the
-      // durable turn status is the authority. A user interrupt durably cancels a
-      // turn's suspensions (so they fail the `terminal_kind = 'none'` filter
-      // above), but a tool that raced the interrupt could have recorded a fresh
-      // pending suspension on a turn that then became `interrupted`/`failed`.
-      // Ingesting + resuming that would be exactly the "stopped agent churns
-      // again" bug — so drop it structurally here, independent of the gate.
-      if (row.turnId) {
-        const turn = this.loadTurnRun(row.turnId);
-        if (turn && isTerminalRunPhase(turn.status)) {
-          this.recordDebugPhase(channelId, "channel_method.reconcile.skipped_terminal_turn", {
-            callId: row.transportCallId,
-            invocationId: row.invocationId,
-            turnId: row.turnId,
-            turnStatus: turn.status,
-          });
-          continue;
-        }
-      }
-      // Re-check under fresh durable state: a concurrent live delivery may have
-      // already settled this row between our read above and now.
-      const current = this.loadMethodSuspension(row.transportCallId);
-      if (!current || current.terminalKind !== "none" || current.deliveryStatus !== "pending") {
-        continue;
-      }
-      this.recordDebugPhase(channelId, "channel_method.reconcile.ingested_settled", {
-        callId: row.transportCallId,
-        invocationId: row.invocationId,
-        terminalOutcome: settled.terminalOutcome,
-        isError: settled.isError,
-      });
-      await this.handleCompletedMethodResult(
-        channelId,
-        row.transportCallId,
-        settled.content,
-        settled.isError,
-        this.terminalKindForSettledOutcome(settled.terminalOutcome, settled.isError)
-      );
-      ingested = true;
-    }
-    return ingested;
-  }
 
   private async recoverDeliveredAndOrphanedSuspensions(channelId: string): Promise<boolean> {
     if (this.transcriptPoisonedChannels.has(channelId)) {
@@ -4632,9 +4518,58 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       return;
     }
 
+    // Method lifecycle decoder. Runs BEFORE the transcript-poison gate so a
+    // terminal is still recorded on its suspension under poison; the recovery
+    // continuation stays poison-gated inside recoverDeliveredAndOrphanedSuspensions.
+    if (await this.dispatchInvocationLifecycle(channelId, event)) return;
+
     if (await this.failIfTranscriptPoisoned(channelId)) return;
 
     await this.processChannelEvent(channelId, event, opts);
+  }
+
+  /**
+   * Canonical method-lifecycle ingestion. The channel emits durable `invocation.*`
+   * log events for every channel method call; terminals settle/recover the
+   * agent's suspension and `invocation.output` streams progress. Returns true if
+   * the event was a method-lifecycle event (handled here, not forwarded to Pi).
+   */
+  private async dispatchInvocationLifecycle(
+    channelId: string,
+    event: ChannelEvent
+  ): Promise<boolean> {
+    const agentic = this.agenticEventFromChannelEvent(event);
+    const kind = agentic?.kind;
+    if (
+      kind !== "invocation.output" &&
+      kind !== "invocation.completed" &&
+      kind !== "invocation.failed" &&
+      kind !== "invocation.cancelled" &&
+      kind !== "invocation.abandoned"
+    ) {
+      // invocation.started and non-invocation events flow on normally.
+      return false;
+    }
+    const callId = agentic?.causality?.transportCallId;
+    if (!callId) {
+      this.recordDebugPhase(channelId, "invocation.malformed_no_call_id", { kind });
+      return true;
+    }
+    const body = (agentic?.payload ?? {}) as Record<string, unknown>;
+    if (kind === "invocation.output") {
+      await this.handleMethodProgress(channelId, callId, body["output"]);
+      return true;
+    }
+    const isError = kind !== "invocation.completed";
+    const result = isError ? (body["error"] ?? body["reason"]) : body["result"];
+    const terminalKind: Exclude<MethodSuspensionTerminalKind, "none"> =
+      kind === "invocation.completed"
+        ? "completed"
+        : kind === "invocation.failed"
+          ? "failed"
+          : "cancelled";
+    await this.handleCompletedMethodResult(channelId, callId, result, isError, terminalKind, event.id);
+    return true;
   }
 
   // ── PiRunner lifecycle (one per channel, lazy) ──────────────────────────
@@ -5504,7 +5439,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       // The drain loop is started fire-and-forget from whichever inbound
       // request enqueued the work; that request returns immediately, so
       // workerd would otherwise bind the drain's promise continuations (and
-      // the in-flight method-result waiter created inside the turn) to an
+      // the in-flight method-call result waiter created inside the turn) to an
       // already-completed request context and cancel them on cross-request
       // resolution ("A promise was resolved or rejected from a different
       // request context..."). Anchoring the drain to ctx.waitUntil keeps a
@@ -6150,6 +6085,24 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       return;
     }
 
+    // Turn-terminal guard (ports the deleted reconcile guard, 2634-2645): a tool
+    // that raced a user interrupt can record a fresh pending suspension on a turn
+    // that then became interrupted/failed. Admitting it would resurrect a stopped
+    // agent ("stopped agent churns again"). Mark it ignored and stop.
+    if (row.turnId) {
+      const turn = this.loadTurnRun(row.turnId);
+      if (turn && isTerminalRunPhase(turn.status)) {
+        this.recordDebugPhase(channelId, "channel_method.terminal_on_terminal_turn_ignored", {
+          callId,
+          invocationId: row.invocationId,
+          turnId: row.turnId,
+          turnStatus: turn.status,
+        });
+        this.markMethodSuspensionIgnored(callId, { result, isError });
+        return;
+      }
+    }
+
     // Validate that stored-value refs resolve before committing a terminal:
     // a missing blob must leave the suspension pending for retry rather than
     // persisting an unhydratable ref. We still store the raw (ref-preserving)
@@ -6174,6 +6127,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       return;
     }
 
+    // Defer the recovery continuation during replay: terminals marked while
+    // replaying are admitted exactly once by the control:ready hook, after the
+    // full log has been processed. Avoids kicking recovery per-terminal mid-replay.
+    if (this.channelsInReplay.has(channelId)) return;
+
     await this.getOrCreateRunner(channelId);
     await this.runOnChannelRecoveryChain(channelId, async () => {
       await this.recoverDeliveredAndOrphanedSuspensions(channelId);
@@ -6185,6 +6143,15 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     callId: string,
     content: unknown
   ): Promise<void> {
+    // Progress streams only while the suspension is live/pending. Drop it once
+    // the suspension is terminal/cancelled/admitted or its turn is terminal —
+    // a chunk that races the terminal must not append to a settled suspension.
+    const row = this.loadMethodSuspension(callId);
+    if (!row || row.terminalKind !== "none" || row.deliveryStatus !== "pending") return;
+    if (row.turnId) {
+      const turn = this.loadTurnRun(row.turnId);
+      if (turn && isTerminalRunPhase(turn.status)) return;
+    }
     // Keep stored-value refs intact in the suspension ledger so large payloads
     // stay in the blobstore instead of being inlined into DO SQLite. Hydration
     // happens only at the live stream callback boundary.
@@ -6301,20 +6268,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     }
   }
 
-  private async sendDispatchCancel(
-    channelId: string,
-    callId: string,
-    reason: "user-superseded" | "worker-restart" | "user-interrupted"
-  ): Promise<void> {
-    const participantId = this.subscriptions.getParticipantId(channelId);
-    if (!participantId) return;
-    await this.createChannelClient(channelId).sendSignalEvent(
-      participantId,
-      "natstack-dispatch-cancel",
-      { callId, reason }
-    );
-  }
-
   private async notifyDispatchesInterrupted(channelId: string): Promise<void> {
     const pendingCalls = [...this.methodResultWaiters.entries()]
       .filter(([, waiter]) => waiter.channelId === channelId)
@@ -6324,8 +6277,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     this.rejectMethodWaitersForChannel(channelId, "Request was aborted");
     for (const { callId, invocationId } of pendingCalls) {
       try {
+        // channel.cancelCall emits invocation.cancelled; the provider aborts its
+        // executor (and feedback UIs complete) by observing that terminal.
         await this.cancelChannelMethodCall(channelId, callId);
-        await this.sendDispatchCancel(channelId, callId, "user-interrupted");
       } catch (err) {
         this.recordLastError("channel_method.dispatch_cancel", err, channelId);
         this.recordDebugPhase(channelId, "channel_method.dispatch_cancel.failed", {
@@ -6389,7 +6343,16 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   ): Promise<void> {
     await this.ensureAgentActivationReady();
     if (envelope.kind === "control") {
-      if (envelope.type === "ready") this.channelsInReplay.delete(channelId);
+      if (envelope.type === "ready") {
+        this.channelsInReplay.delete(channelId);
+        // Replay finished: admit any terminals marked during replay exactly once.
+        // Routes through the poison-guarded recovery (skips a poisoned channel)
+        // and never submits a Pi continuation directly. Idempotent with the
+        // wake-time recoverFromTurnLedger recovery via the serialized chain.
+        void this.runOnChannelRecoveryChain(channelId, async () => {
+          await this.recoverDeliveredAndOrphanedSuspensions(channelId);
+        });
+      }
       return;
     }
     if (envelope.kind === "log" && envelope.event) {
@@ -6408,26 +6371,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         senderId: envelope.senderId ?? "system",
         ts: envelope.ts ?? Date.now(),
       });
-      return;
-    }
-    if (envelope.kind === "method-result") {
-      await this.handleCompletedMethodResult(
-        channelId,
-        envelope.callId,
-        envelope.content,
-        envelope.isError,
-        this.terminalKindForSettledOutcome(envelope.terminalOutcome ?? null, envelope.isError)
-      );
-      return;
-    }
-    if (envelope.kind === "method-progress") {
-      await this.handleMethodProgress(channelId, envelope.callId, envelope.content);
-      return;
-    }
-    if (envelope.kind === "method-cancel") {
-      // Direct DO method execution has no generic execution AbortSignal here.
-      // The channel still emits this envelope so RPC providers no longer rely
-      // on invocation.cancelled log sniffing for abort control.
       return;
     }
   }

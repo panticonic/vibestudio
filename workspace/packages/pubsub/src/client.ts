@@ -180,9 +180,9 @@ export interface PubSubClient<T extends ParticipantMetadata = ParticipantMetadat
    * in-process, by firing the AbortController handed to the method's execution
    * context. Returns true if a matching in-flight execution was found and
    * aborted. Unlike `cancelMethodCall` (which round-trips through the channel
-   * DO and aborts remote executors through a dedicated method-cancel envelope),
-   * this acts immediately on the local executor — use it to stop an eval
-   * running in this very panel.
+   * DO, settling the call as cancelled so remote executors abort by observing
+   * the `invocation.cancelled` terminal), this acts immediately on the local
+   * executor — use it to stop an eval running in this very panel.
    * `callId` is the transport call id.
    */
   abortExecutingMethod(callId: string): boolean;

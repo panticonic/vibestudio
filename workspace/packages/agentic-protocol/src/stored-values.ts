@@ -42,7 +42,10 @@ const DEFAULT_FORCE_JSON_REF_PATHS = new Set([
   "$.payload.result",
   "$.payload.details",
   "$.payload.data",
-  "$.payload.output",
+  // NOTE: $.payload.output is intentionally size-thresholded, not force-spilled —
+  // method progress (invocation.output) streams many small chunks, and a blob
+  // write per chunk would be wasteful. Small outputs stay inline; large outputs
+  // (> maxInlineTextBytes) still spill by size.
   "$.payload.error",
   "$.payload.replacement",
   "$.payload.body",

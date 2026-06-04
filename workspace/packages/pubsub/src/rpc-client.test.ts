@@ -815,28 +815,29 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
 
       emit({
-        kind: "method-result",
-        callId: handle.transportCallId,
-        invocationId: handle.invocationId,
-        content: {
-          protocol: "natstack.blob-ref.v1",
-          digest: "def456",
-          size: encodedResult.length,
-          encoding: "json",
-          originalBytes: encodedResult.length,
-        },
-        isError: false,
-        terminalOutcome: "success",
-        terminalReasonCode: null,
-        contentType: "application/json",
+        stream: "log",
+        phase: "live",
+        id: 401,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.completed",
+          handle.invocationId,
+          {
+            result: {
+              protocol: "natstack.blob-ref.v1",
+              digest: "def456",
+              size: encodedResult.length,
+              encoding: "json",
+              originalBytes: encodedResult.length,
+            },
+          },
+          { transportCallId: handle.transportCallId }
+        ),
         senderId: "provider-1",
         ts: Date.now(),
       });
 
-      await expect(handle.result).resolves.toEqual({
-        content: result,
-        contentType: "application/json",
-      });
+      await expect(handle.result).resolves.toEqual({ content: result });
 
       client.close();
     });
@@ -875,27 +876,38 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
 
       emit({
-        kind: "method-progress",
-        callId: handle.transportCallId,
-        invocationId: handle.invocationId,
-        content: {
-          protocol: "natstack.blob-ref.v1",
-          digest: "progress",
-          size: encodedProgress.length,
-          encoding: "json",
-          originalBytes: encodedProgress.length,
-        },
+        stream: "log",
+        phase: "live",
+        id: 411,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.output",
+          handle.invocationId,
+          {
+            output: {
+              protocol: "natstack.blob-ref.v1",
+              digest: "progress",
+              size: encodedProgress.length,
+              encoding: "json",
+              originalBytes: encodedProgress.length,
+            },
+          },
+          { transportCallId: handle.transportCallId }
+        ),
         senderId: "provider-1",
         ts: Date.now(),
       });
       emit({
-        kind: "method-result",
-        callId: handle.transportCallId,
-        invocationId: handle.invocationId,
-        content: { done: true },
-        isError: false,
-        terminalOutcome: "success",
-        terminalReasonCode: null,
+        stream: "log",
+        phase: "live",
+        id: 412,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.completed",
+          handle.invocationId,
+          { result: { done: true } },
+          { transportCallId: handle.transportCallId }
+        ),
         senderId: "provider-1",
         ts: Date.now(),
       });
@@ -914,7 +926,7 @@ describe("connectViaRpc", () => {
       client.close();
     });
 
-    it("recovers pending method results from settled_results after resubscribe", async () => {
+    it("recovers a pending method result from a replayed invocation.completed on resubscribe", async () => {
       let recover!: () => Promise<void>;
       const registerColdRecoverHandler = vi.fn(
         (_id: string, handler: () => Promise<void>) => {
@@ -922,6 +934,9 @@ describe("connectViaRpc", () => {
           return vi.fn();
         }
       );
+      // The resubscribe replay carries the missed terminal as a durable
+      // invocation.completed log event (no getSettledResult read-back).
+      let pendingCallId: string | undefined;
       mockRpc.call.mockImplementation(async (target: string, method: string) => {
         if (target === "main" && method === "workers.resolveService") {
           return { kind: "durable-object", targetId: DO_TARGET };
@@ -931,7 +946,22 @@ describe("connectViaRpc", () => {
             ok: true,
             envelope: {
               mode: "after",
-              logEvents: [],
+              logEvents: pendingCallId
+                ? [
+                    {
+                      id: 501,
+                      type: AGENTIC_EVENT_PAYLOAD_KIND,
+                      payload: invocation(
+                        "invocation.completed",
+                        pendingCallId,
+                        { result: { answer: 42 } },
+                        { transportCallId: pendingCallId }
+                      ),
+                      senderId: "provider-1",
+                      ts: Date.now(),
+                    },
+                  ]
+                : [],
               snapshots: [],
               ready: {
                 contextId: "ctx-recovered",
@@ -939,15 +969,6 @@ describe("connectViaRpc", () => {
                 envelopeCount: 0,
               },
             },
-          };
-        }
-        if (method === "getSettledResult") {
-          return {
-            content: { answer: 42 },
-            isError: false,
-            terminalOutcome: "success",
-            terminalReasonCode: null,
-            contentType: "application/json",
           };
         }
         return undefined;
@@ -962,17 +983,13 @@ describe("connectViaRpc", () => {
       mockRpc.call.mockClear();
 
       const handle = client.callMethod("provider-1", "compute", {});
+      pendingCallId = handle.transportCallId;
       await recover();
 
-      await expect(handle.result).resolves.toEqual({
-        content: { answer: 42 },
-        contentType: "application/json",
-      });
-      expect(mockRpc.call).toHaveBeenCalledWith(
-        DO_TARGET,
-        "getSettledResult",
-        [handle.transportCallId]
-      );
+      await expect(handle.result).resolves.toEqual({ content: { answer: 42 } });
+      expect(
+        mockRpc.call.mock.calls.some((call) => call[1] === "getSettledResult")
+      ).toBe(false);
 
       client.close();
     });
@@ -1123,13 +1140,16 @@ describe("connectViaRpc", () => {
       ]);
 
       emit({
-        kind: "method-result",
-        callId: handle.transportCallId,
-        invocationId: handle.invocationId,
-        content: { paused: true },
-        isError: false,
-        terminalOutcome: "success",
-        terminalReasonCode: null,
+        stream: "log",
+        phase: "live",
+        id: 320,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.completed",
+          handle.invocationId,
+          { result: { paused: true } },
+          { transportCallId: handle.transportCallId }
+        ),
         senderId: "agent-1",
         ts: Date.now(),
       });
@@ -1140,7 +1160,7 @@ describe("connectViaRpc", () => {
       client.close();
     });
 
-    it("aborts the signal when method-cancel arrives", async () => {
+    it("aborts the executing method when invocation.cancelled arrives", async () => {
       let capturedSignal: AbortSignal | null = null;
 
       const client = connectViaRpc({
@@ -1197,7 +1217,7 @@ describe("connectViaRpc", () => {
 
       expect(capturedSignal!.aborted).toBe(false);
 
-      // Display-only invocation cancellation no longer controls provider abort.
+      // invocation.cancelled is now the provider-abort signal (no method-cancel).
       emit({
         stream: "log",
         phase: "live",
@@ -1205,16 +1225,6 @@ describe("connectViaRpc", () => {
         type: AGENTIC_EVENT_PAYLOAD_KIND,
         payload: invocation("invocation.cancelled", CALL_ID_SLOW, { reason: "cancelled" }),
         senderId: "caller-1",
-        ts: Date.now(),
-      });
-      expect(capturedSignal!.aborted).toBe(false);
-
-      emit({
-        kind: "method-cancel",
-        callId: CALL_ID_SLOW,
-        invocationId: CALL_ID_SLOW,
-        reason: "cancelled",
-        senderId: "system",
         ts: Date.now(),
       });
 
