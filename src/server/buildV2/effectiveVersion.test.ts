@@ -12,7 +12,17 @@ vi.mock("@natstack/shared/envPaths", () => ({
 }));
 
 import { execGitFileSync } from "@natstack/shared/gitRuntime";
-import { resolveMainRef, computeGitTreeHash, getCommitAt, diffEvMaps } from "./effectiveVersion.js";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
+import {
+  resolveMainRef,
+  computeGitTreeHash,
+  getCommitAt,
+  diffEvMaps,
+  computeBuildKey,
+} from "./effectiveVersion.js";
 
 const execGitFileSyncMock = execGitFileSync as unknown as ReturnType<typeof vi.fn>;
 
@@ -129,6 +139,45 @@ describe("effectiveVersion", () => {
       expect(result.changed).toEqual([]);
       expect(result.added).toEqual([]);
       expect(result.removed).toEqual([]);
+    });
+  });
+
+  describe("computeBuildKey", () => {
+    it("changes when root dependency metadata changes", () => {
+      const previousCwd = process.cwd();
+      const previousAppRoot = process.env["NATSTACK_APP_ROOT"];
+      const rootA = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-key-a-"));
+      const rootB = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-key-b-"));
+      try {
+        process.chdir(rootA);
+        fs.mkdirSync(path.join(rootA, "dist"));
+        fs.mkdirSync(path.join(rootB, "dist"));
+        fs.writeFileSync(path.join(rootA, "package.json"), '{"dependencies":{"x":"1.0.0"}}\n');
+        fs.writeFileSync(path.join(rootB, "package.json"), '{"dependencies":{"x":"2.0.0"}}\n');
+        fs.writeFileSync(path.join(rootA, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+        fs.writeFileSync(
+          path.join(rootB, "pnpm-lock.yaml"),
+          "lockfileVersion: '9.0'\nchanged: true\n"
+        );
+        fs.writeFileSync(path.join(rootA, "dist", "server.mjs"), "console.log('a');\n");
+        fs.writeFileSync(path.join(rootB, "dist", "server.mjs"), "console.log('b changed');\n");
+
+        process.env["NATSTACK_APP_ROOT"] = rootA;
+        const before = computeBuildKey("workers/agent-worker", "ev-1", false);
+        process.env["NATSTACK_APP_ROOT"] = rootB;
+        const after = computeBuildKey("workers/agent-worker", "ev-1", false);
+
+        expect(after).not.toBe(before);
+      } finally {
+        process.chdir(previousCwd);
+        if (previousAppRoot === undefined) {
+          delete process.env["NATSTACK_APP_ROOT"];
+        } else {
+          process.env["NATSTACK_APP_ROOT"] = previousAppRoot;
+        }
+        fs.rmSync(rootA, { recursive: true, force: true });
+        fs.rmSync(rootB, { recursive: true, force: true });
+      }
     });
   });
 });

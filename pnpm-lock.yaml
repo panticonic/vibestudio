@@ -11,7 +11,7 @@ overrides:
 
 patchedDependencies:
   '@earendil-works/pi-agent-core@0.78.0':
-    hash: 55129fb1c1282be3c48f3217247984b4f1e11255c58514cec7140e34982d79ff
+    hash: bc0be24fd55ea1946ed7b83e4bd45059163068d06da67fadd75804657c83b768
     path: workspace/packages/harness/patches/@earendil-works__pi-agent-core@0.78.0.patch
   re2@1.24.0:
     hash: a4a166273fe3817fd493cfc042f1d966f4ada60f1234330cd306e798259b549b
@@ -32,7 +32,7 @@ importers:
         version: 3.2.2(react@19.0.0)
       '@earendil-works/pi-agent-core':
         specifier: ^0.78.0
-        version: 0.78.0(patch_hash=55129fb1c1282be3c48f3217247984b4f1e11255c58514cec7140e34982d79ff)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=bc0be24fd55ea1946ed7b83e4bd45059163068d06da67fadd75804657c83b768)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@earendil-works/pi-ai':
         specifier: ^0.78.0
         version: 0.78.0(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
@@ -1165,7 +1165,7 @@ importers:
     dependencies:
       '@earendil-works/pi-agent-core':
         specifier: ^0.78.0
-        version: 0.78.0(patch_hash=55129fb1c1282be3c48f3217247984b4f1e11255c58514cec7140e34982d79ff)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+        version: 0.78.0(patch_hash=bc0be24fd55ea1946ed7b83e4bd45059163068d06da67fadd75804657c83b768)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       '@workspace/agentic-protocol':
         specifier: workspace:*
         version: link:../agentic-protocol
@@ -12179,7 +12179,7 @@ snapshots:
       react: 19.0.0
       tslib: 2.8.1
 
-  '@earendil-works/pi-agent-core@0.78.0(patch_hash=55129fb1c1282be3c48f3217247984b4f1e11255c58514cec7140e34982d79ff)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
+  '@earendil-works/pi-agent-core@0.78.0(patch_hash=bc0be24fd55ea1946ed7b83e4bd45059163068d06da67fadd75804657c83b768)(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)':
     dependencies:
       '@earendil-works/pi-ai': 0.78.0(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
       ignore: 7.0.5
@@ -16513,7 +16513,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

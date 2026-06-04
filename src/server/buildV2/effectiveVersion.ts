@@ -425,6 +425,41 @@ export function computeEffectiveVersionsWithCache(
 
 /** Increment when build logic changes (plugins, esbuild options, shims) to invalidate all cached builds. */
 const BUILD_CACHE_VERSION = "14";
+const ROOT_DEPENDENCY_FINGERPRINT_FILES = [
+  "package.json",
+  "pnpm-lock.yaml",
+  "pnpm-workspace.yaml",
+  "dist/server.mjs",
+  "dist/main.cjs",
+];
+let rootDependencyFingerprintCache: { root: string; value: string } | null = null;
+
+function rootDependencyFingerprint(): string {
+  const root = process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
+  if (rootDependencyFingerprintCache?.root === root) {
+    return rootDependencyFingerprintCache.value;
+  }
+  const hash = crypto.createHash("sha256");
+  hash.update("root-deps-v1");
+  for (const file of ROOT_DEPENDENCY_FINGERPRINT_FILES) {
+    const filePath = path.join(root, file);
+    if (!fs.existsSync(filePath)) continue;
+    hash.update(file);
+    hash.update("\0");
+    const stat = fs.statSync(filePath);
+    if (file === "package.json" || file.endsWith(".yaml")) {
+      hash.update(fs.readFileSync(filePath));
+    } else {
+      hash.update(String(stat.size));
+      hash.update(":");
+      hash.update(String(stat.mtimeMs));
+    }
+    hash.update("\0");
+  }
+  const value = hash.digest("hex").slice(0, 16);
+  rootDependencyFingerprintCache = { root, value };
+  return value;
+}
 
 /**
  * Compute the build key for a unit: hash(BUILD_CACHE_VERSION, unitName, ev, sourcemap).
@@ -433,5 +468,11 @@ const BUILD_CACHE_VERSION = "14";
  * HTML titles, dependency sets produce different artifacts).
  */
 export function computeBuildKey(unitName: string, ev: string, sourcemap: boolean): string {
-  return hashStrings([BUILD_CACHE_VERSION, unitName, ev, `sourcemap:${sourcemap}`]);
+  return hashStrings([
+    BUILD_CACHE_VERSION,
+    `root-deps:${rootDependencyFingerprint()}`,
+    unitName,
+    ev,
+    `sourcemap:${sourcemap}`,
+  ]);
 }
