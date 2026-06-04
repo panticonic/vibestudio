@@ -1018,6 +1018,95 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("emits a reconnect credential card for expired model auth failures without provider codes", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const send = vi.fn().mockResolvedValue(undefined);
+    const emitCard = vi.fn();
+    const publishWaiting = vi.fn();
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      sendTurnLedgerDiagnostic(channelId: string, turnId: string, message: string): Promise<void>;
+      getModelProviderId(channelId: string): string;
+      getModelBaseUrl(channelId: string): string;
+      publishTurnWaitingEvent(
+        channelId: string,
+        turnId: string,
+        payload: { reason: string; summary: string }
+      ): void;
+      emitModelCredentialRequiredCard(
+        channelId: string,
+        providerId: string,
+        modelBaseUrl: string,
+        opts?: {
+          resumeAfterConnect?: boolean;
+          reason?: string;
+          diagnosticReason?: string;
+          failureCode?: string;
+          turnId?: string;
+        }
+      ): void;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.sendTurnLedgerDiagnostic = send;
+    worker.getModelProviderId = vi.fn().mockReturnValue("openai-codex");
+    worker.getModelBaseUrl = vi.fn().mockReturnValue("https://chatgpt.com/backend-api/codex");
+    worker.emitModelCredentialRequiredCard = emitCard;
+    worker.publishTurnWaitingEvent = publishWaiting;
+    const runner = {
+      getCurrentTurnId: () => "turn-expired-message-only",
+      repairDurableOpenState: vi.fn().mockResolvedValue(undefined),
+      getStateSnapshot: vi.fn().mockResolvedValue({ messages: [] }),
+      session: null,
+    } as unknown as PiRunner;
+    (instance as unknown as { runners: Map<string, { runner: PiRunner }> }).runners.set("chat-1", {
+      runner,
+    });
+    insertTurnRun(sql, { turnId: "turn-expired-message-only", status: "running_model" });
+    const errorMessage = "Provided authentication token is expired. Please try signing in again.";
+
+    await instance.testHandleRunnerAgentEndEventForTurnLedger("chat-1", runner, {
+      type: "agent_end",
+      messages: [
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage,
+        },
+      ],
+      natstack: {
+        turnId: "turn-expired-message-only",
+        operationId: "op-1",
+        lifecycleMatched: true,
+      },
+    } as never);
+
+    expect(turnStatus(sql, "turn-expired-message-only")).toMatchObject({
+      status: "waiting_external",
+      failure_code: "model_credential_reconnect_required",
+      failure_message: errorMessage,
+    });
+    expect(emitCard).toHaveBeenCalledWith(
+      "chat-1",
+      "openai-codex",
+      "https://chatgpt.com/backend-api/codex",
+      {
+        resumeAfterConnect: true,
+        reason: "Your model sign-in needs to be refreshed before this turn can continue.",
+        diagnosticReason: errorMessage,
+        failureCode: undefined,
+        turnId: "turn-expired-message-only",
+      }
+    );
+    expect(publishWaiting).toHaveBeenCalledWith("chat-1", "turn-expired-message-only", {
+      reason: "model_credential_reconnect_required",
+      summary: "Waiting for model credential refresh",
+    });
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("ignores unmatched agent_end events for the active turn", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
@@ -5027,9 +5116,13 @@ describe("AgentWorkerBase model credential resume", () => {
     const { instance } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
     });
-    const publishAgenticEvent = vi.fn(
-      (_participantId: string, _event: unknown) => new Promise<void>(() => undefined)
-    );
+    const publishPromises: Promise<void>[] = [];
+    const publishAgenticEvent = vi.fn((_participantId: string, _event: unknown) => {
+      const promise = new Promise<void>(() => undefined);
+      publishPromises.push(promise);
+      return promise;
+    });
+    const waitUntil = vi.fn();
     const channelClient = {
       getParticipants: vi.fn(() => new Promise(() => undefined)),
       publishAgenticEvent,
@@ -5050,8 +5143,10 @@ describe("AgentWorkerBase model credential resume", () => {
       getModelBaseUrl(channelId: string): string;
       getApiKeyForChannel(channelId: string): () => Promise<string>;
       readRunnerMessages(channelId: string): Promise<AgentMessage[]>;
+      ctx: { waitUntil?: (promise: Promise<unknown>) => void };
     };
 
+    worker.ctx.waitUntil = waitUntil;
     worker._rpc = {
       call: vi.fn(async () => null),
       stream: vi.fn(),
@@ -5088,6 +5183,88 @@ describe("AgentWorkerBase model credential resume", () => {
           providerId: "test",
           modelBaseUrl: "https://model.example/v1",
           resumeAfterConnect: true,
+        },
+      },
+    });
+    expect(waitUntil).toHaveBeenCalledWith(publishPromises[0]);
+    expect(waitUntil).toHaveBeenCalledWith(publishPromises[1]);
+  });
+
+  it("prompts reconnect when credential resolution fails during refresh", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const publishedEvents: unknown[] = [];
+    const channelClient = {
+      getParticipants: vi.fn(() => new Promise(() => undefined)),
+      publishAgenticEvent: vi.fn(
+        (_participantId: string, event: unknown) =>
+          new Promise<void>(() => {
+            publishedEvents.push(event);
+          })
+      ),
+    };
+    const worker = instance as unknown as {
+      _rpc: {
+        call: ReturnType<typeof vi.fn>;
+        stream: ReturnType<typeof vi.fn>;
+        emit: ReturnType<typeof vi.fn>;
+        on: ReturnType<typeof vi.fn>;
+        handleIncomingPost: ReturnType<typeof vi.fn>;
+      };
+      subscriptions: {
+        getParticipantId(channelId: string): string | null;
+      };
+      runners: Map<string, unknown>;
+      createChannelClient: ReturnType<typeof vi.fn>;
+      getModelBaseUrl(channelId: string): string;
+      getApiKeyForChannel(channelId: string): () => Promise<string>;
+      readRunnerMessages(channelId: string): Promise<AgentMessage[]>;
+    };
+    const refreshError = Object.assign(new Error("client_not_authorized"), {
+      code: "client_not_authorized",
+    });
+
+    worker._rpc = {
+      call: vi.fn(async () => {
+        throw refreshError;
+      }),
+      stream: vi.fn(),
+      emit: vi.fn(),
+      on: vi.fn(),
+      handleIncomingPost: vi.fn(),
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClient);
+    worker.getModelBaseUrl = vi.fn().mockReturnValue("https://model.example/v1");
+    worker.readRunnerMessages = vi.fn().mockResolvedValue([]);
+    worker.runners.set("chat-1", { runner: { getCurrentTurnId: () => "turn-refresh-failed" } });
+
+    await expect(worker.getApiKeyForChannel("chat-1")()).rejects.toThrow("client_not_authorized");
+
+    expect(
+      sql.exec(`SELECT status FROM agent_turn_runs WHERE turn_id = ?`, "turn-refresh-failed")
+        .toArray()[0]
+    ).toMatchObject({ status: "waiting_external" });
+    expect(publishedEvents).toHaveLength(2);
+    expect(publishedEvents[0]).toMatchObject({
+      kind: "turn.waiting",
+      payload: {
+        reason: "model_credential_reconnect_required",
+        summary: "Waiting for model credential refresh",
+      },
+    });
+    expect(publishedEvents[1]).toMatchObject({
+      kind: "ui.inline_rendered",
+      payload: {
+        uiType: "inline",
+        props: {
+          providerId: "test",
+          modelBaseUrl: "https://model.example/v1",
+          resumeAfterConnect: true,
+          reason: "Your model sign-in needs to be refreshed before this turn can continue.",
+          diagnosticReason: "client_not_authorized",
+          failureCode: "client_not_authorized",
         },
       },
     });

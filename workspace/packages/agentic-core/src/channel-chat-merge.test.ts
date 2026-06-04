@@ -510,6 +510,41 @@ describe("chatMessagesFromChannelView", () => {
     ]);
   });
 
+  it("does not add a no-response error for turns waiting on model credentials", () => {
+    const turnId = brandId<TurnId>("turn-model-credential");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const waiting: AgenticEvent<"turn.waiting"> = {
+      kind: "turn.waiting",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "model_credential_required",
+        summary: "Waiting for model credential connection",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const closed: AgenticEvent<"turn.closed"> = {
+      kind: "turn.closed",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, summary: "Agent turn completed" },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+
+    const state = [opened, waiting, closed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)).toEqual([]);
+  });
+
   it("does not surface user-interrupted agent turns as no-response errors", () => {
     const turnId = brandId<TurnId>("turn-interrupted");
     const opened: AgenticEvent<"turn.opened"> = {

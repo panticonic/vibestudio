@@ -548,8 +548,22 @@ const MODEL_CREDENTIAL_RECONNECT_CODES = new Set([
   "credential_expired_reauth_required",
   "client_not_authorized",
   "invalid_grant",
+  "token_exchange_failed",
+  "invalid_token_response",
+  "client_config_unavailable",
   "oauth-refresh-failed",
 ]);
+
+const MODEL_CREDENTIAL_RECONNECT_MESSAGE_PATTERNS = [
+  /\bauthentication token is expired\b/i,
+  /\btoken (?:is )?expired\b/i,
+  /\bcredential (?:is )?expired\b/i,
+  /\bsign(?:ed)? in again\b/i,
+  /\bre-?auth(?:enticate|entication)? required\b/i,
+  /\binvalid[_ -]grant\b/i,
+  /\bclient[_ -]not[_ -]authorized\b/i,
+  /\bunauthori[sz]ed\b/i,
+] as const;
 
 interface AgentFailureInfo {
   message: string;
@@ -586,12 +600,17 @@ function modelCredentialReconnectFailure(err: unknown): AgentFailureInfo | null 
   const missingCredential = credentialRequiredMessage(err);
   if (missingCredential) return { message: missingCredential, code: "CREDENTIAL_REQUIRED" };
   const code = errorCodeFromUnknown(err);
-  if (!code) return null;
   const objectMessage =
     err && typeof err === "object" && typeof (err as { message?: unknown }).message === "string"
       ? (err as { message: string }).message
       : undefined;
   const message = err instanceof Error ? err.message : (objectMessage ?? String(err));
+  if (
+    !code &&
+    !MODEL_CREDENTIAL_RECONNECT_MESSAGE_PATTERNS.some((pattern) => pattern.test(message))
+  ) {
+    return null;
+  }
   return { message: message || code, code };
 }
 
@@ -3534,6 +3553,35 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           modelBaseUrl,
           error: err instanceof Error ? err.message : String(err),
         });
+        const reconnectFailure = modelCredentialReconnectFailure(err);
+        if (reconnectFailure) {
+          const shouldResumeCurrentTurn = opts?.resumeCurrentTurnOnMissingCredential !== false;
+          if (shouldResumeCurrentTurn) {
+            const credentialTurnId = await this.transitionCurrentTurnToWaiting(
+              channelId,
+              this.currentTurnIdForChannel(channelId) ?? undefined
+            );
+            this.publishTurnWaitingEvent(channelId, credentialTurnId, {
+              reason: "model_credential_reconnect_required",
+              summary: "Waiting for model credential refresh",
+            });
+            this.queueModelCredentialInterruptionRecord(
+              channelId,
+              providerId,
+              modelBaseUrl,
+              credentialTurnId
+            );
+          }
+          this.emitModelCredentialRequiredCard(channelId, providerId, modelBaseUrl, {
+            resumeAfterConnect: shouldResumeCurrentTurn,
+            reason: "Your model sign-in needs to be refreshed before this turn can continue.",
+            diagnosticReason: reconnectFailure.message,
+            failureCode: reconnectFailure.code,
+            ...(shouldResumeCurrentTurn
+              ? { turnId: this.currentTurnIdForChannel(channelId) ?? undefined }
+              : {}),
+          });
+        }
         throw err;
       } finally {
         const controller = this.modelCredentialResolutionAbortControllers.get(channelId);
@@ -5409,6 +5457,17 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       },
       onWorkFailure: async (work, error, workTurnId) => {
         const turnId = workTurnId ?? (work.kind === "continue" ? work.turnId : undefined);
+        if (turnId && modelCredentialReconnectFailure(error)) {
+          const row = this.loadTurnRun(turnId);
+          if (row?.status === "waiting_external") {
+            this.recordDebugPhase(channelId, "turn_dispatcher.credential_wait_failure_suppressed", {
+              turnId,
+              workKind: work.kind,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+        }
         if (turnId) {
           this.transitionTurn(
             turnId,
@@ -5886,7 +5945,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       ...(opts?.turnId ? { turnId: opts.turnId as never } : {}),
       createdAt: new Date().toISOString(),
     };
-    void channel
+    const delivery = channel
       .publishAgenticEvent(participantId, event, {
         idempotencyKey: cardId,
         senderMetadata: { type: "agent", name: participantId },
@@ -5898,6 +5957,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         );
         this.credentialPromptCardsEmitted.delete(key);
       });
+    this.ctx.waitUntil?.(delivery);
+    void delivery;
   }
 
   private publishTurnWaitingEvent(
@@ -5922,7 +5983,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       },
       createdAt: new Date().toISOString(),
     };
-    void this.createChannelClient(channelId)
+    const delivery = this.createChannelClient(channelId)
       .publishAgenticEvent(participantId, event, {
         idempotencyKey: `turn-waiting:${turnId}:${payload.reason}`,
         senderMetadata: { type: "agent", name: participantId },
@@ -5935,6 +5996,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    this.ctx.waitUntil?.(delivery);
+    void delivery;
   }
 
   private createMethodResultWaiter(

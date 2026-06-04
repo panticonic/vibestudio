@@ -255,7 +255,12 @@ function isRunnerRestartClose(turn: ProjectedTurn): boolean {
 }
 
 function isExpectedNoAssistantClose(turn: ProjectedTurn): boolean {
-  return turn.reason === "user_interrupted" || turn.reason === "channel_unsubscribe";
+  return (
+    turn.reason === "user_interrupted" ||
+    turn.reason === "channel_unsubscribe" ||
+    turn.reason === "model_credential_required" ||
+    turn.reason === "model_credential_reconnect_required"
+  );
 }
 
 function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[] {
