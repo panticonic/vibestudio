@@ -6933,6 +6933,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (segments.length >= 1 && !(this as unknown as { _objectKey?: string })._objectKey) {
       (this as unknown as { _objectKey?: string })._objectKey = decodeURIComponent(segments[0]!);
     }
+    const method = segments.slice(1).join("/") || "getState";
+
+    if (method === "__lifecycle/prepare" || method === "__lifecycle/resume") {
+      return super.fetch(request);
+    }
 
     this.ensureReady();
     this.ensureBootstrapped();
@@ -6941,8 +6946,6 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
       return this.handleWebSocketUpgrade(request);
     }
-
-    const method = segments.slice(1).join("/") || "getState";
 
     if (method === "__rpc") {
       const body = await request.json();

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import type { LifecycleResumeInput } from "@workspace/runtime/worker";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 
 import { AgentWorkerBase } from "./agent-worker-base.js";
@@ -98,6 +99,21 @@ class TestAgentWorker extends AgentWorkerBase {
         ): Promise<string | null>;
       }
     ).captureTurnCheckpoint(channelId, turnId, runner, phase);
+  }
+}
+
+class LifecycleRouteTestAgentWorker extends TestAgentWorker {
+  resumed = false;
+  inactiveMarks = 0;
+
+  override async resumeAfterRestart(input: LifecycleResumeInput): Promise<void> {
+    this.resumed = true;
+    await super.resumeAfterRestart(input);
+  }
+
+  protected override markCheckpointableWorkInactive(): Promise<void> {
+    this.inactiveMarks++;
+    return Promise.resolve();
   }
 }
 
@@ -387,6 +403,37 @@ class SingleFlightRunnerInitTestWorker extends AgentWorkerBase {
 }
 
 describe("AgentWorkerBase runner contract", () => {
+  it("routes lifecycle resume requests through the durable base handler", async () => {
+    const { instance } = await createTestDO(LifecycleRouteTestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as LifecycleRouteTestAgentWorker;
+    const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
+
+    const response = await fetchable.fetch(
+      new Request("http://test/agent-test/__lifecycle/resume", {
+        method: "POST",
+        body: JSON.stringify({
+          args: [
+            {
+              epoch: "epoch-1",
+              previousGeneration: null,
+              currentGeneration: 1,
+              reason: "planned",
+            },
+          ],
+          __instanceToken: "token",
+          __instanceId: "do:workers/agent-worker:AiChatWorker:agent-test",
+          __caller: { callerId: "main", callerKind: "server" },
+        }),
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(worker.resumed).toBe(true);
+    expect(worker.inactiveMarks).toBe(1);
+  });
+
   it("uses the clean AgentHarness-facing dispatcher surface", () => {
     const methods = [
       "subscribe",
