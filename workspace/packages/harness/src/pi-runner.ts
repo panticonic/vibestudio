@@ -174,6 +174,21 @@ function terminalMarkerFromDetails(details: unknown): NatstackTerminalMarker | n
     ...(typeof record["reasonCode"] === "string" ? { reasonCode: record["reasonCode"] } : {}),
   };
 }
+
+function abortedBeforeToolExecutionResult(): AgentToolResult<any> {
+  return {
+    isError: true,
+    terminate: true,
+    content: [{ type: "text", text: "Agent run was aborted before tool execution." }],
+    details: {
+      __natstack_terminal: {
+        outcome: "cancelled",
+        reasonCode: "user_interrupted",
+      },
+    },
+  } as AgentToolResult<any>;
+}
+
 export interface PiRunnerOptions {
   rpc: RpcCaller;
   fs: RuntimeFs;
@@ -612,8 +627,13 @@ export class PiRunner {
     lastBlocks: MessageBlockInput[];
     started: boolean;
   } | null = null;
+  private activation: {
+    controller: AbortController;
+    signal: AbortSignal;
+    turnId: string | null;
+    runSignalCleanup?: () => void;
+  } | null = null;
   private activeRunSignal: AbortSignal | null = null;
-  private activeOperationAbortController: AbortController | null = null;
   private activeOperationId: string | null = null;
   private activeOperationSawAgentStart = false;
   private activeOperationSawAgentEnd = false;
@@ -700,8 +720,52 @@ export class PiRunner {
     );
   }
 
-  private activeOperationSignal(): AbortSignal | undefined {
-    return this.activeRunSignal ?? this.activeOperationAbortController?.signal;
+  private beginActivation(turnId: string | null): AbortSignal {
+    this.endActivation("new_activation", { abort: false });
+    const controller = new AbortController();
+    this.activation = {
+      controller,
+      signal: controller.signal,
+      turnId,
+    };
+    return controller.signal;
+  }
+
+  private ensureActivation(turnId: string | null): AbortSignal {
+    if (this.activation) {
+      if (!this.activation.turnId && turnId) this.activation.turnId = turnId;
+      return this.activation.signal;
+    }
+    return this.beginActivation(turnId);
+  }
+
+  private linkHarnessRunSignal(signal: AbortSignal | null | undefined): void {
+    if (!this.activation || !signal) return;
+    this.activation.runSignalCleanup?.();
+    if (signal.aborted) {
+      this.activation.controller.abort(signal.reason ?? new Error("Harness run aborted"));
+      return;
+    }
+    const controller = this.activation.controller;
+    const onAbort = () => {
+      controller.abort(signal.reason ?? new Error("Harness run aborted"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    this.activation.runSignalCleanup = () => signal.removeEventListener("abort", onAbort);
+  }
+
+  private endActivation(_reason: string, opts: { abort?: boolean } = {}): void {
+    const activation = this.activation;
+    if (!activation) return;
+    if (opts.abort) {
+      activation.controller.abort(new Error(_reason));
+    }
+    activation.runSignalCleanup?.();
+    this.activation = null;
+  }
+
+  private activationSignal(): AbortSignal | undefined {
+    return this.activation?.signal;
   }
 
   getDebugState(): Record<string, unknown> {
@@ -722,8 +786,8 @@ export class PiRunner {
       phase: {
         currentOperation: this.currentOperation ? { ...this.currentOperation } : null,
         activeRunSignal: this.activeRunSignal ? { aborted: this.activeRunSignal.aborted } : null,
-        activeOperationSignal: this.activeOperationAbortController
-          ? { aborted: this.activeOperationAbortController.signal.aborted }
+        activationSignal: this.activation
+          ? { aborted: this.activation.signal.aborted, turnId: this.activation.turnId }
           : null,
         awaitingProviderFirstEvent: this.awaitingProviderFirstEvent,
         providerRequestCount: this.providerRequestCount,
@@ -844,6 +908,7 @@ export class PiRunner {
         },
       ]);
       if (this.currentTurnId === turnId) this.currentTurnId = null;
+      this.endActivation("turn_interrupted", { abort: false });
       this.openedTurnIds.delete(turnId);
       this.turnCloseFailedIds.delete(turnId);
       return true;
@@ -881,6 +946,7 @@ export class PiRunner {
         },
       ]);
       if (this.currentTurnId === turnId) this.currentTurnId = null;
+      this.endActivation("turn_failed", { abort: false });
       this.openedTurnIds.delete(turnId);
       this.turnCloseFailedIds.delete(turnId);
       return true;
@@ -1146,7 +1212,7 @@ export class PiRunner {
       });
       try {
         const messages = await this.hooks.emitTransformContext(event.messages, {
-          signal: this.activeRunSignal ?? undefined,
+          signal: this.activationSignal(),
         });
         this.rememberCheckpoint("context.transform.ok", { messageCount: messages.length });
         return { messages };
@@ -1167,7 +1233,7 @@ export class PiRunner {
       });
       try {
         const result = await this.hooks.emitBeforeProviderRequest(event, {
-          signal: this.activeRunSignal ?? undefined,
+          signal: this.activationSignal(),
         });
         if (this.currentTurnId) {
           await this.options.onTurnPhase?.({
@@ -1247,7 +1313,7 @@ export class PiRunner {
       return undefined;
     });
     this.harness.on("before_agent_start", async () => {
-      const signal = this.activeOperationSignal();
+      const signal = this.activationSignal();
       this.rememberCheckpoint("agent.before_start.resources.start", {
         signalAborted: signal?.aborted ?? false,
       });
@@ -1513,11 +1579,19 @@ export class PiRunner {
     return {
       ...tool,
       execute: async (toolCallId, params, signal, onUpdate) => {
+        const abortedAtEnter = signal?.aborted || this.activationSignal()?.aborted;
+        if (abortedAtEnter) {
+          return abortedBeforeToolExecutionResult();
+        }
         const dispatchResult = await this.dispatchToolCallEvent(
           toolCallId,
           tool.name,
           this.asJsonRecord(params) ?? {}
         );
+        const abortedAfterDispatch = signal?.aborted || this.activationSignal()?.aborted;
+        if (abortedAfterDispatch) {
+          return abortedBeforeToolExecutionResult();
+        }
         if (dispatchResult?.block) {
           if (dispatchResult.terminalToolResult) return dispatchResult.terminalToolResult;
           throw new Error(dispatchResult.reason ?? `Tool "${tool.name}" blocked`);
@@ -1526,7 +1600,8 @@ export class PiRunner {
           await this.writeMutationIntent(toolCallId, tool.name, params);
         }
         try {
-          return await tool.execute(toolCallId, params, signal, onUpdate);
+          const result = await tool.execute(toolCallId, params, signal, onUpdate);
+          return result;
         } catch (err) {
           if (err instanceof NatStackUiToolResultError) return err.result;
           throw err;
@@ -1686,30 +1761,59 @@ export class PiRunner {
     _signal?: AbortSignal,
     capturedMessageEntryId?: string
   ): Promise<void> {
-    const signal = _signal ?? this.activeRunSignal ?? undefined;
+    const harnessSignal = _signal ?? this.activeRunSignal ?? undefined;
     let correlatedEvent: CorrelatedAgentHarnessEvent = this.correlateHarnessEvent(event);
+    let hookSignal = this.activationSignal();
     try {
       this.rememberHarnessEvent(event);
+      const runSignalAborted = harnessSignal?.aborted ?? false;
       if (event.type === "agent_start") {
-        this.activeRunSignal = signal ?? null;
+        if (runSignalAborted) {
+          this.rememberCheckpoint("agent.start.aborted_ignored", {
+            turnId: this.currentTurnId ?? null,
+          });
+          return;
+        }
+        this.activeRunSignal = harnessSignal ?? null;
+        this.ensureActivation(this.currentTurnId);
+        this.linkHarnessRunSignal(harnessSignal);
+        hookSignal = this.activationSignal();
         this.rememberCheckpoint("agent.start", {
-          signalAborted: signal?.aborted ?? false,
+          signalAborted: hookSignal?.aborted ?? false,
         });
         this.running = true;
         await this.openCurrentTurn();
+        this.ensureActivation(this.currentTurnId);
+        hookSignal = this.activationSignal();
         this.activeOperationSawAgentStart = true;
         correlatedEvent = this.correlateHarnessEvent(event);
       }
-      if (event.type === "message_start") {
+      if (runSignalAborted && event.type === "message_start") {
+        this.rememberCheckpoint("message_start.aborted_ignored", {
+          role: this.messageRole((event as { message: AgentMessage }).message),
+          turnId: this.currentTurnId ?? null,
+        });
+      } else if (event.type === "message_start") {
         await this.handleMessageStart((event as { message: AgentMessage }).message);
       }
-      if (event.type === "message_update") {
+      if (runSignalAborted && event.type === "message_update") {
+        this.rememberCheckpoint("message_update.aborted_ignored", {
+          role: this.messageRole((event as { message: AgentMessage }).message),
+          turnId: this.currentTurnId ?? null,
+        });
+      } else if (event.type === "message_update") {
         await this.handleMessageUpdate((event as { message: AgentMessage }).message);
       }
       if (event.type === "message_end") {
-        await this.handleMessageEnd(event.message, capturedMessageEntryId, signal);
+        hookSignal = this.activationSignal();
+        await this.handleMessageEnd(
+          event.message,
+          capturedMessageEntryId,
+          runSignalAborted ? harnessSignal : hookSignal
+        );
       }
       if (event.type === "agent_end") {
+        hookSignal = this.activationSignal();
         if (correlatedEvent.natstack?.lifecycleMatched === false) {
           this.rememberCheckpoint("agent.end.unmatched_ignored", {
             operationId: correlatedEvent.natstack.operationId ?? null,
@@ -1730,7 +1834,7 @@ export class PiRunner {
           this.activeOperationSawAgentEnd = true;
         }
       }
-      await this.hooks.emitEvent(correlatedEvent, { signal });
+      await this.hooks.emitEvent(correlatedEvent, { signal: hookSignal });
     } catch (err) {
       this.failActiveRun(`harness.event.${event.type}`, err);
       throw err;
@@ -1848,6 +1952,7 @@ export class PiRunner {
       throw err;
     });
     this.currentTurnId = null;
+    this.endActivation("turn_closed", { abort: false });
     this.openedTurnIds.delete(turnId);
     this.turnCloseFailedIds.delete(turnId);
   }
@@ -1875,6 +1980,7 @@ export class PiRunner {
     if (requestedTurnId && currentTurnId !== requestedTurnId) return;
     if (!this.openedTurnIds.has(currentTurnId)) {
       this.currentTurnId = null;
+      this.endActivation("turn_failed_unopened", { abort: false });
       this.rememberCheckpoint("turn.failed_unopened_cleared", {
         turnId: currentTurnId,
         requestedTurnId: requestedTurnId ?? null,
@@ -1955,6 +2061,7 @@ export class PiRunner {
     if (repairs.length > 0) await this.appendTrajectoryEvents(repairs);
     if (this.currentTurnId && repairedTurnIds.has(this.currentTurnId)) {
       this.currentTurnId = null;
+      this.endActivation("turn_repaired_closed", { abort: false });
     }
     for (const turnId of repairedTurnIds) {
       this.openedTurnIds.delete(turnId);
@@ -1993,9 +2100,11 @@ export class PiRunner {
     signal?: AbortSignal
   ): Promise<void> {
     if (!this.session) return;
-    if (signal?.aborted && (message as { role?: string }).role === "toolResult") {
+    const rawRole = (message as { role?: string }).role;
+    const role = this.messageRole(message);
+    if (signal?.aborted && rawRole === "toolResult") {
       const details = (message as { details?: unknown }).details;
-      if (terminalMarkerFromDetails(details)) {
+      if (terminalMarkerFromDetails(details) && this.currentTurnId) {
         this.rememberCheckpoint("message_end.aborted_tool_result_terminal_marker_admitted", {
           toolCallId: String((message as { toolCallId?: unknown }).toolCallId ?? ""),
           toolName: String((message as { toolName?: unknown }).toolName ?? ""),
@@ -2007,10 +2116,16 @@ export class PiRunner {
         });
         return;
       }
+    } else if (signal?.aborted) {
+      this.rememberCheckpoint("message_end.aborted_message_ignored", {
+        role,
+        turnId: this.currentTurnId ?? null,
+      });
+      if (role === "assistant") this.activeAssistantMessage = null;
+      return;
     }
     const messageEntryId = capturedMessageEntryId ?? (await this.session.getLeafId());
     if (!messageEntryId) return;
-    const role = this.messageRole(message);
     const messageId =
       role === "assistant" && this.activeAssistantMessage
         ? this.activeAssistantMessage.messageId
@@ -3118,8 +3233,7 @@ export class PiRunner {
     this.activeOperationId = operationId;
     this.activeOperationSawAgentStart = false;
     this.activeOperationSawAgentEnd = false;
-    const operationAbortController = new AbortController();
-    this.activeOperationAbortController = operationAbortController;
+    this.beginActivation(this.currentTurnId);
     this.currentOperation = {
       kind: "prompt",
       operationId,
@@ -3154,9 +3268,6 @@ export class PiRunner {
       });
       throw err;
     } finally {
-      if (this.activeOperationAbortController === operationAbortController) {
-        this.activeOperationAbortController = null;
-      }
       if (this.activeOperationId === operationId) {
         this.activeOperationId = null;
         this.activeOperationSawAgentStart = false;
@@ -3227,8 +3338,7 @@ export class PiRunner {
     this.activeOperationId = operationId;
     this.activeOperationSawAgentStart = false;
     this.activeOperationSawAgentEnd = false;
-    const operationAbortController = new AbortController();
-    this.activeOperationAbortController = operationAbortController;
+    this.ensureActivation(this.currentTurnId);
     this.currentOperation = {
       kind: "continue",
       operationId,
@@ -3259,9 +3369,6 @@ export class PiRunner {
       });
       throw err;
     } finally {
-      if (this.activeOperationAbortController === operationAbortController) {
-        this.activeOperationAbortController = null;
-      }
       if (this.activeOperationId === operationId) {
         this.activeOperationId = null;
         this.activeOperationSawAgentStart = false;
@@ -3386,8 +3493,10 @@ export class PiRunner {
   }
 
   async abort(): Promise<{ clearedSteer: AgentMessage[]; clearedFollowUp: AgentMessage[] }> {
-    this.activeOperationAbortController?.abort(new Error("Agent run aborted"));
-    if (!this.harness) return { clearedSteer: [], clearedFollowUp: [] };
+    this.activation?.controller.abort(new Error("Agent run aborted"));
+    if (!this.harness) {
+      return { clearedSteer: [], clearedFollowUp: [] };
+    }
     return this.harness.abort();
   }
 
@@ -3552,8 +3661,7 @@ export class PiRunner {
   }
 
   dispose(): void {
-    this.activeOperationAbortController?.abort(new Error("PiRunner disposed"));
-    this.activeOperationAbortController = null;
+    this.endActivation("PiRunner disposed", { abort: true });
     void this.harness?.abort().catch((err) => {
       console.warn("[PiRunner] abort during dispose failed:", err);
     });

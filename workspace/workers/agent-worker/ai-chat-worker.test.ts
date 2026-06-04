@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import type { TurnSnapshot } from "@natstack/harness";
+import type { TurnSnapshot } from "@workspace/harness";
 import { AgentWorkerBase } from "@workspace/agentic-do";
 
 import { AiChatWorker } from "./ai-chat-worker.js";

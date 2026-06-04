@@ -6,7 +6,7 @@ import {
   TurnDispatcher,
   type TurnDispatcherRunner,
 } from "./turn-dispatcher.js";
-import type { RunnerTurnInput } from "@natstack/harness";
+import type { RunnerTurnInput } from "@workspace/harness";
 
 // ─── Fakes ───────────────────────────────────────────────────────────────────
 

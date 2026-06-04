@@ -55,14 +55,14 @@
       "@natstack/git-server": [
         "packages/git-server/src/index.ts"
       ],
-      "@natstack/harness": [
-        "packages/harness/src/index.ts"
+      "@workspace/*": [
+        "workspace/packages/*/src/index.ts"
       ],
-      "@natstack/harness/entry": [
-        "packages/harness/src/entry.ts"
+      "@workspace/*/entry": [
+        "workspace/packages/*/src/entry.ts"
       ],
-      "@natstack/harness/types": [
-        "packages/harness/src/types.ts"
+      "@workspace/*/types": [
+        "workspace/packages/*/src/types.ts"
       ],
       "@natstack/port-utils": [
         "packages/port-utils/src/index.ts"

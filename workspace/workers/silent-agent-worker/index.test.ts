@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import type { PiRunnerOptions } from "@natstack/harness";
+import type { PiRunnerOptions } from "@workspace/harness";
 
 import { SilentAgentWorker } from "./index.js";
 

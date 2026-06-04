@@ -1,4 +1,4 @@
-# @natstack/harness
+# @workspace/harness
 
 In-process Pi runtime for the NatStack agent worker DO.
 
@@ -67,7 +67,7 @@ import {
   type TurnUsage,
   type ParticipantDescriptor,
   type UnsubscribeResult,
-} from "@natstack/harness";
+} from "@workspace/harness";
 ```
 
 ## Adding a new extension
@@ -107,7 +107,7 @@ signal.
 ## Tests
 
 ```bash
-pnpm vitest run packages/harness/
+pnpm vitest run workspace/packages/harness/
 ```
 
 Covers all three extension factories and the UI context bridge.

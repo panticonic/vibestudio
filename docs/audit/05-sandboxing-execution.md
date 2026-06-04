@@ -452,7 +452,7 @@ Severity: **Medium**, folded into the fix for S3.
 
 ### S13 — Low/Medium: `ReDoS` in harness `grep` tool and `globToRegex`
 
-**File**: `packages/harness/src/tools/grep.ts:212-258`
+**File**: `workspace/packages/harness/src/tools/grep.ts:212-258`
 
 Users can pass an arbitrary `pattern` with `literal: false`. `new RegExp(source, flags)` + `regex.test(line)` on large lines with a catastrophic pattern (e.g. `(a+)+$`) pins a workerd isolate. This is a self-DoS (the agent is the one supplying the pattern), not an escape, but the resulting `regex.test` runs inside the DO isolate with no built-in regex timeout.
 
@@ -464,7 +464,7 @@ Remediation: enforce a reasonable `pattern` length, refuse patterns containing c
 
 ### S14 — Low: Harness `resolveToCwd` passes absolute paths straight through
 
-**File**: `packages/harness/src/tools/path-utils.ts:41-47`
+**File**: `workspace/packages/harness/src/tools/path-utils.ts:41-47`
 
 ```ts
 export function resolveToCwd(filePath: string, cwd: string): string {
@@ -576,9 +576,9 @@ A second chain, targeting the UI host:
 - `src/main/autofill/autofillManager.ts`, `src/main/autofill/contentScript.ts`
 - `packages/git-server/src/server.ts`, `packages/git-server/src/auth.ts`
 - `packages/git/src/*` (surface only)
-- `packages/harness/src/index.ts`, `packages/harness/src/tools/path-utils.ts`, `packages/harness/src/tools/grep.ts`, `packages/harness/src/pi-extension-runtime.ts`
+- `workspace/packages/harness/src/index.ts`, `workspace/packages/harness/src/tools/path-utils.ts`, `workspace/packages/harness/src/tools/grep.ts`, `workspace/packages/harness/src/pi-extension-runtime.ts`
 - `packages/process-adapter/src/index.ts`
 - `packages/shared/src/fsService.ts`, `packages/shared/src/pathUtils.ts`, `packages/shared/src/panelFactory.ts`
 - `packages/shared/src/db/panelPersistence.ts`, `packages/shared/src/db/panelSearchIndex.ts`, `packages/shared/src/db/panelSchema.ts`, `packages/shared/src/db/databaseManager.ts`
 
-Tests (cross-referenced for behaviour, not audited for coverage): `workerdService.test.ts`, `workerdManager.test.ts`, `packages/shared/src/db/databaseManager.test.ts`, `packages/shared/src/db/panelPersistence.test.ts`, `packages/harness/src/tools/__tests__/*`.
+Tests (cross-referenced for behaviour, not audited for coverage): `workerdService.test.ts`, `workerdManager.test.ts`, `packages/shared/src/db/databaseManager.test.ts`, `packages/shared/src/db/panelPersistence.test.ts`, `workspace/packages/harness/src/tools/__tests__/*`.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { TurnDispatcher, type TurnDispatcherRunner } from "./turn-dispatcher.js";
-import type { RunnerEvent, RunnerTurnInput } from "@natstack/harness";
+import type { RunnerEvent, RunnerTurnInput } from "@workspace/harness";
 
 // Minimal runner fake: prompt() stays pending until resolvePrompt() is called,
 // mirroring a turn that settles on a later (cross-request) harness event.

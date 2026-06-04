@@ -302,7 +302,7 @@ function ${toPascalCase(name)}Content() {
             dependencies: {
               "@workspace/runtime": "workspace:*",
               "@workspace/agentic-do": "workspace:*",
-              "@natstack/harness": "workspace:*",
+              "@workspace/harness": "workspace:*",
             },
           },
           null,
@@ -314,7 +314,7 @@ export default { fetch(_req: Request) { return new Response("${name} DO service"
 `;
 
         files[`${workerFileName}.ts`] = `import { AgentWorkerBase } from "@workspace/agentic-do";
-import type { ParticipantDescriptor } from "@natstack/harness";
+import type { ParticipantDescriptor } from "@workspace/harness";
 
 /**
  * ${className} — Pi-native agent DO.
@@ -358,7 +358,7 @@ export class ${className} extends AgentWorkerBase {
 `;
 
         files[`${workerFileName}.test.ts`] = `import { describe, it, expect } from "vitest";
-import type { ChannelEvent } from "@natstack/harness";
+import type { ChannelEvent } from "@workspace/harness";
 import { createTestDO } from "@workspace/runtime/worker";
 import { ${className} } from "./${workerFileName}.js";
 

@@ -34,23 +34,23 @@
     },
     {
       "id": "harness.approval-gate",
-      "paths": ["packages/harness/src/extensions/approval-gate.ts"],
+      "paths": ["workspace/packages/harness/src/extensions/approval-gate.ts"],
       "class": "journal-before-dispatch",
       "notes": "Replay-safe only when invoked through the agent suspension ledger."
     },
     {
       "id": "harness.ask-user",
-      "paths": ["packages/harness/src/extensions/ask-user.ts"],
+      "paths": ["workspace/packages/harness/src/extensions/ask-user.ts"],
       "class": "journal-before-dispatch",
       "notes": "Replay-safe only when invoked through the agent suspension ledger."
     },
     {
       "id": "harness.fs.read",
       "paths": [
-        "packages/harness/src/tools/read.ts",
-        "packages/harness/src/tools/ls.ts",
-        "packages/harness/src/tools/grep.ts",
-        "packages/harness/src/tools/find.ts"
+        "workspace/packages/harness/src/tools/read.ts",
+        "workspace/packages/harness/src/tools/ls.ts",
+        "workspace/packages/harness/src/tools/grep.ts",
+        "workspace/packages/harness/src/tools/find.ts"
       ],
       "class": "pure-read",
       "notes": "Read-only filesystem inspection tools."
@@ -58,17 +58,17 @@
     {
       "id": "harness.fs.write",
       "paths": [
-        "packages/harness/src/tools/write.ts",
-        "packages/harness/src/tools/edit.ts",
-        "packages/harness/src/tools/edit-diff.ts",
-        "packages/harness/src/tools/truncate.ts"
+        "workspace/packages/harness/src/tools/write.ts",
+        "workspace/packages/harness/src/tools/edit.ts",
+        "workspace/packages/harness/src/tools/edit-diff.ts",
+        "workspace/packages/harness/src/tools/truncate.ts"
       ],
       "class": "unsafe",
       "notes": "Filesystem mutations need journal-before-dispatch wrapping before model replay can be enabled."
     },
     {
       "id": "harness.web",
-      "paths": ["packages/harness/src/extensions/web"],
+      "paths": ["workspace/packages/harness/src/extensions/web"],
       "class": "unsafe",
       "notes": "Network reads are nondeterministic and may consume quota; classify per provider before replay."
     },

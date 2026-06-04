@@ -13,6 +13,6 @@
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
-    "@natstack/harness": "workspace:*"
+    "@workspace/harness": "workspace:*"
   }
 }

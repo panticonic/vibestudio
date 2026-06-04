@@ -1,4 +1,4 @@
-import type { ApprovalLevel, ThinkingLevel } from "@natstack/harness";
+import type { ApprovalLevel, ThinkingLevel } from "@workspace/harness";
 import { toAgentCredentialSetup } from "@natstack/shared/models/providerConnect";
 
 import type { ModelCredentialSetupProps } from "./trajectory-vessel-base.js";

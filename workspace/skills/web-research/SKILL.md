@@ -185,7 +185,7 @@ fetch through a real browser panel instead:
 ```
 eval({ code: `
   import { openPanel } from "@workspace/runtime";
-  import { htmlToReadableMarkdown } from "@natstack/harness/web-extract";
+  import { htmlToReadableMarkdown } from "@workspace/harness/web-extract";
 
   const browser = await openPanel("https://example.com/article");
   const page = await browser.cdp.playwrightPage();

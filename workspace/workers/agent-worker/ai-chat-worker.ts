@@ -1,5 +1,5 @@
 import { AgentWorkerBase } from "@workspace/agentic-do";
-import type { ParticipantDescriptor } from "@natstack/harness/types";
+import type { ParticipantDescriptor } from "@workspace/harness/types";
 
 type ChatAgentConfig = {
   handle?: string;

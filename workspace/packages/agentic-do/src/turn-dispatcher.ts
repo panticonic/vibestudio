@@ -7,7 +7,7 @@
  */
 
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { RunnerEvent, RunnerTurnInput, RunnerTurnOptions } from "@natstack/harness";
+import type { RunnerEvent, RunnerTurnInput, RunnerTurnOptions } from "@workspace/harness";
 
 export interface TurnDispatcherRunner {
   subscribe(listener: (event: RunnerEvent) => void): () => void;

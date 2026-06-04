@@ -1,5 +1,5 @@
 {
-  "name": "@natstack/harness",
+  "name": "@workspace/harness",
   "version": "0.1.0",
   "description": "Shared type definitions for the NatStack agentic harness messaging system",
   "type": "module",
@@ -30,7 +30,7 @@
     "dev": "tsc --project tsconfig.build.json --watch"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.74.1",
+    "@earendil-works/pi-ai": "^0.78.0",
     "@mozilla/readability": "^0.6.0",
     "@natstack/extension": "workspace:*",
     "@natstack/rpc": "workspace:*",

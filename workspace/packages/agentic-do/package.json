@@ -8,11 +8,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.74.1",
+    "@earendil-works/pi-ai": "^0.78.0",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
-    "@natstack/harness": "workspace:*",
+    "@workspace/harness": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@natstack/shared": "workspace:*"
   },

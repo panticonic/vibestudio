@@ -2,7 +2,7 @@
  * @workspace/agentic-do — Composable agent modules for Durable Objects.
  *
  * Agent DOs extend AgentWorkerBase, which embeds Pi (`@earendil-works/pi-agent-core`)
- * in-process via the PiRunner from `@natstack/harness`. Non-agent DOs (e.g.
+ * in-process via the PiRunner from `@workspace/harness`. Non-agent DOs (e.g.
  * PubSub channel DOs) extend DurableObjectBase directly.
  */
 

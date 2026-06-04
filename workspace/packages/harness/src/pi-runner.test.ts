@@ -23,6 +23,7 @@ import {
   runAgentLoop,
   type AgentLoopConfig,
   type AgentMessage,
+  type AgentTool,
 } from "@earendil-works/pi-agent-core";
 
 function deferred<T = void>(): {
@@ -224,7 +225,7 @@ describe("pi-agent-core steering integration", () => {
   });
 
   it("stops the agent loop at the iteration boundary when the run is aborted", async () => {
-    // Guards the pi-agent-core patch (patches/@earendil-works__pi-agent-core).
+    // Guards the pi-agent-core patch (workspace/packages/harness/patches/@earendil-works__pi-agent-core).
     // The loop's built-in abort handling only stops when the *model stream*
     // reports `stopReason: "aborted"`. When the run is aborted during/after
     // tool execution, the loop must terminate at the top of the next iteration
@@ -235,6 +236,7 @@ describe("pi-agent-core steering integration", () => {
     const ac = new AbortController();
     let modelCalls = 0;
     let agentEnded = false;
+    const messageEndRoles: Array<string | undefined> = [];
 
     const tools: NonNullable<Parameters<typeof runAgentLoop>[1]["tools"]> = [
       {
@@ -284,15 +286,20 @@ describe("pi-agent-core steering integration", () => {
       config,
       async (event) => {
         if (event.type === "agent_end") agentEnded = true;
+        if (event.type === "message_end") {
+          messageEndRoles.push((event.message as { role?: string }).role);
+        }
       },
       ac.signal,
       streamFn as never
     );
 
     // Model called once; abort fires during its tool; the loop then terminates
-    // at the next iteration boundary instead of calling the model again.
+    // before emitting an aborted toolResult that could be fed back to the model.
     expect(modelCalls).toBe(1);
     expect(agentEnded).toBe(true);
+    expect(messageEndRoles).toContain("assistant");
+    expect(messageEndRoles).not.toContain("toolResult");
   });
 });
 
@@ -306,6 +313,42 @@ describe("PiRunner", () => {
     expect(runner.session).toBeTruthy();
 
     runner.dispose();
+  });
+
+  it("does not dispatch a tool call when the run signal is already aborted", async () => {
+    const runner = new PiRunner(createOptions()) as unknown as {
+      wrapTool(tool: AgentTool<any>): AgentTool<any>;
+      dispatchToolCallEvent: ReturnType<typeof vi.fn>;
+    };
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "should not run" }],
+      details: {},
+    }));
+    runner.dispatchToolCallEvent = vi.fn();
+    const wrapped = runner.wrapTool({
+      name: "probe",
+      label: "Probe",
+      description: "probe",
+      parameters: { type: "object", additionalProperties: false },
+      execute,
+    } as AgentTool<any>);
+    const ac = new AbortController();
+    ac.abort(new Error("stopped"));
+
+    const result = await wrapped.execute("call_1", {}, ac.signal);
+
+    expect(runner.dispatchToolCallEvent).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      isError: true,
+      terminate: true,
+      details: {
+        __natstack_terminal: {
+          outcome: "cancelled",
+          reasonCode: "user_interrupted",
+        },
+      },
+    });
   });
 
   it("aborts before_agent_start resource loading when the runner is interrupted", async () => {
@@ -354,6 +397,87 @@ describe("PiRunner", () => {
       expect.objectContaining({ status: "fulfilled" }),
       expect.objectContaining({ status: "rejected" }),
     ]);
+
+    runner.dispose();
+  });
+
+  it("keeps an abort visible across prompt-to-continue activation reuse", async () => {
+    const runner = new PiRunner(
+      createOptions({
+        keepTurnOpenOnAgentEnd: () => true,
+      })
+    );
+    const internals = runner as unknown as {
+      harness: {
+        prompt(content: string): Promise<void>;
+        continue(): Promise<void>;
+        abort(): Promise<{ clearedSteer: AgentMessage[]; clearedFollowUp: AgentMessage[] }>;
+      };
+      handleHarnessEvent(event: unknown): Promise<void>;
+      prepareSessionForContinue(): Promise<void>;
+      activationSignal(): AbortSignal | undefined;
+    };
+    await runner.init();
+
+    internals.harness.prompt = async () => {
+      await internals.handleHarnessEvent({ type: "agent_start" });
+      await internals.handleHarnessEvent({ type: "agent_end" });
+    };
+    internals.harness.abort = vi.fn(async () => ({ clearedSteer: [], clearedFollowUp: [] }));
+    internals.prepareSessionForContinue = vi.fn(async () => undefined);
+
+    await runner.prompt({ content: "hello" }, { turnId: "turn-reuse" });
+    const promptSignal = internals.activationSignal();
+    expect(promptSignal).toBeInstanceOf(AbortSignal);
+    expect(promptSignal!.aborted).toBe(false);
+
+    await runner.abort();
+    expect(promptSignal!.aborted).toBe(true);
+
+    let continueSignal: AbortSignal | undefined;
+    internals.harness.continue = async () => {
+      continueSignal = internals.activationSignal();
+      await internals.handleHarnessEvent({ type: "agent_start" });
+      await internals.handleHarnessEvent({ type: "agent_end" });
+    };
+
+    await runner.continueAgent({ turnId: "turn-reuse" });
+    expect(continueSignal).toBe(promptSignal);
+    expect(continueSignal!.aborted).toBe(true);
+
+    runner.dispose();
+  });
+
+  it("passes the activation signal to agent_end hooks even when the turn closes", async () => {
+    const appendTrajectoryBatch = vi.fn(async () => undefined);
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      harness: { prompt(content: string): Promise<void> };
+      handleHarnessEvent(event: unknown): Promise<void>;
+    };
+    await runner.init();
+    internals.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    internals.gad = { call: appendTrajectoryBatch };
+
+    let agentEndSignal: AbortSignal | undefined;
+    runner.hooks.on("event", (event, context) => {
+      if (event.type === "agent_end") agentEndSignal = context?.signal;
+    });
+    internals.harness.prompt = async () => {
+      await internals.handleHarnessEvent({ type: "agent_start" });
+      await internals.handleHarnessEvent({ type: "agent_end" });
+    };
+
+    await runner.prompt({ content: "hello" }, { turnId: "turn-hook-signal" });
+
+    expect(agentEndSignal).toBeInstanceOf(AbortSignal);
+    expect(agentEndSignal!.aborted).toBe(false);
 
     runner.dispose();
   });
@@ -1569,6 +1693,78 @@ describe("PiRunner", () => {
     expect(runner.session.getLeafId).not.toHaveBeenCalled();
     expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain(
       "message_end.aborted_tool_result_ignored"
+    );
+  });
+
+  it("ignores aborted assistant message ends without reopening a turn", async () => {
+    const appendTrajectoryBatch = vi.fn(async () => ({ events: [], published: [] }));
+    const run = new AbortController();
+    run.abort(new Error("Request was aborted"));
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      session: { getLeafId(): Promise<string> };
+      activeRunSignal: AbortSignal | null;
+      currentTurnId: string | null;
+      handleHarnessEvent(event: unknown): Promise<void>;
+      getDebugState(): Promise<Record<string, unknown>>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+    runner.session = { getLeafId: vi.fn(async () => "late-assistant") };
+    runner.activeRunSignal = run.signal;
+    runner.currentTurnId = null;
+
+    await runner.handleHarnessEvent({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "late cleanup" }],
+        timestamp: 0,
+      },
+    });
+
+    expect(runner.currentTurnId).toBeNull();
+    expect(runner.session.getLeafId).not.toHaveBeenCalled();
+    expect(appendTrajectoryBatch).not.toHaveBeenCalled();
+    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain(
+      "message_end.aborted_message_ignored"
+    );
+  });
+
+  it("ignores aborted late agent starts without opening a fresh turn", async () => {
+    const appendTrajectoryBatch = vi.fn(async () => ({ events: [], published: [] }));
+    const run = new AbortController();
+    run.abort(new Error("Request was aborted"));
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      activeRunSignal: AbortSignal | null;
+      currentTurnId: string | null;
+      running: boolean;
+      handleHarnessEvent(event: unknown): Promise<void>;
+      getDebugState(): Promise<Record<string, unknown>>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+    runner.activeRunSignal = run.signal;
+    runner.currentTurnId = null;
+
+    await runner.handleHarnessEvent({ type: "agent_start" });
+
+    expect(runner.currentTurnId).toBeNull();
+    expect(runner.running).toBe(false);
+    expect(appendTrajectoryBatch).not.toHaveBeenCalled();
+    expect(JSON.stringify((await runner.getDebugState())["phase"])).toContain(
+      "agent.start.aborted_ignored"
     );
   });
 

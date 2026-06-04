@@ -138,7 +138,7 @@ priority #1 in Pi's auth resolution chain, ahead of any file-based auth.
 ## NatStack Pi extensions
 
 Three extension factories supplied inline by the worker (closure-bound, not
-Pi-package-portable). Live in `packages/harness/src/extensions/`:
+Pi-package-portable). Live in `workspace/packages/harness/src/extensions/`:
 
 - **`approval-gate.ts`** — `pi.on("tool_call", ...)` reads the approval level
   via a closure-bound getter. The worker can mutate the approval level
@@ -151,7 +151,7 @@ Pi-package-portable). Live in `packages/harness/src/extensions/`:
   on the channel via the worker callback.
 
 The `NatStackExtensionUIContext` class
-(`packages/harness/src/natstack-extension-context.ts`) implements Pi's
+(`workspace/packages/harness/src/natstack-extension-context.ts`) implements Pi's
 `ExtensionUIContext`. Each UI primitive (`select`, `confirm`, `input`,
 `notify`, `setStatus`, etc.) routes through worker-supplied callbacks that
 turn the request into a channel `feedback_form`, ephemeral notify, or
@@ -183,7 +183,7 @@ workspace/
     └── ...
 ```
 
-Extensions are NatStack-only and live in `packages/harness/src/extensions/`
+Extensions are NatStack-only and live in `workspace/packages/harness/src/extensions/`
 as TypeScript modules supplied inline (closure-bound to the worker). There
 is no workspace-level extensions directory — chat behavior is intrinsically
 NatStack-bound.
@@ -192,7 +192,7 @@ NatStack-bound.
 
 | Package                      | Location                              | Contents                                                                                    |
 | ---------------------------- | ------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `@natstack/harness`          | `packages/harness/`                   | `PiRunner`, `NatStackExtensionUIContext`, three extension factories, channel boundary types |
+| Workspace agent runtime      | `workspace/packages/harness/`         | `PiRunner`, `NatStackExtensionUIContext`, three extension factories, channel boundary types |
 | Channel client package       | workspace package                     | Panel-side channel client and protocol types                                                |
 | `@workspace/runtime`         | `workspace/packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                            |
 | `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentWorkerBase, ChannelClient, ContinuationStore, SubscriptionManager                      |

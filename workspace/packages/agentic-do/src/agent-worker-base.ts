@@ -8,8 +8,8 @@
  */
 
 import type { DurableObjectContext } from "@workspace/runtime/worker";
-import type { ApprovalLevel, ThinkingLevel } from "@natstack/harness";
-import type { ParticipantDescriptor } from "@natstack/harness/types";
+import type { ApprovalLevel, ThinkingLevel } from "@workspace/harness";
+import type { ParticipantDescriptor } from "@workspace/harness/types";
 
 import {
   TrajectoryVesselBase,

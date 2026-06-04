@@ -10,7 +10,7 @@ context for another agent or engineer who will turn the findings into scoped
 NatStack changes.
 
 The important distinction: this is not a review of the generic
-`packages/harness` file tools alone. The target is the agent worker DO flow that
+`workspace/packages/harness` file tools alone. The target is the agent worker DO flow that
 forks, embeds, and adapts Pi's chat/agent loop behavior for NatStack's channel,
 Durable Object, credential, hibernation, and method-dispatch model.
 
@@ -75,7 +75,7 @@ Primary local files:
 - `workspace/packages/agentic-do/src/dispatched-call-store.ts`
   - Durable breadcrumb table for interactive tool dispatches that must survive
     hibernation/restart.
-- `packages/harness/src/pi-runner.ts`
+- `workspace/packages/harness/src/pi-runner.ts`
   - Thin in-process wrapper around `@earendil-works/pi-agent-core` `Agent`.
     It adapts Pi to NatStack resources, channel tools, approval gates, ask-user,
     GAD logging, persistence, and DO callbacks.
@@ -272,7 +272,7 @@ Suggested shape:
 - Consider whether listener failures should only log or should propagate to Pi.
   The current local behavior logs and continues, so a conservative first port
   should keep logging/continuing while still awaiting each listener.
-- Update tests in `packages/harness/src/pi-runner.test.ts` to assert an async
+- Update tests in `workspace/packages/harness/src/pi-runner.test.ts` to assert an async
   subscriber is awaited before `runTurnMessage()` resolves.
 - Update `TurnDispatcherRunner.subscribe` in
   `workspace/packages/agentic-do/src/turn-dispatcher.ts` only if needed. That
@@ -340,7 +340,7 @@ handover note:
 ```sh
 pnpm install --frozen-lockfile
 pnpm --dir apps/mobile exec jest --runInBand
-pnpm vitest run packages/harness/src/pi-runner.test.ts workspace/packages/agentic-do/src/content-block-projector.test.ts workspace/packages/agentic-do/src/turn-dispatcher.test.ts workspace/packages/agentic-do/src/agent-worker-base.integration.test.ts
+pnpm vitest run workspace/packages/harness/src/pi-runner.test.ts workspace/packages/agentic-do/src/content-block-projector.test.ts workspace/packages/agentic-do/src/turn-dispatcher.test.ts workspace/packages/agentic-do/src/agent-worker-base.integration.test.ts
 pnpm run type-check
 pnpm build
 ```

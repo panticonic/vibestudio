@@ -23,7 +23,7 @@
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/pubsub": "workspace:*",
-    "@natstack/harness": "workspace:*",
+    "@workspace/harness": "workspace:*",
     "zod": "^3.24.0"
   }
 }

@@ -24,7 +24,7 @@
   "dependencies": {
     "@natstack/extension": "workspace:*",
     "@natstack/git": "workspace:*",
-    "@natstack/harness": "workspace:*",
+    "@workspace/harness": "workspace:*",
     "@natstack/rpc": "workspace:*",
     "@natstack/types": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",

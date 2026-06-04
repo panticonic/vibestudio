@@ -2,7 +2,7 @@
  * Minimal `RuntimeFs` type local to the file-tools package.
  *
  * The full `RuntimeFs` interface lives in `@workspace/runtime`'s
- * `types.ts`, but `@natstack/harness` is a `packages/` package and
+ * `types.ts`, but `@workspace/harness` is a workspace package and
  * deliberately does not depend on the `workspace/` runtime package.
  * Instead we define the slice of `RuntimeFs` the file tools touch and
  * leave it structurally compatible with the upstream interface — any

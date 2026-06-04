@@ -45,7 +45,7 @@ workspace/workers/my-agent/
   "dependencies": {
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
-    "@natstack/harness": "workspace:*"
+    "@workspace/harness": "workspace:*"
   },
   "pnpm": {
     "overrides": {
@@ -508,7 +508,7 @@ Flow:
 
 ```typescript
 import { AgentWorkerBase } from "@workspace/agentic-do";
-import type { ChannelEvent, ParticipantDescriptor, TurnInput } from "@natstack/harness";
+import type { ChannelEvent, ParticipantDescriptor, TurnInput } from "@workspace/harness";
 
 export class CodeReviewWorker extends AgentWorkerBase {
   static override schemaVersion = 3;

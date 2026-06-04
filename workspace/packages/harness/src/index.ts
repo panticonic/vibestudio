@@ -1,5 +1,5 @@
 // =============================================================================
-// @natstack/harness — In-process Pi runtime for the agent worker DO
+// @workspace/harness — In-process Pi runtime for the agent worker DO
 // =============================================================================
 
 // PiRunner — the worker DO instantiates one per channel

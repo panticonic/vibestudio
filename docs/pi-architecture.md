@@ -48,7 +48,7 @@ a filesystem copy.
 
 ## The three NatStack extensions
 
-All three live in `packages/harness/src/extensions/` as TypeScript modules
+All three live in `workspace/packages/harness/src/extensions/` as TypeScript modules
 that export factory functions. The worker supplies them inline via
 `extensionFactories` on `DefaultResourceLoader` — they are closure-bound to
 the worker and not Pi-package-portable.
@@ -112,7 +112,7 @@ user that's not available via any other tool.
 
 Pi's `ExtensionUIContext` interface has primitives like `select`, `confirm`,
 `input`, `notify`, `setStatus`, `setWidget` — designed for a TUI. NatStack
-implements them all (`packages/harness/src/natstack-extension-context.ts`)
+implements them all (`workspace/packages/harness/src/natstack-extension-context.ts`)
 by routing to worker callbacks that send channel events:
 
 | Pi UI primitive             | NatStack channel mapping                               |
@@ -135,7 +135,7 @@ result via the persisted `method-result` channel event.
 
 ## PiRunner
 
-`packages/harness/src/pi-runner.ts` is the worker's wrapper around Pi's
+`workspace/packages/harness/src/pi-runner.ts` is the worker's wrapper around Pi's
 `createAgentSession`. Lifecycle:
 
 1. **Init**: build `AuthStorage`, push API keys via `setRuntimeApiKey`,
@@ -167,7 +167,7 @@ The cloned worker:
 
 ## How to add a new extension
 
-1. Create a new file in `packages/harness/src/extensions/` exporting a
+1. Create a new file in `workspace/packages/harness/src/extensions/` exporting a
    factory function: `export function createMyExtension(deps): ExtensionFactory`
 2. Add the dependency interface (closure-bound callbacks the worker provides)
 3. Inside the factory, use `pi.on(eventType, handler)`, `pi.registerTool(...)`,

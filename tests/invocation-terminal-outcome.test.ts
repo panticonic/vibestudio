@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 import * as ts from "typescript";
 
 const ROOTS = [
-  "packages/harness/src",
+  "workspace/packages/harness/src",
   "workspace/packages/agentic-chat",
   "workspace/packages/agentic-core",
   "workspace/packages/agentic-do",

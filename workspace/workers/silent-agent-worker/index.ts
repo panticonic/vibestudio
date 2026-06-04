@@ -1,7 +1,7 @@
 import { AiChatWorker } from "../agent-worker/ai-chat-worker.js";
-import type { AgentTool, PiRunnerOptions } from "@natstack/harness";
-import { PiRunner } from "@natstack/harness";
-import type { ParticipantDescriptor } from "@natstack/harness/types";
+import type { AgentTool, PiRunnerOptions } from "@workspace/harness";
+import { PiRunner } from "@workspace/harness";
+import type { ParticipantDescriptor } from "@workspace/harness/types";
 
 type SilentAgentConfig = {
   handle?: string;

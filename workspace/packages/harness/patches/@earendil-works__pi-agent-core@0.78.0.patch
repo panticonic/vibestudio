@@ -1,5 +1,5 @@
 diff --git a/dist/agent-loop.js b/dist/agent-loop.js
-index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..d59047031319a585ea6640b1b3fea8d352b0ee2a 100644
+index 5b6becd..2dfbfac 100644
 --- a/dist/agent-loop.js
 +++ b/dist/agent-loop.js
 @@ -78,6 +78,7 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
@@ -10,17 +10,16 @@ index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..d59047031319a585ea6640b1b3fea8d3
      // Check for steering messages at start (user may have typed while waiting)
      let pendingMessages = (await config.getSteeringMessages?.()) || [];
      // Outer loop: continues when queued follow-up messages arrive after agent would stop
-@@ -85,6 +86,17 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
+@@ -85,6 +86,16 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
          let hasMoreToolCalls = true;
          // Inner loop: process tool calls and steering messages
          while (hasMoreToolCalls || pendingMessages.length > 0) {
 +            // Honor an abort between iterations. The model-stream `stopReason`
-+            // check below only stops the run when the *provider* reports the
-+            // abort; if the run is aborted during/after tool execution (tools
-+            // see the aborted signal and fail), the loop would otherwise feed
-+            // those failures back and call the model again. Terminate the run
-+            // at the iteration boundary so an interrupt stops the agent
-+            // promptly instead of churning.
++            // check below only stops the run when the provider reports the
++            // abort; if the run is aborted during/after tool execution, the
++            // loop would otherwise feed those failures back and call the model
++            // again. Terminate at the iteration boundary so an interrupt stops
++            // the agent promptly instead of churning.
 +            if (signal?.aborted) {
 +                await emit({ type: "agent_end", messages: newMessages });
 +                return;
@@ -28,7 +27,7 @@ index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..d59047031319a585ea6640b1b3fea8d3
              if (!firstTurn) {
                  await emit({ type: "turn_start" });
              }
-@@ -101,6 +113,24 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
+@@ -101,6 +112,24 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
                  }
                  pendingMessages = [];
              }
@@ -53,7 +52,18 @@ index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..d59047031319a585ea6640b1b3fea8d3
              // Stream assistant response
              const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFn);
              newMessages.push(message);
-@@ -123,25 +153,12 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
+@@ -115,6 +144,10 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
+             hasMoreToolCalls = false;
+             if (toolCalls.length > 0) {
+                 const executedToolBatch = await executeToolCalls(currentContext, message, config, signal, emit);
++                if (signal?.aborted) {
++                    await emit({ type: "agent_end", messages: newMessages });
++                    return;
++                }
+                 toolResults.push(...executedToolBatch.messages);
+                 hasMoreToolCalls = !executedToolBatch.terminate;
+                 for (const result of toolResults) {
+@@ -123,25 +156,12 @@ async function runLoop(initialContext, newMessages, initialConfig, signal, emit,
                  }
              }
              await emit({ type: "turn_end", message, toolResults });
@@ -80,11 +90,44 @@ index 9899c13e4993e9d4ce469e69980e6761ef1cc8ad..d59047031319a585ea6640b1b3fea8d3
              if (await config.shouldStopAfterTurn?.({
                  message,
                  toolResults,
+@@ -283,6 +303,12 @@ async function executeToolCallsSequential(currentContext, assistantMessage, toolC
+             finalized = await finalizeExecutedToolCall(currentContext, assistantMessage, preparation, executed, config, signal);
+         }
+         await emitToolExecutionEnd(finalized, emit);
++        if (signal?.aborted) {
++            return {
++                messages,
++                terminate: true,
++            };
++        }
+         const toolResultMessage = createToolResultMessage(finalized);
+         await emitToolResultMessage(toolResultMessage, emit);
+         finalizedCalls.push(finalized);
+@@ -331,6 +357,12 @@ async function executeToolCallsParallel(currentContext, assistantMessage, toolCal
+     }
+     const orderedFinalizedCalls = await Promise.all(finalizedCalls.map((entry) => (typeof entry === "function" ? entry() : Promise.resolve(entry))));
+     const messages = [];
++    if (signal?.aborted) {
++        return {
++            messages,
++            terminate: true,
++        };
++    }
+     for (const finalized of orderedFinalizedCalls) {
+         const toolResultMessage = createToolResultMessage(finalized);
+         await emitToolResultMessage(toolResultMessage, emit);
+@@ -499,4 +531,4 @@ async function emitToolResultMessage(toolResultMessage, emit) {
+     await emit({ type: "message_start", message: toolResultMessage });
+     await emit({ type: "message_end", message: toolResultMessage });
+ }
+-//# sourceMappingURL=agent-loop.js.map
+\ No newline at end of file
++//# sourceMappingURL=agent-loop.js.map
 diff --git a/dist/harness/agent-harness.d.ts b/dist/harness/agent-harness.d.ts
-index 24eafe939d2a0444dccf82f49b50d5e3d1b826e9..0602180d6d5a3d95765baf473aae7c46dffe4c50 100644
+index 26fac96..0aeb083 100644
 --- a/dist/harness/agent-harness.d.ts
 +++ b/dist/harness/agent-harness.d.ts
-@@ -44,6 +44,7 @@ export declare class AgentHarness<TSkill extends Skill = Skill, TPromptTemplate
+@@ -45,6 +45,7 @@ export declare class AgentHarness<TSkill extends Skill = Skill, TPromptTemplate
      prompt(text: string, options?: {
          images?: ImageContent[];
      }): Promise<AssistantMessage>;
@@ -92,8 +135,15 @@ index 24eafe939d2a0444dccf82f49b50d5e3d1b826e9..0602180d6d5a3d95765baf473aae7c46
      skill(name: string, additionalInstructions?: string): Promise<AssistantMessage>;
      promptFromTemplate(name: string, args?: string[]): Promise<AssistantMessage>;
      steer(text: string, options?: {
+@@ -92,4 +93,4 @@ export declare class AgentHarness<TSkill extends Skill = Skill, TPromptTemplate
+         type: TType;
+     }>) => Promise<AgentHarnessEventResultMap[TType]> | AgentHarnessEventResultMap[TType]): () => void;
+ }
+-//# sourceMappingURL=agent-harness.d.ts.map
+\ No newline at end of file
++//# sourceMappingURL=agent-harness.d.ts.map
 diff --git a/dist/harness/agent-harness.js b/dist/harness/agent-harness.js
-index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..a05e365dbac2264a0f8b81512942eb7786fe191c 100644
+index ccb492e..aeb2962 100644
 --- a/dist/harness/agent-harness.js
 +++ b/dist/harness/agent-harness.js
 @@ -1,5 +1,5 @@
@@ -103,7 +153,7 @@ index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..a05e365dbac2264a0f8b81512942eb77
  import { collectEntriesForBranchSummary, generateBranchSummary } from "./compaction/branch-summarization.js";
  import { compact, DEFAULT_COMPACTION_SETTINGS, prepareCompaction } from "./compaction/compaction.js";
  import { convertToLlm } from "./messages.js";
-@@ -366,7 +366,9 @@ export class AgentHarness {
+@@ -381,7 +381,9 @@ export class AgentHarness {
                      : undefined;
              },
              prepareNextTurn: async () => {
@@ -113,7 +163,7 @@ index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..a05e365dbac2264a0f8b81512942eb77
                  const nextTurnState = await this.createTurnState();
                  setTurnState(nextTurnState);
                  return {
-@@ -432,7 +434,6 @@ export class AgentHarness {
+@@ -456,7 +458,6 @@ export class AgentHarness {
              await this.flushPendingSessionWrites();
              if (eventError)
                  throw eventError;
@@ -121,7 +171,7 @@ index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..a05e365dbac2264a0f8b81512942eb77
              return;
          }
          if (event.type === "agent_end") {
-@@ -531,6 +532,60 @@ export class AgentHarness {
+@@ -555,6 +556,34 @@ export class AgentHarness {
              finishRunPromise();
          }
      }
@@ -131,45 +181,19 @@ index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..a05e365dbac2264a0f8b81512942eb77
 +        this.phase = "turn";
 +        const finishRunPromise = this.startRunPromise();
 +        try {
-+            let activeTurnState = await this.createTurnState();
++            const turnState = await this.createTurnState();
 +            const abortController = new AbortController();
-+            const getTurnState = () => activeTurnState;
-+            const setTurnState = (nextTurnState) => {
-+                activeTurnState = nextTurnState;
-+            };
++            const getTurnState = () => turnState;
 +            this.runAbortController = abortController;
-+            const runResultPromise = (async () => {
-+                try {
-+                    return await runAgentLoopContinue(this.createContext(activeTurnState), this.createLoopConfig(getTurnState, setTurnState), (event) => this.handleAgentEvent(event, abortController.signal), abortController.signal, this.createStreamFn(getTurnState));
-+                }
-+                catch (error) {
-+                    try {
-+                        return await this.emitRunFailure(activeTurnState.model, error, abortController.signal.aborted, abortController.signal);
-+                    }
-+                    catch (failureError) {
-+                        const cause = new AggregateError([toError(error), toError(failureError)], "Agent continuation failed and failure reporting failed");
-+                        throw new AgentHarnessError("unknown", cause.message, cause);
-+                    }
-+                }
-+            })();
-+            try {
-+                const newMessages = await runResultPromise;
-+                for (let i = newMessages.length - 1; i >= 0; i--) {
-+                    const message = newMessages[i];
-+                    if (message.role === "assistant") {
-+                        return message;
-+                    }
-+                }
-+                throw new AgentHarnessError("invalid_state", "AgentHarness continuation completed without an assistant message");
-+            }
-+            finally {
-+                try {
-+                    await this.flushPendingSessionWrites();
-+                }
-+                finally {
-+                    this.runAbortController = undefined;
++            const runResultPromise = runAgentLoopContinue(this.createContext(turnState), this.createLoopConfig(getTurnState, () => undefined), (event) => this.handleAgentEvent(event, abortController.signal), abortController.signal, this.createStreamFn(getTurnState));
++            const newMessages = await runResultPromise;
++            for (let i = newMessages.length - 1; i >= 0; i--) {
++                const message = newMessages[i];
++                if (message.role === "assistant") {
++                    return message;
 +                }
 +            }
++            throw new AgentHarnessError("invalid_state", "AgentHarness continue completed without an assistant message");
 +        }
 +        catch (error) {
 +            this.phase = "idle";
@@ -182,3 +206,10 @@ index 923c5f7c4fb8c5d7f7d9b72aaf89ab2f653476f1..a05e365dbac2264a0f8b81512942eb77
      async skill(name, additionalInstructions) {
          if (this.phase !== "idle")
              throw new AgentHarnessError("busy", "AgentHarness is busy");
+@@ -960,4 +989,4 @@ export class AgentHarness {
+         return () => handlers.delete(handler);
+     }
+ }
+-//# sourceMappingURL=agent-harness.js.map
+\ No newline at end of file
++//# sourceMappingURL=agent-harness.js.map
