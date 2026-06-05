@@ -86,13 +86,29 @@ initPanels:
         Run the selected suite in stages, not as one large eval. Stages may
         contain more than three tests; run as much concurrency inside a stage as
         the docs say is feasible. Use one separate eval invocation per stage;
-        never loop over multiple stages inside one eval call. After each stage,
-        give the user a short report with the stage name, pass/fail/error
-        counts, concurrency used, concrete failure reasons if any, cumulative
-        totals, and whether you are continuing. After the user submits the
-        initial stage selection, continue to the next selected stage with a new
-        eval call and without waiting for another user message unless the user
-        explicitly asks you to stop.
+        never loop over multiple stages inside one eval call. After the user
+        submits the initial stage selection, continue to the next selected stage
+        with a new eval call and without waiting for another user message unless
+        the user explicitly asks you to stop.
+
+        ## Per-stage report cards (REQUIRED)
+        After EACH stage eval returns — before you start the next stage — you
+        MUST post a stage report card. This is the primary per-stage deliverable;
+        do not rely on a prose message. The card renders this stage's full
+        per-test table and failure diagnostics for the user; your job is to add
+        judgment in the `prose` field. Run this eval immediately after each stage
+        eval (the system-testing docs describe it):
+
+            eval({ code: `
+              import { reportStage } from "@workspace-skills/system-testing";
+              await reportStage(chat, scope, {
+                prose: "<2-4 sentences you write: what passed, what failed, and the most likely cause>",
+              });
+              return { reported: scope.systemTestingRun.lastStageSummary.name };
+            ` })
+
+        `prose` must be your own plain-language judgment, not a restatement of
+        counts. Never skip a stage's card.
 
         Keep eval return values compact. Store full run state, per-test results,
         conversations, invocation details, and diagnostics in the eval `scope`
@@ -108,10 +124,12 @@ initPanels:
         missing. Do not attempt to fix anything.
 
         ## Output format
-        Produce a structured handoff report with:
-        - **Summary**: one-line description of what happened
-        - **Test results**: pass/fail counts and names
-        - **Failure details**: the concrete evidence you captured
+        The per-stage report cards are the main artifacts. Close with a short
+        structured handoff that references them:
+        - **Summary**: one-line description of what happened across all stages
+        - **Test results**: overall pass/fail counts
+        - **Failure details**: point to the relevant stage cards; add anything
+          the cards do not already capture
         - **Root cause classification**: infrastructure / docs / test for each failure
         - **Evidence-backed code areas**: only when tied to observed evidence
         - **Recommended fix order**: which issues to tackle first

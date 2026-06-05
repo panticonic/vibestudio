@@ -58,6 +58,10 @@ return only the compact control data needed to render the feedback form. Do not
 return `scope.systemTestingRun`, the full stage list, or test result arrays from
 eval calls.
 
+> `scope`, `scopes`, and `chat` are **pre-injected ambient globals** in eval —
+> use them directly. Do **not** `import` them (only `contextId`, `rpc`, `gad`,
+> `fs`, etc. come from `@workspace/runtime`). Run the block below as written.
+
 ```
 eval({
   code: `
@@ -204,7 +208,9 @@ eval({
       testTimeoutMs: 20 * 60 * 1000,
     });
 
-    const concurrency = Math.max(1, stage.tests.length);
+    // Cap concurrency: each test is a full headless agent + channel, so running
+    // a whole stage at once floods the DO relay and spikes server memory.
+    const concurrency = Math.min(4, Math.max(1, stage.tests.length));
     const partial = await tester.runSuite(stage.tests, { concurrency });
     const aggregate = run.results ?? scope.results ?? {
       total: 0,
@@ -239,6 +245,7 @@ eval({
     const stageSummary = {
       index: stage.index,
       name: stage.name,
+      category: stage.category,
       position: stagePosition,
       selectedStageCount: selectedStages.length,
       total: partial.total,
@@ -252,19 +259,11 @@ eval({
     run.stageSummaries.push(stageSummary);
     run.lastStageSummary = stageSummary;
     scope.systemTestingRun = run;
-    const reportLines = [
-      "**System Test Stage " + stagePosition + "/" + selectedStages.length + ": " + stage.name + "**",
-      "- Stage results: " + partial.passed + " passed, " + partial.failed + " failed, " + partial.errored + " errored",
-      "- Concurrency: " + concurrency + " test agents",
-      "- Cumulative results: " + aggregate.passed + " passed, " + aggregate.failed + " failed, " + aggregate.errored + " errored, " + aggregate.skipped + " not run/skipped",
-      failedNames.length ? "- Findings: " + failedNames.join("; ") : "- Findings: no failures in this stage",
-      "- Next: " + (remainingStages ? "continuing to the next selected stage" : "all selected stages complete"),
-    ];
-    await chat.publish("message", { content: reportLines.join("\\n") });
 
     return {
       runId: run.runId,
       stage: stage.name,
+      stagePosition,
       remainingStages,
       total: aggregate.total,
       passed: aggregate.passed,
@@ -276,6 +275,34 @@ eval({
   `,
 })
 ```
+
+## Stage report cards (post one after every stage)
+
+The stage eval no longer posts a prose message. Instead, after each stage eval
+returns, post a **stage report card** — a custom message that renders this
+stage's full per-test table and per-failure diagnostics, with your prose summary
+on top. Run this as a separate eval (the prose must be written by you, not the
+deterministic stage eval):
+
+```
+eval({
+  code: `
+    import { reportStage } from "@workspace-skills/system-testing";
+    await reportStage(chat, scope, {
+      prose: "<2-4 sentences: what passed, what failed, and the most likely cause>",
+    });
+    return { reported: scope.systemTestingRun.lastStageSummary.name };
+  `,
+})
+```
+
+`reportStage` defaults to the most-recently completed stage
+(`scope.systemTestingRun.lastStageSummary`) and bounds the card to that stage's
+own tests (so a category split across stages still yields one card per stage).
+Pass `{ stageIndex }` to report a specific earlier stage. The card embeds bounded
+diagnostics from `summarizeFailures`, so it persists across reload/replay without
+depending on live `scope`. Do not skip a stage's card; the cards are the primary
+per-stage deliverable.
 
 ## Inspecting Results
 

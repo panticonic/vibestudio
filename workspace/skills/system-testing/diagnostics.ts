@@ -4,6 +4,7 @@ import type { TestSuiteResult, TestSuiteResultEntry } from "./types.js";
 export interface FailureDiagnostic {
   name: string;
   category: string;
+  passed: boolean;
   prompt: string;
   validationReason: string | null;
   sessionError: string | null;
@@ -50,16 +51,29 @@ const DEFAULT_LIMITS = {
   text: 900,
 };
 
+export type DiagnosticLimits = typeof DEFAULT_LIMITS;
+
 export function summarizeFailures(
   suite: TestSuiteResult,
-  opts?: Partial<typeof DEFAULT_LIMITS>,
+  opts?: Partial<DiagnosticLimits>,
 ): FailureReport {
   const limits = { ...DEFAULT_LIMITS, ...opts };
   const failed = suite.results.filter((entry) => !entry.result.passed);
   return {
     failureCount: failed.length,
-    failures: failed.slice(0, limits.failures).map((entry) => summarizeFailure(entry, limits)),
+    failures: failed.slice(0, limits.failures).map((entry) => summarizeEntry(entry, limits)),
   };
+}
+
+/**
+ * Bounded diagnostic for a single test entry — works for passing tests too, so
+ * the stage report card can show transcript/tool detail for every test that ran.
+ */
+export function summarizeEntry(
+  entry: TestSuiteResultEntry,
+  opts?: Partial<DiagnosticLimits>,
+): FailureDiagnostic {
+  return summarizeFailure(entry, { ...DEFAULT_LIMITS, ...opts });
 }
 
 function summarizeFailure(
@@ -108,6 +122,7 @@ function summarizeFailure(
   return {
     name: entry.test.name,
     category: entry.test.category,
+    passed: entry.result.passed,
     prompt: entry.test.prompt,
     validationReason: entry.result.reason ?? null,
     sessionError: entryExecution["error"] ?? null,
@@ -118,7 +133,9 @@ function summarizeFailure(
     debugEvents,
     cleanupErrors,
     participants,
-    likelyIssue: classifyFailure(entry, finalAgentMessage, invocations, cleanupErrors),
+    likelyIssue: entry.result.passed
+      ? "passed"
+      : classifyFailure(entry, finalAgentMessage, invocations, cleanupErrors),
   };
 }
 
