@@ -216,6 +216,14 @@ export function buildCommonMenuItems(
           vm.forceRepaintVisiblePanel();
         }
       },
+    },
+    {
+      label: "Copy Panel Display Diagnostics",
+      click: () => {
+        if (_menuViewManager) {
+          void assertPresent(_menuViewManager).copyPanelDisplayDiagnosticsToClipboard();
+        }
+      },
     }
   );
 
@@ -416,6 +424,14 @@ export function setupMenu(
               const vm = assertPresent(_menuViewManager);
               vm.refreshVisiblePanel();
               vm.forceRepaintVisiblePanel();
+            }
+          },
+        },
+        {
+          label: "Copy Panel Display Diagnostics",
+          click: () => {
+            if (_menuViewManager) {
+              void assertPresent(_menuViewManager).copyPanelDisplayDiagnosticsToClipboard();
             }
           },
         },

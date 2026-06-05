@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { Box } from "@radix-ui/themes";
 
-import { view, type NativePanelSlotBounds } from "../shell/client";
+import { view, type NativePanelSlotBounds, type NativePanelSlotSyncResult } from "../shell/client";
 
 interface PanelSurfaceProps {
   nativeSlotId: string;
@@ -67,6 +67,16 @@ export function PanelSurface({
     [panelId]
   );
 
+  const handleUpdateResult = useCallback(
+    (result: NativePanelSlotSyncResult | undefined) => {
+      if (result?.status !== "missing") return;
+      boundRef.current = false;
+      lastBoundsRef.current = null;
+      scheduleRetry(result.reason);
+    },
+    [scheduleRetry]
+  );
+
   const clearSlot = useCallback(() => {
     if (!boundRef.current) return;
     boundRef.current = false;
@@ -105,8 +115,9 @@ export function PanelSurface({
     lastBoundsRef.current = bounds;
     void view
       .updateNativePanelSlot({ nativeSlotId, bounds })
+      .then(handleUpdateResult)
       .catch((err: unknown) => console.warn("[PanelSurface] bounds update failed:", err));
-  }, [focused, nativeSlotId, panelId, scheduleRetry]);
+  }, [focused, handleUpdateResult, nativeSlotId, panelId, scheduleRetry]);
 
   syncSlotRef.current = syncSlot;
 
@@ -141,8 +152,9 @@ export function PanelSurface({
     }
     void view
       .updateNativePanelSlot({ nativeSlotId, focused })
+      .then(handleUpdateResult)
       .catch((err: unknown) => console.warn("[PanelSurface] focus update failed:", err));
-  }, [focused, nativeSlotId, scheduleSync]);
+  }, [focused, handleUpdateResult, nativeSlotId, scheduleSync]);
 
   useEffect(() => clearSlot, [clearSlot]);
 

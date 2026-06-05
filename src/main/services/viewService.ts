@@ -259,7 +259,7 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
             },
           ];
           vm.bindPanelSlot(ctx.caller.runtime.id, request);
-          return;
+          return { status: "bound" };
         }
         case "updateNativePanelSlot": {
           assertNativePanelSlotHost(
@@ -275,8 +275,7 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
               focused?: boolean;
             },
           ];
-          vm.updatePanelSlot(ctx.caller.runtime.id, request);
-          return;
+          return vm.updatePanelSlot(ctx.caller.runtime.id, request);
         }
         case "clearNativePanelSlot": {
           assertNativePanelSlotHost(

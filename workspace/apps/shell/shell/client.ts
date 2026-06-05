@@ -259,6 +259,9 @@ export interface NativePanelSlotBounds {
   width: number;
   height: number;
 }
+export type NativePanelSlotSyncResult =
+  | { status: "bound" | "updated" }
+  | { status: "missing"; reason: string };
 type NativeShellOverlayBridge = {
   on: (handler: (event: NativeShellOverlayEvent) => void) => () => void;
 };
@@ -271,12 +274,12 @@ export const view = {
     panelId: string;
     bounds: NativePanelSlotBounds;
     focused?: boolean;
-  }) => rpc.call<undefined>("main", "view.bindNativePanelSlot", [request]),
+  }) => rpc.call<NativePanelSlotSyncResult>("main", "view.bindNativePanelSlot", [request]),
   updateNativePanelSlot: (request: {
     nativeSlotId: string;
     bounds?: NativePanelSlotBounds;
     focused?: boolean;
-  }) => rpc.call<undefined>("main", "view.updateNativePanelSlot", [request]),
+  }) => rpc.call<NativePanelSlotSyncResult>("main", "view.updateNativePanelSlot", [request]),
   clearNativePanelSlot: (request: { nativeSlotId: string }) =>
     rpc.call<undefined>("main", "view.clearNativePanelSlot", [request]),
   setHostedShellReady: (request: { ready: boolean }) =>

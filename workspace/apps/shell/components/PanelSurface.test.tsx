@@ -6,9 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PanelSurface } from "./PanelSurface";
 
 const shellClient = vi.hoisted(() => ({
-  bindNativePanelSlot: vi.fn(() => Promise.resolve()),
-  updateNativePanelSlot: vi.fn(() => Promise.resolve()),
-  clearNativePanelSlot: vi.fn(() => Promise.resolve()),
+  bindNativePanelSlot: vi.fn<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve()),
+  updateNativePanelSlot: vi.fn<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve()),
+  clearNativePanelSlot: vi.fn<(...args: unknown[]) => Promise<void>>(() => Promise.resolve()),
 }));
 
 vi.mock("../shell/client", () => ({
@@ -27,9 +27,9 @@ describe("PanelSurface", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     shellClient.bindNativePanelSlot.mockReset();
-    shellClient.bindNativePanelSlot.mockResolvedValue(undefined);
+    shellClient.bindNativePanelSlot.mockResolvedValue({ status: "bound" });
     shellClient.updateNativePanelSlot.mockReset();
-    shellClient.updateNativePanelSlot.mockResolvedValue(undefined);
+    shellClient.updateNativePanelSlot.mockResolvedValue({ status: "updated" });
     shellClient.clearNativePanelSlot.mockReset();
     shellClient.clearNativePanelSlot.mockResolvedValue(undefined);
     HTMLElement.prototype.getBoundingClientRect = vi.fn(() => ({
@@ -61,7 +61,7 @@ describe("PanelSurface", () => {
   it("retries binding when the panel WebContentsView is not ready yet", async () => {
     shellClient.bindNativePanelSlot
       .mockRejectedValueOnce(new Error("Native panel slot target is not a panel view: panel-1"))
-      .mockResolvedValueOnce(undefined);
+      .mockResolvedValueOnce({ status: "bound" });
 
     render(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />);
 
@@ -69,6 +69,44 @@ describe("PanelSurface", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+
+    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
+    expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
+      nativeSlotId: "slot-1",
+      panelId: "panel-1",
+      focused: true,
+      bounds: { x: 20, y: 30, width: 400, height: 300 },
+    });
+  });
+
+  it("rebinds when main reports that an existing native slot is missing", async () => {
+    const { rerender } = render(
+      <PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused={false} />
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
+
+    shellClient.updateNativePanelSlot.mockResolvedValueOnce({
+      status: "missing",
+      reason: "unknown native panel slot: slot-1",
+    });
+
+    rerender(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(shellClient.updateNativePanelSlot).toHaveBeenCalledWith({
+      nativeSlotId: "slot-1",
+      focused: true,
+    });
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(50);

@@ -105,9 +105,35 @@ describe("view service", () => {
         "bindNativePanelSlot",
         [request]
       )
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ status: "bound" });
 
     expect(vm.bindPanelSlot).toHaveBeenCalledWith("@workspace-apps/shell", request);
+  });
+
+  it("returns native panel slot update acknowledgements to the hosted shell", async () => {
+    const vm = makeViewManager(["panel-hosting"]);
+    vm.updatePanelSlot.mockReturnValue({
+      status: "missing",
+      reason: "unknown native panel slot: panel-stack:primary",
+    });
+    const service = createViewService({ getViewManager: () => vm as never });
+    const request = {
+      nativeSlotId: "panel-stack:primary",
+      bounds: { x: 10, y: 20, width: 300, height: 200 },
+    };
+
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
+        "updateNativePanelSlot",
+        [request]
+      )
+    ).resolves.toEqual({
+      status: "missing",
+      reason: "unknown native panel slot: panel-stack:primary",
+    });
+
+    expect(vm.updatePanelSlot).toHaveBeenCalledWith("@workspace-apps/shell", request);
   });
 
   it("rejects bootstrap shell callers for native panel slots", async () => {

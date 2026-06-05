@@ -16,6 +16,7 @@
  */
 
 import {
+  app,
   BaseWindow,
   Menu,
   WebContentsView,
@@ -64,6 +65,63 @@ export interface ViewConfig {
   appIdentity?: { source?: string; effectiveVersion?: string | null };
 }
 
+interface PanelDisplayDiagnostics {
+  timestamp: string;
+  window: {
+    destroyed: boolean;
+    visible: boolean;
+    contentSize: [number, number];
+  };
+  manager: {
+    visiblePanelId: string | null;
+    shellOverlayActive: boolean;
+    panelViewportBounds: ViewBounds | null;
+  };
+  nativePanelSlots: {
+    hostedShellReady: boolean;
+    activeHostedShellViewId: string | null;
+    focusedNativeSlotId: string | null;
+    hostedShellGeneration: number;
+    slots: Array<NativePanelSlotState & { bounds: ViewBounds }>;
+  };
+  hostedShellSurfaces: Array<{
+    nativeSlotId: string | null;
+    panelId: string | null;
+    bounds: ViewBounds;
+  }>;
+  views: Array<{
+    id: string;
+    type: "shell" | "panel" | "app";
+    parentId?: string;
+    managedVisible: boolean;
+    trackedBounds: ViewBounds;
+    nativeBounds: ViewBounds;
+    hostChrome: boolean;
+    webContents: {
+      id: number;
+      destroyed: boolean;
+      url: string | null;
+      title: string | null;
+      loading: boolean | null;
+      osProcessId: number | null;
+      memoryMb: number | null;
+    };
+  }>;
+  captures: Array<{
+    id: string;
+    ok: boolean;
+    empty?: boolean;
+    size?: { width: number; height: number };
+    error?: string;
+  }>;
+  processMetrics: Array<{
+    pid: number;
+    type: string;
+    memoryMb: number;
+    cpuPercent: number;
+  }>;
+}
+
 interface ManagedView {
   id: string;
   view: WebContentsView;
@@ -85,6 +143,9 @@ interface ManagedView {
 }
 
 export type NativePanelSlotBounds = ViewBounds;
+export type NativePanelSlotSyncResult =
+  | { status: "bound" | "updated" }
+  | { status: "missing"; reason: string };
 
 interface NativePanelSlotState {
   nativeSlotId: string;
@@ -285,7 +346,11 @@ export class ViewManager {
     // When window is hidden, force visibility on protected views to prevent throttling
     if (!visible) {
       this.applyProtectionToViews();
+      return;
     }
+    this.updateShellBounds();
+    this.updateHostChromeBounds();
+    this.refreshVisiblePanel();
   }
 
   private updateShellBounds(): void {
@@ -692,20 +757,24 @@ export class ViewManager {
   updatePanelSlot(
     ownerViewId: string,
     request: { nativeSlotId: string; bounds?: NativePanelSlotBounds; focused?: boolean }
-  ): void {
+  ): NativePanelSlotSyncResult {
     this.assertActiveHostedShellOwner(ownerViewId);
     const nativeSlotId = this.validateNonEmptyId(request.nativeSlotId, "nativeSlotId");
     const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (!slot) {
-      log.verbose(`Ignoring update for unknown native panel slot: ${nativeSlotId}`);
-      return;
+      const reason = `unknown native panel slot: ${nativeSlotId}`;
+      log.verbose(`Ignoring update for ${reason}`);
+      return { status: "missing", reason };
     }
     this.assertSlotOwner(slot, ownerViewId);
 
     const managed = this.views.get(slot.panelId);
     if (!managed || managed.type !== "panel") {
       this.clearPanelSlotInternal(nativeSlotId);
-      return;
+      return {
+        status: "missing",
+        reason: `native panel slot target is no longer a panel view: ${slot.panelId}`,
+      };
     }
 
     if (request.bounds) {
@@ -723,6 +792,7 @@ export class ViewManager {
       }
     }
     this.reconcileNativeLayerOrder();
+    return { status: "updated" };
   }
 
   clearPanelSlot(ownerViewId: string, nativeSlotId: string): void {
@@ -827,11 +897,11 @@ export class ViewManager {
     if (this.shellOverlayActive === active) return;
     this.shellOverlayActive = active;
 
-    for (const slot of this.nativePanelSlots.activeSlots.values()) {
-      const managed = this.views.get(slot.panelId);
-      if (!managed) continue;
-      managed.view.setVisible(!active);
+    if (this.nativePanelSlots.activeSlots.size > 0) {
+      this.refreshActivePanelSlots();
+      return;
     }
+    this.applyBoundsToVisiblePanel();
     this.reconcileNativeLayerOrder();
   }
 
@@ -844,16 +914,19 @@ export class ViewManager {
 
   showNativeShellOverlay(options: ShellOverlayOptions): void {
     this.nativeShellOverlay.show(options);
+    this.refreshActivePanelSlots();
     this.reconcileNativeLayerOrder();
   }
 
   updateNativeShellOverlay(options: Partial<ShellOverlayOptions> & { id?: string }): void {
     this.nativeShellOverlay.update(options);
+    this.refreshActivePanelSlots();
     this.reconcileNativeLayerOrder();
   }
 
   hideNativeShellOverlay(id?: string): void {
     this.nativeShellOverlay.hide(id);
+    this.refreshActivePanelSlots();
     this.reconcileNativeLayerOrder();
   }
 
@@ -1359,6 +1432,160 @@ export class ViewManager {
       ownerViewId: slot.ownerViewId,
       ownerGeneration: slot.ownerGeneration,
     }));
+  }
+
+  async getPanelDisplayDiagnostics(): Promise<PanelDisplayDiagnostics> {
+    const metrics = this.safeAppMetrics();
+    const metricsByPid = new Map(metrics.map((metric) => [metric.pid, metric]));
+    const [contentWidth = 0, contentHeight = 0] = this.window.isDestroyed()
+      ? []
+      : this.window.getContentSize();
+    const slots = Array.from(this.nativePanelSlots.activeSlots.values()).map((slot) => ({
+      ...slot,
+      bounds: { ...slot.bounds },
+    }));
+
+    const captureIds = new Set<string>();
+    for (const slot of slots) captureIds.add(slot.panelId);
+    if (this.visiblePanelId) captureIds.add(this.visiblePanelId);
+
+    return {
+      timestamp: new Date().toISOString(),
+      window: {
+        destroyed: this.window.isDestroyed(),
+        visible: !this.window.isDestroyed() && this.window.isVisible(),
+        contentSize: [contentWidth, contentHeight],
+      },
+      manager: {
+        visiblePanelId: this.visiblePanelId,
+        shellOverlayActive: this.shellOverlayActive,
+        panelViewportBounds: this.panelViewportBounds ? { ...this.panelViewportBounds } : null,
+      },
+      nativePanelSlots: {
+        hostedShellReady: this.nativePanelSlots.hostedShellReady,
+        activeHostedShellViewId: this.nativePanelSlots.activeHostedShellViewId,
+        focusedNativeSlotId: this.nativePanelSlots.focusedNativeSlotId,
+        hostedShellGeneration: this.nativePanelSlots.hostedShellGeneration,
+        slots,
+      },
+      hostedShellSurfaces: await this.getHostedShellSurfaceDiagnostics(),
+      views: Array.from(this.views.values()).map((managed) =>
+        this.describeManagedView(managed, metricsByPid)
+      ),
+      captures: await Promise.all(
+        Array.from(captureIds).map((id) => this.captureViewDiagnostic(id))
+      ),
+      processMetrics: metrics.map((metric) => ({
+        pid: metric.pid,
+        type: metric.type,
+        memoryMb: Math.round((metric.memory.workingSetSize / 1024) * 10) / 10,
+        cpuPercent:
+          Math.round(((metric.cpu as { percentCPUUsage?: number }).percentCPUUsage ?? 0) * 100) /
+          100,
+      })),
+    };
+  }
+
+  async copyPanelDisplayDiagnosticsToClipboard(): Promise<boolean> {
+    const diagnostics = await this.getPanelDisplayDiagnostics();
+    clipboard.writeText(JSON.stringify(diagnostics, null, 2));
+    log.info("Copied panel display diagnostics to clipboard");
+    return true;
+  }
+
+  private safeAppMetrics(): Electron.ProcessMetric[] {
+    try {
+      return app.getAppMetrics();
+    } catch {
+      return [];
+    }
+  }
+
+  private describeManagedView(
+    managed: ManagedView,
+    metricsByPid: Map<number, Electron.ProcessMetric>
+  ): PanelDisplayDiagnostics["views"][number] {
+    const contents = managed.view.webContents;
+    const destroyed = contents.isDestroyed();
+    const pid = destroyed ? null : contents.getOSProcessId();
+    const metric = typeof pid === "number" ? metricsByPid.get(pid) : null;
+    return {
+      id: managed.id,
+      type: managed.type,
+      parentId: managed.parentId,
+      managedVisible: managed.visible,
+      trackedBounds: { ...managed.bounds },
+      nativeBounds: managed.view.getBounds(),
+      hostChrome: managed.hostChrome,
+      webContents: {
+        id: contents.id,
+        destroyed,
+        url: destroyed ? null : contents.getURL(),
+        title: destroyed ? null : contents.getTitle(),
+        loading: destroyed ? null : contents.isLoading(),
+        osProcessId: pid,
+        memoryMb: metric ? Math.round((metric.memory.workingSetSize / 1024) * 10) / 10 : null,
+      },
+    };
+  }
+
+  private async getHostedShellSurfaceDiagnostics(): Promise<
+    PanelDisplayDiagnostics["hostedShellSurfaces"]
+  > {
+    const hostedShellId = this.nativePanelSlots.activeHostedShellViewId;
+    const hostedShell = hostedShellId ? this.views.get(hostedShellId) : null;
+    if (!hostedShell || hostedShell.view.webContents.isDestroyed()) return [];
+    try {
+      return (await hostedShell.view.webContents.executeJavaScript(
+        `
+          Array.from(document.querySelectorAll("[data-native-panel-slot-id]")).map((node) => {
+            const rect = node.getBoundingClientRect();
+            return {
+              nativeSlotId: node.getAttribute("data-native-panel-slot-id"),
+              panelId: node.getAttribute("data-panel-id"),
+              bounds: {
+                x: Math.round(rect.left),
+                y: Math.round(rect.top),
+                width: Math.round(rect.width),
+                height: Math.round(rect.height),
+              },
+            };
+          })
+        `,
+        true
+      )) as PanelDisplayDiagnostics["hostedShellSurfaces"];
+    } catch {
+      return [];
+    }
+  }
+
+  private async captureViewDiagnostic(
+    id: string
+  ): Promise<PanelDisplayDiagnostics["captures"][number]> {
+    const managed = this.views.get(id);
+    if (!managed) return { id, ok: false, error: "view-not-found" };
+    const contents = managed.view.webContents;
+    if (contents.isDestroyed()) return { id, ok: false, error: "webcontents-destroyed" };
+    try {
+      const image = await Promise.race([
+        contents.capturePage(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("capture-timeout")), 1500)
+        ),
+      ]);
+      return {
+        id,
+        ok: true,
+        empty: image.isEmpty(),
+        size: image.getSize(),
+      };
+    } catch (error) {
+      return {
+        id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   /**

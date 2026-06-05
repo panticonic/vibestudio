@@ -19,6 +19,9 @@ vi.mock("electron", () => {
     openDevTools: vi.fn(),
     isDestroyed: vi.fn().mockReturnValue(false),
     getURL: vi.fn().mockReturnValue(""),
+    getTitle: vi.fn().mockReturnValue("Mock Title"),
+    isLoading: vi.fn().mockReturnValue(false),
+    getOSProcessId: vi.fn().mockReturnValue(1234),
     canGoBack: vi.fn().mockReturnValue(false),
     canGoForward: vi.fn().mockReturnValue(false),
     goBack: vi.fn(),
@@ -33,7 +36,10 @@ vi.mock("electron", () => {
     once: vi.fn(),
     insertCSS: vi.fn().mockResolvedValue("css-key"),
     removeInsertedCSS: vi.fn().mockResolvedValue(undefined),
-    capturePage: vi.fn().mockResolvedValue({ isEmpty: () => false }),
+    capturePage: vi.fn().mockResolvedValue({
+      isEmpty: () => false,
+      getSize: () => ({ width: 100, height: 100 }),
+    }),
     invalidate: vi.fn(),
     executeJavaScript: vi.fn().mockResolvedValue(undefined),
     setBackgroundThrottling: vi.fn(),
@@ -67,6 +73,16 @@ vi.mock("electron", () => {
   };
 
   return {
+    app: {
+      getAppMetrics: vi.fn(() => [
+        {
+          pid: 1234,
+          type: "Tab",
+          memory: { workingSetSize: 20480 },
+          cpu: { percentCPUUsage: 1.25 },
+        },
+      ]),
+    },
     BaseWindow: vi.fn(() => mockBaseWindow),
     WebContentsView: vi.fn(createMockWebContentsView),
     ipcMain: {
@@ -278,10 +294,12 @@ describe("ViewManager", () => {
         panelId: "panel-1",
         bounds: { x: 10, y: 20, width: 300, height: 200 },
       });
-      vm.updatePanelSlot("@workspace-apps/shell", {
-        nativeSlotId: "panel-stack:primary",
-        bounds: { x: 12, y: 24, width: 320, height: 220 },
-      });
+      expect(
+        vm.updatePanelSlot("@workspace-apps/shell", {
+          nativeSlotId: "panel-stack:primary",
+          bounds: { x: 12, y: 24, width: 320, height: 220 },
+        })
+      ).toEqual({ status: "updated" });
 
       expect(panelView.setBounds).toHaveBeenLastCalledWith({
         x: 12,
@@ -294,6 +312,88 @@ describe("ViewManager", () => {
 
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
       expect(vm.isPanelSlotted("panel-1")).toBe(false);
+    });
+
+    it("reports missing slots so the hosted shell can rebind", () => {
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+
+      expect(
+        vm.updatePanelSlot("@workspace-apps/shell", {
+          nativeSlotId: "panel-stack:primary",
+          bounds: { x: 12, y: 24, width: 320, height: 220 },
+        })
+      ).toEqual({
+        status: "missing",
+        reason: "unknown native panel slot: panel-stack:primary",
+      });
+    });
+
+    it("reasserts active slot surfaces when a hidden window is shown again", () => {
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        panelId: "panel-1",
+        bounds: { x: 10, y: 20, width: 300, height: 200 },
+      });
+
+      (panelView.setBounds as Mock).mockClear();
+      (panelView.setVisible as Mock).mockClear();
+      const showHandler = (mockWindow.on as Mock).mock.calls.find(
+        (call: unknown[]) => call[0] === "show"
+      )?.[1] as (() => void) | undefined;
+      expect(showHandler).toBeDefined();
+      showHandler?.();
+
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 10,
+        y: 20,
+        width: 300,
+        height: 200,
+      });
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(true);
+    });
+
+    it("reasserts active slot visibility when shell overlay state changes", () => {
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        panelId: "panel-1",
+        bounds: { x: 10, y: 20, width: 300, height: 200 },
+      });
+
+      vm.setShellOverlayActive(true);
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
+      vm.setShellOverlayActive(false);
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 10,
+        y: 20,
+        width: 300,
+        height: 200,
+      });
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(true);
     });
 
     it("rejects binding one panel to two native slots", () => {
@@ -344,6 +444,66 @@ describe("ViewManager", () => {
       expect(hostView.setVisible).toHaveBeenLastCalledWith(false);
       expect(vm.isPanelSlotted("panel-1")).toBe(false);
       expect(vm.getVisibleHostChromeAppId()).toBeNull();
+    });
+
+    it("captures display diagnostics for slotted panels", async () => {
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      (hostView.webContents.executeJavaScript as Mock).mockResolvedValue([
+        {
+          nativeSlotId: "panel-stack:primary",
+          panelId: "panel-1",
+          bounds: { x: 10, y: 20, width: 300, height: 200 },
+        },
+      ]);
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        panelId: "panel-1",
+        bounds: { x: 10, y: 20, width: 300, height: 200 },
+        focused: true,
+      });
+
+      const diagnostics = await vm.getPanelDisplayDiagnostics();
+
+      expect(diagnostics.nativePanelSlots.slots).toEqual([
+        expect.objectContaining({
+          nativeSlotId: "panel-stack:primary",
+          panelId: "panel-1",
+          focused: true,
+        }),
+      ]);
+      expect(diagnostics.hostedShellSurfaces).toEqual([
+        {
+          nativeSlotId: "panel-stack:primary",
+          panelId: "panel-1",
+          bounds: { x: 10, y: 20, width: 300, height: 200 },
+        },
+      ]);
+      expect(diagnostics.views).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "panel-1",
+            managedVisible: true,
+            webContents: expect.objectContaining({ osProcessId: 1234, memoryMb: 20 }),
+          }),
+        ])
+      );
+      expect(diagnostics.captures).toEqual([
+        {
+          id: "panel-1",
+          ok: true,
+          empty: false,
+          size: { width: 100, height: 100 },
+        },
+      ]);
+      expect(panelView.webContents.capturePage).toHaveBeenCalled();
     });
   });
 
