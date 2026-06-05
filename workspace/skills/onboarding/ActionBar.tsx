@@ -3,7 +3,8 @@ import { useState } from "react";
 
 interface OnboardingActionBarProps {
   chat: {
-    publish: (type: string, payload: Record<string, unknown>) => Promise<unknown>;
+    send?: (content: string, options?: Record<string, unknown>) => Promise<unknown>;
+    publish?: (type: string, payload: Record<string, unknown>) => Promise<unknown>;
   };
 }
 
@@ -44,10 +45,16 @@ export default function OnboardingActionBar({ chat }: OnboardingActionBarProps) 
   async function send(label: string, message: string) {
     setPendingLabel(label);
     try {
-      await chat.publish("message", {
-        content: message,
-        metadata: { source: "onboarding-action-bar", action: label },
-      });
+      const metadata = { source: "onboarding-action-bar", action: label };
+      if (typeof chat.send === "function") {
+        await chat.send(message, { metadata });
+      } else if (typeof chat.publish === "function") {
+        await chat.publish("message", { content: message, metadata });
+      } else {
+        throw new Error("Action bar chat API does not expose send() or publish()");
+      }
+    } catch (error) {
+      console.error("Onboarding action bar send failed", error);
     } finally {
       setPendingLabel(null);
     }
