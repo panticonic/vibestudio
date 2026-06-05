@@ -235,10 +235,17 @@ export class ServerProcessManager {
       ...(this.config.logLevel ? { NATSTACK_LOG_LEVEL: this.config.logLevel } : {}),
     };
 
+    // Heap headroom for the server child. It is a single Node process that runs
+    // builds (esbuild), git, and the DO relay hub, so V8's default ~2 GB old-space
+    // limit is tight under load. This is headroom, not a crash fix — the relay/
+    // restart fixes prevent unbounded growth; this just avoids starving legit work.
+    // Override with NATSTACK_SERVER_MAX_OLD_SPACE_MB.
+    const maxOldSpaceMb = Number(process.env["NATSTACK_SERVER_MAX_OLD_SPACE_MB"]) || 4096;
     return utilityProcess.fork(bundlePath, [], {
       serviceName: "natstack-server",
       stdio: "pipe",
       env,
+      execArgv: [`--max-old-space-size=${maxOldSpaceMb}`],
     }) as unknown as ProcessAdapter;
   }
 

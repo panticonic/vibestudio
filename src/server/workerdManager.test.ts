@@ -513,31 +513,29 @@ describe("WorkerdManager", () => {
       expect(revokeSpy).toHaveBeenCalledWith("do-service:workers/agent:B");
     });
 
-    it("waits for an existing workerd process to accept HTTP before DO dispatch", async () => {
+    it("does NOT probe-and-restart a live workerd on ensureDO (A1: no false-positive restarts)", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);
 
       await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
 
-      const fetchMock = vi
-        .fn()
-        .mockRejectedValueOnce(new TypeError("fetch failed"))
-        .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      const restartBegin = vi.fn();
+      mgr.onRestartBegin(restartBegin);
+
+      // If ensureDO probed HTTP readiness, a rejecting fetch would (old behavior)
+      // trigger a restart. The new contract: a live, registered process is left
+      // alone — no readiness fetch, no restart.
+      const fetchMock = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
       vi.stubGlobal("fetch", fetchMock);
 
       try {
-        await mgr.ensureDO("workers/agent", "AgentDO", "object-1");
+        await expect(mgr.ensureDO("workers/agent", "AgentDO", "object-1")).resolves.toBeUndefined();
       } finally {
         vi.unstubAllGlobals();
       }
 
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1:49552/__natstack_workerd_ready", {
-        method: "GET",
-        headers: {
-          Authorization: "Bearer mock-workerd-gateway-token",
-        },
-      });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(restartBegin).not.toHaveBeenCalled();
     });
   });
 

@@ -185,6 +185,15 @@ function workerdInspectorEnabled(): boolean {
 export class WorkerdManager {
   private instances = new Map<string, WorkerInstance>();
   private process: ChildProcess | null = null;
+  // Restart coalescing: callers mutate doServices/instances then call
+  // restartWorkerd(). `requestedEpoch` increments per call; `appliedEpoch` is the
+  // highest config epoch a completed restart has applied. Concurrent callers
+  // within one restart window share it; a config change made during a restart
+  // triggers at most one follow-up restart. Prevents the un-coalesced restart
+  // storm (N failed relays ⇒ N racing restarts) that fed the server OOM.
+  private requestedEpoch = 0;
+  private appliedEpoch = 0;
+  private restartRunning: Promise<void> | null = null;
   private configDir: string;
   private port: number | null = null;
   private inspectorPort: number | null = null;
@@ -1131,11 +1140,26 @@ ${doBlock}${cases.join("\n")}
    */
   private toCapnpText(config: Record<string, unknown>): string {
     this.bundleFileCounter = 0;
+    this.pendingConfigWrites = [];
     const body = this.capnpValue(config, 1);
     return `using Workerd = import "/workerd/workerd.capnp";\n\nconst config :Workerd.Config = ${body};\n`;
   }
 
+  /**
+   * Flush bundle/wasm files collected during `toCapnpText` to disk asynchronously.
+   * (Serialization stays sync for the recursion; the heavy IO is async so it
+   * never blocks the relay event loop during a (re)start.)
+   */
+  private async flushConfigWrites(): Promise<void> {
+    const writes = this.pendingConfigWrites;
+    this.pendingConfigWrites = [];
+    await Promise.all(
+      writes.map((w) => fs.promises.writeFile(path.join(this.configDir, w.filename), w.content))
+    );
+  }
+
   private bundleFileCounter = 0;
+  private pendingConfigWrites: Array<{ filename: string; content: string | Buffer }> = [];
 
   private capnpValue(value: unknown, depth: number): string {
     if (value === null || value === undefined) return "void";
@@ -1160,16 +1184,16 @@ ${doBlock}${cases.join("\n")}
 
       const indent = "  ".repeat(depth);
       const fields = entries.map(([k, v]) => {
-        // esModule bundles: write to file, reference via embed
+        // esModule bundles: collect for async flush, reference via embed.
         if (k === "esModule" && typeof v === "string") {
           const filename = `bundle-${this.bundleFileCounter++}.js`;
-          fs.writeFileSync(path.join(this.configDir, filename), v);
+          this.pendingConfigWrites.push({ filename, content: v });
           return `${indent}${k} = embed "${filename}",`;
         }
         // wasm module bindings: value is base64; decode to binary + embed.
         if (k === "wasm" && typeof v === "string") {
           const filename = `module-${this.bundleFileCounter++}.wasm`;
-          fs.writeFileSync(path.join(this.configDir, filename), Buffer.from(v, "base64"));
+          this.pendingConfigWrites.push({ filename, content: Buffer.from(v, "base64") });
           return `${indent}${k} = embed "${filename}",`;
         }
         return `${indent}${k} = ${this.capnpValue(v, depth + 1)},`;
@@ -1184,7 +1208,36 @@ ${doBlock}${cases.join("\n")}
   // Process lifecycle
   // =========================================================================
 
-  private async restartWorkerd(): Promise<void> {
+  /**
+   * Coalesced restart. Concurrent callers share one in-flight restart; a config
+   * change made during a restart triggers at most one follow-up. Errors
+   * propagate to all current waiters (no infinite retry loop).
+   */
+  private restartWorkerd(): Promise<void> {
+    const myEpoch = ++this.requestedEpoch;
+    return this.ensureRestartAtLeast(myEpoch);
+  }
+
+  private async ensureRestartAtLeast(epoch: number): Promise<void> {
+    while (this.appliedEpoch < epoch) {
+      if (this.restartRunning) {
+        await this.restartRunning;
+        continue;
+      }
+      // Snapshot the highest requested epoch; the config generated below reads
+      // the latest doServices/instances, so it covers at least this epoch.
+      const applying = this.requestedEpoch;
+      this.restartRunning = this._restartWorkerdInner();
+      try {
+        await this.restartRunning;
+      } finally {
+        this.restartRunning = null;
+      }
+      this.appliedEpoch = Math.max(this.appliedEpoch, applying);
+    }
+  }
+
+  private async _restartWorkerdInner(): Promise<void> {
     const correlationId = crypto.randomUUID();
     const previousGeneration = this.bootGeneration === 0 ? null : this.bootGeneration;
     const nextGeneration = this.bootGeneration + 1;
@@ -1281,7 +1334,8 @@ ${doBlock}${cases.join("\n")}
     const config = await this.generateConfig();
     const configPath = path.join(this.configDir, "config.capnp");
     const capnpText = this.toCapnpText(config as Record<string, unknown>);
-    fs.writeFileSync(configPath, capnpText);
+    await this.flushConfigWrites();
+    await fs.promises.writeFile(configPath, capnpText);
 
     const binary = this.findWorkerdBinary();
     if (!this.inspectorPort && workerdInspectorEnabled()) {
@@ -1541,15 +1595,12 @@ ${doBlock}${cases.join("\n")}
       return;
     }
 
-    try {
-      await this.waitForHttpReady(2_000);
-    } catch (err) {
-      log.warn(
-        `workerd process is present but not accepting HTTP; restarting before DO dispatch:`,
-        err
-      );
-      await this.restartWorkerd();
-    }
+    // Do NOT probe-and-restart a live workerd. A missed HTTP health check within
+    // a couple seconds usually means workerd (or the server's own event loop) is
+    // momentarily busy — not that it crashed. Restarting on that false positive
+    // killed all DOs and triggered the relay/restart cascade that OOM'd the
+    // server. The relay path retries transient failures; only a *dead* process
+    // (handled above) warrants a restart.
   }
 
   /**
