@@ -25,9 +25,9 @@ import {
 } from "@workspace/agentic-protocol";
 
 /** Maximum messages in the visible window. New messages push oldest out. */
-const MAX_VISIBLE = 500;
+const MAX_VISIBLE = 2000;
 /** How many messages to fetch per pagination request. */
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 500;
 
 export interface UseChannelMessagesResult {
   messages: ChatMessage[];

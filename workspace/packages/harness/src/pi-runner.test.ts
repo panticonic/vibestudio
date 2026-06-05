@@ -1953,6 +1953,41 @@ describe("PiRunner", () => {
     );
   });
 
+  it("publishes provider text blocks that use content instead of text", () => {
+    const runner = new PiRunner(createOptions()) as unknown as {
+      provenanceQueue: Array<Record<string, unknown>>;
+      queueMessageProvenance(message: unknown, messageEntryId: string): void;
+    };
+    runner.provenanceQueue = [];
+
+    runner.queueMessageProvenance(
+      {
+        role: "assistant",
+        content: [{ type: "text", content: "Checking the replay pipeline." }],
+      },
+      "entry-content-text"
+    );
+
+    expect(runner.provenanceQueue).toContainEqual(
+      expect.objectContaining({
+        publishToChannel: true,
+        event: expect.objectContaining({
+          kind: "message.completed",
+          payload: expect.objectContaining({
+            role: "assistant",
+            content: "Checking the replay pipeline.",
+            blocks: [
+              expect.objectContaining({
+                type: "text",
+                content: "Checking the replay pipeline.",
+              }),
+            ],
+          }),
+        }),
+      })
+    );
+  });
+
   it("records tool-call names and parsed arguments from provider-shaped blocks", () => {
     const runner = new PiRunner(createOptions()) as unknown as {
       provenanceQueue: Array<Record<string, unknown>>;

@@ -1233,7 +1233,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
     contextId: opts.contextId,
     channelConfig: opts.channelConfig ? opts.channelConfig : undefined,
     replay: replayMode !== "skip",
-    replayMessageLimit: opts.replayMessageLimit ?? 200,
+    replayMessageLimit: opts.replayMessageLimit ?? 1000,
     sinceId: opts.sinceId,
     ...(opts.metadata ? opts.metadata : {}),
   };

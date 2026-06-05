@@ -137,7 +137,7 @@ describe("useChannelMessages", () => {
     const older = messageCompleted("older", "Older message", "2026-05-21T08:00:00.000Z");
     const getReplayBefore = vi.fn(async (anchor: number, limit: number) => {
       expect(anchor).toBe(10);
-      expect(limit).toBe(100);
+      expect(limit).toBe(500);
       return {
         mode: "before" as const,
         logEvents: [rawReplayEvent(2, older)],

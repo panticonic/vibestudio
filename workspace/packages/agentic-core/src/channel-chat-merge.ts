@@ -41,7 +41,15 @@ type StoredValueRefPreview = { preview?: string };
 
 export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessage[] {
   assertNoStoredValueRefs(state, "chat message projection input");
-  const messages = Object.values(state.messages).flatMap(projectedMessageToChatMessages);
+  const invocationIds = new Set(Object.keys(state.invocations));
+  const closedTurnIds = new Set(
+    Object.values(state.turns)
+      .filter((turn) => turn.status === "closed")
+      .map((turn) => turn.turnId as string)
+  );
+  const messages = Object.values(state.messages).flatMap((message) =>
+    projectedMessageToChatMessages(message, { closedTurnIds, invocationIds })
+  );
   const invocations = Object.values(state.invocations).map(projectedInvocationToChatMessage);
   const approvals = Object.values(state.approvals).map(projectedApprovalToChatMessage);
   const activeStreamingTurns = new Set(
@@ -265,7 +273,10 @@ function isExpectedNoAssistantClose(turn: ProjectedTurn): boolean {
   );
 }
 
-function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[] {
+function projectedMessageToChatMessages(
+  message: ProjectedMessage,
+  opts: { closedTurnIds: ReadonlySet<string>; invocationIds: ReadonlySet<string> }
+): ChatMessage[] {
   const sortTime =
     Date.parse(message.updatedAt ?? message.completedAt ?? message.startedAt ?? "") || 0;
   const lifecycle = lifecycleNoticeFromMessage(message);
@@ -291,12 +302,30 @@ function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[
     ];
   });
   const failureReason = message.status === "failed" ? message.failureReason : undefined;
-  const content = message.content.trim() || failureReason || message.content;
+  const blockText = textContentFromBlocks(message.blocks);
+  const content = message.content.trim() || blockText || failureReason || message.content;
   const hasRenderableBlocks = (message.blocks ?? []).some((block) =>
     block.type === "attachment" || block.type === "data"
   );
   const visibleContent = content.trim();
-  if (!visibleContent && !hasRenderableBlocks) return thinking;
+  if (!visibleContent && !hasRenderableBlocks) {
+    if (isKnownInvocationShell(message, opts.invocationIds)) return thinking;
+    if (message.status === "started" || message.status === "streaming") return thinking;
+    if (message.turnId && opts.closedTurnIds.has(String(message.turnId))) return thinking;
+    return [
+      ...thinking,
+      {
+        id: `diagnostic:${message.messageId}:empty`,
+        senderId: message.actor.id,
+        content: emptyMessageDiagnostic(message),
+        kind: "message",
+        complete: true,
+        error: "Assistant message had no visible content",
+        senderMetadata,
+        sortTime,
+      } as ChatMessage & { sortTime: number },
+    ];
+  }
   if (lifecycle) {
     return [
       ...thinking,
@@ -328,6 +357,39 @@ function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[
       sortTime,
     } as ChatMessage & { sortTime: number },
   ];
+}
+
+function textContentFromBlocks(blocks: ProjectedMessage["blocks"]): string {
+  return (blocks ?? [])
+    .flatMap((block) =>
+      block.type === "text" && block.content?.trim() ? [block.content] : []
+    )
+    .join("\n")
+    .trim();
+}
+
+function isKnownInvocationShell(
+  message: ProjectedMessage,
+  invocationIds: ReadonlySet<string>
+): boolean {
+  const blocks = message.blocks ?? [];
+  if (blocks.length === 0) return false;
+  return blocks.every(
+    (block) =>
+      block.type === "invocation" &&
+      Boolean(block.invocationId) &&
+      invocationIds.has(String(block.invocationId))
+  );
+}
+
+function emptyMessageDiagnostic(message: ProjectedMessage): string {
+  const invocationCount = (message.blocks ?? []).filter(
+    (block) => block.type === "invocation"
+  ).length;
+  if (invocationCount > 0) {
+    return "Assistant message had no visible text and referenced invocation blocks that were not available.";
+  }
+  return "Assistant message had no visible content.";
 }
 
 function record(value: unknown): Record<string, unknown> {

@@ -3084,7 +3084,10 @@ export class PiRunner {
     if (role !== "assistant" && role !== "panel" && role !== "system") return false;
     return (
       Boolean(content.trim()) ||
-      blocks.some((block) => block.type === "thinking" && Boolean(block.content?.trim()))
+      blocks.some((block) => {
+        if (block.type === "text" || block.type === "thinking") return Boolean(block.content?.trim());
+        return block.type === "attachment" || block.type === "data";
+      })
     );
   }
 
@@ -3153,6 +3156,8 @@ export class PiRunner {
         content:
           typeof record?.["text"] === "string"
             ? record["text"]
+            : typeof record?.["content"] === "string"
+              ? record["content"]
             : typeof block === "string"
               ? block
               : undefined,

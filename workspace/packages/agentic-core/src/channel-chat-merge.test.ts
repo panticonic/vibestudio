@@ -225,6 +225,91 @@ describe("chatMessagesFromChannelView", () => {
     ]);
   });
 
+  it("uses text blocks as visible assistant content when top-level content is empty", () => {
+    const message: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-block-text") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        content: "",
+        blocks: [{ type: "text", content: "I found the relevant code path." }],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+
+    const state = [envelope(message, 1)].reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)).toEqual([
+      expect.objectContaining({
+        id: "msg-block-text",
+        content: "I found the relevant code path.",
+        complete: true,
+      }),
+    ]);
+  });
+
+  it("uses the invocation card instead of a blank assistant card for known invocation-only messages", () => {
+    const message: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-tool-only") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        content: "",
+        blocks: [{ type: "invocation", invocationId: brandId<InvocationId>("call-1") }],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const invocation: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("call-1") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "eval",
+        request: { code: "1 + 1" },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+
+    const state = [message, invocation]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state).map((chatMessage) => chatMessage.id)).toEqual([
+      "invocation:call-1",
+    ]);
+  });
+
+  it("surfaces a diagnostic for unknown invocation-only assistant messages", () => {
+    const message: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-unknown-tool-only") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        content: "",
+        blocks: [{ type: "invocation", invocationId: brandId<InvocationId>("missing-call") }],
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+
+    const state = [envelope(message, 1)].reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)).toEqual([
+      expect.objectContaining({
+        id: "diagnostic:msg-unknown-tool-only:empty",
+        content:
+          "Assistant message had no visible text and referenced invocation blocks that were not available.",
+        error: "Assistant message had no visible content",
+      }),
+    ]);
+  });
+
   it("projects published message.failed reasons as visible transcript errors", () => {
     const messageId = brandId<MessageId>("msg-provider-failed");
     const completed: AgenticEvent<"message.completed"> = {
