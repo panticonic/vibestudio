@@ -9,7 +9,10 @@ import {
   type SpawnSyncOptions,
   type ChildProcess,
 } from "child_process";
+import { promisify } from "node:util";
 import * as fs from "fs";
+
+const execFileAsyncRaw = promisify(execFile);
 
 let cachedGitBinary: string | null = null;
 
@@ -77,6 +80,22 @@ export function execGitFile(
   callback: Parameters<typeof execFile>[3],
 ): void {
   execFile(resolveGitBinary(), [...args], options, callback as any);
+}
+
+/**
+ * Async git invocation — never blocks the event loop. Rejects on non-zero exit
+ * (same failure semantics as execGitFileSync). Returns captured stdout/stderr as
+ * strings. Use this from server hot paths instead of execGitFileSync.
+ */
+export async function execGitFileAsync(
+  args: readonly string[],
+  options?: { cwd?: string; encoding?: BufferEncoding; maxBuffer?: number; env?: NodeJS.ProcessEnv },
+): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await execFileAsyncRaw(resolveGitBinary(), [...args], {
+    ...options,
+    encoding: "utf-8",
+  });
+  return { stdout: stdout.toString(), stderr: stderr.toString() };
 }
 
 export function spawnGit(args: readonly string[], options?: SpawnOptions): ChildProcess {

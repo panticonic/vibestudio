@@ -24,7 +24,7 @@ import {
   validateWorkspaceGitRemoteName,
 } from "@natstack/shared/workspace/remotes";
 import { WORKSPACE_IMPORT_PARENT_DIRS } from "@natstack/shared/workspace/sourceDirs";
-import { execGitFileSync } from "@natstack/shared/gitRuntime";
+import { execGitFileAsync } from "@natstack/shared/gitRuntime";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import type { EgressProxy } from "./egressProxy.js";
@@ -223,15 +223,15 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
           // Use execFileSync (no shell) for every git invocation. Even though
           // current command strings are constant, this prevents future
           // interpolation regressions from becoming RCE.
-          execGitFileSync(["init"], { cwd: absolutePath, stdio: "pipe" });
+          await execGitFileAsync(["init"], { cwd: absolutePath });
           const repoName = repoPath.split("/").pop() ?? "project";
           await writeFile(
             join(absolutePath, "README.md"),
             `# ${repoName}\n\nA new NatStack project.\n`,
             "utf-8"
           );
-          execGitFileSync(["add", "--", "README.md"], { cwd: absolutePath, stdio: "pipe" });
-          execGitFileSync(["commit", "-m", "Initial commit"], { cwd: absolutePath, stdio: "pipe" });
+          await execGitFileAsync(["add", "--", "README.md"], { cwd: absolutePath });
+          await execGitFileAsync(["commit", "-m", "Initial commit"], { cwd: absolutePath });
           if (deps.workspaceConfig) {
             await syncDeclaredRemoteForRepo({
               config: deps.workspaceConfig,
@@ -443,9 +443,9 @@ async function contextGitStatus(
 ): Promise<ContextRepoStatus> {
   const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput);
   const [branchResult, commitResult, porcelain] = await Promise.allSettled([
-    Promise.resolve(runContextGit(repoDir, ["branch", "--show-current"])),
-    Promise.resolve(runContextGit(repoDir, ["rev-parse", "--verify", "HEAD"])),
-    Promise.resolve(runContextGit(repoDir, ["status", "--porcelain=v1"])),
+    runContextGit(repoDir, ["branch", "--show-current"]),
+    runContextGit(repoDir, ["rev-parse", "--verify", "HEAD"]),
+    runContextGit(repoDir, ["status", "--porcelain=v1"]),
   ]);
 
   const branch =
@@ -476,11 +476,11 @@ async function contextGitAddAll(
   repoPathInput: string
 ): Promise<void> {
   const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput);
-  execGitFileSync(["add", "-A", "--", "."], { cwd: repoDir, stdio: "pipe" });
+  await execGitFileAsync(["add", "-A", "--", "."], { cwd: repoDir });
 }
 
-function runContextGit(repoDir: string, args: readonly string[]): string {
-  return execGitFileSync(args, { cwd: repoDir, encoding: "utf-8" });
+async function runContextGit(repoDir: string, args: readonly string[]): Promise<string> {
+  return (await execGitFileAsync(args, { cwd: repoDir })).stdout;
 }
 
 function porcelainLineToFileStatus(line: string): ContextRepoStatus["files"][number] {
@@ -695,15 +695,16 @@ async function persistWorkspaceConfigChange(
   }
   await writeFile(configPath, nextContent, "utf-8");
   mutateWorkspaceConfig(currentConfig, nextConfig);
-  execGitFileSync(["add", "--", "natstack.yml"], { cwd: metaDir, stdio: "pipe" });
-  const status = execGitFileSync(["status", "--porcelain", "--", "natstack.yml"], {
-    cwd: metaDir,
-    encoding: "utf-8",
-  });
+  await execGitFileAsync(["add", "--", "natstack.yml"], { cwd: metaDir });
+  const status = (
+    await execGitFileAsync(["status", "--porcelain", "--", "natstack.yml"], {
+      cwd: metaDir,
+    })
+  ).stdout;
   if (!status.trim()) return;
-  execGitFileSync(
+  await execGitFileAsync(
     ["-c", "user.email=natstack@local", "-c", "user.name=natstack", "commit", "-m", opts.message],
-    { cwd: metaDir, stdio: "pipe" }
+    { cwd: metaDir }
   );
 }
 

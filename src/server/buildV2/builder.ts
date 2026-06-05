@@ -7,7 +7,7 @@
  *   - Extension (Node target): ESM, no splitting
  *
  * Build options are manifest-derived, not caller-supplied.
- * Concurrency: semaphore with MAX_CONCURRENT_BUILDS = 4.
+ * Concurrency: semaphore with MAX_CONCURRENT_BUILDS = 8 by default.
  * Coalescing: dedup concurrent builds of the same build key.
  *
  * Source files are extracted from git at the correct commit via sourceExtractor,
@@ -86,7 +86,13 @@ export function initBuilder(appNodeModules: string | string[]): void {
 // Constants
 // ---------------------------------------------------------------------------
 
-const MAX_CONCURRENT_BUILDS = 4;
+function resolveMaxConcurrentBuilds(): number {
+  const parsed = Number.parseInt(process.env["NATSTACK_MAX_CONCURRENT_BUILDS"] ?? "", 10);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return 8;
+}
+
+const MAX_CONCURRENT_BUILDS = resolveMaxConcurrentBuilds();
 const PANEL_ASSET_LOADERS: Record<string, esbuild.Loader> = {
   ".png": "file",
   ".jpg": "file",
@@ -1554,11 +1560,12 @@ async function doBuild(
   options?: BuildUnitOptions
 ): Promise<BuildResult> {
   await acquireSemaphore();
-
-  // Extract source from git before building
-  const extracted = extractSourceForBuild(node, graph, workspaceRoot, commitMap);
+  let extracted: Awaited<ReturnType<typeof extractSourceForBuild>> | undefined;
 
   try {
+    // Extract source from git before building.
+    extracted = await extractSourceForBuild(node, graph, workspaceRoot, commitMap);
+
     if (options?.library) {
       return await buildLibraryBundle(
         node,
@@ -1606,7 +1613,7 @@ async function doBuild(
     }
   } finally {
     releaseSemaphore();
-    extracted.cleanup();
+    await extracted?.cleanup();
   }
 }
 

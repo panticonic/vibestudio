@@ -8,47 +8,99 @@
  * Uses `git archive` piped to `tar` for extraction — no shell involved.
  */
 
-import * as fs from "fs";
+import { mkdir, mkdtemp, rm } from "fs/promises";
 import * as path from "path";
 import * as os from "os";
-import { spawnSync } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { getCommitAt, resolveMainRef } from "./effectiveVersion.js";
-import { spawnGitSync } from "@natstack/shared/gitRuntime";
+import { spawnGit } from "@natstack/shared/gitRuntime";
 import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
 // Git Archive Extraction
 // ---------------------------------------------------------------------------
 
+interface ProcessCloseResult {
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}
+
+export function waitForClose(child: ChildProcess): Promise<ProcessCloseResult> {
+  return new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code, signal) => resolve({ code, signal }));
+  });
+}
+
+export function processFailureMessage(
+  label: string,
+  repoPath: string,
+  commitSha: string,
+  result: ProcessCloseResult,
+  stderr: string
+): string | null {
+  if (result.signal) {
+    return `${label} was killed by signal ${result.signal} for ${repoPath} at ${commitSha}: ${stderr}`;
+  }
+  if (result.code !== 0) {
+    return `${label} failed for ${repoPath} at ${commitSha}: ${stderr}`;
+  }
+  return null;
+}
+
 /**
  * Extract the full git tree at a specific commit into a target directory.
- * Uses `git archive --format=tar <commit>` piped to `tar -x -C <dir>`.
+ * Streams `git archive --format=tar <commit>` into `tar -x -C <dir>` — async and
+ * fully streamed (no synchronous spawn, no large in-memory buffers), so it never
+ * blocks the server event loop that also relays DO traffic.
  */
-function extractGitTree(repoPath: string, commitSha: string, targetDir: string): void {
-  // git archive outputs tar to stdout
-  const archive = spawnGitSync(["archive", "--format=tar", commitSha], {
+async function extractGitTree(
+  repoPath: string,
+  commitSha: string,
+  targetDir: string
+): Promise<void> {
+  const archive = spawnGit(["archive", "--format=tar", commitSha], {
     cwd: repoPath,
-    stdio: ["pipe", "pipe", "pipe"],
-    maxBuffer: 100 * 1024 * 1024, // 100MB
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const extract = spawn("tar", ["-x", "-C", targetDir], {
+    stdio: ["pipe", "ignore", "pipe"],
   });
 
-  if (archive.status !== 0) {
-    const stderr = archive.stderr?.toString() ?? "";
-    throw new Error(`git archive failed for ${repoPath} at ${commitSha}: ${stderr}`);
-  }
-
-  // Pipe archive output into tar to extract
-  const extract = spawnSync("tar", ["-x", "-C", targetDir], {
-    input: archive.stdout,
-    stdio: ["pipe", "pipe", "pipe"],
-    maxBuffer: 100 * 1024 * 1024,
+  let archiveErr = "";
+  let extractErr = "";
+  archive.stderr?.on("data", (chunk) => {
+    archiveErr += chunk.toString();
+  });
+  extract.stderr?.on("data", (chunk) => {
+    extractErr += chunk.toString();
   });
 
-  if (extract.status !== 0) {
-    const stderr = extract.stderr?.toString() ?? "";
-    throw new Error(`tar extract failed for ${repoPath} at ${commitSha}: ${stderr}`);
-  }
+  // Stream archive stdout → tar stdin (backpressure-aware pipe, no buffering).
+  if (archive.stdout && extract.stdin) archive.stdout.pipe(extract.stdin);
+
+  const [archiveResult, extractResult] = await Promise.all([
+    waitForClose(archive),
+    waitForClose(extract),
+  ]);
+
+  const archiveFailure = processFailureMessage(
+    "git archive",
+    repoPath,
+    commitSha,
+    archiveResult,
+    archiveErr
+  );
+  if (archiveFailure) throw new Error(archiveFailure);
+  const extractFailure = processFailureMessage(
+    "tar extract",
+    repoPath,
+    commitSha,
+    extractResult,
+    extractErr
+  );
+  if (extractFailure) throw new Error(extractFailure);
 }
 
 // ---------------------------------------------------------------------------
@@ -86,8 +138,8 @@ export function collectTransitiveInternalDeps(node: GraphNode, graph: PackageGra
 export interface ExtractedSource {
   /** Root directory containing extracted source (temp dir) */
   sourceRoot: string;
-  /** Clean up the extracted source */
-  cleanup(): void;
+  /** Clean up the extracted source (async; safe to await) */
+  cleanup(): Promise<void>;
 }
 
 /**
@@ -103,18 +155,20 @@ export interface ExtractedSource {
  *
  * Preserves relative paths: <sourceRoot>/panels/chat/, <sourceRoot>/packages/core/
  */
-export function extractSourceForBuild(
+export async function extractSourceForBuild(
   unit: GraphNode,
   graph: PackageGraph,
   workspaceRoot: string,
   commitMap?: Map<string, string>
-): ExtractedSource {
-  const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-source-"));
+): Promise<ExtractedSource> {
+  const sourceRoot = await mkdtemp(path.join(os.tmpdir(), "natstack-source-"));
 
   // Collect all nodes needed for this build
   const nodes = collectTransitiveInternalDeps(unit, graph);
 
-  // Phase 1: Resolve commit SHAs — prefer pre-captured, fall back to git
+  // Phase 1: Resolve commit SHAs — prefer pre-captured, fall back to a single
+  // fast `git rev-parse` (sub-ms; left synchronous to avoid rippling
+  // effectiveVersion async). The heavy work (archive+tar) is streamed async below.
   const resolvedMap = new Map<string, string>();
   for (const node of nodes) {
     const preCapture = commitMap?.get(node.name);
@@ -131,7 +185,7 @@ export function extractSourceForBuild(
     }
   }
 
-  // Phase 2: Extract each node at its captured SHA
+  // Phase 2: Extract each node at its captured SHA (streamed, async)
   try {
     for (const node of nodes) {
       const sha = assertPresent(resolvedMap.get(node.name));
@@ -144,27 +198,19 @@ export function extractSourceForBuild(
       }
       const relPath = path.relative(workspaceRoot, node.path);
       const extractTarget = path.join(sourceRoot, relPath);
-      fs.mkdirSync(extractTarget, { recursive: true });
-      extractGitTree(node.path, sha, extractTarget);
+      await mkdir(extractTarget, { recursive: true });
+      await extractGitTree(node.path, sha, extractTarget);
     }
   } catch (error) {
     // Clean up on extraction failure
-    try {
-      fs.rmSync(sourceRoot, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+    await rm(sourceRoot, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
 
   return {
     sourceRoot,
-    cleanup() {
-      try {
-        fs.rmSync(sourceRoot, { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
+    async cleanup() {
+      await rm(sourceRoot, { recursive: true, force: true }).catch(() => {});
     },
   };
 }
