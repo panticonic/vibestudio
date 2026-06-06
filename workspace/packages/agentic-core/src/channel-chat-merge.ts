@@ -271,6 +271,7 @@ function isExpectedNoAssistantClose(turn: ProjectedTurn): boolean {
   return (
     turn.reason === "user_interrupted" ||
     turn.reason === "channel_unsubscribe" ||
+    turn.reason === "turn_superseded" ||
     turn.reason === "model_credential_required" ||
     turn.reason === "model_credential_reconnect_required"
   );

@@ -39,6 +39,7 @@ export const TURN_REASON_CODES = [
   "user_interrupted",
   "channel_unsubscribe",
   "runner_restarted",
+  "turn_superseded",
   "work_failed",
   "model_credential_required",
   "model_credential_reconnect_required",

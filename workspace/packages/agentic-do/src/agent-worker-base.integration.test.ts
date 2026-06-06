@@ -2143,6 +2143,60 @@ describe("AgentWorkerBase method suspension ledger", () => {
     ).toEqual([expect.objectContaining({ status: "done" })]);
   });
 
+  it("supersedes an orphaned open turn so a fresh prompt is not wedged", async () => {
+    // Repro for: a runner restart parks a `waiting_external` turn whose
+    // in-runner invocation was abandoned (and can never resolve), leaving
+    // `runner.currentTurnId` set. The next user prompt would otherwise hit
+    // `adoptTurnId` -> "turn … is already open" and wedge the channel forever.
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      supersedeOrphanedOpenTurn(channelId: string, runner: PiRunner): Promise<void>;
+    };
+    insertTurnRun(sql, { turnId: "turn-parked", status: "waiting_external" });
+
+    let openTurnId: string | null = "turn-parked";
+    const forceCloseCurrentTurn = vi.fn(async () => {
+      openTurnId = null;
+      return true;
+    });
+    const runner = {
+      getCurrentTurnId: () => openTurnId,
+      forceCloseCurrentTurn,
+    } as unknown as PiRunner;
+
+    await worker.supersedeOrphanedOpenTurn("chat-1", runner);
+
+    expect(forceCloseCurrentTurn).toHaveBeenCalledWith(
+      "turn_superseded",
+      expect.any(String)
+    );
+    expect(openTurnId).toBeNull();
+    expect(turnStatus(sql, "turn-parked")).toMatchObject({
+      status: "interrupted",
+      failure_code: "turn_superseded",
+    });
+  });
+
+  it("supersede is a no-op when the runner holds no open turn", async () => {
+    const { instance } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      supersedeOrphanedOpenTurn(channelId: string, runner: PiRunner): Promise<void>;
+    };
+    const forceCloseCurrentTurn = vi.fn(async () => true);
+    const runner = {
+      getCurrentTurnId: () => null,
+      forceCloseCurrentTurn,
+    } as unknown as PiRunner;
+
+    await worker.supersedeOrphanedOpenTurn("chat-1", runner);
+
+    expect(forceCloseCurrentTurn).not.toHaveBeenCalled();
+  });
+
   it("does nothing for terminal turn ledger rows during recovery", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",

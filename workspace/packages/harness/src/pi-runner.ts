@@ -881,7 +881,7 @@ export class PiRunner {
   async forceCloseCurrentTurn(
     reason: Extract<
       TurnReasonCode,
-      "user_interrupted" | "channel_unsubscribe"
+      "user_interrupted" | "channel_unsubscribe" | "turn_superseded"
     > = "user_interrupted",
     summary = "Agent turn interrupted"
   ): Promise<boolean> {
@@ -889,7 +889,10 @@ export class PiRunner {
   }
 
   private async cancelCurrentTurn(
-    reason: Extract<TurnReasonCode, "user_interrupted" | "channel_unsubscribe">,
+    reason: Extract<
+      TurnReasonCode,
+      "user_interrupted" | "channel_unsubscribe" | "turn_superseded"
+    >,
     summary: string
   ): Promise<boolean> {
     if (!this.options.gad || !this.currentTurnId) return false;

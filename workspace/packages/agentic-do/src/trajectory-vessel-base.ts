@@ -4871,6 +4871,42 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     };
   }
 
+  /**
+   * Before opening a fresh user turn, supersede any turn the runner still holds
+   * open from a prior activation.
+   *
+   * The dispatcher drains FIFO and any recovery `continue` for a parked turn is
+   * enqueued at runner creation (ahead of this prompt). So if a fresh prompt
+   * reaches `onWorkStart` with the runner still holding an open turn, that turn
+   * has no driver left to close it — e.g. a `waiting_external` turn whose
+   * in-runner invocation was abandoned by the post-restart repair
+   * (`repairDurableOpenState({ closeOpenTurns: false })`) and can never resolve.
+   * Left in place it wedges `PiRunner.adoptTurnId` ("turn … is already open"),
+   * permanently blocking every future prompt on the channel. Supersede it:
+   * mark the ledger row terminal and durably close the runner's open turn so the
+   * new turn can be adopted cleanly.
+   */
+  private async supersedeOrphanedOpenTurn(channelId: string, runner: PiRunner): Promise<void> {
+    // Optional-chained to match the rest of the file's treatment of these
+    // accessors (e.g. `currentTurnIdForChannel`): production runners are always
+    // full PiRunners, but minimal test doubles may omit them.
+    const staleTurnId = runner.getCurrentTurnId?.() ?? null;
+    if (!staleTurnId) return;
+    this.recordDebugPhase(channelId, "turn_ledger.superseded_orphaned_open_turn", {
+      staleTurnId,
+    });
+    this.transitionTurn(
+      staleTurnId,
+      ["starting", "running_model", "waiting_external", "continuing", "closing"],
+      "interrupted",
+      {
+        failureCode: "turn_superseded",
+        failureMessage: "Turn superseded by a new user turn after runner restart.",
+      }
+    );
+    await runner.forceCloseCurrentTurn?.("turn_superseded", "Turn superseded by a new user turn");
+  }
+
   private currentTurnIdForChannel(channelId: string): string | undefined {
     // Step 2: the consolidated RunController is the authoritative source for the
     // active turn; fall back to the runner's in-memory id while writers migrate.
@@ -5413,6 +5449,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           });
           return turnId;
         }
+        await this.supersedeOrphanedOpenTurn(channelId, runner);
         const turnId = crypto.randomUUID();
         let entryId: string | null = null;
         try {
