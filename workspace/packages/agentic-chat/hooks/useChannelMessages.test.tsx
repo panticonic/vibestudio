@@ -7,6 +7,7 @@ import {
   AGENTIC_PROTOCOL_VERSION,
   brandId,
   type AgenticEvent,
+  type BlockId,
   type MessageId,
 } from "@workspace/agentic-protocol";
 import type { IncomingEvent, PubSubClient } from "@workspace/pubsub";
@@ -25,7 +26,8 @@ function messageCompleted(
     payload: {
       protocol: AGENTIC_PROTOCOL_VERSION,
       role: "user",
-      content,
+      blocks: [{ blockId: brandId<BlockId>(`${id}:block:0`), type: "text", content }],
+      outcome: "completed",
     },
     createdAt,
   };

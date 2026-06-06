@@ -1607,7 +1607,11 @@ describe("PiRunner", () => {
         event: {
           kind: "message.completed",
           causality: { messageId: "entry-result" },
-          payload: { role: "tool", content: "done" },
+          payload: {
+            role: "tool",
+            blocks: [expect.objectContaining({ type: "text", content: "done" })],
+            outcome: "completed",
+          },
         },
       },
       {
@@ -1911,7 +1915,13 @@ describe("PiRunner", () => {
           actor: { kind: "user", id: "user" },
           payload: expect.objectContaining({
             role: "user",
-            content: "Read the onboarding docs",
+            blocks: [
+              expect.objectContaining({
+                type: "text",
+                content: "Read the onboarding docs",
+              }),
+            ],
+            outcome: "completed",
           }),
         }),
       })
@@ -1940,13 +1950,13 @@ describe("PiRunner", () => {
           kind: "message.completed",
           payload: expect.objectContaining({
             role: "assistant",
-            content: "",
             blocks: [
               expect.objectContaining({
                 type: "thinking",
                 content: "Checking repository state.",
               }),
             ],
+            outcome: "completed",
           }),
         }),
       })
@@ -1975,13 +1985,13 @@ describe("PiRunner", () => {
           kind: "message.completed",
           payload: expect.objectContaining({
             role: "assistant",
-            content: "Checking the replay pipeline.",
             blocks: [
               expect.objectContaining({
                 type: "text",
                 content: "Checking the replay pipeline.",
               }),
             ],
+            outcome: "completed",
           }),
         }),
       })
@@ -2011,12 +2021,18 @@ describe("PiRunner", () => {
 
     expect(runner.provenanceQueue).toContainEqual(
       expect.objectContaining({
-        publishToChannel: false,
+        publishToChannel: true,
         event: expect.objectContaining({
           kind: "message.completed",
           payload: expect.objectContaining({
             role: "assistant",
-            content: "",
+            blocks: [
+              expect.objectContaining({
+                type: "invocation",
+                invocationId: "call_2",
+              }),
+            ],
+            outcome: "tool_calls_only",
           }),
         }),
       })
@@ -2037,6 +2053,51 @@ describe("PiRunner", () => {
         }),
       })
     );
+  });
+
+  it("streams incremental per-block deltas without duplicating accumulated content", async () => {
+    const appendBatch = vi.fn(async () => undefined);
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendBatch };
+      handleMessageStart(message: unknown): Promise<void>;
+      handleMessageUpdate(message: unknown): Promise<void>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendBatch };
+
+    const assistant = (text: string) => ({
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text }],
+      timestamp: 0,
+    });
+    await runner.handleMessageStart(assistant("Hel"));
+    await runner.handleMessageUpdate(assistant("Hello"));
+    await runner.handleMessageUpdate(assistant("Hello world"));
+
+    const calls = appendBatch.mock.calls as unknown as Array<
+      [string, { events: Array<{ event: { kind: string; payload: Record<string, unknown> } }> }]
+    >;
+    const events = calls.flatMap((call) => call[1].events).map((item) => item.event);
+    const deltas = events.filter((event) => event.kind === "message.delta");
+
+    // Each delta carries only its incremental fragment — never the full block — so
+    // the reducer (which appends) never double-applies. The fragments concatenate
+    // (after the started block) to the final content.
+    expect(deltas.map((event) => event.payload["text"])).toEqual(["lo", " world"]);
+    const blockIds = new Set(deltas.map((event) => event.payload["blockId"]));
+    expect(blockIds.size).toBe(1);
+    for (const delta of deltas) {
+      expect(delta.payload["type"]).toBe("text");
+      expect(String(delta.payload["blockId"])).toMatch(/:block:0$/u);
+      expect(delta.payload).not.toHaveProperty("block");
+      expect(delta.payload).not.toHaveProperty("delta");
+      expect(delta.payload["text"]).not.toBe("Hello world");
+    }
   });
 
   it("exposes open invocation metadata and closes it when a tool result is recorded", () => {
@@ -2326,7 +2387,13 @@ describe("PiRunner", () => {
         event: {
           kind: "message.completed",
           actor: { kind: "agent", id: "pi" },
-          payload: { protocol: "agentic.trajectory.v1", role: "assistant", content: "hello" },
+          causality: { messageId: "message-1" },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            role: "assistant",
+            blocks: [{ blockId: "message-1:block:0", type: "text", content: "hello" }],
+            outcome: "completed",
+          },
           createdAt: new Date(0).toISOString(),
         },
       },
@@ -2387,7 +2454,12 @@ describe("PiRunner", () => {
           kind: "message.completed",
           actor: { kind: "agent", id: "pi" },
           causality: { messageId: "message-1" },
-          payload: { protocol: "agentic.trajectory.v1", role: "assistant", content: "hello" },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            role: "assistant",
+            blocks: [{ blockId: "message-1:block:0", type: "text", content: "hello" }],
+            outcome: "completed",
+          },
           createdAt: new Date(0).toISOString(),
         },
       },
@@ -2580,7 +2652,13 @@ describe("PiRunner", () => {
     const event = {
       kind: "message.completed",
       actor: { kind: "agent", id: "pi" },
-      payload: { protocol: "agentic.trajectory.v1", role: "assistant", content: "hello" },
+      causality: { messageId: "message-1" },
+      payload: {
+        protocol: "agentic.trajectory.v1",
+        role: "assistant",
+        blocks: [{ blockId: "message-1:block:0", type: "text", content: "hello" }],
+        outcome: "completed",
+      },
       createdAt: new Date(0).toISOString(),
     };
 

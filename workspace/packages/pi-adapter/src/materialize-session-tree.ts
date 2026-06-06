@@ -1,5 +1,10 @@
 import type { AgentMessage, SessionTreeEntry } from "@earendil-works/pi-agent-core";
-import type { TrajectoryState } from "@workspace/agentic-protocol";
+import {
+  messageDisplayText,
+  type MessageBlockInput,
+  type ProjectedMessage,
+  type TrajectoryState,
+} from "@workspace/agentic-protocol";
 
 export function materializeSessionTree(state: TrajectoryState): SessionTreeEntry[] {
   const exactEntries = exactPiSessionEntries(state);
@@ -19,7 +24,7 @@ export function materializeSessionTree(state: TrajectoryState): SessionTreeEntry
       timestamp: message.completedAt ?? message.startedAt ?? new Date(0).toISOString(),
       message: {
         role: message.role,
-        content: message.content,
+        content: piContentFromBlocks(message, state),
         timestamp: Date.parse(message.completedAt ?? message.startedAt ?? new Date(0).toISOString()),
       } as AgentMessage,
     };
@@ -27,6 +32,41 @@ export function materializeSessionTree(state: TrajectoryState): SessionTreeEntry
     parentId = entry.id;
   }
   return entries;
+}
+
+function piContentFromBlocks(message: ProjectedMessage, state: TrajectoryState): unknown {
+  const parts = (message.blocks ?? []).flatMap((block) => piPartFromBlock(block, state));
+  if (parts.length > 0) return parts;
+  return messageDisplayText(message.blocks);
+}
+
+function piPartFromBlock(block: MessageBlockInput, state: TrajectoryState): unknown[] {
+  if (block.type === "text") {
+    return block.content?.trim() ? [{ type: "text", text: block.content }] : [];
+  }
+  if (block.type === "thinking") {
+    return block.content?.trim() ? [{ type: "thinking", thinking: block.content }] : [];
+  }
+  if (block.type === "invocation" && block.invocationId) {
+    const invocation = state.invocations[String(block.invocationId)];
+    if (invocation?.name && invocation.request !== undefined) {
+      return [
+        {
+          type: "toolCall",
+          id: String(block.invocationId),
+          name: invocation.name,
+          input: invocation.request,
+        },
+      ];
+    }
+    return [
+      {
+        type: "text",
+        text: `[Tool call ${String(block.invocationId)} omitted: metadata unavailable]`,
+      },
+    ];
+  }
+  return [];
 }
 
 function exactPiSessionEntries(state: TrajectoryState): SessionTreeEntry[] {

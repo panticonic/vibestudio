@@ -32,6 +32,15 @@ function blobRef(digest: string, encoded = "{}") {
   };
 }
 
+function textMessagePayload(messageId: string, role: "user" | "assistant", content: string) {
+  return {
+    protocol: AGENTIC_PROTOCOL_VERSION,
+    role,
+    blocks: [{ blockId: `${messageId}:block:0` as never, type: "text" as const, content }],
+    outcome: "completed" as const,
+  };
+}
+
 function largeParticipantMetadata() {
   return {
     type: "panel",
@@ -118,11 +127,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-1" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "hello from trajectory",
-            },
+            payload: textMessagePayload("msg-1", "assistant", "hello from trajectory"),
           }),
           publish: { channelIds: ["channel-1"] },
         },
@@ -388,7 +393,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-2" as never,
             causality: { messageId: "msg-2" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "done" },
+            payload: textMessagePayload("msg-2", "assistant", "done"),
           }),
         },
       ],
@@ -440,11 +445,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-1" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "hello once",
-            },
+            payload: textMessagePayload("msg-1", "assistant", "hello once"),
           }),
           publish: { channelIds: ["channel-1"] },
         },
@@ -481,11 +482,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-prefix" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "already committed",
-            },
+            payload: textMessagePayload("msg-prefix", "assistant", "already committed"),
           }),
           publish: { channelIds: ["channel-1"] },
         },
@@ -502,11 +499,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-prefix" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "already committed",
-            },
+            payload: textMessagePayload("msg-prefix", "assistant", "already committed"),
           }),
           publish: { channelIds: ["channel-1"] },
         },
@@ -559,11 +552,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-1" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "first",
-            },
+            payload: textMessagePayload("msg-1", "assistant", "first"),
           }),
         },
       ],
@@ -580,11 +569,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
             event: event("message.completed", {
               turnId: "turn-1" as never,
               causality: { messageId: "msg-1" as never },
-              payload: {
-                protocol: AGENTIC_PROTOCOL_VERSION,
-                role: "assistant",
-                content: "different",
-              },
+              payload: textMessagePayload("msg-1", "assistant", "different"),
             }),
           },
         ],
@@ -747,11 +732,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-1" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "done",
-            },
+            payload: textMessagePayload("msg-1", "assistant", "done"),
           }),
           publish: { channelIds: ["channel-1"] },
         },
@@ -783,11 +764,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
       payload: event("message.completed", {
         turnId: "turn-1" as never,
         causality: { messageId: "user-msg-1" as never },
-        payload: {
-          protocol: AGENTIC_PROTOCOL_VERSION,
-          role: "user",
-          content: "hello",
-        },
+        payload: textMessagePayload("user-msg-1", "user", "hello"),
       }),
       publishedAt: "2026-05-20T12:00:00.000Z",
     });
@@ -1131,11 +1108,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-public" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "visible at fork point",
-            },
+            payload: textMessagePayload("msg-public", "assistant", "visible at fork point"),
           }),
           publish: { channelIds: ["channel-parent"] },
         },
@@ -1270,11 +1243,11 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-side" as never,
             causality: { messageId: "side-summary-message" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "Side task summary for the main session",
-            },
+            payload: textMessagePayload(
+              "side-summary-message",
+              "assistant",
+              "Side task summary for the main session"
+            ),
           }),
           publish: { channelIds: ["main-channel"] },
         },
@@ -1294,7 +1267,15 @@ describe("GadWorkspaceDO trajectory persistence", () => {
       envelope: {
         payload: {
           kind: "message.completed",
-          payload: { content: "Side task summary for the main session" },
+          payload: {
+            blocks: [
+              expect.objectContaining({
+                content: "Side task summary for the main session",
+                type: "text",
+              }),
+            ],
+            outcome: "completed",
+          },
         },
       },
     });
@@ -1303,9 +1284,9 @@ describe("GadWorkspaceDO trajectory persistence", () => {
     const publicChannel = await call<any[]>("listChannelEnvelopes", {
       channelId: "main-channel",
     });
-    expect(publicChannel.map((envelope) => envelope.payload.payload.content)).toEqual([
-      "Side task summary for the main session",
-    ]);
+    expect(
+      publicChannel.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)
+    ).toEqual(["Side task summary for the main session"]);
     expect(JSON.stringify(publicChannel)).not.toContain("keep this out of PubSub");
 
     const privateLineage = await call<any>("getPrivateLineageForPublishedEnvelope", {
@@ -1789,7 +1770,11 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.started", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-1" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "" },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              role: "assistant",
+              blocks: [],
+            },
           }),
         },
         {
@@ -1797,7 +1782,12 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.delta", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-1" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, delta: "hello" },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              blockId: "msg-1:block:0" as never,
+              type: "text",
+              text: "hello",
+            },
           }),
         },
       ],
@@ -1918,11 +1908,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-fork" as never },
-            payload: {
-              protocol: AGENTIC_PROTOCOL_VERSION,
-              role: "assistant",
-              content: "fork here",
-            },
+            payload: textMessagePayload("msg-fork", "assistant", "fork here"),
           }),
         },
         {
@@ -2063,7 +2049,7 @@ describe("GadWorkspaceDO trajectory persistence", () => {
           event: event("message.completed", {
             turnId: "turn-1" as never,
             causality: { messageId: "msg-1" as never },
-            payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "hello" },
+            payload: textMessagePayload("msg-1", "assistant", "hello"),
           }),
         },
       ],

@@ -7,11 +7,13 @@ import {
   reduceChannelView,
   type AgenticEvent,
   type ApprovalId,
+  type BlockId,
   type ChannelEnvelope,
   type ChannelId,
   type EnvelopeId,
   type InvocationId,
   type MessageId,
+  type MessageRole,
   type TurnId,
 } from "@workspace/agentic-protocol";
 import {
@@ -32,6 +34,15 @@ function envelope(payload: AgenticEvent, seq: number): ChannelEnvelope<AgenticEv
     payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
     payload,
     publishedAt: payload.createdAt,
+  };
+}
+
+function textPayload(messageId: string, role: MessageRole, content: string) {
+  return {
+    protocol: AGENTIC_PROTOCOL_VERSION,
+    role,
+    blocks: [{ blockId: brandId<BlockId>(`${messageId}:block:0`), type: "text" as const, content }],
+    outcome: "completed" as const,
   };
 }
 
@@ -75,7 +86,7 @@ describe("chatMessagesFromChannelView", () => {
       kind: "message.completed",
       actor: agent,
       causality: { messageId: brandId<MessageId>("msg-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "done" },
+      payload: textPayload("msg-1", "assistant", "done"),
       createdAt: "2026-05-20T12:00:00.000Z",
     };
     const started: AgenticEvent<"invocation.started"> = {
@@ -199,11 +210,15 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
-        content: "Final answer",
         blocks: [
-          { type: "thinking", content: "I should inspect the repo first." },
-          { type: "text", content: "Final answer" },
+          {
+            blockId: brandId<BlockId>("msg-thinking:block:0"),
+            type: "thinking",
+            content: "I should inspect the repo first.",
+          },
+          { blockId: brandId<BlockId>("msg-thinking:block:1"), type: "text", content: "Final answer" },
         ],
+        outcome: "completed",
       },
       createdAt: "2026-05-20T12:00:00.000Z",
     };
@@ -212,7 +227,7 @@ describe("chatMessagesFromChannelView", () => {
 
     expect(chatMessagesFromChannelView(state)).toEqual([
       expect.objectContaining({
-        id: "thinking:msg-thinking:0",
+        id: "thinking:msg-thinking:msg-thinking:block:0",
         contentType: "thinking",
         content: "I should inspect the repo first.",
         complete: true,
@@ -233,8 +248,14 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
-        content: "",
-        blocks: [{ type: "text", content: "I found the relevant code path." }],
+        blocks: [
+          {
+            blockId: brandId<BlockId>("msg-block-text:block:0"),
+            type: "text",
+            content: "I found the relevant code path.",
+          },
+        ],
+        outcome: "completed",
       },
       createdAt: "2026-05-20T12:00:00.000Z",
     };
@@ -258,8 +279,14 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
-        content: "",
-        blocks: [{ type: "invocation", invocationId: brandId<InvocationId>("call-1") }],
+        blocks: [
+          {
+            blockId: brandId<BlockId>("msg-tool-only:block:0"),
+            type: "invocation",
+            invocationId: brandId<InvocationId>("call-1"),
+          },
+        ],
+        outcome: "tool_calls_only",
       },
       createdAt: "2026-05-20T12:00:00.000Z",
     };
@@ -284,7 +311,7 @@ describe("chatMessagesFromChannelView", () => {
     ]);
   });
 
-  it("surfaces a diagnostic for unknown invocation-only assistant messages", () => {
+  it("suppresses standalone text for unknown invocation-only assistant messages", () => {
     const message: AgenticEvent<"message.completed"> = {
       kind: "message.completed",
       actor: agent,
@@ -292,22 +319,21 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
-        content: "",
-        blocks: [{ type: "invocation", invocationId: brandId<InvocationId>("missing-call") }],
+        blocks: [
+          {
+            blockId: brandId<BlockId>("msg-unknown-tool-only:block:0"),
+            type: "invocation",
+            invocationId: brandId<InvocationId>("missing-call"),
+          },
+        ],
+        outcome: "tool_calls_only",
       },
       createdAt: "2026-05-20T12:00:00.000Z",
     };
 
     const state = [envelope(message, 1)].reduce(reduceChannelView, createInitialChannelViewState());
 
-    expect(chatMessagesFromChannelView(state)).toEqual([
-      expect.objectContaining({
-        id: "diagnostic:msg-unknown-tool-only:empty",
-        content:
-          "Assistant message had no visible text and referenced invocation blocks that were not available.",
-        error: "Assistant message had no visible content",
-      }),
-    ]);
+    expect(chatMessagesFromChannelView(state)).toEqual([]);
   });
 
   it("projects published message.failed reasons as visible transcript errors", () => {
@@ -319,8 +345,8 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
-        content: "",
         blocks: [],
+        outcome: "empty",
       },
       createdAt: "2026-05-20T12:00:00.000Z",
     };
@@ -343,8 +369,9 @@ describe("chatMessagesFromChannelView", () => {
 
     expect(chatMessagesFromChannelView(state)).toEqual([
       expect.objectContaining({
-        id: "msg-provider-failed",
+        id: "diagnostic:msg-provider-failed",
         content: "provider stream failed",
+        contentType: "diagnostic",
         error: "provider stream failed",
         complete: true,
       }),
@@ -491,7 +518,14 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
-        content: "Agent turn was interrupted during model generation.",
+        blocks: [
+          {
+            blockId: brandId<BlockId>("msg-restart:block:0"),
+            type: "text",
+            content: "Agent turn was interrupted during model generation.",
+          },
+        ],
+        outcome: "completed",
       },
       createdAt: "2026-05-20T12:00:00.000Z",
     };
@@ -528,8 +562,8 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
-        content: "",
         blocks: [],
+        outcome: "empty",
       },
       createdAt: "2026-05-20T12:00:01.000Z",
     };
@@ -546,11 +580,11 @@ describe("chatMessagesFromChannelView", () => {
       .reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(chatMessagesFromChannelView(state).map((message) => message.id)).toEqual([
-      "turn:turn-empty-assistant:no-response",
+      "diagnostic:msg-empty-assistant",
     ]);
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
-      content: "Agent turn closed without an assistant response. Agent turn completed",
-      error: "Agent turn closed without an assistant response",
+      content: "Assistant message had no visible content.",
+      contentType: "diagnostic",
     });
   });
 
@@ -589,10 +623,11 @@ describe("chatMessagesFromChannelView", () => {
       .reduce(reduceChannelView, createInitialChannelViewState());
 
     expect(chatMessagesFromChannelView(state).map((message) => message.id)).toEqual([
-      "msg-empty-failed-assistant",
+      "diagnostic:msg-empty-failed-assistant",
     ]);
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
       content: "provider stream failed",
+      contentType: "diagnostic",
       error: "provider stream failed",
     });
   });
@@ -1051,7 +1086,7 @@ describe("chatMessagesFromChannelView", () => {
       kind: "message.completed",
       actor: { kind: "user", id: "user-1", displayName: "User One" },
       causality: { messageId: brandId<MessageId>("msg-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "user", content: "hi" },
+      payload: textPayload("msg-1", "user", "hi"),
       createdAt: "2026-05-20T12:00:01.000Z",
     };
     const invocation: AgenticEvent<"invocation.started"> = {
@@ -1091,7 +1126,13 @@ describe("chatMessagesFromChannelView", () => {
       actor: agent,
       turnId: brandId<TurnId>("turn-1"),
       causality: { messageId: brandId<MessageId>("msg-1") },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", content: "partial" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        blocks: [
+          { blockId: brandId<BlockId>("msg-1:block:0"), type: "text", content: "partial" },
+        ],
+      },
       createdAt: "2026-05-20T12:00:01.000Z",
     };
 

@@ -1410,10 +1410,10 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
       payload: {
         protocol: "agentic.trajectory.v1",
         role: "user",
-        content,
         blocks: [
-          { type: "text", content },
-          ...(sendOptions?.attachments?.map((attachment) => ({
+          { blockId: `${id}:block:0` as never, type: "text", content },
+          ...(sendOptions?.attachments?.map((attachment, index) => ({
+            blockId: `${id}:block:${index + 1}` as never,
             type: "attachment" as const,
             metadata: {
               mimeType: attachment.mimeType,
@@ -1421,6 +1421,7 @@ export function connectViaRpc<T extends ParticipantMetadata = ParticipantMetadat
             },
           })) ?? []),
         ],
+        outcome: "completed",
         mentions: sendOptions?.mentions,
         replyTo: sendOptions?.replyTo as never,
       },

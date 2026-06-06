@@ -15,6 +15,7 @@ import type {
   ApprovalCardPayload,
   ChatMessage,
   CustomMessageCardPayload,
+  DiagnosticNotice,
   InlineUiCardPayload,
   LifecycleNotice,
   MessageTypeDefinition,
@@ -33,7 +34,8 @@ import {
   isLifecycleMessageReasonCode,
   isStoredValueRef,
   isTurnReasonCode,
-  lifecycleRecoveryNoticeForMessage,
+  messageDisplayText,
+  summarizeMessageBlocks,
 } from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
 
@@ -41,14 +43,13 @@ type StoredValueRefPreview = { preview?: string };
 
 export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessage[] {
   assertNoStoredValueRefs(state, "chat message projection input");
-  const invocationIds = new Set(Object.keys(state.invocations));
   const closedTurnIds = new Set(
     Object.values(state.turns)
       .filter((turn) => turn.status === "closed")
       .map((turn) => turn.turnId as string)
   );
   const messages = Object.values(state.messages).flatMap((message) =>
-    projectedMessageToChatMessages(message, { closedTurnIds, invocationIds })
+    projectedMessageToChatMessages(message)
   );
   const invocations = Object.values(state.invocations).map(projectedInvocationToChatMessage);
   const approvals = Object.values(state.approvals).map(projectedApprovalToChatMessage);
@@ -58,17 +59,18 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
         (message) =>
           message.turnId &&
           message.role === "assistant" &&
-          (message.status === "started" || message.status === "streaming")
+          (message.status === "started" || message.status === "streaming") &&
+          summarizeMessageBlocks(message.blocks).hasText
       )
       .map((message) => message.turnId as string)
   );
-  const visibleAssistantMessageTurnIds = new Set(
+  const terminalAssistantMessageTurnIds = new Set(
     Object.values(state.messages)
       .filter(
         (message) =>
           message.turnId &&
           (message.role === "assistant" || message.actor.kind === "agent") &&
-          hasVisibleMessageContent(message)
+          (message.status === "completed" || message.status === "failed")
       )
       .map((message) => message.turnId as string)
   );
@@ -89,7 +91,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   const silentClosedTurns = Object.values(state.turns).flatMap((turn) =>
     projectedClosedTurnWithoutResponseMessage(turn, {
       hasAssistantMessage:
-        visibleAssistantMessageTurnIds.has(turn.turnId) || turnIdsWithInlineUi.has(turn.turnId),
+        terminalAssistantMessageTurnIds.has(turn.turnId) || turnIdsWithInlineUi.has(turn.turnId),
       hasInvocation: turnIdsWithInvocations.has(turn.turnId),
     })
   );
@@ -273,10 +275,7 @@ function isExpectedNoAssistantClose(turn: ProjectedTurn): boolean {
   );
 }
 
-function projectedMessageToChatMessages(
-  message: ProjectedMessage,
-  opts: { closedTurnIds: ReadonlySet<string>; invocationIds: ReadonlySet<string> }
-): ChatMessage[] {
+function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[] {
   const sortTime =
     Date.parse(message.updatedAt ?? message.completedAt ?? message.startedAt ?? "") || 0;
   const lifecycle = lifecycleNoticeFromMessage(message);
@@ -302,30 +301,26 @@ function projectedMessageToChatMessages(
     ];
   });
   const failureReason = message.status === "failed" ? message.failureReason : undefined;
-  const blockText = textContentFromBlocks(message.blocks);
-  const content = message.content.trim() || blockText || failureReason || message.content;
-  const hasRenderableBlocks = (message.blocks ?? []).some((block) =>
-    block.type === "attachment" || block.type === "data"
-  );
-  const visibleContent = content.trim();
-  if (!visibleContent && !hasRenderableBlocks) {
-    if (isKnownInvocationShell(message, opts.invocationIds)) return thinking;
-    if (message.status === "started" || message.status === "streaming") return thinking;
-    if (message.turnId && opts.closedTurnIds.has(String(message.turnId))) return thinking;
+  const content = messageDisplayText(message.blocks);
+  const diagnostic = diagnosticNoticeFromMessage(message);
+  if (diagnostic) {
     return [
       ...thinking,
       {
-        id: `diagnostic:${message.messageId}:empty`,
+        id: `diagnostic:${message.messageId}`,
         senderId: message.actor.id,
-        content: emptyMessageDiagnostic(message),
-        kind: "message",
+        content: diagnostic.detail ?? diagnostic.title,
+        contentType: "diagnostic",
+        kind: "system",
         complete: true,
-        error: "Assistant message had no visible content",
+        diagnostic,
+        error: diagnostic.severity === "error" ? (diagnostic.detail ?? diagnostic.title) : undefined,
         senderMetadata,
         sortTime,
       } as ChatMessage & { sortTime: number },
     ];
   }
+  if (!messageShouldRenderStandalone(message)) return thinking;
   if (lifecycle) {
     return [
       ...thinking,
@@ -352,44 +347,49 @@ function projectedMessageToChatMessages(
       complete,
       replyTo: message.replyTo,
       mentions: message.mentions,
-      error: message.status === "failed" ? (failureReason ?? "Message failed") : undefined,
+      error:
+        message.status === "failed"
+          ? (failureReason ?? "Message failed")
+          : message.outcome === "interrupted"
+            ? "Interrupted"
+            : undefined,
       senderMetadata,
       sortTime,
     } as ChatMessage & { sortTime: number },
   ];
 }
 
-function textContentFromBlocks(blocks: ProjectedMessage["blocks"]): string {
-  return (blocks ?? [])
-    .flatMap((block) =>
-      block.type === "text" && block.content?.trim() ? [block.content] : []
-    )
-    .join("\n")
-    .trim();
+// A standalone row renders the message's display text (and inline attachments).
+// Thinking, invocations, and diagnostics each own their render path, so row
+// existence is purely content-driven; `outcome` only decorates the row (e.g. the
+// "Interrupted" marker / failure error). Empty and failed-without-content messages
+// are handled earlier by `diagnosticNoticeFromMessage`.
+function messageShouldRenderStandalone(message: ProjectedMessage): boolean {
+  const summary = summarizeMessageBlocks(message.blocks);
+  return summary.hasText || summary.hasAttachmentOrData;
 }
 
-function isKnownInvocationShell(
-  message: ProjectedMessage,
-  invocationIds: ReadonlySet<string>
-): boolean {
+function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotice | null {
   const blocks = message.blocks ?? [];
-  if (blocks.length === 0) return false;
-  return blocks.every(
-    (block) =>
-      block.type === "invocation" &&
-      Boolean(block.invocationId) &&
-      invocationIds.has(String(block.invocationId))
-  );
-}
-
-function emptyMessageDiagnostic(message: ProjectedMessage): string {
-  const invocationCount = (message.blocks ?? []).filter(
-    (block) => block.type === "invocation"
-  ).length;
-  if (invocationCount > 0) {
-    return "Assistant message had no visible text and referenced invocation blocks that were not available.";
-  }
-  return "Assistant message had no visible content.";
+  const diagnosticBlocks = blocks.filter((block) => block.type === "diagnostic");
+  if (diagnosticBlocks.length === 0) return null;
+  const summary = summarizeMessageBlocks(blocks.filter((block) => block.type !== "diagnostic"));
+  if (!summary.isEmpty) return null;
+  const block =
+    diagnosticBlocks.find((item) => record(item.metadata)["severity"] === "error") ??
+    diagnosticBlocks[0]!;
+  const metadata = record(block.metadata);
+  const severity = metadata["severity"];
+  const normalizedSeverity: DiagnosticNotice["severity"] =
+    severity === "error" || severity === "info" || severity === "warning" ? severity : "warning";
+  const content = block.content?.trim() || "Assistant message had no visible content.";
+  return {
+    code: stringValue(metadata["code"]),
+    severity: normalizedSeverity,
+    title: normalizedSeverity === "error" ? "Message failed" : "No assistant response",
+    detail: content,
+    reason: stringValue(metadata["reason"]),
+  };
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -412,22 +412,10 @@ function lifecycleNoticeFromMessage(message: ProjectedMessage): LifecycleNotice 
       return {
         status,
         title: stringValue(diagnostic["title"]) ?? lifecycleTitleForStatus(status),
-        detail: stringValue(diagnostic["detail"]) ?? message.content,
+        detail: stringValue(diagnostic["detail"]) ?? messageDisplayText(message.blocks),
         reason: lifecycleReasonValue(diagnostic["reason"]),
       };
     }
-  }
-  // Fallback when the typed `natstackDiagnostic` metadata is absent: classify
-  // the message via the shared protocol matcher (single source of prose + codes)
-  // rather than re-matching the sentences here.
-  const recoveryNotice = lifecycleRecoveryNoticeForMessage(message.content);
-  if (recoveryNotice) {
-    return {
-      status: recoveryNotice.status,
-      title: recoveryNotice.title,
-      detail: recoveryNotice.detail,
-      reason: recoveryNotice.reason,
-    };
   }
   return null;
 }
@@ -436,16 +424,6 @@ function lifecycleTitleForStatus(status: LifecycleNotice["status"]): string {
   if (status === "recovered") return "Recovered after restart";
   if (status === "failed") return "Recovery failed";
   return "Restart interrupted the turn";
-}
-
-function hasVisibleMessageContent(message: ProjectedMessage): boolean {
-  if (message.content.trim()) return true;
-  if (message.status === "failed" && message.failureReason?.trim()) return true;
-  return (message.blocks ?? []).some((block) => {
-    if (block.type === "thinking") return Boolean(block.content?.trim());
-    if (block.type === "text") return Boolean(block.content?.trim());
-    return block.type === "invocation" || block.type === "attachment" || block.type === "data";
-  });
 }
 
 function projectedApprovalToChatMessage(approval: ProjectedApproval): ChatMessage {

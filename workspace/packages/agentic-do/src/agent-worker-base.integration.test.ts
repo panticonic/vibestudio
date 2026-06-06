@@ -4372,7 +4372,14 @@ describe("AgentWorkerBase typed transcript input", () => {
         payload: {
           protocol: "agentic.trajectory.v1",
           role: "user",
-          content: "Read the onboarding docs first",
+          blocks: [
+            {
+              blockId: "initial-prompt:block:0",
+              type: "text",
+              content: "Read the onboarding docs first",
+            },
+          ],
+          outcome: "completed",
         },
         createdAt: "2026-05-21T08:00:00.000Z",
       },
@@ -4409,7 +4416,8 @@ describe("AgentWorkerBase typed transcript input", () => {
         payload: {
           protocol: "agentic.trajectory.v1",
           role: "user",
-          content: "run with eval",
+          blocks: [{ blockId: "initial-prompt:block:0", type: "text", content: "run with eval" }],
+          outcome: "completed",
         },
         createdAt: "2026-05-21T08:00:00.000Z",
       },
@@ -4460,7 +4468,10 @@ describe("TrajectoryVesselBase respond policy", () => {
         payload: {
           protocol: "agentic.trajectory.v1",
           role: "user",
-          content: "not addressed to the agent",
+          blocks: [
+            { blockId: "msg-1:block:0", type: "text", content: "not addressed to the agent" },
+          ],
+          outcome: "completed",
         },
         createdAt: "2026-05-21T08:00:00.000Z",
       },
@@ -4497,7 +4508,7 @@ describe("TrajectoryVesselBase respond policy", () => {
         senderId: "panel:panel-1",
         payload: {
           kind: "message.completed",
-          payload: { protocol: "agentic.trajectory.v1", content: "hello" },
+          payload: { protocol: "agentic.trajectory.v1", blocks: [] },
         },
         ts: Date.now(),
       })
@@ -4513,7 +4524,8 @@ describe("TrajectoryVesselBase respond policy", () => {
           kind: "message.completed",
           payload: {
             protocol: "agentic.trajectory.v1",
-            content: "@gmail hello",
+            blocks: [{ blockId: "msg-2:block:0", type: "text", content: "@gmail hello" }],
+            outcome: "completed",
             mentions: ["do:agent"],
           },
         },
@@ -4577,7 +4589,8 @@ describe("TrajectoryVesselBase respond policy", () => {
           kind: "message.completed",
           payload: {
             protocol: "agentic.trajectory.v1",
-            content: "hello",
+            blocks: [{ blockId: "user-msg:block:0", type: "text", content: "hello" }],
+            outcome: "completed",
             mentions,
           },
         },

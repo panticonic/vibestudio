@@ -56,8 +56,8 @@ export class ChannelClient {
             payload: {
                 protocol: AGENTIC_PROTOCOL_VERSION,
                 role: participantType === "agent" ? "assistant" : "user",
-                content,
-                blocks: [{ type: "text", content }],
+                blocks: [{ blockId: `${messageId}:block:0` as never, type: "text", content }],
+                outcome: "completed",
                 mentions: opts?.mentions,
                 replyTo: opts?.replyTo as never,
             },

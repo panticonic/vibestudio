@@ -75,7 +75,7 @@ describe("headless transcript pipeline", () => {
       channelId: harness.channelId,
       payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
     });
-    expect(stored.map((envelope) => envelope.payload.payload.content)).toEqual(
+    expect(stored.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)).toEqual(
       expect.arrayContaining([
         "The user just opened this workspace for the first time",
         "Welcome to NatStack.",

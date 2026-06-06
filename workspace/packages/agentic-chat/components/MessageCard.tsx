@@ -162,6 +162,47 @@ export const MessageCard = React.memo(function MessageCard({
     );
   }
 
+  if (msg.contentType === "diagnostic" && msg.diagnostic) {
+    const color = msg.diagnostic.severity === "error"
+      ? "red"
+      : msg.diagnostic.severity === "warning"
+        ? "amber"
+        : "blue";
+    return (
+      <Box
+        key={key}
+        className="message-row message-row-system"
+      >
+        <Card className="message-card message-card-lifecycle">
+          <Flex align="start" gap="2">
+            <Box className="message-lifecycle-icon" aria-hidden="true">
+              <ChatBubbleIcon />
+            </Box>
+            <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
+              <Flex align="center" gap="2" wrap="wrap">
+                <Badge color={color} size="1" variant="soft">
+                  {msg.diagnostic.severity === "error"
+                    ? "Error"
+                    : msg.diagnostic.severity === "warning"
+                      ? "Notice"
+                      : "Info"}
+                </Badge>
+                <Text size="2" weight="medium">
+                  {msg.diagnostic.title}
+                </Text>
+              </Flex>
+              {(msg.diagnostic.detail || msg.content) && (
+                <Text size="1" color="gray" style={{ whiteSpace: "pre-wrap" }}>
+                  {msg.diagnostic.detail ?? msg.content}
+                </Text>
+              )}
+            </Flex>
+          </Flex>
+        </Card>
+      </Box>
+    );
+  }
+
   if (msg.contentType === "approval" && msg.approval) {
     const approval = msg.approval;
     const color = approval.status === "granted"

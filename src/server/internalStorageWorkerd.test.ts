@@ -562,8 +562,10 @@ describe("internal storage DOs under workerd", () => {
             payload: {
               protocol: "agentic.trajectory.v1",
               role: "user",
-              content: "write the file",
-              blocks: [{ type: "text", content: "write the file" }],
+              blocks: [
+                { blockId: `${userMessageId}:block:0`, type: "text", content: "write the file" },
+              ],
+              outcome: "completed",
             },
             createdAt: new Date(1).toISOString(),
           },

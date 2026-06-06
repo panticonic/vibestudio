@@ -8,7 +8,7 @@ import type {
   UsagePayload,
 } from "./events.js";
 import type { ApprovalId, InvocationId, MessageId, TurnId } from "./ids.js";
-import type { InvocationOutcome } from "./constants.js";
+import type { InvocationOutcome, MessageOutcome } from "./constants.js";
 
 export type MessageStatus = "started" | "streaming" | "completed" | "failed";
 export type InvocationStatus =
@@ -25,11 +25,11 @@ export interface ProjectedMessage {
   actor: ActorRef;
   turnId?: TurnId;
   role: string;
-  content: string;
   blocks?: MessageBlockInput[];
   mentions?: string[];
   replyTo?: MessageId;
   status: MessageStatus;
+  outcome?: MessageOutcome;
   startedAt?: string;
   completedAt?: string;
   failedAt?: string;
@@ -138,25 +138,45 @@ function requireApprovalId(event: AgenticEvent): ApprovalId {
   return approvalId;
 }
 
-function mergeMessageBlock(
+function diagnosticBlock(
+  blockId: string,
+  content: string,
+  metadata: Record<string, unknown>
+): MessageBlockInput {
+  return {
+    blockId: blockId as never,
+    type: "diagnostic",
+    content,
+    metadata,
+  };
+}
+
+function blocksWithDiagnostic(
   blocks: MessageBlockInput[] | undefined,
-  block: MessageBlockInput | undefined
-): MessageBlockInput[] | undefined {
-  if (!block) return blocks;
+  diagnostic: MessageBlockInput
+): MessageBlockInput[] {
   const existing = blocks ?? [];
-  let replaceIndex = block.blockId
-    ? existing.findIndex((item) => item.blockId === block.blockId)
-    : -1;
-  if (!block.blockId) {
-    for (let index = existing.length - 1; index >= 0; index--) {
-      if (existing[index]?.type === block.type) {
-        replaceIndex = index;
-        break;
-      }
-    }
+  if (existing.some((block) => block.blockId === diagnostic.blockId)) return existing;
+  return [...existing, diagnostic];
+}
+
+function upsertContentBlock(
+  blocks: MessageBlockInput[] | undefined,
+  blockId: string,
+  type: "text" | "thinking",
+  text: string,
+  replace: boolean | undefined
+): MessageBlockInput[] {
+  const existing = blocks ?? [];
+  const index = existing.findIndex((block) => block.blockId === blockId);
+  if (index === -1) {
+    return [...existing, { blockId: blockId as never, type, content: text }];
   }
-  if (replaceIndex === -1) return [...existing, block];
-  return existing.map((item, index) => (index === replaceIndex ? block : item));
+  return existing.map((block, blockIndex) =>
+    blockIndex === index
+      ? { ...block, content: replace ? text : `${block.content ?? ""}${text}` }
+      : block
+  );
 }
 
 export function applyMessageEvent(
@@ -168,14 +188,12 @@ export function applyMessageEvent(
     messageId,
     actor: event.actor,
     role: event.actor.kind,
-    content: "",
     status: "started" as const,
   };
 
   if (event.kind === "message.started") {
     const payload = event.payload;
     const role = ("role" in payload ? payload.role : undefined) ?? existing.role;
-    const content = ("content" in payload ? payload.content : undefined) ?? existing.content;
     const blocks = "blocks" in payload ? payload.blocks : existing.blocks;
     const mentions = "mentions" in payload ? payload.mentions : existing.mentions;
     const replyTo = "replyTo" in payload ? payload.replyTo : existing.replyTo;
@@ -186,7 +204,6 @@ export function applyMessageEvent(
         actor: event.actor,
         turnId: existing.turnId ?? event.turnId,
         role,
-        content,
         blocks,
         mentions,
         replyTo,
@@ -199,23 +216,17 @@ export function applyMessageEvent(
 
   if (event.kind === "message.delta") {
     const payload = event.payload;
-    const nextBlocks = mergeMessageBlock(
-      existing.blocks,
-      "block" in payload ? payload.block : undefined
-    );
+    const blockId = "blockId" in payload ? String(payload.blockId) : "";
+    const type = "type" in payload ? payload.type : "text";
+    const text = "text" in payload && typeof payload.text === "string" ? payload.text : "";
+    const replace = "replace" in payload ? payload.replace : undefined;
     return {
       ...messages,
       [messageId]: {
         ...existing,
         actor: event.actor,
         turnId: existing.turnId ?? event.turnId,
-        content:
-          "replace" in payload && payload.replace
-            ? "delta" in payload
-              ? payload.delta
-              : existing.content
-            : existing.content + ("delta" in payload ? payload.delta : ""),
-        blocks: nextBlocks,
+        blocks: upsertContentBlock(existing.blocks, blockId, type, text, replace),
         status: "streaming",
         updatedAt: event.createdAt,
       },
@@ -225,8 +236,18 @@ export function applyMessageEvent(
   if (event.kind === "message.completed") {
     const payload = event.payload;
     const role = ("role" in payload ? payload.role : undefined) ?? existing.role;
-    const content = ("content" in payload ? payload.content : undefined) ?? existing.content;
-    const blocks = "blocks" in payload ? payload.blocks : existing.blocks;
+    const outcome = "outcome" in payload ? payload.outcome : existing.outcome;
+    let blocks = "blocks" in payload ? payload.blocks : existing.blocks;
+    if (outcome === "empty") {
+      blocks = blocksWithDiagnostic(
+        blocks,
+        diagnosticBlock(`${messageId}:diagnostic:empty`, "Assistant message had no visible content.", {
+          code: "message_empty",
+          severity: "warning",
+          reason: "empty",
+        })
+      );
+    }
     const mentions = "mentions" in payload ? payload.mentions : existing.mentions;
     const replyTo = "replyTo" in payload ? payload.replyTo : existing.replyTo;
     return {
@@ -236,11 +257,11 @@ export function applyMessageEvent(
         actor: event.actor,
         turnId: existing.turnId ?? event.turnId,
         role,
-        content,
         blocks,
         mentions,
         replyTo,
         status: "completed",
+        outcome,
         completedAt: event.createdAt,
         updatedAt: event.createdAt,
         usage: "usage" in payload ? payload.usage : existing.usage,
@@ -255,6 +276,19 @@ export function applyMessageEvent(
       actor: event.actor,
       turnId: existing.turnId ?? event.turnId,
       status: "failed",
+      blocks: blocksWithDiagnostic(
+        existing.blocks,
+        diagnosticBlock(
+          `${messageId}:diagnostic:failed`,
+          "reason" in event.payload ? event.payload.reason : "Assistant message failed.",
+          {
+            code: "message_failed",
+            severity: "error",
+            reason: "reason" in event.payload ? event.payload.reason : undefined,
+            recoverable: "recoverable" in event.payload ? event.payload.recoverable : undefined,
+          }
+        )
+      ),
       failedAt: event.createdAt,
       failureReason: "reason" in event.payload ? event.payload.reason : existing.failureReason,
       updatedAt: event.createdAt,

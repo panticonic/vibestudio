@@ -1072,7 +1072,14 @@ Use package imports available to inline_ui plus relative imports for local helpe
               payload: {
                 protocol: AGENTIC_PROTOCOL_VERSION,
                 role: "system",
-                content: `Scope refreshed (panel session restarted). ${parts.join(". ")}.${hint}`,
+                blocks: [
+                  {
+                    blockId: `${scopeMsgId}:block:0` as never,
+                    type: "text",
+                    content: `Scope refreshed (panel session restarted). ${parts.join(". ")}.${hint}`,
+                  },
+                ],
+                outcome: "completed",
               },
               createdAt: new Date().toISOString(),
             },

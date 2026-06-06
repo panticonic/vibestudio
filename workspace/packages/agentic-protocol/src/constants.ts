@@ -24,6 +24,15 @@ export const INVOCATION_OUTCOMES = [
 
 export type InvocationOutcome = (typeof INVOCATION_OUTCOMES)[number];
 
+export const MESSAGE_OUTCOMES = [
+  "completed",
+  "empty",
+  "tool_calls_only",
+  "interrupted",
+] as const;
+
+export type MessageOutcome = (typeof MESSAGE_OUTCOMES)[number];
+
 export type TerminalInvocationKind = (typeof TERMINAL_INVOCATION_KINDS)[number];
 
 export const TURN_REASON_CODES = [

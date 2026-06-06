@@ -7,6 +7,7 @@ import {
   encodeChannelPayloadStoredValues,
   invocationCompletedPayload,
   type AgenticEvent,
+  type BlockId,
   type InvocationId,
   type MessageId,
 } from "@workspace/agentic-protocol";
@@ -173,7 +174,8 @@ export function assistantMessage(id: string, content: string): AgenticEvent<"mes
     payload: {
       protocol: AGENTIC_PROTOCOL_VERSION,
       role: "assistant",
-      content,
+      blocks: [{ blockId: brandId<BlockId>(`${id}:block:0`), type: "text", content }],
+      outcome: "completed",
     },
     createdAt: new Date().toISOString(),
   };

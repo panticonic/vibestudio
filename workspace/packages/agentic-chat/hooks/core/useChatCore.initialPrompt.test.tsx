@@ -110,7 +110,8 @@ describe("useChatCore initial prompt", () => {
           kind: "message.completed",
           payload: {
             role: "user",
-            content: prompt,
+            blocks: [expect.objectContaining({ type: "text", content: prompt })],
+            outcome: "completed",
           },
         },
       });
@@ -120,7 +121,9 @@ describe("useChatCore initial prompt", () => {
       channelId: harness.channelId,
       payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
     });
-    expect(stored.map((envelope) => envelope.payload.payload.content)).toContain(prompt);
+    expect(
+      stored.map((envelope) => envelope.payload.payload.blocks?.[0]?.content)
+    ).toContain(prompt);
 
     await agentIterator.return?.();
     latest?.clientRef.current?.close();

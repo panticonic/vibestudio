@@ -168,7 +168,8 @@ export class TestAgentWorker extends AgentWorkerBase {
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
           role: "assistant",
-          content: responseText,
+          blocks: [{ blockId: `${messageId}:block:0` as never, type: "text", content: responseText }],
+          outcome: "completed",
         },
         createdAt: new Date().toISOString(),
       },

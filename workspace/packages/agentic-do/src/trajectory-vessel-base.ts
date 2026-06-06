@@ -51,8 +51,10 @@ import {
   assertNoStoredValueRefs,
   hydrateStoredValueRefs,
   lifecycleRecoveryNoticeForMessage,
+  messageDisplayText,
   publicParticipantMetadata,
   type AgenticEvent,
+  type MessageBlockInput,
   type InvocationOutcome,
   type LifecycleMessageReasonCode,
   type TurnReasonCode,
@@ -4025,9 +4027,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   protected buildTurnInput(event: ChannelEvent): TurnInput {
     const agentic = this.agenticEventFromChannelEvent(event);
-    const payload = agentic?.payload as { content?: unknown } | undefined;
+    const payload = agentic?.payload as { blocks?: MessageBlockInput[] } | undefined;
     return {
-      content: typeof payload?.content === "string" ? payload.content : "",
+      content: messageDisplayText(payload?.blocks),
       senderId: event.senderId,
       attachments: event.attachments,
     };

@@ -3,6 +3,7 @@ import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   INVOCATION_OUTCOMES,
+  MESSAGE_OUTCOMES,
   TURN_REASON_CODES,
   TURN_SCOPED_OWNER_KINDS,
   validateInvocationTerminalOutcomeForKind,
@@ -69,7 +70,7 @@ const blobRefSchema = z
 const messageBlockInputSchema = z
   .object({
     blockId: idSchema.optional(),
-    type: z.enum(["text", "thinking", "invocation", "attachment", "data"]),
+    type: z.enum(["text", "thinking", "invocation", "attachment", "data", "diagnostic"]),
     content: z.string().optional(),
     invocationId: idSchema.optional(),
     metadata: z.record(z.unknown()).optional(),
@@ -80,7 +81,6 @@ const messageStartedPayloadSchema = z
   .object({
     protocol: protocolSchema,
     role: z.enum(["user", "assistant", "system", "tool", "panel"]),
-    content: z.string().optional(),
     blocks: z.array(messageBlockInputSchema).optional(),
     mentions: z.array(idSchema).optional(),
     replyTo: idSchema.optional(),
@@ -90,9 +90,10 @@ const messageStartedPayloadSchema = z
 const messageDeltaPayloadSchema = z
   .object({
     protocol: protocolSchema,
-    delta: z.string(),
+    blockId: idSchema,
+    type: z.enum(["text", "thinking"]),
+    text: z.string(),
     replace: z.boolean().optional(),
-    block: messageBlockInputSchema.optional(),
   })
   .strict();
 
@@ -100,8 +101,8 @@ const messageCompletedPayloadSchema = z
   .object({
     protocol: protocolSchema,
     role: z.enum(["user", "assistant", "system", "tool", "panel"]).optional(),
-    content: z.string(),
     blocks: z.array(messageBlockInputSchema).optional(),
+    outcome: z.enum(MESSAGE_OUTCOMES),
     usage: usagePayloadSchema.optional(),
     mentions: z.array(idSchema).optional(),
     replyTo: idSchema.optional(),
@@ -655,17 +656,31 @@ export const storedAgenticEventSchema = z
       requireStoredPayloadField(
         payload,
         ctx,
-        "delta",
+        "blockId",
+        (value) => typeof value === "string",
+        "message.delta requires payload.blockId"
+      );
+      requireStoredPayloadField(
+        payload,
+        ctx,
+        "type",
+        (value) => value === "text" || value === "thinking",
+        "message.delta requires payload.type of 'text' or 'thinking'"
+      );
+      requireStoredPayloadField(
+        payload,
+        ctx,
+        "text",
         (value) => typeof value === "string" || blobRefSchema.safeParse(value).success,
-        "message.delta requires payload.delta"
+        "message.delta requires payload.text"
       );
     } else if (event.kind === "message.completed") {
       requireStoredPayloadField(
         payload,
         ctx,
-        "content",
-        (value) => typeof value === "string" || blobRefSchema.safeParse(value).success,
-        "message.completed requires payload.content"
+        "outcome",
+        (value) => MESSAGE_OUTCOMES.includes(value as never),
+        "message.completed requires payload.outcome"
       );
     } else if (event.kind === "invocation.started") {
       requireStoredPayloadField(

@@ -26,7 +26,12 @@ function agenticEvent(kind = "message.completed") {
     kind,
     actor: { kind: "user", id: "panel:user" },
     causality: { messageId: "msg-1" },
-    payload: { protocol: "agentic.trajectory.v1", role: "user", content: "hello" },
+    payload: {
+      protocol: "agentic.trajectory.v1",
+      role: "user",
+      blocks: [{ blockId: "msg-1:block:0", type: "text", content: "hello" }],
+      outcome: "completed",
+    },
     createdAt: new Date().toISOString(),
   };
 }

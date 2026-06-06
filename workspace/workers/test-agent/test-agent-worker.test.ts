@@ -52,7 +52,8 @@ describe("TestAgentWorker", () => {
         payload: {
           protocol: "agentic.trajectory.v1",
           role: "user",
-          content: "hello",
+          blocks: [{ blockId: "user-msg-1:block:0", type: "text", content: "hello" }],
+          outcome: "completed",
         },
         createdAt: "2026-05-28T00:00:00.000Z",
       },

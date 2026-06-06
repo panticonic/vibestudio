@@ -1,5 +1,5 @@
 import { AGENTIC_PROTOCOL_VERSION } from "./constants.js";
-import type { InvocationOutcome, TurnReasonCode } from "./constants.js";
+import type { InvocationOutcome, MessageOutcome, TurnReasonCode } from "./constants.js";
 import type {
   ApprovalId,
   BlockId,
@@ -99,22 +99,27 @@ export type MessagePayload =
   | {
       protocol: "agentic.trajectory.v1";
       role: MessageRole;
-      content?: string;
       blocks?: MessageBlockInput[];
       mentions?: string[];
       replyTo?: MessageId;
     }
   | {
+      // Streaming content update. Deltas stream incremental text/thinking content
+      // ONLY; structural blocks (invocation/attachment/data/diagnostic) are never
+      // streamed — they arrive via their own events and the authoritative `blocks`
+      // on `message.completed`. `text` is appended to the block, or replaces its
+      // content when `replace` is set.
       protocol: "agentic.trajectory.v1";
-      delta: string;
+      blockId: BlockId;
+      type: "text" | "thinking";
+      text: string;
       replace?: boolean;
-      block?: MessageBlockInput;
     }
   | {
       protocol: "agentic.trajectory.v1";
       role?: MessageRole;
-      content: string;
       blocks?: MessageBlockInput[];
+      outcome: MessageOutcome;
       usage?: UsagePayload;
       mentions?: string[];
       replyTo?: MessageId;
@@ -123,7 +128,7 @@ export type MessagePayload =
 
 export interface MessageBlockInput {
   blockId?: BlockId;
-  type: "text" | "thinking" | "invocation" | "attachment" | "data";
+  type: "text" | "thinking" | "invocation" | "attachment" | "data" | "diagnostic";
   content?: string;
   invocationId?: InvocationId;
   metadata?: Record<string, unknown>;

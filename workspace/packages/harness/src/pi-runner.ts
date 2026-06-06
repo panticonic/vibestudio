@@ -87,16 +87,20 @@ import {
   invocationFailedPayload,
   invocationTerminalKindForOutcome,
   MAX_INLINE_TRAJECTORY_EVENT_BYTES,
+  messageDisplayText,
   reduceTrajectory,
+  summarizeMessageBlocks,
   TURN_SCOPED_OWNER_KINDS,
   type AgenticEvent,
   type ApprovalId,
+  type BlockId,
   type EventId,
   type EventKind,
   type InvocationId,
   type InvocationOutcome,
   type MessageBlockInput,
   type MessageId,
+  type MessageOutcome,
   type MessageRole,
   type TrajectoryState,
   type TrajectoryEvent,
@@ -474,6 +478,11 @@ function agentMessageFailureReason(message: AgentMessage): string | null {
   return typeof candidate.errorMessage === "string" && candidate.errorMessage.trim()
     ? candidate.errorMessage
     : "Assistant message failed.";
+}
+
+function agentMessageStopReason(message: AgentMessage): string | null {
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  return typeof stopReason === "string" ? stopReason : null;
 }
 
 function providerPayloadToolNames(payload: unknown): string[] {
@@ -2138,9 +2147,9 @@ export class PiRunner {
 
   private async handleMessageStart(message: AgentMessage): Promise<void> {
     if (!this.options.gad || this.messageRole(message) !== "assistant") return;
-    const content = this.messageText(message);
-    const blocks = this.messageBlocksForTrajectory(this.messageBlocks(message));
     const messageId = this.activeAssistantMessage?.messageId ?? uuidv7();
+    const blocks = this.messageBlocksForTrajectory(this.messageBlocks(message), messageId);
+    const content = messageDisplayText(blocks);
     this.activeAssistantMessage = {
       messageId,
       lastText: content,
@@ -2156,12 +2165,11 @@ export class PiRunner {
           payload: {
             protocol: "agentic.trajectory.v1",
             role: "assistant",
-            content,
             blocks,
           },
           createdAt: this.messageTimestamp(message),
         },
-        publishToChannel: this.shouldPublishMessageToChannel("assistant", content, blocks),
+        publishToChannel: this.shouldPublishMessageToChannel("assistant"),
       },
     ]);
   }
@@ -2172,32 +2180,42 @@ export class PiRunner {
       await this.handleMessageStart(message);
       return;
     }
-    const content = this.messageText(message);
-    const blocks = this.messageBlocksForTrajectory(this.messageBlocks(message));
-    const previous = this.activeAssistantMessage.lastText;
-    const isAppendOnly = content.startsWith(previous);
-    const delta = isAppendOnly ? content.slice(previous.length) : content;
-    const changedBlock = this.changedMessageBlock(this.activeAssistantMessage.lastBlocks, blocks);
-    this.activeAssistantMessage.lastText = content;
-    this.activeAssistantMessage.lastBlocks = blocks;
-    if (!delta && !changedBlock) return;
-    await this.appendTrajectoryEvents([
-      {
+    const messageId = this.activeAssistantMessage.messageId;
+    const blocks = this.messageBlocksForTrajectory(this.messageBlocks(message), messageId);
+    const previousBlocks = this.activeAssistantMessage.lastBlocks;
+    // Stream one delta per changed text/thinking block, carrying that block's own
+    // incremental fragment. Structural blocks (invocation/attachment/...) are not
+    // streamed — they flow via their own events and the completed `blocks`.
+    const items: TrajectoryQueueItem[] = [];
+    for (const block of blocks) {
+      if ((block.type !== "text" && block.type !== "thinking") || !block.blockId) continue;
+      const previousContent =
+        previousBlocks.find((candidate) => candidate.blockId === block.blockId)?.content ?? "";
+      const nextContent = block.content ?? "";
+      if (nextContent === previousContent) continue;
+      const isAppendOnly = nextContent.startsWith(previousContent);
+      const text = isAppendOnly ? nextContent.slice(previousContent.length) : nextContent;
+      items.push({
         event: {
           kind: "message.delta",
           actor: this.agentActor(),
-          causality: { messageId: brandId<MessageId>(this.activeAssistantMessage.messageId) },
+          causality: { messageId: brandId<MessageId>(messageId) },
           payload: {
             protocol: "agentic.trajectory.v1",
-            delta,
+            blockId: block.blockId,
+            type: block.type,
+            text,
             ...(isAppendOnly ? {} : { replace: true }),
-            ...(changedBlock ? { block: changedBlock } : {}),
           },
           createdAt: new Date().toISOString(),
         },
-        publishToChannel: this.shouldPublishMessageToChannel("assistant", content, blocks),
-      },
-    ]);
+        publishToChannel: this.shouldPublishMessageToChannel("assistant"),
+      });
+    }
+    this.activeAssistantMessage.lastText = messageDisplayText(blocks);
+    this.activeAssistantMessage.lastBlocks = blocks;
+    if (items.length === 0) return;
+    await this.appendTrajectoryEvents(items);
   }
 
   private queueMessageProvenance(
@@ -2207,8 +2225,8 @@ export class PiRunner {
   ): void {
     const role = this.messageRole(message);
     const blocks = this.messageBlocks(message);
-    const trajectoryBlocks = this.messageBlocksForTrajectory(blocks);
-    const content = this.messageText(message);
+    const trajectoryBlocks = this.messageBlocksForTrajectory(blocks, visibleMessageId);
+    const outcome = this.classifyMessageOutcome(message, trajectoryBlocks);
     const completedEvent: AgenticEvent = {
       kind: "message.completed",
       actor: this.actorForMessageRole(role),
@@ -2216,15 +2234,15 @@ export class PiRunner {
       payload: {
         protocol: "agentic.trajectory.v1",
         role,
-        content,
         blocks: trajectoryBlocks,
+        outcome,
       },
       createdAt: this.messageTimestamp(message),
     };
     this.provenanceQueue.push({
       event: completedEvent,
       eventId: this.semanticEntryEventId(messageEntryId, "message:completed", completedEvent),
-      publishToChannel: this.shouldPublishMessageToChannel(role, content, trajectoryBlocks),
+      publishToChannel: this.shouldPublishMessageToChannel(role),
     });
     const failureReason = agentMessageFailureReason(message);
     if (failureReason) {
@@ -2242,10 +2260,7 @@ export class PiRunner {
       this.provenanceQueue.push({
         event: failedEvent,
         eventId: this.semanticEntryEventId(messageEntryId, "message:failed", failedEvent),
-        publishToChannel:
-          role === "assistant" &&
-          (this.shouldPublishMessageToChannel(role, content, trajectoryBlocks) ||
-            Boolean(failureReason.trim())),
+        publishToChannel: this.shouldPublishMessageToChannel(role),
       });
     }
 
@@ -3074,21 +3089,10 @@ export class PiRunner {
     };
   }
 
-  private shouldPublishMessageToChannel(
-    role: MessageRole,
-    content: string,
-    blocks: MessageBlockInput[] = []
-  ): boolean {
+  private shouldPublishMessageToChannel(role: MessageRole): boolean {
     // User messages are already durably published by PubSubClient.send().
     // Tool results are represented in the transcript by invocation events.
-    if (role !== "assistant" && role !== "panel" && role !== "system") return false;
-    return (
-      Boolean(content.trim()) ||
-      blocks.some((block) => {
-        if (block.type === "text" || block.type === "thinking") return Boolean(block.content?.trim());
-        return block.type === "attachment" || block.type === "data";
-      })
-    );
+    return role === "assistant" || role === "panel" || role === "system";
   }
 
   private messageTimestamp(message: AgentMessage): string {
@@ -3103,42 +3107,34 @@ export class PiRunner {
     return new Date().toISOString();
   }
 
-  private messageText(message: AgentMessage): string {
-    return this.messageBlocks(message)
-      .map((block) => {
-        if (this.classifyBlock(block) !== "text") return "";
-        if (!block || typeof block !== "object") return String(block);
-        const item = block as Record<string, unknown>;
-        if (typeof item["text"] === "string") return item["text"];
-        if (typeof item["content"] === "string") return item["content"];
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
-  }
-
-  private changedMessageBlock(
-    previous: MessageBlockInput[],
-    next: MessageBlockInput[]
-  ): MessageBlockInput | undefined {
-    const max = Math.max(previous.length, next.length);
-    for (let index = 0; index < max; index++) {
-      const nextBlock = next[index];
-      if (!nextBlock) continue;
-      if (JSON.stringify(previous[index]) !== JSON.stringify(nextBlock)) {
-        return nextBlock;
-      }
+  private classifyMessageOutcome(
+    message: AgentMessage,
+    blocks: MessageBlockInput[]
+  ): MessageOutcome {
+    const stopReason = agentMessageStopReason(message);
+    if (stopReason === "aborted") return "interrupted";
+    const summary = summarizeMessageBlocks(blocks);
+    if (summary.isEmpty) return "empty";
+    if (
+      summary.hasInvocations &&
+      !summary.hasText &&
+      !summary.hasThinking &&
+      !summary.hasAttachmentOrData
+    ) {
+      return "tool_calls_only";
     }
-    return undefined;
+    return "completed";
   }
 
-  private messageBlocksForTrajectory(blocks: unknown[]): MessageBlockInput[] {
-    return blocks.map((block) => {
+  private messageBlocksForTrajectory(blocks: unknown[], messageId: string): MessageBlockInput[] {
+    return blocks.map((block, index) => {
+      const blockId = brandId<BlockId>(`${messageId}:block:${index}`);
       const type = this.classifyBlock(block);
       const toolCallId = this.toolCallIdFromBlock(block);
       const record = this.asJsonRecord(block);
       if (type === "invocation" && toolCallId) {
         return {
+          blockId,
           type: "invocation",
           invocationId: brandId<InvocationId>(toolCallId),
           metadata: record ?? undefined,
@@ -3146,12 +3142,14 @@ export class PiRunner {
       }
       if (type === "thinking") {
         return {
+          blockId,
           type: "thinking",
           content: typeof record?.["thinking"] === "string" ? record["thinking"] : undefined,
           metadata: record ?? undefined,
         };
       }
       return {
+        blockId,
         type: "text",
         content:
           typeof record?.["text"] === "string"
@@ -3634,16 +3632,9 @@ export class PiRunner {
 
   private assistantMessageHasVisibleContent(message: { content?: unknown }): boolean {
     const content = Array.isArray(message.content) ? message.content : [];
-    return content.some((block) => {
-      if (!block || typeof block !== "object") return true;
-      if ((block as { type?: string }).type === "text") {
-        return Boolean((block as { text?: string }).text);
-      }
-      if ((block as { type?: string }).type === "thinking") {
-        return Boolean((block as { thinking?: string }).thinking);
-      }
-      return true;
-    });
+    const blocks = this.messageBlocksForTrajectory(content, "trim-check");
+    const summary = summarizeMessageBlocks(blocks);
+    return !summary.isEmpty;
   }
 
   async getStateSnapshot(): Promise<PiStateSnapshot> {

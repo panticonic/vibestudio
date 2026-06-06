@@ -613,7 +613,8 @@ describe("connectViaRpc", () => {
       expect(parsed.payload).toMatchObject({
         protocol: "agentic.trajectory.v1",
         role: "user",
-        content: "hello",
+        blocks: [expect.objectContaining({ type: "text", content: "hello" })],
+        outcome: "completed",
         mentions: ["agent:one"],
         replyTo: "msg-parent",
       });

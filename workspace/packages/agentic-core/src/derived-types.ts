@@ -134,6 +134,16 @@ export interface LifecycleNotice {
   reason?: LifecycleMessageReasonCode | TurnReasonCode;
 }
 
+export type DiagnosticNoticeSeverity = "info" | "warning" | "error";
+
+export interface DiagnosticNotice {
+  code?: string;
+  severity: DiagnosticNoticeSeverity;
+  title: string;
+  detail?: string;
+  reason?: string;
+}
+
 // ===========================================================================
 // ChatMessage (derived from Pi AgentMessage for component rendering)
 // ===========================================================================
@@ -167,4 +177,5 @@ export interface ChatMessage {
   approval?: ApprovalCardPayload;
   custom?: CustomMessageCardPayload;
   lifecycle?: LifecycleNotice;
+  diagnostic?: DiagnosticNotice;
 }
