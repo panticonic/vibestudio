@@ -2179,6 +2179,78 @@ describe("AgentWorkerBase method suspension ledger", () => {
     });
   });
 
+  it("reports only in-flight method-call invocations as recoverable", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      recoverableSuspensionInvocationIds(channelId: string): Set<string>;
+    };
+    // In-flight method calls survive a restart and must be skipped by repair.
+    insertSuspension(sql, {
+      callId: "call-pending",
+      invocationId: "inv-pending",
+      deliveryStatus: "pending",
+      terminalKind: "none",
+    });
+    insertSuspension(sql, {
+      callId: "call-recovering",
+      invocationId: "inv-recovering",
+      deliveryStatus: "recovering",
+      terminalKind: "none",
+    });
+    // Already-terminal (its result arrived) — not in-flight, repair may abandon
+    // the trajectory invocation harmlessly since the result is admitted.
+    insertSuspension(sql, {
+      callId: "call-done",
+      invocationId: "inv-done",
+      deliveryStatus: "pending",
+      terminalKind: "completed",
+    });
+    // A suspension on a different channel must not leak in.
+    insertSuspension(sql, {
+      callId: "call-other",
+      invocationId: "inv-other",
+      channelId: "chat-2",
+      deliveryStatus: "pending",
+      terminalKind: "none",
+    });
+
+    const ids = worker.recoverableSuspensionInvocationIds("chat-1");
+
+    expect([...ids].sort()).toEqual(["inv-pending", "inv-recovering"]);
+  });
+
+  it("does not supersede a turn parked on a live external wait", async () => {
+    // A method call survives a restart; its turn is parked waiting for the
+    // result to redeliver. A fresh prompt must NOT kill it (it is steered in
+    // via processChannelEvent instead), so supersede leaves it untouched.
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      supersedeOrphanedOpenTurn(channelId: string, runner: PiRunner): Promise<void>;
+    };
+    insertTurnRun(sql, { turnId: "turn-live", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "call-live",
+      turnId: "turn-live",
+      deliveryStatus: "pending",
+      terminalKind: "none",
+    });
+
+    const forceCloseCurrentTurn = vi.fn(async () => true);
+    const runner = {
+      getCurrentTurnId: () => "turn-live",
+      forceCloseCurrentTurn,
+    } as unknown as PiRunner;
+
+    await worker.supersedeOrphanedOpenTurn("chat-1", runner);
+
+    expect(forceCloseCurrentTurn).not.toHaveBeenCalled();
+    expect(turnStatus(sql, "turn-live")).toMatchObject({ status: "waiting_external" });
+  });
+
   it("supersede is a no-op when the runner holds no open turn", async () => {
     const { instance } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",

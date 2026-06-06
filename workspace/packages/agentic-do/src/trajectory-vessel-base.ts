@@ -4801,8 +4801,34 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const submittedRecoveryContinue = await this.recoverFromTurnLedger(channelId, runner);
     await runner.repairDurableOpenState({
       closeOpenTurns: !submittedRecoveryContinue && !this.channelHasNonTerminalTurnRuns(channelId),
+      // Invocations still in flight on the suspension ledger are durable method
+      // calls that survive the restart; the ledger recovers them. Tell repair to
+      // leave them alone so it only abandons genuinely-dead in-runner work.
+      recoverableInvocationIds: this.recoverableSuspensionInvocationIds(channelId),
     });
     return runner;
+  }
+
+  /**
+   * Invocation ids of method-call suspensions that are still in flight (no
+   * durable terminal yet). These survive a runner restart and are recovered
+   * through the suspension ledger, so trajectory repair must not abandon them.
+   */
+  private recoverableSuspensionInvocationIds(channelId: string): Set<string> {
+    const rows = this.sql
+      .exec(
+        `SELECT DISTINCT invocation_id FROM agent_method_suspensions
+         WHERE channel_id = ?
+           AND terminal_kind = 'none'
+           AND delivery_status IN ('pending', 'delivered_live', 'recovering')`,
+        channelId
+      )
+      .toArray();
+    return new Set(
+      rows
+        .map((row) => row["invocation_id"])
+        .filter((id): id is string => typeof id === "string" && id.length > 0)
+    );
   }
 
   protected createRunner(_channelId: string, opts: PiRunnerOptions): PiRunner {
@@ -4892,6 +4918,12 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     // full PiRunners, but minimal test doubles may omit them.
     const staleTurnId = runner.getCurrentTurnId?.() ?? null;
     if (!staleTurnId) return;
+    // A turn parked on a live external wait is a surviving method call, not an
+    // orphan — it will be driven to completion when the result redelivers, and
+    // a concurrent fresh prompt is steered into it (see processChannelEvent).
+    // Only supersede a genuinely dead open turn: one with no live wait and no
+    // driver, which would otherwise wedge adoptTurnId forever.
+    if (this.turnHasOpenExternalWait(staleTurnId)) return;
     this.recordDebugPhase(channelId, "turn_ledger.superseded_orphaned_open_turn", {
       staleTurnId,
     });
@@ -6402,13 +6434,21 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     }
     const images = await this.resizeAttachments(channelId, input.attachments);
     const dispatcher = this.getOrCreateDispatcher(channelId, runner);
-    dispatcher.submit(
-      this.turnInputForAdmission(
-        { content: input.content, ...(images ? { images } : {}) },
-        `user turn input channel=${channelId}`
-      ),
-      opts
+    const turnInput = this.turnInputForAdmission(
+      { content: input.content, ...(images ? { images } : {}) },
+      `user turn input channel=${channelId}`
     );
+    // If the runner is parked on a surviving method call (an open turn with a
+    // live external wait — typically after a restart, while the dispatcher is
+    // idle), steer the message into that turn rather than minting a competing
+    // one that would collide on adoptTurnId. The agent is busy awaiting a
+    // method result; the message rides the in-flight turn.
+    const openTurnId = runner.getCurrentTurnId?.();
+    if (openTurnId && this.turnHasOpenExternalWait(openTurnId)) {
+      dispatcher.steerIntoActiveTurn(turnInput);
+      return;
+    }
+    dispatcher.submit(turnInput, opts);
   }
 
   async onChannelEnvelope(

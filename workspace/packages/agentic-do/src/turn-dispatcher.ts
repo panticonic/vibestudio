@@ -112,6 +112,30 @@ export class TurnDispatcher {
     this.ensureDrain();
   }
 
+  /**
+   * Steer a fresh user message into a turn that is open but not actively
+   * draining here — i.e. a turn parked on a surviving method call after a
+   * runner restart. The runner holds `currentTurnId`, but this dispatcher is
+   * idle, so a plain `submit()` would mint a competing turn and collide on
+   * `adoptTurnId`. Routing it as a steer instead lets the message ride the
+   * in-flight turn: it is consumed when the method result redelivers and the
+   * turn continues, or — if the continue produces an `agent_end` without
+   * consuming it — re-queued as a fresh prompt by the `agent_end` handler.
+   */
+  steerIntoActiveTurn(input: RunnerTurnInput): void {
+    if (this.disposed) return;
+    this.interrupted = false;
+    const message = this.opts.runner.buildUserMessage(input);
+    this.pendingSteered.push({ input, message });
+    this.notifyTyping();
+    void this.opts.runner.steerMessage(message).catch((err) => {
+      this.log.warn("[TurnDispatcher] steer into active turn failed; routing as fresh prompt:", err);
+      this.pendingSteered = this.pendingSteered.filter((candidate) => candidate.message !== message);
+      this.pending.push({ kind: "prompt", input });
+      this.ensureDrain();
+    });
+  }
+
   submitContinue(opts: RunnerTurnOptions = {}): void {
     if (this.disposed) return;
     // Drop auto-continuations once the user has interrupted. A suspension

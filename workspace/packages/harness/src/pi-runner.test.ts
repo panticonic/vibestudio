@@ -2839,6 +2839,52 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
+  it("does not abandon a recoverable method-call invocation on restart", async () => {
+    // All method calls survive a runner restart — their results are delivered
+    // durably and recovered through the suspension ledger. Repair must leave a
+    // method-backed invocation untouched when told it is recoverable, rather
+    // than racing the ledger and hard-terminating an in-flight call.
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      restoredTrajectoryState: {
+        invocations: Record<
+          string,
+          { invocationId: string; status: string; actor: { kind: "agent"; id: string } }
+        >;
+        turns: Record<string, never>;
+      };
+      terminalInvocationIds: Set<string>;
+      appendTrajectoryEvents: ReturnType<typeof vi.fn>;
+      repairDurableOpenState(opts?: {
+        closeOpenTurns?: boolean;
+        recoverableInvocationIds?: ReadonlySet<string>;
+      }): Promise<void>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.restoredTrajectoryState = {
+      invocations: {
+        "call_eval": {
+          invocationId: "call_eval",
+          status: "running",
+          actor: { kind: "agent", id: "pi" },
+        },
+      },
+      turns: {},
+    };
+    runner.appendTrajectoryEvents = vi.fn(async () => undefined);
+
+    await runner.repairDurableOpenState({
+      closeOpenTurns: false,
+      recoverableInvocationIds: new Set(["call_eval"]),
+    });
+
+    expect(runner.appendTrajectoryEvents).not.toHaveBeenCalled();
+  });
+
   it("hydrates stored trajectory refs before restoring the Pi session branch", async () => {
     const blobs = new Map<string, string>();
     const putBlob = (value: unknown) => {

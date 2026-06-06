@@ -2024,14 +2024,25 @@ export class PiRunner {
     }
   }
 
-  async repairDurableOpenState(opts: { closeOpenTurns?: boolean } = {}): Promise<void> {
+  async repairDurableOpenState(
+    opts: { closeOpenTurns?: boolean; recoverableInvocationIds?: ReadonlySet<string> } = {}
+  ): Promise<void> {
     if (!this.options.gad || !this.restoredTrajectoryState) return;
     const closeOpenTurns = opts.closeOpenTurns ?? true;
+    const recoverableInvocationIds = opts.recoverableInvocationIds;
     const now = new Date().toISOString();
     const repairs: TrajectoryQueueItem[] = [];
     for (const invocation of Object.values(this.restoredTrajectoryState.invocations)) {
       if (this.isTerminalInvocationStatus(invocation.status)) continue;
       if (this.terminalInvocationIds.has(invocation.invocationId)) continue;
+      // A method call dispatched to the channel survives a runner restart: its
+      // result is delivered durably (the channel persists invocation.* log
+      // events; the callee re-delivers) and recovered through the suspension
+      // ledger. Abandoning it here would race the suspension recovery and
+      // hard-terminate a still-in-flight call, dropping its real result and
+      // orphaning the turn. The owner of these invocations is the suspension
+      // ledger, not this trajectory repair — so skip them.
+      if (recoverableInvocationIds?.has(invocation.invocationId)) continue;
       repairs.push({
         event: {
           kind: "invocation.abandoned",
