@@ -240,6 +240,42 @@ describe("chatMessagesFromChannelView", () => {
     ]);
   });
 
+  it("does not render an empty standalone row for a thinking-only assistant message", () => {
+    // Thinking renders via its own inline path; a thinking-only message must not
+    // also produce a standalone row with empty display text.
+    const message: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-thinking-only") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        blocks: [
+          {
+            blockId: brandId<BlockId>("msg-thinking-only:block:0"),
+            type: "thinking",
+            content: "Just reasoning, no final text.",
+          },
+        ],
+        outcome: "completed",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+
+    const state = [envelope(message, 1)].reduce(reduceChannelView, createInitialChannelViewState());
+    const projected = chatMessagesFromChannelView(state);
+
+    expect(projected).toEqual([
+      expect.objectContaining({
+        id: "thinking:msg-thinking-only:msg-thinking-only:block:0",
+        contentType: "thinking",
+        content: "Just reasoning, no final text.",
+      }),
+    ]);
+    // No standalone row keyed on the message id (would render an empty bubble).
+    expect(projected.some((msg) => msg.id === "msg-thinking-only")).toBe(false);
+  });
+
   it("uses text blocks as visible assistant content when top-level content is empty", () => {
     const message: AgenticEvent<"message.completed"> = {
       kind: "message.completed",

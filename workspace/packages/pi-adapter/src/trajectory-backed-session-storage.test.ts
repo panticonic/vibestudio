@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionTreeEntry } from "@earendil-works/pi-agent-core";
+import { createInitialTrajectoryState, type TrajectoryState } from "@workspace/agentic-protocol";
 import { TrajectoryBackedSessionStorage } from "./trajectory-backed-session-storage.js";
 import { materializeSessionTree } from "./materialize-session-tree.js";
 
@@ -138,5 +139,73 @@ describe("TrajectoryBackedSessionStorage", () => {
     } as never;
 
     expect(materializeSessionTree(state)).toEqual([first]);
+  });
+});
+
+describe("materializeSessionTree blocks reconstruction", () => {
+  const agent = { kind: "agent" as const, id: "pi" };
+
+  function stateWith(
+    blocks: unknown[],
+    invocations: Record<string, unknown> = {}
+  ): TrajectoryState {
+    return {
+      ...createInitialTrajectoryState(),
+      messages: {
+        m1: {
+          messageId: "m1",
+          actor: agent,
+          role: "assistant",
+          status: "completed",
+          completedAt: timestamp,
+          outcome: "completed",
+          blocks,
+        },
+      },
+      invocations,
+    } as unknown as TrajectoryState;
+  }
+
+  it("reconstructs structured Pi content (text/thinking/toolCall) from blocks and invocations", () => {
+    const state = stateWith(
+      [
+        { blockId: "m1:block:0", type: "thinking", content: "reasoning" },
+        { blockId: "m1:block:1", type: "text", content: "the answer" },
+        { blockId: "m1:block:2", type: "invocation", invocationId: "inv-1" },
+      ],
+      {
+        "inv-1": {
+          invocationId: "inv-1",
+          actor: agent,
+          name: "read",
+          request: { path: "a.ts" },
+          status: "completed",
+          outputs: [],
+          progress: [],
+        },
+      }
+    );
+
+    const [entry] = materializeSessionTree(state);
+    expect((entry as unknown as { message: { content: unknown } }).message.content).toEqual([
+      { type: "thinking", thinking: "reasoning" },
+      { type: "text", text: "the answer" },
+      { type: "toolCall", id: "inv-1", name: "read", input: { path: "a.ts" } },
+    ]);
+  });
+
+  it("degrades to a text placeholder instead of emitting a toolCall with missing request metadata", () => {
+    // Invocation request is unavailable (e.g. partial/resumed trajectory). We must
+    // never feed a toolCall with undefined input to the model.
+    const state = stateWith([
+      { blockId: "m1:block:0", type: "text", content: "before tool" },
+      { blockId: "m1:block:1", type: "invocation", invocationId: "inv-missing" },
+    ]);
+
+    const [entry] = materializeSessionTree(state);
+    expect((entry as unknown as { message: { content: unknown } }).message.content).toEqual([
+      { type: "text", text: "before tool" },
+      { type: "text", text: "[Tool call inv-missing omitted: metadata unavailable]" },
+    ]);
   });
 });

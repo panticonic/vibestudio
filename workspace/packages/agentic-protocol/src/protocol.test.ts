@@ -681,6 +681,47 @@ describe("@workspace/agentic-protocol reducers", () => {
     ]);
   });
 
+  it("routes interleaved thinking and text deltas to their own blocks without cross-contamination", () => {
+    const started: AgenticEvent<"message.started"> = {
+      kind: "message.started",
+      actor: agent,
+      turnId: brandId<TurnId>("turn-1"),
+      causality: { messageId: brandId<MessageId>("msg-stream") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant", blocks: [] },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const delta = (
+      blockId: string,
+      type: "text" | "thinking",
+      text: string
+    ): AgenticEvent<"message.delta"> => ({
+      kind: "message.delta",
+      actor: agent,
+      turnId: brandId<TurnId>("turn-1"),
+      causality: { messageId: brandId<MessageId>("msg-stream") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, blockId: brandId<BlockId>(blockId), type, text },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    });
+
+    const events = [
+      started,
+      delta("msg-stream:block:0", "thinking", "Think"),
+      delta("msg-stream:block:1", "text", "Hel"),
+      delta("msg-stream:block:0", "thinking", " more"),
+      delta("msg-stream:block:1", "text", "lo"),
+    ];
+    const state = events
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    // Each block accumulates only its own fragments — no duplication, no bleed.
+    expect(state.messages["msg-stream"]?.blocks).toEqual([
+      { blockId: "msg-stream:block:0", type: "thinking", content: "Think more" },
+      { blockId: "msg-stream:block:1", type: "text", content: "Hello" },
+    ]);
+    expect(messageDisplayText(state.messages["msg-stream"]?.blocks)).toBe("Hello");
+  });
+
   it("records malformed agentic envelope errors without stopping transcript reduction", () => {
     const malformed = {
       envelopeId: brandId<EnvelopeId>("env-bad"),
