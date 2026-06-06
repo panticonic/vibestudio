@@ -357,17 +357,14 @@ export default function SqlRunner({ props, chat }) {
   const [sql, setSql] = useState(props.defaultQuery || "SELECT 1");
   const [rows, setRows] = useState([]);
   const [error, setError] = useState(null);
-  const [handle, setHandle] = useState(null);
-
   const run = useCallback(async () => {
     setError(null);
     try {
-      Use a Durable Object method backed by `this.sql` for persistent data.
-      if (!handle) setHandle(h);
-      const result = await chat.rpc.call("main", "db.query", [h, sql]);
+      // "main" must expose a db.query method backed by a Durable Object's this.sql.
+      const result = await chat.rpc.call("main", "db.query", [sql]);
       setRows(result);
     } catch (e) { setError(e.message); }
-  }, [sql, handle]);
+  }, [sql]);
 
   const cols = rows.length > 0 ? Object.keys(rows[0]) : [];
 

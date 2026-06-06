@@ -211,7 +211,7 @@ FROM gad_worktree_states ws
 JOIN gad_manifest_nodes root ON root.hash = ws.manifest_root_hash
 JOIN gad_manifest_entries me ON me.parent_hash = root.hash
 JOIN gad_file_versions fv ON fv.id = me.file_version_id
-JOIN gad_manifest_nodes mn ON mn.hash = me.child_hash
+JOIN gad_manifest_nodes mn ON mn.hash = me.child_manifest_hash
 WHERE ws.state_hash = ?
 ORDER BY mn.path;
 ```

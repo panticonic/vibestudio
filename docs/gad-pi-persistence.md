@@ -1,5 +1,18 @@
 # Gad Trajectory Persistence
 
+> ⚠️ **Stale schema — do not copy the SQL here.** This document predates the
+> current GAD schema and refers to tables/columns that no longer exist
+> (`gad_trajectory_items`, `gad_branches`, `gad_payloads`, `parent_id`/`parent_hash`,
+> `introduced_on_branch_id`, `workspace_id`). The live schema uses
+> `trajectory_events`, `trajectory_branches`, `trajectory_messages`,
+> `trajectory_message_blocks`, etc., with payloads stored inline in
+> `*.payload_ref_json` columns. For accurate references see
+> [gad-architecture.md](./gad-architecture.md),
+> [gad-query-recipes.md](./gad-query-recipes.md), the `gad-context` skill, and the
+> authoritative schema in `workspace/workers/gad-store/index.ts`. The conceptual
+> model below (provenance-first, recursive branch history) still holds; the table
+> and column names do not.
+
 Gad is the authoritative persistence system for Pi-mediated agent trajectories,
 workspace state, and semantic provenance. Agent DOs keep execution-local state
 only: runner lifecycle, subscriptions, delivery cursors, dispatched calls,

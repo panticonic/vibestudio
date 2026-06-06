@@ -255,17 +255,10 @@ Pass an encoding such as `"utf-8"` when reading text. Without an encoding,
 
 ## Database Access
 
-```
-eval({ code: `
-  import { db } from "@workspace/runtime";
-  Use `this.sql` inside a Durable Object for persistent state.
-  await conn.exec("CREATE TABLE IF NOT EXISTS items (id INTEGER PRIMARY KEY, name TEXT)");
-  await conn.run("INSERT INTO items (name) VALUES (?)", ["test"]);
-  const rows = await conn.query("SELECT * FROM items");
-  console.log(rows);
-  await conn.close();
-` })
-```
+`eval` runs ephemeral code — there is no importable `db` and no persistence across
+runs. For persistent storage, define a Durable Object and use its `this.sql` API,
+then call that DO over RPC. See the workers guide (`workspace/workers/README.md`)
+and `workspace-dev/WORKERS.md`.
 
 ## Worker Management
 

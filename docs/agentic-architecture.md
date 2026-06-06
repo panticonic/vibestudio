@@ -99,7 +99,7 @@ Workspace and framework state lives in Durable Objects:
 
 - Agent and channel workers own their own `this.sql` schema.
 - `ScopeStoreDO` stores REPL scope snapshots for agentic eval.
-- `PanelStoreDO` stores panel tree state and panel search FTS.
+- `WorkspaceDO` stores panel tree state and panel search FTS (replaced the former `PanelStoreDO`).
 - `BrowserDataDO` stores imported browser data and history FTS.
 - `WebhookStoreDO` stores webhook ingress subscriptions.
 

@@ -26,7 +26,7 @@ The build key is the full cache identity:
 build_key = hash(BUILD_CACHE_VERSION, unitName, ev, sourcemap)
 ```
 
-`BUILD_CACHE_VERSION` (currently `"14"`) is incremented when build logic changes (plugins, esbuild options, shims) to invalidate all cached builds. Unit name is included to prevent different units with identical EVs from sharing builds.
+`BUILD_CACHE_VERSION` (currently `"15"`) is incremented when build logic changes (plugins, esbuild options, shims) to invalidate all cached builds. Unit name is included to prevent different units with identical EVs from sharing builds.
 
 ### Runtime Provenance
 
@@ -181,7 +181,7 @@ Two build strategies, selected by unit kind:
 - Used by `imports` parameter of the eval tool with `"npm:<version>"` values
 - Native addons are not supported (esbuild will fail to bundle `.node` files)
 
-**Concurrency:** Semaphore with `MAX_CONCURRENT_BUILDS = 4`. Build coalescing deduplicates concurrent builds of the same key.
+**Concurrency:** Semaphore with `MAX_CONCURRENT_BUILDS = 8` by default (override via `NATSTACK_MAX_CONCURRENT_BUILDS`). Build coalescing deduplicates concurrent builds of the same key.
 
 **Workspace resolve plugin:** Resolves `@workspace/*` imports from the git-extracted source tree. Reads `package.json` exports fields with condition-based resolution (panel: `natstack-panel`, `import`, `default`; extension: `import`, `default`). Since extracted source lacks `dist/` (gitignored), the plugin maps `dist/` paths to their TypeScript source equivalents.
 

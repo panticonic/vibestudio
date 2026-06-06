@@ -34,11 +34,13 @@ per-context folders:
 
 ```
 workspace/
-├── AGENTS.md        # System prompt (read via workspace RPC)
+├── meta/
+│   ├── AGENTS.md    # System prompt (read via workspace RPC)
+│   └── natstack.yml # Workspace manifest
 ├── skills/          # Workspace skills (read via workspace RPC)
-│   ├── eval/
 │   ├── sandbox/
 │   ├── workspace-dev/
+│   ├── onboarding/
 │   └── ...
 └── ...              # Other workspace files
 ```
@@ -206,7 +208,7 @@ Pi session state is owned by Pi's `AgentSession` and persisted by the worker
 DO. NatStack framework state uses internal Durable Objects:
 
 - `ScopeStoreDO` for REPL scopes.
-- `PanelStoreDO` for panel tree and search.
+- `WorkspaceDO` for panel tree and search (replaced the former `PanelStoreDO`).
 - `BrowserDataDO` for imported browser data.
 - `WebhookStoreDO` for webhook subscriptions.
 

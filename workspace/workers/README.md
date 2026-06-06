@@ -211,13 +211,15 @@ protected shouldProcess(event: ChannelEvent): boolean {
 
 ### buildTurnInput(event: ChannelEvent): TurnInput
 
-Transform a channel event into the input for an AI turn. Default extracts content, senderId, and attachments.
+Transform a channel event into the input for an AI turn. Default derives the turn text from the message's content blocks via `messageDisplayText` (imported from `@workspace/agentic-protocol`), plus senderId and attachments. Messages no longer carry a top-level `content` string — text lives in `payload.blocks`.
 
 ```typescript
+import { messageDisplayText, type MessageBlockInput } from "@workspace/agentic-protocol";
+
 protected buildTurnInput(event: ChannelEvent): TurnInput {
-  const payload = event.payload as { content?: string };
+  const agentic = event.payload as { payload?: { blocks?: MessageBlockInput[] } };
   return {
-    content: payload.content ?? '',
+    content: messageDisplayText(agentic.payload?.blocks),
     senderId: event.senderId,
     attachments: event.attachments,
     context: 'Additional context injected here',
@@ -367,7 +369,12 @@ describe("MyWorker", () => {
         kind: "message.completed",
         actor: { kind: "panel", id: "user-1" },
         causality: { messageId: "msg-1" },
-        payload: { protocol: "agentic.trajectory.v1", role: "user", content: "Hello" },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          role: "user",
+          blocks: [{ blockId: "msg-1:block:0", type: "text", content: "Hello" }],
+          outcome: "completed",
+        },
         createdAt: new Date().toISOString(),
       },
       senderId: "user-1",
@@ -534,14 +541,16 @@ export class CodeReviewWorker extends AgentWorkerBase {
     if (event.type !== 'message') return false;
     const senderType = event.senderMetadata?.["type"] as string | undefined;
     if (!isClientParticipantType(senderType)) return false;
-    const content = (event.payload as { content?: string })?.content ?? '';
+    const agentic = event.payload as { payload?: { blocks?: MessageBlockInput[] } };
+    const content = messageDisplayText(agentic.payload?.blocks);
     return content.includes('```') || content.includes('diff --git');
   }
 
   protected override buildTurnInput(event: ChannelEvent): TurnInput {
-    const payload = event.payload as { content?: string };
+    const agentic = event.payload as { payload?: { blocks?: MessageBlockInput[] } };
+    const content = messageDisplayText(agentic.payload?.blocks);
     return {
-      content: `Please review the following code:\n\n${payload.content ?? ''}`,
+      content: `Please review the following code:\n\n${content}`,
       senderId: event.senderId,
       attachments: event.attachments,
     };
