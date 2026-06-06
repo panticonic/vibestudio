@@ -67,15 +67,20 @@ const blobRefSchema = z
   })
   .strict();
 
-const messageBlockInputSchema = z
-  .object({
-    blockId: idSchema.optional(),
-    type: z.enum(["text", "thinking", "invocation", "attachment", "data", "diagnostic"]),
-    content: z.string().optional(),
-    invocationId: idSchema.optional(),
-    metadata: z.record(z.unknown()).optional(),
-  })
-  .strict();
+const blockBaseShape = {
+  blockId: idSchema.optional(),
+  metadata: z.record(z.unknown()).optional(),
+};
+const messageBlockInputSchema = z.discriminatedUnion("type", [
+  z.object({ ...blockBaseShape, type: z.literal("text"), content: z.string() }).strict(),
+  z.object({ ...blockBaseShape, type: z.literal("thinking"), content: z.string() }).strict(),
+  z
+    .object({ ...blockBaseShape, type: z.literal("invocation"), invocationId: idSchema, content: z.string().optional() })
+    .strict(),
+  z.object({ ...blockBaseShape, type: z.literal("attachment"), content: z.string().optional() }).strict(),
+  z.object({ ...blockBaseShape, type: z.literal("data"), content: z.string().optional() }).strict(),
+  z.object({ ...blockBaseShape, type: z.literal("diagnostic"), content: z.string() }).strict(),
+]);
 
 const messageStartedPayloadSchema = z
   .object({

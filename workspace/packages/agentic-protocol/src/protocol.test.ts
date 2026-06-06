@@ -177,6 +177,42 @@ describe("@workspace/agentic-protocol schemas", () => {
     ).toBe("message.failed");
   });
 
+  it("enforces per-type message block invariants via the discriminated union", () => {
+    const completed = (block: unknown) => ({
+      kind: "message.completed" as const,
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("msg-blocks") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        blocks: [block],
+        outcome: "completed",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    });
+
+    // Valid shapes pass.
+    expect(
+      agenticEventSchema.safeParse(
+        completed({ blockId: brandId<BlockId>("b0"), type: "invocation", invocationId: brandId<InvocationId>("call-1") })
+      ).success
+    ).toBe(true);
+    expect(
+      agenticEventSchema.safeParse(completed({ blockId: brandId<BlockId>("b0"), type: "text", content: "hi" })).success
+    ).toBe(true);
+
+    // An invocation block without an invocationId is rejected.
+    expect(agenticEventSchema.safeParse(completed({ type: "invocation" })).success).toBe(false);
+    // A text block carrying an invocationId is rejected (strict: field belongs only to invocation).
+    expect(
+      agenticEventSchema.safeParse(
+        completed({ type: "text", content: "hi", invocationId: brandId<InvocationId>("call-1") })
+      ).success
+    ).toBe(false);
+    // A text block without content is rejected.
+    expect(agenticEventSchema.safeParse(completed({ type: "text" })).success).toBe(false);
+  });
+
   it("requires terminalOutcome on stored invocation terminal events", () => {
     const result = storedAgenticEventSchema.safeParse({
       kind: "invocation.failed",

@@ -3144,7 +3144,7 @@ export class PiRunner {
         return {
           blockId,
           type: "thinking",
-          content: typeof record?.["thinking"] === "string" ? record["thinking"] : undefined,
+          content: typeof record?.["thinking"] === "string" ? record["thinking"] : "",
           metadata: record ?? undefined,
         };
       }
@@ -3158,7 +3158,7 @@ export class PiRunner {
               ? record["content"]
             : typeof block === "string"
               ? block
-              : undefined,
+              : "",
         metadata: record ?? undefined,
       };
     });

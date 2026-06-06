@@ -80,6 +80,7 @@ export type {
   DiagnosticSeverity,
   KnowledgePayload,
   MessageBlockInput,
+  MessageBlockType,
   MessagePayload,
   MessageRole,
   MessageTypeClearedPayload,

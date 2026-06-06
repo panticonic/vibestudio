@@ -126,13 +126,31 @@ export type MessagePayload =
     }
   | { protocol: "agentic.trajectory.v1"; reason: string; recoverable?: boolean };
 
-export interface MessageBlockInput {
+export type MessageBlockType =
+  | "text"
+  | "thinking"
+  | "invocation"
+  | "attachment"
+  | "data"
+  | "diagnostic";
+
+interface MessageBlockBase {
   blockId?: BlockId;
-  type: "text" | "thinking" | "invocation" | "attachment" | "data" | "diagnostic";
-  content?: string;
-  invocationId?: InvocationId;
   metadata?: Record<string, unknown>;
 }
+
+/**
+ * A content block within a message. A discriminated union on `type` so each
+ * variant carries exactly the fields it needs: text/thinking/diagnostic require
+ * `content`; invocation requires `invocationId` (and only invocation may carry
+ * one). Illegal shapes — a text block with an `invocationId`, an invocation block
+ * with no id — are unrepresentable.
+ */
+export type MessageBlockInput =
+  | (MessageBlockBase & { type: "text" | "thinking"; content: string })
+  | (MessageBlockBase & { type: "invocation"; invocationId: InvocationId; content?: string })
+  | (MessageBlockBase & { type: "attachment" | "data"; content?: string })
+  | (MessageBlockBase & { type: "diagnostic"; content: string });
 
 export type DiagnosticSeverity = "info" | "warning" | "error";
 
