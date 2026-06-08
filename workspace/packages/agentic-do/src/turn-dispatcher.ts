@@ -19,7 +19,7 @@ export interface TurnDispatcherRunner {
 }
 
 export type WorkItem =
-  | { kind: "prompt"; input: RunnerTurnInput }
+  | { kind: "prompt"; input: RunnerTurnInput; steeringId?: string }
   | { kind: "continue"; turnId?: string };
 
 type WorkCompletion =
@@ -35,6 +35,7 @@ interface ActiveWork {
   sawAgentEnd: boolean;
   runnerSettled: boolean;
   completed: boolean;
+  steeringId?: string;
   completion: Promise<WorkCompletion>;
   complete(result: WorkCompletion): void;
 }
@@ -42,6 +43,7 @@ interface ActiveWork {
 interface PendingSteer {
   input: RunnerTurnInput;
   message: AgentMessage;
+  steeringId?: string;
 }
 
 export interface TurnDispatcherOptions {
@@ -53,6 +55,7 @@ export interface TurnDispatcherOptions {
     code: string,
     detail?: Record<string, unknown>
   ) => void | Promise<void>;
+  onSteeredMessageObserved?: (steeringId: string) => void | Promise<void>;
   /**
    * Anchor the detached drain promise to the DO's current request lifetime
    * (typically `ctx.waitUntil`). The drain loop is started fire-and-forget
@@ -88,26 +91,40 @@ export class TurnDispatcher {
     this.unsub = opts.runner.subscribe((event) => this.handleEvent(event));
   }
 
-  submit(input: RunnerTurnInput, opts?: { mode?: "auto" | "sequential" }): void {
+  submit(input: RunnerTurnInput, opts?: { mode?: "auto" | "sequential"; steeringId?: string }): void {
     if (this.disposed) return;
     // A fresh user message re-engages the agent after an interrupt.
     this.interrupted = false;
+    if (opts?.steeringId && this.hasInFlightSteeringId(opts.steeringId)) return;
     const sequential = opts?.mode === "sequential";
     if (!sequential && this.running) {
       const message = this.opts.runner.buildUserMessage(input);
-      this.pendingSteered.push({ input, message });
+      const pending: PendingSteer = {
+        input,
+        message,
+        ...(opts?.steeringId ? { steeringId: opts.steeringId } : {}),
+      };
+      this.pendingSteered.push(pending);
       this.notifyTyping();
       void this.opts.runner.steerMessage(message).catch((err) => {
         this.log.warn("[TurnDispatcher] steer failed; routing as fresh prompt:", err);
         this.pendingSteered = this.pendingSteered.filter(
           (candidate) => candidate.message !== message
         );
-        this.pending.push({ kind: "prompt", input });
+        this.pending.push({
+          kind: "prompt",
+          input,
+          ...(pending.steeringId ? { steeringId: pending.steeringId } : {}),
+        });
         this.ensureDrain();
       });
       return;
     }
-    this.pending.push({ kind: "prompt", input });
+    this.pending.push({
+      kind: "prompt",
+      input,
+      ...(opts?.steeringId ? { steeringId: opts.steeringId } : {}),
+    });
     this.notifyTyping();
     this.ensureDrain();
   }
@@ -122,16 +139,26 @@ export class TurnDispatcher {
    * turn continues, or — if the continue produces an `agent_end` without
    * consuming it — re-queued as a fresh prompt by the `agent_end` handler.
    */
-  steerIntoActiveTurn(input: RunnerTurnInput): void {
+  steerIntoActiveTurn(input: RunnerTurnInput, opts?: { steeringId?: string }): void {
     if (this.disposed) return;
     this.interrupted = false;
+    if (opts?.steeringId && this.hasInFlightSteeringId(opts.steeringId)) return;
     const message = this.opts.runner.buildUserMessage(input);
-    this.pendingSteered.push({ input, message });
+    const pending: PendingSteer = {
+      input,
+      message,
+      ...(opts?.steeringId ? { steeringId: opts.steeringId } : {}),
+    };
+    this.pendingSteered.push(pending);
     this.notifyTyping();
     void this.opts.runner.steerMessage(message).catch((err) => {
       this.log.warn("[TurnDispatcher] steer into active turn failed; routing as fresh prompt:", err);
       this.pendingSteered = this.pendingSteered.filter((candidate) => candidate.message !== message);
-      this.pending.push({ kind: "prompt", input });
+      this.pending.push({
+        kind: "prompt",
+        input,
+        ...(pending.steeringId ? { steeringId: pending.steeringId } : {}),
+      });
       this.ensureDrain();
     });
   }
@@ -206,11 +233,16 @@ export class TurnDispatcher {
       pending: this.pending.map((item) =>
         item.kind === "continue"
           ? { kind: item.kind }
-          : { kind: item.kind, input: summarizeTurnInput(item.input) }
+          : {
+              kind: item.kind,
+              input: summarizeTurnInput(item.input),
+              ...(item.steeringId ? { steeringId: item.steeringId } : {}),
+            }
       ),
       pendingSteered: this.pendingSteered.map((item) => ({
         input: summarizeTurnInput(item.input),
         messageRole: (item.message as { role?: unknown }).role ?? null,
+        ...(item.steeringId ? { steeringId: item.steeringId } : {}),
       })),
       pendingSteeredCount: this.pendingSteered.length,
       running: this.running,
@@ -238,6 +270,25 @@ export class TurnDispatcher {
     }
   }
 
+  private notifySteeringObserved(steeringId: string): void {
+    void Promise.resolve(this.opts.onSteeredMessageObserved?.(steeringId)).catch((err) => {
+      this.log.warn("[TurnDispatcher] onSteeredMessageObserved failed:", err);
+    });
+  }
+
+  private hasInFlightSteeringId(steeringId: string): boolean {
+    if (this.activeWork?.steeringId === steeringId) return true;
+    if (this.pendingSteered.some((item) => item.steeringId === steeringId)) return true;
+    return this.pending.some((item) => item.kind === "prompt" && item.steeringId === steeringId);
+  }
+
+  private observeActivePromptSteering(active: ActiveWork): void {
+    if (active.kind !== "prompt" || !active.steeringId) return;
+    const steeringId = active.steeringId;
+    delete active.steeringId;
+    this.notifySteeringObserved(steeringId);
+  }
+
   private handleEvent(event: RunnerEvent): void {
     if (this.disposed) return;
     switch (event.type) {
@@ -252,7 +303,15 @@ export class TurnDispatcher {
         const msg = (event as { message?: unknown }).message;
         if (!isUserMessage(msg)) return;
         const idx = this.pendingSteered.findIndex((pending) => pending.message === msg);
-        if (idx >= 0) this.pendingSteered.splice(idx, 1);
+        if (idx >= 0) {
+          const [observed] = this.pendingSteered.splice(idx, 1);
+          if (observed?.steeringId) this.notifySteeringObserved(observed.steeringId);
+          return;
+        }
+        const active = this.activeWork;
+        if (active && this.eventMatchesActiveWork(event, active)) {
+          this.observeActivePromptSteering(active);
+        }
         return;
       }
       case "agent_end": {
@@ -279,7 +338,12 @@ export class TurnDispatcher {
           void this.opts.runner.clearSteeringQueue().catch((err) => {
             this.log.warn("[TurnDispatcher] clearSteeringQueue after stranded steer failed:", err);
           });
-          for (const item of stranded) this.pending.push({ kind: "prompt", input: item.input });
+          for (const item of stranded)
+            this.pending.push({
+              kind: "prompt",
+              input: item.input,
+              ...(item.steeringId ? { steeringId: item.steeringId } : {}),
+            });
         }
         this.notifyTyping();
         if (active && active.generation === this.drainGeneration) {
@@ -336,8 +400,13 @@ export class TurnDispatcher {
             });
           }
           if (this.pendingSteered.length > 0) {
-            for (const item of this.pendingSteered)
-              this.pending.push({ kind: "prompt", input: item.input });
+            for (const item of this.pendingSteered) {
+              this.pending.push({
+                kind: "prompt",
+                input: item.input,
+                ...(item.steeringId ? { steeringId: item.steeringId } : {}),
+              });
+            }
             this.pendingSteered = [];
             try {
               await this.opts.runner.clearSteeringQueue();
@@ -348,10 +417,12 @@ export class TurnDispatcher {
               );
             }
           }
+          this.observeActivePromptSteering(active);
           this.running = false;
           this.notifyTyping();
           continue;
         }
+        this.observeActivePromptSteering(active);
         if (!active.sawAgentEnd) {
           this.running = false;
           await this.sweepPendingSteered("after runner completion without agent_end");
@@ -376,6 +447,7 @@ export class TurnDispatcher {
       sawAgentEnd: false,
       runnerSettled: false,
       completed: false,
+      ...(work.kind === "prompt" && work.steeringId ? { steeringId: work.steeringId } : {}),
       completion: new Promise<WorkCompletion>((resolve) => {
         resolveCompletion = resolve;
       }),
@@ -442,7 +514,13 @@ export class TurnDispatcher {
     if (this.pendingSteered.length === 0) return;
     const stranded = this.pendingSteered;
     this.pendingSteered = [];
-    for (const item of stranded) this.pending.push({ kind: "prompt", input: item.input });
+    for (const item of stranded) {
+      this.pending.push({
+        kind: "prompt",
+        input: item.input,
+        ...(item.steeringId ? { steeringId: item.steeringId } : {}),
+      });
+    }
     try {
       await this.opts.runner.clearSteeringQueue();
     } catch (err) {
@@ -458,6 +536,8 @@ export class TurnDispatcher {
       sawAgentEnd: active.sawAgentEnd,
       runnerSettled: active.runnerSettled,
       completed: active.completed,
+      turnId: active.turnId ?? null,
+      ...(active.steeringId ? { steeringId: active.steeringId } : {}),
     };
   }
 

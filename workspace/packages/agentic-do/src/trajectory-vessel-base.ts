@@ -1640,10 +1640,20 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
   }
 
   private turnHasOpenExternalWait(turnId: string): boolean {
+    const turn = this.loadTurnRun(turnId);
+    if (
+      !turn ||
+      turn.status === "closed" ||
+      turn.status === "failed" ||
+      turn.status === "interrupted"
+    ) {
+      return false;
+    }
     const suspension = this.sql
       .exec(
         `SELECT 1 FROM agent_method_suspensions
          WHERE turn_id = ?
+           AND terminal_kind = 'none'
            AND delivery_status IN ('pending', 'delivered_live', 'recovering')
          LIMIT 1`,
         turnId
@@ -1692,7 +1702,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       // Missed terminals are recovered from replayed invocation.* log events
       // (the control:ready hook), not a channel side-table read-back.
       await this.sweepStuckDelivery(channelId, runner);
-      return this.recoverDeliveredAndOrphanedSuspensions(channelId);
+      const recovered = await this.recoverDeliveredAndOrphanedSuspensions(channelId);
+      return this.recoverOrphanedPendingSteering(channelId, runner) || recovered;
     }
     let submittedContinue = false;
     for (const row of rows) {
@@ -1842,7 +1853,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           break;
       }
     }
-    return submittedContinue;
+    return this.recoverOrphanedPendingSteering(channelId, runner) || submittedContinue;
   }
 
   private async tryReplayInterruptedModelTurn(
@@ -3101,6 +3112,116 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     }
   }
 
+  private durableSteeringId(channelId: string, event: ChannelEvent): string {
+    return `${channelId}:${event.id ?? event.messageId ?? Date.now()}`;
+  }
+
+  private persistPendingSteering(
+    channelId: string,
+    turnId: string,
+    steeringId: string,
+    input: RunnerTurnInput
+  ): boolean {
+    const existing = this.sql
+      .exec(
+        `SELECT observed_at FROM agent_pending_steering
+         WHERE steering_id = ?
+         LIMIT 1`,
+        steeringId
+      )
+      .toArray();
+    if (existing.length > 0) {
+      return existing[0]?.["observed_at"] == null;
+    }
+    this.sql.exec(
+      `INSERT INTO agent_pending_steering
+         (steering_id, channel_id, turn_id, input_json, created_at, observed_at)
+       VALUES (?, ?, ?, ?, ?, NULL)`,
+      steeringId,
+      channelId,
+      turnId,
+      JSON.stringify(input),
+      Date.now()
+    );
+    return true;
+  }
+
+  private markPendingSteeringObserved(steeringId: string): void {
+    this.sql.exec(
+      `UPDATE agent_pending_steering
+       SET observed_at = COALESCE(observed_at, ?)
+       WHERE steering_id = ?`,
+      Date.now(),
+      steeringId
+    );
+  }
+
+  private replayDurablePendingSteering(
+    channelId: string,
+    turnId: string,
+    dispatcher: TurnDispatcher
+  ): void {
+    const rows = this.sql
+      .exec(
+        `SELECT steering_id, input_json
+         FROM agent_pending_steering
+         WHERE channel_id = ?
+           AND turn_id = ?
+           AND observed_at IS NULL
+         ORDER BY created_at ASC`,
+        channelId,
+        turnId
+      )
+      .toArray();
+    for (const row of rows) {
+      try {
+        const input = JSON.parse(String(row["input_json"])) as RunnerTurnInput;
+        dispatcher.steerIntoActiveTurn(input, { steeringId: String(row["steering_id"]) });
+      } catch (err) {
+        this.recordLastError("pending_steering.replay", err, channelId);
+      }
+    }
+  }
+
+  private recoverOrphanedPendingSteering(channelId: string, runner: PiRunner): boolean {
+    const rows = this.sql
+      .exec(
+        `SELECT steering_id, turn_id, input_json
+         FROM agent_pending_steering
+         WHERE channel_id = ?
+           AND observed_at IS NULL
+         ORDER BY created_at ASC`,
+        channelId
+      )
+      .toArray();
+    let dispatcher: TurnDispatcher | null = null;
+    let submitted = false;
+    for (const row of rows) {
+      const turnId = String(row["turn_id"]);
+      const turn = this.loadTurnRun(turnId);
+      if (
+        turn &&
+        turn.status !== "closed" &&
+        turn.status !== "failed" &&
+        turn.status !== "interrupted"
+      ) {
+        continue;
+      }
+      try {
+        const input = JSON.parse(String(row["input_json"])) as RunnerTurnInput;
+        dispatcher ??= this.getOrCreateDispatcher(channelId, runner);
+        dispatcher.submit(input, {
+          mode: "sequential",
+          steeringId: String(row["steering_id"]),
+        });
+        submitted = true;
+      } catch (err) {
+        this.recordLastError("pending_steering.orphan_recover", err, channelId);
+      }
+    }
+    return submitted;
+  }
+
   private submitRecoveryContinue(
     channelId: string,
     runner: PiRunner,
@@ -3125,7 +3246,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       reason,
       turnId: resumeTurnId,
     });
-    this.getOrCreateDispatcher(channelId, runner).submitContinue({ turnId: resumeTurnId });
+    const dispatcher = this.getOrCreateDispatcher(channelId, runner);
+    this.replayDurablePendingSteering(channelId, resumeTurnId, dispatcher);
+    dispatcher.submitContinue({ turnId: resumeTurnId });
   }
 
   private async ensureAgentActivationReady(): Promise<void> {
@@ -3224,6 +3347,20 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         attempted_at INTEGER NOT NULL,
         PRIMARY KEY (turn_id, generation)
       )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS agent_pending_steering (
+        steering_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        turn_id TEXT NOT NULL,
+        input_json TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        observed_at INTEGER
+      )
+    `);
+    this.sql.exec(`
+      CREATE INDEX IF NOT EXISTS idx_agent_pending_steering_turn
+        ON agent_pending_steering(channel_id, turn_id, observed_at, created_at)
     `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS agent_turn_outbox (
@@ -5528,6 +5665,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         }
         await this.emitTurnWorkFailureDiagnostic(channelId, work.kind, error);
       },
+      onSteeredMessageObserved: async (steeringId) => {
+        this.markPendingSteeringObserved(steeringId);
+      },
       onInvariantViolation: async (code, detail) => {
         this.recordInvariantViolation(channelId, code, detail);
         if (
@@ -6438,14 +6578,37 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       { content: input.content, ...(images ? { images } : {}) },
       `user turn input channel=${channelId}`
     );
-    // If the runner is parked on a surviving method call (an open turn with a
-    // live external wait — typically after a restart, while the dispatcher is
-    // idle), steer the message into that turn rather than minting a competing
-    // one that would collide on adoptTurnId. The agent is busy awaiting a
-    // method result; the message rides the in-flight turn.
-    const openTurnId = runner.getCurrentTurnId?.();
-    if (openTurnId && this.turnHasOpenExternalWait(openTurnId)) {
-      dispatcher.steerIntoActiveTurn(turnInput);
+    // Mid-turn steering must be durable. Channel delivery is durable, but the
+    // runner/dispatcher steering queue is in-memory; if the DO hibernates while
+    // a tool call or model turn is active, an accepted steer can otherwise be
+    // lost before the runner consumes it. Persist any steer for the current
+    // turn, then mark it observed when the runner starts that exact message (or
+    // requeues it as a fresh prompt).
+    const dispatcherState = (
+      dispatcher as {
+        getDebugState?: () => {
+          busy?: unknown;
+          activeWork?: { turnId?: unknown } | null;
+        };
+      }
+    ).getDebugState?.();
+    const openTurnId =
+      runner.getCurrentTurnId?.() ??
+      (typeof dispatcherState?.activeWork?.turnId === "string"
+        ? dispatcherState.activeWork.turnId
+        : undefined);
+    const dispatcherBusy = Boolean(dispatcherState?.busy);
+    const hasExternalWait = openTurnId ? this.turnHasOpenExternalWait(openTurnId) : false;
+    if (openTurnId && (hasExternalWait || (!opts || opts.mode !== "sequential") && dispatcherBusy)) {
+      const steeringId = this.durableSteeringId(channelId, event);
+      if (!this.persistPendingSteering(channelId, openTurnId, steeringId, turnInput)) {
+        return;
+      }
+      if (hasExternalWait) {
+        dispatcher.steerIntoActiveTurn(turnInput, { steeringId });
+        return;
+      }
+      dispatcher.submit(turnInput, { ...opts, steeringId });
       return;
     }
     dispatcher.submit(turnInput, opts);

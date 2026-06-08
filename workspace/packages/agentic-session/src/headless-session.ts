@@ -171,6 +171,20 @@ interface MessageListener {
   (msg: ChatMessage): void;
 }
 
+function agentFailureMessageReason(msg: ChatMessage, clientId: string): string | null {
+  if (msg.senderId === clientId || !msg.complete || msg.pending) return null;
+  const error = (msg as { error?: unknown }).error;
+  if (typeof error !== "string" || error.trim().length === 0) return null;
+  if (
+    msg.contentType === "invocation" ||
+    msg.contentType === "thinking" ||
+    msg.contentType === "typing"
+  ) {
+    return null;
+  }
+  return error.trim();
+}
+
 export class HeadlessSession {
   private _connection: ConnectionManager;
   private _client: PubSubClient<ChatParticipantMetadata> | null = null;
@@ -799,6 +813,12 @@ export class HeadlessSession {
         if (current.length <= baselineCount) return;
         for (let i = current.length - 1; i >= baselineCount; i--) {
           const msg = current[i]!;
+          const failureReason = agentFailureMessageReason(msg, this._clientId);
+          if (failureReason) {
+            cleanup();
+            reject(new Error(`Agent failed: ${failureReason}`));
+            return;
+          }
           if (isAgentMessage(msg) && msg !== alreadyPresent) {
             cleanup();
             resolve(msg);
@@ -875,6 +895,12 @@ export class HeadlessSession {
         if (current.length <= baselineCount) return;
         for (let i = current.length - 1; i >= baselineCount; i--) {
           const msg = current[i]!;
+          const failureReason = agentFailureMessageReason(msg, this._clientId);
+          if (failureReason) {
+            cleanup();
+            reject(new Error(`Agent failed: ${failureReason}`));
+            return;
+          }
           if (isAgentMessage(msg) && msg !== alreadyPresent) {
             lastMatch = msg;
             scheduleResolve();

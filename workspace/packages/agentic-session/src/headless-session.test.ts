@@ -371,4 +371,39 @@ describe("HeadlessSession", () => {
     await expect(wait).resolves.toBe(idleMessage);
     vi.useRealTimers();
   });
+
+  it("waitForIdle rejects promptly on agent failure diagnostics even while a turn is open", async () => {
+    const session = HeadlessSession.create({
+      config: createConfig(),
+    });
+    const turnId = brandId<TurnId>("turn-open-failed");
+    const failureMessage = {
+      id: "diagnostic:failed-message",
+      senderId: "agent-1",
+      content: "Codex error: server_error",
+      contentType: "diagnostic",
+      kind: "system" as const,
+      complete: true,
+      error: "Codex error: server_error",
+    } satisfies ChatMessage;
+    (session as any)._channelId = "ch-1";
+    (session as any)._channelView = {
+      ...(session as any)._channelView,
+      turns: {
+        [turnId]: {
+          turnId,
+          actor: { kind: "agent", id: "agent-1" },
+          status: "open",
+          openedAt: "2026-05-27T00:00:00.000Z",
+        },
+      },
+    };
+
+    const wait = session.waitForIdle({ debounce: 5, timeoutMs: 1000 });
+    (session as any)._chatMessages = new Map([[failureMessage.id, failureMessage]]);
+    (session as any)._chatMessageOrder = [failureMessage.id];
+    (session as any).notifyListeners();
+
+    await expect(wait).rejects.toThrow("Agent failed: Codex error: server_error");
+  });
 });

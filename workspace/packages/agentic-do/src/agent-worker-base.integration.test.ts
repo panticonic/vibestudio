@@ -643,6 +643,30 @@ describe("AgentWorkerBase method suspension ledger", () => {
     );
   }
 
+  function insertPendingSteering(
+    sql: { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } },
+    opts: {
+      steeringId: string;
+      channelId?: string;
+      turnId: string;
+      input?: unknown;
+      observedAt?: number | null;
+    }
+  ) {
+    const now = Date.now();
+    sql.exec(
+      `INSERT INTO agent_pending_steering
+         (steering_id, channel_id, turn_id, input_json, created_at, observed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      opts.steeringId,
+      opts.channelId ?? "chat-1",
+      opts.turnId,
+      JSON.stringify(opts.input ?? { content: "follow up" }),
+      now,
+      opts.observedAt ?? null
+    );
+  }
+
   function turnStatus(
     sql: { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } },
     turnId: string
@@ -1374,6 +1398,18 @@ describe("AgentWorkerBase method suspension ledger", () => {
       Date.now()
     );
     expect(worker.turnHasOpenExternalWait("turn-wait")).toBe(true);
+
+    expect(worker.transitionTurn("turn-wait", ["waiting_external"], "interrupted")).toBe(true);
+    expect(worker.turnHasOpenExternalWait("turn-wait")).toBe(false);
+
+    insertTurnRun(sql, { turnId: "turn-terminal-pending", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "terminal-pending",
+      turnId: "turn-terminal-pending",
+      terminalKind: "cancelled",
+      deliveryStatus: "pending",
+    });
+    expect(worker.turnHasOpenExternalWait("turn-terminal-pending")).toBe(false);
   });
 
   it("enforces turn transition legality and terminal absorption", async () => {
@@ -2251,6 +2287,92 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(turnStatus(sql, "turn-live")).toMatchObject({ status: "waiting_external" });
   });
 
+  it("supersedes a stale runner turn when the ledger turn was interrupted despite a pending wait", async () => {
+    // Regression for stop + immediate follow-up: a terminal turn can briefly
+    // retain a pending suspension row. It must not look like a live wait, or
+    // the follow-up is steered into the stale turn and the next prompt wedges
+    // on PiRunner.adoptTurnId.
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      supersedeOrphanedOpenTurn(channelId: string, runner: PiRunner): Promise<void>;
+      turnHasOpenExternalWait(turnId: string): boolean;
+    };
+    insertTurnRun(sql, { turnId: "turn-stopped", status: "interrupted" });
+    insertSuspension(sql, {
+      callId: "call-after-stop",
+      turnId: "turn-stopped",
+      deliveryStatus: "pending",
+      terminalKind: "none",
+    });
+
+    let openTurnId: string | null = "turn-stopped";
+    const forceCloseCurrentTurn = vi.fn(async () => {
+      openTurnId = null;
+      return true;
+    });
+    const runner = {
+      getCurrentTurnId: () => openTurnId,
+      forceCloseCurrentTurn,
+    } as unknown as PiRunner;
+
+    expect(worker.turnHasOpenExternalWait("turn-stopped")).toBe(false);
+
+    await worker.supersedeOrphanedOpenTurn("chat-1", runner);
+
+    expect(forceCloseCurrentTurn).toHaveBeenCalledWith(
+      "turn_superseded",
+      expect.any(String)
+    );
+    expect(openTurnId).toBeNull();
+    expect(turnStatus(sql, "turn-stopped")).toMatchObject({ status: "interrupted" });
+  });
+
+  it("supersedes a stale waiting turn when its method result is already terminal", async () => {
+    // A terminal-but-not-admitted suspension is recovery work, not an open
+    // external wait. It must not protect a stale runner currentTurnId from
+    // being force-closed before the next fresh prompt.
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const worker = instance as unknown as {
+      supersedeOrphanedOpenTurn(channelId: string, runner: PiRunner): Promise<void>;
+      turnHasOpenExternalWait(turnId: string): boolean;
+    };
+    insertTurnRun(sql, { turnId: "turn-terminal", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "call-terminal",
+      turnId: "turn-terminal",
+      terminalKind: "cancelled",
+      deliveryStatus: "pending",
+    });
+
+    let openTurnId: string | null = "turn-terminal";
+    const forceCloseCurrentTurn = vi.fn(async () => {
+      openTurnId = null;
+      return true;
+    });
+    const runner = {
+      getCurrentTurnId: () => openTurnId,
+      forceCloseCurrentTurn,
+    } as unknown as PiRunner;
+
+    expect(worker.turnHasOpenExternalWait("turn-terminal")).toBe(false);
+
+    await worker.supersedeOrphanedOpenTurn("chat-1", runner);
+
+    expect(forceCloseCurrentTurn).toHaveBeenCalledWith(
+      "turn_superseded",
+      expect.any(String)
+    );
+    expect(openTurnId).toBeNull();
+    expect(turnStatus(sql, "turn-terminal")).toMatchObject({
+      status: "interrupted",
+      failure_code: "turn_superseded",
+    });
+  });
+
   it("supersede is a no-op when the runner holds no open turn", async () => {
     const { instance } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
@@ -2285,6 +2407,70 @@ describe("AgentWorkerBase method suspension ledger", () => {
     expect(turnStatus(sql, "turn-closed")).toMatchObject({ status: "closed" });
     expect(turnStatus(sql, "turn-failed")).toMatchObject({ status: "failed" });
     expect(turnStatus(sql, "turn-interrupted")).toMatchObject({ status: "interrupted" });
+  });
+
+  it("recovers unobserved steering for terminal turns as fresh sequential prompts", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const submit = vi.fn();
+    const worker = instance as unknown as {
+      getOrCreateDispatcher: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.getOrCreateDispatcher = vi.fn().mockReturnValue({
+      submit,
+      getDebugState: () => ({ busy: false, activeWork: null }),
+    });
+    insertTurnRun(sql, { turnId: "turn-ended", status: "closed" });
+    insertPendingSteering(sql, {
+      steeringId: "chat-1:99",
+      turnId: "turn-ended",
+      input: { content: "please continue" },
+    });
+
+    await expect(worker.recoverFromTurnLedger("chat-1", {} as PiRunner)).resolves.toBe(true);
+
+    expect(submit).toHaveBeenCalledWith(
+      { content: "please continue" },
+      { mode: "sequential", steeringId: "chat-1:99" }
+    );
+    expect(
+      sql
+        .exec(`SELECT observed_at FROM agent_pending_steering WHERE steering_id = ?`, "chat-1:99")
+        .toArray()[0]
+    ).toMatchObject({ observed_at: null });
+  });
+
+  it("does not fresh-replay unobserved steering while the original turn is recoverable", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const submit = vi.fn();
+    const worker = instance as unknown as {
+      getOrCreateDispatcher: ReturnType<typeof vi.fn>;
+      recoverFromTurnLedger(channelId: string, runner: PiRunner): Promise<boolean>;
+    };
+    worker.getOrCreateDispatcher = vi.fn().mockReturnValue({
+      submit,
+      getDebugState: () => ({ busy: false, activeWork: null }),
+    });
+    insertTurnRun(sql, { turnId: "turn-live", status: "waiting_external" });
+    insertSuspension(sql, {
+      callId: "call-live-for-steer",
+      turnId: "turn-live",
+      deliveryStatus: "pending",
+      terminalKind: "none",
+    });
+    insertPendingSteering(sql, {
+      steeringId: "chat-1:100",
+      turnId: "turn-live",
+      input: { content: "still belongs to live turn" },
+    });
+
+    await expect(worker.recoverFromTurnLedger("chat-1", {} as PiRunner)).resolves.toBe(false);
+
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it("deduplicates done outbox diagnostics and retries failed outbox rows", async () => {
@@ -4483,7 +4669,10 @@ describe("AgentWorkerBase typed transcript input", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.getOrCreateDispatcher = vi.fn().mockReturnValue({ submit });
+    worker.getOrCreateDispatcher = vi.fn().mockReturnValue({
+      submit,
+      getDebugState: () => ({ busy: false, activeWork: null }),
+    });
 
     await worker.processChannelEvent("chat-1", {
       id: 1,
@@ -4513,6 +4702,105 @@ describe("AgentWorkerBase typed transcript input", () => {
     });
 
     expect(submit).toHaveBeenCalledWith({ content: "Read the onboarding docs first" }, undefined);
+  });
+
+  it("skips duplicate durable steering events that were already observed", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const submit = vi.fn();
+    const steerIntoActiveTurn = vi.fn();
+    const worker = instance as unknown as {
+      subscriptions: {
+        getParticipantId(channelId: string): string | null;
+      };
+      runners: Map<string, { runner: PiRunner }>;
+      getOrCreateDispatcher: ReturnType<typeof vi.fn>;
+      processChannelEvent(channelId: string, event: unknown): Promise<void>;
+    };
+
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.runners.set("chat-1", {
+      runner: {
+        getCurrentTurnId: () => "turn-wait",
+      } as unknown as PiRunner,
+    });
+    worker.getOrCreateDispatcher = vi.fn().mockReturnValue({
+      submit,
+      steerIntoActiveTurn,
+      getDebugState: () => ({ busy: true, activeWork: { turnId: "turn-wait" } }),
+    });
+    const now = Date.now();
+    sql.exec(
+      `INSERT INTO agent_turn_runs (
+         turn_id, channel_id, status, opened_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?)`,
+      "turn-wait",
+      "chat-1",
+      "waiting_external",
+      now,
+      now
+    );
+    sql.exec(
+      `INSERT INTO agent_method_suspensions (
+         transport_call_id, channel_id, invocation_id, model_tool_call_id,
+         assistant_message_id, tool_call_index, tool_name, turn_id, kind, method,
+         participant_handle, target_participant_id, session_leaf_before_call,
+         terminal_kind, delivery_status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      "call-wait",
+      "chat-1",
+      "tool-1",
+      "tool-1",
+      "assistant-1",
+      0,
+      "eval",
+      "turn-wait",
+      "channelMethod",
+      "eval",
+      null,
+      "tool-1",
+      "leaf-1",
+      "none",
+      "pending",
+      now,
+      now
+    );
+    sql.exec(
+      `INSERT INTO agent_pending_steering
+         (steering_id, channel_id, turn_id, input_json, created_at, observed_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      "chat-1:123",
+      "chat-1",
+      "turn-wait",
+      JSON.stringify({ content: "already handled" }),
+      now,
+      now
+    );
+
+    await worker.processChannelEvent("chat-1", {
+      id: 123,
+      messageId: "env-123",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      senderId: "panel:panel-1",
+      senderMetadata: { name: "User", type: "panel", handle: "user" },
+      payload: {
+        kind: "message.completed",
+        actor: { kind: "panel", id: "panel:panel-1" },
+        causality: { messageId: "env-123" },
+        payload: {
+          protocol: "agentic.trajectory.v1",
+          role: "user",
+          blocks: [{ blockId: "env-123:block:0", type: "text", content: "already handled" }],
+          outcome: "completed",
+        },
+        createdAt: "2026-05-21T08:00:00.000Z",
+      },
+      ts: Date.now(),
+    });
+
+    expect(steerIntoActiveTurn).not.toHaveBeenCalled();
+    expect(submit).not.toHaveBeenCalled();
   });
 
   it("does not call the runner when required channel tools are absent", async () => {

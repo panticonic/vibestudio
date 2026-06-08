@@ -261,6 +261,95 @@ describe("TurnDispatcher — mid-run steer", () => {
     expect(runner.clearSteerCount).toBe(0);
   });
 
+  it("reports durable steers as observed when the runner consumes them", async () => {
+    const runner = makeRunner();
+    const observed = vi.fn();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      notifyTyping: () => {},
+      onSteeredMessageObserved: observed,
+    });
+
+    const first = makeMsg("first");
+    d.submit(first);
+    await flush();
+    runner.emit(agentStart());
+
+    const steered = makeMsg("durable");
+    d.steerIntoActiveTurn(steered, { steeringId: "steer-1" });
+    runner.emit(messageStart(steered));
+    await flush();
+
+    expect(observed).toHaveBeenCalledWith("steer-1");
+  });
+
+  it("reports a durable steer as observed only after fallback prompt admission", async () => {
+    const runner = makeRunner();
+    const observed = vi.fn();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      notifyTyping: () => {},
+      onSteeredMessageObserved: observed,
+    });
+
+    const first = makeMsg("first");
+    d.submit(first);
+    await flush();
+    runner.emit(agentStart());
+
+    const steered = makeMsg("durable-fallback");
+    d.steerIntoActiveTurn(steered, { steeringId: "steer-fallback" });
+
+    runner.emit(messageStart(first));
+    runner.emit(agentEnd());
+    await flush();
+
+    expect(observed).not.toHaveBeenCalled();
+    expect(runner.runTurnCalls).toHaveLength(2);
+    expect(runner.runTurnCalls[1]!.msg).toBe(steered);
+
+    runner.emit(agentStart());
+    runner.emit(messageStart(steered));
+    await flush();
+
+    expect(observed).toHaveBeenCalledWith("steer-fallback");
+  });
+
+  it("reports a durable fresh prompt as observed when the prompt message starts", async () => {
+    const runner = makeRunner();
+    const observed = vi.fn();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      notifyTyping: () => {},
+      onSteeredMessageObserved: observed,
+    });
+
+    const replayed = makeMsg("replayed");
+    d.submit(replayed, { mode: "sequential", steeringId: "steer-replayed" });
+    await flush();
+
+    runner.emit(agentStart());
+    runner.emit(messageStart(replayed));
+    await flush();
+
+    expect(observed).toHaveBeenCalledWith("steer-replayed");
+  });
+
+  it("ignores duplicate durable steering ids already queued in memory", async () => {
+    const runner = makeRunner();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      notifyTyping: () => {},
+    });
+
+    d.submit(makeMsg("first"), { mode: "sequential", steeringId: "same-steer" });
+    d.submit(makeMsg("duplicate"), { mode: "sequential", steeringId: "same-steer" });
+    await flush();
+
+    expect(runner.runTurnCalls).toHaveLength(1);
+    expect(runner.runTurnCalls[0]!.msg.content).toBe("first");
+  });
+
   it("does not treat a different user message with the same text as the absorbed steer", async () => {
     const runner = makeRunner();
     const d = new TurnDispatcher({
