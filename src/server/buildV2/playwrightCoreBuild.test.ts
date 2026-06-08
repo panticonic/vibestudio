@@ -113,6 +113,47 @@ describe("Playwright core library build", () => {
     }
   }, 30_000);
 
+  it("buildUnit builds Playwright core in library mode via the browser bundle path", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-playwright-core-lib-"));
+    try {
+      const workspaceRoot = path.join(root, "workspace");
+      setUserDataPath(path.join(root, "state"));
+      initBuilder([path.join(REPO_ROOT, "node_modules")]);
+
+      for (const name of ["playwright-protocol", "playwright-core"]) {
+        const packageDir = path.join(workspaceRoot, "packages", name);
+        copyPackage(path.join(REPO_ROOT, "workspace/packages", name), packageDir);
+        commit(packageDir, name);
+      }
+
+      const graph = discoverPackageGraph(workspaceRoot);
+      const result = await buildUnit(
+        graph.get("@workspace/playwright-core"),
+        "ev-playwright-core-lib",
+        graph,
+        workspaceRoot,
+        undefined,
+        { library: true }
+      );
+
+      const bundle = result.artifacts.find((artifact) => artifact.role === "primary")?.content;
+      expect(bundle).toBeTruthy();
+
+      const exports: Record<string, unknown> = {};
+      const module = { exports };
+      const requireFn = (id: string) => {
+        throw new Error(`Unexpected external require: ${id}`);
+      };
+      new Function("require", "exports", "module", bundle!)(requireFn, exports, module);
+
+      expect(
+        typeof (module.exports as { BrowserImpl?: { connect?: unknown } }).BrowserImpl?.connect
+      ).toBe("function");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("builds a loadable automation package bundle with a static Playwright import", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-playwright-automation-"));
     try {

@@ -12,6 +12,11 @@ export interface PublishWorkspaceRepoResult {
   changed: boolean;
   pushed: boolean;
   message: string;
+  buildEventsQuery: {
+    service: "build.listRecentBuildEvents";
+    args: [string];
+    description: string;
+  };
 }
 
 const INTERNAL_REMOTE = "__natstack";
@@ -70,10 +75,20 @@ export async function publishWorkspaceRepo(
     commit,
     changed,
     pushed: true,
+    buildEventsQuery: {
+      service: "build.listRecentBuildEvents",
+      args: [buildEventRepoPath(repoPath)],
+      description:
+        "Push-triggered builds run asynchronously; query this for recent build failures.",
+    },
     message: changed
       ? `Committed ${commit?.slice(0, 7) ?? "unknown"} and pushed to ${INTERNAL_REMOTE}/${branch}`
       : `No working-tree changes; pushed current HEAD to ${INTERNAL_REMOTE}/${branch}`,
   };
+}
+
+function buildEventRepoPath(repoPath: string): string {
+  return repoPath.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+$/, "");
 }
 
 async function ensureInternalRemote(

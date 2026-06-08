@@ -51,6 +51,10 @@ describe("publishWorkspaceRepo", () => {
       commit: "1234567890abcdef",
       changed: true,
       pushed: true,
+      buildEventsQuery: {
+        service: "build.listRecentBuildEvents",
+        args: ["panels/app"],
+      },
     });
   });
 
@@ -68,6 +72,16 @@ describe("publishWorkspaceRepo", () => {
     });
     expect(result.changed).toBe(false);
     expect(result.commit).toBe("abc123");
+  });
+
+  it("normalizes the suggested build events query without changing git dir operations", async () => {
+    const git = createGitClientMock();
+
+    const result = await publishWorkspaceRepo(git, "./panels/app", "No-op");
+
+    expect(git.addAll).toHaveBeenCalledWith("./panels/app");
+    expect(git.push).toHaveBeenCalledWith(expect.objectContaining({ dir: "./panels/app" }));
+    expect(result.buildEventsQuery.args).toEqual(["panels/app"]);
   });
 
   it("does not use or overwrite an existing origin remote", async () => {

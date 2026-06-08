@@ -162,6 +162,25 @@ export interface CompleteWorkspaceDependenciesResult {
     error: string;
   }>;
 }
+export interface BuildEventTriggerOrigin {
+  callerId: string;
+  callerKind: string;
+  code?: unknown;
+}
+export interface RecentBuildEvent {
+  type: "build-started" | "build-complete" | "build-error";
+  name: string;
+  relativePath?: string;
+  buildKey?: string;
+  error?: string;
+  trigger?: {
+    repo: string;
+    branch: string;
+    commit: string;
+    origin?: BuildEventTriggerOrigin;
+  };
+  timestamp: string;
+}
 export interface RuntimeGitApi {
   http: CredentialClient["gitHttp"];
   importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo>;
@@ -177,6 +196,7 @@ export interface RuntimeGitApi {
     remoteName: string
   ): Promise<Record<string, unknown> | undefined>;
   ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }>;
+  listRecentBuildEvents(unitNameOrPath?: string): Promise<RecentBuildEvent[]>;
   publishWorkspaceRepo(
     repoPath: string,
     message: string,
@@ -387,6 +407,9 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     },
     ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }> {
       return callMain("git.ensureRepoPresentInContexts", repoPath);
+    },
+    listRecentBuildEvents(unitNameOrPath?: string): Promise<RecentBuildEvent[]> {
+      return callMain("build.listRecentBuildEvents", unitNameOrPath);
     },
     publishWorkspaceRepo(
       repoPath: string,

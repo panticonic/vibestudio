@@ -31,6 +31,11 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
           "Resolve a workspace build unit and report its effective version, immutable build keys, and cached artifact metadata.",
         args: z.tuple([z.string()]),
       },
+      listRecentBuildEvents: {
+        description:
+          "List recent push-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path.",
+        args: z.tuple([z.string().optional()]),
+      },
       doctorExtension: {
         description:
           "Inspect an extension manifest, dependency routing, cached metadata, and smoke/build status.",
@@ -140,8 +145,11 @@ export function createBuildService(deps: { buildSystem: BuildSystemV2 }): Servic
             effectiveVersion,
             buildKeys,
             cachedBuilds,
+            recentBuildEvents: bs.listRecentBuildEvents(node.name),
           };
         }
+        case "listRecentBuildEvents":
+          return bs.listRecentBuildEvents(args[0] as string | undefined);
         case "doctorExtension":
           return bs.doctorExtension(args[0] as string);
         case "recompute":

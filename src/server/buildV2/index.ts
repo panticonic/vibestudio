@@ -50,7 +50,7 @@ import {
   collectTransitiveExternalDeps,
   ensureExternalDeps,
 } from "./externalDeps.js";
-import type { GitServer } from "@natstack/git-server";
+import type { GitPushEvent, GitServer } from "@natstack/git-server";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@natstack/shared/extensionRuntimeAbi";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
@@ -73,6 +73,16 @@ export interface ExtensionDoctorReport {
   dependencyDiagnostics: ExtensionDependencyDiagnostics;
   buildMetadata: BuildResult["metadata"] | null;
   checks: Array<{ name: string; status: "pass" | "warn" | "fail"; message: string }>;
+}
+
+export interface BuildSystemBuildEvent {
+  type: "build-started" | "build-complete" | "build-error";
+  name: string;
+  relativePath?: string;
+  buildKey?: string;
+  error?: string;
+  trigger?: GitPushEvent;
+  timestamp: string;
 }
 
 export type { BuildUnitOptions } from "./builder.js";
@@ -156,6 +166,9 @@ export interface BuildSystemV2 {
 
   /** Get the workspace root */
   getWorkspaceRoot(): string;
+
+  /** Recent push-triggered build lifecycle events and failures. */
+  listRecentBuildEvents(unitName?: string): BuildSystemBuildEvent[];
 
   /**
    * Register a callback for when a push-triggered build completes.
@@ -271,12 +284,39 @@ export async function initBuildSystemV2(
   let currentEvMap = initResult.evMap;
   let currentContentHashes: ContentHashMap = initResult.contentHashes;
   let currentGraph = graph;
+  const recentBuildEvents: BuildSystemBuildEvent[] = [];
+  const recordBuildEvent = (event: Omit<BuildSystemBuildEvent, "relativePath" | "timestamp">) => {
+    const node = currentGraph.tryGet(event.name);
+    recentBuildEvents.push({
+      ...event,
+      relativePath: node?.relativePath,
+      timestamp: new Date().toISOString(),
+    });
+    if (recentBuildEvents.length > 200) {
+      recentBuildEvents.splice(0, recentBuildEvents.length - 200);
+    }
+  };
 
   pushTrigger.on("graph-updated", ({ graph: g, evMap: ev, contentHashes: ch }) => {
     currentGraph = g;
     currentEvMap = ev;
     currentContentHashes = ch;
   });
+  pushTrigger.on("build-started", ({ name, trigger }: { name: string; trigger?: GitPushEvent }) => {
+    recordBuildEvent({ type: "build-started", name, trigger });
+  });
+  pushTrigger.on(
+    "build-complete",
+    ({ name, buildKey, trigger }: { name: string; buildKey: string; trigger?: GitPushEvent }) => {
+      recordBuildEvent({ type: "build-complete", name, buildKey, trigger });
+    }
+  );
+  pushTrigger.on(
+    "build-error",
+    ({ name, error, trigger }: { name: string; error: string; trigger?: GitPushEvent }) => {
+      recordBuildEvent({ type: "build-error", name, error, trigger });
+    }
+  );
 
   // ---------------------------------------------------------------------------
   // Public API
@@ -292,7 +332,15 @@ export async function initBuildSystemV2(
     options?: BuildUnitOptions
   ): Promise<BuildResult | { bundle: string }> {
     // unitPath can be a package name or workspace-relative path
-    let node = resolveUnit(currentGraph, unitPath, workspaceRoot);
+    const resolveRequestedUnit = (): { node: GraphNode | null; libraryEntrySubpath?: string } => {
+      if (options?.library) {
+        const parsed = resolveLibraryUnit(currentGraph, unitPath);
+        if (parsed) return parsed;
+      }
+      return { node: resolveUnit(currentGraph, unitPath, workspaceRoot) };
+    };
+    let resolved = resolveRequestedUnit();
+    let node = resolved.node;
     if (!node) {
       // Unit not in current graph — may have been just created via create_project.
       // Try a quick rediscovery before giving up.
@@ -305,7 +353,8 @@ export async function initBuildSystemV2(
       persistRefState(snapshotRefState(newGraph));
       pushTrigger.updateState(newGraph, result.evMap, result.contentHashes);
 
-      node = resolveUnit(currentGraph, unitPath, workspaceRoot);
+      resolved = resolveRequestedUnit();
+      node = resolved.node;
       if (!node) {
         // @natstack/* packages aren't in the workspace graph — they're compiled
         // platform packages in node_modules. Build them as library bundles
@@ -318,6 +367,9 @@ export async function initBuildSystemV2(
         throw new Error(`Unknown build unit: ${unitPath}`);
       }
     }
+    const buildOptions = options?.library
+      ? { ...options, library: true, libraryEntrySubpath: resolved.libraryEntrySubpath ?? "." }
+      : options;
 
     // ── Ref-specific build path ──
     if (ref) {
@@ -359,7 +411,7 @@ export async function initBuildSystemV2(
         throw new Error(`No effective version for ${node.name} at ref ${ref}`);
       }
 
-      const build = await buildUnit(node, ev, currentGraph, workspaceRoot, commitMap, options);
+      const build = await buildUnit(node, ev, currentGraph, workspaceRoot, commitMap, buildOptions);
       return options?.library ? libraryBuildResult(build) : build;
     }
 
@@ -397,7 +449,7 @@ export async function initBuildSystemV2(
     }
 
     // Build on demand (buildUnit handles cache + coalescing internally)
-    const build = await buildUnit(node, ev, currentGraph, workspaceRoot, undefined, options);
+    const build = await buildUnit(node, ev, currentGraph, workspaceRoot, undefined, buildOptions);
     return options?.library ? libraryBuildResult(build) : build;
   } as BuildSystemV2["getBuild"];
 
@@ -643,6 +695,19 @@ export async function initBuildSystemV2(
       return workspaceRoot;
     },
 
+    listRecentBuildEvents(unitName?: string): BuildSystemBuildEvent[] {
+      const lookupKeys = unitName ? normalizeBuildEventLookupKeys(unitName, workspaceRoot) : null;
+      const events = unitName
+        ? recentBuildEvents.filter(
+            (event) =>
+              lookupKeys?.has(event.name) ||
+              (event.relativePath ? lookupKeys?.has(event.relativePath) : false) ||
+              (event.trigger?.repo ? lookupKeys?.has(event.trigger.repo) : false)
+          )
+        : recentBuildEvents;
+      return [...events];
+    },
+
     onPushBuild(callback: (source: string) => void): void {
       pushTrigger.on("build-complete", ({ name }: { name: string }) => {
         const node = currentGraph.tryGet(name);
@@ -682,6 +747,55 @@ function resolveUnit(
   }
 
   return null;
+}
+
+function resolveLibraryUnit(
+  graph: PackageGraph,
+  specifier: string
+): { node: GraphNode; libraryEntrySubpath: string } | null {
+  const names = graph
+    .allNodes()
+    .map((node) => node.name)
+    .sort((a, b) => b.length - a.length);
+
+  for (const name of names) {
+    if (specifier === name) {
+      return { node: graph.get(name), libraryEntrySubpath: "." };
+    }
+    if (specifier.startsWith(`${name}/`)) {
+      return {
+        node: graph.get(name),
+        libraryEntrySubpath: `./${specifier.slice(name.length + 1)}`,
+      };
+    }
+  }
+
+  return null;
+}
+
+function normalizeBuildEventLookupKeys(input: string, workspaceRoot: string): Set<string> {
+  const keys = new Set<string>();
+  const add = (value: string): void => {
+    const normalized = value
+      .replace(/\\/g, "/")
+      .replace(/^\.\/+/, "")
+      .replace(/\/+$/, "");
+    if (normalized) keys.add(normalized);
+  };
+
+  const raw = input.trim();
+  if (!raw) return keys;
+  add(raw);
+
+  if (path.isAbsolute(raw)) {
+    const relative = path.relative(workspaceRoot, raw);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) add(relative);
+  }
+
+  const workspacePrefixed = raw.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  if (workspacePrefixed.startsWith("workspace/")) add(workspacePrefixed.slice("workspace/".length));
+
+  return keys;
 }
 
 function sourcemapForNode(node: GraphNode): boolean {

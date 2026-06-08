@@ -229,6 +229,25 @@ export interface CompleteWorkspaceDependenciesResult {
     error: string;
   }>;
 }
+export interface BuildEventTriggerOrigin {
+  callerId: string;
+  callerKind: string;
+  code?: unknown;
+}
+export interface RecentBuildEvent {
+  type: "build-started" | "build-complete" | "build-error";
+  name: string;
+  relativePath?: string;
+  buildKey?: string;
+  error?: string;
+  trigger?: {
+    repo: string;
+    branch: string;
+    commit: string;
+    origin?: BuildEventTriggerOrigin;
+  };
+  timestamp: string;
+}
 const gitApi = {
   http: credentialGitHttp,
   importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo> {
@@ -255,6 +274,9 @@ const gitApi = {
   },
   ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }> {
     return rpc.call("main", "git.ensureRepoPresentInContexts", [repoPath]);
+  },
+  listRecentBuildEvents(unitNameOrPath?: string): Promise<RecentBuildEvent[]> {
+    return rpc.call("main", "build.listRecentBuildEvents", [unitNameOrPath]);
   },
   publishWorkspaceRepo(
     repoPath: string,

@@ -38,6 +38,7 @@ function makeBuildSystem(): BuildSystemV2 {
     ),
     getEffectiveVersion: vi.fn(),
     getExternalDeps: vi.fn(),
+    listRecentBuildEvents: vi.fn(() => []),
     doctorExtension: vi.fn(async () => ({
       name: "@workspace-extensions/example",
       kind: "extension" as const,
@@ -141,6 +142,24 @@ describe("build service extension diagnostics", () => {
   it("reports build provenance for a workspace unit", async () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getEffectiveVersion).mockReturnValue("ev-1");
+    vi.mocked(buildSystem.listRecentBuildEvents).mockReturnValue([
+      {
+        type: "build-error",
+        name: "@workspace-extensions/example",
+        relativePath: "extensions/example",
+        error: "Build failed with 1 error: missing module",
+        trigger: {
+          repo: "extensions/example",
+          branch: "main",
+          commit: "abcdef123",
+          origin: {
+            callerId: "panel:test",
+            callerKind: "panel",
+          },
+        },
+        timestamp: "2026-01-01T00:00:01.000Z",
+      },
+    ]);
     const service = createBuildService({ buildSystem });
 
     await expect(
@@ -169,7 +188,54 @@ describe("build service extension diagnostics", () => {
           key: expect.any(String),
         }),
       },
+      recentBuildEvents: [
+        expect.objectContaining({
+          type: "build-error",
+          error: "Build failed with 1 error: missing module",
+          trigger: expect.objectContaining({
+            origin: expect.objectContaining({ callerId: "panel:test" }),
+          }),
+        }),
+      ],
     });
+  });
+
+  it("lists recent push-triggered build events", async () => {
+    const buildSystem = makeBuildSystem();
+    vi.mocked(buildSystem.listRecentBuildEvents).mockReturnValue([
+      {
+        type: "build-error",
+        name: "@workspace-panels/example",
+        relativePath: "panels/example",
+        error: "Could not resolve node:buffer",
+        trigger: {
+          repo: "panels/example",
+          branch: "main",
+          commit: "abcdef123",
+          origin: {
+            callerId: "panel:test",
+            callerKind: "panel",
+          },
+        },
+        timestamp: "2026-01-01T00:00:01.000Z",
+      },
+    ]);
+    const service = createBuildService({ buildSystem });
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "listRecentBuildEvents", [
+        "panels/example",
+      ])
+    ).resolves.toEqual([
+      expect.objectContaining({
+        name: "@workspace-panels/example",
+        error: "Could not resolve node:buffer",
+        trigger: expect.objectContaining({
+          origin: expect.objectContaining({ callerId: "panel:test" }),
+        }),
+      }),
+    ]);
+    expect(buildSystem.listRecentBuildEvents).toHaveBeenCalledWith("panels/example");
   });
 
   it("does not guess build provenance when a basename is ambiguous", async () => {

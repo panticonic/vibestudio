@@ -75,6 +75,12 @@ export interface GitPushEvent {
   branch: string;
   /** New commit SHA */
   commit: string;
+  /** Verified runtime identity that caused the push, when available. */
+  origin?: {
+    callerId: string;
+    callerKind: string;
+    code?: VerifiedCaller["code"];
+  };
 }
 
 export interface DevMirrorConfig {
@@ -306,7 +312,16 @@ export class GitServer {
             });
 
             // Emit push event after checkout so listeners see the updated working tree
-            const event: GitPushEvent = { repo, branch, commit: push.commit };
+            const event: GitPushEvent = {
+              repo,
+              branch,
+              commit: push.commit,
+              origin: {
+                callerId: identity.runtime.id,
+                callerKind: identity.runtime.kind,
+                ...(identity.code ? { code: identity.code } : {}),
+              },
+            };
             for (const fn of this.pushListeners) fn(event);
           });
         });

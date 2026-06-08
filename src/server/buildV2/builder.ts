@@ -1136,10 +1136,10 @@ export function createPlaywrightCoreBrowserPlugins(
 export function createPlaywrightCoreBrowserBuildOptions(
   sourcePath: string,
   outfile: string,
-  options: { nodePaths?: string[]; logLevel?: esbuild.LogLevel } = {}
+  options: { entryFile?: string; nodePaths?: string[]; logLevel?: esbuild.LogLevel } = {}
 ): esbuild.BuildOptions {
   return {
-    entryPoints: [path.join(sourcePath, "src", "index.ts")],
+    entryPoints: [options.entryFile ?? path.join(sourcePath, "src", "index.ts")],
     bundle: true,
     platform: "browser",
     target: "ES2020",
@@ -1483,6 +1483,8 @@ export interface BuildUnitOptions {
   library?: boolean;
   /** Externals for library builds — specifiers to emit as require() calls */
   externals?: string[];
+  /** Package export subpath to use as the library entry point. */
+  libraryEntrySubpath?: string;
 }
 
 /**
@@ -1509,7 +1511,12 @@ export async function buildUnit(
       : node.manifest.sourcemap !== false;
   const effectiveEv = options?.library
     ? `${ev}:lib:${createHash("sha256")
-        .update(JSON.stringify(options.externals ?? []))
+        .update(
+          JSON.stringify({
+            externals: options.externals ?? [],
+            entry: options.libraryEntrySubpath ?? ".",
+          })
+        )
         .digest("hex")
         .slice(0, 12)}`
     : node.kind === "extension"
@@ -1574,7 +1581,8 @@ async function doBuild(
         graph,
         workspaceRoot,
         extracted.sourceRoot,
-        options.externals ?? []
+        options.externals ?? [],
+        options.libraryEntrySubpath ?? "."
       );
     } else if (node.kind === "worker") {
       return await buildWorker(
@@ -3047,21 +3055,27 @@ async function buildLibraryBundle(
   graph: PackageGraph,
   workspaceRoot: string,
   sourceRoot: string,
-  externals: string[]
+  externals: string[],
+  entrySubpath = "."
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
 
   try {
     const outfile = path.join(env.outdir, "bundle.js");
+    const entryFile =
+      entrySubpath === "."
+        ? env.entryFile
+        : resolvePackageExportEntryPoint(node, env.sourcePath, entrySubpath);
     if (node.name === PLAYWRIGHT_CORE_PACKAGE) {
       await esbuild.build(
         createPlaywrightCoreBrowserBuildOptions(env.sourcePath, outfile, {
+          entryFile,
           nodePaths: env.nodePaths,
         })
       );
     } else {
       await esbuild.build({
-        entryPoints: [env.entryFile],
+        entryPoints: [entryFile],
         bundle: true,
         format: "cjs",
         platform: "browser",
@@ -3434,4 +3448,33 @@ export function resolveEntryPoint(node: GraphNode, sourcePath: string): string {
   }
 
   throw new Error(`No entry point found for ${node.name} at ${sourcePath}`);
+}
+
+function resolvePackageExportEntryPoint(
+  node: GraphNode,
+  sourcePath: string,
+  subpath: string
+): string {
+  const normalized = subpath === "." ? "." : subpath.startsWith("./") ? subpath : `./${subpath}`;
+  const pkgJsonPath = path.join(sourcePath, "package.json");
+  if (!fs.existsSync(pkgJsonPath)) {
+    throw new Error(`No package.json found for ${node.name} at ${sourcePath}`);
+  }
+
+  const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
+    exports?: Record<string, unknown>;
+  };
+  const target = pkgJson.exports
+    ? resolveExportSubpath(pkgJson.exports, normalized, PANEL_CONDITIONS)
+    : null;
+  if (!target) {
+    throw new Error(`No export ${normalized} found for ${node.name}`);
+  }
+
+  const resolved = path.resolve(sourcePath, target);
+  if (fs.existsSync(resolved)) return resolved;
+  const srcFallback = resolveSourceFallback(sourcePath, target);
+  if (srcFallback) return srcFallback;
+
+  throw new Error(`Export ${normalized} for ${node.name} resolves to missing file: ${target}`);
 }

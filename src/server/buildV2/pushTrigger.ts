@@ -35,9 +35,9 @@ import { assertPresent } from "../../lintHelpers";
 // ---------------------------------------------------------------------------
 
 export interface PushTriggerEvents {
-  "build-started": { name: string };
-  "build-complete": { name: string; buildKey: string };
-  "build-error": { name: string; error: string };
+  "build-started": { name: string; trigger?: GitPushEvent };
+  "build-complete": { name: string; buildKey: string; trigger?: GitPushEvent };
+  "build-error": { name: string; error: string; trigger?: GitPushEvent };
   "change-detected": { names: string[] };
   "graph-updated": {
     graph: PackageGraph;
@@ -114,7 +114,7 @@ export class PushTrigger extends EventEmitter {
         `[PushTrigger] Push from unknown repo "${event.repo}", triggering full rediscovery`
       );
       this.queue = this.queue
-        .then(() => this.fullRediscovery())
+        .then(() => this.fullRediscovery(undefined, event))
         .catch((error) =>
           console.error(`[PushTrigger] Error during rediscovery for ${event.repo}:`, error)
         );
@@ -133,7 +133,7 @@ export class PushTrigger extends EventEmitter {
           console.log(
             `[PushTrigger] Tracked ref push ${event.branch} for ${nodeName}, triggering full rediscovery`
           );
-          await this.fullRediscovery(nodeName);
+          await this.fullRediscovery(nodeName, event);
           return;
         }
 
@@ -142,9 +142,9 @@ export class PushTrigger extends EventEmitter {
           console.log(
             `[PushTrigger] package.json changed for ${nodeName}, triggering full rediscovery`
           );
-          await this.fullRediscovery(nodeName);
+          await this.fullRediscovery(nodeName, event);
         } else {
-          await this.processChange(nodeName, event.commit);
+          await this.processChange(nodeName, event.commit, event);
         }
       })
       .catch((error) =>
@@ -188,7 +188,11 @@ export class PushTrigger extends EventEmitter {
     return null;
   }
 
-  private async processChange(nodeName: string, commitSha: string): Promise<void> {
+  private async processChange(
+    nodeName: string,
+    commitSha: string,
+    trigger?: GitPushEvent
+  ): Promise<void> {
     // 1. Build commitMap: pushed node at push commit, deps at their EV-basis commits
     const prevRefState = loadPersistedRefState();
     const commitMap = new Map<string, string>();
@@ -249,15 +253,16 @@ export class PushTrigger extends EventEmitter {
 
       if (buildStore.has(buildKey)) continue; // Already built
 
-      this.emit("build-started", { name });
+      this.emit("build-started", { name, trigger });
 
       try {
         await buildUnit(node, ev, this.graph, this.workspaceRoot, commitMap);
-        this.emit("build-complete", { name, buildKey });
+        this.emit("build-complete", { name, buildKey, trigger });
       } catch (error) {
         this.emit("build-error", {
           name,
           error: error instanceof Error ? error.message : String(error),
+          trigger,
         });
       }
     }
@@ -297,7 +302,7 @@ export class PushTrigger extends EventEmitter {
    * Snapshot-first: captures commit SHAs for all nodes before computing EVs,
    * ensuring EV/source consistency when the same commitMap is used for extraction.
    */
-  private async fullRediscovery(sourceNodeName?: string): Promise<void> {
+  private async fullRediscovery(sourceNodeName?: string, trigger?: GitPushEvent): Promise<void> {
     // 1. Fresh graph from disk
     const newGraph = discoverPackageGraph(this.workspaceRoot);
 
@@ -353,15 +358,16 @@ export class PushTrigger extends EventEmitter {
 
       if (buildStore.has(buildKey)) continue;
 
-      this.emit("build-started", { name });
+      this.emit("build-started", { name, trigger });
 
       try {
         await buildUnit(node, ev, newGraph, this.workspaceRoot, commitMap);
-        this.emit("build-complete", { name, buildKey });
+        this.emit("build-complete", { name, buildKey, trigger });
       } catch (error) {
         this.emit("build-error", {
           name,
           error: error instanceof Error ? error.message : String(error),
+          trigger,
         });
       }
     }
