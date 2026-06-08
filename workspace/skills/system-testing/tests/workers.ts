@@ -1,5 +1,9 @@
 import type { TestCase } from "../types.js";
-import { finalMessageHasAll, noIncompleteInvocations } from "./_helpers.js";
+import {
+  finalMessageHasAll,
+  finalMessageHasMarkerCount,
+  noIncompleteInvocations,
+} from "./_helpers.js";
 
 function checked(result: Parameters<typeof finalMessageHasAll>[0], tokens: string[]) {
   const msg = finalMessageHasAll(result, tokens);
@@ -12,8 +16,13 @@ export const workerTests: TestCase[] = [
     name: "list-sources",
     description: "List available worker types",
     category: "workers",
-    prompt: "Exercise listing worker sources. Finish with WORKER_SOURCES_OK and count.",
-    validate: (result) => checked(result, ["WORKER_SOURCES_OK", "count"]),
+    prompt:
+      "Exercise listing worker sources. Finish with WORKER_SOURCES_OK followed by the numeric count.",
+    validate: (result) => {
+      const msg = finalMessageHasMarkerCount(result, "WORKER_SOURCES_OK");
+      if (!msg.passed) return msg;
+      return noIncompleteInvocations(result);
+    },
   },
   {
     name: "create-worker",
@@ -26,8 +35,13 @@ export const workerTests: TestCase[] = [
     name: "list-workers",
     description: "List running worker instances",
     category: "workers",
-    prompt: "Exercise listing running workers. Finish with WORKER_LIST_OK and count.",
-    validate: (result) => checked(result, ["WORKER_LIST_OK", "count"]),
+    prompt:
+      "Exercise listing running workers. Finish with WORKER_LIST_OK followed by the numeric count.",
+    validate: (result) => {
+      const msg = finalMessageHasMarkerCount(result, "WORKER_LIST_OK");
+      if (!msg.passed) return msg;
+      return noIncompleteInvocations(result);
+    },
   },
   {
     name: "create-destroy",

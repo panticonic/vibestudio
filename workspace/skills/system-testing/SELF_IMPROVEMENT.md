@@ -31,7 +31,7 @@ the full stage list, or test result arrays from eval calls.
 ```
 eval({
   code: `
-    import { allTests, testStageChoices, testStages } from "@workspace-skills/system-testing";
+    import { allTests, testStageChoices, testStages } from "@workspace-skills/system-testing/stages";
     const tests = allTests();
     const stages = testStages(tests);
     const stageOptions = testStageChoices(stages);
@@ -92,7 +92,9 @@ errors are separate setup failures.
 ```
 eval({
   code: `
-    import { HeadlessRunner, TestRunner, allTests, nextSelectedStage } from "@workspace-skills/system-testing";
+    import { HeadlessRunner } from "@workspace-skills/system-testing/runner";
+    import { TestRunner } from "@workspace-skills/system-testing/test-runner";
+    import { allTests, nextSelectedStage } from "@workspace-skills/system-testing/stages";
     import { contextId } from "@workspace/runtime";
     const tests = allTests();
     const run = scope.systemTestingRun;
@@ -209,7 +211,7 @@ For each failed test, inspect **everything** — the conversation, every tool ca
 Start with the bounded summary helper:
 
 ```typescript
-import { summarizeFailures } from "@workspace-skills/system-testing";
+import { summarizeFailures } from "@workspace-skills/system-testing/diagnostics";
 return summarizeFailures(scope.results);
 ```
 
@@ -276,6 +278,29 @@ The default AI agent exposes this read-only method for stall diagnosis. It
 captures dispatcher state, runner phase, persisted pending work, checkpoints,
 and recent lifecycle/debug events. See `docs/agent-debug-port.md` for the full
 field guide.
+
+If a build or import failure follows a successful git push, inspect the server's
+push-triggered build event buffer before retrying. The push call can return
+before the background build finishes:
+
+```typescript
+import { git, rpc } from "@workspace/runtime";
+
+return {
+  recent: await git.listRecentBuildEvents(),
+  forRepo: await git.listRecentBuildEvents("panels/example"),
+  unit: await rpc.call("main", "build.inspectBuildProvenance", [
+    "panels/example",
+  ]),
+};
+```
+
+`build.listRecentBuildEvents` can be filtered with a unit name or
+workspace-relative path. Push-triggered events include `trigger.repo`,
+`trigger.branch`, `trigger.commit`, and `trigger.origin` when the git server can
+attribute the push to a runtime caller. Results from `git.publishWorkspaceRepo(...)`
+also include `buildEventsQuery`, a machine-readable reminder for the same
+follow-up lookup.
 
 ## Phase 3: Classify the Root Cause
 

@@ -5,6 +5,11 @@
   "type": "module",
   "exports": {
     ".": "./index.ts",
+    "./diagnostics": "./diagnostics.ts",
+    "./report": "./messages/report.ts",
+    "./runner": "./runner.ts",
+    "./stages": "./stages.ts",
+    "./test-runner": "./test-runner.ts",
     "./tests/*": "./tests/*.ts"
   },
   "dependencies": {

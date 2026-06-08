@@ -22,7 +22,9 @@ Spin up headless agentic sessions to systematically test every NatStack capabili
 ```
 eval({
   code: `
-    import { HeadlessRunner, TestRunner, smokeTests } from "@workspace-skills/system-testing";
+    import { HeadlessRunner } from "@workspace-skills/system-testing/runner";
+    import { TestRunner } from "@workspace-skills/system-testing/test-runner";
+    import { smokeTests } from "@workspace-skills/system-testing/stages";
     import { contextId } from "@workspace/runtime";
 
     const runner = new HeadlessRunner(contextId);
@@ -43,7 +45,7 @@ eval({
 })
 ```
 
-Workspace packages like `@workspace-skills/system-testing` are auto-resolved — the build system builds them on first import. No `imports` parameter needed.
+Workspace packages like `@workspace-skills/system-testing/stages` are auto-resolved - the build system builds them on first import. No `imports` parameter needed.
 
 ## Full Suite
 
@@ -65,7 +67,7 @@ eval calls.
 ```
 eval({
   code: `
-    import { allTests, testStageChoices, testStages } from "@workspace-skills/system-testing";
+    import { allTests, testStageChoices, testStages } from "@workspace-skills/system-testing/stages";
     const tests = allTests();
     const stages = testStages(tests);
     const stageOptions = testStageChoices(stages);
@@ -175,7 +177,9 @@ error you actually observed, verbatim, with the operation that produced it.
 ```
 eval({
   code: `
-    import { HeadlessRunner, TestRunner, allTests, nextSelectedStage } from "@workspace-skills/system-testing";
+    import { HeadlessRunner } from "@workspace-skills/system-testing/runner";
+    import { TestRunner } from "@workspace-skills/system-testing/test-runner";
+    import { allTests, nextSelectedStage } from "@workspace-skills/system-testing/stages";
     import { contextId } from "@workspace/runtime";
     const tests = allTests();
     const run = scope.systemTestingRun;
@@ -289,7 +293,7 @@ deterministic stage eval):
 ```
 eval({
   code: `
-    import { reportStage } from "@workspace-skills/system-testing";
+    import { reportStage } from "@workspace-skills/system-testing/report";
     await reportStage(chat, scope, {
       prose: "<2-4 sentences: what passed, what failed, and the most likely cause>",
     });
@@ -320,7 +324,7 @@ inspect"; those are pointers, not diagnosis.**
 For a bounded structured packet that is safe to paste into a handoff report:
 
 ```typescript
-import { summarizeFailures } from "@workspace-skills/system-testing";
+import { summarizeFailures } from "@workspace-skills/system-testing/diagnostics";
 
 return summarizeFailures(scope.results, {
   failures: 12,
@@ -438,6 +442,31 @@ return {
 
 You can also call `await runner.collectDiagnostics({ channelId, error })` to
 produce the same bounded packet explicitly.
+
+### Background build failures
+
+Some build failures happen after a successful git push, on the server's
+push-triggered background build path. Those failures are not returned by the
+git push call itself. Query the build service before retrying or guessing:
+
+```typescript
+import { git, rpc } from "@workspace/runtime";
+
+return {
+  recent: await git.listRecentBuildEvents(),
+  forRepo: await git.listRecentBuildEvents("panels/example"),
+  panel: await rpc.call("main", "build.inspectBuildProvenance", [
+    "panels/example",
+  ]),
+};
+```
+
+`build.listRecentBuildEvents` accepts an optional unit name or workspace path,
+for example `["panels/example"]`. Events include `build-error` messages and, for
+push-triggered builds, a `trigger` with repo, branch, commit, and the verified
+caller that caused the push when the server can attribute it. Results from
+`git.publishWorkspaceRepo(...)` also include `buildEventsQuery`, a machine-readable
+reminder for the same follow-up lookup.
 
 ### Agent debug port
 

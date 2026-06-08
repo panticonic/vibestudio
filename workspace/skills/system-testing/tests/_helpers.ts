@@ -80,6 +80,25 @@ export function finalMessageHasAny(result: TestExecutionResult, tokens: readonly
   };
 }
 
+export function finalMessageHasMarkerCount(
+  result: TestExecutionResult,
+  marker: string
+): { passed: boolean; reason?: string } {
+  const msg = findLastAgentMessage(result);
+  if (!msg) return { passed: false, reason: "No agent response received" };
+  const escapedMarker = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(
+    `\\b${escapedMarker}\\b\\s*[:=-]?\\s*(?:count\\s*[:=-]?\\s*)?(\\d+)\\b`,
+    "i"
+  ).exec(msg);
+  return {
+    passed: Boolean(match),
+    reason: match
+      ? undefined
+      : `Missing ${marker} followed by a numeric count in response: ${msg.slice(0, 400)}`,
+  };
+}
+
 export function noIncompleteInvocations(result: TestExecutionResult): { passed: boolean; reason?: string } {
   const incomplete = incompleteToolCalls(result);
   return {

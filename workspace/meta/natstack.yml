@@ -100,7 +100,7 @@ initPanels:
         eval (the system-testing docs describe it):
 
             eval({ code: `
-              import { reportStage } from "@workspace-skills/system-testing";
+              import { reportStage } from "@workspace-skills/system-testing/report";
               await reportStage(chat, scope, {
                 prose: "<2-4 sentences you write: what passed, what failed, and the most likely cause>",
               });
