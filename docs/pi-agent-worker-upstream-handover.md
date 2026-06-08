@@ -119,8 +119,8 @@ The upstream harness owns:
 Assessment: do not port wholesale. NatStack has different durability and UI
 boundaries: DO SQLite, channels, method-result recovery, URL-bound credentials,
 forking, and hibernation. The upstream harness is still useful as a design
-reference for specific mechanics, especially turn-state snapshots and pending
-write flushing.
+reference for specific mechanics, especially per-turn context snapshots and
+pending write flushing.
 
 ### 2. Upstream added `prepareNextTurn`
 

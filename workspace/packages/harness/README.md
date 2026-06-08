@@ -26,8 +26,8 @@ This package wraps `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`
 Before this package's rewrite, NatStack used a 4-layer pipeline with a Node.js
 child process running the Anthropic SDK. That layer is gone. Pi runs
 in-process inside the worker DO, the agent worker imports `PiRunner`
-directly, and the chat UI consumes Pi state via two ephemeral channel streams
-(`natstack-state-snapshot` + `natstack-text-delta`).
+directly, and `PiRunner` emits canonical `agentic.trajectory.v1` events that
+are persisted in GAD and published to the channel log for transcript consumers.
 
 See `docs/pi-architecture.md` for the deep dive.
 

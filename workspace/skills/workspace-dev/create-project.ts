@@ -321,9 +321,9 @@ import type { ParticipantDescriptor } from "@workspace/harness";
  *
  * Pi (\`@earendil-works/pi-agent-core\`) runs in-process. The base class
  * handles channel subscriptions, the channel event pipeline, the per-channel
- * PiRunner lifecycle, and forwards Pi state to the channel as snapshot/text-delta
- * ephemerals. You only need to override the small set of customization hooks
- * below.
+ * PiRunner lifecycle, and publishes durable agentic trajectory events to the
+ * channel transcript. You only need to override the small set of customization
+ * hooks below.
  *
  * The system prompt is composed from the NatStack base prompt,
  * workspace/meta/AGENTS.md, the generated skill index, and optional channel

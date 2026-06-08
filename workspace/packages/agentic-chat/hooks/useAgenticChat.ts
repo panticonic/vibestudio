@@ -247,7 +247,7 @@ export function useAgenticChat({
       mgr.dispose();
     };
   }, []);
-  // --- Core (Pi-native: messages from snapshots, no event reducer) ---
+  // --- Core (durable channel trajectory events -> transcript view model) ---
   const core = useChatCore({
     config,
     channelName,

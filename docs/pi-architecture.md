@@ -198,9 +198,11 @@ runner.subscribe((event) => {
 });
 ```
 
-The worker's default behavior forwards a subset to the channel as ephemeral
-streams. To inspect the event flow, log inside `forwardPiEvent` in
-`agent-worker-base.ts` or attach a second listener via `runner.subscribe()`.
+`PiRunner` maps Pi lifecycle events into durable `agentic.trajectory.v1` events
+and publishes selected events to the channel log. To inspect the transcript
+flow, trace `PiRunner.handleMessageStart`, `handleMessageUpdate`,
+`handleMessageEnd`, and `appendTrajectoryEvents`, or attach a second listener
+via `runner.subscribe()`.
 
 ## Where State Lives
 

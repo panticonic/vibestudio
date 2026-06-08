@@ -1,9 +1,11 @@
 // =============================================================================
 // @workspace/agentic-core — Headless agentic session helpers
 //
-// Pi (`@earendil-works/pi-agent-core`) owns chat state. This package provides:
+// Pi (`@earendil-works/pi-agent-core`) owns live agent session execution.
+// Durable transcript state is projected from channel trajectory events. This
+// package provides:
 // - Pi message/event type re-exports (single import surface for consumers)
-// - The signal event envelope used by the channel snapshot stream
+// - The signal event envelope used by transient structured channel payloads
 // - The eval tool factory
 // - The sandbox config factory
 // - Connection management primitives
@@ -63,7 +65,7 @@ export type {
   SignalMessageLike,
 } from "./signal-event-envelope.js";
 
-// --- Derived UI shapes (computed from Pi snapshots for component rendering) ---
+// --- Derived UI shapes (computed from channel trajectory events for rendering) ---
 export type {
   ChatMessage,
   PendingAgent,
@@ -110,5 +112,3 @@ export {
   unwrapChatMethodResult,
 } from "./invocation-result.js";
 export type { ChatMethodResult } from "./invocation-result.js";
-
-// --- Pi snapshot → ChatMessage[] deriver (removed: channel messages replace snapshots) ---

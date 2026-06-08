@@ -15,10 +15,9 @@ Panel (browser)          Channel DO (workerd)     Worker DO (workerd, embeds Pi)
      │                        │                        │  Pi AgentSession streams     │
      │                        │                        │  events in-process           │
      │                        │                        │                              │
-     │                        │◄── sendEphemeralEvent ──◄── snapshot/text-delta ◄────┘
-     │◄── ephemeral message ──│   (state snapshots +
-     │                        │    typing-indicator
-     │                        │    deltas)
+     │                        │◄── persisted trajectory events ◄─────────────┘
+     │◄── channel log event ──│   (message.started/delta/completed,
+     │                        │    invocation.*, turn.*)
      │                        │                        │
      │── method-result ──────►│── persisted event ─────►│── resolve continuation Promise
      │                        │                        │
@@ -30,29 +29,36 @@ Panel (browser)          Channel DO (workerd)     Worker DO (workerd, embeds Pi)
   channel-tools extension can use bare method names without collision.
 - **Worker DO** — `workspace/packages/agentic-do/src/agent-worker-base.ts`.
   Owns one `PiRunner` per channel; Pi's `AgentSession` runs in-process.
-  Forwards Pi events to the channel as ephemeral state-snapshot + text-delta
-  streams.
+  `PiRunner` converts Pi lifecycle events into canonical
+  `agentic.trajectory.v1` events, appends them to GAD, and publishes selected
+  events to the channel log for transcript consumers.
 
-## Key design principle: Pi is the source of truth
+## Key design principle: trajectory events are the transcript source
 
-Pi's `AgentSession.state.messages` is authoritative. The chat UI does NOT
-maintain its own message reducer or event-replay state machine — it just
-renders the latest snapshot the worker pushes. There are no parallel state
-machines, no `MessageState`, no `MethodHistoryTracker`, no `StreamWriter`.
+Pi owns live provider/session execution inside a turn. Durable transcript state
+is represented as `agentic.trajectory.v1` events:
 
-### Two ephemeral channel streams
+- `message.started`, `message.delta`, `message.completed`, `message.failed`
+- `invocation.started`, `invocation.output`, `invocation.completed`, etc.
+- `turn.opened`, `turn.waiting`, `turn.closed`
 
-The worker forwards Pi events as two ephemeral channel messages:
+The chat UI consumes persisted channel envelopes with
+`payloadKind: "agentic.trajectory.v1/event"` and reduces them through
+`@workspace/agentic-protocol` into the rendered transcript. Signal messages are
+still used for transient extension/status UI, but not as the authoritative chat
+transcript.
 
-| contentType               | Payload                                              | When                                                                                                                             |
-| ------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `natstack-state-snapshot` | `{ messages: AgentMessage[]; isStreaming: boolean }` | After every meaningful Pi state change: `message_end`, `tool_execution_end`, `auto_compaction_end`, `auto_retry_end`, `turn_end` |
-| `natstack-text-delta`     | `{ messageId: string; delta: string }`               | For every Pi `message_update` text_delta event                                                                                   |
+### Channel event flow
 
-Snapshots are idempotent — the consumer renders the latest one. Text deltas
-are purely cosmetic typing-indicator fodder; the next snapshot replaces them
-wholesale. The chat UI's `usePiSessionSnapshot` and `usePiTextDeltas` hooks
-read these streams via `parseEphemeralEvent` from `@workspace/agentic-core`.
+1. User/panel messages are published as durable `message.completed` events.
+2. `AgentWorkerBase.shouldProcess()` accepts client-originated
+   `message.completed` events and turns them into `PiRunner` input.
+3. `PiRunner` listens to Pi `message_start`, `message_update`, `message_end`,
+   tool, and turn lifecycle events.
+4. `PiRunner.appendTrajectoryEvents()` writes canonical trajectory events to
+   GAD and asks GAD to publish selected events to the channel.
+5. `useChannelMessages()` subscribes to replay + live channel events and
+   reduces them into `ChatMessage[]`.
 
 ## DO Base Classes
 
@@ -196,8 +202,8 @@ NatStack-bound.
 | Channel client package       | workspace package                     | Panel-side channel client and protocol types                                                |
 | `@workspace/runtime`         | `workspace/packages/runtime/`         | DurableObjectBase, HttpRpcBridge                                                            |
 | `@workspace/agentic-do`      | `workspace/packages/agentic-do/`      | AgentWorkerBase, ChannelClient, ContinuationStore, SubscriptionManager                      |
-| `@workspace/agentic-core`    | `workspace/packages/agentic-core/`    | EphemeralEventEnvelope, derivePiSnapshot, derived UI types, ConnectionManager               |
-| `@workspace/agentic-chat`    | `workspace/packages/agentic-chat/`    | usePiSessionSnapshot, usePiTextDeltas, useChatCore (Pi-native)                              |
+| `@workspace/agentic-core`    | `workspace/packages/agentic-core/`    | Derived UI types, channel-view to chat projection, ConnectionManager                        |
+| `@workspace/agentic-chat`    | `workspace/packages/agentic-chat/`    | useChannelMessages, useChatCore, useAgenticChat                                             |
 | `@workspace/agentic-session` | `workspace/packages/agentic-session/` | HeadlessSession (Pi-native programmatic interface)                                          |
 | Workers                      | `workspace/workers/`                  | AiChatWorker, TestAgentWorker (both extend AgentWorkerBase)                                 |
 
