@@ -12,6 +12,8 @@
     }
   },
   "dependencies": {
-    "@natstack/shared": "workspace:*"
+    "@natstack/env-paths": "workspace:*",
+    "@natstack/shared": "workspace:*",
+    "@natstack/typecheck": "workspace:*"
   }
 }

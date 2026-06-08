@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PANEL_PRINCIPAL_PREFIX } from "@natstack/shared/principalIds";
-import { typeCheckRpcMethods } from "@natstack/shared/typecheck/service";
+import { typeCheckRpcMethods } from "./typecheckService.js";
 import {
   discoverWorkspaceContext,
   type WorkspaceContext,

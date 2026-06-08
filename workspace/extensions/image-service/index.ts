@@ -2,9 +2,9 @@ import {
   resizeImage,
   formatDimensionNote,
   type ImageResizeOptions,
-} from "@natstack/shared/image/image-resize";
-import { convertImage } from "@natstack/shared/image/image-convert";
-import { detectMimeFromBytes } from "@natstack/shared/image/mime";
+} from "./image/image-resize.js";
+import { convertImage } from "./image/image-convert.js";
+import { detectMimeFromBytes } from "./image/mime.js";
 
 function toUint8Array(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value;

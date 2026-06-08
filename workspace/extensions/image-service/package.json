@@ -12,6 +12,6 @@
     }
   },
   "dependencies": {
-    "@natstack/shared": "workspace:*"
+    "@silvia-odwyer/photon-node": "^0.3.4"
   }
 }

@@ -15,8 +15,6 @@
     "@natstack/dev-log": "workspace:*",
     "@natstack/env-paths": "workspace:*",
     "@natstack/rpc": "workspace:*",
-    "@natstack/typecheck": "workspace:*",
-    "@natstack/types": "workspace:*",
-    "@silvia-odwyer/photon-node": "^0.3.4"
+    "@natstack/types": "workspace:*"
   }
 }

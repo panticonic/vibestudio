@@ -636,15 +636,9 @@ importers:
       '@natstack/rpc':
         specifier: workspace:*
         version: link:../rpc
-      '@natstack/typecheck':
-        specifier: workspace:*
-        version: link:../typecheck
       '@natstack/types':
         specifier: workspace:*
         version: link:../types
-      '@silvia-odwyer/photon-node':
-        specifier: ^0.3.4
-        version: 0.3.4
 
   packages/typecheck:
     dependencies:
@@ -850,9 +844,9 @@ importers:
 
   workspace/extensions/image-service:
     dependencies:
-      '@natstack/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
+      '@silvia-odwyer/photon-node':
+        specifier: ^0.3.4
+        version: 0.3.4
 
   workspace/extensions/react-native:
     dependencies:
@@ -877,9 +871,15 @@ importers:
 
   workspace/extensions/typecheck-service:
     dependencies:
+      '@natstack/env-paths':
+        specifier: workspace:*
+        version: link:../../../packages/env-paths
       '@natstack/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
+      '@natstack/typecheck':
+        specifier: workspace:*
+        version: link:../../../packages/typecheck
 
   workspace/packages/about-shared:
     dependencies:
@@ -16556,7 +16556,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

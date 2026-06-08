@@ -19,7 +19,6 @@
       "@natstack/dev-log": ["../dev-log/src/index.ts"],
       "@natstack/env-paths": ["../env-paths/src/index.ts"],
       "@natstack/rpc": ["../rpc/src/index.ts"],
-      "@natstack/typecheck": ["../typecheck/src/index.ts"],
       "@natstack/types": ["../types/src/index.ts"]
     }
   },

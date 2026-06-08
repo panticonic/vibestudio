@@ -30,7 +30,7 @@ import {
   type WorkspaceContext,
 } from "@natstack/typecheck";
 import { getUserDataPath } from "@natstack/env-paths";
-import { runNpmInstall } from "../npmInstaller.js";
+import { runNpmInstall } from "@natstack/shared/npmInstaller";
 
 /** Per-panel TypeCheckService cache — keyed by absolute panel path. */
 const typeCheckServiceCache = new Map<string, TypeCheckService>();

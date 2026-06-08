@@ -72,7 +72,7 @@ The canary migrations all follow the same shape:
 
 - Long-running TypeScript language service per panel. Holds substantial in-memory state across many calls.
 - Migration tested that an extension can be a long-running stateful service, not just stateless compute.
-- The extension reuses `@natstack/shared/typecheck/service` (the in-host helpers stay; the dispatch wrapper moves into the extension).
+- The extension owns the TypeScript service helpers directly; only the neutral npm-install helper remains shared.
 - Path validation moved into the extension — the old service-level `policy.allowed` is replaced by per-method input validation.
 
 ### `browserDataService` → `@workspace-extensions/browser-data`

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { clearTypeCheckCache } from "@natstack/shared/typecheck/service";
+import { clearTypeCheckCache } from "./typecheckService.js";
 
 import { activate } from "./index.js";
 

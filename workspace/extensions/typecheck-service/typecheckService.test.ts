@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, writeFile, rm, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
-import { typeCheckRpcMethods, clearTypeCheckCache } from "./service.js";
+import { typeCheckRpcMethods, clearTypeCheckCache } from "./typecheckService.js";
 
 let panelDir: string;
 

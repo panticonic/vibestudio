@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { loadPhoton } from "@natstack/shared/image/photon";
-import { detectMimeFromBytes } from "@natstack/shared/image/mime";
+import { loadPhoton } from "./image/photon.js";
+import { detectMimeFromBytes } from "./image/mime.js";
 
 import { activate } from "./index.js";
 
