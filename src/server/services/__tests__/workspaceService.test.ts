@@ -35,7 +35,7 @@ import path from "node:path";
 import { ELECTRON_LOCAL_SERVICE_NAMES } from "@natstack/rpc";
 import type { RpcCaller } from "@natstack/rpc";
 import { createWorkspaceService } from "../workspaceService.js";
-import { createWorkspaceClient } from "../../../../workspace/packages/runtime/src/shared/workspace.js";
+import { createWorkspaceClient } from "@natstack/shared/workspace/client";
 import type { WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import type { UserlandApprovalChoice } from "@natstack/shared/approvals";

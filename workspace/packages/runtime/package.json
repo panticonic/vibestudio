@@ -26,6 +26,7 @@
     "@natstack/git": "workspace:*",
     "@workspace/harness": "workspace:*",
     "@natstack/rpc": "workspace:*",
+    "@natstack/shared": "workspace:*",
     "@natstack/types": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/cdp-client": "workspace:*",

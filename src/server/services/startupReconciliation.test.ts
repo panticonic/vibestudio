@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { vi } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@natstack/durable/test-utils";
 
 import { WorkspaceDO } from "../internalDOs/workspaceDO.js";
 import { WorkspaceDOTestable } from "../internalDOs/workspaceDO.testFixture.js";

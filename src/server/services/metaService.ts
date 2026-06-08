@@ -2,7 +2,7 @@ import { z } from "zod";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 import type { ServiceDefinition, MethodDef } from "@natstack/shared/serviceDefinition";
 import type { ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
-import type { RuntimeSurface } from "../../../workspace/packages/runtime/src/shared/runtimeSurface.js";
+import type { RuntimeSurface } from "@natstack/shared/runtimeSurface";
 
 function serializeMethod(method: MethodDef) {
   return {

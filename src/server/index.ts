@@ -2246,10 +2246,8 @@ async function main() {
 
   {
     const { createMetaService } = await import("./services/metaService.js");
-    const { panelRuntimeSurface } =
-      await import("../../workspace/packages/runtime/src/shared/runtimeSurface.panel.js");
-    const { workerRuntimeSurface } =
-      await import("../../workspace/packages/runtime/src/shared/runtimeSurface.worker.js");
+    const { panelRuntimeSurface } = await import("@natstack/shared/runtimeSurface.panel");
+    const { workerRuntimeSurface } = await import("@natstack/shared/runtimeSurface.worker");
     container.registerRpc(
       createMetaService({
         dispatcher,

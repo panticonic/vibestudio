@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true,
+    "lib": ["ES2022", "DOM"],
+    "paths": {
+      "@natstack/rpc": ["../rpc/src/index.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@natstack/durable",
+  "version": "0.1.0",
+  "description": "Neutral Durable Object primitives for NatStack host and workspace workers",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./test-utils": "./src/test-utils.ts"
+  },
+  "dependencies": {
+    "@natstack/rpc": "workspace:*"
+  },
+  "devDependencies": {
+    "sql.js": "^1.14.0",
+    "typescript": "^5.9.3"
+  }
+}

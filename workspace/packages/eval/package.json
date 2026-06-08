@@ -10,6 +10,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@natstack/shared": "workspace:*",
     "sucrase": "^3.35.0"
   },
   "devDependencies": {

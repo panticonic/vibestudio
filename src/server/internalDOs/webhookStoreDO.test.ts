@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@natstack/durable/test-utils";
 import { WebhookStoreDO } from "./webhookStoreDO.js";
 import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
 

@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@natstack/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { createRuntimeService } from "./runtimeService.js";
 import type { ApprovalQueue } from "./approvalQueue.js";

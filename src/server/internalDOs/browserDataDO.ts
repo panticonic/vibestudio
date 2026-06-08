@@ -1,7 +1,4 @@
-import {
-  DurableObjectBase,
-  type DurableObjectContext,
-} from "../../../workspace/packages/runtime/src/worker/durable-base.js";
+import { DurableObjectBase, type DurableObjectContext } from "@natstack/durable";
 import { BROWSER_DATA_SCHEMA } from "../../../packages/browser-data/src/storage/schema.js";
 import type {
   ImportedAutofillEntry,

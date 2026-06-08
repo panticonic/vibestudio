@@ -3,7 +3,7 @@ import {
   type LifecyclePrepareInput,
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
-} from "@workspace/runtime/worker";
+} from "@natstack/durable";
 
 export class LifecycleProbeDO extends DurableObjectBase {
   protected createTables(): void {

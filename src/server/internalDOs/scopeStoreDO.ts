@@ -1,11 +1,5 @@
-import {
-  DurableObjectBase,
-  type DurableObjectContext,
-} from "../../../workspace/packages/runtime/src/worker/durable-base.js";
-import type {
-  ScopeEntry,
-  ScopeListEntry,
-} from "../../../workspace/packages/eval/src/scopePersistence.js";
+import { DurableObjectBase, type DurableObjectContext } from "@natstack/durable";
+import type { ScopeEntry, ScopeListEntry } from "@natstack/shared/scopePersistence";
 
 interface ScopeRow {
   id: string;

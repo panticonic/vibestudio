@@ -1,7 +1,4 @@
-import {
-  DurableObjectBase,
-  type DurableObjectContext,
-} from "../../../workspace/packages/runtime/src/worker/durable-base.js";
+import { DurableObjectBase, type DurableObjectContext } from "@natstack/durable";
 import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
 
 interface WebhookIngressSubscriptionRow {

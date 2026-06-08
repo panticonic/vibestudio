@@ -6,8 +6,8 @@ import {
   type ServiceContext,
 } from "../../../packages/shared/src/serviceDispatcher.js";
 import { createMetaService } from "./metaService.js";
-import { panelRuntimeSurface } from "../../../workspace/packages/runtime/src/shared/runtimeSurface.panel.js";
-import { workerRuntimeSurface } from "../../../workspace/packages/runtime/src/shared/runtimeSurface.worker.js";
+import { panelRuntimeSurface } from "@natstack/shared/runtimeSurface.panel";
+import { workerRuntimeSurface } from "@natstack/shared/runtimeSurface.worker";
 import type { ServiceDefinition } from "../../../packages/shared/src/serviceDefinition.js";
 
 const ctx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };

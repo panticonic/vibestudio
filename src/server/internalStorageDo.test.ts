@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { DurableObjectBase } from "../../workspace/packages/runtime/src/worker/durable-base.js";
+import { DurableObjectBase } from "@natstack/durable";
+import { createTestDO } from "@natstack/durable/test-utils";
 import { ScopeStoreDO } from "./internalDOs/scopeStoreDO.js";
 
 describe("internal storage Durable Objects", () => {

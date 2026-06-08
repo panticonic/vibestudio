@@ -48,6 +48,9 @@ importers:
       '@natstack/dev-log':
         specifier: workspace:*
         version: link:packages/dev-log
+      '@natstack/durable':
+        specifier: workspace:*
+        version: link:packages/durable
       '@natstack/env-paths':
         specifier: workspace:*
         version: link:packages/env-paths
@@ -489,6 +492,19 @@ importers:
 
   packages/dev-log:
     devDependencies:
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+
+  packages/durable:
+    dependencies:
+      '@natstack/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+    devDependencies:
+      sql.js:
+        specifier: ^1.14.0
+        version: 1.14.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -998,6 +1014,8 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
 
+  workspace/packages/cdp-client: {}
+
   workspace/packages/core:
     dependencies:
       '@natstack/types':
@@ -1010,6 +1028,9 @@ importers:
 
   workspace/packages/eval:
     dependencies:
+      '@natstack/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       sucrase:
         specifier: ^3.35.0
         version: 3.35.1
@@ -1183,8 +1204,6 @@ importers:
         specifier: workspace:*
         version: link:../playwright-core
 
-  workspace/packages/cdp-client: {}
-
   workspace/packages/playwright-core:
     dependencies:
       '@types/ws':
@@ -1300,18 +1319,21 @@ importers:
       '@natstack/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
+      '@natstack/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@natstack/types':
         specifier: workspace:*
         version: link:../../../packages/types
       '@workspace/agentic-protocol':
         specifier: workspace:*
         version: link:../agentic-protocol
-      '@workspace/harness':
-        specifier: workspace:*
-        version: link:../harness
       '@workspace/cdp-client':
         specifier: workspace:*
         version: link:../cdp-client
+      '@workspace/harness':
+        specifier: workspace:*
+        version: link:../harness
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
@@ -1622,6 +1644,18 @@ importers:
 
   workspace/workers/hello:
     dependencies:
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+
+  workspace/workers/model-settings:
+    dependencies:
+      '@earendil-works/pi-ai':
+        specifier: ^0.78.0
+        version: 0.78.0(@modelcontextprotocol/sdk@1.25.3(hono@4.11.7)(zod@3.25.76))(ws@8.19.0)(zod@3.25.76)
+      '@natstack/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { createTestDO } from "@natstack/durable/test-utils";
 import {
   canonicalEntityId,
   type EntityRecord,

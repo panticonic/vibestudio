@@ -10,10 +10,7 @@
  * creates the new schema empty. No data migration.
  */
 
-import {
-  DurableObjectBase,
-  type DurableObjectContext,
-} from "../../../workspace/packages/runtime/src/worker/durable-base.js";
+import { DurableObjectBase, type DurableObjectContext } from "@natstack/durable";
 import {
   IdentityCollisionError,
   canonicalEntityId,

@@ -37,6 +37,12 @@
       "@natstack/dev-log": [
         "packages/dev-log/src/index.ts"
       ],
+      "@natstack/durable": [
+        "packages/durable/src/index.ts"
+      ],
+      "@natstack/durable/test-utils": [
+        "packages/durable/src/test-utils.ts"
+      ],
       "@natstack/env-paths": [
         "packages/env-paths/src/index.ts"
       ],
