@@ -43,7 +43,7 @@ index f92c66f..8d43844 100644
                          await sleep(delayMs, options?.signal);
                          continue;
                      }
-@@ -656,6 +683,75 @@ function closeWebSocketSilently(socket, code = 1000, reason = "done") {
+@@ -656,6 +683,86 @@ function closeWebSocketSilently(socket, code = 1000, reason = "done") {
      }
      catch { }
  }
@@ -73,6 +73,17 @@ index f92c66f..8d43844 100644
 +        return null;
 +    }
 +    return prepared;
++}
++function isWorkerdRuntime() {
++    const userAgent = globalThis.navigator?.userAgent ?? "";
++    return typeof WebSocketPair === "function" || /\b(?:Cloudflare-Workers|workerd)\b/i.test(userAgent);
++}
++function shouldReuseSessionWebSockets() {
++    const hook = globalThis.__natstackShouldReuseCodexWebSocket;
++    if (typeof hook === "function") {
++        return hook() !== false;
++    }
++    return !isWorkerdRuntime();
 +}
 +async function connectWebSocketViaFetchUpgrade(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS) {
 +    if (!canUseWorkersFetchWebSocketUpgrade()) {
@@ -119,7 +130,7 @@ index f92c66f..8d43844 100644
  function scheduleSessionWebSocketExpiry(sessionId, entry) {
      if (entry.idleTimer) {
          clearTimeout(entry.idleTimer);
-@@ -670,16 +766,23 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
+@@ -670,16 +777,23 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
  async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS) {
      const WebSocketCtor = await getWebSocketConstructor();
      if (!WebSocketCtor) {
@@ -144,6 +155,16 @@ index f92c66f..8d43844 100644
          }
          catch (error) {
              reject(error instanceof Error ? error : new Error(String(error)));
+@@ -736,8 +850,8 @@ async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT
+     });
+ }
+ async function acquireWebSocket(url, headers, sessionId, signal, connectTimeoutMs) {
+-    if (!sessionId) {
++    if (!sessionId || !shouldReuseSessionWebSockets()) {
+         const socket = await connectWebSocket(url, headers, signal, connectTimeoutMs);
+         return {
+             socket,
+             reused: false,
 @@ -1053,6 +1156,10 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
          }
      }
