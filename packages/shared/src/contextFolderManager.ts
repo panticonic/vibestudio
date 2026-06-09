@@ -23,6 +23,11 @@ const log = createDevLogger("ContextFolderManager");
 /** Directories to skip when copying working tree files. */
 const SKIP_DIRS = new Set([".git", "node_modules", ".cache", ".databases"]);
 
+export type ContextFolderState =
+  | { status: "missing"; path: string }
+  | { status: "materializing"; path: string }
+  | { status: "ready"; path: string };
+
 /**
  * Validate that a context ID is safe for per-context folder names.
  */
@@ -191,6 +196,8 @@ async function verifyObjectExists(objectsPath: string, sha: string): Promise<voi
 }
 
 export class ContextFolderManager {
+  private readonly materializing = new Set<string>();
+
   private readonly contextsRoot: string;
   private readonly sourcePath: string;
   private readonly getWorkspaceTree: () => Promise<{ children: WorkspaceNode[] }>;
@@ -243,24 +250,29 @@ export class ContextFolderManager {
           return contextPath; // Already exists
         }
 
-        log.info(`Creating context folder: ${contextId}`);
-        await fs.mkdir(contextPath, { recursive: true });
+        this.materializing.add(contextId);
+        try {
+          log.info(`Creating context folder: ${contextId}`);
+          await fs.mkdir(contextPath, { recursive: true });
 
-        // Discover all git repos in the workspace
-        const tree = await this.getWorkspaceTree();
-        const repos = this.collectRepos(tree.children);
+          // Discover all git repos in the workspace
+          const tree = await this.getWorkspaceTree();
+          const repos = this.collectRepos(tree.children);
 
-        // Copy each repo: working tree files + context-local git state
-        for (const repoPath of repos) {
-          try {
-            await this.copyRepoIntoContext(contextPath, repoPath);
-          } catch (err) {
-            console.warn(`[ContextFolder] Failed to setup context git for ${repoPath}:`, err);
+          // Copy each repo: working tree files + context-local git state
+          for (const repoPath of repos) {
+            try {
+              await this.copyRepoIntoContext(contextPath, repoPath);
+            } catch (err) {
+              console.warn(`[ContextFolder] Failed to setup context git for ${repoPath}:`, err);
+            }
           }
-        }
 
-        log.info(`Context folder ready: ${contextId} (${repos.length} repo(s) copied)`);
-        return contextPath;
+          log.info(`Context folder ready: ${contextId} (${repos.length} repo(s) copied)`);
+          return contextPath;
+        } finally {
+          this.materializing.delete(contextId);
+        }
       } finally {
         this.inflight.delete(contextId);
       }
@@ -282,6 +294,28 @@ export class ContextFolderManager {
       return contextPath;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Returns context folder readiness without starting materialization.
+   *
+   * `ensureContextFolder()` creates the directory before copying repo contents,
+   * so a plain existence check can report a partially materialized context as
+   * usable. Callers that need fail-fast readiness semantics should use this
+   * method instead of probing the filesystem directly.
+   */
+  getContextFolderState(contextId: string): ContextFolderState {
+    validateContextId(contextId);
+    const contextPath = path.join(this.contextsRoot, contextId);
+    if (this.materializing.has(contextId)) {
+      return { status: "materializing", path: contextPath };
+    }
+    try {
+      require("fs").accessSync(contextPath);
+      return { status: "ready", path: contextPath };
+    } catch {
+      return { status: "missing", path: contextPath };
     }
   }
 

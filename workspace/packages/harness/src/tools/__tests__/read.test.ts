@@ -42,11 +42,90 @@ describe("createReadTool", () => {
     const result = await tool.execute("call-1", { path: "big.txt", offset: 3, limit: 2 });
 
     expect((result.content[0] as { text: string }).text).toBe("line 3\nline 4");
-    expect(rpc.call).toHaveBeenCalledWith("main", "extensions.invoke", [
-      "@workspace-extensions/file-tools",
-      "read",
-      [{ path: "big.txt", cwd: CWD, offset: 3, limit: 2 }],
-    ]);
+    expect(rpc.call).toHaveBeenCalledWith(
+      "main",
+      "extensions.invoke",
+      [
+        "@workspace-extensions/file-tools",
+        "read",
+        [{ path: "big.txt", cwd: CWD, offset: 3, limit: 2 }],
+      ],
+      {
+        signal: expect.any(AbortSignal),
+      }
+    );
+  });
+
+  it("falls back to runtime fs when the file extension read stalls", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
+    const rpc = {
+      call: vi.fn().mockImplementation((_target: string, method: string) => {
+        if (method === "extensions.invoke") return new Promise(() => {});
+        return Promise.resolve([]);
+      }),
+      stream: vi.fn(async () => new Response()),
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onUpdate = vi.fn();
+    const tool = createReadTool(CWD, fs, { rpc, fileToolsReadTimeoutMs: 10 });
+
+    const result = await tool.execute("call-1", { path: "hello.txt" }, undefined, onUpdate);
+
+    expect((result.content[0] as { text: string }).text).toBe("hello\nworld");
+    expect(result.details).toMatchObject({
+      path: "hello.txt",
+      engine: "runtime-fs",
+      extensionFallback: "file-tools read timed out after 10ms",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "[read] file-tools read timed out after 10ms; falling back to RuntimeFs"
+    );
+    expect(onUpdate).toHaveBeenCalledWith({
+      content: [],
+      details: {
+        type: "console",
+        content: "file-tools read timed out after 10ms; falling back to RuntimeFs read",
+      },
+    });
+    warn.mockRestore();
+  });
+
+  it("records a readiness fallback without treating it as a stalled extension", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
+    const notReady = Object.assign(new Error("Context folder is materializing"), {
+      code: "ENOTREADY",
+    });
+    const rpc = {
+      call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
+        if (method === "extensions.invoke") {
+          const [extensionName, extensionMethod] = args;
+          if (extensionName === "@workspace-extensions/file-tools") return Promise.reject(notReady);
+          if (
+            extensionName === "@workspace-extensions/image-service" &&
+            extensionMethod === "detectMimeType"
+          ) {
+            return Promise.resolve(null);
+          }
+        }
+        return Promise.resolve([]);
+      }),
+      stream: vi.fn(async () => new Response()),
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const onUpdate = vi.fn();
+    const tool = createReadTool(CWD, fs, { rpc, fileToolsReadTimeoutMs: 10 });
+
+    const result = await tool.execute("call-1", { path: "hello.txt" }, undefined, onUpdate);
+
+    expect((result.content[0] as { text: string }).text).toBe("hello\nworld");
+    expect(result.details).toMatchObject({
+      path: "hello.txt",
+      engine: "runtime-fs",
+      extensionFallback: "file-tools extension or context not ready",
+    });
+    expect(warn).not.toHaveBeenCalled();
+    expect(onUpdate).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("keeps image reads on the image-service path", async () => {
@@ -84,7 +163,7 @@ describe("createReadTool", () => {
     expect(rpc.call).not.toHaveBeenCalledWith(
       "main",
       "extensions.invoke",
-      expect.arrayContaining(["@workspace-extensions/file-tools", "read"]),
+      expect.arrayContaining(["@workspace-extensions/file-tools", "read"])
     );
   });
 

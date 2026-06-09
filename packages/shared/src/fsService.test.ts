@@ -42,6 +42,12 @@ function makeStubFolderManager(root: string): ContextFolderManager {
       mkdirSync(p, { recursive: true });
       return p;
     },
+    getContextFolderState(contextId: string) {
+      const p = path.join(root, contextId);
+      return existsSync(p)
+        ? { status: "ready" as const, path: p }
+        : { status: "missing" as const, path: p };
+    },
     async isAllowedSharedGitObjectsSymlink(args: {
       contextRoot: string;
       symlinkPath: string;
@@ -326,9 +332,9 @@ describe("FsService", () => {
 
       // Phase 3: no silent unrestricted-host-fs fallback — the call throws
       // instead of reading `/`.
-      await expect(
-        service.handleCall(ctx, "readFile", [absolutePath, "utf8"])
-      ).rejects.toThrow(/host-fs-access capability/i);
+      await expect(service.handleCall(ctx, "readFile", [absolutePath, "utf8"])).rejects.toThrow(
+        /host-fs-access capability/i
+      );
     });
 
     it("grants unrestricted host fs only to an extension holding the explicit host-fs capability", async () => {
@@ -380,10 +386,26 @@ describe("FsService", () => {
         effectiveVersion: "ev-1",
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-realpath");
+      mkdirSync(path.join(tmpRoot, "ctx-realpath"), { recursive: true });
 
       await expect(service.handleCall(ctx, "realpath", ["/"])).resolves.toBe(
         path.join(tmpRoot, "ctx-realpath")
       );
+    });
+
+    it("fails fast for chained extension fs calls before context materialization", async () => {
+      const ctx = makeExtensionCtx("@workspace-extensions/file-tools");
+      ctx.chainCaller = {
+        callerId: "do:workers/agent-worker:AiChatWorker:agent-3",
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "ev-1",
+      };
+      registerContext(ctx.chainCaller.callerId, "do", "ctx-not-ready");
+
+      await expect(service.handleCall(ctx, "realpath", ["/"])).rejects.toMatchObject({
+        code: "ENOTREADY",
+      });
     });
   });
 

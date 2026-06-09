@@ -54,6 +54,12 @@ interface ResolvedFsPath {
   escapedViaSharedGitObjects: boolean;
 }
 
+function codedError(code: string, message: string): NodeJS.ErrnoException {
+  const error = new Error(message) as NodeJS.ErrnoException;
+  error.code = code;
+  return error;
+}
+
 // ---------------------------------------------------------------------------
 // Path sandboxing
 // ---------------------------------------------------------------------------
@@ -314,6 +320,13 @@ export class FsService {
           );
         }
         contextId = cid;
+        const state = this.contextFolderManager.getContextFolderState(contextId);
+        if (state.status !== "ready") {
+          throw codedError(
+            "ENOTREADY",
+            `Context folder ${contextId} is ${state.status}; scoped extension filesystem calls must wait for context materialization`
+          );
+        }
         const root = await this.contextFolderManager.ensureContextFolder(contextId);
         return {
           root,
