@@ -74,6 +74,20 @@ describe("executeSandbox", () => {
     expect(result.returnValue).toBe(3);
   });
 
+  it("does not suggest npm imports for unavailable Node built-ins", async () => {
+    const result = await executeSandbox(
+      'import { spawn } from "node:child_process"; return spawn;',
+      {
+        syntax: "typescript",
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Node built-in module "node:child_process" is not available');
+    expect(result.error).toContain("@workspace/runtime");
+    expect(result.error).not.toContain("npm:latest");
+  });
+
   it("exposes a lazy import loader to runtime helpers during eval", async () => {
     const result = await executeSandbox(
       "const loaded = await globalThis.__natstackLoadImport__('lazy-package', 'latest'); return loaded.answer;",

@@ -133,15 +133,16 @@ export class TestRunner {
       } catch (snapshotErr) {
         console.warn("[system-testing] Failed to snapshot failed headless session:", snapshotErr);
       }
+      const errorMessage = formatExecutionError(err, messages, snapshot);
       const execution: TestExecutionResult = {
         messages,
         duration,
-        error: err instanceof Error ? err.message : String(err),
+        error: errorMessage,
         snapshot,
       };
       execution.diagnostics = await this.runner.collectDiagnostics({
         channelId: session?.channelId,
-        error: err,
+        error: new Error(errorMessage),
       });
       outcome = {
         result: { passed: false, reason: `Error: ${execution.error}` },
@@ -210,4 +211,49 @@ export class TestRunner {
       if (timer !== undefined) clearTimeout(timer);
     }
   }
+}
+
+function formatExecutionError(
+  err: unknown,
+  messages: readonly ChatMessage[],
+  snapshot?: SessionSnapshot
+): string {
+  const base = err instanceof Error ? err.message : String(err);
+  if (!/^Timed out waiting for agent to finish test/.test(base)) return base;
+  const details = timeoutDiagnosticDetails(messages, snapshot);
+  return details.length > 0 ? `${base}. ${details.join(" ")}` : base;
+}
+
+function timeoutDiagnosticDetails(
+  messages: readonly ChatMessage[],
+  snapshot?: SessionSnapshot
+): string[] {
+  const details: string[] = [];
+  const pendingInvocations = (snapshot?.invocations ?? []).filter(
+    (invocation) => !isSettledInvocationStatus(invocation.status)
+  );
+  if (pendingInvocations.length > 0) {
+    details.push(
+      `Pending invocations: ${pendingInvocations
+        .slice(0, 5)
+        .map((invocation) => `${invocation.name}:${invocation.status || "unknown"}`)
+        .join(", ")}${pendingInvocations.length > 5 ? ` (+${pendingInvocations.length - 5} more)` : ""}.`
+    );
+  }
+  const lastLifecycle = [...messages].reverse().find((message) => message.lifecycle);
+  if (lastLifecycle?.lifecycle) {
+    const reason = lastLifecycle.lifecycle.reason ? ` reason=${lastLifecycle.lifecycle.reason}` : "";
+    details.push(`Last lifecycle: ${lastLifecycle.lifecycle.status}${reason} "${lastLifecycle.lifecycle.title}".`);
+  }
+  const lastDiagnostic = [...messages].reverse().find((message) => message.diagnostic || message.error);
+  if (lastDiagnostic) {
+    const code = lastDiagnostic.diagnostic?.code ? ` code=${lastDiagnostic.diagnostic.code}` : "";
+    const title = lastDiagnostic.diagnostic?.title ?? lastDiagnostic.error ?? lastDiagnostic.content;
+    details.push(`Last diagnostic:${code} "${String(title).slice(0, 200)}".`);
+  }
+  return details;
+}
+
+function isSettledInvocationStatus(status: string): boolean {
+  return ["complete", "completed", "error", "failed", "cancelled", "abandoned"].includes(status);
 }

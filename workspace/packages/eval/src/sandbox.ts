@@ -17,6 +17,7 @@ import {
   execute,
   executeDefault,
   getDefaultRequire,
+  unavailableModuleMessage,
   validateRequires,
   preloadRequires,
 } from "./execute.js";
@@ -442,6 +443,13 @@ export async function executeSandbox(
     throwIfAborted(signal);
     if (!validation.valid) {
       const missing = validation.missingModule!;
+      if (missing.startsWith("node:")) {
+        return {
+          success: false,
+          consoleOutput: "",
+          error: unavailableModuleMessage(missing),
+        };
+      }
       const moduleMap = getModuleMap();
       const available = Object.keys(moduleMap);
       const missingModules = transformed.requires.filter((r) => !moduleMap[r]);

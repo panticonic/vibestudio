@@ -213,6 +213,20 @@ describe("validateRequires", () => {
     expect(result.error).toContain("missing-module");
   });
 
+  it("explains that Node built-ins are unavailable instead of suggesting npm imports", () => {
+    const mockRequire = () => {
+      throw new Error("Not found");
+    };
+
+    const result = validateRequires(["node:child_process"], mockRequire);
+
+    expect(result.valid).toBe(false);
+    expect(result.missingModule).toBe("node:child_process");
+    expect(result.error).toContain("Node built-in module");
+    expect(result.error).toContain("@workspace/runtime");
+    expect(result.error).not.toContain("npm:latest");
+  });
+
   it("returns invalid when require function is not available", () => {
     // Don't provide a require function and ensure global isn't set
     const original = (globalThis as Record<string, unknown>)["__natstackRequire__"];

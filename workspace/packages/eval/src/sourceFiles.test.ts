@@ -150,6 +150,23 @@ describe("source file bundles", () => {
     expect(result.error).toContain("packages/app/package.json");
   });
 
+  it("does not suggest npm imports for Node built-ins from file-loaded helpers", async () => {
+    const code = `import { run } from "./helper"; return run;`;
+    const result = await executeSandbox(code, {
+      syntax: "typescript",
+      sourcePath: "packages/app/src/main.ts",
+      sourceFiles: {
+        "packages/app/src/main.ts": code,
+        "packages/app/src/helper.ts": `import { spawn } from "node:child_process"; export const run = spawn;`,
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Node built-in module "node:child_process" is not available');
+    expect(result.error).toContain("@workspace/runtime");
+    expect(result.error).not.toContain("npm:latest");
+  });
+
   it("does not infer eval imports from devDependencies", async () => {
     const code = `import { describe } from "vitest"; return typeof describe;`;
     const loadCalls: Array<{ specifier: string; ref: string | undefined }> = [];

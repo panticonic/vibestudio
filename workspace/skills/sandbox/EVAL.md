@@ -275,6 +275,7 @@ eval({ code: `
 ## Git Operations
 
 Use the routed `git.client()` helper from `@workspace/runtime` — do NOT use `node:child_process`, shell commands, or manually construct `new GitClient(fs, { serverUrl: gitConfig.serverUrl, token })`.
+Sandbox eval does not provide Node built-ins such as `node:child_process`; if an operation seems to need a process, first look for a runtime API (`fs`, `git`, `workspace`, `workers`, `extensions`) or move privileged host work into an extension/worker service.
 
 ```
 eval({ code: `

@@ -1,4 +1,4 @@
-import { execute, getDefaultRequire, preloadRequires } from "./execute.js";
+import { execute, getDefaultRequire, preloadRequires, unavailableModuleMessage } from "./execute.js";
 import { transformCode, type TransformOptions } from "./transform.js";
 
 export type LoadSourceFile = (path: string) => Promise<string>;
@@ -492,8 +492,15 @@ function rewriteRelativeSpecifiers(
 async function defaultEnsureExternalRequires(requires: string[]): Promise<void> {
   const external = requires.filter(Boolean);
   if (external.length === 0) return;
+  const unavailableNodeBuiltIn = external.find((specifier) => specifier.startsWith("node:"));
+  if (unavailableNodeBuiltIn) {
+    throw new Error(unavailableModuleMessage(unavailableNodeBuiltIn));
+  }
   const preload = await preloadRequires(external);
   if (!preload.success) {
+    if (preload.failedModule?.startsWith("node:")) {
+      throw new Error(unavailableModuleMessage(preload.failedModule));
+    }
     throw new Error(preload.error ?? `Module "${preload.failedModule}" not available`);
   }
 }

@@ -48,12 +48,11 @@ These are pre-bundled with the panel and work as bare `import` statements:
 
 | Module                       | What it provides                                                                                                |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `@workspace/runtime`         | rpc, fs, db, workers, ai, workspace, contextId, panel navigation, `requestApproval` for custom shared resources |
+| `@workspace/runtime`         | rpc, fs, git, db, workers, ai, workspace, contextId, panel navigation, `requestApproval` for custom shared resources |
 | `@workspace/panel-browser`   | Browser data import/export (cookies, passwords, bookmarks, history)                                             |
 | `react`, `react/jsx-runtime` | React hooks and component APIs                                                                                  |
 | `@radix-ui/themes`           | UI components (Button, Flex, Card, Table, etc.)                                                                 |
 | `@radix-ui/react-icons`      | Icon components                                                                                                 |
-| `isomorphic-git`             | Git operations (clone, fetch, checkout, etc.)                                                                   |
 
 ### On-demand imports (require `imports` parameter)
 

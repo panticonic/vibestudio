@@ -76,6 +76,12 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `notifications` | namespace | `show`, `dismiss` |  |
 <!-- END GENERATED: panel-runtime-surface -->
 
+Prefer the `git` namespace for git operations. Use `git.client()` for structured
+repository operations and `git.publishWorkspaceRepo(repoPath, message)` for
+workspace source edits that must affect rebuilt panels, workers, packages, or
+skills. `gitConfig` is a low-level transport detail for runtime internals; do
+not construct `GitClient` instances manually in agent eval code.
+
 ## Store
 
 ```ts
