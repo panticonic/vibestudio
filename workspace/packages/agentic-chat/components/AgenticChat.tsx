@@ -23,8 +23,8 @@ export interface AgenticChatProps {
   actions?: AgenticChatActions;
   /** Theme */
   theme?: "light" | "dark";
-  /** Agents being spawned */
-  pendingAgents?: Array<{ agentId: string; handle: string }>;
+  /** Agents installed for this channel; shown as pending until they join the roster */
+  installedAgents?: Array<{ agentId: string; handle: string }>;
   /** If set, automatically sent as the first user message once connected */
   initialPrompt?: string;
   /** Sandbox config — provides RPC and import loading */
@@ -55,7 +55,7 @@ export function AgenticChat({
   tools,
   actions,
   theme,
-  pendingAgents: pendingAgentInfos,
+  installedAgents: installedAgentInfos,
   initialPrompt,
   sandbox,
   initialActionBarFile,
@@ -72,7 +72,7 @@ export function AgenticChat({
     tools,
     actions,
     theme,
-    pendingAgentInfos,
+    installedAgentInfos,
     initialPrompt,
     sandbox,
     initialActionBarFile,

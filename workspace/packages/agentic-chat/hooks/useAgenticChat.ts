@@ -44,8 +44,8 @@ import type {
 } from "../types";
 import { unwrapChatMethodResult } from "@workspace/agentic-core";
 import type { ChatMethodResult, AgentSubscriptionConfig } from "@workspace/agentic-core";
-/** Pending agent info passed from launcher */
-interface PendingAgentInfo {
+/** Installed agent info passed from the host panel. */
+interface InstalledAgentInfo {
   agentId: string;
   handle: string;
 }
@@ -175,7 +175,7 @@ export interface UseAgenticChatOptions {
   tools?: ToolProvider;
   actions?: AgenticChatActions;
   theme?: "light" | "dark";
-  pendingAgentInfos?: PendingAgentInfo[];
+  installedAgentInfos?: InstalledAgentInfo[];
   /** If set, automatically sent as the first user message once connected */
   initialPrompt?: string;
   /** Sandbox config — provides RPC and import loading (keeps agentic-chat runtime-agnostic) */
@@ -202,7 +202,7 @@ export function useAgenticChat({
   tools,
   actions,
   theme = "dark",
-  pendingAgentInfos,
+  installedAgentInfos,
   initialPrompt,
   sandbox,
   initialActionBarFile,
@@ -270,11 +270,11 @@ export function useAgenticChat({
     },
     [core.clientRef]
   );
-  // --- Mirror session-owned pending agents when provided ---
+  // --- Mirror host-owned installed agents into transient pending badges until they join ---
   useEffect(() => {
-    if (pendingAgentInfos === undefined) return;
-    core.setPendingAgentInfos(pendingAgentInfos);
-  }, [pendingAgentInfos, core.setPendingAgentInfos]);
+    if (installedAgentInfos === undefined) return;
+    core.setPendingAgentInfos(installedAgentInfos);
+  }, [installedAgentInfos, core.setPendingAgentInfos]);
   // --- Build chat sandbox value (stale-ref safe — dereferences clientRef at call time) ---
   const chat: ChatSandboxValue = useMemo(
     () => ({

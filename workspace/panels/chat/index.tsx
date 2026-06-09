@@ -23,7 +23,7 @@ import {
 import { findMatchingUrlAudience } from "@natstack/shared/credentials/urlAudience";
 import type { UrlAudience } from "@natstack/shared/credentials/urlAudience";
 import type { DurableObjectServiceClient } from "@workspace/runtime";
-import { appendPendingAgent, resolveChatContextId } from "./bootstrap.js";
+import { appendInstalledAgent, resolveChatContextId } from "./bootstrap.js";
 
 function detectHostPlatform(): "mobile" | "electron" {
   const explicitPlatform = (globalThis as { __natstackHostPlatform?: unknown }).__natstackHostPlatform;
@@ -34,6 +34,16 @@ function detectHostPlatform(): "mobile" | "electron" {
     return "mobile";
   }
   return "electron";
+}
+
+function modelHasMatchingCredential(baseUrl: string | undefined, audiences: UrlAudience[]): boolean {
+  if (!baseUrl?.trim() || /\{[^}]+\}/.test(baseUrl)) return false;
+  try {
+    return findMatchingUrlAudience(baseUrl, audiences) !== null;
+  } catch (err) {
+    console.warn("[ChatPanel] Ignoring invalid credential audience while matching model:", err);
+    return false;
+  }
 }
 
 /** Stable metadata object — avoids creating a new object every render */
@@ -59,7 +69,12 @@ interface WorkerSourceEntry {
   title?: string;
   classes: Array<{ className: string }>;
   /** Present iff this worker declares itself a chat agent (manifest `agent` block). */
-  agent?: { displayName?: string; description?: string; icon?: string };
+  agent?: {
+    displayName?: string;
+    description?: string;
+    icon?: string;
+    defaultConfig?: AgentSubscriptionConfig;
+  };
 }
 
 interface ChannelParticipant {
@@ -114,7 +129,7 @@ function delay(ms: number): Promise<void> {
 /** Persisted per-agent record. `key` is the stable DO `objectKey` minted once
  *  when the user first adds the agent, so rehydration reuses the same entity
  *  row rather than spawning a fresh participant. */
-interface PendingAgent {
+interface InstalledAgent {
   agentId: string;
   handle: string;
   key: string;
@@ -131,7 +146,7 @@ interface ChatStateArgs {
   channelName?: string;
   channelConfig?: Record<string, unknown>;
   contextId?: string;
-  pendingAgents?: PendingAgent[];
+  installedAgents?: InstalledAgent[];
   agentSource?: string;
   agentClass?: string;
   /** If set, automatically sent as the first user message once connected */
@@ -240,7 +255,7 @@ export default function ChatPanel() {
 
   // Auto-bootstrap: when no channelName, generate one and spawn the default agent
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
-  const [bootstrapPending, setBootstrapPending] = useState<PendingAgent[] | null>(null);
+  const [bootstrapInstalled, setBootstrapInstalled] = useState<InstalledAgent[] | null>(null);
   const bootstrapAttempted = useRef(false);
 
   useEffect(() => {
@@ -261,7 +276,7 @@ export default function ChatPanel() {
       const perAgentConfig: Record<string, unknown> = {
         model: (stateArgs.agentConfig?.["model"] as string | undefined) ?? defaultModel,
       };
-      const pending: PendingAgent[] = [{
+      const installed: InstalledAgent[] = [{
         agentId: className,
         handle: baseHandle,
         key: agentKey,
@@ -270,7 +285,7 @@ export default function ChatPanel() {
         config: perAgentConfig,
       }];
 
-      void setStateArgs({ channelName, contextId: resolvedContextId, pendingAgents: pending });
+      void setStateArgs({ channelName, contextId: resolvedContextId, installedAgents: installed });
 
       const subscribeConfig: Record<string, unknown> = {
         model: defaultModel,
@@ -292,7 +307,7 @@ export default function ChatPanel() {
       });
 
       setBootstrapChannel(channelName);
-      setBootstrapPending(pending);
+      setBootstrapInstalled(installed);
     })();
   }, [
     resolvedContextId,
@@ -327,47 +342,11 @@ export default function ChatPanel() {
           const dos = await getChannelDOParticipants(channelName);
           if (dos.length > 0) return;
 
-          const workerSource = stateArgs.agentSource ?? DEFAULT_WORKER_SOURCE;
-          const fallbackClass = stateArgs.agentClass ?? DEFAULT_CLASS_NAME;
-          const fallbackHandle = fallbackClass === DEFAULT_CLASS_NAME
-            ? DEFAULT_HANDLE
-            : fallbackClass.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase();
+          const installedList = stateArgs.installedAgents ?? [];
+          if (installedList.length === 0) return;
           const defaultModel = await resolveWorkspaceDefaultModel();
-          // Persisted pendingAgents carry the original `key`. If state was
-          // written by an older build that only stored `{agentId, handle}`, mint
-          // and persist a key now so subsequent rehydrations are stable.
-          let pendingList: PendingAgent[];
-          if (stateArgs.pendingAgents && stateArgs.pendingAgents.length > 0) {
-            let mutated = false;
-            pendingList = stateArgs.pendingAgents.map((agent) => {
-              if (agent.key && agent.source && agent.className) return agent;
-              mutated = true;
-              const handle = agent.handle;
-              return {
-                agentId: agent.agentId,
-                handle,
-                key: agent.key ?? `${handle}-${crypto.randomUUID().slice(0, 8)}`,
-                source: agent.source ?? workerSource,
-                className: agent.className ?? agent.agentId,
-              };
-            });
-            if (mutated) void setStateArgs({ pendingAgents: pendingList });
-          } else {
-            const perAgentConfig = {
-              model: (stateArgs.agentConfig?.["model"] as string | undefined) ?? defaultModel,
-            };
-            pendingList = [{
-              agentId: fallbackClass,
-              handle: fallbackHandle,
-              key: `${fallbackHandle}-${crypto.randomUUID().slice(0, 8)}`,
-              source: workerSource,
-              className: fallbackClass,
-              config: perAgentConfig,
-            }];
-            void setStateArgs({ pendingAgents: pendingList });
-          }
 
-          for (const agent of pendingList) {
+          for (const agent of installedList) {
             // Layer the per-agent persisted config over the global default so a
             // switched/added agent comes back on its own model after reload.
             const subscribeConfig: Record<string, unknown> = {
@@ -402,7 +381,15 @@ export default function ChatPanel() {
     return () => {
       cancelled = true;
     };
-  }, [stateArgs.channelName, resolvedContextId, stateArgs.agentConfig, resolveWorkspaceDefaultModel]);
+  }, [
+    stateArgs.channelName,
+    stateArgs.installedAgents,
+    stateArgs.agentConfig,
+    stateArgs.systemPrompt,
+    stateArgs.systemPromptMode,
+    resolvedContextId,
+    resolveWorkspaceDefaultModel,
+  ]);
 
   // Build ConnectionConfig from runtime
   const config: ConnectionConfig = {
@@ -451,6 +438,7 @@ export default function ChatPanel() {
             name: source.agent.displayName ?? source.title ?? source.name,
             description: source.agent.description,
             icon: source.agent.icon,
+            defaultConfig: source.agent.defaultConfig,
             proposedHandle: source.name.split("-")[0] ?? source.name,
           });
         }
@@ -473,7 +461,7 @@ export default function ChatPanel() {
       );
       const audiences = creds.flatMap((c) => c.audience ?? []);
       const refs = cat.models
-        .filter((m) => findMatchingUrlAudience(m.baseUrl, audiences) !== null)
+        .filter((m) => modelHasMatchingCredential(m.baseUrl, audiences))
         .map((m) => m.ref);
       setConnectedModelRefs(refs);
     } catch (err) {
@@ -540,7 +528,7 @@ export default function ChatPanel() {
     const configHandle = typeof config?.["handle"] === "string" ? (config["handle"] as string) : "";
     const requestedHandle = configHandle.trim() || agent?.proposedHandle || DEFAULT_HANDLE;
     const handle = `${requestedHandle}-${crypto.randomUUID().slice(0, 4)}`;
-    // Mint key once and persist into pendingAgents so rehydration reuses it.
+    // Mint key once and persist into installedAgents so rehydration reuses it.
     const agentKey = `${handle}-${crypto.randomUUID().slice(0, 8)}`;
     const { subscribeConfig, perAgent } = buildSubscribeConfig(handle, config);
     await createAndSubscribeAgent({
@@ -558,11 +546,11 @@ export default function ChatPanel() {
         console.warn("[ChatPanel] Failed to persist workspace default model:", err);
       });
     }
-    // Persist into stateArgs.pendingAgents so the agent rehydrates on reload.
+    // Persist into stateArgs.installedAgents so the agent rehydrates on reload.
     // Read the latest snapshot (rather than the captured `stateArgs`) to avoid
     // clobbering concurrent additions.
     const currentArgs = getStateArgs<ChatStateArgs>();
-    const nextPending = appendPendingAgent(currentArgs.pendingAgents, {
+    const nextInstalled = appendInstalledAgent(currentArgs.installedAgents, {
       agentId: className,
       handle,
       key: agentKey,
@@ -570,7 +558,7 @@ export default function ChatPanel() {
       className,
       ...(Object.keys(perAgent).length > 0 ? { config: perAgent } : {}),
     });
-    await setStateArgs({ pendingAgents: nextPending });
+    await setStateArgs({ installedAgents: nextInstalled });
     return { agentId: source, handle };
   }, [availableAgents, buildSubscribeConfig, persistWorkspaceDefaultModel]);
 
@@ -625,12 +613,12 @@ export default function ChatPanel() {
       className,
       ...(Object.keys(perAgent).length > 0 ? { config: perAgent } : {}),
     };
-    const existing = currentArgs.pendingAgents ?? [];
+    const existing = currentArgs.installedAgents ?? [];
     const replaced = existing.some((a) => a.key === target.objectKey);
-    const nextPending = replaced
+    const nextInstalled = replaced
       ? existing.map((a) => (a.key === target.objectKey ? newRecord : a))
       : [...existing, newRecord];
-    await setStateArgs({ pendingAgents: nextPending });
+    await setStateArgs({ installedAgents: nextInstalled });
     return { agentId: source, handle };
   }, [availableAgents, buildSubscribeConfig, persistWorkspaceDefaultModel]);
 
@@ -662,8 +650,8 @@ export default function ChatPanel() {
       throw new Error(`Cannot resolve agent participant: ${participantId}`);
     }
     const currentArgs = getStateArgs<ChatStateArgs>();
-    const existing = currentArgs.pendingAgents ?? [];
-    const nextPending = existing.map((agent) => {
+    const existing = currentArgs.installedAgents ?? [];
+    const nextInstalled = existing.map((agent) => {
       if (agent.key !== target.objectKey) return agent;
       return {
         ...agent,
@@ -676,7 +664,7 @@ export default function ChatPanel() {
     if (!existing.some((agent) => agent.key === target.objectKey)) {
       throw new Error(`No persisted agent record found for ${participantId}`);
     }
-    await setStateArgs({ pendingAgents: nextPending });
+    await setStateArgs({ installedAgents: nextInstalled });
     void persistWorkspaceDefaultModel(model).catch((err: unknown) => {
       console.warn("[ChatPanel] Failed to persist workspace default model:", err);
     });
@@ -736,7 +724,7 @@ export default function ChatPanel() {
 
   // Resolve channel name: from stateArgs (existing chat) or bootstrap (new chat)
   const channelName = stateArgs.channelName ?? bootstrapChannel;
-  const pendingAgents = stateArgs.pendingAgents ?? bootstrapPending ?? undefined;
+  const installedAgents = stateArgs.installedAgents ?? bootstrapInstalled ?? undefined;
 
   // Still bootstrapping — show a brief loading indicator
   if (!channelName) {
@@ -763,7 +751,7 @@ export default function ChatPanel() {
         tools={toolProvider}
         actions={chatActions}
         theme={theme}
-        pendingAgents={pendingAgents}
+        installedAgents={installedAgents}
         initialPrompt={initialPromptCaptured.current}
         sandbox={sandboxConfig}
         initialActionBarFile={stateArgs.actionBarFile ?? undefined}

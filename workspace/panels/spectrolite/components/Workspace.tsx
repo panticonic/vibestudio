@@ -92,7 +92,7 @@ interface SpectroliteStateArgs {
   openPath?: string;
   channelName?: string;
   contextId?: string;
-  pendingAgents?: Array<{ handle: string }>;
+  installedAgents?: Array<{ handle: string }>;
 }
 
 export type AgentVaultNotice =

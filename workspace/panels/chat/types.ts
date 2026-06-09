@@ -1,10 +1,10 @@
-/** Persisted per-agent record (mirrors PendingAgentRecord in bootstrap.ts). */
-export interface PersistedPendingAgent {
+/** Persisted per-agent record (mirrors InstalledAgentRecord in bootstrap.ts). */
+export interface PersistedInstalledAgent {
   agentId: string;
   handle: string;
-  key?: string;
-  source?: string;
-  className?: string;
+  key: string;
+  source: string;
+  className: string;
   /** Per-agent subscription config (model/effort/etc.), excluding handle. */
   config?: Record<string, unknown>;
 }
@@ -13,7 +13,7 @@ export interface ChatStateArgs {
   channelName: string;
   channelConfig?: Record<string, unknown>;
   contextId?: string;
-  pendingAgents?: PersistedPendingAgent[];
+  installedAgents?: PersistedInstalledAgent[];
   agentSource?: string;
   agentClass?: string;
   agentConfig?: Record<string, unknown>;

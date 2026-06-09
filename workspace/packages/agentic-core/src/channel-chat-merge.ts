@@ -352,7 +352,8 @@ function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[
         kind: "system",
         complete: true,
         diagnostic,
-        error: diagnostic.severity === "error" ? (diagnostic.detail ?? diagnostic.title) : undefined,
+        error:
+          diagnostic.severity === "error" ? (diagnostic.detail ?? diagnostic.title) : undefined,
         senderMetadata,
         sortTime,
       } as ChatMessage & { sortTime: number },

@@ -54,6 +54,8 @@ export interface AvailableAgent {
   description?: string;
   /** Emoji/icon for the agent gallery. */
   icon?: string;
+  /** Optional manifest-provided defaults for new subscriptions of this agent type. */
+  defaultConfig?: AgentSubscriptionConfig;
   proposedHandle: string;
 }
 

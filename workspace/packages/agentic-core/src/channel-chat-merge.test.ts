@@ -216,7 +216,11 @@ describe("chatMessagesFromChannelView", () => {
             type: "thinking",
             content: "I should inspect the repo first.",
           },
-          { blockId: brandId<BlockId>("msg-thinking:block:1"), type: "text", content: "Final answer" },
+          {
+            blockId: brandId<BlockId>("msg-thinking:block:1"),
+            type: "text",
+            content: "Final answer",
+          },
         ],
         outcome: "completed",
       },
@@ -781,6 +785,53 @@ describe("chatMessagesFromChannelView", () => {
     expect(card?.error).toBeUndefined();
   });
 
+  it("clears a credential waiting notice when the same turn becomes active again", () => {
+    const turnId = brandId<TurnId>("turn-resumed-same-credential");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const waiting: AgenticEvent<"turn.waiting"> = {
+      kind: "turn.waiting",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "model_credential_required",
+        summary: "Waiting for model credential approval",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const resumed: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const waitingState = [opened, waiting]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    expect(chatMessagesFromChannelView(waitingState).map((message) => message.id)).toEqual([
+      "turn:turn-resumed-same-credential:waiting",
+    ]);
+
+    const resumedState = [opened, waiting, resumed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    expect(chatMessagesFromChannelView(resumedState).map((message) => message.id)).toEqual([
+      "turn:turn-resumed-same-credential",
+    ]);
+    expect(chatMessagesFromChannelView(resumedState)[0]).toMatchObject({
+      contentType: "typing",
+      complete: false,
+    });
+  });
+
   it("does not surface user-interrupted agent turns as no-response errors", () => {
     const turnId = brandId<TurnId>("turn-interrupted");
     const opened: AgenticEvent<"turn.opened"> = {
@@ -1202,9 +1253,7 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
-        blocks: [
-          { blockId: brandId<BlockId>("msg-1:block:0"), type: "text", content: "partial" },
-        ],
+        blocks: [{ blockId: brandId<BlockId>("msg-1:block:0"), type: "text", content: "partial" }],
       },
       createdAt: "2026-05-20T12:00:01.000Z",
     };

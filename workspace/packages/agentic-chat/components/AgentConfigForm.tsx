@@ -159,16 +159,31 @@ export function AgentConfigForm({
             Reactiveness
           </FieldLabel>
           <SegmentedControl.Root
-            value={policy === "all" ? "all" : policy === "from-participants" ? "specific" : "mentioned"}
+            value={
+              policy === "all"
+                ? "all"
+                : policy === "from-participants"
+                  ? "specific"
+                  : policy === "mentioned-or-followup"
+                    ? "followup"
+                    : "mentioned"
+            }
             onValueChange={(v) =>
               set({
                 respondPolicy:
-                  v === "all" ? "all" : v === "specific" ? "from-participants" : "mentioned",
+                  v === "all"
+                    ? "all"
+                    : v === "specific"
+                      ? "from-participants"
+                      : v === "followup"
+                        ? "mentioned-or-followup"
+                        : "mentioned",
               })
             }
           >
             <SegmentedControl.Item value="all">Everything</SegmentedControl.Item>
             <SegmentedControl.Item value="mentioned">@mention</SegmentedControl.Item>
+            <SegmentedControl.Item value="followup">Mention + reply</SegmentedControl.Item>
             {participants.length > 0 && (
               <SegmentedControl.Item value="specific">Specific</SegmentedControl.Item>
             )}

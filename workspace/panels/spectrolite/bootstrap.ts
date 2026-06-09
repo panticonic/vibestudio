@@ -11,7 +11,7 @@ import { parseDoTargetId } from "@workspace/runtime/workerd-client";
 
 const CHANNEL_SERVICE_PROTOCOL = "natstack.channel.v1";
 
-export interface PendingAgentRecord {
+export interface InstalledAgentRecord {
   agentId: string;
   handle: string;
   key: string;
@@ -29,10 +29,10 @@ export function resolveContextId(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-export function appendPendingAgent(
-  existing: PendingAgentRecord[] | undefined,
-  agent: PendingAgentRecord,
-): PendingAgentRecord[] {
+export function appendInstalledAgent(
+  existing: InstalledAgentRecord[] | undefined,
+  agent: InstalledAgentRecord,
+): InstalledAgentRecord[] {
   return [...(existing ?? []), agent];
 }
 

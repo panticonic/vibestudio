@@ -1,6 +1,11 @@
 export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high";
 export type AgentApprovalLevel = 0 | 1 | 2;
-export type AgentRespondPolicy = "all" | "mentioned" | "mentioned-strict" | "from-participants";
+export type AgentRespondPolicy =
+  | "all"
+  | "mentioned"
+  | "mentioned-strict"
+  | "mentioned-or-followup"
+  | "from-participants";
 
 export interface AgentSubscriptionConfig {
   /** Model in "provider:modelId" form. */

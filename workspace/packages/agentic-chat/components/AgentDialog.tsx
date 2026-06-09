@@ -96,6 +96,27 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const draftForAgent = useCallback(
+    (agent = availableAgents[0]): AgentConfigDraft => {
+      const defaults = agent?.defaultConfig ?? {};
+      const defaultHandle =
+        typeof defaults["handle"] === "string" ? defaults["handle"] : agent?.proposedHandle;
+      return {
+        model:
+          typeof defaults.model === "string"
+            ? defaults.model
+            : pickDefaultModel(modelCatalog, connectedRefs, defaultModelRef),
+        thinkingLevel: defaults.thinkingLevel,
+        approvalLevel: defaults.approvalLevel ?? 2,
+        respondPolicy: defaults.respondPolicy ?? (showReactiveness ? "mentioned" : undefined),
+        respondFrom: defaults.respondFrom,
+        handle: defaultHandle,
+        systemPrompt: defaults.systemPrompt,
+      };
+    },
+    [availableAgents, connectedRefs, defaultModelRef, modelCatalog, showReactiveness]
+  );
+
   // Initialize when the dialog opens.
   useEffect(() => {
     if (!open) return;
@@ -106,12 +127,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
     setModelTouched(false);
 
     if (mode === "add") {
-      setDraft({
-        model: pickDefaultModel(modelCatalog, connectedRefs, defaultModelRef),
-        approvalLevel: 2,
-        respondPolicy: showReactiveness ? "mentioned" : undefined,
-        handle: availableAgents[0]?.proposedHandle,
-      });
+      setDraft(draftForAgent());
       return;
     }
 
@@ -293,7 +309,11 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
                 selected={a.id === agentId}
                 onSelect={() => {
                   setAgentId(a.id);
-                  setDraft((d) => ({ ...d, handle: showHandle ? a.proposedHandle : d.handle }));
+                  const next = draftForAgent(a);
+                  setDraft((current) => ({
+                    ...next,
+                    model: modelTouched ? current.model : next.model,
+                  }));
                 }}
               />
             ))}
