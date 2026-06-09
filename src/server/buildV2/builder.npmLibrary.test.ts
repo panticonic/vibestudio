@@ -12,5 +12,8 @@ describe("buildNpmLibrary", () => {
     await expect(buildNpmLibrary("vite", "^7.3.1", [])).rejects.toThrow(
       "Unsupported npm package for panel eval: vite"
     );
+    await expect(buildNpmLibrary("esbuild", "^0.27.0", [])).rejects.toThrow(
+      "Unsupported npm package for panel eval: esbuild"
+    );
   });
 });

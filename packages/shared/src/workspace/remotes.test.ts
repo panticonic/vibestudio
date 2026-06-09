@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   getDeclaredRemoteForRepo,
   getDeclaredRemotesForRepo,
+  isDeclaredRemoteRepoPath,
   removeDeclaredRemoteFromConfig,
   setDeclaredRemoteInConfig,
   syncDeclaredRemoteForRepo,
@@ -23,6 +24,12 @@ function initRepo(workspaceRoot: string, repoPath: string): void {
 }
 
 describe("workspace remotes", () => {
+  it("classifies only section/repo paths as declared-remote eligible", () => {
+    expect(isDeclaredRemoteRepoPath("panels/chat")).toBe(true);
+    expect(isDeclaredRemoteRepoPath("tmp-git-stash-test")).toBe(false);
+    expect(isDeclaredRemoteRepoPath("../tmp-git-stash-test")).toBe(false);
+  });
+
   it("stores remote names as keys under the section/repo declaration", () => {
     const config: WorkspaceConfig = { id: "test", git: {} };
 
@@ -49,7 +56,10 @@ describe("workspace remotes", () => {
       name: "ci",
       url: "https://github.com/acme/chat-ci.git",
     });
-    expect(getDeclaredRemotesForRepo(next, "panels/chat").map((remote) => remote.name)).toEqual(["ci", "origin"]);
+    expect(getDeclaredRemotesForRepo(next, "panels/chat").map((remote) => remote.name)).toEqual([
+      "ci",
+      "origin",
+    ]);
   });
 
   it("removes a named remote without removing the repo declaration", () => {
@@ -62,7 +72,7 @@ describe("workspace remotes", () => {
       {
         name: "ci",
         url: "https://github.com/acme/chat-ci.git",
-      },
+      }
     );
 
     const next = removeDeclaredRemoteFromConfig(config, "panels/chat", "ci");
@@ -73,10 +83,12 @@ describe("workspace remotes", () => {
   });
 
   it("rejects remote URLs with embedded credentials", () => {
-    expect(() => setDeclaredRemoteInConfig({ id: "test" }, "panels/chat", {
-      name: "origin",
-      url: "https://token@github.com/acme/chat.git",
-    })).toThrow("Remote URL must not contain embedded credentials");
+    expect(() =>
+      setDeclaredRemoteInConfig({ id: "test" }, "panels/chat", {
+        name: "origin",
+        url: "https://token@github.com/acme/chat.git",
+      })
+    ).toThrow("Remote URL must not contain embedded credentials");
   });
 
   it("materializes declared remotes into git config", async () => {
@@ -91,24 +103,30 @@ describe("workspace remotes", () => {
       {
         name: "ci",
         url: "https://github.com/acme/chat-ci.git",
-      },
+      }
     );
 
     await syncDeclaredRemoteForRepo({ config, workspaceRoot, repoPath: "panels/chat" });
 
     const repoDir = path.join(workspaceRoot, "panels/chat");
-    expect(execFileSync("git", ["remote", "get-url", "origin"], {
-      cwd: repoDir,
-      encoding: "utf-8",
-    }).trim()).toBe("https://github.com/acme/chat.git");
-    expect(execFileSync("git", ["remote", "get-url", "ci"], {
-      cwd: repoDir,
-      encoding: "utf-8",
-    }).trim()).toBe("https://github.com/acme/chat-ci.git");
-    expect(execFileSync("git", ["config", "remote.origin.natstack-managed"], {
-      cwd: repoDir,
-      encoding: "utf-8",
-    }).trim()).toBe("true");
+    expect(
+      execFileSync("git", ["remote", "get-url", "origin"], {
+        cwd: repoDir,
+        encoding: "utf-8",
+      }).trim()
+    ).toBe("https://github.com/acme/chat.git");
+    expect(
+      execFileSync("git", ["remote", "get-url", "ci"], {
+        cwd: repoDir,
+        encoding: "utf-8",
+      }).trim()
+    ).toBe("https://github.com/acme/chat-ci.git");
+    expect(
+      execFileSync("git", ["config", "remote.origin.natstack-managed"], {
+        cwd: repoDir,
+        encoding: "utf-8",
+      }).trim()
+    ).toBe("true");
   });
 
   it("applies a predeclared remote when the repo appears later", async () => {
@@ -118,22 +136,28 @@ describe("workspace remotes", () => {
       url: "https://github.com/acme/future.git",
     });
 
-    await expect(syncDeclaredRemoteForRepo({
-      config,
-      workspaceRoot,
-      repoPath: "panels/future",
-    })).resolves.toMatchObject({ applied: false });
+    await expect(
+      syncDeclaredRemoteForRepo({
+        config,
+        workspaceRoot,
+        repoPath: "panels/future",
+      })
+    ).resolves.toMatchObject({ applied: false });
 
     initRepo(workspaceRoot, "panels/future");
-    await expect(syncDeclaredRemoteForRepo({
-      config,
-      workspaceRoot,
-      repoPath: "panels/future",
-    })).resolves.toMatchObject({ applied: true });
+    await expect(
+      syncDeclaredRemoteForRepo({
+        config,
+        workspaceRoot,
+        repoPath: "panels/future",
+      })
+    ).resolves.toMatchObject({ applied: true });
 
-    expect(execFileSync("git", ["remote", "get-url", "origin"], {
-      cwd: path.join(workspaceRoot, "panels/future"),
-      encoding: "utf-8",
-    }).trim()).toBe("https://github.com/acme/future.git");
+    expect(
+      execFileSync("git", ["remote", "get-url", "origin"], {
+        cwd: path.join(workspaceRoot, "panels/future"),
+        encoding: "utf-8",
+      }).trim()
+    ).toBe("https://github.com/acme/future.git");
   });
 });

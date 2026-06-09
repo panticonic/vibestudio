@@ -12,8 +12,8 @@ export function createNotificationService(deps: {
 }): ServiceDefinition {
   return {
     name: "notification",
-    description: "Host notification surface for workspace apps",
-    policy: { allowed: ["shell", "app"] },
+    description: "Host notification surface for workspace apps and panels",
+    policy: { allowed: ["shell", "app", "panel"] },
     methods: {
       show: {
         args: z.tuple([

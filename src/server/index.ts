@@ -796,7 +796,8 @@ async function main() {
     getWorkspaceConfig: () => workspaceConfig,
   });
 
-  const { syncDeclaredRemoteForRepo } = await import("@natstack/shared/workspace/remotes");
+  const { isDeclaredRemoteRepoPath, syncDeclaredRemoteForRepo } =
+    await import("@natstack/shared/workspace/remotes");
   const { loadWorkspaceConfig, resolveDeclaredApps, resolveDeclaredExtensions } =
     await import("@natstack/shared/workspace/loader");
   const reconcileDeclaredWorkspaceUnits = async (
@@ -817,20 +818,30 @@ async function main() {
       );
     await Promise.all([extensionTask ?? Promise.resolve(), appTask ?? Promise.resolve()]);
   };
+  const skippedDeclaredRemoteRepoWarnings = new Set<string>();
   const syncDeclaredRemotesForSource = async (repoPath?: string): Promise<void> => {
     const repos = repoPath
       ? [repoPath]
       : collectWorkspaceRepoPaths((await gitServer.getWorkspaceTree()).children);
     await Promise.all(
-      repos.map((repo) =>
-        syncDeclaredRemoteForRepo({
+      repos.map((repo) => {
+        if (!isDeclaredRemoteRepoPath(repo)) {
+          if (!skippedDeclaredRemoteRepoWarnings.has(repo)) {
+            skippedDeclaredRemoteRepoWarnings.add(repo);
+            console.warn(
+              `[GitRemotes] Skipping declared remote sync for non-declarable workspace repo path ${repo}`
+            );
+          }
+          return Promise.resolve();
+        }
+        return syncDeclaredRemoteForRepo({
           config: workspaceConfig,
           workspaceRoot: workspacePath,
           repoPath: repo,
         }).catch((err: unknown) => {
           console.warn(`[GitRemotes] Failed to sync declared remote for ${repo}:`, err);
-        })
-      )
+        });
+      })
     );
   };
   gitServer.onPush((event) => {

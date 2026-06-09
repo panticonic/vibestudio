@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, lstatSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -295,5 +295,36 @@ describe("ContextFolderManager", () => {
         "utf8"
       )
     ).resolves.toBe("context-only");
+  });
+
+  it("skips declared remote sync for top-level transient repos without log flooding", async () => {
+    const root = makeTempRoot();
+    const sourcePath = path.join(root, "source");
+    const contextsRoot = path.join(root, "contexts");
+    const repoRel = "tmp-git-stash-test";
+    const repoPath = path.join(sourcePath, repoRel);
+
+    mkdirSync(repoPath, { recursive: true });
+    writeFileSync(path.join(repoPath, "note.txt"), "temporary\n");
+    initGitRepo(repoPath);
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const manager = new ContextFolderManager({
+      sourcePath,
+      contextsRoot,
+      getWorkspaceTree: async () => ({ children: [makeNode(repoRel)] }),
+      getWorkspaceConfig: () => ({ id: "test", git: {} }),
+    });
+
+    await manager.ensureContextFolder("ctx-test");
+    await manager.syncDeclaredRemotes();
+    await manager.syncDeclaredRemotes(repoRel);
+
+    expect(warn.mock.calls).toEqual([
+      [
+        "[ContextFolderManager] Skipping declared remote sync for non-declarable workspace repo path tmp-git-stash-test",
+      ],
+    ]);
+    warn.mockRestore();
   });
 });

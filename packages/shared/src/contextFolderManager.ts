@@ -16,7 +16,7 @@ import { createDevLogger } from "@natstack/dev-log";
 
 import type { WorkspaceNode } from "./types.js";
 import type { WorkspaceConfig } from "./workspace/types.js";
-import { syncDeclaredRemoteForRepo } from "./workspace/remotes.js";
+import { isDeclaredRemoteRepoPath, syncDeclaredRemoteForRepo } from "./workspace/remotes.js";
 
 const log = createDevLogger("ContextFolderManager");
 
@@ -202,6 +202,7 @@ export class ContextFolderManager {
   private readonly sourcePath: string;
   private readonly getWorkspaceTree: () => Promise<{ children: WorkspaceNode[] }>;
   private readonly getWorkspaceConfig?: () => WorkspaceConfig;
+  private readonly skippedDeclaredRemoteRepoWarnings = new Set<string>();
 
   /** Concurrency guard: in-flight ensureContextFolder promises. */
   private readonly inflight = new Map<string, Promise<string>>();
@@ -438,6 +439,15 @@ export class ContextFolderManager {
 
   private async syncDeclaredRemoteForRepo(contextPath: string, repoPath: string): Promise<void> {
     if (!this.getWorkspaceConfig) return;
+    if (!isDeclaredRemoteRepoPath(repoPath)) {
+      if (!this.skippedDeclaredRemoteRepoWarnings.has(repoPath)) {
+        this.skippedDeclaredRemoteRepoWarnings.add(repoPath);
+        log.warn(
+          `Skipping declared remote sync for non-declarable workspace repo path ${repoPath}`
+        );
+      }
+      return;
+    }
     try {
       await syncDeclaredRemoteForRepo({
         config: this.getWorkspaceConfig(),

@@ -3124,6 +3124,7 @@ function validateSandboxNpmLibrarySpecifier(specifier: string): void {
     specifier === "vitest" ||
     specifier === "vite" ||
     specifier === "vite-node" ||
+    specifier === "esbuild" ||
     specifier.startsWith("@vitest/")
   ) {
     throw new Error(
@@ -3267,7 +3268,10 @@ async function doNpmBuild(
         // are intercepted by createWorkerNodeStubPlugin and replaced with a
         // throwing stub, so the bundle links and only throws if actually used.
         external: [...externals, ...WORKER_NODE_BUILTIN_EXTERNALS],
-        plugins: [createWorkerNodeStubPlugin()],
+        plugins: [
+          createCryptoShimPlugin({ includeNodePrefix: false, resolveDir: nodeModulesDir }),
+          createWorkerNodeStubPlugin(),
+        ],
         nodePaths,
         logLevel: "warning",
         tsconfigRaw: { compilerOptions: {} },

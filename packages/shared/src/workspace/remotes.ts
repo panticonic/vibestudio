@@ -36,9 +36,18 @@ export function normalizeWorkspaceRepoPath(repoPath: string): string {
   return normalized;
 }
 
+export function isDeclaredRemoteRepoPath(repoPath: string): boolean {
+  try {
+    normalizeWorkspaceRepoPath(repoPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getDeclaredRemotesForRepo(
   config: WorkspaceConfig,
-  repoPathInput: string,
+  repoPathInput: string
 ): ResolvedWorkspaceGitRemote[] {
   const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
   const [section, ...repoParts] = repoPath.split("/");
@@ -53,12 +62,16 @@ export function getDeclaredRemotesForRepo(
 export function getDeclaredRemoteForRepo(
   config: WorkspaceConfig,
   repoPathInput: string,
-  name = "origin",
+  name = "origin"
 ): ResolvedWorkspaceGitRemote | null {
-  return getDeclaredRemotesForRepo(config, repoPathInput).find((remote) => remote.name === name) ?? null;
+  return (
+    getDeclaredRemotesForRepo(config, repoPathInput).find((remote) => remote.name === name) ?? null
+  );
 }
 
-export function validateWorkspaceGitRemote(remote: WorkspaceGitRemoteConfig): WorkspaceGitRemoteConfig {
+export function validateWorkspaceGitRemote(
+  remote: WorkspaceGitRemoteConfig
+): WorkspaceGitRemoteConfig {
   if (!remote || typeof remote !== "object") {
     throw new Error("Remote declaration is required");
   }
@@ -80,7 +93,7 @@ function validateWorkspaceGitRemoteEntry(
   section: string,
   repoKey: string,
   nameInput: string,
-  urlInput: string,
+  urlInput: string
 ): ResolvedWorkspaceGitRemote {
   const name = validateWorkspaceGitRemoteName(nameInput);
   return {
@@ -115,7 +128,7 @@ export function normalizeRemoteUrl(value: string): string {
 export function setDeclaredRemoteInConfig(
   config: WorkspaceConfig,
   repoPathInput: string,
-  remote: WorkspaceGitRemoteConfig,
+  remote: WorkspaceGitRemoteConfig
 ): WorkspaceConfig {
   const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
   const [section, ...repoParts] = repoPath.split("/");
@@ -145,7 +158,7 @@ export function setDeclaredRemoteInConfig(
 export function removeDeclaredRemoteFromConfig(
   config: WorkspaceConfig,
   repoPathInput: string,
-  remoteName: string,
+  remoteName: string
 ): WorkspaceConfig {
   const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
   const [section, ...repoParts] = repoPath.split("/");
@@ -223,7 +236,11 @@ async function removeRemote(repoDir: string, name: string): Promise<void> {
 }
 
 async function listManagedRemoteNames(repoDir: string): Promise<string[]> {
-  const result = await gitConfig(repoDir, ["config", "--get-regexp", "^remote\\..*\\.natstack-managed$"]);
+  const result = await gitConfig(repoDir, [
+    "config",
+    "--get-regexp",
+    "^remote\\..*\\.natstack-managed$",
+  ]);
   if (!result.ok) return [];
   const names = new Set<string>();
   for (const line of result.stdout.split(/\r?\n/)) {
@@ -236,7 +253,7 @@ async function listManagedRemoteNames(repoDir: string): Promise<string[]> {
 async function gitConfig(
   cwd: string,
   args: string[],
-  throwOnError = false,
+  throwOnError = false
 ): Promise<{ ok: true; stdout: string } | { ok: false; stdout: string; stderr: string }> {
   try {
     const { stdout } = await execFileAsync("git", args, { cwd });

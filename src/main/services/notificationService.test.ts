@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import { createVerifiedCaller, ServiceDispatcher } from "@natstack/shared/serviceDispatcher";
 import { createNotificationService } from "./notificationService.js";
 
 function createHarness(capabilities: string[] = []) {
@@ -44,6 +44,27 @@ describe("createNotificationService", () => {
       id,
       type: "info",
       title: "Allowed",
+    });
+  });
+
+  it("allows panel callers through the dispatcher policy", async () => {
+    const { service, eventService } = createHarness([]);
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.registerService(service);
+    dispatcher.markInitialized();
+
+    const id = await dispatcher.dispatch(
+      { caller: createVerifiedCaller("panel:test", "panel") },
+      "notification",
+      "show",
+      [{ type: "info", title: "Panel notice" }]
+    );
+
+    expect(id).toMatch(/^notif-/);
+    expect(eventService.emit).toHaveBeenCalledWith("notification:show", {
+      id,
+      type: "info",
+      title: "Panel notice",
     });
   });
 
