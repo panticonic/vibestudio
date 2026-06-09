@@ -321,13 +321,17 @@ function aggregateHistoryByThread(history: GmailHistoryResponse): GmailThreadDif
   return [...byThread.values()];
 }
 
-export function createGmailClient(credentials: CredentialClient): GmailClient {
+export function createGmailClient(
+  credentials: CredentialClient,
+  opts: { credentialId?: string } = {}
+): GmailClient {
   let handlePromise: Promise<UrlCredentialHandle> | null = null;
   const handle = (): Promise<UrlCredentialHandle> => {
     if (!handlePromise) {
       const p = credentials.forAudience({
         ...googleWorkspaceCredential,
         label: googleWorkspaceCredential.displayName,
+        ...(opts.credentialId ? { credentialId: opts.credentialId } : {}),
       });
       p.catch(() => {
         if (handlePromise === p) handlePromise = null;

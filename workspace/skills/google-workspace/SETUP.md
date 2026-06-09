@@ -46,10 +46,11 @@ Optional APIs when the user's task needs them:
 5. Run `configureGoogleOAuthClient()` so the trusted approval UI collects the
    Desktop app `client_id` and `client_secret`. Do not ask the user to paste
    secrets into chat.
-6. Run `beginGoogleCredentialCreation({ redirectUri })`, open the
-   returned authorize URL with `openExternal(begin.authorizeUrl, {
-   expectedRedirectUri: redirectUri })`, then complete the PKCE flow.
-7. Run `verifyGoogleCredential(credentialId)`.
+6. Run `connectGoogle()` to launch the host-owned PKCE flow. The helper asks
+   Google for offline access and tells NatStack to persist the returned refresh
+   token.
+7. Run `verifyGoogleCredential(credentialId)` or
+   `verifyGoogleConnection(connectionId)`.
 
 Never skip Production publishing. Google's Testing mode can produce refresh
 tokens that expire after 7 days for user-data scopes.

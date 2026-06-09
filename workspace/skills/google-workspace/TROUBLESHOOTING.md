@@ -29,6 +29,17 @@ unverified-app cap.
 After publishing, reconnect the Google account so Google issues a new refresh
 token under the Production app.
 
+## `credential-expired` After Restart
+
+The stored Google credential has an expired access token and no usable refresh
+token. Older NatStack Google connections requested offline access from Google
+but did not opt into persisting the returned refresh token in the host
+credential store.
+
+Revoke or replace the old Google Workspace credential and run
+`connectGoogle({ force: true })` once. New connections persist the refresh token
+and should survive app restarts.
+
 ## "This App Isn't Verified"
 
 Expected for unverified Google OAuth apps. Users can click **Advanced** and

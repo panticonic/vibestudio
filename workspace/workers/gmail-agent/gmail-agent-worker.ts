@@ -22,6 +22,30 @@ import type { PiRunnerOptions } from "@workspace/harness";
 import type { ParticipantDescriptor } from "@workspace/harness";
 
 const DEFAULT_POLL_INTERVAL_MS = 5 * 60 * 1000;
+const INITIAL_THREAD_LOAD_LIMIT = 12;
+const GMAIL_ACTION_BAR_FILE = "skills/gmail/action-bar.tsx";
+const GMAIL_ACTION_BAR_MAX_HEIGHT = 180;
+const GMAIL_UI_INSTALL_VERSION = 2;
+const GMAIL_UI_IMPORTS = {
+  react: "latest",
+  "react/jsx-runtime": "latest",
+  "@radix-ui/themes": "npm:^3.2.1",
+  "@radix-ui/react-icons": "npm:^1.3.2",
+} satisfies Record<string, string>;
+const GMAIL_RENDERERS = [
+  { typeId: "gmail.inbox", displayMode: "row" as const, path: "skills/gmail/renderers/gmail-inbox.tsx" },
+  { typeId: "gmail.category", displayMode: "row" as const, path: "skills/gmail/renderers/gmail-category.tsx" },
+  { typeId: "gmail.thread", displayMode: "row" as const, path: "skills/gmail/renderers/gmail-thread.tsx" },
+  { typeId: "gmail.compose", displayMode: "row" as const, path: "skills/gmail/renderers/gmail-compose.tsx" },
+];
+const GMAIL_SETUP_ONBOARDING_PROMPT = [
+  "You have just been added as the Gmail agent for this channel.",
+  "Start first-run setup. Ask the user what kinds of incoming email you should pay attention to.",
+  "Do not run semantic analysis over every message by default. The built-in default only wakes for unread inbox mail from senders the user has replied to before.",
+  "When the user answers, use the normal workspace file tools as needed to inspect and edit the Gmail agent code so incoming email wakes you only on the requested static/cheap signals.",
+  "Useful watch categories to offer: important senders or domains, invoices and receipts, scheduling, customer/user messages, urgent operational mail, every email, or nothing yet.",
+  "After you have implemented or confirmed the requested behavior, call gmail_markConfigured with a concise summary.",
+].join("\n");
 const METADATA_HEADERS = [
   "Subject",
   "From",
@@ -38,29 +62,26 @@ const GMAIL_SYSTEM_CATEGORIES: Record<string, string> = {
   CATEGORY_UPDATES: "Updates",
   CATEGORY_FORUMS: "Forums",
 };
-const GMAIL_TOOL_NAMES = new Set([
-  "set_title",
-  "gmail_checkInbox",
-  "gmail_search",
-  "gmail_summarizeThread",
-  "gmail_draftReply",
-  "gmail_send",
-  "gmail_categorize",
-  "gmail_setPollInterval",
-  "gmail_listActionableThreads",
-]);
 
 type GmailTool = NonNullable<PiRunnerOptions["extraTools"]>[number];
+type GmailToolParameters = GmailTool["parameters"];
 
 interface GmailChannelState {
   channelId: string;
   historyId?: string;
   emailAddress?: string;
+  credentialId?: string;
   pollIntervalMs: number;
   inboxMessageId?: string;
   lastSyncAt?: number;
   lastError?: string;
   lastOverviewJson?: string;
+  lastSearchQuery?: string;
+  lastSearchJson?: string;
+  setupStatus: "needs-user-preferences" | "configured";
+  setupPromptedAt?: number;
+  configuredAt?: number;
+  setupSummary?: string;
 }
 
 interface GmailThreadStateRow {
@@ -77,6 +98,224 @@ interface GmailThreadStateRow {
   updated_at: number;
 }
 
+type GmailAttentionAction =
+  | "surface"
+  | "summarize"
+  | "draft"
+  | "archive"
+  | "markRead";
+
+type GmailAttentionScope = "metadata" | "snippet" | "full-thread-on-wake";
+type GmailAttentionField = GmailAttentionCondition["field"];
+type GmailAttentionOperator = NonNullable<GmailAttentionCondition["op"]>;
+
+const GMAIL_ATTENTION_FIELDS = [
+  "from",
+  "fromDomain",
+  "to",
+  "subject",
+  "snippet",
+  "label",
+  "category",
+  "hasAttachment",
+  "priorReplyToSender",
+  "wakeAll",
+] as const satisfies readonly GmailAttentionField[];
+
+const GMAIL_ATTENTION_OPERATORS = [
+  "contains",
+  "equals",
+  "matches",
+  "present",
+] as const satisfies readonly GmailAttentionOperator[];
+
+const GMAIL_ATTENTION_ACTIONS = [
+  "surface",
+  "summarize",
+  "draft",
+  "archive",
+  "markRead",
+] as const satisfies readonly GmailAttentionAction[];
+
+const GMAIL_ATTENTION_SCOPES = [
+  "metadata",
+  "snippet",
+  "full-thread-on-wake",
+] as const satisfies readonly GmailAttentionScope[];
+
+const EMPTY_TOOL_SCHEMA = {
+  type: "object",
+  properties: {},
+  additionalProperties: false,
+} as const;
+
+const SEARCH_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    q: { type: "string", minLength: 1 },
+    limit: { type: "number", minimum: 1, maximum: 25 },
+  },
+  required: ["q"],
+  additionalProperties: false,
+} as const;
+
+const THREAD_ID_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    threadId: { type: "string", minLength: 1 },
+  },
+  required: ["threadId"],
+  additionalProperties: false,
+} as const;
+
+const SEND_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    to: { type: "string" },
+    cc: { type: "string" },
+    bcc: { type: "string" },
+    subject: { type: "string" },
+    body: { type: "string" },
+    threadId: { type: "string" },
+    messageId: { type: "string" },
+    sourceThreadId: { type: "string" },
+  },
+  required: ["body"],
+  additionalProperties: false,
+} as const;
+
+const CATEGORIZE_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    threadId: { type: "string", minLength: 1 },
+    category: { type: "string", minLength: 1 },
+  },
+  required: ["threadId", "category"],
+  additionalProperties: false,
+} as const;
+
+const POLL_INTERVAL_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    pollIntervalMs: { type: "number", minimum: 30_000 },
+  },
+  required: ["pollIntervalMs"],
+  additionalProperties: false,
+} as const;
+
+const LIST_THREADS_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    limit: { type: "number", minimum: 1, maximum: 25 },
+  },
+  additionalProperties: false,
+} as const;
+
+const MARK_CONFIGURED_TOOL_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+  },
+  additionalProperties: false,
+} as const;
+
+interface GmailAttentionCondition {
+  field:
+    | "from"
+    | "fromDomain"
+    | "to"
+    | "subject"
+    | "snippet"
+    | "label"
+    | "category"
+    | "hasAttachment"
+    | "priorReplyToSender"
+    | "wakeAll";
+  op?: "contains" | "equals" | "matches" | "present";
+  value?: string;
+}
+
+interface GmailAttentionMatcher {
+  any?: GmailAttentionCondition[];
+  all?: GmailAttentionCondition[];
+  not?: GmailAttentionCondition[];
+}
+
+interface GmailAttentionDirective {
+  id: string;
+  name: string;
+  description?: string;
+  enabled: boolean;
+  scope: GmailAttentionScope;
+  priority: number;
+  match: GmailAttentionMatcher;
+  actions: GmailAttentionAction[];
+}
+
+interface GmailAttentionRuleSet {
+  version: 1;
+  directives: GmailAttentionDirective[];
+}
+
+interface GmailAttentionRuleSetRecord {
+  channelId: string;
+  ruleSet: GmailAttentionRuleSet;
+  updatedAt: number;
+}
+
+interface GmailAttentionRulesSnapshot {
+  channelId: string;
+  rules: GmailAttentionDirective[];
+  ruleSet: GmailAttentionRuleSet;
+  updatedAt: number;
+  capabilities: {
+    fields: readonly GmailAttentionField[];
+    operators: readonly GmailAttentionOperator[];
+    actions: readonly GmailAttentionAction[];
+    scopes: readonly GmailAttentionScope[];
+  };
+  rpc: {
+    source: "workers/gmail-agent";
+    className: "GmailAgentWorker";
+    objectKey: string;
+    resolveMethod: "workers.resolveDurableObject";
+  };
+}
+
+interface GmailAttentionDecision {
+  wake: boolean;
+  directiveId?: string;
+  directiveName?: string;
+  reason?: string;
+  actions?: GmailAttentionAction[];
+}
+
+interface GmailAttentionEvent {
+  threadId: string;
+  messageId?: string;
+  from: string;
+  to: string;
+  subject: string;
+  snippet: string;
+  labels: string[];
+  category?: string;
+  hasAttachment: boolean;
+  priorReplyToSender?: boolean;
+  unread: boolean;
+  inInbox: boolean;
+  addressedToUser: boolean;
+  internalDate?: number;
+}
+
+interface GmailAttentionHit {
+  threadId: string;
+  directiveId: string;
+  directiveName: string;
+  reason: string;
+  actions: GmailAttentionAction[];
+  matchedAt: number;
+}
+
 interface GmailThreadCardState extends GmailThreadState {
   threadId: string;
   subject: string;
@@ -86,26 +325,37 @@ interface GmailThreadCardState extends GmailThreadState {
   inInbox: boolean;
   category?: string;
   actionable: boolean;
+  attention?: GmailAttentionDecision;
   updatedAt: number;
 }
 
 interface GmailComposeState {
   to?: string;
+  cc?: string;
+  bcc?: string;
   subject?: string;
   body?: string;
+  draftId?: string;
   threadId?: string;
   sourceThreadId?: string;
-  status: "draft" | "sending" | "sent" | "error";
+  status: "draft" | "saved" | "discarded" | "sending" | "sent" | "error";
   error?: string;
 }
 
 interface GmailInboxState {
   email?: string;
   unread: number;
+  inbox: number;
   urgent: number;
   draftCount: number;
   perCategory?: Record<string, number>;
   actionable: GmailThreadCardState[];
+  setupStatus: "needs-user-preferences" | "configured";
+  setupSummary?: string;
+  attentionRules?: GmailAttentionRuleSet;
+  attentionHits?: GmailAttentionHit[];
+  searchQuery?: string;
+  searchResults?: GmailThreadCardState[];
   lastSyncedAt?: string;
   lastError?: string;
 }
@@ -119,9 +369,18 @@ function stringArg(args: Record<string, unknown>, key: string): string | undefin
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+function gmailAgentObjectKey(channelId: string): string {
+  return `gmail-${channelId}`;
+}
+
 function numberArg(args: Record<string, unknown>, key: string): number | undefined {
   const value = args[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function booleanArg(args: Record<string, unknown>, key: string): boolean | undefined {
+  const value = args[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function header(message: GmailMessage, name: string): string | undefined {
@@ -153,6 +412,12 @@ function textFromPart(part: NonNullable<GmailMessage["payload"]> | undefined): s
   return "";
 }
 
+function partHasAttachment(part: NonNullable<GmailMessage["payload"]> | undefined): boolean {
+  if (!part) return false;
+  if (part.filename || part.body?.attachmentId) return true;
+  return (part.parts ?? []).some(partHasAttachment);
+}
+
 function textContentFromAssistant(message: Awaited<ReturnType<typeof complete>>): string {
   return message.content
     .filter((block): block is { type: "text"; text: string } => block.type === "text")
@@ -166,6 +431,223 @@ function categoryFromLabels(labels: Set<string>): string | undefined {
     if (labels.has(labelId)) return category;
   }
   return undefined;
+}
+
+function slug(value: string): string {
+  const text = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+  return text || "directive";
+}
+
+function normalizeText(value: string): string {
+  return value.toLowerCase();
+}
+
+function fromDomain(from: string): string {
+  const email = /<([^>]+)>/.exec(from)?.[1] ?? from;
+  const domain = /@([^>\s,]+)/.exec(email)?.[1] ?? "";
+  return domain.toLowerCase();
+}
+
+function normalizeEmailAddress(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const candidate = /<([^>]+)>/.exec(value)?.[1] ?? value;
+  const match = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i.exec(candidate);
+  return match?.[0].toLowerCase();
+}
+
+function parseAddressList(value: string | string[] | undefined): string[] {
+  const text = Array.isArray(value) ? value.join(",") : value ?? "";
+  return Array.from(text.matchAll(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi))
+    .map((match) => match[0]!.toLowerCase());
+}
+
+function defaultAttentionRules(): GmailAttentionRuleSet {
+  return {
+    version: 1,
+    directives: [
+      {
+        id: "prior-replies",
+        name: "People you have replied to",
+        description:
+          "Wake only for unread inbox mail from senders you have replied to before.",
+        enabled: true,
+        scope: "metadata",
+        priority: 100,
+        match: {
+          all: [
+            { field: "priorReplyToSender", op: "present" },
+            { field: "label", op: "contains", value: "INBOX" },
+            { field: "label", op: "contains", value: "UNREAD" },
+          ],
+        },
+        actions: ["surface", "summarize"],
+      },
+    ],
+  };
+}
+
+function validateAttentionRules(value: unknown): GmailAttentionRuleSet {
+  const root = record(value);
+  if (root["version"] !== 1) throw new Error("attention rules version must be 1");
+  const rawDirectives = root["directives"];
+  if (!Array.isArray(rawDirectives)) throw new Error("attention rules directives must be an array");
+  if (rawDirectives.length > 50) throw new Error("attention rules can contain at most 50 directives");
+  const ids = new Set<string>();
+  const directives = rawDirectives.map((item, index): GmailAttentionDirective => {
+    const directive = record(item);
+    const id = typeof directive["id"] === "string" ? slug(directive["id"]) : `directive-${index + 1}`;
+    if (ids.has(id)) throw new Error(`duplicate attention directive id: ${id}`);
+    ids.add(id);
+    const name =
+      typeof directive["name"] === "string" && directive["name"].trim()
+        ? directive["name"].trim().slice(0, 120)
+        : id;
+    const scope =
+      directive["scope"] === "full-thread-on-wake" || directive["scope"] === "metadata"
+        ? directive["scope"]
+        : "snippet";
+    const actions: GmailAttentionAction[] = Array.isArray(directive["actions"])
+      ? directive["actions"].filter((action): action is GmailAttentionAction =>
+          (GMAIL_ATTENTION_ACTIONS as readonly string[]).includes(String(action))
+        )
+      : ["surface"];
+    const match = validateMatcher(directive["match"]);
+    return {
+      id,
+      name,
+      ...(typeof directive["description"] === "string"
+        ? { description: directive["description"].slice(0, 500) }
+        : {}),
+      enabled: directive["enabled"] !== false,
+      scope,
+      priority: Math.max(0, Math.min(Number(directive["priority"] ?? 50) || 50, 1000)),
+      match,
+      actions: actions.length > 0 ? actions : (["surface"] satisfies GmailAttentionAction[]),
+    };
+  });
+  return { version: 1, directives };
+}
+
+function validateMatcher(value: unknown): GmailAttentionMatcher {
+  const matcher = record(value);
+  const next: GmailAttentionMatcher = {};
+  for (const key of ["any", "all", "not"] as const) {
+    const raw = matcher[key];
+    if (raw === undefined) continue;
+    if (!Array.isArray(raw)) throw new Error(`attention matcher ${key} must be an array`);
+    next[key] = raw.map(validateCondition);
+    if (next[key]!.length > 25) throw new Error(`attention matcher ${key} has too many conditions`);
+  }
+  if (!next.any && !next.all) throw new Error("attention matcher requires any or all conditions");
+  return next;
+}
+
+function validateCondition(value: unknown): GmailAttentionCondition {
+  const condition = record(value);
+  const field = condition["field"];
+  if (
+    ![
+      ...(GMAIL_ATTENTION_FIELDS as readonly string[])
+    ].includes(String(field))
+  ) {
+    throw new Error(`unsupported attention condition field: ${String(field)}`);
+  }
+  const op = condition["op"];
+  if (
+    op !== undefined &&
+    !(GMAIL_ATTENTION_OPERATORS as readonly string[]).includes(String(op))
+  ) {
+    throw new Error(`unsupported attention condition op: ${String(op)}`);
+  }
+  const valueText = typeof condition["value"] === "string" ? condition["value"].slice(0, 500) : undefined;
+  if (
+    field !== "hasAttachment" &&
+    field !== "priorReplyToSender" &&
+    field !== "wakeAll" &&
+    !valueText
+  ) {
+    throw new Error(`attention condition ${String(field)} requires value`);
+  }
+  if (op === "matches" && valueText) new RegExp(valueText);
+  return {
+    field: field as GmailAttentionCondition["field"],
+    ...(op ? { op: op as GmailAttentionCondition["op"] } : {}),
+    ...(valueText ? { value: valueText } : {}),
+  };
+}
+
+function conditionMatches(condition: GmailAttentionCondition, event: GmailAttentionEvent): boolean {
+  if (condition.field === "wakeAll") return true;
+  if (condition.field === "hasAttachment") return event.hasAttachment;
+  if (condition.field === "priorReplyToSender") return event.priorReplyToSender === true;
+  const haystack =
+    condition.field === "fromDomain"
+      ? fromDomain(event.from)
+      : condition.field === "from"
+        ? event.from
+        : condition.field === "to"
+          ? event.to
+          : condition.field === "subject"
+            ? event.subject
+            : condition.field === "snippet"
+              ? event.snippet
+              : condition.field === "label"
+                ? event.labels.join(" ")
+                : event.category ?? "";
+  const needle = condition.value ?? "";
+  const op = condition.op ?? (condition.field === "fromDomain" ? "equals" : "contains");
+  if (op === "present") return Boolean(haystack);
+  if (op === "equals") return normalizeText(haystack) === normalizeText(needle);
+  if (op === "matches") return new RegExp(needle, "i").test(haystack);
+  return normalizeText(haystack).includes(normalizeText(needle));
+}
+
+function directiveDecision(
+  directive: GmailAttentionDirective,
+  event: GmailAttentionEvent
+): GmailAttentionDecision | null {
+  if (!directive.enabled) return null;
+  if (directive.match.not?.some((condition) => conditionMatches(condition, event))) return null;
+  const anyOk = directive.match.any
+    ? directive.match.any.some((condition) => conditionMatches(condition, event))
+    : true;
+  const allOk = directive.match.all
+    ? directive.match.all.every((condition) => conditionMatches(condition, event))
+    : true;
+  if (!anyOk || !allOk) return null;
+  return {
+    wake: true,
+    directiveId: directive.id,
+    directiveName: directive.name,
+    reason: directive.description ?? directive.name,
+    actions: directive.actions,
+  };
+}
+
+function parseActionsJson(value: unknown): GmailAttentionAction[] {
+  try {
+    const parsed = JSON.parse(String(value ?? "[]")) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is GmailAttentionAction =>
+          (GMAIL_ATTENTION_ACTIONS as readonly string[]).includes(String(item))
+        )
+      : ["surface"];
+  } catch {
+    return ["surface"];
+  }
+}
+
+function maxInternalDate(thread: GmailThread): number {
+  const newest = Math.max(
+    ...(thread.messages ?? [])
+      .map((m) => Number(m.internalDate ?? 0))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  return Number.isFinite(newest) && newest > 0 ? newest : Date.now();
 }
 
 function isExcludedActionableCategory(labels: Set<string>): boolean {
@@ -207,22 +689,20 @@ function toolResult(details: unknown): {
 function threadCardState(
   thread: GmailThread,
   category?: string | null,
-  userEmail?: string
+  userEmail?: string,
+  attention?: GmailAttentionDecision
 ): GmailThreadCardState {
   const message = latestMessage(thread) ?? thread.messages?.[0];
   const labels = new Set((thread.messages ?? []).flatMap((m) => m.labelIds ?? []));
   const latestLabels = new Set(message?.labelIds ?? []);
   const resolvedCategory = category ?? categoryFromLabels(labels);
+  const unread = labels.has("UNREAD");
+  const inInbox = labels.has("INBOX");
   const actionable =
     latestLabels.has("UNREAD") &&
     !isExcludedActionableCategory(labels) &&
     addressHeaderIncludes(message, userEmail);
-  const updatedAt = Math.max(
-    Date.now(),
-    ...(thread.messages ?? [])
-      .map((m) => Number(m.internalDate ?? 0))
-      .filter((value) => Number.isFinite(value))
-  );
+  const updatedAt = maxInternalDate(thread);
   return {
     threadId: thread.id,
     subject: (message && header(message, "Subject")) || "(no subject)",
@@ -236,21 +716,49 @@ function threadCardState(
       )
     ),
     lastSnippet: message?.snippet ?? "",
-    unreadCount: labels.has("UNREAD") ? 1 : 0,
+    unreadCount: unread ? 1 : 0,
     hasDraft: false,
-    status: labels.has("INBOX") || labels.has("UNREAD") ? "unread" : "archived",
-    unread: labels.has("UNREAD"),
-    inInbox: labels.has("INBOX"),
-    actionable,
+    status: unread ? "unread" : inInbox ? "open" : "archived",
+    unread,
+    inInbox,
+    actionable: actionable || Boolean(attention?.wake),
+    ...(attention?.wake ? { attention } : {}),
     ...(resolvedCategory ? { category: resolvedCategory } : {}),
     updatedAt,
+  };
+}
+
+function attentionEventFromThread(
+  thread: GmailThread,
+  userEmail?: string
+): GmailAttentionEvent | null {
+  const message = latestMessage(thread) ?? thread.messages?.[0];
+  if (!message) return null;
+  const labels = Array.from(new Set((thread.messages ?? []).flatMap((m) => m.labelIds ?? [])));
+  const labelSet = new Set(labels);
+  return {
+    threadId: thread.id,
+    messageId: message.id,
+    from: header(message, "From") ?? "",
+    to: [header(message, "To"), header(message, "Cc"), header(message, "Bcc")]
+      .filter((value): value is string => Boolean(value))
+      .join(", "),
+    subject: header(message, "Subject") ?? "",
+    snippet: message.snippet ?? "",
+    labels,
+    ...(categoryFromLabels(labelSet) ? { category: categoryFromLabels(labelSet) } : {}),
+    hasAttachment: (thread.messages ?? []).some((item) => partHasAttachment(item.payload)),
+    unread: labelSet.has("UNREAD"),
+    inInbox: labelSet.has("INBOX"),
+    addressedToUser: addressHeaderIncludes(message, userEmail),
+    internalDate: Number(message.internalDate ?? 0) || undefined,
   };
 }
 
 export class GmailAgentWorker extends AgentWorkerBase {
   static override schemaVersion = AgentWorkerBase.schemaVersion;
 
-  private _gmail: GmailClient | null = null;
+  private gmailClients = new Map<string, GmailClient>();
   private recoveredChannels = new Set<string>();
 
   constructor(ctx: DurableObjectContext, env: unknown) {
@@ -265,11 +773,18 @@ export class GmailAgentWorker extends AgentWorkerBase {
         channel_id TEXT PRIMARY KEY,
         history_id TEXT,
         email_address TEXT,
+        credential_id TEXT,
         poll_interval_ms INTEGER NOT NULL,
         inbox_message_id TEXT,
         last_sync_at INTEGER,
         last_error TEXT,
-        last_overview_json TEXT
+        last_overview_json TEXT,
+        last_search_query TEXT,
+        last_search_json TEXT,
+        setup_status TEXT NOT NULL DEFAULT 'needs-user-preferences',
+        setup_prompted_at INTEGER,
+        configured_at INTEGER,
+        setup_summary TEXT
       )
     `);
     try {
@@ -279,6 +794,43 @@ export class GmailAgentWorker extends AgentWorkerBase {
     }
     try {
       this.sql.exec(`ALTER TABLE gmail_channel_state ADD COLUMN email_address TEXT`);
+    } catch {
+      // Column already exists on upgraded objects.
+    }
+    try {
+      this.sql.exec(`ALTER TABLE gmail_channel_state ADD COLUMN credential_id TEXT`);
+    } catch {
+      // Column already exists on upgraded objects.
+    }
+    try {
+      this.sql.exec(`ALTER TABLE gmail_channel_state ADD COLUMN last_search_query TEXT`);
+    } catch {
+      // Column already exists on upgraded objects.
+    }
+    try {
+      this.sql.exec(`ALTER TABLE gmail_channel_state ADD COLUMN last_search_json TEXT`);
+    } catch {
+      // Column already exists on upgraded objects.
+    }
+    try {
+      this.sql.exec(
+        `ALTER TABLE gmail_channel_state ADD COLUMN setup_status TEXT NOT NULL DEFAULT 'needs-user-preferences'`
+      );
+    } catch {
+      // Column already exists on upgraded objects.
+    }
+    try {
+      this.sql.exec(`ALTER TABLE gmail_channel_state ADD COLUMN setup_prompted_at INTEGER`);
+    } catch {
+      // Column already exists on upgraded objects.
+    }
+    try {
+      this.sql.exec(`ALTER TABLE gmail_channel_state ADD COLUMN configured_at INTEGER`);
+    } catch {
+      // Column already exists on upgraded objects.
+    }
+    try {
+      this.sql.exec(`ALTER TABLE gmail_channel_state ADD COLUMN setup_summary TEXT`);
     } catch {
       // Column already exists on upgraded objects.
     }
@@ -311,15 +863,68 @@ export class GmailAgentWorker extends AgentWorkerBase {
         PRIMARY KEY(channel_id, category)
       )
     `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gmail_attention_rules (
+        channel_id TEXT PRIMARY KEY,
+        rules_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gmail_attention_hits (
+        channel_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        directive_id TEXT NOT NULL,
+        directive_name TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        actions_json TEXT NOT NULL,
+        matched_at INTEGER NOT NULL,
+        PRIMARY KEY(channel_id, thread_id, directive_id)
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gmail_replied_senders (
+        channel_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        display TEXT,
+        first_replied_at INTEGER NOT NULL,
+        last_replied_at INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        PRIMARY KEY(channel_id, email)
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS gmail_attention_turns (
+        channel_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        directive_id TEXT NOT NULL,
+        last_message_id TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        PRIMARY KEY(channel_id, thread_id, directive_id)
+      )
+    `);
   }
 
-  protected get gmail(): GmailClient {
-    this._gmail ??= this.createGmailClient();
-    return this._gmail;
+  protected gmailForChannel(channelId: string): GmailClient {
+    const credentialId = this.getGmailCredentialId(channelId);
+    const key = credentialId ?? "__default__";
+    let client = this.gmailClients.get(key);
+    if (!client) {
+      client = this.createGmailClient(credentialId);
+      this.gmailClients.set(key, client);
+    }
+    return client;
   }
 
-  protected createGmailClient(): GmailClient {
-    return createGmailClient(this.credentials);
+  protected createGmailClient(credentialId?: string): GmailClient {
+    return createGmailClient(this.credentials, credentialId ? { credentialId } : {});
+  }
+
+  private getGmailCredentialId(channelId: string): string | undefined {
+    const state = this.getChannelState(channelId);
+    if (state.credentialId) return state.credentialId;
+    const config = record(this.subscriptions.getConfig(channelId));
+    return stringArg(config, "googleCredentialId") ?? stringArg(config, "credentialId") ?? undefined;
   }
 
   protected override getDefaultModel(): string {
@@ -377,7 +982,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
   }
 
   protected override getRespondPolicy(_channelId: string): RespondPolicy {
-    return "mentioned-strict";
+    return "mentioned-or-followup";
   }
 
   protected override getRunnerPromptConfig(_channelId: string): {
@@ -388,15 +993,18 @@ export class GmailAgentWorker extends AgentWorkerBase {
       systemPromptMode: "replace",
       systemPrompt: [
         "You are the Gmail agent for this channel.",
-        "Operate narrowly on Gmail tasks: inbox triage, search, summaries, drafting replies, sending only when requested, and explaining Gmail sync state.",
-        "Do not start work unless invoked by an action bar, a Gmail custom message, or an explicit @gmail mention.",
+        "Operate narrowly on Gmail tasks: inbox triage, search, summaries, drafting replies, sending only when requested, archiving, marking read, and explaining Gmail sync state.",
+        "Treat the Gmail inbox card as the shared mail desk: keep passive sync state there, and create compose cards only for explicit draft or compose actions.",
+        "For incoming mail attention, do not run semantic analysis over every message by default. Ask what the user wants watched, then use the eval tool to call this Gmail worker's public attention-rule RPC methods, or use normal workspace dev/file tools for deeper code changes.",
+        "Your built-in default attention filter wakes only for unread inbox mail from senders the user has replied to before.",
+        "Attention logic should wake on static metadata/snippet factors first: sender, domain, recipients, subject, snippet, labels, category, attachments, or an explicit wake-all directive.",
+        "To edit attention rules from eval, resolve this Durable Object with workers.resolveDurableObject('workers/gmail-agent', 'GmailAgentWorker', `gmail-${channelId}`), then call listAttentionRules/upsertAttentionRule/setAttentionRuleEnabled/deleteAttentionRule/clearAttentionRules/resetAttentionRules on that target.",
+        "When first-run attention setup is actually complete, call gmail_markConfigured with a concise summary. Do not mark configured merely because you asked the initial question.",
+        "Do not start work unless invoked by an action bar, a Gmail custom message, an explicit @gmail mention, or a direct user follow-up immediately after one of your messages.",
+        "In multi-agent channels, use roster and channel-context notes to recognize when another agent is active or addressed. If no Gmail intervention is useful, call close_turn_without_response instead of sending a visible reply.",
         "Prefer Gmail methods and concise answers. Never invent message contents.",
       ].join("\n"),
     };
-  }
-
-  protected override getRunnerToolFilter(_channelId: string): PiRunnerOptions["toolFilter"] {
-    return (toolName) => GMAIL_TOOL_NAMES.has(toolName);
   }
 
   protected override getRunnerTools(channelId: string): PiRunnerOptions["extraTools"] {
@@ -404,41 +1012,79 @@ export class GmailAgentWorker extends AgentWorkerBase {
       this.gmailTool(
         "gmail_checkInbox",
         "Synchronize Gmail now and refresh Gmail cards.",
+        EMPTY_TOOL_SCHEMA,
         async (_toolCallId, params) => this.syncChannel(channelId)
+      ),
+      this.gmailTool(
+        "gmail_markConfigured",
+        "Mark first-run Gmail setup complete after the requested attention behavior has been implemented or confirmed. Parameters: { summary?: string }.",
+        MARK_CONFIGURED_TOOL_SCHEMA,
+        async (_toolCallId, params) => this.markConfigured(channelId, record(params))
       ),
       this.gmailTool(
         "gmail_search",
         "Search Gmail. Parameters: { q: string, limit?: number }.",
+        SEARCH_TOOL_SCHEMA,
         async (_toolCallId, params) => this.search(channelId, record(params))
       ),
       this.gmailTool(
         "gmail_summarizeThread",
         "Fetch sanitized thread contents for summarization. Parameters: { threadId: string }.",
-        async (_toolCallId, params) => this.getThread(record(params))
+        THREAD_ID_TOOL_SCHEMA,
+        async (_toolCallId, params) => this.getThread(channelId, record(params))
       ),
       this.gmailTool(
         "gmail_draftReply",
         "Create a reply compose card. Parameters: { threadId: string }.",
+        THREAD_ID_TOOL_SCHEMA,
         async (_toolCallId, params) => this.draftReply(channelId, record(params))
       ),
       this.gmailTool(
         "gmail_send",
-        "Send a Gmail message. Parameters: { to: string, subject: string, body: string, threadId?: string, messageId?: string }.",
+        "Send a Gmail message. Parameters: { to: string, cc?: string, bcc?: string, subject: string, body: string, threadId?: string, messageId?: string }.",
+        SEND_TOOL_SCHEMA,
         async (_toolCallId, params) => this.send(channelId, record(params))
+      ),
+      this.gmailTool(
+        "gmail_saveDraft",
+        "Save a Gmail draft. Parameters: { to: string, cc?: string, bcc?: string, subject: string, body: string, threadId?: string, messageId?: string }.",
+        SEND_TOOL_SCHEMA,
+        async (_toolCallId, params) => this.saveDraft(channelId, record(params))
+      ),
+      this.gmailTool(
+        "gmail_archiveThread",
+        "Archive a Gmail thread locally and in Gmail. Parameters: { threadId: string }.",
+        THREAD_ID_TOOL_SCHEMA,
+        async (_toolCallId, params) => this.archiveThread(channelId, record(params))
+      ),
+      this.gmailTool(
+        "gmail_markRead",
+        "Mark a Gmail thread read. Parameters: { threadId: string }.",
+        THREAD_ID_TOOL_SCHEMA,
+        async (_toolCallId, params) => this.markRead(channelId, record(params))
       ),
       this.gmailTool(
         "gmail_categorize",
         "Set a local category for a Gmail thread. Parameters: { threadId: string, category: string }.",
+        CATEGORIZE_TOOL_SCHEMA,
         async (_toolCallId, params) => this.categorize(channelId, record(params))
+      ),
+      this.gmailTool(
+        "gmail_clearSearch",
+        "Clear the Gmail desk search results.",
+        EMPTY_TOOL_SCHEMA,
+        async () => this.clearSearch(channelId)
       ),
       this.gmailTool(
         "gmail_setPollInterval",
         "Configure Gmail polling. Parameters: { pollIntervalMs: number }.",
+        POLL_INTERVAL_TOOL_SCHEMA,
         async (_toolCallId, params) => this.setPollInterval(channelId, record(params))
       ),
       this.gmailTool(
         "gmail_listActionableThreads",
         "List current unread or inbox threads. Parameters: { limit?: number }.",
+        LIST_THREADS_TOOL_SCHEMA,
         async (_toolCallId, params) =>
           this.listActionableThreads(channelId, numberArg(record(params), "limit") ?? 6)
       ),
@@ -448,13 +1094,14 @@ export class GmailAgentWorker extends AgentWorkerBase {
   private gmailTool(
     name: string,
     description: string,
+    parameters: GmailToolParameters,
     execute: (toolCallId: string, params: unknown) => Promise<unknown> | unknown
   ): GmailTool {
     return {
       name,
       label: name,
       description,
-      parameters: { type: "object", additionalProperties: true } as never,
+      parameters,
       execute: async (toolCallId, params) => toolResult(await execute(toolCallId, params)),
     } as GmailTool;
   }
@@ -471,11 +1118,17 @@ export class GmailAgentWorker extends AgentWorkerBase {
       metadata: { provider: "gmail" },
       methods: [
         { name: "checkNow", description: "Synchronize Gmail now" },
+        { name: "markConfigured", description: "Mark first-run Gmail setup complete" },
         { name: "categorize", description: "Set a local category for a Gmail thread" },
         { name: "draftReply", description: "Create a reply compose card for a Gmail thread" },
         { name: "send", description: "Send a Gmail message or compose card" },
+        { name: "saveDraft", description: "Save a Gmail draft from a compose card" },
+        { name: "discardCompose", description: "Mark a Gmail compose card discarded" },
+        { name: "archiveThread", description: "Archive a Gmail thread" },
+        { name: "markRead", description: "Mark a Gmail thread read" },
         { name: "compose", description: "Create a Gmail compose card" },
         { name: "search", description: "Search Gmail and publish a result card" },
+        { name: "clearSearch", description: "Clear Gmail search results from the inbox card" },
         { name: "listActionableThreads", description: "Return current actionable Gmail threads" },
         { name: "setPollInterval", description: "Configure Gmail polling interval" },
         { name: "getThread", description: "Fetch sanitized Gmail thread contents" },
@@ -489,7 +1142,17 @@ export class GmailAgentWorker extends AgentWorkerBase {
   ): Promise<{ ok: boolean; participantId: string }> {
     const result = await super.subscribeChannel(opts);
     this.ensureChannelState(opts.channelId);
+    const credentialId =
+      stringArg(record(opts.config), "googleCredentialId") ??
+      stringArg(record(opts.config), "credentialId");
+    if (credentialId) {
+      const state = this.getChannelState(opts.channelId);
+      state.credentialId = credentialId;
+      this.saveChannelState(state);
+    }
+    await this.installChannelUi(opts.channelId);
     this.setAlarm(this.getChannelState(opts.channelId).pollIntervalMs);
+    await this.startSetupTurnIfNeeded(opts.channelId);
     return result;
   }
 
@@ -526,6 +1189,8 @@ export class GmailAgentWorker extends AgentWorkerBase {
         case "checkNow":
           await this.ensureRecovered(channelId);
           return { result: await this.syncChannel(channelId) };
+        case "markConfigured":
+          return { result: await this.markConfigured(channelId, record(args)) };
         case "categorize":
           await this.ensureRecovered(channelId);
           return { result: await this.categorize(channelId, record(args)) };
@@ -535,11 +1200,24 @@ export class GmailAgentWorker extends AgentWorkerBase {
         case "send":
           await this.ensureRecovered(channelId);
           return { result: await this.send(channelId, record(args)) };
+        case "saveDraft":
+          await this.ensureRecovered(channelId);
+          return { result: await this.saveDraft(channelId, record(args)) };
+        case "discardCompose":
+          return { result: await this.discardCompose(channelId, record(args)) };
+        case "archiveThread":
+          await this.ensureRecovered(channelId);
+          return { result: await this.archiveThread(channelId, record(args)) };
+        case "markRead":
+          await this.ensureRecovered(channelId);
+          return { result: await this.markRead(channelId, record(args)) };
         case "compose":
           return { result: await this.compose(channelId, record(args)) };
         case "search":
           await this.ensureRecovered(channelId);
           return { result: await this.search(channelId, record(args)) };
+        case "clearSearch":
+          return { result: await this.clearSearch(channelId) };
         case "listActionableThreads":
           await this.ensureRecovered(channelId);
           return {
@@ -548,7 +1226,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
         case "setPollInterval":
           return { result: this.setPollInterval(channelId, record(args)) };
         case "getThread":
-          return { result: await this.getThread(record(args)) };
+          return { result: await this.getThread(channelId, record(args)) };
         default:
           return { result: { error: `unknown method: ${methodName}` }, isError: true };
       }
@@ -574,28 +1252,505 @@ export class GmailAgentWorker extends AgentWorkerBase {
       channelId,
       historyId: row["history_id"] as string | undefined,
       emailAddress: row["email_address"] as string | undefined,
+      credentialId: row["credential_id"] as string | undefined,
       pollIntervalMs: Number(row["poll_interval_ms"]) || DEFAULT_POLL_INTERVAL_MS,
       inboxMessageId: row["inbox_message_id"] as string | undefined,
       lastSyncAt: row["last_sync_at"] as number | undefined,
       lastError: row["last_error"] as string | undefined,
       lastOverviewJson: row["last_overview_json"] as string | undefined,
+      lastSearchQuery: row["last_search_query"] as string | undefined,
+      lastSearchJson: row["last_search_json"] as string | undefined,
+      setupStatus:
+        row["setup_status"] === "configured" ? "configured" : "needs-user-preferences",
+      setupPromptedAt: row["setup_prompted_at"] as number | undefined,
+      configuredAt: row["configured_at"] as number | undefined,
+      setupSummary: row["setup_summary"] as string | undefined,
     };
   }
 
   private saveChannelState(state: GmailChannelState): void {
     this.sql.exec(
       `INSERT OR REPLACE INTO gmail_channel_state
-       (channel_id, history_id, email_address, poll_interval_ms, inbox_message_id, last_sync_at, last_error, last_overview_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+       (channel_id, history_id, email_address, credential_id, poll_interval_ms, inbox_message_id, last_sync_at, last_error, last_overview_json, last_search_query, last_search_json, setup_status, setup_prompted_at, configured_at, setup_summary)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       state.channelId,
       state.historyId ?? null,
       state.emailAddress ?? null,
+      state.credentialId ?? null,
       state.pollIntervalMs,
       state.inboxMessageId ?? null,
       state.lastSyncAt ?? null,
       state.lastError ?? null,
-      state.lastOverviewJson ?? null
+      state.lastOverviewJson ?? null,
+      state.lastSearchQuery ?? null,
+      state.lastSearchJson ?? null,
+      state.setupStatus,
+      state.setupPromptedAt ?? null,
+      state.configuredAt ?? null,
+      state.setupSummary ?? null
     );
+  }
+
+  private getAttentionRulesRecord(channelId: string): GmailAttentionRuleSetRecord {
+    const row = this.sql
+      .exec(`SELECT * FROM gmail_attention_rules WHERE channel_id = ?`, channelId)
+      .toArray()[0];
+    if (!row) {
+      const ruleSet = defaultAttentionRules();
+      return {
+        channelId,
+        ruleSet,
+        updatedAt: 0,
+      };
+    }
+    try {
+      const ruleSet = validateAttentionRules(JSON.parse(String(row["rules_json"])));
+      return {
+        channelId,
+        ruleSet,
+        updatedAt: Number(row["updated_at"] ?? 0),
+      };
+    } catch {
+      const ruleSet = defaultAttentionRules();
+      return {
+        channelId,
+        ruleSet,
+        updatedAt: Number(row["updated_at"] ?? 0),
+      };
+    }
+  }
+
+  private saveAttentionRules(channelId: string, ruleSet: GmailAttentionRuleSet): void {
+    const normalized = validateAttentionRules(ruleSet);
+    this.sql.exec(
+      `INSERT OR REPLACE INTO gmail_attention_rules
+       (channel_id, rules_json, updated_at)
+       VALUES (?, ?, ?)`,
+      channelId,
+      JSON.stringify(normalized),
+      Date.now()
+    );
+  }
+
+  private assertSubscribedChannel(channelId: string): void {
+    if (!channelId || !this.subscriptions.getParticipantId(channelId)) {
+      throw new Error(`Gmail agent is not subscribed to channel: ${channelId}`);
+    }
+  }
+
+  private assertAttentionRuleWriteAllowed(): void {
+    const caller = this.caller;
+    if (!caller) return;
+    if (["panel", "shell", "server", "harness"].includes(caller.callerKind)) return;
+    throw new Error("Gmail attention rule changes must be initiated from a user-facing panel");
+  }
+
+  private async startSetupTurnIfNeeded(channelId: string): Promise<void> {
+    const state = this.getChannelState(channelId);
+    if (state.setupStatus === "configured" || state.setupPromptedAt) return;
+    await this.submitAgentInitiatedTurn(channelId, { content: GMAIL_SETUP_ONBOARDING_PROMPT }, {
+      mode: "sequential",
+      steeringId: `gmail-setup:${channelId}`,
+    });
+    state.setupPromptedAt = Date.now();
+    this.saveChannelState(state);
+  }
+
+  private async installChannelUi(channelId: string): Promise<void> {
+    const channel = this.createChannelClient(channelId);
+    const actor = this.localActor(channelId);
+    for (const renderer of GMAIL_RENDERERS) {
+      const event: AgenticEvent<"messageType.registered"> = {
+        kind: "messageType.registered",
+        actor,
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          typeId: renderer.typeId,
+          displayMode: renderer.displayMode,
+          source: { type: "file", path: renderer.path },
+          imports: GMAIL_UI_IMPORTS,
+          registeredBy: actor,
+        },
+        createdAt: new Date().toISOString(),
+      };
+      await channel.publishAgenticEvent(actor.id, event, {
+        idempotencyKey: `gmail:ui:v${GMAIL_UI_INSTALL_VERSION}:message-type:${renderer.typeId}`,
+        senderMetadata: actor.metadata,
+      });
+    }
+
+    const actionBarEvent: AgenticEvent<"ui.action_bar.updated"> = {
+      kind: "ui.action_bar.updated",
+      actor,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        uiType: "action_bar",
+        id: "gmail-action-bar",
+        source: { type: "file", path: GMAIL_ACTION_BAR_FILE },
+        imports: GMAIL_UI_IMPORTS,
+        maxHeight: GMAIL_ACTION_BAR_MAX_HEIGHT,
+        result: { ok: true },
+      },
+      createdAt: new Date().toISOString(),
+    };
+    await channel.publishAgenticEvent(actor.id, actionBarEvent, {
+      idempotencyKey: `gmail:ui:v${GMAIL_UI_INSTALL_VERSION}:action-bar`,
+      senderMetadata: actor.metadata,
+    });
+  }
+
+  private async markConfigured(
+    channelId: string,
+    args: Record<string, unknown>
+  ): Promise<{ configured: true; configuredAt: string; summary?: string }> {
+    const state = this.getChannelState(channelId);
+    const summary = stringArg(args, "summary")?.slice(0, 500);
+    state.setupStatus = "configured";
+    state.configuredAt = Date.now();
+    state.setupSummary = summary;
+    this.saveChannelState(state);
+    await this.publishOverview(channelId);
+    return {
+      configured: true,
+      configuredAt: new Date(state.configuredAt).toISOString(),
+      ...(summary ? { summary } : {}),
+    };
+  }
+
+  async listAttentionRules(channelId: string): Promise<GmailAttentionRulesSnapshot> {
+    this.assertSubscribedChannel(channelId);
+    const record = this.getAttentionRulesRecord(channelId);
+    return {
+      channelId,
+      rules: record.ruleSet.directives,
+      ruleSet: record.ruleSet,
+      updatedAt: record.updatedAt,
+      capabilities: {
+        fields: GMAIL_ATTENTION_FIELDS,
+        operators: GMAIL_ATTENTION_OPERATORS,
+        actions: GMAIL_ATTENTION_ACTIONS,
+        scopes: GMAIL_ATTENTION_SCOPES,
+      },
+      rpc: {
+        source: "workers/gmail-agent",
+        className: "GmailAgentWorker",
+        objectKey: gmailAgentObjectKey(channelId),
+        resolveMethod: "workers.resolveDurableObject",
+      },
+    };
+  }
+
+  async upsertAttentionRule(
+    channelId: string,
+    args: unknown
+  ): Promise<{ saved: true; rule: GmailAttentionDirective; ruleSet: GmailAttentionRuleSet }> {
+    this.assertSubscribedChannel(channelId);
+    this.assertAttentionRuleWriteAllowed();
+    const input = record(args);
+    const rawRule = input["rule"] ?? input["directive"] ?? input;
+    const rule = validateAttentionRules({ version: 1, directives: [rawRule] }).directives[0]!;
+    const current = this.getAttentionRulesRecord(channelId).ruleSet;
+    const directives = [
+      ...current.directives.filter((directive) => directive.id !== rule.id),
+      rule,
+    ].sort((a, b) => b.priority - a.priority);
+    const ruleSet = validateAttentionRules({ version: 1, directives });
+    this.saveAttentionRules(channelId, ruleSet);
+    await this.recomputeAttentionForStoredThreads(channelId);
+    await this.publishOverview(channelId);
+    return { saved: true, rule, ruleSet };
+  }
+
+  async setAttentionRuleEnabled(
+    channelId: string,
+    args: unknown
+  ): Promise<{ saved: true; rule: GmailAttentionDirective; ruleSet: GmailAttentionRuleSet }> {
+    this.assertSubscribedChannel(channelId);
+    this.assertAttentionRuleWriteAllowed();
+    const input = record(args);
+    const id = slug(stringArg(input, "id") ?? "");
+    if (!id) throw new Error("setAttentionRuleEnabled requires id");
+    const enabled = booleanArg(input, "enabled");
+    if (enabled === undefined) throw new Error("setAttentionRuleEnabled requires enabled");
+    const current = this.getAttentionRulesRecord(channelId).ruleSet;
+    const rule = current.directives.find((directive) => directive.id === id);
+    if (!rule) throw new Error(`attention rule not found: ${id}`);
+    const ruleSet = validateAttentionRules({
+      version: 1,
+      directives: current.directives.map((directive) =>
+        directive.id === id ? { ...directive, enabled } : directive
+      ),
+    });
+    this.saveAttentionRules(channelId, ruleSet);
+    await this.recomputeAttentionForStoredThreads(channelId);
+    await this.publishOverview(channelId);
+    return {
+      saved: true,
+      rule: ruleSet.directives.find((directive) => directive.id === id)!,
+      ruleSet,
+    };
+  }
+
+  async deleteAttentionRule(
+    channelId: string,
+    args: unknown
+  ): Promise<{ deleted: true; id: string; ruleSet: GmailAttentionRuleSet }> {
+    this.assertSubscribedChannel(channelId);
+    this.assertAttentionRuleWriteAllowed();
+    const id = slug(stringArg(record(args), "id") ?? "");
+    if (!id) throw new Error("deleteAttentionRule requires id");
+    const current = this.getAttentionRulesRecord(channelId).ruleSet;
+    const ruleSet = validateAttentionRules({
+      version: 1,
+      directives: current.directives.filter((directive) => directive.id !== id),
+    });
+    if (ruleSet.directives.length === current.directives.length) {
+      throw new Error(`attention rule not found: ${id}`);
+    }
+    this.saveAttentionRules(channelId, ruleSet);
+    await this.recomputeAttentionForStoredThreads(channelId);
+    await this.publishOverview(channelId);
+    return { deleted: true, id, ruleSet };
+  }
+
+  async clearAttentionRules(channelId: string): Promise<{
+    cleared: true;
+    ruleSet: GmailAttentionRuleSet;
+    rules: GmailAttentionDirective[];
+  }> {
+    this.assertSubscribedChannel(channelId);
+    this.assertAttentionRuleWriteAllowed();
+    const ruleSet = validateAttentionRules({ version: 1, directives: [] });
+    this.saveAttentionRules(channelId, ruleSet);
+    await this.recomputeAttentionForStoredThreads(channelId);
+    await this.publishOverview(channelId);
+    return { cleared: true, ruleSet, rules: [] };
+  }
+
+  async resetAttentionRules(channelId: string): Promise<{
+    reset: true;
+    ruleSet: GmailAttentionRuleSet;
+    rules: GmailAttentionDirective[];
+  }> {
+    this.assertSubscribedChannel(channelId);
+    this.assertAttentionRuleWriteAllowed();
+    const ruleSet = defaultAttentionRules();
+    this.saveAttentionRules(channelId, ruleSet);
+    await this.recomputeAttentionForStoredThreads(channelId);
+    await this.publishOverview(channelId);
+    return { reset: true, ruleSet, rules: ruleSet.directives };
+  }
+
+  private evaluateAttentionRules(
+    ruleSet: GmailAttentionRuleSet,
+    event: GmailAttentionEvent
+  ): GmailAttentionDecision {
+    const matches = ruleSet.directives
+      .map((directive) => directiveDecision(directive, event))
+      .filter((decision): decision is GmailAttentionDecision => Boolean(decision))
+      .sort((a, b) => {
+        const aDirective = ruleSet.directives.find((directive) => directive.id === a.directiveId);
+        const bDirective = ruleSet.directives.find((directive) => directive.id === b.directiveId);
+        return (bDirective?.priority ?? 0) - (aDirective?.priority ?? 0);
+      });
+    return matches[0] ?? { wake: false };
+  }
+
+  private recordAttentionHit(
+    channelId: string,
+    threadId: string,
+    decision: GmailAttentionDecision
+  ): void {
+    if (!decision.wake || !decision.directiveId || !decision.directiveName) return;
+    this.sql.exec(
+      `INSERT OR REPLACE INTO gmail_attention_hits
+       (channel_id, thread_id, directive_id, directive_name, reason, actions_json, matched_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      channelId,
+      threadId,
+      decision.directiveId,
+      decision.directiveName,
+      decision.reason ?? decision.directiveName,
+      JSON.stringify(decision.actions ?? ["surface"]),
+      Date.now()
+    );
+  }
+
+  private recordRepliedSender(
+    channelId: string,
+    email: string | undefined,
+    display: string | undefined,
+    source: "sent-mail" | "send"
+  ): void {
+    if (!email) return;
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT INTO gmail_replied_senders
+       (channel_id, email, display, first_replied_at, last_replied_at, source)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(channel_id, email) DO UPDATE SET
+         display = COALESCE(excluded.display, gmail_replied_senders.display),
+         last_replied_at = excluded.last_replied_at,
+         source = excluded.source`,
+      channelId,
+      email.toLowerCase(),
+      display ?? null,
+      now,
+      now,
+      source
+    );
+  }
+
+  private hasRepliedToSender(channelId: string, from: string): boolean {
+    const email = normalizeEmailAddress(from);
+    if (!email) return false;
+    const row = this.sql
+      .exec(
+        `SELECT email FROM gmail_replied_senders WHERE channel_id = ? AND email = ? LIMIT 1`,
+        channelId,
+        email
+      )
+      .toArray()[0];
+    return Boolean(row);
+  }
+
+  private async seedRepliedSendersFromSentMail(channelId: string): Promise<void> {
+    const gmail = this.gmailForChannel(channelId);
+    const result = await gmail.search("in:sent", {
+      maxResults: 50,
+      format: "metadata",
+      metadataHeaders: ["To", "Cc", "Bcc"],
+    });
+    for (const message of result.messages) {
+      for (const headerName of ["To", "Cc", "Bcc"]) {
+        for (const email of parseAddressList(header(message, headerName))) {
+          this.recordRepliedSender(channelId, email, email, "sent-mail");
+        }
+      }
+    }
+  }
+
+  private shouldStartAttentionTurn(
+    channelId: string,
+    event: GmailAttentionEvent,
+    decision: GmailAttentionDecision
+  ): boolean {
+    if (!decision.wake || !decision.directiveId) return false;
+    if (!event.unread || !event.inInbox) return false;
+    const messageKey = event.messageId ?? String(event.internalDate ?? "unknown");
+    const row = this.sql
+      .exec(
+        `SELECT last_message_id FROM gmail_attention_turns
+         WHERE channel_id = ? AND thread_id = ? AND directive_id = ?`,
+        channelId,
+        event.threadId,
+        decision.directiveId
+      )
+      .toArray()[0];
+    if (String(row?.["last_message_id"] ?? "") === messageKey) return false;
+    this.sql.exec(
+      `INSERT OR REPLACE INTO gmail_attention_turns
+       (channel_id, thread_id, directive_id, last_message_id, started_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      channelId,
+      event.threadId,
+      decision.directiveId,
+      messageKey,
+      Date.now()
+    );
+    return true;
+  }
+
+  private async startAttentionTurn(
+    channelId: string,
+    event: GmailAttentionEvent,
+    decision: GmailAttentionDecision
+  ): Promise<void> {
+    if (!this.shouldStartAttentionTurn(channelId, event, decision)) return;
+    const actions = decision.actions?.length ? decision.actions.join(", ") : "surface";
+    await this.submitAgentInitiatedTurn(
+      channelId,
+      {
+        content: [
+          "A new Gmail message matched your deterministic attention rules.",
+          "",
+          `Thread: ${event.threadId}`,
+          `From: ${event.from || "(unknown)"}`,
+          `To: ${event.to || "(unknown)"}`,
+          `Subject: ${event.subject || "(no subject)"}`,
+          `Reason: ${decision.reason ?? decision.directiveName ?? decision.directiveId}`,
+          `Requested actions: ${actions}`,
+          "",
+          `Snippet: ${event.snippet || "(none)"}`,
+          "",
+          "Use Gmail tools only if needed. Do not send mail without an explicit user request.",
+        ].join("\n"),
+      },
+      {
+        mode: "sequential",
+        steeringId: `gmail-attention:${channelId}:${event.threadId}:${decision.directiveId}:${event.messageId ?? event.internalDate ?? "message"}`,
+      }
+    );
+  }
+
+  private attentionHits(channelId: string, limit = 8): GmailAttentionHit[] {
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM gmail_attention_hits
+         WHERE channel_id = ?
+         ORDER BY matched_at DESC
+         LIMIT ?`,
+        channelId,
+        Math.max(1, Math.min(limit, 50))
+      )
+      .toArray();
+    return rows.map((row) => ({
+      threadId: String(row["thread_id"]),
+      directiveId: String(row["directive_id"]),
+      directiveName: String(row["directive_name"]),
+      reason: String(row["reason"]),
+      actions: parseActionsJson(row["actions_json"]),
+      matchedAt: Number(row["matched_at"] ?? 0),
+    }));
+  }
+
+  private attentionHitForThread(channelId: string, threadId: string): GmailAttentionHit | null {
+    const row = this.sql
+      .exec(
+        `SELECT * FROM gmail_attention_hits
+         WHERE channel_id = ? AND thread_id = ?
+         ORDER BY matched_at DESC
+         LIMIT 1`,
+        channelId,
+        threadId
+      )
+      .toArray()[0];
+    return row
+      ? {
+          threadId,
+          directiveId: String(row["directive_id"]),
+          directiveName: String(row["directive_name"]),
+          reason: String(row["reason"]),
+          actions: parseActionsJson(row["actions_json"]),
+          matchedAt: Number(row["matched_at"] ?? 0),
+        }
+      : null;
+  }
+
+  private async recomputeAttentionForStoredThreads(channelId: string): Promise<void> {
+    const state = this.getChannelState(channelId);
+    this.sql.exec(`DELETE FROM gmail_attention_hits WHERE channel_id = ?`, channelId);
+    const rows = this.sql
+      .exec(`SELECT thread_id FROM gmail_threads WHERE channel_id = ?`, channelId)
+      .toArray();
+    for (const row of rows) {
+      const threadId = String(row["thread_id"]);
+      try {
+        await this.refreshThread(channelId, threadId, state.emailAddress);
+      } catch {
+        // Stale or inaccessible threads will be reconciled by the next Gmail sync.
+      }
+    }
   }
 
   private async ensureRecovered(channelId: string): Promise<void> {
@@ -688,24 +1843,27 @@ export class GmailAgentWorker extends AgentWorkerBase {
     channelId: string
   ): Promise<{ ok: true; historyId: string; threadsUpdated: number }> {
     const state = this.getChannelState(channelId);
+    const gmail = this.gmailForChannel(channelId);
     if (!state.historyId) {
-      const profile = await this.gmail.getProfile();
+      const profile = await gmail.getProfile();
       state.historyId = profile.historyId;
       state.emailAddress = profile.emailAddress;
       state.lastSyncAt = Date.now();
       state.lastError = undefined;
       this.saveChannelState(state);
+      await this.seedRepliedSendersFromSentMail(channelId).catch(() => undefined);
+      await this.bootstrapRecentThreads(channelId, profile.emailAddress);
       await this.publishOverview(channelId, profile.emailAddress);
       return { ok: true, historyId: profile.historyId, threadsUpdated: 0 };
     }
 
     if (!state.emailAddress) {
-      const profile = await this.gmail.getProfile();
+      const profile = await gmail.getProfile();
       state.emailAddress = profile.emailAddress;
     }
-    const diff = await this.gmail.syncSince(state.historyId);
+    const diff = await gmail.syncSince(state.historyId);
     for (const thread of diff.threads) {
-      await this.refreshThread(channelId, thread.threadId, state.emailAddress);
+      await this.refreshThread(channelId, thread.threadId, state.emailAddress, { allowWake: true });
     }
     state.historyId = diff.historyId;
     state.lastSyncAt = Date.now();
@@ -713,6 +1871,26 @@ export class GmailAgentWorker extends AgentWorkerBase {
     this.saveChannelState(state);
     await this.publishOverview(channelId);
     return { ok: true, historyId: diff.historyId, threadsUpdated: diff.threads.length };
+  }
+
+  private async bootstrapRecentThreads(channelId: string, userEmail: string): Promise<void> {
+    const gmail = this.gmailForChannel(channelId);
+    const result = await gmail.listMessages({
+      maxResults: INITIAL_THREAD_LOAD_LIMIT,
+      labelIds: ["INBOX"],
+      format: "metadata",
+      metadataHeaders: METADATA_HEADERS,
+    });
+    const threadIds = Array.from(
+      new Set(
+        result.messages
+          .map((message) => message.threadId)
+          .filter((threadId): threadId is string => Boolean(threadId))
+      )
+    );
+    for (const threadId of threadIds) {
+      await this.refreshThread(channelId, threadId, userEmail);
+    }
   }
 
   private recordSyncError(channelId: string, err: unknown): void {
@@ -725,12 +1903,14 @@ export class GmailAgentWorker extends AgentWorkerBase {
   private async refreshThread(
     channelId: string,
     threadId: string,
-    userEmail?: string
+    userEmail?: string,
+    opts: { allowWake?: boolean } = {}
   ): Promise<GmailThreadCardState> {
     const existing = this.threadRow(channelId, threadId);
+    const gmail = this.gmailForChannel(channelId);
     let thread: GmailThread;
     try {
-      thread = await this.gmail.getThread(threadId, {
+      thread = await gmail.getThread(threadId, {
         format: "metadata",
         metadataHeaders: METADATA_HEADERS,
       });
@@ -756,9 +1936,17 @@ export class GmailAgentWorker extends AgentWorkerBase {
         });
       return archived;
     }
-    const card = threadCardState(thread, existing?.category, userEmail);
-    const messageId =
-      existing?.message_id ?? (await this.publishCustom(channelId, "gmail.thread", card, "row"));
+    const event = attentionEventFromThread(thread, userEmail);
+    if (event) event.priorReplyToSender = this.hasRepliedToSender(channelId, event.from);
+    const attention = event
+      ? this.evaluateAttentionRules(this.getAttentionRulesRecord(channelId).ruleSet, event)
+      : { wake: false };
+    if (event && attention.wake) {
+      this.recordAttentionHit(channelId, thread.id, attention);
+      if (opts.allowWake) await this.startAttentionTurn(channelId, event, attention);
+    }
+    const card = threadCardState(thread, existing?.category, userEmail, attention);
+    const messageId = existing?.message_id ?? null;
     this.sql.exec(
       `INSERT OR REPLACE INTO gmail_threads
        (channel_id, thread_id, message_id, subject, from_addr, snippet, unread, in_inbox, actionable, category, updated_at)
@@ -775,9 +1963,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
       card.category ?? null,
       card.updatedAt
     );
-    if (existing?.message_id) {
-      await this.updateCustom(channelId, existing.message_id, card);
-    }
+    if (existing?.message_id) await this.updateCustom(channelId, existing.message_id, card);
     return card;
   }
 
@@ -789,11 +1975,14 @@ export class GmailAgentWorker extends AgentWorkerBase {
           channelId,
           threadId
         )
-        .toArray()[0] as GmailThreadStateRow | undefined) ?? null
+        .toArray()[0] as unknown as GmailThreadStateRow | undefined) ?? null
     );
   }
 
-  private threadCardFromRow(row: GmailThreadStateRow): GmailThreadCardState {
+  private threadCardFromRow(
+    row: GmailThreadStateRow,
+    hit?: GmailAttentionHit | null
+  ): GmailThreadCardState {
     return {
       threadId: row.thread_id,
       subject: row.subject,
@@ -803,10 +1992,21 @@ export class GmailAgentWorker extends AgentWorkerBase {
       lastSnippet: row.snippet,
       unreadCount: row.unread === 1 ? 1 : 0,
       hasDraft: false,
-      status: row.in_inbox === 1 || row.unread === 1 ? "unread" : "archived",
+      status: row.unread === 1 ? "unread" : row.in_inbox === 1 ? "open" : "archived",
       unread: row.unread === 1,
       inInbox: row.in_inbox === 1,
       actionable: row.actionable === 1,
+      ...(hit
+        ? {
+            attention: {
+              wake: true,
+              directiveId: hit.directiveId,
+              directiveName: hit.directiveName,
+              reason: hit.reason,
+              actions: hit.actions,
+            },
+          }
+        : {}),
       ...(row.category ? { category: row.category } : {}),
       updatedAt: row.updated_at,
     };
@@ -823,11 +2023,14 @@ export class GmailAgentWorker extends AgentWorkerBase {
         Math.max(1, Math.min(limit, 25))
       )
       .toArray() as unknown as GmailThreadStateRow[];
-    return rows.map((row) => this.threadCardFromRow(row));
+    return rows.map((row) =>
+      this.threadCardFromRow(row, this.attentionHitForThread(channelId, row.thread_id))
+    );
   }
 
   private async publishOverview(channelId: string, email?: string): Promise<void> {
     const state = this.getChannelState(channelId);
+    const attentionRecord = this.getAttentionRulesRecord(channelId);
     const actionable = this.listActionableThreads(channelId, 8);
     const rows =
       this.sql
@@ -839,13 +2042,21 @@ export class GmailAgentWorker extends AgentWorkerBase {
           channelId
         )
         .toArray()[0] ?? {};
+    const searchResults = this.parseStoredThreadCards(state.lastSearchJson);
     const payload: GmailInboxState = {
-      email,
+      email: email ?? state.emailAddress,
       unread: Number(rows["unread"] ?? 0),
+      inbox: Number(rows["inbox"] ?? 0),
       urgent: actionable.filter((thread) => thread.category === "urgent").length,
       draftCount: 0,
       perCategory: this.categoryCounts(channelId),
       actionable,
+      setupStatus: state.setupStatus,
+      ...(state.setupSummary ? { setupSummary: state.setupSummary } : {}),
+      attentionRules: attentionRecord.ruleSet,
+      attentionHits: this.attentionHits(channelId, 8),
+      ...(state.lastSearchQuery ? { searchQuery: state.lastSearchQuery } : {}),
+      ...(searchResults.length > 0 ? { searchResults } : {}),
       lastSyncedAt: state.lastSyncAt ? new Date(state.lastSyncAt).toISOString() : undefined,
       lastError: state.lastError,
     };
@@ -859,7 +2070,21 @@ export class GmailAgentWorker extends AgentWorkerBase {
       state.lastOverviewJson = overviewJson;
       this.saveChannelState(state);
     }
-    await this.publishCategories(channelId);
+  }
+
+  private parseStoredThreadCards(value: string | undefined): GmailThreadCardState[] {
+    if (!value) return [];
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return Array.isArray(parsed)
+        ? parsed.filter(
+            (item): item is GmailThreadCardState =>
+              Boolean(item && typeof item === "object" && typeof record(item)["threadId"] === "string")
+          )
+        : [];
+    } catch {
+      return [];
+    }
   }
 
   private async categorize(
@@ -886,6 +2111,87 @@ export class GmailAgentWorker extends AgentWorkerBase {
     }
     await this.publishOverview(channelId);
     return { threadId, category };
+  }
+
+  private async archiveThread(
+    channelId: string,
+    args: Record<string, unknown>
+  ): Promise<{ threadId: string; archived: true }> {
+    const threadId = stringArg(args, "threadId");
+    if (!threadId) throw new Error("archiveThread requires threadId");
+    const gmail = this.gmailForChannel(channelId);
+    await gmail.modifyLabels({ threadId, removeLabelIds: ["INBOX"] });
+    await this.applyLocalThreadFlags(channelId, threadId, {
+      inInbox: false,
+      actionable: false,
+      status: "archived",
+    });
+    await this.publishOverview(channelId);
+    return { threadId, archived: true };
+  }
+
+  private async markRead(
+    channelId: string,
+    args: Record<string, unknown>
+  ): Promise<{ threadId: string; read: true }> {
+    const threadId = stringArg(args, "threadId");
+    if (!threadId) throw new Error("markRead requires threadId");
+    const gmail = this.gmailForChannel(channelId);
+    await gmail.modifyLabels({ threadId, removeLabelIds: ["UNREAD"] });
+    await this.applyLocalThreadFlags(channelId, threadId, {
+      unread: false,
+      actionable: false,
+      status: "open",
+    });
+    await this.publishOverview(channelId);
+    return { threadId, read: true };
+  }
+
+  private async applyLocalThreadFlags(
+    channelId: string,
+    threadId: string,
+    flags: {
+      unread?: boolean;
+      inInbox?: boolean;
+      actionable?: boolean;
+      status?: GmailThreadCardState["status"];
+    }
+  ): Promise<void> {
+    const existing = this.threadRow(channelId, threadId);
+    if (!existing) return;
+    const updatedAt = Date.now();
+    this.sql.exec(
+      `UPDATE gmail_threads
+       SET unread = COALESCE(?, unread),
+           in_inbox = COALESCE(?, in_inbox),
+           actionable = COALESCE(?, actionable),
+           updated_at = ?
+       WHERE channel_id = ? AND thread_id = ?`,
+      typeof flags.unread === "boolean" ? (flags.unread ? 1 : 0) : null,
+      typeof flags.inInbox === "boolean" ? (flags.inInbox ? 1 : 0) : null,
+      typeof flags.actionable === "boolean" ? (flags.actionable ? 1 : 0) : null,
+      updatedAt,
+      channelId,
+      threadId
+    );
+    if (existing.message_id) {
+      const row = this.threadRow(channelId, threadId);
+      if (row) {
+        await this.updateCustom(channelId, existing.message_id, {
+          ...this.threadCardFromRow(row),
+          ...(flags.status ? { status: flags.status } : {}),
+        });
+      }
+    }
+  }
+
+  private async clearSearch(channelId: string): Promise<{ cleared: true }> {
+    const state = this.getChannelState(channelId);
+    state.lastSearchQuery = undefined;
+    state.lastSearchJson = undefined;
+    this.saveChannelState(state);
+    await this.publishOverview(channelId);
+    return { cleared: true };
   }
 
   private categoryCounts(channelId: string): Record<string, number> {
@@ -955,6 +2261,8 @@ export class GmailAgentWorker extends AgentWorkerBase {
   ): Promise<{ messageId: string }> {
     const state: GmailComposeState = {
       to: stringArg(args, "to"),
+      cc: stringArg(args, "cc"),
+      bcc: stringArg(args, "bcc"),
       subject: stringArg(args, "subject"),
       body: stringArg(args, "body"),
       threadId: stringArg(args, "threadId"),
@@ -970,7 +2278,8 @@ export class GmailAgentWorker extends AgentWorkerBase {
   ): Promise<{ messageId: string; body: string }> {
     const threadId = stringArg(args, "threadId");
     if (!threadId) throw new Error("draftReply requires threadId");
-    const thread = await this.gmail.getThread(threadId, { format: "full" });
+    const gmail = this.gmailForChannel(channelId);
+    const thread = await gmail.getThread(threadId, { format: "full" });
     const latest = latestMessage(thread);
     const subject = header(latest ?? ({} as GmailMessage), "Subject") ?? "";
     const to = header(latest ?? ({} as GmailMessage), "From") ?? "";
@@ -991,8 +2300,10 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { messageId, body };
   }
 
-  private async resolveReplySendArgs(args: Record<string, unknown>): Promise<{
+  private async resolveReplySendArgs(channelId: string, args: Record<string, unknown>): Promise<{
     to: string;
+    cc?: string;
+    bcc?: string;
     subject: string;
     threadId?: string;
     inReplyTo?: string;
@@ -1003,9 +2314,15 @@ export class GmailAgentWorker extends AgentWorkerBase {
     const explicitSubject = stringArg(args, "subject");
     if (!threadId) {
       if (!explicitTo || !explicitSubject) throw new Error("send requires to and subject");
-      return { to: explicitTo, subject: explicitSubject };
+      return {
+        to: explicitTo,
+        ...(stringArg(args, "cc") ? { cc: stringArg(args, "cc") } : {}),
+        ...(stringArg(args, "bcc") ? { bcc: stringArg(args, "bcc") } : {}),
+        subject: explicitSubject,
+      };
     }
-    const thread = await this.gmail.getThread(threadId, {
+    const gmail = this.gmailForChannel(channelId);
+    const thread = await gmail.getThread(threadId, {
       format: "metadata",
       metadataHeaders: METADATA_HEADERS,
     });
@@ -1017,6 +2334,8 @@ export class GmailAgentWorker extends AgentWorkerBase {
     if (!to || !subject) throw new Error("send could not resolve reply recipient and subject");
     return {
       to,
+      ...(stringArg(args, "cc") ? { cc: stringArg(args, "cc") } : {}),
+      ...(stringArg(args, "bcc") ? { bcc: stringArg(args, "bcc") } : {}),
       subject,
       threadId,
       inReplyTo: header(latest ?? ({} as GmailMessage), "Message-ID"),
@@ -1033,19 +2352,25 @@ export class GmailAgentWorker extends AgentWorkerBase {
     const messageId = stringArg(args, "messageId");
     if (messageId) await this.updateCustom(channelId, messageId, { status: "sending" });
     try {
-      const replyArgs = await this.resolveReplySendArgs(args);
-      const sent = await this.gmail.sendMessage({
+      const gmail = this.gmailForChannel(channelId);
+      const replyArgs = await this.resolveReplySendArgs(channelId, args);
+      const sent = await gmail.sendMessage({
         to: replyArgs.to,
+        ...(replyArgs.cc ? { cc: replyArgs.cc } : {}),
+        ...(replyArgs.bcc ? { bcc: replyArgs.bcc } : {}),
         subject: replyArgs.subject,
         body: stringArg(args, "body") ?? "",
         ...(replyArgs.threadId ? { threadId: replyArgs.threadId } : {}),
         ...(replyArgs.inReplyTo ? { inReplyTo: replyArgs.inReplyTo } : {}),
         ...(replyArgs.references ? { references: replyArgs.references } : {}),
       });
+      for (const email of parseAddressList([replyArgs.to, replyArgs.cc ?? "", replyArgs.bcc ?? ""])) {
+        this.recordRepliedSender(channelId, email, email, "send");
+      }
       if (messageId) await this.updateCustom(channelId, messageId, { status: "sent" });
       const sourceThreadId = stringArg(args, "sourceThreadId") ?? stringArg(args, "threadId");
       if (sourceThreadId) {
-        await this.gmail
+        await gmail
           .modifyLabels({ threadId: sourceThreadId, removeLabelIds: ["INBOX"] })
           .catch(() => undefined);
         await this.refreshThread(
@@ -1053,6 +2378,12 @@ export class GmailAgentWorker extends AgentWorkerBase {
           sourceThreadId,
           this.getChannelState(channelId).emailAddress
         ).catch(() => undefined);
+        await this.applyLocalThreadFlags(channelId, sourceThreadId, {
+          inInbox: false,
+          actionable: false,
+          status: "archived",
+        });
+        if (this.subscriptions.getParticipantId(channelId)) await this.publishOverview(channelId);
       }
       return { sent: true, id: sent.id };
     } catch (err) {
@@ -1065,46 +2396,86 @@ export class GmailAgentWorker extends AgentWorkerBase {
     }
   }
 
+  private async saveDraft(
+    channelId: string,
+    args: Record<string, unknown>
+  ): Promise<{ saved: true; draftId: string }> {
+    const messageId = stringArg(args, "messageId");
+    const gmail = this.gmailForChannel(channelId);
+    const replyArgs = await this.resolveReplySendArgs(channelId, args);
+    const draft = await gmail.createDraft({
+      to: replyArgs.to,
+      ...(replyArgs.cc ? { cc: replyArgs.cc } : {}),
+      ...(replyArgs.bcc ? { bcc: replyArgs.bcc } : {}),
+      subject: replyArgs.subject,
+      body: stringArg(args, "body") ?? "",
+      ...(replyArgs.threadId ? { threadId: replyArgs.threadId } : {}),
+      ...(replyArgs.inReplyTo ? { inReplyTo: replyArgs.inReplyTo } : {}),
+      ...(replyArgs.references ? { references: replyArgs.references } : {}),
+    });
+    if (messageId) await this.updateCustom(channelId, messageId, { status: "saved", draftId: draft.id });
+    return { saved: true, draftId: draft.id };
+  }
+
+  private async discardCompose(
+    channelId: string,
+    args: Record<string, unknown>
+  ): Promise<{ discarded: true }> {
+    const messageId = stringArg(args, "messageId");
+    if (messageId) await this.updateCustom(channelId, messageId, { status: "discarded" });
+    return { discarded: true };
+  }
+
   private async search(
     channelId: string,
     args: Record<string, unknown>
-  ): Promise<{ messageId: string; count: number }> {
+  ): Promise<{ count: number; query: string }> {
     const q = stringArg(args, "q");
     if (!q) throw new Error("search requires q");
-    const result = await this.gmail.search(q, {
+    const gmail = this.gmailForChannel(channelId);
+    const result = await gmail.search(q, {
       maxResults: Math.max(1, Math.min(numberArg(args, "limit") ?? 10, 25)),
       format: "metadata",
       metadataHeaders: METADATA_HEADERS,
     });
-    const threads = result.messages.map((message) => ({
-      threadId: message.threadId,
-      subject: header(message, "Subject") ?? "(no subject)",
-      from: header(message, "From") ?? "",
-      snippet: message.snippet ?? "",
-    }));
-    const messageId = await this.publishCustom(
-      channelId,
-      "gmail.inbox",
-      {
-        search: q,
-        unread: 0,
-        urgent: 0,
-        draftCount: 0,
-        perCategory: {},
-        actionable: threads,
-        lastSyncedAt: new Date().toISOString(),
-      },
-      "row"
-    );
-    return { messageId, count: threads.length };
+    const threads: GmailThreadCardState[] = result.messages.map((message) => {
+      const labels = new Set(message.labelIds ?? []);
+      const unread = labels.has("UNREAD");
+      const inInbox = labels.has("INBOX");
+      const category = categoryFromLabels(labels);
+      return {
+        threadId: message.threadId,
+        subject: header(message, "Subject") ?? "(no subject)",
+        from: header(message, "From") ?? "",
+        snippet: message.snippet ?? "",
+        participants: [header(message, "From") ?? ""].filter(Boolean),
+        lastSnippet: message.snippet ?? "",
+        unreadCount: unread ? 1 : 0,
+        hasDraft: false,
+        status: unread ? "unread" : inInbox ? "open" : "archived",
+        unread,
+        inInbox,
+        actionable: false,
+        updatedAt: Number(message.internalDate ?? Date.now()),
+        ...(category ? { category } : {}),
+      };
+    });
+    const state = this.getChannelState(channelId);
+    state.lastSearchQuery = q;
+    state.lastSearchJson = JSON.stringify(threads);
+    this.saveChannelState(state);
+    await this.publishOverview(channelId);
+    return { query: q, count: threads.length };
   }
 
   private async getThread(
+    channelId: string,
     args: Record<string, unknown>
   ): Promise<{ threadId: string; messages: Array<Record<string, unknown>> }> {
     const threadId = stringArg(args, "threadId");
     if (!threadId) throw new Error("getThread requires threadId");
-    const thread = await this.gmail.getThread(threadId, { format: "full" });
+    const gmail = this.gmailForChannel(channelId);
+    const thread = await gmail.getThread(threadId, { format: "full" });
     return {
       threadId,
       messages: (thread.messages ?? []).map((message) => ({

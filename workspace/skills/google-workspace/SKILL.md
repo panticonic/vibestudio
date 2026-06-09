@@ -24,6 +24,11 @@ Use this order:
 4. If `stage === "connected"`, run `verifyGoogleConnection(connectionId)`.
 5. If `stage === "verified"`, continue onboarding.
 
+`connectGoogle()` must be the connection path for Google Workspace. It requests
+Google offline access and opts into NatStack refresh-token persistence. If
+status or verification reports `credential-expired`, replace the old credential
+with `connectGoogle({ force: true })`.
+
 When the user is setting up Gmail specifically, continue with
 `workspace/skills/gmail/ONBOARDING.md` after Google Workspace reaches
 `verified`.

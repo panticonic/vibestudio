@@ -34,6 +34,7 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     opts?: unknown;
   }> = [];
   signals: Array<{ participantId: string; content: string; type?: string }> = [];
+  agentInitiatedTurns: Array<{ channelId: string; content: string }> = [];
   replayEvents: Array<{
     id: number;
     type: string;
@@ -61,6 +62,23 @@ class TestGmailAgentWorker extends GmailAgentWorker {
       },
     ],
   }));
+  listMessages = vi.fn(async () => ({
+    messages: [
+      message(
+        "msg-1",
+        "thr-1",
+        {
+          Subject: "Question",
+          From: "a@example.com",
+          To: "me@example.com",
+          "Message-ID": "<msg-1@example.com>",
+          Date: "Fri, 22 May 2026 10:00:00 +0000",
+        },
+        "Private full email body",
+        "Short snippet"
+      ),
+    ],
+  }));
   fakeThread: GmailThread = {
     id: "thr-1",
     messages: [
@@ -82,16 +100,23 @@ class TestGmailAgentWorker extends GmailAgentWorker {
   sent = vi.fn(async (params: unknown) => ({ id: "sent-1", threadId: "thr-1", params }));
   draftBodies = vi.fn(async () => "Thanks for the context. I will follow up shortly.");
   useBaseDraftGeneration = false;
-  rpcCall = vi.fn(
-    async (..._args: unknown[]): Promise<{ id: string } | null> => ({ id: "cred-1" })
-  );
+  rpcCall = vi.fn(async (_target: string, method: string): Promise<unknown> => {
+    if (method === "runtime.resolveContext") return "ctx-1";
+    if (method === "workers.resolveService") {
+      return { kind: "durable-object", targetId: "do:channel:test" };
+    }
+    if (method === "subscribe") {
+      return { ok: true, participantId: "agent-gmail", channelConfig: {} };
+    }
+    return { id: "cred-1" };
+  });
 
   protected override get rpc(): never {
     return {
       call: this.rpcCall,
       callDeferred: async (...args: unknown[]) => ({
         status: "completed" as const,
-        result: await this.rpcCall(...args),
+        result: await (this.rpcCall as (...rpcArgs: unknown[]) => Promise<unknown>)(...args),
       }),
     } as never;
   }
@@ -101,7 +126,7 @@ class TestGmailAgentWorker extends GmailAgentWorker {
       handle: vi.fn() as never,
       getProfile: this.profile as never,
       listLabels: vi.fn() as never,
-      listMessages: vi.fn() as never,
+      listMessages: this.listMessages as never,
       search: vi.fn() as never,
       listHistory: vi.fn() as never,
       syncSince: this.sync as never,
@@ -122,6 +147,13 @@ class TestGmailAgentWorker extends GmailAgentWorker {
       return super.generateDraftReplyBody(channelId, thread);
     }
     return this.draftBodies();
+  }
+
+  protected override async submitAgentInitiatedTurn(
+    channelId: string,
+    input: { content?: string }
+  ): Promise<void> {
+    this.agentInitiatedTurns.push({ channelId, content: input.content ?? "" });
   }
 
   protected override createChannelClient() {
@@ -166,12 +198,34 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     );
   }
 
+  seedRepliedSender(channelId = "ch-1", email = "a@example.com") {
+    this.sql.exec(
+      `INSERT OR REPLACE INTO gmail_replied_senders
+       (channel_id, email, display, first_replied_at, last_replied_at, source)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      channelId,
+      email,
+      email,
+      Date.now(),
+      Date.now(),
+      "test"
+    );
+  }
+
   respondPolicy(channelId: string) {
     return this.getRespondPolicy(channelId);
   }
 
   prompt(channelId: string) {
     return this.getRunnerPromptConfig(channelId);
+  }
+
+  runnerTools(channelId = "ch-1") {
+    return this.getRunnerTools(channelId)?.map((tool) => tool.name) ?? [];
+  }
+
+  runnerTool(name: string, channelId = "ch-1") {
+    return this.getRunnerTools(channelId)?.find((tool) => tool.name === name);
   }
 
   participant() {
@@ -182,12 +236,18 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     return this.getModel(channelId);
   }
 
-  toolAllowed(toolName: string) {
-    return this.getRunnerToolFilter("ch-1")?.(toolName);
+  runnerToolFilter() {
+    return this.getRunnerToolFilter("ch-1");
   }
 
   async debug(channelId = "ch-1") {
     return this.getDebugState(channelId);
+  }
+
+  channelStateRow(channelId = "ch-1") {
+    return this.sql
+      .exec(`SELECT * FROM gmail_channel_state WHERE channel_id = ?`, channelId)
+      .toArray()[0];
   }
 }
 
@@ -196,11 +256,11 @@ describe("GmailAgentWorker", () => {
     expect(GmailAgentWorker.schemaVersion).toBe(AgentWorkerBase.schemaVersion);
   });
 
-  it("advertises Gmail and standard agent methods with strict mention policy", async () => {
+  it("advertises Gmail and standard agent methods with mention-or-followup policy", async () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
-    expect(worker.respondPolicy("ch-1")).toBe("mentioned-strict");
+    expect(worker.respondPolicy("ch-1")).toBe("mentioned-or-followup");
     expect(worker.participant()).toMatchObject({
       handle: "gmail",
       name: "Gmail",
@@ -243,13 +303,153 @@ describe("GmailAgentWorker", () => {
     ]);
   });
 
-  it("keeps base built-in tools visible through the Gmail tool filter", async () => {
+  it("does not filter the runner tool roster", async () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
-    expect(worker.toolAllowed("set_title")).toBe(true);
-    expect(worker.toolAllowed("gmail_checkInbox")).toBe(true);
-    expect(worker.toolAllowed("eval")).toBe(false);
+    expect(worker.runnerToolFilter()).toBeNull();
+    expect(worker.runnerTools()).not.toContain("gmail_upsertAttentionRule");
+    expect(worker.runnerTools().filter((name) => name.includes("Attention"))).toEqual([]);
+  });
+
+  it("advertises strict Gmail runner tool schemas", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+
+    expect(worker.runnerTool("gmail_search")?.parameters).toMatchObject({
+      type: "object",
+      required: ["q"],
+      additionalProperties: false,
+      properties: {
+        q: { type: "string", minLength: 1 },
+      },
+    });
+    expect(worker.runnerTool("gmail_checkInbox")?.parameters).toMatchObject({
+      type: "object",
+      properties: {},
+      additionalProperties: false,
+    });
+  });
+
+  it("persists the Google credential pin from subscription config", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker, {
+      WORKERD_SESSION_ID: "test-session",
+      WORKERD_BOOT_GENERATION: "1",
+    });
+    const worker = instance as TestGmailAgentWorker;
+
+    await worker.subscribeChannel({
+      channelId: "ch-1",
+      contextId: "ctx-1",
+      replay: false,
+      config: { handle: "gmail", googleCredentialId: "google-cred-2" },
+    });
+
+    expect(worker.channelStateRow("ch-1")).toMatchObject({
+      channel_id: "ch-1",
+      credential_id: "google-cred-2",
+    });
+  });
+
+  it("starts first-run setup when subscribed in an unconfigured state", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker, {
+      WORKERD_SESSION_ID: "test-session",
+      WORKERD_BOOT_GENERATION: "1",
+    });
+    const worker = instance as TestGmailAgentWorker;
+
+    await expect(
+      worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1", replay: false })
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(worker.published.map((entry) => entry.event.kind)).toEqual([
+      "messageType.registered",
+      "messageType.registered",
+      "messageType.registered",
+      "messageType.registered",
+      "ui.action_bar.updated",
+    ]);
+    expect(
+      worker.published.map((entry) => (entry.event.payload as { typeId?: string }).typeId)
+    ).toEqual(["gmail.inbox", "gmail.category", "gmail.thread", "gmail.compose", undefined]);
+    expect(worker.published[0]?.event.payload).toMatchObject({
+      imports: {
+        react: "latest",
+        "react/jsx-runtime": "latest",
+        "@radix-ui/themes": "npm:^3.2.1",
+        "@radix-ui/react-icons": "npm:^1.3.2",
+      },
+    });
+    expect(worker.published[4]?.event.payload).toMatchObject({
+      uiType: "action_bar",
+      source: { type: "file", path: "skills/gmail/action-bar.tsx" },
+      imports: {
+        react: "latest",
+        "react/jsx-runtime": "latest",
+        "@radix-ui/themes": "npm:^3.2.1",
+        "@radix-ui/react-icons": "npm:^1.3.2",
+      },
+      maxHeight: 180,
+    });
+    expect(worker.agentInitiatedTurns).toEqual([
+      {
+        channelId: "ch-1",
+        content: expect.stringContaining("Ask the user what kinds of incoming email"),
+      },
+    ]);
+
+    await worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1", replay: false });
+    expect(worker.agentInitiatedTurns).toHaveLength(1);
+  });
+
+  it("starts an attention turn only for incoming mail from a sender already replied to", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker, {
+      WORKERD_SESSION_ID: "test-session",
+      WORKERD_BOOT_GENERATION: "1",
+    });
+    const worker = instance as TestGmailAgentWorker;
+    worker.seedSubscription();
+
+    await worker.onMethodCall("ch-1", "call-1", "checkNow", {});
+    expect(worker.agentInitiatedTurns).toEqual([]);
+
+    worker.seedRepliedSender("ch-1", "a@example.com");
+    await worker.onMethodCall("ch-1", "call-2", "checkNow", {});
+    expect(worker.agentInitiatedTurns).toHaveLength(1);
+    expect(worker.agentInitiatedTurns[0]?.content).toContain(
+      "senders you have replied to before"
+    );
+
+    await worker.onMethodCall("ch-1", "call-3", "checkNow", {});
+    expect(worker.agentInitiatedTurns).toHaveLength(1);
+  });
+
+  it("lets the agent mark Gmail setup configured", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+    worker.seedSubscription();
+
+    await expect(
+      worker.onMethodCall("ch-1", "call-1", "markConfigured", {
+        summary: "Watching invoices and scheduling mail.",
+      })
+    ).resolves.toMatchObject({
+      result: {
+        configured: true,
+        summary: "Watching invoices and scheduling mail.",
+      },
+    });
+
+    await worker.onMethodCall("ch-1", "call-2", "checkNow", {});
+    const inbox = worker.published.find(
+      (entry) => (entry.event.payload as { typeId?: string }).typeId === "gmail.inbox"
+    );
+    expect(inbox?.event.payload).toMatchObject({
+      initialState: {
+        setupStatus: "configured",
+        setupSummary: "Watching invoices and scheduling mail.",
+      },
+    });
   });
 
   it("emits a connect-only credential card for one-shot draft generation without entering external wait", async () => {
@@ -375,7 +575,14 @@ describe("GmailAgentWorker", () => {
       result: { ok: true, historyId: "h1", threadsUpdated: 0 },
     });
     expect(worker.published.map((entry) => entry.event.kind)).toEqual(["custom.started"]);
-    expect(worker.published[0]!.event.payload).toMatchObject({ typeId: "gmail.inbox" });
+    expect(worker.published[0]!.event.payload).toMatchObject({
+      typeId: "gmail.inbox",
+      initialState: {
+        unread: 1,
+        inbox: 1,
+        actionable: [expect.objectContaining({ threadId: "thr-1" })],
+      },
+    });
 
     await expect(worker.onMethodCall("ch-1", "call-2", "checkNow", {})).resolves.toMatchObject({
       result: { ok: true, historyId: "h2", threadsUpdated: 1 },
@@ -384,7 +591,7 @@ describe("GmailAgentWorker", () => {
       worker.published
         .map((entry) => (entry.event.payload as { typeId?: string }).typeId)
         .filter(Boolean)
-    ).toContain("gmail.thread");
+    ).toEqual(["gmail.inbox"]);
 
     const beforeCategorize = worker.published.length;
     await expect(
@@ -394,11 +601,7 @@ describe("GmailAgentWorker", () => {
       })
     ).resolves.toMatchObject({ result: { threadId: "thr-1", category: "urgent" } });
     const afterCategorize = worker.published.slice(beforeCategorize);
-    expect(
-      afterCategorize.some(
-        (entry) => (entry.event.payload as { typeId?: string }).typeId === "gmail.category"
-      )
-    ).toBe(true);
+    expect(afterCategorize.map((entry) => entry.event.kind)).toContain("custom.updated");
 
     expect(JSON.stringify(worker.published)).not.toContain("Private full email body");
   });
@@ -463,6 +666,152 @@ describe("GmailAgentWorker", () => {
       worker.onMethodCall("ch-1", "call-7", "listActionableThreads", {})
     ).resolves.toMatchObject({
       result: [],
+    });
+  });
+
+  it("exposes a structured attention-rule API over direct Durable Object RPC", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+    worker.seedSubscription();
+
+    await expect(worker.listAttentionRules("other-channel")).rejects.toThrow(
+      "not subscribed"
+    );
+
+    await expect(worker.listAttentionRules("ch-1")).resolves.toMatchObject({
+      channelId: "ch-1",
+      rules: [
+        expect.objectContaining({
+          id: "prior-replies",
+          match: {
+            all: expect.arrayContaining([
+              expect.objectContaining({ field: "priorReplyToSender" }),
+            ]),
+          },
+        }),
+      ],
+      capabilities: expect.objectContaining({
+        fields: expect.arrayContaining(["fromDomain", "priorReplyToSender", "wakeAll"]),
+      }),
+      rpc: {
+        source: "workers/gmail-agent",
+        className: "GmailAgentWorker",
+        objectKey: "gmail-ch-1",
+        resolveMethod: "workers.resolveDurableObject",
+      },
+    });
+
+    await expect(
+      worker.upsertAttentionRule("ch-1", {
+        rule: {
+          id: "vip-domain",
+          name: "VIP domain",
+          enabled: true,
+          scope: "snippet",
+          priority: 200,
+          match: { any: [{ field: "fromDomain", op: "equals", value: "vip.example" }] },
+          actions: ["surface", "summarize"],
+        },
+      })
+    ).resolves.toMatchObject({
+      saved: true,
+      rule: { id: "vip-domain", actions: ["surface", "summarize"] },
+    });
+
+    (worker as unknown as { _currentVerifiedCaller: { callerId: string; callerKind: string } | null })
+      ._currentVerifiedCaller = { callerId: "do:other", callerKind: "do" };
+    await expect(
+      worker.upsertAttentionRule("ch-1", {
+        rule: {
+          id: "blocked-do-write",
+          name: "Blocked DO write",
+          enabled: true,
+          scope: "snippet",
+          priority: 100,
+          match: { any: [{ field: "wakeAll", op: "present" }] },
+          actions: ["surface"],
+        },
+      })
+    ).rejects.toThrow("user-facing panel");
+    (worker as unknown as { _currentVerifiedCaller: { callerId: string; callerKind: string } | null })
+      ._currentVerifiedCaller = null;
+
+    await expect(
+      worker.setAttentionRuleEnabled("ch-1", { id: "vip-domain", enabled: false })
+    ).resolves.toMatchObject({
+      saved: true,
+      rule: { id: "vip-domain", enabled: false },
+    });
+
+    await expect(worker.deleteAttentionRule("ch-1", { id: "vip-domain" })).resolves.toMatchObject({
+      deleted: true,
+      id: "vip-domain",
+    });
+
+    await expect(worker.clearAttentionRules("ch-1")).resolves.toMatchObject({
+      cleared: true,
+      rules: [],
+    });
+
+    await expect(worker.resetAttentionRules("ch-1")).resolves.toMatchObject({
+      reset: true,
+      rules: [expect.objectContaining({ id: "prior-replies" })],
+    });
+  });
+
+  it("uses installed attention rules to wake on messages outside default heuristics", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+    worker.seedSubscription();
+    worker.fakeThread = {
+      id: "thr-1",
+      messages: [
+        message(
+          "msg-promo",
+          "thr-1",
+          {
+            Subject: "Launch update",
+            From: "founder@investor.example",
+            To: "me@example.com",
+            Date: "Fri, 22 May 2026 10:15:00 +0000",
+          },
+          "Fundraising details",
+          "Fundraising details",
+          ["INBOX", "UNREAD", "CATEGORY_PROMOTIONS"]
+        ),
+      ],
+    };
+
+    await expect(
+      worker.upsertAttentionRule("ch-1", {
+        rule: {
+          id: "investor-domain",
+          name: "Investor domain",
+          enabled: true,
+          scope: "snippet",
+          priority: 100,
+          match: {
+            any: [{ field: "fromDomain", op: "equals", value: "investor.example" }],
+          },
+          actions: ["surface"],
+        },
+      })
+    ).resolves.toMatchObject({ saved: true });
+
+    await worker.onMethodCall("ch-1", "call-2", "checkNow", {});
+
+    await expect(
+      worker.onMethodCall("ch-1", "call-3", "listActionableThreads", {})
+    ).resolves.toMatchObject({
+      result: [
+        expect.objectContaining({
+          threadId: "thr-1",
+          attention: expect.objectContaining({
+            directiveId: "investor-domain",
+            directiveName: "Investor domain",
+          }),
+        }),
+      ],
     });
   });
 

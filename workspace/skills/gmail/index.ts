@@ -1,21 +1,9 @@
-import {
-  AGENTIC_EVENT_PAYLOAD_KIND,
-  AGENTIC_PROTOCOL_VERSION,
-  type AgenticEvent,
-} from "@workspace/agentic-protocol";
 import { contextId as runtimeContextId, getStateArgs, rpc, setStateArgs } from "@workspace/runtime";
 
 const GMAIL_AGENT_SOURCE = "workers/gmail-agent";
 const GMAIL_AGENT_CLASS = "GmailAgentWorker";
 const GMAIL_AGENT_HANDLE = "gmail";
-const GMAIL_ACTION_BAR_FILE = "skills/gmail/action-bar.tsx";
 
-const GMAIL_RENDERERS = [
-  { typeId: "gmail.inbox", displayMode: "row" as const, path: "skills/gmail/renderers/gmail-inbox.tsx" },
-  { typeId: "gmail.category", displayMode: "row" as const, path: "skills/gmail/renderers/gmail-category.tsx" },
-  { typeId: "gmail.thread", displayMode: "row" as const, path: "skills/gmail/renderers/gmail-thread.tsx" },
-  { typeId: "gmail.compose", displayMode: "row" as const, path: "skills/gmail/renderers/gmail-compose.tsx" },
-];
 
 export interface GmailAgentSetupStatus {
   stage: "needs-google-workspace" | "needs-channel-setup" | "ready" | "error";
@@ -23,22 +11,18 @@ export interface GmailAgentSetupStatus {
   google?: unknown;
 }
 
-interface SetupChatApi {
-  publish?: (kind: string, payload: unknown, options?: { idempotencyKey?: string }) => Promise<unknown>;
-}
-
-interface PendingAgentRecord {
+interface InstalledAgentRecord {
   agentId: string;
   handle: string;
   key: string;
   source: string;
   className: string;
+  config?: Record<string, unknown>;
 }
 
 interface GmailAgentSetupArgs {
   channelId?: string | null;
   contextId?: string | null;
-  chat?: SetupChatApi | null;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -48,7 +32,7 @@ function record(value: unknown): Record<string, unknown> {
 export async function getGmailAgentSetupStatus(): Promise<GmailAgentSetupStatus> {
   try {
     const google = await import("@workspace-skills/google-workspace");
-    const status = await google.getGoogleOnboardingStatus();
+    const status = await google.getGoogleOnboardingStatus({ verify: true });
     if (status.stage === "needs-setup") {
       return {
         stage: "needs-google-workspace",
@@ -71,9 +55,14 @@ export async function getGmailAgentSetupStatus(): Promise<GmailAgentSetupStatus>
       };
     }
     if (status.stage === "verified") {
-      const pendingAgents = (getStateArgs() as Record<string, unknown>)["pendingAgents"];
-      const hasGmailAgent = Array.isArray(pendingAgents)
-        && pendingAgents.some((agent) => record(agent)["handle"] === GMAIL_AGENT_HANDLE);
+      const installedAgents = (getStateArgs() as Record<string, unknown>)["installedAgents"];
+      const hasGmailAgent = Array.isArray(installedAgents)
+        && installedAgents.some((agent) => {
+          const entry = record(agent);
+          return entry["handle"] === GMAIL_AGENT_HANDLE
+            || entry["source"] === GMAIL_AGENT_SOURCE
+            || entry["className"] === GMAIL_AGENT_CLASS;
+        });
       return {
         stage: hasGmailAgent ? "ready" : "needs-channel-setup",
         message: hasGmailAgent
@@ -95,50 +84,31 @@ export async function getGmailAgentSetupStatus(): Promise<GmailAgentSetupStatus>
   }
 }
 
-export async function connectGmail(): Promise<unknown> {
-  const google = await import("@workspace-skills/google-workspace");
-  return google.connectGoogle();
-}
-
-function setupActor(): AgenticEvent["actor"] {
-  return {
-    kind: "panel",
-    id: "gmail-setup",
-    displayName: "Gmail setup",
-    metadata: { type: "panel", handle: "gmail-setup" },
-  };
-}
-
-async function registerGmailRenderers(chat: SetupChatApi): Promise<string[]> {
-  if (!chat.publish) return [];
-  const registered: string[] = [];
-  for (const renderer of GMAIL_RENDERERS) {
-    const event: AgenticEvent<"messageType.registered"> = {
-      kind: "messageType.registered",
-      actor: setupActor(),
-      payload: {
-        protocol: AGENTIC_PROTOCOL_VERSION,
-        typeId: renderer.typeId,
-        displayMode: renderer.displayMode,
-        source: { type: "file", path: renderer.path },
-        registeredBy: setupActor(),
-      },
-      createdAt: new Date().toISOString(),
-    };
-    await chat.publish(AGENTIC_EVENT_PAYLOAD_KIND, event, {
-      idempotencyKey: `gmail:message-type:${renderer.typeId}`,
-    });
-    registered.push(renderer.typeId);
-  }
-  return registered;
-}
-
-function gmailAgentKey(channelId: string): string {
+export function gmailAgentObjectKey(channelId: string): string {
   return `gmail-${channelId}`;
 }
 
-function updatePendingAgents(existing: unknown, next: PendingAgentRecord): PendingAgentRecord[] {
-  const current = Array.isArray(existing) ? existing as PendingAgentRecord[] : [];
+export async function resolveGmailAgentWorker(channelId: string): Promise<{ targetId: string }> {
+  const normalized = channelId.trim();
+  if (!normalized) throw new Error("resolveGmailAgentWorker requires channelId");
+  return rpc.call<{ targetId: string }>("main", "workers.resolveDurableObject", [
+    GMAIL_AGENT_SOURCE,
+    GMAIL_AGENT_CLASS,
+    gmailAgentObjectKey(normalized),
+  ]);
+}
+
+export async function callGmailAttention<T = unknown>(
+  channelId: string,
+  method: string,
+  args: unknown = {}
+): Promise<T> {
+  const target = await resolveGmailAgentWorker(channelId);
+  return rpc.call<T>(target.targetId, method, [channelId, args]);
+}
+
+function updateInstalledAgents(existing: unknown, next: InstalledAgentRecord): InstalledAgentRecord[] {
+  const current = Array.isArray(existing) ? existing as InstalledAgentRecord[] : [];
   return [...current.filter((agent) => agent.handle !== next.handle), next];
 }
 
@@ -148,9 +118,6 @@ export async function setupGmailAgent(args: GmailAgentSetupArgs = {}): Promise<{
   contextId?: string;
   targetId?: string;
   participantId?: string;
-  actionBarFile: string;
-  renderers: string[];
-  registeredRenderers: string[];
 }> {
   const channelId = args.channelId?.trim();
   const contextId = args.contextId?.trim() || runtimeContextId;
@@ -160,8 +127,14 @@ export async function setupGmailAgent(args: GmailAgentSetupArgs = {}): Promise<{
   if (!contextId) {
     throw new Error("setupGmailAgent requires a runtime contextId");
   }
+  const google = await import("@workspace-skills/google-workspace");
+  const googleStatus = await google.getGoogleOnboardingStatus({ verify: true });
+  const googleCredentialId = googleStatus.credentialId;
+  if (googleStatus.stage !== "verified" || !googleCredentialId) {
+    throw new Error("setupGmailAgent requires a verified Google Workspace credential");
+  }
 
-  const key = gmailAgentKey(channelId);
+  const key = gmailAgentObjectKey(channelId);
   const entity = await rpc.call<{ id: string; targetId: string }>("main", "runtime.createEntity", [{
     kind: "do",
     source: GMAIL_AGENT_SOURCE,
@@ -176,31 +149,27 @@ export async function setupGmailAgent(args: GmailAgentSetupArgs = {}): Promise<{
       handle: GMAIL_AGENT_HANDLE,
       name: "Gmail",
       approvalLevel: 2,
+      googleCredentialId,
     },
   }]);
 
   const stateArgs = getStateArgs() as Record<string, unknown>;
   await setStateArgs({
-    pendingAgents: updatePendingAgents(stateArgs["pendingAgents"], {
+    installedAgents: updateInstalledAgents(stateArgs["installedAgents"], {
       agentId: GMAIL_AGENT_CLASS,
       handle: GMAIL_AGENT_HANDLE,
       key,
       source: GMAIL_AGENT_SOURCE,
       className: GMAIL_AGENT_CLASS,
+      config: { googleCredentialId },
     }),
-    actionBarFile: GMAIL_ACTION_BAR_FILE,
-    actionBarMaxHeight: 180,
   });
 
-  const registeredRenderers = args.chat ? await registerGmailRenderers(args.chat) : [];
   return {
     ok: subscription.ok,
     channelId,
     contextId,
     targetId: entity.targetId,
     participantId: subscription.participantId,
-    actionBarFile: GMAIL_ACTION_BAR_FILE,
-    renderers: GMAIL_RENDERERS.map((renderer) => renderer.path),
-    registeredRenderers,
   };
 }

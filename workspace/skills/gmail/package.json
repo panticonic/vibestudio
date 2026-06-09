@@ -4,9 +4,12 @@
   "type": "module",
   "exports": { ".": "./index.ts" },
   "dependencies": {
+    "@radix-ui/react-icons": "^1.3.2",
+    "@radix-ui/themes": "^3.2.1",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/gmail": "workspace:*",
     "@workspace/runtime": "workspace:*",
-    "@workspace-skills/google-workspace": "workspace:*"
+    "@workspace-skills/google-workspace": "workspace:*",
+    "react": "^19.2.0"
   }
 }

@@ -11,7 +11,11 @@
     "agent": {
       "displayName": "Gmail Agent",
       "description": "Reads and triages your Gmail",
-      "icon": "📧"
+      "icon": "📧",
+      "defaultConfig": {
+        "handle": "gmail",
+        "respondPolicy": "mentioned-or-followup"
+      }
     },
     "exposeModules": [
       "@earendil-works/pi-ai",

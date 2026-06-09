@@ -43,6 +43,7 @@ const googleCredential: StoredCredentialSummary = {
   ],
   metadata: {
     providerId: "google-workspace",
+    oauthRefreshTokenStored: "true",
   },
 };
 
@@ -198,6 +199,7 @@ describe("google-workspace skill facade", () => {
             access_type: "offline",
             prompt: "consent",
           },
+          persistRefreshToken: true,
         }),
         credential: expect.objectContaining({
           metadata: { providerId: "google-workspace" },
@@ -208,6 +210,45 @@ describe("google-workspace skill facade", () => {
         }),
       })
     );
+  });
+
+  it("connectGoogle reuses an already verified Google credential instead of launching OAuth again", async () => {
+    runtimeMock.credentials.listStoredCredentials.mockResolvedValue([googleCredential]);
+
+    const result = await connectGoogle();
+
+    expect(result).toMatchObject({
+      success: true,
+      credentialId: "cred-google",
+      email: "user@example.com",
+    });
+    expect(runtimeMock.credentials.connect).not.toHaveBeenCalled();
+  });
+
+  it("warns when a stored Google credential predates durable refresh-token storage", async () => {
+    runtimeMock.credentials.listStoredCredentials.mockResolvedValue([
+      {
+        ...googleCredential,
+        metadata: { providerId: "google-workspace" },
+      },
+    ]);
+
+    const status = await getGoogleOnboardingStatus();
+
+    expect(status.stage).toBe("connected");
+    expect(status.warnings.join(" ")).toContain("does not report a stored refresh token");
+  });
+
+  it("returns structured verification failure when the credential proxy reports expiry", async () => {
+    runtimeMock.credentials.fetch.mockRejectedValue(new Error("credential-expired"));
+
+    const result = await verifyGoogleCredential("cred-google");
+
+    expect(result).toMatchObject({
+      valid: false,
+      credentialId: "cred-google",
+    });
+    expect(result.error).toContain("Reconnect Google Workspace");
   });
 
   it("connectGoogle returns a setup error instead of starting connection without client config", async () => {

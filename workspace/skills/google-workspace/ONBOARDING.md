@@ -81,6 +81,9 @@ return result;
 ```
 
 If the browser flow succeeds, keep the returned `connectionId`.
+The helper requests Google offline access and opts into NatStack refresh-token
+persistence. If an existing credential reports `credential-expired` or warns
+that no refresh token is stored, replace it with `connectGoogle({ force: true })`.
 
 ## Verify
 

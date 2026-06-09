@@ -26,17 +26,36 @@ export default function GmailThread({ state, expanded, chat }: {
   const [thread, setThread] = useState<ThreadBody | null>(null);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [reviewingSend, setReviewingSend] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function loadThread() {
     if (thread || loading) return;
     setLoading(true);
+    setError(null);
     try {
       const result = await chat.callMethodByHandle("gmail", "getThread", { threadId: state.threadId });
       if (result && typeof result === "object" && Array.isArray((result as ThreadBody).messages)) {
         setThread(result as ThreadBody);
       }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function call(method: string, args: unknown, label: string) {
+    setBusy(label);
+    setError(null);
+    try {
+      await chat.callMethodByHandle("gmail", method, args);
+      if (method === "send") setDraft("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -45,18 +64,21 @@ export default function GmailThread({ state, expanded, chat }: {
   }
 
   return (
-    <Flex direction="column" gap="2" onClick={() => void loadThread()}>
+    <Flex direction="column" gap="2">
       <Flex align="center" justify="between" gap="2">
         <Text size="3" weight="bold">{state.subject}</Text>
         <Badge color={state.status === "archived" ? "gray" : "blue"}>{state.status}</Badge>
       </Flex>
       <Text size="2" color="gray">{state.participants.join(", ")}</Text>
+      {error ? <Text size="1" color="red">{error}</Text> : null}
       {thread ? (
         <Flex direction="column" gap="2">
           {thread.messages.map((message) => (
             <Flex key={message.id} direction="column" gap="1">
               <Text size="1" color="gray">{message.from} {message.date}</Text>
-              <Text size="2">{message.bodyText ?? message.snippet}</Text>
+              <Text size="2" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                {message.bodyText ?? message.snippet}
+              </Text>
             </Flex>
           ))}
         </Flex>
@@ -65,14 +87,45 @@ export default function GmailThread({ state, expanded, chat }: {
       )}
       <TextArea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Draft reply" />
       <Flex gap="2" wrap="wrap">
-        <Button size="1" onClick={() => chat.callMethodByHandle("gmail", "draftReply", { threadId: state.threadId })}>
-          AI draft
+        <Button size="1" variant="soft" disabled={loading || busy !== null} onClick={() => void loadThread()}>
+          {loading ? "Loading" : thread ? "Refresh thread" : "Load thread"}
         </Button>
-        <Button size="1" variant="soft" disabled={!draft.trim()} onClick={() => chat.callMethodByHandle("gmail", "send", {
-          threadId: state.threadId,
-          body: draft,
-        })}>
-          Send
+        <Button
+          size="1"
+          disabled={busy !== null}
+          onClick={() => void call("draftReply", { threadId: state.threadId }, "draft")}
+        >
+          {busy === "draft" ? "Drafting" : "AI draft"}
+        </Button>
+        <Button
+          size="1"
+          variant="soft"
+          disabled={!draft.trim() || busy !== null}
+          onClick={() => {
+            if (!reviewingSend) {
+              setReviewingSend(true);
+              return;
+            }
+            void call("send", { threadId: state.threadId, body: draft }, "send");
+          }}
+        >
+          {busy === "send" ? "Sending" : reviewingSend ? "Confirm send" : "Review send"}
+        </Button>
+        <Button
+          size="1"
+          variant="ghost"
+          disabled={busy !== null}
+          onClick={() => void call("markRead", { threadId: state.threadId }, "read")}
+        >
+          Mark read
+        </Button>
+        <Button
+          size="1"
+          variant="ghost"
+          disabled={busy !== null}
+          onClick={() => void call("archiveThread", { threadId: state.threadId }, "archive")}
+        >
+          Archive
         </Button>
         <Button size="1" variant="ghost" onClick={() => setDraft("")}>Discard</Button>
       </Flex>

@@ -11,15 +11,22 @@ Use this skill after Google Workspace OAuth is configured. Gmail reuses the
 ## Agent Behavior
 
 The Gmail agent is invoked through action-bar controls, custom message pills,
-and strict mentions. It should not start a trajectory on every message in a
-1:1 channel; the worker uses `respondPolicy = "mentioned-strict"`.
+explicit `@gmail` mentions, and direct user follow-ups immediately after one of
+its own messages. It should not start a trajectory on every message in a 1:1
+channel; the worker uses `respondPolicy = "mentioned-or-followup"`.
+
+Incoming-mail attention is deterministic and cheap by default. The built-in
+rule only starts an agent turn for unread inbox mail from senders the user has
+already replied to at least once. Users can add, pause, delete, or replace watch
+rules from the Gmail desk without enabling model work over every message.
 
 ## Runtime Helpers
 
 ```typescript
 import {
-  connectGmail,
+  callGmailAttention,
   getGmailAgentSetupStatus,
+  resolveGmailAgentWorker,
   setupGmailAgent,
 } from "@workspace-skills/gmail";
 ```
@@ -29,8 +36,59 @@ Recommended flow:
 1. Run `getGmailAgentSetupStatus()`.
 2. If Google Workspace is not verified, follow
    `workspace/skills/google-workspace/ONBOARDING.md`.
-3. Run `connectGmail()` to connect or verify the Google credential.
-4. Run `setupGmailAgent({ channelId: chat.channelId, chat })` from the target chat context.
+3. Once Google Workspace is verified, run
+   `setupGmailAgent({ channelId: chat.channelId })` from the target chat
+   context. Do not start another OAuth flow after verification.
+
+The Gmail worker owns its in-channel UI installation. On subscription it
+registers the Gmail custom message renderers, publishes the Gmail action bar,
+and starts first-run attention setup when the channel is not configured yet.
+The setup helper should only create/subscribe the Gmail worker and persist the
+installed-agent record for panel reloads.
+
+If the user configures attention from the Gmail desk UI, the UI calls
+`markConfigured` after installing the watch rule so the setup badge clears.
+
+## Attention Rule DX
+
+Attention rules are application state on the Gmail Durable Object, not model
+runner tools. The Gmail agent has access to eval and normal workspace tools; it
+should edit rules by calling the Gmail DO over RPC from eval. No
+`workspace/meta/natstack.yml` service entry is required for this path because
+`workers.resolveDurableObject(...)` can resolve the concrete Gmail DO target.
+Rule writes are accepted from user-facing callers such as the chat panel; DO
+callers may inspect rules but cannot silently rewrite them.
+
+```typescript
+import { callGmailAttention } from "@workspace-skills/gmail";
+
+await callGmailAttention(chat.channelId, "upsertAttentionRule", {
+  rule: {
+    id: "vip-domain",
+    name: "VIP domain",
+    enabled: true,
+    scope: "snippet",
+    priority: 200,
+    match: { any: [{ field: "fromDomain", op: "equals", value: "vip.example" }] },
+    actions: ["surface", "summarize"],
+  },
+});
+```
+
+The public rule methods are:
+
+| Method | Purpose |
+|--------|---------|
+| `listAttentionRules(channelId)` | Inspect current rules and supported fields/actions |
+| `upsertAttentionRule(channelId, { rule })` | Create or replace one rule |
+| `setAttentionRuleEnabled(channelId, { id, enabled })` | Pause or resume one rule |
+| `deleteAttentionRule(channelId, { id })` | Remove one rule |
+| `clearAttentionRules(channelId)` | Quiet mode: remove all wake rules |
+| `resetAttentionRules(channelId)` | Restore the default prior-reply rule |
+
+Use workspace code edits for behavior that cannot be expressed as static rule
+state. The default static fields are sender, sender domain, recipients,
+subject, snippet, label, category, attachments, prior-reply sender, and wake-all.
 
 ## Custom Message Types
 
@@ -51,6 +109,13 @@ fold the same updates.
 
 `action-bar.tsx` exposes Compose, Search, Check now, and quick-reply controls.
 It calls the Gmail agent by handle with `chat.callMethodByHandle("gmail", ...)`.
+The worker publishes this action bar as channel UI during subscription, so both
+manual agent launch and onboarding-driven setup get the same controls.
+
+Compose cards use a review step before sending, support Cc/Bcc, can save Gmail
+drafts, and can be discarded. Thread and inbox cards expose read/archive/draft
+triage actions; the inbox card supports bulk mark-read/archive for selected
+threads.
 
 ## Files
 

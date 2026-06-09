@@ -72,6 +72,7 @@ export interface GoogleOnboardingStatusOptions {
 
 export interface ConnectGoogleOptions {
   scopes?: string[];
+  force?: boolean;
 }
 
 function getDefaultScopes(scopes?: string[]): string[] {
@@ -150,6 +151,27 @@ function getCredentialEmail(credential: StoredCredentialSummary | undefined): st
   return credential?.accountIdentity?.email;
 }
 
+function hasDurableRefreshToken(credential: StoredCredentialSummary | undefined): boolean {
+  return credential?.metadata?.["oauthRefreshTokenStored"] === "true";
+}
+
+function explainGoogleCredentialError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("credential-expired")) {
+    return (
+      "credential-expired: the stored Google credential is expired and cannot be refreshed. " +
+      "Reconnect Google Workspace so NatStack can store a durable offline refresh token."
+    );
+  }
+  if (message.includes("client_not_authorized") || message.includes("oauth-refresh-failed")) {
+    return (
+      `${message}: Google rejected the stored refresh credential. ` +
+      "Reconnect Google Workspace after confirming the OAuth app is published to Production."
+    );
+  }
+  return message;
+}
+
 function getNextActions(
   status: Pick<GoogleOnboardingStatus, "stage" | "connected" | "configured">
 ): string[] {
@@ -157,7 +179,7 @@ function getNextActions(
     case "needs-setup":
       return [
         "Render the Google Workspace setup workflow from SETUP.md.",
-    "Run configureGoogleOAuthClient() and enter the Desktop app client_id and client_secret in the trusted approval UI.",
+        "Run configureGoogleOAuthClient() and enter the Desktop app client_id and client_secret in the trusted approval UI.",
       ];
     case "ready-to-connect":
       return ["Run connectGoogle() to create the Google Workspace credential."];
@@ -201,6 +223,12 @@ function buildStatus(input: {
     nextActions: [],
     warnings: input.warnings ?? [],
   };
+  if (primary && !hasDurableRefreshToken(primary)) {
+    status.warnings.push(
+      "This Google Workspace credential does not report a stored refresh token. " +
+        "It may expire after restart or token expiry; reconnect Google Workspace with connectGoogle({ force: true })."
+    );
+  }
   status.nextActions = getNextActions(status);
   return status;
 }
@@ -259,26 +287,34 @@ export async function revokeGoogleCredential(credentialId: string): Promise<void
 export async function verifyGoogleCredential(
   credentialId: string
 ): Promise<GoogleVerificationResult> {
-  return withCredentialRuntime(async (api) => {
-    const response = await api.fetch(
-      "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
-      undefined,
-      { credentialId }
-    );
-    if (!response.ok) {
-      return { valid: false, credentialId, error: `${response.status} ${response.statusText}` };
-    }
-    const body = (await response.json()) as { email?: string };
-    const credential = (await listGoogleCredentials()).find(
-      (candidate) => candidate.id === credentialId
-    );
+  try {
+    return await withCredentialRuntime(async (api) => {
+      const response = await api.fetch(
+        "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
+        undefined,
+        { credentialId }
+      );
+      if (!response.ok) {
+        return { valid: false, credentialId, error: `${response.status} ${response.statusText}` };
+      }
+      const body = (await response.json()) as { email?: string };
+      const credential = (await listGoogleCredentials()).find(
+        (candidate) => candidate.id === credentialId
+      );
+      return {
+        valid: true,
+        credentialId,
+        email: body.email ?? getCredentialEmail(credential),
+        scopes: credential?.scopes,
+      };
+    });
+  } catch (error) {
     return {
-      valid: true,
+      valid: false,
       credentialId,
-      email: body.email ?? getCredentialEmail(credential),
-      scopes: credential?.scopes,
+      error: explainGoogleCredentialError(normalizeCredentialRuntimeError(error)),
     };
-  });
+  }
 }
 
 export async function verifyGoogleConnection(
@@ -348,6 +384,29 @@ export async function connectGoogle(
   opts: ConnectGoogleOptions = {}
 ): Promise<GoogleConnectionResult> {
   try {
+    if (!opts.force) {
+      const existing = await getGoogleOnboardingStatus({ verify: true });
+      if (existing.stage === "verified" && existing.credentialId) {
+        return {
+          success: true,
+          connectionId: existing.credentialId,
+          credentialId: existing.credentialId,
+          email: existing.email,
+        };
+      }
+      if (existing.connected && existing.credentialId) {
+        return {
+          success: false,
+          connectionId: existing.credentialId,
+          credentialId: existing.credentialId,
+          email: existing.email,
+          error:
+            existing.verification?.error ??
+            "An existing Google Workspace credential is stored but could not be verified. Revoke it or call connectGoogle({ force: true }) to replace it.",
+        };
+      }
+    }
+
     if (!(await getGoogleOAuthClientStatus()).configured) {
       return {
         success: false,
@@ -364,6 +423,7 @@ export async function connectGoogle(
           type: "oauth2-auth-code-pkce",
           clientConfigId: GOOGLE_OAUTH_CLIENT_CONFIG_ID,
           scopes,
+          persistRefreshToken: true,
           extraAuthorizeParams: {
             access_type: "offline",
             prompt: "consent",
