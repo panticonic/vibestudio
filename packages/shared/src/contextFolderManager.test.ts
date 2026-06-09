@@ -308,7 +308,7 @@ describe("ContextFolderManager", () => {
     writeFileSync(path.join(repoPath, "note.txt"), "temporary\n");
     initGitRepo(repoPath);
 
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const manager = new ContextFolderManager({
       sourcePath,
       contextsRoot,
@@ -320,11 +320,17 @@ describe("ContextFolderManager", () => {
     await manager.syncDeclaredRemotes();
     await manager.syncDeclaredRemotes(repoRel);
 
-    expect(warn.mock.calls).toEqual([
+    expect(
+      log.mock.calls.filter(
+        ([message]) =>
+          message ===
+          "[ContextFolderManager] Skipping declared remote sync for non-declarable workspace repo path tmp-git-stash-test"
+      )
+    ).toEqual([
       [
         "[ContextFolderManager] Skipping declared remote sync for non-declarable workspace repo path tmp-git-stash-test",
       ],
     ]);
-    warn.mockRestore();
+    log.mockRestore();
   });
 });

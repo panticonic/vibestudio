@@ -1732,7 +1732,7 @@ export class PubSubChannel extends DurableObjectBase {
     // settled (consumed) — drop with a diagnostic; the canonical terminal is
     // already in the durable log from the original settle.
     if (!this.assertSubmitterIsTarget(participantId, transportCallId, "submitMethodResult")) {
-      console.warn(
+      console.log(
         `[Channel] submitMethodResult dropped: no pending call (already terminal or unknown): ` +
           `channel=${this.objectKey} transportCallId=${transportCallId} isError=${isError}`
       );
@@ -1818,7 +1818,7 @@ export class PubSubChannel extends DurableObjectBase {
       // Lost a race with another terminal (cancel/timeout/duplicate) that already
       // consumed the call and logged its terminal. Drop with a diagnostic — the
       // canonical terminal is already durable.
-      console.warn(
+      console.log(
         `[Channel] method result without a live pending call (already terminal): ` +
           `channel=${this.objectKey} transportCallId=${transportCallId} isError=${isError}`
       );

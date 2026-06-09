@@ -828,7 +828,7 @@ async function main() {
         if (!isDeclaredRemoteRepoPath(repo)) {
           if (!skippedDeclaredRemoteRepoWarnings.has(repo)) {
             skippedDeclaredRemoteRepoWarnings.add(repo);
-            console.warn(
+            console.log(
               `[GitRemotes] Skipping declared remote sync for non-declarable workspace repo path ${repo}`
             );
           }

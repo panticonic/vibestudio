@@ -442,7 +442,7 @@ export class ContextFolderManager {
     if (!isDeclaredRemoteRepoPath(repoPath)) {
       if (!this.skippedDeclaredRemoteRepoWarnings.has(repoPath)) {
         this.skippedDeclaredRemoteRepoWarnings.add(repoPath);
-        log.warn(
+        log.info(
           `Skipping declared remote sync for non-declarable workspace repo path ${repoPath}`
         );
       }
