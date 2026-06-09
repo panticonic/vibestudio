@@ -1383,6 +1383,71 @@ describe("GadWorkspaceDO trajectory persistence", () => {
         owner,
         events: [
           {
+            eventId: "event-inv-complete-replayed",
+            event: event("invocation.completed", {
+              turnId: "turn-1" as never,
+              causality: { invocationId: "inv-1" as never },
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                result: blobRef("result-ok", '"ok"'),
+                terminalOutcome: "success",
+              },
+            }),
+          },
+        ],
+      })
+    ).resolves.toMatchObject({ branchId: "main" });
+
+    const replayInspection = await call<any>("inspectInvocationState", {
+      invocationId: "inv-1",
+    });
+    expect(replayInspection.rows[0]).toMatchObject({
+      invocation_id: "inv-1",
+      status: "completed",
+      completed_event_id: "event-inv-complete",
+    });
+
+    await expect(
+      call("appendTrajectoryBatch", {
+        trajectoryId: "traj-1",
+        branchId: "main",
+        owner,
+        events: [
+          {
+            eventId: "event-inv-complete-duplicate-projection",
+            event: event("invocation.completed", {
+              turnId: "turn-1" as never,
+              causality: { invocationId: "inv-1" as never },
+              payload: {
+                protocol: AGENTIC_PROTOCOL_VERSION,
+                result: blobRef("result-ok-wrapped", '{"ok":true}'),
+                terminalOutcome: "success",
+                terminalReasonCode: "duplicate_replay",
+              },
+            }),
+          },
+        ],
+      })
+    ).resolves.toMatchObject({ branchId: "main" });
+
+    const duplicateProjectionInspection = await call<any>("inspectInvocationState", {
+      invocationId: "inv-1",
+    });
+    expect(duplicateProjectionInspection.rows[0]).toMatchObject({
+      invocation_id: "inv-1",
+      status: "completed",
+      terminal_outcome: "success",
+      terminal_reason_code: null,
+      completed_event_id: "event-inv-complete",
+    });
+
+    await expect(
+      call("appendTrajectoryBatch", {
+        trajectoryId: "traj-1",
+        branchId: "main",
+        owner,
+        events: [
+          {
             eventId: "event-inv-failed",
             event: event("invocation.failed", {
               turnId: "turn-1" as never,

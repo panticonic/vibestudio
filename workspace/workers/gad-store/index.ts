@@ -440,6 +440,21 @@ function sameAgenticEvent(left: AgenticEvent | TrajectoryEvent, right: AgenticEv
   return stableJson(semanticAgenticEvent(left)) === stableJson(semanticAgenticEvent(right));
 }
 
+function terminalInvocationSignature(event: AgenticEvent | TrajectoryEvent): string {
+  const causality = ((event as { causality?: JsonRecord }).causality ?? {}) as JsonRecord;
+  return stableJson({
+    actor: event.actor,
+    kind: event.kind,
+    turnId: "turnId" in event ? event.turnId : undefined,
+    causality: {
+      invocationId: causality["invocationId"],
+      modelToolCallId: causality["modelToolCallId"],
+      transportCallId: causality["transportCallId"],
+    },
+    payload: event.payload,
+  });
+}
+
 function semanticChannelEnvelope(value: ChannelEnvelope): Record<string, unknown> {
   return {
     channelId: value.channelId,
@@ -3105,7 +3120,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     ]);
     const existing = this.sql
       .exec(
-        `SELECT status FROM trajectory_invocations WHERE branch_id = ? AND invocation_id = ?`,
+        `SELECT * FROM trajectory_invocations WHERE branch_id = ? AND invocation_id = ?`,
         event.branchId,
         invocationId
       )
@@ -3115,6 +3130,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
       existing &&
       terminalKinds.has(`invocation.${String(existing["status"])}`)
     ) {
+      if (
+        this.matchesExistingTerminalInvocation(existing, event) ||
+        this.matchesExistingTerminalProjection(existing, event)
+      ) {
+        return;
+      }
       throw new Error(`duplicate terminal invocation event for ${invocationId}`);
     }
     const payload = event.payload as JsonRecord;
@@ -3161,6 +3182,36 @@ export class GadWorkspaceDO extends DurableObjectBase {
       terminalKinds.has(event.kind) ? event.eventId : null,
       nowIso()
     );
+  }
+
+  private matchesExistingTerminalInvocation(
+    existing: JsonRecord,
+    event: TrajectoryEvent
+  ): boolean {
+    const completedEventId = asString(existing["completed_event_id"]);
+    if (!completedEventId) return false;
+    const row = this.sql
+      .exec(`SELECT * FROM trajectory_events WHERE event_id = ? LIMIT 1`, completedEventId)
+      .toArray()[0] as JsonRecord | undefined;
+    if (!row) return false;
+    const prior = this.mapTrajectoryEvent(row);
+    return terminalInvocationSignature(prior) === terminalInvocationSignature(event);
+  }
+
+  private matchesExistingTerminalProjection(existing: JsonRecord, event: TrajectoryEvent): boolean {
+    const payload = event.payload as JsonRecord;
+    const nextStatus = event.kind.replace("invocation.", "");
+    const existingStatus = asString(existing["status"]);
+    if (existingStatus !== nextStatus) return false;
+    const existingOutcome = asString(existing["terminal_outcome"]);
+    const nextOutcome = asString(payload["terminalOutcome"]);
+    if (existingOutcome !== nextOutcome) return false;
+
+    // The first terminal event owns the projection. Later terminals with the
+    // same status/outcome can be replays from runner recovery or from a tool
+    // result crossing the channel/provenance boundary twice. Preserve the first
+    // row and keep the raw duplicate event in the trajectory log.
+    return true;
   }
 
   private projectApproval(event: TrajectoryEvent): void {
