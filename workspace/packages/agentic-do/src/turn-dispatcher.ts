@@ -79,7 +79,7 @@ export interface TurnDispatcherOptions {
    * promise here keeps a live context around until the turn settles.
    */
   keepAlive?: (promise: Promise<unknown>) => void;
-  log?: Pick<Console, "warn" | "error">;
+  log?: Pick<Console, "warn" | "error"> & Partial<Pick<Console, "info">>;
 }
 
 export class TurnDispatcher {
@@ -97,7 +97,7 @@ export class TurnDispatcher {
   private interrupted = false;
   private activeWork: ActiveWork | null = null;
   private readonly unsub: () => void;
-  private readonly log: Pick<Console, "warn" | "error">;
+  private readonly log: Pick<Console, "warn" | "error"> & Partial<Pick<Console, "info">>;
 
   constructor(private readonly opts: TurnDispatcherOptions) {
     this.log = opts.log ?? console;
@@ -330,6 +330,15 @@ export class TurnDispatcher {
     };
   }
 
+  private logInfo(message: string, detail?: unknown): void {
+    if (!this.log.info) return;
+    if (detail === undefined) {
+      this.log.info(message);
+      return;
+    }
+    this.log.info(message, detail);
+  }
+
   private notifySteeringObserved(steeringId: string): void {
     void Promise.resolve(this.opts.onSteeredMessageObserved?.(steeringId)).catch((err) => {
       this.log.warn("[TurnDispatcher] onSteeredMessageObserved failed:", err);
@@ -439,7 +448,7 @@ export class TurnDispatcher {
       while (!this.disposed && generation === this.drainGeneration && this.pending.length > 0) {
         const work = this.pending.shift()!;
         if (work.kind === "prompt" && this.opts.runner.getCurrentTurnId() !== null) {
-          this.log.warn(
+          this.logInfo(
             "[TurnDispatcher] queued prompt found open runner turn; converting to steer",
             this.diagnosticContext({
               workKind: work.kind,

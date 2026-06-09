@@ -1188,7 +1188,13 @@ describe("TurnDispatcher — open (parked/suspended) turn steering", () => {
 
   it("converts an already queued prompt into a steer when the prior turn parks open", async () => {
     const runner = makeRunner();
-    const d = new TurnDispatcher({ runner: runner.runner, notifyTyping: () => {} });
+    const warn = vi.fn();
+    const info = vi.fn();
+    const d = new TurnDispatcher({
+      runner: runner.runner,
+      notifyTyping: () => {},
+      log: { warn, error: vi.fn(), info },
+    });
 
     const first = makeMsg("first startup prompt");
     const second = makeMsg("second startup prompt");
@@ -1210,6 +1216,14 @@ describe("TurnDispatcher — open (parked/suspended) turn steering", () => {
 
     expect(runner.runTurnCalls).toHaveLength(1);
     expect(runner.steerCalls).toEqual([second]);
+    expect(warn).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      "[TurnDispatcher] queued prompt found open runner turn; converting to steer",
+      expect.objectContaining({
+        workKind: "prompt",
+        openTurnId: "turn-parked",
+      })
+    );
   });
 
   it("steers a concurrent message into an open turn instead of starting a fresh prompt", async () => {
