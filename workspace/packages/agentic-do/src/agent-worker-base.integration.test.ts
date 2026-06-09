@@ -9,7 +9,7 @@ import type { RespondPolicy, CustomMessageReducer } from "./trajectory-vessel-ba
 import type { TurnDispatcherRunner } from "./turn-dispatcher.js";
 import type { ChannelEvent } from "@workspace/harness";
 import type { PiRunner, PiRunnerOptions } from "@workspace/harness";
-import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
 
 class TestAgentWorker extends AgentWorkerBase {
   protected override getDefaultModel(): string {
@@ -1612,6 +1612,36 @@ describe("AgentWorkerBase method suspension ledger", () => {
     );
   });
 
+  it("publishes an active turn projection when a parked turn resumes", async () => {
+    const { instance, sql } = await createTestDO(TestAgentWorker, {
+      __objectKey: "agent-test",
+    });
+    const publishAgenticEvent = vi.fn(async () => undefined);
+    const worker = instance as unknown as {
+      subscriptions: { getParticipantId(channelId: string): string | null };
+      createChannelClient: ReturnType<typeof vi.fn>;
+      transitionTurn(turnId: string, from: string[], to: string): boolean;
+    };
+    worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
+    worker.createChannelClient = vi.fn().mockReturnValue({ publishAgenticEvent });
+    insertTurnRun(sql, { turnId: "turn-resume", status: "waiting_external" });
+
+    expect(worker.transitionTurn("turn-resume", ["waiting_external"], "continuing")).toBe(true);
+
+    expect(turnStatus(sql, "turn-resume")).toMatchObject({ status: "continuing" });
+    expect(publishAgenticEvent).toHaveBeenCalledWith(
+      "do:agent",
+      expect.objectContaining({
+        kind: "turn.opened",
+        turnId: "turn-resume",
+        payload: expect.objectContaining({ protocol: AGENTIC_PROTOCOL_VERSION }),
+      }),
+      expect.objectContaining({
+        idempotencyKey: "turn-active:turn-resume:resume",
+      })
+    );
+  });
+
   it("persists turn-open and model-start replay checkpoints", async () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
@@ -2012,7 +2042,10 @@ describe("AgentWorkerBase method suspension ledger", () => {
       clearSteeringQueue: vi.fn(async () => undefined),
     };
     const worker = instance as unknown as {
-      getOrCreateDispatcher(channelId: string, runner: unknown): {
+      getOrCreateDispatcher(
+        channelId: string,
+        runner: unknown
+      ): {
         submitContinue(opts?: { turnId?: string }): void;
         getDebugState(): { busy?: boolean; pendingCount?: number };
       };
@@ -5212,7 +5245,10 @@ describe("TrajectoryVesselBase respond policy", () => {
     await worker.processChannelEvent("chat-1", message(1, "panel:user", "panel", "hello"));
     expect(submit).not.toHaveBeenCalled();
 
-    await worker.processChannelEvent("chat-1", message(2, "do:agent", "agent", "What should I watch?"));
+    await worker.processChannelEvent(
+      "chat-1",
+      message(2, "do:agent", "agent", "What should I watch?")
+    );
     expect(submit).not.toHaveBeenCalled();
 
     await worker.processChannelEvent("chat-1", message(3, "panel:user", "panel", "Invoices"));
@@ -6281,6 +6317,7 @@ describe("AgentWorkerBase model credential resume", () => {
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
     worker.createChannelClient = vi.fn().mockReturnValue({
       getParticipants: vi.fn().mockResolvedValue([]),
+      publishAgenticEvent: vi.fn(async () => undefined),
     });
     worker.runners.set("chat-1", {
       runner: {
@@ -6374,6 +6411,7 @@ describe("AgentWorkerBase model credential resume", () => {
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
     worker.createChannelClient = vi.fn().mockReturnValue({
       getParticipants: vi.fn().mockResolvedValue([]),
+      publishAgenticEvent: vi.fn(async () => undefined),
     });
     worker.runners.set("chat-1", {
       runner: {
@@ -6586,12 +6624,7 @@ describe("AgentWorkerBase model credential resume", () => {
     const dispatcher = { submitContinue, getDebugState: () => ({ busy: false }) };
 
     const callDeferred = vi.fn(
-      async (
-        _target: string,
-        _method: string,
-        _args: unknown[],
-        opts?: { requestId?: string }
-      ) => {
+      async (_target: string, _method: string, _args: unknown[], opts?: { requestId?: string }) => {
         requestId = opts?.requestId ?? "req-fast";
         return {
           status: "deferred" as const,
@@ -6669,7 +6702,8 @@ describe("AgentWorkerBase model credential resume", () => {
     expect(moveTo).toHaveBeenCalledWith("entry-user");
     expect(submitContinue).toHaveBeenCalledWith({ turnId: "turn-fast-credential" });
     expect(
-      sql.exec(`SELECT status FROM agent_turn_runs WHERE turn_id = ?`, "turn-fast-credential")
+      sql
+        .exec(`SELECT status FROM agent_turn_runs WHERE turn_id = ?`, "turn-fast-credential")
         .toArray()[0]
     ).toMatchObject({ status: "continuing" });
     expect(

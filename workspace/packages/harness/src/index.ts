@@ -12,6 +12,9 @@ export type {
   RunnerTurnInput,
   RunnerTurnOptions,
   HibernationResumableTool,
+  ChannelContextSnapshot,
+  ChannelContextParticipant,
+  ChannelContextActivity,
 } from "./pi-runner.js";
 
 // TurnSuspensionSignal — typed "pause this turn" signal thrown from getApiKey.

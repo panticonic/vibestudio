@@ -969,6 +969,77 @@ describe("credentialService", () => {
     expect(JSON.stringify(persisted)).not.toContain("must-not-persist");
   });
 
+  it("persists OAuth PKCE refresh tokens when the flow opts into durable refresh", async () => {
+    const store = new MemoryCredentialStore();
+    const emit = vi.fn();
+    const service = createCredentialService({
+      credentialStore: store as never,
+      eventService: targetedOpenEventService(emit) as never,
+      approvalQueue: approvingQueue("version") as never,
+    });
+    const ctx = { caller: verifiedTestCaller("panel-test", "panel") };
+
+    const started = await startOAuthConnection(service, emit, ctx, {
+      flow: {
+        type: "oauth2-auth-code-pkce",
+        authorizeUrl: "https://auth.example.test/oauth/authorize",
+        tokenUrl: "https://auth.example.test/oauth/token",
+        clientId: "client-1",
+        scopes: ["read", "write"],
+        persistRefreshToken: true,
+        extraAuthorizeParams: {
+          access_type: "offline",
+          prompt: "consent",
+        },
+      },
+      credential: {
+        label: "Durable OAuth",
+        audience: [{ url: "https://api.example.test/v1", match: "path-prefix" }],
+        injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+        accountIdentity: { email: "dev@example.test" },
+      },
+    });
+
+    expect(started.authorizeUrl.searchParams.get("access_type")).toBe("offline");
+    expect(started.authorizeUrl.searchParams.get("prompt")).toBe("consent");
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body as URLSearchParams;
+        expect(body.get("grant_type")).toBe("authorization_code");
+        return new Response(
+          JSON.stringify({
+            access_token: "oauth-access-token",
+            refresh_token: "durable-refresh-token",
+            token_type: "Bearer",
+            expires_in: 3600,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }
+        );
+      })
+    );
+
+    await deliverOAuthCallback(
+      started.redirectUri,
+      new URLSearchParams({
+        code: "code-1",
+        state: started.state,
+      })
+    );
+    const completed = await started.pending;
+
+    expect(completed.metadata?.["oauthRefreshTokenStored"]).toBe("true");
+    expect(JSON.stringify(completed)).not.toContain("durable-refresh-token");
+
+    const persisted = await store.loadUrlBound(completed.id);
+    expect(persisted?.accessToken).toBe("oauth-access-token");
+    expect(persisted?.refreshToken).toBe("durable-refresh-token");
+  });
+
   it("credentials.connect owns browser handoff, callback validation, token exchange, and initial grant", async () => {
     const store = new MemoryCredentialStore();
     const emit = vi.fn();

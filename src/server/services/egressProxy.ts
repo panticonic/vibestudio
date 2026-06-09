@@ -56,6 +56,7 @@ const HOP_BY_HOP_REQUEST_HEADERS = new Set([
  *  upstream so they never leak to the destination. */
 const EGRESS_CALLER_HEADER = "x-natstack-egress-caller";
 const EGRESS_SECRET_HEADER = "x-natstack-egress-secret";
+const NATSTACK_WS_HEADERS_PARAM = "__natstack_ws_headers";
 const INTERNAL_EGRESS_HEADERS = new Set([
   EGRESS_CALLER_HEADER,
   EGRESS_SECRET_HEADER,
@@ -193,6 +194,14 @@ export class EgressProxy {
       }
       void this.handleConnect(req, socket as Duplex, head, caller);
     });
+    server.on("upgrade", (req, socket, head) => {
+      const caller = this.resolveAttributedCaller(req);
+      if (!caller) {
+        this.rejectUpgrade(socket as Duplex, 403, "egress: unattributed websocket request");
+        return;
+      }
+      void this.handleWebSocketUpgrade(req, socket as Duplex, head, caller);
+    });
 
     return new Promise<number>((resolve, reject) => {
       server.once("error", reject);
@@ -234,6 +243,9 @@ export class EgressProxy {
     server.on("connect", (req, socket, head) => {
       void this.handleConnect(req, socket as Duplex, head, null);
     });
+    server.on("upgrade", (req, socket, head) => {
+      void this.handleWebSocketUpgrade(req, socket as Duplex, head, null);
+    });
 
     this.server = server;
 
@@ -261,6 +273,9 @@ export class EgressProxy {
     });
     server.on("connect", (req, socket, head) => {
       void this.handleConnect(req, socket as Duplex, head, caller);
+    });
+    server.on("upgrade", (req, socket, head) => {
+      void this.handleWebSocketUpgrade(req, socket as Duplex, head, caller);
     });
 
     return new Promise<number>((resolve, reject) => {
@@ -1339,6 +1354,156 @@ export class EgressProxy {
     });
   }
 
+  private async handleWebSocketUpgrade(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    caller: VerifiedCaller | null
+  ): Promise<void> {
+    const resolvedTargetUrl = this.resolveTargetUrl(req);
+    let metadata: { targetUrl: URL; headerPairs: Array<[string, string]> } | null = null;
+    try {
+      metadata = resolvedTargetUrl ? extractNatStackWebSocketMetadata(resolvedTargetUrl) : null;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Invalid NatStack WebSocket metadata";
+      this.rejectUpgrade(socket, 400, message);
+      return;
+    }
+    const targetUrl = metadata?.targetUrl ?? null;
+    if (!caller || !targetUrl) {
+      this.rejectUpgrade(socket, 403, "WebSocket egress requires an attributed workerd service");
+      return;
+    }
+    const inputHeaders = mergeWebSocketMetadataHeaders(req.headers, metadata?.headerPairs ?? []);
+
+    const policyUrl = websocketPolicyUrlFor(targetUrl);
+    if (!policyUrl) {
+      this.rejectUpgrade(socket, 400, "WebSocket egress target URL is invalid");
+      return;
+    }
+
+    try {
+      await this.executeAuthorizedRequest({
+        caller,
+        method: "GET",
+        targetUrl: policyUrl,
+        inputHeaders,
+        credentialUse: "fetch",
+        replaySafe: false,
+        execute: async (preparedPolicyUrl, headers) => {
+          const upstreamUrl = websocketUpstreamUrlFor(preparedPolicyUrl, targetUrl.protocol);
+          const forwardHeaders = this.prepareWebSocketForwardHeaders(inputHeaders, headers);
+          const result = await this.forwardWebSocketUpgrade(
+            req,
+            socket,
+            head,
+            upstreamUrl,
+            forwardHeaders
+          );
+          return { ...result, payload: undefined };
+        },
+      });
+    } catch (error) {
+      if (!socket.destroyed) {
+        const status = error instanceof ForwardRejection ? error.statusCode : 502;
+        const message = error instanceof Error ? error.message : "WebSocket egress failed";
+        this.rejectUpgrade(socket, status, message);
+      }
+    }
+  }
+
+  private prepareWebSocketForwardHeaders(
+    inputHeaders: IncomingHttpHeaders,
+    preparedHeaders: OutgoingHttpHeaders
+  ): OutgoingHttpHeaders {
+    const headers: OutgoingHttpHeaders = { ...preparedHeaders };
+    headers.connection = "Upgrade";
+    headers.upgrade = "websocket";
+
+    for (const headerName of [
+      "sec-websocket-key",
+      "sec-websocket-version",
+      "sec-websocket-protocol",
+      "sec-websocket-extensions",
+    ]) {
+      const value = inputHeaders[headerName];
+      if (value !== undefined) {
+        headers[headerName] = value;
+      }
+    }
+
+    return headers;
+  }
+
+  private forwardWebSocketUpgrade(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    targetUrl: URL,
+    headers: OutgoingHttpHeaders
+  ): Promise<ForwardResult> {
+    return new Promise<ForwardResult>((resolve, reject) => {
+      const requestUrl = websocketHttpUrlFor(targetUrl);
+      const requestFn = requestUrl.protocol === "https:" ? httpsRequest : httpRequest;
+      const defaultPort = requestUrl.protocol === "https:" ? 443 : 80;
+      let settled = false;
+
+      const settle = (result: ForwardResult) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+
+      const upstreamRequest = requestFn({
+        protocol: requestUrl.protocol,
+        hostname: requestUrl.hostname,
+        port: requestUrl.port ? Number(requestUrl.port) : defaultPort,
+        method: req.method ?? "GET",
+        path: `${requestUrl.pathname}${requestUrl.search}`,
+        headers,
+      });
+
+      upstreamRequest.on("upgrade", (upstreamResponse, upstreamSocket, upstreamHead) => {
+        const statusCode = upstreamResponse.statusCode ?? 101;
+        socket.write(serializeRawHttpResponseHead(statusCode, upstreamResponse.headers));
+        if (upstreamHead.length > 0) {
+          socket.write(upstreamHead);
+        }
+        if (head.length > 0) {
+          upstreamSocket.write(head);
+        }
+        upstreamSocket.pipe(socket);
+        socket.pipe(upstreamSocket);
+        settle({ statusCode, bytesIn: 0, bytesOut: 0 });
+      });
+
+      upstreamRequest.on("response", (upstreamResponse) => {
+        const statusCode = upstreamResponse.statusCode ?? 502;
+        socket.write(serializeRawHttpResponseHead(statusCode, upstreamResponse.headers));
+        upstreamResponse.on("data", (chunk: Buffer | string) => socket.write(chunk));
+        upstreamResponse.on("end", () => {
+          socket.end();
+          settle({ statusCode, bytesIn: 0, bytesOut: 0 });
+        });
+        upstreamResponse.on("error", reject);
+      });
+
+      upstreamRequest.on("error", reject);
+      socket.on("error", () => {
+        upstreamRequest.destroy();
+      });
+      upstreamRequest.end();
+    });
+  }
+
+  private rejectUpgrade(socket: Duplex, statusCode: number, message: string): void {
+    const body = message;
+    socket.end(
+      `HTTP/1.1 ${statusCode} ${httpStatusText(statusCode)}\r\nConnection: close\r\nContent-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`
+    );
+  }
+
   private async forwardHttpRequest(
     req: IncomingMessage,
     res: ServerResponse,
@@ -1527,6 +1692,119 @@ function auditUrlFor(originalTargetUrl: URL, binding: CredentialBinding | null):
     redacted.searchParams.set(binding.injection.name, "[redacted]");
   }
   return redacted.toString();
+}
+
+function websocketPolicyUrlFor(targetUrl: URL): URL | null {
+  const policyUrl = new URL(targetUrl.toString());
+  if (policyUrl.protocol === "wss:") {
+    policyUrl.protocol = "https:";
+  } else if (policyUrl.protocol === "ws:") {
+    policyUrl.protocol = "http:";
+  } else if (policyUrl.protocol !== "https:" && policyUrl.protocol !== "http:") {
+    return null;
+  }
+  return policyUrl;
+}
+
+function extractNatStackWebSocketMetadata(targetUrl: URL): {
+  targetUrl: URL;
+  headerPairs: Array<[string, string]>;
+} {
+  const cleanUrl = new URL(targetUrl.toString());
+  const encodedHeaders = cleanUrl.searchParams.get(NATSTACK_WS_HEADERS_PARAM);
+  cleanUrl.searchParams.delete(NATSTACK_WS_HEADERS_PARAM);
+  return {
+    targetUrl: cleanUrl,
+    headerPairs: decodeNatStackWebSocketHeaderPairs(encodedHeaders),
+  };
+}
+
+function decodeNatStackWebSocketHeaderPairs(value: string | null): Array<[string, string]> {
+  if (!value) return [];
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(normalized.length + ((4 - (normalized.length % 4)) % 4), "=");
+    const parsed = JSON.parse(Buffer.from(padded, "base64").toString("utf8")) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const pairs: Array<[string, string]> = [];
+    for (const item of parsed) {
+      if (!Array.isArray(item) || item.length !== 2) continue;
+      const [name, headerValue] = item;
+      if (typeof name !== "string" || typeof headerValue !== "string") continue;
+      const lower = name.toLowerCase();
+      if (isBlockedNatStackWebSocketMetadataHeader(lower)) continue;
+      pairs.push([lower, headerValue]);
+    }
+    return pairs;
+  } catch {
+    throw new Error("Invalid NatStack WebSocket metadata");
+  }
+}
+
+function mergeWebSocketMetadataHeaders(
+  inputHeaders: IncomingHttpHeaders,
+  metadataHeaderPairs: Array<[string, string]>
+): IncomingHttpHeaders {
+  if (metadataHeaderPairs.length === 0) return inputHeaders;
+  const headers: IncomingHttpHeaders = { ...inputHeaders };
+  for (const [name, value] of metadataHeaderPairs) {
+    if (isBlockedNatStackWebSocketMetadataHeader(name)) continue;
+    headers[name] = value;
+  }
+  return headers;
+}
+
+function isBlockedNatStackWebSocketMetadataHeader(name: string): boolean {
+  return (
+    HOP_BY_HOP_REQUEST_HEADERS.has(name) ||
+    name === "authorization" ||
+    name === "host" ||
+    name === "sec-websocket-accept" ||
+    name === "sec-websocket-extensions" ||
+    name === "sec-websocket-key" ||
+    name === "sec-websocket-protocol" ||
+    name === "sec-websocket-version" ||
+    INTERNAL_EGRESS_HEADERS.has(name)
+  );
+}
+
+function websocketUpstreamUrlFor(preparedPolicyUrl: URL, originalProtocol: string): URL {
+  const upstreamUrl = new URL(preparedPolicyUrl.toString());
+  if (originalProtocol === "wss:" || originalProtocol === "ws:") {
+    upstreamUrl.protocol = originalProtocol;
+  }
+  return upstreamUrl;
+}
+
+function websocketHttpUrlFor(upstreamUrl: URL): URL {
+  const requestUrl = new URL(upstreamUrl.toString());
+  if (requestUrl.protocol === "wss:") {
+    requestUrl.protocol = "https:";
+  } else if (requestUrl.protocol === "ws:") {
+    requestUrl.protocol = "http:";
+  }
+  return requestUrl;
+}
+
+function serializeRawHttpResponseHead(statusCode: number, headers: IncomingHttpHeaders): string {
+  const lines = [`HTTP/1.1 ${statusCode} ${httpStatusText(statusCode)}`];
+  for (const [name, value] of Object.entries(headers)) {
+    if (value === undefined) continue;
+    if (Array.isArray(value)) {
+      for (const item of value) lines.push(`${name}: ${item}`);
+    } else {
+      lines.push(`${name}: ${value}`);
+    }
+  }
+  return `${lines.join("\r\n")}\r\n\r\n`;
+}
+
+function httpStatusText(statusCode: number): string {
+  if (statusCode === 101) return "Switching Protocols";
+  if (statusCode === 400) return "Bad Request";
+  if (statusCode === 403) return "Forbidden";
+  if (statusCode === 502) return "Bad Gateway";
+  return "Error";
 }
 
 function describeGitHttpOperation(

@@ -12,6 +12,7 @@ import {
   Session,
   uuidv7,
   type AgentHarnessEvent,
+  type AgentHarnessStreamOptionsPatch,
   type AgentMessage,
   type AgentTool,
   type AgentToolResult,
@@ -26,6 +27,10 @@ import {
   type ThinkingLevel,
 } from "@earendil-works/pi-agent-core";
 import { getModel as piGetModel, type ImageContent, type Model } from "@earendil-works/pi-ai";
+import {
+  getOpenAICodexWebSocketDebugStats,
+  type OpenAICodexWebSocketDebugStats,
+} from "@earendil-works/pi-ai/openai-codex-responses";
 import { Buffer } from "node:buffer";
 import { basename } from "node:path";
 import { isAbsolute, relative as relativePath } from "node:path";
@@ -50,6 +55,7 @@ import {
   createGrepTool,
   createFindTool,
   createLsTool,
+  createCloseTurnWithoutResponseTool,
   resolveReadPath,
   resolveToCwd,
 } from "./tools/index.js";
@@ -131,7 +137,12 @@ const BUILTIN_TOOL_NAMES = [
   "web_search",
   "web_fetch",
   "web_read",
+  "close_turn_without_response",
 ] as const;
+
+const DEFAULT_CODEX_TRANSPORT = "auto" as const;
+const DEFAULT_CODEX_MAX_RETRIES = 1;
+const DEFAULT_CODEX_TRANSPORT_REASON = "workerd_fetch_upgrade_websocket_supported";
 
 export interface PiRunnerGadProvenance {
   trajectoryId?: string | null;
@@ -214,6 +225,10 @@ export interface PiRunnerOptions {
     signal: AbortSignal | undefined,
     turnId?: string
   ) => Promise<AgentToolResult<any> | string>;
+  channelContextCallback?: () =>
+    | ChannelContextSnapshot
+    | null
+    | Promise<ChannelContextSnapshot | null>;
   model: string;
   getApiKey: () => Promise<string>;
   thinkingLevel?: ThinkingLevel;
@@ -257,6 +272,32 @@ export interface PiRunnerOptions {
    * sees credential values.
    */
   fetcher?: typeof fetch;
+}
+
+export interface ChannelContextParticipant {
+  participantId: string;
+  handle?: string;
+  type?: string;
+  title?: string;
+  self?: boolean;
+  methods?: string[];
+}
+
+export interface ChannelContextActivity {
+  id?: number;
+  kind: string;
+  senderId?: string;
+  senderHandle?: string;
+  summary?: string;
+}
+
+export interface ChannelContextSnapshot {
+  channelId?: string;
+  selfParticipantId?: string;
+  participants?: ChannelContextParticipant[];
+  mentionedParticipantIds?: string[];
+  mentionedHandles?: string[];
+  recentActivity?: ChannelContextActivity[];
 }
 
 export interface HibernationResumableTool {
@@ -416,6 +457,68 @@ function pushBounded<T>(items: T[], item: T, limit = DEBUG_RING_LIMIT): void {
 function previewText(value: string, limit = DEBUG_PREVIEW_LIMIT): string {
   const compact = value.replace(/\s+/gu, " ").trim();
   return compact.length > limit ? `${compact.slice(0, limit - 3)}...` : compact;
+}
+
+function channelContextMessage(snapshot: ChannelContextSnapshot): AgentMessage | null {
+  const text = formatChannelContext(snapshot);
+  if (!text) return null;
+  return {
+    role: "user",
+    content: [
+      {
+        type: "text",
+        text,
+      },
+    ],
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+function formatChannelContext(snapshot: ChannelContextSnapshot): string {
+  const participants = snapshot.participants ?? [];
+  const agents = participants.filter((participant) => participant.type === "agent");
+  const activity = snapshot.recentActivity ?? [];
+  const mentioned = snapshot.mentionedHandles ?? [];
+  const shouldInclude =
+    agents.length > 1 || activity.length > 0 || (snapshot.mentionedParticipantIds?.length ?? 0) > 0;
+  if (!shouldInclude) return "";
+
+  const lines = [
+    "[NatStack runtime channel context: situational awareness only, not a user request.]",
+  ];
+  if (snapshot.channelId) lines.push(`Channel: ${snapshot.channelId}`);
+  if (participants.length > 0) {
+    lines.push("Roster:");
+    for (const participant of participants.slice(0, 12)) {
+      const label = participant.handle ?? participant.title ?? participant.participantId;
+      const suffixes = [
+        participant.self ? "self" : "",
+        participant.type ?? "",
+        participant.methods?.length ? `tools: ${participant.methods.slice(0, 8).join(", ")}` : "",
+      ].filter(Boolean);
+      lines.push(
+        `- ${label} (${participant.participantId})${suffixes.length ? `; ${suffixes.join("; ")}` : ""}`
+      );
+    }
+    if (participants.length > 12)
+      lines.push(`- ... ${participants.length - 12} more participant(s)`);
+  }
+  if (mentioned.length > 0) {
+    lines.push(`Explicitly mentioned in latest user message: ${mentioned.join(", ")}`);
+  }
+  if (activity.length > 0) {
+    lines.push("Recent channel activity:");
+    for (const item of activity.slice(-8)) {
+      const sender = item.senderHandle ?? item.senderId ?? "unknown sender";
+      const summary = item.summary ? ` - ${previewText(item.summary, 220)}` : "";
+      const id = typeof item.id === "number" ? `#${item.id} ` : "";
+      lines.push(`- ${id}${item.kind} from ${sender}${summary}`);
+    }
+  }
+  lines.push(
+    "Use close_turn_without_response when this context shows another agent should handle the turn."
+  );
+  return lines.join("\n");
 }
 
 function summarizeDebugValue(value: unknown, depth = 0): unknown {
@@ -619,6 +722,7 @@ export class PiRunner {
   private readonly phaseCheckpoints: RunnerDebugCheckpoint[] = [];
   private readonly recentHarnessEvents: RunnerDebugEvent[] = [];
   private readonly recentTrajectoryEvents: RunnerDebugTrajectoryEvent[] = [];
+  private readonly lastCodexTransportStatsSignatures = new Map<string, string>();
   private readonly terminalInvocationIds = new Set<string>();
   private readonly lastErrors: RunnerDebugError[] = [];
   private readonly compactionDiagnostics: CompactionDiagnosticState = {
@@ -740,6 +844,126 @@ export class PiRunner {
     return Object.fromEntries(
       Object.entries(record).map(([key, value]) => [key, summarizeDebugValue(value)])
     );
+  }
+
+  private isOpenAICodexModel(model: unknown): boolean {
+    if (!model || typeof model !== "object") return false;
+    const record = model as Record<string, unknown>;
+    return record["provider"] === "openai-codex" || record["api"] === "openai-codex-responses";
+  }
+
+  private codexWebSocketStats(
+    sessionId: string | undefined
+  ): OpenAICodexWebSocketDebugStats | null {
+    if (!sessionId) return null;
+    try {
+      return getOpenAICodexWebSocketDebugStats(sessionId) ?? null;
+    } catch (err) {
+      this.rememberError("provider.codex.websocket_stats", err);
+      return null;
+    }
+  }
+
+  private recordCodexTransportStats(
+    sessionId: string | undefined,
+    stats: OpenAICodexWebSocketDebugStats | null,
+    phase: string
+  ): void {
+    if (!sessionId || !stats) return;
+    const signature = stableJson({
+      websocketFailures: stats.websocketFailures,
+      sseFallbacks: stats.sseFallbacks,
+      websocketFallbackActive: stats.websocketFallbackActive ?? false,
+      lastWebSocketError: stats.lastWebSocketError ?? null,
+    });
+    const key = `${sessionId}:${phase}`;
+    if (this.lastCodexTransportStatsSignatures.get(key) === signature) return;
+    this.lastCodexTransportStatsSignatures.set(key, signature);
+    this.rememberCheckpoint("provider.codex.websocket_stats", {
+      phase,
+      sessionId,
+      stats,
+    });
+    if (stats.websocketFailures > 0 || stats.sseFallbacks > 0 || stats.websocketFallbackActive) {
+      console.warn("[PiRunner] Codex transport fallback observed", {
+        phase,
+        sessionId,
+        stats,
+      });
+    }
+  }
+
+  private applyCodexProviderPolicy(
+    event: Extract<AgentHarnessEvent, { type: "before_provider_request" }>,
+    result: { streamOptions?: AgentHarnessStreamOptionsPatch } | undefined
+  ): { streamOptions?: AgentHarnessStreamOptionsPatch } | undefined {
+    if (!this.isOpenAICodexModel(event.model)) return result;
+
+    const baseOptions = event.streamOptions ?? {};
+    const hookPatch = result?.streamOptions ?? {};
+    const patch: AgentHarnessStreamOptionsPatch = { ...hookPatch };
+    const appliedDefaults: Record<string, unknown> = {};
+
+    const stats = this.codexWebSocketStats(event.sessionId);
+    if (baseOptions.transport === undefined && hookPatch.transport === undefined) {
+      if (stats?.websocketFallbackActive) {
+        patch.transport = "sse";
+        appliedDefaults["transport"] = "sse";
+        appliedDefaults["transportReason"] = "codex_websocket_fallback_active";
+      } else {
+        patch.transport = DEFAULT_CODEX_TRANSPORT;
+        appliedDefaults["transport"] = DEFAULT_CODEX_TRANSPORT;
+        appliedDefaults["transportReason"] = DEFAULT_CODEX_TRANSPORT_REASON;
+      }
+    }
+    if (baseOptions.maxRetries === undefined && hookPatch.maxRetries === undefined) {
+      patch.maxRetries = DEFAULT_CODEX_MAX_RETRIES;
+      appliedDefaults["maxRetries"] = DEFAULT_CODEX_MAX_RETRIES;
+    }
+
+    const effectiveTransport = patch.transport ?? baseOptions.transport ?? DEFAULT_CODEX_TRANSPORT;
+    const effectiveMaxRetries =
+      patch.maxRetries ?? baseOptions.maxRetries ?? DEFAULT_CODEX_MAX_RETRIES;
+    this.rememberCheckpoint("provider.request.codex_policy", {
+      providerRequestCount: this.providerRequestCount,
+      sessionId: event.sessionId,
+      model: {
+        id: (event.model as { id?: unknown }).id,
+        provider: (event.model as { provider?: unknown }).provider,
+        api: (event.model as { api?: unknown }).api,
+      },
+      inputStreamOptions: baseOptions,
+      hookPatchedStreamOptions: hookPatch,
+      appliedDefaults,
+      effectiveTransport,
+      effectiveMaxRetries,
+      transportReason:
+        effectiveTransport === DEFAULT_CODEX_TRANSPORT
+          ? DEFAULT_CODEX_TRANSPORT_REASON
+          : "explicit_or_hook_configured",
+      websocketStats: stats,
+    });
+    this.recordCodexTransportStats(event.sessionId, stats, "before_provider_request");
+
+    return Object.keys(patch).length > 0 ? { streamOptions: patch } : result;
+  }
+
+  private recordAssistantProviderDiagnostics(message: AgentMessage): void {
+    const diagnostics = (message as { diagnostics?: unknown }).diagnostics;
+    if (!Array.isArray(diagnostics)) return;
+    for (const diagnostic of diagnostics) {
+      if (!diagnostic || typeof diagnostic !== "object") continue;
+      const record = diagnostic as Record<string, unknown>;
+      const type = typeof record["type"] === "string" ? record["type"] : "unknown";
+      if (type !== "provider_transport_failure" && type !== "provider_retry") continue;
+      this.rememberCheckpoint(`provider.diagnostic.${type}`, {
+        diagnostic: record,
+      });
+      console.warn("[PiRunner] Provider diagnostic emitted", {
+        type,
+        diagnostic: record,
+      });
+    }
   }
 
   private beginActivation(turnId: string | null): AbortSignal {
@@ -1095,6 +1319,7 @@ export class PiRunner {
         rpc: this.options.rpc,
       }),
       createLsTool(cwd, this.options.fs),
+      createCloseTurnWithoutResponseTool(),
     ] as AgentTool<any>[];
 
     this.resolvedModel = resolveModel(this.options.model);
@@ -1233,11 +1458,12 @@ export class PiRunner {
     });
 
     this.harness.on("context", async (event) => {
+      const messagesWithChannelContext = await this.addChannelContextMessages(event.messages);
       this.rememberCheckpoint("context.transform.start", {
-        messageCount: event.messages.length,
+        messageCount: messagesWithChannelContext.length,
       });
       try {
-        const messages = await this.hooks.emitTransformContext(event.messages, {
+        const messages = await this.hooks.emitTransformContext(messagesWithChannelContext, {
           signal: this.activationSignal(),
         });
         this.rememberCheckpoint("context.transform.ok", { messageCount: messages.length });
@@ -1258,9 +1484,10 @@ export class PiRunner {
         activeToolNames: this.computeActiveTools().map((tool) => tool.name),
       });
       try {
-        const result = await this.hooks.emitBeforeProviderRequest(event, {
+        const hookResult = await this.hooks.emitBeforeProviderRequest(event, {
           signal: this.activationSignal(),
         });
+        const result = this.applyCodexProviderPolicy(event, hookResult);
         if (this.currentTurnId) {
           await this.options.onTurnPhase?.({
             turnId: this.currentTurnId,
@@ -1269,7 +1496,9 @@ export class PiRunner {
         }
         this.rememberCheckpoint("provider.request.hooks_ok", {
           providerRequestCount: this.providerRequestCount,
+          hookPatchedStreamOptions: Boolean(hookResult?.streamOptions),
           patchedStreamOptions: Boolean(result?.streamOptions),
+          streamOptionsPatch: result?.streamOptions ?? null,
         });
         return result;
       } catch (err) {
@@ -1601,6 +1830,21 @@ export class PiRunner {
     return tools.map((tool) => this.wrapTool(tool));
   }
 
+  private async addChannelContextMessages(messages: AgentMessage[]): Promise<AgentMessage[]> {
+    try {
+      const snapshot = await this.options.channelContextCallback?.();
+      const contextMessage = snapshot ? channelContextMessage(snapshot) : null;
+      if (!contextMessage) return messages;
+      return [contextMessage, ...messages];
+    } catch (err) {
+      this.rememberError("channel_context.inject", err);
+      this.rememberCheckpoint("channel_context.inject.error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return messages;
+    }
+  }
+
   private wrapTool(tool: AgentTool<any>): AgentTool<any> {
     return {
       ...tool,
@@ -1795,7 +2039,7 @@ export class PiRunner {
       const runSignalAborted = harnessSignal?.aborted ?? false;
       if (event.type === "agent_start") {
         if (runSignalAborted) {
-          this.rememberCheckpoint("agent.start.aborted_ignored", {
+          this.recordAbortedHarnessEventIgnored(event.type, "agent.start.aborted_ignored", {
             turnId: this.currentTurnId ?? null,
           });
           return;
@@ -1815,18 +2059,20 @@ export class PiRunner {
         correlatedEvent = this.correlateHarnessEvent(event);
       }
       if (runSignalAborted && event.type === "message_start") {
-        this.rememberCheckpoint("message_start.aborted_ignored", {
+        this.recordAbortedHarnessEventIgnored(event.type, "message_start.aborted_ignored", {
           role: this.messageRole((event as { message: AgentMessage }).message),
           turnId: this.currentTurnId ?? null,
         });
+        return;
       } else if (event.type === "message_start") {
         await this.handleMessageStart((event as { message: AgentMessage }).message);
       }
       if (runSignalAborted && event.type === "message_update") {
-        this.rememberCheckpoint("message_update.aborted_ignored", {
+        this.recordAbortedHarnessEventIgnored(event.type, "message_update.aborted_ignored", {
           role: this.messageRole((event as { message: AgentMessage }).message),
           turnId: this.currentTurnId ?? null,
         });
+        return;
       } else if (event.type === "message_update") {
         await this.handleMessageUpdate((event as { message: AgentMessage }).message);
       }
@@ -1837,8 +2083,21 @@ export class PiRunner {
           capturedMessageEntryId,
           runSignalAborted ? harnessSignal : hookSignal
         );
+        if (runSignalAborted) {
+          this.recordAbortedHarnessEventIgnored(event.type, "message_end.aborted_event_ignored", {
+            role: this.messageRole(event.message),
+            turnId: this.currentTurnId ?? null,
+          });
+          return;
+        }
       }
       if (event.type === "agent_end") {
+        if (runSignalAborted) {
+          this.recordAbortedHarnessEventIgnored(event.type, "agent.end.aborted_ignored", {
+            turnId: this.currentTurnId ?? null,
+          });
+          return;
+        }
         hookSignal = this.activationSignal();
         if (correlatedEvent.natstack?.lifecycleMatched === false) {
           this.rememberCheckpoint("agent.end.unmatched_ignored", {
@@ -1863,8 +2122,23 @@ export class PiRunner {
           this.activeOperationSawAgentEnd = true;
         }
       }
+      if (runSignalAborted) {
+        this.recordAbortedHarnessEventIgnored(event.type, "harness.event.aborted_ignored", {
+          turnId: this.currentTurnId ?? null,
+        });
+        return;
+      }
       await this.hooks.emitEvent(correlatedEvent, { signal: hookSignal });
     } catch (err) {
+      if (isHookListenerAbortError(err) && (hookSignal?.aborted || harnessSignal?.aborted)) {
+        this.recordAbortedHarnessEventIgnored(event.type, "harness.event.aborted_hook_ignored", {
+          eventType: event.type,
+          turnId: this.currentTurnId ?? null,
+          hookSignalAborted: hookSignal?.aborted ?? false,
+          harnessSignalAborted: harnessSignal?.aborted ?? false,
+        });
+        return;
+      }
       this.failActiveRun(`harness.event.${event.type}`, err);
       throw err;
     } finally {
@@ -1874,6 +2148,24 @@ export class PiRunner {
           this.activeOperationSawAgentStart = false;
         }
       }
+    }
+  }
+
+  private recordAbortedHarnessEventIgnored(
+    eventType: string,
+    checkpoint: string,
+    details: Record<string, unknown> = {}
+  ): void {
+    const payload = {
+      eventType,
+      ...details,
+    };
+    this.rememberCheckpoint(checkpoint, payload);
+    if (checkpoint === "harness.event.aborted_hook_ignored") {
+      console.warn("[PiRunner] Ignoring stale harness event from aborted run", {
+        checkpoint,
+        ...payload,
+      });
     }
   }
 
@@ -2187,6 +2479,7 @@ export class PiRunner {
       role === "assistant" && this.activeAssistantMessage
         ? this.activeAssistantMessage.messageId
         : messageEntryId;
+    if (role === "assistant") this.recordAssistantProviderDiagnostics(message);
     await this.queueSessionEntryProvenance(messageEntryId);
     this.queueMessageProvenance(message, messageEntryId, messageId);
     if (role === "assistant") this.activeAssistantMessage = null;
@@ -2290,7 +2583,10 @@ export class PiRunner {
     this.provenanceQueue.push({
       event: completedEvent,
       eventId: this.semanticEntryEventId(messageEntryId, "message:completed", completedEvent),
-      publishToChannel: this.shouldPublishMessageToChannel(role),
+      // A suspended turn is paused, not complete from the user's point of view.
+      // Keep the trajectory event so resume can inspect the session, but do not
+      // publish an empty assistant completion into the chat transcript.
+      publishToChannel: !this.pendingSuspension && this.shouldPublishMessageToChannel(role),
     });
     const failureReason = agentMessageFailureReason(message);
     if (failureReason) {
@@ -2501,6 +2797,17 @@ export class PiRunner {
       try {
         await this.appendTrajectoryEvents([item]);
       } catch (err) {
+        const terminalInvocationId = this.terminalInvocationIdFromEvent(item.event);
+        if (terminalInvocationId && isDuplicateTerminalInvocationError(err)) {
+          this.terminalInvocationIds.add(terminalInvocationId);
+          this.rememberCheckpoint("trajectory.append.duplicate_terminal_accepted", {
+            invocationId: terminalInvocationId,
+            eventId: item.eventId ?? null,
+            kind: item.event.kind,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
         if (isProvenanceSizeLimitError(err)) {
           retry.push(item);
           sizeLimitError ??= { item, error: err };
@@ -2556,8 +2863,10 @@ export class PiRunner {
 
   private async appendTrajectoryEvents(items: TrajectoryQueueItem[]): Promise<void> {
     if (items.length === 0 || !this.options.gad) return;
+    const appendItems = this.filterDuplicateTerminalInvocationItems(items);
+    if (appendItems.length === 0) return;
     const events = await Promise.all(
-      items.map(async (item) => {
+      appendItems.map(async (item) => {
         const event = await this.normalizeProvenanceEvent(
           this.withCurrentTurnId(item.event),
           item.eventId
@@ -2594,6 +2903,36 @@ export class PiRunner {
       this.rememberError("trajectory.append", err);
       throw err;
     }
+  }
+
+  private filterDuplicateTerminalInvocationItems(
+    items: TrajectoryQueueItem[]
+  ): TrajectoryQueueItem[] {
+    const seen = new Set(this.terminalInvocationIds);
+    const filtered: TrajectoryQueueItem[] = [];
+    for (const item of items) {
+      const invocationId = this.terminalInvocationIdFromEvent(item.event);
+      if (invocationId) {
+        if (seen.has(invocationId)) {
+          this.rememberCheckpoint("trajectory.append.duplicate_terminal_skipped", {
+            invocationId,
+            eventId: item.eventId ?? null,
+            kind: item.event.kind,
+          });
+          continue;
+        }
+        seen.add(invocationId);
+      }
+      filtered.push(item);
+    }
+    return filtered;
+  }
+
+  private terminalInvocationIdFromEvent(event: AgenticEvent): string | null {
+    if (!this.isTerminalInvocationEvent(event.kind)) return null;
+    const invocationId = (event as { causality?: { invocationId?: unknown } }).causality
+      ?.invocationId;
+    return typeof invocationId === "string" && invocationId.length > 0 ? invocationId : null;
   }
 
   private schedulePublishedChannelEnvelopeBroadcasts(
@@ -3801,6 +4140,12 @@ function resolveModel(modelName: string): Model<any> {
   return model;
 }
 
+function isHookListenerAbortError(err: unknown): boolean {
+  return (
+    err instanceof Error && err.name === "AbortError" && err.message === "Hook listener aborted"
+  );
+}
+
 function createExecutionEnv(cwd: string, fs: RuntimeFs): ExecutionEnv {
   return {
     cwd,
@@ -3980,11 +4325,17 @@ function isPermanentProvenanceError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return (
     /GAD event id collision with different content/u.test(message) ||
+    isDuplicateTerminalInvocationError(err) ||
     /Cannot (?:resolve|abandon) unknown dispatch/u.test(message) ||
     /Cannot (?:resolve|abandon) dispatch .* from status/u.test(message) ||
     /Cannot resolve unknown approval/u.test(message) ||
     /Cannot resolve approval .* more than once/u.test(message)
   );
+}
+
+function isDuplicateTerminalInvocationError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /duplicate terminal invocation event for /u.test(message);
 }
 
 function stableJson(value: unknown): string {

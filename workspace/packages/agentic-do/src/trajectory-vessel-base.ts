@@ -68,6 +68,8 @@ import {
   type ApprovalLevel,
   type ThinkingLevel,
   type SystemPromptMode,
+  type ChannelContextSnapshot,
+  type ChannelContextActivity,
   AgentWorkerError,
   TurnSuspensionSignal,
   type RunnerEvent,
@@ -169,6 +171,9 @@ const MAX_PARTIAL_UPDATES_PER_CALL = 256;
 const MAX_INLINE_SUSPENSION_RESULT_BYTES = 256 * 1024;
 const EXPECTED_CHANNEL_TOOL_READY_TIMEOUT_MS = 5_000;
 const EXPECTED_CHANNEL_TOOL_READY_POLL_MS = 100;
+const CHANNEL_CONTEXT_REPLAY_WINDOW = 100;
+const CHANNEL_CONTEXT_RECENT_ACTIVITY_LIMIT = 8;
+const CHANNEL_CONTEXT_SUMMARY_LIMIT = 240;
 const CLAIM_LOST = Symbol("CLAIM_LOST");
 export type RespondPolicy =
   | "all"
@@ -572,10 +577,27 @@ function modelCredentialReconnectFailure(err: unknown): AgentFailureInfo | null 
 }
 
 function shouldProxyUrlBoundModelFetch(url: URL, baseUrls: readonly string[]): boolean {
-  if (url.protocol !== "https:" && url.protocol !== "http:") return false;
-  if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1")
+  const matchUrl = modelCredentialFetchMatchUrl(url);
+  if (!matchUrl) return false;
+  if (
+    matchUrl.hostname === "localhost" ||
+    matchUrl.hostname === "127.0.0.1" ||
+    matchUrl.hostname === "::1"
+  )
     return false;
-  return baseUrls.some((baseUrl) => isUrlWithinBase(url, baseUrl));
+  return baseUrls.some((baseUrl) => isUrlWithinBase(matchUrl, baseUrl));
+}
+
+function modelCredentialFetchMatchUrl(url: URL): URL | null {
+  const matchUrl = new URL(url.toString());
+  if (matchUrl.protocol === "wss:") {
+    matchUrl.protocol = "https:";
+  } else if (matchUrl.protocol === "ws:") {
+    matchUrl.protocol = "http:";
+  } else if (matchUrl.protocol !== "https:" && matchUrl.protocol !== "http:") {
+    return null;
+  }
+  return matchUrl;
 }
 
 interface UrlBoundModelCredentialFetchRoute {
@@ -592,19 +614,63 @@ interface UrlBoundModelFetchProxyState {
   routes: Map<string, UrlBoundModelCredentialFetchRoute>;
 }
 
+interface NatStackModelWebSocketRequest {
+  url: string;
+  protocols?: string | string[];
+}
+
 function findUrlBoundModelFetchProxyRoute(
   url: URL,
   routes: ReadonlyMap<string, UrlBoundModelCredentialFetchRoute>
 ): { baseUrl: string; route: UrlBoundModelCredentialFetchRoute } | null {
-  if (!shouldProxyUrlBoundModelFetch(url, [...routes.keys()])) return null;
+  const matchUrl = modelCredentialFetchMatchUrl(url);
+  if (!matchUrl || !shouldProxyUrlBoundModelFetch(matchUrl, [...routes.keys()])) return null;
   let best: { baseUrl: string; route: UrlBoundModelCredentialFetchRoute } | null = null;
   for (const [baseUrl, route] of routes.entries()) {
-    if (!isUrlWithinBase(url, baseUrl)) continue;
+    if (!isUrlWithinBase(matchUrl, baseUrl)) continue;
     if (!best || baseUrl.length > best.baseUrl.length) {
       best = { baseUrl, route };
     }
   }
   return best;
+}
+
+function modelWebSocketProxyHeaderPairs(headers: Headers): Array<[string, string]> {
+  const blocked = new Set([
+    "authorization",
+    "connection",
+    "host",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+    "sec-websocket-accept",
+    "sec-websocket-extensions",
+    "sec-websocket-key",
+    "sec-websocket-protocol",
+    "sec-websocket-version",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "x-natstack-egress-caller",
+    "x-natstack-egress-secret",
+  ]);
+  const pairs: Array<[string, string]> = [];
+  for (const [name, value] of headers.entries()) {
+    const lower = name.toLowerCase();
+    if (blocked.has(lower)) continue;
+    pairs.push([lower, value]);
+  }
+  return pairs;
+}
+
+function redactNatStackWebSocketHeaderParam(url: URL): string {
+  const redacted = new URL(url.toString());
+  if (redacted.searchParams.has("__natstack_ws_headers")) {
+    redacted.searchParams.set("__natstack_ws_headers", "<redacted>");
+  }
+  return redacted.toString();
 }
 
 function isModelCredentialOAuthConfig(value: unknown): value is ModelCredentialOAuthConfig {
@@ -1568,6 +1634,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     if (changed) {
       // Phase 1 shadow projection: mirror the authoritative durable status.
       this.runControllerFor(current.channelId).project(turnId, to);
+      if (current.status === "waiting_external" && to === "continuing") {
+        this.publishTurnActiveEvent(current.channelId, turnId, "resume");
+      }
     }
     if (
       changed &&
@@ -3949,14 +4018,15 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     name?: string;
     baseUrl: string;
   }> {
-    return (getPiModels(providerId as never) as Array<{ id: string; name?: string; baseUrl?: string }>)
-      .filter(
-        (model): model is { id: string; name?: string; baseUrl: string } =>
-          typeof model.id === "string" &&
-          typeof model.baseUrl === "string" &&
-          model.baseUrl.length > 0 &&
-          !/\{[^}]+\}/.test(model.baseUrl)
-      );
+    return (
+      getPiModels(providerId as never) as Array<{ id: string; name?: string; baseUrl?: string }>
+    ).filter(
+      (model): model is { id: string; name?: string; baseUrl: string } =>
+        typeof model.id === "string" &&
+        typeof model.baseUrl === "string" &&
+        model.baseUrl.length > 0 &&
+        !/\{[^}]+\}/.test(model.baseUrl)
+    );
   }
 
   private providerLabel(providerId: string): string {
@@ -4003,10 +4073,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           })()
         : null) ??
       (preferred?.modelBaseUrl
-        ? models.find((model) => model.baseUrl === preferred.modelBaseUrl) ?? null
+        ? (models.find((model) => model.baseUrl === preferred.modelBaseUrl) ?? null)
         : null);
     const recommendedId = pickRecommendedModelId(providerId, models);
-    const model = preferredModel ?? models.find((candidate) => candidate.id === recommendedId) ?? models[0]!;
+    const model =
+      preferredModel ?? models.find((candidate) => candidate.id === recommendedId) ?? models[0]!;
     return {
       providerId,
       providerLabel: this.providerLabel(providerId),
@@ -4026,7 +4097,9 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const currentModelRef = this.getModel(channelId);
     const providerIds = [
       currentProviderId,
-      ...this.getModelCredentialProviderIds().filter((providerId) => providerId !== currentProviderId),
+      ...this.getModelCredentialProviderIds().filter(
+        (providerId) => providerId !== currentProviderId
+      ),
     ];
     const options: ModelCredentialProviderOption[] = [];
     const seen = new Set<string>();
@@ -4204,6 +4277,10 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       __natstackModelFetchProxyInstalled?: boolean;
       __natstackModelFetchProxyBaseUrls?: string[];
       __natstackModelFetchProxyState?: UrlBoundModelFetchProxyState;
+      __natstackPrepareModelWebSocket?: (
+        url: string,
+        headers: Headers | Record<string, string>
+      ) => NatStackModelWebSocketRequest | null;
     };
     let state = globals.__natstackModelFetchProxyState;
     if (!state) {
@@ -4224,6 +4301,31 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     globals.__natstackModelFetchProxyBaseUrls = Array.from(
       new Set([...(globals.__natstackModelFetchProxyBaseUrls ?? []), modelBaseUrl])
     );
+    globals.__natstackPrepareModelWebSocket = (
+      url: string,
+      headersInput: Headers | Record<string, string>
+    ): NatStackModelWebSocketRequest | null => {
+      const targetUrl = new URL(url);
+      const route = findUrlBoundModelFetchProxyRoute(targetUrl, state.routes);
+      if (!route) return null;
+      const headers = new Headers(headersInput);
+      const authorization = headers.get("authorization");
+      const hasSentinel = authorization?.startsWith("Bearer ")
+        ? isModelCredentialSentinel(authorization.slice("Bearer ".length))
+        : false;
+      if (!hasSentinel) return null;
+      const proxyUrl = new URL(targetUrl.toString());
+      proxyUrl.searchParams.set(
+        "__natstack_ws_headers",
+        base64UrlJson(modelWebSocketProxyHeaderPairs(headers))
+      );
+      route.route.debug?.record("model_fetch.proxy.websocket_prepare", {
+        baseUrl: route.baseUrl,
+        url: targetUrl.toString(),
+        proxyUrl: redactNatStackWebSocketHeaderParam(proxyUrl),
+      });
+      return { url: proxyUrl.toString() };
+    };
     if (globals.__natstackModelFetchProxyInstalled) return;
 
     globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
@@ -4256,6 +4358,22 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
           before: "dispatch",
         });
         throw new Error("URL-bound model credential fetch aborted before proxy dispatch");
+      }
+
+      if (headers.get("upgrade")?.toLowerCase() === "websocket") {
+        const websocketFetchUrl =
+          modelCredentialFetchMatchUrl(targetUrl)?.toString() ?? targetUrl.toString();
+        route.route.debug?.record("model_fetch.proxy.websocket_upgrade", {
+          baseUrl: route.baseUrl,
+          url: targetUrl.toString(),
+          fetchUrl: websocketFetchUrl,
+          method: request.method,
+        });
+        return state.originalFetch(websocketFetchUrl, {
+          method: request.method,
+          headers,
+          signal: request.signal,
+        });
       }
 
       // Route through the credentialed client. The shared client uses
@@ -5146,6 +5264,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         signal: AbortSignal | undefined,
         turnId?: string
       ) => this.askUser(channelId, toolCallId, params, signal, turnId),
+      channelContextCallback: () => this.channelContextSnapshots.get(channelId) ?? null,
       model: this.getModel(channelId),
       getApiKey: this.getApiKeyForChannel(channelId),
       hasCredentialForOrigin: async (originUrl: string) => {
@@ -6230,6 +6349,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
 
   private cachedRoster = new Map<string, ChannelToolMethod[]>();
   private cachedParticipants = new Map<string, CachedParticipant[]>();
+  private channelContextSnapshots = new Map<string, ChannelContextSnapshot>();
 
   private missingExpectedChannelTools(channelId: string): string[] {
     const expected = this.getExpectedChannelToolNames(channelId);
@@ -6320,6 +6440,197 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       }
     }
     this.cachedRoster.set(channelId, roster);
+  }
+
+  private async prepareChannelContextSnapshot(
+    channelId: string,
+    event: ChannelEvent
+  ): Promise<void> {
+    try {
+      this.channelContextSnapshots.set(
+        channelId,
+        await this.buildChannelContextSnapshot(channelId, event)
+      );
+    } catch (err) {
+      this.recordLastError("channel_context.prepare", err, channelId);
+      this.recordDebugPhase(channelId, "channel_context.prepare.failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private async buildChannelContextSnapshot(
+    channelId: string,
+    event: ChannelEvent
+  ): Promise<ChannelContextSnapshot> {
+    const participants = this.cachedParticipants.get(channelId) ?? [];
+    const selfParticipantId = this.subscriptions.getParticipantId(channelId) ?? undefined;
+    const meta = this.extractMessageMeta(event);
+    const participantById = this.participantLookup(participants);
+    const mentionedParticipantIds = meta.mentions ?? [];
+    const mentionedHandles = mentionedParticipantIds.map((id) =>
+      this.participantLabel(participantById.get(id) ?? null, id)
+    );
+
+    return {
+      channelId,
+      ...(selfParticipantId ? { selfParticipantId } : {}),
+      participants: participants.map((participant) => ({
+        participantId: participant.participantId,
+        ...(typeof participant.metadata["handle"] === "string"
+          ? { handle: participant.metadata["handle"] as string }
+          : {}),
+        ...(typeof participant.metadata["type"] === "string"
+          ? { type: participant.metadata["type"] as string }
+          : {}),
+        ...(typeof participant.metadata["title"] === "string"
+          ? { title: participant.metadata["title"] as string }
+          : {}),
+        ...(participant.participantId === selfParticipantId ? { self: true } : {}),
+        methods: this.participantMethodNames(participant),
+      })),
+      ...(mentionedParticipantIds.length > 0 ? { mentionedParticipantIds } : {}),
+      ...(mentionedHandles.length > 0 ? { mentionedHandles } : {}),
+      recentActivity: await this.collectRecentChannelActivity(channelId, event, participantById),
+    };
+  }
+
+  private async collectRecentChannelActivity(
+    channelId: string,
+    event: ChannelEvent,
+    participantById: Map<string, CachedParticipant>
+  ): Promise<ChannelContextActivity[]> {
+    const currentEventId = typeof event.id === "number" ? event.id : 0;
+    if (currentEventId <= 0) return [];
+
+    const channel = this.createChannelClient(channelId);
+    const cursor = Math.max(0, currentEventId - CHANNEL_CONTEXT_REPLAY_WINDOW);
+    const envelope = await channel.getReplayAfter(cursor);
+    const activity: ChannelContextActivity[] = [];
+    for (const candidate of envelope.logEvents) {
+      if (candidate.id === event.id) continue;
+      if (typeof candidate.id === "number" && candidate.id > currentEventId) continue;
+      const summary = this.summarizeChannelActivity(candidate as ChannelEvent, participantById);
+      if (!summary) continue;
+      activity.push(summary);
+    }
+    return activity.slice(-CHANNEL_CONTEXT_RECENT_ACTIVITY_LIMIT);
+  }
+
+  private summarizeChannelActivity(
+    event: ChannelEvent,
+    participantById: Map<string, CachedParticipant>
+  ): ChannelContextActivity | null {
+    const agentic = this.agenticEventFromChannelEvent(event);
+    if (!agentic?.kind) return null;
+    const participant = participantById.get(event.senderId);
+    const senderHandle = this.participantLabel(participant ?? null, event.senderId);
+    const base = {
+      ...(typeof event.id === "number" ? { id: event.id } : {}),
+      kind: agentic.kind,
+      senderId: event.senderId,
+      senderHandle,
+    };
+
+    if (agentic.kind === "message.completed") {
+      const participantType = participant?.metadata["type"];
+      if (participantType !== "agent") return null;
+      const payload = agentic.payload as
+        | { blocks?: MessageBlockInput[]; role?: string }
+        | undefined;
+      const role = payload?.role ? `${payload.role}: ` : "";
+      const text = messageDisplayText(payload?.blocks);
+      return {
+        ...base,
+        summary: this.compactChannelContextSummary(`${role}${text || "[no text content]"}`),
+      };
+    }
+
+    if (agentic.kind === "custom.started") {
+      const payload = this.customPayload(agentic.payload);
+      return {
+        ...base,
+        summary: this.compactChannelContextSummary(
+          `messageId=${String(payload["messageId"] ?? "")} typeId=${String(
+            payload["typeId"] ?? ""
+          )} initialState=${this.safeCompactJson(payload["initialState"])}`
+        ),
+      };
+    }
+
+    if (agentic.kind === "custom.updated") {
+      const payload = this.customPayload(agentic.payload);
+      return {
+        ...base,
+        summary: this.compactChannelContextSummary(
+          `messageId=${String(payload["messageId"] ?? "")} update=${this.safeCompactJson(
+            payload["update"]
+          )}`
+        ),
+      };
+    }
+
+    if (agentic.kind === "ui.inline_rendered" || agentic.kind === "ui.action_bar.updated") {
+      const payload = agentic.payload as Record<string, unknown> | undefined;
+      return {
+        ...base,
+        summary: this.compactChannelContextSummary(
+          `uiType=${String(payload?.["uiType"] ?? "")} id=${String(
+            payload?.["id"] ?? ""
+          )} props=${this.safeCompactJson(payload?.["props"])}`
+        ),
+      };
+    }
+
+    if (agentic.kind.startsWith("messageType.") || agentic.kind.startsWith("external.")) {
+      return {
+        ...base,
+        summary: this.compactChannelContextSummary(this.safeCompactJson(agentic.payload)),
+      };
+    }
+
+    return null;
+  }
+
+  private participantLookup(participants: CachedParticipant[]): Map<string, CachedParticipant> {
+    return new Map(participants.map((participant) => [participant.participantId, participant]));
+  }
+
+  private participantLabel(participant: CachedParticipant | null, fallback: string): string {
+    if (typeof participant?.metadata["handle"] === "string") {
+      return participant.metadata["handle"] as string;
+    }
+    if (typeof participant?.metadata["title"] === "string") {
+      return participant.metadata["title"] as string;
+    }
+    return fallback;
+  }
+
+  private participantMethodNames(participant: CachedParticipant): string[] {
+    const advertised = participant.metadata["methods"];
+    if (!Array.isArray(advertised)) return [];
+    return advertised
+      .map((method) =>
+        typeof (method as Record<string, unknown>)?.["name"] === "string"
+          ? ((method as Record<string, unknown>)["name"] as string)
+          : null
+      )
+      .filter((name): name is string => Boolean(name));
+  }
+
+  private safeCompactJson(value: unknown): string {
+    try {
+      return JSON.stringify(value) ?? "undefined";
+    } catch {
+      return "[unserializable]";
+    }
+  }
+
+  private compactChannelContextSummary(value: string): string {
+    const compact = value.replace(/\s+/gu, " ").trim();
+    return compact.length > CHANNEL_CONTEXT_SUMMARY_LIMIT
+      ? `${compact.slice(0, CHANNEL_CONTEXT_SUMMARY_LIMIT - 3)}...`
+      : compact;
   }
 
   private async invokeChannelMethod(
@@ -6600,7 +6911,11 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         ? (panel.metadata["hostPlatform"] as string)
         : undefined;
     const cardId = `model-credential-${providerId}-${crypto.randomUUID()}`;
-    const providerOptions = this.getModelCredentialProviderOptions(channelId, providerId, modelBaseUrl);
+    const providerOptions = this.getModelCredentialProviderOptions(
+      channelId,
+      providerId,
+      modelBaseUrl
+    );
     const props = {
       providerId,
       modelRef: this.getModel(channelId),
@@ -6681,6 +6996,39 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
         this.recordDebugPhase(channelId, "turn_waiting.publish_failed", {
           turnId,
           reason: payload.reason,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    this.ctx.waitUntil?.(delivery);
+    void delivery;
+  }
+
+  private publishTurnActiveEvent(channelId: string, turnId: string, reason: "resume"): void {
+    const participantId = this.subscriptions.getParticipantId(channelId);
+    if (!participantId) return;
+    const event: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: {
+        kind: "agent",
+        id: participantId,
+        displayName: participantId,
+      },
+      turnId: turnId as never,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+      },
+      createdAt: new Date().toISOString(),
+    };
+    const delivery = this.createChannelClient(channelId)
+      .publishAgenticEvent(participantId, event, {
+        idempotencyKey: `turn-active:${turnId}:${reason}`,
+        senderMetadata: { type: "agent", name: participantId },
+      })
+      .catch((err) => {
+        this.recordLastError("turn_active.publish_failed", err, channelId);
+        this.recordDebugPhase(channelId, "turn_active.publish_failed", {
+          turnId,
+          reason,
           error: err instanceof Error ? err.message : String(err),
         });
       });
@@ -7068,6 +7416,7 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     const shouldRespond = await this.shouldRespond(channelId, event);
     this.rememberCompletedMessageSender(channelId, event);
     if (!shouldRespond) return;
+    await this.prepareChannelContextSnapshot(channelId, event);
     await this.getOrCreateRunner(channelId);
 
     const runner = this.runners.get(channelId)!.runner;
@@ -7393,9 +7742,8 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
       // outstanding method dispatches. If the loop sees those cancelled tool
       // results while its signal is still live, it can feed them back into the
       // model and continue after the user pressed stop.
-      const abort = (
-        entry.runner as { abort?: (reason?: "user_interrupted") => Promise<unknown> }
-      ).abort;
+      const abort = (entry.runner as { abort?: (reason?: "user_interrupted") => Promise<unknown> })
+        .abort;
       void abort?.call(entry.runner, "user_interrupted")?.catch((err) => {
         this.recordLastError("runner.abort", err, channelId);
         this.recordDebugPhase(channelId, "runner.abort.failed", {

@@ -9,6 +9,7 @@ import type { AddressInfo } from "node:net";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { WebSocketServer } from "ws";
 
 import type { AuditEntry, Credential } from "../../../packages/shared/src/credentials/types.js";
 import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
@@ -23,6 +24,10 @@ class MemoryCredentialStore {
 
   loadUrlBound(id: string): Credential | null {
     return this.credentials.get(id) ?? null;
+  }
+
+  listUrlBound(): Credential[] {
+    return [...this.credentials.values()];
   }
 
   saveUrlBound(credential: Credential & { id: string }): void {
@@ -157,6 +162,42 @@ function requestThroughHttpProxy(params: {
   });
 }
 
+function requestWebSocketUpgradeThroughProxy(params: {
+  proxyPort: number;
+  targetUrl: string;
+  headers?: Record<string, string>;
+}): Promise<{ status: number; headers: IncomingMessage["headers"] }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({
+      host: "127.0.0.1",
+      port: params.proxyPort,
+      method: "GET",
+      path: params.targetUrl,
+      headers: {
+        Connection: "Upgrade",
+        Upgrade: "websocket",
+        "Sec-WebSocket-Key": Buffer.alloc(16).toString("base64"),
+        "Sec-WebSocket-Version": "13",
+        ...params.headers,
+      },
+    });
+    req.on("upgrade", (response, socket) => {
+      socket.destroy();
+      resolve({ status: response.statusCode ?? 0, headers: response.headers });
+    });
+    req.on("response", (response) => {
+      response.resume();
+      resolve({ status: response.statusCode ?? 0, headers: response.headers });
+    });
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+function encodeWebSocketMetadata(headers: Array<[string, string]>): string {
+  return Buffer.from(JSON.stringify(headers)).toString("base64url");
+}
+
 describe("EgressProxy", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -254,6 +295,87 @@ describe("EgressProxy", () => {
       );
     } finally {
       await proxy.stop();
+    }
+  });
+
+  it("forwards attributed WebSocket upgrades with injected URL-bound credentials", async () => {
+    const auditLog = new MemoryAuditLog();
+    const upstreamServer = createServer();
+    const wss = new WebSocketServer({ noServer: true });
+    const upstreamPort = await new Promise<number>((resolve) => {
+      upstreamServer.listen(0, "127.0.0.1", () => {
+        resolve((upstreamServer.address() as AddressInfo).port);
+      });
+    });
+    const credential = createCredential({
+      bindings: [
+        {
+          id: "api",
+          use: "fetch",
+          audience: [{ url: `http://127.0.0.1:${upstreamPort}/v1`, match: "path-prefix" }],
+          injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+        },
+      ],
+      grants: [
+        {
+          bindingId: "api",
+          use: "fetch",
+          resource: `http://127.0.0.1:${upstreamPort}/v1`,
+          action: "use",
+          scope: "caller",
+          callerId: "worker:test",
+          grantedAt: 1,
+          grantedBy: "self",
+        },
+      ],
+    });
+    const proxy = createProxy(credential, auditLog);
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+    let observedAuthorization: string | undefined;
+    let observedOpenAIBeta: string | undefined;
+    let observedUrl: string | undefined;
+
+    upstreamServer.on("upgrade", (req, socket, head) => {
+      observedAuthorization = req.headers.authorization;
+      observedOpenAIBeta = req.headers["openai-beta"] as string | undefined;
+      observedUrl = req.url;
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.close(1000, "done");
+      });
+    });
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket?__natstack_ws_headers=${encodeURIComponent(
+          encodeWebSocketMetadata([
+            ["openai-beta", "responses=experimental; websockets=v1"],
+            ["authorization", "Bearer attacker"],
+          ])
+        )}`,
+        headers: {
+          Authorization: "Bearer sentinel",
+          "X-NatStack-Egress-Caller": "worker:test",
+          "X-NatStack-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response.status).toBe(101);
+      expect(observedAuthorization).toBe("Bearer secret-token");
+      expect(observedOpenAIBeta).toBe("responses=experimental; websockets=v1");
+      expect(observedUrl).toBe("/v1/socket");
+      expect(auditLog.entries[auditLog.entries.length - 1]).toMatchObject({
+        callerId: "worker:test",
+        method: "GET",
+        status: 101,
+      });
+    } finally {
+      await proxy.stop();
+      wss.close();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
     }
   });
 

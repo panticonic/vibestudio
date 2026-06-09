@@ -1,0 +1,164 @@
+diff --git a/dist/providers/openai-codex-responses.js b/dist/providers/openai-codex-responses.js
+index f92c66f..8d43844 100644
+--- a/dist/providers/openai-codex-responses.js
++++ b/dist/providers/openai-codex-responses.js
+@@ -239,6 +239,19 @@ export const streamOpenAICodexResponses = (model, context, options) => {
+                             : response.status === 429
+                                 ? capRetryDelayMs(retryAfterDelayMs, options)
+                                 : retryAfterDelayMs;
++                        const retryDetails = {
++                            provider: "openai-codex",
++                            transport: "sse",
++                            phase: "sse_response_status",
++                            attempt: attempt + 1,
++                            nextAttempt: attempt + 2,
++                            maxRetries,
++                            delayMs,
++                            status: response.status,
++                            retryAfterDelayMs,
++                        };
++                        appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic("provider_retry", new Error(`HTTP ${response.status}`), retryDetails));
++                        console.warn("[pi-ai] Retrying Codex SSE request after retryable response", retryDetails);
+                         await sleep(delayMs, options?.signal);
+                         continue;
+                     }
+@@ -260,6 +273,20 @@ export const streamOpenAICodexResponses = (model, context, options) => {
+                     // Network errors are retryable
+                     if (attempt < maxRetries && !lastError.message.includes("usage limit")) {
+                         const delayMs = BASE_DELAY_MS * 2 ** attempt;
++                        const retryDetails = {
++                            provider: "openai-codex",
++                            transport: "sse",
++                            phase: "sse_fetch",
++                            attempt: attempt + 1,
++                            nextAttempt: attempt + 2,
++                            maxRetries,
++                            delayMs,
++                        };
++                        appendAssistantMessageDiagnostic(output, createAssistantMessageDiagnostic("provider_retry", lastError, retryDetails));
++                        console.warn("[pi-ai] Retrying Codex SSE request after provider error", {
++                            ...retryDetails,
++                            error: formatThrownValue(lastError),
++                        });
+                         await sleep(delayMs, options?.signal);
+                         continue;
+                     }
+@@ -656,6 +683,75 @@ function closeWebSocketSilently(socket, code = 1000, reason = "done") {
+     }
+     catch { }
+ }
++function canUseWorkersFetchWebSocketUpgrade() {
++    return typeof fetch === "function" && typeof WebSocketPair === "function";
++}
++function websocketFetchUpgradeUrl(url) {
++    const fetchUrl = new URL(url);
++    if (fetchUrl.protocol === "wss:") {
++        fetchUrl.protocol = "https:";
++    }
++    else if (fetchUrl.protocol === "ws:") {
++        fetchUrl.protocol = "http:";
++    }
++    return fetchUrl.toString();
++}
++function isConsumableWebSocket(socket) {
++    return typeof socket?.send === "function" && typeof socket?.addEventListener === "function";
++}
++function prepareNatStackModelWebSocket(url, headers) {
++    const hook = globalThis.__natstackPrepareModelWebSocket;
++    if (typeof hook !== "function") {
++        return null;
++    }
++    const prepared = hook(url, headers);
++    if (!prepared || typeof prepared.url !== "string") {
++        return null;
++    }
++    return prepared;
++}
++async function connectWebSocketViaFetchUpgrade(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS) {
++    if (!canUseWorkersFetchWebSocketUpgrade()) {
++        return null;
++    }
++    const wsHeaders = headersToRecord(headers);
++    wsHeaders["Upgrade"] = "websocket";
++    const controller = new AbortController();
++    let timeout;
++    const abort = () => controller.abort(signal?.reason);
++    if (signal?.aborted) {
++        abort();
++    }
++    else {
++        signal?.addEventListener("abort", abort, { once: true });
++    }
++    try {
++        timeout = setTimeout(() => {
++            controller.abort(new Error(`Codex WebSocket upgrade timed out after ${connectTimeoutMs}ms`));
++        }, connectTimeoutMs);
++        const response = await fetch(websocketFetchUpgradeUrl(url), {
++            method: "GET",
++            headers: wsHeaders,
++            signal: controller.signal,
++        });
++        const socket = response.webSocket;
++        if (!socket) {
++            throw new Error(`Codex WebSocket upgrade failed with HTTP ${response.status}`);
++        }
++        socket.accept?.();
++        if (!isConsumableWebSocket(socket)) {
++            closeWebSocketSilently(socket, 1000, "unsupported_runtime_socket_shape");
++            throw new Error("Codex WebSocket upgrade returned a pass-through WebSocket that cannot be consumed by this runtime");
++        }
++        return { socket };
++    }
++    finally {
++        if (timeout) {
++            clearTimeout(timeout);
++        }
++        signal?.removeEventListener("abort", abort);
++    }
++}
+ function scheduleSessionWebSocketExpiry(sessionId, entry) {
+     if (entry.idleTimer) {
+         clearTimeout(entry.idleTimer);
+@@ -670,16 +766,23 @@ function scheduleSessionWebSocketExpiry(sessionId, entry) {
+ async function connectWebSocket(url, headers, signal, connectTimeoutMs = DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS) {
+     const WebSocketCtor = await getWebSocketConstructor();
+     if (!WebSocketCtor) {
++        const fetchUpgrade = await connectWebSocketViaFetchUpgrade(url, headers, signal, connectTimeoutMs);
++        if (fetchUpgrade) {
++            return fetchUpgrade;
++        }
+         throw new Error("WebSocket transport is not available in this runtime");
+     }
+     const wsHeaders = headersToRecord(headers);
+     delete wsHeaders["OpenAI-Beta"];
++    const natstackPrepared = prepareNatStackModelWebSocket(url, headers);
+     return new Promise((resolve, reject) => {
+         let settled = false;
+         let timeout;
+         let socket;
+         try {
+-            socket = new WebSocketCtor(url, { headers: wsHeaders });
++            socket = natstackPrepared
++                ? new WebSocketCtor(natstackPrepared.url, natstackPrepared.protocols)
++                : new WebSocketCtor(url, { headers: wsHeaders });
+         }
+         catch (error) {
+             reject(error instanceof Error ? error : new Error(String(error)));
+@@ -1053,6 +1156,10 @@ async function processWebSocketStream(url, body, headers, output, stream, model,
+         }
+     }
+     try {
++        if (!isConsumableWebSocket(socket)) {
++            closeWebSocketSilently(socket, 1000, "unsupported_runtime_socket_shape");
++            throw new Error("Codex WebSocket upgrade returned a pass-through WebSocket that cannot be consumed by this runtime");
++        }
+         socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
+         await processResponsesStream(startWebSocketOutputOnFirstEvent(mapCodexEvents(parseWebSocket(socket, options?.signal, idleTimeoutMs)), output, stream, onStart), output, stream, model, {
+             serviceTier: options?.serviceTier,
+@@ -1168,4 +1275,4 @@ function buildWebSocketHeaders(initHeaders, additionalHeaders, accountId, token,
+     headers.set("session-id", requestId);
+     return headers;
+ }
+-//# sourceMappingURL=openai-codex-responses.js.map
+\ No newline at end of file
++//# sourceMappingURL=openai-codex-responses.js.map

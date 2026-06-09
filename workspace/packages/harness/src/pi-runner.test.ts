@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 
+let mockCodexWebSocketStats: Record<string, unknown> | undefined;
+
 vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@earendil-works/pi-ai")>();
   return {
@@ -14,6 +16,10 @@ vi.mock("@earendil-works/pi-ai", async (importOriginal) => {
     })),
   };
 });
+
+vi.mock("@earendil-works/pi-ai/openai-codex-responses", () => ({
+  getOpenAICodexWebSocketDebugStats: vi.fn(() => mockCodexWebSocketStats),
+}));
 
 import { PiRunner } from "./pi-runner.js";
 import { TurnSuspensionSignal } from "./turn-suspension.js";
@@ -327,6 +333,60 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
+  it("injects compact multi-agent channel context when provided", async () => {
+    const runner = new PiRunner(
+      createOptions({
+        channelContextCallback: () => ({
+          channelId: "chat-1",
+          participants: [
+            { participantId: "agent:self", handle: "codex", type: "agent", self: true },
+            {
+              participantId: "agent:gmail",
+              handle: "gmail",
+              type: "agent",
+              methods: ["gmail_checkInbox"],
+            },
+          ],
+          mentionedParticipantIds: ["agent:gmail"],
+          mentionedHandles: ["gmail"],
+          recentActivity: [
+            {
+              id: 7,
+              kind: "custom.updated",
+              senderId: "agent:gmail",
+              senderHandle: "gmail",
+              summary: 'messageId=m1 update={"status":"synced"}',
+            },
+          ],
+        }),
+      })
+    );
+    const contexts: AgentMessage[][] = [];
+    runner.onTransformContext((messages) => {
+      contexts.push(messages);
+      return messages;
+    });
+    await runner.init();
+
+    await runner.prompt({ content: "gmail, check this" });
+
+    const injected = contexts[0]?.[0] as { content?: unknown } | undefined;
+    expect(JSON.stringify(injected?.content)).toContain("NatStack runtime channel context");
+    expect(JSON.stringify(injected?.content)).toContain("custom.updated");
+    expect(JSON.stringify(injected?.content)).toContain("gmail_checkInbox");
+    runner.dispose();
+  });
+
+  it("exposes close_turn_without_response as a built-in tool", async () => {
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+
+    expect((await runner.getDebugState())["activeToolNames"]).toContain(
+      "close_turn_without_response"
+    );
+    runner.dispose();
+  });
+
   it("records but never channel-publishes a suspended turn's failure message", () => {
     // P2: when getApiKey throws a typed TurnSuspensionSignal, the resulting
     // assistant-error message must NOT be broadcast to the channel (no red
@@ -506,6 +566,54 @@ describe("PiRunner", () => {
     expect(continueSignal).toBe(promptSignal);
     expect(continueSignal!.aborted).toBe(true);
 
+    runner.dispose();
+  });
+
+  it("logs stale aborted hook events without poisoning the next prompt", async () => {
+    const runner = new PiRunner(createOptions());
+    const internals = runner as unknown as {
+      harness: {
+        prompt(content: string): Promise<void>;
+        abort(): Promise<{ clearedSteer: AgentMessage[]; clearedFollowUp: AgentMessage[] }>;
+      };
+      handleHarnessEvent(event: unknown): Promise<void>;
+      getDebugState(): Promise<Record<string, unknown>>;
+    };
+    await runner.init();
+
+    const blockedHook = deferred<void>();
+    let blockFirstHook = true;
+    runner.subscribe(async () => {
+      if (!blockFirstHook) return;
+      blockFirstHook = false;
+      await blockedHook.promise;
+    });
+    internals.harness.abort = vi.fn(async () => ({ clearedSteer: [], clearedFollowUp: [] }));
+    internals.harness.prompt = async () => {
+      await internals.handleHarnessEvent({ type: "agent_start" });
+    };
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const interrupted = runner.prompt({ content: "interrupted" });
+    await flushUntil(() => !blockFirstHook);
+    await runner.abort();
+    await expect(interrupted).rejects.toThrow("Runner prompt completed without agent_end");
+
+    internals.harness.prompt = async () => {
+      await internals.handleHarnessEvent({ type: "agent_start" });
+      await internals.handleHarnessEvent({ type: "agent_end" });
+    };
+    await expect(runner.prompt({ content: "after interrupt" })).resolves.toBeUndefined();
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[PiRunner] Ignoring stale harness event from aborted run",
+      expect.objectContaining({ checkpoint: "harness.event.aborted_hook_ignored" })
+    );
+    expect(JSON.stringify((await internals.getDebugState())["phase"])).toContain(
+      "harness.event.aborted_hook_ignored"
+    );
+
+    warnSpy.mockRestore();
     runner.dispose();
   });
 
@@ -952,6 +1060,151 @@ describe("PiRunner", () => {
     runner.dispose();
   });
 
+  it("applies Codex auto transport and retry defaults before provider requests", async () => {
+    mockCodexWebSocketStats = undefined;
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+
+    const result = await (
+      runner as unknown as {
+        harness: {
+          emitBeforeProviderRequest(
+            model: unknown,
+            sessionId: string,
+            streamOptions: Record<string, unknown>
+          ): Promise<Record<string, unknown>>;
+        };
+      }
+    ).harness.emitBeforeProviderRequest(
+      { id: "gpt-5", provider: "openai-codex", api: "openai-codex-responses" },
+      "session-codex",
+      {}
+    );
+
+    expect(result).toMatchObject({
+      transport: "auto",
+      maxRetries: 1,
+    });
+    const debug = await runner.getDebugState();
+    expect(JSON.stringify(debug["phase"])).toContain("provider.request.codex_policy");
+    expect(JSON.stringify(debug["phase"])).toContain('"effectiveTransport":"auto"');
+    expect(JSON.stringify(debug["phase"])).toContain('"effectiveMaxRetries":1');
+    expect(JSON.stringify(debug["phase"])).toContain("workerd_fetch_upgrade_websocket_supported");
+    runner.dispose();
+  });
+
+  it("switches Codex provider requests to SSE after WebSocket fallback is active", async () => {
+    mockCodexWebSocketStats = {
+      requests: 1,
+      connectionsCreated: 1,
+      connectionsReused: 0,
+      cachedContextRequests: 1,
+      storeTrueRequests: 0,
+      fullContextRequests: 1,
+      deltaRequests: 0,
+      lastInputItems: 2,
+      websocketFailures: 1,
+      sseFallbacks: 1,
+      lastWebSocketError:
+        "Codex WebSocket upgrade returned a pass-through WebSocket that cannot be consumed by this runtime",
+      websocketFallbackActive: true,
+    };
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+
+    const result = await (
+      runner as unknown as {
+        harness: {
+          emitBeforeProviderRequest(
+            model: unknown,
+            sessionId: string,
+            streamOptions: Record<string, unknown>
+          ): Promise<Record<string, unknown>>;
+        };
+      }
+    ).harness.emitBeforeProviderRequest(
+      { id: "gpt-5", provider: "openai-codex", api: "openai-codex-responses" },
+      "session-codex",
+      {}
+    );
+
+    expect(result).toMatchObject({
+      transport: "sse",
+      maxRetries: 1,
+    });
+    const debug = await runner.getDebugState();
+    expect(JSON.stringify(debug["phase"])).toContain("codex_websocket_fallback_active");
+    runner.dispose();
+    mockCodexWebSocketStats = undefined;
+  });
+
+  it("does not overwrite explicit Codex provider stream options", async () => {
+    mockCodexWebSocketStats = undefined;
+    const runner = new PiRunner(createOptions());
+    runner.hooks.on("before_provider_request", () => ({
+      streamOptions: {
+        transport: "auto",
+        maxRetries: 3,
+      },
+    }));
+    await runner.init();
+
+    const result = await (
+      runner as unknown as {
+        harness: {
+          emitBeforeProviderRequest(
+            model: unknown,
+            sessionId: string,
+            streamOptions: Record<string, unknown>
+          ): Promise<Record<string, unknown>>;
+        };
+      }
+    ).harness.emitBeforeProviderRequest(
+      { id: "gpt-5", provider: "openai-codex", api: "openai-codex-responses" },
+      "session-codex",
+      {}
+    );
+
+    expect(result).toMatchObject({
+      transport: "auto",
+      maxRetries: 3,
+    });
+    runner.dispose();
+  });
+
+  it("records provider retry diagnostics instead of hiding them", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const runner = new PiRunner(createOptions());
+    await runner.init();
+
+    (
+      runner as unknown as {
+        recordAssistantProviderDiagnostics(message: AgentMessage): void;
+      }
+    ).recordAssistantProviderDiagnostics({
+      role: "assistant",
+      content: [],
+      diagnostics: [
+        {
+          type: "provider_retry",
+          error: { message: "Codex SSE response headers timed out after 10000ms" },
+          details: { transport: "sse", attempt: 1, nextAttempt: 2 },
+        },
+      ],
+    } as unknown as AgentMessage);
+
+    const debug = await runner.getDebugState();
+    expect(JSON.stringify(debug["phase"])).toContain("provider.diagnostic.provider_retry");
+    expect(warn).toHaveBeenCalledWith(
+      "[PiRunner] Provider diagnostic emitted",
+      expect.objectContaining({
+        type: "provider_retry",
+      })
+    );
+    warn.mockRestore();
+    runner.dispose();
+  });
+
   it("warns when provider payload omits expected channel tools", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const runner = new PiRunner(
@@ -1158,6 +1411,48 @@ describe("PiRunner", () => {
             }),
           }),
           publishToChannel: true,
+        }),
+      ])
+    );
+
+    runner.dispose();
+  });
+
+  it("does not publish suspended assistant error provenance to the channel", async () => {
+    const runner = new PiRunner(createOptions()) as unknown as {
+      pendingSuspension: TurnSuspensionSignal | null;
+      queueMessageProvenance(message: unknown, messageEntryId: string): void;
+      provenanceQueue: Array<{
+        event: { kind: string; payload: Record<string, unknown> };
+        publishToChannel?: boolean;
+      }>;
+      dispose(): void;
+    };
+    runner.pendingSuspension = new TurnSuspensionSignal({
+      reason: "credential",
+      message: "Waiting for model credential approval for provider: x",
+    });
+
+    runner.queueMessageProvenance(
+      {
+        role: "assistant",
+        content: [],
+        stopReason: "error",
+        errorMessage: "Waiting for model credential approval for provider: x",
+        timestamp: 1,
+      },
+      "entry-suspended"
+    );
+
+    expect(runner.provenanceQueue).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: expect.objectContaining({ kind: "message.completed" }),
+          publishToChannel: false,
+        }),
+        expect.objectContaining({
+          event: expect.objectContaining({ kind: "message.failed" }),
+          publishToChannel: false,
         }),
       ])
     );
@@ -1727,6 +2022,116 @@ describe("PiRunner", () => {
       originalBytes: expect.any(Number),
     });
     expect(JSON.stringify(input)).not.toContain(largeText);
+  });
+
+  it("drops duplicate terminal invocation events before sending a gad batch", async () => {
+    const appendTrajectoryBatch = vi.fn(async () => ({ published: [] }));
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      terminalInvocationIds: Set<string>;
+      appendTrajectoryEvents(items: Array<Record<string, unknown>>): Promise<void>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+
+    await runner.appendTrajectoryEvents([
+      {
+        eventId: "event-terminal-success",
+        publishToChannel: true,
+        event: {
+          kind: "invocation.completed",
+          actor: { kind: "agent", id: "test" },
+          causality: { invocationId: "call_1" },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            result: { ok: true },
+            terminalOutcome: "success",
+          },
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+      {
+        eventId: "event-terminal-stale-failed",
+        publishToChannel: true,
+        event: {
+          kind: "invocation.failed",
+          actor: { kind: "agent", id: "test" },
+          causality: { invocationId: "call_1" },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            reason: "stale abort artifact",
+            terminalOutcome: "tool_error",
+            terminalReasonCode: "eval_exception",
+          },
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    ]);
+
+    expect(appendTrajectoryBatch).toHaveBeenCalledTimes(1);
+    const calls = appendTrajectoryBatch.mock.calls as unknown as Array<
+      [string, { events: Array<{ eventId?: string; event: { kind: string } }> }]
+    >;
+    const input = calls[0]![1] as {
+      events: Array<{ eventId?: string; event: { kind: string } }>;
+    };
+    expect(input.events).toHaveLength(1);
+    expect(input.events[0]).toMatchObject({
+      eventId: "event-terminal-success",
+      event: { kind: "invocation.completed" },
+    });
+    expect(runner.terminalInvocationIds.has("call_1")).toBe(true);
+  });
+
+  it("accepts gad duplicate-terminal errors as stale terminal replays during provenance flush", async () => {
+    const duplicate = new Error(
+      'DO RPC relay failed (500): {"error":"duplicate terminal invocation event for call_1"}'
+    );
+    const appendTrajectoryBatch = vi.fn(async () => {
+      throw duplicate;
+    });
+    const runner = new PiRunner(createOptions()) as unknown as {
+      options: PiRunnerOptions;
+      gad: { call: typeof appendTrajectoryBatch };
+      provenanceQueue: Array<Record<string, unknown>>;
+      terminalInvocationIds: Set<string>;
+      flushProvenance(): Promise<void>;
+    };
+    runner.options.gad = {
+      trajectoryId: "trajectory:test",
+      branchId: "branch:test",
+      channelId: "channel:test",
+    };
+    runner.gad = { call: appendTrajectoryBatch };
+    runner.provenanceQueue = [
+      {
+        eventId: "event-terminal-stale",
+        publishToChannel: true,
+        event: {
+          kind: "invocation.failed",
+          actor: { kind: "agent", id: "test" },
+          causality: { invocationId: "call_1" },
+          payload: {
+            protocol: "agentic.trajectory.v1",
+            reason: "stale abort artifact",
+            terminalOutcome: "tool_error",
+            terminalReasonCode: "eval_exception",
+          },
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    ];
+
+    await expect(runner.flushProvenance()).resolves.toBeUndefined();
+
+    expect(appendTrajectoryBatch).toHaveBeenCalledTimes(2);
+    expect(runner.provenanceQueue).toEqual([]);
+    expect(runner.terminalInvocationIds.has("call_1")).toBe(true);
   });
 
   it("records completed tool results as trajectory invocation provenance", () => {
@@ -3110,7 +3515,7 @@ describe("PiRunner", () => {
     };
     runner.restoredTrajectoryState = {
       invocations: {
-        "call_eval": {
+        call_eval: {
           invocationId: "call_eval",
           status: "running",
           actor: { kind: "agent", id: "pi" },

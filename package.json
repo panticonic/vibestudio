@@ -78,7 +78,8 @@
     },
     "patchedDependencies": {
       "re2@1.24.0": "patches/re2@1.24.0.patch",
-      "@earendil-works/pi-agent-core@0.78.0": "workspace/packages/harness/patches/@earendil-works__pi-agent-core@0.78.0.patch"
+      "@earendil-works/pi-agent-core@0.78.0": "workspace/packages/harness/patches/@earendil-works__pi-agent-core@0.78.0.patch",
+      "@earendil-works/pi-ai@0.78.0": "workspace/packages/harness/patches/@earendil-works__pi-ai@0.78.0.patch"
     }
   },
   "devDependencies": {
