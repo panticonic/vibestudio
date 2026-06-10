@@ -509,6 +509,39 @@ describe("PanelManager", () => {
     expect(init.parentEntityId).toBe(mem.state.slots.get(root.panelId)?.current_entity_id);
   });
 
+  it("persists recursive close for descendant slots", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    for (const name of ["root", "child", "grandchild"]) {
+      const panelDir = path.join(workspacePath, "panels", name);
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({ name, natstack: { title: `${name} Panel` } })
+      );
+    }
+
+    const registry = new PanelRegistry({});
+    const { mem, deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+
+    const root = await manager.create("panels/root", { isRoot: true, addAsRoot: true });
+    const child = await manager.create("panels/child", { parentId: root.panelId });
+    const grandchild = await manager.create("panels/grandchild", { parentId: child.panelId });
+
+    await manager.close(root.panelId);
+
+    expect(mem.state.slots.get(root.panelId)?.closed_at).not.toBeNull();
+    expect(mem.state.slots.get(child.panelId)?.closed_at).not.toBeNull();
+    expect(mem.state.slots.get(grandchild.panelId)?.closed_at).not.toBeNull();
+
+    await manager.syncSnapshot();
+    expect(registry.getRootPanels()).toEqual([]);
+    expect(registry.getPanel(child.panelId)).toBeUndefined();
+    expect(registry.getPanel(grandchild.panelId)).toBeUndefined();
+  });
+
   it("pushes navigation into history and traverses it via back/forward", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
     tempDirs.push(workspacePath);

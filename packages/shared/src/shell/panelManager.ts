@@ -434,11 +434,13 @@ export class PanelManager {
       }
     }
 
-    await this.workspaceState.closeSlot(slotId).catch((error: unknown) => {
-      log.warn(
-        `Failed to close slot ${slotId}: ${error instanceof Error ? error.message : String(error)}`
-      );
-    });
+    for (const id of [...closedIds].reverse()) {
+      await this.workspaceState.closeSlot(id).catch((error: unknown) => {
+        log.warn(
+          `Failed to close slot ${id}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    }
 
     for (const id of closedIds) {
       this.registry.removePanel(id);
