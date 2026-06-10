@@ -1,6 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Box, Button, Callout, Card, Flex, Spinner, Text } from "@radix-ui/themes";
-import { CheckIcon, CopyIcon, ExclamationTriangleIcon, ReloadIcon } from "@radix-ui/react-icons";
+import { Badge, Box, Button, Callout, Card, DropdownMenu, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import { DotsHorizontalIcon, ExclamationTriangleIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { EventErrorBoundary } from "@workspace/tool-ui/components/EventErrorBoundary";
 import type { CustomMessageCardPayload } from "@workspace/agentic-core";
 import { foldCustomMessageState, validateCustomState } from "@workspace/agentic-core";
@@ -91,42 +91,52 @@ export function customInspectorPayload(
   };
 }
 
-function useCopyDetails(payload: CustomMessageCardPayload, entry?: MessageTypeComponentEntry) {
-  const [copied, setCopied] = useState(false);
-  const copy = useCallback(
-    async (event: React.MouseEvent) => {
-      event.stopPropagation();
-      const details = customInspectorPayload(payload, entry);
-      await navigator.clipboard.writeText(JSON.stringify(details, null, 2));
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    },
-    [payload, entry]
-  );
-  return { copied, copy };
-}
-
-function CopyDetailsButton({
+/**
+ * Compact "⋯" actions menu for custom message cards: Copy details, plus
+ * optional Inspect toggle and Collapse. Replaces the previous row of inline
+ * text buttons — diagnostics are one click away instead of always-on chrome.
+ */
+function CardActionsMenu({
   payload,
   entry,
+  inspectOpen,
+  onToggleInspect,
+  onCollapse,
 }: {
   payload: CustomMessageCardPayload;
   entry?: MessageTypeComponentEntry;
+  inspectOpen?: boolean;
+  onToggleInspect?: () => void;
+  onCollapse?: (() => void) | undefined;
 }) {
-  const { copied, copy } = useCopyDetails(payload, entry);
+  const copy = useCallback(async () => {
+    const details = customInspectorPayload(payload, entry);
+    await navigator.clipboard.writeText(JSON.stringify(details, null, 2));
+  }, [payload, entry]);
   return (
-    <Button
-      size="1"
-      color="gray"
-      variant="ghost"
-      onClick={copy}
-      aria-label="Copy custom message details"
-      title="Copy custom message details"
-      style={{ marginLeft: "auto" }}
-    >
-      {copied ? <CheckIcon /> : <CopyIcon />}
-      {copied ? "Copied" : "Copy details"}
-    </Button>
+    <DropdownMenu.Root modal={false}>
+      <DropdownMenu.Trigger>
+        <IconButton
+          size="1"
+          color="gray"
+          variant="ghost"
+          aria-label="Card actions"
+          title="Card actions"
+          style={{ marginLeft: "auto" }}
+        >
+          <DotsHorizontalIcon />
+        </IconButton>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end">
+        <DropdownMenu.Item onSelect={() => void copy()}>Copy details</DropdownMenu.Item>
+        {onToggleInspect && (
+          <DropdownMenu.Item onSelect={onToggleInspect}>
+            {inspectOpen ? "Hide inspector" : "Inspect"}
+          </DropdownMenu.Item>
+        )}
+        {onCollapse && <DropdownMenu.Item onSelect={onCollapse}>Collapse</DropdownMenu.Item>}
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
   );
 }
 
@@ -392,27 +402,13 @@ function ReadyCustomCard({
         >
           {payload.typeId}
         </Text>
-        <CopyDetailsButton payload={payload} entry={entry} />
-        <Text
-          size="1"
-          color="gray"
-          onClick={() => setInspectOpen((open) => !open)}
-          style={{ cursor: "pointer", userSelect: "none" }}
-          aria-expanded={inspectOpen}
-          role="button"
-        >
-          {inspectOpen ? "▾ Inspect" : "▸ Inspect"}
-        </Text>
-        {onCollapse && (
-          <Text
-            size="1"
-            color="gray"
-            onClick={onCollapse}
-            style={{ cursor: "pointer", userSelect: "none" }}
-          >
-            Collapse
-          </Text>
-        )}
+        <CardActionsMenu
+          payload={payload}
+          entry={entry}
+          inspectOpen={inspectOpen}
+          onToggleInspect={() => setInspectOpen((open) => !open)}
+          onCollapse={onCollapse}
+        />
       </Flex>
       {inspectOpen && (
         <Flex direction="column" gap="1" mb="2">
@@ -454,7 +450,7 @@ function CustomFailedCard({
     <Card className="message-card">
       <Flex align="center" gap="2" mb="1">
         <Text size="1" color="gray" weight="medium">{payload.typeId}</Text>
-        <CopyDetailsButton payload={payload} entry={entry} />
+        <CardActionsMenu payload={payload} entry={entry} />
       </Flex>
       <Callout.Root color="red" size="1">
         <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
@@ -537,17 +533,7 @@ function CustomDiagnosticCard({
               <ReloadIcon width={11} height={11} /> Retry
             </Button>
           )}
-          <CopyDetailsButton payload={payload} entry={entry} />
-          {onCollapse && (
-            <Text
-              size="1"
-              color="gray"
-              onClick={onCollapse}
-              style={{ cursor: "pointer", userSelect: "none" }}
-            >
-              Collapse
-            </Text>
-          )}
+          <CardActionsMenu payload={payload} entry={entry} onCollapse={onCollapse} />
         </Flex>
         {loading && (
           <Text size="1" color="gray">

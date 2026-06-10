@@ -6,7 +6,28 @@ import {
   Pencil1Icon,
   ReloadIcon,
 } from "@radix-ui/react-icons";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+/** Inline copy of renderers/use-container-width — the action bar compiles standalone. */
+function useContainerWidth<T extends HTMLElement = HTMLDivElement>(): {
+  ref: React.RefObject<T | null>;
+  compact: boolean;
+} {
+  const ref = useRef<T | null>(null);
+  const [width, setWidth] = useState<number | null>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[entries.length - 1];
+      if (entry) setWidth(entry.contentRect.width);
+    });
+    observer.observe(element);
+    setWidth(element.getBoundingClientRect().width);
+    return () => observer.disconnect();
+  }, []);
+  return { ref, compact: width !== null && width < 480 };
+}
 
 interface GmailActionBarProps {
   chat: {
@@ -20,6 +41,7 @@ interface ActionableThread {
 }
 
 export default function GmailActionBar({ chat }: GmailActionBarProps) {
+  const { ref, compact } = useContainerWidth();
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [threads, setThreads] = useState<ActionableThread[]>([]);
@@ -64,7 +86,7 @@ export default function GmailActionBar({ chat }: GmailActionBarProps) {
   }, [chat]);
 
   return (
-    <Flex direction="column" gap="2" p="2">
+    <Flex ref={ref} direction="column" gap="2" p="2">
       <Flex align="center" gap="2" wrap="wrap">
         <Flex align="center" gap="1">
           <EnvelopeClosedIcon />
@@ -72,40 +94,43 @@ export default function GmailActionBar({ chat }: GmailActionBarProps) {
           {threads.length > 0 ? <Badge size="1" color="red">{threads.length}</Badge> : null}
         </Flex>
         <Button
-          size="1"
+          size={compact ? "2" : "1"}
           variant="soft"
           disabled={busy !== null}
           title="Check now"
+          aria-label="Check now"
           onClick={() =>
             void run("check", "checkNow", {}, "Inbox checked").then(() => refreshQueue())
           }
         >
-          <ReloadIcon /> {busy === "check" ? "Checking" : "Check"}
+          <ReloadIcon /> {compact ? null : busy === "check" ? "Checking" : "Check"}
         </Button>
         <Button
-          size="1"
+          size={compact ? "2" : "1"}
           variant="soft"
           disabled={busy !== null}
           title="Compose"
+          aria-label="Compose"
           onClick={() => void run("compose", "compose", {}, "Compose card created")}
         >
-          <Pencil1Icon /> Compose
+          <Pencil1Icon /> {compact ? null : "Compose"}
         </Button>
-        <Flex align="center" gap="1" style={{ minWidth: 220, flex: "1 1 280px" }}>
+        <Flex align="center" gap="1" style={{ minWidth: 0, flex: "1 1 160px" }}>
           <TextField.Root
-            size="1"
+            size={compact ? "2" : "1"}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search mail"
-            style={{ flex: 1 }}
+            style={{ flex: 1, minWidth: 0 }}
           />
           <Button
-            size="1"
+            size={compact ? "2" : "1"}
             disabled={busy !== null || query.trim().length === 0}
             title="Search"
+            aria-label="Search"
             onClick={() => void run("search", "search", { q: query.trim() }, "Search updated")}
           >
-            <MagnifyingGlassIcon /> Search
+            <MagnifyingGlassIcon /> {compact ? null : "Search"}
           </Button>
         </Flex>
       </Flex>

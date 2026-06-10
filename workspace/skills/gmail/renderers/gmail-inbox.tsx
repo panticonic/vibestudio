@@ -12,6 +12,7 @@ import {
 } from "@radix-ui/react-icons";
 import { useState } from "react";
 
+import { useContainerWidth } from "./use-container-width";
 import type {
   GmailAttentionAction,
   GmailAttentionCondition,
@@ -69,9 +70,12 @@ export default function GmailInbox({
   expanded: boolean;
   chat: GmailChat;
 }) {
+  const { ref, compact } = useContainerWidth();
   const [busy, setBusy] = useState<string | null>(null);
   const [query, setQuery] = useState(state.searchQuery ?? "");
   const [searchCollapsed, setSearchCollapsed] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
   const [watchInstruction, setWatchInstruction] = useState("");
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(() => new Set());
   const [status, setStatus] = useState<string | null>(null);
@@ -192,18 +196,17 @@ export default function GmailInbox({
   const hits = state.attentionHits ?? [];
   const lastSynced = state.lastSyncedAt ? new Date(state.lastSyncedAt).toLocaleString() : "Not synced";
 
+  const buttonSize = compact ? "2" : "1";
+
   return (
-    <Flex direction="column" gap="3">
+    <Flex ref={ref} direction="column" gap="3">
       <Flex align="start" justify="between" gap="3" wrap="wrap">
-        <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
-          <Flex align="center" gap="2" wrap="wrap">
-            <EnvelopeClosedIcon />
-            <Text size="3" weight="bold">Gmail desk</Text>
-            <Badge color={state.lastError ? "red" : "green"} variant="soft">
-              {state.lastError ? "Sync issue" : "Live"}
-            </Badge>
-          </Flex>
-          <Text size="1" color="gray">{state.email ?? "Gmail account"} - {lastSynced}</Text>
+        <Flex align="center" gap="2" wrap="wrap" style={{ minWidth: 0 }}>
+          <EnvelopeClosedIcon />
+          <Text size="3" weight="bold">Gmail desk</Text>
+          <Badge color={state.lastError ? "red" : "green"} variant="soft">
+            {state.lastError ? "Sync issue" : "Live"}
+          </Badge>
         </Flex>
         <Flex gap="1" wrap="wrap">
           <Badge color="blue" variant="soft">{state.unread} unread</Badge>
@@ -242,42 +245,71 @@ export default function GmailInbox({
 
       <Flex align="center" gap="2" wrap="wrap">
         <Button
-          size="1"
+          size={buttonSize}
           variant="soft"
           disabled={busy !== null}
           title="Check now"
+          aria-label="Check now"
           onClick={() => void run("check", "checkNow")}
         >
-          <ReloadIcon /> {busy === "check" ? "Checking" : "Check"}
+          <ReloadIcon /> {compact ? null : busy === "check" ? "Checking" : "Check"}
         </Button>
         <Button
-          size="1"
+          size={buttonSize}
           variant="soft"
           disabled={busy !== null}
           title="Compose"
+          aria-label="Compose"
           onClick={() => void run("compose", "compose")}
         >
-          <Pencil1Icon /> Compose
+          <Pencil1Icon /> {compact ? null : "Compose"}
         </Button>
-        <Flex align="center" gap="1" style={{ flex: "1 1 260px", minWidth: 220 }}>
-          <TextField.Root
-            size="1"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search mail"
-            style={{ flex: 1 }}
-          />
+        {compact && !searchOpen ? (
           <Button
-            size="1"
-            disabled={busy !== null || !query.trim()}
-            title="Search"
-            onClick={() => void run("search", "search", { q: query.trim() })}
+            size={buttonSize}
+            variant="soft"
+            title="Search mail"
+            aria-label="Search mail"
+            onClick={() => setSearchOpen(true)}
           >
-            <MagnifyingGlassIcon /> Search
+            <MagnifyingGlassIcon />
           </Button>
-        </Flex>
+        ) : (
+          <Flex align="center" gap="1" style={{ flex: "1 1 220px", minWidth: 0 }}>
+            <TextField.Root
+              size={buttonSize}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search mail"
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <Button
+              size={buttonSize}
+              disabled={busy !== null || !query.trim()}
+              title="Search"
+              aria-label="Search"
+              onClick={() => void run("search", "search", { q: query.trim() })}
+            >
+              <MagnifyingGlassIcon /> {compact ? null : "Search"}
+            </Button>
+          </Flex>
+        )}
       </Flex>
 
+      {/* Watch rules — diagnostic/secondary, collapsed by default */}
+      <Button
+        size="1"
+        variant="ghost"
+        color="gray"
+        style={{ alignSelf: "flex-start" }}
+        aria-expanded={rulesOpen}
+        onClick={() => setRulesOpen((open) => !open)}
+      >
+        {rulesOpen ? <ChevronDownIcon /> : <ChevronRightIcon />}
+        Watch rules ({directives.length})
+      </Button>
+
+      {rulesOpen ? (
       <Flex
         direction="column"
         gap="2"
@@ -287,13 +319,13 @@ export default function GmailInbox({
           padding: "10px",
         }}
       >
+        <Text size="1" color="gray">
+          {state.email ?? "Gmail account"} - {lastSynced}
+        </Text>
         <Flex align="center" justify="between" gap="2" wrap="wrap">
-          <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
-            <Text size="2" weight="medium">Attention rules</Text>
-            <Text size="1" color="gray">
-              Static wake rules run on incoming metadata and snippets before any semantic work.
-            </Text>
-          </Flex>
+          <Text size="1" color="gray" style={{ minWidth: 0 }}>
+            Static wake rules run on incoming metadata and snippets before any semantic work.
+          </Text>
           <Button
             size="1"
             variant="ghost"
@@ -369,10 +401,13 @@ export default function GmailInbox({
         ) : null}
 
       </Flex>
+      ) : null}
 
+      {actionable.length > 0 ? (
       <ThreadList
         title="Needs attention"
-        empty="No unread primary threads addressed to you."
+        empty=""
+        compact={compact}
         threads={actionable}
         busy={busy}
         selectedThreadIds={selectedThreadIds}
@@ -384,6 +419,7 @@ export default function GmailInbox({
         onArchive={(threadId) => void run(`archive:${threadId}`, "archiveThread", { threadId })}
         onRead={(threadId) => void run(`read:${threadId}`, "markRead", { threadId })}
       />
+      ) : null}
 
       {state.searchQuery ? (
         <>
@@ -412,6 +448,7 @@ export default function GmailInbox({
           <ThreadList
             title=""
             empty="No matching messages."
+            compact={compact}
             threads={searchResults}
             busy={busy}
             selectedThreadIds={selectedThreadIds}
@@ -556,6 +593,7 @@ function slug(value: string): string {
 function ThreadList({
   title,
   empty,
+  compact,
   threads,
   busy,
   selectedThreadIds,
@@ -569,6 +607,7 @@ function ThreadList({
 }: {
   title: string;
   empty: string;
+  compact: boolean;
   threads: GmailThreadCardState[];
   busy: string | null;
   selectedThreadIds: Set<string>;
@@ -596,11 +635,12 @@ function ThreadList({
           </Flex>
         ) : null}
       </Flex>
-      {threads.length === 0 ? <Text size="2" color="gray">{empty}</Text> : null}
+      {threads.length === 0 && empty ? <Text size="2" color="gray">{empty}</Text> : null}
       {threads.map((thread) => (
         <Flex
           key={thread.threadId}
-          align="center"
+          direction={compact ? "column" : "row"}
+          align={compact ? "stretch" : "center"}
           justify="between"
           gap="2"
           style={{
@@ -610,6 +650,7 @@ function ThreadList({
             minWidth: 0,
           }}
         >
+          <Flex gap="2" align={compact ? "start" : "center"} style={{ minWidth: 0, flex: "1 1 auto" }}>
           <Checkbox
             checked={selectedThreadIds.has(thread.threadId)}
             onCheckedChange={(checked) => onSelect(thread.threadId, checked === true)}
@@ -636,17 +677,18 @@ function ThreadList({
               </Text>
             ) : null}
           </Box>
-          <Flex gap="1" wrap="wrap" justify="end" style={{ flex: "0 0 auto" }}>
-            <Button size="1" variant="ghost" disabled={busy !== null} title="Open" onClick={() => onOpen(thread)}>
+          </Flex>
+          <Flex gap="1" wrap="wrap" justify={compact ? "start" : "end"} style={{ flex: "0 0 auto" }}>
+            <Button size={compact ? "2" : "1"} variant="ghost" disabled={busy !== null} title="Open" onClick={() => onOpen(thread)}>
               Open
             </Button>
-            <Button size="1" variant="soft" disabled={busy !== null} title="Draft reply" onClick={() => onDraft(thread.threadId)}>
+            <Button size={compact ? "2" : "1"} variant="soft" disabled={busy !== null} title="Draft reply" onClick={() => onDraft(thread.threadId)}>
               <Pencil1Icon /> Draft
             </Button>
-            <Button size="1" variant="ghost" disabled={busy !== null} title="Mark read" onClick={() => onRead(thread.threadId)}>
+            <Button size={compact ? "2" : "1"} variant="ghost" disabled={busy !== null} title="Mark read" aria-label="Mark read" onClick={() => onRead(thread.threadId)}>
               <CheckIcon />
             </Button>
-            <Button size="1" variant="ghost" disabled={busy !== null} title="Archive" onClick={() => onArchive(thread.threadId)}>
+            <Button size={compact ? "2" : "1"} variant="ghost" disabled={busy !== null} title="Archive" aria-label="Archive" onClick={() => onArchive(thread.threadId)}>
               <ArchiveIcon />
             </Button>
           </Flex>

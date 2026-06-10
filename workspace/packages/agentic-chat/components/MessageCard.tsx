@@ -299,6 +299,7 @@ export const MessageCard = React.memo(function MessageCard({
             </Box>
             {onReply && hasContent && !isStreaming && (
               <IconButton
+                className="copy-button"
                 size="1"
                 variant="ghost"
                 color="gray"

@@ -101,7 +101,11 @@
   .message-card .copy-button:hover { opacity: 1; }
 }
 @media (pointer: coarse) {
-  .message-card .copy-button { padding: 8px; }
+  .message-card .copy-button {
+    padding: 8px;
+    min-inline-size: 40px;
+    min-block-size: 40px;
+  }
 }
 
 .agentic-chat-root {
@@ -200,6 +204,43 @@
 .chat-input-actions {
   flex: 0 0 auto;
   padding-block: 1px;
+}
+
+/* Comfortable tap targets and no-zoom text entry on touch devices */
+@media (pointer: coarse) {
+  .chat-input-action-button {
+    inline-size: 40px;
+    block-size: 40px;
+  }
+
+  .chat-input-card textarea {
+    font-size: 16px;
+  }
+}
+
+/* Container-width responsive utilities — keyed on .agentic-chat-root,
+   which is a `container-type: inline-size` container. Narrow panels (not
+   just narrow viewports) get the compact header. */
+.chat-narrow-only {
+  display: none !important;
+}
+
+@container (max-width: 520px) {
+  .chat-wide-only {
+    display: none !important;
+  }
+
+  .chat-narrow-only {
+    display: flex !important;
+  }
+}
+
+.chat-connection-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  inline-size: 8px;
+  block-size: 8px;
+  border-radius: 999px;
 }
 
 .chat-input-action-button {

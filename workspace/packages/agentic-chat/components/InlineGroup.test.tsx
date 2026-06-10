@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { Theme } from "@radix-ui/themes";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InlineGroup, type InlineItem } from "./InlineGroup";
+
+// Radix Themes components (DropdownMenu et al.) require a Theme provider.
+const render = (ui: React.ReactElement) => rtlRender(<Theme>{ui}</Theme>);
 import { CustomMessageCard } from "./CustomMessage";
 import type { MessageTypeComponentEntry } from "../types";
 
@@ -218,7 +222,10 @@ describe("InlineGroup custom messages", () => {
     // The spinner pill is clickable and self-describing.
     fireEvent.click(screen.getByRole("button", { expanded: false }));
     expect(screen.getByText(/Loading renderer source file/)).toBeTruthy();
-    expect(screen.getByText("Copy details")).toBeTruthy();
+    // Copy details now lives behind the card actions ("⋯") menu — the popper
+    // content can't open in jsdom (duplicate React under @floating-ui), so
+    // assert the menu trigger by its accessible name.
+    expect(screen.getByLabelText("Card actions")).toBeTruthy();
     fireEvent.click(screen.getByText(/Details/));
     expect(screen.getByText("skills/weather/renderer.tsx")).toBeTruthy();
   });

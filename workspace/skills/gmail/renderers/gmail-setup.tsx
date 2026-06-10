@@ -1,6 +1,13 @@
 import { Badge, Box, Button, Callout, Flex, Switch, Text } from "@radix-ui/themes";
-import { ExclamationTriangleIcon, GearIcon, ReloadIcon } from "@radix-ui/react-icons";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ExclamationTriangleIcon,
+  GearIcon,
+  ReloadIcon,
+} from "@radix-ui/react-icons";
 import { useState } from "react";
+import { useContainerWidth } from "./use-container-width";
 import type { GmailSetupState } from "@workspace/gmail/card-types";
 
 type GmailSetupCardState = Partial<GmailSetupState> & { status: GmailSetupState["status"] };
@@ -32,9 +39,11 @@ export default function GmailSetup({
   expanded: boolean;
   chat: GmailChat;
 }) {
+  const { ref, compact } = useContainerWidth();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reconnectResult, setReconnectResult] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
 
   if (!expanded) return <Pill state={state} />;
 
@@ -77,9 +86,9 @@ export default function GmailSetup({
   const lastSynced = state.lastSyncAt ? new Date(state.lastSyncAt).toLocaleString() : "never";
 
   return (
-    <Flex direction="column" gap="3">
+    <Flex ref={ref} direction="column" gap="2">
       <Flex align="center" justify="between" gap="2" wrap="wrap">
-        <Flex align="center" gap="2">
+        <Flex align="center" gap="2" style={{ minWidth: 0 }}>
           <GearIcon />
           <Text size="3" weight="bold">Gmail setup</Text>
           <Badge color={auth === "ok" ? "green" : auth === "reconnect-required" ? "red" : "gray"} variant="soft">
@@ -90,28 +99,20 @@ export default function GmailSetup({
                 : "Connection unknown"}
           </Badge>
         </Flex>
-        <Button size="1" variant="soft" disabled={busy !== null} onClick={() => void reconnect()}>
-          <ReloadIcon /> {busy === "reconnect" ? "Verifying" : "Reconnect"}
-        </Button>
+        {auth !== "ok" ? (
+          <Button
+            size={compact ? "2" : "1"}
+            variant="soft"
+            disabled={busy !== null}
+            style={compact ? { width: "100%" } : undefined}
+            onClick={() => void reconnect()}
+          >
+            <ReloadIcon /> {busy === "reconnect" ? "Verifying" : "Reconnect"}
+          </Button>
+        ) : null}
       </Flex>
 
-      <Text size="1" color="gray">
-        {state.email ?? "Gmail account"} - last synced {lastSynced}
-        {pollMinutes ? ` - polls every ${pollMinutes} min` : ""}
-      </Text>
-
-      {state.addressBook ? (
-        <Text size="1" color="gray">
-          Address book: history-derived ({state.addressBook.knownPeople} people) - Google
-          contacts:{" "}
-          {state.addressBook.googleContacts === "available"
-            ? "available"
-            : state.addressBook.googleContacts === "unavailable"
-              ? "unavailable — reconnect Google to enable it"
-              : "not checked yet"}
-        </Text>
-      ) : null}
-
+      {/* Errors always surface */}
       {reconnectResult ? <Text size="1" color="gray">{reconnectResult}</Text> : null}
       {state.lastError || error ? (
         <Callout.Root color="red" size="1">
@@ -142,41 +143,85 @@ export default function GmailSetup({
           </Callout.Text>
         </Callout.Root>
       ) : null}
-      {state.setupSummary ? <Text size="1" color="gray">{state.setupSummary}</Text> : null}
 
-      <Flex direction="column" gap="2">
-        <Text size="2" weight="medium">Attention rules</Text>
-        {rules.length === 0 ? (
-          <Text size="2" color="gray">No wake rules installed. Incoming mail will not wake the agent.</Text>
-        ) : (
-          rules.map((rule) => (
-            <Flex
-              key={rule.id}
-              align="center"
-              justify="between"
-              gap="2"
-              style={{ border: "1px solid var(--gray-a5)", borderRadius: 6, padding: "8px" }}
+      {/* Everything diagnostic/secondary lives behind the Details disclosure */}
+      <Button
+        size="1"
+        variant="ghost"
+        color="gray"
+        style={{ alignSelf: "flex-start" }}
+        aria-expanded={detailsOpen}
+        onClick={() => setDetailsOpen((open) => !open)}
+      >
+        {detailsOpen ? <ChevronDownIcon /> : <ChevronRightIcon />}
+        Details
+      </Button>
+
+      {detailsOpen ? (
+        <Flex direction="column" gap="2">
+          {auth === "ok" ? (
+            <Button
+              size="1"
+              variant="soft"
+              disabled={busy !== null}
+              style={{ alignSelf: "flex-start" }}
+              onClick={() => void reconnect()}
             >
-              <Box style={{ minWidth: 0 }}>
-                <Text size="2" weight="medium" style={{ wordBreak: "break-word" }}>{rule.name}</Text>
-                <Text size="1" color="gray" style={{ display: "block" }}>
-                  priority {rule.priority}
-                </Text>
-              </Box>
-              <Switch
-                checked={rule.enabled}
-                disabled={busy !== null}
-                onCheckedChange={(checked) =>
-                  void run(`rule:${rule.id}`, "setAttentionRuleEnabled", {
-                    id: rule.id,
-                    enabled: checked === true,
-                  })
-                }
-              />
-            </Flex>
-          ))
-        )}
-      </Flex>
+              <ReloadIcon /> {busy === "reconnect" ? "Verifying" : "Reconnect"}
+            </Button>
+          ) : null}
+          <Text size="1" color="gray">
+            {state.email ?? "Gmail account"} - last synced {lastSynced}
+            {pollMinutes ? ` - polls every ${pollMinutes} min` : ""}
+          </Text>
+
+          {state.addressBook ? (
+            <Text size="1" color="gray">
+              Address book: history-derived ({state.addressBook.knownPeople} people) - Google
+              contacts:{" "}
+              {state.addressBook.googleContacts === "available"
+                ? "available"
+                : state.addressBook.googleContacts === "unavailable"
+                  ? "unavailable — reconnect Google to enable it"
+                  : "not checked yet"}
+            </Text>
+          ) : null}
+
+          {state.setupSummary ? <Text size="1" color="gray">{state.setupSummary}</Text> : null}
+
+          <Text size="2" weight="medium">Attention rules</Text>
+          {rules.length === 0 ? (
+            <Text size="2" color="gray">No wake rules installed. Incoming mail will not wake the agent.</Text>
+          ) : (
+            rules.map((rule) => (
+              <Flex
+                key={rule.id}
+                align="center"
+                justify="between"
+                gap="2"
+                style={{ border: "1px solid var(--gray-a5)", borderRadius: 6, padding: "8px" }}
+              >
+                <Box style={{ minWidth: 0 }}>
+                  <Text size="2" weight="medium" style={{ wordBreak: "break-word" }}>{rule.name}</Text>
+                  <Text size="1" color="gray" style={{ display: "block" }}>
+                    priority {rule.priority}
+                  </Text>
+                </Box>
+                <Switch
+                  checked={rule.enabled}
+                  disabled={busy !== null}
+                  onCheckedChange={(checked) =>
+                    void run(`rule:${rule.id}`, "setAttentionRuleEnabled", {
+                      id: rule.id,
+                      enabled: checked === true,
+                    })
+                  }
+                />
+              </Flex>
+            ))
+          )}
+        </Flex>
+      ) : null}
     </Flex>
   );
 }

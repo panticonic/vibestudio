@@ -1,5 +1,7 @@
 import { Badge, Button, Flex, Text, TextArea } from "@radix-ui/themes";
+import { ChevronDownIcon, ChevronRightIcon } from "@radix-ui/react-icons";
 import { useState } from "react";
+import { useContainerWidth } from "./use-container-width";
 import type {
   GmailThreadState,
   GmailThreadUpdate,
@@ -67,7 +69,9 @@ export default function GmailThread({ state, expanded, chat }: {
   expanded: boolean;
   chat: { callMethodByHandle: (handle: string, method: string, args: unknown) => Promise<unknown> };
 }) {
+  const { ref, compact } = useContainerWidth();
   const [thread, setThread] = useState<ThreadBody | null>(null);
+  const [openMessageIds, setOpenMessageIds] = useState<Set<string>>(() => new Set());
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -107,42 +111,82 @@ export default function GmailThread({ state, expanded, chat }: {
     return <Pill state={state} />;
   }
 
+  function toggleMessage(id: string) {
+    setOpenMessageIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  const buttonSize = compact ? "2" : "1";
+
   return (
-    <Flex direction="column" gap="2">
-      <Flex align="center" justify="between" gap="2">
-        <Text size="3" weight="bold">{state.subject}</Text>
+    <Flex ref={ref} direction="column" gap="2">
+      <Flex align="center" justify="between" gap="2" style={{ minWidth: 0 }}>
+        <Text
+          size="3"
+          weight="bold"
+          truncate={compact}
+          style={{ minWidth: 0 }}
+          title={state.subject}
+        >
+          {state.subject}
+        </Text>
         <Badge color={state.status === "archived" ? "gray" : "blue"}>{state.status}</Badge>
       </Flex>
       <Text size="2" color="gray">{state.participants.join(", ")}</Text>
       {error ? <Text size="1" color="red">{error}</Text> : null}
       {thread ? (
         <Flex direction="column" gap="2">
-          {thread.messages.map((message) => (
-            <Flex key={message.id} direction="column" gap="1">
-              <Text size="1" color="gray">{message.from} {message.date}</Text>
-              <Text size="2" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                {message.bodyText ?? message.snippet}
-              </Text>
-            </Flex>
-          ))}
+          {thread.messages.map((message) => {
+            const open = openMessageIds.has(message.id);
+            return (
+              <Flex key={message.id} direction="column" gap="1">
+                <Button
+                  size="1"
+                  variant="ghost"
+                  color="gray"
+                  style={{ alignSelf: "flex-start", maxWidth: "100%" }}
+                  aria-expanded={open}
+                  onClick={() => toggleMessage(message.id)}
+                >
+                  {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
+                  <Text size="1" truncate style={{ minWidth: 0 }}>
+                    {message.from} {message.date}
+                  </Text>
+                </Button>
+                {open ? (
+                  <Text size="2" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                    {message.bodyText ?? message.snippet}
+                  </Text>
+                ) : (
+                  <Text size="1" color="gray" truncate>
+                    {message.snippet ?? ""}
+                  </Text>
+                )}
+              </Flex>
+            );
+          })}
         </Flex>
       ) : (
         <Text size="2" color="gray">{loading ? "Loading thread..." : state.lastSnippet}</Text>
       )}
       <TextArea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Draft reply" />
       <Flex gap="2" wrap="wrap">
-        <Button size="1" variant="soft" disabled={loading || busy !== null} onClick={() => void loadThread()}>
+        <Button size={buttonSize} variant="soft" disabled={loading || busy !== null} onClick={() => void loadThread()}>
           {loading ? "Loading" : thread ? "Refresh thread" : "Load thread"}
         </Button>
         <Button
-          size="1"
+          size={buttonSize}
           disabled={busy !== null}
           onClick={() => void call("draftReply", { threadId: state.threadId }, "draft")}
         >
           {busy === "draft" ? "Drafting" : "AI draft"}
         </Button>
         <Button
-          size="1"
+          size={buttonSize}
           variant="soft"
           disabled={!draft.trim() || busy !== null}
           onClick={() => {
@@ -156,7 +200,7 @@ export default function GmailThread({ state, expanded, chat }: {
           {busy === "send" ? "Sending" : reviewingSend ? "Confirm send" : "Review send"}
         </Button>
         <Button
-          size="1"
+          size={buttonSize}
           variant="ghost"
           disabled={busy !== null}
           onClick={() => void call("markRead", { threadId: state.threadId }, "read")}
@@ -164,14 +208,14 @@ export default function GmailThread({ state, expanded, chat }: {
           Mark read
         </Button>
         <Button
-          size="1"
+          size={buttonSize}
           variant="ghost"
           disabled={busy !== null}
           onClick={() => void call("archiveThread", { threadId: state.threadId }, "archive")}
         >
           Archive
         </Button>
-        <Button size="1" variant="ghost" onClick={() => setDraft("")}>Discard</Button>
+        <Button size={buttonSize} variant="ghost" onClick={() => setDraft("")}>Discard</Button>
       </Flex>
     </Flex>
   );

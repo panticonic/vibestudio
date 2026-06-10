@@ -2,6 +2,7 @@ import { Badge, Button, Callout, Flex, Text, TextArea } from "@radix-ui/themes";
 import { Cross2Icon, ExclamationTriangleIcon, PaperPlaneIcon, PersonIcon } from "@radix-ui/react-icons";
 import { useEffect, useRef, useState } from "react";
 import type { GmailComposeCardState, GmailContactCandidate } from "@workspace/gmail/card-types";
+import { useContainerWidth } from "./use-container-width";
 
 type GmailComposeState = Partial<GmailComposeCardState>;
 
@@ -167,6 +168,7 @@ function RecipientField({
             borderRadius: 6,
             boxShadow: "var(--shadow-3)",
             overflow: "hidden",
+            maxWidth: "100%",
           }}
         >
           {suggestions.slice(0, 6).map((candidate) => (
@@ -224,6 +226,9 @@ export default function GmailCompose({
   const [reviewingSend, setReviewingSend] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  // Cc/Bcc stay hidden until used — visible when they already have values.
+  const [showCcBcc, setShowCcBcc] = useState(false);
+  const { ref, compact } = useContainerWidth();
 
   useEffect(() => {
     setTo(splitRecipients(state.to));
@@ -269,9 +274,12 @@ export default function GmailCompose({
     (candidate) => candidate.email && !to.includes(candidate.email)
   );
   const hasTo = to.length > 0;
+  const ccBccVisible = showCcBcc || cc.length > 0 || bcc.length > 0;
+  const actionButtonSize = compact ? "2" : "1";
+  const actionButtonStyle = compact ? { width: "100%" } : undefined;
 
   return (
-    <Flex direction="column" gap="2">
+    <Flex ref={ref} direction="column" gap="2">
       <Flex align="center" justify="between" gap="2">
         <Text size="3" weight="bold">{state.threadId ? "Reply" : "Compose"}</Text>
         {state.status ? <StatusBadge status={state.status} /> : null}
@@ -310,14 +318,27 @@ export default function GmailCompose({
           ))}
         </Flex>
       ) : null}
-      <Flex gap="2" wrap="wrap">
-        <div style={{ flex: "1 1 180px" }}>
-          <RecipientField label="Cc" chips={cc} setChips={setCc} disabled={disabled} chat={chat} />
-        </div>
-        <div style={{ flex: "1 1 180px" }}>
-          <RecipientField label="Bcc" chips={bcc} setChips={setBcc} disabled={disabled} chat={chat} />
-        </div>
-      </Flex>
+      {ccBccVisible ? (
+        <Flex gap="2" wrap="wrap" direction={compact ? "column" : "row"}>
+          <div style={compact ? undefined : { flex: "1 1 180px" }}>
+            <RecipientField label="Cc" chips={cc} setChips={setCc} disabled={disabled} chat={chat} />
+          </div>
+          <div style={compact ? undefined : { flex: "1 1 180px" }}>
+            <RecipientField label="Bcc" chips={bcc} setChips={setBcc} disabled={disabled} chat={chat} />
+          </div>
+        </Flex>
+      ) : (
+        <Button
+          size="1"
+          variant="ghost"
+          color="gray"
+          disabled={disabled}
+          style={{ alignSelf: "flex-start" }}
+          onClick={() => setShowCcBcc(true)}
+        >
+          + Cc/Bcc
+        </Button>
+      )}
       <input
         value={subject}
         onChange={(event) => setSubject(event.target.value)}
@@ -340,7 +361,7 @@ export default function GmailCompose({
         disabled={disabled}
         style={{ minHeight: 160 }}
       />
-      <Flex gap="2" wrap="wrap">
+      <Flex gap="2" wrap="wrap" direction={compact ? "column" : "row"}>
         {reviewingSend ? (
           <Callout.Root color="amber" size="1" style={{ width: "100%" }}>
             <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
@@ -350,7 +371,8 @@ export default function GmailCompose({
           </Callout.Root>
         ) : null}
         <Button
-          size="1"
+          size={actionButtonSize}
+          style={actionButtonStyle}
           disabled={disabled || !hasTo || !subject.trim() || !body.trim()}
           title="Send"
           onClick={() => {
@@ -373,7 +395,8 @@ export default function GmailCompose({
                 : "Review send"}
         </Button>
         <Button
-          size="1"
+          size={actionButtonSize}
+          style={actionButtonStyle}
           variant="soft"
           disabled={disabled || !body.trim()}
           onClick={() => void call("saveDraft", payload, "draft")}
@@ -381,7 +404,8 @@ export default function GmailCompose({
           {busy === "draft" ? "Saving" : state.status === "saved" ? "Saved" : "Save draft"}
         </Button>
         <Button
-          size="1"
+          size={actionButtonSize}
+          style={actionButtonStyle}
           variant="ghost"
           color="red"
           disabled={disabled}
