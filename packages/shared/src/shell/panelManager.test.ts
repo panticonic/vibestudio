@@ -443,6 +443,7 @@ describe("PanelManager", () => {
       canGoBack: true,
       canGoForward: false,
     });
+    expect(getCurrentSnapshot(panel).source).toBe("panels/browserish");
     expect(getCurrentSnapshot(panel).resolvedUrl).toBe("https://example.com/docs");
     expect(registry.getTreeRevision()).toBeGreaterThan(revisionBeforeUpdate);
   });

@@ -813,6 +813,51 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     expect(registry.getPanel("root")?.title).toBe("New title");
   });
 
+  it("treats workspace external navigation state as non-semantic snapshot drift", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.addPanel(
+      makePanel("root", [], {
+        title: "Runtime title",
+        navigation: {
+          url: "https://example.com/",
+          pageTitle: "Example Domain",
+          isLoading: false,
+          canGoBack: false,
+          canGoForward: false,
+        },
+        snapshot: {
+          source: "panels/root",
+          contextId: "ctx-root",
+          options: {},
+          resolvedUrl: "https://example.com/",
+        },
+      }),
+      null,
+      { addAsRoot: true }
+    );
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+    const repopulate = vi.spyOn(registry, "repopulate");
+
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [
+        makePanel("root", [], {
+          title: "Runtime title",
+          snapshot: {
+            source: "panels/root",
+            contextId: "ctx-root",
+            options: {},
+          },
+        }),
+      ],
+    });
+
+    expect(repopulate).not.toHaveBeenCalled();
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelRuntime", "getSnapshot", []);
+    expect(getCurrentSnapshot(registry.getPanel("root")!).source).toBe("panels/root");
+    expect(getCurrentSnapshot(registry.getPanel("root")!).resolvedUrl).toBe("https://example.com/");
+  });
+
   it("prevents non-explicit server title updates from overwriting explicit runtime titles", () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });

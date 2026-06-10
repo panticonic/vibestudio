@@ -5092,7 +5092,7 @@ describe("AgentWorkerBase typed transcript input", () => {
 
     expect(worker.prompt).not.toHaveBeenCalled();
     expect(worker.emittedDiagnostics).toEqual([
-      "Agent turn failed while running: Cannot start agent model turn: missing expected channel tool(s): eval",
+      "Agent turn failed while running: Cannot start agent model turn: missing expected channel tool(s): eval. The eval-providing client is absent from the channel roster; ensure the headless or panel runtime stayed connected and did not navigate away before the agent turn.",
     ]);
     expect(error).toHaveBeenCalledWith(
       "[TrajectoryVesselBase] Expected channel tools were not available",

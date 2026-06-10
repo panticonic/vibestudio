@@ -6408,9 +6408,13 @@ export abstract class TrajectoryVesselBase extends DurableObjectBase {
     };
     console.error("[TrajectoryVesselBase] Expected channel tools were not available", detail);
     this.recordDebugPhase(channelId, "channel_tools.expected_missing", detail);
+    const evalHint = missing.includes("eval")
+      ? ". The eval-providing client is absent from the channel roster; ensure the headless " +
+        "or panel runtime stayed connected and did not navigate away before the agent turn."
+      : "";
     throw new AgentWorkerError(
       "invalid_state",
-      `Cannot start agent model turn: missing expected channel tool(s): ${missing.join(", ")}`
+      `Cannot start agent model turn: missing expected channel tool(s): ${missing.join(", ")}${evalHint}`
     );
   }
 

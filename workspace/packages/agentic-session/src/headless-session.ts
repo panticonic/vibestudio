@@ -121,6 +121,7 @@ export interface SessionSnapshot {
   debugEvents: readonly (AgentDebugPayload & { ts: number })[];
   cleanupErrors: readonly SessionCleanupError[];
   participants: Record<string, { name: string; type: string; handle: string; connected: boolean }>;
+  localMethodNames: readonly string[];
   connected: boolean;
   duration: number;
 }
@@ -207,6 +208,7 @@ export class HeadlessSession {
   private _debugEvents: Array<AgentDebugPayload & { ts: number }> = [];
   private _cleanupErrors: SessionCleanupError[] = [];
   private _dirtyRepoWarnings = new Map<string, DirtyRepoDetails>();
+  private _registeredMethodNames: string[] = [];
   private _disposed = false;
   private _consumeAbort: AbortController | null = null;
 
@@ -293,6 +295,12 @@ export class HeadlessSession {
       ...defaultMethods,
       ...config.methods,
     };
+    if (config.sandbox && !methods["eval"]) {
+      throw new Error(
+        "HeadlessSession sandbox was provided but no eval method is registered. " +
+          "Expected the headless client to expose eval before subscribing the agent."
+      );
+    }
 
     const channelConfig: ChannelConfig = {
       ...getRecommendedChannelConfig(),
@@ -494,6 +502,7 @@ export class HeadlessSession {
     }
 
     const methods = options?.methods ?? this.buildDefaultMethods();
+    this._registeredMethodNames = Object.keys(methods).sort();
 
     this._client = await this._connection.connect({
       channelId,
@@ -755,6 +764,7 @@ export class HeadlessSession {
       debugEvents: this._debugEvents,
       cleanupErrors: [...this._cleanupErrors],
       participants,
+      localMethodNames: this._registeredMethodNames,
       connected: this._connection.connected,
       duration: now - this._createdAt,
     };
