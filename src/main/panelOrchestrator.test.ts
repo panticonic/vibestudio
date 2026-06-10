@@ -55,6 +55,13 @@ function createOrchestrator(
       source: "panels/created-panel",
       options: {},
     })),
+    createBrowser: vi.fn(async (_parentId: string | null, url: string, _options?: unknown) => ({
+      panelId: "created-browser",
+      title: "created-browser",
+      contextId: "ctx-created-browser",
+      source: `browser:${url}`,
+      options: {},
+    })),
     updateTitle: vi.fn(async (_panelId: string, _title: string) => {}),
     updateStateArgs: vi.fn(async (panelId: string, updates: Record<string, unknown>) => {
       const panel = registry.getPanel(panelId);
@@ -126,6 +133,7 @@ describe("PanelOrchestrator.closePanel", () => {
       runtimeClient: {
         clientSessionId: "host-session",
         platform: "headless",
+        loadOnLeaseAssignment: true,
         label: "Headless",
         supportsCdp: true,
       },
@@ -141,6 +149,7 @@ describe("PanelOrchestrator.closePanel", () => {
         hostConnectionId: "host-session",
         label: "Headless",
         platform: "headless",
+        loadOnLeaseAssignment: true,
         supportsCdp: true,
       },
     ]);
@@ -152,6 +161,7 @@ describe("PanelOrchestrator.closePanel", () => {
       runtimeClient: {
         clientSessionId: "host-session",
         platform: "headless",
+        loadOnLeaseAssignment: true,
         label: "Headless",
         supportsCdp: true,
       },
@@ -379,6 +389,82 @@ describe("PanelOrchestrator.createPanel", () => {
     expect(panelView.createViewForPanel.mock.invocationCallOrder[0]).toBeLessThan(
       panelView.setViewVisible.mock.invocationCallOrder[0] ?? 0
     );
+  });
+
+  it("acquires a runtime lease before creating browser panel views", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const caller = makePanel("caller");
+    const createdPanel = makePanel("created-browser", [], {
+      snapshot: {
+        source: "browser:https://example.com/",
+        contextId: "ctx-created-browser",
+        options: {},
+      },
+      artifacts: { buildState: "ready" },
+    });
+    registry.addPanel(caller, null, { addAsRoot: true });
+    registry.addPanel(createdPanel, caller.id);
+
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
+
+    await orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/", {
+      focus: false,
+    });
+
+    const acquireCallIndex = serverClient.call.mock.calls.findIndex(
+      ([service, method]) => service === "panelRuntime" && method === "acquire"
+    );
+    expect(acquireCallIndex).toBeGreaterThanOrEqual(0);
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "acquire", [
+      "panel:nav-created-browser",
+      expect.objectContaining({
+        slotId: "created-browser",
+        clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      }),
+    ]);
+    expect(panelView.createViewForBrowser).toHaveBeenCalledWith(
+      "created-browser",
+      "https://example.com/",
+      "ctx-created-browser"
+    );
+    const acquireOrder = serverClient.call.mock.invocationCallOrder[acquireCallIndex];
+    const createViewOrder = panelView.createViewForBrowser.mock.invocationCallOrder[0];
+    expect(acquireOrder).toBeDefined();
+    expect(createViewOrder).toBeDefined();
+    expect(acquireOrder!).toBeLessThan(createViewOrder!);
+  });
+
+  it("releases the browser panel runtime lease when native browser view creation fails", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const caller = makePanel("caller");
+    const createdPanel = makePanel("created-browser", [], {
+      snapshot: {
+        source: "browser:https://example.com/",
+        contextId: "ctx-created-browser",
+        options: {},
+      },
+      artifacts: { buildState: "ready" },
+    });
+    registry.addPanel(caller, null, { addAsRoot: true });
+    registry.addPanel(createdPanel, caller.id);
+
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
+    panelView.createViewForBrowser.mockRejectedValueOnce(new Error("native view failed"));
+
+    await expect(
+      orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/", {
+        focus: false,
+      })
+    ).rejects.toThrow("native view failed");
+
+    const acquireCall = serverClient.call.mock.calls.find(
+      ([service, method]) => service === "panelRuntime" && method === "acquire"
+    );
+    expect(acquireCall).toBeDefined();
+    expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "release", [
+      "panel:nav-created-browser",
+      expect.stringMatching(/^desktop-created-browser-/),
+    ]);
   });
 });
 
@@ -853,6 +939,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
         holderLabel: "Desktop",
         platform: "desktop",
         supportsCdp: true,
+        loadOnLeaseAssignment: false,
         acquiredAt: 1,
       },
       next: null,
@@ -897,6 +984,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
         connectionId: "assigned-runtime-conn",
         holderLabel: "Headless",
         platform: "headless",
+        loadOnLeaseAssignment: true,
         supportsCdp: true,
         acquiredAt: 1,
       },
@@ -947,6 +1035,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
           connectionId: "assigned-runtime-conn",
           holderLabel: "Headless",
           platform: "headless",
+          loadOnLeaseAssignment: true,
           supportsCdp: true,
           acquiredAt: 1,
         },
@@ -997,6 +1086,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
         connectionId: "assigned-runtime-1",
         holderLabel: "Headless",
         platform: "headless",
+        loadOnLeaseAssignment: true,
         supportsCdp: true,
         acquiredAt: 1,
       },
@@ -1016,6 +1106,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
         connectionId: "assigned-runtime-2",
         holderLabel: "Headless",
         platform: "headless",
+        loadOnLeaseAssignment: true,
         supportsCdp: true,
         acquiredAt: 2,
       },

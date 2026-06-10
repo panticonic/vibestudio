@@ -154,6 +154,7 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "headless-host",
       label: "Headless",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
 
     const result = coordinator.ensureDefaultCdpHostForSlot("slot-a", "panel:nav-slot-a");
@@ -166,6 +167,7 @@ describe("PanelRuntimeCoordinator", () => {
         clientSessionId: "headless-session",
         hostConnectionId: "headless-host",
         platform: "headless",
+        loadOnLeaseAssignment: true,
         supportsCdp: true,
       },
     });
@@ -175,6 +177,26 @@ describe("PanelRuntimeCoordinator", () => {
     });
   });
 
+  it("does not assign unheld panels to headless clients that cannot load assigned leases", () => {
+    const coordinator = new PanelRuntimeCoordinator();
+    coordinator.registerClient({
+      clientSessionId: "headless-session",
+      hostConnectionId: "headless-host",
+      label: "Headless",
+      platform: "headless",
+    });
+
+    const result = coordinator.ensureDefaultCdpHostForSlot("slot-a", "panel:nav-slot-a", {
+      isHostAvailable: () => true,
+    });
+
+    expect(result).toEqual({
+      assigned: false,
+      reason: "no_default_cdp_host",
+    });
+    expect(coordinator.resolveHostForSlot("slot-a")).toBeNull();
+  });
+
   it("skips unavailable headless clients when assigning the default CDP host", () => {
     const coordinator = new PanelRuntimeCoordinator();
     coordinator.registerClient({
@@ -182,12 +204,14 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "headless-host-a",
       label: "Headless A",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
     coordinator.registerClient({
       clientSessionId: "headless-b",
       hostConnectionId: "headless-host-b",
       label: "Headless B",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
 
     const result = coordinator.ensureDefaultCdpHostForSlot("slot-a", "panel:nav-slot-a", {
@@ -210,6 +234,7 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "headless-host",
       label: "Headless",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
 
     const result = coordinator.ensureDefaultCdpHostForSlot("slot-a", "panel:nav-slot-a", {
@@ -233,6 +258,7 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "headless-host",
       label: "Headless",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
     coordinator.registerClient({
       clientSessionId: "desktop-session",
@@ -253,6 +279,7 @@ describe("PanelRuntimeCoordinator", () => {
       clientSessionId: "headless-session",
       hostConnectionId: "headless-host",
       platform: "headless",
+      loadOnLeaseAssignment: true,
       supportsCdp: true,
     });
     expect(eventService.emit).toHaveBeenLastCalledWith(
@@ -278,6 +305,7 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "headless-host",
       label: "Headless",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
     coordinator.registerClient({
       clientSessionId: "desktop-session",
@@ -305,6 +333,7 @@ describe("PanelRuntimeCoordinator", () => {
       clientSessionId: "headless-session",
       hostConnectionId: "headless-host",
       platform: "headless",
+      loadOnLeaseAssignment: true,
       supportsCdp: true,
     });
     expect(eventService.emit).toHaveBeenLastCalledWith(
@@ -327,6 +356,7 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "headless-host",
       label: "Headless",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
     coordinator.acquire("panel:nav-slot-a", {
       slotId: "slot-a",
@@ -358,6 +388,7 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "headless-host",
       label: "Headless",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
     coordinator.acquire("panel:nav-slot-a", {
       slotId: "slot-a",
@@ -397,6 +428,7 @@ describe("PanelRuntimeCoordinator", () => {
       hostConnectionId: "headless-host",
       label: "Headless",
       platform: "headless",
+      loadOnLeaseAssignment: true,
     });
     coordinator.registerClient({
       clientSessionId: "mobile-session",

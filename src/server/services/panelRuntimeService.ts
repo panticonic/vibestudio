@@ -10,6 +10,7 @@ const registerClientSchema = z.object({
   label: z.string().min(1),
   platform: clientPlatformSchema,
   supportsCdp: z.boolean().optional(),
+  loadOnLeaseAssignment: z.boolean().optional(),
 });
 
 const leaseRequestSchema = z.object({

@@ -217,6 +217,7 @@ describe("PanelRegistry", () => {
             holderLabel: "Desktop A",
             platform: "desktop",
             supportsCdp: true,
+            loadOnLeaseAssignment: false,
             acquiredAt: 1,
           },
         ],

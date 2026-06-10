@@ -54,6 +54,7 @@ export class PanelRuntimeCoordinator {
     label: string;
     platform: "desktop" | "headless" | "mobile";
     supportsCdp?: boolean;
+    loadOnLeaseAssignment?: boolean;
   }): void {
     const now = Date.now();
     const existing = this.clients.get(input.clientSessionId);
@@ -65,6 +66,7 @@ export class PanelRuntimeCoordinator {
       label: input.label,
       platform: input.platform,
       supportsCdp: input.supportsCdp ?? input.platform !== "mobile",
+      loadOnLeaseAssignment: input.loadOnLeaseAssignment ?? false,
       connectedAt: existing?.connectedAt ?? now,
       lastSeenAt: now,
     });
@@ -131,6 +133,7 @@ export class PanelRuntimeCoordinator {
     for (const client of this.clients.values()) {
       const hostConnectionId = client.hostConnectionId ?? client.clientSessionId;
       if (client.platform !== "headless" || client.supportsCdp === false) continue;
+      if (client.loadOnLeaseAssignment !== true) continue;
       if (options.isHostAvailable && !options.isHostAvailable(hostConnectionId)) continue;
       return client;
     }
@@ -345,6 +348,7 @@ export class PanelRuntimeCoordinator {
       holderLabel: client.label,
       platform: client.platform,
       supportsCdp: client.supportsCdp ?? client.platform !== "mobile",
+      loadOnLeaseAssignment: client.loadOnLeaseAssignment ?? false,
       acquiredAt: Date.now(),
     };
     this.leases.set(runtimeEntityId, lease);

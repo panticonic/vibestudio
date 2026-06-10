@@ -10,6 +10,7 @@ export interface ClientSession {
   label: string;
   platform: ClientPlatform;
   supportsCdp?: boolean;
+  loadOnLeaseAssignment?: boolean;
   connectedAt: number;
   lastSeenAt: number;
 }
@@ -28,6 +29,7 @@ export interface PanelRuntimeLease {
   holderLabel: string;
   platform: ClientPlatform;
   supportsCdp: boolean;
+  loadOnLeaseAssignment: boolean;
   acquiredAt: number;
   expiresAt?: number;
 }

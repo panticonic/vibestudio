@@ -18,6 +18,7 @@ describe("panelRuntimeService", () => {
       hostConnectionId: "headless-host",
       label: "Headless",
       platform: "headless",
+      loadOnLeaseAssignment: true,
       supportsCdp: true,
     };
 

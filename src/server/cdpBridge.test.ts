@@ -63,6 +63,7 @@ function leaseChangedEvent(
     holderLabel: hostConnectionId,
     platform: "desktop" as const,
     supportsCdp: true,
+    loadOnLeaseAssignment: false,
     acquiredAt: Date.now(),
   });
   return {

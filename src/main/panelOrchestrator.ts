@@ -1302,8 +1302,18 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
 
     if (opts.browserUrl) {
       if (view?.createViewForBrowser) {
-        await view.createViewForBrowser(result.panelId, opts.browserUrl, assertPresent(contextId));
-        this.bumpViewRevision();
+        await this.acquireRuntimeLease(result.panelId, "acquire");
+        try {
+          await view.createViewForBrowser(
+            result.panelId,
+            opts.browserUrl,
+            assertPresent(contextId)
+          );
+          this.bumpViewRevision();
+        } catch (error) {
+          this.releaseLocalPanelRuntime(result.panelId, "unload");
+          throw error;
+        }
       }
       this.registry.updateArtifacts(result.panelId, {
         htmlPath: opts.browserUrl,
@@ -1495,6 +1505,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
         label: this.runtimeClientLabel,
         platform: this.runtimeClientPlatform,
         supportsCdp: this.runtimeClientSupportsCdp,
+        loadOnLeaseAssignment: this.loadOnLeaseAssignment,
       },
     ]);
     this.runtimeClientRegistered = true;
