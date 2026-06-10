@@ -428,7 +428,8 @@ export class ViewManager {
     view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     view.setVisible(false);
 
-    // Add to window's content view
+    // Add to window's content view. This appends at the top of the stack, so
+    // re-assert layer order below once the view is tracked.
     this.window.contentView.addChildView(view);
 
     // Track the managed view
@@ -505,6 +506,10 @@ export class ViewManager {
 
     if (config.type === "panel") {
       this.restorePanelSlotIfPending(config.id, managed);
+    }
+
+    if (this.nativePanelSlots.activeSlots.size > 0 || this.visiblePanelId) {
+      this.reconcileNativeLayerOrder();
     }
 
     return view;
@@ -946,16 +951,8 @@ export class ViewManager {
       managed.bounds = bounds;
       managed.view.setBounds(bounds);
       managed.view.setVisible(true);
-      this.bringToFront(id);
+      this.reconcileNativeLayerOrder();
       this.focusVisibleView(managed);
-      // Showing the hosted shell must not leave it stacked above panels it
-      // hosts in native slots — those layer above the shell surface.
-      if (
-        this.nativePanelSlots.activeSlots.size > 0 &&
-        this.nativePanelSlots.activeHostedShellViewId === id
-      ) {
-        this.reconcileNativeLayerOrder();
-      }
     } else if (visible && managed.type !== "shell") {
       // Track visible panel and apply calculated bounds
       this.visiblePanelId = id;
@@ -968,7 +965,7 @@ export class ViewManager {
         managed.view.setVisible(false);
       } else {
         managed.view.setVisible(true);
-        this.bringToFront(id);
+        this.reconcileNativeLayerOrder();
         this.focusVisibleView(managed);
       }
     } else {
@@ -1243,55 +1240,51 @@ export class ViewManager {
   }
 
   /**
-   * Bring a view to the front (above other views but below shell).
+   * Single authority for native layer z-order. Every code path that shows,
+   * raises, or creates a view routes through here instead of re-adding child
+   * views directly — distributed remove/add calls are how the hosted shell
+   * ended up stacked over slotted panels. Re-asserts, bottom to top:
+   * bootstrap shell (while the hosted shell is not ready), host chrome app
+   * views, the legacy visible panel (no native slot), slotted panels with the
+   * focused slot last, then overlay layers via callbacks.
    */
-  bringToFront(id: string): void {
-    const managed = this.views.get(id);
-    if (!managed) {
-      return;
-    }
-
-    // Re-add to move to top of z-order (shell is always below)
-    this.window.contentView.removeChildView(managed.view);
-    this.window.contentView.addChildView(managed.view);
-
-    // Notify listeners (e.g., autofill overlay) to re-establish z-order
-    for (const cb of this.viewOrderChangedCallbacks) {
-      cb();
-    }
-    this.nativeShellOverlay.bringToFront();
-  }
-
   private reconcileNativeLayerOrder(): void {
     if (this.window.isDestroyed()) return;
 
-    const readd = (managed: ManagedView) => {
+    const raised = new Set<string>();
+    const raise = (id: string | null | undefined) => {
+      if (!id || raised.has(id)) return;
+      const managed = this.views.get(id);
+      if (!managed) return;
+      raised.add(id);
       this.window.contentView.removeChildView(managed.view);
       this.window.contentView.addChildView(managed.view);
     };
 
     if (!this.nativePanelSlots.hostedShellReady) {
-      const shellManaged = this.views.get("shell");
-      if (shellManaged) readd(shellManaged);
+      raise("shell");
     }
 
-    const hostedShellId = this.nativePanelSlots.activeHostedShellViewId;
-    if (hostedShellId && this.nativePanelSlots.hostedShellReady) {
-      const hostedShell = this.views.get(hostedShellId);
-      if (hostedShell) readd(hostedShell);
+    for (const managed of this.views.values()) {
+      if (managed.hostChrome && managed.visible) raise(managed.id);
+    }
+    if (this.nativePanelSlots.hostedShellReady) {
+      raise(this.nativePanelSlots.activeHostedShellViewId);
+    }
+
+    if (this.visiblePanelId && !this.nativePanelSlots.panelToSlot.has(this.visiblePanelId)) {
+      const managed = this.views.get(this.visiblePanelId);
+      if (managed?.visible) raise(this.visiblePanelId);
     }
 
     for (const slot of this.nativePanelSlots.activeSlots.values()) {
       if (slot.nativeSlotId === this.nativePanelSlots.focusedNativeSlotId) continue;
-      const managed = this.views.get(slot.panelId);
-      if (managed) readd(managed);
+      raise(slot.panelId);
     }
     const focusedSlotId = this.nativePanelSlots.focusedNativeSlotId;
-    const focusedPanelId = focusedSlotId
-      ? this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId
-      : null;
-    const focusedManaged = focusedPanelId ? this.views.get(focusedPanelId) : null;
-    if (focusedManaged) readd(focusedManaged);
+    if (focusedSlotId) {
+      raise(this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId);
+    }
 
     for (const cb of this.viewOrderChangedCallbacks) {
       cb();
@@ -1300,7 +1293,7 @@ export class ViewManager {
   }
 
   /**
-   * Register a callback invoked after every bringToFront() call.
+   * Register a callback invoked after every native layer-order change.
    * Used by AutofillManager to re-add the dropdown overlay on top.
    */
   onViewOrderChanged(callback: () => void): void {
@@ -1343,7 +1336,7 @@ export class ViewManager {
     if (!this.shellOverlayActive) {
       managed.view.setVisible(true);
     }
-    this.bringToFront(this.visiblePanelId);
+    this.reconcileNativeLayerOrder();
   }
 
   /**
@@ -1969,7 +1962,7 @@ export class ViewManager {
    * Start periodic compositor keepalive.
    * Nudges the visible panel's compositor with invalidate() + a bounds
    * re-apply every few seconds. This is a gentle keepalive that doesn't
-   * steal focus from input elements (unlike bringToFront or visibility
+   * steal focus from input elements (unlike layer re-stacking or visibility
    * cycling). For full compositor recovery from an active stall, the user
    * can use the "Refresh Panel Display" menu item or forceRepaint().
    */
@@ -1982,7 +1975,7 @@ export class ViewManager {
 
   /**
    * Gentle compositor keepalive — invalidate + re-apply bounds.
-   * Avoids bringToFront (removeChildView/addChildView steals focus) and
+   * Avoids re-stacking (removeChildView/addChildView steals focus) and
    * visibility cycling (setVisible toggle may steal focus).
    */
   private keepCompositorAlive(): void {
@@ -2059,7 +2052,7 @@ export class ViewManager {
    * compositor isn't painting), capturePage() goes through the actual
    * compositing pipeline. An empty capture on a visible panel means the
    * compositor surface is gone → stall confirmed → aggressive recovery.
-   * Aggressive recovery (bringToFront + visibility cycle) is acceptable
+   * Aggressive recovery (layer re-stack + visibility cycle) is acceptable
    * here because a blank panel has no focused input to steal focus from.
    */
   private startCompositorStallDetector(intervalMs = 10000): void {
@@ -2106,7 +2099,7 @@ export class ViewManager {
       if (image.isEmpty()) {
         log.verbose(` Compositor stall detected on ${panelId} (empty capture) — recovering`);
         // Aggressive recovery: re-attach view + refresh bounds + visibility cycle
-        this.bringToFront(panelId);
+        this.reconcileNativeLayerOrder();
         const bounds = this.calculatePanelBounds();
         managed.bounds = bounds;
         managed.view.setBounds(bounds);

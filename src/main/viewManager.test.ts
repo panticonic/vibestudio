@@ -524,8 +524,9 @@ describe("ViewManager", () => {
           bounds: { x: 10, y: 20, width: 300, height: 200 },
         });
 
-        // Simulate something stacking the shell above the slotted panel.
-        localVm.bringToFront("@workspace-apps/shell");
+        // Simulate external layer corruption stacking the shell above the
+        // slotted panel (no ViewManager API does this anymore).
+        mockWindow.contentView.addChildView(hostView);
         const children = mockWindow.contentView.children as unknown[];
         expect(children.indexOf(panelView)).toBeLessThan(children.indexOf(hostView));
 
