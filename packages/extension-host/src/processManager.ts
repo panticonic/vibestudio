@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createProcessAdapter, type ProcessAdapter } from "@natstack/process-adapter";
 
@@ -70,7 +71,7 @@ export class ExtensionProcessManager {
         NATSTACK_EXTENSION_RPC_TOKEN: state.rpcToken,
       },
       {
-        execArgv: extensionInspectorEnabled() ? ["--inspect=0"] : undefined,
+        execArgv: extensionRuntimeExecArgv(),
         preferNode: true,
       },
     );
@@ -300,10 +301,19 @@ export class ExtensionProcessManager {
   }
 }
 
-function resolveChildRuntimePath(): string {
+export function resolveChildRuntimePath(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const dist = path.join(here, "childRuntime.js");
+  if (fs.existsSync(dist)) return dist;
+  const source = path.join(here, "childRuntime.ts");
+  if (fs.existsSync(source)) return source;
   return dist;
+}
+
+export function extensionRuntimeExecArgv(): string[] | undefined {
+  const execArgv = [...process.execArgv];
+  if (extensionInspectorEnabled()) execArgv.push("--inspect=0");
+  return execArgv.length > 0 ? execArgv : undefined;
 }
 
 function extensionInspectorEnabled(): boolean {
