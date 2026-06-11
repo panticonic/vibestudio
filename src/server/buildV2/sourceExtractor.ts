@@ -12,6 +12,7 @@ import { mkdir, mkdtemp, rm } from "fs/promises";
 import * as path from "path";
 import * as os from "os";
 import { spawn, type ChildProcess } from "child_process";
+import { pipeline } from "stream/promises";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { getCommitAt, resolveMainRef } from "./effectiveVersion.js";
 import { spawnGit } from "@natstack/shared/gitRuntime";
@@ -49,6 +50,35 @@ export function processFailureMessage(
   return null;
 }
 
+export function isExpectedPipeClosure(error: unknown): boolean {
+  const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+  return code === "EPIPE" || code === "ERR_STREAM_PREMATURE_CLOSE";
+}
+
+function streamErrorText(error: unknown): string {
+  if (error instanceof Error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code ? `${code}: ${error.message}` : error.message;
+  }
+  return String(error);
+}
+
+export async function pipeChildOutputToInput(
+  source: NodeJS.ReadableStream | null,
+  destination: NodeJS.WritableStream | null
+): Promise<unknown | null> {
+  if (!source || !destination) {
+    return new Error("missing source or destination stream");
+  }
+
+  try {
+    await pipeline(source, destination);
+    return null;
+  } catch (error) {
+    return error;
+  }
+}
+
 /**
  * Extract the full git tree at a specific commit into a target directory.
  * Streams `git archive --format=tar <commit>` into `tar -x -C <dir>` — async and
@@ -73,16 +103,25 @@ async function extractGitTree(
   archive.stderr?.on("data", (chunk) => {
     archiveErr += chunk.toString();
   });
+  archive.stderr?.on("error", (error) => {
+    archiveErr += `\nstderr stream error: ${streamErrorText(error)}`;
+  });
   extract.stderr?.on("data", (chunk) => {
     extractErr += chunk.toString();
   });
+  extract.stderr?.on("error", (error) => {
+    extractErr += `\nstderr stream error: ${streamErrorText(error)}`;
+  });
 
-  // Stream archive stdout → tar stdin (backpressure-aware pipe, no buffering).
-  if (archive.stdout && extract.stdin) archive.stdout.pipe(extract.stdin);
+  // Stream archive stdout -> tar stdin (backpressure-aware pipe, no buffering).
+  // pipeline() installs stream error handlers; a plain .pipe() can otherwise
+  // emit an unhandled EPIPE on tar stdin if tar exits while git is still writing.
+  const pipeErrorPromise = pipeChildOutputToInput(archive.stdout, extract.stdin);
 
-  const [archiveResult, extractResult] = await Promise.all([
+  const [archiveResult, extractResult, pipeError] = await Promise.all([
     waitForClose(archive),
     waitForClose(extract),
+    pipeErrorPromise,
   ]);
 
   const archiveFailure = processFailureMessage(
@@ -93,6 +132,7 @@ async function extractGitTree(
     archiveErr
   );
   if (archiveFailure) throw new Error(archiveFailure);
+
   const extractFailure = processFailureMessage(
     "tar extract",
     repoPath,
@@ -101,6 +141,14 @@ async function extractGitTree(
     extractErr
   );
   if (extractFailure) throw new Error(extractFailure);
+
+  if (pipeError && !isExpectedPipeClosure(pipeError)) {
+    throw new Error(
+      `git archive -> tar extract pipe failed for ${repoPath} at ${commitSha}: ${streamErrorText(
+        pipeError
+      )}`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
