@@ -62,6 +62,15 @@ describe("mobile Metro native capability boundary", () => {
     ).not.toThrow();
   });
 
+  it("permits the shipped native host bootstrap to persist connect-link replay state", () => {
+    expect(() =>
+      boundary.guardNativeModuleImport(
+        "@react-native-async-storage/async-storage",
+        path.resolve("apps/mobile/index.js")
+      )
+    ).not.toThrow();
+  });
+
   it("does not affect normal JavaScript package resolution", () => {
     expect(() =>
       boundary.guardNativeModuleImport("@natstack/shared", path.join(workspaceAppRoot, "App.tsx"))

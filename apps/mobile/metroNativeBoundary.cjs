@@ -44,6 +44,9 @@ function createNativeBoundary(workspaceAppRoot) {
       new Set(relativePaths.map((relativePath) => normalize(path.join(workspaceAppRoot, relativePath)))),
     ]),
   );
+  allowedByModule
+    .get("@react-native-async-storage/async-storage")
+    ?.add(normalize(path.join(__dirname, "index.js")));
 
   return {
     guardNativeModuleImport(moduleName, originModulePath) {
