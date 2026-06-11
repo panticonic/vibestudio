@@ -23,8 +23,9 @@ try {
     requireElectronReady: true,
     bannerTitle: "Pair a NatStack device",
     deepLinkLabel: "Pair URL",
+    clientCommandLabel: "Desktop command",
     instructions:
-      "Scan with the mobile app, click the Pair URL on a laptop, or paste the code in Connection Settings.",
+      "Scan with the mobile app, run the desktop command on a laptop, or paste the code in Connection Settings.",
   });
 } catch (error) {
   console.error(`[pair] ${error instanceof Error ? error.message : String(error)}`);

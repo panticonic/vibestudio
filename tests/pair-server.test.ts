@@ -79,6 +79,49 @@ describe("pair-server runner", () => {
     expect(fs.existsSync(path.dirname(readyFile))).toBe(false);
   });
 
+  it("prints a desktop client command when configured", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const child = new FakeChild();
+
+    runPairServer(
+      {
+        ...config,
+        clientCommandLabel: "Desktop command",
+        instructions: "Run the desktop command.",
+      },
+      ["--host", "127.0.0.1", "--port", "3456"],
+      {
+        spawnServer({ serverArgs }: { serverArgs: string[] }) {
+          const readyIndex = serverArgs.indexOf("--ready-file");
+          const readyFile = serverArgs[readyIndex + 1] ?? "";
+          setTimeout(() => {
+            fs.writeFileSync(
+              readyFile,
+              JSON.stringify({
+                connectUrl: "https://host.tailnet.ts.net",
+                pairingCode: "PAIRING_DESKTOP_CODE_123",
+                qrPairingCode: "PAIRING_QR_CODE_123",
+              })
+            );
+          }, 10);
+          return child;
+        },
+        onChildExit: () => true,
+      }
+    );
+
+    await waitFor(() => logText(logSpy).includes("PAIRING_DESKTOP_CODE_123"));
+    const output = logText(logSpy);
+    expect(output).toContain("Desktop command:");
+    expect(output).toContain(
+      "natstack remote start --pair 'natstack://connect?url=https%3A%2F%2Fhost.tailnet.ts.net&code=PAIRING_DESKTOP_CODE_123'"
+    );
+    expect(output).toContain("Run the desktop command.");
+
+    child.emit("exit", 0, null);
+  });
+
   it("polls a custom server --ready-file instead of an unused generated file", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     vi.spyOn(console, "error").mockImplementation(() => undefined);

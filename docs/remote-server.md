@@ -177,16 +177,20 @@ non-loopback `http://` remotes are intentionally rejected by the client.
 ## Connecting the Electron App
 
 Run `natstack remote serve` on the server. The readiness banner prints a pairing code and a
-`Pair URL:` deep link:
+`Pair URL:` deep link, plus a desktop command you can paste into a source checkout
+on another machine:
 
 ```text
 Pairing code: abc123...
 Pair URL:     natstack://connect?url=https%3A%2F%2Fhost.tailnet.ts.net&code=abc123...
+Desktop command:
+  natstack remote start --pair 'natstack://connect?url=https%3A%2F%2Fhost.tailnet.ts.net&code=abc123...'
 ```
 
-On the laptop, click the `Pair URL` or open Connection Settings and paste the
-code on the **Pair with code** tab. Electron exchanges the code for a durable
-device credential; the admin token does not need to leave the server.
+On the laptop, run the desktop command, click the `Pair URL`, or open Connection
+Settings and paste the code on the **Pair with code** tab. Electron exchanges the
+code for a durable device credential; the admin token does not need to leave the
+server.
 
 Pairing codes are single-use and valid for one hour. If the startup pairing
 code is not used within that hour, the standalone pairing server exits so the
