@@ -110,7 +110,13 @@ export class MobileRpcClient implements Pick<RpcClient, "selfId" | "call" | "emi
 
   async connectAndWait(timeoutMs?: number): Promise<void> {
     this.setStatus("connecting");
-    await this.ensureRpc();
+    try {
+      await this.ensureRpc();
+    } catch (error) {
+      console.warn("[MobileRpcClient] Failed to initialize native app principal:", error);
+      this.setStatus("disconnected");
+      throw error;
+    }
     await this.transport?.connectAndWait(timeoutMs);
   }
 

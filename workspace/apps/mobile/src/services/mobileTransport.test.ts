@@ -35,6 +35,27 @@ describe("MobileRpcClient", () => {
     );
   });
 
+  it("returns to disconnected when connectAndWait cannot initialize native grants", async () => {
+    const transport = new MobileRpcClient({
+      serverUrl: "https://server.example",
+      issueConnectionGrant: async () => {
+        throw new Error("grant failed");
+      },
+    });
+    const statuses: string[] = [];
+    transport.onStatusChange((status) => statuses.push(status));
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    try {
+      await expect(transport.connectAndWait(1)).rejects.toThrow("grant failed");
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    expect(transport.status).toBe("disconnected");
+    expect(statuses).toEqual(["connecting", "disconnected"]);
+  });
+
   it("builds websocket URLs only from server origins", () => {
     expect(buildWsUrl("https://server.example")).toBe("wss://server.example/rpc");
     expect(buildWsUrl("http://127.0.0.1:3030")).toBe("ws://127.0.0.1:3030/rpc");
