@@ -131,6 +131,20 @@ export function ConsentApprovalBar() {
     return () => window.clearInterval(intervalId);
   }, [refreshPendingAccess]);
 
+  // Replays the attention pulse whenever a not-yet-seen approval enters the
+  // queue — including ones that line up behind the currently shown approval,
+  // which otherwise change nothing but the "1 / N" counter.
+  const [attentionSeq, setAttentionSeq] = useState(0);
+  const seenApprovalIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const ids = new Set(pendingAccess.map((approval) => approval.approvalId));
+    const hasNew = pendingAccess.some(
+      (approval) => !seenApprovalIdsRef.current.has(approval.approvalId)
+    );
+    seenApprovalIdsRef.current = ids;
+    if (hasNew) setAttentionSeq((seq) => seq + 1);
+  }, [pendingAccess]);
+
   // Browsable index into pendingAccess. Stays put when later items resolve,
   // clamps when the visible item disappears (the most natural fallback is to
   // stay at the same index — the next pending slides into view).
@@ -305,12 +319,13 @@ export function ConsentApprovalBar() {
       ref={barRef}
       data-shell-top-chrome="approval-bar"
       key={current.approvalId}
-      className="approval-bar approval-bar-attention"
+      className="approval-bar"
       style={{
         ...toneStyle,
         flexShrink: 0,
       }}
     >
+      <span key={attentionSeq} className="approval-attention-pulse" aria-hidden="true" />
       <Flex direction="column" gap="3" px="4" py="3">
         <Flex align="start" gap="3">
           <Box className="approval-icon-box">

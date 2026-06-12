@@ -84,6 +84,8 @@ import { EventService } from "@natstack/shared/eventsService";
 import type { EventName } from "@natstack/shared/events";
 import { createServerEventBridge } from "./serverEventBridge.js";
 import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
+import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
+import type { PendingApproval } from "@natstack/shared/approvals";
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { installPinnedTlsForAllPartitions } from "./tlsPinning.js";
 import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
@@ -215,6 +217,7 @@ let shellCore: ReturnType<
 let serverSession: SessionConnection | null = null;
 let mainWindow: BaseWindow | null = null;
 let viewManager: ViewManager | null = null;
+let approvalAttention: ApprovalAttention | null = null;
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
 let autofillManager: import("./autofill/autofillManager.js").AutofillManager | null = null;
 const corsApprovalCache = new Set<string>();
@@ -900,6 +903,8 @@ function createWindow(): void {
     IS_HEADLESS_HOST ? `NatStack Headless Host — ${workspaceId}` : `NatStack — ${workspaceId}`
   );
 
+  mainWindow.on("focus", () => approvalAttention?.handleWindowFocus());
+
   mainWindow.on("closed", () => {
     mainWindow = null;
     viewManager = null;
@@ -1184,6 +1189,8 @@ app.on("ready", async () => {
   });
   const recoverShellStateFromServer = async (_kind: "resubscribe" | "cold-recover") => {
     await serverEventSubscriptions.replay({ force: true });
+    // Catch up on approvals that arrived while the event stream was down.
+    void approvalAttention?.refresh();
     if (!panelOrchestrator) return;
     await panelOrchestrator
       .recoverShellSnapshot({ loadFocusedView: false })
@@ -1193,6 +1200,18 @@ app.on("ready", async () => {
       });
   };
 
+  if (!IS_HEADLESS_HOST) {
+    approvalAttention = createApprovalAttention({
+      getWindow: () => mainWindow,
+      listPending: async () => {
+        const client = serverClientRef;
+        if (!client) return null;
+        return (await client.call("shellApproval", "listPending", [])) as PendingApproval[];
+      },
+      log,
+    });
+  }
+
   const handleServerEvent = createServerEventBridge({
     eventService,
     getPanelOrchestrator: () => panelOrchestrator,
@@ -1200,6 +1219,7 @@ app.on("ready", async () => {
     getServerClient: () => serverClientRef,
     openExternal: (url) => shell.openExternal(url),
     warn: (message) => log.warn(message),
+    onApprovalPendingChanged: (pending) => approvalAttention?.handlePendingChanged(pending),
   });
 
   try {
@@ -1266,7 +1286,12 @@ app.on("ready", async () => {
     serverEventSubscriptions.add("panel-tree-updated");
     serverEventSubscriptions.add("panel-title-updated");
     serverEventSubscriptions.add("panel:runtimeLeaseChanged");
+    serverEventSubscriptions.add("shell-approval:pending-changed");
     await serverEventSubscriptions.replay({ force: true });
+    // Seed badge/seen-set from approvals already pending at launch without
+    // firing OS notifications for them — the bar shows them once the shell
+    // window is up.
+    void approvalAttention?.refresh({ quiet: true });
     workspaceId = serverSession.workspaceId;
 
     performance.mark("startup:server-spawned");

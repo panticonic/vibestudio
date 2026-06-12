@@ -2,6 +2,7 @@ import type { EventService } from "@natstack/shared/eventsService";
 import { isValidEventName, type EventName } from "@natstack/shared/events";
 import type { PanelTreeSnapshot } from "@natstack/shared/types";
 import type { PanelRuntimeLeaseChangedEvent } from "@natstack/shared/panel/panelLease";
+import type { PendingApproval } from "@natstack/shared/approvals";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
 import type { AppOrchestrator, AppAvailableEvent } from "./appOrchestrator.js";
@@ -14,6 +15,8 @@ export interface ServerEventBridgeDeps {
   getServerClient(): ServerClient | null;
   openExternal(url: string): Promise<void>;
   warn(message: string): void;
+  /** OS-level attention (badge/flash/notification) for pending approvals. */
+  onApprovalPendingChanged?(pending: PendingApproval[]): void;
 }
 
 /**
@@ -134,6 +137,14 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
           );
         });
       return;
+    }
+
+    if (bareEvent === "shell-approval:pending-changed") {
+      const { pending } = payload as { pending?: unknown };
+      if (Array.isArray(pending)) {
+        deps.onApprovalPendingChanged?.(pending as PendingApproval[]);
+      }
+      // Fall through — the renderer's approval bar consumes the same event.
     }
 
     if (isValidEventName(bareEvent)) {
