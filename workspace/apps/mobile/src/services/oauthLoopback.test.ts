@@ -12,6 +12,16 @@ const mockWait = jest.fn(async () => ({
 const mockStop = jest.fn(async () => undefined);
 const mockCall = jest.fn(async () => undefined);
 
+function createShellClient() {
+  return {
+    transport: { call: mockCall },
+    credentialService: {
+      forwardOAuthCallback: (request: unknown) =>
+        mockCall("main", "credentials.forwardOAuthCallback", [request]),
+    },
+  } as never;
+}
+
 beforeEach(() => {
   setApprovedAppCapabilities(["open-external"]);
   (Linking as unknown as { openURL: typeof mockOpenURL }).openURL = mockOpenURL;
@@ -29,7 +39,7 @@ beforeEach(() => {
 
 describe("oauthLoopback", () => {
   it("opens ordinary external URLs directly", async () => {
-    await handleExternalOpen({ transport: { call: mockCall } } as never, {
+    await handleExternalOpen(createShellClient(), {
       url: "https://example.test/",
     });
 
@@ -40,7 +50,7 @@ describe("oauthLoopback", () => {
 
   it("rejects OpenAI public-callback OAuth handoffs on mobile", async () => {
     await expect(
-      handleExternalOpen({ transport: { call: mockCall } } as never, {
+      handleExternalOpen(createShellClient(), {
         url: "https://auth.openai.com/oauth/authorize?redirect_uri=https%3A%2F%2Fexample.test%2F_r%2Fs%2Fcredentials%2Foauth%2Fcallback",
       })
     ).rejects.toThrow(/Android loopback callback/);
@@ -70,7 +80,7 @@ describe("oauthLoopback", () => {
       order.push("forward");
     });
 
-    await handleExternalOpen({ transport: { call: mockCall } } as never, {
+    await handleExternalOpen(createShellClient(), {
       url: "https://auth.example.test/oauth",
       oauthLoopback: {
         transactionId: "tx-1",
@@ -105,7 +115,7 @@ describe("oauthLoopback", () => {
     mockOpenURL.mockRejectedValueOnce(new Error("browser unavailable"));
 
     await expect(
-      handleExternalOpen({ transport: { call: mockCall } } as never, {
+      handleExternalOpen(createShellClient(), {
         url: "https://auth.example.test/oauth",
         oauthLoopback: {
           transactionId: "tx-1",

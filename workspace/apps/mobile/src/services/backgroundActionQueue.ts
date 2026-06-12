@@ -1,4 +1,3 @@
-import { RPC_METHODS } from "@natstack/shared/approvalContract";
 import type { ShellClient } from "./shellClient";
 import { clearAction as clearActionCore, clearWorkspaceMutation, enqueueAction as enqueueActionCore, enqueueWorkspaceMutation, loadDeepLink, loadPendingActions as loadPendingActionsCore, loadWorkspaceMutations, pruneStaleActions, serializeDeepLink, serializePendingActions, serializeWorkspaceMutations, type BackgroundApprovalDecision, type QueuedBackgroundAction, type QueuedWorkspaceMutation, } from "./backgroundActionQueueCore";
 declare const require: (moduleName: string) => unknown;
@@ -156,8 +155,7 @@ export async function drainBackgroundActionQueue(shellClient: ShellClient, notif
     let remaining = actions;
     for (const action of actions) {
         try {
-            await shellClient.transport.call("main", RPC_METHODS.shellApproval.resolve, [action.approvalId,
-                action.decision]);
+            await shellClient.shellApproval.resolve(action.approvalId, action.decision);
             remaining = clearActionCore(remaining, action.approvalId);
             await writeActions(storage, remaining);
             await notifee?.cancelNotification(action.approvalId);

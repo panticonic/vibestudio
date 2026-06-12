@@ -67,11 +67,11 @@ export async function handleExternalOpen(shellClient: ShellClient, payload: Exte
         callbackPending = native.wait();
         await openExternalUrl(payload.url);
         const callback = await callbackPending;
-        await shellClient.transport.call("main", "credentials.forwardOAuthCallback", [{
+        await shellClient.credentialService.forwardOAuthCallback({
                 transactionId: loopback.transactionId,
                 url: callback.url,
                 state: callback.state,
-            }]);
+            });
     }
     catch (error) {
         await native.stop().catch(() => { });

@@ -16,6 +16,14 @@ type MockShellClient = {
     call: jest.Mock;
     onRecovery: jest.Mock;
   };
+  shellApproval: {
+    listPending: jest.Mock;
+    resolve: jest.Mock;
+  };
+  push: {
+    register: jest.Mock;
+    unregister: jest.Mock;
+  };
 };
 
 const mockStorage = new Map<string, string>();
@@ -95,19 +103,30 @@ const appStateSpy = jest
 function createShellClient(
   status: MockShellClient["transport"]["status"] = "connected"
 ): MockShellClient {
+  const transport = {
+    status,
+    call: jest.fn(async (_target: string, method: string) => {
+      if (method === "shellApproval.listPending") {
+        return [{ approvalId: "approval-1" }];
+      }
+      return undefined;
+    }),
+    onRecovery: jest.fn((kind: RecoveryKind, callback: () => void) => {
+      mockListeners.recovery.set(kind, callback);
+      return jest.fn();
+    }),
+  };
   return {
-    transport: {
-      status,
-      call: jest.fn(async (_target: string, method: string) => {
-        if (method === "shellApproval.listPending") {
-          return [{ approvalId: "approval-1" }];
-        }
-        return undefined;
-      }),
-      onRecovery: jest.fn((kind: RecoveryKind, callback: () => void) => {
-        mockListeners.recovery.set(kind, callback);
-        return jest.fn();
-      }),
+    transport,
+    shellApproval: {
+      listPending: jest.fn(() => transport.call("main", "shellApproval.listPending", [])),
+      resolve: jest.fn((approvalId: string, decision: string) =>
+        transport.call("main", "shellApproval.resolve", [approvalId, decision])
+      ),
+    },
+    push: {
+      register: jest.fn((request: unknown) => transport.call("main", "push.register", [request])),
+      unregister: jest.fn((clientId: string) => transport.call("main", "push.unregister", [clientId])),
     },
   };
 }

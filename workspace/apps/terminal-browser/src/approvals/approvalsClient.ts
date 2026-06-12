@@ -1,6 +1,8 @@
 import type { RpcClient } from "@natstack/rpc";
-import { RPC_METHODS, type ApprovalDecisionId } from "@natstack/shared/approvalContract";
+import type { ApprovalDecisionId } from "@natstack/shared/approvalContract";
 import type { PendingApproval } from "@natstack/shared/approvals";
+import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 
 /**
  * Thin wrapper over the existing global shell-approval queue. The terminal
@@ -16,20 +18,21 @@ export interface ApprovalsClient {
 }
 
 export function createApprovalsClient(rpc: RpcClient): ApprovalsClient {
+  const shellApproval = createTypedServiceClient(
+    "shellApproval",
+    shellApprovalMethods,
+    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+  );
   return {
     async list() {
-      const pending = await rpc.call<PendingApproval[]>(
-        "main",
-        RPC_METHODS.shellApproval.listPending,
-        [],
-      );
+      const pending = await shellApproval.listPending();
       return Array.isArray(pending) ? pending : [];
     },
     async resolve(approvalId, decision) {
-      await rpc.call("main", RPC_METHODS.shellApproval.resolve, [approvalId, decision]);
+      await shellApproval.resolve(approvalId, decision);
     },
     async resolveUserland(approvalId, choice) {
-      await rpc.call("main", RPC_METHODS.shellApproval.resolveUserland, [approvalId, choice]);
+      await shellApproval.resolveUserland(approvalId, choice);
     },
     onChange(listener) {
       return rpc.on("shell-approval:pending-changed", () => listener());

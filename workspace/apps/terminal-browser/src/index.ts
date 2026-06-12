@@ -14,6 +14,8 @@ import { registerHostService } from "./host/HostService.js";
 import { createApprovalsClient } from "./approvals/approvalsClient.js";
 import { TerminalBrowser } from "./host/TerminalBrowser.js";
 import type { LogLine } from "./ui/LogsView.js";
+import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 
 function requiredEnv(name: string): string {
   const value = process.env[name];
@@ -175,8 +177,11 @@ export async function main(): Promise<void> {
   const appId = requiredEnv("NATSTACK_TERMINAL_APP_ID");
   const logSink = createLogSink();
   const { rpc, close } = await connect(appId, logSink);
+  const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (service, method, args) =>
+    rpc.call("main", `${service}.${method}`, args)
+  );
 
-  const workspace = (await rpc.call("main", "workspace.getInfo", []).catch(() => null)) as {
+  const workspace = (await workspaceClient.getInfo().catch(() => null)) as {
     config?: { id?: string };
   } | null;
   const workspaceId = workspace?.config?.id ?? "default";

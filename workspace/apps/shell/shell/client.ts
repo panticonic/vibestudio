@@ -13,6 +13,19 @@ import {
   type RpcEventContext,
 } from "@natstack/rpc";
 import { RPC_METHODS } from "@natstack/shared/approvalContract";
+import { appMethods } from "@natstack/shared/serviceSchemas/app";
+import { eventsMethods } from "@natstack/shared/serviceSchemas/events";
+import { menuMethods } from "@natstack/shared/serviceSchemas/menu";
+import { notificationMethods } from "@natstack/shared/serviceSchemas/notification";
+import { panelMethods } from "@natstack/shared/serviceSchemas/panel";
+import { remoteCredMethods } from "@natstack/shared/serviceSchemas/remoteCred";
+import { settingsMethods } from "@natstack/shared/serviceSchemas/settings";
+import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
+import { autofillMethods } from "@natstack/shared/serviceSchemas/autofill";
+import { tokensMethods } from "@natstack/shared/serviceSchemas/tokens";
+import { viewMethods } from "@natstack/shared/serviceSchemas/view";
+import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (targetId: string, message: unknown) => Promise<void>;
@@ -50,6 +63,48 @@ const rpc: RpcClient = createRpcClient({
   callerKind: "shell",
   transport,
 });
+const shellApprovalClient = createTypedServiceClient(
+  "shellApproval",
+  shellApprovalMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const appClient = createTypedServiceClient("app", appMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const eventsClient = createTypedServiceClient("events", eventsMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const menuClient = createTypedServiceClient("menu", menuMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const panelClient = createTypedServiceClient("panel", panelMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const notificationClient = createTypedServiceClient(
+  "notification",
+  notificationMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const remoteCredClient = createTypedServiceClient(
+  "remoteCred",
+  remoteCredMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+);
+const autofillClient = createTypedServiceClient("autofill", autofillMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const settingsClient = createTypedServiceClient("settings", settingsMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const tokensClient = createTypedServiceClient("tokens", tokensMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const viewClient = createTypedServiceClient("view", viewMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
+const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
 import type {
   AppInfo,
   ThemeMode,
@@ -71,6 +126,7 @@ import type {
   PanelChromeState,
 } from "@natstack/shared/panelChrome";
 import type { PanelRuntimeLease } from "@natstack/shared/panel/panelLease";
+import type { BrowserNavigationIntent } from "@natstack/shared/panelCommands";
 import type { PanelLifecycleResult } from "@natstack/shared/types";
 import type {
   HostTarget,
@@ -82,69 +138,44 @@ import type {
 // App Service
 // =============================================================================
 export const app = {
-  getInfo: () => rpc.call<AppInfo>("main", "app.getInfo", []),
-  getSystemTheme: () => rpc.call<ThemeAppearance>("main", "app.getSystemTheme", []),
-  setThemeMode: (mode: ThemeMode) => rpc.call<undefined>("main", "app.setThemeMode", [mode]),
-  openDevTools: () => rpc.call<undefined>("main", "app.openDevTools", []),
-  openExternal: (url: string) => rpc.call<undefined>("main", "app.openExternal", [url]),
-  clearBuildCache: () => rpc.call<undefined>("main", "app.clearBuildCache", []),
-  applyUpdate: (appId: string) =>
-    rpc.call<{ applied: boolean }>("main", "app.applyUpdate", [appId]),
-  listPendingUpdates: () =>
-    rpc.call<
-      Array<{
-        appId: string;
-        source?: string;
-        target?: string;
-        url: string;
-        buildKey?: string | null;
-        effectiveVersion?: string | null;
-        previousBuildKey?: string | null;
-        previousEffectiveVersion?: string | null;
-      }>
-    >("main", "app.listPendingUpdates", []),
+  getInfo: () => appClient.getInfo(),
+  getSystemTheme: () => appClient.getSystemTheme(),
+  setThemeMode: (mode: ThemeMode) => appClient.setThemeMode(mode),
+  openDevTools: () => appClient.openDevTools(),
+  openExternal: (url: string) => appClient.openExternal(url),
+  clearBuildCache: () => appClient.clearBuildCache(),
+  applyUpdate: (appId: string) => appClient.applyUpdate(appId),
+  listPendingUpdates: () => appClient.listPendingUpdates(),
 };
 // =============================================================================
 // Panel Service
 // =============================================================================
 export const panel = {
-  getTree: () => rpc.call<Panel[]>("main", "panel.getTree", []),
-  getTreeSnapshot: () => rpc.call<PanelTreeSnapshot>("main", "panel.getTreeSnapshot", []),
-  getFocusedPanelId: () => rpc.call<string | null>("main", "panel.getFocusedPanelId", []),
-  notifyFocused: (panelId: string) =>
-    rpc.call<PanelFocusResult>("main", "panel.notifyFocused", [panelId]),
-  updateTheme: (theme: ThemeAppearance) =>
-    rpc.call<undefined>("main", "panel.updateTheme", [theme]),
-  openDevTools: (panelId: string) => rpc.call<undefined>("main", "panel.openDevTools", [panelId]),
-  getChromeState: (panelId: string) =>
-    rpc.call<PanelChromeState>("main", "panel.getChromeState", [panelId]),
-  getRuntimeLease: (panelId: string) =>
-    rpc.call<PanelRuntimeLease | null>("main", "panel.getRuntimeLease", [panelId]),
-  takeOver: (panelId: string) => rpc.call<undefined>("main", "panel.takeOver", [panelId]),
-  getAddressOptions: (source: string, ref?: string) =>
-    rpc.call<PanelAddressOptions>("main", "panel.getAddressOptions", [source, ref]),
-  getBrowserAddressOptions: (query: string) =>
-    rpc.call<BrowserAddressOptions>("main", "panel.getBrowserAddressOptions", [query]),
+  getTree: () => panelClient.getTree(),
+  getTreeSnapshot: () => panelClient.getTreeSnapshot(),
+  getFocusedPanelId: () => panelClient.getFocusedPanelId(),
+  notifyFocused: (panelId: string) => panelClient.notifyFocused(panelId),
+  updateTheme: (theme: ThemeAppearance) => panelClient.updateTheme(theme),
+  openDevTools: (panelId: string) => panelClient.openDevTools(panelId),
+  getChromeState: (panelId: string) => panelClient.getChromeState(panelId),
+  getRuntimeLease: (panelId: string) => panelClient.getRuntimeLease(panelId),
+  takeOver: (panelId: string) => panelClient.takeOver(panelId),
+  getAddressOptions: (source: string, ref?: string) => panelClient.getAddressOptions(source, ref),
+  getBrowserAddressOptions: (query: string) => panelClient.getBrowserAddressOptions(query),
   markBrowserNavigationIntent: (
     panelId: string,
-    intent: {
-      transition?: string;
-      typed?: boolean;
-    }
-  ) => rpc.call<undefined>("main", "panel.markBrowserNavigationIntent", [panelId, intent]),
-  reload: (panelId: string) => rpc.call<PanelLifecycleResult>("main", "panel.reload", [panelId]),
-  reloadView: (panelId: string) => rpc.call<undefined>("main", "panel.reloadView", [panelId]),
-  forceReloadView: (panelId: string) =>
-    rpc.call<undefined>("main", "panel.forceReloadView", [panelId]),
-  rebuildPanel: (panelId: string) =>
-    rpc.call<PanelLifecycleResult>("main", "panel.rebuildPanel", [panelId]),
-  rebuildAndReload: (panelId: string) =>
-    rpc.call<PanelLifecycleResult>("main", "panel.rebuildAndReload", [panelId]),
-  goBack: (panelId: string) => rpc.call<undefined>("main", "panel.goBack", [panelId]),
-  goForward: (panelId: string) => rpc.call<undefined>("main", "panel.goForward", [panelId]),
-  unload: (panelId: string) => rpc.call<PanelLifecycleResult>("main", "panel.unload", [panelId]),
-  archive: (panelId: string) => rpc.call<undefined>("main", "panel.archive", [panelId]),
-  initGitRepo: (panelId: string) => rpc.call<undefined>("main", "panel.initGitRepo", [panelId]),
+    intent: BrowserNavigationIntent
+  ) => panelClient.markBrowserNavigationIntent(panelId, intent),
+  reload: (panelId: string) => panelClient.reload(panelId),
+  reloadView: (panelId: string) => panelClient.reloadView(panelId),
+  forceReloadView: (panelId: string) => panelClient.forceReloadView(panelId),
+  rebuildPanel: (panelId: string) => panelClient.rebuildPanel(panelId),
+  rebuildAndReload: (panelId: string) => panelClient.rebuildAndReload(panelId),
+  goBack: (panelId: string) => panelClient.goBack(panelId),
+  goForward: (panelId: string) => panelClient.goForward(panelId),
+  unload: (panelId: string) => panelClient.unload(panelId),
+  archive: (panelId: string) => panelClient.archive(panelId),
+  initGitRepo: (panelId: string) => panelClient.initGitRepo(panelId),
   updatePanelState: (
     panelId: string,
     state: {
@@ -154,12 +185,9 @@ export const panel = {
       canGoBack?: boolean;
       canGoForward?: boolean;
     }
-  ) => rpc.call<undefined>("main", "panel.updatePanelState", [panelId, state]),
+  ) => panelClient.updatePanelState(panelId, state),
   createAboutPanel: (page: string) =>
-    rpc.call<{
-      id: string;
-      title: string;
-    }>("main", "panel.createAboutPanel", [page]),
+    panelClient.createAboutPanel(page),
   /** Create a panel from any source path (not prefixed with "about/"). */
   navigate: (
     panelId: string,
@@ -169,11 +197,7 @@ export const panel = {
       contextId?: string;
       stateArgs?: Record<string, unknown>;
     }
-  ) =>
-    rpc.call<{
-      id: string;
-      title: string;
-    }>("main", "panel.navigate", [panelId, source, options]),
+  ) => panelClient.navigate(panelId, source, options),
   createPanel: (
     source: string,
     options?: {
@@ -181,11 +205,7 @@ export const panel = {
       isRoot?: boolean;
       ref?: string;
     }
-  ) =>
-    rpc.call<{
-      id: string;
-      title: string;
-    }>("main", "panel.create", [source, options]),
+  ) => panelClient.create(source, options),
   createChild: (
     parentId: string,
     source: string,
@@ -194,22 +214,14 @@ export const panel = {
       focus?: boolean;
       ref?: string;
     }
-  ) =>
-    rpc.call<{
-      id: string;
-      title: string;
-    }>("main", "panel.createChild", [parentId, source, options]),
+  ) => panelClient.createChild(parentId, source, options),
   createBrowser: (
     url: string,
     options?: {
       name?: string;
       focus?: boolean;
     }
-  ) =>
-    rpc.call<{
-      id: string;
-      title: string;
-    }>("main", "panel.createBrowser", [url, options]),
+  ) => panelClient.createBrowser(url, options),
   createBrowserChild: (
     parentId: string,
     url: string,
@@ -217,21 +229,15 @@ export const panel = {
       name?: string;
       focus?: boolean;
     }
-  ) =>
-    rpc.call<{
-      id: string;
-      title: string;
-    }>("main", "panel.createBrowserChild", [parentId, url, options]),
-  movePanel: (request: MovePanelRequest) =>
-    rpc.call<undefined>("main", "panel.movePanel", [request]),
+  ) => panelClient.createBrowserChild(parentId, url, options),
+  movePanel: (request: MovePanelRequest) => panelClient.movePanel(request),
   getChildrenPaginated: (request: GetChildrenPaginatedRequest) =>
-    rpc.call<PaginatedChildren>("main", "panel.getChildrenPaginated", [request]),
+    panelClient.getChildrenPaginated(request),
   getRootPanelsPaginated: (offset: number, limit: number) =>
-    rpc.call<PaginatedRootPanels>("main", "panel.getRootPanelsPaginated", [{ offset, limit }]),
-  getCollapsedIds: () => rpc.call<string[]>("main", "panel.getCollapsedIds", []),
-  setCollapsed: (panelId: string, collapsed: boolean) =>
-    rpc.call<undefined>("main", "panel.setCollapsed", [panelId, collapsed]),
-  expandIds: (panelIds: string[]) => rpc.call<undefined>("main", "panel.expandIds", [panelIds]),
+    panelClient.getRootPanelsPaginated({ offset, limit }),
+  getCollapsedIds: () => panelClient.getCollapsedIds(),
+  setCollapsed: (panelId: string, collapsed: boolean) => panelClient.setCollapsed(panelId, collapsed),
+  expandIds: (panelIds: string[]) => panelClient.expandIds(panelIds),
 };
 // =============================================================================
 // View Service
@@ -267,45 +273,36 @@ type NativeShellOverlayBridge = {
 };
 export const view = {
   forwardMouseClick: (viewId: string, point: { x: number; y: number }) =>
-    rpc.call<boolean>("main", "view.forwardMouseClick", [viewId, point]),
-  setThemeCss: (css: string) => rpc.call<undefined>("main", "view.setThemeCss", [css]),
+    viewClient.forwardMouseClick(viewId, point),
+  setThemeCss: (css: string) => viewClient.setThemeCss(css),
   bindNativePanelSlot: (request: {
     nativeSlotId: string;
     panelId: string;
     bounds: NativePanelSlotBounds;
     focused?: boolean;
-  }) => rpc.call<NativePanelSlotSyncResult>("main", "view.bindNativePanelSlot", [request]),
+  }) => viewClient.bindNativePanelSlot(request),
   updateNativePanelSlot: (request: {
     nativeSlotId: string;
     bounds?: NativePanelSlotBounds;
     focused?: boolean;
-  }) => rpc.call<NativePanelSlotSyncResult>("main", "view.updateNativePanelSlot", [request]),
-  clearNativePanelSlot: (request: { nativeSlotId: string }) =>
-    rpc.call<undefined>("main", "view.clearNativePanelSlot", [request]),
-  setHostedShellReady: (request: { ready: boolean }) =>
-    rpc.call<undefined>("main", "view.setHostedShellReady", [request]),
-  setShellOverlay: (active: boolean) =>
-    rpc.call<undefined>("main", "view.setShellOverlay", [active]),
+  }) => viewClient.updateNativePanelSlot(request),
+  clearNativePanelSlot: (request: { nativeSlotId: string }) => viewClient.clearNativePanelSlot(request),
+  setHostedShellReady: (request: { ready: boolean }) => viewClient.setHostedShellReady(request),
+  setShellOverlay: (active: boolean) => viewClient.setShellOverlay(active),
   showNativeShellOverlay: (options: NativeShellOverlayOptions) =>
-    rpc.call<undefined>("main", "view.showNativeShellOverlay", [options]),
+    viewClient.showNativeShellOverlay(options),
   updateNativeShellOverlay: (
     options: Partial<NativeShellOverlayOptions> & {
       id?: string;
     }
-  ) => rpc.call<undefined>("main", "view.updateNativeShellOverlay", [options]),
-  hideNativeShellOverlay: (id?: string) =>
-    rpc.call<undefined>("main", "view.hideNativeShellOverlay", [id]),
-  browserNavigate: (browserId: string, url: string) =>
-    rpc.call<undefined>("main", "view.browserNavigate", [browserId, url]),
-  browserGoBack: (browserId: string) =>
-    rpc.call<undefined>("main", "view.browserGoBack", [browserId]),
-  browserGoForward: (browserId: string) =>
-    rpc.call<undefined>("main", "view.browserGoForward", [browserId]),
-  browserReload: (browserId: string) =>
-    rpc.call<undefined>("main", "view.browserReload", [browserId]),
-  browserForceReload: (browserId: string) =>
-    rpc.call<undefined>("main", "view.browserForceReload", [browserId]),
-  browserStop: (browserId: string) => rpc.call<undefined>("main", "view.browserStop", [browserId]),
+  ) => viewClient.updateNativeShellOverlay(options),
+  hideNativeShellOverlay: (id?: string) => viewClient.hideNativeShellOverlay(id),
+  browserNavigate: (browserId: string, url: string) => viewClient.browserNavigate(browserId, url),
+  browserGoBack: (browserId: string) => viewClient.browserGoBack(browserId),
+  browserGoForward: (browserId: string) => viewClient.browserGoForward(browserId),
+  browserReload: (browserId: string) => viewClient.browserReload(browserId),
+  browserForceReload: (browserId: string) => viewClient.browserForceReload(browserId),
+  browserStop: (browserId: string) => viewClient.browserStop(browserId),
 };
 export const nativeShellOverlay = {
   on: (handler: (event: NativeShellOverlayEvent) => void) => {
@@ -330,66 +327,45 @@ interface Position {
   x: number;
   y: number;
 }
-interface MenuItem {
-  id: string;
-  label: string;
-}
 export const menu = {
-  showHamburger: (position: Position) =>
-    rpc.call<undefined>("main", "menu.showHamburger", [position]),
-  showContext: (items: MenuItem[], position: Position) =>
-    rpc.call<string | null>("main", "menu.showContext", [items, position]),
+  showHamburger: (position: Position) => menuClient.showHamburger(position),
+  showContext: (items: Array<{ id: string; label: string }>, position: Position) =>
+    menuClient.showContext(items, position),
   showPanelContext: (panelId: string, position: Position) =>
-    rpc.call<PanelContextMenuAction | null>("main", "menu.showPanelContext", [panelId, position]),
+    menuClient.showPanelContext(panelId, position),
 };
 // =============================================================================
 // Workspace Service
 // =============================================================================
 export const workspace = {
-  list: () => rpc.call<WorkspaceEntry[]>("main", "workspace.list", []),
+  list: () => workspaceClient.list(),
   create: (
     name: string,
     opts?: {
       forkFrom?: string;
     }
-  ) => rpc.call<WorkspaceEntry>("main", "workspace.create", [name, opts]),
-  select: (name: string) => rpc.call<undefined>("main", "workspace.select", [name]),
-  delete: (name: string) => rpc.call<undefined>("main", "workspace.delete", [name]),
-  getActive: () => rpc.call<string>("main", "workspace.getActive", []),
+  ) => workspaceClient.create(name, opts),
+  select: (name: string) => workspaceClient.select(name),
+  delete: (name: string) => workspaceClient.delete(name),
+  getActive: () => workspaceClient.getActive(),
   hostTargets: {
-    list: (target: HostTarget) =>
-      rpc.call<HostTargetCandidate[]>("main", "workspace.hostTargets.list", [target]),
-    getSelection: (target: HostTarget) =>
-      rpc.call<{ selection: HostTargetSelection | null; valid: boolean; reason?: string }>(
-        "main",
-        "workspace.hostTargets.getSelection",
-        [target]
-      ),
+    list: (target: HostTarget) => workspaceClient.hostTargets.list(target),
+    getSelection: (target: HostTarget) => workspaceClient.hostTargets.getSelection(target),
     setSelection: (target: HostTarget, input: HostTargetSelectionInput) =>
-      rpc.call<HostTargetSelection>("main", "workspace.hostTargets.setSelection", [target, input]),
-    clearSelection: (target: HostTarget) =>
-      rpc.call<undefined>("main", "workspace.hostTargets.clearSelection", [target]),
+      workspaceClient.hostTargets.setSelection(target, input),
+    clearSelection: (target: HostTarget) => workspaceClient.hostTargets.clearSelection(target),
     versions: (target: HostTarget, sourceOrName: string) =>
-      rpc.call<{ current: unknown; previous: unknown[]; retentionLimit?: number }>(
-        "main",
-        "workspace.hostTargets.versions",
-        [target, sourceOrName]
-      ),
+      workspaceClient.hostTargets.versions(target, sourceOrName),
     preparePinnedCommit: (target: HostTarget, sourceOrName: string, commit: string) =>
-      rpc.call<unknown>("main", "workspace.hostTargets.preparePinnedCommit", [
-        target,
-        sourceOrName,
-        commit,
-      ]),
-    launch: (target: HostTarget) =>
-      rpc.call<{ launched: boolean }>("main", "workspace.hostTargets.launch", [target]),
+      workspaceClient.hostTargets.preparePinnedCommit(target, sourceOrName, commit),
+    launch: (target: HostTarget) => workspaceClient.hostTargets.launch(target),
   },
 };
 // =============================================================================
 // Settings Service
 // =============================================================================
 export const settings = {
-  getData: () => rpc.call<SettingsData>("main", "settings.getData", []),
+  getData: () => settingsClient.getData(),
 };
 // =============================================================================
 // Remote credential store
@@ -452,45 +428,32 @@ export interface DiscoveredServer {
   discoveryVersion: number;
 }
 export const remoteCred = {
-  getCurrent: () => rpc.call<RemoteCredCurrent>("main", "remoteCred.getCurrent", []),
-  save: (args: RemoteCredSaveArgs) =>
-    rpc.call<{
-      ok: boolean;
-    }>("main", "remoteCred.save", [args]),
-  testConnection: (args: RemoteCredSaveArgs) =>
-    rpc.call<TestConnectionResult>("main", "remoteCred.testConnection", [args]),
+  getCurrent: () => remoteCredClient.getCurrent(),
+  save: (args: RemoteCredSaveArgs) => remoteCredClient.save(args),
+  testConnection: (args: RemoteCredSaveArgs) => remoteCredClient.testConnection(args),
   exchangePairingCode: (args: ExchangePairingCodeArgs) =>
-    rpc.call<TestConnectionResult>("main", "remoteCred.exchangePairingCode", [args]),
-  discoverServers: () => rpc.call<DiscoveredServer[]>("main", "remoteCred.discoverServers", []),
-  createPairingInvite: (args?: { ttlMs?: number }) =>
-    rpc.call<PairingInvite>("main", "remoteCred.createPairingInvite", [args]),
-  listDevices: () => rpc.call<DeviceRecord[]>("main", "remoteCred.listDevices", []),
-  revokeDevice: (deviceId: string) =>
-    rpc.call<{ revoked: boolean }>("main", "remoteCred.revokeDevice", [deviceId]),
-  fetchPeerFingerprint: (url: string) =>
-    rpc.call<string>("main", "remoteCred.fetchPeerFingerprint", [url]),
-  pickCaFile: () => rpc.call<string | null>("main", "remoteCred.pickCaFile", []),
-  clear: () =>
-    rpc.call<{
-      ok: boolean;
-    }>("main", "remoteCred.clear", []),
-  relaunch: () =>
-    rpc.call<{
-      ok: boolean;
-    }>("main", "remoteCred.relaunch", []),
+    remoteCredClient.exchangePairingCode(args),
+  discoverServers: () => remoteCredClient.discoverServers(),
+  createPairingInvite: (args?: { ttlMs?: number }) => remoteCredClient.createPairingInvite(args),
+  listDevices: () => remoteCredClient.listDevices(),
+  revokeDevice: (deviceId: string) => remoteCredClient.revokeDevice(deviceId),
+  fetchPeerFingerprint: (url: string) => remoteCredClient.fetchPeerFingerprint(url),
+  pickCaFile: () => remoteCredClient.pickCaFile(),
+  clear: () => remoteCredClient.clear(),
+  relaunch: () => remoteCredClient.relaunch(),
 };
 // =============================================================================
 // Token rotation
 // =============================================================================
 export const tokens = {
-  rotateAdmin: () => rpc.call<string>("main", "tokens.rotateAdmin", []),
+  rotateAdmin: () => tokensClient.rotateAdmin(),
 };
 // =============================================================================
 // Autofill Service
 // =============================================================================
 export const autofill = {
   confirmSave: (panelId: string, action: "save" | "never" | "dismiss") =>
-    rpc.call<undefined>("main", "autofill.confirmSave", [panelId, action]),
+    autofillClient.confirmSave(panelId, action),
 };
 // =============================================================================
 // Events Service
@@ -499,9 +462,9 @@ export const autofill = {
 export type { EventName, EventPayloads } from "@natstack/shared/events";
 import type { EventName } from "@natstack/shared/events";
 export const events = {
-  subscribe: (event: EventName) => rpc.call<undefined>("main", "events.subscribe", [event]),
-  unsubscribe: (event: EventName) => rpc.call<undefined>("main", "events.unsubscribe", [event]),
-  unsubscribeAll: () => rpc.call<undefined>("main", "events.unsubscribeAll", []),
+  subscribe: (event: EventName) => eventsClient.subscribe(event),
+  unsubscribe: (event: EventName) => eventsClient.unsubscribe(event),
+  unsubscribeAll: () => eventsClient.unsubscribeAll(),
 };
 // =============================================================================
 // Notification Service
@@ -512,80 +475,38 @@ export const notification = {
     opts: Omit<NotificationPayload, "id"> & {
       id?: string;
     }
-  ) => rpc.call<string>("main", "notification.show", [opts]),
-  reportAction: (id: string, actionId: string) =>
-    rpc.call<undefined>("main", "notification.reportAction", [id, actionId]),
-  dismiss: (id: string) => rpc.call<undefined>("main", "notification.dismiss", [id]),
+  ) => notificationClient.show(opts),
+  reportAction: (id: string, actionId: string) => notificationClient.reportAction(id, actionId),
+  dismiss: (id: string) => notificationClient.dismiss(id),
 };
 // =============================================================================
 // Workspace Unit Service
 // =============================================================================
 export const workspaceUnits = {
-  list: () =>
-    rpc.call<
-      Array<{
-        name: string;
-        kind: string;
-        source: string;
-        displayName?: string;
-        status: string;
-        target?: string;
-        activeEv?: string | null;
-        activeBundleKey?: string | null;
-        lastError?: string | null;
-        lastErrorDetails?: unknown;
-        canRollback?: boolean;
-        rollbackRetentionLimit?: number;
-        previousVersions?: Array<{
-          version: string;
-          target: string;
-          activeEv: string | null;
-          activeBundleKey: string;
-          activatedAt: number;
-        }>;
-      }>
-    >("main", "workspace.units.list", []),
-  versions: (name: string) =>
-    rpc.call<{ current: unknown; previous: unknown[]; retentionLimit?: number }>(
-      "main",
-      "workspace.units.versions",
-      [name]
-    ),
-  rollback: (name: string, opts?: { buildKey?: string }) =>
-    rpc.call<unknown>("main", "workspace.units.rollback", [name, opts]),
-  restart: (name: string) => rpc.call<unknown>("main", "workspace.units.restart", [name]),
+  list: () => workspaceClient.units.list(),
+  versions: (name: string) => workspaceClient.units.versions(name),
+  rollback: (name: string, opts?: { buildKey?: string }) => workspaceClient.units.rollback(name, opts),
+  restart: (name: string) => workspaceClient.units.restart(name),
   logs: (
     name: string,
     opts?: { since?: number; level?: "debug" | "info" | "warn" | "error"; limit?: number }
-  ) =>
-    rpc.call<
-      Array<{
-        workspaceId: string;
-        unitName: string;
-        kind: string;
-        timestamp: number;
-        level: "debug" | "info" | "warn" | "error";
-        message: string;
-        fields?: Record<string, unknown>;
-        source?: "stdout" | "stderr" | "ctx.log" | "console" | "runner";
-      }>
-    >("main", "workspace.units.logs", [name, opts]),
+  ) => workspaceClient.units.logs(name, opts),
 };
 // =============================================================================
 // Shell Approval Service (consent approval queue)
 // =============================================================================
-import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
+import type { ApprovalDecision } from "@natstack/shared/approvals";
 import { assertPresent } from "../utils/assertPresent";
 export const shellApproval = {
   resolve: (approvalId: string, decision: ApprovalDecision) =>
-    rpc.call<undefined>("main", "shellApproval.resolve", [approvalId, decision]),
+    shellApprovalClient.resolve(approvalId, decision),
   resolveUserland: (approvalId: string, choice: string | "dismiss") =>
-    rpc.call<undefined>("main", "shellApproval.resolveUserland", [approvalId, choice]),
+    shellApprovalClient.resolveUserland(approvalId, choice),
   submitClientConfig: (approvalId: string, values: Record<string, string>) =>
-    rpc.call("main", "shellApproval.submitClientConfig", [approvalId, values]) as Promise<void>,
+    shellApprovalClient.submitClientConfig(approvalId, values),
   submitCredentialInput: (approvalId: string, values: Record<string, string>) =>
-    rpc.call("main", "shellApproval.submitCredentialInput", [approvalId, values]) as Promise<void>,
-  listPending: () => rpc.call<PendingApproval[]>("main", "shellApproval.listPending", []),
+    shellApprovalClient.submitCredentialInput(approvalId, values),
+  listPending: () => shellApprovalClient.listPending(),
 };
 // =============================================================================
 // Shell Presence Service

@@ -17,6 +17,8 @@ import {
   CrossCircledIcon,
   Cross2Icon,
   LockClosedIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from "@radix-ui/react-icons";
 import { useShellEvent } from "../shell/useShellEvent";
 import { app, notification, workspaceUnits } from "../shell/client";
@@ -65,6 +67,7 @@ function TypeIcon({ type }: { type: NotificationPayload["type"] }) {
 
 export function NotificationBar() {
   const [notifications, setNotifications] = useState<Map<string, NotificationPayload>>(new Map());
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const timerCleanups = useRef<Map<string, () => void>>(new Map());
   const barRef = useRef<HTMLDivElement>(null);
 
@@ -83,6 +86,12 @@ export function NotificationBar() {
   const dismissNotification = useCallback((id: string) => {
     setNotifications((prev) => {
       const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+    setExpandedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
       next.delete(id);
       return next;
     });
@@ -199,13 +208,24 @@ export function NotificationBar() {
   // Show the most recent notification (last added)
   const entries = Array.from(notifications.values());
   const current = assertPresent(entries[entries.length - 1]);
-  const queueCount = entries.length - 1;
+  const queuedNotifications = entries.slice(0, -1).reverse();
+  const expanded = expandedIds.has(current.id);
+  const toggleExpanded = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div ref={barRef} data-shell-top-chrome="notification-bar">
       <ToastNotification
         notification={current}
-        queueCount={queueCount}
+        queuedNotifications={queuedNotifications}
+        expanded={expanded}
+        onToggleExpanded={toggleExpanded}
         onAction={handleAction}
         onDismiss={dismissNotification}
       />
@@ -217,64 +237,225 @@ export function NotificationBar() {
 
 function ToastNotification({
   notification,
-  queueCount,
+  queuedNotifications,
+  expanded,
+  onToggleExpanded,
   onAction,
   onDismiss,
 }: {
   notification: NotificationPayload;
-  queueCount: number;
+  queuedNotifications: NotificationPayload[];
+  expanded: boolean;
+  onToggleExpanded: (id: string) => void;
   onAction: (id: string, action: NonNullable<NotificationPayload["actions"]>[number]) => void;
   onDismiss: (id: string) => void;
 }) {
+  const multilineMessage = notification.message?.includes("\n") ? notification.message : null;
+  const summaryMessage = firstLine(notification.message);
+  const hasExpandableContent =
+    Boolean(multilineMessage) ||
+    Boolean(notification.details?.length) ||
+    Boolean(notification.history?.length) ||
+    queuedNotifications.length > 0;
+
   return (
     <Flex
-      align="center"
-      justify="between"
-      px="3"
-      py="2"
-      gap="3"
+      direction="column"
       style={{
         backgroundColor: TYPE_BG[notification.type],
         borderBottom: `1px solid ${TYPE_BORDER[notification.type]}`,
         flexShrink: 0,
       }}
     >
-      <Flex align="center" gap="2" style={{ flex: 1, minWidth: 0 }}>
-        <TypeIcon type={notification.type} />
-        <Text size="2" weight="bold" truncate>
-          {notification.title}
-        </Text>
-        {notification.message && (
-          <Text size="2" color="gray" truncate>
-            {notification.message}
+      <Flex align="center" justify="between" px="3" py="2" gap="3" style={{ width: "100%" }}>
+        <Flex align="center" gap="2" style={{ flex: 1, minWidth: 0 }}>
+          <TypeIcon type={notification.type} />
+          <Text size="2" weight="bold" truncate>
+            {notification.title}
           </Text>
-        )}
-        {queueCount > 0 && (
-          <Badge size="1" variant="soft">
-            +{queueCount}
-          </Badge>
-        )}
-      </Flex>
-      <Flex gap="2" style={{ flexShrink: 0 }}>
-        {notification.actions?.map((action) => (
+          {summaryMessage && (
+            <Text size="2" color="gray" truncate>
+              {summaryMessage}
+            </Text>
+          )}
+          {queuedNotifications.length > 0 && (
+            <Badge size="1" variant="soft">
+              +{queuedNotifications.length}
+            </Badge>
+          )}
+        </Flex>
+        <Flex gap="2" align="center" style={{ flexShrink: 0 }}>
+          {hasExpandableContent && (
+            <Button
+              size="1"
+              variant="ghost"
+              aria-expanded={expanded}
+              onClick={() => onToggleExpanded(notification.id)}
+            >
+              {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+              Details
+            </Button>
+          )}
+          {notification.actions?.map((action) => (
+            <Button
+              key={action.id}
+              size="1"
+              variant={action.variant ?? "soft"}
+              onClick={() => onAction(notification.id, action)}
+            >
+              {action.label}
+            </Button>
+          ))}
           <Button
-            key={action.id}
             size="1"
-            variant={action.variant ?? "soft"}
-            onClick={() => onAction(notification.id, action)}
+            variant="ghost"
+            aria-label="Dismiss notification"
+            onClick={() => onDismiss(notification.id)}
           >
-            {action.label}
+            <Cross2Icon />
           </Button>
-        ))}
-        <Button
-          size="1"
-          variant="ghost"
-          aria-label="Dismiss notification"
-          onClick={() => onDismiss(notification.id)}
-        >
-          <Cross2Icon />
-        </Button>
+        </Flex>
       </Flex>
+      {expanded && hasExpandableContent && (
+        <NotificationDetails
+          notification={notification}
+          multilineMessage={multilineMessage}
+          queuedNotifications={queuedNotifications}
+        />
+      )}
     </Flex>
   );
+}
+
+function NotificationDetails({
+  notification,
+  multilineMessage,
+  queuedNotifications,
+}: {
+  notification: NotificationPayload;
+  multilineMessage: string | null;
+  queuedNotifications: NotificationPayload[];
+}) {
+  return (
+    <div
+      data-testid="notification-details-pane"
+      style={{
+        width: "100%",
+        maxHeight: 280,
+        overflowY: "auto",
+        borderTop: `1px solid ${TYPE_BORDER[notification.type]}`,
+        padding: "8px 12px 10px",
+      }}
+    >
+      <Flex direction="column" gap="2">
+        {multilineMessage && <DiagnosticBlock title="Message" value={multilineMessage} mono />}
+        {notification.details?.map((detail) => (
+          <DiagnosticBlock
+            key={`${detail.label}:${detail.value}`}
+            title={detail.label}
+            value={detail.value}
+            mono={detail.mono}
+          />
+        ))}
+        {notification.history?.length ? (
+          <Flex direction="column" gap="2">
+            <Text size="1" weight="bold" color="gray">
+              Recent errors
+            </Text>
+            {notification.history.map((item, index) => (
+              <div
+                key={`${item.timestamp ?? index}:${item.title ?? ""}`}
+                style={{
+                  border: "1px solid var(--gray-6)",
+                  borderRadius: 6,
+                  padding: "7px 8px",
+                  background: "color-mix(in srgb, var(--gray-1) 72%, transparent)",
+                }}
+              >
+                <Flex direction="column" gap="1">
+                  <Text size="1" weight="bold">
+                    {item.title ?? `Error ${index + 1}`}
+                    {item.timestamp ? ` · ${new Date(item.timestamp).toLocaleTimeString()}` : ""}
+                  </Text>
+                  <DiagnosticValue value={item.message} mono />
+                  {item.details?.map((detail) => (
+                    <DiagnosticBlock
+                      key={`${index}:${detail.label}:${detail.value}`}
+                      title={detail.label}
+                      value={detail.value}
+                      mono={detail.mono}
+                    />
+                  ))}
+                </Flex>
+              </div>
+            ))}
+          </Flex>
+        ) : null}
+        {queuedNotifications.length > 0 && (
+          <Flex direction="column" gap="2">
+            <Text size="1" weight="bold" color="gray">
+              Other notifications
+            </Text>
+            {queuedNotifications.map((queued) => (
+              <div
+                key={queued.id}
+                style={{
+                  border: "1px solid var(--gray-6)",
+                  borderRadius: 6,
+                  padding: "7px 8px",
+                  background: "color-mix(in srgb, var(--gray-1) 72%, transparent)",
+                }}
+              >
+                <Text size="1" weight="bold">
+                  {queued.title}
+                </Text>
+                {queued.message ? <DiagnosticValue value={queued.message} /> : null}
+              </div>
+            ))}
+          </Flex>
+        )}
+      </Flex>
+    </div>
+  );
+}
+
+function DiagnosticBlock({
+  title,
+  value,
+  mono,
+}: {
+  title: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <Flex direction="column" gap="1">
+      <Text size="1" weight="bold" color="gray">
+        {title}
+      </Text>
+      <DiagnosticValue value={value} mono={mono} />
+    </Flex>
+  );
+}
+
+function DiagnosticValue({ value, mono }: { value: string; mono?: boolean }) {
+  return (
+    <Text
+      as="div"
+      size="1"
+      style={{
+        whiteSpace: "pre-wrap",
+        overflowWrap: "anywhere",
+        fontFamily: mono ? "var(--font-mono)" : undefined,
+        lineHeight: 1.45,
+      }}
+    >
+      {value}
+    </Text>
+  );
+}
+
+function firstLine(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return value.split(/\r?\n/, 1)[0];
 }

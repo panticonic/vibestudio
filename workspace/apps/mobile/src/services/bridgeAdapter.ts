@@ -2,6 +2,9 @@ import type { PanelManager } from "@natstack/shared/shell/panelManager";
 import type { PanelRegistry } from "@natstack/shared/panelRegistry";
 import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
 import { asPanelSlotId } from "@natstack/shared/panel/ids";
+import type { OpenExternalOptions } from "@natstack/shared/externalOpen";
+import { externalOpenMethods } from "@natstack/shared/serviceSchemas/externalOpen";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 import type { MobileRpcClient } from "./mobileTransport";
 
 export interface BridgeAdapterCallbacks {
@@ -113,14 +116,14 @@ export function createBridgeAdapter(deps: {
                 case "openExternal": {
                     const [url, options] = args as [
                         string,
-                        unknown?
+                        OpenExternalOptions?
                     ];
-                    await deps.transport.call("main", "externalOpen.openExternalForCaller", [{
-                            callerId: panelId,
-                            callerKind: "panel",
-                            url,
-                            options,
-                        }]);
+                    const externalOpen = createTypedServiceClient(
+                        "externalOpen",
+                        externalOpenMethods,
+                        (svc, method, callArgs) => deps.transport.call("main", `${svc}.${method}`, callArgs),
+                    );
+                    await externalOpen.openExternal(url, options);
                     return;
                 }
                 case "getCdpEndpoint":

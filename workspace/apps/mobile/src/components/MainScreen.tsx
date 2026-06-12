@@ -63,7 +63,6 @@ import {
 import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
 import type { HostConfig } from "../services/panelUrls";
 import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
-import { RPC_METHODS } from "@natstack/shared/approvalContract";
 const MAX_WEBVIEWS = 5;
 const PANEL_MATERIALIZE_TIMEOUT_MS = 45_000;
 interface WebViewEntry {
@@ -326,11 +325,7 @@ export function MainScreen() {
       return [];
     }
     const seq = ++pendingApprovalsRefreshSeq.current;
-    const pending = await shellClient.transport.call<PendingApproval[]>(
-      "main",
-      RPC_METHODS.shellApproval.listPending,
-      []
-    );
+    const pending = await shellClient.shellApproval.listPending();
     if (seq === pendingApprovalsRefreshSeq.current) {
       setPendingApprovals(pending);
       const signature = pending.map((approval) => `${approval.kind}:${approval.approvalId}`).join("|");
@@ -354,10 +349,7 @@ export function MainScreen() {
   const resolveApproval = useCallback(
     async (approvalId: string, decision: ApprovalDecision) => {
       if (!shellClient) throw new Error("Shell client not available");
-      await shellClient.transport.call("main", RPC_METHODS.shellApproval.resolve, [
-        approvalId,
-        decision,
-      ]);
+      await shellClient.shellApproval.resolve(approvalId, decision);
       removeResolvedApproval(approvalId);
       void refreshPendingApprovals().catch(() => {});
     },
@@ -366,10 +358,7 @@ export function MainScreen() {
   const submitClientConfig = useCallback(
     async (approvalId: string, values: Record<string, string>) => {
       if (!shellClient) throw new Error("Shell client not available");
-      await shellClient.transport.call("main", RPC_METHODS.shellApproval.submitClientConfig, [
-        approvalId,
-        values,
-      ]);
+      await shellClient.shellApproval.submitClientConfig(approvalId, values);
       removeResolvedApproval(approvalId);
     },
     [removeResolvedApproval, shellClient]
@@ -377,10 +366,7 @@ export function MainScreen() {
   const submitCredentialInput = useCallback(
     async (approvalId: string, values: Record<string, string>) => {
       if (!shellClient) throw new Error("Shell client not available");
-      await shellClient.transport.call("main", RPC_METHODS.shellApproval.submitCredentialInput, [
-        approvalId,
-        values,
-      ]);
+      await shellClient.shellApproval.submitCredentialInput(approvalId, values);
       removeResolvedApproval(approvalId);
     },
     [removeResolvedApproval, shellClient]
@@ -388,10 +374,7 @@ export function MainScreen() {
   const resolveUserland = useCallback(
     async (approvalId: string, choice: string | "dismiss") => {
       if (!shellClient) throw new Error("Shell client not available");
-      await shellClient.transport.call("main", RPC_METHODS.shellApproval.resolveUserland, [
-        approvalId,
-        choice,
-      ]);
+      await shellClient.shellApproval.resolveUserland(approvalId, choice);
       removeResolvedApproval(approvalId);
     },
     [removeResolvedApproval, shellClient]

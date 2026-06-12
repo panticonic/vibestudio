@@ -151,10 +151,10 @@ function dispatch(shellClient: ShellClient, parsed: ParsedCallback): void {
     // callback to the pending flow by state. Error responses (empty code) are
     // forwarded too so the server can fail the waiting flow instead of hanging;
     // it parses the error out of the raw callback URL.
-    void shellClient.transport.call("main", "credentials.forwardOAuthCallback", [{
+    void shellClient.credentialService.forwardOAuthCallback({
             url: parsed.rawUrl,
             state: parsed.state,
-        }]).catch((err: unknown) => {
+        }).catch((err: unknown) => {
         dedupe.forget(parsed.state);
         console.warn(`[oauthHandler] Failed to forward OAuth callback for provider=${parsed.provider}:`, err);
     });

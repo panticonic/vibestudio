@@ -6,6 +6,9 @@ import {
   type RpcEnvelope,
 } from "@natstack/rpc";
 import { createConnectDeepLink } from "@natstack/shared/connect";
+import { authMethods } from "@natstack/shared/serviceSchemas/auth";
+import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
 import WebSocket from "ws";
 
@@ -161,36 +164,31 @@ async function connect() {
 
 export async function main(): Promise<void> {
   const { rpc, close } = await connect();
+  const workspaceClient = createTypedServiceClient(
+    "workspace",
+    workspaceMethods,
+    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
+  );
+  const authClient = createTypedServiceClient("auth", authMethods, (service, method, args) =>
+    rpc.call("main", `${service}.${method}`, args)
+  );
   printBootstrapSummary();
-  const workspace = await rpc.call("main", "workspace.getInfo", []);
+  const workspace = await workspaceClient.getInfo();
   console.log(`Connected as ${requiredEnv("NATSTACK_TERMINAL_APP_ID")}`);
-  console.log(`Workspace: ${(workspace as { config?: { id?: string } }).config?.id ?? "unknown"}`);
+  console.log(`Workspace: ${workspace.config.id ?? "unknown"}`);
 
-  const units = await rpc.call("main", "workspace.units.list", []);
-  const unitRows = Array.isArray(units) ? units : [];
-  console.log(`Workspace units: ${unitRows.length}`);
-  for (const unit of unitRows) {
-    if (!unit || typeof unit !== "object") continue;
-    const row = unit as {
-      name?: unknown;
-      kind?: unknown;
-      source?: unknown;
-      status?: unknown;
-      target?: unknown;
-    };
+  const units = await workspaceClient.units.list();
+  console.log(`Workspace units: ${units.length}`);
+  for (const unit of units) {
     console.log(
-      `- ${String(row.kind ?? "unit")} ${String(row.name ?? "unknown")} ${String(
-        row.source ?? ""
-      )} status=${String(row.status ?? "unknown")} target=${String(row.target ?? "")}`
+      `- ${unit.kind} ${unit.name} ${unit.source} status=${unit.status} target=${unit.target ?? ""}`
     );
   }
 
   const command = process.env["NATSTACK_TERMINAL_APP_COMMAND"] ?? "invite";
   if (command === "status") return;
   if (command === "invite") {
-    const invite = (await rpc.call("main", "auth.createPairingInvite", [
-      { ttlMs: 10 * 60 * 1000 },
-    ])) as PairingInviteLike;
+    const invite = await authClient.createPairingInvite({ ttlMs: 10 * 60 * 1000 });
     console.log(formatPairingInvite(invite));
   }
 

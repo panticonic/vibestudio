@@ -33,6 +33,12 @@ import { createMobileShellCore } from "../shellCore/createMobileShellCore";
 import type { Credentials } from "./auth";
 import { issueConnectionGrant } from "./auth";
 import { drainWorkspaceMutationQueue } from "./backgroundActionQueue";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
+import { panelRuntimeMethods } from "@natstack/shared/serviceSchemas/panelRuntime";
+import { gitMethods } from "@natstack/shared/serviceSchemas/git";
+import { credentialsMethods } from "@natstack/shared/serviceSchemas/credentials";
+import { pushMethods } from "@natstack/shared/serviceSchemas/push";
 
 function smokePhase(phase: string, details?: Record<string, unknown>): void {
   const suffix = details ? ` ${JSON.stringify(details)}` : "";
@@ -44,10 +50,48 @@ export interface ShellClientConfig {
   onTreeUpdated?: (tree: Panel[]) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
 }
+function createShellApprovalClient(transport: MobileRpcClient) {
+  return createTypedServiceClient("shellApproval", shellApprovalMethods, (service, method, args) =>
+    transport.call("main", `${service}.${method}`, args)
+  );
+}
+
+function createPanelRuntimeClient(transport: MobileRpcClient) {
+  return createTypedServiceClient("panelRuntime", panelRuntimeMethods, (service, method, args) =>
+    transport.call("main", `${service}.${method}`, args)
+  );
+}
+
+function createGitClient(transport: MobileRpcClient) {
+  return createTypedServiceClient("git", gitMethods, (service, method, args) =>
+    transport.call("main", `${service}.${method}`, args)
+  );
+}
+
+function createCredentialsClient(transport: MobileRpcClient) {
+  return createTypedServiceClient("credentials", credentialsMethods, (service, method, args) =>
+    transport.call("main", `${service}.${method}`, args)
+  );
+}
+
+function createPushClient(transport: MobileRpcClient) {
+  return createTypedServiceClient("push", pushMethods, (service, method, args) =>
+    transport.call("main", `${service}.${method}`, args)
+  );
+}
+
+type ShellApprovalClient = ReturnType<typeof createShellApprovalClient>;
+type PanelRuntimeClient = ReturnType<typeof createPanelRuntimeClient>;
+type GitClient = ReturnType<typeof createGitClient>;
+type CredentialsClient = ReturnType<typeof createCredentialsClient>;
+type PushClient = ReturnType<typeof createPushClient>;
+
 class MobilePanels {
   private panelManager: PanelManager | null = null;
   private registryInstance: PanelRegistry | null = null;
   private bridgeAdapterInstance: ReturnType<typeof createBridgeAdapter> | null = null;
+  private readonly panelRuntime: PanelRuntimeClient;
+  private readonly git: GitClient;
   private readonly browserData: BrowserDataClient;
   constructor(
     private readonly deps: {
@@ -58,6 +102,8 @@ class MobilePanels {
       clientSessionId: string;
     }
   ) {
+    this.panelRuntime = createPanelRuntimeClient(this.deps.transport);
+    this.git = createGitClient(this.deps.transport);
     this.browserData = createBrowserDataRpcClient({
       call: (service: string, method: string, args: unknown[]) =>
         this.deps.transport.call("main", `${service}.${method}`, args),
@@ -88,13 +134,11 @@ class MobilePanels {
     }
     const initialTheme = Appearance.getColorScheme() === "light" ? "light" : "dark";
     this.panelManager.setCurrentTheme(initialTheme);
-    await this.deps.transport.call("main", "panelRuntime.registerClient", [
-      {
-        clientSessionId: this.deps.clientSessionId,
-        label: "Mobile",
-        platform: "mobile",
-      },
-    ]);
+    await this.panelRuntime.registerClient({
+      clientSessionId: this.deps.clientSessionId,
+      label: "Mobile",
+      platform: "mobile",
+    });
     const tree = await this.panelManager.syncSnapshot();
     await this.syncRuntimeLeases();
     if (tree.rootPanels.length > 0) return;
@@ -204,10 +248,14 @@ class MobilePanels {
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().createBrowser(parentId ? asPanelSlotId(parentId) : null, url, {
-      name: options?.name,
-      addAsRoot: parentId == null,
-    });
+    const result = await this.requireManager().createBrowser(
+      parentId ? asPanelSlotId(parentId) : null,
+      url,
+      {
+        name: options?.name,
+        addAsRoot: parentId == null,
+      }
+    );
     if (options?.focus !== false) {
       await this.requireManager().notifyFocused(result.panelId);
       this.deps.navigateToPanel(result.panelId);
@@ -252,7 +300,9 @@ class MobilePanels {
     this.deps.onTreeUpdated?.(this.getTree());
   }
   async updateBrowserUrl(panelId: string, url: string): Promise<void> {
-    await this.requireManager().replaceCurrentSnapshot(asPanelSlotId(panelId), { source: `browser:${url}` });
+    await this.requireManager().replaceCurrentSnapshot(asPanelSlotId(panelId), {
+      source: `browser:${url}`,
+    });
     this.deps.onTreeUpdated?.(this.getTree());
   }
   async navigatePanel(
@@ -277,28 +327,13 @@ class MobilePanels {
       ref,
       git: {
         getWorkspaceTree: () =>
-          this.deps.transport.call<{
-            children: WorkspaceNode[];
-          }>("main", "git.getWorkspaceTree", []),
-        findRepoForPath: (path) =>
-          this.deps.transport.call<{
-            repoPath: string;
-            relativePath: string;
-          } | null>("main", "git.findRepoForPath", [path]),
+          this.git.getWorkspaceTree() as Promise<{ children: WorkspaceNode[] }>,
+        findRepoForPath: (path) => this.git.findRepoForPath(path),
         status: (repoPath) =>
-          this.deps.transport.call<
-            PanelRepoState & {
-              repoPath: string;
-            }
-          >("main", "git.status", [repoPath]),
-        listBranches: (repoPath) =>
-          this.deps.transport.call<BranchInfo[]>("main", "git.listBranches", [repoPath]),
+          this.git.status(repoPath) as Promise<PanelRepoState & { repoPath: string }>,
+        listBranches: (repoPath) => this.git.listBranches(repoPath) as Promise<BranchInfo[]>,
         listCommits: (repoPath, commitRef, limit) =>
-          this.deps.transport.call<CommitInfo[]>("main", "git.listCommits", [
-            repoPath,
-            commitRef,
-            limit,
-          ]),
+          this.git.listCommits(repoPath, commitRef, limit) as Promise<CommitInfo[]>,
       },
     });
   }
@@ -333,28 +368,22 @@ class MobilePanels {
     runtimeEntityId: string,
     opts: { connectionId: string }
   ): Promise<{ acquired: boolean; lease?: { holderLabel: string } }> {
-    return this.deps.transport.call("main", "panelRuntime.acquire", [
-      runtimeEntityId,
-      {
-        slotId: panelId,
-        clientSessionId: this.deps.clientSessionId,
-        connectionId: opts.connectionId,
-      },
-    ]);
+    return this.panelRuntime.acquire(runtimeEntityId, {
+      slotId: panelId,
+      clientSessionId: this.deps.clientSessionId,
+      connectionId: opts.connectionId,
+    });
   }
   async takeOverLease(
     panelId: string,
     runtimeEntityId: string,
     opts: { connectionId: string }
   ): Promise<{ acquired: boolean; lease?: { holderLabel: string } }> {
-    return this.deps.transport.call("main", "panelRuntime.takeOver", [
-      runtimeEntityId,
-      {
-        slotId: panelId,
-        clientSessionId: this.deps.clientSessionId,
-        connectionId: opts.connectionId,
-      },
-    ]);
+    return this.panelRuntime.takeOver(runtimeEntityId, {
+      slotId: panelId,
+      clientSessionId: this.deps.clientSessionId,
+      connectionId: opts.connectionId,
+    });
   }
   applyRuntimeLeaseEvent(event: PanelRuntimeLeaseChangedEvent): void {
     this.registry.applyRuntimeLeaseChanged(event);
@@ -364,11 +393,7 @@ class MobilePanels {
     this.bridgeAdapterInstance?.setRuntimeHost(host);
   }
   async syncRuntimeLeases(): Promise<void> {
-    const snapshot = await this.deps.transport.call<RuntimeLeaseSnapshot>(
-      "main",
-      "panelRuntime.getSnapshot",
-      []
-    );
+    const snapshot = await this.panelRuntime.getSnapshot();
     this.registry.applyRuntimeLeaseSnapshot(snapshot);
     this.deps.onTreeUpdated?.(this.getTree());
   }
@@ -387,6 +412,10 @@ export class ShellClient {
   readonly workspaces: WorkspaceClient;
   readonly settings: SettingsClient;
   readonly events: EventsClient;
+  readonly shellApproval: ShellApprovalClient;
+  readonly panelRuntime: PanelRuntimeClient;
+  readonly credentialService: CredentialsClient;
+  readonly push: PushClient;
   readonly recovery: RecoveryCoordinator;
   readonly credentials: Credentials;
   readonly serverUrl: string;
@@ -419,6 +448,10 @@ export class ShellClient {
     this.workspaces = new WorkspaceClient(this.transport);
     this.settings = new SettingsClient(this.transport);
     this.events = new EventsClient(this.transport, this.recovery);
+    this.shellApproval = createShellApprovalClient(this.transport);
+    this.panelRuntime = createPanelRuntimeClient(this.transport);
+    this.credentialService = createCredentialsClient(this.transport);
+    this.push = createPushClient(this.transport);
     this.transport.on("event:panel:runtimeLeaseChanged", (event) => {
       this.panels.applyRuntimeLeaseEvent(event.payload as PanelRuntimeLeaseChangedEvent);
     });
@@ -427,9 +460,7 @@ export class ShellClient {
     smokePhase("workspace-shell-init-start", { serverUrl: this.serverUrl });
     await this.transport.connectAndWait(null);
     smokePhase("workspace-ws-authenticated");
-    const info = await this.transport.call<{
-      config: WorkspaceConfig;
-    }>("main", "workspace.getInfo", []);
+    const info = await this.workspaces.getInfo();
     smokePhase("workspace-info-loaded", { workspaceId: info.config.id });
     await this.panels.init(info.config.id, info.config);
     smokePhase("workspace-panels-initialized");
@@ -480,9 +511,7 @@ export class ShellClient {
     for (const unsubscribe of this.panelRecoveryUnsubs ?? []) unsubscribe();
     this.panelRecoveryUnsubs = null;
     void (async () => {
-      await this.transport
-        .call("main", "panelRuntime.unregisterClient", [this.credentials.deviceId])
-        .catch(() => {});
+      await this.panelRuntime.unregisterClient(this.credentials.deviceId).catch(() => {});
       this.transport.disconnect();
     })();
     this.statusUnsub?.();

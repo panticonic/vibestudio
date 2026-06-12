@@ -5,8 +5,7 @@
  * development app and tests still run before Firebase/Notifee are installed.
  */
 import { AppState, Platform, type AppStateStatus } from "react-native";
-import { APPROVAL_CATEGORY_DECIDE, RPC_METHODS, type PushApprovalDataPayload, } from "@natstack/shared/approvalContract";
-import type { PendingApproval } from "@natstack/shared/approvals";
+import { APPROVAL_CATEGORY_DECIDE, type PushApprovalDataPayload, } from "@natstack/shared/approvalContract";
 import type { ShellClient } from "./shellClient";
 import { requireApprovedAppCapability } from "./appCapabilities";
 import { APPROVAL_NOTIFICATION_CHANNEL_ID, getAndroidNotificationActions, } from "./notificationCategories";
@@ -188,7 +187,7 @@ function getAsyncStorage(): AsyncStorageLike | null {
 async function registerToken(shellClient: ShellClient, token: string): Promise<void> {
     const platform = Platform.OS === "ios" ? "ios" : "android";
     const clientId = await getDeviceClientId();
-    await shellClient.transport.call("main", RPC_METHODS.push.register, [{ token, platform, clientId }]);
+    await shellClient.push.register({ token, platform, clientId });
 }
 function isAuthorizedStatus(status: number | {
     authorizationStatus?: number;
@@ -246,7 +245,7 @@ export async function reconcilePushNotifications(shellClient: ShellClient, notif
     if (!notifee)
         return;
     try {
-        const pending = await shellClient.transport.call<PendingApproval[]>("main", RPC_METHODS.shellApproval.listPending, []);
+        const pending = await shellClient.shellApproval.listPending();
         const pendingIds = new Set(pending.map((approval) => approval.approvalId));
         const displayed = await notifee.getDisplayedNotifications?.() ?? [];
         for (const entry of displayed) {
@@ -284,8 +283,7 @@ async function handleForegroundEvent(event: NotifeeEvent, EventType: Record<stri
     const actionId = event.detail.pressAction?.id;
     if (event.type === EventType["ACTION_PRESS"] && isBackgroundDecision(actionId)) {
         if (shellClient.transport.status === "connected") {
-            await shellClient.transport.call("main", RPC_METHODS.shellApproval.resolve, [approvalId,
-                actionId]);
+            await shellClient.shellApproval.resolve(approvalId, actionId);
             await notifee.cancelNotification(approvalId);
         }
         else {
@@ -406,7 +404,7 @@ export async function unregisterPushNotifications(shellClient: ShellClient): Pro
         return;
     const messaging = messagingModule();
     try {
-        await shellClient.transport.call("main", RPC_METHODS.push.unregister, [await getDeviceClientId()]);
+        await shellClient.push.unregister(await getDeviceClientId());
     }
     catch (error) {
         console.error("[PushNotifications] Failed to unregister token from server:", error);
