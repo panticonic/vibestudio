@@ -1,5 +1,7 @@
 import type { RpcCaller } from "@natstack/rpc";
 import { createGadServiceClient } from "@natstack/shared/userlandServiceRpc";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { blobstoreMethods } from "@natstack/shared/serviceSchemas/blobstore";
 import {
   hydrateStoredValueRefs,
   type AgenticEvent,
@@ -315,9 +317,12 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     if (typeof input === "string") return [input, bindings ?? []];
     return [input.sql, input.bindings ?? input.params ?? bindings ?? []];
   };
+  const blobstore = createTypedServiceClient("blobstore", blobstoreMethods, (svc, method, args) =>
+    rpc.call("main", `${svc}.${method}`, args)
+  );
   const hydrate = async <T>(value: T): Promise<T> =>
     hydrateStoredValueRefs(value, {
-      getText: (digest) => rpc.call<string | null>("main", "blobstore.getText", [digest]),
+      getText: (digest) => blobstore.getText(digest),
     }) as Promise<T>;
   const hydrateLineage = async <
     T extends { envelope: ChannelEnvelope; trajectoryEvent: TrajectoryEvent },

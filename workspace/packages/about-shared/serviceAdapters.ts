@@ -6,7 +6,18 @@
  * about pages (git-init, dirty-repo) to work without nodeIntegration.
  */
 import { rpc } from "@workspace/runtime";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { gitMethods } from "@natstack/shared/serviceSchemas/git";
 import type { FsPromisesLike } from "@natstack/git";
+
+/**
+ * Typed client for the subset of the "git" service that exists in the shared
+ * schema table. Most GitClientAdapter methods (git.fs.*, init, add, stash*, …)
+ * are NOT in gitMethods yet and remain stringly-typed below.
+ */
+const gitService = createTypedServiceClient("git", gitMethods, (svc, method, args) =>
+    rpc.call("main", `${svc}.${method}`, args)
+);
 /**
  * Create a FsPromisesLike implementation that routes through the git service.
  * All paths are validated server-side against the scope directory.
@@ -90,7 +101,7 @@ class GitClientAdapter {
         return rpc.call<boolean>("main", "git.isRepo", [dir]);
     }
     async status(dir: string): Promise<unknown> {
-        return rpc.call("main", "git.status", [dir]);
+        return gitService.status(dir);
     }
     // Staging operations
     async add(dir: string, filepath: string): Promise<void> {

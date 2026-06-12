@@ -727,6 +727,13 @@ describe("AgentWorkerBase method suspension ledger", () => {
     };
   }
 
+  function channelClientWithDiagnostics<T extends Record<string, unknown>>(overrides: T) {
+    return {
+      send: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    };
+  }
+
   it("awaits lifecycle lease activation before starting model work", async () => {
     const { instance } = await createTestDO(LeaseBarrierTestAgentWorker, {
       __objectKey: "agent-test",
@@ -1489,12 +1496,12 @@ describe("AgentWorkerBase method suspension ledger", () => {
       ): Promise<unknown>;
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi
         .fn()
         .mockResolvedValue([{ participantId: "panel-1", metadata: { type: "panel" } }]),
       callMethod,
-    });
+    }));
     worker.runners.set("chat-1", {
       runner: {
         getCurrentTurnId: () => "turn-ui",
@@ -1626,7 +1633,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
       transitionTurn(turnId: string, from: string[], to: string): boolean;
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({ publishAgenticEvent });
+    worker.createChannelClient = vi.fn().mockReturnValue(
+      channelClientWithDiagnostics({ publishAgenticEvent })
+    );
     insertTurnRun(sql, { turnId: "turn-resume", status: "waiting_external" });
 
     expect(worker.transitionTurn("turn-resume", ["waiting_external"], "continuing")).toBe(true);
@@ -4382,7 +4391,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       appendMethodSuspensionUpdate(callId: string, content: unknown): void;
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([
         {
           participantId: "panel:panel-1",
@@ -4394,7 +4403,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
         throw new Error("dispatch exploded");
       }),
       cancelCall,
-    });
+    }));
 
     await expect(
       worker.invokeChannelMethod(
@@ -4443,7 +4452,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       ): Promise<unknown>;
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([
         {
           participantId: "panel:panel-1",
@@ -4451,7 +4460,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
         },
       ]),
       callMethod,
-    });
+    }));
     insertTurnRun(sql, { turnId: "turn-interrupted-dispatch", status: "interrupted" });
 
     await expect(
@@ -4504,7 +4513,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
       ): Promise<unknown>;
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([
         {
           participantId: "panel:panel-1",
@@ -4512,7 +4521,7 @@ describe("AgentWorkerBase method suspension ledger", () => {
         },
       ]),
       callMethod,
-    });
+    }));
     const controller = new AbortController();
     controller.abort(new Error("Request was aborted"));
 
@@ -4550,7 +4559,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
       Date.now(),
       "do:agent"
     );
-    worker.createChannelClient = vi.fn().mockReturnValue({ setTypingState });
+    worker.createChannelClient = vi.fn().mockReturnValue(
+      channelClientWithDiagnostics({ setTypingState })
+    );
 
     await worker.ensureAgentActivationReady();
 
@@ -4581,7 +4592,9 @@ describe("AgentWorkerBase method suspension ledger", () => {
       Date.now(),
       "do:agent"
     );
-    worker.createChannelClient = vi.fn().mockReturnValue({ setTypingState });
+    worker.createChannelClient = vi.fn().mockReturnValue(
+      channelClientWithDiagnostics({ setTypingState })
+    );
 
     const debug = await worker.getDebugState("chat-1");
 
@@ -5496,14 +5509,14 @@ describe("TrajectoryVesselBase custom message recovery", () => {
       })),
     ];
 
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getReplayAfter: vi.fn(async (cursor: number) => ({
         mode: "after",
         logEvents: events.filter((event) => event.id > cursor).slice(0, 500),
         snapshots: [],
         ready: { totalCount: events.length, envelopeCount: events.length },
       })),
-    });
+    }));
 
     const result = await worker.testIndexOwnCustomMessages("chat-1", (typeId) => {
       if (typeId !== "gmail.thread") return undefined;
@@ -5583,6 +5596,13 @@ describe("AgentWorkerBase fork subscription state", () => {
 });
 
 /** Build a {kind:"log"} channel envelope carrying a durable invocation.* terminal. */
+function channelClientWithDiagnostics<T extends Record<string, unknown>>(overrides: T) {
+  return {
+    send: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
 function invocationTerminalEnvelope(opts: {
   terminal:
     | "invocation.completed"
@@ -5662,7 +5682,7 @@ describe("AgentWorkerBase dispatched method results", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([
         {
           participantId: "panel:panel-1",
@@ -5682,7 +5702,7 @@ describe("AgentWorkerBase dispatched method results", () => {
           })
         );
       }),
-    });
+    }));
     const abort = vi.fn().mockResolvedValue(undefined);
     worker.runners.set("chat-1", { runner: { abort } });
 
@@ -5735,7 +5755,7 @@ describe("AgentWorkerBase dispatched method results", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([
         {
           participantId: "panel:panel-1",
@@ -5754,7 +5774,7 @@ describe("AgentWorkerBase dispatched method results", () => {
           })
         );
       }),
-    });
+    }));
 
     const result = await worker.invokeChannelMethod(
       "chat-1",
@@ -5795,7 +5815,7 @@ describe("AgentWorkerBase dispatched method results", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([
         {
           participantId: "panel:panel-1",
@@ -5814,7 +5834,7 @@ describe("AgentWorkerBase dispatched method results", () => {
           })
         );
       }),
-    });
+    }));
 
     const result = await worker.invokeChannelMethod(
       "chat-1",
@@ -5847,9 +5867,9 @@ describe("AgentWorkerBase dispatched method results", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       setTypingState,
-    });
+    }));
 
     await worker.onChannelEnvelope(
       "chat-1",
@@ -5881,9 +5901,9 @@ describe("AgentWorkerBase dispatched method results", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       setTypingState,
-    });
+    }));
 
     await worker.handleIncomingChannelEvent("chat-1", {
       id: 1,
@@ -5937,7 +5957,7 @@ describe("AgentWorkerBase dispatched method results", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([
         {
           participantId: "panel:panel-1",
@@ -5949,7 +5969,7 @@ describe("AgentWorkerBase dispatched method results", () => {
         resolveCallStarted();
       }),
       cancelCall,
-    });
+    }));
 
     const pending = worker.invokeChannelMethod(
       "chat-1",
@@ -6010,7 +6030,7 @@ describe("AgentWorkerBase dispatched method results", () => {
         })),
       },
     });
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([
         {
           participantId: "panel:panel-1",
@@ -6023,7 +6043,7 @@ describe("AgentWorkerBase dispatched method results", () => {
         resolveCallStarted();
       }),
       cancelCall: vi.fn().mockResolvedValue(undefined),
-    });
+    }));
 
     const pending = worker.invokeChannelMethod(
       "chat-1",
@@ -6080,10 +6100,10 @@ describe("AgentWorkerBase model credential resume", () => {
       return promise;
     });
     const waitUntil = vi.fn();
-    const channelClient = {
+    const channelClient = channelClientWithDiagnostics({
       getParticipants: vi.fn(() => new Promise(() => undefined)),
       publishAgenticEvent,
-    };
+    });
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
@@ -6158,7 +6178,7 @@ describe("AgentWorkerBase model credential resume", () => {
       __objectKey: "agent-test",
     });
     const publishedEvents: unknown[] = [];
-    const channelClient = {
+    const channelClient = channelClientWithDiagnostics({
       getParticipants: vi.fn(() => new Promise(() => undefined)),
       publishAgenticEvent: vi.fn(
         (_participantId: string, event: unknown) =>
@@ -6166,7 +6186,7 @@ describe("AgentWorkerBase model credential resume", () => {
             publishedEvents.push(event);
           })
       ),
-    };
+    });
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
@@ -6243,10 +6263,10 @@ describe("AgentWorkerBase model credential resume", () => {
     const { instance, sql } = await createTestDO(TestAgentWorker, {
       __objectKey: "agent-test",
     });
-    const channelClient = {
+    const channelClient = channelClientWithDiagnostics({
       getParticipants: vi.fn(() => new Promise(() => undefined)),
       publishAgenticEvent: vi.fn(() => new Promise<void>(() => undefined)),
-    };
+    });
     const worker = instance as unknown as {
       _rpc: {
         call: ReturnType<typeof vi.fn>;
@@ -6356,10 +6376,10 @@ describe("AgentWorkerBase model credential resume", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([]),
       publishAgenticEvent: vi.fn(async () => undefined),
-    });
+    }));
     worker.runners.set("chat-1", {
       runner: {
         getCurrentTurnId: () => "turn-credential",
@@ -6450,10 +6470,10 @@ describe("AgentWorkerBase model credential resume", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([]),
       publishAgenticEvent: vi.fn(async () => undefined),
-    });
+    }));
     worker.runners.set("chat-1", {
       runner: {
         getCurrentTurnId: () => "turn-credential",
@@ -6569,10 +6589,10 @@ describe("AgentWorkerBase model credential resume", () => {
       handleIncomingPost: vi.fn(),
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([]),
       publishAgenticEvent: vi.fn(async () => undefined),
-    });
+    }));
     worker.getModelBaseUrl = vi.fn().mockReturnValue("https://model.example/v1");
     worker.readRunnerMessages = vi.fn(async () => transcript);
     worker.runners.set("chat-1", {
@@ -6701,10 +6721,10 @@ describe("AgentWorkerBase model credential resume", () => {
       handleIncomingPost: vi.fn(),
     };
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([]),
       publishAgenticEvent: vi.fn(async () => undefined),
-    });
+    }));
     worker.getModelBaseUrl = vi.fn().mockReturnValue("https://model.example/v1");
     worker.readRunnerMessages = vi.fn(async () => {
       if (requestId && !deliveredDuringPark) {
@@ -6776,9 +6796,9 @@ describe("AgentWorkerBase model credential resume", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([]),
-    });
+    }));
     worker.runners.set("chat-1", {
       runner: {
         getCurrentTurnId: () => "turn-current",
@@ -6853,9 +6873,9 @@ describe("AgentWorkerBase model credential resume", () => {
     };
 
     worker.subscriptions.getParticipantId = vi.fn().mockReturnValue("do:agent");
-    worker.createChannelClient = vi.fn().mockReturnValue({
+    worker.createChannelClient = vi.fn().mockReturnValue(channelClientWithDiagnostics({
       getParticipants: vi.fn().mockResolvedValue([]),
-    });
+    }));
     worker.runners.set("chat-1", {
       runner: {
         getCurrentTurnId: () => "turn-interrupted",

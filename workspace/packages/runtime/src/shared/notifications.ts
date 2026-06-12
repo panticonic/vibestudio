@@ -5,6 +5,8 @@
  * (info toasts, errors, warnings, success confirmations).
  */
 import type { RpcCaller } from "@natstack/rpc";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { eventsMethods } from "@natstack/shared/serviceSchemas/events";
 
 type NotificationAction = {
     id?: string;
@@ -34,6 +36,8 @@ export interface NotificationClient {
 }
 export function createNotificationClient(rpc: RpcCaller): NotificationClient {
     const rpcWithEvents = rpc as RpcCallerWithEvents;
+    const eventsService = createTypedServiceClient("events", eventsMethods, (svc, method, args) =>
+        rpc.call("main", `${svc}.${method}`, args));
     const actionHandlers = new Map<string, Map<string, () => void | Promise<void>>>();
     let actionSubscription: Promise<void> | null = null;
     let unsubscribeActionEvents: (() => void) | undefined;
@@ -57,7 +61,7 @@ export function createNotificationClient(rpc: RpcCaller): NotificationClient {
                     console.warn("notification action failed", err);
                 });
             });
-            await rpc.call<void>("main", "events.subscribe", ["notification:action"]).catch(() => {});
+            await eventsService.subscribe("notification:action").catch(() => {});
         })();
         return actionSubscription;
     }

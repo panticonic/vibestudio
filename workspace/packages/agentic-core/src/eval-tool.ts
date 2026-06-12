@@ -5,6 +5,11 @@
  * identical eval method definitions. One implementation, consistent behavior.
  */
 import { z } from "zod";
+import { createTypedServiceClient, type ServiceCallFn } from "@natstack/shared/typedServiceClient";
+import { metaMethods } from "@natstack/shared/serviceSchemas/meta";
+import { buildMethods } from "@natstack/shared/serviceSchemas/build";
+import { blobstoreMethods } from "@natstack/shared/serviceSchemas/blobstore";
+import { fsMethods } from "@natstack/shared/serviceSchemas/fs";
 import { executeSandbox as defaultExecuteSandbox } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult, ScopeManager } from "@workspace/eval";
 import type { MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
@@ -43,6 +48,13 @@ export interface BuildEvalToolOptions {
 export function buildEvalTool(opts: BuildEvalToolOptions): MethodDefinition {
   const { sandbox, scopeManager } = opts;
   const runSandbox = opts.executeSandbox ?? defaultExecuteSandbox;
+  const callMain: ServiceCallFn = (svc, method, args) =>
+    opts.rpc.call("main", `${svc}.${method}`, args);
+  const metaClient = createTypedServiceClient("meta", metaMethods, callMain);
+  const buildClient = createTypedServiceClient("build", buildMethods, callMain);
+  const fsClient = createTypedServiceClient("fs", fsMethods, callMain);
+  const readTextFile = async (filePath: string): Promise<string> =>
+    (await fsClient.readFile(filePath, "utf8")) as string;
   return {
     description: `Execute TypeScript/JavaScript code in the sandbox.
 
@@ -97,22 +109,19 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
           imports: typedArgs.imports,
           loadImport: sandbox.loadImport,
           sourcePath: path,
-          loadSourceFile: path
-            ? async (filePath: string) =>
-                opts.rpc.call("main", "fs.readFile", [filePath, "utf8"]) as Promise<string>
-            : undefined,
+          loadSourceFile: path ? readTextFile : undefined,
           bindings: {
             chat: opts.getChatSandboxValue(),
             scope: scopeManager?.current ?? {},
             scopes: scopeManager?.api ?? {},
             help: async (serviceName?: string) => {
               if (serviceName) {
-                return await opts.rpc.call("main", "meta.describeService", [serviceName]);
+                return await metaClient.describeService(serviceName);
               }
               const [services, runtime, skillPackages] = await Promise.all([
-                opts.rpc.call("main", "meta.listServices", []),
-                opts.rpc.call("main", "meta.getRuntimeSurface", [opts.runtimeTarget]),
-                opts.rpc.call("main", "build.listSkills", []).catch((err) => ({
+                metaClient.listServices(),
+                metaClient.getRuntimeSurface(opts.runtimeTarget),
+                buildClient.listSkills().catch((err) => ({
                   error: err instanceof Error ? err.message : String(err),
                 })),
               ]);
@@ -191,7 +200,10 @@ Use \`path\` instead of \`code\` to run a context-relative TypeScript/TSX file. 
 
 async function loadEvalSource(rpc: SandboxConfig["rpc"], path: string): Promise<string> {
   try {
-    return (await rpc.call("main", "fs.readFile", [path, "utf8"])) as string;
+    const fsClient = createTypedServiceClient("fs", fsMethods, (svc, method, args) =>
+      rpc.call("main", `${svc}.${method}`, args)
+    );
+    return (await fsClient.readFile(path, "utf8")) as string;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -226,8 +238,11 @@ interface EvalBlobRef {
 }
 
 async function spillEvalText(rpc: SandboxConfig["rpc"], text: string): Promise<EvalBlobRef | null> {
+  const blobstore = createTypedServiceClient("blobstore", blobstoreMethods, (svc, method, args) =>
+    rpc.call("main", `${svc}.${method}`, args)
+  );
   try {
-    return (await rpc.call("main", "blobstore.putText", [text])) as EvalBlobRef;
+    return await blobstore.putText(text);
   } catch {
     return null;
   }

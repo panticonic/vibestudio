@@ -26,6 +26,10 @@ if (typeof globalThis.Buffer === "undefined") {
   (globalThis as any).Buffer = Buffer;
 }
 import type { RpcClient } from "@natstack/rpc";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { gitMethods } from "@natstack/shared/serviceSchemas/git";
+import { buildMethods } from "@natstack/shared/serviceSchemas/build";
+import { workerLogMethods } from "@natstack/shared/serviceSchemas/workerLog";
 import { createHttpRpcClient } from "../shared/httpRpcBridge.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/externalOpen";
 import { fs, _initFsWithRpc } from "./fs.js";
@@ -212,6 +216,9 @@ let workerConsoleBridgeInstalled = false;
 function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
   if (workerConsoleBridgeInstalled) return;
   workerConsoleBridgeInstalled = true;
+  const workerLogService = createTypedServiceClient("workerLog", workerLogMethods, (svc, m, a) =>
+    rpc.call("main", `${svc}.${m}`, a)
+  );
   const original = {
     log: console.log.bind(console),
     info: console.info.bind(console),
@@ -238,11 +245,9 @@ function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
           }
         })
         .join(" ");
-      rpc
-        .call("main", "workerLog.write", [level, message, source ? { source } : undefined])
-        .catch((err) => {
-          original.warn("[console-bridge] forward failed:", err);
-        });
+      workerLogService.write(level, message, source ? { source } : undefined).catch((err) => {
+        original.warn("[console-bridge] forward failed:", err);
+      });
     } finally {
       forwarding = false;
     }
@@ -383,33 +388,39 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     token: env.RPC_AUTH_TOKEN,
     internalOrigins: gatewayAliases.map((url) => `${url.replace(/\/$/, "")}/_git`),
   };
+  const gitService = createTypedServiceClient("git", gitMethods, (svc, method, args) =>
+    rpc.call("main", `${svc}.${method}`, args)
+  );
+  const buildService = createTypedServiceClient("build", buildMethods, (svc, method, args) =>
+    rpc.call("main", `${svc}.${method}`, args)
+  );
   const git = helpfulNamespace("git", {
     http: credentials.gitHttp,
     importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo> {
-      return callMain("git.importProject", request);
+      return gitService.importProject(request);
     },
     completeWorkspaceDependencies(
       options: { credentialId?: string } = {}
     ): Promise<CompleteWorkspaceDependenciesResult> {
-      return callMain("git.completeWorkspaceDependencies", options);
+      return gitService.completeWorkspaceDependencies(options);
     },
     setSharedRemote(
       repoPath: string,
       remote: GitRemoteSpec
     ): Promise<Record<string, unknown> | undefined> {
-      return callMain("git.setSharedRemote", repoPath, remote);
+      return gitService.setSharedRemote(repoPath, remote);
     },
     removeSharedRemote(
       repoPath: string,
       remoteName: string
     ): Promise<Record<string, unknown> | undefined> {
-      return callMain("git.removeSharedRemote", repoPath, remoteName);
+      return gitService.removeSharedRemote(repoPath, remoteName);
     },
     ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }> {
-      return callMain("git.ensureRepoPresentInContexts", repoPath);
+      return gitService.ensureRepoPresentInContexts(repoPath);
     },
     listRecentBuildEvents(unitNameOrPath?: string): Promise<RecentBuildEvent[]> {
-      return callMain("build.listRecentBuildEvents", unitNameOrPath);
+      return buildService.listRecentBuildEvents(unitNameOrPath);
     },
     publishWorkspaceRepo(
       repoPath: string,
@@ -478,10 +489,13 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     callMain,
     openExternal: (url: string, options?: OpenExternalOptions) =>
       callMain<OpenExternalResult>("externalOpen.openExternal", url, options),
-    getWorkspaceTree: () => callMain<unknown>("git.getWorkspaceTree"),
-    listBranches: (repoPath: string) => callMain<unknown[]>("git.listBranches", repoPath),
+    getWorkspaceTree: () => gitService.getWorkspaceTree(),
+    listBranches: (repoPath: string) => gitService.listBranches(repoPath),
     listCommits: (repoPath: string, ref?: string, limit?: number) =>
-      callMain<unknown[]>("git.listCommits", repoPath, ref, limit),
+      // Contract gap: git.listCommits args schema requires [string, string, number]
+      // but this API historically allowed omitting ref/limit. Pass through
+      // unchanged (the server validates) rather than inventing defaults here.
+      gitService.listCommits(repoPath, ref as string, limit as number),
     requestApproval: (req: UserlandApprovalRequest) => requestUserlandApproval(rpc, req),
     revokeApproval: (subjectId: string) => revokeUserlandApproval(rpc, subjectId),
     listApprovals: () => listUserlandApprovals(rpc),

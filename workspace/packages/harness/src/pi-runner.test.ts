@@ -2083,7 +2083,10 @@ describe("PiRunner", () => {
     expect(input.events).toHaveLength(1);
     expect(input.events[0]).toMatchObject({
       eventId: "event-terminal-success",
-      event: { kind: "invocation.completed" },
+      event: {
+        kind: "invocation.completed",
+        payload: { terminalOutcome: "success" },
+      },
     });
     expect(runner.terminalInvocationIds.has("call_1")).toBe(true);
   });

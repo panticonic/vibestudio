@@ -107,6 +107,52 @@ class with no matching `singletonObjects` row is rejected at workspace-load
 time. Stateless service routes are live only while the canonical worker
 instance is running.
 
+## Durable Object Schema & Migrations
+
+`DurableObjectBase` owns SQLite schema lifecycle — never run `CREATE TABLE` /
+`ALTER TABLE` ad hoc in handlers. Define the schema declaratively and version
+it:
+
+```ts
+export class MyStoreDO extends DurableObjectBase {
+  // Bump this when the schema changes. Persisted per-instance; instances
+  // upgrade lazily on their next request.
+  static override schemaVersion = 2;
+
+  // Idempotent CREATE TABLE IF NOT EXISTS statements for the CURRENT schema.
+  // Runs on every init (fresh and upgraded instances alike).
+  protected override createTables(): void {
+    this.sql.exec(`CREATE TABLE IF NOT EXISTS items (
+      id TEXT PRIMARY KEY, label TEXT NOT NULL, archived INTEGER DEFAULT 0
+    )`);
+  }
+
+  // Step persisted data forward when an instance is below schemaVersion.
+  // Runs BEFORE createTables(), once, inside init. Make each step idempotent.
+  protected override migrate(fromVersion: number, _toVersion: number): void {
+    if (fromVersion < 2) {
+      this.sql.exec(`ALTER TABLE items ADD COLUMN archived INTEGER DEFAULT 0`);
+    }
+  }
+
+  // Optional: tables that must exist before the version is recorded as ready.
+  // Failed validation throws and retries on the next request.
+  protected override requiredTables(): readonly string[] {
+    return ["items"];
+  }
+}
+```
+
+Rules of thumb:
+
+- **Additive changes** (new table, new nullable/defaulted column) — bump
+  `schemaVersion`, add the `ALTER` to `migrate`, update `createTables`.
+- **Never** renumber or reuse versions; an instance whose stored version is
+  *newer* than the code's `schemaVersion` refuses to start (downgrade guard).
+- Schema init is lazy (first `fetch()`/`alarm()`) and retried on failure, so a
+  throwing migration surfaces in `workspace.units.diagnostics` for the source
+  and the instance stays on its old version until fixed.
+
 ## Store
 
 ```ts

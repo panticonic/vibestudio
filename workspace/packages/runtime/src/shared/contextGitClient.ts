@@ -1,5 +1,7 @@
 import type { RpcClient } from "@natstack/rpc";
 import type { GitClient, RepoStatus } from "@natstack/git";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { gitMethods } from "@natstack/shared/serviceSchemas/git";
 
 function isWorkspaceRepoPath(dir: unknown): dir is string {
   if (typeof dir !== "string") return false;
@@ -13,17 +15,20 @@ export function createContextAwareGitClient(
   client: GitClient,
   rpc: Pick<RpcClient, "call">,
 ): GitClient {
+  const gitService = createTypedServiceClient("git", gitMethods, (svc, method, args) =>
+    rpc.call("main", `${svc}.${method}`, args),
+  );
   const originalStatus = client.status.bind(client);
   const originalAddAll = client.addAll.bind(client);
 
   client.status = async (dir: string): Promise<RepoStatus> => {
     if (!isWorkspaceRepoPath(dir)) return originalStatus(dir);
-    return rpc.call<RepoStatus>("main", "git.contextStatus", [dir]);
+    return gitService.contextStatus(dir);
   };
 
   client.addAll = async (dir: string): Promise<void> => {
     if (!isWorkspaceRepoPath(dir)) return originalAddAll(dir);
-    await rpc.call<void>("main", "git.contextAddAll", [dir]);
+    await gitService.contextAddAll(dir);
   };
 
   return client;

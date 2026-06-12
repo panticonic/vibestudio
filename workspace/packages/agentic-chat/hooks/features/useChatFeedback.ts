@@ -13,6 +13,8 @@ import type { SandboxOptions } from "@workspace/eval";
 import type { FeedbackComponentProps } from "@workspace/tool-ui";
 import { AGENTIC_EVENT_PAYLOAD_KIND, type AgenticEvent } from "@workspace/agentic-protocol";
 import { type ChatSandboxValue } from "@workspace/agentic-core";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { fsMethods } from "@natstack/shared/serviceSchemas/fs";
 interface UseChatFeedbackOptions {
     chat: ChatSandboxValue;
     loadImport?: SandboxOptions["loadImport"];
@@ -38,6 +40,10 @@ export function useChatFeedback({ chat, loadImport, clientRef, connected, }: Use
     const { activeFeedbacks, addFeedback, removeFeedback, dismissFeedback, handleFeedbackError } = useFeedbackManager();
     const activeFeedbacksRef = useRef(activeFeedbacks);
     activeFeedbacksRef.current = activeFeedbacks;
+    const readTextFile = useCallback(async (path: string): Promise<string> => {
+        const fsClient = createTypedServiceClient("fs", fsMethods, (svc, method, args) => chat.rpc.call("main", `${svc}.${method}`, args));
+        return (await fsClient.readFile(path, "utf8")) as string;
+    }, [chat.rpc]);
     const handleFeedbackFormCall = useCallback(async (callId: string, args: FeedbackFormArgs, ctx: MethodExecutionContext) => {
         void ctx;
         return new Promise<FeedbackResult>((resolve) => {
@@ -57,7 +63,7 @@ export function useChatFeedback({ chat, loadImport, clientRef, connected, }: Use
         void ctx;
         const path = args.path?.trim();
         const sourceCode = path
-            ? await chat.rpc.call("main", "fs.readFile", [path, "utf8"]) as string
+            ? await readTextFile(path)
             : args.code;
         if (!sourceCode)
             throw new Error("Missing code or path");
@@ -71,7 +77,7 @@ export function useChatFeedback({ chat, loadImport, clientRef, connected, }: Use
                 imports: args.imports,
                 sourcePath: path,
                 loadSourceFile: path
-                    ? async (filePath: string) => chat.rpc.call("main", "fs.readFile", [filePath, "utf8"]) as Promise<string>
+                    ? readTextFile
                     : undefined,
                 loadImport,
             });
@@ -122,7 +128,7 @@ export function useChatFeedback({ chat, loadImport, clientRef, connected, }: Use
             };
             addFeedback(feedback);
         });
-    }, [addFeedback, removeFeedback, chat.rpc, loadImport]);
+    }, [addFeedback, removeFeedback, readTextFile, loadImport]);
     const onFeedbackDismiss = useCallback((callId: string) => { dismissFeedback(callId); }, [dismissFeedback]);
     // Stable refs for connection effect
     const handleFeedbackFormCallRef = useRef(handleFeedbackFormCall);

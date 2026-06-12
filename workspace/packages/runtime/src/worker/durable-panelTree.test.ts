@@ -284,7 +284,7 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
   });
 
-  it("builds a panel parent handle with slot-scoped CDP and entity-scoped RPC", async () => {
+  it("builds a panel parent handle with workspace CDP refusal and entity-scoped RPC", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
@@ -307,15 +307,24 @@ describe("DurableObjectBase panelTree handles", () => {
     class ParentProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
-      async probeParent(): Promise<{ id: string; title: string | undefined } | null> {
+      async probeParent(): Promise<{
+        id: string;
+        title: string | undefined;
+        cdpError: string;
+      } | null> {
         const parent = this.getParent();
         if (!parent) return null;
         const info = await parent.getInfo();
         await parent.call["ping"]?.();
-        await parent.cdp.getCdpEndpoint();
+        let cdpError = "";
+        try {
+          await parent.cdp.getCdpEndpoint();
+        } catch (error) {
+          cdpError = error instanceof Error ? error.message : String(error);
+        }
         await parent.reload();
         await parent.rebuildAndReload();
-        return { id: info.id, title: info.title };
+        return { id: info.id, title: info.title, cdpError };
       }
     }
 
@@ -336,19 +345,19 @@ describe("DurableObjectBase panelTree handles", () => {
       })
     );
 
-    await expect(response.json()).resolves.toEqual({ id: "parent-slot", title: "parent-slot" });
+    await expect(response.json()).resolves.toEqual({
+      id: "parent-slot",
+      title: "parent-slot",
+      cdpError: expect.stringContaining(
+        "Refusing to connect to CDP for workspace panel parent-slot"
+      ),
+    });
     expect(calls).toEqual([
       {
         type: "call",
         targetId: "panel:parent-entity",
         method: "ping",
         args: [],
-      },
-      {
-        type: "call",
-        targetId: "main",
-        method: "panelCdp.getCdpEndpoint",
-        args: ["parent-slot"],
       },
       {
         type: "call",

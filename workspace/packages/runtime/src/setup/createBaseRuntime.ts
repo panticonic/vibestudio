@@ -12,8 +12,10 @@ import {
     type EnvelopeRpcTransport,
     type RpcTransport,
 } from "@natstack/rpc";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { gitMethods } from "@natstack/shared/serviceSchemas/git";
 import { createWorkerdClient } from "../shared/workerd.js";
-import type { GitConfig, WorkspaceTree, BranchInfo, CommitInfo, } from "../core/index.js";
+import type { GitConfig, WorkspaceTree, } from "../core/index.js";
 import type { GatewayConfig } from "../shared/globals.js";
 import type { RuntimeFs, ThemeAppearance } from "../types.js";
 export interface BaseRuntimeDeps {
@@ -37,6 +39,7 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     });
     const fs = deps.fs;
     const callMain = <T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, [...args]);
+    const gitService = createTypedServiceClient("git", gitMethods, (svc, method, args) => rpc.call("main", `${svc}.${method}`, args));
     const workers = createWorkerdClient(rpc);
     let currentTheme: ThemeAppearance = deps.initialTheme;
     const themeListeners = new Set<(theme: ThemeAppearance) => void>();
@@ -143,9 +146,12 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
         workers,
         callMain,
         onConnectionError,
-        getWorkspaceTree: () => callMain<WorkspaceTree>("git.getWorkspaceTree"),
-        listBranches: (repoPath: string) => callMain<BranchInfo[]>("git.listBranches", repoPath),
-        listCommits: (repoPath: string, ref?: string, limit?: number) => callMain<CommitInfo[]>("git.listCommits", repoPath, ref, limit),
+        getWorkspaceTree: () => gitService.getWorkspaceTree(),
+        listBranches: (repoPath: string) => gitService.listBranches(repoPath),
+        // Contract gap: git.listCommits args schema requires [string, string, number]
+        // but this API historically allowed omitting ref/limit. Pass through
+        // unchanged (the server validates) rather than inventing defaults here.
+        listCommits: (repoPath: string, ref?: string, limit?: number) => gitService.listCommits(repoPath, ref as string, limit as number),
         getTheme: () => currentTheme,
         onThemeChange: (callback: (theme: ThemeAppearance) => void) => {
             callback(currentTheme);

@@ -171,14 +171,8 @@ export function createRpcFs(rpc: Pick<RpcClient, "call">): RuntimeFs {
         async readlink(path: string): Promise<string> {
             return call<string>("readlink", path);
         },
-        async symlink(target: string, path: string): Promise<void> {
-            await call<void>("symlink", target, path);
-        },
         async chmod(path: string, mode: number): Promise<void> {
             await call<void>("chmod", path, mode);
-        },
-        async chown(path: string, uid: number, gid: number): Promise<void> {
-            await call<void>("chown", path, uid, gid);
         },
         async utimes(path: string, atime: Date | number, mtime: Date | number): Promise<void> {
             // Convert Date to seconds-since-epoch for JSON transport

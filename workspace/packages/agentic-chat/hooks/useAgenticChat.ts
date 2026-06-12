@@ -13,6 +13,9 @@
  */
 import { useCallback, useMemo, useRef, useEffect, useState } from "react";
 import { z } from "zod";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { runtimeMethods } from "@natstack/shared/serviceSchemas/runtime";
+import { fsMethods } from "@natstack/shared/serviceSchemas/fs";
 import type { ChannelConfig, MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
 import { executeSandbox, ScopeManager, RpcScopePersistence } from "@workspace/eval";
 import type { SandboxOptions, SandboxResult, HydrateResult } from "@workspace/eval";
@@ -445,8 +448,12 @@ export function useAgenticChat({
     []
   );
   const loadSourceFile = useCallback(
-    (path: string) =>
-      sandboxRef.current.rpc.call("main", "fs.readFile", [path, "utf8"]) as Promise<string>,
+    async (path: string) => {
+      const fsClient = createTypedServiceClient("fs", fsMethods, (svc, method, args) =>
+        sandboxRef.current.rpc.call("main", `${svc}.${method}`, args)
+      );
+      return (await fsClient.readFile(path, "utf8")) as string;
+    },
     []
   );
   const loadImport = useCallback<NonNullable<SandboxOptions["loadImport"]>>(
@@ -717,7 +724,12 @@ export function useAgenticChat({
               document.title = title;
               const warnings: string[] = [];
               try {
-                await config.rpc.call("main", "runtime.setTitle", [title, { explicit: true }]);
+                const runtimeClient = createTypedServiceClient(
+                  "runtime",
+                  runtimeMethods,
+                  (svc, method, callArgs) => config.rpc.call("main", `${svc}.${method}`, callArgs)
+                );
+                await runtimeClient.setTitle(title, { explicit: true });
               } catch (err) {
                 warnings.push(err instanceof Error ? err.message : String(err));
                 console.warn("[useAgenticChat] runtime.setTitle failed:", err);

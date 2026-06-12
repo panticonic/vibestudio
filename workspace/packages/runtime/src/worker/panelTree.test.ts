@@ -237,7 +237,7 @@ describe("worker panelTree handles", () => {
     ]);
   });
 
-  it("builds panel parent handles with slot-scoped CDP/control and entity-scoped RPC", async () => {
+  it("builds panel parent handles with workspace CDP refusal, slot-scoped control, and entity-scoped RPC", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
@@ -269,7 +269,9 @@ describe("worker panelTree handles", () => {
       parentId: null,
     });
     await parent?.call["ping"]?.();
-    await parent?.cdp.getCdpEndpoint();
+    await expect(parent?.cdp.getCdpEndpoint()).rejects.toThrow(
+      "Refusing to connect to CDP for workspace panel parent-slot"
+    );
     await parent?.reload();
     await parent?.rebuildAndReload();
     runtime.destroy();
@@ -280,12 +282,6 @@ describe("worker panelTree handles", () => {
         targetId: "panel:parent-entity",
         method: "ping",
         args: [],
-      },
-      {
-        type: "call",
-        targetId: "main",
-        method: "panelCdp.getCdpEndpoint",
-        args: ["parent-slot"],
       },
       {
         type: "call",

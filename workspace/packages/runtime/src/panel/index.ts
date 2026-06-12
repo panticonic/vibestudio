@@ -197,6 +197,9 @@ export const credentials = helpfulNamespace("credentials", credentialApi);
 // Git client helper. Relative repo paths route to NatStack's internal git
 // server; absolute external remotes route through host-mediated credentials.
 import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
+import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
+import { gitMethods } from "@natstack/shared/serviceSchemas/git";
+import { buildMethods } from "@natstack/shared/serviceSchemas/build";
 import { createContextAwareGitClient } from "../shared/contextGitClient.js";
 import {
   publishWorkspaceRepo as publishWorkspaceRepoWithClient,
@@ -248,35 +251,41 @@ export interface RecentBuildEvent {
   };
   timestamp: string;
 }
+const gitService = createTypedServiceClient("git", gitMethods, (svc, method, args) =>
+  rpc.call("main", `${svc}.${method}`, args)
+);
+const buildService = createTypedServiceClient("build", buildMethods, (svc, method, args) =>
+  rpc.call("main", `${svc}.${method}`, args)
+);
 const gitApi = {
   http: credentialGitHttp,
   importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo> {
-    return rpc.call("main", "git.importProject", [request]);
+    return gitService.importProject(request);
   },
   completeWorkspaceDependencies(
     options: {
       credentialId?: string;
     } = {}
   ): Promise<CompleteWorkspaceDependenciesResult> {
-    return rpc.call("main", "git.completeWorkspaceDependencies", [options]);
+    return gitService.completeWorkspaceDependencies(options);
   },
   setSharedRemote(
     repoPath: string,
     remote: GitRemoteSpec
   ): Promise<Record<string, unknown> | undefined> {
-    return rpc.call("main", "git.setSharedRemote", [repoPath, remote]);
+    return gitService.setSharedRemote(repoPath, remote);
   },
   removeSharedRemote(
     repoPath: string,
     remoteName: string
   ): Promise<Record<string, unknown> | undefined> {
-    return rpc.call("main", "git.removeSharedRemote", [repoPath, remoteName]);
+    return gitService.removeSharedRemote(repoPath, remoteName);
   },
   ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }> {
-    return rpc.call("main", "git.ensureRepoPresentInContexts", [repoPath]);
+    return gitService.ensureRepoPresentInContexts(repoPath);
   },
   listRecentBuildEvents(unitNameOrPath?: string): Promise<RecentBuildEvent[]> {
-    return rpc.call("main", "build.listRecentBuildEvents", [unitNameOrPath]);
+    return buildService.listRecentBuildEvents(unitNameOrPath);
   },
   publishWorkspaceRepo(
     repoPath: string,

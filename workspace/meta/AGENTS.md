@@ -46,6 +46,35 @@ Before using eval, read the **sandbox** skill — it has the complete API refere
 - **system-testing** — headless test runner; exports `HeadlessRunner`, `TestRunner`, test suites
 - **web-research** — searching the open web and reading pages with `web_search`, `web_fetch`, `web_read`
 
+## Diagnostics — querying unit errors, logs, and build failures
+
+Every workspace unit (panel, worker, DO, extension, app) feeds a per-unit diagnostics store. When something fails — a build breaks, a worker won't start, a panel's renderer crashes or logs errors — query it here instead of guessing:
+
+```js
+import { workspace } from "@workspace/runtime";
+
+// One-stop health check: unit status + lastError, error ring, log tail,
+// and recent build events (build-error entries carry the esbuild message).
+const diag = await workspace.units.diagnostics("workers/my-worker");
+// → { unit: { status, lastError, ... }, errors: [...], logs: [...], builds: [...] }
+
+// Just the log tail (level: "debug"|"info"|"warn"|"error", since: epoch ms):
+const logs = await workspace.units.logs("panels/my-panel", { level: "warn", limit: 50 });
+
+// All units with status at a glance (status "error" + lastError for failed workers):
+const units = await workspace.units.list();
+```
+
+Accepts either the package name or the workspace-relative source path (`workers/foo`, `panels/bar`). What's captured per kind:
+
+- **Workers / DOs** — `console.*` output, plus lifecycle events (started, updated, *failed to start* with the error message).
+- **Panels** — console warnings/errors and lifecycle failures (renderer crash, load failure) forwarded from the shell. Full console history for a *running* panel is available via the panel CDP host (`consoleHistory` host command).
+- **All kinds** — push-triggered build events in `diag.builds`; a `build-error` entry means the last edit did not deploy and `error` holds the compiler output.
+
+From a terminal, the same data is available via the external-agent CLI: `natstack agent diag UNIT` and `natstack agent logs UNIT [--level error]`.
+
+Debugging order when a unit misbehaves: `units.diagnostics` → check `builds` for a failed build → check `errors` for runtime failures → `units.logs` for the surrounding log context.
+
 ## Web tools
 
 You have three tools for reaching the open web:

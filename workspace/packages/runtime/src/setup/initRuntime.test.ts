@@ -230,7 +230,7 @@ describe("initRuntime", () => {
     expect(config.gitConfig?.serverUrl).toBe("http://127.0.0.1:4000/_git");
   });
 
-  it("uses the parent slot id for handle identity/CDP and the parent entity id for RPC", async () => {
+  it("uses the parent slot id for handle identity and the parent entity id for RPC", async () => {
     const sends: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     g.__natstackEntityId = "panel:child-entity";
     g.__natstackSlotId = "child-slot";
@@ -272,11 +272,12 @@ describe("initRuntime", () => {
     });
 
     await runtime.getParent()?.call["ping"]?.();
-    await runtime.getParent()?.cdp.getCdpEndpoint();
+    await expect(runtime.getParent()?.cdp.getCdpEndpoint()).rejects.toThrow(
+      "Refusing to connect to CDP for workspace panel parent-slot"
+    );
 
     expect(sends).toEqual([
       { targetId: "panel:parent-entity", method: "ping", args: [] },
-      { targetId: "main", method: "panelCdp.getCdpEndpoint", args: ["parent-slot"] },
     ]);
   });
 

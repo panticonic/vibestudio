@@ -8,6 +8,13 @@
  * in @workspace/agentic-do — composable modules that extend this base.
  */
 
+import {
+  createTypedServiceClient,
+  type TypedServiceClient,
+} from "@natstack/shared/typedServiceClient";
+import { runtimeMethods } from "@natstack/shared/serviceSchemas/runtime";
+import { workerLogMethods } from "@natstack/shared/serviceSchemas/workerLog";
+import { workspaceStateMethods } from "@natstack/shared/serviceSchemas/workspaceState";
 import { createHttpRpcClient, type HttpRpcClient } from "../shared/httpRpcBridge.js";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
@@ -45,6 +52,9 @@ let consoleBridgeInstalled = false;
 function installConsoleBridge(rpc: Pick<RpcClient, "call">): void {
   if (consoleBridgeInstalled) return;
   consoleBridgeInstalled = true;
+  const workerLogService = createTypedServiceClient("workerLog", workerLogMethods, (svc, m, a) =>
+    rpc.call("main", `${svc}.${m}`, a)
+  );
   const original = {
     log: console.log.bind(console),
     info: console.info.bind(console),
@@ -77,7 +87,7 @@ function installConsoleBridge(rpc: Pick<RpcClient, "call">): void {
     try {
       // Fire-and-forget. Failures go to the *original* console to avoid
       // infinite recursion if the RPC path itself is broken.
-      rpc.call("main", "workerLog.write", [level, message]).catch((err) => {
+      workerLogService.write(level, message).catch((err) => {
         original.warn("[console-bridge] forward failed:", err);
       });
     } finally {
@@ -934,11 +944,11 @@ export abstract class DurableObjectBase {
     const gatewayUrl = String(this.env["GATEWAY_URL"] ?? "");
     const isTestSentinel =
       gatewayUrl.includes("test-server.invalid") || gatewayUrl.includes(".test/");
+    const runtimeService = createTypedServiceClient("runtime", runtimeMethods, (svc, m, a) =>
+      bridge.call("main", `${svc}.${m}`, a)
+    );
     try {
-      await bridge.call("main", "runtime.setTitle", [
-        effective,
-        { explicit: options.explicit === true },
-      ]);
+      await runtimeService.setTitle(effective, { explicit: options.explicit === true });
     } catch (err) {
       if (!isTestSentinel) {
         console.warn("[DurableObjectBase] runtime.setTitle failed:", err);
@@ -987,12 +997,16 @@ export abstract class DurableObjectBase {
 
   /** Schedule the alarm at an absolute epoch-ms time. */
   protected setAlarmAt(timeMs: number): void {
-    void this.alarmRpc("workspace-state.alarmSet", { ...this.lifecycleKey(), wakeAt: timeMs });
+    void this.alarmRpc("workspace-state.alarmSet", () =>
+      this.workspaceStateService.alarmSet({ ...this.lifecycleKey(), wakeAt: timeMs })
+    );
   }
 
   /** Cancel any pending alarm for this DO. */
   protected deleteAlarm(): void {
-    void this.alarmRpc("workspace-state.alarmClear", this.lifecycleKey());
+    void this.alarmRpc("workspace-state.alarmClear", () =>
+      this.workspaceStateService.alarmClear(this.lifecycleKey())
+    );
   }
 
   private lifecycleKey(): { source: string; className: string; objectKey: string } {
@@ -1003,11 +1017,26 @@ export abstract class DurableObjectBase {
     };
   }
 
-  private async alarmRpc(method: string, payload: unknown): Promise<void> {
+  /**
+   * Typed client for the workspace-state service. Built lazily — the call
+   * function dereferences `this.rpc` per call, so constructing the client
+   * never touches the (possibly not-yet-ready) RPC bridge.
+   */
+  private _workspaceStateService?: TypedServiceClient<typeof workspaceStateMethods>;
+
+  private get workspaceStateService(): TypedServiceClient<typeof workspaceStateMethods> {
+    return (this._workspaceStateService ??= createTypedServiceClient(
+      "workspace-state",
+      workspaceStateMethods,
+      (svc, m, a) => this.rpc.call("main", `${svc}.${m}`, a)
+    ));
+  }
+
+  private async alarmRpc(label: string, call: () => Promise<void>): Promise<void> {
     try {
-      await this.rpc.call("main", method, [payload]);
+      await call();
     } catch (err) {
-      console.warn(`[durable] ${method} failed:`, err instanceof Error ? err.message : err);
+      console.warn(`[durable] ${label} failed:`, err instanceof Error ? err.message : err);
     }
   }
 
@@ -1201,7 +1230,7 @@ export abstract class DurableObjectBase {
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        await this.rpc.call("main", "workspace-state.lifecycleLeaseUpsert", [payload]);
+        await this.workspaceStateService.lifecycleLeaseUpsert(payload);
         return;
       } catch (err) {
         lastErr = err;
@@ -1212,7 +1241,7 @@ export abstract class DurableObjectBase {
   }
 
   protected async markCheckpointableWorkInactive(): Promise<void> {
-    await this.rpc.call("main", "workspace-state.lifecycleLeaseClear", [this.lifecycleKey()]);
+    await this.workspaceStateService.lifecycleLeaseClear(this.lifecycleKey());
   }
 
   // --- Hibernation hooks ---
