@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createConnectDeepLink } from "@natstack/shared/connect";
+import { clearShellTokenCache } from "./rpcClient.js";
 
 const mocks = vi.hoisted(() => ({
   discoverNatstackServers: vi.fn(
@@ -20,6 +21,7 @@ describe("natstack CLI", () => {
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-cli-"));
     vi.stubEnv("HOME", tmpDir);
+    clearShellTokenCache();
     mocks.discoverNatstackServers.mockReset();
     mocks.discoverNatstackServers.mockResolvedValue([]);
     vi.spyOn(console, "log").mockImplementation(() => {});
@@ -190,14 +192,38 @@ describe("natstack CLI", () => {
       "fetch",
       vi.fn(async (url: URL) => {
         if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
-          return new Response(JSON.stringify({ workspaceId: "ws_1", serverId: "srv_1" }));
+          return new Response(
+            JSON.stringify({
+              shellToken: "shell_token",
+              callerId: "shell:dev_cli",
+              deviceId: "dev_cli",
+              workspaceId: "ws_1",
+              serverId: "srv_1",
+            })
+          );
         }
         return new Response(JSON.stringify({ ok: true, product: "natstack", discoveryVersion: 1 }));
       })
     );
 
     const { main } = await import("./client.js");
-    await expect(main(["remote", "status"])).resolves.toBe(0);
+    await expect(main(["remote", "status", "--json"])).resolves.toBe(0);
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(JSON.parse(output)).toMatchObject({ workspaceId: "ws_1", serverId: "srv_1" });
+  });
+
+  it("reports missing credentials for status as an auth error (exit 3)", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["remote", "status", "--json"])).resolves.toBe(3);
+  });
+
+  it("rejects unknown flags as usage errors (exit 2)", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["remote", "status", "--bogus"])).resolves.toBe(2);
+    await expect(main(["agent", "call", "--bogus"])).resolves.toBe(2);
   });
 
   it("creates a pairing invite using the stored device credential", async () => {
@@ -240,7 +266,7 @@ describe("natstack CLI", () => {
     );
 
     const { main } = await import("./client.js");
-    await expect(main(["remote", "invite", "--ttl-ms", "60000"])).resolves.toBe(0);
+    await expect(main(["remote", "invite", "--ttl-ms", "60000", "--json"])).resolves.toBe(0);
 
     expect(bodies).toEqual([
       {
@@ -252,8 +278,13 @@ describe("natstack CLI", () => {
         body: { method: "auth.createPairingInvite", args: [{ ttlMs: 60_000 }] },
       },
     ]);
-    expect(console.log).toHaveBeenCalledWith(
-      `Pair URL: ${createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24))}`
-    );
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(JSON.parse(output)).toMatchObject({
+      code: "A".repeat(24),
+      deepLink: createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24)),
+    });
   });
 });

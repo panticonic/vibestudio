@@ -23,10 +23,11 @@ import {
   mkdirSync,
   symlinkSync,
   realpathSync,
+  utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { FsService } from "./fsService.js";
+import { FsService, _setRipgrepPathForTests, type GrepResult } from "./fsService.js";
 import { EntityCache } from "./runtime/entityCache.js";
 import type { EntityKind, EntityRecord } from "./runtime/entitySpec.js";
 import type { ContextFolderManager } from "./contextFolderManager.js";
@@ -47,6 +48,10 @@ function makeStubFolderManager(root: string): ContextFolderManager {
       return existsSync(p)
         ? { status: "ready" as const, path: p }
         : { status: "missing" as const, path: p };
+    },
+    getContextRoot(contextId: string): string | null {
+      const p = path.join(root, contextId);
+      return existsSync(p) ? p : null;
     },
     async isAllowedSharedGitObjectsSymlink(args: {
       contextRoot: string;
@@ -81,6 +86,14 @@ function makeDoCtx(callerId: string): ServiceContext {
 
 function makeExtensionCtx(callerId: string): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "extension") };
+}
+
+function makeShellCtx(callerId: string): ServiceContext {
+  return { caller: createVerifiedCaller(callerId, "shell") };
+}
+
+function makeHarnessCtx(callerId: string): ServiceContext {
+  return { caller: createVerifiedCaller(callerId, "harness") };
 }
 
 describe("FsService", () => {
@@ -406,6 +419,281 @@ describe("FsService", () => {
       await expect(service.handleCall(ctx, "realpath", ["/"])).rejects.toMatchObject({
         code: "ENOTREADY",
       });
+    });
+  });
+
+  describe("explicit-contextId callers (shell/harness)", () => {
+    it("shell callers resolve an existing context passed as the first argument", async () => {
+      mkdirSync(path.join(tmpRoot, "ctx-shell"), { recursive: true });
+      const ctx = makeShellCtx("shell-1");
+      await service.handleCall(ctx, "writeFile", ["ctx-shell", "/note.txt", "from-shell"]);
+      expect(existsSync(path.join(tmpRoot, "ctx-shell", "note.txt"))).toBe(true);
+      await expect(
+        service.handleCall(ctx, "readFile", ["ctx-shell", "/note.txt", "utf8"])
+      ).resolves.toBe("from-shell");
+    });
+
+    it("harness callers resolve an existing context passed as the first argument", async () => {
+      mkdirSync(path.join(tmpRoot, "ctx-harness"), { recursive: true });
+      writeFileSync(path.join(tmpRoot, "ctx-harness", "probe.txt"), "hi");
+      const ctx = makeHarnessCtx("harness-1");
+      await expect(
+        service.handleCall(ctx, "readFile", ["ctx-harness", "/probe.txt", "utf8"])
+      ).resolves.toBe("hi");
+    });
+
+    it("accepts a contextId known only through an active entity", async () => {
+      registerContext("do:src:class:entity-only", "do", "ctx-entity-only");
+      const ctx = makeShellCtx("shell-1");
+      await service.handleCall(ctx, "writeFile", ["ctx-entity-only", "/x.txt", "ok"]);
+      expect(existsSync(path.join(tmpRoot, "ctx-entity-only", "x.txt"))).toBe(true);
+    });
+
+    it("rejects unknown contextIds for shell and harness callers", async () => {
+      await expect(
+        service.handleCall(makeShellCtx("shell-1"), "readFile", ["ctx-nope", "/a.txt", "utf8"])
+      ).rejects.toThrow(/Unknown contextId: ctx-nope/);
+      await expect(
+        service.handleCall(makeHarnessCtx("harness-1"), "stat", ["ctx-nope", "/a.txt"])
+      ).rejects.toThrow(/Unknown contextId: ctx-nope/);
+    });
+
+    it("rejects calls without a contextId first argument", async () => {
+      await expect(
+        service.handleCall(makeShellCtx("shell-1"), "readFile", [])
+      ).rejects.toThrow(/must provide contextId/);
+    });
+
+    it("server callers may address fresh contexts (created on the fly)", async () => {
+      const ctx: ServiceContext = { caller: createVerifiedCaller("server-main", "server") };
+      await service.handleCall(ctx, "writeFile", ["ctx-fresh", "/s.txt", "srv"]);
+      expect(existsSync(path.join(tmpRoot, "ctx-fresh", "s.txt"))).toBe(true);
+    });
+  });
+
+  describe("removed sandbox-escape primitives", () => {
+    it("symlink and chown are no longer dispatchable", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-removed");
+      await expect(service.handleCall(ctx, "symlink", ["/a", "/b"])).rejects.toThrow(
+        /Unknown fs method: symlink/
+      );
+      await expect(service.handleCall(ctx, "chown", ["/a", 0, 0])).rejects.toThrow(
+        /Unknown fs method: chown/
+      );
+    });
+  });
+
+  describe("readdir recursive", () => {
+    function setupTree(contextId: string): void {
+      const root = path.join(tmpRoot, contextId);
+      mkdirSync(path.join(root, "sub", "deeper"), { recursive: true });
+      writeFileSync(path.join(root, "top.txt"), "t");
+      writeFileSync(path.join(root, "sub", "mid.txt"), "m");
+      writeFileSync(path.join(root, "sub", "deeper", "leaf.txt"), "l");
+    }
+
+    it("lists nested entries with relative paths", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-rdr");
+      setupTree("ctx-rdr");
+
+      const names = (await service.handleCall(ctx, "readdir", [
+        "/",
+        { recursive: true },
+      ])) as string[];
+      expect(names.sort()).toEqual(["sub", "sub/deeper", "sub/deeper/leaf.txt", "sub/mid.txt", "top.txt"]);
+    });
+
+    it("supports recursive withFileTypes with nested relative names", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-rdr-ft");
+      setupTree("ctx-rdr-ft");
+
+      const entries = (await service.handleCall(ctx, "readdir", [
+        "/",
+        { recursive: true, withFileTypes: true },
+      ])) as Array<{ name: string; _isFile: boolean; _isDirectory: boolean }>;
+      const leaf = entries.find((e) => e.name === "sub/deeper/leaf.txt");
+      expect(leaf).toBeDefined();
+      expect(leaf!._isFile).toBe(true);
+      const dir = entries.find((e) => e.name === "sub/deeper");
+      expect(dir).toBeDefined();
+      expect(dir!._isDirectory).toBe(true);
+    });
+
+    it("non-recursive readdir is unchanged", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-rdr-flat");
+      setupTree("ctx-rdr-flat");
+      const names = (await service.handleCall(ctx, "readdir", ["/"])) as string[];
+      expect(names.sort()).toEqual(["sub", "top.txt"]);
+    });
+  });
+
+  describe("grep", () => {
+    function setupSearchTree(contextId: string): string {
+      const root = path.join(tmpRoot, contextId);
+      mkdirSync(path.join(root, "src"), { recursive: true });
+      mkdirSync(path.join(root, "node_modules", "dep"), { recursive: true });
+      mkdirSync(path.join(root, ".git"), { recursive: true });
+      writeFileSync(
+        path.join(root, "src", "alpha.ts"),
+        "line one\nneedle here\nline three\nline four\nNEEDLE again\n"
+      );
+      writeFileSync(path.join(root, "src", "beta.md"), "no match\nanother needle\n");
+      writeFileSync(path.join(root, "node_modules", "dep", "skip.ts"), "needle in dep\n");
+      writeFileSync(path.join(root, ".git", "config"), "needle in git\n");
+      writeFileSync(path.join(root, "binary.bin"), Buffer.from([0x6e, 0x65, 0x00, 0x6c, 0x65]));
+      return root;
+    }
+
+    afterEach(() => {
+      _setRipgrepPathForTests(undefined);
+    });
+
+    for (const [mode, rgOverride] of [
+      ["js fallback", null],
+      ["auto-detected backend", undefined],
+    ] as const) {
+      describe(mode, () => {
+        function withBackend(): void {
+          _setRipgrepPathForTests(rgOverride);
+        }
+
+        it("finds matches with sandbox-relative paths and skips .git/node_modules/binary files", async () => {
+          const ctx = makeWorkerCtx("do:src:class:key");
+          registerContext(ctx.caller.runtime.id, "do", "ctx-grep-a");
+          setupSearchTree("ctx-grep-a");
+          withBackend();
+
+          const result = (await service.handleCall(ctx, "grep", ["needle"])) as GrepResult;
+          expect(result.truncated).toBe(false);
+          expect(result.matchCount).toBe(2);
+          const files = result.matches.map((m) => m.file).sort();
+          expect(files).toEqual(["/src/alpha.ts", "/src/beta.md"]);
+          const alpha = result.matches.find((m) => m.file === "/src/alpha.ts")!;
+          expect(alpha.lineNumber).toBe(2);
+          expect(alpha.line).toBe("needle here");
+          expect(alpha.before).toEqual([]);
+          expect(alpha.after).toEqual([]);
+        });
+
+        it("supports caseInsensitive and contextLines", async () => {
+          const ctx = makeWorkerCtx("do:src:class:key");
+          registerContext(ctx.caller.runtime.id, "do", "ctx-grep-b");
+          setupSearchTree("ctx-grep-b");
+          withBackend();
+
+          const result = (await service.handleCall(ctx, "grep", [
+            "needle",
+            { path: "/src", glob: "*.ts", caseInsensitive: true, contextLines: 1 },
+          ])) as GrepResult;
+          expect(result.matchCount).toBe(2);
+          const first = result.matches.find((m) => m.lineNumber === 2)!;
+          expect(first.before).toEqual(["line one"]);
+          expect(first.after).toEqual(["line three"]);
+          const second = result.matches.find((m) => m.lineNumber === 5)!;
+          expect(second.line).toBe("NEEDLE again");
+          expect(second.before).toEqual(["line four"]);
+        });
+
+        it("truncates at maxMatches", async () => {
+          const ctx = makeWorkerCtx("do:src:class:key");
+          registerContext(ctx.caller.runtime.id, "do", "ctx-grep-c");
+          const root = path.join(tmpRoot, "ctx-grep-c");
+          mkdirSync(root, { recursive: true });
+          writeFileSync(root + "/many.txt", Array(20).fill("needle").join("\n"));
+          withBackend();
+
+          const result = (await service.handleCall(ctx, "grep", [
+            "needle",
+            { maxMatches: 5 },
+          ])) as GrepResult;
+          expect(result.matchCount).toBe(5);
+          expect(result.truncated).toBe(true);
+        });
+
+        it("filters candidate files by glob", async () => {
+          const ctx = makeWorkerCtx("do:src:class:key");
+          registerContext(ctx.caller.runtime.id, "do", "ctx-grep-d");
+          setupSearchTree("ctx-grep-d");
+          withBackend();
+
+          const result = (await service.handleCall(ctx, "grep", [
+            "needle",
+            { glob: "*.md" },
+          ])) as GrepResult;
+          expect(result.matches.map((m) => m.file)).toEqual(["/src/beta.md"]);
+        });
+      });
+    }
+
+    it("rejects paths escaping the sandbox", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-grep-esc");
+      mkdirSync(path.join(tmpRoot, "ctx-grep-esc"), { recursive: true });
+      await expect(
+        service.handleCall(ctx, "grep", ["needle", { path: "../other-context" }])
+      ).rejects.toThrow(/Path traversal/);
+    });
+
+    it("works for shell callers with an explicit contextId", async () => {
+      mkdirSync(path.join(tmpRoot, "ctx-grep-shell"), { recursive: true });
+      writeFileSync(path.join(tmpRoot, "ctx-grep-shell", "f.txt"), "needle\n");
+      const result = (await service.handleCall(makeShellCtx("shell-1"), "grep", [
+        "ctx-grep-shell",
+        "needle",
+      ])) as GrepResult;
+      expect(result.matchCount).toBe(1);
+      expect(result.matches[0]!.file).toBe("/f.txt");
+    });
+  });
+
+  describe("glob", () => {
+    it("returns matching files sorted by mtime desc, skipping node_modules", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-glob");
+      const root = path.join(tmpRoot, "ctx-glob");
+      mkdirSync(path.join(root, "src", "deep"), { recursive: true });
+      mkdirSync(path.join(root, "node_modules"), { recursive: true });
+      writeFileSync(path.join(root, "src", "old.ts"), "");
+      writeFileSync(path.join(root, "src", "deep", "newer.ts"), "");
+      writeFileSync(path.join(root, "src", "skip.md"), "");
+      writeFileSync(path.join(root, "node_modules", "dep.ts"), "");
+      const now = Date.now() / 1000;
+      utimesSync(path.join(root, "src", "old.ts"), now - 100, now - 100);
+      utimesSync(path.join(root, "src", "deep", "newer.ts"), now, now);
+
+      const result = (await service.handleCall(ctx, "glob", ["**/*.ts"])) as string[];
+      expect(result).toEqual(["/src/deep/newer.ts", "/src/old.ts"]);
+    });
+
+    it("scopes the search to options.path", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-glob-scope");
+      const root = path.join(tmpRoot, "ctx-glob-scope");
+      mkdirSync(path.join(root, "a"), { recursive: true });
+      mkdirSync(path.join(root, "b"), { recursive: true });
+      writeFileSync(path.join(root, "a", "in.txt"), "");
+      writeFileSync(path.join(root, "b", "out.txt"), "");
+
+      const result = (await service.handleCall(ctx, "glob", [
+        "*.txt",
+        { path: "/a" },
+      ])) as string[];
+      expect(result).toEqual(["/a/in.txt"]);
+    });
+
+    it("matches slash-free patterns against basenames anywhere in the tree", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-glob-base");
+      const root = path.join(tmpRoot, "ctx-glob-base");
+      mkdirSync(path.join(root, "nested"), { recursive: true });
+      writeFileSync(path.join(root, "nested", "match.spec.ts"), "");
+
+      const result = (await service.handleCall(ctx, "glob", ["*.spec.ts"])) as string[];
+      expect(result).toEqual(["/nested/match.spec.ts"]);
     });
   });
 

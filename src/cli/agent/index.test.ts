@@ -1,0 +1,316 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { clearShellTokenCache } from "../rpcClient.js";
+
+vi.mock("@natstack/shared/tailscaleDiscovery", () => ({
+  discoverNatstackServers: vi.fn(async () => []),
+}));
+
+interface RpcRequest {
+  method: string;
+  args: unknown[];
+  type?: string;
+  targetId?: string;
+}
+
+/**
+ * Stub fetch for a paired server: answers refresh-shell and routes /rpc
+ * bodies through `handle`.
+ */
+function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequest[] } {
+  const rpcBodies: RpcRequest[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: URL, init?: RequestInit) => {
+      if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
+        return new Response(
+          JSON.stringify({ shellToken: "tok", callerId: "shell:dev_cli", deviceId: "dev_cli" })
+        );
+      }
+      const body = JSON.parse(String(init?.body ?? "{}")) as RpcRequest;
+      rpcBodies.push(body);
+      try {
+        return new Response(JSON.stringify({ result: handle(body) }));
+      } catch (error) {
+        return new Response(
+          JSON.stringify({ error: error instanceof Error ? error.message : String(error) })
+        );
+      }
+    })
+  );
+  return { rpcBodies };
+}
+
+function writeCredentials(tmpDir: string): void {
+  const dir = path.join(tmpDir, ".config", "natstack");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "cli-credentials.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      kind: "device",
+      url: "https://host.tailnet.ts.net",
+      deviceId: "dev_cli",
+      refreshToken: "refresh_cli",
+    })
+  );
+}
+
+function sessionFile(tmpDir: string, name: string): string {
+  return path.join(tmpDir, ".config", "natstack", "agent-sessions", `${name}.json`);
+}
+
+function jsonOutput(): unknown {
+  const lines = vi.mocked(console.log).mock.calls.map((call) => String(call[0]));
+  return JSON.parse(lines[lines.length - 1]!);
+}
+
+const SESSION_HANDLE = {
+  id: "session:work",
+  kind: "session",
+  source: { repoPath: "agent-cli", effectiveVersion: "" },
+  contextId: "ctx_1",
+  targetId: "session:work",
+};
+
+describe("natstack agent commands", () => {
+  let tmpDir = "";
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-agent-"));
+    vi.stubEnv("HOME", tmpDir);
+    clearShellTokenCache();
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("attach creates a session entity and persists a 0600 session file", async () => {
+    writeCredentials(tmpDir);
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "runtime.listEntities") return [];
+      if (body.method === "runtime.createEntity") return SESSION_HANDLE;
+      throw new Error(`unexpected method ${body.method}`);
+    });
+
+    const { main } = await import("../client.js");
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+
+    expect(rpcBodies).toEqual([
+      {
+        method: "runtime.createEntity",
+        args: [{ kind: "session", source: "agent-cli", key: "work", title: "work" }],
+      },
+    ]);
+    const filePath = sessionFile(tmpDir, "work");
+    const stored = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
+    expect(stored).toMatchObject({
+      schemaVersion: 1,
+      name: "work",
+      serverUrl: "https://host.tailnet.ts.net",
+      entityId: "session:work",
+      contextId: "ctx_1",
+      scopeKey: "work",
+    });
+    if (process.platform !== "win32") {
+      expect(fs.statSync(filePath).mode & 0o777).toBe(0o600);
+    }
+    expect(jsonOutput()).toMatchObject({ entityId: "session:work" });
+  });
+
+  it("attach is idempotent when the entity is still live", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    {
+      stubServer((body) => (body.method === "runtime.createEntity" ? SESSION_HANDLE : []));
+      await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+    }
+    const before = fs.readFileSync(sessionFile(tmpDir, "work"), "utf8");
+
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "runtime.listEntities") return [{ id: "session:work" }];
+      throw new Error(`unexpected method ${body.method}`);
+    });
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+    expect(rpcBodies.map((body) => body.method)).toEqual(["runtime.listEntities"]);
+    expect(fs.readFileSync(sessionFile(tmpDir, "work"), "utf8")).toBe(before);
+  });
+
+  it("attach recreates the entity when it is gone", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    stubServer((body) => (body.method === "runtime.createEntity" ? SESSION_HANDLE : []));
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+
+    const recreated = { ...SESSION_HANDLE, id: "session:work2", contextId: "ctx_2" };
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "runtime.listEntities") return [];
+      if (body.method === "runtime.createEntity") return recreated;
+      throw new Error(`unexpected method ${body.method}`);
+    });
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+    expect(rpcBodies.map((body) => body.method)).toEqual([
+      "runtime.listEntities",
+      "runtime.createEntity",
+    ]);
+    expect(jsonOutput()).toMatchObject({ entityId: "session:work2", contextId: "ctx_2" });
+  });
+
+  it("attach without credentials or pairing options is an auth error (exit 3)", async () => {
+    const { main } = await import("../client.js");
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(3);
+  });
+
+  it("status reports stale sessions with exit 5", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    stubServer((body) => (body.method === "runtime.createEntity" ? SESSION_HANDLE : []));
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+
+    stubServer((body) => {
+      if (body.method === "runtime.listEntities") return [{ id: "session:work" }];
+      throw new Error(`unexpected method ${body.method}`);
+    });
+    await expect(main(["agent", "status", "work", "--json"])).resolves.toBe(0);
+
+    stubServer(() => []);
+    await expect(main(["agent", "status", "work", "--json"])).resolves.toBe(5);
+  });
+
+  it("detach retires the entity and removes the session file", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    stubServer((body) => (body.method === "runtime.createEntity" ? SESSION_HANDLE : []));
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "runtime.retireEntity") return null;
+      throw new Error(`unexpected method ${body.method}`);
+    });
+    await expect(main(["agent", "detach", "work", "--rm", "--json"])).resolves.toBe(0);
+    expect(rpcBodies).toEqual([
+      {
+        method: "runtime.retireEntity",
+        args: [{ id: "session:work", removeContext: true }],
+      },
+    ]);
+    expect(fs.existsSync(sessionFile(tmpDir, "work"))).toBe(false);
+  });
+
+  it("sessions reconciles local files against live entities", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    stubServer((body) => (body.method === "runtime.createEntity" ? SESSION_HANDLE : []));
+    await expect(main(["agent", "attach", "work", "--json"])).resolves.toBe(0);
+    stubServer((body) => {
+      if (body.method === "runtime.createEntity") {
+        return { ...SESSION_HANDLE, id: "session:gone", contextId: "ctx_gone" };
+      }
+      return [];
+    });
+    await expect(main(["agent", "attach", "gone", "--json"])).resolves.toBe(0);
+
+    stubServer((body) => {
+      if (body.method === "runtime.listEntities") return [{ id: "session:work" }];
+      throw new Error(`unexpected method ${body.method}`);
+    });
+    await expect(main(["agent", "sessions", "--json"])).resolves.toBe(0);
+    expect(jsonOutput()).toEqual([
+      expect.objectContaining({ name: "gone", live: false }),
+      expect.objectContaining({ name: "work", live: true }),
+    ]);
+  });
+
+  it("call dispatches direct and relayed RPC and prints the result", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    const { rpcBodies } = stubServer((body) => {
+      if (body.type === "call") return { relayed: body.targetId };
+      return { direct: body.method };
+    });
+
+    await expect(main(["agent", "call", "workspace.getActive", "[]", "--json"])).resolves.toBe(0);
+    expect(jsonOutput()).toEqual({ direct: "workspace.getActive" });
+
+    await expect(
+      main(["agent", "call", "stats.get", '[{"a":1}]', "--target", "worker:r:k", "--json"])
+    ).resolves.toBe(0);
+    expect(jsonOutput()).toEqual({ relayed: "worker:r:k" });
+    expect(rpcBodies[1]).toEqual({
+      type: "call",
+      targetId: "worker:r:k",
+      method: "stats.get",
+      args: [{ a: 1 }],
+    });
+  });
+
+  it("call rejects malformed args as usage errors (exit 2)", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    await expect(main(["agent", "call", "no-dot", "--json"])).resolves.toBe(2);
+    await expect(main(["agent", "call", "a.b", "{not json", "--json"])).resolves.toBe(2);
+    await expect(main(["agent", "call", "a.b", '{"not":"array"}', "--json"])).resolves.toBe(2);
+  });
+
+  it("call surfaces server RPC errors as exit 1", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    stubServer(() => {
+      throw new Error("Unknown service method");
+    });
+    await expect(main(["agent", "call", "nope.nope", "--json"])).resolves.toBe(1);
+  });
+
+  it("services lists and describes via the meta service", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "meta.listServices") {
+        return [{ name: "runtime", description: "Runtime entity creation" }];
+      }
+      if (body.method === "meta.describeService") {
+        return { name: "runtime", policy: { allowed: ["shell"] }, methods: {} };
+      }
+      throw new Error(`unexpected method ${body.method}`);
+    });
+
+    await expect(main(["agent", "services", "--json"])).resolves.toBe(0);
+    expect(jsonOutput()).toEqual([{ name: "runtime", description: "Runtime entity creation" }]);
+
+    await expect(main(["agent", "services", "runtime", "--json"])).resolves.toBe(0);
+    expect(rpcBodies[1]).toEqual({ method: "meta.describeService", args: ["runtime"] });
+  });
+
+  it("skills and logs hit the workspace service with the right shapes", async () => {
+    writeCredentials(tmpDir);
+    const { main } = await import("../client.js");
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "workspace.listSkills") {
+        return [{ name: "alpha", description: "A skill", dirPath: "skills/alpha" }];
+      }
+      if (body.method === "workspace.readSkill") return "# alpha skill";
+      if (body.method === "workspace.units.logs") return [{ level: "info", message: "hi" }];
+      throw new Error(`unexpected method ${body.method}`);
+    });
+
+    await expect(main(["agent", "skills", "--json"])).resolves.toBe(0);
+    await expect(main(["agent", "skills", "alpha", "--json"])).resolves.toBe(0);
+    await expect(
+      main(["agent", "logs", "workers/foo", "--level", "info", "--limit", "10", "--json"])
+    ).resolves.toBe(0);
+
+    expect(rpcBodies).toEqual([
+      { method: "workspace.listSkills", args: [] },
+      { method: "workspace.readSkill", args: ["alpha"] },
+      { method: "workspace.units.logs", args: ["workers/foo", { level: "info", limit: 10 }] },
+    ]);
+  });
+});

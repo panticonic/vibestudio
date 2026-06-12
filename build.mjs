@@ -155,6 +155,21 @@ const clientConfig = {
   logOverride,
 };
 
+// Standalone eval-runner child process spawned by `natstack eval run`.
+// Bundles @workspace/eval (and its sucrase dependency) so the runner works
+// with plain `node` next to the CLI client bundle.
+const evalRunnerConfig = {
+  entryPoints: ["src/cli/agent/evalRunner.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "esm",
+  outfile: "dist/cli/eval-runner.mjs",
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+};
+
 const mainConfig = {
   entryPoints: ["src/main/index.ts"],
   bundle: true,
@@ -408,6 +423,9 @@ function copyAssets() {
     "workspace/extensions/shell/vscode-shell-integration",
     "dist/vscode-shell-integration"
   );
+  // Bundled agent skill consumed by `natstack agent skill install|print`
+  // (resolved as a sibling of dist/cli/client.mjs).
+  copyDirectoryRecursive("skills/natstack-agent", "dist/cli/skills/natstack-agent");
 }
 
 function copyDirectoryRecursive(srcDir, destDir) {
@@ -628,6 +646,7 @@ async function build() {
     await esbuild.build(serverElectronWithBundle);
     await esbuild.build(serverWithBundle);
     await esbuild.build(clientConfig);
+    await esbuild.build(evalRunnerConfig);
     await buildDependencyWorkers();
 
     // ========================================================================

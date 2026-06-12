@@ -49,12 +49,8 @@ function loadBrowserTransport(): string {
     }
   }
 
-  try {
-    return fs.readFileSync(transportCandidates[0] ?? "browserTransport.js", "utf-8");
-  } catch {
-    log.info(`[PanelHttpServer] Browser transport not found, using inline stub`);
-    return `console.warn("[NatStack] Browser transport not available — panel RPC will not work.");`;
-  }
+  log.info(`[PanelHttpServer] Browser transport not found, using inline stub`);
+  return `console.warn("[NatStack] Browser transport not available — panel RPC will not work.");`;
 }
 
 const BROWSER_TRANSPORT_JS = loadBrowserTransport();

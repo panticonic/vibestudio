@@ -5,14 +5,10 @@ import {
   parseConnectLink,
   parseConnectServerUrl,
 } from "@natstack/shared/connect";
+import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 
-export interface DeviceCredential {
-  schemaVersion: 1;
-  kind: "device";
-  url: string;
-  deviceId: string;
-  refreshToken: string;
-}
+export type { DeviceCredential } from "./rpcClient.js";
+export { refreshShell, type RefreshShellResponse } from "./rpcClient.js";
 
 export interface PairOptions {
   url?: string;
@@ -59,55 +55,16 @@ export async function completePairing(options: PairOptions): Promise<DeviceCrede
   };
 }
 
-export async function refreshShell(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">
-): Promise<Record<string, unknown>> {
-  const refresh = await fetch(new URL("/_r/s/auth/refresh-shell", creds.url), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId: creds.deviceId, refreshToken: creds.refreshToken }),
-  });
-  const body = (await refresh.json().catch(() => ({}))) as Record<string, unknown>;
-  if (!refresh.ok) {
-    throw new Error(remoteErrorMessage(body, `${refresh.status} ${refresh.statusText}`));
-  }
-  return body;
-}
-
 export async function createPairingInvite(
   creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">,
   options: { ttlMs?: number } = {}
 ): Promise<PairingInvite> {
-  const refresh = await refreshShell(creds);
-  const shellToken = refresh["shellToken"];
-  if (typeof shellToken !== "string") {
-    throw new Error("server did not return a shell token");
-  }
-  const rpcResponse = await fetch(new URL("/rpc", creds.url), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${shellToken}`,
-    },
-    body: JSON.stringify({
-      method: "auth.createPairingInvite",
-      args: [options.ttlMs ? { ttlMs: options.ttlMs } : {}],
-    }),
-  });
-  const rpcBody = (await rpcResponse.json().catch(() => ({}))) as {
-    result?: unknown;
-    error?: unknown;
-  };
-  const result = rpcBody.result as Record<string, unknown> | undefined;
-  if (
-    !rpcResponse.ok ||
-    !result ||
-    typeof result["code"] !== "string" ||
-    typeof result["connectUrl"] !== "string"
-  ) {
-    throw new Error(
-      remoteErrorMessage(rpcBody, `invite failed (${rpcResponse.status} ${rpcResponse.statusText})`)
-    );
+  const client = new RpcClient(creds);
+  const result = (await client.call("auth.createPairingInvite", [
+    options.ttlMs ? { ttlMs: options.ttlMs } : {},
+  ])) as Record<string, unknown> | undefined;
+  if (!result || typeof result["code"] !== "string" || typeof result["connectUrl"] !== "string") {
+    throw new Error("invite failed: server returned an unexpected response");
   }
   return {
     code: result["code"],

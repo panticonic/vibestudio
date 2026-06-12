@@ -6,7 +6,6 @@
  */
 
 import { randomUUID } from "crypto";
-import { z } from "zod";
 import { createDevLogger } from "@natstack/dev-log";
 import type { ServiceContainer } from "@natstack/shared/serviceContainer";
 import {
@@ -1042,7 +1041,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   });
 
   {
-    const { handleFsCall } = await import("@natstack/shared/fsService");
+    const { createFsServiceDefinition } = await import("./services/fsServiceDef.js");
     let fsServiceInstance: import("@natstack/shared/fsService").FsService;
     container.registerManaged({
       name: "fsRpc",
@@ -1053,40 +1052,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         );
       },
       getServiceDefinition() {
-        const fsMethodSchema = { args: z.tuple([z.string()]).rest(z.unknown()) };
-        // `mktemp` takes an optional prefix string; no leading path arg.
-        const mktempSchema = { args: z.tuple([z.string().optional()]) };
-        // Per-method policy for sandbox-escape primitives. `symlink` and
-        // `chown` were Wave-1 audit findings (#38, #39): even though the
-        // implementation in `fsService.ts` was hardened (sandbox-target
-        // resolution, lstat parent walk), exposing them to `panel` /
-        // `worker` callers gives attackers a TOCTOU primitive. Restrict
-        // both to trusted native-code callers only — internal server callers
-        // needing these ops can bypass the dispatcher, and extensions already
-        // have equivalent raw Node access after install approval. App callers
-        // are pre-gated by the Electron host's fs-read/fs-write capabilities.
-        return {
-          name: "fs",
-          description: "Per-context filesystem operations (sandboxed to context folder)",
-          policy: { allowed: ["panel", "app", "server", "worker", "do", "extension"] },
-          methods: {
-            readFile: fsMethodSchema,
-            writeFile: fsMethodSchema,
-            readdir: fsMethodSchema,
-            mkdir: fsMethodSchema,
-            stat: fsMethodSchema,
-            open: fsMethodSchema,
-            close: fsMethodSchema,
-            read: fsMethodSchema,
-            write: fsMethodSchema,
-            mktemp: mktempSchema,
-            symlink: { ...fsMethodSchema, policy: { allowed: ["shell", "extension"] } },
-            chown: { ...fsMethodSchema, policy: { allowed: ["shell", "extension"] } },
-          },
-          handler: async (ctx, method, serviceArgs) => {
-            return handleFsCall(fsServiceInstance, ctx, method, serviceArgs as unknown[]);
-          },
-        };
+        return createFsServiceDefinition(() => fsServiceInstance);
       },
     });
   }

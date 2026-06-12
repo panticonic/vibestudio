@@ -227,13 +227,329 @@ function serializeStat(stats: fsSync.Stats) {
   };
 }
 
-function serializeDirent(d: fsSync.Dirent) {
+function serializeDirent(d: fsSync.Dirent, name: string = d.name) {
   return {
-    name: d.name,
+    name,
     _isFile: d.isFile(),
     _isDirectory: d.isDirectory(),
     _isSymbolicLink: d.isSymbolicLink(),
   };
+}
+
+/** Path of a (possibly nested) Dirent relative to the listed directory. */
+function relativeDirentName(listedDir: string, d: fsSync.Dirent): string {
+  return path.relative(listedDir, path.join(d.parentPath, d.name)).split(path.sep).join("/");
+}
+
+// ---------------------------------------------------------------------------
+// grep / glob
+// ---------------------------------------------------------------------------
+
+/** Directories never descended into by grep/glob. */
+const SEARCH_SKIP_DIRS = new Set([".git", "node_modules"]);
+
+const GREP_DEFAULT_MAX_MATCHES = 200;
+const GREP_HARD_MAX_MATCHES = 1000;
+const GREP_MAX_CONTEXT_LINES = 10;
+
+export interface GrepOptions {
+  /** Directory (or single file) to search, relative to the context root. */
+  path?: string;
+  /** Glob filter for candidate files (gitignore-style; basename match when slash-free). */
+  glob?: string;
+  caseInsensitive?: boolean;
+  /** Lines of context before/after each match (clamped to 10). */
+  contextLines?: number;
+  /** Stop after this many matches (default 200, hard cap 1000). */
+  maxMatches?: number;
+}
+
+export interface GlobOptions {
+  /** Directory to search, relative to the context root. */
+  path?: string;
+}
+
+export interface GrepMatch {
+  file: string;
+  lineNumber: number;
+  line: string;
+  before: string[];
+  after: string[];
+}
+
+export interface GrepResult {
+  matches: GrepMatch[];
+  matchCount: number;
+  truncated: boolean;
+}
+
+interface RawGrepMatch {
+  /** Absolute file path. */
+  file: string;
+  lineNumber: number;
+  line: string;
+}
+
+let cachedRipgrepPath: string | null | undefined;
+
+/** Locate `rg` on PATH (cached). Exported test hook: `_resetRipgrepCache`. */
+function findRipgrep(): string | null {
+  if (cachedRipgrepPath !== undefined) return cachedRipgrepPath;
+  const names = process.platform === "win32" ? ["rg.exe", "rg"] : ["rg"];
+  for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
+    if (!dir) continue;
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      try {
+        fsSync.accessSync(candidate, fsSync.constants.X_OK);
+        if (fsSync.statSync(candidate).isFile()) {
+          cachedRipgrepPath = candidate;
+          return candidate;
+        }
+      } catch {
+        // keep looking
+      }
+    }
+  }
+  cachedRipgrepPath = null;
+  return null;
+}
+
+/** Test hook: force re-detection of ripgrep (and optionally disable it). */
+export function _setRipgrepPathForTests(value: string | null | undefined): void {
+  cachedRipgrepPath = value;
+}
+
+/**
+ * Convert a glob pattern to a RegExp source string. Supports `*`, `**`, `?`,
+ * `[...]` character classes, and `{a,b}` alternation.
+ */
+function globSource(glob: string): string {
+  let out = "";
+  let i = 0;
+  while (i < glob.length) {
+    const c = glob[i]!;
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        if (glob[i + 2] === "/") {
+          out += "(?:[^/]+/)*";
+          i += 3;
+        } else {
+          out += ".*";
+          i += 2;
+        }
+      } else {
+        out += "[^/]*";
+        i += 1;
+      }
+    } else if (c === "?") {
+      out += "[^/]";
+      i += 1;
+    } else if (c === "[") {
+      const end = glob.indexOf("]", i + 2);
+      if (end === -1) {
+        out += "\\[";
+        i += 1;
+      } else {
+        let cls = glob.slice(i + 1, end);
+        if (cls.startsWith("!")) cls = "^" + cls.slice(1);
+        out += `[${cls}]`;
+        i = end + 1;
+      }
+    } else if (c === "{") {
+      const end = glob.indexOf("}", i + 1);
+      if (end === -1) {
+        out += "\\{";
+        i += 1;
+      } else {
+        const parts = glob.slice(i + 1, end).split(",");
+        out += `(?:${parts.map(globSource).join("|")})`;
+        i = end + 1;
+      }
+    } else {
+      out += c.replace(/[.+^$()|\\\]}]/g, "\\$&");
+      i += 1;
+    }
+  }
+  return out;
+}
+
+/**
+ * Match a slash-separated relative path against a glob pattern. Patterns
+ * without a slash match against the basename (gitignore convention).
+ */
+function matchesGlob(relPath: string, pattern: string): boolean {
+  const subject = pattern.includes("/") ? relPath : path.posix.basename(relPath);
+  return new RegExp(`^${globSource(pattern)}$`).test(subject);
+}
+
+/** Recursively yield files under `dir`, skipping VCS/deps dirs and symlinks. */
+async function* walkFiles(dir: string): AsyncGenerator<string> {
+  let entries: fsSync.Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (SEARCH_SKIP_DIRS.has(entry.name)) continue;
+      yield* walkFiles(abs);
+    } else if (entry.isFile()) {
+      yield abs;
+    }
+    // Symlinks (and other special entries) are intentionally skipped: they
+    // could point outside the sandbox.
+  }
+}
+
+/** Heuristic binary check: NUL byte in the first 8 KiB. */
+async function isBinaryFile(filePath: string): Promise<boolean> {
+  const handle = await fs.open(filePath, "r");
+  try {
+    const buf = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    return buf.subarray(0, bytesRead).includes(0);
+  } finally {
+    await handle.close();
+  }
+}
+
+/** Run ripgrep and collect up to `limit` raw matches. */
+async function grepWithRipgrep(
+  rgPath: string,
+  searchRoot: string,
+  pattern: string,
+  opts: { caseInsensitive: boolean; glob?: string },
+  limit: number
+): Promise<{ raw: RawGrepMatch[]; truncated: boolean }> {
+  const { spawn } = await import("node:child_process");
+  const rgArgs = [
+    "--json",
+    "--no-ignore",
+    "--hidden",
+    "--no-messages",
+    "--glob",
+    "!**/.git/**",
+    "--glob",
+    "!**/node_modules/**",
+  ];
+  if (opts.caseInsensitive) rgArgs.push("--ignore-case");
+  if (opts.glob) rgArgs.push("--glob", opts.glob);
+  rgArgs.push("--regexp", pattern, "--", searchRoot);
+
+  return new Promise((resolvePromise, rejectPromise) => {
+    const child = spawn(rgPath, rgArgs, { stdio: ["ignore", "pipe", "pipe"] });
+    const raw: RawGrepMatch[] = [];
+    let truncated = false;
+    let stderr = "";
+    let buffered = "";
+    let settled = false;
+
+    const finish = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      if (err) rejectPromise(err);
+      else resolvePromise({ raw, truncated });
+    };
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.stdout.on("data", (chunk: Buffer) => {
+      buffered += chunk.toString("utf8");
+      let newline: number;
+      while ((newline = buffered.indexOf("\n")) !== -1) {
+        const line = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + 1);
+        if (!line.trim()) continue;
+        let event: any;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (event.type !== "match") continue;
+        const file = event.data?.path?.text;
+        const text = event.data?.lines?.text;
+        const lineNumber = event.data?.line_number;
+        // Skip non-UTF8 payloads (rg reports them as base64 `bytes`).
+        if (typeof file !== "string" || typeof text !== "string") continue;
+        if (typeof lineNumber !== "number") continue;
+        if (raw.length >= limit) {
+          truncated = true;
+          child.kill();
+          finish();
+          return;
+        }
+        raw.push({ file, lineNumber, line: text.replace(/\r?\n$/, "") });
+      }
+    });
+    child.on("error", (err) => finish(err));
+    child.on("close", (code) => {
+      // rg exits 0 on matches, 1 on no matches, 2 on error.
+      if (!truncated && code !== null && code > 1) {
+        finish(new Error(`ripgrep failed: ${stderr.trim() || `exit code ${code}`}`));
+        return;
+      }
+      finish();
+    });
+  });
+}
+
+/** Pure-JS streaming grep fallback (no ripgrep on PATH). */
+async function grepWithJs(
+  searchRoot: string,
+  regex: RegExp,
+  globFilter: string | undefined,
+  limit: number
+): Promise<{ raw: RawGrepMatch[]; truncated: boolean }> {
+  const { createInterface } = await import("node:readline");
+  const raw: RawGrepMatch[] = [];
+  let truncated = false;
+
+  const rootStat = await fs.stat(searchRoot);
+  const files = rootStat.isFile() ? singleton(searchRoot) : walkFiles(searchRoot);
+
+  outer: for await (const file of files) {
+    if (globFilter) {
+      const rel =
+        searchRoot === file
+          ? path.basename(file)
+          : path.relative(searchRoot, file).split(path.sep).join("/");
+      if (!matchesGlob(rel, globFilter)) continue;
+    }
+    try {
+      if (await isBinaryFile(file)) continue;
+    } catch {
+      continue;
+    }
+    const stream = fsSync.createReadStream(file, { encoding: "utf8" });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+    let lineNumber = 0;
+    try {
+      for await (const line of rl) {
+        lineNumber += 1;
+        if (!regex.test(line)) continue;
+        if (raw.length >= limit) {
+          truncated = true;
+          break outer;
+        }
+        raw.push({ file, lineNumber, line });
+      }
+    } catch {
+      // Unreadable file mid-stream: skip the rest of it.
+    } finally {
+      rl.close();
+      stream.destroy();
+    }
+  }
+  return { raw, truncated };
+}
+
+async function* singleton<T>(value: T): AsyncGenerator<T> {
+  yield value;
 }
 
 // ---------------------------------------------------------------------------
@@ -288,10 +604,12 @@ export class FsService {
 
   /**
    * Resolve the context root path for a service call.
-   * - panel/app/worker/DO/harness callers: look up contextId from EntityCache
+   * - panel/app/worker/DO callers: look up contextId from EntityCache
    * - extension callers inside an invocation: use the chained caller context
    * - extension callers outside an invocation: unrestricted host fs
-   * - server callers: contextId is the first arg (shifted from args array)
+   * - server/shell/harness callers: contextId is the first arg (shifted from
+   *   the args array). Shell and harness callers must name an existing
+   *   context; server callers may create one on the fly.
    */
   private async resolveContextRoot(ctx: ServiceContext, args: unknown[]): Promise<FsCallScope> {
     let contextId: string;
@@ -301,8 +619,7 @@ export class FsService {
       ctx.caller.runtime.kind === "panel" ||
       ctx.caller.runtime.kind === "app" ||
       ctx.caller.runtime.kind === "worker" ||
-      ctx.caller.runtime.kind === "do" ||
-      ctx.caller.runtime.kind === "harness"
+      ctx.caller.runtime.kind === "do"
     ) {
       panelId = ctx.caller.runtime.id;
       const cid = this.entityCache.resolveContext(panelId);
@@ -356,11 +673,24 @@ export class FsService {
           `on-behalf-of context and without the host-fs-access capability`
       );
     } else {
-      // Server-originated calls pass contextId as first arg
+      // Server / shell / harness callers pass an explicit contextId as the
+      // first argument.
+      const kind = ctx.caller.runtime.kind;
       contextId = args.shift() as string;
-      panelId = `server:${ctx.caller.runtime.id}`;
+      panelId = `${kind}:${ctx.caller.runtime.id}`;
       if (!contextId || typeof contextId !== "string") {
-        throw new Error("Server fs calls must provide contextId as first argument");
+        throw new Error(`${kind} fs calls must provide contextId as first argument`);
+      }
+      if (kind !== "server") {
+        // Shell / harness callers may only address contexts that already
+        // exist (a context folder on disk, or an active entity bound to the
+        // context). Server callers are trusted to create contexts.
+        const known =
+          this.contextFolderManager.getContextRoot(contextId) !== null ||
+          this.entityCache.listActive().some((record) => record.contextId === contextId);
+        if (!known) {
+          throw new Error(`Unknown contextId: ${contextId}`);
+        }
       }
     }
 
@@ -490,12 +820,25 @@ export class FsService {
           allowSharedGitObjects: true,
           isAllowedSharedGitObjectsSymlink: scope.isAllowedSharedGitObjectsSymlink,
         });
-        const opts = args[1] as { withFileTypes?: boolean } | undefined;
+        const opts = args[1] as { withFileTypes?: boolean; recursive?: boolean } | undefined;
+        const recursive = opts?.recursive ?? false;
         if (opts?.withFileTypes) {
-          const entries = await fs.readdir(p, { withFileTypes: true });
-          return entries.map(serializeDirent);
+          const entries = await fs.readdir(p, { withFileTypes: true, recursive });
+          // For recursive listings, report names relative to the listed
+          // directory (Node's Dirent.name is just the basename).
+          return entries.map((d) =>
+            serializeDirent(d, recursive ? relativeDirentName(p, d) : d.name)
+          );
         }
-        return fs.readdir(p);
+        return fs.readdir(p, recursive ? { recursive } : undefined);
+      }
+
+      case "grep": {
+        return this.grep(scope, args[0] as string, args[1] as GrepOptions | undefined);
+      }
+
+      case "glob": {
+        return this.glob(scope, args[0] as string, args[1] as GlobOptions | undefined);
       }
 
       case "mkdir": {
@@ -621,41 +964,15 @@ export class FsService {
         return target;
       }
 
-      // TODO(audit #39): `symlink` and `chown` should NOT be reachable from
-      // panel/app/worker callers. The `fs` service `policy.allowed` is declared
-      // in `src/server/panelRuntimeRegistration.ts` (see fsServiceInstance
-      // registration). Remove `panel` from the allowed list there — and ideally
-      // remove `symlink` / `chown` from the methods table entirely so panels
-      // cannot construct sandbox-escape primitives (TOCTOU on symlink races,
-      // privilege weirdness on setgid dirs).
-      case "symlink": {
-        // Validate that the target resolves within the context root
-        const target = args[0] as string;
-        const linkPath = await resolveFsPath(scope, args[1] as string);
-        // Resolve the target relative to the link's parent directory
-        const linkDir = path.dirname(linkPath);
-        const resolvedTarget = path.resolve(linkDir, target);
-        if (
-          !scope.unrestricted &&
-          !resolvedTarget.startsWith(root + path.sep) &&
-          resolvedTarget !== root
-        ) {
-          throw new Error("Symlink target escapes sandbox");
-        }
-        await fs.symlink(target, linkPath);
-        return;
-      }
+      // NOTE: `symlink` and `chown` were removed entirely (audit findings #38,
+      // #39): they are sandbox-escape primitives (TOCTOU symlink races,
+      // privilege weirdness on setgid dirs). Internal server code can use raw
+      // Node fs; nothing in the service surface needs them.
 
       // ----- Permissions & timestamps -----
       case "chmod": {
         const p = await resolveFsPath(scope, args[0] as string);
         await fs.chmod(p, args[1] as number);
-        return;
-      }
-
-      case "chown": {
-        const p = await resolveFsPath(scope, args[0] as string);
-        await fs.chown(p, args[1] as number, args[2] as number);
         return;
       }
 
@@ -746,6 +1063,109 @@ export class FsService {
       default:
         throw new Error(`Unknown fs method: ${method}`);
     }
+  }
+
+  // =========================================================================
+  // Search (grep / glob)
+  // =========================================================================
+
+  /** Map an absolute path back to the caller-visible form. */
+  private toDisplayPath(scope: FsCallScope, absolutePath: string): string {
+    if (scope.unrestricted) return absolutePath;
+    if (absolutePath === scope.root) return "/";
+    return "/" + path.relative(scope.root, absolutePath).split(path.sep).join("/");
+  }
+
+  /**
+   * Search file contents under the context root. Uses a ripgrep subprocess
+   * when `rg` is on PATH, with a streaming pure-JS fallback. Skips `.git`,
+   * `node_modules`, symlinks, and binary files.
+   */
+  private async grep(
+    scope: FsCallScope,
+    pattern: string,
+    opts: GrepOptions = {}
+  ): Promise<GrepResult> {
+    if (typeof pattern !== "string" || pattern.length === 0) {
+      throw new Error("grep pattern must be a non-empty string");
+    }
+    const caseInsensitive = opts.caseInsensitive ?? false;
+    // Validate the pattern eagerly (also used by the JS fallback and shared
+    // with ripgrep's regex dialect for everyday patterns).
+    const regex = new RegExp(pattern, caseInsensitive ? "i" : "");
+    const contextLines = Math.min(
+      GREP_MAX_CONTEXT_LINES,
+      Math.max(0, Math.floor(opts.contextLines ?? 0))
+    );
+    const maxMatches = Math.min(
+      GREP_HARD_MAX_MATCHES,
+      Math.max(1, Math.floor(opts.maxMatches ?? GREP_DEFAULT_MAX_MATCHES))
+    );
+    const searchRoot = await resolveFsPath(scope, opts.path ?? "/");
+
+    const rgPath = findRipgrep();
+    const { raw, truncated } = rgPath
+      ? await grepWithRipgrep(
+          rgPath,
+          searchRoot,
+          pattern,
+          { caseInsensitive, glob: opts.glob },
+          maxMatches
+        )
+      : await grepWithJs(searchRoot, regex, opts.glob, maxMatches);
+
+    // Attach context lines by re-reading matched files (bounded by maxMatches).
+    const fileLines = new Map<string, string[]>();
+    if (contextLines > 0) {
+      for (const file of new Set(raw.map((m) => m.file))) {
+        try {
+          fileLines.set(file, (await fs.readFile(file, "utf8")).split(/\r?\n/));
+        } catch {
+          // File vanished between search and context read; emit without context.
+        }
+      }
+    }
+
+    const matches: GrepMatch[] = raw.map((m) => {
+      const lines = fileLines.get(m.file);
+      const idx = m.lineNumber - 1;
+      return {
+        file: this.toDisplayPath(scope, m.file),
+        lineNumber: m.lineNumber,
+        line: m.line,
+        before: lines ? lines.slice(Math.max(0, idx - contextLines), idx) : [],
+        after: lines ? lines.slice(idx + 1, idx + 1 + contextLines) : [],
+      };
+    });
+
+    return { matches, matchCount: matches.length, truncated };
+  }
+
+  /**
+   * Find files matching a glob pattern under the context root, sorted by
+   * mtime descending. Skips `.git`, `node_modules`, and symlinks.
+   */
+  private async glob(
+    scope: FsCallScope,
+    pattern: string,
+    opts: GlobOptions = {}
+  ): Promise<string[]> {
+    if (typeof pattern !== "string" || pattern.length === 0) {
+      throw new Error("glob pattern must be a non-empty string");
+    }
+    const searchRoot = await resolveFsPath(scope, opts.path ?? "/");
+    const matched: Array<{ file: string; mtimeMs: number }> = [];
+    for await (const file of walkFiles(searchRoot)) {
+      const rel = path.relative(searchRoot, file).split(path.sep).join("/");
+      if (!matchesGlob(rel, pattern)) continue;
+      try {
+        matched.push({ file, mtimeMs: (await fs.lstat(file)).mtimeMs });
+      } catch {
+        // File vanished mid-walk.
+      }
+    }
+    matched.sort((a, b) => b.mtimeMs - a.mtimeMs);
+    return matched.map((m) => this.toDisplayPath(scope, m.file));
   }
 }
 

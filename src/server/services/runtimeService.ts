@@ -67,12 +67,19 @@ export interface RuntimeEntityHooks {
   onRetire: (record: EntityRecord) => Promise<void>;
 }
 
+/** Context-folder lifecycle used by inert session entities. */
+export interface RuntimeContextFolders {
+  ensureContextFolder(contextId: string): Promise<string>;
+  removeContext(contextId: string): Promise<void>;
+}
+
 export interface RuntimeServiceDeps {
   doDispatch: DODispatch;
   workspaceId: string;
   hooks: RuntimeEntityHooks;
   capability: CapabilityPermissionDeps;
   entityCache: EntityCache;
+  contextFolders: RuntimeContextFolders;
   /**
    * Server-controlled display-title registry. Workers (and DOs / panels)
    * call `runtime.setTitle(title)` to populate the title that approval UIs
@@ -122,6 +129,13 @@ const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
     className: z.string(),
     key: z.string().optional(),
     contextId: z.string().nullable().optional(),
+  }),
+  z.object({
+    kind: z.literal("session"),
+    source: z.string(),
+    contextId: z.string().nullable().optional(),
+    key: z.string().optional(),
+    title: z.string().optional(),
   }),
 ]);
 
@@ -199,13 +213,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     rawSpec: RuntimeEntityCreateSpec
   ): Promise<RuntimeEntityHandle> {
     const spec = rawSpec;
-    if (spec.kind === "app") {
+    if (spec.kind === "app" || spec.kind === "session") {
       const callerKind = caller.runtime.kind;
       if (callerKind !== "shell" && callerKind !== "server" && callerKind !== "harness") {
-        throw new Error("App runtime entities are host-managed");
+        throw new Error(
+          `${spec.kind === "app" ? "App" : "Session"} runtime entities are host-managed`
+        );
       }
     }
-    const contextId = await resolveContextPolicy(caller, spec.contextId, spec);
+    let contextId = await resolveContextPolicy(caller, spec.contextId, spec);
     const key = spec.key ?? randomUUID();
 
     let canonicalId: string;
@@ -259,6 +275,22 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       effectiveVersion =
         existing?.status === "retired" ? existing.source.effectiveVersion : resolvedVersion;
       targetId = canonicalId;
+    } else if (spec.kind === "session") {
+      canonicalId = canonicalEntityId({ kind: "session", key });
+      existing = await dispatchDO<EntityRecord | null>("entityResolve", [canonicalId]);
+      // Entity identity columns are write-once, so re-attaching to an
+      // existing session key must reuse its contextId — a freshly minted one
+      // would throw IDENTITY_COLLISION even against a retired row. The
+      // context folder is re-materialized below if it was removed.
+      if ((spec.contextId == null || spec.contextId === "") && existing) {
+        contextId = existing.contextId;
+      }
+      // Inert kind: no workerd/panel runtime. The only phase-4 prep is
+      // eagerly materializing the context folder so harness callers (e.g.
+      // agent CLIs) get a working tree immediately.
+      await deps.contextFolders.ensureContextFolder(contextId);
+      effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
+      targetId = canonicalId;
     } else {
       canonicalId = canonicalEntityId({ kind: "panel", key });
       existing = await dispatchDO<EntityRecord | null>("entityResolve", [canonicalId]);
@@ -277,10 +309,20 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       contextId,
       className: spec.kind === "do" ? spec.className : undefined,
       key,
-      stateArgs: "stateArgs" in spec ? spec.stateArgs : undefined,
+      stateArgs:
+        spec.kind === "session"
+          ? spec.title !== undefined
+            ? { title: spec.title }
+            : undefined
+          : "stateArgs" in spec
+            ? spec.stateArgs
+            : undefined,
     };
     const record = await dispatchDO<EntityRecord>("entityActivate", [activateInput]);
     deps.entityCache._onActivate(record);
+    if (spec.kind === "session" && spec.title) {
+      await deps.setEntityTitle?.(record.id, spec.title, { explicit: true });
+    }
 
     return {
       id: record.id,
@@ -291,7 +333,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     };
   }
 
-  async function retireEntity(id: string): Promise<void> {
+  async function retireEntity(id: string, removeContext?: boolean): Promise<void> {
     const record = await dispatchDO<EntityRecord | null>("entityRetire", [id]);
     if (!record) return;
     deps.entityCache._onRetire(record);
@@ -301,6 +343,44 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     } catch {
       // Leave cleanup_complete=0; cleanupReaper will retry.
     }
+    if (removeContext) {
+      const live = await dispatchDO<EntityRecord[]>("entityListActive", []);
+      if (!live.some((e) => e.contextId === record.contextId)) {
+        await deps.contextFolders.removeContext(record.contextId);
+      }
+    }
+  }
+
+  interface EntitySummary {
+    id: string;
+    kind: string;
+    source: string;
+    contextId: string;
+    title?: string;
+    createdAt: number;
+  }
+
+  async function listEntities(kind?: string): Promise<EntitySummary[]> {
+    const live = kind
+      ? await dispatchDO<EntityRecord[]>("entityListActiveByKind", [kind])
+      : await dispatchDO<EntityRecord[]>("entityListActive", []);
+    return live.map((record) => {
+      const stateArgs = record.stateArgs;
+      const title =
+        stateArgs != null &&
+        typeof stateArgs === "object" &&
+        typeof (stateArgs as { title?: unknown }).title === "string"
+          ? ((stateArgs as { title: string }).title as string)
+          : undefined;
+      return {
+        id: record.id,
+        kind: record.kind,
+        source: record.source.repoPath,
+        contextId: record.contextId,
+        title,
+        createdAt: record.createdAt,
+      };
+    });
   }
 
   async function resolveContext(id: string): Promise<string | null> {
@@ -319,8 +399,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         description: "Create a runtime entity (panel, worker, or DO).",
       },
       retireEntity: {
-        args: z.tuple([z.object({ id: z.string() })]),
-        description: "Retire a single entity, firing cleanup hooks.",
+        args: z.tuple([z.object({ id: z.string(), removeContext: z.boolean().optional() })]),
+        description:
+          "Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context.",
+      },
+      listEntities: {
+        args: z.tuple([
+          z.object({ kind: z.enum(["panel", "app", "worker", "do", "session"]).optional() }),
+        ]),
+        description: "List live entities (id, kind, source, contextId, title, createdAt).",
       },
       resolveContext: {
         args: z.tuple([z.string()]),
@@ -343,9 +430,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           return await createEntity(ctx.caller, spec);
         }
         case "retireEntity": {
-          const [{ id }] = args as [{ id: string }];
-          await retireEntity(id);
+          const [{ id, removeContext }] = args as [{ id: string; removeContext?: boolean }];
+          await retireEntity(id, removeContext);
           return;
+        }
+        case "listEntities": {
+          const [{ kind }] = args as [{ kind?: string }];
+          return await listEntities(kind);
         }
         case "resolveContext": {
           const [id] = args as [string];

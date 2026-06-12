@@ -51,6 +51,44 @@ function appSourceCaller() {
   });
 }
 
+function setupContextRepo() {
+  const contextsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-context-git-"));
+  const contextRoot = path.join(contextsRoot, "ctx-1");
+  const repoDir = path.join(contextRoot, "panels", "spectrolite");
+  fs.mkdirSync(repoDir, { recursive: true });
+  execGitFileSync(["init"], { cwd: repoDir, stdio: "pipe" });
+  execGitFileSync(["config", "user.email", "test@example.com"], { cwd: repoDir, stdio: "pipe" });
+  execGitFileSync(["config", "user.name", "Test User"], { cwd: repoDir, stdio: "pipe" });
+  fs.writeFileSync(path.join(repoDir, "index.ts"), "one\n");
+  execGitFileSync(["add", "--", "index.ts"], { cwd: repoDir, stdio: "pipe" });
+  execGitFileSync(["commit", "-m", "initial"], { cwd: repoDir, stdio: "pipe" });
+
+  const entityCache = new EntityCache();
+  entityCache._onActivate({
+    id: "panel-source",
+    kind: "panel",
+    source: { repoPath: "panels/source", effectiveVersion: "version-1" },
+    contextId: "ctx-1",
+    key: "panel-source",
+    createdAt: Date.now(),
+    status: "active",
+    cleanupComplete: true,
+  });
+  const service = createGitService({
+    gitServer: {} as never,
+    tokenManager: {} as never,
+    contextFolderManager: {
+      ensureContextFolder: vi.fn(async () => contextRoot),
+      getContextRoot: vi.fn((contextId: string) => (contextId === "ctx-1" ? contextRoot : null)),
+      syncDeclaredRemotes: vi.fn(),
+      ensureRepoPresentInContexts: vi.fn(),
+    },
+    entityCache,
+  });
+
+  return { repoDir, service };
+}
+
 describe("gitService", () => {
   it("runs status against the caller context repo instead of source workspace", async () => {
     const contextsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-context-git-"));
@@ -81,6 +119,7 @@ describe("gitService", () => {
       tokenManager: {} as never,
       contextFolderManager: {
         ensureContextFolder: vi.fn(async () => contextRoot),
+        getContextRoot: vi.fn((contextId: string) => (contextId === "ctx-1" ? contextRoot : null)),
         syncDeclaredRemotes: vi.fn(),
         ensureRepoPresentInContexts: vi.fn(),
       },
@@ -127,6 +166,7 @@ describe("gitService", () => {
       tokenManager: {} as never,
       contextFolderManager: {
         ensureContextFolder: vi.fn(async () => contextRoot),
+        getContextRoot: vi.fn((contextId: string) => (contextId === "ctx-1" ? contextRoot : null)),
         syncDeclaredRemotes: vi.fn(),
         ensureRepoPresentInContexts: vi.fn(),
       },
@@ -143,6 +183,106 @@ describe("gitService", () => {
     expect(porcelain).toContain("A  extra.ts");
   });
 
+  it("returns a unified diff of context repo working tree edits against HEAD", async () => {
+    const { repoDir, service } = setupContextRepo();
+    fs.writeFileSync(path.join(repoDir, "index.ts"), "two\n");
+
+    const diff = await service.handler({ caller: panelSourceCaller() }, "contextDiff", [
+      "panels/spectrolite",
+    ]);
+
+    expect(diff).toContain("--- a/index.ts");
+    expect(diff).toContain("+++ b/index.ts");
+    expect(diff).toContain("-one");
+    expect(diff).toContain("+two");
+  });
+
+  it("returns the staged diff after contextAddAll", async () => {
+    const { repoDir, service } = setupContextRepo();
+    fs.writeFileSync(path.join(repoDir, "index.ts"), "two\n");
+
+    const beforeStaging = await service.handler({ caller: panelSourceCaller() }, "contextDiff", [
+      "panels/spectrolite",
+      { staged: true },
+    ]);
+    expect(beforeStaging).toBe("");
+
+    await service.handler({ caller: panelSourceCaller() }, "contextAddAll", ["panels/spectrolite"]);
+
+    const staged = await service.handler({ caller: panelSourceCaller() }, "contextDiff", [
+      "panels/spectrolite",
+      { staged: true },
+    ]);
+    expect(staged).toContain("-one");
+    expect(staged).toContain("+two");
+  });
+
+  it("commits staged context repo changes and reports the commit", async () => {
+    const { repoDir, service } = setupContextRepo();
+    fs.writeFileSync(path.join(repoDir, "index.ts"), "two\n");
+    await service.handler({ caller: panelSourceCaller() }, "contextAddAll", ["panels/spectrolite"]);
+
+    const result = await service.handler({ caller: panelSourceCaller() }, "contextCommit", [
+      "panels/spectrolite",
+      "Update index",
+    ]);
+
+    const head = execGitFileSync(["rev-parse", "HEAD"], { cwd: repoDir, encoding: "utf-8" }).trim();
+    expect(result).toEqual({ commitId: head, summary: "Update index" });
+    const log = execGitFileSync(["log", "--format=%s"], { cwd: repoDir, encoding: "utf-8" });
+    expect(log.trim().split("\n")).toEqual(["Update index", "initial"]);
+  });
+
+  it("rejects context commits with nothing staged", async () => {
+    const { service } = setupContextRepo();
+
+    await expect(
+      service.handler({ caller: panelSourceCaller() }, "contextCommit", [
+        "panels/spectrolite",
+        "Empty commit",
+      ])
+    ).rejects.toThrow("Nothing to commit: no staged changes");
+  });
+
+  it("lets shell callers address a known context explicitly (contextId-first args)", async () => {
+    const { repoDir, service } = setupContextRepo();
+    fs.writeFileSync(path.join(repoDir, "index.ts"), "two\n");
+    const shell = createVerifiedCaller("shell:dev_cli", "shell");
+
+    const status = await service.handler({ caller: shell }, "contextStatus", [
+      "ctx-1",
+      "panels/spectrolite",
+    ]);
+    expect(status).toMatchObject({
+      dirty: true,
+      files: [{ path: "index.ts", status: "modified" }],
+    });
+
+    await service.handler({ caller: shell }, "contextAddAll", ["ctx-1", "panels/spectrolite"]);
+    const staged = await service.handler({ caller: shell }, "contextDiff", [
+      "ctx-1",
+      "panels/spectrolite",
+      { staged: true },
+    ]);
+    expect(staged).toContain("+two");
+
+    const result = (await service.handler({ caller: shell }, "contextCommit", [
+      "ctx-1",
+      "panels/spectrolite",
+      "Shell commit",
+    ])) as { summary: string };
+    expect(result.summary).toBe("Shell commit");
+  });
+
+  it("rejects shell callers naming an unknown context", async () => {
+    const { service } = setupContextRepo();
+    const shell = createVerifiedCaller("shell:dev_cli", "shell");
+
+    await expect(
+      service.handler({ caller: shell }, "contextStatus", ["ctx-unknown", "panels/spectrolite"])
+    ).rejects.toThrow("Unknown contextId: ctx-unknown");
+  });
+
   it("ensures a repo is present in existing context folders", async () => {
     const ensureRepoPresentInContexts = vi.fn(async () => undefined);
     const service = createGitService({
@@ -150,6 +290,7 @@ describe("gitService", () => {
       tokenManager: {} as never,
       contextFolderManager: {
         ensureContextFolder: vi.fn(),
+        getContextRoot: vi.fn(() => null),
         syncDeclaredRemotes: vi.fn(),
         ensureRepoPresentInContexts,
       },

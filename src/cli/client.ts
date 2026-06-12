@@ -9,79 +9,278 @@ import {
   saveCliCredentials,
   credentialPath,
 } from "./credentialStore.js";
-import { completePairing, createPairingInvite, refreshShell } from "./remoteClient.js";
-
-interface Options {
-  url?: string;
-  code?: string;
-  link?: string;
-  label?: string;
-  ttlMs?: number;
-}
+import { completePairing, createPairingInvite } from "./remoteClient.js";
+import { refreshShell } from "./rpcClient.js";
+import { agentCommands } from "./agent/index.js";
+import { fsCommands } from "./agent/fsCommands.js";
+import { gitCommands } from "./agent/gitCommands.js";
+import { evalCommands } from "./agent/evalCommand.js";
+import {
+  findCommand,
+  groupCommands,
+  parseInvocation,
+  renderGroupHelp,
+  JSON_FLAG,
+  type CliCommand,
+  type ParsedInvocation,
+} from "./commandTable.js";
+import { AuthError, UsageError, jsonMode, printError, printResult } from "./output.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+// ───────────────────────────────────────────────────────────────────────────
+// remote commands
+// ───────────────────────────────────────────────────────────────────────────
+
+async function remotePair(inv: ParsedInvocation): Promise<number> {
+  const opts: { url?: string; code?: string; link?: string; label?: string } = {};
+  if (typeof inv.flags["url"] === "string") opts.url = inv.flags["url"];
+  if (typeof inv.flags["code"] === "string") opts.code = inv.flags["code"];
+  if (typeof inv.flags["label"] === "string") opts.label = inv.flags["label"];
+  const positional = inv.positionals[0];
+  if (positional?.startsWith("natstack://")) opts.link = positional;
+  else if (positional) opts.url = positional;
+  let creds;
+  try {
+    creds = await completePairing(opts);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  saveCliCredentials(creds);
+  console.log(`paired ${creds.url}`);
+  console.log(`credentials: ${credentialPath()}`);
+  return 0;
+}
+
+async function remoteStatus(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const creds = loadCliCredentials();
+    if (!creds) throw new AuthError("not paired");
+    const refresh = await refreshShell(creds);
+    const response = await fetch(new URL("/healthz", creds.url));
+    if (!response.ok) throw new AuthError(`unreachable (${response.status})`);
+    const body = (await response.json()) as Record<string, unknown>;
+    const result = {
+      url: creds.url,
+      version: typeof body["version"] === "string" ? body["version"] : undefined,
+      workspaceId:
+        refresh.workspaceId ??
+        (typeof body["workspaceId"] === "string" ? body["workspaceId"] : undefined),
+      serverId: refresh.serverId,
+    };
+    printResult(result, {
+      json,
+      human: () => {
+        console.log(`connected: ${result.url}`);
+        if (result.version) console.log(`version: ${result.version}`);
+        if (result.workspaceId) console.log(`workspace: ${result.workspaceId}`);
+        if (result.serverId) console.log(`server: ${result.serverId}`);
+      },
+    });
+    return 0;
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+async function remoteInvite(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const creds = loadCliCredentials();
+    if (!creds) throw new AuthError("not paired");
+    let ttlMs: number | undefined;
+    if (typeof inv.flags["ttl-ms"] === "string") {
+      const value = Number(inv.flags["ttl-ms"]);
+      if (Number.isFinite(value)) ttlMs = value;
+    }
+    const invite = await createPairingInvite(creds, { ttlMs });
+    printResult(invite, {
+      json,
+      human: () => {
+        console.log(`Pairing code: ${invite.code}`);
+        console.log(`Pair URL: ${invite.deepLink}`);
+        if (typeof invite.expiresAt === "number") {
+          console.log(`Expires: ${new Date(invite.expiresAt).toISOString()}`);
+        }
+      },
+    });
+    return 0;
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
+function scriptCommand(
+  group: string,
+  name: string,
+  scriptName: string,
+  summary: string,
+  options: { aliases?: string[]; usage?: string; prependArgs?: string[] } = {}
+): CliCommand {
+  return {
+    group,
+    name,
+    aliases: options.aliases,
+    summary,
+    usage: options.usage,
+    passthrough: true,
+    run: (_inv, rawArgs) => runScript(scriptName, [...(options.prependArgs ?? []), ...rawArgs]),
+  };
+}
+
+const remoteCommands: CliCommand[] = [
+  scriptCommand(
+    "remote",
+    "start",
+    "remote-start.mjs",
+    "Launch Electron against the paired server",
+    {
+      aliases: ["desktop"],
+      usage: "natstack remote start [--pair <link>]",
+    }
+  ),
+  scriptCommand("remote", "serve", "remote-serve.mjs", "Start a QR/deep-link pairing server", {
+    aliases: ["server"],
+    usage: "natstack remote serve [--host tailscale] [--port 3030]",
+  }),
+  {
+    group: "remote",
+    name: "pair",
+    summary: "Save a CLI device credential without launching Electron",
+    usage: 'natstack remote pair "natstack://connect?url=...&code=..."',
+    flags: [
+      { name: "url", takesValue: true },
+      { name: "code", takesValue: true },
+      { name: "label", takesValue: true },
+    ],
+    run: remotePair,
+  },
+  {
+    group: "remote",
+    name: "invite",
+    summary: "Create a pairing invite for another device",
+    usage: "natstack remote invite [--ttl-ms <milliseconds>]",
+    flags: [{ name: "ttl-ms", takesValue: true }, JSON_FLAG],
+    run: remoteInvite,
+  },
+  {
+    group: "remote",
+    name: "status",
+    summary: "Check the stored credential against the server",
+    usage: "natstack remote status",
+    flags: [JSON_FLAG],
+    run: remoteStatus,
+  },
+  {
+    group: "remote",
+    name: "logout",
+    summary: "Remove the stored CLI device credential",
+    usage: "natstack remote logout",
+    run: async () => {
+      clearCliCredentials();
+      console.log("logged out");
+      return 0;
+    },
+  },
+  {
+    group: "remote",
+    name: "discover",
+    summary: "Print NatStack servers discovered on the tailnet",
+    usage: "natstack remote discover",
+    run: async () => {
+      const servers = await discoverNatstackServers();
+      for (const server of servers) console.log(server.url);
+      return 0;
+    },
+  },
+];
+
+const mobileCommands: CliCommand[] = [
+  scriptCommand("mobile", "pair", "mobile-pair.mjs", "Start the QR/deep-link pairing server", {
+    usage: "natstack mobile pair [--host tailscale] [--port 3030]",
+  }),
+  scriptCommand("mobile", "dev", "mobile-dev.mjs", "Metro + local server + debug APK", {
+    usage: "natstack mobile dev [--avd <name>] [--device <serial>]",
+  }),
+  scriptCommand(
+    "mobile",
+    "smoke",
+    "mobile-smoke.mjs",
+    "Verify the installed internal APK can pair and reach the workspace app",
+    {
+      usage: "natstack mobile smoke [--avd <name>] [--device <serial>]",
+    }
+  ),
+  scriptCommand("mobile", "build", "mobile-install.mjs", "Build the trusted internal APK", {
+    aliases: ["apk"],
+    usage: "natstack mobile build",
+    prependArgs: ["--build-only"],
+  }),
+  scriptCommand("mobile", "install", "mobile-install.mjs", "Install the internal APK", {
+    usage: "natstack mobile install [--device <serial>] [--launch]",
+  }),
+  scriptCommand("mobile", "logs", "mobile-logs.mjs", "Tail app logs from a device", {
+    usage: "natstack mobile logs [--device <serial>]",
+  }),
+  scriptCommand("mobile", "emulator", "mobile-emulator.mjs", "Start an Android emulator", {
+    usage: "natstack mobile emulator [--avd <name>]",
+  }),
+];
+
+/**
+ * The full command registry. Extension point: later command groups
+ * (fs, git, eval, ...) append their `CliCommand[]` here.
+ */
+const commandRegistry: CliCommand[] = [
+  ...remoteCommands,
+  ...mobileCommands,
+  ...agentCommands,
+  ...fsCommands,
+  ...gitCommands,
+  ...evalCommands,
+];
+
+const GROUP_ORDER = ["remote", "mobile", "agent", "fs", "git", "eval"];
+
 export async function main(argv: string[]): Promise<number> {
-  const [command, ...rest] = argv;
-  if (!command || command === "--help" || command === "help") {
+  const [group, ...rest] = argv;
+  if (!group || group === "--help" || group === "help") {
     printHelp();
     return 0;
   }
-  if (command === "remote") return remote(rest);
-  if (command === "mobile") return mobile(rest);
-  console.error(`Unknown command: ${command}`);
-  printHelp();
-  return 2;
-}
-
-async function remote(argv: string[]): Promise<number> {
-  const [subcommand, ...rest] = argv;
-  if (!subcommand || subcommand === "--help" || subcommand === "help") {
-    printRemoteHelp();
+  if (!GROUP_ORDER.includes(group)) {
+    console.error(`Unknown command: ${group}`);
+    printHelp();
+    return 2;
+  }
+  const [sub, ...subArgs] = rest;
+  if (!sub || sub === "--help" || sub === "help") {
+    printGroupHelp(group);
     return 0;
   }
-  if (subcommand === "start" || subcommand === "desktop") {
-    return runScript("remote-start.mjs", rest);
+  const command = findCommand(commandRegistry, group, sub);
+  if (!command) {
+    console.error(`Unknown ${group} command: ${sub}`);
+    printGroupHelp(group);
+    return 2;
   }
-  if (subcommand === "serve" || subcommand === "server") {
-    return runScript("remote-serve.mjs", rest);
+  if (command.passthrough) {
+    return await command.run({ positionals: subArgs, flags: {} }, subArgs);
   }
-  if (subcommand === "pair") return pair(rest);
-  if (subcommand === "invite") return invite(rest);
-  if (subcommand === "status") return status();
-  if (subcommand === "logout") {
-    clearCliCredentials();
-    console.log("logged out");
-    return 0;
+  let inv: ParsedInvocation;
+  try {
+    inv = parseInvocation(command, subArgs);
+  } catch (error) {
+    if (error instanceof UsageError) {
+      console.error(error.message);
+      if (command.usage) console.error(`Usage: ${command.usage}`);
+      return error.exitCode;
+    }
+    throw error;
   }
-  if (subcommand === "discover") {
-    const servers = await discoverNatstackServers();
-    for (const server of servers) console.log(server.url);
-    return 0;
-  }
-  console.error(`Unknown remote command: ${subcommand}`);
-  printRemoteHelp();
-  return 2;
-}
-
-async function mobile(argv: string[]): Promise<number> {
-  const [subcommand, ...rest] = argv;
-  if (!subcommand || subcommand === "--help" || subcommand === "help") {
-    printMobileHelp();
-    return 0;
-  }
-  if (subcommand === "pair") return runScript("mobile-pair.mjs", rest);
-  if (subcommand === "dev") return runScript("mobile-dev.mjs", rest);
-  if (subcommand === "smoke") return runScript("mobile-smoke.mjs", rest);
-  if (subcommand === "build" || subcommand === "apk") {
-    return runScript("mobile-install.mjs", ["--build-only", ...rest]);
-  }
-  if (subcommand === "install") return runScript("mobile-install.mjs", rest);
-  if (subcommand === "logs") return runScript("mobile-logs.mjs", rest);
-  if (subcommand === "emulator") return runScript("mobile-emulator.mjs", rest);
-  console.error(`Unknown mobile command: ${subcommand}`);
-  printMobileHelp();
-  return 2;
+  return await command.run(inv, subArgs);
 }
 
 function runScript(scriptName: string, argv: string[]): Promise<number> {
@@ -106,152 +305,22 @@ function runScript(scriptName: string, argv: string[]): Promise<number> {
   });
 }
 
-async function pair(argv: string[]): Promise<number> {
-  const opts = parseOptions(argv);
-  if (argv[0] && argv[0].startsWith("natstack://")) {
-    opts.link = argv[0];
-  } else if (argv[0] && !argv[0].startsWith("--")) {
-    opts.url = argv[0];
-  }
-  let creds;
-  try {
-    creds = await completePairing(opts);
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    return 1;
-  }
-  saveCliCredentials(creds);
-  console.log(`paired ${creds.url}`);
-  console.log(`credentials: ${credentialPath()}`);
-  return 0;
-}
-
-async function status(): Promise<number> {
-  const creds = loadCliCredentials();
-  if (!creds) {
-    console.log("not paired");
-    return 1;
-  }
-  let refresh;
-  try {
-    refresh = await refreshShell(creds);
-  } catch (error) {
-    console.log(`not connected: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
-  }
-  const response = await fetch(new URL("/healthz", creds.url));
-  if (!response.ok) {
-    console.log(`unreachable (${response.status})`);
-    return 1;
-  }
-  const body = (await response.json()) as Record<string, unknown>;
-  console.log(`connected: ${creds.url}`);
-  if (typeof body["version"] === "string") console.log(`version: ${body["version"]}`);
-  const workspaceId =
-    typeof refresh["workspaceId"] === "string"
-      ? refresh["workspaceId"]
-      : typeof body["workspaceId"] === "string"
-        ? body["workspaceId"]
-        : undefined;
-  if (workspaceId) console.log(`workspace: ${workspaceId}`);
-  if (typeof refresh["serverId"] === "string") console.log(`server: ${refresh["serverId"]}`);
-  return 0;
-}
-
-async function invite(argv: string[]): Promise<number> {
-  const opts = parseOptions(argv);
-  const creds = loadCliCredentials();
-  if (!creds) {
-    console.error("not paired");
-    return 1;
-  }
-  let invite;
-  try {
-    invite = await createPairingInvite(creds, { ttlMs: opts.ttlMs });
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    return 1;
-  }
-  console.log(`Pairing code: ${invite.code}`);
-  console.log(`Pair URL: ${invite.deepLink}`);
-  if (typeof invite.expiresAt === "number") {
-    console.log(`Expires: ${new Date(invite.expiresAt).toISOString()}`);
-  }
-  return 0;
-}
-
-function parseOptions(argv: string[]): Options {
-  const opts: Options = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--url") opts.url = argv[++i];
-    else if (arg === "--code") opts.code = argv[++i];
-    else if (arg === "--label") opts.label = argv[++i];
-    else if (arg === "--ttl-ms") {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value)) opts.ttlMs = value;
-    }
-  }
-  return opts;
-}
-
 function printHelp(): void {
+  const sections = GROUP_ORDER.map((group) => renderGroupHelp(commandRegistry, group)).join("\n");
   console.log(`natstack
 
 Usage:
-  natstack remote start [--pair <link>]
-  natstack remote serve [--host tailscale] [--port 3030]
-  natstack remote pair "natstack://connect?url=...&code=..."
-  natstack remote invite [--ttl-ms <milliseconds>]
-  natstack remote status
-  natstack mobile pair [--host tailscale] [--port 3030]
-  natstack mobile build
-  natstack mobile install [--launch]
-  natstack mobile dev
-  natstack mobile smoke [--device <serial>]
+${sections}
 
 Credentials are stored as a 0600 JSON file at ${credentialPath()}.
 `);
 }
 
-function printRemoteHelp(): void {
-  console.log(`natstack remote
+function printGroupHelp(group: string): void {
+  console.log(`natstack ${group}
 
 Usage:
-  natstack remote start [--pair <link>]
-  natstack remote start
-  natstack remote serve [--host tailscale] [--port 3030]
-  natstack remote pair "natstack://connect?url=...&code=..."
-  natstack remote invite [--ttl-ms <milliseconds>]
-  natstack remote status
-  natstack remote logout
-  natstack remote discover
-
-Notes:
-  start launches Electron against the paired remote server.
-  start uses built Electron artifacts even when invoked through pnpm cli.
-  serve starts a QR/deep-link pairing server for phones and laptops.
-  pair saves the CLI device credential without launching Electron.
-`);
-}
-
-function printMobileHelp(): void {
-  console.log(`natstack mobile
-
-Usage:
-  natstack mobile pair [--host tailscale] [--port 3030]
-  natstack mobile dev [--avd <name>] [--device <serial>]
-  natstack mobile smoke [--avd <name>] [--device <serial>]
-  natstack mobile build
-  natstack mobile install [--device <serial>] [--launch]
-  natstack mobile logs [--device <serial>]
-  natstack mobile emulator [--avd <name>]
-
-Notes:
-  pair starts the QR/deep-link pairing server.
-  dev starts Metro, a disposable local server, installs the debug APK, and launches it.
-  smoke verifies the installed internal APK can accept a connect link and reach the workspace app.
-  build and install use the trusted internal Android variant.
+${renderGroupHelp(commandRegistry, group)}
 `);
 }
 
@@ -263,3 +332,5 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       process.exit(1);
     });
 }
+
+export { commandRegistry, groupCommands };

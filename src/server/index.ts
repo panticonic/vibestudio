@@ -1444,6 +1444,7 @@ async function main() {
           doDispatch,
           workspaceId: workspace.config.id,
           entityCache,
+          contextFolders: contextFolderManager,
           hooks: {
             prepareDurableObject: (args) => workerdManager.ensureDurableObjectEntity(args),
             prepareWorker: (args) => workerdManager.startWorker(args),

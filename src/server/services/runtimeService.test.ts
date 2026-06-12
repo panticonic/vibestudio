@@ -82,6 +82,21 @@ interface BuildDepsOptions {
   >[0]["canCreateCrossContextEntity"];
 }
 
+/** In-memory context-folder fake tracking which contexts exist. */
+function contextFoldersFake() {
+  const existing = new Set<string>();
+  return {
+    existing,
+    ensureContextFolder: vi.fn(async (contextId: string) => {
+      existing.add(contextId);
+      return `/tmp/contexts/${contextId}`;
+    }),
+    removeContext: vi.fn(async (contextId: string) => {
+      existing.delete(contextId);
+    }),
+  };
+}
+
 async function buildDeps(opts: BuildDepsOptions = {}) {
   const { instance } = await createTestDO(WorkspaceDOTestable);
   const { dispatch, spy } = makeDODispatch(instance);
@@ -101,6 +116,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
       targetId: `target:worker:${args.source}:${args.key}`,
       effectiveVersion: "ev-worker",
     }));
+  const contextFolders = contextFoldersFake();
   const onRetire = opts.onRetire ?? vi.fn(async () => {});
   const resolvePanelEffectiveVersion =
     opts.resolvePanelEffectiveVersion ?? vi.fn(async () => "ev-panel");
@@ -118,6 +134,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     },
     capability: { approvalQueue, grantStore },
     entityCache,
+    contextFolders,
     setEntityTitle: opts.setEntityTitle,
     canCreateCrossContextEntity: opts.canCreateCrossContextEntity,
   });
@@ -127,6 +144,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     service,
     spy,
     entityCache,
+    contextFolders,
     approvalQueue,
     grantStore,
     prepareDurableObject,
@@ -700,5 +718,169 @@ describe("runtimeService singleton DO + cross-panel sharing", () => {
 
     expect(agent.contextId).toBe("ctx-host");
     expect(instance.entityResolve(agent.id)?.contextId).toBe("ctx-host");
+  });
+});
+
+describe("runtimeService session entities", () => {
+  const sessionSpec = (
+    overrides: Partial<Extract<RuntimeEntityCreateSpec, { kind: "session" }>> = {}
+  ): RuntimeEntityCreateSpec => ({
+    kind: "session",
+    source: "agent-cli",
+    ...overrides,
+  });
+
+  it("creates an inert session entity and eagerly materializes its context folder", async () => {
+    const setEntityTitle = vi.fn();
+    const { service, entityCache, contextFolders, prepareDurableObject, prepareWorker } =
+      await buildDeps({ setEntityTitle });
+
+    const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
+      sessionSpec({ key: "s1", title: "My agent session" }),
+    ])) as { id: string; kind: string; contextId: string; targetId: string };
+
+    expect(handle.kind).toBe("session");
+    expect(handle.id).toBe("session:s1");
+    expect(handle.targetId).toBe(handle.id);
+    expect(handle.contextId).toMatch(/^[0-9a-f-]{36}$/); // fresh UUID minted
+    // Context folder materialized eagerly.
+    expect(contextFolders.ensureContextFolder).toHaveBeenCalledWith(handle.contextId);
+    expect(contextFolders.existing.has(handle.contextId)).toBe(true);
+    // No workerd/panel runtime prep.
+    expect(prepareDurableObject).not.toHaveBeenCalled();
+    expect(prepareWorker).not.toHaveBeenCalled();
+    // Cache + title registry updated.
+    expect(entityCache.resolveActive(handle.id)).toMatchObject({
+      kind: "session",
+      source: { repoPath: "agent-cli", effectiveVersion: "" },
+      stateArgs: { title: "My agent session" },
+    });
+    expect(setEntityTitle).toHaveBeenCalledWith(handle.id, "My agent session", {
+      explicit: true,
+    });
+  });
+
+  it("honors an explicitly supplied contextId", async () => {
+    const { service, contextFolders } = await buildDeps();
+    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
+      sessionSpec({ contextId: "ctx-given" }),
+    ])) as { contextId: string };
+    expect(handle.contextId).toBe("ctx-given");
+    expect(contextFolders.ensureContextFolder).toHaveBeenCalledWith("ctx-given");
+  });
+
+  it("allows harness callers and rejects non-host callers", async () => {
+    const { service } = await buildDeps();
+    const harnessCaller = createVerifiedCaller("harness:cli", "harness");
+    await expect(
+      service.handler({ caller: harnessCaller }, "createEntity", [sessionSpec()])
+    ).resolves.toMatchObject({ kind: "session" });
+
+    await expect(
+      service.handler({ caller: panelCaller() }, "createEntity", [sessionSpec()])
+    ).rejects.toThrow(/host-managed/);
+  });
+
+  it("resolves and lists session entities", async () => {
+    const { service } = await buildDeps();
+    const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
+      sessionSpec({ key: "s-list", title: "Listed session" }),
+    ])) as { id: string; contextId: string };
+    // Create a worker too, so kind filtering is observable.
+    await service.handler({ caller: serverCaller }, "createEntity", [
+      { kind: "worker", source: "workers/w", key: "w1", contextId: "ctx-w" },
+    ]);
+
+    const resolved = await service.handler({ caller: shellCaller }, "resolveContext", [handle.id]);
+    expect(resolved).toBe(handle.contextId);
+
+    const all = (await service.handler({ caller: shellCaller }, "listEntities", [{}])) as Array<{
+      id: string;
+      kind: string;
+    }>;
+    expect(all.map((e) => e.kind).sort()).toEqual(["session", "worker"]);
+
+    const sessions = (await service.handler({ caller: shellCaller }, "listEntities", [
+      { kind: "session" },
+    ])) as Array<{
+      id: string;
+      kind: string;
+      source: string;
+      contextId: string;
+      title?: string;
+      createdAt: number;
+    }>;
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]).toMatchObject({
+      id: handle.id,
+      kind: "session",
+      source: "agent-cli",
+      contextId: handle.contextId,
+      title: "Listed session",
+    });
+    expect(sessions[0]?.createdAt).toBeGreaterThan(0);
+  });
+
+  it("retire with removeContext deletes the context folder when no live entity shares it", async () => {
+    const { service, contextFolders, instance } = await buildDeps();
+    const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
+      sessionSpec({ key: "s-rm" }),
+    ])) as { id: string; contextId: string };
+    expect(contextFolders.existing.has(handle.contextId)).toBe(true);
+
+    await service.handler({ caller: shellCaller }, "retireEntity", [
+      { id: handle.id, removeContext: true },
+    ]);
+
+    expect(instance.entityResolve(handle.id)?.status).toBe("retired");
+    expect(contextFolders.removeContext).toHaveBeenCalledWith(handle.contextId);
+    expect(contextFolders.existing.has(handle.contextId)).toBe(false);
+  });
+
+  it("retire with removeContext keeps the folder when another live entity shares the context", async () => {
+    const { service, contextFolders } = await buildDeps();
+    const session = (await service.handler({ caller: shellCaller }, "createEntity", [
+      sessionSpec({ key: "s-shared", contextId: "ctx-shared" }),
+    ])) as { id: string };
+    await service.handler({ caller: serverCaller }, "createEntity", [
+      { kind: "worker", source: "workers/w", key: "w-shared", contextId: "ctx-shared" },
+    ]);
+
+    await service.handler({ caller: shellCaller }, "retireEntity", [
+      { id: session.id, removeContext: true },
+    ]);
+
+    expect(contextFolders.removeContext).not.toHaveBeenCalled();
+    expect(contextFolders.existing.has("ctx-shared")).toBe(true);
+  });
+
+  it("re-creating a session key after retire+removeContext reuses its contextId and re-materializes the folder", async () => {
+    const { service, contextFolders } = await buildDeps();
+    const first = (await service.handler({ caller: shellCaller }, "createEntity", [
+      sessionSpec({ key: "s-again" }),
+    ])) as { id: string; contextId: string };
+    await service.handler({ caller: shellCaller }, "retireEntity", [
+      { id: first.id, removeContext: true },
+    ]);
+    expect(contextFolders.existing.has(first.contextId)).toBe(false);
+
+    const second = (await service.handler({ caller: shellCaller }, "createEntity", [
+      sessionSpec({ key: "s-again" }),
+    ])) as { id: string; contextId: string };
+    expect(second.id).toBe(first.id);
+    expect(second.contextId).toBe(first.contextId);
+    expect(contextFolders.existing.has(first.contextId)).toBe(true);
+  });
+
+  it("retire without removeContext keeps the context folder", async () => {
+    const { service, contextFolders } = await buildDeps();
+    const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
+      sessionSpec({ key: "s-keep" }),
+    ])) as { id: string; contextId: string };
+
+    await service.handler({ caller: shellCaller }, "retireEntity", [{ id: handle.id }]);
+
+    expect(contextFolders.removeContext).not.toHaveBeenCalled();
+    expect(contextFolders.existing.has(handle.contextId)).toBe(true);
   });
 });

@@ -159,6 +159,10 @@ describe("panel navigation: capability grants and retire hooks", () => {
       },
       capability: { approvalQueue, grantStore },
       entityCache,
+      contextFolders: {
+        ensureContextFolder: vi.fn(async (contextId: string) => `/tmp/contexts/${contextId}`),
+        removeContext: vi.fn(async () => {}),
+      },
     });
 
     const handle = (await service.handler(

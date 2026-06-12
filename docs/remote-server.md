@@ -404,6 +404,28 @@ Use this checklist after changes to pairing or remote bootstrap:
 
 Electron stores its own UI state (window position, session data, etc.) in `~/.config/natstack/remote-state/` rather than in a workspace-specific directory.
 
+## Agent CLI
+
+A paired device credential also powers the headless agent CLI (`pnpm cli`, or
+`dist/cli/client.mjs` in a packaged build), which talks to the server over
+`POST /rpc` with short-lived shell tokens:
+
+```bash
+natstack remote pair "natstack://connect?url=...&code=..."   # store the device credential
+natstack agent attach            # create a durable session entity + context folder
+natstack fs ls /                 # files inside the session context
+natstack git status --repo panels/notes
+natstack eval run -e 'return await services.meta.listServices()'
+natstack agent call SERVICE.METHOD 'ARGS_JSON'               # any shell-callable RPC
+```
+
+Sessions are `session` runtime entities; their context folders live under the
+workspace state dir at `state/.contexts/{contextId}`. Output is JSON whenever
+stdout is piped, making the CLI scriptable from coding agents. Full
+documentation ships as a Claude Code skill: `natstack agent skill install`
+copies it to `./.claude/skills/natstack-agent` (source: `skills/natstack-agent/`,
+service reference regenerated with `pnpm generate:agent-docs`).
+
 ## Gateway Routing
 
 The standalone server runs a single-port gateway that multiplexes all traffic:

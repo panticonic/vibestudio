@@ -66,9 +66,9 @@ Stores external dependency installs (npm `node_modules`) for panels and workers,
 
 Stores extension runtime dependency installs for packages esbuild leaves external, keyed by dependency hash plus platform, architecture, and Node ABI. Unlike `external-deps/`, this cache may run package lifecycle scripts because extension install/update approval grants native-code trust.
 
-### `context-scopes/`
+### `.contexts/`
 
-Per-workspace, per-context filesystem scopes at `{userData}/context-scopes/{workspaceId}/{contextId}/`. Each context gets an isolated filesystem root.
+Per-context filesystem scopes at `workspaces/{name}/state/.contexts/{contextId}/` (the server's state directory is already per-workspace, so there is no workspace level inside it). Each context gets an isolated filesystem root managed by `ContextFolderManager` and used by sessions, panels, workers, and DOs.
 
 ### `.databases/workerd-do/`
 

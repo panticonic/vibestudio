@@ -42,7 +42,7 @@ function createWorkspaceMemory() {
   }
   interface MemEntity {
     id: string;
-    kind: "panel" | "app" | "worker" | "do";
+    kind: "panel" | "app" | "worker" | "do" | "session";
     source: string;
     contextId: string;
     status: "active" | "retired";

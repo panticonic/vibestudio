@@ -6,7 +6,7 @@
  * write-once; lifecycle (status, retiredAt, cleanupComplete, error) is mutable.
  */
 
-export type EntityKind = "panel" | "app" | "worker" | "do" | "shell" | "server";
+export type EntityKind = "panel" | "app" | "worker" | "do" | "session" | "shell" | "server";
 
 export interface EntitySource {
   repoPath: string;
@@ -66,11 +66,19 @@ export type RuntimeEntityCreateSpec =
       className: string;
       key?: string;
       contextId?: string | null;
+    }
+  | {
+      /** Inert session entity: no workerd/panel runtime, just identity + context. */
+      kind: "session";
+      source: string;
+      contextId?: string | null;
+      key?: string;
+      title?: string;
     };
 
 export interface RuntimeEntityHandle {
   id: string;
-  kind: "panel" | "app" | "worker" | "do";
+  kind: "panel" | "app" | "worker" | "do" | "session";
   source: EntitySource;
   contextId: string;
   targetId: string;
@@ -82,6 +90,7 @@ export interface RuntimeEntityHandle {
  * - app: `app:<source>:<key>`
  * - worker: `worker:<source>:<key>`
  * - do: `do:<source>:<className>:<key>`
+ * - session: `session:<key>`
  */
 export function canonicalEntityId(args: {
   kind: EntityKind;
@@ -102,6 +111,8 @@ export function canonicalEntityId(args: {
       if (!args.source) throw new Error("do entity requires source");
       if (!args.className) throw new Error("do entity requires className");
       return `do:${args.source}:${args.className}:${args.key}`;
+    case "session":
+      return `session:${args.key}`;
     case "shell":
       return `shell:${args.key}`;
     case "server":

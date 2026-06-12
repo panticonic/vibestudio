@@ -8,6 +8,10 @@ import { parseConnectLink, parseConnectServerUrl } from "./lib/connect-utils.mjs
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 
+// NOTE: minimal inline copy of src/cli/credentialStore.ts. This script runs
+// as a plain .mjs (spawned by the CLI and runnable standalone before any
+// build exists), so it cannot import the TypeScript CLI modules; like the
+// other scripts here it only shares code via scripts/cli/lib/*.mjs.
 function credentialPath() {
   return path.join(os.homedir(), ".config", "natstack", "cli-credentials.json");
 }

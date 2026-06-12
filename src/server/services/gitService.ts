@@ -50,9 +50,9 @@ type GitServiceDeps = {
   workspaceConfig?: WorkspaceConfig;
   contextFolderManager?: Pick<
     ContextFolderManager,
-    "ensureContextFolder" | "syncDeclaredRemotes" | "ensureRepoPresentInContexts"
+    "ensureContextFolder" | "getContextRoot" | "syncDeclaredRemotes" | "ensureRepoPresentInContexts"
   >;
-  entityCache?: Pick<EntityCache, "resolveContext">;
+  entityCache?: Pick<EntityCache, "resolveContext" | "listActive">;
   egressProxy?: Pick<EgressProxy, "forwardGitHttp">;
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
@@ -107,6 +107,9 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
   const completeWorkspaceDependenciesSchema = z.object({
     credentialId: z.string().optional(),
   });
+  const contextDiffOptionsSchema = z.object({
+    staged: z.boolean().optional(),
+  });
   return {
     name: "git",
     description: "Git operations and scoped filesystem access for panels",
@@ -115,8 +118,29 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
       getWorkspaceTree: { args: z.tuple([]) },
       findRepoForPath: { args: z.tuple([z.string()]) },
       status: { args: z.tuple([z.string()]) },
-      contextStatus: { args: z.tuple([z.string()]) },
-      contextAddAll: { args: z.tuple([z.string()]) },
+      // context* methods: entity callers (panel/app/worker/do/extension) pass
+      // [repoPath, ...]; explicit-context callers (server/shell/harness) prepend
+      // their contextId: [contextId, repoPath, ...] — same convention as fs.*.
+      contextStatus: {
+        args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
+      },
+      contextAddAll: {
+        args: z.union([z.tuple([z.string()]), z.tuple([z.string(), z.string()])]),
+      },
+      contextDiff: {
+        args: z.union([
+          z.tuple([z.string()]),
+          z.tuple([z.string(), contextDiffOptionsSchema.optional()]),
+          z.tuple([z.string(), z.string()]),
+          z.tuple([z.string(), z.string(), contextDiffOptionsSchema.optional()]),
+        ]),
+      },
+      contextCommit: {
+        args: z.union([
+          z.tuple([z.string(), z.string()]),
+          z.tuple([z.string(), z.string(), z.string()]),
+        ]),
+      },
       listBranches: { args: z.tuple([z.string()]) },
       listCommits: { args: z.tuple([z.string(), z.string(), z.number()]) },
       resolveRef: { args: z.tuple([z.string(), z.string()]) },
@@ -152,10 +176,28 @@ export function createGitService(deps: GitServiceDeps): ServiceDefinition {
         }
         case "status":
           return g.status(args[0] as string);
-        case "contextStatus":
-          return contextGitStatus(ctx, deps, args[0] as string);
-        case "contextAddAll":
-          return contextGitAddAll(ctx, deps, args[0] as string);
+        case "contextStatus": {
+          const { contextId, rest } = splitExplicitContextArgs(ctx, args);
+          return contextGitStatus(ctx, deps, rest[0] as string, contextId);
+        }
+        case "contextAddAll": {
+          const { contextId, rest } = splitExplicitContextArgs(ctx, args);
+          return contextGitAddAll(ctx, deps, rest[0] as string, contextId);
+        }
+        case "contextDiff": {
+          const { contextId, rest } = splitExplicitContextArgs(ctx, args);
+          return contextGitDiff(
+            ctx,
+            deps,
+            rest[0] as string,
+            rest[1] as { staged?: boolean } | undefined,
+            contextId
+          );
+        }
+        case "contextCommit": {
+          const { contextId, rest } = splitExplicitContextArgs(ctx, args);
+          return contextGitCommit(ctx, deps, rest[0] as string, rest[1] as string, contextId);
+        }
         case "listBranches":
           return g.listBranches(args[0] as string);
         case "listCommits": {
@@ -407,22 +449,64 @@ type ContextRepoStatus = {
   }>;
 };
 
+/** Caller kinds without a context-bound entity: they name the context explicitly. */
+const EXPLICIT_CONTEXT_CALLER_KINDS = new Set(["server", "shell", "harness"]);
+
+/**
+ * For server/shell/harness callers the first argument of a context git call is
+ * the contextId (same convention as fs.*); entity-bound callers (panel, app,
+ * worker, do, extension) resolve their context from the EntityCache instead.
+ */
+function splitExplicitContextArgs(
+  ctx: ServiceContext,
+  args: unknown[]
+): { contextId?: string; rest: unknown[] } {
+  if (!EXPLICIT_CONTEXT_CALLER_KINDS.has(ctx.caller.runtime.kind)) {
+    return { rest: args };
+  }
+  const [contextId, ...rest] = args;
+  if (typeof contextId !== "string" || !contextId) {
+    throw new Error(
+      `${ctx.caller.runtime.kind} context git calls must provide contextId as first argument`
+    );
+  }
+  return { contextId, rest };
+}
+
 async function resolveContextRepoDir(
   ctx: ServiceContext,
   deps: GitServiceDeps,
-  repoPathInput: string
+  repoPathInput: string,
+  explicitContextId?: string
 ): Promise<{ repoPath: string; repoDir: string }> {
   if (!deps.contextFolderManager || !deps.entityCache) {
     throw new Error("Context git operations are unavailable");
   }
 
-  const contextCallerId =
-    ctx.caller.runtime.kind === "extension" && ctx.chainCaller
-      ? ctx.chainCaller.callerId
-      : ctx.caller.runtime.id;
-  const contextId = deps.entityCache.resolveContext(contextCallerId);
-  if (!contextId) {
-    throw new Error(`No context registered for caller ${contextCallerId}`);
+  let contextId: string;
+  if (explicitContextId !== undefined) {
+    // Shell/harness callers may only address contexts that already exist (a
+    // context folder on disk, or an active entity bound to the context);
+    // server callers are trusted to create contexts. Mirrors fsService.
+    if (ctx.caller.runtime.kind !== "server") {
+      const known =
+        deps.contextFolderManager.getContextRoot(explicitContextId) !== null ||
+        deps.entityCache.listActive().some((record) => record.contextId === explicitContextId);
+      if (!known) {
+        throw new Error(`Unknown contextId: ${explicitContextId}`);
+      }
+    }
+    contextId = explicitContextId;
+  } else {
+    const contextCallerId =
+      ctx.caller.runtime.kind === "extension" && ctx.chainCaller
+        ? ctx.chainCaller.callerId
+        : ctx.caller.runtime.id;
+    const resolved = deps.entityCache.resolveContext(contextCallerId);
+    if (!resolved) {
+      throw new Error(`No context registered for caller ${contextCallerId}`);
+    }
+    contextId = resolved;
   }
 
   const repoPath = normalizeWorkspaceRepoPath(repoPathInput);
@@ -439,9 +523,10 @@ async function resolveContextRepoDir(
 async function contextGitStatus(
   ctx: ServiceContext,
   deps: GitServiceDeps,
-  repoPathInput: string
+  repoPathInput: string,
+  explicitContextId?: string
 ): Promise<ContextRepoStatus> {
-  const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput);
+  const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput, explicitContextId);
   const [branchResult, commitResult, porcelain] = await Promise.allSettled([
     runContextGit(repoDir, ["branch", "--show-current"]),
     runContextGit(repoDir, ["rev-parse", "--verify", "HEAD"]),
@@ -473,10 +558,44 @@ async function contextGitStatus(
 async function contextGitAddAll(
   ctx: ServiceContext,
   deps: GitServiceDeps,
-  repoPathInput: string
+  repoPathInput: string,
+  explicitContextId?: string
 ): Promise<void> {
-  const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput);
+  const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput, explicitContextId);
   await execGitFileAsync(["add", "-A", "--", "."], { cwd: repoDir });
+}
+
+async function contextGitDiff(
+  ctx: ServiceContext,
+  deps: GitServiceDeps,
+  repoPathInput: string,
+  options?: { staged?: boolean },
+  explicitContextId?: string
+): Promise<string> {
+  const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput, explicitContextId);
+  return runContextGit(repoDir, options?.staged ? ["diff", "--cached"] : ["diff", "HEAD"]);
+}
+
+async function contextGitCommit(
+  ctx: ServiceContext,
+  deps: GitServiceDeps,
+  repoPathInput: string,
+  message: string,
+  explicitContextId?: string
+): Promise<{ commitId: string; summary: string }> {
+  const { repoDir } = await resolveContextRepoDir(ctx, deps, repoPathInput, explicitContextId);
+  if (!message.trim()) throw new Error("Commit message is required");
+  const staged = await runContextGit(repoDir, ["diff", "--cached", "--name-only"]);
+  if (!staged.trim()) {
+    throw new Error("Nothing to commit: no staged changes");
+  }
+  await execGitFileAsync(
+    ["-c", "user.email=natstack@local", "-c", "user.name=natstack", "commit", "-m", message],
+    { cwd: repoDir }
+  );
+  const commitId = (await runContextGit(repoDir, ["rev-parse", "HEAD"])).trim();
+  const summary = (await runContextGit(repoDir, ["log", "-1", "--format=%s"])).trim();
+  return { commitId, summary };
 }
 
 async function runContextGit(repoDir: string, args: readonly string[]): Promise<string> {
