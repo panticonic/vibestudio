@@ -22,6 +22,7 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { parseConnectLink } from "@natstack/shared/connect";
 import { name as appName } from "./app.json";
 
 const RN_HOST_ABI = "rn-host-1";
@@ -42,66 +43,9 @@ function missingNativeHostError() {
 
 function parseConnectDeepLink(rawUrl) {
   if (typeof rawUrl !== "string" || !rawUrl.startsWith("natstack://connect")) return null;
-  const queryStart = rawUrl.indexOf("?");
-  if (queryStart < 0) throw new Error("Connect link is missing url or code");
-  const params = parseQuery(rawUrl.slice(queryStart + 1));
-  const serverUrl = params.get("url");
-  const code = params.get("code");
-  if (!serverUrl || !code) {
-    throw new Error("Connect link is missing url or code");
-  }
-  return { serverUrl: normalizeServerUrl(serverUrl), code: validatePairingCode(code) };
-}
-
-function parseQuery(query) {
-  const params = new Map();
-  for (const part of query.split("&")) {
-    if (!part) continue;
-    const separator = part.indexOf("=");
-    const rawKey = separator >= 0 ? part.slice(0, separator) : part;
-    const rawValue = separator >= 0 ? part.slice(separator + 1) : "";
-    params.set(decodeQueryComponent(rawKey), decodeQueryComponent(rawValue));
-  }
-  return params;
-}
-
-function decodeQueryComponent(value) {
-  try {
-    return decodeURIComponent(value.replace(/\+/g, " "));
-  } catch {
-    throw new Error("Connect link is invalid");
-  }
-}
-
-function normalizeServerUrl(rawUrl) {
-  let parsed;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
-    throw new Error(`Connect link server URL is not supported: ${rawUrl}`);
-  }
-  const protocol = parsed.protocol.toLowerCase();
-  if (protocol !== "http:" && protocol !== "https:") {
-    throw new Error("Connect link server URL must use http:// or https://");
-  }
-  if (
-    !parsed.hostname ||
-    parsed.username ||
-    parsed.password ||
-    (parsed.pathname && parsed.pathname !== "/") ||
-    parsed.search ||
-    parsed.hash
-  ) {
-    throw new Error("Connect link server URL must be a server origin without a path");
-  }
-  return `${protocol}//${parsed.host}`;
-}
-
-function validatePairingCode(code) {
-  if (!/^[A-Za-z0-9_-]{16,512}$/.test(code)) {
-    throw new Error("Connect link pairing code has an unexpected format");
-  }
-  return code;
+  const parsed = parseConnectLink(rawUrl);
+  if (parsed.kind === "error") throw new Error(parsed.reason);
+  return { serverUrl: parsed.url, code: parsed.code };
 }
 
 async function markConnectLinkConsumed(rawUrl) {

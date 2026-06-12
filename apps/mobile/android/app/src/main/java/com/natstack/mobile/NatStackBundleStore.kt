@@ -26,6 +26,14 @@ object NatStackBundleStore {
         return null
     }
 
+    fun activeBundlePathIfMatches(context: Context, buildKey: String, integrity: String): String? {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val currentBuildKey = prefs.getString(ACTIVE_BUILD_KEY, null) ?: return null
+        val currentIntegrity = prefs.getString(ACTIVE_INTEGRITY, null) ?: return null
+        if (currentBuildKey != buildKey || currentIntegrity != integrity) return null
+        return activeBundlePath(context)
+    }
+
     fun activate(context: Context, localPath: String, buildKey: String, integrity: String): Boolean {
         val file = File(localPath)
         if (!isUnderBundleCache(context, file) || !file.isFile) {

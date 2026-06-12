@@ -131,31 +131,48 @@ class NatStackMobileHostModule(
                 if (rnHostAbi != expectedRnHostAbi) {
                     throw IllegalStateException("React Native host ABI mismatch: expected $expectedRnHostAbi, got $rnHostAbi")
                 }
+                val buildKey = bootstrap.getString("buildKey")
                 val artifact = selectArtifact(bootstrap, platform)
                 val artifactUrl = artifact.getString("url")
-                ensureSameOriginArtifactUrl(artifactUrl, credential.serverUrl)
-                val bytes = getBytes(artifactUrl)
+                val artifactPath = artifact.getString("path")
                 val integrity = artifact.getString("integrity")
-                verifySha256Integrity(integrity, bytes)
-                val bundleFile = writeBundleFile(bootstrap.getString("buildKey"), artifact.getString("path"), bytes)
-                if (!source.isNullOrBlank()) {
-                    prefs.edit().putString(ACTIVE_APP_SOURCE_KEY, source).apply()
-                } else {
-                    prefs.edit().remove(ACTIVE_APP_SOURCE_KEY).apply()
+                ensureSameOriginArtifactUrl(artifactUrl, credential.serverUrl)
+                val activeBundlePath = NatStackBundleStore.activeBundlePathIfMatches(
+                    reactApplicationContext,
+                    buildKey,
+                    integrity
+                )
+                if (activeBundlePath != null) {
+                    updateActiveAppSource(source)
+                    Log.i(TAG, "[NatStackMobileSmoke] phase=native-bundle-cache-hit")
+                    Log.i(TAG, "[NatStackMobileSmoke] phase=native-bundle-prepared cached=true")
+                    promise.resolve(preparedBundleMap(
+                        bootstrap,
+                        buildKey,
+                        rnHostAbi,
+                        integrity,
+                        platform,
+                        artifactUrl,
+                        artifactPath,
+                        activeBundlePath
+                    ))
+                    return@thread
                 }
+                val bytes = getBytes(artifactUrl)
+                verifySha256Integrity(integrity, bytes)
+                val bundleFile = writeBundleFile(buildKey, artifactPath, bytes)
+                updateActiveAppSource(source)
                 Log.i(TAG, "[NatStackMobileSmoke] phase=native-bundle-prepared")
-                promise.resolve(Arguments.createMap().apply {
-                    putString("appId", bootstrap.getString("appId"))
-                    putString("buildKey", bootstrap.getString("buildKey"))
-                    putString("effectiveVersion", bootstrap.optString("effectiveVersion").takeIf { it.isNotBlank() })
-                    putArray("capabilities", stringArray(bootstrap, "capabilities"))
-                    putString("rnHostAbi", rnHostAbi)
-                    putString("integrity", integrity)
-                    putString("platform", platform)
-                    putString("url", artifactUrl)
-                    putString("path", artifact.getString("path"))
-                    putString("localPath", bundleFile.absolutePath)
-                })
+                promise.resolve(preparedBundleMap(
+                    bootstrap,
+                    buildKey,
+                    rnHostAbi,
+                    integrity,
+                    platform,
+                    artifactUrl,
+                    artifactPath,
+                    bundleFile.absolutePath
+                ))
             } catch (error: Exception) {
                 promise.reject("bundle_prepare_failed", error.message, error)
             }
@@ -228,6 +245,14 @@ class NatStackMobileHostModule(
     private fun activeAppSource(): String? = prefs.getString(ACTIVE_APP_SOURCE_KEY, null)
         ?.takeIf { it.isNotBlank() }
 
+    private fun updateActiveAppSource(source: String?) {
+        if (!source.isNullOrBlank()) {
+            prefs.edit().putString(ACTIVE_APP_SOURCE_KEY, source).apply()
+        } else {
+            prefs.edit().remove(ACTIVE_APP_SOURCE_KEY).apply()
+        }
+    }
+
     private fun clearStoredCredentials() {
         prefs.edit().remove(CREDENTIAL_KEY).remove(ACTIVE_APP_SOURCE_KEY).apply()
     }
@@ -298,6 +323,28 @@ class NatStackMobileHostModule(
         for (index in 0 until values.length()) {
             pushString(values.getString(index))
         }
+    }
+
+    private fun preparedBundleMap(
+        bootstrap: JSONObject,
+        buildKey: String,
+        rnHostAbi: String,
+        integrity: String,
+        platform: String,
+        artifactUrl: String,
+        artifactPath: String,
+        localPath: String
+    ): WritableMap = Arguments.createMap().apply {
+        putString("appId", bootstrap.getString("appId"))
+        putString("buildKey", buildKey)
+        putString("effectiveVersion", bootstrap.optString("effectiveVersion").takeIf { it.isNotBlank() })
+        putArray("capabilities", stringArray(bootstrap, "capabilities"))
+        putString("rnHostAbi", rnHostAbi)
+        putString("integrity", integrity)
+        putString("platform", platform)
+        putString("url", artifactUrl)
+        putString("path", artifactPath)
+        putString("localPath", localPath)
     }
 
     private fun verifySha256Integrity(integrity: String, bytes: ByteArray) {
