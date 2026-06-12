@@ -2,7 +2,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
+import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
+import * as tls from "node:tls";
 import { fileURLToPath } from "node:url";
 import { parseConnectLink, parseConnectServerUrl } from "./lib/connect-utils.mjs";
 
@@ -113,21 +117,124 @@ CLI device credentials are read from ${credentialPath()}.
 `);
 }
 
-async function pair(link, label) {
+function normalizeFingerprint(raw) {
+  if (!raw) return null;
+  const hex = String(raw).replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+  if (hex.length !== 64) return String(raw).toUpperCase();
+  return hex.match(/.{2}/g).join(":");
+}
+
+function sha256Fingerprint(der) {
+  const hex = createHash("sha256").update(der).digest("hex").toUpperCase();
+  return hex.match(/.{2}/g).join(":");
+}
+
+function isIpLiteral(host) {
+  return /^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":");
+}
+
+function createPinnedTlsSocket({ host, port, expectedFingerprint }) {
+  const sock = tls.connect({
+    host,
+    port,
+    ...(isIpLiteral(host) ? {} : { servername: host }),
+    rejectUnauthorized: false,
+    checkServerIdentity: () => undefined,
+  });
+  sock.once("secureConnect", () => {
+    const cert = sock.getPeerCertificate(false);
+    if (!cert || !cert.raw) {
+      sock.destroy(new Error("TLS fingerprint pinning: peer presented no certificate"));
+      return;
+    }
+    const actual = sha256Fingerprint(cert.raw);
+    if (actual !== expectedFingerprint) {
+      sock.destroy(
+        new Error(`TLS fingerprint mismatch: expected ${expectedFingerprint}, got ${actual}`)
+      );
+    }
+  });
+  return sock;
+}
+
+function createPinnedHttpsAgent(expectedFingerprint) {
+  const agent = new HttpsAgent();
+  agent.createConnection = (opts) => {
+    const host = opts.host ?? "127.0.0.1";
+    const port = typeof opts.port === "string" ? parseInt(opts.port, 10) : (opts.port ?? 443);
+    return createPinnedTlsSocket({ host, port, expectedFingerprint });
+  };
+  return agent;
+}
+
+function parseJsonObject(raw) {
+  try {
+    return JSON.parse(raw || "{}");
+  } catch {
+    return {};
+  }
+}
+
+async function postAuthJson(remoteUrl, route, bodyValue, options) {
+  const requestUrl = new URL(route, remoteUrl);
+  const body = JSON.stringify(bodyValue);
+  const isHttps = requestUrl.protocol === "https:";
+  const fingerprint = normalizeFingerprint(options.fingerprint);
+  const agent =
+    isHttps && fingerprint
+      ? createPinnedHttpsAgent(fingerprint)
+      : isHttps && options.caPath
+        ? new HttpsAgent({ ca: fs.readFileSync(options.caPath) })
+        : undefined;
+
+  return new Promise((resolve, reject) => {
+    const req = (isHttps ? httpsRequest : httpRequest)(
+      requestUrl,
+      {
+        method: "POST",
+        agent,
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+        },
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          resolve({
+            statusCode: res.statusCode ?? 0,
+            statusMessage: res.statusMessage ?? "",
+            body: Buffer.concat(chunks).toString("utf8"),
+          });
+        });
+      }
+    );
+    req.once("error", reject);
+    req.end(body);
+  });
+}
+
+async function pair(link, options) {
   const parsed = parseConnectLink(link);
   if (parsed.kind === "error") throw new Error(parsed.reason);
-  const response = await fetch(`${parsed.url}/_r/s/auth/complete-pairing`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+  const response = await postAuthJson(
+    new URL(parsed.url),
+    "/_r/s/auth/complete-pairing",
+    {
       code: parsed.code,
-      label: label ?? `${os.hostname()} CLI`,
+      label: options.label ?? `${os.hostname()} CLI`,
       platform: "desktop",
-    }),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(body?.error ? String(body.error) : `Pairing failed with HTTP ${response.status}`);
+    },
+    options
+  );
+  const body = parseJsonObject(response.body);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(
+      body?.error
+        ? String(body.error)
+        : `Pairing failed with HTTP ${response.statusCode}: ${response.statusMessage}`
+    );
   }
   if (typeof body.deviceId !== "string" || typeof body.refreshToken !== "string") {
     throw new Error("Pairing response did not include a device credential");
@@ -200,7 +307,7 @@ async function main() {
     return;
   }
   const cliCreds = options.pairLink
-    ? await pair(options.pairLink, options.label)
+    ? await pair(options.pairLink, options)
     : loadCliCredentials();
   const creds = resolveLaunchCredentials(options, cliCreds);
   launchElectron(creds, options);

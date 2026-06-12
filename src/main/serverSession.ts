@@ -48,6 +48,10 @@ export interface SessionConnection {
   serverInfo: ServerInfo;
 }
 
+export function remoteGatewayServerUrl(remoteUrl: URL): string {
+  return remoteUrl.origin;
+}
+
 /**
  * Build the ServerInfo object that provides token management and RPC proxying.
  */
@@ -283,7 +287,7 @@ export async function establishServerSession(args: {
     externalHost = remoteUrl.hostname;
     protocol = remoteUrl.protocol === "https:" ? "https" : "http";
     const remotePort = parseInt(remoteUrl.port) || (protocol === "https" ? 443 : 80);
-    gatewayConfig = { serverUrl: `${protocol}://${externalHost}:${remotePort}` };
+    gatewayConfig = { serverUrl: remoteGatewayServerUrl(remoteUrl) };
 
     let shellCredential = await acquireShellCredential(mode);
     let shellToken = shellCredential.shellToken;
