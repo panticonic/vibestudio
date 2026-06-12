@@ -14,6 +14,11 @@ import type { WsLike } from "@natstack/rpc/protocol/wsAdapter";
 import type { RecoveryKind } from "@natstack/rpc/protocol/recoveryCoordinator";
 import { isWorkspaceMobileAppCallerId } from "./auth";
 
+function smokePhase(phase: string, details?: Record<string, unknown>): void {
+  const suffix = details ? ` ${JSON.stringify(details)}` : "";
+  console.log(`[NatStackMobileSmoke] phase=${phase}${suffix}`);
+}
+
 export type ConnectionStatus = RpcConnectionStatus;
 
 export interface MobileConnectionGrant {
@@ -33,7 +38,10 @@ export function createMobileRpcClient(config: MobileRpcClientConfig): MobileRpcC
 }
 
 class BrowserWsLike implements WsLike {
-  constructor(private readonly ws: WebSocket) {}
+  constructor(
+    private readonly ws: WebSocket,
+    private readonly url: string
+  ) {}
   get readyState(): number {
     return this.ws.readyState;
   }
@@ -41,25 +49,51 @@ class BrowserWsLike implements WsLike {
     return this.ws.onopen as (() => void) | null;
   }
   set onopen(handler: (() => void) | null) {
-    this.ws.onopen = handler;
+    this.ws.onopen = (() => {
+      smokePhase("workspace-ws-opened", { url: this.url });
+      handler?.();
+    }) as WebSocket["onopen"];
   }
   get onmessage(): ((event: { data: unknown }) => void) | null {
     return this.ws.onmessage as ((event: { data: unknown }) => void) | null;
   }
   set onmessage(handler: ((event: { data: unknown }) => void) | null) {
-    this.ws.onmessage = handler as unknown as WebSocket["onmessage"];
+    this.ws.onmessage = ((event: { data: unknown }) => {
+      const data = typeof event.data === "string" ? event.data : "";
+      if (data.includes('"type":"ws:auth-result"')) {
+        try {
+          const parsed = JSON.parse(data) as { success?: unknown; error?: unknown };
+          smokePhase("workspace-ws-auth-result", {
+            success: parsed.success === true,
+            ...(typeof parsed.error === "string" ? { error: parsed.error } : {}),
+          });
+        } catch {
+          smokePhase("workspace-ws-auth-result", { parseError: true });
+        }
+      }
+      handler?.(event);
+    }) as unknown as WebSocket["onmessage"];
   }
   get onclose(): ((event: { code?: number; reason?: string }) => void) | null {
     return this.ws.onclose as ((event: { code?: number; reason?: string }) => void) | null;
   }
   set onclose(handler: ((event: { code?: number; reason?: string }) => void) | null) {
-    this.ws.onclose = handler as unknown as WebSocket["onclose"];
+    this.ws.onclose = ((event: { code?: number; reason?: string }) => {
+      smokePhase("workspace-ws-close", {
+        code: event.code ?? null,
+        reason: event.reason ?? "",
+      });
+      handler?.(event);
+    }) as unknown as WebSocket["onclose"];
   }
   get onerror(): ((event: unknown) => void) | null {
     return this.ws.onerror as ((event: unknown) => void) | null;
   }
   set onerror(handler: ((event: unknown) => void) | null) {
-    this.ws.onerror = handler as unknown as WebSocket["onerror"];
+    this.ws.onerror = ((event: unknown) => {
+      smokePhase("workspace-ws-error", describeWebSocketEvent(event));
+      handler?.(event);
+    }) as unknown as WebSocket["onerror"];
   }
   send(data: string): void {
     this.ws.send(data);
@@ -67,6 +101,18 @@ class BrowserWsLike implements WsLike {
   close(code?: number, reason?: string): void {
     this.ws.close(code, reason);
   }
+}
+
+function describeWebSocketEvent(event: unknown): Record<string, unknown> {
+  if (event instanceof Error) return { message: event.message };
+  if (!event || typeof event !== "object") return { type: typeof event };
+  const maybe = event as { message?: unknown; type?: unknown; code?: unknown; reason?: unknown };
+  return {
+    ...(typeof maybe.type === "string" ? { type: maybe.type } : {}),
+    ...(typeof maybe.message === "string" ? { message: maybe.message } : {}),
+    ...(typeof maybe.code === "number" ? { code: maybe.code } : {}),
+    ...(typeof maybe.reason === "string" ? { reason: maybe.reason } : {}),
+  };
 }
 
 type MobileWsTransport = ReturnType<typeof wsClientTransport>;
@@ -238,6 +284,7 @@ export class MobileRpcClient implements Pick<RpcClient, "selfId" | "call" | "emi
     if (this.currentCallerId && grant.callerId !== this.currentCallerId) {
       throw new Error("Native host returned a different app principal for this connection");
     }
+    smokePhase("workspace-grant-issued", { callerId: grant.callerId });
     return grant;
   }
 
@@ -251,9 +298,11 @@ export class MobileRpcClient implements Pick<RpcClient, "selfId" | "call" | "emi
   }
 
   private createTransport(callerId: string): MobileWsTransport {
+    const wsUrl = buildWsUrl(this.config.serverUrl);
+    smokePhase("workspace-ws-url", { url: wsUrl });
     const transport = wsClientTransport({
       selfId: callerId,
-      getWsUrl: () => buildWsUrl(this.config.serverUrl),
+      getWsUrl: () => wsUrl,
       terminalCloseCodes: [4001, 4005, 4006],
       logPrefix: "MobileRpcClient",
       onRecovery: (kind) => {
@@ -265,7 +314,10 @@ export class MobileRpcClient implements Pick<RpcClient, "selfId" | "call" | "emi
         now: () => Date.now(),
         getAuthToken: () => this.nextGrantToken(),
         refreshAuthToken: () => this.nextGrantToken(),
-        createSocket: (url) => new BrowserWsLike(new WebSocket(url)),
+        createSocket: (url) => {
+          smokePhase("workspace-ws-create", { url });
+          return new BrowserWsLike(new WebSocket(url), url);
+        },
       },
     });
     transport.onStatusChange?.((status) => this.setStatus(status));

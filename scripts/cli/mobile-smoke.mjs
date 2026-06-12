@@ -15,9 +15,11 @@ import {
   serverEntryArg,
   serverEntryDescription,
 } from "./lib/server-entry.mjs";
+import { pickMobileHost } from "./lib/connect-utils.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
+const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
 const defaultApkPath = path.join(
   androidDir,
   "app",
@@ -47,7 +49,10 @@ function parseArgs(argv) {
     noInstall: false,
     noReset: false,
     noTap: false,
-    timeoutMs: 180_000,
+    network: "local",
+    timeoutMs: 420_000,
+    pairingTimeoutMs: 180_000,
+    agentTimeoutMs: 300_000,
     serverArgs: [],
     help: false,
   };
@@ -79,8 +84,16 @@ function parseArgs(argv) {
       options.noReset = true;
     } else if (arg === "--no-tap") {
       options.noTap = true;
+    } else if (arg === "--network") {
+      options.network = parseNetwork(argv[++i]);
+    } else if (arg === "--tailscale") {
+      options.network = "tailscale";
     } else if (arg === "--timeout-ms") {
       options.timeoutMs = parsePositiveInt(argv[++i], "--timeout-ms");
+    } else if (arg === "--pairing-timeout-ms") {
+      options.pairingTimeoutMs = parsePositiveInt(argv[++i], "--pairing-timeout-ms");
+    } else if (arg === "--agent-timeout-ms") {
+      options.agentTimeoutMs = parsePositiveInt(argv[++i], "--agent-timeout-ms");
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -91,6 +104,11 @@ function parseArgs(argv) {
   if (!options.packageName) throw new Error("--package must not be empty");
   if (!options.activityName) throw new Error("--activity must not be empty");
   return options;
+}
+
+function parseNetwork(value) {
+  if (value === "local" || value === "tailscale") return value;
+  throw new Error("--network must be local or tailscale");
 }
 
 function parsePositiveInt(value, label) {
@@ -114,18 +132,35 @@ Runner options:
   --package <id>      App package. Defaults to ${defaultPackage}.
   --activity <class>  Main activity class. Defaults to ${defaultActivity}.
   --no-build          Use the existing internal APK without rebuilding.
-  --no-install        Skip APK install.
+  --no-install        Skip APK install; build-only unless --no-build, then launch
+                       the already-installed app.
   --no-reset          Do not clear app data before pairing.
   --no-tap            Do not automate the Pair button tap.
-  --timeout-ms <ms>   Overall smoke timeout. Defaults to 180000.
+  --network <mode>    Pair through local adb reverse or Tailscale HTTPS.
+                       Values: local, tailscale. Defaults to local.
+  --tailscale         Alias for --network tailscale.
+  --timeout-ms <ms>   Time to wait for Android boot, build/install, and server
+                       readiness. Defaults to 420000.
+  --pairing-timeout-ms <ms>
+                       Time to wait for pairing and panel WebView load after
+                       the server is ready. Defaults to 180000.
+  --agent-timeout-ms <ms>
+                       Time to wait for the initial agent response after the
+                       panel WebView loads. Defaults to 300000.
   --help              Show this help message.
 
 Everything after '--' is forwarded to ${serverEntryDescription()}.
 
-The smoke starts a disposable local server, reverses its gateway port through
-adb, sends a natstack://connect intent to the installed internal app, confirms
-the Pair screen, then waits for native bundle activation, workspace connection,
-panel materialization, and panel WebView load log markers.
+By default, the smoke delegates APK build/install/reset/launcher startup to
+natstack mobile install --reset-app --launch. It then starts a disposable local
+server, reverses its gateway port through adb, sends a natstack://connect intent
+to the launched internal app, confirms the Pair screen, then waits for native
+bundle activation, workspace connection, panel materialization, panel WebView
+load log markers, and the initial agent turn.
+
+With --network tailscale, the smoke starts the server on the detected Tailscale
+address, requires a verified HTTPS public URL, skips adb reverse, and pairs the
+phone through that HTTPS URL.
 `);
 }
 
@@ -262,6 +297,48 @@ async function adbCaptureBuffer(device, ...args) {
   return runCommandBuffer("adb", makeAdbArgs(device, args));
 }
 
+async function runMobileInstall(options, { buildOnly = false } = {}) {
+  const args = [
+    mobileInstallScript,
+    "--apk",
+    options.apkPath,
+    "--package",
+    options.packageName,
+  ];
+  if (options.device) args.push("--device", options.device);
+  if (options.noBuild) args.push("--no-build");
+  if (buildOnly) {
+    args.push("--build-only");
+  } else {
+    if (!options.noReset) args.push("--reset-app");
+    args.push("--launch");
+  }
+  await runCommand(process.execPath, args, {
+    cwd: repoRoot,
+    env: process.env,
+    label: "mobile-install",
+  });
+}
+
+async function launchInstalledApp(device, packageName) {
+  await adb(
+    device,
+    "shell",
+    "monkey",
+    "-p",
+    packageName,
+    "-c",
+    "android.intent.category.LAUNCHER",
+    "1"
+  );
+}
+
+async function ensureDeviceInteractive(device) {
+  await adbCapture(device, "shell", "input", "keyevent", "KEYCODE_WAKEUP").catch(() => null);
+  await adbCapture(device, "shell", "wm", "dismiss-keyguard").catch(() => null);
+  await adbCapture(device, "shell", "cmd", "statusbar", "collapse").catch(() => null);
+}
+
 async function hasAdbDevice(device) {
   try {
     await adbCapture(device, "get-state");
@@ -304,6 +381,105 @@ function createConnectLink(ready) {
   if (!serverUrl) throw new Error("Ready file did not include connectUrl or gatewayUrl");
   if (!code) throw new Error("Ready file did not include qrPairingCode or pairingCode");
   return `natstack://connect?url=${encodeURIComponent(serverUrl)}&code=${encodeURIComponent(code)}`;
+}
+
+function createServerArgs(options, readyFilePath) {
+  const args = [
+    serverEntryArg(),
+    "--app-root",
+    repoRoot,
+    "--ready-file",
+    readyFilePath,
+    "--ephemeral",
+    "--serve-panels",
+    "--print-credentials",
+    "--require-mobile-ready",
+  ];
+
+  if (options.network === "tailscale") {
+    const selectedHost = pickMobileHost("tailscale", { includeTunnel: true });
+    console.log(
+      `[mobile-smoke] Tailscale host: ${selectedHost.address}` +
+        (selectedHost.interfaceName ? ` (${selectedHost.interfaceName})` : "")
+    );
+    args.push(
+      "--host",
+      selectedHost.address,
+      "--gateway-port",
+      "3030",
+      "--require-public-url"
+    );
+  } else {
+    args.push(
+      "--host",
+      "127.0.0.1",
+      "--bind-host",
+      "127.0.0.1",
+      "--no-vpn-detect"
+    );
+  }
+
+  args.push(...options.serverArgs);
+  return args;
+}
+
+function assertTailscaleReady(ready) {
+  const connectUrl = ready.connectUrl || "";
+  if (!connectUrl.startsWith("https://")) {
+    throw new Error(
+      `Tailscale smoke requires an HTTPS connectUrl, but server advertised: ` +
+        `${connectUrl || "(none)"}`
+    );
+  }
+}
+
+async function waitForPhoneTcpReachable(device, rawUrl, timeoutMs = 45_000) {
+  const endpoint = tcpEndpointForUrl(rawUrl);
+  const deadlineMs = Date.now() + timeoutMs;
+  let lastError = "not attempted";
+  while (Date.now() < deadlineMs) {
+    await ensureDeviceInteractive(device);
+    try {
+      await adbCapture(
+        device,
+        "shell",
+        "nc",
+        "-z",
+        "-w",
+        "5",
+        endpoint.host,
+        String(endpoint.port)
+      );
+      console.log(
+        `[mobile-smoke] Phone can open ${endpoint.host}:${endpoint.port} over ${endpoint.protocol}`
+      );
+      return;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      await sleep(2_000);
+    }
+  }
+  throw new Error(
+    `Android device could not open ${endpoint.host}:${endpoint.port} for ${rawUrl}. ` +
+      `Check the phone's Tailscale VPN state, Tailnet ACLs, Tailscale Serve, and any host firewall on tailscale0. ` +
+      `Last adb nc error: ${lastError}`
+  );
+}
+
+function tcpEndpointForUrl(rawUrl) {
+  const parsed = new URL(rawUrl);
+  const protocol = parsed.protocol.replace(/:$/, "");
+  const port = parsed.port
+    ? Number(parsed.port)
+    : parsed.protocol === "https:"
+      ? 443
+      : parsed.protocol === "http:"
+        ? 80
+        : null;
+  if (!parsed.hostname || !port) {
+    throw new Error(`Cannot derive TCP endpoint from URL: ${rawUrl}`);
+  }
+  return { protocol, host: parsed.hostname, port };
 }
 
 function startLogcat(device, expectedPhases, deadlineMs) {
@@ -369,11 +545,8 @@ function startLogcat(device, expectedPhases, deadlineMs) {
 }
 
 async function tapButtonByText(device, text, deadlineMs) {
-  const dumpPath = "/sdcard/natstack-mobile-smoke-window.xml";
   while (Date.now() < deadlineMs) {
-    await adbCapture(device, "shell", "uiautomator", "dump", dumpPath).catch(() => null);
-    const result = await adbCapture(device, "exec-out", "cat", dumpPath).catch(() => null);
-    const xml = result?.stdout ?? "";
+    const xml = await dumpWindowXml(device);
     const bounds = findNodeBounds(xml, text);
     if (bounds) {
       await adb(device, "shell", "input", "tap", String(bounds.x), String(bounds.y));
@@ -386,11 +559,8 @@ async function tapButtonByText(device, text, deadlineMs) {
 
 async function tapOptionalButtonByText(device, text, timeoutMs = 6_000) {
   const deadlineMs = Date.now() + timeoutMs;
-  const dumpPath = "/sdcard/natstack-mobile-smoke-window.xml";
   while (Date.now() < deadlineMs) {
-    await adbCapture(device, "shell", "uiautomator", "dump", dumpPath).catch(() => null);
-    const result = await adbCapture(device, "exec-out", "cat", dumpPath).catch(() => null);
-    const xml = result?.stdout ?? "";
+    const xml = await dumpWindowXml(device);
     const bounds = findNodeBounds(xml, text);
     if (bounds) {
       await adb(device, "shell", "input", "tap", String(bounds.x), String(bounds.y));
@@ -403,11 +573,8 @@ async function tapOptionalButtonByText(device, text, timeoutMs = 6_000) {
 
 async function tapOptionalButtonByLabelPrefix(device, text, timeoutMs = 6_000) {
   const deadlineMs = Date.now() + timeoutMs;
-  const dumpPath = "/sdcard/natstack-mobile-smoke-window.xml";
   while (Date.now() < deadlineMs) {
-    await adbCapture(device, "shell", "uiautomator", "dump", dumpPath).catch(() => null);
-    const result = await adbCapture(device, "exec-out", "cat", dumpPath).catch(() => null);
-    const xml = result?.stdout ?? "";
+    const xml = await dumpWindowXml(device);
     const bounds = findNodeBounds(xml, text, { labelPrefix: true });
     if (bounds) {
       await adb(device, "shell", "input", "tap", String(bounds.x), String(bounds.y));
@@ -416,6 +583,13 @@ async function tapOptionalButtonByLabelPrefix(device, text, timeoutMs = 6_000) {
     await sleep(500);
   }
   return false;
+}
+
+async function dumpWindowXml(device) {
+  const dumpPath = "/sdcard/natstack-mobile-smoke-window.xml";
+  await adbCapture(device, "shell", "uiautomator", "dump", dumpPath).catch(() => null);
+  const result = await adbCapture(device, "exec-out", "cat", dumpPath).catch(() => null);
+  return result?.stdout ?? "";
 }
 
 function findNodeBounds(xml, text, options = {}) {
@@ -446,6 +620,26 @@ function findNodeBounds(xml, text, options = {}) {
   return null;
 }
 
+async function tapVisibleNode(device, xml, text, options = {}) {
+  const bounds = findNodeBounds(xml, text, options);
+  if (!bounds) return false;
+  await adb(device, "shell", "input", "tap", String(bounds.x), String(bounds.y));
+  return true;
+}
+
+function collectWindowLabels(xml) {
+  const labels = [];
+  const pattern = /<node\b[^>]*>/g;
+  let match;
+  while ((match = pattern.exec(xml))) {
+    const node = match[0];
+    const label = readXmlAttribute(node, "text") || readXmlAttribute(node, "content-desc");
+    const normalized = label.replace(/\s+/g, " ").trim();
+    if (normalized) labels.push(normalized);
+  }
+  return labels;
+}
+
 function readXmlAttribute(node, name) {
   const match = node.match(new RegExp(`\\b${name}="([^"]*)"`));
   return match ? unescapeXmlAttribute(match[1]) : "";
@@ -459,7 +653,238 @@ function unescapeXmlAttribute(value) {
     .replace(/&amp;/g, "&");
 }
 
-async function captureAndAssertPanelVisible(device) {
+function createAgentTurnProbe(ready) {
+  const workspaceDir = typeof ready?.workspaceDir === "string" ? ready.workspaceDir : "";
+  const stateDirCandidates = [
+    workspaceDir ? path.join(path.dirname(workspaceDir), "state") : "",
+    workspaceDir ? path.join(workspaceDir, "state") : "",
+    workspaceDir.endsWith(`${path.sep}state`) ? workspaceDir : "",
+  ].filter(Boolean);
+  return {
+    stateDirCandidates: [...new Set(stateDirCandidates)],
+    sqliteFiles: null,
+    tableDbs: new Map(),
+    warned: false,
+  };
+}
+
+async function probeInitialAgentTurn(probe) {
+  if (!probe?.stateDirCandidates?.length) {
+    return { kind: "unavailable", summary: "ready file did not include workspaceDir" };
+  }
+
+  const agentRunDbs = await getDatabasesWithTable(probe, "agent_turn_runs");
+  if (!agentRunDbs.length) {
+    return { kind: "pending", summary: "agent_turn_runs table not found yet" };
+  }
+
+  let latest = null;
+  for (const dbPath of agentRunDbs) {
+    const rows = await sqliteJson(
+      dbPath,
+      `SELECT turn_id, channel_id, status, failure_code, failure_message, opened_at, updated_at, closed_at
+       FROM agent_turn_runs
+       ORDER BY opened_at DESC
+       LIMIT 1`
+    ).catch(() => []);
+    for (const row of rows) {
+      if (!latest || Number(row.opened_at ?? 0) > Number(latest.opened_at ?? 0)) {
+        latest = row;
+      }
+    }
+  }
+
+  if (!latest?.turn_id) {
+    return { kind: "pending", summary: "no agent turn run has started yet" };
+  }
+
+  if (
+    latest.failure_code ||
+    latest.failure_message ||
+    /\b(?:failed|failure|error|aborted)\b/i.test(String(latest.status ?? ""))
+  ) {
+    return {
+      kind: "failed",
+      summary:
+        `${latest.turn_id} status=${latest.status}` +
+        (latest.failure_code ? ` code=${latest.failure_code}` : "") +
+        (latest.failure_message ? ` message=${latest.failure_message}` : ""),
+    };
+  }
+
+  const messageSummary = await countCompletedAssistantMessages(probe, latest.turn_id);
+  const status = String(latest.status ?? "");
+  const closed = status === "closed" || latest.closed_at != null;
+  if (closed && messageSummary.completedAssistant > 0) {
+    return {
+      kind: "completed",
+      summary:
+        `${latest.turn_id} status=${status} completedAssistant=${messageSummary.completedAssistant}`,
+    };
+  }
+
+  return {
+    kind: "pending",
+    summary:
+      `${latest.turn_id} status=${status || "(unknown)"} ` +
+      `completedAssistant=${messageSummary.completedAssistant}`,
+  };
+}
+
+async function countCompletedAssistantMessages(probe, turnId) {
+  const messageDbs = await getDatabasesWithTable(probe, "trajectory_messages");
+  let completedAssistant = 0;
+  let failedAssistant = 0;
+  for (const dbPath of messageDbs) {
+    const rows = await sqliteJson(
+      dbPath,
+      `SELECT
+         SUM(CASE WHEN role = 'assistant' AND status = 'completed' THEN 1 ELSE 0 END) AS completed_assistant,
+         SUM(CASE WHEN role = 'assistant' AND status = 'failed' THEN 1 ELSE 0 END) AS failed_assistant
+       FROM trajectory_messages
+       WHERE turn_id = ${sqlString(turnId)}`
+    ).catch(() => []);
+    for (const row of rows) {
+      completedAssistant += Number(row.completed_assistant ?? 0);
+      failedAssistant += Number(row.failed_assistant ?? 0);
+    }
+  }
+  return { completedAssistant, failedAssistant };
+}
+
+async function getDatabasesWithTable(probe, table) {
+  const cached = probe.tableDbs.get(table);
+  if (cached?.length) return cached;
+  const files = await getSqliteFiles(probe);
+  const matches = [];
+  for (const dbPath of files) {
+    const rows = await sqliteJson(
+      dbPath,
+      `SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${sqlString(table)} LIMIT 1`
+    ).catch(() => []);
+    if (rows.length > 0) matches.push(dbPath);
+  }
+  if (matches.length) probe.tableDbs.set(table, matches);
+  return matches;
+}
+
+async function getSqliteFiles(probe) {
+  if (probe.sqliteFiles?.length) return probe.sqliteFiles;
+  const files = [];
+  for (const stateDir of probe.stateDirCandidates) {
+    files.push(...(await listSqliteFiles(path.join(stateDir, ".databases")).catch(() => [])));
+    if (files.length) break;
+    files.push(...(await listSqliteFiles(stateDir).catch(() => [])));
+    if (files.length) break;
+  }
+  probe.sqliteFiles = [...new Set(files)];
+  return probe.sqliteFiles;
+}
+
+async function listSqliteFiles(root) {
+  const files = [];
+  const pending = [root];
+  while (pending.length) {
+    const dir = pending.pop();
+    const entries = await fsp.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(fullPath);
+      } else if (entry.isFile() && entry.name.endsWith(".sqlite")) {
+        files.push(fullPath);
+      }
+    }
+  }
+  return files;
+}
+
+async function sqliteJson(dbPath, sql) {
+  const { stdout } = await runCommand("sqlite3", ["-json", dbPath, sql]);
+  const text = stdout.trim();
+  return text ? JSON.parse(text) : [];
+}
+
+function sqlString(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+async function waitForInitialAgentTurn(device, deadlineMs, agentProbe) {
+  let lastLabels = [];
+  let lastAgentState = "not checked";
+  let nextProbeAt = 0;
+  while (Date.now() < deadlineMs) {
+    const xml = await dumpWindowXml(device);
+    const labels = collectWindowLabels(xml);
+    const text = labels.join("\n");
+    lastLabels = labels;
+
+    if (await tapVisibleNode(device, xml, "Approve all")) {
+      await sleep(1_000);
+      continue;
+    }
+    if (await tapVisibleNode(device, xml, "Use once", { labelPrefix: true })) {
+      await sleep(2_000);
+      continue;
+    }
+
+    assertNoBlockingPermissionDialog(xml);
+
+    if (
+      /\b(Error|Recovery failed)\b/i.test(text) ||
+      /Runner (?:prompt|continue) completed without/i.test(text) ||
+      /Agent turn failed|Cannot continue|DO RPC relay failed|Connection error/i.test(text)
+    ) {
+      throw new Error(
+        `Initial agent turn surfaced a visible error. Visible labels: ${summarizeLabels(labels)}`
+      );
+    }
+
+    const isTyping = /\b(?:AI Chat|Agent) typing\b/i.test(text);
+    const hasAssistantMessage = /(?:^|\n)AI Chat(?:\s+|\n)@agent(?:\n|$)/.test(text);
+
+    if (hasAssistantMessage && !isTyping) {
+      return;
+    }
+
+    if (Date.now() >= nextProbeAt) {
+      nextProbeAt = Date.now() + 2_000;
+      const agentState = await probeInitialAgentTurn(agentProbe).catch((error) => ({
+        kind: "unavailable",
+        summary: error instanceof Error ? error.message : String(error),
+      }));
+      lastAgentState = `${agentState.kind}: ${agentState.summary}`;
+      if (agentState.kind === "failed") {
+        throw new Error(`Initial agent turn failed in durable state: ${agentState.summary}`);
+      }
+      if (agentState.kind === "completed") {
+        console.log(`[mobile-smoke] Initial agent turn completed: ${agentState.summary}`);
+        return;
+      }
+      if (agentState.kind === "unavailable" && !agentProbe.warned) {
+        agentProbe.warned = true;
+        console.warn(`[mobile-smoke] Durable agent-state probe unavailable: ${agentState.summary}`);
+      }
+    }
+
+    await sleep(1_000);
+  }
+
+  throw new Error(
+    `Timed out waiting for the initial onboarding agent turn to finish. ` +
+      `Last visible labels: ${summarizeLabels(lastLabels)}. ` +
+      `Last durable state: ${lastAgentState}`
+  );
+}
+
+function summarizeLabels(labels) {
+  const compact = labels.filter(Boolean).slice(0, 40).join(" | ");
+  return compact || "(none)";
+}
+
+async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo) {
+  const agentProbe = createAgentTurnProbe(readyInfo);
+  await ensureDeviceInteractive(device);
   await sleep(2_000);
   if (await tapOptionalButtonByText(device, "Approve all", 2_000)) {
     await sleep(2_000);
@@ -467,7 +892,9 @@ async function captureAndAssertPanelVisible(device) {
   if (await tapOptionalButtonByLabelPrefix(device, "Use once", 2_000)) {
     await sleep(3_000);
   }
-  await assertNoBlockingPermissionDialog(device);
+  await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe);
+  await ensureDeviceInteractive(device);
+  assertNoBlockingPermissionDialog(await dumpWindowXml(device));
   await fsp.mkdir(screenshotDir, { recursive: true });
   const screenshotPath = path.join(screenshotDir, `panel-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
   const { stdout } = await adbCaptureBuffer(device, "exec-out", "screencap", "-p");
@@ -499,11 +926,7 @@ async function captureAndAssertPanelVisible(device) {
   }
 }
 
-async function assertNoBlockingPermissionDialog(device) {
-  const dumpPath = "/sdcard/natstack-mobile-smoke-window.xml";
-  await adbCapture(device, "shell", "uiautomator", "dump", dumpPath).catch(() => null);
-  const result = await adbCapture(device, "exec-out", "cat", dumpPath).catch(() => null);
-  const xml = result?.stdout ?? "";
+function assertNoBlockingPermissionDialog(xml) {
   const text = unescapeXmlAttribute(xml);
   if (/send you notifications/i.test(text) || /don.?t allow/i.test(text)) {
     throw new Error(
@@ -768,44 +1191,27 @@ async function main() {
     }
 
     await waitForAndroidBoot(options.device);
-
-    if (!options.noBuild) {
-      await runCommand("./gradlew", ["assembleInternal"], {
-        cwd: androidDir,
-        env: process.env,
-        label: "gradle",
-      });
-    }
+    await ensureDeviceInteractive(options.device);
 
     if (!options.noInstall) {
-      await adb(options.device, "install", "-r", "-d", options.apkPath);
+      await runMobileInstall(options);
+    } else if (!options.noBuild) {
+      await runMobileInstall(options, { buildOnly: true });
     }
 
-    if (!options.noReset) {
+    if (options.noInstall && !options.noReset) {
       await adb(options.device, "shell", "pm", "clear", options.packageName);
     }
+    if (options.noInstall) {
+      await launchInstalledApp(options.device, options.packageName);
+    }
+    await ensureDeviceInteractive(options.device);
 
     try {
       await fsp.unlink(readyFilePath);
     } catch {}
 
-    const serverArgs = [
-      serverEntryArg(),
-      "--app-root",
-      repoRoot,
-      "--ready-file",
-      readyFilePath,
-      "--ephemeral",
-      "--host",
-      "127.0.0.1",
-      "--bind-host",
-      "127.0.0.1",
-      "--serve-panels",
-      "--print-credentials",
-      "--require-mobile-ready",
-      "--no-vpn-detect",
-      ...options.serverArgs,
-    ];
+    const serverArgs = createServerArgs(options, readyFilePath);
     const serverInvocation = createServerInvocation(serverArgs);
     const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
       cwd: repoRoot,
@@ -824,8 +1230,14 @@ async function main() {
       Math.max(1_000, deadlineMs - Date.now())
     );
     readyInfo = ready;
+    if (options.network === "tailscale") {
+      assertTailscaleReady(ready);
+      await waitForPhoneTcpReachable(options.device, ready.connectUrl);
+    }
 
-    await adb(options.device, "reverse", `tcp:${ready.gatewayPort}`, `tcp:${ready.gatewayPort}`);
+    if (options.network === "local") {
+      await adb(options.device, "reverse", `tcp:${ready.gatewayPort}`, `tcp:${ready.gatewayPort}`);
+    }
     await adb(options.device, "logcat", "-c");
 
     const phases = [
@@ -841,26 +1253,30 @@ async function main() {
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
     ];
-    const logcat = startLogcat(options.device, phases, deadlineMs);
+    const pairingDeadlineMs = Date.now() + options.pairingTimeoutMs;
+    const logcat = startLogcat(options.device, phases, pairingDeadlineMs);
     children.push(logcat.child);
 
     const link = createConnectLink(ready);
+    console.log(`[mobile-smoke] Network: ${options.network}`);
     console.log(`[mobile-smoke] Gateway: ${ready.gatewayUrl}`);
     console.log(`[mobile-smoke] Connect URL: ${ready.connectUrl || ready.gatewayUrl}`);
+    await ensureDeviceInteractive(options.device);
     await startConnectIntent(options.device, options.packageName, options.activityName, link);
     await logcat.waitForPhase("embedded-deep-link-received");
+    await ensureDeviceInteractive(options.device);
 
     if (!options.noTap) {
-      await tapButtonByText(options.device, "Pair", deadlineMs);
+      await tapButtonByText(options.device, "Pair", pairingDeadlineMs);
     }
 
     for (const phase of phases.slice(1)) {
       await logcat.waitForPhase(phase);
     }
-    await captureAndAssertPanelVisible(options.device);
+    await captureAndAssertPanelVisible(options.device, options.agentTimeoutMs, readyInfo);
 
     console.log(
-      "[mobile-smoke] PASS clean QR/deep-link pairing reached workspace connection and visibly loaded a panel WebView"
+      "[mobile-smoke] PASS clean QR/deep-link pairing reached workspace connection and completed the initial agent turn"
     );
     await cleanup();
   } catch (error) {

@@ -34,6 +34,11 @@ import type { Credentials } from "./auth";
 import { issueConnectionGrant } from "./auth";
 import { drainWorkspaceMutationQueue } from "./backgroundActionQueue";
 
+function smokePhase(phase: string, details?: Record<string, unknown>): void {
+  const suffix = details ? ` ${JSON.stringify(details)}` : "";
+  console.log(`[NatStackMobileSmoke] phase=${phase}${suffix}`);
+}
+
 export interface ShellClientConfig {
   credentials: Credentials;
   onTreeUpdated?: (tree: Panel[]) => void;
@@ -419,11 +424,15 @@ export class ShellClient {
     });
   }
   async init(): Promise<void> {
+    smokePhase("workspace-shell-init-start", { serverUrl: this.serverUrl });
     await this.transport.connectAndWait(null);
+    smokePhase("workspace-ws-authenticated");
     const info = await this.transport.call<{
       config: WorkspaceConfig;
     }>("main", "workspace.getInfo", []);
+    smokePhase("workspace-info-loaded", { workspaceId: info.config.id });
     await this.panels.init(info.config.id, info.config);
+    smokePhase("workspace-panels-initialized");
     await this.events.subscribe("panel:runtimeLeaseChanged");
     await this.panels.syncRuntimeLeases();
     await drainWorkspaceMutationQueue(this);
