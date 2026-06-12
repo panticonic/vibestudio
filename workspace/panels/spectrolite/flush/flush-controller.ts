@@ -12,6 +12,8 @@ export interface FlushController {
   noteChange(path: string): void;
   flushNow(path: string): void;
   flushPending(): void;
+  /** Drop all pending timers WITHOUT firing them (e.g. vault switch). */
+  cancelPending(): void;
   dispose(): void;
 }
 
@@ -57,6 +59,10 @@ export function createFlushController(opts: FlushControllerOptions): FlushContro
     },
     flushPending() {
       for (const path of [...timers.keys()]) fire(path);
+    },
+    cancelPending() {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
     },
     dispose() {
       disposed = true;

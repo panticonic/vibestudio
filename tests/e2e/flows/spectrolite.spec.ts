@@ -838,6 +838,8 @@ test.describe("Spectrolite", () => {
     }).toContain("Commit or discard changes before switching branches.");
     await closeTopDialog(testApp, panelId);
 
+    expect(await clickPanelSelector(testApp.app, panelId, '[contenteditable="true"]')).toBe(true);
+    await typePanelText(testApp.app, panelId, "\nImmediate pre-commit line");
     await setCommitMessage(testApp, panelId, "E2E commit");
     await expect.poll(() => executePanelScript<boolean>(testApp!.app, panelId, `
       (() => {
@@ -856,6 +858,35 @@ test.describe("Spectrolite", () => {
     await expect.poll(() => getPanelText(testApp!.app, panelId), {
       timeout: 60000,
     }).toContain("0 dirty");
+    const repo = path.join(workspacePath, "source", "projects", "default");
+    const committed = execFileSync("git", ["show", "HEAD:E2E.mdx"], { cwd: repo, encoding: "utf8" });
+    expect(committed).toContain("Committed by e2e");
+    expect(committed).toContain("Immediate pre-commit line");
+  });
+
+  test("blocks branch switching after immediate unflushed typing", async () => {
+    workspacePath = createManagedTestWorkspace();
+    initializeDefaultVaultRepo(workspacePath);
+    replaceInitPanels(workspacePath, {
+      repoRoot: "/projects/default",
+      openPath: "E2E.mdx",
+    });
+
+    testApp = await launchTestApp({ workspace: workspacePath, launchTimeout: 180000 });
+    const panelId = await waitForSpectrolitePanel(testApp);
+
+    await expect.poll(() => getPanelText(testApp!.app, panelId), {
+      timeout: 60000,
+    }).toContain("E2E Note");
+
+    expect(await clickPanelSelector(testApp.app, panelId, '[contenteditable="true"]')).toBe(true);
+    await typePanelText(testApp.app, panelId, "\nUnflushed branch guard line");
+    await clickBranch(testApp, panelId, "branch-e2e");
+    await expect.poll(() => getPanelText(testApp!.app, panelId), {
+      timeout: 60000,
+    }).toContain("Commit or discard changes before switching branches.");
+    const repo = path.join(workspacePath, "source", "projects", "default");
+    expect(fs.readFileSync(path.join(repo, "E2E.mdx"), "utf8")).toContain("Unflushed branch guard line");
   });
 
   test("shows backlinks, recovers around broken MDX/live JSX, and switches branches", async () => {
@@ -874,6 +905,26 @@ test.describe("Spectrolite", () => {
       timeout: 60000,
     }).toContain('data-testid="spectrolite-backlink-Linked.mdx"');
     await closeTopDialog(testApp, panelId);
+
+    expect(await clickPanelElement(testApp, panelId, '[data-testid="spectrolite-quick-open-trigger"]')).toBe(true);
+    await expect.poll(() => getPanelHtml(testApp!.app, panelId), {
+      timeout: 10000,
+    }).toContain('data-testid="spectrolite-quick-open-input"');
+    const quickOpened = await executePanelScript<boolean>(testApp.app, panelId, `
+      (() => {
+        const input = document.querySelector('[data-testid="spectrolite-quick-open-input"]');
+        if (!(input instanceof HTMLInputElement)) return false;
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        setter?.call(input, "Linked");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+        return true;
+      })()
+    `);
+    expect(quickOpened).toBe(true);
+    await expect.poll(() => getPanelText(testApp!.app, panelId), {
+      timeout: 60000,
+    }).toContain("This note points at");
 
     await clickBranch(testApp, panelId, "branch-e2e");
     await expect.poll(() => getPanelText(testApp!.app, panelId), {

@@ -4,28 +4,17 @@
  *
  * Computed on demand by grepping each `.mdx` for the active file's
  * basename (without `.mdx`) inside `[[…]]` brackets. Scans are bounded
- * and concurrent so large vaults do not serialize thousands of file
- * reads onto the UI update path. v1 caches per (activePath, refreshKey)
- * — invalidate by bumping `refreshKey` after flush or commit.
+ * and concurrent so large vaults don't serialize thousands of file reads
+ * onto the UI update path. Re-scans when the path index refreshes (the
+ * vault controller updates it after flush/commit/file create).
  */
 
 import { useEffect, useState } from "react";
 import { promises as fs } from "fs";
-import { Box, Code, Flex, Link, ScrollArea, Text } from "@radix-ui/themes";
+import { Box, Flex, ScrollArea, Text } from "@radix-ui/themes";
 import { Link2Icon } from "@radix-ui/react-icons";
 import { extractWikilinks } from "../mdx/wikilink";
-
-export interface BacklinksPanelProps {
-  root: string;
-  /** Active file, relative to root. */
-  activePath: string | null;
-  /** Workspace `.mdx` paths (relative). Refreshed by FileTree. */
-  paths: string[];
-  /** Bump to force re-scan after flush/commit. */
-  refreshKey: number;
-  /** Click handler — opens the referencing file in the editor. */
-  onOpen: (path: string) => void;
-}
+import { useApp, useAppState } from "../app/context";
 
 interface Backlink {
   fromPath: string;
@@ -86,12 +75,16 @@ export async function findBacklinks(
   return out;
 }
 
-export function BacklinksPanel({ root, activePath, paths, refreshKey, onOpen }: BacklinksPanelProps) {
+export function BacklinksPanel({ onOpened }: { onOpened?: () => void }) {
+  const app = useApp();
+  const root = useAppState((s) => s.repoRoot);
+  const activePath = useAppState((s) => s.activePath);
+  const paths = useAppState((s) => s.paths);
   const [backlinks, setBacklinks] = useState<Backlink[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!activePath) {
+    if (!root || !activePath) {
       setBacklinks([]);
       return;
     }
@@ -102,36 +95,47 @@ export function BacklinksPanel({ root, activePath, paths, refreshKey, onOpen }: 
       .catch(() => { if (!cancelled) setBacklinks([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [root, activePath, paths, refreshKey]);
+  }, [root, activePath, paths]);
 
-  if (!activePath) return null;
+  if (!activePath) {
+    return (
+      <Text size="1" color="gray" as="div" style={{ padding: "var(--space-3)" }}>
+        Open a file to see its backlinks.
+      </Text>
+    );
+  }
 
   return (
-    <Flex direction="column" gap="1" p="2" style={{ borderTop: "1px solid var(--gray-5)" }} data-testid="spectrolite-backlinks">
-      <Flex align="center" gap="1">
+    <Flex direction="column" gap="1" p="2" style={{ height: "100%", minHeight: 0 }} data-testid="spectrolite-backlinks">
+      <Flex align="center" gap="1" px="1">
         <Link2Icon />
-        <Text size="1" weight="medium" color="gray">BACKLINKS</Text>
+        <Text size="1" weight="bold" color="gray" style={{ letterSpacing: "0.06em" }}>BACKLINKS</Text>
         <Text size="1" color="gray">· {backlinks.length}</Text>
       </Flex>
-      <Box style={{ maxHeight: "30vh" }}>
+      <Box style={{ flex: 1, minHeight: 0 }}>
         <ScrollArea>
           {loading ? (
-            <Text size="1" color="gray">Scanning…</Text>
+            <Text size="1" color="gray" as="div" style={{ padding: "var(--space-2)" }}>Scanning…</Text>
           ) : backlinks.length === 0 ? (
-            <Text size="1" color="gray">None</Text>
+            <Text size="1" color="gray" as="div" style={{ padding: "var(--space-2)" }}>
+              Nothing links here yet. Reference this note with [[{basenameNoExt(activePath)}]].
+            </Text>
           ) : (
             <Flex direction="column" gap="1">
               {backlinks.map((bl) => (
-                <Box key={bl.fromPath}>
-                  <Link size="1" onClick={(e) => { e.preventDefault(); onOpen(bl.fromPath); }} href="#" data-testid={`spectrolite-backlink-${bl.fromPath}`}>
-                    <Code variant="ghost" size="1">{bl.fromPath}</Code>
-                  </Link>
-                  {bl.snippet ? (
-                    <Text as="div" size="1" color="gray" style={{ marginLeft: "var(--space-2)" }}>
-                      {bl.snippet}
-                    </Text>
-                  ) : null}
-                </Box>
+                <button
+                  key={bl.fromPath}
+                  type="button"
+                  className="spectrolite-backlink-row"
+                  data-testid={`spectrolite-backlink-${bl.fromPath}`}
+                  onClick={() => {
+                    app.editor.openFile(bl.fromPath);
+                    onOpened?.();
+                  }}
+                >
+                  <span className="spectrolite-file-row-name">{bl.fromPath}</span>
+                  {bl.snippet ? <span className="spectrolite-backlink-snippet">{bl.snippet}</span> : null}
+                </button>
               ))}
             </Flex>
           )}

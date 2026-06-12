@@ -1,102 +1,61 @@
 /**
- * Minimal MDX file browser for the active context's filesystem.
+ * File browser for the active vault. Reads the path index from the app
+ * store (refreshed by the vault controller); rows show the basename
+ * prominently with the directory as secondary text.
  *
- * Lists every `.mdx` under the workspace root, lets the user open one in the
- * editor. Single-click selection — no drag/drop, no rename, no folders-as-
- * folders. New files are created via the "+ New" button.
+ * Every file gets its own DOM row (no virtualization) — the e2e suite
+ * and wikilink resolution both rely on the full list being present.
  */
 
-import { useCallback, useEffect, useState } from "react";
-import { promises as fs } from "fs";
-import { Box, Button, Callout, Code, Flex, ScrollArea, Text, TextField } from "@radix-ui/themes";
+import { useCallback, useState } from "react";
+import { Box, Callout, Flex, IconButton, ScrollArea, Text, TextField } from "@radix-ui/themes";
 import { FileTextIcon, PlusIcon, ReloadIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import { listMdxPaths } from "../state/workspacePaths";
-import { joinSafe, parentDir } from "../state/safePath";
+import { useApp, useAppState } from "../app/context";
 
 export interface FileTreeProps {
-  root: string;
-  activePath: string | null;
-  onOpen: (path: string) => void;
-  refreshNonce?: number;
-  /** Optional: notify parent when the path list refreshes (so wikilink resolution caches stay in sync). */
-  onPathsRefreshed?: (paths: string[]) => void;
+  /** Close the hosting drawer/sidebar after opening a file. */
+  onOpened?: () => void;
 }
 
-export function FileTree({ root, activePath, onOpen, refreshNonce, onPathsRefreshed }: FileTreeProps) {
-  const [files, setFiles] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
+function splitPath(path: string): { dir: string; name: string } {
+  const idx = path.lastIndexOf("/");
+  if (idx < 0) return { dir: "", name: path };
+  return { dir: path.slice(0, idx), name: path.slice(idx + 1) };
+}
+
+export function FileTree({ onOpened }: FileTreeProps) {
+  const app = useApp();
+  const files = useAppState((s) => s.paths);
+  const loading = useAppState((s) => s.pathsLoading || !s.pathsLoaded);
+  const activePath = useAppState((s) => s.activePath);
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const list = await listMdxPaths(root);
-      setFiles(list);
-      onPathsRefreshed?.(list);
-    } finally {
-      setLoading(false);
-    }
-  }, [root, onPathsRefreshed]);
-
-  useEffect(() => { void refresh(); }, [refresh, refreshNonce]);
+  const open = useCallback((path: string) => {
+    app.editor.openFile(path);
+    onOpened?.();
+  }, [app, onOpened]);
 
   const handleCreate = useCallback(async () => {
     const trimmed = newName.trim();
     if (!trimmed) return;
     setCreateError(null);
-    const relPath = trimmed.endsWith(".mdx") ? trimmed : `${trimmed}.mdx`;
-    // Reject `../` traversal and absolute paths that would escape root.
-    const full = joinSafe(root, relPath);
-    if (!full) {
-      setCreateError(`"${relPath}" escapes the workspace root`);
-      return;
-    }
-    // Refuse to clobber an existing file.
     try {
-      await fs.stat(full);
-      setCreateError(`"${relPath}" already exists`);
-      return;
-    } catch {
-      // ENOENT → safe to create
-    }
-    const parent = parentDir(full);
-    if (parent) {
-      try { await fs.mkdir(parent, { recursive: true }); } catch (err) {
-        console.warn("[Spectrolite] mkdir failed:", err);
-      }
-    }
-    try {
-      // Exclusive-create: fail rather than clobber. We do NOT fall back to
-      // a plain writeFile on non-EEXIST errors — an unknown failure
-      // (EACCES, ENOSPC, etc.) shouldn't be silently downgraded to an
-      // overwrite that could destroy a concurrently-created file. The
-      // earlier stat() narrows the typical case; the `wx` flag closes
-      // the residual race.
-      const fsWithFlags = fs as unknown as { writeFile(p: string, data: string, opts?: { flag?: string }): Promise<void> };
-      await fsWithFlags.writeFile(full, `# ${trimmed.replace(/\.mdx$/, "")}\n\n`, { flag: "wx" });
+      const created = await app.vault.createFile(trimmed, `# ${trimmed.replace(/\.mdx$/, "")}\n\n`);
+      setNewName("");
+      open(created);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/eexist/i.test(msg)) {
-        setCreateError(`"${relPath}" already exists`);
-        return;
-      }
-      console.warn("[Spectrolite] Failed to create file:", err);
-      setCreateError(msg);
-      return;
+      setCreateError(err instanceof Error ? err.message : String(err));
     }
-    setNewName("");
-    await refresh();
-    onOpen(relPath);
-  }, [newName, root, refresh, onOpen]);
+  }, [app, newName, open]);
 
   return (
     <Flex direction="column" gap="2" className="spectrolite-file-tree" style={{ height: "100%", padding: "var(--space-2)" }}>
-      <Flex align="center" justify="between" gap="2">
-        <Text size="1" weight="medium" color="gray">FILES</Text>
-        <Button size="1" variant="ghost" color="gray" onClick={() => void refresh()} aria-label="Refresh">
+      <Flex align="center" justify="between" gap="2" px="1">
+        <Text size="1" weight="bold" color="gray" style={{ letterSpacing: "0.06em" }}>FILES</Text>
+        <IconButton size="1" variant="ghost" color="gray" onClick={() => void app.vault.refreshPaths()} aria-label="Refresh">
           <ReloadIcon />
-        </Button>
+        </IconButton>
       </Flex>
       <Flex gap="1">
         <TextField.Root
@@ -107,9 +66,9 @@ export function FileTree({ root, activePath, onOpen, refreshNonce, onPathsRefres
           onKeyDown={(e) => { if (e.key === "Enter") void handleCreate(); }}
           style={{ flex: 1 }}
         />
-        <Button size="1" variant="soft" onClick={() => void handleCreate()} disabled={!newName.trim()}>
+        <IconButton size="1" variant="soft" onClick={() => void handleCreate()} disabled={!newName.trim()} aria-label="Create note">
           <PlusIcon />
-        </Button>
+        </IconButton>
       </Flex>
       {createError ? (
         <Callout.Root size="1" color="red">
@@ -120,25 +79,26 @@ export function FileTree({ root, activePath, onOpen, refreshNonce, onPathsRefres
       <Box style={{ flex: 1, minHeight: 0 }}>
         <ScrollArea>
           {loading ? (
-            <Text size="1" color="gray">Loading…</Text>
+            <Text size="1" color="gray" as="div" style={{ padding: "var(--space-2)" }}>Loading…</Text>
           ) : files.length === 0 ? (
-            <Text size="1" color="gray">No .mdx files yet</Text>
+            <Text size="1" color="gray" as="div" style={{ padding: "var(--space-2)" }}>No .mdx files yet</Text>
           ) : (
-            <Flex direction="column" gap="0">
+            <Flex direction="column">
               {files.map((path) => {
                 const active = path === activePath;
+                const { dir, name } = splitPath(path);
                 return (
-                  <Button
+                  <button
                     key={path}
-                    size="1"
-                    variant={active ? "soft" : "ghost"}
-                    color={active ? "blue" : "gray"}
-                    onClick={() => onOpen(path)}
-                    style={{ justifyContent: "flex-start", textAlign: "left" }}
+                    type="button"
+                    className={`spectrolite-file-row${active ? " spectrolite-file-row--active" : ""}`}
+                    onClick={() => open(path)}
+                    title={path}
                   >
-                    <FileTextIcon />
-                    <Code variant="ghost" size="1">{path}</Code>
-                  </Button>
+                    <FileTextIcon className="spectrolite-file-row-icon" />
+                    <span className="spectrolite-file-row-name">{name}</span>
+                    {dir ? <span className="spectrolite-file-row-dir">{dir}</span> : null}
+                  </button>
                 );
               })}
             </Flex>

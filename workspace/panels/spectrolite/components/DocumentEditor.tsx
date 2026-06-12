@@ -80,6 +80,8 @@ export interface DocumentEditorProps {
   mentionCandidates: MentionCandidate[];
   /** Frontmatter-declared dependencies; passed to inline JSX + preview compile. */
   dependencies: Record<string, string>;
+  /** A conflict recovery file was written alongside the active document. */
+  onRecoveryCreated?: (path: string) => void;
 }
 
 const POLL_MS = 600;
@@ -107,6 +109,33 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function recoveryPathFor(relPath: string): string {
+  return relPath.replace(/\.mdx$/i, "") + `.mine-${Date.now()}.mdx`;
+}
+
+function conflictPreview(mineMdx: string | null, diskMdx: string): string {
+  if (mineMdx === null) return diskMdx.split(/\r?\n/).slice(0, 8).join("\n");
+  const mine = wikilinksFromJsx(mineMdx).split(/\r?\n/);
+  const disk = diskMdx.split(/\r?\n/);
+  const max = Math.max(mine.length, disk.length);
+  let firstDiff = 0;
+  while (firstDiff < max && mine[firstDiff] === disk[firstDiff]) firstDiff += 1;
+  const start = Math.max(0, firstDiff - 2);
+  const end = Math.min(max, firstDiff + 6);
+  const out: string[] = [];
+  for (let i = start; i < end; i += 1) {
+    const diskLine = disk[i];
+    const mineLine = mine[i];
+    if (diskLine === mineLine) {
+      out.push(`  ${diskLine ?? ""}`);
+    } else {
+      if (diskLine !== undefined) out.push(`- ${diskLine}`);
+      if (mineLine !== undefined) out.push(`+ ${mineLine}`);
+    }
+  }
+  return out.join("\n") || "(no text differences)";
+}
+
 export function DocumentEditor({
   repoRoot,
   relPath,
@@ -117,6 +146,7 @@ export function DocumentEditor({
   hasUnflushedChanges,
   mentionCandidates,
   dependencies,
+  onRecoveryCreated,
 }: DocumentEditorProps) {
   const [markdown, setMarkdown] = useState<string | null>(null);
   const markdownRef = useRef<string | null>(null);
@@ -168,6 +198,7 @@ export function DocumentEditor({
   const [fileMissing, setFileMissing] = useState(false);
   const fileMissingRef = useRef(fileMissing);
   fileMissingRef.current = fileMissing;
+  const [recoveryNotice, setRecoveryNotice] = useState<{ path: string } | null>(null);
 
   // Resolved + traversal-checked. Defensive even though the panel's fs is
   // RPC-scoped to the context root.
@@ -222,6 +253,7 @@ export function DocumentEditor({
     setRichEditorKey((n) => n + 1);
     setDiskConflict(null);
     setFileMissing(false);
+    setRecoveryNotice(null);
     lastDiskRef.current = null;
     bufferedMarkdownRef.current = null;
     const signal = { cancelled: false };
@@ -301,21 +333,35 @@ export function DocumentEditor({
   const resolveConflictTakeDisk = useCallback(() => {
     const conflict = diskConflict;
     if (!conflict) return;
-    setDiskConflict(null);
-    const transformed = wikilinksToJsx(conflict.disk);
-    const merged = Object.keys(docStateRef.current).length > 0
-      ? replaceFrontmatterState(transformed, docStateRef.current)
-      : transformed;
-    if (mergeTimerRef.current) {
-      clearTimeout(mergeTimerRef.current);
-      mergeTimerRef.current = null;
-    }
-    bufferedMarkdownRef.current = merged;
-    setMarkdown(merged);
-    setDocState(parseFrontmatter(merged).state);
-    editorRef.current?.setMarkdown(merged);
-    onReload(relPath, merged);
-  }, [diskConflict, onReload, relPath]);
+    void (async () => {
+      const mine = bufferedMarkdownRef.current ?? markdownRef.current;
+      if (mine !== null) {
+        try {
+          const recoveryPath = recoveryPathFor(relPath);
+          await writeBufferToDisk(repoRoot, recoveryPath, mine);
+          setRecoveryNotice({ path: recoveryPath });
+          onRecoveryCreated?.(recoveryPath);
+        } catch (err) {
+          setError(`Could not write recovery copy before taking disk version: ${errorMessage(err)}`);
+          return;
+        }
+      }
+      setDiskConflict(null);
+      const transformed = wikilinksToJsx(conflict.disk);
+      const merged = Object.keys(docStateRef.current).length > 0
+        ? replaceFrontmatterState(transformed, docStateRef.current)
+        : transformed;
+      if (mergeTimerRef.current) {
+        clearTimeout(mergeTimerRef.current);
+        mergeTimerRef.current = null;
+      }
+      bufferedMarkdownRef.current = merged;
+      setMarkdown(merged);
+      setDocState(parseFrontmatter(merged).state);
+      editorRef.current?.setMarkdown(merged);
+      onReload(relPath, merged);
+    })();
+  }, [diskConflict, onReload, onRecoveryCreated, relPath, repoRoot]);
 
   const recreateMissingFile = useCallback(async () => {
     if (!fullPath || markdown === null) return;
@@ -673,12 +719,29 @@ export function DocumentEditor({
               <Callout.Text size="2">
                 This file was changed on disk while you have unflushed edits.
               </Callout.Text>
+              <Box mt="2">
+                <pre className="spectrolite-conflict-preview" data-testid="spectrolite-conflict-preview">
+                  {conflictPreview(bufferedMarkdownRef.current ?? markdown, diskConflict.disk)}
+                </pre>
+              </Box>
               <Flex gap="2" mt="2">
                 <Button size="2" variant="solid" color="amber" onClick={resolveConflictTakeDisk}>
-                  Reload from disk
+                  Take disk version
                 </Button>
                 <Button size="2" variant="soft" color="gray" onClick={resolveConflictKeepMine}>
                   Keep my edits
+                </Button>
+              </Flex>
+            </Callout.Root>
+          ) : null}
+          {recoveryNotice ? (
+            <Callout.Root color="grass" size="1" style={{ borderRadius: 0, borderLeft: 0, borderRight: 0 }} data-testid="spectrolite-conflict-recovery-saved">
+              <Callout.Text size="2">
+                Your version was saved to {recoveryNotice.path}.
+              </Callout.Text>
+              <Flex gap="2" mt="2">
+                <Button size="1" variant="soft" color="gray" onClick={() => setRecoveryNotice(null)}>
+                  Dismiss
                 </Button>
               </Flex>
             </Callout.Root>

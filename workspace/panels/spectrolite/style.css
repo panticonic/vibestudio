@@ -1,32 +1,433 @@
+/* ====================================================================
+ * Spectrolite visual design.
+ *
+ * Built on Radix Themes tokens (iris accent / slate gray). Everything
+ * here is restraint + typography: a quiet chrome around a generous,
+ * readable prose column, with motion only where it orients the user
+ * (slide-over panels, status dot).
+ * ==================================================================== */
+
+/* ---------- chrome ---------- */
+
+.spectrolite-header {
+  flex-shrink: 0;
+  background: var(--color-panel-solid);
+  border-bottom: 1px solid var(--gray-4);
+  position: relative;
+}
+
+/* Iridescent accent line under the header — the "spectrolite" sheen. */
+.spectrolite-header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--iris-6) 20%,
+    var(--cyan-6) 50%,
+    var(--violet-6) 80%,
+    transparent
+  );
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.spectrolite-gem {
+  color: var(--iris-9);
+  font-size: 40px;
+  line-height: 1;
+  background: linear-gradient(135deg, var(--iris-9), var(--cyan-9) 55%, var(--violet-9));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.spectrolite-gem--small {
+  font-size: 16px;
+}
+
+.spectrolite-chip {
+  padding: 2px 8px;
+  border-radius: var(--radius-3);
+  background: var(--gray-a2);
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.spectrolite-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.spectrolite-commit-bar {
+  flex-shrink: 0;
+  border-top: 1px solid var(--gray-4);
+  background: var(--color-panel-solid);
+}
+
+.spectrolite-mobile-actions {
+  flex-shrink: 0;
+  border-top: 1px solid var(--gray-4);
+  background: var(--color-panel-solid);
+}
+
+.spectrolite-empty-card {
+  max-width: 440px;
+  text-align: center;
+  padding: var(--space-6);
+  border: 1px dashed var(--gray-6);
+  border-radius: var(--radius-4);
+  background: var(--gray-a1);
+}
+
+.spectrolite-conflict-preview {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  padding: var(--space-2);
+  border: 1px solid var(--amber-6);
+  border-radius: var(--radius-2);
+  background: var(--amber-a2);
+  color: var(--gray-12);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+/* ---------- vault picker ---------- */
+
+.spectrolite-picker {
+  background:
+    radial-gradient(1200px 500px at 50% -10%, var(--iris-a3), transparent 60%),
+    var(--color-background);
+}
+
+.spectrolite-vault-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid transparent;
+  border-radius: var(--radius-3);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  min-height: 52px;
+}
+
+.spectrolite-vault-row:hover {
+  background: var(--iris-a2);
+  border-color: var(--iris-a5);
+}
+
+.spectrolite-vault-row:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: -2px;
+}
+
+.spectrolite-vault-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-3);
+  background: var(--iris-a3);
+  color: var(--iris-11);
+  flex-shrink: 0;
+}
+
+/* ---------- file tree / backlinks ---------- */
+
+.spectrolite-file-tree {
+  background: var(--color-panel-solid);
+}
+
+.spectrolite-file-row,
+.spectrolite-backlink-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 4px var(--space-2);
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-2);
+  background: transparent;
+  color: var(--gray-12);
+  font: inherit;
+  font-size: var(--font-size-1);
+  cursor: pointer;
+  text-align: left;
+  min-height: 28px;
+}
+
+.spectrolite-file-row:hover,
+.spectrolite-backlink-row:hover {
+  background: var(--gray-a3);
+}
+
+.spectrolite-file-row:focus-visible,
+.spectrolite-backlink-row:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: -2px;
+}
+
+.spectrolite-file-row--active {
+  background: var(--iris-a3);
+  border-left-color: var(--iris-9);
+  color: var(--iris-12);
+}
+
+.spectrolite-file-row-icon {
+  flex-shrink: 0;
+  color: var(--gray-9);
+}
+
+.spectrolite-file-row--active .spectrolite-file-row-icon {
+  color: var(--iris-10);
+}
+
+.spectrolite-file-row-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spectrolite-file-row-dir {
+  margin-left: auto;
+  color: var(--gray-9);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 45%;
+  flex-shrink: 1;
+}
+
+.spectrolite-quick-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1.1fr);
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 36px;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-3);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.spectrolite-quick-section {
+  padding: 0 var(--space-2);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.spectrolite-quick-row:hover,
+.spectrolite-quick-row--selected {
+  background: var(--iris-a2);
+  border-color: var(--iris-a5);
+}
+
+.spectrolite-quick-row:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: -2px;
+}
+
+.spectrolite-quick-row-title,
+.spectrolite-quick-row-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.spectrolite-quick-row-title {
+  font-weight: 500;
+}
+
+.spectrolite-quick-row-path {
+  color: var(--gray-10);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+}
+
+.spectrolite-quick-match {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--amber-a5);
+  color: inherit;
+}
+
+.spectrolite-backlink-row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: var(--space-2);
+}
+
+.spectrolite-backlink-row .spectrolite-file-row-name {
+  color: var(--iris-11);
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.spectrolite-backlink-snippet {
+  color: var(--gray-10);
+  font-size: var(--font-size-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ---------- agents ---------- */
+
+.spectrolite-agent-row {
+  border: 1px solid var(--gray-4);
+  border-radius: var(--radius-3);
+  background: var(--gray-a1);
+}
+
+.spectrolite-agent-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--iris-a4), var(--cyan-a4));
+  color: var(--iris-11);
+  flex-shrink: 0;
+}
+
+/* ---------- channel dock ---------- */
+
+.spectrolite-dock {
+  flex-shrink: 0;
+  border-top: 1px solid var(--gray-4);
+  background: var(--color-panel-translucent);
+  backdrop-filter: blur(8px);
+}
+
+.spectrolite-drawer-toggle:focus {
+  outline: none;
+}
+
+.spectrolite-drawer-toggle:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: -2px;
+}
+
+.spectrolite-bubble {
+  border-radius: var(--radius-3);
+  padding: var(--space-2) var(--space-3);
+  max-width: 92%;
+}
+
+.spectrolite-bubble--agent {
+  background: var(--iris-a2);
+  border: 1px solid var(--iris-a4);
+  align-self: flex-start;
+}
+
+.spectrolite-bubble--self {
+  background: var(--gray-a3);
+  border: 1px solid var(--gray-a4);
+  align-self: flex-end;
+}
+
+/* ---------- slide-over panels ---------- */
+
+@keyframes spectrolite-slide-in-left {
+  from { transform: translateX(-24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes spectrolite-slide-in-right {
+  from { transform: translateX(24px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+.spectrolite-side-panel--left {
+  border-right: 1px solid var(--gray-5);
+  animation: spectrolite-slide-in-left 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.spectrolite-side-panel--right {
+  border-left: 1px solid var(--gray-5);
+  animation: spectrolite-slide-in-right 160ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.spectrolite-side-panel-header {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--gray-4);
+  background: var(--color-panel-solid);
+}
+
+/* ---------- editor / prose ---------- */
+
 .spectrolite-mdx {
   background: var(--color-background);
 }
 
+/* Readable column: generous measure, centered, comfortable rhythm. */
 .spectrolite-content {
   font-size: var(--font-size-3);
-  line-height: var(--line-height-3);
-  padding: var(--space-4);
+  line-height: 1.65;
+  padding: var(--space-5) max(var(--space-5), calc((100% - 76ch) / 2)) var(--space-8);
   min-height: 100%;
+  caret-color: var(--iris-9);
 }
 
-/* Hide the focus ring only for mouse users; keyboard users (focus-visible)
-   still see a high-contrast outline so they can locate the editor. */
+.spectrolite-content h1,
+.spectrolite-content h2,
+.spectrolite-content h3 {
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+
+.spectrolite-content h1 {
+  margin-top: var(--space-4);
+  border-bottom: 1px solid var(--gray-4);
+  padding-bottom: var(--space-2);
+}
+
+.spectrolite-content blockquote {
+  border-left: 3px solid var(--iris-7);
+  color: var(--gray-11);
+}
+
+.spectrolite-content a {
+  color: var(--iris-11);
+}
+
+/* Hide the focus ring only for mouse users; keyboard users still get a
+   high-contrast outline so they can locate the editor. */
 .spectrolite-content:focus {
   outline: none;
 }
+
 .spectrolite-content:focus-visible {
   outline: 2px solid var(--accent-9);
   outline-offset: -2px;
   border-radius: var(--radius-2);
-}
-
-/* Channel drawer toggle keyboard focus */
-.spectrolite-drawer-toggle:focus {
-  outline: none;
-}
-.spectrolite-drawer-toggle:focus-visible {
-  outline: 2px solid var(--accent-9);
-  outline-offset: -2px;
 }
 
 .spectrolite-content--dark {
@@ -50,13 +451,19 @@
   position: sticky;
   top: 0;
   z-index: 2;
-  border-bottom: 1px solid var(--gray-5);
+  border-bottom: 1px solid var(--gray-4);
+  border-radius: 0;
+  background: var(--color-panel-solid);
+}
+
+/* Live JSX components inside the editor breathe a bit */
+.spectrolite-mdx .mdxeditor [data-lexical-decorator] {
+  margin: var(--space-2) 0;
 }
 
 /* Dark-theme overrides for MDXEditor's toolbar, dialogs, and popovers.
-   MDXEditor's default styles assume a light background; on dark themes we
-   re-map its CSS variables to Radix dark tokens so the toolbar and dialogs
-   blend in. */
+   MDXEditor's defaults assume a light background; re-map its CSS vars to
+   Radix dark tokens so the toolbar and dialogs blend in. */
 [data-is-root-theme] [data-accent-color] .spectrolite-mdx .mdxeditor.dark-theme,
 .dark-theme .spectrolite-mdx .mdxeditor,
 .spectrolite-mdx.dark-theme .mdxeditor {
@@ -85,53 +492,55 @@
   --accentTextContrast: var(--accent-12);
 }
 
-/* Live JSX components inside the editor breathe a bit */
-.spectrolite-mdx .mdxeditor [data-lexical-decorator] {
-  margin: var(--space-2) 0;
+/* Subtle scrollbars inside our panes */
+.spectrolite-file-tree ::-webkit-scrollbar,
+.spectrolite-mdx ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.spectrolite-file-tree ::-webkit-scrollbar-thumb,
+.spectrolite-mdx ::-webkit-scrollbar-thumb {
+  background: var(--gray-a5);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 /* ----------------------------------------------------------------
- * Mobile adjustments
- * Triggered by max-width 767px (matches @workspace/react useIsMobile).
+ * Mobile adjustments (max-width 767px matches useIsMobile).
  * ---------------------------------------------------------------- */
 @media (max-width: 767px) {
-  /* MDXEditor toolbar gets too wide for phone screens — let it scroll
-   * horizontally instead of wrapping awkwardly or being cropped. */
+  /* MDXEditor toolbar gets too wide for phone screens — scroll it
+   * horizontally instead of wrapping awkwardly. */
   .spectrolite-mdx .mdxeditor-toolbar {
     overflow-x: auto;
     flex-wrap: nowrap;
     -webkit-overflow-scrolling: touch;
   }
+
   .spectrolite-mdx .mdxeditor-toolbar::-webkit-scrollbar {
     display: none;
   }
 
-  /* Editor padding tighter so prose isn't a thin column. */
   .spectrolite-content {
     padding: var(--space-3);
-    font-size: var(--font-size-3);
-    line-height: var(--line-height-3);
+    line-height: 1.6;
   }
 }
 
 /* ----------------------------------------------------------------
- * Touch-device adjustments (coarse pointer = phone OR tablet).
- * Bumps interactive elements to the iOS/Android 44 px tap target.
+ * Touch devices: 44px tap targets.
  * ---------------------------------------------------------------- */
 @media (pointer: coarse) {
   .spectrolite-mdx .mdxeditor-toolbar button {
     min-height: 44px;
     min-width: 44px;
   }
-  /* File tree rows are size=1 Radix Buttons by design (visual density),
-   * but on touch they're undersized. Bump each row to 44 px. */
-  .spectrolite-file-tree button {
+
+  .spectrolite-file-row,
+  .spectrolite-backlink-row,
+  .spectrolite-vault-row {
     min-height: 44px;
   }
-}
-
-/* Mobile sidebar / bottom sheet — make sure the editor underneath
- * doesn't bleed through behind the sidebar's solid panel. */
-.spectrolite-file-tree {
-  background: var(--color-panel-solid);
 }

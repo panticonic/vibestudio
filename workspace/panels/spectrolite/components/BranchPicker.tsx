@@ -1,108 +1,34 @@
 /**
- * Minimal branch picker for the active vault.
- *
- * Reads branches via `listBranches(repoPath)` from `@workspace/runtime`
- * (which talks to the git server's tree manager) and switches via
- * `GitClient.checkout(repoPath, branch)`.
- *
- * Doesn't use `@workspace/git-ui`'s `BranchSelector` because that one
- * relies on a global Jotai store that's initialised by `GitStatusView`,
- * which we don't mount in Spectrolite.
+ * Branch picker for the active vault — dropdown fed by the git
+ * controller's branch list. Checkout (incl. the dirty-tree guard and the
+ * clean-tree force fallback) lives in GitController.
  */
 
-import { useCallback, useEffect, useState } from "react";
 import { Button, DropdownMenu, Flex, Spinner, Text } from "@radix-ui/themes";
 import { ChevronDownIcon, CheckIcon } from "@radix-ui/react-icons";
-import { git as runtimeGit, listBranches } from "@workspace/runtime";
-import { formatGitError } from "../state/gitErrors";
+import { useApp, useAppState } from "../app/context";
 
-export interface BranchPickerProps {
-  /** Context-fs path of the vault (e.g. `/projects/default`). */
-  repoRoot: string;
-  /** Bumped externally after commits so the branch list refreshes. */
-  refreshNonce?: number;
-}
-
-function toRelative(repoRoot: string): string {
-  return repoRoot.replace(/^\/+/, "");
-}
-
-export function BranchPicker({ repoRoot, refreshNonce = 0 }: BranchPickerProps) {
-  const [branches, setBranches] = useState<Array<{ name: string; current: boolean }>>([]);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    const rel = toRelative(repoRoot);
-    void (async () => {
-      try {
-        const list = await listBranches(rel);
-        if (cancelled) return;
-        setBranches(list.map((b) => ({ name: b.name, current: b.current })));
-        setError(null);
-      } catch (err) {
-        if (cancelled) return;
-        console.debug("[Spectrolite] listBranches failed:", err);
-        setBranches([]);
-        setError(formatGitError("branches", err));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [repoRoot, refreshNonce]);
+export function BranchPicker() {
+  const app = useApp();
+  const branches = useAppState((s) => s.branches);
+  const loading = useAppState((s) => s.branchesLoading);
+  const busy = useAppState((s) => s.checkoutBusy);
+  const error = useAppState((s) => s.branchError);
+  const operation = useAppState((s) => s.gitOperation);
 
   const current = branches.find((b) => b.current)?.name;
 
-  const handleCheckout = useCallback(async (name: string) => {
-    if (name === current || busy) return;
-    const git = runtimeGit.client();
-    setBusy(true);
-    setError(null);
-    try {
-      const status = await git.status(repoRoot);
-      const dirtyFiles = (status.files ?? []).filter((file) => file.status !== "unmodified" && file.status !== "ignored");
-      if (dirtyFiles.length > 0) {
-        setError("Commit or discard changes before switching branches.");
-        return;
-      }
-      const forceCheckoutIfClean = async (checkoutErr?: unknown) => {
-        const refreshedStatus = await git.status(repoRoot);
-        const refreshedDirtyFiles = (refreshedStatus.files ?? [])
-          .filter((file) => file.status !== "unmodified" && file.status !== "ignored");
-        if (refreshedDirtyFiles.length > 0) throw checkoutErr ?? new Error("Commit or discard changes before switching branches.");
-        await git.checkout(repoRoot, name, { force: true });
-      };
-      try {
-        await git.checkout(repoRoot, name);
-        const nextStatus = await git.status(repoRoot);
-        if (nextStatus.branch !== name) await forceCheckoutIfClean();
-      } catch (checkoutErr) {
-        await forceCheckoutIfClean(checkoutErr);
-      }
-      // Refresh by re-running the effect.
-      setBranches((prev) => prev.map((b) => ({ ...b, current: b.name === name })));
-    } catch (err) {
-      console.warn("[Spectrolite] checkout failed:", err);
-      setError(formatGitError("checkout", err));
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, current, repoRoot]);
-
-  if (loading) return <Spinner size="1" />;
+  if (loading && branches.length === 0) return <Spinner size="1" />;
   if (branches.length === 0) {
     return <Text size="1" color={error ? "red" : "gray"}>{error ? `branches unavailable: ${error}` : "no branches"}</Text>;
   }
 
   return (
-    <Flex align="center" gap="2">
+    <Flex align="center" gap="2" wrap="wrap">
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
-          <Button size="1" variant="ghost" color={error ? "red" : "gray"} disabled={busy} data-testid="spectrolite-branch-trigger">
+          <Button size="1" variant="surface" color={error ? "red" : "gray"} disabled={busy} data-testid="spectrolite-branch-trigger">
+            {busy ? <Spinner size="1" /> : null}
             {current ?? "detached"} <ChevronDownIcon />
           </Button>
         </DropdownMenu.Trigger>
@@ -111,8 +37,7 @@ export function BranchPicker({ repoRoot, refreshNonce = 0 }: BranchPickerProps) 
           {branches.map((b) => (
             <DropdownMenu.Item
               key={b.name}
-              onSelect={() => void handleCheckout(b.name)}
-              data-testid={`spectrolite-branch-${b.name}`}
+              onSelect={() => void app.git.checkout(b.name)}
             >
               <Flex
                 align="center"
@@ -131,6 +56,10 @@ export function BranchPicker({ repoRoot, refreshNonce = 0 }: BranchPickerProps) 
       {error ? (
         <Text size="1" color="red" title={error} data-testid="spectrolite-branch-error">
           {error}
+        </Text>
+      ) : operation === "flushing" || operation === "checkout" ? (
+        <Text size="1" color="gray" data-testid="spectrolite-branch-operation">
+          {operation === "flushing" ? "Flushing edits..." : "Switching branch..."}
         </Text>
       ) : null}
     </Flex>

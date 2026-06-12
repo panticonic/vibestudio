@@ -1,283 +1,100 @@
 /**
  * Spectrolite — Obsidian-style MDX knowledge base panel.
  *
- * On mount without a channelName, auto-generates one and spawns the default
- * AI chat agent DO with the Spectrolite system prompt. The panel and agent
- * share `contextId` so the agent's normal file-editing tools see the same
- * `.mdx` files the user is editing. No special edit RPC.
+ * Architecture: `app/createApp` builds a small external store plus four
+ * controllers (session, vault, editor, git) that own ALL imperative
+ * lifecycle — channel connection, agent bootstrap/rehydration, the flush
+ * pipeline, and git operations. The React tree below is a pure view of
+ * the store; components subscribe to slices via `useAppState` so editing
+ * keystrokes never re-render the shell.
  *
- * Channel + agent bootstrap follows the chat panel pattern
- * (`workspace/panels/chat/index.tsx`) — same DO subscription, rehydration,
- * and stable-key persistence in stateArgs.
+ * The panel and its resident agent share `contextId`, so the agent's
+ * normal file-editing tools see the same `.mdx` files the user edits.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useMemo } from "react";
+import { promises as fs } from "fs";
 import { Flex, Spinner, Text, Theme } from "@radix-ui/themes";
-import {
-  contextId as runtimeContextId,
-  useStateArgs,
-  setStateArgs,
-  getStateArgs,
-} from "@workspace/runtime";
 import { usePanelTheme } from "@workspace/react";
 import { ErrorBoundary } from "@workspace/agentic-chat";
-import {
-  appendInstalledAgent,
-  createAndSubscribeAgent,
-  getChannelDOParticipants,
-  listAvailableAgents,
-  newAgentKey,
-  newChannelName,
-  resolveContextId,
-  unsubscribeDOFromChannel,
-  type InstalledAgentRecord,
-} from "./bootstrap";
-import { Workspace } from "./components/Workspace";
-import { spectroliteAgentSystemPrompt } from "./agent-prompt";
+import { createSpectroliteApp } from "./app/createApp";
+import { AppProvider, useAppState } from "./app/context";
+import { Shell } from "./components/Shell";
+import { joinSafe, parentDir } from "./state/safePath";
 import "@workspace/agentic-chat/styles.css";
 import "./style.css";
 
-// Silent agent worker is the default companion: it only sends a chat
-// message when it explicitly calls its `say` tool, so the channel stays
-// quiet during routine file edits. Spectrolite's primary signal channel
-// is the kb.user_edit / file-edit loop, not chat.
-const DEFAULT_WORKER_SOURCE = "workers/silent-agent-worker";
-const DEFAULT_CLASS_NAME = "SilentAgentWorker";
-const DEFAULT_HANDLE = "scribe";
-
-interface SpectroliteStateArgs {
-  channelName?: string;
-  contextId?: string;
-  installedAgents?: InstalledAgentRecord[];
-  openPath?: string;
-  /** Context-fs path of the currently selected vault (e.g. `/projects/default`). */
-  repoRoot?: string;
-}
-
-function buildAgentConfig(opts: { handle: string; repoRoot: string | null }): Record<string, unknown> {
-  return {
-    handle: opts.handle,
-    systemPrompt: spectroliteAgentSystemPrompt({
-      workspaceRoot: opts.repoRoot ?? "/projects/<not-selected-yet>",
-      handle: opts.handle,
-    }),
-    systemPromptMode: "append",
-  };
-}
-
-function buildAddedAgentConfig(opts: { handle: string; repoRoot: string | null; className: string }): Record<string, unknown> {
-  const base = buildAgentConfig({ handle: opts.handle, repoRoot: opts.repoRoot });
-  if (opts.className === "TestAgentWorker") {
-    return {
-      ...base,
-      deterministicResponse: true,
-      writeVaultSwitchMarker: true,
-      markerPath: "AgentProof.mdx",
-      responseText: `Deterministic Spectrolite test agent @${opts.handle} handled the update.`,
-      delayMs: 10,
-    };
-  }
-  return base;
-}
-
 export default function SpectrolitePanel() {
   const theme = usePanelTheme();
-  const stateArgs = useStateArgs<SpectroliteStateArgs>();
-  const resolvedContextId = resolveContextId(stateArgs.contextId, runtimeContextId);
-  // No default — until the user picks a vault, repoRoot is null and the
-  // Workspace renders the VaultPicker instead of the editor. (The picker
-  // surfaces `projects/default` as a pre-init'd option if it exists in
-  // the workspace; that's the closest thing to a "default vault".)
-  const repoRoot = stateArgs.repoRoot ?? null;
+  const app = useMemo(() => createSpectroliteApp(), []);
 
-  const handleSelectVault = useCallback((contextPath: string) => {
-    void setStateArgs({ repoRoot: contextPath, openPath: undefined });
-  }, []);
-
-  const handleSwitchVault = useCallback(() => {
-    void setStateArgs({ repoRoot: undefined, openPath: undefined });
-  }, []);
-
-  const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
-  const [bootstrapInstalled, setBootstrapInstalled] = useState<InstalledAgentRecord[] | null>(null);
-  const bootstrapAttempted = useRef(false);
-  const defaultAgentAttempted = useRef(false);
-
-  // Auto-bootstrap the channel on first mount. The default agent is
-  // deliberately delayed until a vault is selected so its system prompt
-  // contains a real workspace root instead of a placeholder.
   useEffect(() => {
-    if (stateArgs.channelName || bootstrapAttempted.current || !resolvedContextId) return;
-    bootstrapAttempted.current = true;
+    app.start();
+    return () => app.dispose();
+  }, [app]);
 
-    const channelName = newChannelName();
-
-    void setStateArgs({
-      channelName,
-      contextId: resolvedContextId,
-      repoRoot,
-    });
-
-    setBootstrapChannel(channelName);
-  }, [resolvedContextId, stateArgs.channelName, repoRoot]);
-
-  // Create the default resident agent only after the user has picked a
-  // vault. Additional manually-added agents still go through handleAddAgent.
+  // E2E-only panel hook. Tests must call the installer explicitly, and
+  // every file operation is scoped through joinSafe() to the active vault.
   useEffect(() => {
-    const channelName = stateArgs.channelName ?? bootstrapChannel;
-    const installed = stateArgs.installedAgents ?? bootstrapInstalled ?? [];
-    if (!repoRoot || !resolvedContextId || !channelName) return;
-    if (installed.length > 0 || defaultAgentAttempted.current) return;
-    defaultAgentAttempted.current = true;
-
-    const agentKey = newAgentKey(DEFAULT_HANDLE);
-    const defaultAgent: InstalledAgentRecord = {
-      agentId: DEFAULT_CLASS_NAME,
-      handle: DEFAULT_HANDLE,
-      key: agentKey,
-      source: DEFAULT_WORKER_SOURCE,
-      className: DEFAULT_CLASS_NAME,
-    };
-    setBootstrapInstalled([defaultAgent]);
-    void setStateArgs({ installedAgents: [defaultAgent] });
-
-    createAndSubscribeAgent({
-      source: DEFAULT_WORKER_SOURCE,
-      className: DEFAULT_CLASS_NAME,
-      key: agentKey,
-      channelId: channelName,
-      channelContextId: resolvedContextId,
-      config: buildAgentConfig({ handle: DEFAULT_HANDLE, repoRoot }),
-      replay: true,
-    }).catch((err: unknown) => {
-      defaultAgentAttempted.current = false;
-      setBootstrapInstalled(null);
-      const cur = getStateArgs<SpectroliteStateArgs>();
-      if ((cur.installedAgents ?? []).some((agent) => agent.key === agentKey)) {
-        void setStateArgs({
-          installedAgents: (cur.installedAgents ?? []).filter((agent) => agent.key !== agentKey),
-        });
-      }
-      console.warn("[Spectrolite] failed to subscribe default agent:", err);
-    });
-  }, [bootstrapChannel, bootstrapInstalled, resolvedContextId, repoRoot, stateArgs.channelName, stateArgs.installedAgents]);
-
-  // Rehydration: if channelName persists but no DO participants are subscribed
-  // (host restart), re-create each persisted agent with the same stable key.
-  const rehydrated = useRef(false);
-  useEffect(() => {
-    if (rehydrated.current || bootstrapAttempted.current) return;
-    if (!stateArgs.channelName || !resolvedContextId) return;
-    if (!repoRoot) return;
-    rehydrated.current = true;
-    const channelName = stateArgs.channelName;
-    void (async () => {
-      try {
-        const dos = await getChannelDOParticipants(channelName);
-        if (dos.length > 0) return;
-        const list = stateArgs.installedAgents ?? [];
-        if (list.length === 0) return;
-        for (const agent of list) {
-          try {
-            await createAndSubscribeAgent({
-              source: agent.source,
-              className: agent.className,
-              key: agent.key,
-              channelId: channelName,
-              channelContextId: resolvedContextId,
-              config: buildAddedAgentConfig({ handle: agent.handle, repoRoot, className: agent.className }),
-              replay: true,
-            });
-          } catch (err) {
-            console.warn(`[Spectrolite] rehydrate failed for @${agent.handle}:`, err);
-          }
-        }
-      } catch (err) {
-        console.warn("[Spectrolite] rehydration check failed:", err);
-      }
-    })();
-  }, [stateArgs.channelName, stateArgs.installedAgents, resolvedContextId, repoRoot]);
-
-  const handleAddAgent = useCallback(async (agentId: string) => {
-    if (!resolvedContextId) return;
-    const channelName = (getStateArgs<SpectroliteStateArgs>().channelName) ?? bootstrapChannel;
-    if (!channelName) return;
-    const agents = await listAvailableAgents();
-    const agent = agents.find((a) => a.id === agentId || a.className === agentId) ?? agents[0];
-    if (!agent) return;
-    const handle = `${agent.proposedHandle}-${crypto.randomUUID().slice(0, 4)}`;
-    const key = newAgentKey(handle);
-    await createAndSubscribeAgent({
-      source: agent.id,
-      className: agent.className,
-      key,
-      channelId: channelName,
-      channelContextId: resolvedContextId,
-      config: buildAddedAgentConfig({ handle, repoRoot, className: agent.className }),
-    });
-    const cur = getStateArgs<SpectroliteStateArgs>();
-    await setStateArgs({
-      installedAgents: appendInstalledAgent(cur.installedAgents, {
-        agentId: agent.className,
-        handle,
-        key,
-        source: agent.id,
-        className: agent.className,
-      }),
-    });
-  }, [resolvedContextId, bootstrapChannel, repoRoot]);
-
-  const handleRemoveAgent = useCallback(async (handle: string) => {
-    const args = getStateArgs<SpectroliteStateArgs>();
-    const channelName = args.channelName ?? bootstrapChannel;
-    if (!channelName) return;
-    const workers = await getChannelDOParticipants(channelName);
-    // Look up the persisted record for this handle to get the EXACT
-    // objectKey we minted on subscribe; prefix-matching by handle is
-    // unsafe when handles share prefixes (e.g. "scribe" vs "scribe-x").
-    const installedRecord = (args.installedAgents ?? []).find((a) => a.handle === handle);
-    const match = installedRecord
-      ? workers.find((w) => w.objectKey === installedRecord.key)
-      : null;
-    if (match) {
-      await unsubscribeDOFromChannel(match.source, match.className, match.objectKey, channelName);
-    } else if (!match) {
-      console.warn(`[Spectrolite] no DO worker matches handle "${handle}" (key=${installedRecord?.key ?? "?"})`);
+    const g = globalThis as Record<string, unknown>;
+    if (process.env["NATSTACK_TEST_MODE"] !== "1") {
+      delete g["__spectroliteInstallE2E__"];
+      delete g["__spectroliteE2E__"];
+      return;
     }
-    const cur = getStateArgs<SpectroliteStateArgs>();
-    await setStateArgs({
-      installedAgents: (cur.installedAgents ?? []).filter((a) => a.handle !== handle),
-    });
-  }, [bootstrapChannel]);
-
-  const channelName = stateArgs.channelName ?? bootstrapChannel;
-  const installed = stateArgs.installedAgents ?? bootstrapInstalled ?? [];
-
-  if (!channelName || !resolvedContextId) {
-    return (
-      <ErrorBoundary>
-        <Theme appearance={theme}>
-          <Flex align="center" justify="center" gap="2" style={{ height: "100dvh" }}>
-            <Spinner />
-            <Text size="2" color="gray">Starting Spectrolite…</Text>
-          </Flex>
-        </Theme>
-      </ErrorBoundary>
-    );
-  }
+    const resolve = (relPath: string, verb: string): string => {
+      const root = app.store.getState().repoRoot;
+      if (!root) throw new Error("No Spectrolite vault is selected");
+      const full = joinSafe(root, relPath);
+      if (!full) throw new Error(`Refusing to ${verb} "${relPath}" outside the active vault`);
+      return full;
+    };
+    g["__spectroliteInstallE2E__"] = () => {
+      g["__spectroliteE2E__"] = {
+        writeFile: async (relPath: string, content: string) => {
+          const full = resolve(relPath, "write");
+          const parent = parentDir(full);
+          if (parent) await fs.mkdir(parent, { recursive: true });
+          await fs.writeFile(full, content);
+        },
+        readFile: async (relPath: string) => fs.readFile(resolve(relPath, "read"), "utf-8"),
+        unlink: async (relPath: string) => fs.unlink(resolve(relPath, "delete")),
+      };
+      return true;
+    };
+    return () => {
+      delete g["__spectroliteInstallE2E__"];
+      delete g["__spectroliteE2E__"];
+    };
+  }, [app]);
 
   return (
     <ErrorBoundary>
-      <Workspace
-        channelName={channelName}
-        channelContextId={resolvedContextId}
-        repoRoot={repoRoot}
-        primaryAgentHandle={installed[0]?.handle}
-        onAddAgent={handleAddAgent}
-        onRemoveAgent={handleRemoveAgent}
-        onSelectVault={handleSelectVault}
-        onSwitchVault={handleSwitchVault}
-      />
+      <AppProvider value={app}>
+        <Theme
+          appearance={theme}
+          accentColor="iris"
+          grayColor="slate"
+          radius="medium"
+          panelBackground="solid"
+          style={{ height: "100dvh" }}
+        >
+          <SessionGate theme={theme} />
+        </Theme>
+      </AppProvider>
     </ErrorBoundary>
   );
+}
+
+function SessionGate({ theme }: { theme: "light" | "dark" }) {
+  const ready = useAppState((s) => Boolean(s.channelName && s.contextId));
+  if (!ready) {
+    return (
+      <Flex align="center" justify="center" gap="2" style={{ height: "100%" }}>
+        <Spinner />
+        <Text size="2" color="gray">Starting Spectrolite…</Text>
+      </Flex>
+    );
+  }
+  return <Shell theme={theme} />;
 }

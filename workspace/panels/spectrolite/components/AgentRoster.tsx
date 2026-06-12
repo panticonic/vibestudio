@@ -1,42 +1,78 @@
 /**
- * Compact strip of resident agents with add/remove controls.
- *
- * Stays minimal — Spectrolite isn't a chat surface. The strip lives at the
- * top-right corner of the editor and only expands when the user clicks
- * "Add agent".
+ * Resident-agent management — list with remove buttons + an "Add agent"
+ * menu. Rendered inside the workspace settings drawer/sheet. The header
+ * shows a separate read-only `AgentBadges` strip (no controls, so the
+ * settings drawer stays the only place with add/remove testids).
  */
 
-import { useState } from "react";
-import { Badge, Button, DropdownMenu, Flex, Text } from "@radix-ui/themes";
+import { useMemo, useState } from "react";
+import { Badge, Button, DropdownMenu, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
 import { PersonIcon, PlusIcon, Cross2Icon } from "@radix-ui/react-icons";
 import { useIsMobile } from "@workspace/react";
-import type { AvailableAgent } from "../bootstrap";
+import { useApp, useAppState } from "../app/context";
+import type { RosterAgent } from "../app/state";
 
-export interface RosterAgent {
-  handle: string;
-  participantId?: string;
-  status: "live" | "pending";
+export function useVisibleRoster(): RosterAgent[] {
+  const roster = useAppState((s) => s.roster);
+  const removedHandles = useAppState((s) => s.removedHandles);
+  return useMemo(
+    () => roster.filter((agent) => !removedHandles.includes(agent.handle)),
+    [roster, removedHandles],
+  );
 }
 
-export interface AgentRosterProps {
-  agents: RosterAgent[];
-  availableAgents: AvailableAgent[];
-  onAdd: (agentId: string) => void | Promise<void>;
-  onRemove: (handle: string) => void | Promise<void>;
-  disabled?: boolean;
+/** Read-only avatar strip for the header. */
+export function AgentBadges() {
+  const agents = useVisibleRoster();
+  if (agents.length === 0) return null;
+  return (
+    <Flex align="center" gap="1">
+      {agents.map((agent) => (
+        <Tooltip key={agent.handle} content={`@${agent.handle} is in the channel`}>
+          <Badge variant="soft" color="iris" data-testid={`spectrolite-agent-${agent.handle}`}>
+            <PersonIcon width="10" height="10" /> {agent.handle}
+          </Badge>
+        </Tooltip>
+      ))}
+    </Flex>
+  );
 }
 
-export function AgentRoster({ agents, availableAgents, onAdd, onRemove, disabled }: AgentRosterProps) {
+export function AgentRoster() {
+  const app = useApp();
   const isMobile = useIsMobile();
+  const agents = useVisibleRoster();
+  const availableAgents = useAppState((s) => s.availableAgents);
   const [busy, setBusy] = useState(false);
 
-  // On mobile, stack agents vertically with full-width rows; the
-  // horizontal-strip layout (designed for the desktop header) becomes
-  // unreadable on narrow screens.
-  if (isMobile) {
-    return (
-      <Flex direction="column" gap="2">
-        {agents.map((agent) => (
+  const add = async (agentId: string) => {
+    setBusy(true);
+    try {
+      await app.session.addAgent(agentId);
+    } catch (err) {
+      console.warn("[Spectrolite] add agent failed:", err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = async (handle: string) => {
+    setBusy(true);
+    try {
+      await app.session.removeAgent(handle);
+    } catch (err) {
+      console.warn("[Spectrolite] remove agent failed:", err);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Flex direction="column" gap="2">
+      {agents.length === 0 ? (
+        <Text size="1" color="gray">No agents in the channel yet.</Text>
+      ) : (
+        agents.map((agent) => (
           <Flex
             key={agent.handle}
             data-testid={`spectrolite-agent-${agent.handle}`}
@@ -44,110 +80,42 @@ export function AgentRoster({ agents, availableAgents, onAdd, onRemove, disabled
             justify="between"
             gap="2"
             px="2"
-            style={{
-              minHeight: 48,
-              border: "1px solid var(--gray-5)",
-              borderRadius: "var(--radius-2)",
-              background: agent.status === "live" ? "var(--blue-2)" : "var(--gray-2)",
-            }}
+            py="1"
+            className="spectrolite-agent-row"
+            style={{ minHeight: isMobile ? 48 : 36 }}
           >
             <Flex align="center" gap="2">
-              <PersonIcon />
+              <span className="spectrolite-agent-avatar"><PersonIcon /></span>
               <Text size="2" weight="medium">@{agent.handle}</Text>
-              {agent.status !== "live" ? <Text size="1" color="gray">pending</Text> : null}
+              <Badge size="1" color={agent.status === "live" ? "grass" : "gray"} variant="soft">
+                {agent.status}
+              </Badge>
             </Flex>
-            <Button
+            <IconButton
               size="2"
               variant="ghost"
               color="gray"
-              disabled={disabled || busy}
-              onClick={async () => {
-                setBusy(true);
-                try { await onRemove(agent.handle); } finally { setBusy(false); }
-              }}
+              disabled={busy}
+              onClick={() => void remove(agent.handle)}
               aria-label={`Remove @${agent.handle}`}
               data-testid={`spectrolite-agent-remove-${agent.handle}`}
-              style={{ minHeight: 40, minWidth: 40 }}
+              style={isMobile ? { minHeight: 40, minWidth: 40 } : undefined}
             >
               <Cross2Icon />
-            </Button>
+            </IconButton>
           </Flex>
-        ))}
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger>
-            <Button
-              size="3"
-              variant="soft"
-              color="gray"
-              disabled={disabled || busy || availableAgents.length === 0}
-              style={{ minHeight: 48 }}
-              data-testid="spectrolite-agent-add-trigger"
-            >
-              <PlusIcon /> Add agent
-            </Button>
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Content>
-            {availableAgents.length === 0 ? (
-              <DropdownMenu.Item disabled>(no agents available)</DropdownMenu.Item>
-            ) : (
-              availableAgents.map((a) => (
-                <DropdownMenu.Item
-                  key={`${a.id}-${a.className}`}
-                  data-testid={`spectrolite-agent-option-${a.className}`}
-                  onSelect={async () => {
-                    setBusy(true);
-                    try { await onAdd(a.id); } finally { setBusy(false); }
-                  }}
-                >
-                  {a.name} <Text color="gray" size="1">({a.className})</Text>
-                </DropdownMenu.Item>
-              ))
-            )}
-          </DropdownMenu.Content>
-        </DropdownMenu.Root>
-      </Flex>
-    );
-  }
-
-  return (
-    <Flex align="center" gap="2">
-      {agents.map((agent) => (
-        <Badge
-          key={agent.handle}
-          variant={agent.status === "live" ? "soft" : "outline"}
-          color={agent.status === "live" ? "blue" : "gray"}
-          data-testid={`spectrolite-agent-${agent.handle}`}
-        >
-          <Flex align="center" gap="1">
-            <PersonIcon />
-            <Text size="1">@{agent.handle}</Text>
-            <Button
-              size="1"
-              variant="ghost"
-              color="gray"
-              disabled={disabled || busy}
-              onClick={async () => {
-                setBusy(true);
-                try { await onRemove(agent.handle); } finally { setBusy(false); }
-              }}
-              aria-label={`Remove @${agent.handle}`}
-              data-testid={`spectrolite-agent-remove-${agent.handle}`}
-            >
-              <Cross2Icon width="10" height="10" />
-            </Button>
-          </Flex>
-        </Badge>
-      ))}
+        ))
+      )}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
           <Button
-            size="1"
+            size={isMobile ? "3" : "2"}
             variant="soft"
-            color="gray"
-            disabled={disabled || busy || availableAgents.length === 0}
+            disabled={busy || availableAgents.length === 0}
+            style={{ minHeight: isMobile ? 48 : undefined }}
             data-testid="spectrolite-agent-add-trigger"
           >
-            <PlusIcon /> Agent
+            <PlusIcon /> Add agent
           </Button>
         </DropdownMenu.Trigger>
         <DropdownMenu.Content>
@@ -158,10 +126,7 @@ export function AgentRoster({ agents, availableAgents, onAdd, onRemove, disabled
               <DropdownMenu.Item
                 key={`${a.id}-${a.className}`}
                 data-testid={`spectrolite-agent-option-${a.className}`}
-                onSelect={async () => {
-                  setBusy(true);
-                  try { await onAdd(a.id); } finally { setBusy(false); }
-                }}
+                onSelect={() => void add(a.id)}
               >
                 {a.name} <Text color="gray" size="1">({a.className})</Text>
               </DropdownMenu.Item>

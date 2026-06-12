@@ -2,22 +2,17 @@
  * Vault picker — first-run landing screen.
  *
  *   - Lists existing `projects/*` directories from the workspace tree.
- *   - Lets the user create a new vault, which:
- *       1. mkdir's `/projects/<name>/` in the context fs
- *       2. writes a starter `Welcome.mdx`
- *       3. runs `git init` + initial commit + push so the workspace source
- *          tree gets the new repo (visible to future contexts and to
- *          `getWorkspaceTree`).
+ *   - Lets the user create a new vault (mkdir + starter Welcome.mdx +
+ *     git init/commit/push via `initAndPush`).
  *
- * Sits in place of an "empty state" — Spectrolite always asks the user
- * which knowledge base they want to work on rather than guessing a
- * default path.
+ * Spectrolite always asks which knowledge base to work on rather than
+ * guessing a default path.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { promises as fs } from "fs";
-import { Box, Button, Callout, Card, Code, Flex, Heading, Spinner, Text, TextField } from "@radix-ui/themes";
-import { ExclamationTriangleIcon, FilePlusIcon, FileTextIcon, ReloadIcon } from "@radix-ui/react-icons";
+import { Box, Button, Callout, Card, Code, Flex, Heading, IconButton, Spinner, Text, TextField } from "@radix-ui/themes";
+import { ArchiveIcon, ExclamationTriangleIcon, FilePlusIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { initAndPush, type FsPromisesLike } from "@natstack/git";
 import { git as runtimeGit } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react";
@@ -47,6 +42,7 @@ export interface VaultPickerProps {
 export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
   const isMobile = useIsMobile();
   const [vaults, setVaults] = useState<VaultEntry[] | null>(null);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [newName, setNewName] = useState("");
   const [creating, setCreating] = useState(false);
@@ -55,7 +51,14 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
   useEffect(() => {
     let cancelled = false;
     setVaults(null);
-    void discoverVaults().then((v) => { if (!cancelled) setVaults(v); });
+    setDiscoverError(null);
+    discoverVaults()
+      .then((v) => { if (!cancelled) setVaults(v); })
+      .catch((err) => {
+        if (cancelled) return;
+        setVaults([]);
+        setDiscoverError(err instanceof Error ? err.message : String(err));
+      });
     return () => { cancelled = true; };
   }, [refreshNonce]);
 
@@ -74,14 +77,9 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
     setCreating(true);
     try {
       const dir = vaultContextPath(trimmed);
-      // mkdir is idempotent — if a concurrent creator beat us we'd see
-      // the existence at the writeFile step instead.
       await fs.mkdir(dir, { recursive: true });
       // initAndPush handles init + initial commit + push back to the
-      // workspace's projects/<name> repo. The remote URL "projects/<name>"
-      // is resolved by the runtime git client against the browser-safe
-      // internal git endpoint. If the repo or file already exists, git init is
-      // idempotent and the commit step skips when there are no changes.
+      // workspace's projects/<name> repo. Idempotent if the repo exists.
       await initAndPush(runtimeGit.client(), fs as unknown as FsPromisesLike, {
         dir,
         remote: `projects/${trimmed}`,
@@ -98,57 +96,59 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
   }, [newName, duplicateName, onSelect]);
 
   return (
-    <Flex align={isMobile ? "start" : "center"} justify="center" style={{ minHeight: "100%" }} p={isMobile ? "3" : "6"}>
-      <Flex direction="column" gap="4" style={{ maxWidth: 640, width: "100%" }}>
-        <Box>
-          <Heading size="4">Spectrolite</Heading>
-          <Text size="2" color="gray" as="p">
+    <Flex align={isMobile ? "start" : "center"} justify="center" className="spectrolite-picker" style={{ minHeight: "100%" }} p={isMobile ? "4" : "6"}>
+      <Flex direction="column" gap="5" style={{ maxWidth: 560, width: "100%" }}>
+        <Flex direction="column" gap="2" align="center" mt={isMobile ? "4" : "0"}>
+          <span className="spectrolite-gem" aria-hidden>◆</span>
+          <Heading size="6" align="center">Spectrolite</Heading>
+          <Text size="2" color="gray" align="center" as="p" style={{ maxWidth: 420 }}>
             A live MDX knowledge base with a resident editing agent
-            {agentHandle ? <> — <Text weight="medium">@{agentHandle}</Text> is already in the room.</> : ""}
-            {" "}Each vault is a folder under <Code>projects/</Code> in your workspace; the workspace
-            keeps it as a git repo automatically.
+            {agentHandle ? <> — <Text weight="medium">@{agentHandle}</Text> is already in the room.</> : null}
+            {" "}Each vault is a git-backed folder under <Code>projects/</Code> in your workspace.
           </Text>
-        </Box>
+        </Flex>
 
-        <Card>
+        <Card size="2">
           <Flex direction="column" gap="2">
             <Flex align="center" justify="between">
-              <Text size="2" weight="medium">Open an existing vault</Text>
-              <Button size="1" variant="ghost" color="gray" onClick={() => setRefreshNonce((n) => n + 1)} aria-label="Refresh vault list">
+              <Text size="2" weight="bold">Open a vault</Text>
+              <IconButton size="1" variant="ghost" color="gray" onClick={() => setRefreshNonce((n) => n + 1)} aria-label="Refresh vault list">
                 <ReloadIcon />
-              </Button>
+              </IconButton>
             </Flex>
             {vaults === null ? (
-              <Flex align="center" gap="2"><Spinner /> <Text size="1" color="gray">Scanning workspace…</Text></Flex>
+              <Flex align="center" gap="2" py="2"><Spinner /> <Text size="1" color="gray">Scanning workspace…</Text></Flex>
             ) : vaults.length === 0 ? (
-              <Text size="1" color="gray">No vaults yet. Create one below.</Text>
+              <Text size="1" color="gray">
+                {discoverError ? `Could not scan the workspace: ${discoverError}` : "No vaults yet. Create one below."}
+              </Text>
             ) : (
-              <Flex direction="column" gap={isMobile ? "1" : "0"}>
+              <Flex direction="column" gap="1">
                 {vaults.map((v) => (
-                  <Button
+                  <button
                     key={v.relPath}
-                    size={isMobile ? "3" : "2"}
-                    variant="ghost"
-                    color="gray"
+                    type="button"
+                    className="spectrolite-vault-row"
                     onClick={() => onSelect(v.contextPath)}
                     data-testid={`spectrolite-vault-${v.name}`}
-                    style={{ justifyContent: "flex-start", minHeight: isMobile ? 56 : undefined }}
                   >
-                    <FileTextIcon />
-                    <Flex direction="column" align="start" style={{ flex: 1, textAlign: "left" }}>
-                      <Text size={isMobile ? "3" : "2"} weight="medium">{v.name}</Text>
-                      <Text size="1" color="gray">{v.relPath}{!v.isGitRepo ? " · not a git repo yet" : ""}</Text>
-                    </Flex>
-                  </Button>
+                    <span className="spectrolite-vault-icon"><ArchiveIcon /></span>
+                    <Box style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
+                      <Text size="2" weight="medium" as="div" truncate>{v.name}</Text>
+                      <Text size="1" color="gray" as="div" truncate>
+                        {v.relPath}{!v.isGitRepo ? " · not a git repo yet" : ""}
+                      </Text>
+                    </Box>
+                  </button>
                 ))}
               </Flex>
             )}
           </Flex>
         </Card>
 
-        <Card>
+        <Card size="2">
           <Flex direction="column" gap="2">
-            <Text size="2" weight="medium">Create a new vault</Text>
+            <Text size="2" weight="bold">Create a new vault</Text>
             <Flex gap="2">
               <TextField.Root
                 size="2"
@@ -173,8 +173,7 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
               <Text size="1" color="red">A vault named "{newName.trim()}" already exists</Text>
             ) : (
               <Text size="1" color="gray">
-                Will be created at <Code>projects/{newName.trim() || "<name>"}</Code> with a starter
-                <Code> Welcome.mdx</Code>.
+                Will be created at <Code>projects/{newName.trim() || "<name>"}</Code> with a starter <Code>Welcome.mdx</Code>.
               </Text>
             )}
             {createError ? (
