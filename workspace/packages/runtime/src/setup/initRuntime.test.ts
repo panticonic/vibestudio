@@ -272,12 +272,14 @@ describe("initRuntime", () => {
     });
 
     await runtime.getParent()?.call["ping"]?.();
-    await expect(runtime.getParent()?.cdp.getCdpEndpoint()).rejects.toThrow(
-      "Refusing to connect to CDP for workspace panel parent-slot"
-    );
+    await expect(runtime.getParent()?.cdp.getCdpEndpoint()).resolves.toEqual({
+      wsEndpoint: "ws://server/cdp/parent-slot",
+      token: "t",
+    });
 
     expect(sends).toEqual([
       { targetId: "panel:parent-entity", method: "ping", args: [] },
+      { targetId: "main", method: "panelCdp.getCdpEndpoint", args: ["parent-slot"] },
     ]);
   });
 

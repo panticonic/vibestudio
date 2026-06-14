@@ -269,9 +269,9 @@ describe("worker panelTree handles", () => {
       parentId: null,
     });
     await parent?.call["ping"]?.();
-    await expect(parent?.cdp.getCdpEndpoint()).rejects.toThrow(
-      "Refusing to connect to CDP for workspace panel parent-slot"
-    );
+    await expect(parent?.cdp.getCdpEndpoint()).resolves.toEqual({
+      wsEndpoint: "ws://cdp.test",
+    });
     await parent?.reload();
     await parent?.rebuildAndReload();
     runtime.destroy();
@@ -282,6 +282,12 @@ describe("worker panelTree handles", () => {
         targetId: "panel:parent-entity",
         method: "ping",
         args: [],
+      },
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelCdp.getCdpEndpoint",
+        args: ["parent-slot"],
       },
       {
         type: "call",

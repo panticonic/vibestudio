@@ -136,9 +136,10 @@ describe("PanelHandle", () => {
       source: "panels/example",
       kind: "workspace",
     });
-    await expect(handle.cdp.getCdpEndpoint()).rejects.toThrow(
-      "Refusing to connect to CDP for workspace panel panel-1 through CDP"
-    );
+    await expect(handle.cdp.getCdpEndpoint()).resolves.toEqual({
+      wsEndpoint: "ws://localhost",
+      token: "t",
+    });
     await expect(handle.cdp.consoleHistory()).resolves.toMatchObject({
       capacity: { entries: 1000, errors: 500 },
     });
@@ -205,9 +206,10 @@ describe("PanelHandle", () => {
     expect(typedChild.id).toBe("child-1");
     await (typedChild.call as Record<string, () => Promise<unknown>>)["ping"]!();
     await typedChild.emit("ready", { ok: true });
-    await expect(typedChild.cdp.getCdpEndpoint()).rejects.toThrow(
-      "Refusing to connect to CDP for workspace panel child-1 through CDP"
-    );
+    await expect(typedChild.cdp.getCdpEndpoint()).resolves.toEqual({
+      wsEndpoint: "ws://localhost",
+      token: "t",
+    });
     await typedChild.stateArgs.set({ mode: "live" });
 
     expect(rpcCall).toHaveBeenCalledWith("panel:child-entity", "ping", []);
@@ -452,24 +454,30 @@ describe("PanelHandle", () => {
     );
   });
 
-  it("refuses destructive CDP operations for workspace and self handles", async () => {
+  it("routes CDP operations through rpc for workspace and self handles", async () => {
     const rpcCall = createRpcCall();
     const { _initPanelHandleBridge, getPanelHandle, panelTree } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
       selfId: "panel-self",
     });
 
-    expect(() => getPanelHandle("workspace-1").cdp.navigate("https://example.com")).toThrow(
-      "Refusing to navigate workspace panel workspace-1 through CDP"
-    );
-    await expect(getPanelHandle("workspace-1").cdp.getCdpEndpoint()).rejects.toThrow(
-      "Refusing to connect to CDP for workspace panel workspace-1 through CDP"
-    );
-    expect(() => panelTree.self().cdp.reload()).toThrow("This handle is the current panel");
+    // CDP automation is available for every panel target, including workspace
+    // panels and the panel the agent is running in (panelTree.self()).
+    await expect(
+      getPanelHandle("workspace-1").cdp.navigate("https://example.com")
+    ).resolves.toBeUndefined();
+    await expect(getPanelHandle("workspace-1").cdp.getCdpEndpoint()).resolves.toEqual({
+      wsEndpoint: "ws://localhost",
+      token: "t",
+    });
+    await expect(panelTree.self().cdp.reload()).resolves.toBeUndefined();
 
-    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelCdp.navigate", expect.any(Array));
-    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelCdp.reload", expect.any(Array));
-    expect(rpcCall).not.toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", expect.any(Array));
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.navigate", [
+      "workspace-1",
+      "https://example.com",
+    ]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["workspace-1"]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.reload", ["panel-self"]);
   });
 
   it("hydrates direct children from the host each call", async () => {

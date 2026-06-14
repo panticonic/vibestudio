@@ -348,9 +348,7 @@ describe("DurableObjectBase panelTree handles", () => {
     await expect(response.json()).resolves.toEqual({
       id: "parent-slot",
       title: "parent-slot",
-      cdpError: expect.stringContaining(
-        "Refusing to connect to CDP for workspace panel parent-slot"
-      ),
+      cdpError: "",
     });
     expect(calls).toEqual([
       {
@@ -358,6 +356,12 @@ describe("DurableObjectBase panelTree handles", () => {
         targetId: "panel:parent-entity",
         method: "ping",
         args: [],
+      },
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelCdp.getCdpEndpoint",
+        args: ["parent-slot"],
       },
       {
         type: "call",

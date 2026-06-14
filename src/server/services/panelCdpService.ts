@@ -110,22 +110,6 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
     });
   }
 
-  function assertPanelCallerMayDriveTarget(
-    method: string,
-    ctx: Parameters<ServiceDefinition["handler"]>[0],
-    target: PanelAccessPermissionTarget
-  ): void {
-    if (ctx.caller.runtime.kind !== "panel") return;
-    if (target.kind === "browser") return;
-    const action = method === "getCdpEndpoint" ? "open raw CDP for" : method;
-    const reason =
-      `Refusing to ${action} workspace panel ${target.id} through CDP from panel runtime ` +
-      `${ctx.caller.runtime.id}. Open a browser panel with panelTree.open("https://...") ` +
-      `or openPanel("https://...") and automate the returned browser handle.`;
-    recordAccess(method, ctx, target, { reason });
-    throw new Error(reason);
-  }
-
   return {
     name: "panelCdp",
     description: "Approval-gated server CDP access for panel targets",
@@ -146,7 +130,6 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
 
       switch (method) {
         case "getCdpEndpoint": {
-          assertPanelCallerMayDriveTarget(method, ctx, target);
           const permission = await requirePanelAccessPermission(deps, ctx, "cdp", target);
           if (!permission.allowed) {
             recordAccess(method, ctx, target, { reason: permission.reason ?? "CDP access denied" });
@@ -182,7 +165,6 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
           if (method === "navigate") {
             assertHttpUrl(args[1]);
           }
-          assertPanelCallerMayDriveTarget(method, ctx, target);
           const permission = await requirePanelAccessPermission(deps, ctx, op, target);
           if (!permission.allowed) {
             recordAccess(method, ctx, target, {

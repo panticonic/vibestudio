@@ -120,10 +120,33 @@ target renderer should do a browser-style reload.
 
 Every runtime panel registers `_agent.snapshot`, `_agent.tree`, `_agent.state`, `_agent.routes`, and `_agent.setMode`. Agents should call these through a handle, not directly.
 
+`handle.state()` is empty by default — React component state is not otherwise
+reachable from outside the renderer. A panel publishes introspectable state by
+registering providers:
+
+```tsx
+import { useAgentState } from "@workspace/react";
+
+function Editor() {
+  const [doc, setDoc] = useState(initialDoc);
+  const [dirty, setDirty] = useState(false);
+  useAgentState("editor", { path: doc.path, dirty, length: doc.text.length });
+  // A debugging agent: await parent.state()
+  // => { editor: { path: "Welcome.mdx", dirty: true, length: 1280 } }
+}
+```
+
+Outside React, use `agentApi.registerStateProvider(key, () => value)` from
+`@workspace/runtime` (returns an unregister function). The latest value is
+reported on each `state()` call, so keep providers cheap and side-effect free.
+
 Mobile hosts implement these methods through the WebView bridge. CDP access is
 served by CDP-capable Electron hosts through `handle.cdp.lightweightPage()` and
-the direct `handle.cdp` navigation helpers. Panels held by non-CDP hosts reject
-CDP access instead of being silently taken over.
+the direct `handle.cdp` navigation helpers. CDP automation works for **any**
+panel target — workspace panels and browser panels alike, including the panel
+you are running in (`panelTree.self()`). Panels held by non-CDP hosts reject CDP
+access instead of being silently taken over. CDP access is still approval-gated
+through the `panelCdp` service.
 Use `handle.cdp.lightweightPage()` for the runtime-owned smaller wrapper. For
 full Playwright, import `playwrightPage` from
 `@workspace/playwright-automation` and call `await playwrightPage(handle)`.

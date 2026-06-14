@@ -89,26 +89,15 @@ export function createCdpAutomation(
   id: string,
   options: CdpAutomationOptions = {}
 ): CdpAutomation {
-  const assertBrowserAutomationTarget = (operation: string) => {
-    if (options.kind === "browser") return;
-    const selfHint =
-      options.requesterPanelId && options.requesterPanelId === id
-        ? " This handle is the current panel; open a browser panel and use that returned handle instead."
-        : "";
-    throw new Error(
-      `Refusing to ${operation} workspace panel ${id} through CDP.${selfHint} ` +
-        `Use panelTree.open("https://...") / openPanel("https://...") to create a browser panel, ` +
-        `then automate the returned browser handle.`
-    );
-  };
-
+  // CDP automation is available for every panel target — workspace panels and
+  // browser panels alike. (A prior commit restricted this to browser panels to
+  // stop test agents from navigating the panel they were running in; that
+  // over-corrected and blocked legitimate inspection of other workspace panels.)
   const getCdpEndpoint = async (): Promise<CdpEndpoint> => {
-    assertBrowserAutomationTarget("connect to CDP for");
     return rpc.call<CdpEndpoint>("main", "panelCdp.getCdpEndpoint", [id]);
   };
 
   const connectPage = async (): Promise<any> => {
-    assertBrowserAutomationTarget("open a lightweight page for");
     const { BrowserImpl } = await loadLightweightClient();
     const endpoint = await getCdpEndpoint();
     const connectOptions: { isElectronWebview: boolean; transportOptions?: { authToken: string } } =
@@ -129,23 +118,18 @@ export function createCdpAutomation(
     },
     getCdpEndpoint,
     navigate: (url) => {
-      assertBrowserAutomationTarget("navigate");
       return rpc.call<void>("main", "panelCdp.navigate", [id, url]);
     },
     goBack: () => {
-      assertBrowserAutomationTarget("go back in");
       return rpc.call<void>("main", "panelCdp.goBack", [id]);
     },
     goForward: () => {
-      assertBrowserAutomationTarget("go forward in");
       return rpc.call<void>("main", "panelCdp.goForward", [id]);
     },
     reload: () => {
-      assertBrowserAutomationTarget("reload");
       return rpc.call<void>("main", "panelCdp.reload", [id]);
     },
     stop: () => {
-      assertBrowserAutomationTarget("stop loading in");
       return rpc.call<void>("main", "panelCdp.stop", [id]);
     },
     click: async (selector) => {

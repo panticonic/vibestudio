@@ -3,7 +3,7 @@
  * Provides declarative, idiomatic React APIs for panel features.
  */
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import * as runtime from "@workspace/runtime";
 import { Rpc } from "@workspace/runtime";
 import type { PanelHandle, ThemeAppearance } from "@workspace/runtime";
@@ -246,4 +246,45 @@ export function useConnectionError(): { code: number; reason: string } | null {
   }, []);
 
   return error;
+}
+
+// =============================================================================
+// Agent State Introspection
+// =============================================================================
+
+/**
+ * Expose a slice of this panel's state to debugging agents under `key`.
+ *
+ * Agents read it from the host via `handle.state()` (which calls the
+ * `_agent.state` method). Without this, `handle.state()` returns `{}` because
+ * React component state is not otherwise reachable from outside the renderer.
+ *
+ * The latest `value` is always reported — the registered provider reads a ref,
+ * so re-renders update what agents see without re-registering. Pass a unique
+ * `key` per slice; the registration is removed automatically on unmount.
+ *
+ * @example
+ * ```tsx
+ * function Editor() {
+ *   const [doc, setDoc] = useState(initialDoc);
+ *   const [dirty, setDirty] = useState(false);
+ *   useAgentState("editor", { path: doc.path, dirty, length: doc.text.length });
+ *   // An agent debugging this panel: await parent.state()
+ *   // => { editor: { path: "Welcome.mdx", dirty: true, length: 1280 } }
+ *   return <textarea value={doc.text} onChange={...} />;
+ * }
+ * ```
+ */
+export function useAgentState(key: string, value: unknown): void {
+  const valueRef = useRef(value);
+  valueRef.current = value;
+
+  useEffect(() => {
+    const register = runtime.agentApi?.registerStateProvider;
+    if (!register) return;
+    const unregister = register(key, () => valueRef.current);
+    return () => {
+      unregister();
+    };
+  }, [key]);
 }

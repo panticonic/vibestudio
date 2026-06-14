@@ -230,7 +230,7 @@ describe("panelCdpService", () => {
     ]);
   });
 
-  it("rejects panel caller drive verbs against workspace panels before prompting", async () => {
+  it("allows panel caller drive verbs against workspace panels with approval", async () => {
     const approvalQueue = approvalQueueMock("session");
     const drive = vi.fn(async () => undefined);
     const logAccess = vi.fn();
@@ -250,10 +250,14 @@ describe("panelCdpService", () => {
 
     await expect(
       service.handler(ctx(), "navigate", ["chat-panel", "https://example.com"])
-    ).rejects.toThrow("Refusing to navigate workspace panel chat-panel through CDP");
+    ).resolves.toBeUndefined();
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(drive).not.toHaveBeenCalled();
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: PANEL_AUTOMATE_CAPABILITY })
+    );
+    expect(drive).toHaveBeenCalledWith("chat-panel", "panel:requester", "navigate", [
+      "https://example.com",
+    ]);
     expect(logAccess).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "navigate",
@@ -262,14 +266,14 @@ describe("panelCdpService", () => {
         targetId: "chat-panel",
         targetKind: "workspace",
         targetSource: "panels/chat",
-        denied: true,
       })
     );
   });
 
-  it("rejects panel caller raw CDP endpoints against workspace panels before prompting", async () => {
+  it("allows panel caller raw CDP endpoints against workspace panels with approval", async () => {
     const approvalQueue = approvalQueueMock("session");
-    const getEndpoint = vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/chat", token: "t" }));
+    const endpoint = { wsEndpoint: "ws://server/cdp/chat", token: "t" };
+    const getEndpoint = vi.fn(async () => endpoint);
     const service = createPanelCdpService({
       approvalQueue,
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
@@ -282,12 +286,14 @@ describe("panelCdpService", () => {
       getEndpoint,
     });
 
-    await expect(service.handler(ctx(), "getCdpEndpoint", ["chat-panel"])).rejects.toThrow(
-      "Refusing to open raw CDP for workspace panel chat-panel through CDP"
+    await expect(service.handler(ctx(), "getCdpEndpoint", ["chat-panel"])).resolves.toEqual(
+      endpoint
     );
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(getEndpoint).not.toHaveBeenCalled();
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: PANEL_AUTOMATE_CAPABILITY })
+    );
+    expect(getEndpoint).toHaveBeenCalledWith("chat-panel", "panel:requester");
   });
 
   it("allows non-panel callers to drive workspace panels", async () => {
