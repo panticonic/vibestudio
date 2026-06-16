@@ -130,6 +130,32 @@ describe("loadNatStackResources", () => {
     expect(resources.systemPrompt).toBe("System prompt content");
   });
 
+  it("fails clearly when workspace.getAgentsMd returns a non-string", async () => {
+    const rpc = createMockRpc({
+      "main:workspace.getAgentsMd": { text: "wrong" },
+      "main:workspace.listSkills": [],
+    });
+
+    await expect(loadNatStackResources({ rpc })).rejects.toMatchObject({
+      name: "AgentWorkerError",
+      code: "resource_loading",
+      message: expect.stringContaining("workspace.getAgentsMd returned invalid resource shape"),
+    });
+  });
+
+  it("fails clearly when workspace.listSkills returns a malformed descriptor", async () => {
+    const rpc = createMockRpc({
+      "main:workspace.getAgentsMd": "System prompt content",
+      "main:workspace.listSkills": [{ name: "broken", description: 7, dirPath: "/broken" }],
+    });
+
+    await expect(loadNatStackResources({ rpc })).rejects.toMatchObject({
+      name: "AgentWorkerError",
+      code: "resource_loading",
+      message: expect.stringContaining("workspace.listSkills[0] returned invalid resource shape"),
+    });
+  });
+
   it("issues both RPC calls in parallel (does not serialize)", async () => {
     let agentsMdResolve: ((value: string) => void) | undefined;
     let skillsResolve: ((value: SkillEntry[]) => void) | undefined;

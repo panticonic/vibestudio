@@ -2,108 +2,25 @@
 // @workspace/harness — In-process Pi runtime for the agent worker DO
 // =============================================================================
 
-// PiRunner — the worker DO instantiates one per channel
-export { PiRunner } from "./pi-runner.js";
-export type {
-  PiRunnerOptions,
-  PiStateSnapshot,
-  ThinkingLevel,
-  PiRunnerGadProvenance,
-  RunnerTurnInput,
-  RunnerTurnOptions,
-  HibernationResumableTool,
-  ChannelContextSnapshot,
-  ChannelContextParticipant,
-  ChannelContextActivity,
-} from "./pi-runner.js";
-
-// TurnSuspensionSignal — typed "pause this turn" signal thrown from getApiKey.
-export { TurnSuspensionSignal, isTurnSuspensionSignal } from "./turn-suspension.js";
-export type { TurnSuspensionInit } from "./turn-suspension.js";
-
-// TurnSnapshot (Phase 2) — surfaced via `onPrepareNextTurn`.
-export { buildTurnSnapshot } from "./turn-snapshot.js";
-export type { TurnSnapshot, BuildTurnSnapshotInput } from "./turn-snapshot.js";
-
-// HookBus (Phase 6) — typed multi-listener event/hook bus owned by PiRunner.
-export { HookBus } from "./hook-bus.js";
-export type {
-  HookName,
-  HookListenerMap,
-  EventListener,
-  TransformContextListener,
-  BeforeProviderRequestListener,
-  RunnerEvent,
-  NatStackRunnerEvent,
-  OrphanFileMutationIntentEvent,
-} from "./hook-bus.js";
-
-// CompactionTrigger - decides when to call AgentHarness.compact().
-export { CompactionTrigger } from "./compaction-trigger.js";
-export type { CompactionTriggerOptions } from "./compaction-trigger.js";
+// The in-process Pi runtime (PiRunner / AgentHarness) was replaced by the
+// event-sourced @workspace/agent-loop + the AgentLoopDriver in
+// @workspace/agentic-do (unified-log Stage B cut). The harness package keeps
+// the local tools, prompt composition, and shared types.
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 // Stable runner-level error codes (Phase 7).
 export { AgentWorkerError } from "./errors.js";
 export type { AgentWorkerErrorCode } from "./errors.js";
 
-export {
-  NATSTACK_BASE_SYSTEM_PROMPT,
-  composeSystemPrompt,
-} from "./system-prompt.js";
+export { NATSTACK_BASE_SYSTEM_PROMPT, composeSystemPrompt } from "./system-prompt.js";
 export type { ComposeSystemPromptOptions, SystemPromptMode } from "./system-prompt.js";
+export { loadNatStackResources, formatSkillIndex } from "./resource-loader.js";
+export type { NatStackResources, ResourceLoaderDeps, SkillEntry } from "./resource-loader.js";
 
-// NatStack extension factories — supplied to the runner via PiRunnerOptions
-export {
-  createApprovalGateExtension,
-  DEFAULT_SAFE_TOOL_NAMES,
-} from "./extensions/approval-gate.js";
-export type { ApprovalLevel, ApprovalGateDeps } from "./extensions/approval-gate.js";
-
-export { createChannelToolsExtension } from "./extensions/channel-tools.js";
-export type { ChannelToolMethod, ChannelToolsDeps, StreamUpdateCallback } from "./extensions/channel-tools.js";
-
-export { createAskUserExtension } from "./extensions/ask-user.js";
-export type {
-  AskUserParams,
-  AskUserQuestion,
-  AskUserDeps,
-} from "./extensions/ask-user.js";
-
-export { createWebToolsExtension } from "./extensions/web/index.js";
-export type {
-  WebToolsDeps,
-  WebRpcCaller,
-  SearchResult,
-  ProviderName,
-  CredentialPresenceProbe,
-} from "./extensions/web/index.js";
-export { SEARCH_PROVIDER_ORIGINS } from "./extensions/web/provider.js";
-
-// UI bridge
-export {
-  NatStackExtensionUIContext,
-} from "./natstack-extension-context.js";
-export type { NatStackScopedUiContext } from "./natstack-extension-context.js";
-
-// NatStack-local Pi extension API + runtime
-export { PiExtensionRuntime } from "./pi-extension-runtime.js";
-export type {
-  AgentTool,
-  PiExtensionAPI,
-  PiExtensionContext,
-  PiExtensionEvent,
-  PiExtensionEventResult,
-  PiExtensionFactory,
-  PiExtensionHandler,
-  PiExtensionUIContext,
-  PiExtensionUIDialogOptions,
-  PiExtensionWidgetOptions,
-  PiExtensionWidgetPlacement,
-  PiSessionStartEvent,
-  PiToolCallEvent,
-  PiToolInfo,
-  PiTurnStartEvent,
-} from "./pi-extension-api.js";
+// The Pi extension layer (approval gate, channel tools, ask-user, web tools,
+// extension runtime/UI bridge) was replaced by pure step policies in
+// @workspace/agent-loop (unified-log Stage B). Tools remain below.
+export type { AgentTool } from "@workspace/pi-core";
 
 // Channel boundary types (still used by agentic-do)
 export type {
@@ -121,9 +38,11 @@ export {
   createReadTool,
   createEditTool,
   createWriteTool,
+  createToolVcs,
   createGrepTool,
   createFindTool,
   createLsTool,
+  createCloseTurnWithoutResponseTool,
   resolveToCwd,
   resolveReadPath,
   expandPath,
@@ -141,6 +60,10 @@ export {
   stripBom,
   generateDiffString,
 } from "./tools/index.js";
+
+// Web research tools (web_search / web_fetch / web_read).
+export { createWebTools } from "./web/index.js";
+export type { WebToolsDeps } from "./web/index.js";
 export type {
   ReadToolInput,
   ReadToolDetails,
@@ -149,6 +72,11 @@ export type {
   EditToolDetails,
   WriteToolInput,
   WriteToolDetails,
+  ToolVcs,
+  ToolVcsApplyResult,
+  ToolVcsEditOp,
+  ToolVcsFileReadContent,
+  ToolVcsFileWriteContent,
   GrepToolInput,
   GrepToolDetails,
   FindToolInput,

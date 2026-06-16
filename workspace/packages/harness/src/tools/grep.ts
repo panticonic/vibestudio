@@ -12,11 +12,11 @@
  *
  * Upstream reference: `@mariozechner/pi-coding-agent@0.67.x`
  * `dist/core/tools/grep.js`; prebuilt tool exports were removed in Pi 0.68,
- * and current `@earendil-works/pi-agent-core` does not ship this file tool.
+ * and current `@workspace/pi-core` does not ship this file tool.
  */
 
 import { Type, type Static } from "@sinclair/typebox";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import path from "node:path";
 import { Buffer } from "node:buffer";

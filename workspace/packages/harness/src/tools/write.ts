@@ -1,17 +1,13 @@
 /**
- * Write tool — workerd port of pi-coding-agent's `dist/core/tools/write.js`.
- *
- * Differences from upstream:
- * - File I/O goes through `RuntimeFs` (no `fs/promises`).
- * - Parent directories are created via `fs.mkdir(..., { recursive: true })`.
+ * Write tool — GAD-native. Commits a whole-file write through `vcs.applyEdits`
+ * (creates or overwrites; parent dirs are implicit in the content-addressed
+ * tree). Disk is a projection of the head, never written directly.
  */
 
 import { Type, type Static } from "@sinclair/typebox";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
-import { dirname } from "node:path";
-import type { RuntimeFs } from "./runtime-fs.js";
-import { resolveToCwd } from "./path-utils.js";
+import { toVcsPath, type ToolVcs } from "./tool-vcs.js";
 
 const writeSchema = Type.Object({
   path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
@@ -27,7 +23,7 @@ export interface WriteToolDetails {
 
 export function createWriteTool(
   cwd: string,
-  fs: RuntimeFs,
+  vcs: ToolVcs
 ): AgentTool<typeof writeSchema, WriteToolDetails> {
   return {
     name: "write",
@@ -40,32 +36,27 @@ export function createWriteTool(
       if (typeof path !== "string" || typeof content !== "string") {
         throw new Error("write requires path and content");
       }
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
+      if (signal?.aborted) throw new Error("Operation aborted");
+
+      const relPath = toVcsPath(path, cwd);
+      // A whole-file write authored against the current head: no base pinned, so
+      // it fast-forwards (overwrite semantics) while concurrent edits to OTHER
+      // files still merge.
+      const result = await vcs.applyEdits({
+        edits: [{ kind: "write", path: relPath, content: { kind: "text", text: content } }],
+      });
+      if (signal?.aborted) throw new Error("Operation aborted");
+      if (result.status === "conflicted") {
+        throw new Error(
+          `Write to ${path} conflicted with a concurrent change; the merge is parked.`
+        );
       }
 
-      const absolutePath = resolveToCwd(path, cwd);
-      const dir = dirname(absolutePath);
-
-      await fs.mkdir(dir, { recursive: true });
-
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
-      }
-
-      await fs.writeFile(absolutePath, content);
-
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
-      }
-
-      const result: { content: (TextContent | ImageContent)[]; details: WriteToolDetails } = {
-        content: [
-          { type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` },
-        ],
-        details: { bytesWritten: content.length, path: absolutePath },
+      const out: { content: (TextContent | ImageContent)[]; details: WriteToolDetails } = {
+        content: [{ type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` }],
+        details: { bytesWritten: content.length, path: relPath },
       };
-      return result;
+      return out;
     },
   };
 }

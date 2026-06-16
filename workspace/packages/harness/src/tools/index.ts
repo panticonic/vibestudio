@@ -16,6 +16,15 @@ export type { EditToolInput, EditToolDetails } from "./edit.js";
 export { createWriteTool } from "./write.js";
 export type { WriteToolInput, WriteToolDetails } from "./write.js";
 
+export { createToolVcs } from "./tool-vcs.js";
+export type {
+  ToolVcs,
+  ToolVcsApplyResult,
+  ToolVcsEditOp,
+  ToolVcsFileReadContent,
+  ToolVcsFileWriteContent,
+} from "./tool-vcs.js";
+
 export { createGrepTool } from "./grep.js";
 export type { GrepToolInput, GrepToolDetails } from "./grep.js";
 

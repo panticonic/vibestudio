@@ -17,6 +17,7 @@ export type AgentWorkerErrorCode =
   | "compaction"
   | "dispatch"
   | "provenance"
+  | "resource_loading"
   | "runner_lifecycle"
   | "transcript_shape";
 

@@ -11,7 +11,7 @@
  */
 
 import { Type, type Static } from "@sinclair/typebox";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { RpcCaller } from "@natstack/rpc";
 import { createExtensionProxy } from "@natstack/extension";
@@ -115,6 +115,11 @@ export function createFindTool(
       }
 
       const regex = globToRegex(pattern);
+      // A slashless pattern matches by BASENAME anywhere in the tree (the
+      // universal agent-glob convention — `system-testing*` should find
+      // `skills/system-testing/`). Path-shaped patterns keep full-path
+      // semantics.
+      const basenameRegex = pattern.includes("/") ? null : regex;
       const matches: string[] = [];
       let resultLimitReached = false;
 
@@ -138,7 +143,7 @@ export function createFindTool(
             if (SKIP_DIRS.has(entry.name)) continue;
             // Test the directory itself against the glob too — it lets users find
             // directories like `**/__tests__`.
-            if (regex.test(rel + "/")) {
+            if (regex.test(rel + "/") || basenameRegex?.test(entry.name) || basenameRegex?.test(entry.name + "/")) {
               matches.push(rel + "/");
               if (matches.length >= effectiveLimit) {
                 resultLimitReached = true;
@@ -147,7 +152,7 @@ export function createFindTool(
             }
             await walk(full);
           } else if (entry.isFile()) {
-            if (regex.test(rel)) {
+            if (regex.test(rel) || basenameRegex?.test(entry.name)) {
               matches.push(rel);
               if (matches.length >= effectiveLimit) {
                 resultLimitReached = true;

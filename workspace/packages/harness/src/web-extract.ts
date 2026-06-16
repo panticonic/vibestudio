@@ -14,4 +14,4 @@ export {
   extractPage,
   type ExtractedPage,
   type ExtractFetcher,
-} from "./extensions/web/extract.js";
+} from "./web/extract.js";

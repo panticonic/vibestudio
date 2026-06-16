@@ -13,7 +13,10 @@
  * descriptors (one per skill directory under `workspace/skills/`).
  */
 import type { RpcCaller } from "@natstack/rpc";
+import { AgentWorkerError } from "./errors.js";
+
 export type { RpcCaller } from "@natstack/rpc";
+
 export interface SkillEntry {
     /** Skill identifier; matches the directory name under `workspace/skills/`. */
     name: string;
@@ -40,12 +43,54 @@ export interface ResourceLoaderDeps {
  */
 export async function loadNatStackResources(deps: ResourceLoaderDeps): Promise<NatStackResources> {
     throwIfAborted(deps.signal);
-    const [systemPrompt, skills] = await Promise.all([
-        abortable(callWorkspace<string>(deps, "workspace.getAgentsMd"), deps.signal),
-        abortable(callWorkspace<SkillEntry[]>(deps, "workspace.listSkills"), deps.signal),
+    const [systemPromptRaw, skillsRaw] = await Promise.all([
+        abortable(callWorkspace<unknown>(deps, "workspace.getAgentsMd"), deps.signal),
+        abortable(callWorkspace<unknown>(deps, "workspace.listSkills"), deps.signal),
     ]);
+    const systemPrompt = validateAgentsMd(systemPromptRaw);
+    const skills = validateSkillList(skillsRaw);
     const skillIndex = formatSkillIndex(skills);
     return { systemPrompt, skillIndex, skills };
+}
+
+function resourceShapeError(method: string, expected: string, received: unknown): AgentWorkerError {
+    const actual = Array.isArray(received) ? "array" : typeof received;
+    return new AgentWorkerError(
+        "resource_loading",
+        `${method} returned invalid resource shape: expected ${expected}, received ${actual}`
+    );
+}
+
+function validateAgentsMd(value: unknown): string {
+    if (typeof value !== "string") {
+        throw resourceShapeError("workspace.getAgentsMd", "a string", value);
+    }
+    return value;
+}
+
+function validateSkillList(value: unknown): SkillEntry[] {
+    if (!Array.isArray(value)) {
+        throw resourceShapeError("workspace.listSkills", "an array of skill descriptors", value);
+    }
+    return value.map((entry, index) => validateSkillEntry(entry, index));
+}
+
+function validateSkillEntry(value: unknown, index: number): SkillEntry {
+    if (!value || typeof value !== "object") {
+        throw resourceShapeError(`workspace.listSkills[${index}]`, "a skill descriptor object", value);
+    }
+    const record = value as Record<string, unknown>;
+    const name = record["name"];
+    const description = record["description"];
+    const dirPath = record["dirPath"];
+    if (typeof name !== "string" || typeof description !== "string" || typeof dirPath !== "string") {
+        throw resourceShapeError(
+            `workspace.listSkills[${index}]`,
+            "{ name: string, description: string, dirPath: string }",
+            value
+        );
+    }
+    return { name, description, dirPath };
 }
 
 function callWorkspace<T>(deps: ResourceLoaderDeps, method: string): Promise<T> {

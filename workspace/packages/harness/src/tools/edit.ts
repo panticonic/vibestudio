@@ -1,18 +1,14 @@
 /**
- * Edit tool — workerd port of pi-coding-agent's `dist/core/tools/edit.js`.
- *
- * Differences from upstream:
- * - File I/O goes through `RuntimeFs` (no `fs/promises`).
- * - Atomic writes use `fs.mktemp()` (added in W1d) instead of `os.tmpdir()`.
- * - The fuzzy / BOM / line-ending logic is unchanged.
+ * Edit tool — GAD-native. Reads the base from the caller's vcs head and commits
+ * the change through `vcs.applyEdits` (edit-first; disk is a projection of the
+ * head, never written directly). The fuzzy / BOM / line-ending matching logic
+ * is the upstream pi-coding-agent behaviour.
  */
 
 import { Type, type Static } from "@sinclair/typebox";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
-import { Buffer } from "node:buffer";
-import type { RuntimeFs } from "./runtime-fs.js";
-import { resolveToCwd } from "./path-utils.js";
+import { toVcsPath, type ToolVcs, type ToolVcsEditOp } from "./tool-vcs.js";
 import {
   detectLineEnding,
   fuzzyFindText,
@@ -40,7 +36,7 @@ export interface EditToolDetails {
 
 export function createEditTool(
   cwd: string,
-  fs: RuntimeFs,
+  vcs: ToolVcs
 ): AgentTool<typeof editSchema, EditToolDetails> {
   return {
     name: "edit",
@@ -53,35 +49,17 @@ export function createEditTool(
       if (typeof path !== "string" || typeof oldText !== "string" || typeof newText !== "string") {
         throw new Error("edit requires path, oldText, and newText");
       }
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
+      if (signal?.aborted) throw new Error("Operation aborted");
+
+      const relPath = toVcsPath(path, cwd);
+      const base = await vcs.readFile(relPath);
+      if (!base) throw new Error(`File not found: ${path}`);
+      if (base.content.kind !== "text") {
+        throw new Error(`Cannot edit binary file as text: ${path}`);
       }
+      if (signal?.aborted) throw new Error("Operation aborted");
 
-      const absolutePath = resolveToCwd(path, cwd);
-
-      // Check existence + read+write permission.
-      try {
-        await fs.access(absolutePath, fs.constants.R_OK | fs.constants.W_OK);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          throw new Error(`File not found: ${path}`);
-        }
-        throw err;
-      }
-
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
-      }
-
-      const raw = await fs.readFile(absolutePath);
-      const rawContent =
-        typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8");
-
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
-      }
-
-      const { bom, text: content } = stripBom(rawContent);
+      const { bom, text: content } = stripBom(base.content.text);
       const originalEnding = detectLineEnding(content);
       const normalizedContent = normalizeToLF(content);
       const normalizedOldText = normalizeToLF(oldText);
@@ -90,7 +68,7 @@ export function createEditTool(
       const matchResult = fuzzyFindText(normalizedContent, normalizedOldText);
       if (!matchResult.found) {
         throw new Error(
-          `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
+          `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`
         );
       }
 
@@ -99,20 +77,15 @@ export function createEditTool(
       const occurrences = fuzzyContent.split(fuzzyOldText).length - 1;
       if (occurrences > 1) {
         throw new Error(
-          `Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`,
+          `Found ${occurrences} occurrences of the text in ${path}. The text must be unique. Please provide more context to make it unique.`
         );
       }
-
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
-      }
+      if (signal?.aborted) throw new Error("Operation aborted");
 
       const baseContent = matchResult.contentForReplacement;
-      const newContent =
-        baseContent.substring(0, matchResult.index) +
-        normalizedNewText +
-        baseContent.substring(matchResult.index + matchResult.matchLength);
-
+      const start = matchResult.index;
+      const end = matchResult.index + matchResult.matchLength;
+      const newContent = baseContent.slice(0, start) + normalizedNewText + baseContent.slice(end);
       if (baseContent === newContent) {
         return {
           content: [
@@ -125,15 +98,38 @@ export function createEditTool(
         };
       }
 
-      const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+      // On the common LF / no-BOM path the normalized content is byte-identical
+      // to what GAD stores, so emit a surgical replacement hunk (offsets valid
+      // against the base) which merges cleanly with concurrent edits elsewhere.
+      // Otherwise fall back to a whole-file write that preserves BOM/endings.
+      let edits: ToolVcsEditOp[];
+      if (!matchResult.usedFuzzyMatch && bom === "" && originalEnding === "\n") {
+        edits = [
+          {
+            kind: "replace",
+            path: relPath,
+            hunks: [
+              { start, end, oldText: baseContent.slice(start, end), newText: normalizedNewText },
+            ],
+          },
+        ];
+      } else {
+        edits = [
+          {
+            kind: "write",
+            path: relPath,
+            content: { kind: "text", text: bom + restoreLineEndings(newContent, originalEnding) },
+          },
+        ];
+      }
 
-      // Atomic write: write to a tmp file, then rename into place.
-      const tmpPath = await fs.mktemp("edit-");
-      await fs.writeFile(tmpPath, finalContent);
-      await fs.rename(tmpPath, absolutePath);
-
-      if (signal?.aborted) {
-        throw new Error("Operation aborted");
+      const result = await vcs.applyEdits({ baseStateHash: base.stateHash, edits });
+      if (signal?.aborted) throw new Error("Operation aborted");
+      if (result.status === "conflicted") {
+        throw new Error(
+          `Edit to ${path} conflicted with a concurrent change to the same region; the merge is parked. ` +
+            `Re-read the file and reapply your change against the current content.`
+        );
       }
 
       const diffResult = generateDiffString(baseContent, newContent);

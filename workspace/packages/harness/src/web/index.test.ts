@@ -3,9 +3,9 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { createWebToolsExtension } from "./index.js";
+import { createWebTools } from "./index.js";
 import { parseLiteResults, searchDuckDuckGo, DuckDuckGoBlockedError } from "./duckduckgo.js";
-import { htmlToReadableMarkdown } from "./extract.js";
+import { extractPage, htmlToReadableMarkdown } from "./extract.js";
 import { selectSearchProvider } from "./provider.js";
 
 const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "__fixtures__");
@@ -28,23 +28,15 @@ interface MockTool {
   }>;
 }
 
-function createMockApi() {
+function registeredTools(tools: unknown[]): Map<string, MockTool> {
   const registered = new Map<string, MockTool>();
-  return {
-    on: vi.fn(),
-    registerTool: vi.fn((tool: MockTool) => {
-      registered.set(tool.name, tool);
-    }),
-    setActiveTools: vi.fn(),
-    getActiveTools: vi.fn(() => []),
-    getAllTools: vi.fn(() => []),
-    getRegistered: () => registered,
-  };
+  for (const tool of tools as MockTool[]) registered.set(tool.name, tool);
+  return registered;
 }
 
 function mockResponse(
   body: string | Uint8Array,
-  init?: { ok?: boolean; status?: number; contentType?: string; url?: string },
+  init?: { ok?: boolean; status?: number; contentType?: string; contentLength?: string; url?: string },
 ) {
   const bytes =
     body instanceof Uint8Array ? body : new TextEncoder().encode(body);
@@ -56,6 +48,9 @@ function mockResponse(
       get(name: string) {
         if (name.toLowerCase() === "content-type") {
           return init?.contentType ?? "text/html; charset=utf-8";
+        }
+        if (name.toLowerCase() === "content-length") {
+          return init?.contentLength ?? null;
         }
         return null;
       },
@@ -90,6 +85,20 @@ function makeBlobstore() {
         return Promise.resolve(
           buf.subarray(offset, Math.min(buf.length, offset + limit)).toString("utf8") as T,
         );
+      }
+      if (method === "blobstore.getRangeBytes") {
+        const digest = args[0] as string;
+        const offset = args[1] as number;
+        const limit = args[2] as number;
+        const text = store.get(digest);
+        if (text === undefined) return Promise.resolve(null as T);
+        const buf = Buffer.from(text, "utf8");
+        if (offset >= buf.length) return Promise.resolve({ bytesBase64: "" } as T);
+        return Promise.resolve({
+          bytesBase64: buf
+            .subarray(offset, Math.min(buf.length, offset + limit))
+            .toString("base64"),
+        } as T);
       }
       if (method === "blobstore.grep") {
         const digest = args[0] as string;
@@ -128,16 +137,14 @@ function makeBlobstore() {
   return { rpc: { call }, store };
 }
 
-describe("createWebToolsExtension", () => {
+describe("createWebTools", () => {
   it("registers web_search, web_fetch, and web_read", () => {
     const { rpc } = makeBlobstore();
-    const factory = createWebToolsExtension({ rpc: rpc as never });
-    const api = createMockApi();
-    factory(api as never);
+    const registered = registeredTools(createWebTools({ rpc: rpc as never }));
 
-    expect(api.getRegistered().has("web_search")).toBe(true);
-    expect(api.getRegistered().has("web_fetch")).toBe(true);
-    expect(api.getRegistered().has("web_read")).toBe(true);
+    expect(registered.has("web_search")).toBe(true);
+    expect(registered.has("web_fetch")).toBe(true);
+    expect(registered.has("web_read")).toBe(true);
   });
 
   it("uses DuckDuckGo when no API key is available", async () => {
@@ -145,11 +152,9 @@ describe("createWebToolsExtension", () => {
     const fetcher = vi.fn(async () =>
       mockResponse(fixture("ddg-lite-sample.html"), { contentType: "text/html" }),
     ) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({ rpc: rpc as never, fetcher });
-    const api = createMockApi();
-    factory(api as never);
+    const registered = registeredTools(createWebTools({ rpc: rpc as never, fetcher }));
 
-    const tool = api.getRegistered().get("web_search")!;
+    const tool = registered.get("web_search")!;
     const result = await tool.execute("call-1", { query: "tc39 stage 3" }, undefined);
     const details = result.details as { provider: string; results: unknown[] };
     expect(details.provider).toBe("duckduckgo");
@@ -182,15 +187,13 @@ describe("createWebToolsExtension", () => {
         { contentType: "application/json" },
       );
     }) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({
+    const registered = registeredTools(createWebTools({
       rpc: rpc as never,
       fetcher: credentialedFetcher,
       hasCredentialForOrigin: async (origin) => origin.includes("search.brave.com"),
-    });
-    const api = createMockApi();
-    factory(api as never);
+    }));
 
-    const tool = api.getRegistered().get("web_search")!;
+    const tool = registered.get("web_search")!;
     const result = await tool.execute("c", { query: "x" }, undefined);
     const details = result.details as { provider: string; results: Array<{ snippet: string }> };
     expect(details.provider).toBe("brave");
@@ -216,14 +219,12 @@ describe("createWebToolsExtension", () => {
         { contentType: "application/json" },
       );
     }) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({
+    const registered = registeredTools(createWebTools({
       rpc: rpc as never,
       fetcher: credentialedFetcher,
       hasCredentialForOrigin: async (origin) => origin.includes("exa.ai"),
-    });
-    const api = createMockApi();
-    factory(api as never);
-    const tool = api.getRegistered().get("web_search")!;
+    }));
+    const tool = registered.get("web_search")!;
     const result = await tool.execute("c", { query: "x" }, undefined);
     const details = result.details as { provider: string; results: Array<{ snippet: string }> };
     expect(details.provider).toBe("exa");
@@ -248,15 +249,13 @@ describe("createWebToolsExtension", () => {
         { contentType: "application/json" },
       );
     }) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({
+    const registered = registeredTools(createWebTools({
       rpc: rpc as never,
       fetcher: credentialedFetcher,
       hasCredentialForOrigin: async (origin) => origin.includes("tavily.com"),
-    });
-    const api = createMockApi();
-    factory(api as never);
+    }));
 
-    const tool = api.getRegistered().get("web_search")!;
+    const tool = registered.get("web_search")!;
     const result = await tool.execute("call-1", { query: "anything" }, undefined);
     const details = result.details as { provider: string; results: Array<{ url: string }> };
     expect(details.provider).toBe("tavily");
@@ -272,11 +271,9 @@ describe("createWebToolsExtension", () => {
       }),
     ) as unknown as typeof fetch;
     // headLength of 600 means a page that produces ~700+ bytes of markdown will truncate.
-    const factory = createWebToolsExtension({ rpc: rpc as never, fetcher, headLength: 600 });
-    const api = createMockApi();
-    factory(api as never);
+    const registered = registeredTools(createWebTools({ rpc: rpc as never, fetcher, headLength: 600 }));
 
-    const tool = api.getRegistered().get("web_fetch")!;
+    const tool = registered.get("web_fetch")!;
     const result = await tool.execute(
       "call-1",
       { url: "https://example.com/spec" },
@@ -306,11 +303,9 @@ describe("createWebToolsExtension", () => {
         url: "https://example.com/spec",
       }),
     ) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({ rpc: rpc as never, fetcher });
-    const api = createMockApi();
-    factory(api as never);
+    const registered = registeredTools(createWebTools({ rpc: rpc as never, fetcher }));
 
-    const fetchTool = api.getRegistered().get("web_fetch")!;
+    const fetchTool = registered.get("web_fetch")!;
     const fetchResult = await fetchTool.execute(
       "call-1",
       { url: "https://example.com/spec" },
@@ -318,7 +313,7 @@ describe("createWebToolsExtension", () => {
     );
     const { digest, size } = fetchResult.details as { digest: string; size: number };
 
-    const readTool = api.getRegistered().get("web_read")!;
+    const readTool = registered.get("web_read")!;
     const result = await readTool.execute(
       "call-2",
       { digest, offset: 0, limit: 20 },
@@ -330,12 +325,55 @@ describe("createWebToolsExtension", () => {
     expect(details.bytes).toBeLessThanOrEqual(size);
   });
 
+  it("web_read preserves UTF-8 boundaries and reports byte progress", async () => {
+    const { rpc, store } = makeBlobstore();
+    const text = "AéB🙂C";
+    const digest = createHash("sha256").update(text, "utf8").digest("hex");
+    store.set(digest, text);
+    const registered = registeredTools(createWebTools({ rpc: rpc as never }));
+    const readTool = registered.get("web_read")!;
+
+    const completeMultibyte = await readTool.execute(
+      "call-1",
+      { digest, offset: 0, limit: 3 },
+      undefined,
+    );
+    expect(completeMultibyte.content[0]!.text).toBe("Aé");
+    expect(completeMultibyte.content[0]!.text).not.toContain("\uFFFD");
+    expect(completeMultibyte.details).toMatchObject({
+      bytes: 3,
+      next_offset: 3,
+    });
+
+    const trailingPartial = await readTool.execute(
+      "call-2",
+      { digest, offset: 3, limit: 2 },
+      undefined,
+    );
+    expect(trailingPartial.content[0]!.text).toBe("B");
+    expect(trailingPartial.content[0]!.text).not.toContain("\uFFFD");
+    expect(trailingPartial.details).toMatchObject({
+      bytes: 1,
+      next_offset: 4,
+    });
+
+    const leadingPartial = await readTool.execute(
+      "call-3",
+      { digest, offset: 5, limit: 4 },
+      undefined,
+    );
+    expect(leadingPartial.content[0]!.text).toBe("C");
+    expect(leadingPartial.content[0]!.text).not.toContain("\uFFFD");
+    expect(leadingPartial.details).toMatchObject({
+      bytes: 4,
+      next_offset: 9,
+    });
+  });
+
   it("web_read throws when the digest is unknown", async () => {
     const { rpc } = makeBlobstore();
-    const factory = createWebToolsExtension({ rpc: rpc as never });
-    const api = createMockApi();
-    factory(api as never);
-    const readTool = api.getRegistered().get("web_read")!;
+    const registered = registeredTools(createWebTools({ rpc: rpc as never }));
+    const readTool = registered.get("web_read")!;
     await expect(
       readTool.execute("call-1", { digest: "0".repeat(64) }, undefined),
     ).rejects.toThrow(/no cached blob/);
@@ -350,11 +388,9 @@ describe("createWebToolsExtension", () => {
         url: "https://example.com/doc.pdf",
       }),
     ) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({ rpc: rpc as never, fetcher });
-    const api = createMockApi();
-    factory(api as never);
+    const registered = registeredTools(createWebTools({ rpc: rpc as never, fetcher }));
 
-    const tool = api.getRegistered().get("web_fetch")!;
+    const tool = registered.get("web_fetch")!;
     const result = await tool.execute(
       "c1",
       { url: "https://example.com/doc.pdf" },
@@ -372,12 +408,38 @@ describe("createWebToolsExtension", () => {
     expect(stored).toContain("Page 1");
   });
 
+  it("web_fetch rejects oversized HTML bodies before extraction", async () => {
+    const { rpc } = makeBlobstore();
+    const readBody = vi.fn(async () => new ArrayBuffer(0));
+    const readText = vi.fn(async () => "<html><body>too large</body></html>");
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      url: "https://example.com/huge",
+      headers: {
+        get(name: string) {
+          if (name.toLowerCase() === "content-type") return "text/html";
+          if (name.toLowerCase() === "content-length") return String(6 * 1024 * 1024);
+          return null;
+        },
+      },
+      text: readText,
+      arrayBuffer: readBody,
+    })) as unknown as typeof fetch;
+    const registered = registeredTools(createWebTools({ rpc: rpc as never, fetcher }));
+
+    const tool = registered.get("web_fetch")!;
+    await expect(
+      tool.execute("c1", { url: "https://example.com/huge" }, undefined),
+    ).rejects.toThrow(/HTML response body exceeds \d+ byte limit/);
+    expect(readBody).not.toHaveBeenCalled();
+    expect(readText).not.toHaveBeenCalled();
+  });
+
   it("web_fetch rejects non-http URLs", async () => {
     const { rpc } = makeBlobstore();
-    const factory = createWebToolsExtension({ rpc: rpc as never });
-    const api = createMockApi();
-    factory(api as never);
-    const tool = api.getRegistered().get("web_fetch")!;
+    const registered = registeredTools(createWebTools({ rpc: rpc as never }));
+    const tool = registered.get("web_fetch")!;
     await expect(
       tool.execute("call-1", { url: "ftp://example.com/x" }, undefined),
     ).rejects.toThrow(/must start with http/);
@@ -391,11 +453,9 @@ describe("createWebToolsExtension", () => {
         url: "https://example.com/spec",
       }),
     ) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({ rpc: rpc as never, fetcher });
-    const api = createMockApi();
-    factory(api as never);
+    const registered = registeredTools(createWebTools({ rpc: rpc as never, fetcher }));
 
-    const tool = api.getRegistered().get("web_fetch")!;
+    const tool = registered.get("web_fetch")!;
     const first = await tool.execute("call-1", { url: "https://example.com/spec" }, undefined);
     const second = await tool.execute("call-2", { url: "https://example.com/spec" }, undefined);
 
@@ -418,7 +478,7 @@ describe("createWebToolsExtension", () => {
         url: "https://example.com/a",
       }),
     ) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({
+    const registered = registeredTools(createWebTools({
       rpc: rpc as never,
       fetcher,
       perHostGapMs: 200,
@@ -428,11 +488,9 @@ describe("createWebToolsExtension", () => {
         sleeps.push(ms);
         nowMs += ms;
       },
-    });
-    const api = createMockApi();
-    factory(api as never);
+    }));
 
-    const tool = api.getRegistered().get("web_fetch")!;
+    const tool = registered.get("web_fetch")!;
     await tool.execute("c1", { url: "https://example.com/a" }, undefined);
     nowMs += 50; // less than 200ms gap
     await tool.execute("c2", { url: "https://example.com/a" }, undefined);
@@ -451,16 +509,14 @@ describe("createWebToolsExtension", () => {
         url: "https://example.com/spec",
       }),
     ) as unknown as typeof fetch;
-    const factory = createWebToolsExtension({
+    const registered = registeredTools(createWebTools({
       rpc: rpc as never,
       fetcher,
       urlCacheTtlMs: 100,
       now: () => nowMs,
-    });
-    const api = createMockApi();
-    factory(api as never);
+    }));
 
-    const tool = api.getRegistered().get("web_fetch")!;
+    const tool = registered.get("web_fetch")!;
     await tool.execute("call-1", { url: "https://example.com/spec" }, undefined);
     nowMs += 200; // past TTL
     await tool.execute("call-2", { url: "https://example.com/spec" }, undefined);
@@ -547,6 +603,36 @@ describe("htmlToReadableMarkdown", () => {
     expect(out.title).toBeTruthy();
     expect(out.markdown).toContain("Section 7");
     expect(out.markdown).toContain("This is a paragraph");
+  });
+
+  it("extractPage rejects streamed HTML beyond the configured byte limit", async () => {
+    const canceled = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("<html>"));
+        controller.enqueue(new TextEncoder().encode("<body>oversized</body></html>"));
+      },
+      cancel: canceled,
+    });
+    const fetcher = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      url: "https://example.com/stream",
+      headers: {
+        get(name: string) {
+          if (name.toLowerCase() === "content-type") return "text/html";
+          return null;
+        },
+      },
+      body,
+      text: async () => "",
+      arrayBuffer: async () => new ArrayBuffer(0),
+    }));
+
+    await expect(
+      extractPage("https://example.com/stream", fetcher, undefined, { maxHtmlBytes: 8 }),
+    ).rejects.toThrow(/HTML response body exceeds 8 byte limit/);
+    expect(canceled).toHaveBeenCalled();
   });
 });
 

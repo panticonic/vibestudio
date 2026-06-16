@@ -3,44 +3,22 @@
   "version": "0.1.0",
   "description": "Shared type definitions for the NatStack agentic harness messaging system",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./types": {
-      "types": "./dist/types.d.ts",
-      "default": "./dist/types.js"
-    },
-    "./web-extract": {
-      "types": "./dist/web-extract.d.ts",
-      "default": "./dist/web-extract.js"
-    },
-    "./entry": {
-      "default": "./dist/entry.js"
-    }
-  },
-  "files": [
-    "dist"
-  ],
-  "scripts": {
-    "build": "tsc --project tsconfig.build.json",
-    "dev": "tsc --project tsconfig.build.json --watch"
+    ".": "./src/index.ts",
+    "./types": "./src/types.ts",
+    "./web": "./src/web/index.ts",
+    "./web-extract": "./src/web-extract.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.78.0",
     "@mozilla/readability": "^0.6.0",
     "@natstack/extension": "workspace:*",
     "@natstack/rpc": "workspace:*",
-    "@natstack/shared": "workspace:*",
-    "@workspace/agentic-protocol": "workspace:*",
-    "@workspace/pi-adapter": "workspace:*",
+    "@sinclair/typebox": "^0.27.8",
+    "@workspace/pi-core": "workspace:*",
+    "diff": "^7.0.0",
     "linkedom": "^0.18.5",
-    "unpdf": "^1.6.2",
-    "ws": "^8.18.0",
-    "zod": "^3.24.4"
+    "unpdf": "^1.6.2"
   },
   "optionalDependencies": {
     "re2": "1.24.0"
@@ -52,7 +30,7 @@
   },
   "//": "re2 pinned to exact version to match patches/re2@1.24.0.patch",
   "devDependencies": {
-    "@types/ws": "^8.5.14",
+    "@types/diff": "^7.0.0",
     "typescript": "^5.9.3"
   }
 }

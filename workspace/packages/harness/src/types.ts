@@ -38,6 +38,8 @@ export interface ChannelEvent {
   contentType?: string;
   ts: number;
   attachments?: Attachment[];
+  /** Durable envelope annotations (policy folds — e.g. agentHops). */
+  annotations?: Record<string, unknown>;
 }
 
 /** Options for sending a channel message through a Durable Object-backed service. */

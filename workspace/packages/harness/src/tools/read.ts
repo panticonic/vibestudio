@@ -8,7 +8,7 @@
  *   pi-coding-agent ships.
  */
 import { Type, type Static } from "@sinclair/typebox";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { Buffer } from "node:buffer";
 import type { RuntimeFs } from "./runtime-fs.js";
@@ -110,6 +110,17 @@ export function createReadTool(
         throw new Error("Operation aborted");
       }
       const absolutePath = resolveReadPath(path, cwd);
+      // Directories are a common model mistake — answer with guidance
+      // instead of a raw EISDIR from the fs layer.
+      try {
+        const stats = await fs.stat(absolutePath);
+        if (stats.isDirectory()) {
+          throw new Error(`Path is a directory, not a file: ${path} — use the ls tool to list it.`);
+        }
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("is a directory, not a file")) throw err;
+        // stat failures fall through — the read below reports them naturally.
+      }
       let fileToolsFallbackReason: string | undefined;
       let skipImageExtensionDetection = false;
       if (fileToolsRpc && !isLikelyImagePath(path)) {
