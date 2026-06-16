@@ -3,10 +3,13 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@natstack/env-paths";
 
 import { buildUnit } from "./builder.js";
+import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
+beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
+afterAll(() => setBuildSourceProvider(null));
 import { discoverPackageGraph } from "./packageGraph.js";
 import { clearBuildProvidersForTests, registerBuildProvider } from "./buildProviderRegistry.js";
 
@@ -77,18 +80,25 @@ describe("buildUnit app builds", () => {
       graph.get("@workspace-apps/shell"),
       "ev-shell",
       graph,
-      workspaceRoot
+      workspaceRoot,
+      "state:test"
     );
     const html = result.artifacts.find((artifact) => artifact.path === "index.html")?.content;
 
-    expect(html).toContain('type="module" src="./bundle.js"');
+    expect(html).toMatch(/type="module" src="\.\/bundle-[A-Za-z0-9]+\.js"/u);
     expect(html).not.toContain('src="/__loader.js"');
     expect(html).not.toContain("<base ");
     expect(html).not.toContain("renderer/index.js");
     expect(result.artifacts).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: "bundle.js", role: "primary" }),
-        expect.objectContaining({ path: "bundle.css", role: "css" }),
+        expect.objectContaining({
+          path: expect.stringMatching(/^bundle-[A-Za-z0-9]+\.js$/u),
+          role: "primary",
+        }),
+        expect.objectContaining({
+          path: expect.stringMatching(/^bundle-[A-Za-z0-9]+\.css$/u),
+          role: "css",
+        }),
       ])
     );
   });
@@ -170,7 +180,8 @@ describe("buildUnit app builds", () => {
       graph.get("@workspace-apps/remote-cli"),
       "ev-cli",
       graph,
-      workspaceRoot
+      workspaceRoot,
+      "state:test"
     );
 
     expect(result.metadata.details).toMatchObject({ kind: "app", target: "terminal" });
@@ -249,12 +260,14 @@ describe("buildUnit app builds", () => {
       graph.get("@workspace-apps/mobile"),
       "ev-mobile",
       graph,
-      workspaceRoot
+      workspaceRoot,
+      "state:test"
     );
 
     expect(result.metadata).toMatchObject({
       kind: "app",
       name: "@workspace-apps/mobile",
+      sourceStateHash: "state:test",
       details: {
         kind: "app",
         target: "react-native",
@@ -269,6 +282,7 @@ describe("buildUnit app builds", () => {
         },
       },
     });
+    expect(result.sourceStateHash).toBe("state:test");
     expect(result.artifacts).toEqual([
       expect.objectContaining({
         path: "ios/main.hbc",
@@ -351,15 +365,18 @@ describe("buildUnit app builds", () => {
       graph.get("@workspace-panels/fs-panel"),
       "ev-panel",
       graph,
-      workspaceRoot
+      workspaceRoot,
+      "state:test"
     );
+    const primaryPath = result.artifacts.find((artifact) => artifact.role === "primary")?.path;
+    const html = result.artifacts.find((artifact) => artifact.path === "index.html")?.content;
 
-    expect(result.artifacts).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ path: "bundle.js", role: "primary" }),
-        expect.objectContaining({ path: "index.html", role: "html" }),
-      ])
+    expect(primaryPath).toMatch(/^bundle-[A-Za-z0-9]+\.js$/u);
+    expect(html).toContain(
+      `<script src="/__loader.js" data-bundle-src="./${primaryPath}"></script>`
     );
+    expect(html).not.toContain('data-bundle-src="./bundle.js"');
+    expect(html).not.toContain('src="./bundle.js"');
   });
 
   it("rejects dist as an app build target", async () => {
@@ -393,7 +410,13 @@ describe("buildUnit app builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     await expect(
-      buildUnit(graph.get("@workspace-apps/prebuilt"), "ev-dist", graph, workspaceRoot)
+      buildUnit(
+        graph.get("@workspace-apps/prebuilt"),
+        "ev-dist",
+        graph,
+        workspaceRoot,
+        "state:test"
+      )
     ).rejects.toThrow(/target must be "electron", "react-native", or "terminal"/);
   });
 });

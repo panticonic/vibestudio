@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@natstack/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
+import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
+beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
+afterAll(() => setBuildSourceProvider(null));
 import { discoverPackageGraph } from "./packageGraph.js";
 
 const REPO_ROOT = process.cwd();
@@ -100,7 +103,8 @@ describe("buildUnit terminal worker builds", () => {
       graph.get("@workspace-workers/terminal-min"),
       "ev-terminal-min",
       graph,
-      workspaceRoot
+      workspaceRoot,
+      "state:test"
     );
 
     // Multi-artifact: primary bundle.js + the extracted yoga.wasm module.
@@ -179,7 +183,8 @@ describe("buildUnit terminal worker builds", () => {
       graph.get("@workspace-workers/stale-dist-worker"),
       "ev-stale-dist-worker",
       graph,
-      workspaceRoot
+      workspaceRoot,
+      "state:test"
     );
 
     const bundle = result.artifacts.find((a) => a.role === "primary")?.content ?? "";

@@ -1,7 +1,7 @@
 /**
  * Template resolution — determines framework and HTML shell for panel builds.
  *
- * Resolves both concerns in one pass from extracted source (ref-correct):
+ * Resolves both concerns in one pass from materialized source state:
  * - htmlPath: which HTML shell to use (panel's own, template's, or null for adapter fallback)
  * - framework: which compiler adapter to use ("react", "svelte", "vanilla", etc.)
  */
@@ -21,7 +21,7 @@ export interface ResolvedTemplate {
 }
 
 /**
- * Resolve template HTML and framework for a panel from extracted source.
+ * Resolve template HTML and framework for a panel from materialized source.
  *
  * HTML resolution: panel index.html → named template → default template → null
  * Framework resolution: template config → dep auto-detection → "vanilla"

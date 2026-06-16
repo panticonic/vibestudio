@@ -1,23 +1,24 @@
 /**
- * Effective Version Computer — git tree hash + bottom-up EV computation.
+ * Effective Version Computer — GAD subtree hash + bottom-up EV computation.
  *
  * Every buildable unit gets an effective version: a single hash capturing
  * its own content AND all its transitive internal dependencies.
  *
- * ev(leaf)    = hash(treeHash(leaf))
- * ev(package) = hash(treeHash(package), ev(dep_1), ev(dep_2), ...)
+ * ev(leaf)    = hash(contentHash(leaf))
+ * ev(package) = hash(contentHash(package), depSig(dep_1), depSig(dep_2), ...)
  *
- * Each workspace unit is its own git repo (checkout: true), so the main
- * branch's tree hash captures all tracked content in one command.
+ * Content hashes are GAD manifest subtree hashes of each unit's directory
+ * within the single workspace tree (`vcs:workspace` log) — computed by the
+ * gad-store DO and INJECTED here. This module is pure recomputation over an
+ * immutable PackageGraph; it never touches git, the DO, or the filesystem
+ * (except EV-map persistence, a P1 cache).
  */
 
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import type { InternalDepRef, PackageGraph } from "./packageGraph.js";
+import type { PackageGraph } from "./packageGraph.js";
 import { getUserDataPath } from "@natstack/env-paths";
-import { execGitFile, execGitFileSync } from "@natstack/shared/gitRuntime";
-import { assertPresent } from "../../lintHelpers";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,115 +34,16 @@ export interface ChangeSet {
   removed: string[];
 }
 
-/** Per-unit git tree hash, tracked separately from the immutable PackageGraph. */
+/** Per-unit GAD subtree hash, tracked separately from the immutable PackageGraph. */
 export interface ContentHashMap {
   [packageName: string]: string;
-}
-
-/** Per-unit commit SHA at the main branch, used for cold-start change detection. */
-export interface RefState {
-  [unitName: string]: string;
-}
-
-// ---------------------------------------------------------------------------
-// Git Tree Hashing
-// ---------------------------------------------------------------------------
-
-const MAIN_CANDIDATES = ["refs/heads/main", "refs/heads/master"];
-
-/** Cache: repo path -> resolved main ref */
-const mainRefCache = new Map<string, string>();
-
-/** Resolve the main branch ref for a repo. Tries main first, then master. Cached per-repo. */
-export function resolveMainRef(repoPath: string): string {
-  const cached = mainRefCache.get(repoPath);
-  if (cached) return cached;
-  for (const ref of MAIN_CANDIDATES) {
-    try {
-      // `--end-of-options` prevents a ref that starts with "-" from being
-      // parsed as an option. Do not use plain "--" here: `git rev-parse -- X`
-      // echoes the rev tokens instead of resolving them.
-      execGitFileSync(["rev-parse", "--verify", "--end-of-options", ref], {
-        cwd: repoPath,
-        encoding: "utf-8",
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-      mainRefCache.set(repoPath, ref);
-      return ref;
-    } catch {
-      /* try next */
-    }
-  }
-  throw new Error(`No main/master branch found in ${repoPath}`);
-}
-
-/**
- * Compute the git tree hash for a repo at the given ref (defaults to main branch).
- * Returns a 40-char hex SHA.
- */
-export function computeGitTreeHash(repoPath: string, ref?: string): string {
-  const resolvedRef = ref ?? resolveMainRef(repoPath);
-  return execGitFileSync(["rev-parse", "--verify", "--end-of-options", `${resolvedRef}^{tree}`], {
-    cwd: repoPath,
-    encoding: "utf-8",
-    stdio: ["pipe", "pipe", "pipe"],
-  })
-    .toString()
-    .trim();
-}
-
-/**
- * Async version of computeGitTreeHash — does not block the event loop.
- * Used in the hot path (getBuild) where blocking would stall HTTP serving.
- */
-export function computeGitTreeHashAsync(repoPath: string, ref?: string): Promise<string> {
-  const resolvedRef = ref ?? resolveMainRef(repoPath);
-  return new Promise((resolve, reject) => {
-    execGitFile(
-      ["rev-parse", "--verify", "--end-of-options", `${resolvedRef}^{tree}`],
-      {
-        cwd: repoPath,
-        encoding: "utf-8",
-      },
-      (err, stdout) => {
-        if (err) reject(err);
-        else resolve(stdout.toString().trim());
-      }
-    );
-  });
-}
-
-/** Get the commit SHA at a specific ref. Returns null if ref doesn't exist. */
-export function getCommitAt(repoPath: string, ref?: string): string | null {
-  const resolvedRef = ref ?? resolveMainRef(repoPath);
-  // `--` separator: if a ref ever ends up with a leading `-`, git would
-  // otherwise interpret it as a flag. Belt-and-braces — refs at this layer
-  // come from PackageGraph dep specs which are already validated.
-  try {
-    return execGitFileSync(["rev-parse", "--verify", "--end-of-options", resolvedRef], {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["pipe", "pipe", "pipe"],
-    })
-      .toString()
-      .trim();
-  } catch {
-    return null;
-  }
-}
-
-export function resolveDepRefToGitRef(repoPath: string, depRef?: InternalDepRef): string {
-  if (!depRef || depRef.mode === "default") return resolveMainRef(repoPath);
-  if (depRef.mode === "branch") return `refs/heads/${depRef.branch ?? "main"}`;
-  if (depRef.mode === "ref") return depRef.ref ?? resolveMainRef(repoPath);
-  return depRef.commit ?? resolveMainRef(repoPath);
 }
 
 function buildDepSignatures(
   graph: PackageGraph,
   nodeName: string,
   evMap: EffectiveVersionMap,
-  commitCache: Map<string, string | null>
+  contentHashes: ContentHashMap
 ): string[] {
   const node = graph.get(nodeName);
   const deps: string[] = [];
@@ -149,20 +51,8 @@ function buildDepSignatures(
   for (const depName of node.internalDeps) {
     const depNode = graph.tryGet(depName);
     if (!depNode) continue;
-
-    const depRef = node.internalDepRefs[depName];
-    const ref = resolveDepRefToGitRef(depNode.path, depRef);
-    const commitKey = `${depNode.path}\0${ref}`;
-    const depCommit = commitCache.has(commitKey)
-      ? assertPresent(commitCache.get(commitKey))
-      : (() => {
-          const commit = getCommitAt(depNode.path, ref);
-          commitCache.set(commitKey, commit);
-          return commit;
-        })();
-
     deps.push(
-      `${depName}\0ref:${depRef?.raw ?? "workspace:*"}\0commit:${depCommit ?? "missing"}\0ev:${evMap[depName] ?? ""}`
+      `${depName}\0content:${contentHashes[depName] ?? "missing"}\0ev:${evMap[depName] ?? ""}`
     );
   }
 
@@ -187,84 +77,57 @@ function hashStrings(parts: string[]): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Compute effective versions for all nodes in the graph using git tree hashes
- * at the main branch. Nodes where refs/heads/main doesn't exist are skipped.
- *
- * @param hashes - Optional pre-computed content hashes. Missing entries are
- *   computed from git on the fly. The returned contentHashes includes all
- *   entries (pre-computed + newly resolved).
+ * Compute effective versions for all nodes in the graph from injected
+ * content hashes. Nodes with no content hash (not present in the workspace
+ * state) are skipped — they are not buildable at this state.
  */
 export function computeEffectiveVersions(
   graph: PackageGraph,
-  hashes?: ContentHashMap
+  contentHashes: ContentHashMap
 ): { evMap: EffectiveVersionMap; contentHashes: ContentHashMap } {
   const evMap: EffectiveVersionMap = {};
-  const contentHashes: ContentHashMap = { ...hashes };
-  const commitCache = new Map<string, string | null>();
 
   for (const node of graph.topologicalOrder()) {
-    let hash = contentHashes[node.name];
-    if (!hash) {
-      try {
-        hash = computeGitTreeHash(node.path);
-        contentHashes[node.name] = hash;
-      } catch {
-        // No main/master branch — skip this node (not buildable)
-        continue;
-      }
-    }
-
-    // EV = hash(contentHash, dep edge signatures: name+ref+commit+depEv)
-    const depSigs = buildDepSignatures(graph, node.name, evMap, commitCache);
+    const hash = contentHashes[node.name];
+    if (!hash) continue;
+    const depSigs = buildDepSignatures(graph, node.name, evMap, contentHashes);
     evMap[node.name] = hashStrings([hash, ...depSigs]);
   }
 
-  return { evMap, contentHashes };
+  return { evMap, contentHashes: { ...contentHashes } };
 }
 
 /**
- * Recompute tree hash for a specific node and propagate EV changes
- * up through its reverse dependencies. Does NOT mutate the graph.
+ * Recompute the EV for changed nodes and propagate up through reverse
+ * dependencies. Does NOT mutate the graph or its inputs.
  *
- * @param contentHashes - Current content hash map (not mutated).
- * @param commitSha - Optional commit SHA to pin the changed node at (from push event).
- * @returns Updated evMap and contentHashes (new objects, inputs unchanged).
+ * @param updatedHashes - New content hashes for the changed units
+ *   (unit name → subtree hash; a null/absent hash leaves the old one).
  */
-export function recomputeFromNode(
+export function recomputeFromNodes(
   graph: PackageGraph,
-  nodeName: string,
+  changedNames: string[],
   currentEvMap: EffectiveVersionMap,
   contentHashes: ContentHashMap,
-  commitSha?: string
+  updatedHashes: ContentHashMap
 ): { evMap: EffectiveVersionMap; contentHashes: ContentHashMap } {
-  const commitCache = new Map<string, string | null>();
-  const node = graph.get(nodeName);
-  const newHashes = { ...contentHashes };
-  newHashes[nodeName] = computeGitTreeHash(node.path, commitSha);
+  const newHashes = { ...contentHashes, ...updatedHashes };
 
-  // Recompute EVs for this node and all its reverse deps
-  const affected = new Set([nodeName]);
-  const reverseDeps = graph.getReverseDeps(nodeName);
-  for (const dep of reverseDeps) {
-    affected.add(dep);
+  const affected = new Set<string>();
+  for (const name of changedNames) {
+    if (!graph.has(name)) continue;
+    affected.add(name);
+    for (const dep of graph.getReverseDeps(name)) {
+      affected.add(dep);
+    }
   }
 
-  // Recompute in topo order (only affected nodes)
   const newEvMap = { ...currentEvMap };
   for (const n of graph.topologicalOrder()) {
     if (!affected.has(n.name)) continue;
-
-    let hash = newHashes[n.name];
-    if (!hash) {
-      try {
-        hash = computeGitTreeHash(n.path);
-        newHashes[n.name] = hash;
-      } catch {
-        continue;
-      }
-    }
-
-    const depSigs = buildDepSignatures(graph, n.name, newEvMap, commitCache);
+    const hash = newHashes[n.name];
+    if (!hash) continue;
+    const depSigs = buildDepSignatures(graph, n.name, newEvMap, newHashes);
     newEvMap[n.name] = hashStrings([hash, ...depSigs]);
   }
 
@@ -297,126 +160,43 @@ export function diffEvMaps(previous: EffectiveVersionMap, current: EffectiveVers
 }
 
 // ---------------------------------------------------------------------------
-// EV Map Persistence
+// EV Map Persistence (P1 cache — derivation: computeEffectiveVersions at the
+// persisted workspace state hash; deletable, recomputed on next boot)
 // ---------------------------------------------------------------------------
 
-function getEvMapPath(): string {
-  return path.join(getUserDataPath(), "ev-map.json");
+interface PersistedEvState {
+  /** Workspace state hash the EV map was computed at. */
+  stateHash: string;
+  evMap: EffectiveVersionMap;
+  contentHashes: ContentHashMap;
 }
 
-export function loadPersistedEvMap(): EffectiveVersionMap {
-  const p = getEvMapPath();
+function getEvStatePath(): string {
+  return path.join(getUserDataPath(), "ev-state.json");
+}
+
+export function loadPersistedEvState(): PersistedEvState | null {
+  const p = getEvStatePath();
   try {
     if (fs.existsSync(p)) {
-      return JSON.parse(fs.readFileSync(p, "utf-8")) as EffectiveVersionMap;
-    }
-  } catch {
-    // Corrupted — treat as empty
-  }
-  return {};
-}
-
-export function persistEvMap(evMap: EffectiveVersionMap): void {
-  const p = getEvMapPath();
-  const dir = path.dirname(p);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(p, JSON.stringify(evMap, null, 2));
-}
-
-// ---------------------------------------------------------------------------
-// Ref-State Persistence (for cold-start change detection)
-// ---------------------------------------------------------------------------
-
-function getRefStatePath(): string {
-  return path.join(getUserDataPath(), "ref-state.json");
-}
-
-/** Snapshot the current main-branch commit SHA for each unit in the graph. */
-export function snapshotRefState(graph: PackageGraph): RefState {
-  const state: RefState = {};
-  for (const node of graph.allNodes()) {
-    const commit = getCommitAt(node.path);
-    if (commit) state[node.name] = commit;
-  }
-  return state;
-}
-
-export function loadPersistedRefState(): RefState {
-  const p = getRefStatePath();
-  try {
-    if (fs.existsSync(p)) {
-      return JSON.parse(fs.readFileSync(p, "utf-8")) as RefState;
-    }
-  } catch {
-    // Corrupted — treat as empty
-  }
-  return {};
-}
-
-export function persistRefState(state: RefState): void {
-  const p = getRefStatePath();
-  const dir = path.dirname(p);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  fs.writeFileSync(p, JSON.stringify(state, null, 2));
-}
-
-/**
- * Compute effective versions with cold-start optimization.
- * Compares current ref state against previous ref state:
- * - Same commit AND no dep changed → reuse cached EV (skip git rev-parse)
- * - Different commit or dep changed → recompute tree hash
- *
- * Makes cold start O(changed repos) not O(all repos).
- */
-export function computeEffectiveVersionsWithCache(
-  graph: PackageGraph,
-  currentRefs: RefState,
-  prevRefs: RefState,
-  prevEvMap: EffectiveVersionMap
-): { evMap: EffectiveVersionMap; contentHashes: ContentHashMap } {
-  const evMap: EffectiveVersionMap = {};
-  const contentHashes: ContentHashMap = {};
-  const recomputed = new Set<string>();
-  const commitCache = new Map<string, string | null>();
-
-  for (const node of graph.topologicalOrder()) {
-    const prevCommit = prevRefs[node.name];
-    const curCommit = currentRefs[node.name];
-
-    // Skip nodes without a main branch commit
-    if (!curCommit) continue;
-
-    // Check if any dependency was recomputed
-    const depChanged = node.internalDeps.some((dep) => recomputed.has(dep));
-
-    const hasNonDefaultDepRefs = node.internalDeps.some(
-      (dep) => (node.internalDepRefs[dep]?.mode ?? "default") !== "default"
-    );
-
-    if (prevCommit === curCommit && !depChanged && !hasNonDefaultDepRefs && prevEvMap[node.name]) {
-      // No change — reuse cached EV
-      evMap[node.name] = assertPresent(prevEvMap[node.name]);
-    } else {
-      // Changed — recompute tree hash
-      let hash: string;
-      try {
-        hash = computeGitTreeHash(node.path);
-      } catch {
-        continue; // Can't resolve main ref — skip
+      const parsed = JSON.parse(fs.readFileSync(p, "utf-8")) as PersistedEvState;
+      if (parsed && typeof parsed.stateHash === "string" && parsed.evMap && parsed.contentHashes) {
+        return parsed;
       }
-      contentHashes[node.name] = hash;
-
-      const depSigs = buildDepSignatures(graph, node.name, evMap, commitCache);
-      evMap[node.name] = hashStrings([hash, ...depSigs]);
-      recomputed.add(node.name);
     }
+  } catch {
+    // Corrupted — treat as absent (cache amnesia)
   }
+  return null;
+}
 
-  return { evMap, contentHashes };
+export function persistEvState(state: PersistedEvState): void {
+  const p = getEvStatePath();
+  const dir = path.dirname(p);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  fs.writeFileSync(p, JSON.stringify(state));
 }
 
 // ---------------------------------------------------------------------------
@@ -424,7 +204,7 @@ export function computeEffectiveVersionsWithCache(
 // ---------------------------------------------------------------------------
 
 /** Increment when build logic changes (plugins, esbuild options, shims) to invalidate all cached builds. */
-const BUILD_CACHE_VERSION = "15";
+const BUILD_CACHE_VERSION = "16";
 const ROOT_DEPENDENCY_FINGERPRINT_FILES = [
   "package.json",
   "pnpm-lock.yaml",
@@ -446,14 +226,7 @@ function rootDependencyFingerprint(): string {
     if (!fs.existsSync(filePath)) continue;
     hash.update(file);
     hash.update("\0");
-    const stat = fs.statSync(filePath);
-    if (file === "package.json" || file.endsWith(".yaml")) {
-      hash.update(fs.readFileSync(filePath));
-    } else {
-      hash.update(String(stat.size));
-      hash.update(":");
-      hash.update(String(stat.mtimeMs));
-    }
+    hash.update(fs.readFileSync(filePath));
     hash.update("\0");
   }
   const value = hash.digest("hex").slice(0, 16);

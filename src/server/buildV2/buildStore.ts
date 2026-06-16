@@ -90,6 +90,8 @@ export interface BuildMetadata {
   kind: "panel" | "package" | "worker" | "extension" | "app" | "template";
   name: string;
   ev: string;
+  /** Workspace state this artifact was materialized from; null for non-workspace builds. */
+  sourceStateHash: string | null;
   sourcemap: boolean;
   framework?: string;
   details: BuildMetadataDetails;
@@ -99,6 +101,8 @@ export interface BuildMetadata {
 export interface BuildResult {
   /** Absolute path to the build directory */
   dir: string;
+  /** Workspace state resolved for this build request; null for non-workspace builds. */
+  sourceStateHash: string | null;
   /** Build metadata */
   metadata: BuildMetadata;
   /** Target-agnostic artifact manifest with content loaded. */
@@ -127,49 +131,6 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   console.warn(
     `[buildStore] Failed to remove ${pathName}: ${error instanceof Error ? error.message : String(error)}`
   );
-}
-
-function walkFilesRecursive(dir: string): string[] {
-  const out: string[] = [];
-  if (!fs.existsSync(dir)) return out;
-
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...walkFilesRecursive(full));
-    } else if (entry.isFile()) {
-      out.push(full);
-    }
-  }
-  return out;
-}
-
-function isBinaryAsset(file: string): boolean {
-  const ext = path.extname(file).toLowerCase();
-  return [
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".webp",
-    ".avif",
-    ".ico",
-    ".bmp",
-    ".tif",
-    ".tiff",
-    ".woff",
-    ".woff2",
-    ".ttf",
-    ".otf",
-    ".eot",
-    ".mp3",
-    ".mp4",
-    ".ogg",
-    ".wav",
-    ".webm",
-    ".wasm",
-    ".pdf",
-  ].includes(ext);
 }
 
 export function contentTypeForPath(filePath: string): string {
@@ -258,50 +219,6 @@ function metadataForEntries(
   };
 }
 
-function legacyArtifactFromFile(
-  dir: string,
-  artifactPath: string,
-  role: BuildArtifactRole
-): BuildArtifactWithContent | null {
-  const filePath = path.join(dir, artifactPath);
-  if (!fs.existsSync(filePath)) return null;
-  const encoding: BuildArtifactEncoding = isBinaryAsset(filePath) ? "base64" : "utf8";
-  const input: BuildArtifactInput = {
-    path: artifactPath.split(path.sep).join(path.posix.sep),
-    role,
-    contentType: contentTypeForPath(artifactPath),
-    encoding,
-    content:
-      encoding === "base64"
-        ? fs.readFileSync(filePath, "base64")
-        : fs.readFileSync(filePath, "utf-8"),
-  };
-  return {
-    ...manifestForEntry({ ...input, integrity: artifactIntegrity(input) }),
-    content: input.content,
-  };
-}
-
-function readLegacyArtifacts(dir: string): BuildArtifactWithContent[] | null {
-  const artifacts: BuildArtifactWithContent[] = [];
-  const add = (artifactPath: string, role: BuildArtifactRole) => {
-    const artifact = legacyArtifactFromFile(dir, artifactPath, role);
-    if (artifact) artifacts.push(artifact);
-  };
-
-  add("bundle.js", "primary");
-  add("bundle.css", "css");
-  add("index.html", "html");
-
-  const assetsDir = path.join(dir, "assets");
-  for (const filePath of walkFilesRecursive(assetsDir).sort()) {
-    const relative = path.relative(dir, filePath).split(path.sep).join(path.posix.sep);
-    add(relative, path.extname(filePath).toLowerCase() === ".map" ? "map" : "asset");
-  }
-
-  return artifacts.length > 0 ? artifacts : null;
-}
-
 export function has(key: string): boolean {
   const dir = getBuildDir(key);
   return fs.existsSync(path.join(dir, "metadata.json"));
@@ -315,16 +232,23 @@ export function get(key: string): BuildResult | null {
 
   try {
     const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8")) as BuildMetadata;
+    if (
+      !("sourceStateHash" in metadata) ||
+      (metadata.sourceStateHash !== null && typeof metadata.sourceStateHash !== "string")
+    ) {
+      return null;
+    }
     const manifestPath = path.join(dir, "artifacts.json");
-    const artifacts = fs.existsSync(manifestPath)
-      ? (JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as BuildArtifactManifestEntry[])
-          .filter((entry) => fs.existsSync(path.join(dir, entry.path)))
-          .map((entry) => ({ ...entry, content: readArtifactContent(dir, entry) }))
-      : readLegacyArtifacts(dir);
-    if (!artifacts) return null;
+    if (!fs.existsSync(manifestPath)) return null;
+    const artifacts = (
+      JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as BuildArtifactManifestEntry[]
+    )
+      .filter((entry) => fs.existsSync(path.join(dir, entry.path)))
+      .map((entry) => ({ ...entry, content: readArtifactContent(dir, entry) }));
     const artifactManifest = artifacts.map(({ content: _content, ...entry }) => entry);
     return {
       dir,
+      sourceStateHash: metadata.sourceStateHash,
       metadata: metadataForEntries(metadata, artifactManifest),
       artifacts,
     };

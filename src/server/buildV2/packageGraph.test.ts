@@ -22,7 +22,6 @@ function makeNode(
     dependencies: {},
     dependencyOverrides: {},
     internalDeps,
-    internalDepRefs: {},
     manifest: {},
     ...overrides,
   };
@@ -193,6 +192,45 @@ describe("PackageGraph", () => {
 });
 
 describe("discoverPackageGraph extension units", () => {
+  it("rejects per-dependency refs for internal workspace packages", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-dep-ref-"));
+    try {
+      const runtimeDir = path.join(root, "packages", "runtime");
+      const panelDir = path.join(root, "panels", "chat");
+      fs.mkdirSync(runtimeDir, { recursive: true });
+      fs.mkdirSync(panelDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(runtimeDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace/runtime",
+          version: "0.0.0",
+          natstack: {},
+        })
+      );
+      fs.writeFileSync(
+        path.join(panelDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace-panels/chat",
+          version: "1.0.0",
+          dependencies: {
+            "@workspace/runtime": "workspace:main",
+          },
+          natstack: {
+            entry: "index.tsx",
+            panel: {},
+          },
+        })
+      );
+
+      const graph = discoverPackageGraph(root);
+      const node = graph.get("@workspace-panels/chat");
+      expect(node.internalDeps).toContain("@workspace/runtime");
+      expect(node.dependencyErrors).toEqual([expect.stringContaining("must use workspace:*")]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("discovers extension packages under flat workspace/extensions paths", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-ext-graph-"));
     try {

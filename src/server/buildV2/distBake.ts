@@ -12,6 +12,7 @@ export interface ApprovedAppDistEntry {
   capabilities: readonly AppCapability[];
   source: { repo: string; ref: string };
   activeEv: string | null;
+  activeSourceHash: string | null;
   activeBundleKey: string | null;
   status: string;
 }
@@ -29,6 +30,7 @@ export interface AppDistBakeManifest {
   build: {
     key: string;
     effectiveVersion: string;
+    sourceStateHash: string | null;
     target: "electron" | "react-native" | "terminal";
     integrity: string | null;
     rnHostAbi: string | null;
@@ -77,6 +79,7 @@ export function createAppDistBakeManifest(opts: {
     build: {
       key: buildKey,
       effectiveVersion: opts.build.metadata.ev,
+      sourceStateHash: opts.entry.activeSourceHash,
       target: details.target,
       integrity: details.integrity ?? null,
       rnHostAbi: details.rnHostAbi ?? null,

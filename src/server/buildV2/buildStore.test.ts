@@ -18,10 +18,12 @@ import {
 function build(overrides: Partial<BuildResult> = {}): BuildResult {
   return {
     dir: "/tmp/build",
+    sourceStateHash: "state:test",
     metadata: {
       kind: "worker",
       name: "workers/a",
       ev: "ev-worker",
+      sourceStateHash: "state:test",
       sourcemap: false,
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
@@ -181,7 +183,7 @@ describe("build artifact helpers", () => {
     }
   });
 
-  it("loads legacy bundle/css/html/assets build directories without an artifact manifest", () => {
+  it("rejects build directories without an artifact manifest", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-store-"));
     try {
       setUserDataPath(root);
@@ -209,17 +211,7 @@ describe("build artifact helpers", () => {
 
       const result = get("legacy-key");
 
-      expect(result?.artifacts.map((artifact) => artifact.path)).toEqual([
-        "bundle.js",
-        "bundle.css",
-        "index.html",
-        "assets/chunk.js",
-      ]);
-      expect(primaryTextArtifactContent(result as BuildResult)).toBe("console.log('legacy');");
-      expect(result?.metadata.details).toMatchObject({
-        kind: "app",
-        integrity: expect.stringMatching(/^sha256-/),
-      });
+      expect(result).toBeNull();
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

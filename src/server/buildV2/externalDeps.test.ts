@@ -43,7 +43,6 @@ function makeNode(
     dependencies,
     dependencyOverrides: {},
     internalDeps,
-    internalDepRefs: {},
     manifest: {},
   };
 }
@@ -191,13 +190,13 @@ describe("collectTransitiveExternalDeps", () => {
       );
 
       const graph = new PackageGraph();
-      const adapter = makeNode("@workspace/pi-adapter", {
+      const packageUsingPatchedDep = makeNode("@workspace/patched-dep-fixture", {
         "@earendil-works/pi-agent-core": "^0.78.0",
         zod: "^3.25.0",
       });
-      graph.addNode(adapter);
+      graph.addNode(packageUsingPatchedDep);
 
-      const deps = collectTransitiveExternalDeps(adapter, graph);
+      const deps = collectTransitiveExternalDeps(packageUsingPatchedDep, graph);
       expect(deps).toEqual({ zod: "^3.25.0" });
     } finally {
       if (previousAppRoot === undefined) {

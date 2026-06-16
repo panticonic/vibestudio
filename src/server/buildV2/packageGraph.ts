@@ -33,23 +33,10 @@ export interface GraphNode {
   dependencyOverrides: Record<string, string>;
   /** Resolved internal dependency names */
   internalDeps: string[];
-  /** Internal dependency ref spec (branch/ref/commit) keyed by dep name */
-  internalDepRefs: Record<string, InternalDepRef>;
+  /** Dependency declaration errors that block this unit without aborting graph discovery. */
+  dependencyErrors?: string[];
   /** natstack manifest from package.json */
   manifest: PackageManifest;
-}
-
-export interface InternalDepRef {
-  /** Original dependency spec string from package.json */
-  raw: string;
-  /** How this dependency ref should be resolved */
-  mode: "default" | "branch" | "ref" | "commit";
-  /** Branch name (when mode === "branch") */
-  branch?: string;
-  /** Full git ref (when mode === "ref") */
-  ref?: string;
-  /** Commit SHA (when mode === "commit") */
-  commit?: string;
 }
 
 export class PackageGraph {
@@ -164,49 +151,28 @@ function isInternalDep(name: string): boolean {
   return WORKSPACE_SCOPES.some((scope) => name.startsWith(scope));
 }
 
-function parseInternalDepRef(rawSpec: string): InternalDepRef {
+function validateInternalDepSpec(depName: string, rawSpec: string): string | null {
   const raw = (rawSpec ?? "").trim();
   const normalized = raw.toLowerCase();
 
-  // Default workspace-local semantics.
   if (!raw || raw === "*" || normalized === "workspace:*" || normalized === "workspace:") {
-    return { raw: raw || "*", mode: "default" };
+    return null;
   }
 
-  // Common shorthand: workspace:<branch>
-  if (normalized.startsWith("workspace:")) {
-    const rest = raw.slice("workspace:".length).trim();
-    if (!rest || rest === "*") return { raw, mode: "default" };
+  return `Internal dependency ${depName} must use workspace:*; GAD workspace builds do not support per-dependency refs`;
+}
 
-    if (rest.startsWith("commit:")) {
-      const commit = rest.slice("commit:".length).trim();
-      return { raw, mode: "commit", commit };
-    }
-    if (rest.startsWith("ref:")) {
-      const ref = rest.slice("ref:".length).trim();
-      return { raw, mode: "ref", ref };
-    }
-    if (rest.startsWith("branch:")) {
-      const branch = rest.slice("branch:".length).trim();
-      return { raw, mode: "branch", branch };
-    }
-    if (/^[0-9a-f]{7,40}$/i.test(rest)) {
-      return { raw, mode: "commit", commit: rest };
-    }
-    if (rest.startsWith("refs/")) {
-      return { raw, mode: "ref", ref: rest };
-    }
-    return { raw, mode: "branch", branch: rest };
-  }
-
-  // Fallbacks for non-workspace-prefixed internal dep specs.
-  if (/^[0-9a-f]{7,40}$/i.test(raw)) {
-    return { raw, mode: "commit", commit: raw };
-  }
-  if (raw.startsWith("refs/")) {
-    return { raw, mode: "ref", ref: raw };
-  }
-  return { raw, mode: "default" };
+function recordInternalDepSpecError(
+  node: { name: string; dependencyErrors?: string[] },
+  depName: string,
+  rawSpec: string
+): void {
+  const error = validateInternalDepSpec(depName, rawSpec);
+  if (!error) return;
+  node.dependencyErrors ??= [];
+  if (node.dependencyErrors.includes(error)) return;
+  node.dependencyErrors.push(error);
+  console.warn(`[PackageGraph] ${node.name}: ${error}`);
 }
 
 interface PackageJson {
@@ -262,12 +228,12 @@ function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind
 
     const allDeps = { ...pkg.peerDependencies, ...pkg.dependencies };
     const internalDeps: string[] = [];
-    const internalDepRefs: Record<string, InternalDepRef> = {};
+    const partialNode = { name: pkg.name, dependencyErrors: undefined as string[] | undefined };
 
     for (const [depName, depSpec] of Object.entries(allDeps)) {
       if (isInternalDep(depName)) {
         internalDeps.push(depName);
-        internalDepRefs[depName] = parseInternalDepRef(depSpec);
+        recordInternalDepSpecError(partialNode, depName, depSpec);
       }
     }
 
@@ -279,7 +245,7 @@ function scanDirectory(dir: string, workspaceRoot: string, kind: GraphNode["kind
       dependencies: allDeps,
       dependencyOverrides: packageManagerOverrides(pkg),
       internalDeps,
-      internalDepRefs,
+      ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
       manifest: pkg.natstack ?? {},
     });
   }
@@ -322,7 +288,6 @@ function scanTemplates(dir: string, workspaceRoot: string): GraphNode[] {
       dependencies: {},
       dependencyOverrides: {},
       internalDeps: [],
-      internalDepRefs: {},
       manifest: { framework: config.framework },
     });
   }
@@ -375,13 +340,14 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
 
   // The template workspace may contain packages whose real package name is not
   // under an @workspace/* scope, e.g. @vendor/shared-utils. Treat any dependency
-  // whose package name is present in the graph as internal so source extraction,
-  // EV computation, and esbuild resolution all see the same workspace graph.
+  // whose package name is present in the graph as internal so source
+  // materialization, EV computation, and esbuild resolution all see the same
+  // workspace graph.
   for (const node of graph.allNodes()) {
     for (const [depName, depSpec] of Object.entries(node.dependencies)) {
       if (!graph.has(depName) || node.internalDeps.includes(depName)) continue;
       node.internalDeps.push(depName);
-      node.internalDepRefs[depName] = parseInternalDepRef(depSpec);
+      recordInternalDepSpecError(node, depName, depSpec);
     }
   }
 
@@ -395,7 +361,6 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
       const templateName = `template:${node.manifest.template}`;
       if (graph.has(templateName)) {
         node.internalDeps.push(templateName);
-        node.internalDepRefs[templateName] = { raw: "workspace:*", mode: "default" };
       } else {
         console.warn(
           `[PackageGraph] ${node.name} references template "${node.manifest.template}" which does not exist`
@@ -404,13 +369,12 @@ export function discoverPackageGraph(workspaceRoot: string): PackageGraph {
     } else if (hasDefaultTemplate) {
       // Always inject default template as a dep so its content flows into the
       // panel's EV. Even panels with their own index.html get this dep — the
-      // cost is trivial (template files extracted alongside panel source) and
-      // it avoids a ref-correctness issue: the live filesystem check for
-      // index.html could disagree with the state at the requested build ref.
+      // cost is trivial (template files materialized alongside panel source)
+      // and it avoids a state-correctness issue: the live filesystem check for
+      // index.html could disagree with the requested build state.
       // resolveFramework() handles the "has own HTML" case at build time from
-      // extracted source.
+      // materialized source.
       node.internalDeps.push("template:default");
-      node.internalDepRefs["template:default"] = { raw: "workspace:*", mode: "default" };
     }
   }
 

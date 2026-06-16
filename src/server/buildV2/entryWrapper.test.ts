@@ -179,7 +179,7 @@ describe("injectHtmlTransforms", () => {
 
     expect(html).toContain("<title>Agentic Chat</title>");
     expect(html).toContain('<link rel="stylesheet" href="./bundle.css" />');
-    expect(html).toContain('<script src="/__loader.js"></script>');
+    expect(html).toContain('<script src="/__loader.js" data-bundle-src="./bundle.js"></script>');
   });
 
   it("does not duplicate an existing bundle stylesheet", () => {
@@ -190,6 +190,24 @@ describe("injectHtmlTransforms", () => {
     );
 
     expect(html.match(/bundle\.css/g)).toHaveLength(1);
+  });
+
+  it("rewrites template bundle references to hashed panel artifacts", () => {
+    const html = injectHtmlTransforms(
+      '<html><head><link rel="stylesheet" href="./bundle.css" /></head><body><script src="./bundle.js"></script></body></html>',
+      "/panels/chat/",
+      true,
+      undefined,
+      "Agentic Chat",
+      true,
+      { bundleSrc: "./bundle-ABC123.js", cssHref: "./bundle-XYZ789.css" }
+    );
+
+    expect(html).toContain('href="./bundle-XYZ789.css"');
+    expect(html).toContain(
+      '<script src="/__loader.js" data-bundle-src="./bundle-ABC123.js"></script>'
+    );
+    expect(html).not.toContain('href="./bundle.css"');
   });
 });
 

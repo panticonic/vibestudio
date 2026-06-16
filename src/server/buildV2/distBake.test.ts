@@ -16,6 +16,7 @@ function appEntry(overrides: Partial<ApprovedAppDistEntry> = {}): ApprovedAppDis
     capabilities: ["notifications"],
     source: { repo: "workspace/apps/shell", ref: "main" },
     activeEv: "ev-shell",
+    activeSourceHash: "state:shell",
     activeBundleKey: "build-shell",
     status: "running",
     ...overrides,
@@ -25,10 +26,12 @@ function appEntry(overrides: Partial<ApprovedAppDistEntry> = {}): ApprovedAppDis
 function appBuild(overrides: Partial<BuildResult> = {}): BuildResult {
   return {
     dir: "/builds/build-shell",
+    sourceStateHash: "state:shell",
     metadata: {
       kind: "app",
       name: "@workspace-apps/shell",
       ev: "ev-shell",
+      sourceStateHash: "state:shell",
       sourcemap: true,
       details: {
         kind: "app",
@@ -81,6 +84,7 @@ describe("app dist bake", () => {
       build: {
         key: "build-shell",
         effectiveVersion: "ev-shell",
+        sourceStateHash: "state:shell",
         target: "electron",
         integrity: "sha256-shell",
       },

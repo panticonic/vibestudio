@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@natstack/env-paths";
 
 import { buildUnit } from "./builder.js";
+import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
+beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
+afterAll(() => setBuildSourceProvider(null));
 import { primaryTextArtifactContent } from "./buildStore.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 
@@ -73,7 +76,7 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/hello");
-    const result = await buildUnit(node, "ev-extension-test", graph, workspaceRoot);
+    const result = await buildUnit(node, "ev-extension-test", graph, workspaceRoot, "state:test");
 
     expect(result.metadata).toMatchObject({
       kind: "extension",
@@ -145,7 +148,13 @@ describe("buildUnit extension builds", () => {
 
     const graph = discoverPackageGraph(workspaceRoot);
     const node = graph.get("@workspace-extensions/cjs-extension");
-    const result = await buildUnit(node, "ev-extension-cjs-test", graph, workspaceRoot);
+    const result = await buildUnit(
+      node,
+      "ev-extension-cjs-test",
+      graph,
+      workspaceRoot,
+      "state:test"
+    );
     const mod = await import(`file://${path.join(result.dir, "bundle.js")}`);
     const api = await mod.activate();
 

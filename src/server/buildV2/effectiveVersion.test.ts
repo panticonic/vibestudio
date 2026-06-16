@@ -1,183 +1,170 @@
 /**
- * Tests for effectiveVersion.ts — git-based functions with mocked child_process.
+ * Tests for effectiveVersion.ts — pure EV computation over injected GAD
+ * subtree hashes (no git, no DO, no filesystem beyond persistence).
  */
 
-vi.mock("@natstack/shared/gitRuntime", () => ({
-  execGitFileSync: vi.fn(),
-  execGitFile: vi.fn(),
-}));
-
-vi.mock("@natstack/shared/envPaths", () => ({
-  getUserDataPath: vi.fn().mockReturnValue("/tmp/test-ev"),
-}));
-
-import { execGitFileSync } from "@natstack/shared/gitRuntime";
-import * as fs from "fs";
-import * as os from "os";
-import * as path from "path";
-
+import { PackageGraph, type GraphNode } from "./packageGraph.js";
 import {
-  resolveMainRef,
-  computeGitTreeHash,
-  getCommitAt,
+  computeEffectiveVersions,
+  recomputeFromNodes,
   diffEvMaps,
   computeBuildKey,
+  type ContentHashMap,
 } from "./effectiveVersion.js";
 
-const execGitFileSyncMock = execGitFileSync as unknown as ReturnType<typeof vi.fn>;
+function node(
+  name: string,
+  relativePath: string,
+  internalDeps: string[] = [],
+  kind: GraphNode["kind"] = "package"
+): GraphNode {
+  return {
+    path: `/ws/${relativePath}`,
+    relativePath,
+    name,
+    kind,
+    dependencies: {},
+    dependencyOverrides: {},
+    internalDeps,
+    manifest: {},
+  };
+}
+
+function graphOf(...nodes: GraphNode[]): PackageGraph {
+  const graph = new PackageGraph();
+  for (const n of nodes) graph.addNode(n);
+  graph.computeTopologicalOrder();
+  return graph;
+}
 
 describe("effectiveVersion", () => {
-  beforeEach(() => {
-    execGitFileSyncMock.mockReset();
+  describe("computeEffectiveVersions", () => {
+    it("derives EVs bottom-up from injected content hashes", () => {
+      const graph = graphOf(
+        node("@workspace/core", "packages/core"),
+        node("@workspace-panels/chat", "panels/chat", ["@workspace/core"], "panel")
+      );
+      const hashes: ContentHashMap = {
+        "@workspace/core": "m1",
+        "@workspace-panels/chat": "m2",
+      };
+      const { evMap } = computeEffectiveVersions(graph, hashes);
+      expect(evMap["@workspace/core"]).toMatch(/^[0-9a-f]{16}$/);
+      expect(evMap["@workspace-panels/chat"]).toMatch(/^[0-9a-f]{16}$/);
+      expect(evMap["@workspace/core"]).not.toBe(evMap["@workspace-panels/chat"]);
+    });
+
+    it("skips nodes with no content hash (not in the workspace state)", () => {
+      const graph = graphOf(node("@workspace/ghost", "packages/ghost"));
+      const { evMap } = computeEffectiveVersions(graph, {});
+      expect(evMap["@workspace/ghost"]).toBeUndefined();
+    });
+
+    it("is deterministic for the same inputs", () => {
+      const graph = graphOf(
+        node("@workspace/a", "packages/a"),
+        node("@workspace/b", "packages/b", ["@workspace/a"])
+      );
+      const hashes: ContentHashMap = { "@workspace/a": "x", "@workspace/b": "y" };
+      const first = computeEffectiveVersions(graph, hashes);
+      const second = computeEffectiveVersions(graph, hashes);
+      expect(first.evMap).toEqual(second.evMap);
+    });
+
+    it("changes a dependent's EV when only the dep's hash changes", () => {
+      const graph = graphOf(
+        node("@workspace/a", "packages/a"),
+        node("@workspace/b", "packages/b", ["@workspace/a"])
+      );
+      const before = computeEffectiveVersions(graph, {
+        "@workspace/a": "x1",
+        "@workspace/b": "y",
+      });
+      const after = computeEffectiveVersions(graph, {
+        "@workspace/a": "x2",
+        "@workspace/b": "y",
+      });
+      expect(after.evMap["@workspace/a"]).not.toBe(before.evMap["@workspace/a"]);
+      expect(after.evMap["@workspace/b"]).not.toBe(before.evMap["@workspace/b"]);
+    });
   });
 
-  // -------------------------------------------------------------------------
-  // resolveMainRef
-  // -------------------------------------------------------------------------
-  describe("resolveMainRef", () => {
-    it("returns refs/heads/main when git rev-parse succeeds for main", () => {
-      execGitFileSyncMock.mockReturnValue("deadbeef\n");
-
-      // Use a unique repo path to avoid the internal cache
-      const ref = resolveMainRef("/repo/resolve-main-success");
-      expect(ref).toBe("refs/heads/main");
-      expect(execGitFileSync).toHaveBeenCalledWith(
-        ["rev-parse", "--verify", "--end-of-options", "refs/heads/main"],
-        expect.objectContaining({ cwd: "/repo/resolve-main-success" })
+  describe("recomputeFromNodes", () => {
+    it("propagates a changed hash through reverse deps without touching others", () => {
+      const graph = graphOf(
+        node("@workspace/a", "packages/a"),
+        node("@workspace/b", "packages/b", ["@workspace/a"]),
+        node("@workspace/c", "packages/c")
       );
-    });
-
-    it("falls back to refs/heads/master when main fails", () => {
-      execGitFileSyncMock
-        .mockImplementationOnce(() => {
-          throw new Error("not found");
-        })
-        .mockReturnValueOnce("abcd1234\n");
-
-      const ref = resolveMainRef("/repo/resolve-fallback-master");
-      expect(ref).toBe("refs/heads/master");
-    });
-
-    it("throws when both main and master fail", () => {
-      execGitFileSyncMock.mockImplementation(() => {
-        throw new Error("not found");
+      const initial = computeEffectiveVersions(graph, {
+        "@workspace/a": "x1",
+        "@workspace/b": "y",
+        "@workspace/c": "z",
       });
 
-      expect(() => resolveMainRef("/repo/resolve-both-fail")).toThrowError(
-        /No main\/master branch found/
+      const result = recomputeFromNodes(
+        graph,
+        ["@workspace/a"],
+        initial.evMap,
+        initial.contentHashes,
+        { "@workspace/a": "x2" }
       );
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // computeGitTreeHash
-  // -------------------------------------------------------------------------
-  describe("computeGitTreeHash", () => {
-    it("returns trimmed git rev-parse output for tree ref", () => {
-      // First call resolves the main ref, second returns the tree hash
-      execGitFileSyncMock
-        .mockReturnValueOnce("ok\n") // rev-parse --verify refs/heads/main
-        .mockReturnValueOnce("aabbccdd1122334455667788aabbccdd11223344\n"); // rev-parse refs/heads/main^{tree}
-
-      const hash = computeGitTreeHash("/repo/tree-hash-test");
-      expect(hash).toBe("aabbccdd1122334455667788aabbccdd11223344");
+      expect(result.evMap["@workspace/a"]).not.toBe(initial.evMap["@workspace/a"]);
+      expect(result.evMap["@workspace/b"]).not.toBe(initial.evMap["@workspace/b"]);
+      expect(result.evMap["@workspace/c"]).toBe(initial.evMap["@workspace/c"]);
+      expect(result.contentHashes["@workspace/a"]).toBe("x2");
+      // inputs not mutated
+      expect(initial.contentHashes["@workspace/a"]).toBe("x1");
     });
 
-    it("uses an explicit ref when provided", () => {
-      execGitFileSyncMock.mockReturnValue("abc123def456\n");
-
-      const hash = computeGitTreeHash("/repo/tree-explicit-ref", "refs/heads/feature");
-      expect(execGitFileSync).toHaveBeenCalledWith(
-        ["rev-parse", "--verify", "--end-of-options", "refs/heads/feature^{tree}"],
-        expect.anything()
+    it("matches a from-scratch computation after the change", () => {
+      const graph = graphOf(
+        node("@workspace/a", "packages/a"),
+        node("@workspace/b", "packages/b", ["@workspace/a"]),
+        node("@workspace/c", "panels/c", ["@workspace/b"], "panel")
       );
-      expect(hash).toBe("abc123def456");
-    });
-  });
-
-  // -------------------------------------------------------------------------
-  // getCommitAt
-  // -------------------------------------------------------------------------
-  describe("getCommitAt", () => {
-    it("returns trimmed SHA on success", () => {
-      // First call resolves the main ref
-      execGitFileSyncMock
-        .mockReturnValueOnce("ok\n") // rev-parse --verify refs/heads/main
-        .mockReturnValueOnce("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"); // rev-parse refs/heads/main
-
-      const sha = getCommitAt("/repo/commit-at-success");
-      expect(sha).toBe("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
-    });
-
-    it("returns null when git command fails", () => {
-      execGitFileSyncMock.mockImplementation(() => {
-        throw new Error("not found");
+      const initial = computeEffectiveVersions(graph, {
+        "@workspace/a": "x1",
+        "@workspace/b": "y",
+        "@workspace/c": "z",
       });
-
-      const sha = getCommitAt("/repo/commit-at-fail", "refs/heads/nonexistent");
-      expect(sha).toBeNull();
+      const incremental = recomputeFromNodes(
+        graph,
+        ["@workspace/a"],
+        initial.evMap,
+        initial.contentHashes,
+        { "@workspace/a": "x2" }
+      );
+      const fromScratch = computeEffectiveVersions(graph, {
+        "@workspace/a": "x2",
+        "@workspace/b": "y",
+        "@workspace/c": "z",
+      });
+      expect(incremental.evMap).toEqual(fromScratch.evMap);
     });
   });
 
-  // -------------------------------------------------------------------------
-  // diffEvMaps (pure function, no git needed)
-  // -------------------------------------------------------------------------
   describe("diffEvMaps", () => {
     it("detects changed, added, and removed entries", () => {
-      const previous = { a: "hash1", b: "hash2", c: "hash3" };
-      const current = { a: "hash1", b: "hash2-changed", d: "hash4" };
-
-      const result = diffEvMaps(previous, current);
-      expect(result.changed).toEqual(["b"]);
-      expect(result.added).toEqual(["d"]);
-      expect(result.removed).toEqual(["c"]);
+      const changes = diffEvMaps({ a: "1", b: "2", gone: "3" }, { a: "1", b: "9", fresh: "4" });
+      expect(changes.changed).toEqual(["b"]);
+      expect(changes.added).toEqual(["fresh"]);
+      expect(changes.removed).toEqual(["gone"]);
     });
 
     it("returns empty arrays when maps are identical", () => {
-      const map = { x: "h1", y: "h2" };
-      const result = diffEvMaps(map, { ...map });
-      expect(result.changed).toEqual([]);
-      expect(result.added).toEqual([]);
-      expect(result.removed).toEqual([]);
+      const changes = diffEvMaps({ a: "1" }, { a: "1" });
+      expect(changes).toEqual({ changed: [], added: [], removed: [] });
     });
   });
 
   describe("computeBuildKey", () => {
-    it("changes when root dependency metadata changes", () => {
-      const previousCwd = process.cwd();
-      const previousAppRoot = process.env["NATSTACK_APP_ROOT"];
-      const rootA = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-key-a-"));
-      const rootB = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-build-key-b-"));
-      try {
-        process.chdir(rootA);
-        fs.mkdirSync(path.join(rootA, "dist"));
-        fs.mkdirSync(path.join(rootB, "dist"));
-        fs.writeFileSync(path.join(rootA, "package.json"), '{"dependencies":{"x":"1.0.0"}}\n');
-        fs.writeFileSync(path.join(rootB, "package.json"), '{"dependencies":{"x":"2.0.0"}}\n');
-        fs.writeFileSync(path.join(rootA, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
-        fs.writeFileSync(
-          path.join(rootB, "pnpm-lock.yaml"),
-          "lockfileVersion: '9.0'\nchanged: true\n"
-        );
-        fs.writeFileSync(path.join(rootA, "dist", "server.mjs"), "console.log('a');\n");
-        fs.writeFileSync(path.join(rootB, "dist", "server.mjs"), "console.log('b changed');\n");
-
-        process.env["NATSTACK_APP_ROOT"] = rootA;
-        const before = computeBuildKey("workers/agent-worker", "ev-1", false);
-        process.env["NATSTACK_APP_ROOT"] = rootB;
-        const after = computeBuildKey("workers/agent-worker", "ev-1", false);
-
-        expect(after).not.toBe(before);
-      } finally {
-        process.chdir(previousCwd);
-        if (previousAppRoot === undefined) {
-          delete process.env["NATSTACK_APP_ROOT"];
-        } else {
-          process.env["NATSTACK_APP_ROOT"] = previousAppRoot;
-        }
-        fs.rmSync(rootA, { recursive: true, force: true });
-        fs.rmSync(rootB, { recursive: true, force: true });
-      }
+    it("varies by unit name, ev, and sourcemap flag", () => {
+      const base = computeBuildKey("unit-a", "ev1", true);
+      expect(computeBuildKey("unit-a", "ev1", true)).toBe(base);
+      expect(computeBuildKey("unit-b", "ev1", true)).not.toBe(base);
+      expect(computeBuildKey("unit-a", "ev2", true)).not.toBe(base);
+      expect(computeBuildKey("unit-a", "ev1", false)).not.toBe(base);
     });
   });
 });

@@ -12,7 +12,11 @@ import {
   createPlaywrightCoreBrowserBuildOptions,
   initBuilder,
 } from "./builder.js";
+import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 import { discoverPackageGraph } from "./packageGraph.js";
+
+beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
+afterAll(() => setBuildSourceProvider(null));
 
 const REPO_ROOT = process.cwd();
 
@@ -132,7 +136,7 @@ describe("Playwright core library build", () => {
         "ev-playwright-core-lib",
         graph,
         workspaceRoot,
-        undefined,
+        "state:test",
         { library: true }
       );
 
@@ -167,7 +171,6 @@ describe("Playwright core library build", () => {
         dependencies: {},
         dependencyOverrides: {},
         internalDeps: [],
-        internalDepRefs: {},
         manifest: {},
       } satisfies GraphNode);
       graph.addNode({
@@ -178,7 +181,6 @@ describe("Playwright core library build", () => {
         dependencies: { "@workspace/playwright-core": "workspace:*" },
         dependencyOverrides: {},
         internalDeps: ["@workspace/playwright-core"],
-        internalDepRefs: {},
         manifest: {},
       } satisfies GraphNode);
 
@@ -225,7 +227,6 @@ describe("Playwright core library build", () => {
         dependencies: {},
         dependencyOverrides: {},
         internalDeps: [],
-        internalDepRefs: {},
         manifest: {},
       } satisfies GraphNode);
       graph.addNode({
@@ -236,7 +237,6 @@ describe("Playwright core library build", () => {
         dependencies: {},
         dependencyOverrides: {},
         internalDeps: ["@workspace/playwright-protocol"],
-        internalDepRefs: {},
         manifest: {},
       } satisfies GraphNode);
       graph.addNode({
@@ -247,7 +247,6 @@ describe("Playwright core library build", () => {
         dependencies: { "@workspace/playwright-core": "workspace:*" },
         dependencyOverrides: {},
         internalDeps: ["@workspace/playwright-core"],
-        internalDepRefs: {},
         manifest: {},
       } satisfies GraphNode);
 
@@ -330,7 +329,8 @@ describe("Playwright core library build", () => {
         graph.get("@workspace-workers/playwright-import"),
         "ev-playwright-worker",
         graph,
-        workspaceRoot
+        workspaceRoot,
+        "state:test"
       );
 
       const bundle = result.artifacts.find((artifact) => artifact.role === "primary")?.content;

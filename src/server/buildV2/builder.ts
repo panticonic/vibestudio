@@ -10,8 +10,8 @@
  * Concurrency: semaphore with MAX_CONCURRENT_BUILDS = 8 by default.
  * Coalescing: dedup concurrent builds of the same build key.
  *
- * Source files are extracted from git at the correct commit via sourceExtractor,
- * so builds always match what the EV describes regardless of working tree state.
+ * Source files are materialized from the requested GAD state, so builds always
+ * match what the EV describes regardless of working tree state.
  */
 
 import * as esbuild from "esbuild";
@@ -47,7 +47,7 @@ import {
   ensureExternalDeps,
   ensureExtensionRuntimeDeps,
 } from "./externalDeps.js";
-import { extractSourceForBuild } from "./sourceExtractor.js";
+import { collectTransitiveInternalDeps, getBuildSourceProvider } from "./buildSource.js";
 import { PANEL_CSP_META } from "@natstack/shared/constants";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@natstack/shared/extensionRuntimeAbi";
 import { getAdapter } from "./adapters/index.js";
@@ -183,11 +183,14 @@ function formatBytes(bytes: number): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Remap an original workspace path to the corresponding extracted source path.
- * Uses path.relative + path.join, not string replacement.
+ * Resolve a graph node inside a materialized source root.
+ *
+ * Graph nodes may have been discovered from a different checkout than the one
+ * used for this build, so absolute `node.path` is only a fallback. The stable
+ * coordinate is `relativePath`.
  */
-function remapPath(orig: string, workspaceRoot: string, sourceRoot: string): string {
-  return path.join(sourceRoot, path.relative(workspaceRoot, orig));
+function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
+  return path.join(sourceRoot, node.relativePath);
 }
 
 // ---------------------------------------------------------------------------
@@ -222,11 +225,11 @@ const inFlightLibraryBuilds = new Map<string, Promise<BuildResult>>();
 
 /**
  * Create an esbuild plugin that resolves @workspace/* imports from
- * the git-extracted source tree. All packages are extracted from git
- * to preserve content-addressable semantics — the build always matches
- * the EV regardless of filesystem state.
+ * the materialized source tree. All packages are read from the same immutable
+ * GAD state to preserve content-addressable semantics: the build always
+ * matches the EV regardless of filesystem state.
  *
- * Since extracted source lacks dist/ (gitignored), the plugin maps
+ * Since materialized source states do not include generated dist/, the plugin maps
  * exports-based dist/ paths to their TypeScript source equivalents.
  */
 const PANEL_CONDITIONS = ["natstack-panel", "import", "default"] as const;
@@ -270,7 +273,7 @@ function createWorkspaceResolvePlugin(
         const node = graph.tryGet(parsed.packageName);
         if (!node) return null;
 
-        const extractedPath = remapPath(node.path, workspaceRoot, sourceRoot);
+        const extractedPath = sourcePathForNode(node, sourceRoot);
         const sourcePath = fs.existsSync(path.join(extractedPath, "package.json"))
           ? extractedPath
           : node.path;
@@ -301,7 +304,7 @@ function createWorkspaceResolvePlugin(
 
           if (fs.existsSync(resolved)) return { path: resolved };
 
-          // dist/ not in git-extracted source — map to TypeScript source
+          // dist/ is generated output; map to TypeScript source.
           if (srcFallback) return { path: srcFallback };
         }
 
@@ -365,11 +368,11 @@ function resolveSourceFallback(sourcePath: string, target: string): string | nul
 }
 
 /**
- * Rewrite .js extension imports to .ts/.tsx within the extracted source tree.
+ * Rewrite .js extension imports to .ts/.tsx within the materialized source tree.
  *
  * TypeScript ESM sources use .js extensions in imports (e.g., `from "./rpc.js"`)
- * per the TypeScript convention — these reference compiled output. In the git-
- * extracted source, only .ts files exist. This plugin intercepts .js imports
+ * per the TypeScript convention: these reference compiled output. In the
+ * materialized source state, only .ts files exist. This plugin intercepts .js imports
  * within the source root and rewrites them to their .ts/.tsx equivalents.
  */
 function createTsExtensionPlugin(sourceRoot: string): esbuild.Plugin {
@@ -377,7 +380,7 @@ function createTsExtensionPlugin(sourceRoot: string): esbuild.Plugin {
     name: "ts-extension-rewrite",
     setup(build) {
       build.onResolve({ filter: /\.js$/ }, (args) => {
-        // Only relative imports within extracted source
+        // Only relative imports within materialized source
         if (!args.path.startsWith(".") || !args.resolveDir) return null;
         if (!args.resolveDir.startsWith(sourceRoot)) return null;
 
@@ -702,7 +705,6 @@ function createAppRuntimeShimPlugin(): esbuild.Plugin {
 export const fs = new Proxy({}, { get: () => unavailable });
 export const gatewayConfig = {};
 export const gatewayFetch = unavailable;
-export const gitConfig = {};
 export const env = {};
 export const entityId = "app";
 export const id = "app";
@@ -723,9 +725,6 @@ export const onFocus = () => () => {};
 export const onConnectionError = () => () => {};
 export const getInfo = unavailable;
 export const focusPanel = unavailable;
-export const getWorkspaceTree = unavailable;
-export const listBranches = unavailable;
-export const listCommits = unavailable;
 export const expose = unavailable;
 export const openPanel = unavailable;
 export const openExternal = unavailable;
@@ -1034,7 +1033,7 @@ function playwrightCoreSourcePath(
 ): string | null {
   const node = graph.tryGet(PLAYWRIGHT_CORE_PACKAGE);
   if (!node) return null;
-  const extractedPath = remapPath(node.path, workspaceRoot, sourceRoot);
+  const extractedPath = sourcePathForNode(node, sourceRoot);
   return fs.existsSync(path.join(extractedPath, "package.json")) ? extractedPath : node.path;
 }
 
@@ -1046,7 +1045,7 @@ function playwrightProtocolSourcePath(
 ): string {
   const node = graph.tryGet("@workspace/playwright-protocol");
   if (!node) return path.join(coreSourcePath, "..", "playwright-protocol");
-  const extractedPath = remapPath(node.path, workspaceRoot, sourceRoot);
+  const extractedPath = sourcePathForNode(node, sourceRoot);
   return fs.existsSync(path.join(extractedPath, "package.json")) ? extractedPath : node.path;
 }
 
@@ -1222,6 +1221,28 @@ function escapeHtml(str: string): string {
     .replace(/"/g, "&quot;");
 }
 
+function relativeAssetHref(artifactPath: string): string {
+  return artifactPath.startsWith("/") || artifactPath.startsWith("./")
+    ? artifactPath
+    : `./${artifactPath}`;
+}
+
+function panelLoaderScript(bundleSrc: string): string {
+  return `<script src="/__loader.js" data-bundle-src="${escapeHtml(bundleSrc)}"></script>`;
+}
+
+function isPanelEntryJsOutput(outputPath: string): boolean {
+  return /^bundle(?:-[^.]+)?\.js$/i.test(path.basename(outputPath));
+}
+
+function isPanelEntryCssOutput(outputPath: string): boolean {
+  return /^bundle(?:-[^.]+)?\.css$/i.test(path.basename(outputPath));
+}
+
+function relativeBuildOutputPath(outdir: string, outputPath: string): string {
+  return path.relative(outdir, path.resolve(outputPath)).replace(/\\/g, "/");
+}
+
 /**
  * Inject standard transforms into a custom/template HTML file:
  * importmap, CSP, base href, bundle.js → __loader.js replacement.
@@ -1232,9 +1253,12 @@ export function injectHtmlTransforms(
   hasCss: boolean,
   externals?: Record<string, string>,
   title?: string,
-  usePanelLoader = true
+  usePanelLoader = true,
+  assetPaths: { bundleSrc?: string; cssHref?: string } = {}
 ): string {
   let result = html;
+  const bundleSrc = assetPaths.bundleSrc ?? "./bundle.js";
+  const cssHref = assetPaths.cssHref ?? "./bundle.css";
   if (title !== undefined) {
     const titleElement = `<title>${escapeHtml(title)}</title>`;
     if (/<title\b[^>]*>[\s\S]*?<\/title>/i.test(result)) {
@@ -1267,22 +1291,29 @@ export function injectHtmlTransforms(
   }
   // If esbuild emitted CSS for imported component styles, make custom panel
   // templates load it too. The fallback HTML path already includes this link.
-  if (
-    hasCss &&
-    !/<link\b[^>]*\bhref\s*=\s*["'](?:\.\/)?bundle\.css(?:\?[^"']*)?["'][^>]*>/i.test(result)
-  ) {
-    const cssLink = `<link rel="stylesheet" href="./bundle.css" />`;
-    if (/<\/head>/i.test(result)) {
-      result = result.replace(/<\/head>/i, `  ${cssLink}\n</head>`);
+  if (hasCss) {
+    const bundleCssLink =
+      /(<link\b[^>]*\bhref\s*=\s*["'])(?:\.\/)?bundle\.css(?:\?[^"']*)?(["'][^>]*>)/i;
+    if (bundleCssLink.test(result)) {
+      result = result.replace(bundleCssLink, `$1${escapeHtml(cssHref)}$2`);
     } else {
-      result = `${cssLink}\n${result}`;
+      const cssLink = `<link rel="stylesheet" href="${escapeHtml(cssHref)}" />`;
+      if (/<\/head>/i.test(result)) {
+        result = result.replace(/<\/head>/i, `  ${cssLink}\n</head>`);
+      } else {
+        result = `${cssLink}\n${result}`;
+      }
     }
   }
+  const bundleScript =
+    /<script\b[^>]*\bsrc\s*=\s*["'](?:\.\/)?bundle\.js(?:\?[^"']*)?["'][^>]*><\/script>/i;
   if (usePanelLoader) {
     // Replace bundle.js script with the panel identity/config loader.
+    result = result.replace(bundleScript, panelLoaderScript(bundleSrc));
+  } else if (bundleSrc !== "./bundle.js") {
     result = result.replace(
-      /<script\b[^>]*\bsrc\s*=\s*["'](?:\.\/)?bundle\.js(?:\?[^"']*)?["'][^>]*><\/script>/i,
-      `<script src="/__loader.js"></script>`
+      bundleScript,
+      `<script type="module" src="${escapeHtml(bundleSrc)}"></script>`
     );
   }
   return result;
@@ -1293,10 +1324,18 @@ function generatePanelHtml(
   relativePath: string,
   templateHtmlPath: string | null,
   adapter: FrameworkAdapter,
-  options: { hasCss: boolean; externals?: Record<string, string>; usePanelLoader?: boolean }
+  options: {
+    hasCss: boolean;
+    externals?: Record<string, string>;
+    usePanelLoader?: boolean;
+    bundleSrc?: string;
+    cssHref?: string;
+  }
 ): string {
   const usePanelLoader = options.usePanelLoader ?? true;
   const baseHref = usePanelLoader ? `/${relativePath}/` : null;
+  const bundleSrc = options.bundleSrc ?? "./bundle.js";
+  const cssHref = options.cssHref ?? "./bundle.css";
 
   // If template or panel provides HTML, use it with standard injections
   if (templateHtmlPath && fs.existsSync(templateHtmlPath)) {
@@ -1307,12 +1346,15 @@ function generatePanelHtml(
       options.hasCss,
       options.externals,
       title,
-      usePanelLoader
+      usePanelLoader,
+      { bundleSrc, cssHref }
     );
   }
 
   // Adapter-generated fallback HTML
-  const cssLink = options.hasCss ? `\n  <link rel="stylesheet" href="./bundle.css" />` : "";
+  const cssLink = options.hasCss
+    ? `\n  <link rel="stylesheet" href="${escapeHtml(cssHref)}" />`
+    : "";
   const importMapScript =
     options.externals && Object.keys(options.externals).length > 0
       ? `<script type="importmap">${JSON.stringify({ imports: options.externals })}</script>\n  `
@@ -1342,8 +1384,8 @@ function generatePanelHtml(
   ${rootElement}
   ${
     options.usePanelLoader === false
-      ? '<script type="module" src="./bundle.js"></script>'
-      : '<script src="/__loader.js"></script>'
+      ? `<script type="module" src="${escapeHtml(bundleSrc)}"></script>`
+      : panelLoaderScript(bundleSrc)
   }
 </body>
 </html>`;
@@ -1496,13 +1538,54 @@ export interface BuildUnitOptions {
   libraryEntrySubpath?: string;
 }
 
+export function effectiveBuildVersion(
+  node: GraphNode,
+  ev: string,
+  options?: BuildUnitOptions
+): string {
+  if (options?.library) {
+    return `${ev}:lib:${createHash("sha256")
+      .update(
+        JSON.stringify({
+          externals: options.externals ?? [],
+          entry: options.libraryEntrySubpath ?? ".",
+        })
+      )
+      .digest("hex")
+      .slice(0, 12)}`;
+  }
+  if (node.kind === "extension") {
+    return `${ev}:extension-runtime-abi:${EXTENSION_RUNTIME_ABI_VERSION}`;
+  }
+  return ev;
+}
+
+export function buildSourcemapForNode(node: GraphNode, options?: BuildUnitOptions): boolean {
+  return options?.library
+    ? false
+    : node.kind === "extension"
+      ? true
+      : node.manifest.sourcemap !== false;
+}
+
+export function computeBuildUnitKey(
+  node: GraphNode,
+  ev: string,
+  options?: BuildUnitOptions
+): string {
+  return computeBuildKey(
+    node.name,
+    effectiveBuildVersion(node, ev, options),
+    buildSourcemapForNode(node, options)
+  );
+}
+
 /**
  * Build a single unit (panel, about page, worker, or library).
  * Returns a BuildResult from the content-addressed store.
  *
- * @param commitMap - Optional map of unit name → commit SHA for source extraction.
- *   When provided (from push trigger), ensures extraction uses the same commits
- *   that EVs were derived from. When absent, extraction snapshots from git on the spot.
+ * @param stateRef - Immutable workspace state (`state:…` hash) the build's
+ *   sources are materialized from — the same state EVs were derived from.
  * @param options - Optional build options (library mode, externals).
  */
 export async function buildUnit(
@@ -1510,28 +1593,11 @@ export async function buildUnit(
   ev: string,
   graph: PackageGraph,
   workspaceRoot: string,
-  commitMap?: Map<string, string>,
+  stateRef: string,
   options?: BuildUnitOptions
 ): Promise<BuildResult> {
-  const sourcemap = options?.library
-    ? false
-    : node.kind === "extension"
-      ? true
-      : node.manifest.sourcemap !== false;
-  const effectiveEv = options?.library
-    ? `${ev}:lib:${createHash("sha256")
-        .update(
-          JSON.stringify({
-            externals: options.externals ?? [],
-            entry: options.libraryEntrySubpath ?? ".",
-          })
-        )
-        .digest("hex")
-        .slice(0, 12)}`
-    : node.kind === "extension"
-      ? `${ev}:extension-runtime-abi:${EXTENSION_RUNTIME_ABI_VERSION}`
-      : ev;
-  const buildKey = computeBuildKey(node.name, effectiveEv, sourcemap);
+  const sourcemap = buildSourcemapForNode(node, options);
+  const buildKey = computeBuildUnitKey(node, ev, options);
 
   // Check store first
   const cached = buildStore.get(buildKey);
@@ -1539,12 +1605,12 @@ export async function buildUnit(
     if (node.kind === "extension") {
       await refreshCachedExtensionRuntimeDeps(cached);
     }
-    return cached;
+    return withRequestedSourceState(cached, stateRef);
   }
 
   // Check for in-flight build (coalescing)
   const inFlight = inFlightBuilds.get(buildKey);
-  if (inFlight) return inFlight;
+  if (inFlight) return withRequestedSourceState(await inFlight, stateRef);
 
   const buildPromise = doBuild(
     node,
@@ -1553,16 +1619,20 @@ export async function buildUnit(
     graph,
     workspaceRoot,
     sourcemap,
-    commitMap,
+    stateRef,
     options
   );
   inFlightBuilds.set(buildKey, buildPromise);
 
   try {
-    return await buildPromise;
+    return withRequestedSourceState(await buildPromise, stateRef);
   } finally {
     inFlightBuilds.delete(buildKey);
   }
+}
+
+function withRequestedSourceState(build: BuildResult, sourceStateHash: string): BuildResult {
+  return build.sourceStateHash === sourceStateHash ? build : { ...build, sourceStateHash };
 }
 
 async function doBuild(
@@ -1572,15 +1642,20 @@ async function doBuild(
   graph: PackageGraph,
   workspaceRoot: string,
   sourcemap: boolean,
-  commitMap?: Map<string, string>,
+  stateRef: string,
   options?: BuildUnitOptions
 ): Promise<BuildResult> {
   await acquireSemaphore();
-  let extracted: Awaited<ReturnType<typeof extractSourceForBuild>> | undefined;
 
   try {
-    // Extract source from git before building.
-    extracted = await extractSourceForBuild(node, graph, workspaceRoot, commitMap);
+    // Materialize sources for the unit + its transitive internal deps at the
+    // immutable workspace state. The provider caches per-state checkouts; no
+    // per-build temp dir, no cleanup.
+    const extracted = await getBuildSourceProvider().materializeForBuild(
+      collectTransitiveInternalDeps(node, graph),
+      stateRef,
+      workspaceRoot
+    );
 
     if (options?.library) {
       return await buildLibraryBundle(
@@ -1590,6 +1665,7 @@ async function doBuild(
         graph,
         workspaceRoot,
         extracted.sourceRoot,
+        stateRef,
         options.externals ?? [],
         options.libraryEntrySubpath ?? "."
       );
@@ -1601,10 +1677,19 @@ async function doBuild(
         graph,
         workspaceRoot,
         sourcemap,
-        extracted.sourceRoot
+        extracted.sourceRoot,
+        stateRef
       );
     } else if (node.kind === "extension") {
-      return await buildExtension(node, ev, buildKey, graph, workspaceRoot, extracted.sourceRoot);
+      return await buildExtension(
+        node,
+        ev,
+        buildKey,
+        graph,
+        workspaceRoot,
+        extracted.sourceRoot,
+        stateRef
+      );
     } else if (node.kind === "app") {
       return await buildApp(
         node,
@@ -1613,7 +1698,8 @@ async function doBuild(
         graph,
         workspaceRoot,
         sourcemap,
-        extracted.sourceRoot
+        extracted.sourceRoot,
+        stateRef
       );
     } else if (node.kind === "template") {
       throw new Error(`Templates are not buildable: ${node.name}`);
@@ -1625,12 +1711,12 @@ async function doBuild(
         graph,
         workspaceRoot,
         sourcemap,
-        extracted.sourceRoot
+        extracted.sourceRoot,
+        stateRef
       );
     }
   } finally {
     releaseSemaphore();
-    await extracted?.cleanup();
   }
 }
 
@@ -1665,7 +1751,7 @@ async function prepareBuildEnv(
   const outdir = path.join(os.tmpdir(), "natstack-builds", `build-${buildKey}`);
   fs.mkdirSync(outdir, { recursive: true });
 
-  const sourcePath = remapPath(node.path, workspaceRoot, sourceRoot);
+  const sourcePath = sourcePathForNode(node, sourceRoot);
   const entryFile = resolveEntryPoint(node, sourcePath);
 
   const externalDeps = collectTransitiveExternalDeps(node, graph, workspaceRoot, _appNodeModules);
@@ -1714,6 +1800,7 @@ function storeSimpleBuild(
   node: GraphNode,
   ev: string,
   sourcemap: boolean,
+  sourceStateHash: string | null,
   extraMetadata: Partial<BuildMetadata> = {}
 ): BuildResult {
   const artifacts = bundleArtifacts(bundle);
@@ -1721,6 +1808,7 @@ function storeSimpleBuild(
     kind: node.kind as BuildMetadata["kind"],
     name: node.name,
     ev,
+    sourceStateHash,
     sourcemap,
     details: { kind: "generic" },
     ...extraMetadata,
@@ -1754,7 +1842,8 @@ async function buildPanel(
   graph: PackageGraph,
   workspaceRoot: string,
   sourcemap: boolean,
-  sourceRoot: string
+  sourceRoot: string,
+  sourceStateHash: string
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
   const { outdir, entryFile, nodePaths } = env;
@@ -1766,7 +1855,7 @@ async function buildPanel(
   const extractedManifest = pkg.natstack ?? {};
   const extractedDeps = { ...pkg.peerDependencies, ...pkg.dependencies };
 
-  // Resolve framework and HTML template from extracted source
+  // Resolve framework and HTML template from materialized source
   const resolved = resolveTemplate(extractedManifest, extractedDeps, panelSourcePath, sourceRoot);
   const adapter = getAdapter(resolved.framework);
 
@@ -1804,7 +1893,7 @@ async function buildPanel(
     entryPoints[`split-${index}`] = moduleEntry;
   }
 
-  // Build plugins — resolve plugin uses extracted source paths.
+  // Build plugins: resolve plugin uses materialized source paths.
   const plugins: esbuild.Plugin[] = [
     ...(node.kind === "app" ? [createAppRuntimeShimPlugin()] : []),
     ...createPlaywrightCoreBrowserPlugins(graph, workspaceRoot, sourceRoot),
@@ -1840,7 +1929,7 @@ async function buildPanel(
     nodePaths,
     loader: PANEL_ASSET_LOADERS,
     assetNames: "assets/[name]-[hash]",
-    entryNames: "[name]",
+    entryNames: "[name]-[hash]",
     chunkNames: "chunk-[hash]",
     external: externalSpecifiers,
   };
@@ -1863,9 +1952,7 @@ async function buildPanel(
         )
         .map(([, meta]) => meta);
       const largestChunkBytes = jsChunks.reduce((max, meta) => Math.max(max, meta.bytes), 0);
-      const mainBundleEntry = outputs.find(
-        ([outputPath]) => outputPath.endsWith("/bundle.js") || outputPath === "bundle.js"
-      );
+      const mainBundleEntry = outputs.find(([outputPath]) => isPanelEntryJsOutput(outputPath));
       const mainBundleBytes = mainBundleEntry?.[1].bytes;
       const bundleSizeText = formatBytes(mainBundleBytes ?? 0);
       const largestChunkText = jsChunks.length > 0 ? formatBytes(largestChunkBytes) : "0B";
@@ -1876,15 +1963,22 @@ async function buildPanel(
     }
 
     // Read outputs
-    const bundlePath = path.join(outdir, "bundle.js");
-    const cssPath = path.join(outdir, "bundle.css");
+    const outputPaths = Object.keys(result.metafile?.outputs ?? {});
+    const bundleOutputPath =
+      outputPaths.find((outputPath) => isPanelEntryJsOutput(outputPath)) ??
+      path.join(outdir, "bundle.js");
+    const cssOutputPath = outputPaths.find((outputPath) => isPanelEntryCssOutput(outputPath));
+    const bundleArtifactPath = relativeBuildOutputPath(outdir, bundleOutputPath);
+    const cssArtifactPath = cssOutputPath ? relativeBuildOutputPath(outdir, cssOutputPath) : null;
+    const bundlePath = path.join(outdir, ...bundleArtifactPath.split("/"));
+    const cssPath = cssArtifactPath ? path.join(outdir, ...cssArtifactPath.split("/")) : null;
 
     const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf-8") : "";
-    const css = fs.existsSync(cssPath) ? fs.readFileSync(cssPath, "utf-8") : undefined;
+    const css = cssPath && fs.existsSync(cssPath) ? fs.readFileSync(cssPath, "utf-8") : undefined;
 
     const artifactEntries: BuildArtifactInput[] = [
       {
-        path: "bundle.js",
+        path: bundleArtifactPath,
         role: "primary",
         contentType: "text/javascript; charset=utf-8",
         encoding: "utf8",
@@ -1893,7 +1987,7 @@ async function buildPanel(
     ];
     if (css) {
       artifactEntries.push({
-        path: "bundle.css",
+        path: cssArtifactPath ?? "bundle.css",
         role: "css",
         contentType: "text/css; charset=utf-8",
         encoding: "utf8",
@@ -1910,12 +2004,12 @@ async function buildPanel(
         const absPath = path.resolve(outputPath);
 
         // Skip main bundle and CSS
+        const relativeName = path.relative(outdir, absPath).replace(/\\/g, "/");
         const basename = path.basename(absPath);
-        if (basename === "bundle.js" || basename === "bundle.css") continue;
+        if (relativeName === bundleArtifactPath || relativeName === cssArtifactPath) continue;
         if (isSyntheticSplitEntryOutput(basename)) continue;
         if (!fs.existsSync(absPath)) continue;
 
-        const relativeName = path.relative(outdir, absPath).replace(/\\/g, "/");
         const ext = path.extname(absPath).toLowerCase();
         const isText = TEXT_EXTENSIONS.has(ext);
 
@@ -1937,6 +2031,8 @@ async function buildPanel(
       hasCss: !!css,
       externals: manifestExternals,
       usePanelLoader: node.kind !== "app",
+      bundleSrc: relativeAssetHref(bundleArtifactPath),
+      cssHref: cssArtifactPath ? relativeAssetHref(cssArtifactPath) : undefined,
     });
 
     artifactEntries.push({
@@ -1951,6 +2047,7 @@ async function buildPanel(
       kind: node.kind,
       name: node.name,
       ev,
+      sourceStateHash,
       sourcemap,
       framework: resolved.framework,
       details:
@@ -2334,7 +2431,8 @@ async function buildWorker(
   graph: PackageGraph,
   workspaceRoot: string,
   sourcemap: boolean,
-  sourceRoot: string
+  sourceRoot: string,
+  sourceStateHash: string
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
   const { outdir, entryFile, nodePaths, resolveDir } = env;
@@ -2344,9 +2442,8 @@ async function buildWorker(
   // manifest.externals is intentionally ignored (unlike panels which can use
   // import maps, workers have no way to resolve external imports).
 
-  // Read extracted manifest (matches the panel build's source-of-truth pattern).
-  // Reading from extracted source rather than `node.manifest` ensures ref-pinned
-  // builds use the manifest from the requested git ref, not the working tree.
+  // Read the manifest from the materialized source state rather than
+  // `node.manifest`, so ref-pinned builds do not observe the working tree.
   const workerSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(workerSourcePath, "package.json");
   const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
@@ -2452,6 +2549,7 @@ async function buildWorker(
         kind: node.kind as BuildMetadata["kind"],
         name: node.name,
         ev,
+        sourceStateHash,
         sourcemap,
         details: { kind: "generic" },
         builtAt: new Date().toISOString(),
@@ -2459,7 +2557,7 @@ async function buildWorker(
       return buildStore.put(buildKey, artifacts, metadata);
     }
 
-    return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap);
+    return storeSimpleBuild(buildKey, bundle, node, ev, sourcemap, sourceStateHash);
   } finally {
     env.cleanup();
   }
@@ -2476,7 +2574,8 @@ async function buildApp(
   graph: PackageGraph,
   workspaceRoot: string,
   sourcemap: boolean,
-  sourceRoot: string
+  sourceRoot: string,
+  sourceStateHash: string
 ): Promise<BuildResult> {
   const appSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkgPath = path.join(appSourcePath, "package.json");
@@ -2496,7 +2595,8 @@ async function buildApp(
       workspaceRoot,
       sourcemap,
       sourceRoot,
-      appManifest
+      appManifest,
+      sourceStateHash
     );
   }
   if (appManifest["target"] === "react-native") {
@@ -2531,6 +2631,7 @@ async function buildApp(
       kind: "app",
       name: node.name,
       ev,
+      sourceStateHash,
       sourcemap,
       details: {
         kind: "app",
@@ -2550,7 +2651,16 @@ async function buildApp(
     return buildStore.put(providerBuildKey, { entries }, metadata);
   }
 
-  return buildPanel(node, ev, buildKey, graph, workspaceRoot, sourcemap, sourceRoot);
+  return buildPanel(
+    node,
+    ev,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourcemap,
+    sourceRoot,
+    sourceStateHash
+  );
 }
 
 async function buildTerminalApp(
@@ -2561,7 +2671,8 @@ async function buildTerminalApp(
   workspaceRoot: string,
   sourcemap: boolean,
   sourceRoot: string,
-  appManifest: Record<string, unknown>
+  appManifest: Record<string, unknown>,
+  sourceStateHash: string
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
   const { outdir, nodePaths, resolveDir, sourcePath } = env;
@@ -2618,6 +2729,7 @@ async function buildTerminalApp(
         kind: "app",
         name: node.name,
         ev,
+        sourceStateHash,
         sourcemap,
         details: {
           kind: "app",
@@ -2694,7 +2806,8 @@ async function buildExtension(
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
-  sourceRoot: string
+  sourceRoot: string,
+  sourceStateHash: string
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
   const { outdir, entryFile, nodePaths, resolveDir } = env;
@@ -2774,10 +2887,12 @@ async function buildExtension(
     fs.writeFileSync(path.join(outdir, "package.json"), '{"type":"module"}');
     const smokeResult: BuildResult = {
       dir: outdir,
+      sourceStateHash,
       metadata: {
         kind: "extension",
         name: node.name,
         ev,
+        sourceStateHash,
         sourcemap: true,
         details: {
           kind: "extension",
@@ -2804,7 +2919,7 @@ async function buildExtension(
       dependencyDiagnostics,
     });
 
-    const result = storeSimpleBuild(buildKey, bundle, node, ev, true, {
+    const result = storeSimpleBuild(buildKey, bundle, node, ev, true, sourceStateHash, {
       details: {
         kind: "extension",
         runtimeDepsKey: runtimeDeps.key,
@@ -3064,6 +3179,7 @@ async function buildLibraryBundle(
   graph: PackageGraph,
   workspaceRoot: string,
   sourceRoot: string,
+  sourceStateHash: string,
   externals: string[],
   entrySubpath = "."
 ): Promise<BuildResult> {
@@ -3105,7 +3221,7 @@ async function buildLibraryBundle(
     }
 
     const bundleContent = fs.readFileSync(outfile, "utf-8");
-    return storeSimpleBuild(buildKey, bundleContent, node, ev, false);
+    return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash);
   } finally {
     env.cleanup();
   }
@@ -3188,7 +3304,7 @@ function npmBuildKey(specifier: string, version: string, externals: string[]): s
 /**
  * Build an npm package as a CJS library bundle for sandbox consumption.
  *
- * Unlike buildLibraryBundle (which builds workspace packages from git), this
+ * Unlike buildLibraryBundle (which builds workspace packages from GAD state), this
  * installs an arbitrary npm package and bundles it with esbuild. The result
  * is a self-contained CJS string that can be loaded into __natstackModuleMap__.
  *
@@ -3293,6 +3409,7 @@ async function doNpmBuild(
         kind: "panel",
         name: specifier,
         ev: `npm:${version}`,
+        sourceStateHash: null,
         sourcemap: false,
         details: { kind: "generic" },
         builtAt: new Date().toISOString(),
@@ -3392,6 +3509,7 @@ async function doPlatformBuild(
         kind: "package",
         name: specifier,
         ev: buildKey,
+        sourceStateHash: null,
         sourcemap: false,
         details: { kind: "generic" },
         builtAt: new Date().toISOString(),
@@ -3415,7 +3533,7 @@ async function doPlatformBuild(
 
 /**
  * Resolve the entry point for a node.
- * Uses sourcePath (extracted from git) instead of node.path.
+ * Uses sourcePath from the materialized source state instead of node.path.
  */
 export function resolveEntryPoint(node: GraphNode, sourcePath: string): string {
   const explicit = node.manifest.entry;
