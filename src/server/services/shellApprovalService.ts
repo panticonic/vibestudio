@@ -12,6 +12,7 @@
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ApprovalDecision } from "@natstack/shared/approvals";
 import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
+import { isBootstrapUnitApproval } from "@natstack/shared/bootstrapApprovals";
 import { ServiceError } from "@natstack/shared/serviceDispatcher";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
@@ -40,6 +41,26 @@ export function createShellApprovalService(deps: {
           if (existed) {
             metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
           }
+          return;
+        }
+        case "resolveBootstrap": {
+          const [approvalId, decision] = args as [
+            string,
+            Extract<ApprovalDecision, "once" | "deny">,
+          ];
+          const pending = approvalQueue
+            .listPending()
+            .find((approval) => approval.approvalId === approvalId);
+          if (!pending || !isBootstrapUnitApproval(pending)) {
+            throw new ServiceError(
+              serviceName,
+              method,
+              "No pending startup app approval found",
+              "ENOENT"
+            );
+          }
+          approvalQueue.resolve(approvalId, decision);
+          metrics.recordApprovalResolved({ decision, source: ctx.caller.runtime.kind });
           return;
         }
         case "resolveUserland": {

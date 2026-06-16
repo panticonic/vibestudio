@@ -41,8 +41,8 @@ function categoryFor(approval: PendingApproval): string {
 
 function actionsFor(approval: PendingApproval): readonly string[] {
   if (approval.kind === "unit-batch") {
-    // Push approvals offer a "dev session" grant; startup/management do not.
-    return approval.trigger === "meta-push" || approval.trigger === "source-push"
+    // Source/config change approvals offer a dev-session grant; startup/management do not.
+    return approval.trigger === "meta-change" || approval.trigger === "source-change"
       ? ["once", "session", "deny", "open"]
       : ["once", "deny", "open"];
   }
@@ -64,8 +64,8 @@ function actionPayloadFor(approval: PendingApproval): Array<{ id: string; title:
     id,
     title:
       id === "once" && approval.kind === "unit-batch"
-        ? approval.trigger === "source-push"
-          ? "Approve push"
+        ? approval.trigger === "source-change"
+          ? "Approve change"
           : approval.trigger === "management"
             ? "Approve"
             : "Approve all"
@@ -97,6 +97,10 @@ function payloadFor(
     cancelKey: approval.approvalId,
     actionsJson: JSON.stringify(actionPayloadFor(approval)),
   };
+}
+
+function shouldPushApproval(approval: PendingApproval): boolean {
+  return !(approval.kind === "unit-batch" && approval.trigger === "startup");
 }
 
 export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): ApprovalPushBridge {
@@ -143,6 +147,7 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
   }
 
   function trackNewApproval(approval: PendingApproval): void {
+    if (!shouldPushApproval(approval)) return;
     const trackedApproval: TrackedApproval = {
       approval,
       timers: [],

@@ -200,18 +200,6 @@ export interface UnitApprovalDiffStat {
   deletions: number;
 }
 
-export interface UnitApprovalGitIdentity {
-  name: string;
-  email: string;
-}
-
-export interface UnitApprovalCommit {
-  author: UnitApprovalGitIdentity;
-  committer: UnitApprovalGitIdentity;
-  message: string;
-  timestamp: number;
-}
-
 export type UnitBatchEntryKind = "extension" | "app";
 
 /**
@@ -224,7 +212,7 @@ export interface UnitBatchEntry {
   displayName: string;
   version?: string | null;
   target?: "electron" | "react-native" | "terminal" | null;
-  source: { kind: "internal-git"; repo: string; ref: string };
+  source: { kind: "workspace-repo"; repo: string; ref: string };
   ev?: string | null;
   /** Native or host capabilities granted by running this unit. */
   capabilities: string[];
@@ -237,25 +225,24 @@ export interface UnitBatchEntry {
     activeBuildKey: string | null;
     contractVersion: string;
   } | null;
-  commit?: UnitApprovalCommit | null;
 }
 
 /**
  * Joint, informed-consent approval for the set of unapproved declared
  * workspace units. Raised at workspace startup (`trigger: "startup"`, system
- * principal) and when a push to `meta/` adds units (`trigger:
- * "meta-push"`, with `configWrite` describing the workspace-config change the
- * same push performs). It is also used for one-unit source pushes and
+ * principal) and when a committed `meta/` update adds units (`trigger:
+ * "meta-change"`, with `configWrite` describing the workspace-config change the
+ * same state advance performs). It is also used for one-unit source changes and
  * management actions so apps and extensions share a single privileged-unit
  * approval shape. One decision approves or denies the whole set.
  */
 export interface PendingUnitBatchApproval extends PendingApprovalBase {
   kind: "unit-batch";
-  trigger: "startup" | "meta-push" | "source-push" | "management";
+  trigger: "startup" | "meta-change" | "source-change" | "management";
   title: string;
   description: string;
   units: UnitBatchEntry[];
-  /** Present on `meta-push`: the workspace-config write this push performs. */
+  /** Present on `meta-change`: the workspace-config write this state advance performs. */
   configWrite?: { repoPath: string; summary: string } | null;
 }
 

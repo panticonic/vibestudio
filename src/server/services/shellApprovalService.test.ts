@@ -1,8 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller, ServiceError } from "@natstack/shared/serviceDispatcher";
+import type { PendingApproval, PendingUnitBatchApproval } from "@natstack/shared/approvals";
 import { createApprovalQueue } from "./approvalQueue.js";
 import { createShellApprovalService } from "./shellApprovalService.js";
 import { createPushMetrics } from "./pushMetrics.js";
+
+function startupApproval(id = "startup-1"): PendingUnitBatchApproval {
+  return {
+    kind: "unit-batch",
+    approvalId: id,
+    callerId: "system:startup",
+    callerKind: "system",
+    repoPath: "meta",
+    effectiveVersion: "ev:startup",
+    requestedAt: 10,
+    title: "Workspace apps need approval",
+    description: "Approve startup apps.",
+    trigger: "startup",
+    units: [
+      {
+        unitKind: "app",
+        unitName: "@workspace-apps/shell",
+        displayName: "Shell",
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "HEAD" },
+        ev: "ev:startup",
+        capabilities: ["panel-hosting"],
+      },
+    ],
+  };
+}
 
 describe("shellApprovalService", () => {
   it("accepts every approval decision exposed by the consent UI", () => {
@@ -113,6 +139,78 @@ describe("shellApprovalService", () => {
     await expect(
       service.handler({ caller: createVerifiedCaller("shell", "shell") }, "missing", [])
     ).rejects.toBeInstanceOf(ServiceError);
+  });
+
+  it("refuses to resolve non-bootstrap approvals through the bootstrap method", async () => {
+    const resolve = vi.fn();
+    const service = createShellApprovalService({
+      approvalQueue: {
+        request: vi.fn(),
+        requestClientConfig: vi.fn(),
+        requestCredentialInput: vi.fn(),
+        requestUserland: vi.fn(),
+        presentDeviceCode: vi.fn(),
+        onPendingChanged: vi.fn(),
+        resolve,
+        resolveUserland: vi.fn(),
+        submitClientConfig: vi.fn(),
+        submitCredentialInput: vi.fn(),
+        listPending: vi.fn(() => [
+          {
+            kind: "credential",
+            approvalId: "credential-1",
+            callerId: "worker:alpha",
+            callerKind: "worker",
+            repoPath: "workers/alpha",
+            effectiveVersion: "ev:worker",
+            requestedAt: 10,
+            credentialId: "openai",
+            credentialLabel: "ChatGPT Codex model credential",
+          } as PendingApproval,
+        ]),
+        cancelForCaller: vi.fn(),
+      },
+    });
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller("bootstrap", "app") }, "resolveBootstrap", [
+        "credential-1",
+        "once",
+      ])
+    ).rejects.toMatchObject({ name: "ServiceError", code: "ENOENT" });
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("resolves startup approvals through the bootstrap method", async () => {
+    const resolve = vi.fn();
+    const metrics = createPushMetrics();
+    const service = createShellApprovalService({
+      approvalQueue: {
+        request: vi.fn(),
+        requestClientConfig: vi.fn(),
+        requestCredentialInput: vi.fn(),
+        requestUserland: vi.fn(),
+        presentDeviceCode: vi.fn(),
+        onPendingChanged: vi.fn(),
+        resolve,
+        resolveUserland: vi.fn(),
+        submitClientConfig: vi.fn(),
+        submitCredentialInput: vi.fn(),
+        listPending: vi.fn(() => [startupApproval("startup-1")]),
+        cancelForCaller: vi.fn(),
+      },
+      metrics,
+    });
+
+    await service.handler(
+      { caller: createVerifiedCaller("bootstrap", "app") },
+      "resolveBootstrap",
+      ["startup-1", "once"]
+    );
+    expect(resolve).toHaveBeenCalledWith("startup-1", "once");
+    expect(metrics.snapshot().approval_resolved_total).toMatchObject({
+      "decision=once,source=app": 1,
+    });
   });
 
   it("leaves double resolves idempotent and records resolution metrics", async () => {

@@ -95,21 +95,21 @@ describe("approvalCopy", () => {
       summaryIncludes: "github.com/acme/project",
     },
     {
-      name: "workspace source push",
+      name: "workspace source change",
       approval: {
         ...base,
         kind: "capability",
-        capability: "internal-git-write",
-        grantResourceKey: "workspace-source-push:panels/spectrolite:main",
-        title: "Push workspace repo",
+        capability: "workspace-repo-write",
+        grantResourceKey: "workspace-source-change:panels/spectrolite:main",
+        title: "Update workspace source",
         resource: {
-          type: "git-repo",
-          label: "Repository",
+          type: "workspace-source",
+          label: "Workspace source",
           value: "panels/spectrolite",
         },
       },
       category: "Workspace source",
-      title: "Push to panels/spectrolite",
+      title: "Update panels/spectrolite",
       summaryIncludes: "Updates workspace source",
     },
     {
@@ -168,12 +168,12 @@ describe("approvalCopy", () => {
       warning: "The sign-in domain differs from the service domain.",
     },
     {
-      name: "app source push unit batch",
+      name: "app source change unit batch",
       approval: {
         ...base,
         kind: "unit-batch",
-        trigger: "source-push",
-        title: "Shell app source push",
+        trigger: "source-change",
+        title: "Shell app source change",
         description: "Accepting this push updates trusted workspace app code.",
         units: [{
           unitKind: "app",
@@ -181,14 +181,14 @@ describe("approvalCopy", () => {
           displayName: "Shell",
           version: "1.0.0",
           target: "electron",
-          source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+          source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
           ev: "ev-shell",
           capabilities: ["notifications"],
         }],
         configWrite: null,
       },
       category: "App source",
-      title: "Shell app source push",
+      title: "Shell app source change",
       summaryIncludes: "trusted workspace app code",
       warning: "Approving allows these workspace apps to run in the app host.",
       detailsOpen: true,
@@ -207,7 +207,7 @@ describe("approvalCopy", () => {
           displayName: "Acme",
           version: "1.2.3",
           target: null,
-          source: { kind: "internal-git", repo: "extensions/acme", ref: "main" },
+          source: { kind: "workspace-repo", repo: "extensions/acme", ref: "main" },
           ev: "ev-acme",
           capabilities: ["node:fs", "node:child_process"],
         }],
@@ -341,7 +341,7 @@ describe("approvalCopy", () => {
     const [capability, oauth, gitWrite] = fixtures.map((fixture) => fixture.approval);
     const severePanelAutomation = fixtures.find((fixture) => fixture.name === "panel automate")!
       .approval as Extract<PendingApproval, { kind: "capability" }>;
-    const workspaceSourcePush = fixtures.find((fixture) => fixture.name === "workspace source push")!
+    const workspaceSourceChange = fixtures.find((fixture) => fixture.name === "workspace source change")!
       .approval as Extract<PendingApproval, { kind: "capability" }>;
     const severePanelStructural = {
       ...(fixtures.find((fixture) => fixture.name === "panel structural")!
@@ -359,8 +359,8 @@ describe("approvalCopy", () => {
       getStandardActionCopy(capability as Extract<PendingApproval, { kind: "capability" }>).once
         .label
     ).toBe("Open once");
-    expect(getStandardActionCopy(workspaceSourcePush).once.label).toBe("Push once");
-    expect(getStandardActionCopy(workspaceSourcePush).session.description).toContain(
+    expect(getStandardActionCopy(workspaceSourceChange).once.label).toBe("Commit once");
+    expect(getStandardActionCopy(workspaceSourceChange).session.description).toContain(
       "panels/spectrolite"
     );
     expect(getStandardActionCopy(severePanelAutomation).once.label).toBe("Drive once");

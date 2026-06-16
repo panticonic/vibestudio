@@ -2,6 +2,7 @@ import { app, Notification } from "electron";
 import type { BaseWindow } from "electron";
 import type { PendingApproval } from "@natstack/shared/approvals";
 import { getApprovalAttribution, getApprovalCopy } from "@natstack/shared/approvalCopy";
+import { filterRuntimeApprovals } from "@natstack/shared/bootstrapApprovals";
 
 export interface ApprovalAttention {
   /** Apply the latest pending list: badge count, frame flash, OS notification. */
@@ -96,12 +97,13 @@ export function createApprovalAttention(deps: {
   };
 
   const apply = (pending: PendingApproval[], quiet: boolean) => {
-    const fresh = pending.filter((approval) => !knownIds.has(approval.approvalId));
+    const runtimePending = filterRuntimeApprovals(pending);
+    const fresh = runtimePending.filter((approval) => !knownIds.has(approval.approvalId));
     knownIds.clear();
-    for (const approval of pending) knownIds.add(approval.approvalId);
+    for (const approval of runtimePending) knownIds.add(approval.approvalId);
 
-    setBadge(pending.length);
-    if (pending.length === 0) {
+    setBadge(runtimePending.length);
+    if (runtimePending.length === 0) {
       flash(false);
       closeNotification();
       return;
@@ -117,7 +119,7 @@ export function createApprovalAttention(deps: {
     if (process.platform === "darwin") {
       app.dock?.bounce("critical");
     }
-    notify(firstFresh, pending.length);
+    notify(firstFresh, runtimePending.length);
   };
 
   return {

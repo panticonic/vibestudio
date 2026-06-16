@@ -53,15 +53,15 @@ function requestCapability(queue: ReturnType<typeof createQueue>) {
   });
 }
 
-function requestAppSourcePush(queue: ReturnType<typeof createQueue>) {
+function requestAppSourceChange(queue: ReturnType<typeof createQueue>) {
   return queue.request({
     kind: "unit-batch",
     callerId: "panel-1",
     callerKind: "panel",
     repoPath: "panels/example",
     effectiveVersion: "hash-1",
-    trigger: "source-push",
-    title: "@workspace-apps/shell app source push",
+    trigger: "source-change",
+    title: "@workspace-apps/shell app source change",
     description: "Accepting this push updates trusted workspace app code.",
     units: [
       {
@@ -70,7 +70,7 @@ function requestAppSourcePush(queue: ReturnType<typeof createQueue>) {
         displayName: "Shell",
         version: "1.0.0",
         target: "electron",
-        source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
         ev: "ev-shell",
         capabilities: ["notifications"],
       },
@@ -96,7 +96,33 @@ function requestUnitManagement(queue: ReturnType<typeof createQueue>) {
         displayName: "Image Service",
         version: "1.0.0",
         target: null,
-        source: { kind: "internal-git", repo: "extensions/image-service", ref: "main" },
+        source: { kind: "workspace-repo", repo: "extensions/image-service", ref: "main" },
+        ev: "ev-image",
+        capabilities: ["node:fs"],
+      },
+    ],
+    configWrite: null,
+  });
+}
+
+function requestStartupUnit(queue: ReturnType<typeof createQueue>) {
+  return queue.request({
+    kind: "unit-batch",
+    callerId: "system:units",
+    callerKind: "system",
+    repoPath: "meta",
+    effectiveVersion: "",
+    trigger: "startup",
+    title: "Approve workspace extensions",
+    description: "Approve startup extensions.",
+    units: [
+      {
+        unitKind: "extension",
+        unitName: "@workspace-extensions/image-service",
+        displayName: "Image Service",
+        version: "1.0.0",
+        target: null,
+        source: { kind: "workspace-repo", repo: "extensions/image-service", ref: "main" },
         ev: "ev-image",
         capabilities: ["node:fs"],
       },
@@ -345,7 +371,7 @@ describe("approvalPushBridge", () => {
     await expect(promise).resolves.toEqual({ decision: "deny" });
   });
 
-  it("offers session grants for unit source-push approvals", async () => {
+  it("offers session grants for unit source-change approvals", async () => {
     const queue = createQueue();
     const push = createPushMock();
     createApprovalPushBridge({
@@ -358,7 +384,7 @@ describe("approvalPushBridge", () => {
       },
     });
 
-    const promise = requestAppSourcePush(queue);
+    const promise = requestAppSourceChange(queue);
     await flush();
 
     expect(push.sendBatch).toHaveBeenCalledWith(
@@ -366,7 +392,7 @@ describe("approvalPushBridge", () => {
         data: expect.objectContaining({
           approvalKind: "unit-batch",
           actionsJson: JSON.stringify([
-            { id: "once", title: "Approve push" },
+            { id: "once", title: "Approve change" },
             { id: "session", title: "Session" },
             { id: "deny", title: "Deny" },
             { id: "open", title: "Open" },
@@ -408,6 +434,27 @@ describe("approvalPushBridge", () => {
       })
     );
 
+    queue.resolve(queue.listPending()[0]!.approvalId, "once");
+    await expect(promise).resolves.toBe("once");
+  });
+
+  it("does not mirror startup unit approvals into push notifications", async () => {
+    const queue = createQueue();
+    const push = createPushMock();
+    createApprovalPushBridge({
+      approvalQueue: queue,
+      push,
+      shellPresence: {
+        isAnyShellActive: () => false,
+        markActive: vi.fn(),
+        getActiveShellCount: () => 0,
+      },
+    });
+
+    const promise = requestStartupUnit(queue);
+    await flush();
+
+    expect(push.sendBatch).not.toHaveBeenCalled();
     queue.resolve(queue.listPending()[0]!.approvalId, "once");
     await expect(promise).resolves.toBe("once");
   });

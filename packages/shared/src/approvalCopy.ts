@@ -48,7 +48,7 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
       if (approval.units.every((unit) => unit.unitKind === "extension")) return "Extension management";
       return "Unit management";
     }
-    if (approval.trigger === "source-push") {
+    if (approval.trigger === "source-change") {
       if (approval.units.every((unit) => unit.unitKind === "app")) return "App source";
       if (approval.units.every((unit) => unit.unitKind === "extension")) return "Extension source";
       return "Unit source";
@@ -57,9 +57,9 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
     if (approval.units.every((unit) => unit.unitKind === "extension")) return "Extension setup";
     return "Workspace setup";
   }
-  if (approval.capability === "internal-git-write") {
-    const isWorkspaceSourcePush = approval.grantResourceKey?.startsWith("workspace-source-push:");
-    if (isWorkspaceSourcePush) {
+  if (approval.capability === "workspace-repo-write") {
+    const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith("workspace-source-change:");
+    if (isWorkspaceSourceChange) {
       return "Workspace source";
     }
     return approval.resource?.value === "meta" ? "Config edit" : "Write request";
@@ -168,28 +168,28 @@ export function getStandardActionCopy(
       denyDescription: "Do not open this sign-in flow.",
     };
   }
-  if (approval.capability === "internal-git-write") {
-    const isWorkspaceSourcePush = approval.grantResourceKey?.startsWith("workspace-source-push:");
-    if (isWorkspaceSourcePush) {
-      const destination = approval.resource?.value ?? "this workspace source repo";
+  if (approval.capability === "workspace-repo-write") {
+    const isWorkspaceSourceChange = approval.grantResourceKey?.startsWith("workspace-source-change:");
+    if (isWorkspaceSourceChange) {
+      const destination = approval.resource?.value ?? "this workspace source tree";
       return {
         once: {
-          label: "Push once",
-          description: "Allow this workspace source push once.",
+          label: "Commit once",
+          description: "Allow this workspace source change once.",
         },
         session: {
-          label: "Push this session",
-          description: `Allow pushes to ${destination} until NatStack restarts.`,
+          label: "Commit this session",
+          description: `Allow committed changes to ${destination} until NatStack restarts.`,
         },
         version: {
           label: "Trust version",
-          description: `Allow this code version to push to ${destination}.`,
+          description: `Allow this code version to update ${destination}.`,
         },
         repo: {
           label: "Trust repo",
-          description: `Allow this workspace project to push to ${destination}.`,
+          description: `Allow this workspace project to update ${destination}.`,
         },
-        denyDescription: "Do not allow this workspace source push.",
+        denyDescription: "Do not allow this workspace source change.",
       };
     }
     const isMeta = approval.resource?.value === "meta";
@@ -372,9 +372,9 @@ export function getApprovalCopy(
     const fallbackTitle =
       approval.trigger === "management"
         ? `Manage ${count} workspace ${count === 1 ? unitLabel.singular : unitLabel.plural}`
-        : approval.trigger === "source-push"
+        : approval.trigger === "source-change"
         ? `Update ${unitLabel.singular} source`
-        : approval.trigger === "meta-push"
+        : approval.trigger === "meta-change"
         ? "Apply workspace config change"
         : count > 0
         ? `Run ${count} workspace ${count === 1 ? unitLabel.singular : unitLabel.plural}`
@@ -382,7 +382,7 @@ export function getApprovalCopy(
     const fallbackSummary = count > 0
       ? approval.trigger === "management"
         ? `Manages ${count} workspace ${unitLabel.singular}${count === 1 ? "" : "s"}.`
-        : approval.trigger === "source-push"
+        : approval.trigger === "source-change"
         ? unitLabel.nativeCode
           ? `Updates trusted native extension source code.`
           : `Updates trusted workspace app source code.`
@@ -402,11 +402,11 @@ export function getApprovalCopy(
     };
   }
   if (approval.kind === "capability") {
-    if (approval.capability === "internal-git-write") {
+    if (approval.capability === "workspace-repo-write") {
       const destination = approval.resource?.value ?? "this repository";
-      if (approval.grantResourceKey?.startsWith("workspace-source-push:")) {
+      if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {
         return {
-          title: `Push to ${destination}`,
+          title: `Update ${destination}`,
           summary: `Updates workspace source in ${destination}.`,
         };
       }

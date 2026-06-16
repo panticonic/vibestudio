@@ -37,6 +37,7 @@ export type PushApprovalDataPayload = {
 export const RPC_METHODS = {
   shellApproval: {
     resolve: "shellApproval.resolve",
+    resolveBootstrap: "shellApproval.resolveBootstrap",
     submitClientConfig: "shellApproval.submitClientConfig",
     submitCredentialInput: "shellApproval.submitCredentialInput",
     resolveUserland: "shellApproval.resolveUserland",

@@ -59,6 +59,42 @@ function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval
   } as PendingApproval;
 }
 
+function makeStartupUnitApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {
+  return {
+    kind: "unit-batch",
+    approvalId: "startup-unit-approval",
+    callerId: "system:units",
+    callerKind: "system",
+    repoPath: "meta",
+    effectiveVersion: "ev-app",
+    requestedAt: 1,
+    trigger: "startup",
+    title: "Approve workspace units",
+    description: "Approve units.",
+    units: [
+      {
+        unitKind: "app",
+        unitName: "@workspace-apps/mobile",
+        displayName: "Mobile",
+        target: "react-native",
+        source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
+        ev: "ev-mobile",
+        capabilities: [],
+      },
+      {
+        unitKind: "extension",
+        unitName: "@workspace-extensions/native",
+        displayName: "Native Extension",
+        target: null,
+        source: { kind: "workspace-repo", repo: "extensions/native", ref: "main" },
+        ev: "ev-extension",
+        capabilities: ["native-code"],
+      },
+    ],
+    ...overrides,
+  } as PendingApproval;
+}
+
 function makeWindow(opts: { focused?: boolean; visible?: boolean } = {}) {
   return {
     isDestroyed: vi.fn(() => false),
@@ -96,6 +132,17 @@ describe("createApprovalAttention", () => {
     attention.handlePendingChanged([]);
     expect(electronMocks.app.setBadgeCount).toHaveBeenLastCalledWith(0);
     expect(window.flashFrame).toHaveBeenLastCalledWith(false);
+  });
+
+  it("ignores startup privileged-unit approvals owned by target launch", () => {
+    const window = makeWindow({ focused: false });
+    const attention = makeAttention(window);
+
+    attention.handlePendingChanged([makeStartupUnitApproval()]);
+
+    expect(electronMocks.app.setBadgeCount).toHaveBeenCalledWith(0);
+    expect(window.flashFrame).not.toHaveBeenCalledWith(true);
+    expect(electronMocks.notificationInstances).toHaveLength(0);
   });
 
   it("flashes and notifies for a new approval while the window is unfocused", () => {

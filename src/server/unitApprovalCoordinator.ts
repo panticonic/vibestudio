@@ -1,6 +1,5 @@
-import type { UnitApprovalCoordinator } from "@natstack/unit-host";
+import type { UnitApprovalCoordinator, UnitApprovalDecision } from "@natstack/unit-host";
 import type { PendingUnitBatchApproval, UnitBatchEntry } from "@natstack/shared/approvals";
-import type { GrantedDecision } from "./services/approvalQueue.js";
 
 export interface UnitApprovalQueueLike {
   request(req: {
@@ -15,15 +14,7 @@ export interface UnitApprovalQueueLike {
     description: string;
     units: PendingUnitBatchApproval["units"];
     configWrite?: PendingUnitBatchApproval["configWrite"];
-  }): Promise<"once" | "session" | "version" | "repo" | "deny">;
-}
-
-export interface StartupUnitApprovalPrompt {
-  request(req: {
-    title: string;
-    description: string;
-    units: PendingUnitBatchApproval["units"];
-  }): Promise<GrantedDecision>;
+  }): Promise<UnitApprovalDecision>;
 }
 
 interface PendingRequest {
@@ -35,26 +26,24 @@ interface PendingRequest {
 }
 
 interface PendingBatch {
-  trigger: "startup" | "meta-push";
+  trigger: "startup" | "meta-change";
   requests: PendingRequest[];
   timer: ReturnType<typeof setTimeout> | null;
 }
 
 export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<UnitBatchEntry> {
-  private pending = new Map<"startup" | "meta-push", PendingBatch>();
+  private pending = new Map<"startup" | "meta-change", PendingBatch>();
 
   constructor(
     private readonly deps: {
       approvalQueue: UnitApprovalQueueLike;
       delayMs?: number;
-      autoApproveStartup?: boolean;
-      startupPrompt?: StartupUnitApprovalPrompt;
     }
   ) {}
 
   enqueue(request: {
     entries: UnitBatchEntry[];
-    trigger: "startup" | "meta-push";
+    trigger: "startup" | "meta-change";
     applyApproved(): Promise<void>;
     applyDenied(): void;
   }): Promise<void> {
@@ -74,42 +63,14 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     });
   }
 
-  private async flush(trigger: "startup" | "meta-push"): Promise<void> {
+  private async flush(trigger: "startup" | "meta-change"): Promise<void> {
     const batch = this.pending.get(trigger);
     if (!batch) return;
     this.pending.delete(trigger);
     if (batch.timer) clearTimeout(batch.timer);
-    let requests = batch.requests;
+    const requests = batch.requests;
     try {
-      if (trigger === "startup" && this.deps.autoApproveStartup) {
-        const promptRequests: PendingRequest[] = [];
-        for (const request of requests) {
-          if (request.entries.every((entry) => entry.unitKind === "app")) {
-            await request.applyApproved();
-            request.resolve();
-          } else {
-            promptRequests.push(request);
-          }
-        }
-        requests = promptRequests;
-        if (requests.length === 0) return;
-      }
       const units = requests.flatMap((request) => request.entries);
-      if (trigger === "startup" && this.deps.startupPrompt && units.length > 0) {
-        const decision = await this.deps.startupPrompt.request({
-          title: unitBatchTitle(units, trigger),
-          description: unitBatchDescription(units),
-          units,
-        });
-        if (decision === "deny") {
-          for (const request of requests) request.applyDenied();
-        } else {
-          for (const request of requests) await request.applyApproved();
-        }
-        for (const request of requests) request.resolve();
-        return;
-      }
-      const queuedUnits = requests.flatMap((request) => request.entries);
       const decision = await this.deps.approvalQueue.request({
         kind: "unit-batch",
         callerId: "system:units",
@@ -117,9 +78,9 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
         repoPath: "meta",
         effectiveVersion: "",
         trigger,
-        title: unitBatchTitle(queuedUnits, trigger),
-        description: unitBatchDescription(queuedUnits),
-        units: queuedUnits,
+        title: unitBatchTitle(units, trigger),
+        description: unitBatchDescription(units),
+        units,
         configWrite: null,
       });
       if (decision === "deny") {
@@ -134,14 +95,17 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
   }
 }
 
-function unitBatchTitle(units: UnitBatchEntry[], trigger: "startup" | "meta-push"): string {
+function unitBatchTitle(units: UnitBatchEntry[], trigger: "startup" | "meta-change"): string {
   const hasApps = units.some((unit) => unit.unitKind === "app");
   const hasExtensions = units.some((unit) => unit.unitKind === "extension");
   if (hasApps && hasExtensions) {
-    return trigger === "meta-push" ? "Workspace units changed" : "Approve workspace units";
+    return trigger === "meta-change" ? "Workspace units changed" : "Approve workspace units";
   }
-  if (hasApps) return trigger === "meta-push" ? "Workspace apps changed" : "Approve workspace apps";
-  return trigger === "meta-push" ? "Workspace extensions changed" : "Approve workspace extensions";
+  if (hasApps)
+    return trigger === "meta-change" ? "Workspace apps changed" : "Approve workspace apps";
+  return trigger === "meta-change"
+    ? "Workspace extensions changed"
+    : "Approve workspace extensions";
 }
 
 function unitBatchDescription(units: UnitBatchEntry[]): string {
