@@ -1,29 +1,20 @@
 /**
- * @natstack/git - Git operations for NatStack panels
+ * @natstack/git - Git operations for external repositories
  *
  * Provides git clone/pull/push operations using isomorphic-git,
- * designed to work with RPC-backed filesystem in browser panels.
+ * designed to work with an injected filesystem implementation.
  *
  * Usage:
  * ```typescript
  * import { GitClient } from "@natstack/git";
  * import { promises as fsPromises } from "fs"; // RPC-backed in panels
  *
- * // Create git client for the internal git server
- * const git = new GitClient(fsPromises, {
- *   serverUrl: "http://localhost:63524",
- *   token: "your-token",
- * });
- *
- * // Or use a host-mediated credential HTTP adapter for external remotes:
+ * // Use a host-mediated credential HTTP adapter for external remotes:
  * const git = new GitClient(fsPromises, { http: credentials.gitHttp() });
- *
- * // In NatStack runtime code, prefer @workspace/runtime's git.client(),
- * // which routes internal and external remotes through the right transport.
  *
  * // Clone a repository
  * await git.clone({
- *   url: "panels/my-panel",
+ *   url: "https://github.com/owner/my-panel.git",
  *   dir: "/src",
  *   ref: "main",
  * });
@@ -38,8 +29,6 @@
 export {
   GitClient,
   GitAuthError,
-  createBearerHttpClient,
-  createRoutingHttpClient,
   type FsPromisesLike,
 } from "./client.js";
 export { initAndPush, type InitAndPushOptions } from "./convenience.js";

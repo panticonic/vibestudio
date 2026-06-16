@@ -7,7 +7,7 @@
 
 import type { HttpClient, StatusRow } from "isomorphic-git";
 import git from "isomorphic-git";
-import { createRoutingHttpClient, GitAuthError } from "./client.js";
+import { GitAuthError } from "./client.js";
 import { GitClient, type FsPromisesLike } from "./client.js";
 
 describe("GitAuthError", () => {
@@ -32,62 +32,17 @@ describe("GitAuthError", () => {
   });
 });
 
-describe("createRoutingHttpClient", () => {
-  function mockHttpClient(name: string): HttpClient {
-    return {
-      request: vi.fn(async (request) => ({
-        url: request.url,
-        method: request.method ?? "GET",
-        statusCode: 200,
-        statusMessage: name,
-        headers: {},
-        body: (async function* () {})(),
-      })),
-    };
-  }
-
-  it("routes configured NatStack gateway aliases to the internal client", async () => {
-    const internal = mockHttpClient("internal");
-    const external = mockHttpClient("external");
-    const http = createRoutingHttpClient({
-      internalOrigin: "http://127.0.0.1:3030/_git",
-      internalOrigins: ["http://100.90.80.70:3030/_git", "https://natstack.example.test/_git"],
-      internal,
-      external,
-    });
-
-    await http.request({
-      url: "http://100.90.80.70:3030/_git/projects/natstack/info/refs?service=git-upload-pack",
-    });
-    await http.request({
-      url: "https://natstack.example.test/_git/projects/natstack/git-receive-pack",
-      method: "POST",
-    });
-
-    expect(internal.request).toHaveBeenCalledTimes(2);
-    expect(external.request).not.toHaveBeenCalled();
-  });
-
-  it("leaves non-alias remotes on the external client", async () => {
-    const internal = mockHttpClient("internal");
-    const external = mockHttpClient("external");
-    const http = createRoutingHttpClient({
-      internalOrigin: "http://127.0.0.1:3030/_git",
-      internalOrigins: ["http://100.90.80.70:3030/_git"],
-      internal,
-      external,
-    });
-
-    await http.request({
-      url: "https://github.com/example/repo.git/info/refs?service=git-upload-pack",
-    });
-
-    expect(internal.request).not.toHaveBeenCalled();
-    expect(external.request).toHaveBeenCalledTimes(1);
-  });
-});
-
 describe("GitClient", () => {
+  const http: HttpClient = {
+    request: vi.fn(async (request) => ({
+      url: request.url,
+      method: request.method ?? "GET",
+      statusCode: 200,
+      statusMessage: "OK",
+      headers: {},
+      body: (async function* () {})(),
+    })),
+  };
   const fs = {
     readFile: vi.fn(),
     writeFile: vi.fn(),
@@ -101,7 +56,7 @@ describe("GitClient", () => {
   it("exposes the raw isomorphic-git status matrix", async () => {
     const matrix: StatusRow[] = [["src/app.ts", 1, 2, 1]];
     const statusMatrix = vi.spyOn(git, "statusMatrix").mockResolvedValueOnce(matrix);
-    const client = new GitClient(fs, { token: "test-token" });
+    const client = new GitClient(fs, { http });
 
     await expect(client.statusMatrix("/repo")).resolves.toEqual(matrix);
     expect(statusMatrix).toHaveBeenCalledWith({
@@ -111,7 +66,7 @@ describe("GitClient", () => {
   });
 
   it("exposes a discoverable method list", () => {
-    const client = new GitClient(fs, { token: "test-token" });
+    const client = new GitClient(fs, { http });
 
     expect(client.methods).toEqual(
       expect.arrayContaining(["commit", "fetch", "push", "status", "statusMatrix"])
@@ -119,7 +74,7 @@ describe("GitClient", () => {
   });
 
   it("validates status and fetch argument shapes before calling isomorphic-git", async () => {
-    const client = new GitClient(fs, { token: "test-token" });
+    const client = new GitClient(fs, { http });
     const statusMatrix = vi.spyOn(git, "statusMatrix");
 
     await expect(client.status({ dir: "/repo" } as never)).rejects.toThrow(

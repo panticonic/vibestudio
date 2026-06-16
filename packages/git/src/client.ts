@@ -1,5 +1,5 @@
 import git, { STAGE } from "isomorphic-git";
-import type { FsClient, HttpClient, GitHttpRequest, GitHttpResponse } from "isomorphic-git";
+import type { FsClient, HttpClient } from "isomorphic-git";
 import { diffLines } from "diff";
 import type {
   GitClientOptions,
@@ -130,83 +130,6 @@ function wrapFsForGit(fsPromises: FsPromisesLike): FsClient {
   };
 }
 
-/**
- * HTTP client for isomorphic-git with bearer token auth
- */
-export function createBearerHttpClient(token: string): HttpClient {
-  return {
-    async request(request: GitHttpRequest): Promise<GitHttpResponse> {
-      const { url, method = "GET", headers = {}, body } = request;
-
-      const authHeaders: Record<string, string> = {
-        ...headers,
-        Authorization: `Bearer ${token}`,
-      };
-
-      // Convert body if it's an async iterable
-      let requestBody: Uint8Array | undefined;
-      if (body) {
-        if (body instanceof Uint8Array) {
-          requestBody = body;
-        } else {
-          // Collect async iterable into single buffer
-          const chunks: Uint8Array[] = [];
-          for await (const chunk of body) {
-            chunks.push(chunk);
-          }
-          const totalLength = chunks.reduce((sum, c) => sum + c.length, 0);
-          const result = new Uint8Array(totalLength);
-          let offset = 0;
-          for (const chunk of chunks) {
-            result.set(chunk, offset);
-            offset += chunk.length;
-          }
-          requestBody = result;
-        }
-      }
-
-      const response = await fetch(url, {
-        method,
-        headers: authHeaders,
-        body: requestBody as BodyInit | undefined,
-      });
-
-      // Convert response body to async iterable
-      const responseBody = response.body
-        ? toAsyncIterable(response.body)
-        : (async function* () {})();
-
-      return {
-        url: response.url,
-        method,
-        statusCode: response.status,
-        statusMessage: response.statusText,
-        headers: Object.fromEntries(response.headers.entries()),
-        body: responseBody,
-      };
-    },
-  };
-}
-
-export function createRoutingHttpClient(options: {
-  internalOrigin: string;
-  internalOrigins?: readonly string[];
-  internal: HttpClient;
-  external: HttpClient;
-}): HttpClient {
-  const internalOrigins = new Set(
-    [options.internalOrigin, ...(options.internalOrigins ?? [])].map((origin) => new URL(origin).origin)
-  );
-  return {
-    request(request) {
-      const origin = new URL(request.url).origin;
-      return internalOrigins.has(origin)
-        ? options.internal.request(request)
-        : options.external.request(request);
-    },
-  };
-}
-
 function getAuthFailureInfo(err: unknown): { statusCode: number; message: string } | null {
   const data = (
     err as { data?: { statusCode?: number; response?: string; statusMessage?: string } }
@@ -257,24 +180,6 @@ function describeGitOperationError(
   const ref = options.ref ?? "(current branch)";
   const force = options.force ? ", force=true" : "";
   return new Error(`git.${method} failed for ${options.dir} -> ${remote}/${ref}${force}: ${detail}`);
-}
-
-/**
- * Convert ReadableStream to AsyncIterableIterator
- */
-async function* toAsyncIterable(
-  stream: ReadableStream<Uint8Array>
-): AsyncIterableIterator<Uint8Array> {
-  const reader = stream.getReader();
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) yield value;
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }
 
 /**
@@ -815,17 +720,16 @@ function parseConflictMarkers(content: string): {
 }
 
 /**
- * Git client for panel filesystem operations
+ * Git client for external repository operations.
  *
  * Wraps isomorphic-git with:
- * - Bearer token authentication for NatStack git server
+ * - Host-mediated HTTP credentials supplied by the caller
  * - Filesystem integration (automatically adapts fs/promises)
  * - Simplified API for common operations
  *
  * @example
  * ```typescript
  * import { promises as fsPromises } from "fs";
- * const git = new GitClient(fsPromises, { serverUrl, token });
  * const externalGit = new GitClient(fsPromises, { http: credentials.gitHttp() });
  * ```
  */
@@ -833,21 +737,13 @@ export class GitClient {
   private fs: FsClient;
   private fsPromises: FsPromisesLike;
   private http: HttpClient;
-  private serverUrl: string;
   private author: { name: string; email: string };
   public readonly methods: string[];
 
   constructor(fs: FsPromisesLike, options: GitClientOptions) {
     this.fs = wrapFsForGit(fs);
     this.fsPromises = fs;
-    this.serverUrl = options.serverUrl ?? "";
-    if (options.http) {
-      this.http = options.http;
-    } else if (options.token) {
-      this.http = createBearerHttpClient(options.token);
-    } else {
-      throw new Error("GitClient requires either options.http or options.token");
-    }
+    this.http = options.http;
     this.author = options.author ?? {
       name: "NatStack Panel",
       email: "panel@natstack.local",
@@ -858,20 +754,13 @@ export class GitClient {
   }
 
   /**
-   * Resolve a repo path to a full URL
-   * - Absolute URLs pass through unchanged
-   * - Relative paths are resolved against the git server
+   * Resolve a repo URL.
    */
   resolveUrl(repoPath: string): string {
     if (repoPath.startsWith("http://") || repoPath.startsWith("https://")) {
       return repoPath;
     }
-    // Remove leading slash if present
-    if (!this.serverUrl) {
-      throw new Error("GitClient cannot resolve relative repo paths without options.serverUrl");
-    }
-    const cleanPath = repoPath.startsWith("/") ? repoPath.slice(1) : repoPath;
-    return `${this.serverUrl}/${cleanPath}`;
+    throw new Error(`GitClient requires an absolute external Git URL, got "${repoPath}"`);
   }
 
 
