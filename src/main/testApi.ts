@@ -101,6 +101,23 @@ export interface TestApi {
     ownerGeneration: number;
   }>;
 
+  /** Return host shell view debug state from ViewManager */
+  getHostViewDebugInfo(): {
+    visibleHostChromeAppId: string | null;
+    shell: unknown;
+    hostedShell: unknown;
+    shellUrl: string | null;
+    hostedShellUrl: string | null;
+    nativeSlots: Array<{
+      nativeSlotId: string;
+      panelId: string;
+      bounds: { x: number; y: number; width: number; height: number };
+      focused: boolean;
+      ownerViewId: string;
+      ownerGeneration: number;
+    }>;
+  };
+
   /** Click an element inside a panel's WebContents */
   clickPanelSelector(panelId: string, selector: string): Promise<boolean>;
 
@@ -371,6 +388,29 @@ export function setupTestApi(
 
     getNativePanelSlotDebugInfo() {
       return panelView?.getViewManager().getNativePanelSlotDebugInfo() ?? [];
+    },
+
+    getHostViewDebugInfo() {
+      const viewManager = panelView?.getViewManager();
+      if (!viewManager) {
+        return {
+          visibleHostChromeAppId: null,
+          shell: null,
+          hostedShell: null,
+          shellUrl: null,
+          hostedShellUrl: null,
+          nativeSlots: [],
+        };
+      }
+      const hostedShellId = "@workspace-apps/shell";
+      return {
+        visibleHostChromeAppId: viewManager.getVisibleHostChromeAppId(),
+        shell: viewManager.getViewInfo("shell"),
+        hostedShell: viewManager.getViewInfo(hostedShellId),
+        shellUrl: viewManager.getWebContents("shell")?.getURL() ?? null,
+        hostedShellUrl: viewManager.getWebContents(hostedShellId)?.getURL() ?? null,
+        nativeSlots: viewManager.getNativePanelSlotDebugInfo(),
+      };
     },
 
     async clickPanelSelector(panelId, selector): Promise<boolean> {

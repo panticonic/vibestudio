@@ -39,6 +39,14 @@ export interface IpcDispatcherDeps {
     method: string,
     args: readonly unknown[]
   ) => void;
+  onServerRpcResult?: (event: {
+    callerId: string;
+    callerKind: CallerKind;
+    service: string;
+    method: string;
+    args: readonly unknown[];
+    result: unknown;
+  }) => Promise<void> | void;
   /** EventService for registering IPC-backed shell subscriber */
   eventService: EventService;
 }
@@ -198,6 +206,14 @@ export class IpcDispatcher {
             throw new Error(`Server RPC relay is not available for ${callerKind} callers`);
           }
         }
+        await this.deps.onServerRpcResult?.({
+          callerId,
+          callerKind,
+          service,
+          method,
+          args: req.args,
+          result,
+        });
         this.sendResponse(sender, req.requestId, {
           type: "response",
           requestId: req.requestId,

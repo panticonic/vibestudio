@@ -9,8 +9,6 @@ import type {
   ThemeAppearance,
 } from "@natstack/shared/types";
 import type { ServerClient } from "../serverClient.js";
-import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { gitMethods } from "@natstack/shared/serviceSchemas/git";
 import { panelMethods } from "@natstack/shared/serviceSchemas/panel";
 import {
   buildPanelChromeState,
@@ -39,7 +37,7 @@ async function getPanelAddressOptions(
   return getSharedPanelAddressOptions({
     source,
     ref,
-    git: serverClient ? createGitAdapter(serverClient) : null,
+    repoProvider: serverClient ? createRepoAdapter(serverClient) : null,
   });
 }
 
@@ -55,11 +53,31 @@ async function getBrowserAddressOptions(
   });
 }
 
-function createGitAdapter(serverClient: ServerClient) {
-  // Typed client derived from the git service's schema table — no casts.
-  return createTypedServiceClient("git", gitMethods, (svc, method, args) =>
-    serverClient.call(svc, method, args)
-  );
+function createRepoAdapter(serverClient: ServerClient) {
+  return {
+    // The workspace.sourceTree RPC is untyped here; loosened to fit AddressProviderRepoAdapter.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    sourceTree: () => serverClient.call("workspace", "sourceTree", []) as Promise<any>,
+    findUnitForPath: (source: string) =>
+      serverClient.call("workspace", "findUnitForPath", [source]) as Promise<{
+        unitPath: string;
+        relativePath: string;
+      } | null>,
+    unitStatus: async (unitPath: string) => {
+      const status = (await serverClient.call("vcs", "unitStatus", [unitPath])) as {
+        unitPath: string;
+        head: string;
+        stateHash: string | null;
+        dirty: boolean;
+      };
+      return {
+        unitPath: status.unitPath,
+        head: status.head,
+        stateHash: status.stateHash,
+        dirty: status.dirty,
+      };
+    },
+  };
 }
 
 function createBrowserDataAdapter(serverClient: ServerClient): AddressProviderBrowserDataAdapter {
@@ -82,19 +100,19 @@ async function getRepoState(
   }
 
   try {
-    const git = createGitAdapter(serverClient);
-    const repo = await git.findRepoForPath(source);
-    const repoPath = repo?.repoPath ?? source;
-    const status = await git.status(repoPath);
+    const repo = createRepoAdapter(serverClient);
+    const unit = await repo.findUnitForPath(source);
+    const unitPath = unit?.unitPath ?? source;
+    const status = await repo.unitStatus(unitPath);
     return {
-      repoPath: status.repoPath,
-      branch: status.branch,
-      commit: status.commit,
+      unitPath: status.unitPath,
+      head: status.head,
+      stateHash: status.stateHash,
       dirty: status.dirty,
     };
   } catch {
     return {
-      repoPath: source,
+      unitPath: source,
     };
   }
 }
@@ -270,12 +288,6 @@ export function createPanelShellService(deps: {
             );
             throw error;
           }
-          return;
-        }
-
-        case "initGitRepo": {
-          const panelId = args[0] as string;
-          await lifecycle.initializeGitRepo(panelId);
           return;
         }
 

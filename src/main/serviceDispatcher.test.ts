@@ -10,7 +10,6 @@ import {
   parseServiceMethod,
 } from "@natstack/shared/serviceDispatcher";
 import { fsMethods } from "@natstack/shared/serviceSchemas/fs";
-import { gitMethods } from "@natstack/shared/serviceSchemas/git";
 import type { ServiceContext, ServiceHandler } from "@natstack/shared/serviceDispatcher";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 
@@ -26,11 +25,18 @@ function makeService(name: string, handler: ServiceHandler): ServiceDefinition {
 }
 
 describe("ServiceDispatcher", () => {
-  it("dispatch throws ServiceError when not initialized", async () => {
+  it("dispatch before markInitialized: registered services work, unknown services get the retryable not-initialized error", async () => {
     const sd = new ServiceDispatcher();
     sd.registerService(makeService("echo", async (_ctx, method, args) => ({ method, args })));
 
-    await expect(sd.dispatch(ctx, "echo", "hello", [])).rejects.toThrow(
+    // A registered service is fully wired and may be called during boot
+    // (e.g. singleton DOs dispatching back into the server mid-startup).
+    await expect(sd.dispatch(ctx, "echo", "hello", [])).resolves.toEqual({
+      method: "hello",
+      args: [],
+    });
+    // A not-yet-registered service signals "retry later", not "unknown".
+    await expect(sd.dispatch(ctx, "later", "foo", [])).rejects.toThrow(
       "Services not yet initialized"
     );
   });
@@ -278,7 +284,7 @@ describe("ServiceDispatcher", () => {
     );
   });
 
-  it("normalizes the real fs and context-git overloaded schemas", async () => {
+  it("normalizes the real fs overloaded schemas", async () => {
     const sd = new ServiceDispatcher();
     const seen = new Map<string, unknown[]>();
     sd.registerService({
@@ -294,17 +300,6 @@ describe("ServiceDispatcher", () => {
         return "";
       },
     });
-    sd.registerService({
-      name: "realGit",
-      policy: { allowed: ["shell"] },
-      methods: {
-        contextDiff: gitMethods.contextDiff,
-      },
-      handler: async (_ctx, method, args) => {
-        seen.set(`git.${method}`, args);
-        return "";
-      },
-    });
     sd.markInitialized();
 
     await sd.dispatch(ctx, "realFs", "readFile", ["skills/system-testing/SKILL.md"]);
@@ -312,12 +307,6 @@ describe("ServiceDispatcher", () => {
 
     await sd.dispatch(ctx, "realFs", "glob", ["skills", null]);
     expect(seen.get("fs.glob")).toEqual(["skills", undefined]);
-
-    await sd.dispatch(ctx, "realGit", "contextDiff", ["panels/example", null]);
-    expect(seen.get("git.contextDiff")).toEqual(["panels/example", undefined]);
-
-    await sd.dispatch(ctx, "realGit", "contextDiff", ["ctx-1", "panels/example", null]);
-    expect(seen.get("git.contextDiff")).toEqual(["ctx-1", "panels/example", undefined]);
   });
 
   it("getMethodSchema returns method definition", () => {

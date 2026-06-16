@@ -175,7 +175,6 @@ export const panel = {
   goForward: (panelId: string) => panelClient.goForward(panelId),
   unload: (panelId: string) => panelClient.unload(panelId),
   archive: (panelId: string) => panelClient.archive(panelId),
-  initGitRepo: (panelId: string) => panelClient.initGitRepo(panelId),
   updatePanelState: (
     panelId: string,
     state: {
@@ -356,8 +355,8 @@ export const workspace = {
     clearSelection: (target: HostTarget) => workspaceClient.hostTargets.clearSelection(target),
     versions: (target: HostTarget, sourceOrName: string) =>
       workspaceClient.hostTargets.versions(target, sourceOrName),
-    preparePinnedCommit: (target: HostTarget, sourceOrName: string, commit: string) =>
-      workspaceClient.hostTargets.preparePinnedCommit(target, sourceOrName, commit),
+    preparePinnedRef: (target: HostTarget, sourceOrName: string, ref: string) =>
+      workspaceClient.hostTargets.preparePinnedRef(target, sourceOrName, ref),
     launch: (target: HostTarget) => workspaceClient.hostTargets.launch(target),
   },
 };
@@ -500,6 +499,8 @@ import { assertPresent } from "../utils/assertPresent";
 export const shellApproval = {
   resolve: (approvalId: string, decision: ApprovalDecision) =>
     shellApprovalClient.resolve(approvalId, decision),
+  resolveBootstrap: (approvalId: string, decision: Extract<ApprovalDecision, "once" | "deny">) =>
+    shellApprovalClient.resolveBootstrap(approvalId, decision),
   resolveUserland: (approvalId: string, choice: string | "dismiss") =>
     shellApprovalClient.resolveUserland(approvalId, choice),
   submitClientConfig: (approvalId: string, values: Record<string, string>) =>

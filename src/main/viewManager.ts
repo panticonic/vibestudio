@@ -214,6 +214,7 @@ export class ViewManager {
     activeHostedShellViewId: null,
     hostedShellGeneration: 0,
   };
+  private readonly hidePanelViewsUntilHostedShellReady: boolean;
   /**
    * Slot bindings remembered across panel view destroy/recreate (same panelId).
    * The hosted shell believes these panels are still bound and will not issue
@@ -254,10 +255,12 @@ export class ViewManager {
     shellAdditionalArguments?: string[];
     devTools?: boolean;
     showWindowOnShellLoad?: boolean;
+    hidePanelViewsUntilHostedShellReady?: boolean;
   }) {
     this.window = options.window;
-    // Create the minimal shipped bootstrap/recovery UI. The full shell is a
-    // workspace app; this surface only owns host recovery and approval actions.
+    this.hidePanelViewsUntilHostedShellReady = options.hidePanelViewsUntilHostedShellReady ?? false;
+    // Create the minimal shipped bootstrap launch gate. The full shell is a
+    // workspace app; this surface only owns host-target startup approval.
     this.shellView = new WebContentsView({
       webPreferences: {
         preload: options.shellPreload,
@@ -320,6 +323,9 @@ export class ViewManager {
     });
 
     this.shellView.webContents.on("before-input-event", (event, input) => {
+      if (this.hidePanelViewsUntilHostedShellReady && !this.nativePanelSlots.hostedShellReady) {
+        return;
+      }
       const panelId = this.getFocusedPanelId();
       if (!panelId || this.nativeShellOverlay.isVisible()) return;
       const focused = electronWebContents.getFocusedWebContents();
@@ -726,7 +732,9 @@ export class ViewManager {
     }
 
     managed.bounds = bounds;
-    managed.view.setBounds(bounds);
+    managed.view.setBounds(
+      this.shouldHidePanelViewForBootstrap(managed) ? this.hiddenBounds() : bounds
+    );
   }
 
   setPanelViewportBounds(bounds: ViewBounds | null): void {
@@ -977,14 +985,12 @@ export class ViewManager {
       managed.bounds = bounds;
       managed.view.setBounds(bounds);
 
-      // If shell overlay is active, keep tracking but don't actually show
-      if (this.shellOverlayActive) {
-        managed.view.setVisible(false);
-      } else {
-        managed.view.setVisible(true);
-        this.reconcileNativeLayerOrder();
+      // Keep tracking the selected panel, but do not let startup panels paint
+      // or reserve hit-test space above/below the launch gate.
+      if (this.applyNativePanelVisibility(managed, bounds)) {
         this.focusVisibleView(managed);
       }
+      this.reconcileNativeLayerOrder();
     } else {
       managed.view.setVisible(visible);
       if (!visible && this.visiblePanelId === id) {
@@ -1042,6 +1048,33 @@ export class ViewManager {
 
   isNativeShellOverlayVisible(): boolean {
     return this.nativeShellOverlay.isVisible();
+  }
+
+  private shouldHidePanelViewForBootstrap(managed: ManagedView): boolean {
+    return (
+      this.hidePanelViewsUntilHostedShellReady &&
+      managed.type === "panel" &&
+      !this.nativePanelSlots.hostedShellReady
+    );
+  }
+
+  private hiddenBounds(): ViewBounds {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+
+  private applyNativePanelVisibility(managed: ManagedView, bounds: ViewBounds): boolean {
+    if (this.shouldHidePanelViewForBootstrap(managed)) {
+      managed.view.setBounds(this.hiddenBounds());
+      managed.view.setVisible(false);
+      return false;
+    }
+    managed.view.setBounds(bounds);
+    if (this.shellOverlayActive) {
+      managed.view.setVisible(false);
+      return false;
+    }
+    managed.view.setVisible(true);
+    return true;
   }
 
   /**
@@ -1230,12 +1263,7 @@ export class ViewManager {
 
     const bounds = this.calculatePanelBounds();
     managed.bounds = bounds;
-    managed.view.setBounds(bounds);
-    if (this.shellOverlayActive) {
-      managed.view.setVisible(false);
-    } else {
-      managed.view.setVisible(true);
-    }
+    this.applyNativePanelVisibility(managed, bounds);
   }
 
   /**
@@ -1261,9 +1289,10 @@ export class ViewManager {
    * raises, or creates a view routes through here instead of re-adding child
    * views directly — distributed remove/add calls are how the hosted shell
    * ended up stacked over slotted panels. Re-asserts, bottom to top:
-   * bootstrap shell (while the hosted shell is not ready), host chrome app
-   * views, the legacy visible panel (no native slot), slotted panels with the
-   * focused slot last, then overlay layers via callbacks.
+   * host chrome app views, the legacy visible panel (no native slot), slotted
+   * panels with the focused slot last, then the bootstrap launch gate while
+   * the hosted shell is not ready. The gate must stay above fallback panels
+   * until a hosted shell explicitly reports ready.
    */
   private reconcileNativeLayerOrder(): void {
     if (this.window.isDestroyed()) return;
@@ -1282,29 +1311,37 @@ export class ViewManager {
       desired.push(managed.view);
     };
 
-    if (!this.nativePanelSlots.hostedShellReady) {
-      plan("shell");
-    }
-
-    for (const managed of this.views.values()) {
-      if (managed.hostChrome && managed.visible) plan(managed.id);
-    }
     if (this.nativePanelSlots.hostedShellReady) {
+      for (const managed of this.views.values()) {
+        if (managed.hostChrome && managed.visible) plan(managed.id);
+      }
       plan(this.nativePanelSlots.activeHostedShellViewId);
     }
 
-    if (this.visiblePanelId && !this.nativePanelSlots.panelToSlot.has(this.visiblePanelId)) {
+    const allowFallbackPanels =
+      this.nativePanelSlots.hostedShellReady || !this.hidePanelViewsUntilHostedShellReady;
+
+    if (
+      allowFallbackPanels &&
+      this.visiblePanelId &&
+      !this.nativePanelSlots.panelToSlot.has(this.visiblePanelId)
+    ) {
       const managed = this.views.get(this.visiblePanelId);
       if (managed?.visible) plan(this.visiblePanelId);
     }
 
-    for (const slot of this.nativePanelSlots.activeSlots.values()) {
-      if (slot.nativeSlotId === this.nativePanelSlots.focusedNativeSlotId) continue;
-      plan(slot.panelId);
+    if (allowFallbackPanels) {
+      for (const slot of this.nativePanelSlots.activeSlots.values()) {
+        if (slot.nativeSlotId === this.nativePanelSlots.focusedNativeSlotId) continue;
+        plan(slot.panelId);
+      }
+      const focusedSlotId = this.nativePanelSlots.focusedNativeSlotId;
+      if (focusedSlotId) {
+        plan(this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId);
+      }
     }
-    const focusedSlotId = this.nativePanelSlots.focusedNativeSlotId;
-    if (focusedSlotId) {
-      plan(this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId);
+    if (!this.nativePanelSlots.hostedShellReady) {
+      plan("shell");
     }
 
     // No-op check: the layer tree is already correct when (a) the desired
@@ -1400,10 +1437,7 @@ export class ViewManager {
     // setVisible(true) recovers that case without a full visibility cycle.
     const bounds = this.calculatePanelBounds();
     managed.bounds = bounds;
-    managed.view.setBounds(bounds);
-    if (!this.shellOverlayActive) {
-      managed.view.setVisible(true);
-    }
+    this.applyNativePanelVisibility(managed, bounds);
     this.reconcileNativeLayerOrder();
   }
 
@@ -1803,6 +1837,7 @@ export class ViewManager {
   getViewInfo(id: string): {
     type: string;
     visible: boolean;
+    hostChrome: boolean;
     bounds: ViewBounds;
     capabilities: readonly AppCapability[];
     appIdentity?: { source?: string; effectiveVersion?: string | null };
@@ -1815,6 +1850,7 @@ export class ViewManager {
     return {
       type: managed.type,
       visible: managed.visible,
+      hostChrome: managed.hostChrome,
       bounds: managed.bounds,
       capabilities: managed.appCapabilities,
       appIdentity: managed.appIdentity,

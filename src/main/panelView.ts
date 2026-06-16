@@ -362,6 +362,15 @@ export class PanelView implements PanelViewLike {
           return;
         }
 
+        if (/^https?:\/\//i.test(url) && !isManagedHost(url, this.externalHost)) {
+          void this.panelOrchestrator
+            .navigatePanel(panelId, panelSourceFromBrowserUrl(url), {
+              contextId: getPanelContextId(panel),
+            })
+            .catch((err) => log.warn(`[PanelNav] External navigation failed for ${panelId}:`, err));
+          return;
+        }
+
         const parsed = parsePanelUrl(url, this.externalHost);
         if (parsed && parsed.source !== currentSource) {
           void this.panelOrchestrator

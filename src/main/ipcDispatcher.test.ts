@@ -104,10 +104,12 @@ describe("IpcDispatcher", () => {
       );
     });
     expect(serverClient.call).not.toHaveBeenCalled();
-    expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
-      type: "response",
-      requestId: "req-1",
-      result: { workspace: "ok" },
+    await vi.waitFor(() => {
+      expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
+        type: "response",
+        requestId: "req-1",
+        result: { workspace: "ok" },
+      });
     });
   });
 
@@ -213,10 +215,12 @@ describe("IpcDispatcher", () => {
       "/hello.txt",
       "utf8",
     ]);
-    expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
-      type: "response",
-      requestId: "req-fs-ok",
-      result: "hello",
+    await vi.waitFor(() => {
+      expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
+        type: "response",
+        requestId: "req-fs-ok",
+        result: "hello",
+      });
     });
   });
 

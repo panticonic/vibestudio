@@ -60,10 +60,9 @@ import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 import { panelLogMethods } from "@natstack/shared/serviceSchemas/panelLog";
 import { corsApprovalMethods } from "@natstack/shared/serviceSchemas/corsApproval";
 import { externalOpenMethods } from "@natstack/shared/serviceSchemas/externalOpen";
-import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { PanelView } from "./panelView.js";
-import { AppOrchestrator } from "./appOrchestrator.js";
+import { AppOrchestrator, type AppAvailableEvent } from "./appOrchestrator.js";
 import { resolveElectronViewCaller } from "./callerResolution.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
 import {
@@ -92,6 +91,7 @@ import { createServerEventBridge } from "./serverEventBridge.js";
 import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
 import type { PendingApproval } from "@natstack/shared/approvals";
+import { filterBootstrapApprovalsForTarget } from "@natstack/shared/bootstrapApprovals";
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 import { installPinnedTlsForAllPartitions } from "./tlsPinning.js";
 import { BROWSER_SESSION_PARTITION } from "@natstack/shared/panelInterfaces";
@@ -214,6 +214,10 @@ let panelRegistry: PanelRegistry | null = null;
 let panelOrchestrator: PanelOrchestrator | null = null;
 let panelView: PanelView | null = null;
 let appOrchestrator: AppOrchestrator | null = null;
+let pendingReadyElectronLaunch: AppAvailableEvent | null = null;
+let electronHostLaunchTimer: ReturnType<typeof setInterval> | null = null;
+let electronHostLaunchBlockedByApproval = false;
+let panelTreeInitializationStarted = false;
 let shellCore: ReturnType<
   typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
 > | null = null;
@@ -302,6 +306,19 @@ function authorizeAppServerCall(
   method: string,
   args: readonly unknown[]
 ): void {
+  // The shell consent queue (credential/capability/install/device-code/client-
+  // config approvals) must only be reachable from the trusted host-chrome
+  // consent surface — NOT from an ordinary adopted app view, which could
+  // otherwise enumerate and silently grant/deny another principal's approvals.
+  if (service === "shellApproval") {
+    const viewInfo = viewManager?.getViewInfo(callerId);
+    if (!(viewInfo?.type === "app" && viewInfo.hostChrome)) {
+      throw new Error(
+        `shellApproval is only available to the host-chrome consent surface, not ${callerId}`
+      );
+    }
+    return;
+  }
   if (service !== "fs") return;
   const required = appFsCapabilitiesForMethod(method, args);
   if (required.length === 0) return;
@@ -848,22 +865,170 @@ function installRemoteTlsPinning(mode: StartupMode): void {
   installPinnedTlsForAllPartitions(mode.remoteUrl.hostname, expectedFingerprint);
 }
 
-async function syncElectronHostTarget(serverClient: Pick<ServerClient, "call">): Promise<void> {
-  try {
-    const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (svc, m, a) =>
-      serverClient.call(svc, m, a)
+function readyElectronLaunchEvent(result: unknown): AppAvailableEvent | null {
+  const launch =
+    typeof result === "object" && result !== null
+      ? (result as {
+          status?: unknown;
+          appId?: unknown;
+          source?: unknown;
+          url?: unknown;
+          capabilities?: unknown;
+          buildKey?: unknown;
+          effectiveVersion?: unknown;
+          adoptionPolicy?: unknown;
+        })
+      : null;
+  if (launch?.status !== "ready") return null;
+  if (
+    typeof launch.appId !== "string" ||
+    typeof launch.source !== "string" ||
+    typeof launch.url !== "string"
+  ) {
+    log.warn("[apps] Electron host target is ready but did not include hosted app metadata");
+    return null;
+  }
+  return {
+    appId: launch.appId,
+    source: launch.source,
+    target: "electron",
+    url: launch.url,
+    capabilities: Array.isArray(launch.capabilities)
+      ? (launch.capabilities as import("@natstack/shared/unitManifest").AppCapability[])
+      : [],
+    buildKey: typeof launch.buildKey === "string" ? launch.buildKey : null,
+    effectiveVersion: typeof launch.effectiveVersion === "string" ? launch.effectiveVersion : null,
+    adoptionPolicy:
+      launch.adoptionPolicy === "prompt" || launch.adoptionPolicy === "artifact-only"
+        ? launch.adoptionPolicy
+        : "immediate",
+    selectedForHost: true,
+  };
+}
+
+async function applyReadyElectronLaunchResult(result: unknown): Promise<boolean> {
+  const event = readyElectronLaunchEvent(result);
+  if (!event) return false;
+  if (!appOrchestrator) {
+    pendingReadyElectronLaunch = event;
+    log.info(
+      `[apps] Holding ready Electron host target until app host is initialized: ${event.appId}`
     );
-    const result = await workspaceClient.hostTargets.launch("electron");
-    if (!result.launched) {
+    return false;
+  }
+  log.info(`[apps] Applying ready Electron host target: ${event.appId}`);
+  await appOrchestrator.applyAppAvailable(event);
+  initializePanelTreeOnce("electron-host-ready");
+  return true;
+}
+
+async function drainPendingReadyElectronLaunch(): Promise<void> {
+  if (!pendingReadyElectronLaunch || !appOrchestrator) return;
+  const event = pendingReadyElectronLaunch;
+  log.info(`[apps] Applying held Electron host target: ${event.appId}`);
+  await appOrchestrator.applyAppAvailable(event);
+  pendingReadyElectronLaunch = null;
+  initializePanelTreeOnce("held-electron-host-ready");
+}
+
+function initializePanelTreeOnce(reason: string): void {
+  if (panelTreeInitializationStarted) return;
+  const orchestrator = panelOrchestrator;
+  if (!orchestrator) return;
+  panelTreeInitializationStarted = true;
+  log.info(`[panels] Initializing panel tree after ${reason}`);
+  orchestrator.initializePanelTree().catch((error) => {
+    panelTreeInitializationStarted = false;
+    console.error("[App] Failed to initialize panel tree:", error);
+    eventService.emit("panel-initialization-error", {
+      path: "",
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
+}
+
+function stopElectronHostTargetLaunchLoop(): void {
+  if (!electronHostLaunchTimer) return;
+  clearInterval(electronHostLaunchTimer);
+  electronHostLaunchTimer = null;
+}
+
+type ElectronHostTargetSyncResult = "adopted" | "blocked-by-approval" | "retry";
+
+async function syncElectronHostTarget(
+  serverClient: Pick<ServerClient, "call">
+): Promise<ElectronHostTargetSyncResult> {
+  try {
+    const result = await serverClient.call("workspace", "hostTargets.launch", ["electron"]);
+    const launch =
+      typeof result === "object" && result !== null
+        ? (result as {
+            status?: unknown;
+            appId?: unknown;
+            source?: unknown;
+            target?: unknown;
+            url?: unknown;
+            capabilities?: unknown;
+            buildKey?: unknown;
+            effectiveVersion?: unknown;
+            adoptionPolicy?: unknown;
+          })
+        : null;
+    const status = launch?.status ?? null;
+    if (status === "approval-required") {
+      if (!electronHostLaunchBlockedByApproval) {
+        log.info("[apps] Electron host target launch is waiting for startup approval");
+      }
+      electronHostLaunchBlockedByApproval = true;
+      return "blocked-by-approval";
+    }
+    if (status === "ready") {
+      electronHostLaunchBlockedByApproval = false;
+      return (await applyReadyElectronLaunchResult(result)) ? "adopted" : "retry";
+    }
+    electronHostLaunchBlockedByApproval = false;
+    if (status !== "ready") {
       log.warn("[apps] No launchable Electron host target is selected");
     }
+    return "retry";
   } catch (error) {
     log.warn(
       `[apps] Failed to synchronize Electron host target: ${
         error instanceof Error ? error.message : String(error)
       }`
     );
+    return "retry";
   }
+}
+
+function startElectronHostTargetLaunchLoop(serverClient: Pick<ServerClient, "call">): void {
+  stopElectronHostTargetLaunchLoop();
+  electronHostLaunchBlockedByApproval = false;
+  let inFlight = false;
+  const run = async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const result = await syncElectronHostTarget(serverClient);
+      if (result === "adopted" || result === "blocked-by-approval") {
+        stopElectronHostTargetLaunchLoop();
+      }
+    } finally {
+      inFlight = false;
+    }
+  };
+  electronHostLaunchTimer = setInterval(() => {
+    void run();
+  }, 2_000);
+  void run();
+}
+
+function retryElectronHostTargetLaunchAfterApprovalChange(pending: PendingApproval[]): void {
+  if (!electronHostLaunchBlockedByApproval) return;
+  if (filterBootstrapApprovalsForTarget(pending, "electron").length > 0) return;
+  const client = serverSession?.serverClient;
+  if (!client) return;
+  startElectronHostTargetLaunchLoop(client);
 }
 
 // =============================================================================
@@ -895,6 +1060,7 @@ function createWindow(): void {
     shellAdditionalArguments: [],
     devTools: false,
     showWindowOnShellLoad: !IS_HEADLESS_HOST,
+    hidePanelViewsUntilHostedShellReady: true,
   });
 
   // Set native window title for OS taskbar / window switcher (Alt+Tab / dock)
@@ -905,10 +1071,12 @@ function createWindow(): void {
   mainWindow.on("focus", () => approvalAttention?.handleWindowFocus());
 
   mainWindow.on("closed", () => {
+    stopElectronHostTargetLaunchLoop();
     mainWindow = null;
     viewManager = null;
     panelView = null; // Clear so getPanelView() returns null until recreated
     appOrchestrator = null;
+    panelTreeInitializationStarted = false;
   });
 
   if (viewManager && panelRegistry && panelOrchestrator && serverSession) {
@@ -936,9 +1104,19 @@ function createWindow(): void {
       getPanelView: () => panelView,
       statePath: startupMode.kind === "remote" ? getRemoteUserDataDir() : serverSession.statePath,
     });
-    void syncElectronHostTarget(serverSession.serverClient);
+    void drainPendingReadyElectronLaunch().catch((error: unknown) => {
+      log.warn(
+        `[apps] Failed to apply held Electron host target: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
+    startElectronHostTargetLaunchLoop(serverSession.serverClient);
     void appOrchestrator
       .loadBakedApp(path.join(getResourcesPath(), "baked-app"))
+      .then((loaded) => {
+        if (loaded) initializePanelTreeOnce("baked-electron-host");
+      })
       .catch((error: unknown) => {
         log.error(
           `[dist] Failed to load baked app payload: ${error instanceof Error ? error.message : String(error)}`
@@ -987,15 +1165,8 @@ function createWindow(): void {
       },
     });
 
-  // Initialize panel tree after window is ready
-  if (panelOrchestrator) {
-    panelOrchestrator.initializePanelTree().catch((error) => {
-      console.error("[App] Failed to initialize panel tree:", error);
-      eventService.emit("panel-initialization-error", {
-        path: "",
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
+  if (IS_HEADLESS_HOST) {
+    initializePanelTreeOnce("headless-host-startup");
   }
 }
 
@@ -1218,7 +1389,10 @@ app.on("ready", async () => {
     getServerClient: () => serverClientRef,
     openExternal: (url) => shell.openExternal(url),
     warn: (message) => log.warn(message),
-    onApprovalPendingChanged: (pending) => approvalAttention?.handlePendingChanged(pending),
+    onApprovalPendingChanged: (pending) => {
+      approvalAttention?.handlePendingChanged(pending);
+      retryElectronHostTargetLaunchAfterApprovalChange(pending);
+    },
   });
 
   try {
@@ -1369,6 +1543,11 @@ app.on("ready", async () => {
       },
       getWebContentsForCaller: (callerId) => viewManager?.getWebContents(callerId) ?? null,
       authorizeAppServerCall,
+      onServerRpcResult: async ({ service, method, args, result }) => {
+        if (service === "workspace" && method === "hostTargets.launch" && args[0] === "electron") {
+          await applyReadyElectronLaunchResult(result);
+        }
+      },
       eventService,
     });
     log.info(`[PanelHTTP] Using server's panel HTTP via gateway port ${conn.gatewayPort}`);
@@ -1471,6 +1650,25 @@ app.on("ready", async () => {
         }
         if (action === "rebuildAndReload") {
           return panelOrchestrator?.rebuildAndReloadPanel(panelId) ?? null;
+        }
+        if (action === "reloadPanel") {
+          return panelOrchestrator?.reloadPanel(panelId) ?? null;
+        }
+        if (action === "navigatePanel") {
+          const source = typeof args[0] === "string" ? args[0] : "";
+          if (!source) throw new Error("navigatePanel requires a source");
+          const options = (args[1] ?? {}) as {
+            ref?: string;
+            contextId?: string;
+            env?: Record<string, string>;
+            stateArgs?: Record<string, unknown>;
+          };
+          return panelOrchestrator?.navigatePanel(panelId, source, options) ?? null;
+        }
+        if (action === "navigatePanelHistory") {
+          const delta = args[0] === -1 || args[0] === 1 ? args[0] : 0;
+          if (!delta) throw new Error("navigatePanelHistory requires delta -1 or 1");
+          return panelOrchestrator?.navigatePanelHistory(panelId, delta) ?? null;
         }
         if (action === "accessibilityTree") {
           if (!cdpHostProvider) throw new Error("CDP host provider not initialized");

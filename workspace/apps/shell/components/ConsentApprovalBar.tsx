@@ -46,6 +46,7 @@ import {
   originForUrl,
   shouldOpenApprovalDetails,
 } from "@natstack/shared/approvalCopy";
+import { filterRuntimeApprovals } from "@natstack/shared/bootstrapApprovals";
 import { useShellEvent } from "../shell/useShellEvent";
 import { shellApproval, shellPresence } from "../shell/client";
 import { useNavigation } from "./NavigationContext";
@@ -90,7 +91,7 @@ export function ConsentApprovalBar() {
     try {
       const list = await shellApproval.listPending();
       if (seq === pendingAccessRefreshSeq.current) {
-        setPendingAccess(list);
+        setPendingAccess(filterRuntimeApprovals(list));
       }
     } catch (err) {
       console.warn("[ConsentApprovalBar] listPending failed:", err);
@@ -103,7 +104,7 @@ export function ConsentApprovalBar() {
       (event) => {
         if (Array.isArray(event?.pending)) {
           pendingAccessRefreshSeq.current++;
-          setPendingAccess(event.pending);
+          setPendingAccess(filterRuntimeApprovals(event.pending));
           return;
         }
         void refreshPendingAccess();
@@ -612,14 +613,14 @@ function UnitBatchActions({
   const count = approval.units.length;
   const hasExtensions = approval.units.some((unit) => unit.unitKind === "extension");
   const unitLabel = unitBatchNoun(approval);
-  const isSourcePush = approval.trigger === "source-push";
+  const isSourceChange = approval.trigger === "source-change";
   const isManagement = approval.trigger === "management";
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       <DecisionButton
         label={
-          isSourcePush
-            ? "Approve push"
+          isSourceChange
+            ? "Approve change"
             : isManagement
               ? "Approve"
               : count > 0
@@ -627,8 +628,8 @@ function UnitBatchActions({
                 : "Allow"
         }
         description={
-          isSourcePush
-            ? `Allow this ${unitLabel} source push.`
+          isSourceChange
+            ? `Allow this ${unitLabel} source change.`
             : isManagement
               ? `Allow this ${unitLabel} management request.`
               : count > 0
@@ -639,23 +640,23 @@ function UnitBatchActions({
         variant="solid"
         onClick={() => decide("once")}
       />
-      {approval.trigger === "meta-push" || isSourcePush ? (
+      {approval.trigger === "meta-change" || isSourceChange ? (
         <DecisionButton
           label="Dev session"
           description={
-            isSourcePush
-              ? `Allow ${unitLabel} source pushes without asking for the next 4 hours.`
-              : "Allow workspace-config pushes without asking for the next 4 hours."
+            isSourceChange
+              ? `Allow ${unitLabel} source changes without asking for the next 4 hours.`
+              : "Allow workspace-config changes without asking for the next 4 hours."
           }
           variant="surface"
           onClick={() => decide("session")}
         />
       ) : null}
       <DecisionButton
-        label={isSourcePush || isManagement ? "Deny" : count > 0 ? "Deny all" : "Deny"}
+        label={isSourceChange || isManagement ? "Deny" : count > 0 ? "Deny all" : "Deny"}
         description={
-          isSourcePush
-            ? "Reject this source push."
+          isSourceChange
+            ? "Reject this source change."
             : isManagement
               ? "Reject this management request."
               : count > 0

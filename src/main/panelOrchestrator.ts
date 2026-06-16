@@ -544,10 +544,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle {
     this.registry.notifyPanelTreeUpdate();
   }
 
-  async initializeGitRepo(panelId: string): Promise<void> {
-    await this.rebuildUnloadedPanel(panelId);
-  }
-
   // =========================================================================
   // Bootstrap config
   // =========================================================================

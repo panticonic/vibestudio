@@ -338,7 +338,6 @@ export async function establishServerSession(args: {
       wsDir: mode.wsDir,
       appRoot: getAppRoot(),
       isEphemeral: mode.isEphemeral,
-      createdFromTemplate: mode.createdFromTemplate,
       onCrash: (code) => {
         console.error(`[App] Server process crashed with code ${code}`);
         console.error(

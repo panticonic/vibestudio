@@ -149,7 +149,7 @@ function unitBatchApproval(
 ): PendingUnitBatchApproval {
   return {
     kind: "unit-batch",
-    trigger: partial.trigger ?? "startup",
+    trigger: partial.trigger ?? "source-change",
     callerId: partial.callerId ?? "system:units",
     callerKind: partial.callerKind ?? "system",
     repoPath: partial.repoPath ?? "meta",
@@ -165,7 +165,7 @@ function unitBatchApproval(
         unitName: `@workspace-extensions/ext-${index + 1}`,
         displayName: `Extension ${index + 1}`,
         version: "0.1.0",
-        source: { kind: "internal-git" as const, repo: `extensions/ext-${index + 1}`, ref: "main" },
+        source: { kind: "workspace-repo" as const, repo: `extensions/ext-${index + 1}`, ref: "main" },
         ev: `ev-${index + 1}`,
         capabilities: ["node:fs", "node:process"],
       })),
@@ -215,6 +215,69 @@ describe("ConsentApprovalBar queue browsing", () => {
     });
     expect(screen.getByText("First approval")).toBeTruthy();
     expect(screen.getByText("1 / 3")).toBeTruthy();
+  });
+
+  it("does not render startup privileged-unit approvals in the runtime consent bar", async () => {
+    const runtimeApproval = userlandApproval({
+      approvalId: "runtime-approval",
+      title: "Runtime approval",
+    });
+    shellClient.listPending.mockResolvedValueOnce([
+      unitBatchApproval({
+        approvalId: "desktop-app-startup",
+        title: "Approve desktop app",
+        trigger: "startup",
+        units: [
+          {
+            unitKind: "app",
+            unitName: "@workspace-apps/shell",
+            displayName: "Shell",
+            version: "0.1.0",
+            target: "electron",
+            source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
+            ev: "ev-shell",
+            capabilities: ["panel-hosting"],
+          },
+        ],
+      }),
+      unitBatchApproval({
+        approvalId: "mobile-app-startup",
+        title: "Approve mobile app",
+        trigger: "startup",
+        units: [
+          {
+            unitKind: "app",
+            unitName: "@workspace-apps/mobile",
+            displayName: "Mobile",
+            version: "0.1.0",
+            target: "react-native",
+            source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
+            ev: "ev-mobile",
+            capabilities: [],
+          },
+        ],
+      }),
+      unitBatchApproval({
+        approvalId: "extension-startup",
+        title: "Approve native extension",
+        trigger: "startup",
+      }),
+      runtimeApproval,
+    ]);
+
+    render(
+      <Theme>
+        <ConsentApprovalBar />
+      </Theme>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Runtime approval")).toBeTruthy();
+    });
+    expect(screen.queryByText("Approve desktop app")).toBeNull();
+    expect(screen.queryByText("Approve mobile app")).toBeNull();
+    expect(screen.queryByText("Approve native extension")).toBeNull();
+    expect(screen.queryByText("1 / 4")).toBeNull();
   });
 
   it("does not render a navigator for a single pending approval", async () => {
@@ -296,6 +359,7 @@ describe("ConsentApprovalBar queue browsing", () => {
       unitBatchApproval({
         approvalId: "apps-approval",
         title: "Approve workspace apps",
+        trigger: "source-change",
         units: [
           {
             unitKind: "app",
@@ -303,13 +367,16 @@ describe("ConsentApprovalBar queue browsing", () => {
             displayName: "NatStack Mobile",
             version: "0.1.0",
             target: "react-native",
-            source: { kind: "internal-git", repo: "apps/mobile", ref: "main" },
+            source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
             ev: "ev-app",
             capabilities: ["clipboard", "keychain", "notifications", "open-external"],
           },
         ],
       }),
-      unitBatchApproval({ approvalId: "extensions-approval", title: "Approve workspace extensions" }),
+      unitBatchApproval({
+        approvalId: "extensions-approval",
+        title: "Approve workspace extensions",
+      }),
     ]);
 
     render(
@@ -322,14 +389,14 @@ describe("ConsentApprovalBar queue browsing", () => {
       expect(screen.getByText("Approve workspace apps")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("Approve all"));
+    fireEvent.click(screen.getByText("Approve change"));
     await waitFor(() => {
       expect(screen.queryByText("Approve workspace apps")).toBeNull();
       expect(screen.getByText("Approve workspace extensions")).toBeTruthy();
     });
     expect(shellClient.resolve).toHaveBeenCalledWith("apps-approval", "once");
 
-    fireEvent.click(screen.getByText("Deny all"));
+    fireEvent.click(screen.getByText("Deny"));
     await waitFor(() => {
       expect(screen.queryByText("Approve workspace extensions")).toBeNull();
     });
@@ -343,6 +410,7 @@ describe("ConsentApprovalBar queue browsing", () => {
       unitBatchApproval({
         approvalId: "apps-approval",
         title: "Approve workspace apps",
+        trigger: "source-change",
         units: [
           {
             unitKind: "app",
@@ -350,7 +418,7 @@ describe("ConsentApprovalBar queue browsing", () => {
             displayName: "NatStack Mobile",
             version: "0.1.0",
             target: "react-native",
-            source: { kind: "internal-git", repo: "apps/mobile", ref: "main" },
+            source: { kind: "workspace-repo", repo: "apps/mobile", ref: "main" },
             ev: "ev-app",
             capabilities: ["clipboard", "keychain", "notifications", "open-external"],
           },
@@ -368,7 +436,7 @@ describe("ConsentApprovalBar queue browsing", () => {
       expect(screen.getByText("Approve workspace apps")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("Approve all"));
+    fireEvent.click(screen.getByText("Approve change"));
     await waitFor(() => {
       expect(screen.getByText("Approval action failed: resolve blocked")).toBeTruthy();
     });
@@ -380,11 +448,11 @@ describe("ConsentApprovalBar queue browsing", () => {
     errorSpy.mockRestore();
   });
 
-  it("uses distinct approval tones for app and extension source pushes", async () => {
+  it("uses distinct approval tones for app and extension source changes", async () => {
     const appApproval = unitBatchApproval({
       approvalId: "app-source",
-      title: "Shell app source push",
-      trigger: "source-push",
+      title: "Shell app source change",
+      trigger: "source-change",
       units: [
         {
           unitKind: "app",
@@ -392,7 +460,7 @@ describe("ConsentApprovalBar queue browsing", () => {
           displayName: "Shell",
           version: "0.1.0",
           target: "electron",
-          source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+          source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
           ev: "ev-app",
           capabilities: ["notifications"],
         },
@@ -400,8 +468,8 @@ describe("ConsentApprovalBar queue browsing", () => {
     });
     const extensionApproval = unitBatchApproval({
       approvalId: "extension-source",
-      title: "Extension source push",
-      trigger: "source-push",
+      title: "Extension source change",
+      trigger: "source-change",
     });
 
     shellClient.listPending.mockResolvedValueOnce([appApproval, extensionApproval]);
@@ -413,21 +481,21 @@ describe("ConsentApprovalBar queue browsing", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Shell app source push")).toBeTruthy();
+      expect(screen.getByText("Shell app source change")).toBeTruthy();
     });
     expect(
       (
-        screen.getByText("Shell app source push").closest(".approval-bar") as HTMLElement | null
+        screen.getByText("Shell app source change").closest(".approval-bar") as HTMLElement | null
       )?.style.getPropertyValue("--app-approval-stripe")
     ).toBe("var(--app-approval-amber-stripe)");
 
     fireEvent.click(screen.getByLabelText("Next approval"));
     await waitFor(() => {
-      expect(screen.getByText("Extension source push")).toBeTruthy();
+      expect(screen.getByText("Extension source change")).toBeTruthy();
     });
     expect(
       (
-        screen.getByText("Extension source push").closest(".approval-bar") as HTMLElement | null
+        screen.getByText("Extension source change").closest(".approval-bar") as HTMLElement | null
       )?.style.getPropertyValue("--app-approval-stripe")
     ).toBe("var(--app-approval-red-stripe)");
   });

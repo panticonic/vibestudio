@@ -22,7 +22,6 @@ import {
   type CSSProperties,
   type KeyboardEvent,
   type MouseEvent,
-  type RefObject,
 } from "react";
 import { useIsMobile, useTouchDevice } from "@workspace/react/responsive";
 
@@ -42,7 +41,6 @@ import type {
   DescendantSiblingGroup,
 } from "./navigationTypes";
 import type { PanelContextMenuAction } from "@natstack/shared/types";
-import type { BranchInfo, CommitInfo } from "@natstack/shared/types";
 import {
   buildAddressAutocompleteItems,
   type AddressAutocompleteItem,
@@ -561,9 +559,7 @@ function BrowserAddressBar({
 }
 
 type PanelAddressOverlayState =
-  | { kind: "path"; bounds: NativeShellOverlayOptions["bounds"] }
-  | { kind: "branch"; bounds: NativeShellOverlayOptions["bounds"] }
-  | { kind: "commit"; bounds: NativeShellOverlayOptions["bounds"] };
+  | { kind: "path"; bounds: NativeShellOverlayOptions["bounds"] };
 
 function PanelAddressBar({
   chromeState,
@@ -574,21 +570,13 @@ function PanelAddressBar({
 }) {
   const isMobile = useIsMobile();
   const pathInputRef = useRef<HTMLInputElement | null>(null);
-  const branchButtonRef = useRef<HTMLButtonElement | null>(null);
-  const commitButtonRef = useRef<HTMLButtonElement | null>(null);
   const [pathValue, setPathValue] = useState(chromeState.source);
   const [addressOptions, setAddressOptions] = useState<PanelAddressOptions | null>(null);
-  const [selectedBranch, setSelectedBranch] = useState<string | null>(
-    chromeState.ref ?? chromeState.repo?.branch ?? null
-  );
-  const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
   const [overlay, setOverlay] = useState<PanelAddressOverlayState | null>(null);
 
   useEffect(() => {
     setPathValue(chromeState.source);
-    setSelectedBranch(chromeState.ref ?? chromeState.repo?.branch ?? null);
-    setSelectedCommit(null);
-  }, [chromeState.panelId, chromeState.ref, chromeState.repo?.branch, chromeState.source]);
+  }, [chromeState.panelId, chromeState.source]);
 
   useEffect(() => {
     const source = pathValue.trim();
@@ -599,7 +587,7 @@ function PanelAddressBar({
     let cancelled = false;
     const timer = window.setTimeout(() => {
       void panel
-        .getAddressOptions(source, selectedBranch ?? undefined)
+        .getAddressOptions(source, chromeState.ref)
         .then((options) => {
           if (!cancelled) setAddressOptions(options);
         })
@@ -611,7 +599,7 @@ function PanelAddressBar({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [pathValue, selectedBranch]);
+  }, [chromeState.ref, pathValue]);
 
   useEffect(() => {
     const focusAddress = () => {
@@ -622,11 +610,6 @@ function PanelAddressBar({
     return () => window.removeEventListener("shell-focus-address", focusAddress);
   }, []);
 
-  const branchValue =
-    selectedBranch ?? addressOptions?.repo?.branch ?? chromeState.repo?.branch ?? "HEAD";
-  const commitValue =
-    selectedCommit ?? addressOptions?.repo?.commit ?? chromeState.repo?.commit ?? null;
-  const commitShort = commitValue ? commitValue.slice(0, 7) : "commit";
   const dirty = addressOptions?.repo?.dirty ?? chromeState.repo?.dirty ?? false;
 
   const submit = (event?: KeyboardEvent<HTMLInputElement>) => {
@@ -636,7 +619,7 @@ function PanelAddressBar({
     onChromeCommand?.({
       type: "navigate",
       value,
-      ref: selectedCommit ?? selectedBranch ?? undefined,
+      ref: chromeState.ref,
       mode: event ? getAddressNavigationModeFromModifiers(event) : "current",
     });
   };
@@ -645,18 +628,10 @@ function PanelAddressBar({
     (kind: PanelAddressOverlayState["kind"], target: HTMLElement | null) => {
       if (!target) return;
       const rect = target.getBoundingClientRect();
-      const preferredWidth =
-        kind === "commit"
-          ? Math.max(isMobile ? 280 : 420, rect.width)
-          : Math.max(isMobile ? 260 : 320, rect.width);
+      const preferredWidth = Math.max(isMobile ? 260 : 320, rect.width);
       const maxOverlayWidth =
         typeof window === "undefined" ? preferredWidth : Math.max(240, window.innerWidth - 16);
-      const rowCount =
-        kind === "path"
-          ? Math.min(addressOptions?.suggestions.length ?? 0, 8)
-          : kind === "branch"
-            ? Math.min(addressOptions?.branches.length ?? 0, 10)
-            : Math.min(addressOptions?.commits.length ?? 0, 10);
+      const rowCount = Math.min(addressOptions?.suggestions.length ?? 0, 8);
       const height = Math.max(52, Math.min(360, 28 + rowCount * 42));
       setOverlay({
         kind,
@@ -669,31 +644,15 @@ function PanelAddressBar({
       });
     },
     [
-      addressOptions?.branches.length,
-      addressOptions?.commits.length,
       addressOptions?.suggestions.length,
       isMobile,
     ]
   );
 
-  const overlayHtml = useMemo(() => {
-    if (!overlay) return "";
-    if (overlay.kind === "path") {
-      return buildPathOverlayHtml(addressOptions?.suggestions ?? [], pathValue);
-    }
-    if (overlay.kind === "branch") {
-      return buildBranchOverlayHtml(addressOptions?.branches ?? [], branchValue);
-    }
-    return buildCommitOverlayHtml(addressOptions?.commits ?? [], commitValue);
-  }, [
-    addressOptions?.branches,
-    addressOptions?.commits,
-    addressOptions?.suggestions,
-    branchValue,
-    commitValue,
-    overlay,
-    pathValue,
-  ]);
+  const overlayHtml = useMemo(
+    () => (overlay ? buildPathOverlayHtml(addressOptions?.suggestions ?? [], pathValue) : ""),
+    [addressOptions?.suggestions, overlay, pathValue]
+  );
 
   const overlayOptions = overlay
     ? {
@@ -707,21 +666,10 @@ function PanelAddressBar({
 
   const handleOverlayEvent = useCallback((event: NativeShellOverlayEvent) => {
     const payload = event.payload as
-      | { source?: string; branch?: string; commit?: string }
+      | { source?: string }
       | undefined;
     if (event.type === "path-select" && payload?.source) {
       setPathValue(payload.source);
-      setSelectedBranch(null);
-      setSelectedCommit(null);
-      setOverlay(null);
-      window.requestAnimationFrame(() => pathInputRef.current?.focus());
-    } else if (event.type === "branch-select" && payload?.branch) {
-      setSelectedBranch(payload.branch);
-      setSelectedCommit(null);
-      setOverlay(null);
-      window.requestAnimationFrame(() => commitButtonRef.current?.focus());
-    } else if (event.type === "commit-select" && payload?.commit) {
-      setSelectedCommit(payload.commit);
       setOverlay(null);
       window.requestAnimationFrame(() => pathInputRef.current?.focus());
     } else if (event.type === "dismiss") {
@@ -800,8 +748,6 @@ function PanelAddressBar({
           onFocus={() => openOverlay("path", pathInputRef.current)}
           onChange={(event) => {
             setPathValue(event.currentTarget.value);
-            setSelectedBranch(null);
-            setSelectedCommit(null);
             openOverlay("path", event.currentTarget);
           }}
           onKeyDown={(event) => {
@@ -823,22 +769,6 @@ function PanelAddressBar({
         />
       </Box>
 
-      <PanelAddressButton
-        buttonRef={branchButtonRef}
-        label={branchValue}
-        disabled={!addressOptions?.branches.length}
-        title="Branch"
-        compact={isMobile}
-        onClick={() => openOverlay("branch", branchButtonRef.current)}
-      />
-      <PanelAddressButton
-        buttonRef={commitButtonRef}
-        label={commitShort}
-        disabled={!addressOptions?.commits.length}
-        title="Commit"
-        compact={isMobile}
-        onClick={() => openOverlay("commit", commitButtonRef.current)}
-      />
       {dirty && (
         <Badge size="1" color="orange" style={{ flexShrink: 0 }}>
           dirty
@@ -847,49 +777,6 @@ function PanelAddressBar({
     </Flex>
   );
 }
-
-const PanelAddressButton = ({
-  label,
-  title,
-  disabled,
-  compact,
-  onClick,
-  buttonRef,
-}: {
-  label: string;
-  title: string;
-  disabled?: boolean;
-  compact?: boolean;
-  onClick: () => void;
-  buttonRef: RefObject<HTMLButtonElement | null>;
-}) => (
-  <button
-    ref={buttonRef}
-    type="button"
-    disabled={disabled}
-    title={title}
-    onClick={onClick}
-    style={{
-      height: 22,
-      maxWidth: compact ? 96 : 140,
-      minWidth: compact ? 54 : 62,
-      flexShrink: 0,
-      border: "1px solid var(--gray-6)",
-      borderRadius: 4,
-      background: disabled ? "var(--gray-3)" : "var(--gray-1)",
-      color: disabled ? "var(--gray-9)" : "var(--gray-12)",
-      font: "inherit",
-      fontSize: 12,
-      padding: "0 8px",
-      overflow: "hidden",
-      textOverflow: "ellipsis",
-      whiteSpace: "nowrap",
-      cursor: disabled ? "default" : "pointer",
-    }}
-  >
-    {label}
-  </button>
-);
 
 function buildPathOverlayHtml(suggestions: PanelSourceSuggestion[], query: string): string {
   const rows = buildAddressAutocompleteItems({
@@ -923,28 +810,6 @@ function buildBrowserAddressOverlayHtml(items: AddressAutocompleteItem[], query:
     empty: query ? "No matching history" : "No browser history yet",
     rows,
   });
-}
-
-function buildBranchOverlayHtml(branches: BranchInfo[], selected: string): string {
-  const rows = branches.slice(0, 40).map((branch) => ({
-    label: branch.name,
-    meta: branch.current ? "current branch" : "branch",
-    selected: branch.name === selected,
-    payload: { branch: branch.name },
-    type: "branch-select",
-  }));
-  return buildListOverlayHtml({ empty: "No branches found", rows });
-}
-
-function buildCommitOverlayHtml(commits: CommitInfo[], selected: string | null): string {
-  const rows = commits.slice(0, 50).map((commit) => ({
-    label: `${commit.oid.slice(0, 7)} ${commit.message}`,
-    meta: commit.author.name,
-    selected: commit.oid === selected,
-    payload: { commit: commit.oid },
-    type: "commit-select",
-  }));
-  return buildListOverlayHtml({ empty: "No commits found", rows });
 }
 
 function buildListOverlayHtml(args: {

@@ -857,6 +857,63 @@ describe("ViewManager", () => {
       });
     });
 
+    it("keeps bootstrap launch gate above fallback panels until hosted shell is ready", () => {
+      const panelView = vm.createView({
+        id: "panel-1",
+        type: "panel",
+      });
+      const children = (mockWindow.contentView as unknown as { children: unknown[] }).children;
+      const matchingShellViews = (children as Array<{ webContents?: unknown }>).filter(
+        (view) => view.webContents === vm.getShellWebContents()
+      );
+      const shellView = matchingShellViews[matchingShellViews.length - 1];
+
+      vm.setViewVisible("panel-1", true);
+
+      expect(shellView).toBeDefined();
+      expect(children[children.length - 1]).toBe(shellView);
+      expect(children[children.length - 1]).not.toBe(panelView);
+    });
+
+    it("keeps panel views natively hidden behind the bootstrap launch gate when configured", () => {
+      const gatedVm = new ViewManager({
+        window: mockWindow,
+        shellPreload: "/path/to/preload.js",
+        shellHtmlPath: "/path/to/index.html",
+        hidePanelViewsUntilHostedShellReady: true,
+      });
+      const panelView = gatedVm.createView({
+        id: "panel-1",
+        type: "panel",
+      });
+      (panelView.setVisible as Mock).mockClear();
+
+      gatedVm.setViewVisible("panel-1", true);
+
+      expect(gatedVm.isViewVisible("panel-1")).toBe(true);
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
+
+      gatedVm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      gatedVm.setHostedShellReady("@workspace-apps/shell", true);
+      (panelView.setVisible as Mock).mockClear();
+
+      gatedVm.setViewVisible("panel-1", true);
+
+      expect(panelView.setBounds).toHaveBeenLastCalledWith({
+        x: 0,
+        y: 32,
+        width: 1200,
+        height: 768,
+      });
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(true);
+    });
+
     it("opens devtools on the visible host chrome app instead of the bootstrap shell", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",

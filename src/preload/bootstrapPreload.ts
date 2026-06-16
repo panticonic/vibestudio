@@ -1,10 +1,10 @@
 /**
- * Bootstrap/recovery preload.
+ * Bootstrap launch-gate preload.
  *
  * This is deliberately smaller than the workspace app preload. The shipped
- * recovery UI can only call the closed set of host RPC methods needed to
- * approve unit batches, reseed the canonical shell, inspect shell logs, open
- * the workspace path, and switch/create workspaces.
+ * launch gate can only call the closed set of host RPC methods needed to
+ * launch the selected host target and resolve the startup app approvals that
+ * launch returns.
  */
 
 import { contextBridge, ipcRenderer } from "electron";

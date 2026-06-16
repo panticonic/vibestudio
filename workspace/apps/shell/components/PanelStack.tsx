@@ -838,8 +838,15 @@ export function PanelStack({
     }
 
     const artifacts = visiblePanel.artifacts;
-    const leasedElsewhere =
-      visibleRuntimeLease && (visibleRuntimeLease.platform !== "desktop" || !artifacts?.htmlPath);
+    // "Leased elsewhere" means the runtime slot is held by a NON-desktop client
+    // (the headless host or a mobile device) that renders it remotely — the only
+    // case where "Take Over" is meaningful. A desktop-held lease whose build
+    // artifacts simply aren't populated yet is NOT elsewhere: it falls through to
+    // the dedicated "Preparing panel…" loading branch below. (The former
+    // `|| !artifacts?.htmlPath` conflated "still building" with "running
+    // elsewhere", so a freshly-created panel flashed the Take Over screen — with
+    // the desktop's own lease — until its first build artifacts arrived.)
+    const leasedElsewhere = visibleRuntimeLease && visibleRuntimeLease.platform !== "desktop";
 
     if (leasedElsewhere) {
       return (

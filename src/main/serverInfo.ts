@@ -1,10 +1,8 @@
 /**
  * ServerInfo — Electron-main's view of the server connection.
  *
- * Formerly carried hand-typed git RPC wrappers (getWorkspaceTree,
- * listBranches, listCommits, resolveRef); those had no consumers — callers
- * use typed service clients (`createTypedServiceClient` + the git schema
- * table) directly instead.
+ * Keep this as a transport snapshot only. Workspace VCS and external Git
+ * interop are exposed through typed service clients instead.
  */
 
 import type { ServerInfoLike } from "@natstack/shared/panelInterfaces";
