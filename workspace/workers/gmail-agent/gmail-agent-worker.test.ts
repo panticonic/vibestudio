@@ -1,11 +1,16 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { GmailApiError, type GmailClient, type GmailMessage, type GmailThread } from "@workspace/gmail";
 import { AGENTIC_EVENT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
 import { AgentWorkerBase } from "@workspace/agentic-do";
+import { ids } from "@workspace/agent-loop";
 
 import { GmailAgentWorker } from "./gmail-agent-worker.js";
 import { GMAIL_MESSAGE_TYPES } from "./cards/cards.js";
+
+const WORKSPACE_ROOT = path.resolve(__dirname, "../..");
 
 function message(
   id: string,
@@ -35,6 +40,9 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     opts?: unknown;
   }> = [];
   signals: Array<{ participantId: string; content: string; type?: string }> = [];
+  unsubscribed: string[] = [];
+  gadCalls: Array<{ method: string; args: unknown[] }> = [];
+  rawSqlRows: Array<Record<string, unknown>> = [{ seq: null }];
   agentInitiatedTurns: Array<{ channelId: string; content: string }> = [];
   replayEvents: Array<{
     id: number;
@@ -107,16 +115,65 @@ class TestGmailAgentWorker extends GmailAgentWorker {
   );
   createDraft = vi.fn(async () => ({ id: "draft-1", message: { id: "m", threadId: "t" } }));
   draftBodies = vi.fn(async () => "Thanks for the context. I will follow up shortly.");
+  blobs = new Map<string, string>();
+  unreadableRendererSources = false;
+  rendererSourceOverrides = new Map<string, string | Uint8Array | null>();
   useBaseDraftGeneration = false;
-  rpcCall = vi.fn(async (_target: string, method: string): Promise<unknown> => {
+  rpcCall = vi.fn(async (_target: string, method: string, args?: unknown[]): Promise<unknown> => {
+    if (_target === "do:gad:test") {
+      this.gadCalls.push({ method, args: args ?? [] });
+      if (method === "rawSql") return { rows: this.rawSqlRows };
+      if (method === "forkLog") return { inherited: (args?.[0] as { atSeq?: number })?.atSeq ?? 0 };
+      if (method === "getLogHead") return null;
+      if (method === "readLog") return [];
+      if (method === "getLogEvent") return null;
+      if (method === "appendLogEvent") {
+        return { envelopes: [], headSeq: 0, headHash: "0".repeat(64), published: [] };
+      }
+    }
     if (method === "runtime.resolveContext") return "ctx-1";
     if (method === "workers.resolveService") {
+      if (args?.[0] === "natstack.gad.workspace.v1") {
+        return {
+          kind: "durable-object",
+          source: "workers/gad-store",
+          className: "GadWorkspaceDO",
+          objectKey: "workspace-gad",
+          targetId: "do:gad:test",
+        };
+      }
       return { kind: "durable-object", targetId: "do:channel:test" };
     }
     if (method === "subscribe") {
       return { ok: true, participantId: "agent-gmail", channelConfig: {} };
     }
-    return { id: "cred-1" };
+    if (method === "workspace.getAgentsMd") return "";
+    if (method === "workspace.listSkills") return [];
+    if (method === "blobstore.putText") {
+      const value = String(args?.[0] ?? "");
+      const digest = `blob-${this.blobs.size + 1}`;
+      this.blobs.set(digest, value);
+      return { digest, size: value.length };
+    }
+    if (method === "credentials.connect") return { id: "cred-1" };
+    if (method === "credentials.resolveCredential") return { id: "cred-1" };
+    if (method === "workspace-state.alarmSet") return undefined;
+    if (method === "fs.readFile") {
+      if (this.unreadableRendererSources) {
+        throw new Error("test renderer source unavailable");
+      }
+      const filePath = args?.[0];
+      const encoding = args?.[1];
+      if (typeof filePath !== "string") throw new Error("fs.readFile path must be a string");
+      if (this.rendererSourceOverrides.has(filePath)) {
+        return this.rendererSourceOverrides.get(filePath);
+      }
+      return fs.readFile(
+        path.join(WORKSPACE_ROOT, filePath),
+        typeof encoding === "string" ? (encoding as BufferEncoding) : "utf8"
+      );
+    }
+    throw new Error(`unexpected rpc ${_target}.${method}`);
   });
 
   protected override get rpc(): never {
@@ -168,6 +225,16 @@ class TestGmailAgentWorker extends GmailAgentWorker {
 
   protected override createChannelClient() {
     return {
+      subscribe: async () => ({
+        ok: true,
+        channelConfig: undefined,
+        envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
+      }),
+      unsubscribe: async (participantId: string) => {
+        this.unsubscribed.push(participantId);
+      },
+      getConfig: async () => null,
+      getParticipants: async () => [],
       getReplayAfter: async (cursor: number) => ({
         mode: "after",
         logEvents: this.replayEvents.filter((event) => event.id > cursor),
@@ -237,15 +304,15 @@ class TestGmailAgentWorker extends GmailAgentWorker {
   }
 
   prompt(channelId: string) {
-    return this.getRunnerPromptConfig(channelId);
+    return this.getAgentPrompt(channelId);
   }
 
   runnerTools(channelId = "ch-1") {
-    return this.getRunnerTools(channelId)?.map((tool) => tool.name) ?? [];
+    return this.getLoopTools(channelId).map((tool) => tool.name);
   }
 
   runnerTool(name: string, channelId = "ch-1") {
-    return this.getRunnerTools(channelId)?.find((tool) => tool.name === name);
+    return this.getLoopTools(channelId).find((tool) => tool.name === name);
   }
 
   participant() {
@@ -253,11 +320,7 @@ class TestGmailAgentWorker extends GmailAgentWorker {
   }
 
   model(channelId = "ch-1") {
-    return this.getModel(channelId);
-  }
-
-  runnerToolFilter() {
-    return this.getRunnerToolFilter("ch-1");
+    return this.getAgentSettings(channelId).model;
   }
 
   async debug(channelId = "ch-1") {
@@ -272,6 +335,12 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     return this.sql
       .exec(`SELECT * FROM gmail_channel_state WHERE channel_id = ?`, channelId)
       .toArray()[0];
+  }
+
+  subscriptionRows() {
+    return this.sql
+      .exec(`SELECT channel_id, participant_id FROM subscriptions ORDER BY channel_id`)
+      .toArray();
   }
 }
 
@@ -297,7 +366,7 @@ describe("GmailAgentWorker", () => {
     expect(worker.participant().methods?.map((method) => method.name)).toContain(
       "getAgentSettings"
     );
-    expect(worker.prompt("ch-1").systemPrompt).toContain("Gmail agent");
+    expect(worker.prompt("ch-1")).toContain("Gmail agent");
   });
 
   it("inherits model credential methods and honors configured model overrides", async () => {
@@ -327,13 +396,21 @@ describe("GmailAgentWorker", () => {
     ]);
   });
 
-  it("does not filter the runner tool roster", async () => {
+  it("does not expose attention-rule mutation as a loop tool", async () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
-    expect(worker.runnerToolFilter()).toBeNull();
     expect(worker.runnerTools()).not.toContain("gmail_upsertAttentionRule");
     expect(worker.runnerTools().filter((name) => name.includes("Attention"))).toEqual([]);
+  });
+
+  it("exposes universal turn-control loop tools alongside Gmail tools", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+
+    expect(worker.runnerTools()).toEqual(
+      expect.arrayContaining(["close_turn_without_response", "ask_user", "gmail_checkInbox"])
+    );
   });
 
   it("advertises strict Gmail runner tool schemas", async () => {
@@ -373,6 +450,91 @@ describe("GmailAgentWorker", () => {
       channel_id: "ch-1",
       credential_id: "google-cred-2",
     });
+  });
+
+  it("removes local subscription state when unsubscribing from a channel", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker);
+    const worker = instance as TestGmailAgentWorker;
+    worker.seedSubscription("ch-1", "agent-gmail");
+
+    await expect(worker.unsubscribeChannel("ch-1")).resolves.toEqual({ ok: true });
+
+    expect(worker.unsubscribed).toEqual(["agent-gmail"]);
+    expect(worker.subscriptionRows()).toEqual([]);
+  });
+
+  it("forks cloned agent state at genesis when no prior trajectory event was published", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker, { __objectKey: "agent-clone" });
+    const worker = instance as TestGmailAgentWorker;
+    worker.seedSubscription("old-channel", "agent-gmail");
+
+    await worker.postClone("parent-agent", "new-channel", "old-channel", 12);
+
+    const rawSql = worker.gadCalls.find((call) => call.method === "rawSql");
+    expect(rawSql?.args).toEqual([
+      expect.stringContaining("ch.origin_head = ?"),
+      [
+        "old-channel",
+        12,
+        ids.logIdForChannel("old-channel"),
+        ids.logIdForChannel("old-channel"),
+      ],
+    ]);
+    const forkLog = worker.gadCalls.find((call) => call.method === "forkLog");
+    expect(forkLog?.args[0]).toMatchObject({
+      fromLogId: ids.logIdForChannel("old-channel"),
+      toLogId: ids.logIdForChannel("new-channel"),
+      atSeq: 0,
+    });
+    expect(worker.subscriptionRows()).toEqual([
+      { channel_id: "new-channel", participant_id: "do:unknown:unknown:agent-clone" },
+    ]);
+  });
+
+  it("continues Gmail UI registration when renderer source files are transiently unreadable", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker, {
+      WORKERD_SESSION_ID: "test-session",
+      WORKERD_BOOT_GENERATION: "1",
+    });
+    const worker = instance as TestGmailAgentWorker;
+    worker.unreadableRendererSources = true;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      await expect(
+        worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1", replay: false })
+      ).resolves.toMatchObject({ ok: true });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("renderer lint skipped"));
+    } finally {
+      warn.mockRestore();
+    }
+
+    expect(worker.published.map((entry) => entry.event.kind)).toEqual([
+      "messageType.registered",
+      "messageType.registered",
+      "messageType.registered",
+      "messageType.registered",
+      "ui.action_bar.updated",
+      "custom.started",
+    ]);
+  });
+
+  it("blocks Gmail UI registration when renderer lint finds unsupported imports", async () => {
+    const { instance } = await createTestDO(TestGmailAgentWorker, {
+      WORKERD_SESSION_ID: "test-session",
+      WORKERD_BOOT_GENERATION: "1",
+    });
+    const worker = instance as TestGmailAgentWorker;
+    worker.rendererSourceOverrides.set(
+      GMAIL_MESSAGE_TYPES[0]!.path,
+      `import lodash from "lodash";\nexport default function GmailSetup() { return null; }\n`
+    );
+
+    await expect(
+      worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1", replay: false })
+    ).rejects.toThrow(/Gmail renderer registration blocked:[\s\S]*Value import "lodash"/);
+
+    expect(worker.published).toEqual([]);
   });
 
   it("starts first-run setup when subscribed in an unconfigured state", async () => {
@@ -502,7 +664,7 @@ describe("GmailAgentWorker", () => {
     worker.rpcCall.mockImplementation(async (...args: unknown[]) => {
       const method = args[1];
       if (method === "credentials.resolveCredential") return null;
-      return { id: "cred-1" };
+      throw new Error(`unexpected rpc method ${String(method)}`);
     });
 
     const result = await worker.onMethodCall("ch-1", "call-1", "draftReply", { threadId: "thr-1" });
@@ -521,9 +683,8 @@ describe("GmailAgentWorker", () => {
         resumeAfterConnect: false,
       }),
     });
-    expect(
-      ((await worker.debug())["persisted"] as { suspensions?: unknown[] }).suspensions
-    ).toEqual([]);
+    // one-shot flows never park anything: the dispatch cache stays empty
+    expect((await worker.debug())["outbox"]).toEqual([]);
   });
 
   it("fetches sanitized thread contents for renderer expansion", async () => {

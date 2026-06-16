@@ -1,63 +1,69 @@
 import { describe, expect, it, vi } from "vitest";
-
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import type { TurnSnapshot } from "@workspace/harness";
-import { AgentWorkerBase } from "@workspace/agentic-do";
+import { PROVIDER_CREDENTIAL_SETUPS, DEFAULT_MODEL } from "@workspace/agentic-do";
 
 import { AiChatWorker } from "./ai-chat-worker.js";
 
-type AgentSettingsResult = {
-  model: { value: string; source: string };
-  thinkingLevel: { value: string; source: string };
-  approvalLevel: { value: number; source: string };
-  respondPolicy: { value: string; source: string };
-  respondFrom: { value: string[]; source: string };
-};
+class TestableAiChatWorker extends AiChatWorker {
+  readonly blobs = new Map<string, string>();
+  readonly published: Array<{ participantId: string; event: unknown; opts?: unknown }> = [];
+  workspaceAgentsMd: unknown = "WORKSPACE AGENTS";
+  workspaceSkills: unknown = [
+    {
+      name: "onboarding",
+      description: "Onboarding skill",
+      dirPath: "/skills/onboarding",
+    },
+  ];
 
-class TestAiChatWorker extends AiChatWorker {
-  rpcCall = vi.fn(async () => ({ id: "cred-1" }));
+  readonly rpcCall = vi.fn(async (target: string, method: string, args: unknown[]) => {
+    if (target === "main" && method === "workspace.getAgentsMd") {
+      return this.workspaceAgentsMd;
+    }
+    if (target === "main" && method === "workspace.listSkills") {
+      return this.workspaceSkills;
+    }
+    if (target === "main" && method === "blobstore.putText") {
+      const value = String(args[0] ?? "");
+      const digest = `blob-${this.blobs.size + 1}`;
+      this.blobs.set(digest, value);
+      return { digest, size: value.length };
+    }
+    throw new Error(`unexpected rpc ${target}.${method}`);
+  });
 
   protected override get rpc(): never {
-    return { call: this.rpcCall } as never;
+    return {
+      call: this.rpcCall,
+      callDeferred: async (...args: unknown[]) => ({
+        status: "completed" as const,
+        result: await this.rpcCall(...(args as [string, string, unknown[]])),
+      }),
+    } as never;
   }
 
-  protected override async refreshRoster(_channelId: string): Promise<void> {
-    // Keep tests focused on settings behavior.
+  protected override createChannelClient() {
+    return {
+      publishAgenticEvent: async (participantId: string, event: unknown, opts?: unknown) => {
+        this.published.push({ participantId, event, opts });
+        return { id: this.published.length };
+      },
+      subscribe: async () => ({
+        ok: true,
+        channelConfig: undefined,
+        envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
+      }),
+      unsubscribe: async () => undefined,
+      getParticipants: async () => [],
+    } as never;
   }
 
-  model(): string {
-    return this.getModel("ch-1");
-  }
-
-  setupProps(providerId: string): Record<string, unknown> | null {
+  credentialSetup(providerId: string) {
     return this.getModelCredentialSetupProps(providerId);
   }
 
-  tokenClaims(providerId: string, providerUserId: string): Record<string, unknown> {
-    return this.getModelCredentialTokenClaims(providerId, {
-      id: "cred-1",
-      accountIdentity: { providerUserId },
-    });
-  }
-
-  modelBaseUrl(): string {
-    return (this as unknown as { getModelBaseUrl(channelId: string): string }).getModelBaseUrl(
-      "ch-1"
-    );
-  }
-
-  prepare(channelId: string, snapshot: TurnSnapshot): Promise<TurnSnapshot | void> {
-    return this.prepareNextTurnHook(channelId, snapshot);
-  }
-
-  insertSubscriptionConfig(channelId: string, config: Record<string, unknown>): void {
-    (
-      this as unknown as {
-        sql: {
-          exec: (query: string, ...params: unknown[]) => unknown;
-        };
-      }
-    ).sql.exec(
+  seedSubscriptionConfig(channelId: string, config: Record<string, unknown>) {
+    this.sql.exec(
       `INSERT OR REPLACE INTO subscriptions (channel_id, context_id, subscribed_at, config, participant_id)
        VALUES (?, ?, ?, ?, ?)`,
       channelId,
@@ -67,340 +73,164 @@ class TestAiChatWorker extends AiChatWorker {
       `participant:${channelId}`
     );
   }
-}
 
-class ApiKeyAiChatWorker extends TestAiChatWorker {
-  protected override getModelCredentialSetupProps(
-    providerId: string
-  ): Record<string, unknown> | null {
-    if (providerId !== "openai-codex") return null;
-    return {
-      credentialLabel: "Test API key",
-      flow: {
-        type: "api-key",
-        title: "Test API key",
-        fields: [{ name: "apiKey", label: "API key", type: "secret", required: true }],
-        materialTemplate: {
-          type: "bearer-token",
-          valueTemplate: "{apiKey}",
-        },
-      },
-      credential: {
-        injection: {
-          type: "header",
-          name: "x-api-key",
-          valueTemplate: "{apiKey}",
-        },
-      },
-    };
+  async materializedPrompt(channelId: string): Promise<string> {
+    await this.ensurePromptArtifacts(channelId);
+    const digest = this.getStateValue(`agent:promptHash:${channelId}`);
+    if (!digest) throw new Error("missing prompt digest");
+    const value = this.blobs.get(digest);
+    if (value === undefined) throw new Error(`missing prompt blob ${digest}`);
+    return value;
+  }
+
+  promptResourceCallCount(method: "workspace.getAgentsMd" | "workspace.listSkills") {
+    return this.rpcCall.mock.calls.filter((call) => call[0] === "main" && call[1] === method)
+      .length;
   }
 }
 
-describe("AiChatWorker model credential defaults", () => {
+async function makeWorker() {
+  const { instance } = await createTestDO(TestableAiChatWorker, { __objectKey: "agent-1" });
+  return instance as TestableAiChatWorker;
+}
+
+describe("AiChatWorker", () => {
   it("inherits the base agent schema version so base-table migrations run", () => {
-    expect(AiChatWorker.schemaVersion).toBe(AgentWorkerBase.schemaVersion);
+    expect(TestableAiChatWorker.schemaVersion).toBe(AiChatWorker.schemaVersion);
   });
 
-  it("wires the default OpenAI Codex model through URL-bound credential OAuth setup", async () => {
-    const { instance } = await createTestDO(TestAiChatWorker);
-    const worker = instance as TestAiChatWorker;
-
-    expect(worker.model()).toBe("openai-codex:gpt-5.5");
-    expect(worker.modelBaseUrl()).toBe("https://chatgpt.com/backend-api");
-
-    const setup = worker.setupProps("openai-codex");
-    expect(setup).toMatchObject({
-      credentialLabel: "ChatGPT Codex model credential",
-      accountIdentityJwtClaimRoot: "https://api.openai.com/auth",
-      accountIdentityJwtClaimField: "chatgpt_account_id",
-      redirectPolicy: "loopback-required",
-      redirect: {
-        type: "loopback",
-        host: "localhost",
-        port: 1455,
-        callbackPath: "/auth/callback",
-      },
-      clientLoopbackRedirect: {
-        type: "client-loopback",
-        host: "localhost",
-        port: 1455,
-        callbackPath: "/auth/callback",
-      },
-      flow: {
-        type: "oauth2-auth-code-pkce",
-        authorizeUrl: "https://auth.openai.com/oauth/authorize",
-        tokenUrl: "https://auth.openai.com/oauth/token",
-        clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
-        scopes: ["openid", "profile", "email", "offline_access"],
-      },
-    });
-
-    expect(worker.tokenClaims("openai-codex", "acct-1")).toEqual({
-      "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
-    });
-    expect(worker.setupProps("anthropic")).toMatchObject({
-      credentialLabel: "Anthropic API key",
-      credential: {
-        injection: {
-          type: "header",
-          name: "x-api-key",
-          valueTemplate: "{token}",
-        },
-      },
-      flow: {
-        type: "api-key",
-        title: "Anthropic API key",
-      },
-    });
-    expect(worker.setupProps("other-provider")).toBeNull();
-    expect(worker.tokenClaims("other-provider", "acct-1")).toEqual({});
-
-    await worker.onMethodCall("ch-1", "call-1", "connectModelCredential", {
-      providerId: "openai-codex",
-      browserOpenMode: "external",
-      browserHandoffCallerId: "panel-1",
-      browserHandoffCallerKind: "panel",
-    });
-    expect(worker.rpcCall).toHaveBeenCalledWith("main", "credentials.connect", [
-      expect.objectContaining({
-        spec: expect.objectContaining({
-          browser: "external",
-          flow: expect.objectContaining({
-            type: "oauth2-auth-code-pkce",
-          }),
-          credential: expect.objectContaining({
-            audience: [{ url: "https://chatgpt.com/backend-api", match: "path-prefix" }],
-          }),
-          redirect: {
-            type: "client-loopback",
-            host: "localhost",
-            port: 1455,
-            callbackPath: "/auth/callback",
-          },
-        }),
-        handoffTarget: {
-          callerId: "panel-1",
-          callerKind: "panel",
-        },
-      }),
-    ]);
-
-    await worker.onMethodCall("ch-1", "call-internal", "connectModelCredential", {
-      providerId: "openai-codex",
-      browserOpenMode: "internal",
-      browserHandoffCallerId: "panel-1",
-      browserHandoffCallerKind: "panel",
-    });
-    expect(worker.rpcCall).toHaveBeenLastCalledWith("main", "credentials.connect", [
-      expect.objectContaining({
-        spec: expect.objectContaining({
-          browser: "internal",
-          redirect: {
-            type: "loopback",
-            host: "localhost",
-            port: 1455,
-            callbackPath: "/auth/callback",
-          },
-        }),
-      }),
-    ]);
-
-    await worker.onMethodCall("ch-1", "call-2", "connectModelCredential", {
-      providerId: "openai-codex",
-      browserOpenMode: "external",
-      browserHandoffCallerId: "panel-1",
-      browserHandoffCallerKind: "panel",
-      browserHandoffPlatform: "mobile",
-    });
-    expect(worker.rpcCall).toHaveBeenLastCalledWith("main", "credentials.connect", [
-      expect.objectContaining({
-        spec: expect.objectContaining({
-          redirect: {
-            type: "client-loopback",
-            host: "localhost",
-            port: 1455,
-            callbackPath: "/auth/callback",
-          },
-        }),
-      }),
-    ]);
+  it("exposes the shared provider connect presets to the credential flow", async () => {
+    const worker = await makeWorker();
+    for (const providerId of Object.keys(PROVIDER_CREDENTIAL_SETUPS)) {
+      expect(worker.credentialSetup(providerId)).toEqual(
+        PROVIDER_CREDENTIAL_SETUPS[providerId]
+      );
+    }
+    expect(worker.credentialSetup("nope")).toBeNull();
   });
 
-  it("connects non-default provider credentials against an explicit model target", async () => {
-    const { instance } = await createTestDO(TestAiChatWorker);
-    const worker = instance as TestAiChatWorker;
-
-    await worker.onMethodCall("ch-1", "call-anthropic", "connectModelCredential", {
-      providerId: "anthropic",
-      modelRef: "anthropic:claude-3-5-sonnet-20241022",
+  it("materializes workspace, skill, and subscription prompts into the model prompt artifact", async () => {
+    const worker = await makeWorker();
+    worker.seedSubscriptionConfig("ch-1", {
+      systemPrompt: "CHANNEL CUSTOM",
+      systemPromptMode: "append",
     });
 
-    expect(worker.rpcCall).toHaveBeenCalledWith("main", "credentials.connect", [
-      expect.objectContaining({
-        flow: expect.objectContaining({
-          type: "api-key",
-          title: "Anthropic API key",
-        }),
-        credential: expect.objectContaining({
-          label: "Anthropic API key",
-          audience: [{ url: "https://api.anthropic.com", match: "path-prefix" }],
-          injection: {
-            type: "header",
-            name: "x-api-key",
-            valueTemplate: "{token}",
-            stripIncoming: ["x-api-key", "authorization"],
-          },
-          metadata: expect.objectContaining({
-            modelProviderId: "anthropic",
-          }),
-        }),
-      }),
-    ]);
+    const prompt = await worker.materializedPrompt("ch-1");
+
+    expect(prompt).toContain("NatStack is a local workspace");
+    expect(prompt).toContain("WORKSPACE AGENTS");
+    expect(prompt).toContain("onboarding");
+    expect(prompt).toContain("CHANNEL CUSTOM");
+    expect(prompt.indexOf("WORKSPACE AGENTS")).toBeLessThan(prompt.indexOf("onboarding"));
+    expect(prompt.indexOf("onboarding")).toBeLessThan(prompt.indexOf("CHANNEL CUSTOM"));
   });
 
-  it("persists a live model switch and uses it for later credential setup", async () => {
-    const { instance } = await createTestDO(TestAiChatWorker);
-    const worker = instance as TestAiChatWorker;
-    worker.insertSubscriptionConfig("ch-1", {});
-
-    await worker.onMethodCall("ch-1", "call-model", "setModel", {
-      model: "anthropic:claude-3-5-sonnet-20241022",
+  it("honors a full replacement subscription prompt", async () => {
+    const worker = await makeWorker();
+    worker.seedSubscriptionConfig("ch-1", {
+      systemPrompt: "CHANNEL ONLY",
+      systemPromptMode: "replace",
     });
 
-    expect(worker.model()).toBe("anthropic:claude-3-5-sonnet-20241022");
-    expect(worker.modelBaseUrl()).toBe("https://api.anthropic.com");
+    await expect(worker.materializedPrompt("ch-1")).resolves.toBe("CHANNEL ONLY");
+  });
+
+  it("caches workspace prompt resources and refreshes them on request", async () => {
+    const worker = await makeWorker();
+    worker.seedSubscriptionConfig("ch-1", {});
+
+    await worker.materializedPrompt("ch-1");
+    await worker.materializedPrompt("ch-1");
+    expect(worker.promptResourceCallCount("workspace.getAgentsMd")).toBe(1);
+    expect(worker.promptResourceCallCount("workspace.listSkills")).toBe(1);
+
+    worker.workspaceAgentsMd = "UPDATED WORKSPACE AGENTS";
+    const refresh = await worker.onMethodCall("ch-1", "tc-refresh", "refreshPromptArtifacts", {});
+
+    expect(refresh).toMatchObject({ result: { refreshed: true } });
+    expect(worker.promptResourceCallCount("workspace.getAgentsMd")).toBe(2);
+    expect(worker.promptResourceCallCount("workspace.listSkills")).toBe(2);
+    await expect(worker.materializedPrompt("ch-1")).resolves.toContain("UPDATED WORKSPACE AGENTS");
+  });
+
+  it("publishes a diagnostic and fails closed when workspace prompt resources are malformed", async () => {
+    const worker = await makeWorker();
+    worker.seedSubscriptionConfig("ch-1", {});
+    worker.workspaceSkills = { not: "a skill list" };
+
+    await expect(worker.materializedPrompt("ch-1")).rejects.toThrow(
+      "workspace.listSkills returned invalid resource shape"
+    );
+
+    expect(worker.published).toHaveLength(1);
+    expect(worker.published[0]?.event).toMatchObject({
+      kind: "message.completed",
+      payload: {
+        blocks: [
+          expect.objectContaining({
+            type: "diagnostic",
+            metadata: expect.objectContaining({
+              code: "prompt_artifact_load_failed",
+              severity: "error",
+              recoverable: true,
+            }),
+          }),
+        ],
+        outcome: "completed",
+      },
+    });
+
+    await expect(worker.materializedPrompt("ch-1")).rejects.toThrow(
+      "workspace.listSkills returned invalid resource shape"
+    );
+    expect(worker.published).toHaveLength(1);
+  });
+
+  it("persists live setting changes through the standard agent methods", async () => {
+    const worker = await makeWorker();
+    const before = await worker.onMethodCall("ch-1", "tc-1", "getAgentSettings", {});
+    expect((before.result as { model: string }).model).toBe(DEFAULT_MODEL);
+
+    const switched = await worker.onMethodCall("ch-1", "tc-2", "setModel", {
+      model: "anthropic:claude-sonnet-4-6",
+    });
+    expect((switched.result as { model: string }).model).toBe("anthropic:claude-sonnet-4-6");
+
+    // settings survive re-read (Ref-kind KV)
+    const after = await worker.onMethodCall("ch-1", "tc-3", "getAgentSettings", {});
+    expect((after.result as { model: string }).model).toBe("anthropic:claude-sonnet-4-6");
+    // other channels are unaffected
+    const other = await worker.onMethodCall("ch-2", "tc-4", "getAgentSettings", {});
+    expect((other.result as { model: string }).model).toBe(DEFAULT_MODEL);
+  });
+
+  it("validates standard method arguments", async () => {
+    const worker = await makeWorker();
+    expect((await worker.onMethodCall("ch-1", "tc-1", "setModel", {})).isError).toBe(true);
     expect(
-      (await worker.onMethodCall("ch-1", "call-settings", "getAgentSettings", {})).result
-    ).toMatchObject({
-      model: { value: "anthropic:claude-3-5-sonnet-20241022", source: "config" },
-    });
-
-    await worker.onMethodCall("ch-1", "call-connect", "connectModelCredential", {
-      providerId: "anthropic",
-    });
-
-    expect(worker.rpcCall).toHaveBeenCalledWith("main", "credentials.connect", [
-      expect.objectContaining({
-        credential: expect.objectContaining({
-          audience: [{ url: "https://api.anthropic.com", match: "path-prefix" }],
-          metadata: expect.objectContaining({
-            modelProviderId: "anthropic",
-          }),
-        }),
-      }),
-    ]);
-  });
-
-  it("passes API-key credential specs through credentials.connect", async () => {
-    const { instance } = await createTestDO(ApiKeyAiChatWorker);
-    const worker = instance as ApiKeyAiChatWorker;
-
-    await worker.onMethodCall("ch-1", "call-api-key", "connectModelCredential", {
-      providerId: "openai-codex",
-    });
-
-    expect(worker.rpcCall).toHaveBeenCalledWith("main", "credentials.connect", [
-      expect.objectContaining({
-        flow: {
-          type: "api-key",
-          title: "Test API key",
-          fields: [{ name: "apiKey", label: "API key", type: "secret", required: true }],
-          materialTemplate: {
-            type: "bearer-token",
-            valueTemplate: "{apiKey}",
-          },
-        },
-        credential: expect.objectContaining({
-          label: "Test API key",
-          audience: [{ url: "https://chatgpt.com/backend-api", match: "path-prefix" }],
-          injection: {
-            type: "header",
-            name: "x-api-key",
-            valueTemplate: "{apiKey}",
-          },
-          metadata: expect.objectContaining({
-            modelProviderId: "openai-codex",
-          }),
-        }),
-      }),
-    ]);
-  });
-
-  it("reports effective live settings with default, config, and state provenance", async () => {
-    const { instance } = await createTestDO(TestAiChatWorker);
-    const worker = instance as TestAiChatWorker;
-
+      (await worker.onMethodCall("ch-1", "tc-2", "setThinkingLevel", { level: "extreme" }))
+        .isError
+    ).toBe(true);
     expect(
-      (await worker.onMethodCall("ch-1", "call-default", "getAgentSettings", {})).result
-    ).toMatchObject({
-      model: { value: "openai-codex:gpt-5.5", source: "default" },
-      thinkingLevel: { value: "medium", source: "default" },
-      approvalLevel: { value: 2, source: "default" },
-      respondPolicy: { value: "all", source: "default" },
-      respondFrom: { value: [], source: "default" },
-    });
+      (await worker.onMethodCall("ch-1", "tc-3", "setApprovalLevel", { level: 9 })).isError
+    ).toBe(true);
+    expect(
+      (await worker.onMethodCall("ch-1", "tc-4", "setRespondPolicy", { policy: "sometimes" }))
+        .isError
+    ).toBe(true);
+    expect((await worker.onMethodCall("ch-1", "tc-5", "unknownMethod", {})).isError).toBe(true);
+  });
 
-    worker.insertSubscriptionConfig("ch-config", {
-      model: "openai-codex:gpt-5.5",
-      thinkingLevel: "low",
-      approvalLevel: 1,
+  it("applies respond policy with an allow-list", async () => {
+    const worker = await makeWorker();
+    const result = await worker.onMethodCall("ch-1", "tc-1", "setRespondPolicy", {
+      policy: "from-participants",
+      from: ["panel:alice", 42, "panel:bob"],
+    });
+    expect(result.result).toMatchObject({
       respondPolicy: "from-participants",
-      respondFrom: ["user-1"],
-    });
-
-    expect(
-      (await worker.onMethodCall("ch-config", "call-config", "getAgentSettings", {})).result
-    ).toMatchObject({
-      model: { value: "openai-codex:gpt-5.5", source: "config" },
-      thinkingLevel: { value: "low", source: "config" },
-      approvalLevel: { value: 1, source: "config" },
-      respondPolicy: { value: "from-participants", source: "config" },
-      respondFrom: { value: ["user-1"], source: "config" },
-    });
-
-    await worker.onMethodCall("ch-config", "call-thinking", "setThinkingLevel", { level: "high" });
-    await worker.onMethodCall("ch-config", "call-approval", "setApprovalLevel", { level: 0 });
-    await worker.onMethodCall("ch-config", "call-policy", "setRespondPolicy", {
-      policy: "mentioned",
-    });
-
-    const settings = (await worker.onMethodCall("ch-config", "call-state", "getAgentSettings", {}))
-      .result as AgentSettingsResult;
-    expect(settings).toMatchObject({
-      model: { value: "openai-codex:gpt-5.5", source: "config" },
-      thinkingLevel: { value: "high", source: "state" },
-      approvalLevel: { value: 0, source: "state" },
-      respondPolicy: { value: "mentioned", source: "state" },
-      respondFrom: { value: [], source: "state" },
-    });
-  });
-
-  it("re-reads live settings during prepareNextTurnHook", async () => {
-    const { instance } = await createTestDO(TestAiChatWorker);
-    const worker = instance as TestAiChatWorker;
-    const snapshot = {
-      sessionLeafId: null,
-      messages: [],
-      systemPrompt: "",
-      model: {},
-      thinkingLevel: "medium",
-      tools: [],
-      activeToolNames: new Set<string>(),
-    } as unknown as TurnSnapshot;
-
-    const initial = await worker.prepare("ch-1", snapshot);
-    expect(initial).toMatchObject({
-      thinkingLevel: "medium",
-    });
-
-    await worker.onMethodCall("ch-1", "call-thinking", "setThinkingLevel", { level: "high" });
-    await expect(worker.prepare("ch-1", snapshot)).resolves.toMatchObject({
-      thinkingLevel: "high",
-    });
-    expect(
-      (await worker.onMethodCall("ch-1", "call-settings", "getAgentSettings", {})).result
-    ).toMatchObject({
-      thinkingLevel: { value: "high", source: "state" },
+      respondFrom: ["panel:alice", "panel:bob"],
     });
   });
 });

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import type { PiRunnerOptions } from "@workspace/harness";
+import type { StepPolicy } from "@workspace/agent-loop";
 
 import { SilentAgentWorker } from "./index.js";
 
 class TestSilentAgentWorker extends SilentAgentWorker {
-  makeRunner(opts: PiRunnerOptions) {
-    return this.createRunner("ch-1", opts);
+  policies(): StepPolicy[] {
+    return this.getStepPolicies("ch-1");
   }
 }
 
@@ -14,28 +14,20 @@ describe("SilentAgentWorker", () => {
   it("publishes turn state while suppressing normal trajectory chatter", async () => {
     const { instance } = await createTestDO(TestSilentAgentWorker);
     const worker = instance as TestSilentAgentWorker;
-    const runner = worker.makeRunner({} as PiRunnerOptions) as unknown as {
-      options: Required<Pick<PiRunnerOptions, "publicationPolicy">>;
-    };
-    const policy = runner.options.publicationPolicy;
+    const policies = worker.policies();
+    const silent = policies.find((policy) => policy.name === "silent");
+    expect(silent).toBeDefined();
 
-    expect(
-      policy?.({
-        event: { kind: "turn.opened" } as never,
-        publishToChannel: true,
-      })
-    ).toBe(true);
-    expect(
-      policy?.({
-        event: { kind: "turn.closed" } as never,
-        publishToChannel: true,
-      })
-    ).toBe(true);
-    expect(
-      policy?.({
-        event: { kind: "message.completed" } as never,
-        publishToChannel: true,
-      })
-    ).toBe(false);
+    const items = [
+      { envelopeId: "a", payloadKind: "turn.opened" as const, payload: {}, publish: true },
+      { envelopeId: "b", payloadKind: "message.completed" as const, payload: {}, publish: true },
+      { envelopeId: "c", payloadKind: "turn.closed" as const, payload: {}, publish: true },
+    ];
+    const filtered = silent!.transformAppend!({ state: {} as never, items });
+    expect(filtered.map((item) => [item.payloadKind, item.publish])).toEqual([
+      ["turn.opened", true],
+      ["message.completed", false],
+      ["turn.closed", true],
+    ]);
   });
 });

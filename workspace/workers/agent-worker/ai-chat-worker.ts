@@ -17,7 +17,7 @@ function asChatAgentConfig(config: unknown): ChatAgentConfig {
 /**
  * AiChatWorker — The default AI chat Durable Object.
  *
- * Pi-native: embeds `@earendil-works/pi-agent-core`'s `Agent` in-process via
+ * Pi-native: embeds `@workspace/pi-core`'s `Agent` in-process via
  * the `PiRunner` harness (see `AgentWorkerBase`). The system prompt is
  * loaded from `meta/AGENTS.md` via the workspace.* RPC service;
  * skill metadata is merged in from each skill's SKILL.md.

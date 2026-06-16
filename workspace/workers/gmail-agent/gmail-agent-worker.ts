@@ -18,8 +18,8 @@ import {
   reduce as reduceGmailThread,
   type GmailThreadState,
 } from "@workspace/gmail/renderers/gmail-thread.reducer";
-import type { PiRunnerOptions } from "@workspace/harness";
 import type { ParticipantDescriptor } from "@workspace/harness";
+import type { AgentTool } from "@workspace/pi-core";
 
 import { createGmailTables, dropGmailTables } from "./schema.js";
 import {
@@ -56,8 +56,12 @@ const GMAIL_UI_IMPORTS = {
   "@radix-ui/themes": "npm:^3.2.1",
   "@radix-ui/react-icons": "npm:^1.3.2",
 } satisfies Record<string, string>;
+const GMAIL_UNIVERSAL_LOOP_TOOL_NAMES = new Set([
+  "close_turn_without_response",
+  "ask_user",
+]);
 
-type GmailTool = NonNullable<PiRunnerOptions["extraTools"]>[number];
+type GmailTool = AgentTool;
 
 export class GmailAgentWorker extends AgentWorkerBase {
   // Gmail tables are versioned by drop-and-recreate (see schema.ts); bump
@@ -233,25 +237,23 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return "mentioned-or-followup";
   }
 
-  protected override getRunnerPromptConfig(_channelId: string): {
-    systemPrompt?: string;
-    systemPromptMode?: "replace";
-  } {
-    return { systemPromptMode: "replace", systemPrompt: GMAIL_SYSTEM_PROMPT };
+  protected override getAgentPrompt(_channelId: string): string {
+    return GMAIL_SYSTEM_PROMPT;
   }
 
   protected async generateDraftReplyBody(channelId: string, thread: GmailThread): Promise<string> {
     return generateDraftReplyBodyLlm({
-      modelRef: this.getModel(channelId),
-      apiKey: await this.getApiKeyForChannel(channelId, {
-        resumeCurrentTurnOnMissingCredential: false,
-      })(),
+      modelRef: this.getAgentSettings(channelId).model,
+      apiKey: await this.resolveModelApiKey(channelId),
       thread,
     });
   }
 
-  protected override getRunnerTools(channelId: string): PiRunnerOptions["extraTools"] {
-    return GMAIL_TOOLS.map(
+  protected override getLoopTools(channelId: string): AgentTool[] {
+    const universalTools = super
+      .getLoopTools(channelId)
+      .filter((tool) => GMAIL_UNIVERSAL_LOOP_TOOL_NAMES.has(tool.name));
+    const gmailTools = GMAIL_TOOLS.map(
       (spec) =>
         ({
           name: spec.name,
@@ -267,6 +269,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
           },
         }) as GmailTool
     );
+    return [...universalTools, ...gmailTools];
   }
 
   protected override getParticipantInfo(
@@ -672,13 +675,16 @@ export class GmailAgentWorker extends AgentWorkerBase {
             : raw instanceof Uint8Array
               ? new TextDecoder().decode(raw)
               : null;
-      } catch {
-        /* fall through */
+      } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
+        console.warn(`[GmailAgentWorker] renderer lint skipped (unreadable): ${path}: ${reason}`);
+        continue;
       }
       if (code === null) {
-        // Can't lint what we can't read — a transient fs problem must not
-        // block UI install (the panel reads the file itself at compile time).
-        console.warn(`[GmailAgentWorker] renderer lint skipped (unreadable): ${path}`);
+        const reason = "fs.readFile did not return text";
+        console.warn(
+          `[GmailAgentWorker] renderer lint skipped (unreadable): ${path}: ${reason}`
+        );
         continue;
       }
       for (const issue of lintRendererSource(code, { imports: GMAIL_UI_IMPORTS })) {

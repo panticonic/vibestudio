@@ -1,7 +1,7 @@
 import { AiChatWorker } from "../agent-worker/ai-chat-worker.js";
-import type { AgentTool, PiRunnerOptions } from "@workspace/harness";
-import { PiRunner } from "@workspace/harness";
 import type { ParticipantDescriptor } from "@workspace/harness";
+import type { AgentTool } from "@workspace/pi-core";
+import { defaultPolicies, silentPolicy, type StepPolicy } from "@workspace/agent-loop";
 
 type SilentAgentConfig = {
   handle?: string;
@@ -34,21 +34,18 @@ export class SilentAgentWorker extends AiChatWorker {
     };
   }
 
-  protected override createRunner(channelId: string, opts: PiRunnerOptions): PiRunner {
-    const allowedTools = asSilentAgentConfig(this.subscriptions.getConfig(channelId)).allowedTools;
-    const allowed = Array.isArray(allowedTools)
-      ? new Set([...allowedTools.filter((tool): tool is string => typeof tool === "string"), "say"])
-      : null;
-    return new PiRunner({
-      ...opts,
-      publicationPolicy: ({ event, publishToChannel }) =>
-        Boolean(publishToChannel) && (event.kind === "turn.opened" || event.kind === "turn.closed"),
-      extraTools: [...(opts.extraTools ?? []), this.createSayTool(channelId)],
-      toolFilter: (toolName) => {
-        if (opts.toolFilter && !opts.toolFilter(toolName)) return false;
-        return allowed ? allowed.has(toolName) : true;
-      },
-    });
+  /** Silent agents publish only turn boundaries; speaking is an explicit
+   *  `say` tool call (a declarative step policy, not a runner wrapper). */
+  protected override getStepPolicies(_channelId: string): StepPolicy[] {
+    return [...defaultPolicies(), silentPolicy()];
+  }
+
+  protected override getLoopTools(channelId: string): AgentTool[] {
+    const cfg = asSilentAgentConfig(this.subscriptions.getConfig(channelId));
+    const tools = [...super.getLoopTools(channelId), this.createSayTool(channelId)];
+    if (!cfg.allowedTools || cfg.allowedTools.length === 0) return tools;
+    const allowed = new Set([...cfg.allowedTools, "say"]);
+    return tools.filter((tool) => allowed.has(tool.name));
   }
 
   private createSayTool(channelId: string): AgentTool<any> {

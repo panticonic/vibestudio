@@ -306,7 +306,6 @@ The base class creates these tables on initialization:
 |-------|---------|
 | `state` | Key-value store (schema version, custom state) |
 | `subscriptions` | Channel subscriptions with config + participant ID |
-| `delivery_cursor` | Last-processed event ID per channel (dedup + gap detection) |
 
 ### Helper Methods
 

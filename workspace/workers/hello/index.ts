@@ -18,7 +18,7 @@ export default {
     const url = new URL(request.url);
 
     if (url.pathname === "/tree") {
-      const tree = await runtime.getWorkspaceTree();
+      const tree = await runtime.workspace.sourceTree();
       return new Response(JSON.stringify(tree, null, 2), {
         headers: { "Content-Type": "application/json" },
       });
