@@ -17,12 +17,11 @@
  */
 
 import { connectViaRpc, type PubSubClient } from "@workspace/pubsub";
-import { rpc, recoveryCoordinator, setStateArgs } from "@workspace/runtime";
+import { rpc, recoveryCoordinator, setStateArgs, slotId } from "@workspace/runtime";
 import type { ChatParticipantMetadata } from "@workspace/agentic-core";
 import type { Store } from "./store";
-import { visibleRoster, type ChannelMessage, type RosterAgent, type SpectroliteState } from "./state";
+import type { ChannelMessage, RosterAgent, SpectroliteState } from "./state";
 import { createEvalRuntime, type EvalRuntime } from "./evalTool";
-import { PANEL_HANDLE } from "./editorController";
 import {
   createAndSubscribeAgent,
   getChannelDOParticipants,
@@ -43,6 +42,9 @@ const DEFAULT_CLASS_NAME = "SilentAgentWorker";
 const DEFAULT_HANDLE = "scribe";
 
 const MAX_MESSAGES = 50;
+
+/** Spectrolite's own participant handle on the channel. */
+export const PANEL_HANDLE = "spectrolite";
 
 const PANEL_METADATA = {
   name: "Spectrolite",
@@ -98,6 +100,17 @@ export class SessionController {
     return this.evalRuntime;
   }
 
+  /** Prefetch a doc's frontmatter dependencies into the sandbox module map
+   *  (so inline JSX + the agent's eval can resolve them). Best-effort. */
+  async prefetchDeps(deps: Record<string, string>): Promise<void> {
+    if (Object.keys(deps).length === 0) return;
+    try {
+      await this.evalRuntime?.prefetch(deps);
+    } catch (err) {
+      console.warn("[Spectrolite] dependency prefetch failed:", err);
+    }
+  }
+
   async start(): Promise<void> {
     if (this.started || this.disposed) return;
     this.started = true;
@@ -118,7 +131,7 @@ export class SessionController {
     this.evalRuntime = createEvalRuntime({
       channelName,
       contextId,
-      panelHandle: PANEL_HANDLE,
+      panelId: slotId,
       getClient: () => this.client,
       getDeps: () => this.hooks.getDepsForEval(),
     });
@@ -127,6 +140,7 @@ export class SessionController {
       rpc,
       channel: channelName,
       contextId,
+      clientId: slotId,
       metadata: PANEL_METADATA,
       methods: { eval: this.evalRuntime.evalTool },
       recoveryCoordinator,
@@ -165,17 +179,15 @@ export class SessionController {
     this.client = null;
   }
 
-  /** The user picked (or switched) a vault. */
+  /**
+   * The vault is bound (this panel runs under the vault's context). Ensure the
+   * resident scribe exists for this vault. Switching vault reopens the panel
+   * under a new context, so a single session only ever sees one vault.
+   */
   onVaultSelected(repoRoot: string): void {
-    const previous = this.agentVault;
-    if (previous === repoRoot) return;
+    if (this.agentVault === repoRoot) return;
+    this.agentVault = repoRoot;
     void this.ensureAgents();
-    if (previous === null) {
-      this.agentVault = repoRoot;
-      this.refreshCurrentNotice();
-      return;
-    }
-    this.notifyVaultSwitch(previous, repoRoot);
   }
 
   async send(content: string, options?: { mentions?: string[] }): Promise<void> {
@@ -367,76 +379,6 @@ export class SessionController {
         removedHandles: removedHandles.length === prev.removedHandles.length ? prev.removedHandles : removedHandles,
       };
     });
-    // A pending vault switch may have been waiting for agent handles.
-    const pending = this.pendingSwitch;
-    if (pending) {
-      this.pendingSwitch = null;
-      this.notifyVaultSwitch(pending.previous, pending.next);
-    } else {
-      this.refreshCurrentNotice();
-    }
-  }
-
-  private pendingSwitch: { previous: string; next: string } | null = null;
-
-  /** Keep the "Agents using <vault>" chip in sync once agents are live. */
-  private refreshCurrentNotice(): void {
-    const state = this.store.getState();
-    const repoRoot = state.repoRoot;
-    const roster = visibleRoster(state);
-    if (!repoRoot || roster.length === 0) return;
-    const prev = state.agentVaultNotice;
-    if (prev && prev.repoRoot === repoRoot && prev.state !== "failed") return;
-    this.store.setState({
-      agentVaultNotice: {
-        state: "current",
-        repoRoot,
-        handles: roster.map((agent) => agent.handle),
-        at: Date.now(),
-      },
-    });
-  }
-
-  /** Tell the resident agents their workspace root moved. */
-  private notifyVaultSwitch(previous: string, next: string): void {
-    const state = this.store.getState();
-    const client = this.client;
-    const roster = visibleRoster(state);
-    const handles = roster.length > 0
-      ? roster.map((agent) => agent.handle)
-      : state.installedAgents.slice(0, 1).map((agent) => agent.handle);
-    if (!client || handles.length === 0) {
-      // No one to tell yet — retry when the roster updates.
-      this.pendingSwitch = { previous, next };
-      return;
-    }
-    this.agentVault = next;
-    const mentions = [...new Set(handles)];
-    this.store.setState({ agentVaultNotice: { state: "pending", repoRoot: next, handles: mentions } });
-    const mentionText = mentions.map((handle) => `@${handle}`).join(" ");
-    const message = [
-      `${mentionText} System update: the user switched Spectrolite vaults.`,
-      `Previous vault: \`${previous}\``,
-      `Current vault: \`${next}\``,
-      `Use the current vault as the workspace root for future file reads, edits, and git commands.`,
-    ].join("\n");
-    void client.send(message, { mentions })
-      .then(() => {
-        this.store.setState({
-          agentVaultNotice: { state: "current", repoRoot: next, handles: mentions, at: Date.now() },
-        });
-      })
-      .catch((err) => {
-        console.warn("[Spectrolite] vault-switch update failed:", err);
-        this.store.setState({
-          agentVaultNotice: {
-            state: "failed",
-            repoRoot: next,
-            handles: mentions,
-            error: err instanceof Error ? err.message : String(err),
-          },
-        });
-      });
   }
 
   /** Stream completed chat messages into the store for the channel dock. */

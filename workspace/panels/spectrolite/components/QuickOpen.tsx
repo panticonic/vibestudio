@@ -105,7 +105,7 @@ export function QuickOpenDialog({ open, onOpenChange }: { open: boolean; onOpenC
   }, [query]);
 
   const openPath = (path: string) => {
-    app.editor.openFile(path);
+    app.openFile(path);
     onOpenChange(false);
   };
 

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { findBacklinks } from "./BacklinksPanel";
+import { findBacklinks } from "../state/backlinks";
 
 const roots: string[] = [];
 

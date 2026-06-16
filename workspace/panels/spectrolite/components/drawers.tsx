@@ -6,15 +6,13 @@
  * carries the stable testid + a Close button the e2e suite drives.
  */
 
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import { Box, Button, Dialog, Flex, Heading, IconButton, Separator, Text } from "@radix-ui/themes";
 import { ChevronRightIcon, Cross2Icon } from "@radix-ui/react-icons";
 import { useApp, useAppState } from "../app/context";
 import { FileTree } from "./FileTree";
 import { BacklinksPanel } from "./BacklinksPanel";
-import { BranchPicker } from "./BranchPicker";
 import { AgentRoster } from "./AgentRoster";
-import { AgentVaultStatus } from "./StatusChips";
 
 function VisuallyHidden({ children }: { children: ReactNode }) {
   return (
@@ -160,18 +158,45 @@ export function WorkspaceSettingsContent({ onSwitchVault }: { onSwitchVault: () 
 
       <Separator size="4" />
 
-      <Section title="Branch">
-        <BranchPicker />
+      <Section title="Publish">
+        <PublishSummary />
       </Section>
 
       <Separator size="4" />
 
       <Section title={`Agents (${rosterCount})`}>
-        <Flex direction="column" gap="2">
-          <AgentVaultStatus />
-          <AgentRoster />
-        </Flex>
+        <AgentRoster />
       </Section>
+    </Flex>
+  );
+}
+
+function PublishSummary() {
+  const app = useApp();
+  const snapshot = useSyncExternalStore(
+    (cb) => app.publish.subscribe(cb),
+    () => app.publish.getSnapshot(),
+    () => app.publish.getSnapshot(),
+  );
+  const count = snapshot.ahead;
+  return (
+    <Flex align="center" gap="2" justify="between" data-testid="spectrolite-vcs-head">
+      <Flex direction="column">
+        <Text size="2" weight="medium">
+          {count > 0 ? `${count} unpublished change${count === 1 ? "" : "s"}` : "Published"}
+        </Text>
+        <Text size="1" color="gray">Changes stay on this vault's head until you publish.</Text>
+      </Flex>
+      <Button
+        size="2"
+        variant={count > 0 ? "solid" : "soft"}
+        color={count > 0 ? "iris" : "gray"}
+        disabled={count === 0 || snapshot.publishing}
+        onClick={() => void app.publish.publish()}
+        data-testid="spectrolite-settings-publish"
+      >
+        {snapshot.publishing ? "Publishing…" : "Publish"}
+      </Button>
     </Flex>
   );
 }

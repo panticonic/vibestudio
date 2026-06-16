@@ -40,7 +40,7 @@ export interface EvalRuntime {
 export interface EvalRuntimeOptions {
   channelName: string;
   contextId: string;
-  panelHandle: string;
+  panelId: string;
   getClient(): PubSubClient<ChatParticipantMetadata> | null;
   /** Active doc's frontmatter deps, merged into every eval call's imports. */
   getDeps(): Record<string, string>;
@@ -52,7 +52,7 @@ export function createEvalRuntime(opts: EvalRuntimeOptions): EvalRuntime {
   const sandbox: SandboxConfig = createPanelSandboxConfig(rpc);
   const scopeManager = new ScopeManager({
     channelId: opts.channelName,
-    panelId: opts.panelHandle,
+    panelId: opts.panelId,
     persistence: new RpcScopePersistence(
       rpc as unknown as { call(targetId: string, method: string, ...args: unknown[]): Promise<unknown> },
     ),

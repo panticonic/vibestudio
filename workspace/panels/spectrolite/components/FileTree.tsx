@@ -28,11 +28,12 @@ export function FileTree({ onOpened }: FileTreeProps) {
   const files = useAppState((s) => s.paths);
   const loading = useAppState((s) => s.pathsLoading || !s.pathsLoaded);
   const activePath = useAppState((s) => s.activePath);
+  const dirtyPaths = useAppState((s) => s.dirtyPaths);
   const [newName, setNewName] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
 
   const open = useCallback((path: string) => {
-    app.editor.openFile(path);
+    app.openFile(path);
     onOpened?.();
   }, [app, onOpened]);
 
@@ -86,6 +87,7 @@ export function FileTree({ onOpened }: FileTreeProps) {
             <Flex direction="column">
               {files.map((path) => {
                 const active = path === activePath;
+                const dirty = dirtyPaths.includes(path);
                 const { dir, name } = splitPath(path);
                 return (
                   <button
@@ -97,6 +99,15 @@ export function FileTree({ onOpened }: FileTreeProps) {
                   >
                     <FileTextIcon className="spectrolite-file-row-icon" />
                     <span className="spectrolite-file-row-name">{name}</span>
+                    {dirty ? (
+                      <span
+                        aria-hidden
+                        title="Unsaved edits"
+                        style={{ color: "var(--iris-9)", fontSize: 9, lineHeight: 1, marginLeft: 4 }}
+                      >
+                        ●
+                      </span>
+                    ) : null}
                     {dir ? <span className="spectrolite-file-row-dir">{dir}</span> : null}
                   </button>
                 );

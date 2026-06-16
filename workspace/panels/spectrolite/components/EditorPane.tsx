@@ -1,18 +1,19 @@
 /**
- * Editor pane — hosts DocumentEditor for the active file, or the
- * appropriate empty state (loading / empty vault / no file open).
+ * Editor pane — hosts the GAD-native {@link DocumentEditor} for the active
+ * file, or the appropriate empty state (loading / empty vault / no file open),
+ * and overlays the live same-block {@link SuggestionStack}.
  *
- * Subscribes only to the slices the editor chrome needs; buffer text
- * lives inside DocumentEditor + the store, so keystrokes don't ripple
+ * Subscribes only to the slices the chrome needs; document content + dirty
+ * tracking live in the per-doc DocController, so keystrokes don't ripple
  * through the shell.
  */
 
-import { useCallback, useMemo, useState } from "react";
-import { Box, Button, Callout, Flex, Heading, Spinner, Text } from "@radix-ui/themes";
-import { CheckIcon, CopyIcon, ExclamationTriangleIcon, FilePlusIcon, HamburgerMenuIcon, ReloadIcon } from "@radix-ui/react-icons";
+import { useCallback, useMemo } from "react";
+import { Box, Button, Flex, Heading, Spinner, Text } from "@radix-ui/themes";
+import { FilePlusIcon, HamburgerMenuIcon } from "@radix-ui/react-icons";
 import { useApp, useAppState } from "../app/context";
-import { hasUnflushedChanges } from "../state/fileBuffer";
 import { DocumentEditor } from "./DocumentEditor";
+import { SuggestionStack } from "./SuggestionCard";
 import type { MentionCandidate } from "./MentionAutocomplete";
 
 export const SAMPLE_DOC_NAME = "Welcome.mdx";
@@ -24,22 +25,21 @@ dependencies: {}
 
 # Welcome to Spectrolite
 
-This is an **MDX** knowledge base backed by a git repo. Try the following:
+This is an **MDX** knowledge base backed by version-controlled storage. Try the following:
 
-1. **Edit prose** like you would in any rich-text editor.
-2. **@-mention an agent** to ask for help — type \`@\` to bring up the
-   autocomplete. The agent sees the diff after you click **Flush** (or
-   1.5 s of inactivity) and edits the file in-place.
+1. **Edit prose** like you would in any rich-text editor — your changes save
+   automatically and never get yanked away mid-edit.
+2. **Ask @scribe** to help — use the "Ask @scribe" button (your pending edits
+   are committed first). The scribe edits in place; its changes briefly
+   highlight and you can undo them.
 3. **Link between notes** with double brackets — for example,
    [[Another Note]] (click to create it).
-4. **Commit** dirty files from the strip at the bottom; click
-   "Suggest message" to have the agent draft a commit message.
+4. **Publish** when you're ready to share with the rest of the workspace.
 
 <Callout color="blue">
   <Callout.Icon><Icons.InfoCircledIcon /></Callout.Icon>
   <Callout.Text>
-    Components like this Callout render live inline. Switch to **Preview**
-    mode (top-right) to see the page rendered with full runtime access.
+    Components like this Callout render live inline.
   </Callout.Text>
 </Callout>
 
@@ -54,9 +54,9 @@ dependencies:
   "@workspace/agentic-chat": latest
 \`\`\`
 
-The panel prefetches them into the sandbox module map. The resident agent's
-\`eval\` tool picks them up automatically, and you can use them in inline
-JSX blocks in this doc without redeclaring imports.
+The panel prefetches them into the sandbox module map. The resident scribe's
+\`eval\` tool picks them up automatically, and you can use them in inline JSX
+blocks in this doc without redeclaring imports.
 
 Delete this file or replace its contents when you're ready.
 `;
@@ -74,15 +74,9 @@ export function EditorPane({ theme, onOpenFiles, mobile = false }: EditorPanePro
   const activePath = useAppState((s) => s.activePath);
   const pathsLoading = useAppState((s) => s.pathsLoading || !s.pathsLoaded);
   const vaultEmpty = useAppState((s) => s.pathsLoaded && !s.pathsLoading && s.paths.length === 0);
-  const activeDirty = useAppState((s) => {
-    const buffer = s.activePath ? s.buffers[s.activePath] : undefined;
-    return buffer ? hasUnflushedChanges(buffer) : false;
-  });
-  const saveError = useAppState((s) => (s.activePath ? s.saveErrors[s.activePath] : undefined));
   const activeDeps = useAppState((s) => s.activeDeps);
   const roster = useAppState((s) => s.roster);
   const removedHandles = useAppState((s) => s.removedHandles);
-  const [copiedSaveError, setCopiedSaveError] = useState(false);
 
   const mentionCandidates: MentionCandidate[] = useMemo(
     () => roster
@@ -91,82 +85,29 @@ export function EditorPane({ theme, onOpenFiles, mobile = false }: EditorPanePro
     [roster, removedHandles],
   );
 
-  const handleChange = useCallback(
-    (path: string, markdown: string) => app.editor.editorChanged(path, markdown),
-    [app],
-  );
-  const handleReload = useCallback(
-    (path: string, markdown: string) => app.editor.editorReloaded(path, markdown),
-    [app],
-  );
-  const handleFlushClick = useCallback(
-    (path: string) => app.editor.flushNow(path),
-    [app],
-  );
-
   const handleCreateWelcomeDoc = useCallback(async () => {
     try {
       const created = await app.vault.createFile(SAMPLE_DOC_NAME, SAMPLE_DOC);
-      app.editor.openFile(created);
+      app.openFile(created);
     } catch (err) {
       console.warn("[Spectrolite] failed to create starter note:", err);
     }
   }, [app]);
 
-  const copySaveErrorDetails = useCallback(async () => {
-    if (!saveError) return;
-    const detail = [
-      `Spectrolite save failed for ${saveError.path}`,
-      `At: ${new Date(saveError.at).toLocaleString()}`,
-      "",
-      saveError.message,
-    ].join("\n");
-    try {
-      await navigator.clipboard.writeText(detail);
-      setCopiedSaveError(true);
-      setTimeout(() => setCopiedSaveError(false), 1500);
-    } catch (err) {
-      console.warn("[Spectrolite] failed to copy save error:", err);
-    }
-  }, [saveError]);
-
-  if (!repoRoot) return null;
+  if (repoRoot === null) return null;
 
   if (activePath) {
     return (
-      <Flex direction="column" style={{ height: "100%", minHeight: 0 }}>
-        {saveError ? (
-          <Callout.Root color="red" size="1" style={{ borderRadius: 0, borderLeft: 0, borderRight: 0 }} data-testid="spectrolite-save-error">
-            <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
-            <Callout.Text size="2">
-              Could not save {saveError.path}: {saveError.message}
-            </Callout.Text>
-            <Flex gap="2" mt="2">
-              <Button size="1" variant="solid" color="red" onClick={() => app.editor.flushNow(saveError.path)}>
-                <ReloadIcon /> Retry save
-              </Button>
-              <Button size="1" variant="soft" color="gray" onClick={() => void copySaveErrorDetails()} data-testid="spectrolite-save-error-copy">
-                {copiedSaveError ? <CheckIcon /> : <CopyIcon />} {copiedSaveError ? "Copied" : "Copy details"}
-              </Button>
-            </Flex>
-          </Callout.Root>
-        ) : null}
-        <Box style={{ flex: 1, minHeight: 0 }}>
-          <DocumentEditor
-            key={activePath}
-            repoRoot={repoRoot}
-            relPath={activePath}
-            theme={theme}
-            onChange={handleChange}
-            onReload={handleReload}
-            onFlushClick={handleFlushClick}
-            hasUnflushedChanges={activeDirty}
-            mentionCandidates={mentionCandidates}
-            dependencies={activeDeps}
-            onRecoveryCreated={() => void app.vault.refreshPaths()}
-          />
-        </Box>
-      </Flex>
+      <Box style={{ position: "relative", height: "100%", minHeight: 0 }}>
+        <DocumentEditor
+          key={activePath}
+          relPath={activePath}
+          theme={theme}
+          mentionCandidates={mentionCandidates}
+          dependencies={activeDeps}
+        />
+        <SuggestionStack />
+      </Box>
     );
   }
 

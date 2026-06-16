@@ -2,22 +2,18 @@
  * Discover Spectrolite vaults.
  *
  * A Spectrolite vault is a directory under `projects/` in the workspace.
- * The workspace startup machinery (`WORKSPACE_GIT_INIT_PATTERNS` includes
- * `projects/*`) automatically `git init`s every `projects/<name>/` so
- * each vault is its own git repo without manual setup.
  *
  * Inside a panel context, workspace repos are mounted at the same path:
  * `projects/<name>/` becomes accessible as `/projects/<name>/` via the
  * panel's RPC-backed fs. Edits happen in the per-context working tree;
- * commits go through that copy's `.git`; pushes propagate back to the
- * workspace source tree via the git server (where they're visible to
- * other contexts on their next pull / context creation).
+ * commits go through the GAD-native runtime VCS surface and advance the
+ * caller's workspace head.
  *
  * `discoverVaults()` returns metadata for every existing `projects/*`
- * directory (whether or not it has been initialised as a git repo).
+ * directory.
  */
 
-import { getWorkspaceTree } from "@workspace/runtime";
+import { workspace } from "@workspace/runtime";
 
 export interface VaultEntry {
   /** Name as it appears under `projects/`. */
@@ -26,23 +22,20 @@ export interface VaultEntry {
   relPath: string;
   /** Path as visible inside the panel context fs, e.g. `/projects/my-notes`. */
   contextPath: string;
-  /** Whether the directory is a git repo (workspace startup git-inits all `projects/*`). */
-  isGitRepo: boolean;
 }
 
 interface WorkspaceNodeLike {
   name: string;
   path: string;
-  isGitRepo: boolean;
   children?: WorkspaceNodeLike[];
 }
 
 export async function discoverVaults(): Promise<VaultEntry[]> {
   let tree: { children?: WorkspaceNodeLike[] };
   try {
-    tree = await getWorkspaceTree() as { children?: WorkspaceNodeLike[] };
+    tree = await workspace.sourceTree() as { children?: WorkspaceNodeLike[] };
   } catch (err) {
-    console.warn("[Spectrolite] getWorkspaceTree failed:", err);
+    console.warn("[Spectrolite] workspace.sourceTree failed:", err);
     return [];
   }
   const projectsNode = tree.children?.find((c) => c.name === "projects");
@@ -51,7 +44,6 @@ export async function discoverVaults(): Promise<VaultEntry[]> {
     name: child.name,
     relPath: child.path,
     contextPath: `/${child.path}`,
-    isGitRepo: child.isGitRepo,
   })).sort((a, b) => a.name.localeCompare(b.name));
 }
 

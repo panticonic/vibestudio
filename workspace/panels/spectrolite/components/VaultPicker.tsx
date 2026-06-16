@@ -3,7 +3,7 @@
  *
  *   - Lists existing `projects/*` directories from the workspace tree.
  *   - Lets the user create a new vault (mkdir + starter Welcome.mdx +
- *     git init/commit/push via `initAndPush`).
+ *     workspace VCS commit).
  *
  * Spectrolite always asks which knowledge base to work on rather than
  * guessing a default path.
@@ -13,8 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { promises as fs } from "fs";
 import { Box, Button, Callout, Card, Code, Flex, Heading, IconButton, Spinner, Text, TextField } from "@radix-ui/themes";
 import { ArchiveIcon, ExclamationTriangleIcon, FilePlusIcon, ReloadIcon } from "@radix-ui/react-icons";
-import { initAndPush, type FsPromisesLike } from "@natstack/git";
-import { git as runtimeGit } from "@workspace/runtime";
+import { vcs } from "@workspace/runtime";
 import { useIsMobile } from "@workspace/react";
 import { discoverVaults, vaultContextPath, validateVaultName, type VaultEntry } from "../state/vaultDiscovery";
 
@@ -78,15 +77,8 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
     try {
       const dir = vaultContextPath(trimmed);
       await fs.mkdir(dir, { recursive: true });
-      // initAndPush handles init + initial commit + push back to the
-      // workspace's projects/<name> repo. Idempotent if the repo exists.
-      await initAndPush(runtimeGit.client(), fs as unknown as FsPromisesLike, {
-        dir,
-        remote: `projects/${trimmed}`,
-        branch: "main",
-        initialFiles: { "Welcome.mdx": WELCOME_BODY },
-        message: "Initial commit",
-      });
+      await fs.writeFile(`${dir}/Welcome.mdx`, WELCOME_BODY);
+      await vcs.commit(`projects/${trimmed}`, "Initial vault");
       onSelect(dir);
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : String(err));
@@ -104,7 +96,7 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
           <Text size="2" color="gray" align="center" as="p" style={{ maxWidth: 420 }}>
             A live MDX knowledge base with a resident editing agent
             {agentHandle ? <> — <Text weight="medium">@{agentHandle}</Text> is already in the room.</> : null}
-            {" "}Each vault is a git-backed folder under <Code>projects/</Code> in your workspace.
+            {" "}Each vault is a workspace VCS folder under <Code>projects/</Code>.
           </Text>
         </Flex>
 
@@ -136,7 +128,7 @@ export function VaultPicker({ agentHandle, onSelect }: VaultPickerProps) {
                     <Box style={{ flex: 1, textAlign: "left", minWidth: 0 }}>
                       <Text size="2" weight="medium" as="div" truncate>{v.name}</Text>
                       <Text size="1" color="gray" as="div" truncate>
-                        {v.relPath}{!v.isGitRepo ? " · not a git repo yet" : ""}
+                        {v.relPath}
                       </Text>
                     </Box>
                   </button>

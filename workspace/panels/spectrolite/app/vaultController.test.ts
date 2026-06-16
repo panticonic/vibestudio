@@ -3,23 +3,27 @@ import { createStore } from "./store";
 import { initialState } from "./state";
 import { VaultController } from "./vaultController";
 
-const pathMocks = vi.hoisted(() => ({
-  listMdxPaths: vi.fn(),
-}));
-
-vi.mock("../state/workspacePaths", () => ({
-  listMdxPaths: pathMocks.listMdxPaths,
+const runtimeMocks = vi.hoisted(() => ({
+  listFiles: vi.fn(),
+  reopen: vi.fn(async () => ({ id: "p", title: "t" })),
+  setStateArgs: vi.fn(),
 }));
 
 vi.mock("@workspace/runtime", () => ({
-  setStateArgs: vi.fn(),
+  vcs: {
+    listFiles: runtimeMocks.listFiles,
+    applyEdits: vi.fn(),
+    readFile: vi.fn(),
+  },
+  reopen: runtimeMocks.reopen,
+  setStateArgs: runtimeMocks.setStateArgs,
 }));
 
 function makeStore() {
   return createStore(initialState({
     contextId: "ctx",
     channelName: "chan",
-    repoRoot: "/projects/default",
+    repoRoot: "projects/default",
     openPath: null,
     installedAgents: [],
   }));
@@ -33,27 +37,38 @@ describe("VaultController", () => {
   it("runs a second path scan when invalidated during an in-flight scan", async () => {
     const store = makeStore();
     const controller = new VaultController(store, {
-      flushAllDirty: async () => {},
-      onVaultChanged: () => {},
       onVaultSelected: () => {},
     });
-    const releases: Array<(paths: string[]) => void> = [];
-    pathMocks.listMdxPaths.mockImplementation(() => new Promise<string[]>((resolve) => {
+    const releases: Array<(entries: Array<{ path: string; contentHash: string; mode: number }>) => void> = [];
+    runtimeMocks.listFiles.mockImplementation(() => new Promise((resolve) => {
       releases.push(resolve);
     }));
 
     const running = controller.refreshPaths();
     controller.refreshPaths();
     await Promise.resolve();
-    expect(pathMocks.listMdxPaths).toHaveBeenCalledTimes(1);
+    expect(runtimeMocks.listFiles).toHaveBeenCalledTimes(1);
 
-    releases[0]!(["First.mdx"]);
+    releases[0]!([{ path: "projects/default/First.mdx", contentHash: "a", mode: 0o644 }]);
     await vi.waitFor(() => {
-      expect(pathMocks.listMdxPaths).toHaveBeenCalledTimes(2);
+      expect(runtimeMocks.listFiles).toHaveBeenCalledTimes(2);
     });
 
-    releases[1]!(["Second.mdx"]);
+    releases[1]!([{ path: "projects/default/Second.mdx", contentHash: "b", mode: 0o644 }]);
     await running;
     expect(store.getState().paths).toEqual(["Second.mdx"]);
+  });
+
+  it("maps vcs paths to vault-relative .mdx paths and ignores other files", async () => {
+    const store = makeStore();
+    const controller = new VaultController(store, { onVaultSelected: () => {} });
+    runtimeMocks.listFiles.mockResolvedValue([
+      { path: "projects/default/A.mdx", contentHash: "1", mode: 0o644 },
+      { path: "projects/default/nested/B.mdx", contentHash: "2", mode: 0o644 },
+      { path: "projects/default/notes.txt", contentHash: "3", mode: 0o644 },
+      { path: "projects/other/C.mdx", contentHash: "4", mode: 0o644 },
+    ]);
+    await controller.refreshPaths();
+    expect(store.getState().paths).toEqual(["A.mdx", "nested/B.mdx"]);
   });
 });

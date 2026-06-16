@@ -1,24 +1,23 @@
 /**
  * Vault controller — owns vault selection and the workspace path index.
  *
- * Path-list refreshes are explicit (`refreshPaths()`) and coalesced;
- * everything that adds/removes files (flush, commit, file create, agent
- * writes) calls it directly instead of bumping a shared nonce.
+ * GAD-native: the path index comes from `vcs.listFiles()` (the vault's ctx
+ * head), filtered to `.mdx` and mapped to vault-relative paths via the
+ * {@link VaultPathMapping}. There is no `fs` walk. File creation commits an
+ * empty doc through `vcs.applyEdits` so it appears in the index + every peer.
+ *
+ * Switching vault is a panel **reopen** under the new vault's stable
+ * contextId (`vault-<hash>`), not a runtime `repoRoot` swap — only reopening
+ * rebinds `vcs.*` (and the scribe) to the new vault's durable head.
  */
 
-import { promises as fs } from "fs";
-import { setStateArgs } from "@workspace/runtime";
+import { reopen, setStateArgs, vcs } from "@workspace/runtime";
 import type { Store } from "./store";
 import type { SpectroliteState } from "./state";
 import { createQueuedRefresh } from "./queuedRefresh";
-import { listMdxPaths } from "../state/workspacePaths";
-import { joinSafe, parentDir } from "../state/safePath";
+import { vaultContextId, vaultPathMapping, normalizeVaultPath, type VaultPathMapping } from "./vaultContext";
 
 export interface VaultControllerHooks {
-  /** Flush dirty buffers before the vault goes away. */
-  flushAllDirty(): Promise<void>;
-  /** Reset editor state for the new root. */
-  onVaultChanged(): void;
   /** Notify the session layer (agent scope update / default-agent bootstrap). */
   onVaultSelected(repoRoot: string): void;
 }
@@ -32,44 +31,53 @@ export class VaultController {
     private readonly hooks: VaultControllerHooks,
   ) {}
 
-  /** Persist + activate a newly-picked vault. */
-  selectVault(contextPath: string): void {
-    void setStateArgs({ repoRoot: contextPath, openPath: undefined });
-    this.store.setState({ repoRoot: contextPath, activePath: null });
-    this.hooks.onVaultChanged();
-    this.pathsEpoch += 1;
-    this.pathsRefresh.reset();
-    this.store.setState({ paths: [], pathsLoading: false, pathsLoaded: false });
-    void this.refreshPaths();
-    this.hooks.onVaultSelected(contextPath);
+  /** The mapping for the active vault (vault-relative ↔ workspace-relative vcs paths). */
+  mapping(): VaultPathMapping {
+    return vaultPathMapping(this.store.getState().repoRoot ?? "");
   }
 
-  /** Flush pending work, then forget the selection so the picker shows. */
-  async switchVault(): Promise<void> {
-    await this.hooks.flushAllDirty().catch((err) => {
-      console.warn("[Spectrolite] flush before vault switch failed:", err);
+  /**
+   * Pick a vault from the picker. The vault head is durable + per-vault, so
+   * binding to it means reopening the panel under `vault-<hash>`. We persist
+   * the selection in the new context's stateArgs via `reopen`.
+   */
+  selectVault(contextPath: string): void {
+    const repoRoot = normalizeVaultPath(contextPath);
+    void reopen({
+      contextId: vaultContextId(repoRoot),
+      stateArgs: { repoRoot, openPath: undefined },
+    }).catch((err) => {
+      console.warn("[Spectrolite] reopen for vault select failed:", err);
     });
-    void setStateArgs({ repoRoot: undefined, openPath: undefined });
-    this.pathsEpoch += 1;
-    this.pathsRefresh.reset();
-    this.store.setState({ repoRoot: null, activePath: null, paths: [], pathsLoading: false, pathsLoaded: false });
-    this.hooks.onVaultChanged();
+  }
+
+  /** Forget the selection so the picker shows (reopen without a repoRoot). */
+  async switchVault(): Promise<void> {
+    await reopen({ stateArgs: { repoRoot: undefined, openPath: undefined } }).catch((err) => {
+      console.warn("[Spectrolite] reopen for vault switch failed:", err);
+    });
   }
 
   refreshPaths(): Promise<void> {
     return this.pathsRefresh.run(async () => {
       const root = this.store.getState().repoRoot;
-      if (!root) {
+      if (root === null) {
         this.store.setState({ paths: [], pathsLoading: false });
         return;
       }
+      const mapping = vaultPathMapping(root);
       const epoch = this.pathsEpoch;
       this.store.setState({ pathsLoading: true });
       try {
-        const paths = await listMdxPaths(root);
+        const entries = await vcs.listFiles();
         if (epoch !== this.pathsEpoch) return;
+        const paths = entries
+          .map((entry) => mapping.toVaultRelPath(entry.path))
+          .filter((p): p is string => p !== null && /\.mdx$/i.test(p))
+          .sort((a, b) => a.localeCompare(b));
         this.store.setState({ paths, pathsLoading: false, pathsLoaded: true });
-      } catch {
+      } catch (err) {
+        console.warn("[Spectrolite] listFiles failed:", err);
         if (epoch !== this.pathsEpoch) return;
         this.store.setState({ paths: [], pathsLoading: false, pathsLoaded: true });
       }
@@ -77,37 +85,26 @@ export class VaultController {
   }
 
   /**
-   * Create a file (exclusive — refuses to clobber). Returns the final
-   * relative path on success, the existing path when the file was already
-   * there, or throws with a user-facing message.
+   * Create a file (exclusive — refuses to clobber an existing note). Returns
+   * the final vault-relative path on success, or the existing path when the
+   * file is already there. Commits an empty doc through the vault head.
    */
   async createFile(relPath: string, initialContent: string): Promise<string> {
     const root = this.store.getState().repoRoot;
-    if (!root) throw new Error("No vault selected");
+    if (root === null) throw new Error("No vault selected");
     const finalPath = relPath.endsWith(".mdx") ? relPath : `${relPath}.mdx`;
-    const full = joinSafe(root, finalPath);
-    if (!full) throw new Error(`"${finalPath}" escapes the workspace root`);
-    try {
-      await fs.stat(full);
-      return finalPath; // exists — caller just opens it
-    } catch {
-      // ENOENT — safe to create
-    }
-    const parent = parentDir(full);
-    if (parent) {
-      try { await fs.mkdir(parent, { recursive: true }); } catch { /* surfaced by writeFile */ }
-    }
-    // Exclusive-create: if the file appeared between stat() and now, `wx`
-    // fails with EEXIST and we open the existing file instead. We do NOT
-    // fall back to a plain write on other errors — that could clobber a
-    // file that exists but couldn't be stat'd.
-    const fsWithFlags = fs as unknown as { writeFile(p: string, data: string, opts?: { flag?: string }): Promise<void> };
-    try {
-      await fsWithFlags.writeFile(full, initialContent, { flag: "wx" });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/eexist/i.test(msg)) return finalPath;
-      throw err instanceof Error ? err : new Error(msg);
+    const mapping = vaultPathMapping(root);
+    const vcsPath = mapping.toVcsPath(finalPath);
+
+    const existing = await vcs.readFile("", vcsPath).catch(() => null);
+    if (existing) return finalPath; // already exists — caller just opens it
+
+    const result = await vcs.applyEdits({
+      edits: [{ kind: "create", path: vcsPath, content: { kind: "text", text: initialContent } }],
+    });
+    if (result.status === "conflicted") {
+      // Lost a create race — the file now exists; just open it.
+      return finalPath;
     }
     void this.refreshPaths();
     return finalPath;

@@ -9,8 +9,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Badge, Box, Button, Flex, IconButton, ScrollArea, Text, TextArea } from "@radix-ui/themes";
-import { ChevronUpIcon, ChevronDownIcon, Cross2Icon, PaperPlaneIcon, CommitIcon, ChatBubbleIcon } from "@radix-ui/react-icons";
+import { Badge, Box, Flex, IconButton, ScrollArea, Text, TextArea } from "@radix-ui/themes";
+import { ChevronUpIcon, ChevronDownIcon, Cross2Icon, PaperPlaneIcon, ChatBubbleIcon } from "@radix-ui/react-icons";
 import { useIsMobile, useViewportHeight } from "@workspace/react";
 import { MessageContent } from "@workspace/agentic-chat";
 import { useApp, useAppState } from "../app/context";
@@ -43,14 +43,6 @@ export function ChannelDrawer() {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [open, messages.length]);
-
-  const newestAgentMessage = useMemo(() => {
-    for (let i = messages.length - 1; i >= 0; i -= 1) {
-      const m = messages[i]!;
-      if (m.senderType && m.senderType !== "panel") return m;
-    }
-    return null;
-  }, [messages]);
 
   const unreadCount = useMemo(() => {
     if (open) return 0;
@@ -141,7 +133,6 @@ export function ChannelDrawer() {
                 ) : (
                   messages.map((m) => {
                     const isAgent = m.senderType && m.senderType !== "panel";
-                    const isNewestAgentMsg = isAgent && newestAgentMessage?.id === m.id;
                     return (
                       <Box
                         key={m.id}
@@ -151,16 +142,6 @@ export function ChannelDrawer() {
                           <Text size="1" weight="bold" color={isAgent ? "iris" : "gray"}>
                             @{m.senderHandle ?? m.senderName ?? m.senderId}
                           </Text>
-                          {isNewestAgentMsg ? (
-                            <Button
-                              size="1"
-                              variant="ghost"
-                              onClick={() => app.store.setState({ commitMessage: m.content })}
-                              title="Copy this reply into the commit message field"
-                            >
-                              <CommitIcon /> Use as commit msg
-                            </Button>
-                          ) : null}
                         </Flex>
                         <Box style={{ fontSize: "var(--font-size-1)" }}>
                           <MessageContent content={m.content} isStreaming={false} mdxActions={mdxActions} />

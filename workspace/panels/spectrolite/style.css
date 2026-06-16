@@ -66,17 +66,6 @@
   display: inline-block;
 }
 
-.spectrolite-commit-bar {
-  flex-shrink: 0;
-  border-top: 1px solid var(--gray-4);
-  background: var(--color-panel-solid);
-}
-
-.spectrolite-mobile-actions {
-  flex-shrink: 0;
-  border-top: 1px solid var(--gray-4);
-  background: var(--color-panel-solid);
-}
 
 .spectrolite-empty-card {
   max-width: 440px;
@@ -100,6 +89,19 @@
   font-size: 12px;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+.spectrolite-publish-conflicts {
+  max-height: 180px;
+  overflow: auto;
+}
+
+.spectrolite-publish-conflict-row {
+  min-width: 0;
+  padding: 4px var(--space-2);
+  border: 1px solid var(--amber-5);
+  border-radius: var(--radius-2);
+  background: var(--amber-a2);
 }
 
 /* ---------- vault picker ---------- */
@@ -434,62 +436,38 @@
   color: var(--gray-12);
 }
 
-/* MDXEditor wraps its own root; let it fill the pane */
-.spectrolite-mdx .mdxeditor {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
+/* Presence: a block the scribe just edited flashes a subtle marker, then fades. */
+@keyframes spectrolite-scribe-touch-fade {
+  from {
+    background: var(--iris-3);
+    box-shadow: inset 2px 0 0 var(--iris-9);
+  }
+  to {
+    background: transparent;
+    box-shadow: inset 2px 0 0 transparent;
+  }
 }
 
-.spectrolite-mdx .mdxeditor-root-contenteditable {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
+.spectrolite-content .spectrolite-scribe-touch {
+  animation: spectrolite-scribe-touch-fade 2.2s ease-out forwards;
+  border-radius: var(--radius-2);
 }
 
-.spectrolite-mdx .mdxeditor-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  border-bottom: 1px solid var(--gray-4);
-  border-radius: 0;
-  background: var(--color-panel-solid);
+/* Live same-block collision cards: a quiet bottom-right stack. */
+.spectrolite-suggestion-card {
+  box-shadow: var(--shadow-4);
+  border: 1px solid var(--iris-6);
 }
 
-/* Live JSX components inside the editor breathe a bit */
-.spectrolite-mdx .mdxeditor [data-lexical-decorator] {
+/* The editor fills + scrolls inside its pane container (the DocumentEditor Box
+   is `overflow: auto`); the contenteditable grows to fill. */
+.spectrolite-content {
+  outline: none;
+}
+
+/* Live JSX / code components inside the editor breathe a bit. */
+.spectrolite-content [data-lexical-decorator] {
   margin: var(--space-2) 0;
-}
-
-/* Dark-theme overrides for MDXEditor's toolbar, dialogs, and popovers.
-   MDXEditor's defaults assume a light background; re-map its CSS vars to
-   Radix dark tokens so the toolbar and dialogs blend in. */
-[data-is-root-theme] [data-accent-color] .spectrolite-mdx .mdxeditor.dark-theme,
-.dark-theme .spectrolite-mdx .mdxeditor,
-.spectrolite-mdx.dark-theme .mdxeditor {
-  --baseBg: var(--color-panel);
-  --basePageBg: var(--color-background);
-  --baseBgSubtle: var(--gray-2);
-  --baseBgHover: var(--gray-4);
-  --baseBgActive: var(--gray-5);
-  --baseBorder: var(--gray-6);
-  --baseBorderHover: var(--gray-7);
-  --baseText: var(--gray-12);
-  --baseTextContrast: var(--gray-12);
-  --baseSolid: var(--accent-9);
-  --baseSolidHover: var(--accent-10);
-  --accentBase: var(--accent-3);
-  --accentBgSubtle: var(--accent-3);
-  --accentBg: var(--accent-4);
-  --accentBgHover: var(--accent-5);
-  --accentBgActive: var(--accent-6);
-  --accentLine: var(--accent-7);
-  --accentBorder: var(--accent-8);
-  --accentBorderHover: var(--accent-9);
-  --accentSolid: var(--accent-9);
-  --accentSolidHover: var(--accent-10);
-  --accentText: var(--accent-11);
-  --accentTextContrast: var(--accent-12);
 }
 
 /* Subtle scrollbars inside our panes */
@@ -511,33 +489,39 @@
  * Mobile adjustments (max-width 767px matches useIsMobile).
  * ---------------------------------------------------------------- */
 @media (max-width: 767px) {
-  /* MDXEditor toolbar gets too wide for phone screens — scroll it
-   * horizontally instead of wrapping awkwardly. */
-  .spectrolite-mdx .mdxeditor-toolbar {
-    overflow-x: auto;
-    flex-wrap: nowrap;
-    -webkit-overflow-scrolling: touch;
-  }
-
-  .spectrolite-mdx .mdxeditor-toolbar::-webkit-scrollbar {
-    display: none;
-  }
-
+  /* Tighter, edge-to-edge reading column on phones; the desktop 76ch
+     centering would otherwise waste half the narrow screen. */
   .spectrolite-content {
-    padding: var(--space-3);
+    font-size: var(--font-size-3);
     line-height: 1.6;
+    padding: var(--space-3) var(--space-3) var(--space-6);
+  }
+
+  /* Header chrome is denser on phones. */
+  .spectrolite-header {
+    min-height: 48px;
+  }
+
+  /* Suggestion cards span the width (minus a small margin) so the diff is
+     readable on a narrow screen. */
+  .spectrolite-suggestion-stack {
+    left: var(--space-2);
+    right: var(--space-2);
+    width: auto !important;
+  }
+
+  /* Edge-anchored side panels (e.g. the settings sheet shown on mobile) go
+     near-full-width instead of the desktop `min(36vw, …)` sliver. */
+  .spectrolite-side-panel {
+    width: 92vw !important;
+    min-width: 0 !important;
   }
 }
 
 /* ----------------------------------------------------------------
- * Touch devices: 44px tap targets.
+ * Touch devices: 44px tap targets (the action bars set their own).
  * ---------------------------------------------------------------- */
 @media (pointer: coarse) {
-  .spectrolite-mdx .mdxeditor-toolbar button {
-    min-height: 44px;
-    min-width: 44px;
-  }
-
   .spectrolite-file-row,
   .spectrolite-backlink-row,
   .spectrolite-vault-row {

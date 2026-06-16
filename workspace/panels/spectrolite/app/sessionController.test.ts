@@ -26,6 +26,15 @@ const bootstrapMocks = vi.hoisted(() => ({
   unsubscribeDOFromChannel: vi.fn(),
 }));
 
+const evalToolMocks = vi.hoisted(() => ({
+  createEvalRuntime: vi.fn(() => ({
+    evalTool: {},
+    sandbox: {},
+    prefetch: vi.fn(),
+    dispose: vi.fn(),
+  })),
+}));
+
 vi.mock("@workspace/pubsub", () => ({
   connectViaRpc: pubsubMocks.connectViaRpc,
 }));
@@ -33,16 +42,12 @@ vi.mock("@workspace/pubsub", () => ({
 vi.mock("@workspace/runtime", () => ({
   rpc: {},
   recoveryCoordinator: {},
+  slotId: "panel:slot-test",
   setStateArgs: vi.fn(),
 }));
 
 vi.mock("./evalTool", () => ({
-  createEvalRuntime: vi.fn(() => ({
-    evalTool: {},
-    sandbox: {},
-    prefetch: vi.fn(),
-    dispose: vi.fn(),
-  })),
+  createEvalRuntime: evalToolMocks.createEvalRuntime,
 }));
 
 vi.mock("../messages/register", () => ({
@@ -88,6 +93,12 @@ describe("SessionController", () => {
     const session = new SessionController(store, { getDepsForEval: () => ({}) });
 
     await session.start();
+    expect(evalToolMocks.createEvalRuntime).toHaveBeenCalledWith(expect.objectContaining({
+      panelId: "panel:slot-test",
+    }));
+    expect(pubsubMocks.connectViaRpc).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: "panel:slot-test",
+    }));
     expect(bootstrapMocks.createAndSubscribeAgent).not.toHaveBeenCalled();
 
     store.setState({ repoRoot: "/projects/default" });

@@ -13,7 +13,7 @@
  * selector results are compared with Object.is to decide re-renders.
  */
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useRef, useSyncExternalStore } from "react";
 
 export interface Store<T> {
   getState(): T;
@@ -51,12 +51,29 @@ export function createStore<T extends object>(initial: T): Store<T> {
 /**
  * Subscribe to a derived slice of the store. The component re-renders
  * only when `selector(state)` changes by Object.is — select primitives
- * or state-owned references (not freshly-built objects/arrays).
+ * or state-owned references when possible. The selected snapshot is cached
+ * per store state so React never sees a new value for an unchanged state.
  */
 export function useStoreState<T extends object, U>(store: Store<T>, selector: (state: T) => U): U {
+  const selectorRef = useRef(selector);
+  const snapshotRef = useRef<{ state: T; selector: (state: T) => U; selected: U } | null>(null);
+  selectorRef.current = selector;
+
+  const getSelectedSnapshot = useCallback(() => {
+    const state = store.getState();
+    const currentSelector = selectorRef.current;
+    const cached = snapshotRef.current;
+    if (cached && Object.is(cached.state, state) && cached.selector === currentSelector) {
+      return cached.selected;
+    }
+    const selected = currentSelector(state);
+    snapshotRef.current = { state, selector: currentSelector, selected };
+    return selected;
+  }, [store]);
+
   return useSyncExternalStore(
     store.subscribe,
-    () => selector(store.getState()),
-    () => selector(store.getState()),
+    getSelectedSnapshot,
+    getSelectedSnapshot,
   );
 }

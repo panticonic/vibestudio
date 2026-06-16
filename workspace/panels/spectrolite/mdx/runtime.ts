@@ -16,7 +16,7 @@
  * agent does the heavy editing.
  */
 
-import type { JsxComponentDescriptor } from "@mdxeditor/editor";
+import type { JsxComponentDescriptor } from "@workspace/mdx-editor-core";
 
 export type DescriptorWithoutEditor = Omit<JsxComponentDescriptor, "Editor">;
 

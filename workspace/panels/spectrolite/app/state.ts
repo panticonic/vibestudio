@@ -1,29 +1,29 @@
 /**
  * Spectrolite panel state — the single source of truth rendered by the UI.
  *
- * Controllers (`session`, `vault`, `editor`, `git`) own all the imperative
- * machinery and are the only writers. Components read via `useAppState`.
+ * Under the GAD-native co-edit rewrite the editor no longer keeps in-memory
+ * disk buffers, a flush pipeline, or git status: each open document owns a
+ * `DocController` that commits dirty blocks through the runtime `vcs` and folds
+ * remote (scribe) edits in narrowly. The store therefore holds only:
+ *   - session / channel / roster,
+ *   - the vault selection + the vault-relative path index (from `vcs.listFiles`),
+ *   - the active document path + recents,
+ *   - transient co-edit surfaces (same-block suggestion cards) and channel UI.
+ *
+ * Controllers (`session`, `vault`) own the imperative machinery and are the
+ * only writers. Components read via `useAppState`.
  */
 
 import type { PubSubClient } from "@workspace/pubsub";
 import type { ChatParticipantMetadata } from "@workspace/agentic-core";
 import type { AvailableAgent, InstalledAgentRecord } from "../bootstrap";
-import type { FileBufferMap } from "../state/fileBuffer";
+import type { Collision } from "../coedit/blockReconcile";
 
 export interface RosterAgent {
   handle: string;
   participantId?: string;
   status: "live" | "pending";
 }
-
-export type AgentVaultNotice =
-  | { state: "current"; repoRoot: string; handles: string[]; at: number }
-  | { state: "pending"; repoRoot: string; handles: string[] }
-  | { state: "failed"; repoRoot: string; handles: string[]; error: string };
-
-export type MentionDeliveryNotice =
-  | { state: "sent"; path: string; handles: string[]; at: number }
-  | { state: "failed"; path: string; handles: string[]; error: string };
 
 export interface ChannelMessage {
   id: string;
@@ -35,18 +35,14 @@ export interface ChannelMessage {
   ts: number;
 }
 
-export interface BranchEntry {
-  name: string;
-  current: boolean;
+/** A live same-block collision surfaced as a SuggestionCard (accept / keep / merge). */
+export interface PendingSuggestion {
+  /** Stable id so the card can be dismissed/resolved deterministically. */
+  id: string;
+  /** The vcs path the suggestion applies to (so a doc switch can filter). */
+  vcsPath: string;
+  collision: Collision;
 }
-
-export interface SaveError {
-  path: string;
-  message: string;
-  at: number;
-}
-
-export type GitOperation = "flushing" | "status" | "committing" | "checkout";
 
 export interface SpectroliteState {
   // ---- session / channel ----
@@ -60,36 +56,28 @@ export interface SpectroliteState {
   removedHandles: ReadonlyArray<string>;
 
   // ---- vault ----
+  /** The vault's workspace-root-relative root, e.g. `projects/default` ("" = tree root). */
   repoRoot: string | null;
+  /** Vault-relative `.mdx` paths for the active vault (from `vcs.listFiles`). */
   paths: string[];
   pathsLoading: boolean;
   /** False until the first path scan for the current vault settles. */
   pathsLoaded: boolean;
+  /** Vault-relative paths with uncommitted local edits (for the file index dot). */
+  dirtyPaths: ReadonlyArray<string>;
 
   // ---- editor ----
   activePath: string | null;
   recentPaths: string[];
-  buffers: FileBufferMap;
-  lastFlushedAt: Record<string, number>;
   /** Frontmatter-declared dependencies of the active doc (feeds inline JSX + eval imports). */
   activeDeps: Record<string, string>;
-  saveErrors: Record<string, SaveError>;
 
-  // ---- git ----
-  gitBranch: string | null;
-  gitDirty: string[];
-  gitStatusError: string | null;
-  gitOperation: GitOperation | null;
-  branches: BranchEntry[];
-  branchesLoading: boolean;
-  branchError: string | null;
-  checkoutBusy: boolean;
+  // ---- co-edit surfaces ----
+  /** Live same-block collisions awaiting the user's accept / keep / merge choice. */
+  pendingSuggestions: PendingSuggestion[];
 
   // ---- notices / channel UI ----
-  agentVaultNotice: AgentVaultNotice | null;
-  mentionDeliveryNotice: MentionDeliveryNotice | null;
   messages: ChannelMessage[];
-  commitMessage: string;
   /** Bumped to programmatically open the channel dock (e.g. from a toast). */
   dockOpenSignal: number;
 }
@@ -114,27 +102,15 @@ export function initialState(args: {
     paths: [],
     pathsLoading: false,
     pathsLoaded: false,
+    dirtyPaths: [],
 
     activePath: args.openPath,
     recentPaths: args.openPath ? [args.openPath] : [],
-    buffers: {},
-    lastFlushedAt: {},
     activeDeps: {},
-    saveErrors: {},
 
-    gitBranch: null,
-    gitDirty: [],
-    gitStatusError: null,
-    gitOperation: null,
-    branches: [],
-    branchesLoading: false,
-    branchError: null,
-    checkoutBusy: false,
+    pendingSuggestions: [],
 
-    agentVaultNotice: null,
-    mentionDeliveryNotice: null,
     messages: [],
-    commitMessage: "",
     dockOpenSignal: 0,
   };
 }

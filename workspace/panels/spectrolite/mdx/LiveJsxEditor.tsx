@@ -6,36 +6,30 @@
  * lists, etc.) back to MDX source via `mdast-util-to-markdown` +
  * `mdast-util-mdx-jsx`, then compile-and-render it via `compileComponent`
  * with `createPanelSandboxConfig(rpc)` bindings — so live JSX in the
- * document has full access to the panel runtime (rpc, fs, GitClient, …),
+ * document has full access to the panel runtime (rpc, fs, vcs, ...),
  * which is the "MDX eval environment with full runtime access" goal.
  *
  * Works for the wildcard `name: "*"` descriptor too: we read the actual
  * tag name from `mdastNode.name` rather than `descriptor.name`.
  *
- * Doc-level exports + the `runtime` namespace are pulled in via
- * globalThis backdoors set by `DocumentEditor`:
+ * The `runtime` namespace + a few hooks are pulled in via globalThis
+ * backdoors set by `DocumentEditor`:
  *
  *   - `globalThis.__spectroliteUseDocState__` — useDocState hook
  *   - `globalThis.__spectroliteRuntime__`     — `runtime.Eval`, etc.
- *   - `globalThis.__spectroliteDocExports__`  — named exports from the
- *      whole-doc compile, so `<Counter />` (defined as
- *      `export const Counter = …` elsewhere in the same doc) resolves.
  *
- * The per-node compile depends on:
- *   - the serialized JSX source for this node
- *   - the list of currently-known doc export NAMES (so the wrapper
- *     destructures the right identifiers — body changes don't require
- *     recompiling the wrapper string but do require re-rendering)
- *   - the `docExportsVersion` counter from `DocumentEditor`, bumped
- *     after each successful doc compile so the rendered `<Component/>`
- *     picks up updated export bodies via React reference identity.
+ * Each JSX node compiles in ISOLATION (local incremental render — a node
+ * recompiles only when its own serialized source changes). There is no
+ * whole-doc compile, so doc-level cross-node exports (a `<Counter/>` that
+ * references an `export const Counter` declared elsewhere in the same doc)
+ * are intentionally NOT in scope.
  *
  * On compile failure we surface a small error card pointing the user to
  * the diff/source toggle so they can edit the JSX by hand.
  */
 
 import { Component as ReactComponent, useEffect, useMemo, useState, type ComponentType, type ReactNode } from "react";
-import type { JsxEditorProps } from "@mdxeditor/editor";
+import type { JsxEditorProps } from "@workspace/mdx-editor-core";
 import { Box, Card, Code, Flex, Text } from "@radix-ui/themes";
 import { ExclamationTriangleIcon, Pencil1Icon } from "@radix-ui/react-icons";
 import { compileComponent } from "@workspace/eval";
@@ -54,47 +48,17 @@ const importedNames = Object.keys(mdxComponents as Record<string, unknown>)
   .filter((n) => /^[A-Z]/.test(n));
 const importList = importedNames.join(", ");
 
-/**
- * Identifiers the wrapper itself binds. If a doc-level export collides
- * with one of these (e.g. someone exports `WikiLink` or `useDocState`),
- * destructuring it would shadow our binding with `undefined` and break
- * the compile. The user's export is dropped from the destructure — the
- * wrapper's version wins.
- */
-const RESERVED_WRAPPER_NAMES = new Set([
-  ...importedNames,
-  "React",
-  "WikiLink",
-  "ActionButton",
-  "useDocState",
-  "useIsMobile",
-  "useTouchDevice",
-  "useViewportHeight",
-  "runtime",
-]);
-
 interface MdastJsxLike {
   type: string;
   name?: string | null;
 }
 
 /**
- * Build the wrapper source. `docExportNames` is the list of currently-
- * known doc-level exports; we destructure them from the panel's
- * globalThis stash so references like `<Counter />` resolve. Names
- * collide with built-in imports are filtered out so users can't shadow
- * the agentic-chat surface (e.g. `<Card>`).
+ * Build the wrapper source. Each JSX node is compiled in isolation (local
+ * incremental render); doc-level cross-node exports are intentionally not in
+ * scope (the whole-doc compile that bridged them was removed).
  */
-function wrapForSandbox(source: string, docExportNames: ReadonlyArray<string>): string {
-  // Filter out exports that would shadow the wrapper's own bindings —
-  // a doc that does `export const useDocState = …` shouldn't be allowed
-  // to clobber our hook in the same scope.
-  const destructured = docExportNames.filter(
-    (n) => !RESERVED_WRAPPER_NAMES.has(n) && /^[A-Za-z_$][\w$]*$/.test(n),
-  );
-  const destructureLine = destructured.length > 0
-    ? `const { ${destructured.join(", ")} } = (globalThis.__spectroliteDocExports__ ?? {});`
-    : "";
+function wrapForSandbox(source: string): string {
   return `
 import * as React from "react";
 import { mdxComponents } from "@workspace/agentic-chat";
@@ -147,11 +111,6 @@ const useViewportHeight = (globalThis.__spectroliteUseViewportHeight__) ||
 const runtime = globalThis.__spectroliteRuntime__ ||
   { useDocState, useIsMobile, useTouchDevice, useViewportHeight };
 
-// Doc-level exports: destructured by name so a node like <Counter/>
-// (where Counter is an export const declared elsewhere in the same
-// doc) resolves. Updated by DocumentEditor on every doc-compile.
-${destructureLine}
-
 export default function LiveJsx() {
   return (<>
     ${source}
@@ -163,22 +122,13 @@ export default function LiveJsx() {
 export interface LiveJsxEditorOwnProps {
   /** Frontmatter-declared dependencies, merged into compileComponent imports. */
   dependencies?: Record<string, string>;
-  /** Names of doc-level exports currently in scope. */
-  docExportNames?: ReadonlyArray<string>;
-  /** Bumped by DocumentEditor whenever the doc compile succeeds so we
-   *  recompile this node and pick up updated export bodies. */
-  docExportsVersion?: number;
 }
 
 export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
-  const { mdastNode, descriptor, dependencies, docExportNames, docExportsVersion } = props;
+  const { mdastNode, descriptor, dependencies } = props;
   const tagName = (mdastNode as unknown as MdastJsxLike).name ?? descriptor.name ?? "Fragment";
   const source = useMemo(() => nodeToMdxSource(mdastNode), [mdastNode]);
-  const namesKey = useMemo(() => (docExportNames ?? []).join(","), [docExportNames]);
-  const wrapped = useMemo(
-    () => wrapForSandbox(source, docExportNames ?? []),
-    [source, namesKey],
-  );
+  const wrapped = useMemo(() => wrapForSandbox(source), [source]);
   const [Component, setComponent] = useState<ComponentType | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -206,7 +156,7 @@ export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
       }
     });
     return () => { cancelled = true; };
-  }, [wrapped, tagName, source, dependencies, docExportsVersion]);
+  }, [wrapped, tagName, source, dependencies]);
 
   if (error) {
     return <LiveJsxErrorCard tagName={tagName} error={error} />;

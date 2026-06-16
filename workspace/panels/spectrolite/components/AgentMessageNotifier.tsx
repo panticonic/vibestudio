@@ -17,7 +17,7 @@ import { useEffect, useRef } from "react";
 import { notifications, id as panelId, focusPanel } from "@workspace/runtime";
 import { usePanelFocus } from "@workspace/react";
 import { useApp, useAppState } from "../app/context";
-import { PANEL_HANDLE } from "../app/editorController";
+import { PANEL_HANDLE } from "../app/sessionController";
 
 const NOTIFICATION_TTL_MS = 5_000;
 const QUIET_PERIOD_MS = 60_000;

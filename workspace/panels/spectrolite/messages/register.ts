@@ -1,36 +1,15 @@
 /**
- * Register Spectrolite's custom message types on a connected channel.
+ * Custom channel message-type registration for Spectrolite.
  *
- * The TSX source for each type is loaded from this panel's package by path;
- * the channel persists the registration so reload + observer panels all
- * receive the same renderer.
+ * Under the GAD-native rewrite there is no per-edit publish: autosave commits
+ * silently and the scribe is invoked only by an explicit Send. The old
+ * `kb.user_edit` / `kb.commit` row message types are gone, so there is nothing
+ * to register today. The hook is kept (the session calls it on connect) so
+ * future Spectrolite-specific message types have a single place to land.
  */
 
 import type { PubSubClient } from "@workspace/pubsub";
 
-export const KB_USER_EDIT_TYPE = "kb.user_edit";
-export const KB_COMMIT_TYPE = "kb.commit";
-
-const KB_USER_EDIT_PATH = "panels/spectrolite/messages/kb-user-edit.tsx";
-const KB_COMMIT_PATH = "panels/spectrolite/messages/kb-commit.tsx";
-
-export async function registerSpectroliteMessageTypes(client: PubSubClient): Promise<void> {
-  const existing = await client.getMessageTypes().catch(() => []);
-  const have = new Set(existing.map((d) => d.typeId));
-
-  if (!have.has(KB_USER_EDIT_TYPE)) {
-    await client.registerMessageType({
-      typeId: KB_USER_EDIT_TYPE,
-      displayMode: "row",
-      source: { type: "file", path: KB_USER_EDIT_PATH },
-    });
-  }
-
-  if (!have.has(KB_COMMIT_TYPE)) {
-    await client.registerMessageType({
-      typeId: KB_COMMIT_TYPE,
-      displayMode: "row",
-      source: { type: "file", path: KB_COMMIT_PATH },
-    });
-  }
+export async function registerSpectroliteMessageTypes(_client: PubSubClient): Promise<void> {
+  // No Spectrolite-specific message types at present.
 }

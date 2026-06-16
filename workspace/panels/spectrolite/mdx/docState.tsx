@@ -1,41 +1,32 @@
 /**
- * `useDocState(key, initial)` — the component-facing entry point for
- * persisting state into the active doc's frontmatter `state:` block.
+ * `useDocState(key, initial)` — per-viewer component state for inline JSX
+ * (slider positions, toggles, counters), backed by the {@link ViewStateStore}.
  *
  * API mirrors `useState`:
  *
  *     const [count, setCount] = useDocState("count", 0);
  *
- * Reads come from the active doc's parsed `state.<key>` value (or
- * `initial` if absent). Writes update the in-memory map immediately
- * (so other consumers re-render via React context) and are merged
- * back into the doc's frontmatter after a short debounce by
- * `DocumentEditor`.
+ * Under the GAD-native rewrite this state is PRIVATE per viewer and lives
+ * OUTSIDE the co-edited document — it is keyed by the active doc's vcs path in
+ * a panel-local store (see `coedit/viewState.ts`), never written into the
+ * worktree, so nudging a slider never produces a commit or notifies the scribe.
+ * The old `state:` frontmatter round-trip is gone.
  *
- * Functional updates (`setCount(n => n + 1)`) are resolved by the
- * provider against the LATEST state map, so chained calls within the
- * same tick (or in callbacks) behave like `useState` rather than
- * collapsing to the render-time value.
- *
- * Fallback behavior: outside a `DocStateContext.Provider` (e.g. when
- * this MDX is rendered by the chat panel's `inline_ui`), the hook
- * degrades to plain `React.useState` — ephemeral, but the component
- * still works.
+ * `DocumentEditor` mounts a {@link DocStateContext.Provider} carrying the store
+ * + the active doc path. Outside a provider (e.g. the chat panel's `inline_ui`)
+ * the hook degrades to plain `React.useState` — ephemeral, but still works.
  */
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState } from "react";
+import type { ViewStateStore } from "../coedit/viewState";
 
 export type DocStateUpdate = unknown | ((prev: unknown) => unknown);
 
 export interface DocStateContextValue {
-  /** Current state map. */
-  state: Record<string, unknown>;
-  /**
-   * Schedule an update. `value` may be a function `(prev) => next`,
-   * which the provider resolves against the LATEST state map so that
-   * multiple setter calls in the same tick compose correctly.
-   */
-  setState: (key: string, value: DocStateUpdate) => void;
+  /** The panel-local view-state store (scoped to the vault by partition). */
+  store: ViewStateStore;
+  /** The active document's vcs path (the store key). */
+  path: string;
 }
 
 export const DocStateContext = createContext<DocStateContextValue | null>(null);
@@ -44,34 +35,35 @@ export type Setter<T> = (next: T | ((prev: T) => T)) => void;
 
 export function useDocState<T>(key: string, initial: T): [T, Setter<T>] {
   const ctx = useContext(DocStateContext);
-  // Always invoke useState so the hook call order is stable across
-  // renders regardless of whether a Provider is mounted.
+  // Always invoke useState so hook call order is stable regardless of whether
+  // a Provider is mounted (fallback path for non-Spectrolite hosts).
   const [local, setLocal] = useState<T>(initial);
+  // Re-render when the store entry for this path changes (another consumer
+  // updated the same key, or a migration seeded it).
+  const [, bump] = useState(0);
 
-  const ctxSetState = ctx?.setState;
-  const stored = ctx ? ctx.state[key] : undefined;
-  const value = (stored === undefined ? (ctx ? initial : local) : (stored as T));
+  const store = ctx?.store ?? null;
+  const path = ctx?.path ?? null;
+
+  useEffect(() => {
+    if (!store || path === null) return;
+    return store.subscribe(path, () => bump((n) => n + 1));
+  }, [store, path]);
+
+  const value = store && path !== null ? store.get(path, key, initial) : local;
 
   const setValue = useCallback<Setter<T>>(
     (next) => {
-      if (!ctxSetState) {
+      if (!store || path === null) {
         setLocal(next as never);
         return;
       }
-      // Forward functional updates verbatim so the provider can resolve
-      // them against the LATEST state map. Calling `next(value)` here
-      // would capture the render-time `value` and break chained
-      // updates within a single tick.
-      if (typeof next === "function") {
-        const fn = next as (prev: T) => T;
-        ctxSetState(key, (prev: unknown) => fn(
-          prev === undefined ? initial : (prev as T),
-        ));
-      } else {
-        ctxSetState(key, next);
-      }
+      const resolved = typeof next === "function"
+        ? (next as (prev: T) => T)(store.get(path, key, initial))
+        : next;
+      store.set(path, key, resolved);
     },
-    [ctxSetState, key, initial],
+    [store, path, key, initial],
   );
 
   return [value, setValue];
