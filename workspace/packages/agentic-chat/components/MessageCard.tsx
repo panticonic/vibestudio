@@ -1,5 +1,5 @@
-import React, { useCallback } from "react";
-import { Badge, Box, Card, Code, Flex, IconButton, Text } from "@radix-ui/themes";
+import React, { useCallback, useState } from "react";
+import { Badge, Box, Button, Card, Code, Flex, IconButton, Text } from "@radix-ui/themes";
 import { CopyIcon, CheckIcon, ChatBubbleIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { CONTENT_TYPE_INLINE_UI, isClientParticipantType } from "@workspace/pubsub";
 import { TypingIndicator } from "./TypingIndicator";
@@ -8,6 +8,7 @@ import { ImageGallery } from "./ImageGallery";
 import { InlineUiMessage, parseInlineUiData } from "./InlineUiMessage";
 import { AgentDisconnectedMessage } from "./AgentDisconnectedMessage";
 import { CustomMessageCard } from "./CustomMessage";
+import ModelCredentialRequiredCard from "./ModelCredentialRequiredCard";
 import type { ChatMessage, InlineUiComponentEntry, MessageTypeComponentEntry } from "../types";
 import type { SenderInfo } from "./MessageList";
 import type { MdxActionHandlers } from "./markdownComponents";
@@ -84,6 +85,36 @@ export const MessageCard = React.memo(function MessageCard({
   const handleReply = useCallback(() => {
     onReply?.(msg.id);
   }, [onReply, msg.id]);
+  const [resumeScheduleState, setResumeScheduleState] = useState<
+    "idle" | "scheduling" | "scheduled" | "failed"
+  >("idle");
+  const handleScheduleResumeAtReset = useCallback(async () => {
+    const diagnostic = msg.diagnostic;
+    const callMethod = chat["callMethod"];
+    if (!diagnostic?.messageId || !diagnostic.resetAt || typeof callMethod !== "function") {
+      return;
+    }
+    setResumeScheduleState("scheduling");
+    try {
+      const result = await (
+        callMethod as (
+          participantId: string,
+          method: string,
+          args: unknown
+        ) => Promise<unknown>
+      )(msg.senderId, "scheduleResumeAtReset", {
+        messageId: diagnostic.messageId,
+        resetAt: diagnostic.resetAt,
+      });
+      const scheduled =
+        !!result &&
+        typeof result === "object" &&
+        (result as { scheduled?: unknown }).scheduled === true;
+      setResumeScheduleState(scheduled ? "scheduled" : "failed");
+    } catch {
+      setResumeScheduleState("failed");
+    }
+  }, [chat, msg.diagnostic, msg.senderId]);
 
   // Handle inline_ui messages
   if (msg.contentType === CONTENT_TYPE_INLINE_UI) {
@@ -103,6 +134,25 @@ export const MessageCard = React.memo(function MessageCard({
         </Box>
       );
     }
+  }
+
+  // Model credential connect card — rendered from the channel's unresolved
+  // credential requests (agentic.credential-connect.v1 envelopes).
+  if (msg.contentType === "credential-connect" && msg.credentialRequest) {
+    const request = msg.credentialRequest;
+    return (
+      <Box key={key} className="message-row message-row-system">
+        <ModelCredentialRequiredCard
+          props={{
+            ...(request.connectSpec as Record<string, unknown>),
+            providerId: request.providerId,
+            ...(request.modelBaseUrl ? { modelBaseUrl: request.modelBaseUrl } : {}),
+            agentParticipantId: request.agentParticipantId,
+          }}
+          chat={chat as { callMethod: (participantId: string, method: string, args: unknown) => Promise<unknown> }}
+        />
+      </Box>
+    );
   }
 
   // Handle system messages (e.g., agent disconnection notifications)
@@ -199,6 +249,27 @@ export const MessageCard = React.memo(function MessageCard({
                 <Text size="1" color="gray" style={{ whiteSpace: "pre-wrap" }}>
                   {msg.diagnostic.detail ?? msg.content}
                 </Text>
+              )}
+              {msg.diagnostic.resetAt && msg.diagnostic.messageId && (
+                <Flex align="center" gap="2" wrap="wrap">
+                  <Button
+                    size="1"
+                    variant="soft"
+                    color={resumeScheduleState === "failed" ? "red" : "blue"}
+                    disabled={resumeScheduleState === "scheduling" || resumeScheduleState === "scheduled"}
+                    onClick={handleScheduleResumeAtReset}
+                    title="Resume this turn when the provider limit resets"
+                  >
+                    <ReloadIcon />
+                    {resumeScheduleState === "scheduling"
+                      ? "Scheduling"
+                      : resumeScheduleState === "scheduled"
+                        ? "Scheduled"
+                        : resumeScheduleState === "failed"
+                          ? "Retry scheduling"
+                          : "Resume at reset"}
+                  </Button>
+                </Flex>
               )}
             </Flex>
           </Flex>

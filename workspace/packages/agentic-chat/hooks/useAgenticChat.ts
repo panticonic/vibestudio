@@ -83,13 +83,10 @@ function actorForClient(clientId: string | undefined, metadata: ChatParticipantM
   };
 }
 
-const SANDBOX_METHOD_TIMEOUT_MS = 20 * 60 * 1000;
-
 async function waitForMethodHandle<T>(
   handle: { result: Promise<T>; cancel?: () => Promise<void> },
   options?: { timeoutMs?: number; signal?: AbortSignal }
 ): Promise<T> {
-  const timeoutMs = options?.timeoutMs ?? SANDBOX_METHOD_TIMEOUT_MS;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let abortCleanup: (() => void) | undefined;
   const cancel = () => {
@@ -99,7 +96,8 @@ async function waitForMethodHandle<T>(
   };
   try {
     const blockers: Array<Promise<never>> = [];
-    if (timeoutMs > 0) {
+    if (options?.timeoutMs !== undefined && options.timeoutMs > 0) {
+      const timeoutMs = options.timeoutMs;
       blockers.push(
         new Promise<never>((_, reject) => {
           timeout = setTimeout(() => {
@@ -713,6 +711,72 @@ export function useAgenticChat({
         const methods: Record<string, MethodDefinition> = {
           ...feedbackMethods,
           ...toolMethods,
+          confirm: {
+            description: "Ask the user to approve or deny a requested agent action.",
+            parameters: z
+              .object({
+                question: z.string(),
+                details: z.unknown().optional(),
+              })
+              .passthrough(),
+            execute: async (args: unknown, ctx: MethodExecutionContext) => {
+              const input = args as { question?: unknown; details?: unknown };
+              const question =
+                typeof input.question === "string" && input.question.trim()
+                  ? input.question
+                  : "Allow this action?";
+              const fb = feedbackRef.current;
+              return new Promise<{ granted: boolean; details?: unknown }>((resolve) => {
+                let settled = false;
+                const finish = (granted: boolean) => {
+                  if (settled) return;
+                  settled = true;
+                  fb.removeFeedback(ctx.callId);
+                  resolve({ granted, details: input.details });
+                };
+                fb.addFeedback({
+                  type: "schema",
+                  callId: ctx.callId,
+                  title: question,
+                  fields: [
+                    ...(input.details
+                      ? ([
+                          {
+                            key: "__details",
+                            type: "readonly",
+                            label: "Details",
+                            default:
+                              typeof input.details === "string"
+                                ? input.details
+                                : JSON.stringify(input.details, null, 2),
+                          },
+                        ] as ActiveFeedbackSchema["fields"])
+                      : []),
+                    {
+                      key: "approval",
+                      type: "buttonGroup",
+                      submitOnSelect: true,
+                      buttons: [
+                        { value: "deny", label: "Deny", color: "gray" },
+                        { value: "allow", label: "Allow", color: "green" },
+                      ],
+                    },
+                  ],
+                  values: {},
+                  hideSubmit: true,
+                  createdAt: Date.now(),
+                  complete: (result: FeedbackResult) => {
+                    if (result.type === "submit") {
+                      const values = (result.value ?? {}) as Record<string, unknown>;
+                      finish(values["approval"] === "allow");
+                    } else {
+                      finish(false);
+                    }
+                  },
+                });
+              });
+            },
+          },
           set_title: {
             description: "Set the conversation title",
             parameters: z.object({ title: z.string().describe("The new title") }),

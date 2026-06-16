@@ -50,6 +50,104 @@ function formatDisplayName(toolName: string): string {
     .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2");
 }
 
+type ConsoleLine = {
+  text: string;
+  level: "log" | "info" | "debug" | "warn" | "error";
+};
+
+function parseConsoleLine(line: string): ConsoleLine {
+  const match = /^\[(DEBUG|INFO|WARN|ERROR)\]\s?(.*)$/i.exec(line);
+  if (match) {
+    const level = match[1]!.toLowerCase();
+    return {
+      text: match[2] ?? "",
+      level: isConsoleLevel(level) ? level : "log",
+    };
+  }
+  return { text: line, level: "log" };
+}
+
+function isConsoleLevel(value: string): value is ConsoleLine["level"] {
+  return value === "log" || value === "info" || value === "debug" || value === "warn" || value === "error";
+}
+
+function consoleLineTone(level: ConsoleLine["level"]): {
+  color: "gray" | "blue" | "amber" | "red";
+  background: string;
+  border: string;
+} {
+  if (level === "error") {
+    return { color: "red", background: "var(--red-a2)", border: "var(--red-a5)" };
+  }
+  if (level === "warn") {
+    return { color: "amber", background: "var(--amber-a2)", border: "var(--amber-a5)" };
+  }
+  if (level === "info") {
+    return { color: "blue", background: "var(--blue-a2)", border: "var(--blue-a5)" };
+  }
+  return { color: "gray", background: "transparent", border: "var(--gray-a4)" };
+}
+
+function ConsoleOutputView({ output }: { output: string }) {
+  const lines = useMemo(
+    () => output.split(/\r?\n/).map(parseConsoleLine),
+    [output]
+  );
+  return (
+    <Box
+      style={{
+        border: "1px solid var(--gray-a5)",
+        borderRadius: "4px",
+        background: "var(--gray-a2)",
+        overflow: "hidden",
+      }}
+    >
+      {lines.map((line, index) => {
+        const tone = consoleLineTone(line.level);
+        return (
+          <Flex
+            key={`${index}-${line.text}`}
+            align="start"
+            gap="2"
+            style={{
+              minHeight: 22,
+              padding: "3px 8px",
+              borderTop: index === 0 ? undefined : "1px solid var(--gray-a3)",
+              borderLeft: `3px solid ${tone.border}`,
+              background: tone.background,
+            }}
+          >
+            <Text
+              size="1"
+              color={tone.color}
+              style={{
+                width: 42,
+                flexShrink: 0,
+                fontFamily: "var(--font-mono, monospace)",
+                textTransform: "uppercase",
+              }}
+            >
+              {line.level === "log" ? "" : line.level}
+            </Text>
+            <Text
+              size="1"
+              color={line.level === "log" || line.level === "debug" ? "gray" : tone.color}
+              style={{
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+                fontFamily: "var(--font-mono, monospace)",
+                lineHeight: 1.5,
+              }}
+            >
+              {line.text || " "}
+            </Text>
+          </Flex>
+        );
+      })}
+    </Box>
+  );
+}
+
 // ── ActionPill (collapsed view) ────────────────────────────────────────────
 
 export const ActionPill = React.memo(function ActionPill({
@@ -219,7 +317,7 @@ export const ExpandedAction = React.memo(function ExpandedAction({
 
         {exec.consoleOutput && (
           <CollapsibleSection label="Console" defaultOpen={true} color="blue">
-            <ToolDataView value={exec.consoleOutput} label="Console output" chat={chat} />
+            <ConsoleOutputView output={exec.consoleOutput} />
           </CollapsibleSection>
         )}
 

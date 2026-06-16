@@ -1,7 +1,8 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Box, Button, Callout, Card, DropdownMenu, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import { Badge, Box, Button, Callout, DropdownMenu, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
 import { DotsHorizontalIcon, ExclamationTriangleIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { EventErrorBoundary } from "@workspace/tool-ui/components/EventErrorBoundary";
+import { SurfaceFrame } from "@workspace/tool-ui/components/SurfaceFrame";
 import type { CustomMessageCardPayload } from "@workspace/agentic-core";
 import { foldCustomMessageState, validateCustomState } from "@workspace/agentic-core";
 import {
@@ -391,17 +392,12 @@ function ReadyCustomCard({
 }) {
   const [inspectOpen, setInspectOpen] = useState(false);
   return (
-    <Card className="message-card">
-      <Flex align="center" gap="2" mb="1">
-        <Text
-          size="1"
-          color="gray"
-          weight="medium"
-          onClick={onCollapse}
-          style={onCollapse ? { cursor: "pointer", userSelect: "none" } : undefined}
-        >
-          {payload.typeId}
-        </Text>
+    <SurfaceFrame
+      className="message-card"
+      title={payload.typeId}
+      tone="blue"
+      onHeaderClick={onCollapse}
+      actions={
         <CardActionsMenu
           payload={payload}
           entry={entry}
@@ -409,7 +405,8 @@ function ReadyCustomCard({
           onToggleInspect={() => setInspectOpen((open) => !open)}
           onCollapse={onCollapse}
         />
-      </Flex>
+      }
+    >
       {inspectOpen && (
         <Flex direction="column" gap="1" mb="2">
           <MetaRow label="message" value={payload.messageId} />
@@ -430,7 +427,7 @@ function ReadyCustomCard({
         </Flex>
       )}
       {children}
-    </Card>
+    </SurfaceFrame>
   );
 }
 
@@ -447,11 +444,13 @@ function CustomFailedCard({
   entry?: MessageTypeComponentEntry;
 }) {
   return (
-    <Card className="message-card">
-      <Flex align="center" gap="2" mb="1">
-        <Text size="1" color="gray" weight="medium">{payload.typeId}</Text>
-        <CardActionsMenu payload={payload} entry={entry} />
-      </Flex>
+    <SurfaceFrame
+      className="message-card"
+      title={payload.typeId}
+      tone="red"
+      badge={<Badge color="red" size="1">Failed</Badge>}
+      actions={<CardActionsMenu payload={payload} entry={entry} />}
+    >
       <Callout.Root color="red" size="1">
         <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
         <Text as="div" size="2" className="rt-CalloutText">
@@ -461,7 +460,7 @@ function CustomFailedCard({
           </Flex>
         </Text>
       </Callout.Root>
-    </Card>
+    </SurfaceFrame>
   );
 }
 
@@ -511,7 +510,34 @@ function CustomDiagnosticCard({
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   return (
-    <Card className="message-card">
+    <SurfaceFrame
+      className="message-card"
+      title={payload.typeId}
+      tone={loading ? "gray" : "red"}
+      icon={loading ? <Spinner size="1" /> : <ExclamationTriangleIcon />}
+      subtitle={
+        loading
+          ? stage
+            ? (LOADING_STAGE_LABELS[stage] ?? stage)
+            : "waiting for registry"
+          : errorMessage
+      }
+      badge={
+        <Badge color={color} size="1" variant="soft">
+          {loading ? (stage ?? "waiting") : "error"}
+        </Badge>
+      }
+      actions={
+        <Flex align="center" gap="1">
+          {retry && (
+            <Button size="1" variant="soft" color="red" onClick={retry}>
+              <ReloadIcon width={11} height={11} /> Retry
+            </Button>
+          )}
+          <CardActionsMenu payload={payload} entry={entry} onCollapse={onCollapse} />
+        </Flex>
+      }
+    >
       {stalled && chat && (
         <UiFeedbackReporter
           chat={chat}
@@ -522,19 +548,6 @@ function CustomDiagnosticCard({
         />
       )}
       <Flex direction="column" gap="2">
-        <Flex align="center" gap="2">
-          {loading ? <Spinner size="1" /> : <Badge color="red" size="1">Custom type</Badge>}
-          <Text size="2" weight="medium">{payload.typeId}</Text>
-          <Badge color={color} size="1" variant="soft">
-            {loading ? (stage ?? "waiting for registry") : "error"}
-          </Badge>
-          {retry && (
-            <Button size="1" variant="soft" color="red" onClick={retry}>
-              <ReloadIcon width={11} height={11} /> Retry
-            </Button>
-          )}
-          <CardActionsMenu payload={payload} entry={entry} onCollapse={onCollapse} />
-        </Flex>
         {loading && (
           <Text size="1" color="gray">
             {stage
@@ -579,7 +592,7 @@ function CustomDiagnosticCard({
           </Flex>
         )}
       </Flex>
-    </Card>
+    </SurfaceFrame>
   );
 }
 

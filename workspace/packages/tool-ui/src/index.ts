@@ -33,6 +33,12 @@ export type { FeedbackFormArgs } from "@workspace/pubsub";
 // ============================================================================
 export { FeedbackFormRenderer, type FeedbackFormRendererProps } from "./components/FeedbackFormRenderer";
 export { FeedbackContainer, type FeedbackContainerProps } from "./components/FeedbackContainer";
+export {
+  SurfaceFrame,
+  surfaceButtonProps,
+  type SurfaceFrameProps,
+  type SurfaceTone,
+} from "./components/SurfaceFrame";
 export { ToolPreviewField, type ToolPreviewFieldProps } from "./components/ToolPreviewField";
 export { ErrorBoundary } from "./components/ErrorBoundary";
 export { EventErrorBoundary, type EventErrorBoundaryProps } from "./components/EventErrorBoundary";

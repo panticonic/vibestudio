@@ -82,7 +82,7 @@ export function AgenticChat({
   });
 
   return (
-    <ErrorBoundary>
+    <ErrorBoundary surfaceName="chat panel">
       {/* Theme is applied here (above ChatProvider) rather than in ChatLayout
           so that ChatLayout does NOT read from context. This prevents
           keystroke-driven context updates from re-rendering ChatLayout and

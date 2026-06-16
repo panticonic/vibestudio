@@ -221,7 +221,7 @@ describe("InlineGroup custom messages", () => {
 
     // The spinner pill is clickable and self-describing.
     fireEvent.click(screen.getByRole("button", { expanded: false }));
-    expect(screen.getByText(/Loading renderer source file/)).toBeTruthy();
+    expect(screen.getAllByText(/Loading renderer source file/).length).toBeGreaterThan(0);
     // Copy details now lives behind the card actions ("⋯") menu — the popper
     // content can't open in jsdom (duplicate React under @floating-ui), so
     // assert the menu trigger by its accessible name.

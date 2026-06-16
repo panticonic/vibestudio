@@ -5,9 +5,10 @@
  * at any time to interact with the component.
  */
 import { Suspense, useCallback, useEffect, useMemo, useReducer, useState, type ComponentType } from "react";
-import { Box, Button, Card, Callout, Flex, Spinner, Text } from "@radix-ui/themes";
-import { ExclamationTriangleIcon, ChevronDownIcon, ChevronUpIcon, ComponentInstanceIcon } from "@radix-ui/react-icons";
+import { Box, Button, Callout, Flex, Spinner, Text } from "@radix-ui/themes";
+import { ExclamationTriangleIcon, ComponentInstanceIcon } from "@radix-ui/react-icons";
 import { EventErrorBoundary } from "@workspace/tool-ui/components/EventErrorBoundary";
+import { SurfaceFrame } from "@workspace/tool-ui/components/SurfaceFrame";
 import { wrapChatForErrorReporting, wrapScopesForErrorReporting } from "../utils/wrapSandboxApis";
 import type { InlineUiData } from "@workspace/pubsub";
 import type { ChatSandboxValue } from "@workspace/agentic-core";
@@ -101,7 +102,6 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
       console.warn("[InlineUiMessage] Scope persist after interaction failed:", err);
     });
   }, [scopeManager]);
-  const [expanded, setExpanded] = useState(true);
 
   // Reset async error when props change (same trigger as EventErrorBoundary's resetKey)
   const resetKey = JSON.stringify(data.props);
@@ -126,51 +126,30 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
   }
 
   return (
-    <Card
-      variant="surface"
-      size="1"
-      style={{
-        background: "var(--color-surface)",
-        border: "1px solid var(--gray-a4)",
-        overflow: "hidden",
-      }}
+    <SurfaceFrame
+      title="Interactive UI"
+      tone="blue"
+      icon={<ComponentInstanceIcon />}
+      collapsible
+      defaultExpanded
     >
-      {/* Clickable header — always visible */}
-      <Flex
-        align="center"
-        gap="2"
-        px="2"
-        py="1"
-        onClick={() => setExpanded(v => !v)}
-        style={{
-          cursor: "pointer",
-          userSelect: "none",
-          borderBottom: expanded ? "1px solid var(--gray-a4)" : "none",
-        }}
+      <Box
+        onClickCapture={onInteraction}
+        onInputCapture={onInteraction}
+        onChangeCapture={onInteraction}
       >
-        <ComponentInstanceIcon style={{ color: "var(--gray-9)", flexShrink: 0 }} />
-        <Text size="1" color="gray" style={{ flex: 1 }}>Interactive UI</Text>
-        <Button variant="ghost" size="1" tabIndex={-1} style={{ pointerEvents: "none" }}>
-          {expanded ? <ChevronUpIcon /> : <ChevronDownIcon />}
-        </Button>
-      </Flex>
-
-      {/* Collapsible content */}
-      {expanded && (
-        <Box p="2" onClickCapture={onInteraction} onInputCapture={onInteraction} onChangeCapture={onInteraction}>
-          <EventErrorBoundary
-            resetKey={resetKey}
-            renderFallback={(error) => (
-              <InlineUiErrorCallout error={error} componentId={data.id} chat={chat} />
-            )}
-          >
-            <Suspense fallback={<Spinner size="1" />}>
-              <CompiledComponent props={componentProps} chat={wrappedChat as unknown as Record<string, unknown>} scope={scope} scopes={wrappedScopes as unknown as Record<string, unknown>} />
-            </Suspense>
-          </EventErrorBoundary>
-        </Box>
-      )}
-    </Card>
+        <EventErrorBoundary
+          resetKey={resetKey}
+          renderFallback={(error) => (
+            <InlineUiErrorCallout error={error} componentId={data.id} chat={chat} />
+          )}
+        >
+          <Suspense fallback={<Spinner size="1" />}>
+            <CompiledComponent props={componentProps} chat={wrappedChat as unknown as Record<string, unknown>} scope={scope} scopes={wrappedScopes as unknown as Record<string, unknown>} />
+          </Suspense>
+        </EventErrorBoundary>
+      </Box>
+    </SurfaceFrame>
   );
 }
 

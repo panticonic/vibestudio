@@ -1,8 +1,34 @@
 import React, { Component, type ReactNode } from "react";
 
+interface PanelRenderErrorDiagnosticRequest {
+  surfaceName?: string;
+  errorName?: string;
+  errorMessage: string;
+  errorStack?: string;
+  componentStack?: string;
+  locationHref?: string;
+  userAgent?: string;
+  timestamp?: string;
+}
+
+interface PanelErrorDiagnosticChatResult {
+  panelId: string;
+  title: string;
+  prompt: string;
+}
+
+type PanelErrorDiagnosticLauncher = (
+  request: PanelRenderErrorDiagnosticRequest
+) => Promise<PanelErrorDiagnosticChatResult>;
+
+interface PanelErrorDiagnosticLauncherGlobal {
+  __natstackPanelErrorDiagnostics?: PanelErrorDiagnosticLauncher;
+}
+
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
+  surfaceName?: string;
   onError?: (error: Error, errorInfo: React.ErrorInfo) => void;
 }
 
@@ -11,6 +37,9 @@ interface ErrorBoundaryState {
   error: Error | null;
   errorInfo: React.ErrorInfo | null;
   autoReloading: boolean;
+  debugChatOpening: boolean;
+  debugChatOpened: boolean;
+  debugChatError: string | null;
 }
 
 const TRANSIENT_IMPORT_ERROR_RE = /failed to fetch dynamically imported module|error loading dynamically imported module|loading chunk \d+ failed|importing a module script failed/i;
@@ -20,6 +49,13 @@ const AUTO_RELOAD_WINDOW_MS = 30_000;
 function isTransientImportError(error: Error): boolean {
   const text = `${error.name}\n${error.message}\n${error.stack ?? ""}`;
   return TRANSIENT_IMPORT_ERROR_RE.test(text);
+}
+
+function getPanelErrorDiagnosticLauncher(): PanelErrorDiagnosticLauncher | null {
+  const g = globalThis as typeof globalThis & PanelErrorDiagnosticLauncherGlobal;
+  return typeof g.__natstackPanelErrorDiagnostics === "function"
+    ? g.__natstackPanelErrorDiagnostics
+    : null;
 }
 
 function shouldAutoReloadForTransientImport(): boolean {
@@ -53,7 +89,15 @@ function shouldAutoReloadForTransientImport(): boolean {
 export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
     super(props);
-    this.state = { hasError: false, error: null, errorInfo: null, autoReloading: false };
+    this.state = {
+      hasError: false,
+      error: null,
+      errorInfo: null,
+      autoReloading: false,
+      debugChatOpening: false,
+      debugChatOpened: false,
+      debugChatError: null,
+    };
   }
 
   static getDerivedStateFromError(error: Error): Partial<ErrorBoundaryState> {
@@ -79,7 +123,43 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     } catch {
       // Ignore storage failures; retry should still re-render.
     }
-    this.setState({ hasError: false, error: null, errorInfo: null, autoReloading: false });
+    this.setState({
+      hasError: false,
+      error: null,
+      errorInfo: null,
+      autoReloading: false,
+      debugChatOpening: false,
+      debugChatOpened: false,
+      debugChatError: null,
+    });
+  };
+
+  handleDebugWithAgent = async (): Promise<void> => {
+    const launcher = getPanelErrorDiagnosticLauncher();
+    if (!launcher) {
+      this.setState({ debugChatError: "Panel diagnostics are not available in this host." });
+      return;
+    }
+    const error = this.state.error;
+    this.setState({ debugChatOpening: true, debugChatError: null });
+    try {
+      await launcher({
+        surfaceName: this.props.surfaceName ?? "panel",
+        errorName: error?.name,
+        errorMessage: error?.message ?? String(error ?? "Unknown error"),
+        errorStack: error?.stack,
+        componentStack: this.state.errorInfo?.componentStack ?? undefined,
+        locationHref: typeof window !== "undefined" ? window.location.href : undefined,
+        userAgent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
+        timestamp: new Date().toISOString(),
+      });
+      this.setState({ debugChatOpening: false, debugChatOpened: true });
+    } catch (err) {
+      this.setState({
+        debugChatOpening: false,
+        debugChatError: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 
   render(): ReactNode {
@@ -88,6 +168,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         return this.props.fallback;
       }
 
+      const surfaceName = this.props.surfaceName ?? "panel";
+      const diagnosticLauncherAvailable = getPanelErrorDiagnosticLauncher() !== null;
       return (
         <div
           style={{
@@ -113,8 +195,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             </h2>
             <p style={{ marginBottom: "16px", opacity: 0.8 }}>
               {this.state.autoReloading
-                ? "The chat panel hit a transient network error while loading. Reloading..."
-                : "The chat panel encountered an error. You can try to recover or reload the panel."}
+                ? `The ${surfaceName} hit a transient network error while loading. Reloading...`
+                : `The ${surfaceName} encountered an error. You can debug it with an agent, try to recover, or reload the panel.`}
             </p>
             <details
               style={{
@@ -155,14 +237,43 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 </pre>
               )}
             </details>
-            <div style={{ display: "flex", gap: "12px", justifyContent: "center" }}>
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: "12px",
+                justifyContent: "center",
+              }}
+            >
+              {diagnosticLauncherAvailable && (
+                <button
+                  onClick={() => { void this.handleDebugWithAgent(); }}
+                  disabled={this.state.debugChatOpening}
+                  style={{
+                    padding: "8px 16px",
+                    backgroundColor: "var(--primary, #4a9eff)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: this.state.debugChatOpening ? "default" : "pointer",
+                    fontSize: "14px",
+                    opacity: this.state.debugChatOpening ? 0.8 : 1,
+                  }}
+                >
+                  {this.state.debugChatOpening
+                    ? "Opening..."
+                    : this.state.debugChatOpened
+                      ? "Debug Chat Opened"
+                      : "Debug with Agent"}
+                </button>
+              )}
               <button
                 onClick={this.handleRetry}
                 style={{
                   padding: "8px 16px",
-                  backgroundColor: "var(--primary, #4a9eff)",
-                  color: "white",
-                  border: "none",
+                  backgroundColor: "var(--surface, #3a3a3a)",
+                  color: "var(--foreground, #e0e0e0)",
+                  border: "1px solid var(--border, #444)",
                   borderRadius: "6px",
                   cursor: "pointer",
                   fontSize: "14px",
@@ -185,6 +296,18 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 Reload Panel
               </button>
             </div>
+            {this.state.debugChatError && (
+              <p
+                style={{
+                  margin: "12px 0 0",
+                  color: "var(--error, #f44336)",
+                  fontSize: "12px",
+                  overflowWrap: "anywhere",
+                }}
+              >
+                {this.state.debugChatError}
+              </p>
+            )}
           </div>
         </div>
       );

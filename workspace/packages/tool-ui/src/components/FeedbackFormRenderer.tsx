@@ -28,6 +28,7 @@ export interface FeedbackFormRendererProps extends FeedbackCallbacks {
   severity?: "info" | "warning" | "danger";
   hideSubmit?: boolean;
   hideCancel?: boolean;
+  showTitle?: boolean;
 }
 
 /**
@@ -126,6 +127,7 @@ export function FeedbackFormRenderer({
   severity,
   hideSubmit = false,
   hideCancel = false,
+  showTitle = true,
   onSubmit,
   onCancel,
   onError,
@@ -152,8 +154,8 @@ export function FeedbackFormRenderer({
     for (const field of effectiveFields) {
       if (field.required) {
         const value = values[field.key];
-        if (value === undefined || value === "") {
-          onError(`Required field "${field.label}" is missing`);
+        if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) {
+          onError(`Required field "${field.label ?? field.key}" is missing`);
           return;
         }
       }
@@ -176,7 +178,7 @@ export function FeedbackFormRenderer({
 
   // Don't show title if we have an approvalHeader field (header contains its own title)
   const hasApprovalHeader = effectiveFields.some(f => f.type === "approvalHeader");
-  const showTitle = !hasApprovalHeader && title;
+  const shouldShowTitle = showTitle && !hasApprovalHeader && title;
 
   // Custom field renderers for toolPreview and approvalHeader fields
   const customFieldRenderers = useMemo(() => ({
@@ -201,7 +203,7 @@ export function FeedbackFormRenderer({
   return (
     <Box>
       {/* Title with optional severity icon (hidden when approvalHeader is used) */}
-      {showTitle && (
+      {shouldShowTitle && (
         <Flex align="center" gap="2" mb="4">
           {severity && getSeverityIcon(severity)}
           <Heading size="4">{title}</Heading>

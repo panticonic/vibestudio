@@ -72,6 +72,17 @@ export interface CustomMessageUpdatePayload {
   seq: number;
 }
 
+/** Payload for an unresolved model-credential connect card. `connectSpec`
+ *  is the shared connect-preset props (ModelCredentialSetupProps). */
+export interface CredentialRequestCardPayload {
+  credKey: string;
+  providerId: string;
+  connectSpec: Record<string, unknown>;
+  modelBaseUrl?: string;
+  expiresAt?: string;
+  agentParticipantId: string;
+}
+
 export interface CustomMessageCardPayload {
   messageId: string;
   typeId: string;
@@ -145,11 +156,16 @@ export interface LifecycleNotice {
 export type DiagnosticNoticeSeverity = "info" | "warning" | "error";
 
 export interface DiagnosticNotice {
+  messageId?: string;
   code?: string;
+  failureCode?: string;
   severity: DiagnosticNoticeSeverity;
   title: string;
   detail?: string;
   reason?: string;
+  recoverable?: boolean;
+  resetAt?: string;
+  retryAfterMs?: number;
 }
 
 // ===========================================================================
@@ -184,6 +200,7 @@ export interface ChatMessage {
   inlineUi?: InlineUiCardPayload;
   approval?: ApprovalCardPayload;
   custom?: CustomMessageCardPayload;
+  credentialRequest?: CredentialRequestCardPayload;
   lifecycle?: LifecycleNotice;
   diagnostic?: DiagnosticNotice;
 }

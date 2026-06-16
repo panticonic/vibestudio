@@ -44,6 +44,7 @@ import {
   CodeIcon,
   Link2Icon,
   ExternalLinkIcon,
+  OpenInNewWindowIcon,
   MagnifyingGlassIcon,
   LightningBoltIcon,
   RocketIcon,
@@ -96,6 +97,7 @@ const Icons = {
   CodeIcon,
   Link2Icon,
   ExternalLinkIcon,
+  OpenInNewWindowIcon,
   MagnifyingGlassIcon,
   LightningBoltIcon,
   RocketIcon,
@@ -128,6 +130,22 @@ const Callout = Object.assign(RadixCallout.Root, {
   Icon: RadixCallout.Icon,
   Text: CalloutText,
 });
+
+function FeedbackFormTitle({
+  children,
+  title,
+}: {
+  children?: ReactNode;
+  title?: ReactNode;
+}) {
+  const content = children ?? title;
+  if (!content) return null;
+  return (
+    <Heading size="4" mb="2">
+      {content}
+    </Heading>
+  );
+}
 
 function createActionButton(actions?: MdxActionHandlers) {
   return function ActionButton({
@@ -296,6 +314,7 @@ export const mdxComponents: Record<string, unknown> = {
   Table,
   Text,
   Icons,
+  FeedbackFormTitle,
 };
 
 export function createMdxComponents(actions?: MdxActionHandlers): Record<string, unknown> {

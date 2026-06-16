@@ -1,7 +1,7 @@
 // =============================================================================
 // @workspace/agentic-core — Headless agentic session helpers
 //
-// Pi (`@earendil-works/pi-agent-core`) owns live agent session execution.
+// Pi (`@workspace/pi-core`) owns live agent session execution.
 // Durable transcript state is projected from channel trajectory events. This
 // package provides:
 // - Pi message/event type re-exports (single import surface for consumers)
@@ -12,7 +12,7 @@
 // =============================================================================
 
 // --- Pi message/event type re-exports ---
-export type { AgentMessage, AgentEvent } from "@earendil-works/pi-agent-core";
+export type { AgentMessage, AgentEvent } from "@workspace/pi-core";
 
 // --- Headless types ---
 export type {

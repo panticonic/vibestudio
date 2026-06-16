@@ -60,13 +60,10 @@ import {
   unsubscribeHeadlessAgent,
 } from "./channel.js";
 
-const SANDBOX_METHOD_TIMEOUT_MS = 20 * 60 * 1000;
-
 async function waitForMethodHandle<T>(
   handle: { result: Promise<T>; cancel?: () => Promise<void> },
   options?: { timeoutMs?: number; signal?: AbortSignal }
 ): Promise<T> {
-  const timeoutMs = options?.timeoutMs ?? SANDBOX_METHOD_TIMEOUT_MS;
   let timeout: ReturnType<typeof setTimeout> | undefined;
   let abortCleanup: (() => void) | undefined;
   const cancel = () => {
@@ -74,7 +71,8 @@ async function waitForMethodHandle<T>(
   };
   try {
     const blockers: Array<Promise<never>> = [];
-    if (timeoutMs > 0) {
+    if (options?.timeoutMs !== undefined && options.timeoutMs > 0) {
+      const timeoutMs = options.timeoutMs;
       blockers.push(new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           cancel();

@@ -112,6 +112,25 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   const custom = Object.values(state.customMessages).flatMap((item) =>
     projectedCustomMessageToChatMessage(item, state.messageTypes[item.typeId ?? ""])
   );
+  const credentialRequests = Object.values(state.credentialRequests ?? {}).map(
+    (request): ChatMessage & { sortTime: number } => ({
+      id: `credential:${request.credKey}`,
+      senderId: request.participantId,
+      content: `Model credential required (${request.providerId})`,
+      contentType: "credential-connect",
+      kind: "system",
+      complete: false,
+      credentialRequest: {
+        credKey: request.credKey,
+        providerId: request.providerId,
+        connectSpec: request.connectSpec,
+        modelBaseUrl: request.modelBaseUrl,
+        expiresAt: request.expiresAt,
+        agentParticipantId: request.participantId,
+      },
+      sortTime: Date.parse(request.publishedAt ?? "") || 0,
+    })
+  );
   return [
     ...messages,
     ...invocations,
@@ -121,6 +140,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
     ...silentClosedTurns,
     ...inlineUi,
     ...custom,
+    ...credentialRequests,
   ]
     .sort(
       (a, b) =>
@@ -324,12 +344,17 @@ function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[
   };
   const complete = message.status === "completed" || message.status === "failed";
   const thinking = (message.blocks ?? []).flatMap((block, index) => {
-    if (block.type !== "thinking" || !block.content) return [];
+    if (block.type !== "thinking") return [];
+    // Reasoning summaries stream as live deltas, so a contentless thinking
+    // block is pure noise (e.g. a reasoning phase whose summary never
+    // arrived) — drop it rather than rendering an empty pill.
+    const content = typeof block.content === "string" ? block.content : "";
+    if (!content) return [];
     return [
       {
         id: `thinking:${message.messageId}:${block.blockId ?? index}`,
         senderId: message.actor.id,
-        content: block.content,
+        content,
         contentType: "thinking",
         kind: "message",
         complete,
@@ -339,6 +364,7 @@ function projectedMessageToChatMessages(message: ProjectedMessage): ChatMessage[
     ];
   });
   const failureReason = message.status === "failed" ? message.failureReason : undefined;
+  if (isCredentialSuspensionReason(failureReason)) return thinking;
   const content = messageDisplayText(message.blocks);
   const diagnostic = diagnosticNoticeFromMessage(message);
   if (diagnostic) {
@@ -408,6 +434,13 @@ function messageShouldRenderStandalone(message: ProjectedMessage): boolean {
   return summary.hasText || summary.hasAttachmentOrData;
 }
 
+function isCredentialSuspensionReason(reason: string | undefined): boolean {
+  return (
+    reason === "model_credential_required" ||
+    reason === "model_credential_reconnect_required"
+  );
+}
+
 function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotice | null {
   const blocks = message.blocks ?? [];
   const diagnosticBlocks = blocks.filter((block) => block.type === "diagnostic");
@@ -420,11 +453,23 @@ function diagnosticNoticeFromMessage(message: ProjectedMessage): DiagnosticNotic
   const metadata = readDiagnosticMetadata(block.metadata);
   const content = block.content?.trim() || "Assistant message had no visible content.";
   return {
+    messageId: message.messageId as string,
     code: metadata.code,
+    failureCode: metadata.failureCode,
     severity: metadata.severity,
-    title: metadata.severity === "error" ? "Message failed" : "No assistant response",
+    title:
+      metadata.code === "max_model_calls_per_turn"
+        ? "Model call limit reached"
+        : metadata.failureCode === "usage_limit_terminal"
+          ? "Model usage limit reached"
+        : metadata.severity === "error"
+          ? "Message failed"
+          : "No assistant response",
     detail: content,
     reason: metadata.reason,
+    recoverable: metadata.recoverable,
+    resetAt: metadata.resetAt,
+    retryAfterMs: metadata.retryAfterMs,
   };
 }
 
@@ -563,9 +608,115 @@ function invocationCardStatus(
 }
 
 function invocationDescription(invocation: ProjectedInvocation, inferredSummary?: string): string {
-  return (
-    invocation.terminalReason ?? (invocation.status === "completed" ? "" : (inferredSummary ?? ""))
-  );
+  if (invocation.terminalReason) return invocation.terminalReason;
+  const uiDescription = uiInvocationDescription(invocation);
+  if (uiDescription) return uiDescription;
+  return invocation.status === "completed" ? "" : (inferredSummary ?? "");
+}
+
+function uiInvocationDescription(invocation: ProjectedInvocation): string | undefined {
+  switch (invocation.name) {
+    case "inline_ui":
+      return inlineUiInvocationDescription(invocation);
+    case "load_action_bar":
+      return actionBarInvocationDescription(invocation);
+    case "feedback_form":
+      return feedbackInvocationDescription(invocation, "feedback");
+    case "feedback_custom":
+      return feedbackInvocationDescription(invocation, "custom feedback");
+    case "ui_prompt":
+      return uiPromptInvocationDescription(invocation);
+    case "inspect_card":
+      return inspectCardInvocationDescription(invocation);
+    default:
+      return undefined;
+  }
+}
+
+function inlineUiInvocationDescription(invocation: ProjectedInvocation): string {
+  const request = recordOrEmpty(invocation.request);
+  const result = recordOrEmpty(invocation.result);
+  const source = uiSourceLabel(request);
+  const error = methodError(result);
+  if (error) return `Inline UI failed: ${error}`;
+  if (invocation.status === "completed") {
+    const id = stringValue(result["id"]);
+    return id
+      ? `Rendered inline UI (${id})`
+      : `Rendered inline UI${source ? ` from ${source}` : ""}`;
+  }
+  return `Rendering inline UI${source ? ` from ${source}` : ""}`;
+}
+
+function actionBarInvocationDescription(invocation: ProjectedInvocation): string {
+  const request = recordOrEmpty(invocation.request);
+  const result = recordOrEmpty(invocation.result);
+  const clear = request["clear"] === true || result["cleared"] === true;
+  const error = methodError(result);
+  if (error) return `Action bar failed: ${error}`;
+  if (clear) return invocation.status === "completed" ? "Cleared action bar" : "Clearing action bar";
+  const source = uiSourceLabel(request);
+  return invocation.status === "completed"
+    ? `Loaded action bar${source ? ` from ${source}` : ""}`
+    : `Loading action bar${source ? ` from ${source}` : ""}`;
+}
+
+function feedbackInvocationDescription(
+  invocation: ProjectedInvocation,
+  label: "feedback" | "custom feedback"
+): string {
+  const request = recordOrEmpty(invocation.request);
+  const result = recordOrEmpty(invocation.result);
+  const title = feedbackTitle(request, label);
+  if (invocation.status !== "completed") return `Waiting for ${label}: ${title}`;
+  return completedFeedbackDescription(result, title);
+}
+
+function uiPromptInvocationDescription(invocation: ProjectedInvocation): string {
+  const request = recordOrEmpty(invocation.request);
+  const title = stringValue(request["title"]) ?? "prompt";
+  const kind = stringValue(request["kind"]);
+  if (invocation.status !== "completed") {
+    return `Waiting for ${kind ? `${kind} ` : ""}prompt: ${title}`;
+  }
+  return `Prompt answered: ${title}`;
+}
+
+function inspectCardInvocationDescription(invocation: ProjectedInvocation): string {
+  const request = recordOrEmpty(invocation.request);
+  const result = recordOrEmpty(invocation.result);
+  const messageId = stringValue(request["messageId"]);
+  const suffix = messageId ? ` ${messageId}` : "";
+  const error = methodError(result);
+  if (error) return `Custom message inspection failed: ${error}`;
+  return invocation.status === "completed"
+    ? `Inspected custom message${suffix}`
+    : `Inspecting custom message${suffix}`;
+}
+
+function completedFeedbackDescription(result: Record<string, unknown>, title: string): string {
+  const type = stringValue(result["type"]);
+  if (type === "submit") return `Feedback submitted: ${title}`;
+  if (type === "cancel") return `Feedback cancelled: ${title}`;
+  if (type === "error") {
+    return `Feedback error: ${stringValue(result["message"]) ?? title}`;
+  }
+  return `Feedback completed: ${title}`;
+}
+
+function feedbackTitle(request: Record<string, unknown>, fallback: string): string {
+  return stringValue(request["title"]) ?? uiSourceLabel(request) ?? fallback;
+}
+
+function uiSourceLabel(request: Record<string, unknown>): string | undefined {
+  const path = stringValue(request["path"]);
+  if (path) return path;
+  return stringValue(request["code"]) ? "inline code" : undefined;
+}
+
+function methodError(result: Record<string, unknown>): string | undefined {
+  if (result["ok"] !== false && stringValue(result["type"]) !== "error") return undefined;
+  return stringValue(result["error"]) ?? stringValue(result["message"]) ?? "Unknown error";
 }
 
 function projectedInlineUiToChatMessage(
@@ -708,9 +859,29 @@ function inferInvocationDisplay(value: unknown): {
 }
 
 function stringifyOutput(value: unknown): string {
-  if (isStoredValueRef(value))
+  if (isStoredValueRef(value)) {
     return storedValuePreview(value) ?? `[stored ${value.encoding} blob ${value.digest}]`;
-  return typeof value === "string" ? value : JSON.stringify(value);
+  }
+  if (typeof value === "string") return value;
+  const consoleLine = formatConsoleStreamOutput(value);
+  if (consoleLine !== undefined) return consoleLine;
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function formatConsoleStreamOutput(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (record["type"] !== "console") return undefined;
+
+  const content = record["content"];
+  const text = typeof content === "string" ? content : content == null ? "" : stringifyOutput(content);
+  const level = typeof record["level"] === "string" ? record["level"].toLowerCase() : "";
+  if (!level || level === "log") return text;
+  return `[${level.toUpperCase()}] ${text}`;
 }
 
 function displayStoredValue(value: unknown): unknown {

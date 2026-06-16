@@ -5,7 +5,7 @@
  * The React adapter (@workspace/agentic-chat) re-exports these and adds
  * its own UI-specific types on top.
  *
- * Pi (`@earendil-works/pi-agent-core`) owns the agent message shape now.
+ * Pi (`@workspace/pi-core`) owns the agent message shape now.
  * `AgentMessage` is re-exported from `index.ts` for downstream consumers.
  */
 
@@ -35,6 +35,7 @@ export type { ChatParticipantMetadata } from "@workspace/pubsub";
 
 /** Inject connection config instead of importing from runtime */
 export interface ConnectionConfig {
+  /** Stable participant id. Panel callers should pass runtime `slotId`, not `rpc.selfId`. */
   clientId: string;
   rpc: {
     call<R = unknown>(targetId: string, method: string, args: unknown[]): Promise<R>;

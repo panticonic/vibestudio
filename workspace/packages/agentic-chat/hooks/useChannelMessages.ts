@@ -17,6 +17,8 @@ import {
 } from "@workspace/agentic-core";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
+  CREDENTIAL_CONNECT_PAYLOAD_KIND,
+  applyMessageEvent,
   createInitialChannelViewState,
   reduceChannelView,
   type AgenticEvent,
@@ -132,6 +134,20 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     flush(trimTail);
   }, [flush]);
 
+  // Token deltas arrive far faster than the channel projection is cheap to
+  // rebuild (the rebuild is O(channel size)). Coalesce delta-triggered
+  // rebuilds onto a trailing timer so a streaming burst costs one projection
+  // per frame-ish window instead of one per token.
+  const deltaRebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const replayRebuildTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleDeltaRebuild = useCallback(() => {
+    if (deltaRebuildTimerRef.current !== null) return;
+    deltaRebuildTimerRef.current = setTimeout(() => {
+      deltaRebuildTimerRef.current = null;
+      if (!cancelledRef.current) rebuildFromChannelState();
+    }, 33);
+  }, [rebuildFromChannelState]);
+
   useEffect(() => {
     if (!client) return;
     cancelledRef.current = false;
@@ -150,6 +166,19 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
 
     const consume = async () => {
       try {
+        let replayDirty = false;
+        const flushReplayDirty = () => {
+          if (!replayDirty) return;
+          replayDirty = false;
+          rebuildFromChannelState();
+        };
+        const scheduleReplayRebuild = () => {
+          if (replayRebuildTimerRef.current !== null) return;
+          replayRebuildTimerRef.current = setTimeout(() => {
+            replayRebuildTimerRef.current = null;
+            if (!cancelledRef.current) flushReplayDirty();
+          }, 0);
+        };
         for await (const event of client.events({ includeReplay: true, includeSignals: true })) {
           if (cancelledRef.current) break;
 
@@ -164,7 +193,62 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
             attachments?: WireAttachment[];
             payload?: AgenticEvent;
           };
+          if (wire.phase === "live" && replayDirty) {
+            if (replayRebuildTimerRef.current !== null) {
+              clearTimeout(replayRebuildTimerRef.current);
+              replayRebuildTimerRef.current = null;
+            }
+            flushReplayDirty();
+          }
 
+          // Ephemeral agentic events (message.delta streaming) arrive as
+          // string-content signals. They have NO seq/envelope identity, so
+          // they must NOT enter the envelope reducer (seq-0 ordering breaks,
+          // random ids defeat dedup). Apply them directly to the message
+          // projection; the durable terminal later replaces blocks
+          // authoritatively.
+          const signalWire = wire as unknown as { contentType?: string; content?: string };
+          if (
+            wire.delivery === "signal" &&
+            signalWire.contentType === AGENTIC_EVENT_PAYLOAD_KIND &&
+            typeof signalWire.content === "string"
+          ) {
+            try {
+              const parsed = JSON.parse(signalWire.content) as AgenticEvent | AgenticEvent[];
+              const ephemeralEvents = Array.isArray(parsed) ? parsed : [parsed];
+              const deltaEvents = ephemeralEvents.filter(
+                (ephemeralEvent): ephemeralEvent is AgenticEvent<"message.delta"> =>
+                  ephemeralEvent.kind === "message.delta"
+              );
+              if (deltaEvents.length > 0) {
+                let messages = channelStateRef.current.messages;
+                for (const ephemeralEvent of deltaEvents) {
+                  messages = applyMessageEvent(messages, ephemeralEvent as never);
+                }
+                channelStateRef.current = {
+                  ...channelStateRef.current,
+                  messages,
+                };
+                scheduleDeltaRebuild();
+              }
+            } catch {
+              // malformed ephemeral payload — ignore (durable terminal wins)
+            }
+            continue;
+          }
+          if (wire.type === CREDENTIAL_CONNECT_PAYLOAD_KIND && wire.payload) {
+            channelStateRef.current = reduceChannelView(
+              channelStateRef.current,
+              credentialConnectWireToEnvelope(client.channelId, wire)
+            );
+            if (wire.phase === "replay") {
+              replayDirty = true;
+              scheduleReplayRebuild();
+            } else {
+              rebuildFromChannelState();
+            }
+            continue;
+          }
           if (wire.type === AGENTIC_EVENT_PAYLOAD_KIND && wire.payload) {
             rememberAttachments(attachmentsByMessageIdRef.current, wire.payload, wire.attachments);
             const envelope = pubsubAgenticEventToEnvelope(client.channelId, {
@@ -183,8 +267,20 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
                 newestSeqRef.current = wire.pubsubId;
               }
             }
-            rebuildFromChannelState();
+            if (wire.phase === "replay") {
+              replayDirty = true;
+              scheduleReplayRebuild();
+            } else {
+              rebuildFromChannelState();
+            }
           }
+        }
+        if (!cancelledRef.current && replayDirty) {
+          if (replayRebuildTimerRef.current !== null) {
+            clearTimeout(replayRebuildTimerRef.current);
+            replayRebuildTimerRef.current = null;
+          }
+          flushReplayDirty();
         }
       } catch (err) {
         if (!cancelledRef.current) console.error("[useChannelMessages]", err);
@@ -193,8 +289,16 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
     void consume();
     return () => {
       cancelledRef.current = true;
+      if (deltaRebuildTimerRef.current !== null) {
+        clearTimeout(deltaRebuildTimerRef.current);
+        deltaRebuildTimerRef.current = null;
+      }
+      if (replayRebuildTimerRef.current !== null) {
+        clearTimeout(replayRebuildTimerRef.current);
+        replayRebuildTimerRef.current = null;
+      }
     };
-  }, [client, rebuildFromChannelState]);
+  }, [client, rebuildFromChannelState, scheduleDeltaRebuild]);
 
   // --- Pagination: load earlier messages ---
   const loadEarlierMessages = useCallback(async () => {
@@ -213,9 +317,28 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
       setHasMoreHistory(Boolean(result.ready.hasMoreBefore));
 
       for (const raw of result.logEvents) {
+        // Advance the pagination cursor for EVERY event in the page, not just
+        // agentic ones — a page of only credential/presence events must still
+        // move the anchor or pagination stalls on it forever.
+        if (raw.id < (oldestRootIdRef.current ?? Infinity)) oldestRootIdRef.current = raw.id;
+        if (newestSeqRef.current === null || raw.id > newestSeqRef.current) newestSeqRef.current = raw.id;
+
         const payload = raw.payload as Record<string, unknown> | undefined;
         if (!payload) continue;
 
+        if (raw.type === CREDENTIAL_CONNECT_PAYLOAD_KIND && payload) {
+          channelStateRef.current = reduceChannelView(
+            channelStateRef.current,
+            credentialConnectWireToEnvelope(c.channelId, {
+              pubsubId: raw.id,
+              senderId: raw.senderId,
+              ts: raw.ts,
+              senderMetadata: raw.senderMetadata as { name?: string; type?: string; handle?: string } | undefined,
+              payload,
+            })
+          );
+          continue;
+        }
         if (raw.type === AGENTIC_EVENT_PAYLOAD_KIND && payload) {
           rememberAttachments(attachmentsByMessageIdRef.current, payload as unknown as AgenticEvent, raw.attachments as WireAttachment[] | undefined);
           const envelope = pubsubAgenticEventToEnvelope(c.channelId, {
@@ -226,8 +349,6 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
             payload: payload as unknown as AgenticEvent,
           });
           channelStateRef.current = reduceChannelView(channelStateRef.current, envelope);
-          if (raw.id < (oldestRootIdRef.current ?? Infinity)) oldestRootIdRef.current = raw.id;
-          if (newestSeqRef.current === null || raw.id > newestSeqRef.current) newestSeqRef.current = raw.id;
         }
       }
 
@@ -248,6 +369,19 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
       const result = await c.getReplayAfter(cursor);
       for (const raw of result.logEvents) {
         const payload = raw.payload as Record<string, unknown> | undefined;
+        if (raw.type === CREDENTIAL_CONNECT_PAYLOAD_KIND && payload) {
+          channelStateRef.current = reduceChannelView(
+            channelStateRef.current,
+            credentialConnectWireToEnvelope(c.channelId, {
+              pubsubId: raw.id,
+              senderId: raw.senderId,
+              ts: raw.ts,
+              senderMetadata: raw.senderMetadata as { name?: string; type?: string; handle?: string } | undefined,
+              payload,
+            })
+          );
+          continue;
+        }
         if (raw.type === AGENTIC_EVENT_PAYLOAD_KIND && payload) {
           rememberAttachments(attachmentsByMessageIdRef.current, payload as unknown as AgenticEvent, raw.attachments as WireAttachment[] | undefined);
           const envelope = pubsubAgenticEventToEnvelope(c.channelId, {
@@ -365,6 +499,35 @@ function messageTypeDefinitionsSignature(definitions: MessageTypeDefinition[]): 
     clearedAtSeq: definition.clearedAtSeq,
     cleared: definition.cleared,
   })));
+}
+
+function credentialConnectWireToEnvelope(
+  channelId: string,
+  wire: {
+    pubsubId?: number;
+    senderId?: string;
+    ts?: number;
+    senderMetadata?: { name?: string; type?: string; handle?: string };
+    payload?: unknown;
+  }
+): ChannelEnvelope {
+  const participantId = wire.senderId ?? "agent";
+  const metadata = wire.senderMetadata;
+  return {
+    envelopeId: `pubsub:${wire.pubsubId ?? crypto.randomUUID()}` as never,
+    channelId: channelId as never,
+    seq: wire.pubsubId ?? 0,
+    from: {
+      kind: participantKind(metadata?.type),
+      id: participantId,
+      displayName: metadata?.name,
+      participantId,
+      metadata,
+    },
+    payload: wire.payload as never,
+    payloadKind: CREDENTIAL_CONNECT_PAYLOAD_KIND,
+    publishedAt: new Date(wire.ts ?? Date.now()).toISOString(),
+  } as ChannelEnvelope;
 }
 
 function pubsubAgenticEventToEnvelope(

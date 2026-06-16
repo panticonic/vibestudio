@@ -189,6 +189,47 @@ describe("MessageList typing indicators (roster-based)", () => {
     expect(document.body.querySelector(".message-card-lifecycle")).toBeTruthy();
   });
 
+  it("offers scheduling for reset-aware model failures", async () => {
+    const callMethod = vi.fn().mockResolvedValue({ scheduled: true });
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "diagnostic:msg-usage-limit",
+          senderId: "agent-1",
+          contentType: "diagnostic",
+          kind: "system",
+          content:
+            "The usage limit has been reached for GPT-5.3-Codex-Spark. Try again after Jun 15, 2026 at 6:35 PM UTC.",
+          complete: true,
+          diagnostic: {
+            messageId: "msg-usage-limit",
+            code: "message_failed",
+            failureCode: "usage_limit_terminal",
+            severity: "error",
+            title: "Model usage limit reached",
+            detail:
+              "The usage limit has been reached for GPT-5.3-Codex-Spark. Try again after Jun 15, 2026 at 6:35 PM UTC.",
+            resetAt: "2026-06-15T18:35:01.000Z",
+          },
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+      chat: { callMethod },
+    } as never));
+
+    fireEvent.click(screen.getByRole("button", { name: /resume at reset/i }));
+
+    await waitFor(() => {
+      expect(callMethod).toHaveBeenCalledWith("agent-1", "scheduleResumeAtReset", {
+        messageId: "msg-usage-limit",
+        resetAt: "2026-06-15T18:35:01.000Z",
+      });
+    });
+    expect(await screen.findByText("Scheduled")).toBeTruthy();
+  });
+
   it("shows a cancel control for pending invocation pills", () => {
     const onCancelInvocation = vi.fn();
     render(React.createElement(MessageList, {
@@ -451,5 +492,72 @@ describe("MessageList typing indicators (roster-based)", () => {
     fireEvent.click(button);
 
     expect(publishMessage).toHaveBeenCalledWith("Refresh the data");
+  });
+
+  it("renders feedback-form title MDX from transcript messages", async () => {
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "feedback-title-1",
+          content: "<FeedbackFormTitle>System test feedback</FeedbackFormTitle>",
+          complete: true,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: {},
+    } as never));
+
+    expect(await screen.findByRole("heading", { name: "System test feedback" })).toBeTruthy();
+  });
+
+  it("renders the documented OpenInNewWindow MDX icon", async () => {
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "open-icon-1",
+          content: '<Icons.OpenInNewWindowIcon data-testid="open-icon" />',
+          complete: true,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: {},
+    } as never));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("open-icon")).toBeTruthy();
+    });
+  });
+
+  it("falls back to plain text when MDX rendering throws", async () => {
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      render(React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "missing-mdx-1",
+            content: "<MissingTranscriptWidget>Fallback copy</MissingTranscriptWidget>",
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+      } as never));
+
+      await waitFor(() => {
+        expect(debugSpy.mock.calls.some(([message]) => String(message).includes("MDX render failed"))).toBe(true);
+      });
+
+      expect(document.body.textContent).toContain(
+        "<MissingTranscriptWidget>Fallback copy</MissingTranscriptWidget>"
+      );
+    } finally {
+      debugSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 });

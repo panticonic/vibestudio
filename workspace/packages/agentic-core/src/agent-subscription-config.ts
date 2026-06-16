@@ -20,6 +20,8 @@ export interface AgentSubscriptionConfig {
   /** Chattiness: who the agent responds to. */
   respondPolicy?: AgentRespondPolicy;
   respondFrom?: string[];
+  /** Optional cap for model rounds in one turn. Null/undefined means unlimited. */
+  maxModelCallsPerTurn?: number | null;
   /** Worker-specific extras, such as handle and display name. */
   [key: string]: unknown;
 }

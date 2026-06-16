@@ -4,16 +4,12 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./serviceAdapters": "./serviceAdapters.ts",
     "./types": "./types.ts",
     "./ui": "./ui.tsx"
   },
   "dependencies": {
-    "@natstack/git": "workspace:*",
-    "@natstack/shared": "workspace:*",
     "@radix-ui/themes": "^3.2.1",
-    "@workspace/react": "workspace:*",
-    "@workspace/runtime": "workspace:*"
+    "@workspace/react": "workspace:*"
   },
   "peerDependencies": {
     "react": "^19.0.0",

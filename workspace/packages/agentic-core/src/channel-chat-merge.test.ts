@@ -202,6 +202,73 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("projects UI method invocations with user-facing descriptions", () => {
+    const inlineStarted: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-inline") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "inline_ui",
+        request: { path: "skills/setup/Panel.tsx", props: { step: "connect" } },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const inlineCompleted: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-inline") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: { ok: true, id: "ui-1" },
+        terminalOutcome: "success",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const feedbackStarted: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-feedback") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "feedback_custom",
+        request: { title: "Choose deployment target", path: "skills/deploy/Picker.tsx" },
+      },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+    const promptStarted: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-prompt") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "ui_prompt",
+        request: { kind: "confirm", title: "Allow extension action?" },
+      },
+      createdAt: "2026-05-20T12:00:04.000Z",
+    };
+
+    const state = [
+      envelope(inlineStarted, 1),
+      envelope(inlineCompleted, 2),
+      envelope(feedbackStarted, 3),
+      envelope(promptStarted, 4),
+    ].reduce(reduceChannelView, createInitialChannelViewState());
+
+    const descriptions = Object.fromEntries(
+      chatMessagesFromChannelView(state).flatMap((message) =>
+        message.invocation
+          ? [[message.invocation.id, message.invocation.execution.description] as const]
+          : []
+      )
+    );
+    expect(descriptions).toMatchObject({
+      "inv-inline": "Rendered inline UI (ui-1)",
+      "inv-feedback": "Waiting for custom feedback: Choose deployment target",
+      "inv-prompt": "Waiting for confirm prompt: Allow extension action?",
+    });
+  });
+
   it("projects assistant thinking blocks as inline thinking messages", () => {
     const message: AgenticEvent<"message.completed"> = {
       kind: "message.completed",
@@ -414,6 +481,94 @@ describe("chatMessagesFromChannelView", () => {
         contentType: "diagnostic",
         error: "provider stream failed",
         complete: true,
+      }),
+    ]);
+  });
+
+  it("projects reset-aware model failures with scheduling metadata", () => {
+    const messageId = brandId<MessageId>("msg-usage-limit");
+    const failed: AgenticEvent<"message.failed"> = {
+      kind: "message.failed",
+      actor: agent,
+      causality: { messageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason:
+          "The usage limit has been reached for GPT-5.3-Codex-Spark. Try again after Jun 15, 2026 at 6:35 PM UTC.",
+        recoverable: false,
+        code: "usage_limit_terminal",
+        resetAt: "2026-06-15T18:35:01.000Z",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+
+    const state = [envelope(failed, 1)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+
+    expect(chatMessagesFromChannelView(state)).toEqual([
+      expect.objectContaining({
+        id: "diagnostic:msg-usage-limit",
+        contentType: "diagnostic",
+        diagnostic: expect.objectContaining({
+          messageId: "msg-usage-limit",
+          title: "Model usage limit reached",
+          failureCode: "usage_limit_terminal",
+          resetAt: "2026-06-15T18:35:01.000Z",
+          recoverable: false,
+        }),
+      }),
+    ]);
+  });
+
+  it("projects model-call cap diagnostics with a specific title and code", () => {
+    const messageId = brandId<MessageId>("diag-max-model-calls");
+    const detail =
+      "Configured maxModelCallsPerTurn reached for t:chan-1:env-1: 96 model call(s) have already run, and the configured limit is 96.";
+    const completed: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        role: "assistant",
+        blocks: [
+          {
+            blockId: brandId<BlockId>("diag-max-model-calls:block:0"),
+            type: "diagnostic",
+            content: detail,
+            metadata: {
+              code: "max_model_calls_per_turn",
+              severity: "error",
+              configKey: "maxModelCallsPerTurn",
+              limit: 96,
+              modelCallCount: 96,
+              turnId: "t:chan-1:env-1",
+            },
+          },
+        ],
+        outcome: "completed",
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+
+    const state = [envelope(completed, 1)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+
+    expect(chatMessagesFromChannelView(state)).toEqual([
+      expect.objectContaining({
+        id: "diagnostic:diag-max-model-calls",
+        content: detail,
+        contentType: "diagnostic",
+        diagnostic: expect.objectContaining({
+          code: "max_model_calls_per_turn",
+          severity: "error",
+          title: "Model call limit reached",
+        }),
+        error: detail,
       }),
     ]);
   });
@@ -785,6 +940,57 @@ describe("chatMessagesFromChannelView", () => {
     expect(card?.error).toBeUndefined();
   });
 
+  it("suppresses credential-suspension message failures in favor of the waiting card", () => {
+    const turnId = brandId<TurnId>("turn-credential-suspended");
+    const messageId = brandId<MessageId>("msg-credential-suspended");
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const started: AgenticEvent<"message.started"> = {
+      kind: "message.started",
+      actor: agent,
+      turnId,
+      causality: { messageId },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant" },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const failed: AgenticEvent<"message.failed"> = {
+      kind: "message.failed",
+      actor: agent,
+      turnId,
+      causality: { messageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "model_credential_required",
+        recoverable: true,
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const waiting: AgenticEvent<"turn.waiting"> = {
+      kind: "turn.waiting",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "model_credential_required",
+        summary: "Waiting for model credential approval",
+      },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [opened, started, failed, waiting]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state).map((message) => message.id)).toEqual([
+      "turn:turn-credential-suspended:waiting",
+    ]);
+  });
+
   it("clears a credential waiting notice when the same turn becomes active again", () => {
     const turnId = brandId<TurnId>("turn-resumed-same-credential");
     const opened: AgenticEvent<"turn.opened"> = {
@@ -1027,6 +1233,77 @@ describe("chatMessagesFromChannelView", () => {
           description: "exit code 1",
           consoleOutput: "stderr line",
           isError: true,
+        },
+      },
+    });
+  });
+
+  it("renders structured console stream output as log lines instead of raw JSON", () => {
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-console") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        name: "eval",
+        request: { code: 'console.log("hello")' },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const outputs: Array<AgenticEvent<"invocation.output">> = [
+      {
+        kind: "invocation.output",
+        actor: agent,
+        causality: { invocationId: brandId<InvocationId>("inv-console") },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          output: { type: "console", content: "hello world" },
+        },
+        createdAt: "2026-05-20T12:00:02.000Z",
+      },
+      {
+        kind: "invocation.output",
+        actor: agent,
+        causality: { invocationId: brandId<InvocationId>("inv-console") },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          output: { type: "console", level: "warn", content: "careful" },
+        },
+        createdAt: "2026-05-20T12:00:03.000Z",
+      },
+      {
+        kind: "invocation.output",
+        actor: agent,
+        causality: { invocationId: brandId<InvocationId>("inv-console") },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          output: { type: "console", level: "error", content: "boom" },
+        },
+        createdAt: "2026-05-20T12:00:04.000Z",
+      },
+    ];
+    const completed: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-console") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: { content: [{ type: "text", text: "[eval] (no output)" }] },
+        terminalOutcome: "success",
+      },
+      createdAt: "2026-05-20T12:00:05.000Z",
+    };
+
+    const state = [started, ...outputs, completed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
+      contentType: "invocation",
+      invocation: {
+        id: "inv-console",
+        execution: {
+          consoleOutput: "hello world\n[WARN] careful\n[ERROR] boom",
         },
       },
     });

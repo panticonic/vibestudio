@@ -1,4 +1,4 @@
-import React, { type ComponentType, useEffect, useState } from "react";
+import React, { type ComponentType, type ReactNode, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Text } from "@radix-ui/themes";
@@ -26,6 +26,35 @@ interface MessageContentProps {
 }
 
 const remarkPlugins = [remarkGfm];
+
+class MdxRenderErrorBoundary extends React.Component<
+  { children: ReactNode; fallback: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: unknown) {
+    console.debug("MDX render failed, using plain-text fallback:", error);
+  }
+
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
+
+function PlainTextMessageContent({ content }: { content: string }) {
+  return (
+    <div className="message-prose">
+      <Text as="div" size="2" style={{ whiteSpace: "pre-wrap" }}>
+        {content}
+      </Text>
+    </div>
+  );
+}
 
 // Lazy-loaded rehype-highlight plugin (~1.5MB highlight.js deferred until first render)
 type RehypeHighlightPlugin = typeof import("rehype-highlight").default;
@@ -113,22 +142,18 @@ export const MessageContent = React.memo(function MessageContent({ content, isSt
 
   if (MdxComponent) {
     return (
-      <div className="message-prose">
-        <MdxComponent />
-      </div>
+      <MdxRenderErrorBoundary key={content} fallback={<PlainTextMessageContent content={content} />}>
+        <div className="message-prose">
+          <MdxComponent />
+        </div>
+      </MdxRenderErrorBoundary>
     );
   }
 
   // Fast path: during streaming, if content has no markdown syntax yet,
   // skip ReactMarkdown entirely and render as plain text
   if (isStreaming && !MARKDOWN_SYNTAX_RE.test(content)) {
-    return (
-      <div className="message-prose">
-        <Text as="div" size="2" style={{ whiteSpace: "pre-wrap" }}>
-          {content}
-        </Text>
-      </div>
-    );
+    return <PlainTextMessageContent content={content} />;
   }
 
   // Skip syntax highlighting during streaming — code blocks are incomplete

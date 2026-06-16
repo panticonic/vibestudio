@@ -183,8 +183,9 @@ export function useChatFeedback({ chat, loadImport, clientRef, connected, }: Use
 
 **Result:** \`{ type: "submit", value: { fieldKey: userValue, ... } }\` or \`{ type: "cancel" }\`
 
-**Field types:** string, number, boolean, select (needs \`options\`), slider (\`min\`/\`max\`), segmented (\`options\`)
+**Field types:** string, number, boolean, select (needs \`options\`), segmented (\`options\`), multiSelect (\`options\`), slider (\`min\`/\`max\`)
 **Field props:** \`key\` (required), \`label\` (required), \`type\` (required), \`default\`, \`required\`, \`description\`
+**Choice fields:** select, segmented, and multiSelect include an "Other" free-text option by default unless \`allowFreeText: false\`; multiSelect also includes Select all / Deselect all controls.
 **Pre-populate:** Add \`values: { "key": "existing value" }\``,
             parameters: FeedbackFormArgsSchema,
             execute: async (args: unknown, ctx: MethodExecutionContext) => handleFeedbackFormCallRef.current(ctx.callId, args as FeedbackFormArgs, ctx),

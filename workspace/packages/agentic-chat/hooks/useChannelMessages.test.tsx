@@ -50,6 +50,25 @@ function messageTypeRegistered(
   };
 }
 
+function messageDelta(
+  id: string,
+  text: string,
+  createdAt = "2026-05-21T08:00:00.000Z",
+): AgenticEvent<"message.delta"> {
+  return {
+    kind: "message.delta",
+    actor: { kind: "agent", id: "agent:writer" },
+    causality: { messageId: brandId<MessageId>(id) },
+    payload: {
+      protocol: AGENTIC_PROTOCOL_VERSION,
+      blockId: brandId<BlockId>(`${id}:block:0`),
+      type: "text",
+      text,
+    },
+    createdAt,
+  };
+}
+
 function pubsubAgenticEvent(seq: number, payload: AgenticEvent) {
   return {
     type: AGENTIC_EVENT_PAYLOAD_KIND,
@@ -199,5 +218,31 @@ describe("useChannelMessages", () => {
       expect(latest!.messages.map((message) => message.id)).toEqual(["msg-1", "msg-2"]);
     });
     expect(latest!.messageTypes).toBe(registryProjection);
+  });
+
+  it("applies batched ephemeral message deltas from one signal event", async () => {
+    let latest: UseChannelMessagesResult | undefined;
+    const client = createClient([
+      {
+        delivery: "signal",
+        type: "signal",
+        contentType: AGENTIC_EVENT_PAYLOAD_KIND,
+        content: JSON.stringify([
+          messageDelta("msg-stream", "hel"),
+          messageDelta("msg-stream", "lo"),
+        ]),
+        ts: Date.parse("2026-05-21T08:00:00.000Z"),
+      },
+    ]);
+
+    render(<Probe client={client} onValue={(value) => { latest = value; }} />);
+
+    await waitFor(() => {
+      expect(latest!.messages).toContainEqual(expect.objectContaining({
+        id: "msg-stream",
+        content: "hello",
+        complete: false,
+      }));
+    });
   });
 });
