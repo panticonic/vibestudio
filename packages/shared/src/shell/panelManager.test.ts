@@ -585,6 +585,38 @@ describe("PanelManager", () => {
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).options.ref).toBe("feature");
   });
 
+  it("navigates existing slots to URL-like sources as browser snapshots", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "chat");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "chat", natstack: { title: "Chat" } })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const manager = new PanelManager({ registry, ...deps });
+    const created = await manager.create("panels/chat", { isRoot: true, addAsRoot: true });
+
+    const result = await manager.navigate(created.panelId, "https:/example.org");
+    const panel = registry.getPanel(created.panelId)!;
+
+    expect(result).toMatchObject({
+      panelId: created.panelId,
+      source: "browser:https://example.org/",
+      title: "example.org",
+    });
+    expect(getCurrentSnapshot(panel).source).toBe("browser:https://example.org/");
+    expect(panel.title).toBe("example.org");
+    expect(panel.history?.entries.map((entry) => entry.source)).toEqual([
+      "panels/chat",
+      "browser:https://example.org/",
+    ]);
+  });
+
   it("keeps selected descendant path local while using collision-free sibling ranks", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
     tempDirs.push(workspacePath);

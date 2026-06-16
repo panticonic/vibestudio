@@ -69,16 +69,13 @@ describe("loadWorkspaceConfig", () => {
     expect(loadWorkspaceConfig(sourceRoot).id).toBe(workspaceRoot);
   });
 
-  it("rejects duplicate extension declarations", () => {
+  it("rejects .git-suffixed extension declarations", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
-    writeConfig(
-      sourceRoot,
-      "extensions:\n  - source: extensions/a\n  - source: extensions/a.git\n"
-    );
+    writeConfig(sourceRoot, "extensions:\n  - source: extensions/a.git\n");
 
-    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/duplicate extension/);
+    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/extensions\[\]\.source/);
   });
 
   it("rejects duplicate extension declarations across source-root and package-name forms", () => {
@@ -124,13 +121,13 @@ describe("loadWorkspaceConfig", () => {
     expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/non-empty `source`/);
   });
 
-  it("rejects duplicate app declarations", () => {
+  it("rejects .git-suffixed app declarations", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
-    writeConfig(sourceRoot, "apps:\n  - source: apps/shell\n  - source: apps/shell.git\n");
+    writeConfig(sourceRoot, "apps:\n  - source: apps/shell.git\n");
 
-    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/duplicate app/);
+    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/apps\[\]\.source/);
   });
 
   it("rejects duplicate app declarations across source-root and package-name forms", () => {
@@ -313,9 +310,9 @@ describe("initWorkspace", () => {
       expect(resolveDeclaredExtensions(config)).toEqual([
         { source: "extensions/react-native", ref: "main" },
       ]);
-      expect(fs.existsSync(path.join(sourceRoot, "apps", "shell", ".git"))).toBe(true);
-      expect(fs.existsSync(path.join(sourceRoot, "apps", "mobile", ".git"))).toBe(true);
-      expect(fs.existsSync(path.join(sourceRoot, "extensions", "react-native", ".git"))).toBe(true);
+      expect(fs.existsSync(path.join(sourceRoot, "apps", "shell", ".git"))).toBe(false);
+      expect(fs.existsSync(path.join(sourceRoot, "apps", "mobile", ".git"))).toBe(false);
+      expect(fs.existsSync(path.join(sourceRoot, "extensions", "react-native", ".git"))).toBe(false);
       expect(
         JSON.parse(fs.readFileSync(path.join(sourceRoot, "apps", "shell", "package.json"), "utf-8"))
       ).toMatchObject({
@@ -417,13 +414,12 @@ describe("initWorkspace", () => {
         kind?: string;
         sourcePath?: string;
         copiedAt?: string;
-        gitHead?: unknown;
       };
 
       expect(marker.kind).toBe("template");
       expect(marker.sourcePath).toBe(templateRoot);
       expect(marker.copiedAt).toEqual(expect.any(String));
-      expect(marker.gitHead === null || typeof marker.gitHead === "string").toBe(true);
+      expect(Object.keys(marker).sort()).toEqual(["copiedAt", "kind", "sourcePath"]);
     }
   );
 });

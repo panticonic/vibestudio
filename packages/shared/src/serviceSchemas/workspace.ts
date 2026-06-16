@@ -16,10 +16,12 @@ import { defineServiceMethods } from "../typedServiceClient.js";
 import type {
   HostTarget,
   HostTargetCandidate,
+  HostTargetLaunchResult as SharedHostTargetLaunchResult,
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "../hostTargets.js";
 import type { WorkspaceConfig } from "../workspace/types.js";
+import type { WorkspaceNode } from "../types.js";
 
 // ─── Host target schemas ──────────────────────────────────────────────────────
 // Structural shapes live in `../hostTargets.js`; these zod wrappers bind the
@@ -33,10 +35,9 @@ export const HostTargetSchema = z.enum([
 
 export const HostTargetSelectionInputSchema = z.object({
   source: z.string().min(1),
-  mode: z.enum(["follow-ref", "pinned-build", "pinned-commit"]).optional(),
+  mode: z.enum(["follow-ref", "pinned-build", "pinned-ref"]).optional(),
   ref: z.string().min(1).optional(),
   buildKey: z.string().min(1).optional(),
-  commit: z.string().min(1).optional(),
   autoSelected: z.boolean().optional(),
 }) satisfies z.ZodType<HostTargetSelectionInput>;
 
@@ -52,8 +53,10 @@ export const HostTargetSelectionStatusSchema = z.object({
 });
 export type HostTargetSelectionStatus = z.infer<typeof HostTargetSelectionStatusSchema>;
 
-export const HostTargetLaunchResultSchema = z.object({
-  launched: z.boolean(),
+export const HostTargetLaunchResultSchema = z.custom<SharedHostTargetLaunchResult>((value) => {
+  if (!value || typeof value !== "object") return false;
+  const status = (value as { status?: unknown }).status;
+  return status === "ready" || status === "approval-required" || status === "unavailable";
 });
 export type HostTargetLaunchResult = z.infer<typeof HostTargetLaunchResultSchema>;
 
@@ -73,7 +76,7 @@ export const WorkspaceAppVersionRecordSchema = z.object({
   target: z.string(),
   capabilities: z.array(z.string()),
   activeEv: z.string().nullable(),
-  activeSha: z.string().nullable(),
+  activeSourceHash: z.string().nullable(),
   activeBundleKey: z.string(),
   activeDependencyEvs: z.record(z.string()),
   activeExternalDeps: z.record(z.string()),
@@ -164,7 +167,7 @@ export const WorkspaceUnitDiagnosticsSchema = z.object({
   unit: WorkspaceUnitStatusSchema.nullable(),
   logs: z.array(WorkspaceUnitLogRecordSchema),
   errors: z.array(WorkspaceUnitLogRecordSchema),
-  /** Recent push-triggered build lifecycle events for the unit. */
+  /** Recent state-triggered build lifecycle events for the unit. */
   builds: z.array(WorkspaceUnitBuildEventSchema),
   dropped: z.object({ entries: z.number(), errors: z.number() }),
   capacity: z.object({ entries: z.number(), errors: z.number() }),
@@ -179,6 +182,36 @@ export const SkillEntrySchema = z.object({
   /** Workspace-relative directory path, always `skills/<dirname>`. */
   dirPath: z.string(),
 });
+
+export type WorkspaceTreeNode = WorkspaceNode;
+export const WorkspaceTreeNodeSchema: z.ZodType<WorkspaceTreeNode> = z.lazy(() =>
+  z.object({
+    name: z.string(),
+    path: z.string(),
+    isUnit: z.boolean(),
+    launchable: z
+      .object({ type: z.literal("app"), title: z.string(), hidden: z.boolean().optional() })
+      .optional(),
+    packageInfo: z.object({ name: z.string(), version: z.string().optional() }).optional(),
+    skillInfo: z.object({ name: z.string(), description: z.string() }).optional(),
+    children: z.array(WorkspaceTreeNodeSchema),
+  })
+);
+
+export const WorkspaceTreeSchema = z.object({
+  children: z.array(WorkspaceTreeNodeSchema),
+});
+export type WorkspaceTree = z.infer<typeof WorkspaceTreeSchema>;
+
+export const WorkspaceFindUnitForPathResultSchema = z
+  .object({
+    unitPath: z.string(),
+    relativePath: z.string(),
+  })
+  .nullable();
+export type WorkspaceFindUnitForPathResult = z.infer<
+  typeof WorkspaceFindUnitForPathResultSchema
+>;
 
 /** Options accepted by `units.logs`. */
 const UnitLogsOptionsSchema = z.object({
@@ -249,6 +282,11 @@ export const workspaceMethods = defineServiceMethods({
   getAgentsMd: { args: z.tuple([]), returns: z.string() },
   listSkills: { args: z.tuple([]), returns: z.array(SkillEntrySchema) },
   readSkill: { args: z.tuple([z.string()]), returns: z.string() },
+  sourceTree: { args: z.tuple([]), returns: WorkspaceTreeSchema },
+  findUnitForPath: {
+    args: z.tuple([z.string()]),
+    returns: WorkspaceFindUnitForPathResultSchema,
+  },
   "units.list": { args: z.tuple([]), returns: z.array(WorkspaceUnitStatusSchema) },
   "units.inspector": {
     args: z.tuple([z.string()]),
@@ -306,7 +344,7 @@ export const workspaceMethods = defineServiceMethods({
     returns: WorkspaceAppVersionsSchema,
     policy: { allowed: ["shell", "shell-remote", "server"] },
   },
-  "hostTargets.preparePinnedCommit": {
+  "hostTargets.preparePinnedRef": {
     args: z.tuple([HostTargetSchema, z.string(), z.string()]),
     returns: z.unknown(),
     policy: { allowed: ["shell", "shell-remote", "server"] },
@@ -314,6 +352,6 @@ export const workspaceMethods = defineServiceMethods({
   "hostTargets.launch": {
     args: z.tuple([HostTargetSchema]),
     returns: HostTargetLaunchResultSchema,
-    policy: { allowed: ["shell", "shell-remote", "server"] },
+    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
   },
 });

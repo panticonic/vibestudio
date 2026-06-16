@@ -13,14 +13,14 @@ export const extensionRegistryEntrySchema = z
     version: z.string(),
     source: z
       .object({
-        kind: z.literal("internal-git"),
+        kind: z.literal("workspace-repo"),
         repo: z.string(),
         ref: z.string(),
       })
       .strict(),
     installedAt: z.number(),
     activeEv: z.string().nullable(),
-    activeSha: z.string().nullable(),
+    activeSourceHash: z.string().nullable(),
     activeBundleKey: z.string().nullable(),
     activeDependencyEvs: z.record(z.string()),
     activeExternalDeps: z.record(z.string()),

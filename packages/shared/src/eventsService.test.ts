@@ -111,7 +111,7 @@ describe("EventService", () => {
           repoPath: "panels/test",
           effectiveVersion: "ev",
           requestedAt: 1,
-          capability: "internal-git-write",
+          capability: "workspace-repo-write",
           title: "Write project files",
           resource: { type: "git-repo", label: "Repository", value: "panels/test" },
         },

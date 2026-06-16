@@ -340,7 +340,7 @@ export class ServiceDispatcher {
     method: string,
     args: unknown[]
   ): Promise<unknown> {
-    if (!this.initialized) {
+    if (!this.initialized && !this.handlers.has(service)) {
       throw new ServiceError(service, method, "Services not yet initialized");
     }
 

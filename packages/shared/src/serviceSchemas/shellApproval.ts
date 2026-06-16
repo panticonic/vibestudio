@@ -22,6 +22,10 @@ export const shellApprovalMethods = defineServiceMethods({
     args: z.tuple([z.string(), z.enum(APPROVAL_DECISIONS)]),
     returns: z.void(),
   },
+  resolveBootstrap: {
+    args: z.tuple([z.string(), z.enum(["once", "deny"])]),
+    returns: z.void(),
+  },
   resolveUserland: {
     args: z.tuple([z.string(), z.union([z.string().min(1).max(40), z.literal("dismiss")])]),
     returns: z.void(),

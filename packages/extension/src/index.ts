@@ -52,7 +52,7 @@ export type UserlandApprovalChoice =
   | { kind: "uncallable"; reason: "no-user-context" };
 
 export interface ExtensionSource {
-  kind: "internal-git";
+  kind: "workspace-repo";
   repo: string;
   ref: string;
 }

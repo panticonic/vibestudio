@@ -19,23 +19,22 @@ import type {
   BuildProviderOutput,
   BuildProviderTarget,
 } from "@natstack/shared/buildProvider";
-import { verifyProductSeedSource } from "@natstack/shared/productSeedTrust";
 import type { PendingUnitBatchApproval, UnitBatchEntry } from "@natstack/shared/approvals";
+import {
+  parseWorkspaceConfigContentWithId,
+  resolveDeclaredExtensions,
+} from "@natstack/shared/workspace/configParser";
 import {
   UnitManifestError,
   extensionUnitManifestDescriptor,
   readAndValidateUnitManifest,
 } from "@natstack/shared/unitManifest";
 import {
-  parseWorkspaceConfigContentWithId,
-  resolveDeclaredExtensions,
-} from "@natstack/shared/workspace/configParser";
-import {
   UnitHost,
   UnitRegistry,
-  UnitSourcePushGrantStore,
+  UnitSourceChangeGrantStore,
   UnitTrustResolver,
-  authorizeUnitSourcePush,
+  authorizeUnitSourceChange,
   collectTransitiveUnitDependencyEvs,
   createPendingUnitRegistryEntry,
   createUnitBuildIdentity,
@@ -48,10 +47,10 @@ import {
   type UnitApprovalCoordinator,
   type UnitBuildIdentity,
   type UnitDescriptor,
+  type UnitMetaChangeApprovalProvider,
   type UnitReconcileTrigger,
   type UnitWorkspaceStatus,
 } from "@natstack/unit-host";
-import { execGitFileSync } from "@natstack/shared/gitRuntime";
 
 import { ExtensionProcessManager } from "./processManager.js";
 import {
@@ -89,6 +88,7 @@ interface BuildSystemLike {
     ref?: string
   ): Promise<{
     dir: string;
+    sourceStateHash?: string | null;
     metadata: ExtensionBuildMetadataLike;
     artifacts: ExtensionBuildArtifactLike[];
   }>;
@@ -96,6 +96,7 @@ interface BuildSystemLike {
     key: string
   ): {
     dir: string;
+    sourceStateHash?: string | null;
     metadata: ExtensionBuildMetadataLike;
     artifacts: ExtensionBuildArtifactLike[];
   } | null;
@@ -124,6 +125,7 @@ interface BuildSystemLike {
 
 interface ExtensionBuildMetadataLike {
   ev: string;
+  sourceStateHash?: string | null;
   details?:
     | {
         kind: "extension";
@@ -185,10 +187,12 @@ export interface ExtensionHostDeps {
   statePath: string;
   workspacePath: string;
   workspaceId: string;
+  readWorkspaceFileAtCommit(commit: string, filePath: string): Promise<string | null>;
   buildSystem: BuildSystemLike;
   tokenManager: TokenManager;
   eventService: EventService;
   approvalQueue: ApprovalQueueLike;
+  approvalCoordinator?: UnitApprovalCoordinator<UnitBatchEntry>;
   notificationService?: NotificationServiceLike;
   recordUnitLog?: (record: UnitLogRecord) => void;
   getContextIdForCaller?: (callerId: string) => string | null;
@@ -200,10 +204,9 @@ export interface ExtensionHostDeps {
   extensionTransport: ExtensionTransportLike;
   registerBuildProvider?: (provider: BuildProvider) => void;
   unregisterBuildProvider?: (target: BuildProviderTarget, name: string) => void;
-  approvalCoordinator?: UnitApprovalCoordinator<UnitBatchEntry>;
 }
 
-export class ExtensionHost {
+export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   readonly registry: UnitRegistry<RegistryEntry>;
   readonly processes: ExtensionProcessManager;
   private readonly extensionTrustResolver: UnitTrustResolver<RegistryEntry>;
@@ -220,7 +223,7 @@ export class ExtensionHost {
   private fetchRequestBodies = new Map<string, FetchRequestBodyStream>();
   private activeInvocations = new Map<string, ExtensionInvocation>();
   private registeredBuildProviderTargets = new Map<string, Set<BuildProviderTarget>>();
-  private readonly sourcePushGrants: UnitSourcePushGrantStore;
+  private readonly sourceChangeGrants: UnitSourceChangeGrantStore;
 
   constructor(private readonly deps: ExtensionHostDeps) {
     this.registry = new UnitRegistry<RegistryEntry>({
@@ -229,13 +232,8 @@ export class ExtensionHost {
     });
     this.extensionTrustResolver = new UnitTrustResolver<RegistryEntry>({
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
-      productSeedTrust: (identity) =>
-        verifyProductSeedSource({
-          unitDir: path.join(this.deps.workspacePath, identity.source.repo),
-          identity,
-        }) !== null,
     });
-    this.sourcePushGrants = new UnitSourcePushGrantStore({ statePath: deps.statePath });
+    this.sourceChangeGrants = new UnitSourceChangeGrantStore({ statePath: deps.statePath });
     this.processes = new ExtensionProcessManager({
       onStatus: (name, status, error) => {
         if (status === "running") {
@@ -297,8 +295,6 @@ export class ExtensionHost {
     this.unitHost = new UnitHost({
       descriptor: EXTENSION_UNIT_DESCRIPTOR,
       registry: this.registry,
-      currentDeclarationVersion: () =>
-        resolveGitCommit(path.join(this.deps.workspacePath, "meta"), "HEAD"),
       resolveNode: (source) => this.findExtensionNode(source),
       candidateIdentity: (node, decl) => this.declarationBuildIdentity(node, decl.ref),
       trustResolver: this.extensionTrustResolver,
@@ -325,6 +321,14 @@ export class ExtensionHost {
           type: "error",
           title: "Unknown extensions declared",
           message: `meta/natstack.yml declares extensions that don't exist: ${sources.join(", ")}.`,
+        });
+      },
+      validateBeforeApproval: (node) => this.validateExtensionManifestAtPath(node.path, node.name),
+      onApprovalCandidateError: (node, _decl, message) => {
+        this.deps.eventService.emit("extensions:status", {
+          name: node.name,
+          status: "error",
+          error: message,
         });
       },
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl.ref),
@@ -372,7 +376,7 @@ export class ExtensionHost {
   /**
    * Reconcile the registry against the declared extension set from
    * `meta/natstack.yml`. This is the single entry point that installs or
-   * removes extensions. Called at boot and after a meta push (post-receive).
+   * removes extensions. Called at boot and after a meta-state update (post-receive).
    * The declared set is authoritative: anything in the registry but not
    * declared is removed.
    */
@@ -380,7 +384,7 @@ export class ExtensionHost {
     declared: Array<{ source: string; ref: string }>,
     opts: { trigger?: UnitReconcileTrigger } = {}
   ): Promise<void> {
-    await this.unitHost.reconcileDeclared(this.normalizeDeclaredRefs(declared), opts);
+    await this.unitHost.reconcileDeclared(declared, opts);
   }
 
   /**
@@ -393,13 +397,6 @@ export class ExtensionHost {
 
   async whenReconciled(): Promise<void> {
     await this.unitHost.whenReconciled();
-  }
-
-  preapproveDeclarations(
-    declared: Array<{ source: string; ref: string }>
-  ): { units: UnitBatchEntry[]; identityKeys: string[] } {
-    const approval = this.unitHost.preapproveDeclarations(this.normalizeDeclaredRefs(declared));
-    return { units: approval.entries, identityKeys: approval.identityKeys };
   }
 
   /** Build/start a single declared extension. */
@@ -452,6 +449,19 @@ export class ExtensionHost {
 
   async shutdown(): Promise<void> {
     await this.processes.shutdown();
+  }
+
+  async metaChangeApprovalForCommit(
+    commit: string
+  ): Promise<{ units: UnitBatchEntry[]; identityKeys: string[] }> {
+    const approval = this.unitHost.approvalForDeclarations(
+      await this.readDeclaredExtensionsFromCommit(commit)
+    );
+    return { units: approval.entries, identityKeys: approval.identityKeys };
+  }
+
+  acceptPreapprovedTrust(keys: Iterable<string>): void {
+    this.unitHost.acceptPreapprovedTrust(keys);
   }
 
   createServiceDefinition(): ServiceDefinition {
@@ -708,7 +718,7 @@ export class ExtensionHost {
   /**
    * Pure lookup for the invoke path — never installs or builds.
    * Returns the running-eligible registry entry, or null. Trust is granted at
-   * declaration time (startup / meta-push reconcile), not at invocation.
+   * declaration time (startup / meta-change reconcile), not at invocation.
    */
   private lookupForInvoke(name: string): RegistryEntry | null {
     let resolvedName = name;
@@ -1069,7 +1079,7 @@ export class ExtensionHost {
     return filtered.slice(-limit);
   }
 
-  async authorizeSourcePush(request: {
+  async authorizeSourceChange(request: {
     caller: VerifiedCaller;
     repoPath: string;
     branch: string;
@@ -1079,22 +1089,22 @@ export class ExtensionHost {
     if (repoPath === "meta") {
       return { allowed: true };
     }
-    return authorizeUnitSourcePush(
+    return authorizeUnitSourceChange(
       {
         descriptor: EXTENSION_UNIT_DESCRIPTOR,
-        grantStore: this.sourcePushGrants,
+        grantStore: this.sourceChangeGrants,
         grantTtlMs: EXTENSION_DEV_SESSION_TTL_MS,
         findInstalledByRepo: (source) => this.unitHost.findInstalledByRepo(source),
-        requestApproval: async ({ request: sourcePush, installed, identity, callerKind }) =>
+        requestApproval: async ({ request: sourceChange, installed, identity, callerKind }) =>
           this.deps.approvalQueue.request({
             kind: "unit-batch",
-            callerId: sourcePush.caller.runtime.id,
+            callerId: sourceChange.caller.runtime.id,
             callerKind,
             repoPath: identity.repoPath,
             effectiveVersion: identity.effectiveVersion,
-            dedupKey: `unit-source-push:extension:${installed.entry.name}:${sourcePush.branch}`,
-            trigger: "source-push",
-            title: `${installed.entry.name} source push`,
+            dedupKey: `unit-source-change:extension:${installed.entry.name}:${sourceChange.branch}`,
+            trigger: "source-change",
+            title: `${installed.entry.name} source change`,
             description: "Accepting this push updates trusted native extension code.",
             units: [
               {
@@ -1109,44 +1119,12 @@ export class ExtensionHost {
     );
   }
 
-  metaPushApprovalForCommit(commit: string): { units: UnitBatchEntry[]; identityKeys: string[] } {
-    const approval = this.unitHost.approvalForDeclarations(
-      this.normalizeDeclaredRefs(this.readDeclaredExtensionsFromCommit(commit))
-    );
-    return { units: approval.entries, identityKeys: approval.identityKeys };
-  }
-
-  acceptPreapprovedTrust(version: string, keys: Iterable<string>): void {
-    this.unitHost.acceptPreapprovedTrust(version, keys);
-  }
-
-  private normalizeDeclaredRefs(
-    declared: Array<{ source: string; ref: string }>
-  ): UnitDeclaration[] {
-    return declared.map((decl) => {
-      try {
-        const node = this.findExtensionNode(decl.source);
-        return { ...decl, ref: this.resolveDeclarationRef(node, decl.ref) };
-      } catch {
-        return decl;
-      }
-    });
-  }
-
-  private readDeclaredExtensionsFromCommit(
-    commit: string
-  ): Array<{ source: string; ref: string }> {
-    const metaRepoDir = path.join(this.deps.workspacePath, "meta");
+  private async readDeclaredExtensionsFromCommit(commit: string): Promise<UnitDeclaration[]> {
     try {
-      const out = String(
-        execGitFileSync(["show", "--end-of-options", `${commit}:natstack.yml`], {
-          cwd: metaRepoDir,
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-        })
-      );
+      const content = await this.deps.readWorkspaceFileAtCommit(commit, "meta/natstack.yml");
+      if (!content) return [];
       return resolveDeclaredExtensions(
-        parseWorkspaceConfigContentWithId(out, this.deps.workspaceId)
+        parseWorkspaceConfigContentWithId(content, this.deps.workspaceId)
       );
     } catch {
       return [];
@@ -1320,6 +1298,7 @@ export class ExtensionHost {
     const previous = this.registry.get(node.name);
     this.unitHost.markBuilding(node.name);
     const build = await this.deps.buildSystem.getBuild(node.name, ref);
+    const activeSourceHash = requireBuildSourceStateHash(node.name, build);
     const activeDependencyEvs = this.currentDependencyEvs(node);
     const activeExternalDeps = this.currentExternalDeps(node);
     this.unitHost.activateBuild({
@@ -1329,7 +1308,7 @@ export class ExtensionHost {
       ref: ref ?? "main",
       buildDir: build.dir,
       effectiveVersion: build.metadata.ev,
-      activeSha: resolveGitCommit(node.path, ref),
+      activeSourceHash,
       dependencyEvs: activeDependencyEvs,
       externalDeps: activeExternalDeps,
       runtimeDepsKey: extensionMetadataDetails(build.metadata)?.runtimeDepsKey ?? null,
@@ -1342,7 +1321,7 @@ export class ExtensionHost {
       if (previous?.activeBundleKey) {
         this.registry.patch(node.name, {
           activeEv: previous.activeEv,
-          activeSha: previous.activeSha,
+          activeSourceHash: previous.activeSourceHash,
           activeBundleKey: previous.activeBundleKey,
           activeDependencyEvs: previous.activeDependencyEvs,
           activeExternalDeps: previous.activeExternalDeps ?? {},
@@ -1363,7 +1342,7 @@ export class ExtensionHost {
       } else {
         this.registry.patch(node.name, {
           activeEv: previous?.activeEv ?? null,
-          activeSha: previous?.activeSha ?? null,
+          activeSourceHash: previous?.activeSourceHash ?? null,
           activeBundleKey: previous?.activeBundleKey ?? null,
           activeDependencyEvs: previous?.activeDependencyEvs ?? {},
           activeExternalDeps: previous?.activeExternalDeps ?? {},
@@ -1457,15 +1436,6 @@ export class ExtensionHost {
     return node;
   }
 
-  private resolveDeclarationRef(
-    node: ReturnType<ExtensionHost["findExtensionNode"]>,
-    ref: string
-  ): string {
-    if (resolveGitCommit(node.path, ref)) return ref;
-    if (ref === "main" && resolveGitCommit(node.path, "master")) return "master";
-    return ref;
-  }
-
   private storageDirFor(name: string): string {
     return path.join(
       this.deps.statePath,
@@ -1513,7 +1483,7 @@ export class ExtensionHost {
     const node = this.findExtensionNode(name);
     const entry = this.registry.get(node.name);
     const source = entry?.source ?? {
-      kind: "internal-git" as const,
+      kind: "workspace-repo" as const,
       repo: node.relativePath,
       ref: "main",
     };
@@ -1539,7 +1509,6 @@ export class ExtensionHost {
           capabilities: extensionRuntimeCapabilities(),
           dependencyEvs: entry?.activeDependencyEvs ?? this.currentDependencyEvs(node),
           externalDeps: entry?.activeExternalDeps ?? this.currentExternalDeps(node),
-          commit: null,
         },
       ],
       configWrite: null,
@@ -1721,6 +1690,18 @@ function extensionMetadataDetails(metadata: ExtensionBuildMetadataLike | undefin
   };
 }
 
+function requireBuildSourceStateHash(
+  unitName: string,
+  build: {
+    sourceStateHash?: string | null;
+    metadata: ExtensionBuildMetadataLike;
+  }
+): string {
+  if (build.sourceStateHash) return build.sourceStateHash;
+  if (build.metadata.sourceStateHash) return build.metadata.sourceStateHash;
+  throw new Error(`Build for ${unitName} is missing workspace source state provenance`);
+}
+
 function extensionPrimaryArtifactPath(build: {
   dir: string;
   artifacts: ExtensionBuildArtifactLike[];
@@ -1741,22 +1722,6 @@ const EXTENSION_DEV_SESSION_TTL_MS = 4 * 60 * 60 * 1000;
 
 function extensionRuntimeCapabilities(): string[] {
   return ["node:fs", "node:child_process", "node:net", "node:process", "userland:*"];
-}
-
-function resolveGitCommit(repoPath: string, ref = "HEAD"): string | null {
-  try {
-    return (
-      String(
-        execGitFileSync(["rev-parse", "--verify", "--end-of-options", ref], {
-          cwd: repoPath,
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-        })
-      ).trim() || null
-    );
-  } catch {
-    return null;
-  }
 }
 
 function assertBuildProviderOutput(

@@ -33,6 +33,7 @@ describe("panelAccessPolicy", () => {
       "close",
       "unload",
       "movePanel",
+      "replacePanel",
       "takeOver",
       "openDevTools",
       "rebuildPanel",

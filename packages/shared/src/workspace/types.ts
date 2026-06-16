@@ -112,7 +112,7 @@ export interface CentralConfig {
 }
 
 /**
- * Git server configuration
+ * Workspace Git remote declarations
  */
 export interface GitConfig {
   /**
@@ -245,7 +245,7 @@ export interface WorkspaceRouteDecl {
 export interface WorkspaceConfig {
   /** Resolved workspace identifier. If omitted on disk, derived from the workspace location. */
   id: string;
-  /** Git server configuration */
+  /** Workspace Git remote declarations */
   git?: GitConfig;
   /**
    * Panels to create on first initialization (when panel tree is empty).
@@ -290,11 +290,11 @@ export interface WorkspaceConfig {
  * Resolved workspace with computed paths.
  *
  * Directory layout:
- *   workspaces/{name}/source/   ← path (source root: git repos, meta/natstack.yml)
+ *   workspaces/{name}/source/   ← path (workspace source root, meta/natstack.yml)
  *   workspaces/{name}/state/    ← statePath (Electron userData + runtime state)
  */
 export interface Workspace {
-  /** Absolute path to source directory (git repos, meta/natstack.yml) */
+  /** Absolute path to workspace source directory (meta/natstack.yml and unit source trees) */
   path: string;
   /** Absolute path to state directory (Electron userData, databases, cache) */
   statePath: string;
@@ -306,8 +306,6 @@ export interface Workspace {
   packagesPath: string;
   /** Absolute path to contexts directory (state/.contexts) */
   contextsPath: string;
-  /** Absolute path to git repos directory (= source root) */
-  gitReposPath: string;
   /** Absolute path to cache directory (state/.cache) */
   cachePath: string;
   /** Absolute path to agents directory (source/agents) */

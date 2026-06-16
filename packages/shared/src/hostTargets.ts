@@ -1,7 +1,9 @@
 import type { WorkspaceAppTarget } from "./unitManifest.js";
+import type { AppCapability } from "./unitManifest.js";
+import type { PendingUnitBatchApproval } from "./approvals.js";
 
 export type HostTarget = WorkspaceAppTarget;
-export type HostTargetSelectionMode = "follow-ref" | "pinned-build" | "pinned-commit";
+export type HostTargetSelectionMode = "follow-ref" | "pinned-build" | "pinned-ref";
 
 export interface HostTargetSelection {
   workspaceId: string;
@@ -11,7 +13,6 @@ export interface HostTargetSelection {
   mode: HostTargetSelectionMode;
   ref?: string;
   buildKey?: string;
-  commit?: string;
   updatedAt: number;
   autoSelected?: boolean;
 }
@@ -21,7 +22,6 @@ export interface HostTargetSelectionInput {
   mode?: HostTargetSelectionMode;
   ref?: string;
   buildKey?: string;
-  commit?: string;
   autoSelected?: boolean;
 }
 
@@ -54,3 +54,30 @@ export interface HostTargetCandidate {
   lastErrorDetails?: unknown;
   compatibility: HostTargetCompatibility;
 }
+
+export type HostTargetLaunchResult =
+  | {
+      status: "ready";
+      launched: true;
+      target: HostTarget;
+      source: string;
+      appId: string;
+      buildKey: string;
+      url?: string;
+      capabilities?: AppCapability[];
+      effectiveVersion?: string | null;
+      adoptionPolicy?: "immediate" | "prompt" | "artifact-only";
+    }
+  | {
+      status: "approval-required";
+      launched: false;
+      target: HostTarget;
+      approvals: PendingUnitBatchApproval[];
+    }
+  | {
+      status: "unavailable";
+      launched: false;
+      target: HostTarget;
+      reason: string;
+      details: string[];
+    };

@@ -13,7 +13,7 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
   return config;
 }
 
-const UNIT_SOURCE_NORMALIZE = /(^\/+|\.git(\/.*)?$|\/+$)/g;
+const UNIT_SOURCE_NORMALIZE = /(^\/+|\/+$)/g;
 const UNIT_PACKAGE_NAME = /^@[^/\s]+\/[^/\s]+$/;
 const WORKSPACE_SOURCE_DIR_SET = new Set<string>(WORKSPACE_SOURCE_DIRS);
 
@@ -62,7 +62,7 @@ function validateDeclaredUnitSource<Decl extends { source: string }>(
   }
   if (normalized.startsWith(sourceRootPrefix)) {
     const sourceIdentity = normalized.slice(sourceRootPrefix.length);
-    if (!/^[^/\s]+$/.test(sourceIdentity)) {
+    if (!/^[^/\s]+$/.test(sourceIdentity) || sourceIdentity.endsWith(".git")) {
       throw new Error(
         `meta/natstack.yml: \`${descriptor.section}[].source\` must be \`${descriptor.sourceRoot}/name\` or \`${descriptor.packageScope}name\``,
       );

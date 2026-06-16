@@ -26,13 +26,11 @@ import type {
   WorkspaceEntry,
 } from "./types.js";
 import type { CentralDataManager } from "../centralData.js";
-import { assertGitAvailable, execGitFileSync } from "../gitRuntime.js";
 import {
   getExistingWorkspaceTemplateDir,
   getWorkspaceTemplateCandidates,
 } from "../runtimePaths.js";
 import {
-  WORKSPACE_GIT_INIT_PATTERNS,
   WORKSPACE_SOURCE_DIRS,
   WORKSPACE_STATE_DIRS,
 } from "./sourceDirs.js";
@@ -42,14 +40,6 @@ const WORKSPACE_TEMPLATE_SOURCE_FILE = "meta/.natstack-template-source.json";
 const CENTRAL_CONFIG_FILE = "config.yml";
 const SECRETS_FILE = ".secrets.yml";
 const ENV_FILE = ".env";
-const WORKSPACE_BOOTSTRAP_GIT_CONFIG = [
-  "-c",
-  "user.name=NatStack",
-  "-c",
-  "user.email=natstack@local",
-  "-c",
-  "commit.gpgSign=false",
-] as const;
 
 // =============================================================================
 // Central Config
@@ -425,10 +415,6 @@ export function initWorkspace(
     writeTemplateSourceMarker(sourceRoot, templateSrc, templateSourceKind);
   }
 
-  // Initialize git repos for all source subdirectories (panels, packages, etc.)
-  // so the build system can extract source and compute effective versions.
-  initGitRepos(sourceRoot);
-
   log.info(`[Workspace] Created managed workspace "${name}" at ${wsDir}`);
 }
 
@@ -448,18 +434,6 @@ function copyDirRecursive(src: string, dest: string): void {
   }
 }
 
-function hasStagedChanges(repoDir: string): boolean {
-  try {
-    execGitFileSync(["diff", "--cached", "--quiet"], {
-      cwd: repoDir,
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    return false;
-  } catch {
-    return true;
-  }
-}
-
 function writeTemplateSourceMarker(
   sourceRoot: string,
   templateSrc: string,
@@ -470,66 +444,12 @@ function writeTemplateSourceMarker(
     kind,
     sourcePath: path.resolve(templateSrc),
     copiedAt: new Date().toISOString(),
-    gitHead: readGitHead(templateSrc),
   };
   fs.mkdirSync(path.dirname(markerPath), { recursive: true });
   fs.writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, "utf-8");
 }
 
-function readGitHead(cwd: string): string | null {
-  try {
-    return execGitFileSync(["rev-parse", "--verify", "HEAD"], {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Initialize git repos for all immediate subdirectories within each source dir.
- * Each panel/package/agent/worker/skill/about-page/project becomes its own
- * git repo with an initial commit.
- */
-function initGitRepos(wsDir: string): void {
-  assertGitAvailable();
-
-  for (const sourceDir of WORKSPACE_SOURCE_DIRS) {
-    const parentDir = path.join(wsDir, sourceDir);
-    if (!fs.existsSync(parentDir)) continue;
-
-    for (const repoDir of listWorkspaceUnitDirs(parentDir, sourceDir)) {
-      // Skip if already a git repo
-      if (fs.existsSync(path.join(repoDir, ".git"))) continue;
-
-      // Skip empty directories
-      const contents = fs.readdirSync(repoDir);
-      if (contents.length === 0) continue;
-
-      execGitFileSync(["init", "-b", "main"], { cwd: repoDir, stdio: "pipe" });
-      execGitFileSync(["add", "-A"], { cwd: repoDir, stdio: "pipe" });
-      if (!hasStagedChanges(repoDir)) continue;
-      execGitFileSync([...WORKSPACE_BOOTSTRAP_GIT_CONFIG, "commit", "-m", "Initial workspace"], {
-        cwd: repoDir,
-        stdio: "pipe",
-      });
-    }
-  }
-}
-
-function listWorkspaceUnitDirs(parentDir: string, _sourceDir: string): string[] {
-  const dirs: string[] = [];
-  for (const entry of fs.readdirSync(parentDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const entryPath = path.join(parentDir, entry.name);
-    dirs.push(entryPath);
-  }
-  return dirs;
-}
-
-export { WORKSPACE_GIT_INIT_PATTERNS, WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS };
+export { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS };
 
 /**
  * Delete a managed workspace directory.
@@ -580,7 +500,7 @@ function deriveWorkspaceId(workspacePath: string): string {
 
 /**
  * Create a fully resolved Workspace object from a managed workspace directory.
- * The wsDir contains source/ (git repos, natstack.yml) and state/ (runtime data).
+ * The wsDir contains source/ (workspace source state) and state/ (runtime data).
  */
 export function createWorkspace(wsDir: string): Workspace {
   const resolvedDir = path.resolve(wsDir);
@@ -590,7 +510,6 @@ export function createWorkspace(wsDir: string): Workspace {
   const panelsPath = path.join(sourceRoot, "panels");
   const packagesPath = path.join(sourceRoot, "packages");
   const contextsPath = path.join(stateRoot, ".contexts");
-  const gitReposPath = sourceRoot;
   const cachePath = path.join(stateRoot, ".cache");
   const agentsPath = path.join(sourceRoot, "agents");
   const projectsPath = path.join(sourceRoot, "projects");
@@ -611,7 +530,6 @@ export function createWorkspace(wsDir: string): Workspace {
     panelsPath,
     packagesPath,
     contextsPath,
-    gitReposPath,
     cachePath,
     agentsPath,
     projectsPath,

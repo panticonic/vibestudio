@@ -18,7 +18,7 @@ export interface ProductSeedSourceRecord {
 export interface ProductSeedIdentity {
   unitKind: ProductSeedUnitKind;
   name: string;
-  source: { kind: "internal-git"; repo: string; ref: string };
+  source: { kind: "workspace-repo"; repo: string; ref: string };
   effectiveVersion: string | null;
 }
 
@@ -264,6 +264,5 @@ function normalizeSeedRepoPath(repoPath: string): string {
   return repoPath
     .replace(/^\/+/, "")
     .replace(/^workspace\//, "")
-    .replace(/\.git(\/.*)?$/, "")
     .replace(/\/+$/, "");
 }

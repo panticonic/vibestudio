@@ -15,7 +15,7 @@ import type { PanelEntityId, PanelSlotId } from "./panel/ids.js";
 // Types
 // =============================================================================
 
-/** DTO returned by server panel.create / panel.createBrowser */
+/** DTO returned by panel slot create/navigate operations. */
 export interface PanelCreateResult {
   panelId: string;
   contextId: string;

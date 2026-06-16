@@ -2,7 +2,7 @@ import type { RuntimeSurface } from "./runtimeSurface.js";
 import { namespaceEntry, valueEntry } from "./runtimeSurface.js";
 
 const panelTreeDescription =
-  "Return signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; open(source, opts?): Promise<PanelHandle>. `self()` and `get()` are synchronous handle factories; catch errors on async handle methods like `refresh()` or `getInfo()`.";
+  "Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>; open(source, opts?): Promise<PanelHandle>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; open creates a new panel. self/get are sync; async methods refresh metadata as needed.";
 
 export const panelRuntimeSurface: RuntimeSurface = {
   target: "panel",
@@ -17,7 +17,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
     getInstanceId: valueEntry(),
     id: valueEntry(),
     entityId: valueEntry("Panel entity id (panel:<historyEntryKey>) - same as `id`."),
-    slotId: valueEntry("Stable panel slot id for panel tree operations."),
+    slotId: valueEntry("Stable panel slot id for panel tree operations and panel channel/client identity."),
     rpc: valueEntry(),
     parent: valueEntry(),
     getParent: valueEntry(),
@@ -25,9 +25,6 @@ export const panelRuntimeSurface: RuntimeSurface = {
     onConnectionError: valueEntry(),
     getInfo: valueEntry(),
     focusPanel: valueEntry(),
-    getWorkspaceTree: valueEntry(),
-    listBranches: valueEntry(),
-    listCommits: valueEntry(),
     getTheme: valueEntry(),
     onThemeChange: valueEntry(),
     onFocus: valueEntry(),
@@ -43,7 +40,6 @@ export const panelRuntimeSurface: RuntimeSurface = {
     gatewayFetch: valueEntry(
       "Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."
     ),
-    gitConfig: valueEntry("Git HTTP endpoint and token derived from the gateway config."),
     env: valueEntry(),
     doTargetId: valueEntry("Build a unified RPC target ID for a Durable Object reference."),
     createDurableObjectServiceClient: valueEntry(
@@ -72,15 +68,21 @@ export const panelRuntimeSurface: RuntimeSurface = {
     useStateArgs: valueEntry(),
     setStateArgs: valueEntry(),
     setStateArgsForPanel: valueEntry(),
+    reopen: valueEntry(
+      "Replace the current panel slot with a source/context/stateArgs using panelTree.navigate."
+    ),
     openExternal: valueEntry(),
     onChildCreated: valueEntry(),
     openPanel: valueEntry(),
     listPanels: valueEntry(),
     getPanelHandle: valueEntry(),
     panelTree: namespaceEntry(
-      ["self", "get", "list", "roots", "children", "parent", "open"],
+      ["self", "get", "list", "roots", "children", "parent", "navigate", "open"],
       panelTreeDescription
     ),
+    buildPanelRenderErrorPrompt: valueEntry(),
+    installPanelErrorDiagnosticLauncher: valueEntry(),
+    openPanelErrorDiagnosticChat: valueEntry(),
     agentApi: valueEntry(),
     Journal: valueEntry(),
     withJournal: valueEntry(),
@@ -106,9 +108,11 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "setInitPanels",
       "setConfigField",
       "switchTo",
+      "sourceTree",
+      "findUnitForPath",
       "openPanel",
       "units",
-    ]),
+    ], "Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles."),
     credentials: namespaceEntry([
       "store",
       "connect",
@@ -130,9 +134,24 @@ export const panelRuntimeSurface: RuntimeSurface = {
       "completeWorkspaceDependencies",
       "setSharedRemote",
       "removeSharedRemote",
-      "ensureRepoPresentInContexts",
-      "publishWorkspaceRepo",
-      "client",
+    ]),
+    vcs: namespaceEntry([
+      "commit",
+      "applyEdits",
+      "readFile",
+      "listFiles",
+      "revert",
+      "status",
+      "unitStatus",
+      "log",
+      "diff",
+      "resolveHead",
+      "merge",
+      "abortMerge",
+      "pendingMerge",
+      "publishStatus",
+      "publish",
+      "recall",
     ]),
     gad: namespaceEntry([
       "rawSql",

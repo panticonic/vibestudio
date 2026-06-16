@@ -22,7 +22,6 @@ import {
   writeFileSync,
   mkdirSync,
   symlinkSync,
-  realpathSync,
   utimesSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,22 +51,6 @@ function makeStubFolderManager(root: string): ContextFolderManager {
     getContextRoot(contextId: string): string | null {
       const p = path.join(root, contextId);
       return existsSync(p) ? p : null;
-    },
-    async isAllowedSharedGitObjectsSymlink(args: {
-      contextRoot: string;
-      symlinkPath: string;
-      realTarget: string;
-    }): Promise<boolean> {
-      const expectedSymlink = path.join(args.contextRoot, "repo", ".git", "objects");
-      const expectedTarget = path.join(root, "source", "repo", ".git", "objects");
-      try {
-        return (
-          path.resolve(args.symlinkPath) === expectedSymlink &&
-          realpathSync(args.realTarget) === realpathSync(expectedTarget)
-        );
-      } catch {
-        return false;
-      }
     },
   } as unknown as ContextFolderManager;
 }
@@ -225,95 +208,7 @@ describe("FsService", () => {
     });
   });
 
-  describe("shared git object store", () => {
-    it("allows reads through context .git/objects symlinks", async () => {
-      const ctx = makeWorkerCtx("do:src:class:key");
-      registerContext(ctx.caller.runtime.id, "do", "ctx-git-read");
-      setupSharedGitObjects("ctx-git-read", {
-        "ab/cdef1234567890abcdef1234567890abcdef12": "object",
-      });
-
-      await expect(
-        service.handleCall(ctx, "readFile", [
-          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
-          "utf8",
-        ])
-      ).resolves.toBe("object");
-    });
-
-    it("allows creating new loose objects without overwriting existing shared objects", async () => {
-      const ctx = makeWorkerCtx("do:src:class:key");
-      registerContext(ctx.caller.runtime.id, "do", "ctx-git-write");
-      const sharedObjects = setupSharedGitObjects("ctx-git-write", {
-        "ab/cdef1234567890abcdef1234567890abcdef12": "existing",
-      });
-
-      await service.handleCall(ctx, "mkdir", ["/repo/.git/objects/cd", { recursive: true }]);
-      await service.handleCall(ctx, "writeFile", [
-        "/repo/.git/objects/cd/ef1234567890abcdef1234567890abcdef1234",
-        "new",
-      ]);
-      expect(
-        existsSync(path.join(sharedObjects, "cd", "ef1234567890abcdef1234567890abcdef1234"))
-      ).toBe(true);
-
-      await expect(
-        service.handleCall(ctx, "writeFile", [
-          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
-          "overwrite",
-        ])
-      ).rejects.toMatchObject({ code: "EEXIST" });
-      expect(
-        await service.handleCall(ctx, "readFile", [
-          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
-          "utf8",
-        ])
-      ).toBe("existing");
-    });
-
-    it("rejects non-object writes and destructive operations through shared git objects", async () => {
-      const ctx = makeWorkerCtx("do:src:class:key");
-      registerContext(ctx.caller.runtime.id, "do", "ctx-git-deny");
-      setupSharedGitObjects("ctx-git-deny", {
-        "ab/cdef1234567890abcdef1234567890abcdef12": "existing",
-      });
-
-      await expect(
-        service.handleCall(ctx, "writeFile", ["/repo/.git/objects/not-a-loose-object", "bad"])
-      ).rejects.toThrow(/loose object/i);
-      await expect(
-        service.handleCall(ctx, "unlink", [
-          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
-        ])
-      ).rejects.toThrow(/Symlink escapes sandbox/i);
-      await expect(
-        service.handleCall(ctx, "rm", [
-          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
-        ])
-      ).rejects.toThrow(/Symlink escapes sandbox/i);
-      await expect(service.handleCall(ctx, "rmdir", ["/repo/.git/objects/ab"])).rejects.toThrow(
-        /Symlink escapes sandbox/i
-      );
-      await expect(
-        service.handleCall(ctx, "rename", [
-          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
-          "/repo/.git/objects/ab/ffffffffffffffffffffffffffffffffffffff",
-        ])
-      ).rejects.toThrow(/Symlink escapes sandbox/i);
-      await expect(
-        service.handleCall(ctx, "truncate", [
-          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
-          0,
-        ])
-      ).rejects.toThrow(/Symlink escapes sandbox/i);
-      await expect(
-        service.handleCall(ctx, "open", [
-          "/repo/.git/objects/ab/cdef1234567890abcdef1234567890abcdef12",
-          "w",
-        ])
-      ).rejects.toThrow(/Symlink escapes sandbox/i);
-    });
-
+  describe("symlink sandboxing", () => {
     it("rejects reads through an invalid .git/objects symlink escape", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-git-invalid");
@@ -709,20 +604,5 @@ describe("FsService", () => {
       cleanupComplete: true,
     };
     entityCache._onActivate(record);
-  }
-
-  function setupSharedGitObjects(contextId: string, objects: Record<string, string>): string {
-    const contextRoot = path.join(tmpRoot, contextId);
-    const repoGit = path.join(contextRoot, "repo", ".git");
-    const sharedObjects = path.join(tmpRoot, "source", "repo", ".git", "objects");
-    mkdirSync(repoGit, { recursive: true });
-    mkdirSync(sharedObjects, { recursive: true });
-    for (const [objectPath, content] of Object.entries(objects)) {
-      const fullPath = path.join(sharedObjects, objectPath);
-      mkdirSync(path.dirname(fullPath), { recursive: true });
-      writeFileSync(fullPath, content);
-    }
-    symlinkSync(path.relative(repoGit, sharedObjects), path.join(repoGit, "objects"), "dir");
-    return sharedObjects;
   }
 });

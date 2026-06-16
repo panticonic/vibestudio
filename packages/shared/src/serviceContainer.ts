@@ -88,8 +88,20 @@ export class ServiceContainer {
 
         log.info(`[${name}] Starting`);
         if (service.start) {
-          const instance = await service.start(resolve);
-          this.instances.set(name, instance);
+          // Watchdog: a stuck service start hangs the whole boot with no
+          // further output — keep naming the offender until it resolves.
+          const startedAt = Date.now();
+          const watchdog = setInterval(() => {
+            log.warn(
+              `[${name}] still starting after ${Math.round((Date.now() - startedAt) / 1000)}s`
+            );
+          }, 15_000);
+          try {
+            const instance = await service.start(resolve);
+            this.instances.set(name, instance);
+          } finally {
+            clearInterval(watchdog);
+          }
         } else {
           this.instances.set(name, undefined);
         }

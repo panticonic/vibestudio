@@ -25,7 +25,7 @@ export type UnitRegistryStatus =
   | "building";
 
 export interface UnitSource {
-  kind: "internal-git";
+  kind: "workspace-repo";
   repo: string;
   ref: string;
 }
@@ -41,9 +41,7 @@ export interface UnitBuildIdentity<Kind extends UnitKind = UnitKind> {
 }
 
 export type UnitTrustDecision =
-  | "product-seed-trusted"
   | "user-approved"
-  | "session-granted"
   | "preapproved"
   | "needs-approval";
 
@@ -54,13 +52,11 @@ export interface UnitTrustResolution {
 
 export interface UnitTrustResolverOptions<Entry extends UnitRegistryEntryBase> {
   entryIdentity?: (entry: Entry) => UnitBuildIdentity<Entry["unitKind"]> | null;
-  productSeedTrust?: (identity: UnitBuildIdentity<Entry["unitKind"]>) => boolean;
 }
 
 export interface UnitTrustResolveContext<Entry extends UnitRegistryEntryBase> {
   identity: UnitBuildIdentity<Entry["unitKind"]>;
   entry: Entry | null;
-  sessionGrantedIdentityKeys?: ReadonlySet<string>;
   preapprovedIdentityKeys?: ReadonlySet<string>;
 }
 
@@ -71,12 +67,6 @@ export class UnitTrustResolver<Entry extends UnitRegistryEntryBase> {
     const identityKey = canonicalUnitBuildIdentity(ctx.identity);
     if (this.isUserApproved(ctx.entry, ctx.identity)) {
       return { decision: "user-approved", identityKey };
-    }
-    if (this.opts.productSeedTrust?.(ctx.identity)) {
-      return { decision: "product-seed-trusted", identityKey };
-    }
-    if (ctx.sessionGrantedIdentityKeys?.has(identityKey)) {
-      return { decision: "session-granted", identityKey };
     }
     if (ctx.preapprovedIdentityKeys?.has(identityKey)) {
       return { decision: "preapproved", identityKey };
@@ -99,7 +89,7 @@ export interface UnitRegistryEntryBase {
   source: UnitSource;
   installedAt: number;
   activeEv: string | null;
-  activeSha: string | null;
+  activeSourceHash: string | null;
   activeBundleKey: string | null;
   activeDependencyEvs: Record<string, string>;
   activeExternalDeps: Record<string, string>;
@@ -200,7 +190,7 @@ export interface UnitBuildActivationOptions<Entry extends UnitRegistryEntryBase>
   ref: string;
   buildDir: string;
   effectiveVersion: string;
-  activeSha: string | null;
+  activeSourceHash: string | null;
   dependencyEvs: Record<string, string>;
   externalDeps: Record<string, string>;
   runtimeDepsKey?: string | null;
@@ -235,7 +225,7 @@ export function createUnitBuildIdentity<Kind extends UnitKind>(
   return {
     unitKind: opts.unitKind,
     name: opts.name,
-    source: { kind: "internal-git", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
+    source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
     effectiveVersion: opts.effectiveVersion,
     dependencyEvs: opts.dependencyEvs,
     externalDeps: opts.externalDeps,
@@ -252,7 +242,6 @@ export interface UnitBatchEntryBase<Kind extends UnitKind = UnitKind> {
   ev: string | null;
   dependencyEvs: Record<string, string>;
   externalDeps: Record<string, string>;
-  commit: null;
 }
 
 export interface UnitBatchEntryBaseOptions<Kind extends UnitKind> {
@@ -295,7 +284,6 @@ export interface UnitHostOptions<
 > {
   descriptor: UnitDescriptor<Entry["unitKind"]>;
   registry: UnitRegistry<Entry>;
-  currentDeclarationVersion(): string | null;
   resolveNode(source: string): Node;
   candidateIdentity(node: Node, decl: Decl): UnitBuildIdentity<Entry["unitKind"]>;
   trustResolver?: UnitTrustResolver<Entry>;
@@ -304,24 +292,34 @@ export interface UnitHostOptions<
   removeUndeclared(entry: Entry): Promise<void>;
   emitRemoved(entry: Entry): void;
   notifyUnresolved(sources: string[]): void;
+  validateBeforeApproval?: (node: Node, decl: Decl) => void;
+  onApprovalCandidateError?: (node: Node, decl: Decl, message: string) => void;
   approvalEntry(node: Node, decl: Decl): ApprovalEntry;
-  requestApproval(entries: ApprovalEntry[], trigger: "startup" | "meta-push"): Promise<"once" | "session" | "version" | "repo" | "deny">;
+  requestApproval(
+    entries: ApprovalEntry[],
+    trigger: UnitReconcileTrigger,
+  ): Promise<UnitApprovalDecision>;
   approvalCoordinator?: UnitApprovalCoordinator<ApprovalEntry>;
   onApprovalDenied(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void;
   onBackgroundError(error: unknown): void;
 }
 
+export type UnitReconcileTrigger = "startup" | "meta-change";
+export type UnitApprovalDecision = "once" | "session" | "version" | "repo" | "deny";
+
+export interface UnitReconcileOptions {
+  trigger?: UnitReconcileTrigger;
+  removeUndeclared?: boolean;
+}
+
 export interface UnitApprovalCoordinator<ApprovalEntry> {
   enqueue(request: {
     entries: ApprovalEntry[];
-    trigger: "startup" | "meta-push";
+    trigger: UnitReconcileTrigger;
     applyApproved(): Promise<void>;
     applyDenied(): void;
   }): Promise<void>;
 }
-
-export type UnitReconcileTrigger = "startup" | "meta-push";
-export type UnitApprovalDecision = "once" | "session" | "version" | "repo" | "deny";
 
 export interface UnitBatchApprovalQueue<ApprovalEntry, ConfigWrite = unknown> {
   request(req: {
@@ -364,33 +362,35 @@ export function requestUnitBatchApproval<
 }
 
 function unitBatchApprovalDescription(descriptor: UnitDescriptor, count: number): string {
-  const label = count === 1
-    ? descriptor.approvalFraming.unitLabel
-    : descriptor.approvalFraming.unitLabelPlural;
-  const privilege = descriptor.kind === "app"
-    ? "privileged"
-    : descriptor.approvalFraming.nativeCode
-      ? "native-code"
-      : "trusted";
+  const label =
+    count === 1
+      ? descriptor.approvalFraming.unitLabel
+      : descriptor.approvalFraming.unitLabelPlural;
+  const privilege =
+    descriptor.kind === "app"
+      ? "privileged"
+      : descriptor.approvalFraming.nativeCode
+        ? "native-code"
+        : "trusted";
   const runtime = descriptor.kind === "app" ? "in the app host" : "as native code";
   const verb = count === 1 ? "needs" : "need";
   return `This workspace uses ${count} ${privilege} ${label} that ${verb} approval to run ${runtime}.`;
 }
 
-interface UnitSourcePushGrantFile {
+interface UnitSourceChangeGrantFile {
   grants: Array<{ key: string; expiresAt: number }>;
 }
 
 /**
- * Persistent per-unit dev-session push grants. These are intentionally keyed
- * by callers and unit/repo/branch by the host that owns the push decision.
+ * Persistent per-unit dev-session source-change grants. These are intentionally
+ * keyed by callers and unit/repo/branch by the host that owns the decision.
  */
-export class UnitSourcePushGrantStore {
+export class UnitSourceChangeGrantStore {
   private readonly filePath: string;
   private grants = new Map<string, number>();
 
   constructor(opts: { statePath: string }) {
-    this.filePath = path.join(opts.statePath, "units", "source-push-grants.json");
+    this.filePath = path.join(opts.statePath, "units", "source-change-grants.json");
     this.load();
   }
 
@@ -410,7 +410,7 @@ export class UnitSourcePushGrantStore {
 
   private load(): void {
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as UnitSourcePushGrantFile;
+      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as UnitSourceChangeGrantFile;
       const now = Date.now();
       this.grants = new Map(
         (Array.isArray(parsed.grants) ? parsed.grants : [])
@@ -423,7 +423,7 @@ export class UnitSourcePushGrantStore {
       );
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
-        console.warn("[UnitSourcePushGrantStore] Failed to load grants:", err);
+        console.warn("[UnitSourceChangeGrantStore] Failed to load grants:", err);
       }
       this.grants = new Map();
     }
@@ -432,7 +432,7 @@ export class UnitSourcePushGrantStore {
   private save(): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const tmp = `${this.filePath}.tmp.${process.pid}.${Date.now()}`;
-    const payload: UnitSourcePushGrantFile = {
+    const payload: UnitSourceChangeGrantFile = {
       grants: [...this.grants.entries()].map(([key, expiresAt]) => ({ key, expiresAt })),
     };
     fs.writeFileSync(tmp, JSON.stringify(payload, null, 2));
@@ -440,89 +440,94 @@ export class UnitSourcePushGrantStore {
   }
 }
 
-export type UnitSourcePushDecision = UnitApprovalDecision;
+export type UnitSourceChangeDecision = "once" | "session" | "version" | "repo" | "deny";
 export type UnitUserlandCallerKind = "panel" | "app" | "worker" | "do";
 
-export interface UnitSourcePushCallerIdentity {
+export interface UnitSourceChangeCallerIdentity {
   callerKind: string;
   repoPath: string;
   effectiveVersion: string;
 }
 
-export interface UnitSourcePushCaller {
+export interface UnitSourceChangeCaller {
   runtime: { id: string; kind: string };
-  code?: UnitSourcePushCallerIdentity | null;
+  code?: UnitSourceChangeCallerIdentity | null;
 }
 
-export interface UnitSourcePushRequest {
-  caller: UnitSourcePushCaller;
+export interface UnitSourceChangeRequest {
+  caller: UnitSourceChangeCaller;
   repoPath: string;
   branch: string;
   commit: string;
 }
 
-export interface UnitSourcePushAuthorizationDecision {
+export interface UnitSourceChangeAuthorizationDecision {
   allowed: boolean;
   reason?: string;
 }
 
-export interface UnitSourcePushHandler {
-  authorizeSourcePush(
-    request: UnitSourcePushRequest,
-  ): Promise<UnitSourcePushAuthorizationDecision> | UnitSourcePushAuthorizationDecision;
+export interface UnitSourceChangeHandler {
+  authorizeSourceChange(
+    request: UnitSourceChangeRequest,
+  ): Promise<UnitSourceChangeAuthorizationDecision> | UnitSourceChangeAuthorizationDecision;
 }
 
-export interface UnitSourcePushTarget {
+export interface UnitSourceChangeTarget {
   sourceRoot: string;
-  getHandler(): UnitSourcePushHandler | null | undefined;
+  getHandler(): UnitSourceChangeHandler | null | undefined;
 }
 
-export interface UnitMetaPushApprovalProvider<ApprovalEntry = unknown> {
-  metaPushApprovalForCommit(commit: string): { units: ApprovalEntry[]; identityKeys: string[] };
-  acceptPreapprovedTrust(version: string, keys: Iterable<string>): void;
+export interface UnitMetaChangeApprovalProvider<ApprovalEntry = unknown> {
+  metaChangeApprovalForCommit(
+    commit: string,
+  ): Promise<{ units: ApprovalEntry[]; identityKeys: string[] }> | {
+    units: ApprovalEntry[];
+    identityKeys: string[];
+  };
+  acceptPreapprovedTrust(keys: Iterable<string>): void;
 }
 
-export interface InstalledUnitForSourcePush<Entry extends UnitRegistryEntryBase, Node extends UnitGraphNode> {
+export interface InstalledUnitForSourceChange<Entry extends UnitRegistryEntryBase, Node extends UnitGraphNode> {
   entry: Entry;
   node: Node;
 }
 
-export interface UnitSourcePushApprovalContext<
+export interface UnitSourceChangeApprovalContext<
   Entry extends UnitRegistryEntryBase,
   Node extends UnitGraphNode,
 > {
-  request: UnitSourcePushRequest;
+  request: UnitSourceChangeRequest;
   repoPath: string;
-  installed: InstalledUnitForSourcePush<Entry, Node>;
-  identity: UnitSourcePushCallerIdentity;
+  installed: InstalledUnitForSourceChange<Entry, Node>;
+  identity: UnitSourceChangeCallerIdentity;
   callerKind: UnitUserlandCallerKind;
   sessionGrantKey: string;
 }
 
-export interface UnitSourcePushAuthorizerOptions<
+export interface UnitSourceChangeAuthorizerOptions<
   Entry extends UnitRegistryEntryBase,
   Node extends UnitGraphNode,
 > {
   descriptor: UnitDescriptor<Entry["unitKind"]>;
-  grantStore: Pick<UnitSourcePushGrantStore, "hasActive" | "grant">;
+  grantStore: Pick<UnitSourceChangeGrantStore, "hasActive" | "grant">;
   grantTtlMs: number;
-  findInstalledByRepo(repoPath: string): InstalledUnitForSourcePush<Entry, Node> | null;
-  requestApproval(ctx: UnitSourcePushApprovalContext<Entry, Node>): Promise<UnitSourcePushDecision>;
+  findInstalledByRepo(repoPath: string): InstalledUnitForSourceChange<Entry, Node> | null;
+  requestApproval(ctx: UnitSourceChangeApprovalContext<Entry, Node>): Promise<UnitSourceChangeDecision>;
 }
 
-export async function authorizeUnitSourcePush<
+export async function authorizeUnitSourceChange<
   Entry extends UnitRegistryEntryBase,
   Node extends UnitGraphNode,
 >(
-  opts: UnitSourcePushAuthorizerOptions<Entry, Node>,
-  request: UnitSourcePushRequest,
-): Promise<UnitSourcePushAuthorizationDecision> {
+  opts: UnitSourceChangeAuthorizerOptions<Entry, Node>,
+  request: UnitSourceChangeRequest,
+): Promise<UnitSourceChangeAuthorizationDecision> {
   const repoPath = normalizeUnitRepoPath(request.repoPath);
   const branch = normalizeUnitRef(request.branch);
   const normalizedRequest = { ...request, repoPath, branch };
   const installed = opts.findInstalledByRepo(repoPath);
   if (!installed) return { allowed: true };
-  if (!sourcePushTouchesUnitRef(branch, installed.entry.source.ref)) {
+  if (!sourceChangeTouchesUnitRef(branch, installed.entry.source.ref)) {
     return { allowed: true };
   }
 
@@ -530,7 +535,7 @@ export async function authorizeUnitSourcePush<
     return { allowed: true };
   }
 
-  const sessionGrantKey = unitPushSessionGrantKey(
+  const sessionGrantKey = unitChangeSessionGrantKey(
     request.caller.runtime.id,
     installed.entry.name,
     repoPath,
@@ -544,7 +549,7 @@ export async function authorizeUnitSourcePush<
   if (!callerKind) {
     return {
       allowed: false,
-      reason: `${capitalize(opts.descriptor.approvalFraming.unitLabel)} source pushes from ${request.caller.runtime.kind} callers are not supported`,
+      reason: `${capitalize(opts.descriptor.approvalFraming.unitLabel)} source changes from ${request.caller.runtime.kind} callers are not supported`,
     };
   }
 
@@ -564,7 +569,7 @@ export async function authorizeUnitSourcePush<
   if (decision === "deny") {
     return {
       allowed: false,
-      reason: `${capitalize(opts.descriptor.approvalFraming.unitLabel)} source push denied`,
+      reason: `${capitalize(opts.descriptor.approvalFraming.unitLabel)} source change denied`,
     };
   }
   if (decision === "session") {
@@ -577,7 +582,6 @@ export function normalizeUnitRepoPath(repoPath: string): string {
   return repoPath
     .replace(/^\/+/, "")
     .replace(/^workspace\//, "")
-    .replace(/\.git(\/.*)?$/, "")
     .replace(/\/+$/, "");
 }
 
@@ -585,7 +589,7 @@ export function normalizeUnitRef(ref: string): string {
   return ref.replace(/^refs\/heads\//, "");
 }
 
-export function unitPushSessionGrantKey(
+export function unitChangeSessionGrantKey(
   callerId: string,
   unitName: string,
   repoPath: string,
@@ -599,7 +603,7 @@ function unitUserlandCallerKind(kind: string): UnitUserlandCallerKind | null {
   return null;
 }
 
-function sourcePushTouchesUnitRef(branch: string, ref: string): boolean {
+function sourceChangeTouchesUnitRef(branch: string, ref: string): boolean {
   return normalizeUnitRef(branch) === normalizeUnitRef(ref);
 }
 
@@ -616,23 +620,29 @@ export class UnitHost<
 > {
   private reconciling: Promise<void> | null = null;
   private backgroundFlow: Promise<void> | null = null;
-  private preapprovedTrust: { version: string | null; keys: Set<string> } | null = null;
+  private preapprovedTrust = new Set<string>();
+  private pendingApprovalIdentityKeys = new Set<string>();
   private readonly trustResolver: UnitTrustResolver<Entry>;
 
   constructor(private readonly opts: UnitHostOptions<Entry, Decl, Node, ApprovalEntry>) {
     this.trustResolver = opts.trustResolver ?? new UnitTrustResolver<Entry>();
   }
 
-  acceptPreapprovedTrust(version: string, keys: Iterable<string>): void {
-    this.preapprovedTrust = { version, keys: new Set(keys) };
+  acceptPreapprovedTrust(keys: Iterable<string>): void {
+    for (const key of keys) {
+      this.preapprovedTrust.add(key);
+    }
   }
 
   async reconcileDeclared(
     declared: Decl[],
-    opts: { trigger?: UnitReconcileTrigger } = {},
+    opts: UnitReconcileOptions = {},
   ): Promise<void> {
     const run = (this.reconciling ?? Promise.resolve()).then(() =>
-      this.reconcileDeclaredOnce(declared, opts.trigger ?? "startup"),
+      this.reconcileDeclaredOnce(declared, {
+        trigger: opts.trigger ?? "startup",
+        removeUndeclared: opts.removeUndeclared ?? true,
+      }),
     );
     this.reconciling = run.catch(() => {});
     await run;
@@ -658,8 +668,7 @@ export class UnitHost<
         continue;
       }
       const entry = this.opts.registry.get(node.name);
-      const identity = this.opts.candidateIdentity(node, decl);
-      const trust = this.trustResolver.resolve({ identity, entry });
+      const trust = this.trustForCandidate(node, decl, entry);
       if (trust.decision !== "needs-approval") continue;
       entries.push(this.opts.approvalEntry(node, decl));
       identityKeys.push(trust.identityKey);
@@ -667,24 +676,8 @@ export class UnitHost<
     return { entries, identityKeys };
   }
 
-  preapproveDeclarations(declared: Decl[]): { entries: ApprovalEntry[]; identityKeys: string[] } {
-    const approval = this.approvalForDeclarations(declared);
-    const version = this.opts.currentDeclarationVersion();
-    if (approval.identityKeys.length > 0) {
-      const keys =
-        this.preapprovedTrust && this.preapprovedTrust.version === version
-          ? new Set([...this.preapprovedTrust.keys, ...approval.identityKeys])
-          : new Set(approval.identityKeys);
-      this.preapprovedTrust = { version, keys };
-    }
-    return approval;
-  }
-
   trustForDeclaration(node: Node, decl: Decl): UnitTrustResolution {
-    return this.trustResolver.resolve({
-      identity: this.opts.candidateIdentity(node, decl),
-      entry: this.opts.registry.get(node.name),
-    });
+    return this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
   }
 
   async applyRuntimeDeclaration(
@@ -694,7 +687,7 @@ export class UnitHost<
     try {
       opts.validateBeforeApply?.(node, decl);
       const entry = this.opts.registry.get(node.name);
-      const trust = this.trustForDeclaration(node, decl);
+      const trust = this.trustForCandidate(node, decl, entry);
       if (!entry || trust.decision !== "user-approved" || opts.needsBuildRefresh(entry, node, decl)) {
         if (!entry) {
           this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
@@ -715,10 +708,10 @@ export class UnitHost<
   activateBuild(opts: UnitBuildActivationOptions<Entry>): Entry {
     return this.opts.registry.patch(opts.name, {
       ...opts.extra,
-      source: { kind: "internal-git", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
+      source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
       version: opts.version,
       activeEv: opts.effectiveVersion,
-      activeSha: opts.activeSha,
+      activeSourceHash: opts.activeSourceHash,
       activeBundleKey: path.basename(opts.buildDir),
       activeDependencyEvs: opts.dependencyEvs,
       activeExternalDeps: opts.externalDeps,
@@ -765,7 +758,7 @@ export class UnitHost<
     } as Partial<Entry>);
   }
 
-  findInstalledByRepo(repoPath: string): InstalledUnitForSourcePush<Entry, Node> | null {
+  findInstalledByRepo(repoPath: string): InstalledUnitForSourceChange<Entry, Node> | null {
     const normalizedRepo = normalizeUnitRepoPath(repoPath);
     for (const entry of this.opts.registry.list()) {
       let node: Node;
@@ -810,14 +803,12 @@ export class UnitHost<
     return [unitWorkspaceLogRecord(this.opts.descriptor.kind, workspaceId, entry)];
   }
 
-  private async reconcileDeclaredOnce(declared: Decl[], trigger: UnitReconcileTrigger): Promise<void> {
-    const version = this.opts.currentDeclarationVersion();
-    const preApproved =
-      this.preapprovedTrust && version === this.preapprovedTrust.version
-        ? this.preapprovedTrust.keys
-        : new Set<string>();
-    this.preapprovedTrust = null;
-
+  private async reconcileDeclaredOnce(
+    declared: Decl[],
+    opts: { trigger: UnitReconcileTrigger; removeUndeclared: boolean },
+  ): Promise<void> {
+    const preApproved = this.preapprovedTrust;
+    this.preapprovedTrust = new Set();
     const resolved: Array<ResolvedUnitDeclaration<Decl, Node>> = [];
     const unresolved: string[] = [];
     for (const decl of declared) {
@@ -830,7 +821,9 @@ export class UnitHost<
     if (unresolved.length > 0) this.opts.notifyUnresolved(unresolved);
 
     const declaredByName = new Map(resolved.map((item) => [item.node.name, item]));
-    const needsApproval: Array<ResolvedUnitDeclaration<Decl, Node>> = [];
+    const needsApproval: Array<
+      ResolvedUnitDeclaration<Decl, Node> & { identityKey: string }
+    > = [];
 
     for (const { node, decl } of resolved) {
       const entry = this.opts.registry.get(node.name);
@@ -841,25 +834,42 @@ export class UnitHost<
       });
       if (trust.decision !== "needs-approval") {
         await this.opts.applyTrusted(node, decl);
-      } else {
-        if (!entry) this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
-        needsApproval.push({ node, decl });
+        continue;
+      }
+      try {
+        this.opts.validateBeforeApproval?.(node, decl);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.opts.onApprovalCandidateError?.(node, decl, message);
+        continue;
+      }
+      if (!entry) this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
+      if (!this.pendingApprovalIdentityKeys.has(trust.identityKey)) {
+        needsApproval.push({ node, decl, identityKey: trust.identityKey });
       }
     }
 
-    for (const entry of this.opts.registry.list()) {
-      if (declaredByName.has(entry.name)) continue;
-      await this.opts.removeUndeclared(entry);
-      this.opts.registry.delete(entry.name);
-      this.opts.emitRemoved(entry);
+    if (opts.removeUndeclared) {
+      for (const entry of this.opts.registry.list()) {
+        if (declaredByName.has(entry.name)) continue;
+        await this.opts.removeUndeclared(entry);
+        this.opts.registry.delete(entry.name);
+        this.opts.emitRemoved(entry);
+      }
     }
 
     if (needsApproval.length > 0) {
-      const startApproval = () => this.promptAndApply(needsApproval, trigger);
+      for (const item of needsApproval) {
+        this.pendingApprovalIdentityKeys.add(item.identityKey);
+      }
+      const startApproval = () => this.promptAndApply(needsApproval, opts.trigger);
       const flow = this.backgroundFlow ? this.backgroundFlow.then(startApproval) : startApproval();
       const tracked = flow
         .catch((err) => this.opts.onBackgroundError(err))
         .finally(() => {
+          for (const item of needsApproval) {
+            this.pendingApprovalIdentityKeys.delete(item.identityKey);
+          }
           if (this.backgroundFlow === tracked) {
             this.backgroundFlow = null;
           }
@@ -894,6 +904,18 @@ export class UnitHost<
     for (const { node, decl } of items) {
       await this.opts.applyTrusted(node, decl);
     }
+  }
+
+  private trustForCandidate(
+    node: Node,
+    decl: Decl,
+    entry: Entry | null,
+  ): UnitTrustResolution {
+    const identity = this.opts.candidateIdentity(node, decl);
+    return this.trustResolver.resolve({
+      identity,
+      entry,
+    });
   }
 
   private tryResolveNode(source: string): Node | null {
@@ -955,10 +977,10 @@ export function createPendingUnitRegistryEntry<Kind extends UnitKind>(opts: {
     unitKind: opts.unitKind,
     name: opts.name,
     version: opts.version,
-    source: { kind: "internal-git", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
+    source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
     installedAt: opts.installedAt ?? Date.now(),
     activeEv: null,
-    activeSha: null,
+    activeSourceHash: null,
     activeBundleKey: null,
     activeDependencyEvs: {},
     activeExternalDeps: {},
@@ -976,11 +998,10 @@ export function createUnitBatchEntryBase<Kind extends UnitKind>(
     unitName: opts.name,
     displayName: opts.displayName ?? opts.name,
     version: opts.version,
-    source: { kind: "internal-git", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
+    source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
     ev: opts.effectiveVersion,
     dependencyEvs: opts.dependencyEvs,
     externalDeps: opts.externalDeps,
-    commit: null,
   };
 }
 
@@ -1101,7 +1122,7 @@ export function isUnitRegistryEntry<Kind extends UnitKind>(
     && typeof entry.name === "string"
     && typeof entry.version === "string"
     && !!entry.source
-    && entry.source.kind === "internal-git"
+    && entry.source.kind === "workspace-repo"
     && typeof entry.source.repo === "string"
     && typeof entry.source.ref === "string"
     && typeof entry.installedAt === "number"

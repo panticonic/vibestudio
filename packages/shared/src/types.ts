@@ -430,23 +430,23 @@ export interface DescendantSiblingGroup {
 }
 
 // =============================================================================
-// Workspace Discovery Types (for git repos and launchable panels)
+// Workspace Discovery Types (for workspace units and launchable panels)
 // =============================================================================
 
 /**
  * A node in the workspace tree.
- * Folders contain children, git repos are leaves (children = []).
+ * Folders contain children, workspace units are leaves (children = []).
  */
 export interface WorkspaceNode {
-  /** Directory/repo name */
+  /** Directory or unit name. */
   name: string;
   /**
    * Relative path from workspace root using forward slashes.
    * Example: "panels/editor"
    */
   path: string;
-  /** True if this directory is a git repository root */
-  isGitRepo: boolean;
+  /** True if this directory is a workspace unit root. */
+  isUnit: boolean;
   /**
    * If this is a launchable panel (has natstack config).
    * Note: We intentionally include entries even if some fields are missing
@@ -459,21 +459,20 @@ export interface WorkspaceNode {
     hidden?: boolean;
   };
   /**
-   * Package metadata if this repo has a package.json with a name.
+   * Package metadata if this unit has a package.json with a name.
    */
   packageInfo?: {
     name: string;
     version?: string;
   };
   /**
-   * Skill metadata if this repo has a SKILL.md file with YAML frontmatter.
-   * Skills are repos that provide instructions/context for agents.
+   * Skill metadata if this unit has a SKILL.md file with YAML frontmatter.
    */
   skillInfo?: {
     name: string;
     description: string;
   };
-  /** Child nodes (empty for git repos since they're leaves) */
+  /** Child nodes (empty for workspace units since they're leaves). */
   children: WorkspaceNode[];
 }
 
@@ -483,24 +482,6 @@ export interface WorkspaceNode {
 export interface WorkspaceTree {
   /** Root children (top-level directories) */
   children: WorkspaceNode[];
-}
-
-/**
- * Branch info for a git repository.
- */
-export interface BranchInfo {
-  name: string;
-  current: boolean;
-  remote?: string;
-}
-
-/**
- * Commit info for git log.
- */
-export interface CommitInfo {
-  oid: string;
-  message: string;
-  author: { name: string; timestamp: number };
 }
 
 // Shell IPC channels (shell renderer -> main for service calls)

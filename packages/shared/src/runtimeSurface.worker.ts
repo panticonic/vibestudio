@@ -2,7 +2,7 @@ import type { RuntimeSurface } from "./runtimeSurface.js";
 import { namespaceEntry, valueEntry } from "./runtimeSurface.js";
 
 const panelTreeDescription =
-  "Return signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; open(source, opts?): Promise<PanelHandle>. `self()` and `get()` are synchronous handle factories; catch errors on async handle methods like `refresh()` or `getInfo()`.";
+  "Runtime property, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle | null; navigate(id, source, opts?): Promise<{ id, title }>; open(source, opts?): Promise<PanelHandle>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; open creates a new panel. self/get are sync; async methods refresh metadata as needed.";
 
 export const workerRuntimeSurface: RuntimeSurface = {
   target: "workerRuntime",
@@ -41,8 +41,10 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "setInitPanels",
       "setConfigField",
       "switchTo",
+      "sourceTree",
+      "findUnitForPath",
       "units",
-    ]),
+    ], "Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles."),
     credentials: namespaceEntry([
       "store",
       "connect",
@@ -64,9 +66,24 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "completeWorkspaceDependencies",
       "setSharedRemote",
       "removeSharedRemote",
-      "ensureRepoPresentInContexts",
-      "publishWorkspaceRepo",
-      "client",
+    ]),
+    vcs: namespaceEntry([
+      "commit",
+      "applyEdits",
+      "readFile",
+      "listFiles",
+      "revert",
+      "status",
+      "unitStatus",
+      "log",
+      "diff",
+      "resolveHead",
+      "merge",
+      "abortMerge",
+      "pendingMerge",
+      "publishStatus",
+      "publish",
+      "recall",
     ]),
     gad: namespaceEntry([
       "rawSql",
@@ -116,19 +133,15 @@ export const workerRuntimeSurface: RuntimeSurface = {
     gatewayFetch: valueEntry(
       "Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer."
     ),
-    gitConfig: valueEntry("Git HTTP endpoint and token derived from the gateway config."),
     callMain: valueEntry(),
     openExternal: valueEntry(),
-    getWorkspaceTree: valueEntry(),
-    listBranches: valueEntry(),
-    listCommits: valueEntry(),
     requestApproval: valueEntry(),
     revokeApproval: valueEntry(),
     listApprovals: valueEntry(),
     expose: valueEntry(),
     getParent: valueEntry(),
     panelTree: namespaceEntry(
-      ["self", "get", "list", "roots", "children", "parent", "open"],
+      ["self", "get", "list", "roots", "children", "parent", "navigate", "open"],
       panelTreeDescription
     ),
     handleRpcPost: valueEntry(),

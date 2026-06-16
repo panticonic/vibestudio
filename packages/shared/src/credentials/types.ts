@@ -444,7 +444,8 @@ export interface GrantUrlBoundCredentialRequest {
 }
 
 export interface ResolveUrlBoundCredentialRequest {
-  url: string;
+  url?: string;
+  providerId?: string;
   credentialId?: string;
   use?: CredentialBindingUse;
 }

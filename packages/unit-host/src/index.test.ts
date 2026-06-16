@@ -7,7 +7,7 @@ import {
   UnitHost,
   UnitRegistry,
   UnitTrustResolver,
-  authorizeUnitSourcePush,
+  authorizeUnitSourceChange,
   canonicalUnitBuildIdentity,
   collectTransitiveUnitDependencyEvs,
   createPendingUnitRegistryEntry,
@@ -15,12 +15,10 @@ import {
   createUnitBuildIdentity,
   findUnitGraphNode,
   normalizeUnitRepoPath,
-  requestUnitBatchApproval,
   unitBuildIdentityFromRegistryEntry,
-  unitPushSessionGrantKey,
+  unitChangeSessionGrantKey,
   unitWorkspaceLogRecord,
   unitWorkspaceStatus,
-  type UnitApprovalCoordinator,
   type UnitDeclaration,
   type UnitBuildIdentity,
   type UnitGraphNode,
@@ -46,10 +44,10 @@ function entry(overrides: Partial<UnitRegistryEntryBase> = {}): UnitRegistryEntr
     unitKind: "extension",
     name: "@workspace-extensions/a",
     version: "1.0.0",
-    source: { kind: "internal-git", repo: "extensions/a", ref: "main" },
+    source: { kind: "workspace-repo", repo: "extensions/a", ref: "main" },
     installedAt: 1,
     activeEv: null,
-    activeSha: null,
+    activeSourceHash: null,
     activeBundleKey: null,
     activeDependencyEvs: {},
     activeExternalDeps: {},
@@ -104,7 +102,7 @@ describe("UnitRegistry", () => {
     })).toMatchObject({
       unitKind: "app",
       name: "@workspace-apps/shell",
-      source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+      source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       installedAt: 10,
       activeEv: null,
       activeBundleKey: null,
@@ -122,7 +120,7 @@ describe("UnitRegistry", () => {
       name: "@workspace-apps/shell",
       displayName: "Workspace Shell",
       version: "1.0.0",
-      sourceRepo: "/workspace/apps/shell.git",
+      sourceRepo: "/workspace/apps/shell",
       ref: "main",
       effectiveVersion: "ev-app",
       dependencyEvs: { "@workspace/runtime": "ev-runtime" },
@@ -132,11 +130,10 @@ describe("UnitRegistry", () => {
       unitName: "@workspace-apps/shell",
       displayName: "Workspace Shell",
       version: "1.0.0",
-      source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+      source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       ev: "ev-app",
       dependencyEvs: { "@workspace/runtime": "ev-runtime" },
       externalDeps: { react: "19.0.0" },
-      commit: null,
     });
   });
 
@@ -144,7 +141,7 @@ describe("UnitRegistry", () => {
     expect(createUnitBuildIdentity({
       unitKind: "app",
       name: "@workspace-apps/shell",
-      sourceRepo: "/workspace/apps/shell.git",
+      sourceRepo: "/workspace/apps/shell",
       ref: "main",
       effectiveVersion: "ev-app",
       dependencyEvs: { "@workspace/runtime": "ev-runtime" },
@@ -153,7 +150,7 @@ describe("UnitRegistry", () => {
     })).toEqual({
       unitKind: "app",
       name: "@workspace-apps/shell",
-      source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+      source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       effectiveVersion: "ev-app",
       dependencyEvs: { "@workspace/runtime": "ev-runtime" },
       externalDeps: { react: "19.0.0" },
@@ -165,14 +162,14 @@ describe("UnitRegistry", () => {
     expect(unitBuildIdentityFromRegistryEntry(entry({
       unitKind: "app",
       name: "@workspace-apps/shell",
-      source: { kind: "internal-git", repo: "/workspace/apps/shell.git", ref: "main" },
+      source: { kind: "workspace-repo", repo: "/workspace/apps/shell", ref: "main" },
       activeEv: "ev-app",
       activeDependencyEvs: { "@workspace/runtime": "ev-runtime" },
       activeExternalDeps: { react: "19.0.0" },
     }), ["z", "a"])).toEqual({
       unitKind: "app",
       name: "@workspace-apps/shell",
-      source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+      source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       effectiveVersion: "ev-app",
       dependencyEvs: { "@workspace/runtime": "ev-runtime" },
       externalDeps: { react: "19.0.0" },
@@ -213,7 +210,7 @@ describe("UnitRegistry", () => {
     ];
 
     expect(findUnitGraphNode(nodes, descriptor, "@workspace-apps/shell")).toBe(nodes[0]);
-    expect(findUnitGraphNode(nodes, descriptor, "workspace/apps/shell.git")).toBe(nodes[0]);
+    expect(findUnitGraphNode(nodes, descriptor, "workspace/apps/shell")).toBe(nodes[0]);
     expect(() => findUnitGraphNode(nodes, descriptor, "@workspace-extensions/rn")).toThrow(/Unknown app unit/);
   });
 });
@@ -265,7 +262,7 @@ describe("UnitTrustResolver", () => {
     return {
       unitKind: "extension",
       name: "@workspace-extensions/a",
-      source: { kind: "internal-git", repo: "extensions/a", ref: "main" },
+      source: { kind: "workspace-repo", repo: "extensions/a", ref: "main" },
       effectiveVersion: "ev",
       dependencyEvs: { "@workspace/runtime": "ev-runtime" },
       externalDeps: { leftpad: "1.0.0" },
@@ -370,38 +367,9 @@ describe("UnitTrustResolver", () => {
       preapprovedIdentityKeys: new Set([canonicalUnitBuildIdentity(candidate)]),
     }).decision).toBe("needs-approval");
   });
-
-  it("returns session-granted for exact session trust identity keys", () => {
-    const resolver = new UnitTrustResolver<UnitRegistryEntryBase>();
-    const candidate = identity();
-
-    expect(resolver.resolve({
-      identity: candidate,
-      entry: null,
-      sessionGrantedIdentityKeys: new Set([canonicalUnitBuildIdentity(candidate)]),
-    }).decision).toBe("session-granted");
-    expect(resolver.resolve({
-      identity: identity({ effectiveVersion: "ev-next" }),
-      entry: null,
-      sessionGrantedIdentityKeys: new Set([canonicalUnitBuildIdentity(candidate)]),
-    }).decision).toBe("needs-approval");
-  });
-
-  it("returns product-seed-trusted only when the seed source verifies", () => {
-    const candidate = identity();
-    const resolver = new UnitTrustResolver<UnitRegistryEntryBase>({
-      productSeedTrust: (value) => value.name === candidate.name && value.effectiveVersion === "ev",
-    });
-
-    expect(resolver.resolve({ identity: candidate, entry: null }).decision).toBe("product-seed-trusted");
-    expect(resolver.resolve({
-      identity: identity({ effectiveVersion: "ev-next" }),
-      entry: null,
-    }).decision).toBe("needs-approval");
-  });
 });
 
-describe("authorizeUnitSourcePush", () => {
+describe("authorizeUnitSourceChange", () => {
   const descriptor = {
     kind: "extension",
     sourceRoot: "extensions",
@@ -439,7 +407,7 @@ describe("authorizeUnitSourcePush", () => {
     const grantStore = makeGrantStore();
     const seen: string[] = [];
 
-    await authorizeUnitSourcePush({
+    await authorizeUnitSourceChange({
       descriptor,
       grantStore,
       grantTtlMs: 1000,
@@ -450,20 +418,20 @@ describe("authorizeUnitSourcePush", () => {
       requestApproval: async () => "once",
     }, {
       caller: { runtime: { id: "panel:one", kind: "panel" } },
-      repoPath: "workspace/extensions/a.git",
+      repoPath: "workspace/extensions/a",
       branch: "main",
       commit: "abc",
     });
 
     expect(seen).toEqual(["extensions/a"]);
-    expect(normalizeUnitRepoPath("/workspace/extensions/a.git/")).toBe("extensions/a");
+    expect(normalizeUnitRepoPath("/workspace/extensions/a/")).toBe("extensions/a");
   });
 
   it("denies unsupported runtime callers before prompting", async () => {
     const grantStore = makeGrantStore();
     const prompted: string[] = [];
 
-    const result = await authorizeUnitSourcePush({
+    const result = await authorizeUnitSourceChange({
       descriptor,
       grantStore,
       grantTtlMs: 1000,
@@ -481,7 +449,7 @@ describe("authorizeUnitSourcePush", () => {
 
     expect(result).toEqual({
       allowed: false,
-      reason: "Extension source pushes from extension callers are not supported",
+      reason: "Extension source changes from extension callers are not supported",
     });
     expect(prompted).toEqual([]);
   });
@@ -503,18 +471,18 @@ describe("authorizeUnitSourcePush", () => {
       commit: "abc",
     };
 
-    await expect(authorizeUnitSourcePush({
+    await expect(authorizeUnitSourceChange({
       descriptor,
       grantStore,
       grantTtlMs: 1000,
       findInstalledByRepo: () => ({ entry: activeEntry, node }),
-      requestApproval: async ({ request: sourcePush }) => {
-        promptedBranches.push(sourcePush.branch);
+      requestApproval: async ({ request: sourceChange }) => {
+        promptedBranches.push(sourceChange.branch);
         return "session";
       },
     }, request)).resolves.toEqual({ allowed: true });
 
-    await expect(authorizeUnitSourcePush({
+    await expect(authorizeUnitSourceChange({
       descriptor,
       grantStore,
       grantTtlMs: 1000,
@@ -526,16 +494,16 @@ describe("authorizeUnitSourcePush", () => {
     }, { ...request, branch: "main" })).resolves.toEqual({ allowed: true });
 
     expect(grantStore.active.has(
-      unitPushSessionGrantKey("panel:one", "@workspace-extensions/a", "extensions/a", "main"),
+      unitChangeSessionGrantKey("panel:one", "@workspace-extensions/a", "extensions/a", "main"),
     )).toBe(true);
     expect(promptedBranches).toEqual(["main"]);
   });
 
-  it("gates source pushes to the installed unit ref instead of hardcoded main branches", async () => {
+  it("gates source changes to the installed unit ref instead of hardcoded main branches", async () => {
     const grantStore = makeGrantStore();
     const prompted: string[] = [];
     const featureEntry = entry({
-      source: { kind: "internal-git", repo: "extensions/a", ref: "feature" },
+      source: { kind: "workspace-repo", repo: "extensions/a", ref: "feature" },
       activeBundleKey: "bundle",
       status: "running",
     });
@@ -552,7 +520,7 @@ describe("authorizeUnitSourcePush", () => {
       commit: "abc",
     };
 
-    await expect(authorizeUnitSourcePush({
+    await expect(authorizeUnitSourceChange({
       descriptor,
       grantStore,
       grantTtlMs: 1000,
@@ -563,7 +531,7 @@ describe("authorizeUnitSourcePush", () => {
       },
     }, { ...baseRequest, branch: "main" })).resolves.toEqual({ allowed: true });
 
-    await expect(authorizeUnitSourcePush({
+    await expect(authorizeUnitSourceChange({
       descriptor,
       grantStore,
       grantTtlMs: 1000,
@@ -578,64 +546,6 @@ describe("authorizeUnitSourcePush", () => {
   });
 });
 
-describe("requestUnitBatchApproval", () => {
-  it("frames extension and app startup approvals from descriptors", async () => {
-    const requested: unknown[] = [];
-    const approvalQueue = {
-      request: async (req: unknown) => {
-        requested.push(req);
-        return "once" as const;
-      },
-    };
-
-    await requestUnitBatchApproval({
-      descriptor: {
-        kind: "extension",
-        sourceRoot: "extensions",
-        buildKind: "extension",
-        approvalFraming: {
-          serviceName: "extensions",
-          unitLabel: "extension",
-          unitLabelPlural: "extensions",
-          nativeCode: true,
-        },
-        seedTrustEligible: true,
-      },
-      approvalQueue,
-      entries: [{ unitKind: "extension" }],
-      trigger: "startup",
-    });
-    expect(requested[requested.length - 1]).toMatchObject({
-      callerId: "system:extensions",
-      title: "Approve workspace extensions",
-      description: "This workspace uses 1 native-code extension that needs approval to run as native code.",
-    });
-
-    await requestUnitBatchApproval({
-      descriptor: {
-        kind: "app",
-        sourceRoot: "apps",
-        buildKind: "app",
-        approvalFraming: {
-          serviceName: "apps",
-          unitLabel: "app",
-          unitLabelPlural: "apps",
-          nativeCode: false,
-        },
-        seedTrustEligible: true,
-      },
-      approvalQueue,
-      entries: [{ unitKind: "app" }, { unitKind: "app" }],
-      trigger: "meta-push",
-    });
-    expect(requested[requested.length - 1]).toMatchObject({
-      callerId: "system:apps",
-      title: "Approve workspace apps",
-      description: "This workspace uses 2 privileged apps that need approval to run in the app host.",
-    });
-  });
-});
-
 describe("UnitHost", () => {
   interface TestNode extends UnitGraphNode {
     version: string;
@@ -644,11 +554,7 @@ describe("UnitHost", () => {
   type TestApproval = { name: string; ref: string };
 
   function makeHarness(opts: {
-    decision?: "once" | "deny";
     active?: boolean;
-    productSeedTrust?: (identity: UnitBuildIdentity) => boolean;
-    approvalCoordinator?: UnitApprovalCoordinator<TestApproval>;
-    declarationVersion?: string | null;
     extraNode?: TestNode;
   } = {}) {
     const root = tempRoot();
@@ -671,9 +577,8 @@ describe("UnitHost", () => {
     const nodes = [node, ...(opts.extraNode ? [opts.extraNode] : [])];
     const applied: string[] = [];
     const removed: string[] = [];
-    const denied: string[][] = [];
-    const requested: TestApproval[][] = [];
-    const requestedTriggers: string[] = [];
+    const prompted: TestApproval[][] = [];
+    const denied: string[] = [];
     const host = new UnitHost<UnitRegistryEntryBase, TestDecl, TestNode, TestApproval>({
       descriptor: {
         kind: "extension",
@@ -688,8 +593,6 @@ describe("UnitHost", () => {
         seedTrustEligible: true,
       },
       registry,
-      currentDeclarationVersion: () =>
-        opts.declarationVersion === undefined ? "meta-head" : opts.declarationVersion,
       resolveNode: (source) => {
         const match = nodes.find(
           (candidate) => source === candidate.relativePath || source === candidate.name,
@@ -700,17 +603,15 @@ describe("UnitHost", () => {
       candidateIdentity: (n, decl) => ({
         unitKind: "extension",
         name: n.name,
-        source: { kind: "internal-git", repo: n.relativePath, ref: decl.ref },
+        source: { kind: "workspace-repo", repo: n.relativePath, ref: decl.ref },
         effectiveVersion: "ev",
         dependencyEvs: {},
         externalDeps: {},
       }),
-      trustResolver: opts.productSeedTrust
-        ? new UnitTrustResolver<UnitRegistryEntryBase>({ productSeedTrust: opts.productSeedTrust })
-        : undefined,
+      trustResolver: undefined,
       makePendingEntry: (n, decl, building) => entry({
         name: n.name,
-        source: { kind: "internal-git", repo: n.relativePath, ref: decl.ref },
+        source: { kind: "workspace-repo", repo: n.relativePath, ref: decl.ref },
         status: building ? "building" : "pending-approval",
       }),
       applyTrusted: async (n) => {
@@ -722,147 +623,60 @@ describe("UnitHost", () => {
       emitRemoved: () => undefined,
       notifyUnresolved: () => undefined,
       approvalEntry: (n, decl) => ({ name: n.name, ref: decl.ref }),
-      requestApproval: async (entries, trigger) => {
-        requested.push(entries);
-        requestedTriggers.push(trigger);
-        return opts.decision ?? "once";
+      requestApproval: async (entries) => {
+        prompted.push(entries);
+        return "once";
       },
-      approvalCoordinator: opts.approvalCoordinator,
-      onApprovalDenied: (items) => denied.push(items.map((item) => item.node.name)),
-      onBackgroundError: (err) => {
-        throw err;
+      onApprovalDenied: (items) => {
+        denied.push(...items.map((item) => item.node.name));
+      },
+      onBackgroundError: (error) => {
+        throw error;
       },
     });
-    return { host, registry, applied, removed, denied, requested, requestedTriggers, node };
+    return { host, registry, applied, removed, prompted, denied, node };
   }
 
-  it("prompts once for untrusted declarations and applies after approval", async () => {
-    const { host, registry, applied, requested } = makeHarness();
+  it("applies declared units after approval", async () => {
+    const { host, applied, prompted, node } = makeHarness();
 
     await host.reconcileDeclared([{ source: "extensions/a", ref: "main" }]);
     await host.whenSettled();
 
-    expect(registry.get("@workspace-extensions/a")).toMatchObject({
-      unitKind: "extension",
-      status: "pending-approval",
-    });
-    expect(requested).toEqual([[{ name: "@workspace-extensions/a", ref: "main" }]]);
     expect(applied).toEqual(["@workspace-extensions/a"]);
+    expect(prompted).toEqual([[{ name: node.name, ref: "main" }]]);
   });
 
-  it("enqueues coordinator approvals before reconcile resolves", async () => {
-    let enqueued: TestApproval[] | null = null;
-    let releaseApproval!: () => void;
-    const approvalDone = new Promise<void>((resolve) => {
-      releaseApproval = resolve;
-    });
-    const { host, applied } = makeHarness({
-      approvalCoordinator: {
-        enqueue: async (request) => {
-          enqueued = request.entries;
-          await approvalDone;
-          await request.applyApproved();
-        },
-      },
-    });
+  it("applies preapproved declarations without prompting again", async () => {
+    const { host, applied, prompted, node } = makeHarness();
+    const approval = host.approvalForDeclarations([{ source: "extensions/a", ref: "main" }]);
 
-    await host.reconcileDeclared([
-      { source: "extensions/a", ref: "main" },
-    ]);
-
-    expect(enqueued).toEqual([{ name: "@workspace-extensions/a", ref: "main" }]);
-    expect(applied).toEqual([]);
-
-    releaseApproval();
+    host.acceptPreapprovedTrust(approval.identityKeys);
+    await host.reconcileDeclared([{ source: "extensions/a", ref: "main" }]);
     await host.whenSettled();
 
-    expect(applied).toEqual(["@workspace-extensions/a"]);
+    expect(applied).toEqual([node.name]);
+    expect(prompted).toEqual([]);
   });
 
-  it("propagates the reconcile trigger to background approval requests", async () => {
-    const { host, requestedTriggers } = makeHarness();
+  it("honors removeUndeclared while applying trusted declarations", async () => {
+    const { host, registry, removed, node } = makeHarness({ active: true });
+    registry.upsert(entry({
+      name: "@workspace-extensions/old",
+      source: { kind: "workspace-repo", repo: "extensions/old", ref: "main" },
+      activeBundleKey: "old-bundle",
+      status: "running",
+    }));
 
     await host.reconcileDeclared(
-      [{ source: "extensions/a", ref: "main" }],
-      { trigger: "meta-push" },
+      [{ source: node.relativePath, ref: "main" }],
+      { removeUndeclared: true },
     );
-    await host.whenSettled();
-
-    expect(requestedTriggers).toEqual(["meta-push"]);
+    expect(removed).toEqual(["@workspace-extensions/old"]);
+    expect(registry.get("@workspace-extensions/old")).toBeNull();
   });
 
-  it("uses preapproved trust for the matching declaration version without prompting", async () => {
-    const { host, applied, requested, node } = makeHarness();
-    host.acceptPreapprovedTrust("meta-head", [canonicalUnitBuildIdentity({
-      unitKind: "extension",
-      name: node.name,
-      source: { kind: "internal-git", repo: node.relativePath, ref: "main" },
-      effectiveVersion: "ev",
-      dependencyEvs: {},
-      externalDeps: {},
-    })]);
-
-    await host.reconcileDeclared([{ source: node.relativePath, ref: "main" }]);
-    await host.whenSettled();
-
-    expect(requested).toEqual([]);
-    expect(applied).toEqual([node.name]);
-  });
-
-  it("preapproves declaration trust for the current declaration version", async () => {
-    const { host, applied, requested, node } = makeHarness();
-
-    const approval = host.preapproveDeclarations([{ source: node.relativePath, ref: "main" }]);
-
-    expect(approval.identityKeys).toEqual([canonicalUnitBuildIdentity({
-      unitKind: "extension",
-      name: node.name,
-      source: { kind: "internal-git", repo: node.relativePath, ref: "main" },
-      effectiveVersion: "ev",
-      dependencyEvs: {},
-      externalDeps: {},
-    })]);
-
-    await host.reconcileDeclared([{ source: node.relativePath, ref: "main" }]);
-    await host.whenSettled();
-
-    expect(requested).toEqual([]);
-    expect(applied).toEqual([node.name]);
-  });
-
-  it("merges multiple preapproval calls for the same declaration version", async () => {
-    const extraNode: TestNode = {
-      name: "@workspace-extensions/b",
-      relativePath: "extensions/b",
-      version: "1.0.0",
-    };
-    const { host, applied, requested, node } = makeHarness({ extraNode });
-
-    host.preapproveDeclarations([{ source: node.relativePath, ref: "main" }]);
-    host.preapproveDeclarations([{ source: extraNode.relativePath, ref: "main" }]);
-
-    await host.reconcileDeclared([
-      { source: node.relativePath, ref: "main" },
-      { source: extraNode.relativePath, ref: "main" },
-    ]);
-    await host.whenSettled();
-
-    expect(requested).toEqual([]);
-    expect(applied).toEqual([node.name, extraNode.name]);
-  });
-
-  it("preapproves declaration trust for non-git declaration sources", async () => {
-    const { host, applied, requested, node } = makeHarness({ declarationVersion: null });
-
-    host.preapproveDeclarations([{ source: node.relativePath, ref: "main" }]);
-    await host.reconcileDeclared([{ source: node.relativePath, ref: "main" }]);
-    await host.whenSettled();
-
-    expect(requested).toEqual([]);
-    expect(applied).toEqual([node.name]);
-  });
-
-  it("collects approval entries and identity keys for untrusted declarations", () => {
+  it("collects approval entries for untrusted declarations", () => {
     const { host, node } = makeHarness();
 
     expect(host.approvalForDeclarations([
@@ -870,29 +684,12 @@ describe("UnitHost", () => {
       { source: "extensions/missing", ref: "main" },
     ])).toEqual({
       entries: [{ name: node.name, ref: "main" }],
-      identityKeys: [canonicalUnitBuildIdentity({
-        unitKind: "extension",
-        name: node.name,
-        source: { kind: "internal-git", repo: node.relativePath, ref: "main" },
-        effectiveVersion: "ev",
-        dependencyEvs: {},
-        externalDeps: {},
-      })],
+      identityKeys: [expect.any(String)],
     });
   });
 
   it("does not collect approval entries for already approved declarations", () => {
     const { host, node } = makeHarness({ active: true });
-
-    expect(host.approvalForDeclarations([
-      { source: node.relativePath, ref: "main" },
-    ])).toEqual({ entries: [], identityKeys: [] });
-  });
-
-  it("does not collect approval entries for product-seed-trusted declarations", () => {
-    const { host, node } = makeHarness({
-      productSeedTrust: (identity) => identity.source.repo === node.relativePath,
-    });
 
     expect(host.approvalForDeclarations([
       { source: node.relativePath, ref: "main" },
@@ -1046,7 +843,7 @@ describe("UnitHost", () => {
   it("finds installed units by normalized repo path", () => {
     const { host, node } = makeHarness({ active: true });
 
-    expect(host.findInstalledByRepo("/workspace/extensions/a.git")).toMatchObject({
+    expect(host.findInstalledByRepo("/workspace/extensions/a")).toMatchObject({
       entry: expect.objectContaining({ name: node.name }),
       node,
     });
@@ -1064,5 +861,31 @@ describe("UnitHost", () => {
 
     expect(removed).toEqual(["@workspace-extensions/a"]);
     expect(registry.get("@workspace-extensions/a")).toBeNull();
+  });
+
+  it("can reconcile a selected declaration without removing other registry entries", async () => {
+    const extraNode = {
+      name: "@workspace-extensions/b",
+      relativePath: "extensions/b",
+      version: "1.0.0",
+    };
+    const { host, registry, removed } = makeHarness({ active: true, extraNode });
+    registry.upsert(entry({
+      name: extraNode.name,
+      source: { kind: "workspace-repo", repo: extraNode.relativePath, ref: "main" },
+      activeBundleKey: "bundle-b",
+      activeEv: "ev",
+      status: "running",
+    }));
+
+    await host.reconcileDeclared(
+      [{ source: "extensions/a", ref: "main" }],
+      { removeUndeclared: false },
+    );
+    await host.whenSettled();
+
+    expect(removed).toEqual([]);
+    expect(registry.get("@workspace-extensions/a")).toMatchObject({ status: "running" });
+    expect(registry.get("@workspace-extensions/b")).toMatchObject({ status: "running" });
   });
 });

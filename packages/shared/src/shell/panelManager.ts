@@ -37,6 +37,18 @@ import type {
 
 const log = createDevLogger("PanelManager");
 
+function browserNavigationSource(source: string): string | null {
+  const url = source.startsWith("browser:") ? source.slice("browser:".length) : source;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  return `browser:${parsed.toString()}`;
+}
+
 // =============================================================================
 // Public API surfaces
 // =============================================================================
@@ -559,9 +571,7 @@ export class PanelManager {
   ): Promise<CreatePanelResult> {
     const panel = await this.requireStoredPanel(slotId);
     const nextSnapshot = this.createNavigationSnapshot(panel, source, opts);
-    const manifest = this.tryResolveManifestForSource(nextSnapshot.source) ?? {
-      title: path.basename(nextSnapshot.source),
-    };
+    const title = this.titleFor(slotId, nextSnapshot.source);
 
     const currentEntityId =
       this.currentEntityBySlot.get(slotId) ?? this.deriveEntityIdFromPanel(panel);
@@ -603,19 +613,19 @@ export class PanelManager {
     const livePanel = this.registry.getPanel(slotId);
     const nextHistory = this.pushHistory(panel, nextSnapshot);
     if (livePanel) {
-      livePanel.title = manifest.title;
+      livePanel.title = title;
       livePanel.runtimeEntityId = entityId;
       livePanel.effectiveVersion = handle.source.effectiveVersion;
       this.registry.replaceCurrentSnapshot(slotId, nextSnapshot, nextHistory);
     }
 
-    this.indexPanel(slotId, manifest.title, nextSnapshot.source);
+    this.indexPanel(slotId, title, nextSnapshot.source);
 
     return {
       panelId: slotId,
       contextId: nextSnapshot.contextId,
       source: nextSnapshot.source,
-      title: manifest.title,
+      title,
       stateArgs: stateArgsPayload,
       options: nextSnapshot.options,
       autoArchiveWhenEmpty: nextSnapshot.autoArchiveWhenEmpty,
@@ -1140,6 +1150,16 @@ export class PanelManager {
     source: string,
     opts?: NavigatePanelOptions
   ): PanelSnapshot {
+    const browserSource = browserNavigationSource(source);
+    if (browserSource) {
+      const currentSnapshot = getCurrentSnapshot(panel);
+      const previousOptions = currentSnapshot.options;
+      return createSnapshot(browserSource, opts?.contextId ?? currentSnapshot.contextId, {
+        env: opts?.env ?? previousOptions.env,
+        ref: opts?.ref,
+      });
+    }
+
     const { relativePath, absolutePath } = resolveSource(source, this.workspacePath);
     const manifest = this.resolveManifest(absolutePath, relativePath, this.allowMissingManifests);
     const validatedStateArgs = this.validateManifestStateArgs(

@@ -1,12 +1,12 @@
-import type { BranchInfo, CommitInfo, Panel, PanelNavigationState, PanelSnapshot, WorkspaceNode } from "./types.js";
+import type { Panel, PanelNavigationState, PanelSnapshot, WorkspaceNode } from "./types.js";
 import { getCurrentSnapshot, getPanelHistoryState, getPanelRef } from "./panel/accessors.js";
 
 export type PanelSourceKind = "panel" | "browser";
 
 export interface PanelRepoState {
-  repoPath?: string;
-  branch?: string | null;
-  commit?: string | null;
+  unitPath?: string;
+  head?: string | null;
+  stateHash?: string | null;
   dirty?: boolean;
 }
 
@@ -30,15 +30,13 @@ export interface PanelChromeState {
 export interface PanelSourceSuggestion {
   source: string;
   title?: string;
-  kind: "launchable" | "package" | "skill" | "repo" | "folder";
+  kind: "launchable" | "package" | "skill" | "unit" | "folder";
 }
 
 export interface PanelAddressOptions {
   source: string;
   suggestions: PanelSourceSuggestion[];
   repo?: PanelRepoState;
-  branches: BranchInfo[];
-  commits: CommitInfo[];
 }
 
 export interface BrowserAddressSuggestion {
@@ -63,9 +61,7 @@ export type AddressAction =
   | { type: "navigate-url"; url: string; recordAsTyped?: boolean }
   | { type: "search"; query: string; template: string; recordAsTyped: true }
   | { type: "keyword-search"; engineId: number; query: string; template: string; recordAsTyped: true }
-  | { type: "panel-source"; source: string; ref?: string }
-  | { type: "select-branch"; branch: string }
-  | { type: "select-commit"; commit: string };
+  | { type: "panel-source"; source: string; ref?: string };
 
 export interface TextMatchRange {
   start: number;
@@ -82,7 +78,7 @@ export interface AddressAutocompleteBase {
   value: string;
   label: string;
   meta: string;
-  iconKind: "globe" | "history" | "bookmark" | "search" | "branch" | "commit" | "panel" | "session";
+  iconKind: "globe" | "history" | "bookmark" | "search" | "panel" | "session";
   matchRanges?: {
     label?: TextMatchRange[];
     meta?: TextMatchRange[];
@@ -192,9 +188,9 @@ export function parseAddressInput(input: string): AddressInputResult | null {
 export function formatRepoChip(repo?: PanelRepoState): string | null {
   if (!repo) return null;
   const parts: string[] = [];
-  if (repo.repoPath) parts.push(repo.repoPath);
-  if (repo.branch) parts.push(repo.branch);
-  if (repo.commit) parts.push(repo.commit.slice(0, 7));
+  if (repo.unitPath) parts.push(repo.unitPath);
+  if (repo.head) parts.push(repo.head);
+  if (repo.stateHash) parts.push(repo.stateHash.slice(0, 12));
   if (repo.dirty) parts.push("dirty");
   return parts.length > 0 ? parts.join(" @ ") : null;
 }
@@ -208,11 +204,11 @@ export function collectPanelSourceSuggestions(nodes: WorkspaceNode[]): PanelSour
         ? "package"
         : node.skillInfo
           ? "skill"
-          : node.isGitRepo
-            ? "repo"
+          : node.isUnit
+            ? "unit"
             : "folder";
 
-    if (node.launchable || node.packageInfo || node.skillInfo || node.isGitRepo) {
+    if (node.launchable || node.packageInfo || node.skillInfo || node.isUnit) {
       suggestions.push({
         source: node.path,
         title: node.launchable?.title ?? node.packageInfo?.name ?? node.skillInfo?.name ?? node.name,
@@ -465,12 +461,10 @@ export function buildPanelChromeState(args: {
   };
 }
 
-export interface AddressProviderGitAdapter {
-  getWorkspaceTree(): Promise<{ children: WorkspaceNode[] }>;
-  findRepoForPath(source: string): Promise<{ repoPath: string; relativePath: string } | null>;
-  status(repoPath: string): Promise<PanelRepoState & { repoPath: string }>;
-  listBranches(repoPath: string): Promise<BranchInfo[]>;
-  listCommits(repoPath: string, ref: string, limit: number): Promise<CommitInfo[]>;
+export interface AddressProviderRepoAdapter {
+  sourceTree(): Promise<{ children: WorkspaceNode[] }>;
+  findUnitForPath(source: string): Promise<{ unitPath: string; relativePath: string } | null>;
+  unitStatus(unitPath: string): Promise<PanelRepoState & { unitPath: string }>;
 }
 
 export interface AddressProviderBrowserDataAdapter {
@@ -483,36 +477,29 @@ export interface AddressProviderBrowserDataAdapter {
 export async function getSharedPanelAddressOptions(args: {
   source: string;
   ref?: string;
-  git?: AddressProviderGitAdapter | null;
+  repoProvider?: AddressProviderRepoAdapter | null;
 }): Promise<PanelAddressOptions> {
-  const { source, ref, git } = args;
-  if (!git) return { source, suggestions: [], branches: [], commits: [] };
+  const { source, ref, repoProvider } = args;
+  if (!repoProvider) return { source, suggestions: [] };
 
-  const tree = await git.getWorkspaceTree();
+  const tree = await repoProvider.sourceTree();
   const suggestions = filterPanelSourceSuggestions(collectPanelSourceSuggestions(tree.children), source, 50);
   try {
-    const repo = await git.findRepoForPath(source);
-    if (!repo) return { source, suggestions, branches: [], commits: [] };
-    const [status, branches] = await Promise.all([
-      git.status(repo.repoPath),
-      git.listBranches(repo.repoPath),
-    ]);
-    const currentBranch = ref || status.branch || branches.find((branch) => branch.current)?.name || "HEAD";
-    const commits = await git.listCommits(repo.repoPath, currentBranch, 50);
+    const unit = await repoProvider.findUnitForPath(source);
+    if (!unit) return { source, suggestions };
+    const status = await repoProvider.unitStatus(unit.unitPath);
     return {
       source,
       suggestions,
       repo: {
-        repoPath: status.repoPath,
-        branch: ref || status.branch,
-        commit: status.commit,
+        unitPath: status.unitPath,
+        head: ref || status.head,
+        stateHash: status.stateHash,
         dirty: status.dirty,
       },
-      branches,
-      commits,
     };
   } catch {
-    return { source, suggestions, branches: [], commits: [] };
+    return { source, suggestions };
   }
 }
 
@@ -659,8 +646,6 @@ function actionValue(action: AddressAction, fallback: string): string {
   if (action.type === "navigate-url") return action.url;
   if (action.type === "search" || action.type === "keyword-search") return action.query;
   if (action.type === "panel-source") return action.source;
-  if (action.type === "select-branch") return action.branch;
-  if (action.type === "select-commit") return action.commit;
   return fallback;
 }
 

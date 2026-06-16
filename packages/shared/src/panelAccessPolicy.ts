@@ -28,6 +28,7 @@ export type PanelAccessOperation =
   | "close"
   | "unload"
   | "movePanel"
+  | "replacePanel"
   | "takeOver"
   | "openDevTools"
   | "rebuildPanel"
@@ -84,6 +85,7 @@ const structuralOperations = new Set<PanelAccessOperation>([
   "close",
   "unload",
   "movePanel",
+  "replacePanel",
   "takeOver",
   "openDevTools",
   "rebuildPanel",

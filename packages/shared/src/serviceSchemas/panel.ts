@@ -94,7 +94,6 @@ export const panelMethods = defineServiceMethods({
   goForward: { args: z.tuple([PanelIdSchema]), returns: z.void() },
   unload: { args: z.tuple([PanelIdSchema]), returns: z.custom<PanelLifecycleResult>() },
   archive: { args: z.tuple([PanelIdSchema]), returns: z.void() },
-  initGitRepo: { args: z.tuple([PanelIdSchema]), returns: z.void() },
   updatePanelState: {
     args: z.tuple([PanelIdSchema, z.custom<PanelNavigationState>()]),
     returns: z.void(),

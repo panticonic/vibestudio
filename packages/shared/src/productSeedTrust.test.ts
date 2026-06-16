@@ -42,7 +42,7 @@ describe("product seed trust", () => {
       identity: {
         unitKind: "app",
         name: "@workspace-apps/shell",
-        source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
         effectiveVersion: "ev-seeded",
       },
     })?.record.name).toBe("@workspace-apps/shell");
@@ -62,7 +62,7 @@ describe("product seed trust", () => {
       identity: {
         unitKind: "app",
         name: "@workspace-apps/shell",
-        source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
         effectiveVersion: null,
       },
     })).toBeNull();
@@ -74,7 +74,7 @@ describe("product seed trust", () => {
       identity: {
         unitKind: "app",
         name: "@workspace-apps/shell",
-        source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
         effectiveVersion: "ev-changed",
       },
     })).toBeNull();
@@ -94,7 +94,7 @@ describe("product seed trust", () => {
       identity: {
         unitKind: "app",
         name: "@workspace-apps/shell",
-        source: { kind: "internal-git", repo: "apps/copy", ref: "main" },
+        source: { kind: "workspace-repo", repo: "apps/copy", ref: "main" },
         effectiveVersion: "ev-seeded",
       },
     })).toBeNull();
@@ -115,7 +115,7 @@ describe("product seed trust", () => {
         unitKind: "extension",
         name: "@workspace-extensions/react-native",
         source: {
-          kind: "internal-git",
+          kind: "workspace-repo",
           repo: "extensions/react-native",
           ref: "main",
         },
@@ -150,7 +150,7 @@ describe("product seed trust", () => {
       identity: {
         unitKind: "app",
         name: "@workspace-apps/shell",
-        source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
         effectiveVersion: "ev-seeded",
       },
     })?.record.signatureKeyId).toBe("natstack-product-test-v1");
@@ -172,7 +172,7 @@ describe("product seed trust", () => {
       identity: {
         unitKind: "app",
         name: "@workspace-apps/shell",
-        source: { kind: "internal-git", repo: "apps/shell", ref: "main" },
+        source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
         effectiveVersion: "ev-seeded",
       },
     })).toBeNull();

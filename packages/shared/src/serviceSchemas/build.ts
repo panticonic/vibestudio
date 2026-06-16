@@ -31,6 +31,7 @@ export const buildMetadataSchema = z
     kind: z.enum(["panel", "package", "worker", "extension", "app", "template"]),
     name: z.string(),
     ev: z.string(),
+    sourceStateHash: z.string().nullable(),
     sourcemap: z.boolean(),
     framework: z.string().optional(),
     details: z.object({ kind: z.string() }).passthrough(),
@@ -42,6 +43,7 @@ export type BuildMetadataWire = z.infer<typeof buildMetadataSchema>;
 export const buildResultSchema = z
   .object({
     dir: z.string(),
+    sourceStateHash: z.string().nullable(),
     metadata: buildMetadataSchema,
     artifacts: z.array(buildArtifactSchema),
   })
@@ -140,9 +142,34 @@ export const recentBuildEventSchema = z
     error: z.string().optional(),
     trigger: z
       .object({
-        repo: z.string(),
-        branch: z.string(),
-        commit: z.string(),
+        head: z.string(),
+        stateHash: z.string(),
+        sinceStateHash: z.string().nullable(),
+        eventId: z.string().nullable(),
+        headHash: z.string().nullable(),
+        actor: z.object({ id: z.string(), kind: z.string() }).nullable(),
+        transitionKind: z.enum(["snapshot", "edit", "merge", "merge-resolution"]),
+        changedPaths: z.array(z.string()),
+        fileChanges: z.array(
+          z.object({
+            kind: z.enum(["added", "removed", "changed"]),
+            path: z.string(),
+            oldContentHash: z.string().nullable(),
+            newContentHash: z.string().nullable(),
+            oldMode: z.number().int().nullable(),
+            newMode: z.number().int().nullable(),
+          })
+        ),
+        editOps: z.array(
+          z.object({
+            kind: z.enum(["replace", "write", "create", "delete", "chmod"]),
+            path: z.string(),
+            oldContentHash: z.string().nullable(),
+            newContentHash: z.string().nullable(),
+            hunks: z.unknown().optional(),
+            mode: z.number().int().nullable().optional(),
+          })
+        ),
         origin: z
           .object({
             callerId: z.string(),
@@ -187,7 +214,7 @@ export const buildMethods = defineServiceMethods({
   },
   listRecentBuildEvents: {
     description:
-      "List recent push-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path.",
+      "List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path.",
     args: z.tuple([z.string().optional()]),
     returns: z.array(recentBuildEventSchema),
   },

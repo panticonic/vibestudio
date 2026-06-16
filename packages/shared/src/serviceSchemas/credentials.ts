@@ -503,11 +503,15 @@ export const GrantCredentialParamsSchema = z
 
 export const ResolveCredentialParamsSchema = z
   .object({
-    url: z.string().url(),
+    url: z.string().url().optional(),
+    providerId: IdentifierSchema.optional(),
     credentialId: IdentifierSchema.optional(),
     use: z.enum(["fetch", "git-http", "git-ssh"]).optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => !!value.url || !!value.providerId, {
+    message: "resolveCredential requires url or providerId",
+  });
 
 export const ProxyFetchParamsSchema = z
   .object({

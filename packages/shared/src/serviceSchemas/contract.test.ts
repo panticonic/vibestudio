@@ -14,7 +14,7 @@ import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
 import { externalOpenMethods } from "./externalOpen.js";
 import { fsMethods } from "./fs.js";
-import { gitMethods } from "./git.js";
+import { gitInteropMethods } from "./gitInterop.js";
 import { menuMethods } from "./menu.js";
 import { metaMethods } from "./meta.js";
 import { notificationMethods } from "./notification.js";
@@ -28,6 +28,7 @@ import { scopeMethods } from "./scope.js";
 import { settingsMethods } from "./settings.js";
 import { shellApprovalMethods } from "./shellApproval.js";
 import { tokensMethods } from "./tokens.js";
+import { vcsMethods } from "./vcs.js";
 import { viewMethods } from "./view.js";
 import { workerLogMethods } from "./workerLog.js";
 import { workspaceMethods } from "./workspace.js";
@@ -51,7 +52,7 @@ const serviceTables: ServiceTable[] = [
   { service: "extensions", file: "extensions.ts", methods: extensionsMethods },
   { service: "externalOpen", file: "externalOpen.ts", methods: externalOpenMethods },
   { service: "fs", file: "fs.ts", methods: fsMethods },
-  { service: "git", file: "git.ts", methods: gitMethods },
+  { service: "gitInterop", file: "gitInterop.ts", methods: gitInteropMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "meta", file: "meta.ts", methods: metaMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
@@ -65,6 +66,7 @@ const serviceTables: ServiceTable[] = [
   { service: "settings", file: "settings.ts", methods: settingsMethods },
   { service: "shellApproval", file: "shellApproval.ts", methods: shellApprovalMethods },
   { service: "tokens", file: "tokens.ts", methods: tokensMethods },
+  { service: "vcs", file: "vcs.ts", methods: vcsMethods },
   { service: "view", file: "view.ts", methods: viewMethods },
   { service: "workerLog", file: "workerLog.ts", methods: workerLogMethods },
   { service: "workspace", file: "workspace.ts", methods: workspaceMethods },

@@ -11,6 +11,7 @@ import type { WorkspaceEntry } from "../types.js";
 import type {
   HostTarget,
   HostTargetCandidate,
+  HostTargetLaunchResult,
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "../hostTargets.js";
@@ -75,14 +76,14 @@ export class WorkspaceClient {
   ): Promise<{ current: unknown; previous: unknown[]; retentionLimit: number }> {
     return this.typed.hostTargets.versions(target, sourceOrName);
   }
-  prepareHostTargetPinnedCommit(
+  prepareHostTargetPinnedRef(
     target: HostTarget,
     sourceOrName: string,
-    commit: string
+    ref: string
   ): Promise<unknown> {
-    return this.typed.hostTargets.preparePinnedCommit(target, sourceOrName, commit);
+    return this.typed.hostTargets.preparePinnedRef(target, sourceOrName, ref);
   }
-  launchHostTarget(target: HostTarget): Promise<{ launched: boolean }> {
+  launchHostTarget(target: HostTarget): Promise<HostTargetLaunchResult> {
     return this.typed.hostTargets.launch(target);
   }
 }

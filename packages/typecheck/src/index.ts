@@ -51,7 +51,7 @@ export {
   type WorkspaceImportParts,
 } from "./lib/index.js";
 
-// Virtual type definitions — used by Monaco editor in panels (git-ui) to
+// Virtual type definitions — used by Monaco editor in panels to
 // configure its in-browser TypeScript service. Not used by the server-side
 // TypeCheckService.
 export {

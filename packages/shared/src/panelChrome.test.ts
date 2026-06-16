@@ -60,17 +60,17 @@ describe("panelChrome", () => {
 
     expect(buildPanelChromeState({
       panel: makePanel("panels/chat"),
-      repo: { repoPath: "panels/chat", branch: "main", commit: "abcdef1234567890", dirty: true },
+      repo: { unitPath: "panels/chat", head: "main", stateHash: "abcdef1234567890", dirty: true },
     })).toMatchObject({
       kind: "panel",
       displayAddress: "panels/chat",
-      repo: { branch: "main", dirty: true },
+      repo: { head: "main", dirty: true },
     });
   });
 
   it("formats repo metadata compactly", () => {
-    expect(formatRepoChip({ repoPath: "panels/chat", branch: "main", commit: "abcdef123", dirty: true }))
-      .toBe("panels/chat @ main @ abcdef1 @ dirty");
+    expect(formatRepoChip({ unitPath: "panels/chat", head: "main", stateHash: "abcdef123", dirty: true }))
+      .toBe("panels/chat @ main @ abcdef123 @ dirty");
   });
 
   it("normalizes and ranks browser address suggestions", () => {
