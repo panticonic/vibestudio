@@ -17,7 +17,8 @@ export class SubscriptionManager {
   constructor(
     private sql: SqlStorage,
     private channelFactory: (channelId: string) => ChannelClient,
-    private identity: DOIdentity
+    private identity: DOIdentity,
+    private participantIdFallback?: () => string
   ) {}
 
   createTables(): void {
@@ -34,8 +35,10 @@ export class SubscriptionManager {
 
   /** Build the participant ID from the DO's identity. */
   private buildParticipantId(): string {
-    const ref = this.identity.ref;
-    return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+    const ref = this.identity.refOrNull;
+    if (ref) return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+    if (this.participantIdFallback) return this.participantIdFallback();
+    return `do:unknown:unknown:unbootstrapped`;
   }
 
   async subscribe(opts: {
@@ -51,17 +54,7 @@ export class SubscriptionManager {
     channelConfig?: Record<string, unknown>;
     envelope?: ChannelReplayEnvelope;
   }> {
-    this.sql.exec(
-      `INSERT OR REPLACE INTO subscriptions (channel_id, context_id, subscribed_at, config) VALUES (?, ?, ?, ?)`,
-      opts.channelId,
-      opts.contextId,
-      Date.now(),
-      opts.config ? JSON.stringify(opts.config) : null
-    );
-
     const participantId = this.buildParticipantId();
-    const ref = this.identity.ref;
-
     const metadata: Record<string, unknown> = {
       name: opts.descriptor.name,
       type: opts.descriptor.type,
@@ -86,9 +79,14 @@ export class SubscriptionManager {
     const subResult = await channel.subscribe(participantId, metadata);
 
     this.sql.exec(
-      `UPDATE subscriptions SET participant_id = ? WHERE channel_id = ?`,
+      `INSERT OR REPLACE INTO subscriptions
+         (channel_id, context_id, subscribed_at, config, participant_id)
+       VALUES (?, ?, ?, ?, ?)`,
+      opts.channelId,
+      opts.contextId,
+      Date.now(),
+      opts.config ? JSON.stringify(opts.config) : null,
       participantId,
-      opts.channelId
     );
 
     return {
@@ -159,5 +157,28 @@ export class SubscriptionManager {
   /** Delete subscription record only (no channel call). Used during unsubscribeChannel cleanup. */
   deleteSubscription(channelId: string): void {
     this.sql.exec(`DELETE FROM subscriptions WHERE channel_id = ?`, channelId);
+  }
+
+  /** Number of live subscriptions (fork preflight). */
+  count(): number {
+    const row = this.sql.exec(`SELECT COUNT(*) AS cnt FROM subscriptions`).toArray()[0];
+    return Number(row?.["cnt"] ?? 0);
+  }
+
+  listChannelIds(): string[] {
+    return this.sql
+      .exec(`SELECT channel_id FROM subscriptions ORDER BY channel_id`)
+      .toArray()
+      .map((row) => String(row["channel_id"]));
+  }
+
+  /** Fork bookkeeping: re-key a cloned subscription onto the new channel. */
+  rename(oldChannelId: string, newChannelId: string): void {
+    this.sql.exec(
+      `UPDATE subscriptions SET channel_id = ?, participant_id = ? WHERE channel_id = ?`,
+      newChannelId,
+      this.buildParticipantId(),
+      oldChannelId
+    );
   }
 }

@@ -1,11 +1,14 @@
-import type { ApprovalLevel, ThinkingLevel } from "@workspace/harness";
+import type { ThinkingLevel } from "@workspace/harness";
+
+type ApprovalLevel = 0 | 1 | 2;
 import {
   listProviderConnectPresets,
   toAgentCredentialSetup,
 } from "@workspace/model-catalog/providerConnect";
 import { DEFAULT_AGENT_MODEL_REF } from "@workspace/model-catalog/catalog";
 
-import type { ModelCredentialSetupProps } from "./trajectory-vessel-base.js";
+/** Connect-preset props handed to the credential-connect card. */
+export type ModelCredentialSetupProps = NonNullable<ReturnType<typeof toAgentCredentialSetup>>;
 
 export const OPENAI_CODEX_ACCOUNT_CLAIM = "https://api.openai.com/auth";
 

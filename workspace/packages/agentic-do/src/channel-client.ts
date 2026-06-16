@@ -100,6 +100,9 @@ export class ChannelClient {
     async sendSignalEvent<T>(participantId: string, contentType: string, payload: T): Promise<void> {
         await this.sendSignal(participantId, JSON.stringify(payload), contentType);
     }
+    async broadcastStoredEnvelopes(envelopeIds: string[]): Promise<{ broadcasted: number }> {
+        return this.call("broadcastStoredEnvelopes", envelopeIds) as Promise<{ broadcasted: number }>;
+    }
     async updateMetadata(participantId: string, metadata: Record<string, unknown>): Promise<void> {
         await this.call("updateMetadata", participantId, metadata);
     }
@@ -151,25 +154,27 @@ export class ChannelClient {
     async getMessageType(typeId: string): Promise<Record<string, unknown> | null> {
         return this.call("getMessageType", typeId) as Promise<Record<string, unknown> | null>;
     }
+    async getMessageSender(participantId: string, messageId: string): Promise<string | null> {
+        return this.call("getMessageSender", participantId, messageId) as Promise<string | null>;
+    }
     async getMessageTypes(): Promise<Record<string, unknown>[]> {
         return this.call("getMessageTypes") as Promise<Record<string, unknown>[]>;
     }
-    /** Durable conversation state (last completed sender, agent streak). */
-    async getConversationState(): Promise<{
-        lastCompletedSender: string | null;
-        lastCompletedSeq: number | null;
-        lastCompletedAt: string | null;
-        previousCompletedSender: string | null;
-        previousCompletedSeq: number | null;
-        agentStreak: number;
+    /** Channel policy fold state (WS2 §4.4 — replaces getConversationState).
+     *  Default policy "agentic.conversation.v1" carries the conversation
+     *  state (last completed sender, agent streak), rebuilt by replay so it
+     *  survives forks. */
+    async getPolicyState(name?: string): Promise<{
+        policy: string;
+        version: number;
+        foldedThroughSeq: number;
+        state: unknown;
     }> {
-        return this.call("getConversationState") as Promise<{
-            lastCompletedSender: string | null;
-            lastCompletedSeq: number | null;
-            lastCompletedAt: string | null;
-            previousCompletedSender: string | null;
-            previousCompletedSeq: number | null;
-            agentStreak: number;
+        return this.call("getPolicyState", ...(name ? [name] : [])) as Promise<{
+            policy: string;
+            version: number;
+            foldedThroughSeq: number;
+            state: unknown;
         }>;
     }
     async updateConfig(config: Record<string, unknown>): Promise<Record<string, unknown>> {

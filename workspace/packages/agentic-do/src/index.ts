@@ -1,13 +1,16 @@
 /**
  * @workspace/agentic-do — Composable agent modules for Durable Objects.
  *
- * Agent DOs extend AgentWorkerBase, which embeds Pi (`@earendil-works/pi-agent-core`)
- * in-process via the PiRunner from `@workspace/harness`. Non-agent DOs (e.g.
- * PubSub channel DOs) extend DurableObjectBase directly.
+ * Agent DOs extend AgentWorkerBase (AgentVesselBase + workspace defaults).
+ * Turn semantics live entirely in the pure `@workspace/agent-loop`; this
+ * package contributes the impure driver (outbox, fold cache, executors) and
+ * the DO surface. Non-agent DOs (e.g. PubSub channel DOs) extend
+ * DurableObjectBase directly.
  */
 
 export { AgentWorkerBase } from "./agent-worker-base.js";
-export type { ModelCredentialSetupProps, ModelCredentialSummary } from "./agent-worker-base.js";
+export { AgentVesselBase } from "./agent-vessel.js";
+export type { AgentSettings, ApprovalLevel, CustomMessageReducer } from "./agent-vessel.js";
 export {
   DEFAULT_APPROVAL_LEVEL,
   DEFAULT_MODEL,
@@ -16,8 +19,12 @@ export {
   OPENAI_CODEX_ACCOUNT_CLAIM,
   PROVIDER_CREDENTIAL_SETUPS,
 } from "./agent-config.js";
-export { TrajectoryVesselBase } from "./trajectory-vessel-base.js";
-export type { CustomMessageReducer, RespondPolicy } from "./trajectory-vessel-base.js";
+export type { ModelCredentialSetupProps } from "./agent-config.js";
+export type { RespondPolicy } from "@workspace/agent-loop";
+export { AgentLoopDriver } from "./agent-loop-driver.js";
+export { EffectOutbox } from "./effect-outbox.js";
+export { FoldCache } from "./fold-cache.js";
+export * from "./effect-executors/index.js";
 export { DOIdentity } from "./identity.js";
 export { SubscriptionManager } from "./subscription-manager.js";
 export { ChannelClient } from "./channel-client.js";
