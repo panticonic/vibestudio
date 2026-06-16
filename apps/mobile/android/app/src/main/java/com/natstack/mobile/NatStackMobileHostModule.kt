@@ -82,7 +82,7 @@ class NatStackMobileHostModule(
                 )
                 saveCredential(credential)
                 val grant = try {
-                    issueGrant(credential, source)
+                    shellGrantFromJson(credential, response)
                 } catch (error: Exception) {
                     clearStoredCredentials()
                     throw error
@@ -101,7 +101,19 @@ class NatStackMobileHostModule(
             try {
                 val credential = loadCredential()
                     ?: throw IllegalStateException("No mobile credentials are stored")
-                promise.resolve(issueGrant(credential, activeAppSource()))
+                val source = activeAppSource()
+                promise.resolve(
+                    if (source.isNullOrBlank()) {
+                        issueShellGrant(credential)
+                    } else {
+                        // An app source is active: an app-grant failure must
+                        // FAIL CLOSED, not silently escalate to a shell grant
+                        // (which carries strictly more authority). The outer
+                        // catch rejects so the bootstrap can surface the real
+                        // "app unavailable / approval required" reason.
+                        issueAppGrant(credential, source)
+                    }
+                )
             } catch (error: Exception) {
                 promise.reject("grant_failed", error.message, error)
             }
@@ -202,7 +214,44 @@ class NatStackMobileHostModule(
         }
     }
 
-    private fun issueGrant(credential: Credential, source: String? = null): WritableMap {
+    private fun issueShellGrant(credential: Credential): WritableMap {
+        val body = JSONObject()
+            .put("deviceId", credential.deviceId)
+            .put("refreshToken", credential.refreshToken)
+        return postJson(
+            credential.serverUrl,
+            "/_r/s/auth/refresh-shell",
+            body
+        ).let { json -> shellGrantFromJson(credential, json) }
+    }
+
+    private fun shellGrantFromJson(credential: Credential, json: JSONObject): WritableMap {
+        val callerId = json.optString("callerId")
+        val shellToken = json.optString("shellToken")
+        val responseDeviceId = json.optString("deviceId")
+        if (!isMobileShellCaller(callerId, credential.deviceId)) {
+            throw IllegalStateException("Mobile shell grant response did not include this device's shell principal")
+        }
+        if (shellToken.isBlank()) {
+            throw IllegalStateException("Mobile shell grant response did not include a shell token")
+        }
+        if (responseDeviceId.isNotBlank() && responseDeviceId != credential.deviceId) {
+            throw IllegalStateException("Mobile shell grant response device did not match the stored credential")
+        }
+        return Arguments.createMap().apply {
+            putString("serverUrl", credential.serverUrl)
+            putString("deviceId", credential.deviceId)
+            putString("callerId", callerId)
+            putString("connectionGrant", shellToken)
+            putString("serverId", json.getString("serverId").takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("Mobile shell grant response did not include a server id"))
+            json.optString("serverBootId").takeIf { it.isNotBlank() }?.let { putString("serverBootId", it) }
+            putString("workspaceId", json.getString("workspaceId").takeIf { it.isNotBlank() }
+                ?: throw IllegalStateException("Mobile shell grant response did not include a workspace id"))
+        }
+    }
+
+    private fun issueAppGrant(credential: Credential, source: String? = null): WritableMap {
         val body = JSONObject()
             .put("deviceId", credential.deviceId)
             .put("refreshToken", credential.refreshToken)
@@ -259,6 +308,9 @@ class NatStackMobileHostModule(
 
     private fun isWorkspaceMobileAppCaller(callerId: String, deviceId: String): Boolean =
         callerId.startsWith(WORKSPACE_APP_CALLER_PREFIX) && callerId.endsWith(":$deviceId")
+
+    private fun isMobileShellCaller(callerId: String, deviceId: String): Boolean =
+        callerId == "shell:$deviceId"
 
     private fun postJson(serverUrl: String, path: String, body: JSONObject): JSONObject {
         val connection = URL("$serverUrl$path").openConnection() as HttpURLConnection

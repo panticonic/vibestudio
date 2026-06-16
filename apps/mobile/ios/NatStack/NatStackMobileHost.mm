@@ -81,7 +81,7 @@ RCT_EXPORT_METHOD(completePairing:(NSString *)serverUrl
       };
       [self saveCredential:credential];
       @try {
-        resolve([self issueGrantForCredential:credential source:source]);
+        resolve([self shellGrantFromResponse:response credential:credential]);
       } @catch (NSException *exception) {
         [self clearStoredCredentials];
         @throw;
@@ -101,7 +101,16 @@ RCT_EXPORT_METHOD(issueConnectionGrant:(RCTPromiseResolveBlock)resolve
       if (credential == nil) {
         [NSException raise:@"NatStackNoCredentials" format:@"No mobile credentials are stored"];
       }
-      resolve([self issueGrantForCredential:credential source:[self activeAppSource]]);
+      NSString *source = [self activeAppSource];
+      if (source.length == 0) {
+        resolve([self issueShellGrantForCredential:credential]);
+        return;
+      }
+      // An app source is active: an app-grant failure must FAIL CLOSED, not
+      // silently escalate to a shell grant (which carries strictly more
+      // authority). The outer @catch rejects so the bootstrap can surface the
+      // real "app unavailable / approval required" reason.
+      resolve([self issueAppGrantForCredential:credential source:source]);
     } @catch (NSException *exception) {
       reject(@"grant_failed", exception.reason, nil);
     }
@@ -202,7 +211,43 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   }
 }
 
-- (NSDictionary *)issueGrantForCredential:(NSDictionary *)credential source:(NSString *)source
+- (NSDictionary *)issueShellGrantForCredential:(NSDictionary *)credential
+{
+  NSDictionary *response = [self postJson:credential[@"serverUrl"] path:@"/_r/s/auth/refresh-shell" body:@{
+    @"deviceId": credential[@"deviceId"],
+    @"refreshToken": credential[@"refreshToken"],
+  }];
+  return [self shellGrantFromResponse:response credential:credential];
+}
+
+- (NSDictionary *)shellGrantFromResponse:(NSDictionary *)response credential:(NSDictionary *)credential
+{
+  NSString *callerId = [self optionalString:response key:@"callerId"] ?: @"";
+  NSString *shellToken = [self optionalString:response key:@"shellToken"] ?: @"";
+  NSString *responseDeviceId = [self optionalString:response key:@"deviceId"];
+  if (![self isMobileShellCaller:callerId deviceId:credential[@"deviceId"]]) {
+    [NSException raise:@"NatStackShellGrantInvalid" format:@"Mobile shell grant response did not include this device's shell principal"];
+  }
+  if (shellToken.length == 0) {
+    [NSException raise:@"NatStackShellGrantInvalid" format:@"Mobile shell grant response did not include a shell token"];
+  }
+  if (responseDeviceId.length > 0 && ![responseDeviceId isEqualToString:credential[@"deviceId"]]) {
+    [NSException raise:@"NatStackShellGrantInvalid" format:@"Mobile shell grant response device did not match the stored credential"];
+  }
+  NSMutableDictionary *result = [@{
+    @"serverUrl": credential[@"serverUrl"],
+    @"deviceId": credential[@"deviceId"],
+    @"callerId": callerId,
+    @"connectionGrant": shellToken,
+    @"serverId": [self requiredString:response key:@"serverId"],
+    @"workspaceId": [self requiredString:response key:@"workspaceId"],
+  } mutableCopy];
+  NSString *serverBootId = [self optionalString:response key:@"serverBootId"];
+  if (serverBootId != nil) result[@"serverBootId"] = serverBootId;
+  return result;
+}
+
+- (NSDictionary *)issueAppGrantForCredential:(NSDictionary *)credential source:(NSString *)source
 {
   NSMutableDictionary *body = [@{
     @"deviceId": credential[@"deviceId"],
@@ -257,6 +302,11 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   return [callerId hasPrefix:NatStackWorkspaceAppCallerPrefix] &&
     deviceId.length > 0 &&
     [callerId hasSuffix:[@":" stringByAppendingString:deviceId]];
+}
+
+- (BOOL)isMobileShellCaller:(NSString *)callerId deviceId:(NSString *)deviceId
+{
+  return deviceId.length > 0 && [callerId isEqualToString:[@"shell:" stringByAppendingString:deviceId]];
 }
 
 - (NSDictionary *)postJson:(NSString *)serverUrl path:(NSString *)path body:(NSDictionary *)body
