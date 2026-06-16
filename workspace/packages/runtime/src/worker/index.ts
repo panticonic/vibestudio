@@ -27,8 +27,7 @@ if (typeof globalThis.Buffer === "undefined") {
 }
 import type { RpcClient } from "@natstack/rpc";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { gitMethods } from "@natstack/shared/serviceSchemas/git";
-import { buildMethods } from "@natstack/shared/serviceSchemas/build";
+import { gitInteropMethods } from "@natstack/shared/serviceSchemas/gitInterop";
 import { workerLogMethods } from "@natstack/shared/serviceSchemas/workerLog";
 import { createHttpRpcClient } from "../shared/httpRpcBridge.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/externalOpen";
@@ -63,14 +62,8 @@ import {
   type UserlandApprovalGrant,
   type UserlandApprovalRequest,
 } from "../approvals.js";
-import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
-import { createContextAwareGitClient } from "../shared/contextGitClient.js";
-import {
-  publishWorkspaceRepo as publishWorkspaceRepoWithClient,
-  type PublishWorkspaceRepoOptions,
-  type PublishWorkspaceRepoResult,
-} from "../shared/workspaceGitPublish.js";
-import type { PanelHandle } from "../core/index.js";
+import { createVcsClient, type VcsClient } from "../shared/vcsClient.js";
+import type { PanelHandle, PanelNavigateOptions } from "../core/index.js";
 import type { WorkerEnv } from "./types.js";
 import type { RuntimeFs } from "../types.js";
 import type { PanelLifecycleResult } from "@natstack/shared/types";
@@ -130,6 +123,7 @@ export type {
   LifecycleResumeInput,
 } from "./durable-base.js";
 export { fs } from "./fs.js";
+export { createRpcFs } from "../shared/rpcFs.js";
 export { createGatewayFetch } from "../shared/gatewayFetch.js";
 export type { GatewayFetch } from "../shared/gatewayFetch.js";
 export type {
@@ -166,25 +160,6 @@ export interface CompleteWorkspaceDependenciesResult {
     error: string;
   }>;
 }
-export interface BuildEventTriggerOrigin {
-  callerId: string;
-  callerKind: string;
-  code?: unknown;
-}
-export interface RecentBuildEvent {
-  type: "build-started" | "build-complete" | "build-error";
-  name: string;
-  relativePath?: string;
-  buildKey?: string;
-  error?: string;
-  trigger?: {
-    repo: string;
-    branch: string;
-    commit: string;
-    origin?: BuildEventTriggerOrigin;
-  };
-  timestamp: string;
-}
 export interface RuntimeGitApi {
   http: CredentialClient["gitHttp"];
   importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo>;
@@ -199,14 +174,6 @@ export interface RuntimeGitApi {
     repoPath: string,
     remoteName: string
   ): Promise<Record<string, unknown> | undefined>;
-  ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }>;
-  listRecentBuildEvents(unitNameOrPath?: string): Promise<RecentBuildEvent[]>;
-  publishWorkspaceRepo(
-    repoPath: string,
-    message: string,
-    options?: PublishWorkspaceRepoOptions
-  ): Promise<PublishWorkspaceRepoResult>;
-  client(options?: { credentialId?: string }): GitClient;
 }
 // Cache runtime per worker ID to avoid creating multiple bridges
 let cachedRuntime: WorkerRuntime | null = null;
@@ -293,20 +260,13 @@ export interface WorkerRuntime {
   readonly contextId: string;
   readonly gatewayConfig: { serverUrl: string; token: string; aliases?: readonly string[] };
   readonly gatewayFetch: GatewayFetch;
-  readonly gitConfig: {
-    serverUrl: string;
-    token: string;
-    internalOrigins?: readonly string[];
-  } | null;
   readonly git: RuntimeGitApi;
+  readonly vcs: VcsClient;
   readonly gad: GadClient;
 
   /** Call a server-side service method via RPC. */
   callMain<T>(method: string, ...args: unknown[]): Promise<T>;
   openExternal(url: string, options?: OpenExternalOptions): Promise<OpenExternalResult>;
-  getWorkspaceTree(): Promise<unknown>;
-  listBranches(repoPath: string): Promise<unknown[]>;
-  listCommits(repoPath: string, ref?: string, limit?: number): Promise<unknown[]>;
   requestApproval(req: UserlandApprovalRequest): Promise<UserlandApprovalChoice>;
   revokeApproval(subjectId: string): Promise<boolean>;
   listApprovals(): Promise<UserlandApprovalGrant[]>;
@@ -322,6 +282,11 @@ export interface WorkerRuntime {
     roots(): Promise<PanelHandle[]>;
     children(id: string): Promise<PanelHandle[]>;
     parent(id: string): PanelHandle | null;
+    navigate(
+      id: string,
+      source: string,
+      options?: PanelNavigateOptions
+    ): Promise<{ id: string; title: string }>;
     open(
       source: string,
       options?: {
@@ -383,73 +348,37 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   const gatewayAliases = parseGatewayAliases(env.GATEWAY_URL_ALIASES);
   const gatewayConfig = { serverUrl, token: env.RPC_AUTH_TOKEN, aliases: gatewayAliases };
   const gatewayFetch = createGatewayFetch(gatewayConfig);
-  const gitConfig = {
-    serverUrl: `${serverUrl}/_git`,
-    token: env.RPC_AUTH_TOKEN,
-    internalOrigins: gatewayAliases.map((url) => `${url.replace(/\/$/, "")}/_git`),
-  };
-  const gitService = createTypedServiceClient("git", gitMethods, (svc, method, args) =>
+  const gitInteropService = createTypedServiceClient("gitInterop", gitInteropMethods, (svc, method, args) =>
     rpc.call("main", `${svc}.${method}`, args)
   );
-  const buildService = createTypedServiceClient("build", buildMethods, (svc, method, args) =>
-    rpc.call("main", `${svc}.${method}`, args)
+  const vcs = helpfulNamespace(
+    "vcs",
+    createVcsClient(
+      <T>(method: string, ...vcsArgs: unknown[]) => rpc.call<T>("main", method, vcsArgs),
+      rpc
+    )
   );
   const git = helpfulNamespace("git", {
     http: credentials.gitHttp,
     importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo> {
-      return gitService.importProject(request);
+      return gitInteropService.importProject(request);
     },
     completeWorkspaceDependencies(
       options: { credentialId?: string } = {}
     ): Promise<CompleteWorkspaceDependenciesResult> {
-      return gitService.completeWorkspaceDependencies(options);
+      return gitInteropService.completeWorkspaceDependencies(options);
     },
     setSharedRemote(
       repoPath: string,
       remote: GitRemoteSpec
     ): Promise<Record<string, unknown> | undefined> {
-      return gitService.setSharedRemote(repoPath, remote);
+      return gitInteropService.setSharedRemote(repoPath, remote);
     },
     removeSharedRemote(
       repoPath: string,
       remoteName: string
     ): Promise<Record<string, unknown> | undefined> {
-      return gitService.removeSharedRemote(repoPath, remoteName);
-    },
-    ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }> {
-      return gitService.ensureRepoPresentInContexts(repoPath);
-    },
-    listRecentBuildEvents(unitNameOrPath?: string): Promise<RecentBuildEvent[]> {
-      return buildService.listRecentBuildEvents(unitNameOrPath);
-    },
-    publishWorkspaceRepo(
-      repoPath: string,
-      message: string,
-      options: PublishWorkspaceRepoOptions = {}
-    ): Promise<PublishWorkspaceRepoResult> {
-      return publishWorkspaceRepoWithClient(git.client(), repoPath, message, options);
-    },
-    client(options: { credentialId?: string } = {}) {
-      if (!gitConfig) {
-        return createContextAwareGitClient(
-          new GitClient(runtimeFs, {
-            http: credentials.gitHttp({ credentialId: options.credentialId }),
-          }),
-          rpc
-        );
-      }
-      return createContextAwareGitClient(
-        new GitClient(runtimeFs, {
-          serverUrl: gitConfig.serverUrl,
-          http: createRoutingHttpClient({
-            internalOrigin: gitConfig.serverUrl,
-            internalOrigins: gitConfig.internalOrigins,
-            internal: createBearerHttpClient(gitConfig.token),
-            external: credentials.gitHttp({ credentialId: options.credentialId }),
-          }),
-        }),
-        rpc
-      );
+      return gitInteropService.removeSharedRemote(repoPath, remoteName);
     },
   });
   const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));
@@ -476,6 +405,7 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     workspace: workspaceApi,
     credentials,
     git,
+    vcs,
     gad,
     webhooks,
     notifications,
@@ -484,18 +414,9 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
     contextId: env.CONTEXT_ID,
     gatewayConfig,
     gatewayFetch,
-    gitConfig,
-
     callMain,
     openExternal: (url: string, options?: OpenExternalOptions) =>
       callMain<OpenExternalResult>("externalOpen.openExternal", url, options),
-    getWorkspaceTree: () => gitService.getWorkspaceTree(),
-    listBranches: (repoPath: string) => gitService.listBranches(repoPath),
-    listCommits: (repoPath: string, ref?: string, limit?: number) =>
-      // Contract gap: git.listCommits args schema requires [string, string, number]
-      // but this API historically allowed omitting ref/limit. Pass through
-      // unchanged (the server validates) rather than inventing defaults here.
-      gitService.listCommits(repoPath, ref as string, limit as number),
     requestApproval: (req: UserlandApprovalRequest) => requestUserlandApproval(rpc, req),
     revokeApproval: (subjectId: string) => revokeUserlandApproval(rpc, subjectId),
     listApprovals: () => listUserlandApprovals(rpc),
@@ -563,7 +484,7 @@ function createWorkerPanelTree(
       kind: item.kind,
       parentId: item.parentId,
       contextId: item.contextId,
-      rpcTargetId: item.runtimeEntityId ?? item.panelId,
+      rpcTargetId: item.runtimeEntityId ?? null,
       effectiveVersion: item.effectiveVersion ?? null,
       ref: item.ref ?? null,
     });
@@ -588,7 +509,7 @@ function createWorkerPanelTree(
     kind: meta.kind,
     parentId: meta.parentId,
     contextId: meta.contextId ?? null,
-    rpcTargetId: meta.runtimeEntityId ?? meta.id ?? id,
+    rpcTargetId: meta.runtimeEntityId ?? null,
     effectiveVersion: meta.effectiveVersion ?? null,
     ref: meta.ref ?? null,
   });
@@ -626,6 +547,8 @@ function createWorkerPanelTree(
     close: (id) => callPanel<PanelLifecycleResult>("close", [id]),
     archive: (id) => callPanel("archive", [id]),
     unload: (id) => callPanel<PanelLifecycleResult>("unload", [id]),
+    navigate: (id, source, options) =>
+      callPanel<{ id: string; title: string }>("navigate", [id, source, options]),
     movePanel: (id, newParentId, targetPosition) =>
       callPanel("movePanel", [{ panelId: id, newParentId, targetPosition }]),
     takeOver: (id) => callPanel("takeOver", [id]),
@@ -692,6 +615,8 @@ function createWorkerPanelTree(
           : metadataCache.get(id)?.parentId;
       return resolvedParentId ? panelTree.get(resolvedParentId) : null;
     },
+    navigate: (id, source, options) =>
+      callPanel<{ id: string; title: string }>("navigate", [id, source, options]),
     async open(source, options) {
       const targetParentId = options?.parentId ?? (parentKind === "panel" ? parentId : null);
       const result = await callPanel<{
@@ -708,7 +633,7 @@ function createWorkerPanelTree(
         kind: result.kind,
         parentId: targetParentId,
         contextId: "",
-        runtimeEntityId: result.runtimeEntityId ?? result.id,
+        runtimeEntityId: result.runtimeEntityId ?? null,
         effectiveVersion: result.effectiveVersion ?? null,
       });
     },

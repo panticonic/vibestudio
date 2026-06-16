@@ -48,26 +48,6 @@ export type InferEventMap<T extends EventSchemaMap> = {
 };
 
 /**
- * Git configuration for a panel or worker.
- */
-export interface GitConfig {
-  /**
-   * Git server base URL (e.g., http://localhost:63524).
-   * Prefer `git.client()` from `@workspace/runtime` for userland git
-   * operations; it applies the correct internal/external HTTP routing.
-   */
-  serverUrl: string;
-  /** Additional NatStack gateway URLs that should use the internal bearer token. */
-  internalOrigins?: readonly string[];
-  /** Bearer token for authentication */
-  token: string;
-  /** This endpoint's source repo path (e.g., "panels/my-panel") */
-  sourceRepo: string;
-  /** Optional git ref (branch/tag/commit) to check out */
-  gitRef?: string;
-}
-
-/**
  * Information about a panel or worker.
  */
 export interface EndpointInfo {
@@ -166,6 +146,13 @@ export interface CdpAutomation {
 
 export type PanelHandleContractRole = "parent" | "child";
 
+export interface PanelNavigateOptions {
+  contextId?: string;
+  env?: Record<string, string>;
+  ref?: string;
+  stateArgs?: Record<string, unknown>;
+}
+
 /**
  * Unified handle for communicating with any panel-tree member.
  * Parent helpers return this same handle type.
@@ -194,7 +181,7 @@ export interface PanelHandle<
   E extends Rpc.RpcEventMap = Rpc.RpcEventMap,
   EmitE extends Rpc.RpcEventMap = Rpc.RpcEventMap,
 > {
-  /** Panel's unique slot/runtime target ID. */
+  /** Stable panel slot ID. CDP/control use this slot; RPC resolves the current runtime entity. */
   readonly id: string;
   /** Last known title. Bare handles use the id until refresh/list hydrates them. */
   readonly title: string;
@@ -280,6 +267,7 @@ export interface PanelHandle<
   parent(): PanelHandle | null;
   ensureLoaded(): Promise<unknown>;
   isLoaded(): Promise<boolean>;
+  navigate(source: string, options?: PanelNavigateOptions): Promise<{ id: string; title: string }>;
   reload(): Promise<PanelLifecycleResult>;
   close(): Promise<PanelLifecycleResult>;
 
@@ -348,23 +336,23 @@ export type PanelHandleFromContract<C extends PanelContract, Role extends PanelH
     : never;
 
 // =============================================================================
-// Workspace Discovery Types (for git repos and launchable panels)
+// Workspace Discovery Types (for workspace units and launchable panels)
 // =============================================================================
 
 /**
  * A node in the workspace tree.
- * Folders contain children, git repos are leaves (children = []).
+ * Folders contain children, workspace units are leaves (children = []).
  */
 export interface WorkspaceNode {
-  /** Directory/repo name */
+  /** Directory or unit name. */
   name: string;
   /**
    * Relative path from workspace root using forward slashes.
    * Example: "panels/editor"
    */
   path: string;
-  /** True if this directory is a git repository root */
-  isGitRepo: boolean;
+  /** True if this directory is a workspace unit root. */
+  isUnit: boolean;
   /**
    * If this is a launchable panel/worker (has natstack config).
    * Note: We intentionally include entries even if some fields are missing
@@ -377,21 +365,20 @@ export interface WorkspaceNode {
     hidden?: boolean;
   };
   /**
-   * Package metadata if this repo has a package.json with a name.
+   * Package metadata if this unit has a package.json with a name.
    */
   packageInfo?: {
     name: string;
     version?: string;
   };
   /**
-   * Skill metadata if this repo has a SKILL.md file with YAML frontmatter.
-   * Skills are repos that provide instructions/context for agents.
+   * Skill metadata if this unit has a SKILL.md file with YAML frontmatter.
    */
   skillInfo?: {
     name: string;
     description: string;
   };
-  /** Child nodes (empty for git repos since they're leaves) */
+  /** Child nodes (empty for workspace units since they're leaves). */
   children: WorkspaceNode[];
 }
 
@@ -401,22 +388,4 @@ export interface WorkspaceNode {
 export interface WorkspaceTree {
   /** Root children (top-level directories) */
   children: WorkspaceNode[];
-}
-
-/**
- * Branch info for a git repository.
- */
-export interface BranchInfo {
-  name: string;
-  current: boolean;
-  remote?: string;
-}
-
-/**
- * Commit info for git log.
- */
-export interface CommitInfo {
-  oid: string;
-  message: string;
-  author: { name: string; timestamp: number };
 }

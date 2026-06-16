@@ -1,6 +1,6 @@
 import type { RpcClient, RpcEventContext } from "@natstack/rpc";
 import type { PanelLifecycleResult } from "@natstack/shared/types";
-import type { PanelHandle as CorePanelHandle, Rpc } from "../core/index.js";
+import type { PanelHandle as CorePanelHandle, PanelNavigateOptions, Rpc } from "../core/index.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/externalOpen";
 import { createCdpAutomation } from "./cdpAutomation.js";
 import {
@@ -22,6 +22,18 @@ export interface PanelListItem {
   ref?: string | null;
 }
 
+interface PanelMetadataResult {
+  id?: string;
+  title?: string;
+  source?: string;
+  kind?: "workspace" | "browser";
+  parentId?: string | null;
+  contextId?: string | null;
+  runtimeEntityId?: string | null;
+  effectiveVersion?: string | null;
+  ref?: string | null;
+}
+
 export type PanelHandle<
   T extends Rpc.ExposedMethods = Rpc.ExposedMethods,
   E extends Rpc.RpcEventMap = Rpc.RpcEventMap,
@@ -35,6 +47,11 @@ export interface PanelTreeApi {
   roots(): Promise<PanelHandle[]>;
   children(id: string): Promise<PanelHandle[]>;
   parent(id: string): PanelHandle | null;
+  navigate(
+    id: string,
+    source: string,
+    options?: PanelNavigateOptions
+  ): Promise<{ id: string; title: string }>;
   open(
     source: string,
     options?: {
@@ -109,7 +126,21 @@ function itemToMetadata(item: PanelListItem): PanelHandleMetadata {
     kind: item.kind ?? (item.source.startsWith("browser:") ? "browser" : "workspace"),
     parentId: item.parentId,
     contextId: item.contextId,
-    rpcTargetId: item.runtimeEntityId ?? item.panelId,
+    rpcTargetId: item.runtimeEntityId ?? null,
+    effectiveVersion: item.effectiveVersion ?? null,
+    ref: item.ref ?? null,
+  };
+}
+
+function metadataResultToMetadata(id: string, item: PanelMetadataResult): PanelHandleMetadata {
+  return {
+    id,
+    title: item.title,
+    source: item.source,
+    kind: item.kind ?? (item.source?.startsWith("browser:") ? "browser" : "workspace"),
+    parentId: item.parentId ?? null,
+    contextId: item.contextId ?? null,
+    rpcTargetId: item.runtimeEntityId ?? null,
     effectiveVersion: item.effectiveVersion ?? null,
     ref: item.ref ?? null,
   };
@@ -136,9 +167,8 @@ function metadataForId(id: string, fallback?: Partial<PanelHandleMetadata>): Pan
 
 const ops: PanelHandleHostOps = {
   refresh: async (id) => {
-    const all = await flattenPanels(await panelCall<PanelListItem[]>("list", [null]));
-    const found = all.find((item) => item.panelId === id);
-    return found ? rememberMetadata(itemToMetadata(found)) : metadataForId(id);
+    const metadata = await panelCall<PanelMetadataResult | null>("metadata", [id]);
+    return metadata ? rememberMetadata(metadataResultToMetadata(id, metadata)) : metadataForId(id);
   },
   children: (id) => panelTree.children(id),
   parent: (id, parentId) => {
@@ -169,6 +199,8 @@ const ops: PanelHandleHostOps = {
     currentJournal()?.append({ type: "close", id });
   },
   unload: (id) => panelCall<PanelLifecycleResult>("unload", [id]),
+  navigate: (id, source, options) =>
+    panelCall<{ id: string; title: string }>("navigate", [id, source, options]),
   movePanel: (id, newParentId, targetPosition) =>
     panelCall("movePanel", [{ panelId: id, newParentId, targetPosition }]),
   takeOver: (id) => panelCall("takeOver", [id]),
@@ -314,6 +346,9 @@ export const panelTree: PanelTreeApi = {
         : metadataCache.get(id)?.parentId;
     return parentId ? getPanelHandle(parentId) : null;
   },
+  navigate(id, source, options) {
+    return panelCall("navigate", [id, source, options]);
+  },
   async open(source, options) {
     const parentId = options?.parentId ?? _selfId;
     const result = await panelCall<{
@@ -330,7 +365,7 @@ export const panelTree: PanelTreeApi = {
       kind: result.kind,
       parentId,
       contextId: "",
-      runtimeEntityId: result.runtimeEntityId ?? result.id,
+      runtimeEntityId: result.runtimeEntityId ?? null,
       effectiveVersion: result.effectiveVersion ?? null,
     });
     currentJournal()?.append({ type: "open", source, id: handle.id, kind: handle.kind });

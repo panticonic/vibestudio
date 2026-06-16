@@ -6,6 +6,7 @@ import type {
   PanelHandle,
   PanelHandleContractRole,
   PanelHandleFromContract,
+  PanelNavigateOptions,
   Rpc,
   TypedCallProxy,
 } from "../core/index.js";
@@ -28,6 +29,11 @@ export interface PanelHandleHostOps {
   parent?(id: string, parentId: string | null): PanelHandle | null;
   ensureLoaded?(id: string): Promise<unknown>;
   isLoaded?(id: string): Promise<boolean>;
+  navigate?(
+    id: string,
+    source: string,
+    options?: PanelNavigateOptions
+  ): Promise<{ id: string; title: string }>;
   reload?(id: string): Promise<PanelLifecycleResult>;
   close?(id: string): Promise<PanelLifecycleResult>;
   archive?(id: string): Promise<void>;
@@ -48,15 +54,19 @@ export interface PanelHandleHostOps {
 }
 
 type PanelHandleRpc = Pick<RpcClient, "call" | "emit" | "on">;
+type RpcTargetResolver = string | (() => string | Promise<string>);
 
 export function createCallProxy<T extends Rpc.ExposedMethods>(
   rpc: Pick<RpcClient, "call">,
-  targetId: string | (() => string)
+  targetId: RpcTargetResolver
 ): TypedCallProxy<T> {
   return new Proxy({} as TypedCallProxy<T>, {
     get(_target, method: string) {
-      return async (...args: unknown[]) =>
-        rpc.call(typeof targetId === "function" ? targetId() : targetId, method, [...args]);
+      return async (...args: unknown[]) => {
+        const resolvedTargetId =
+          typeof targetId === "function" ? await targetId() : targetId;
+        return rpc.call(resolvedTargetId, method, [...args]);
+      };
     },
   });
 }
@@ -73,8 +83,30 @@ export function createPanelHandle<
 }): PanelHandle<T, E, EmitE> {
   const { rpc, cdp, ops } = options;
   let metadata = normalizeMetadata(options.metadata);
-  const rpcTargetId = () => metadata.rpcTargetId ?? metadata.id;
-  const call = createCallProxy<T>(rpc, rpcTargetId);
+  let rpcTargetResolvePromise: Promise<string> | null = null;
+  let rpcEventTargetId: string | null = metadata.rpcTargetId ?? (!ops?.refresh ? metadata.id : null);
+  const refreshMetadata = async (): Promise<Required<PanelHandleMetadata>> => {
+    if (ops?.refresh) {
+      metadata = normalizeMetadata({ ...metadata, ...(await ops.refresh(metadata.id)) });
+    }
+    // Use the same non-null fallback as resolveRpcTargetId: a manual refresh of
+    // a still-unloaded refreshable handle must not reset the event target to
+    // null, which would silently kill any active .on() subscription's filter.
+    rpcEventTargetId = metadata.rpcTargetId ?? metadata.id;
+    rpcTargetResolvePromise = null;
+    return metadata;
+  };
+  const resolveRpcTargetId = async (): Promise<string> => {
+    if (metadata.rpcTargetId) return metadata.rpcTargetId;
+    if (!ops?.refresh) return metadata.id;
+    rpcTargetResolvePromise ??= refreshMetadata().then((fresh) => {
+      const targetId = fresh.rpcTargetId ?? fresh.id;
+      rpcEventTargetId = targetId;
+      return targetId;
+    });
+    return rpcTargetResolvePromise;
+  };
+  const call = createCallProxy<T>(rpc, resolveRpcTargetId);
 
   const handle: PanelHandle<T, E, EmitE> = {
     get id() {
@@ -127,11 +159,15 @@ export function createPanelHandle<
       },
     },
     async emit(event: string, payload: unknown) {
-      await rpc.emit(rpcTargetId(), event, payload);
+      await rpc.emit(await resolveRpcTargetId(), event, payload);
     },
     on(event: string, listener: (payload: unknown) => void): () => void {
+      if (!rpcEventTargetId) {
+        void resolveRpcTargetId().catch(() => undefined);
+      }
       return rpc.on(event, (ev: RpcEventContext) => {
-        if (ev.caller.callerId === rpcTargetId()) listener(ev.payload);
+        const targetId = rpcEventTargetId;
+        if (targetId && ev.caller.callerId === targetId) listener(ev.payload);
       });
     },
     withContract<C extends PanelContract, Role extends PanelHandleContractRole>(
@@ -141,15 +177,26 @@ export function createPanelHandle<
       return handle as unknown as PanelHandleFromContract<C, Role>;
     },
     async refresh() {
-      if (ops?.refresh) {
-        metadata = normalizeMetadata({ ...metadata, ...(await ops.refresh(metadata.id)) });
-      }
+      await refreshMetadata();
       return handle;
     },
     children: () => ops?.children?.(metadata.id) ?? Promise.resolve([]),
     parent: () => ops?.parent?.(metadata.id, metadata.parentId) ?? null,
-    ensureLoaded: () => ops?.ensureLoaded?.(metadata.id) ?? Promise.resolve({ loaded: false }),
+    ensureLoaded: async () => {
+      const result = await (ops?.ensureLoaded?.(metadata.id) ??
+        Promise.resolve({ loaded: false }));
+      if (ops?.refresh) await refreshMetadata();
+      return result;
+    },
     isLoaded: () => ops?.isLoaded?.(metadata.id) ?? Promise.resolve(false),
+    navigate: async (source: string, options?: PanelNavigateOptions) => {
+      if (!ops?.navigate) throw new Error("navigate is not available for this handle");
+      const result = await ops.navigate(metadata.id, source, options);
+      if (ops?.refresh) {
+        await refreshMetadata().catch(() => undefined);
+      }
+      return result;
+    },
     reload: async () => {
       if (!ops?.reload) throw new Error("reload is not available for this handle");
       return ops.reload(metadata.id);
@@ -260,6 +307,7 @@ export function createNoPanelHandle(): PanelHandle {
     parent: () => null,
     ensureLoaded: () => Promise.resolve({ loaded: false }),
     isLoaded: () => Promise.resolve(false),
+    navigate: noParent,
     reload: noParent,
     close: noParent,
     archive: noParent,
@@ -324,6 +372,7 @@ export function createNonPanelRuntimeHandle(options: {
     parent: () => options.parent?.() ?? null,
     ensureLoaded: () => Promise.resolve({ loaded: false }),
     isLoaded: () => Promise.resolve(false),
+    navigate: unavailable,
     reload: unavailable,
     close: unavailable,
     archive: unavailable,
@@ -354,7 +403,7 @@ function normalizeMetadata(metadata: PanelHandleMetadata): Required<PanelHandleM
     kind,
     parentId: metadata.parentId ?? null,
     contextId: metadata.contextId ?? null,
-    rpcTargetId: metadata.rpcTargetId ?? metadata.id,
+    rpcTargetId: metadata.rpcTargetId ?? null,
     effectiveVersion: metadata.effectiveVersion ?? null,
     ref: metadata.ref ?? null,
   };

@@ -61,8 +61,7 @@ export interface WorkerCreateOptions {
     bindings?: Record<string, WorkerBindingDef>;
     /** Initial state args (available via STATE_ARGS binding) */
     stateArgs?: Record<string, unknown>;
-    /** Build at a specific git ref (branch, tag, or commit SHA).
-     *  Use a commit SHA for immutable pinning (content-addressed cache guarantees same build). */
+    /** Build at a specific GAD VCS ref: "main", "ctx:<contextId>", or "state:<stateHash>". */
     ref?: string;
     /** ID of the creating caller. Worker can call getParent() to communicate back. */
     parentId?: string;
@@ -75,7 +74,7 @@ export interface WorkerUpdateOptions {
     env?: Record<string, string>;
     bindings?: Record<string, WorkerBindingDef>;
     stateArgs?: Record<string, unknown>;
-    /** Change the git ref this instance builds at */
+    /** Change the GAD VCS ref this instance builds at. */
     ref?: string;
 }
 export interface WorkerInstanceInfo {
@@ -89,7 +88,7 @@ export interface WorkerInstanceInfo {
     bindings: Record<string, WorkerBindingDef>;
     stateArgs?: Record<string, unknown>;
     buildKey?: string;
-    /** Git ref this instance is built at. */
+    /** GAD VCS ref this instance is built at. */
     ref?: string;
     parentEntityId?: string;
     parentKind?: "panel" | "worker" | "do";

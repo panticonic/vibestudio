@@ -154,11 +154,6 @@ export interface DORef {
   objectKey: string;
 }
 
-/** Outcome of {@link DurableObjectBase.callDeferred}. */
-export type DeferredCallOutcome =
-  | { status: "completed"; requestId: string; result: unknown }
-  | { status: "deferred"; requestId: string };
-
 type DurablePanelListItem = {
   panelId: string;
   title: string;
@@ -209,7 +204,6 @@ export abstract class DurableObjectBase {
 
   private _schemaReady = false;
   private _rpc: HttpRpcClient | null = null;
-  private _deferredSchemaReady = false;
   protected _currentRpcCallerId: string | null = null;
   protected _currentRpcCallerKind: string | null = null;
   protected _currentRpcCallerPanelId: string | null = null;
@@ -323,195 +317,13 @@ export abstract class DurableObjectBase {
     this.sql.exec(`DELETE FROM state WHERE key = ?`, key);
   }
 
-  // --- Deferred (out-of-band) calls ---
+  // --- Deferred (out-of-band) calls: REMOVED (unified-log Stage B) ---
   //
-  // A generic, transport-correlated continuation primitive: issue a server call
-  // that may complete out-of-band, persist a durable row keyed by requestId
-  // *before* issuing, and resume idempotently when the result is delivered via
-  // an inbound onDeferredResult POST (which revives a hibernated DO). The table
-  // is created lazily on first use, so DOs that never defer pay nothing.
-  //
-  // Subclasses with a richer continuation store (e.g. agent turn suspensions)
-  // do NOT use this; they own their own table. This is for plain DOs.
-
-  /** Lazily create the deferred_requests table (only when first deferring). */
-  private ensureDeferredSchema(): void {
-    if (this._deferredSchemaReady) return;
-    this.ensureReady();
-    this.sql.exec(
-      `CREATE TABLE IF NOT EXISTS deferred_requests (
-         request_id TEXT PRIMARY KEY,
-         idempotency_key TEXT,
-         target TEXT NOT NULL,
-         method TEXT NOT NULL,
-         args_json TEXT NOT NULL,
-         context_json TEXT,
-         status TEXT NOT NULL DEFAULT 'pending',
-         result_json TEXT,
-         is_error INTEGER NOT NULL DEFAULT 0,
-         created_at INTEGER NOT NULL,
-         updated_at INTEGER NOT NULL
-       )`
-    );
-    this._deferredSchemaReady = true;
-  }
-
-  /** True if the deferred table exists, without creating it. */
-  private deferredTableExists(): boolean {
-    if (this._deferredSchemaReady) return true;
-    const rows = this.sql
-      .exec(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='deferred_requests'`)
-      .toArray();
-    return rows.length > 0;
-  }
-
-  /**
-   * Issue a server call that may complete out-of-band. Persists the call
-   * durably (keyed by requestId) before issuing, so a later onDeferredResult —
-   * or a restart re-drive — can resume it. If the server resolves inline
-   * (fast path), the result is applied immediately and returned.
-   *
-   * `context` is opaque JSON handed back to `onDeferredResolved`, so the DO can
-   * reconstitute what to do with the result after a hibernation.
-   */
-  protected async callDeferred(
-    target: string,
-    method: string,
-    args: unknown[],
-    options?: { idempotencyKey?: string; context?: unknown }
-  ): Promise<DeferredCallOutcome> {
-    this.ensureDeferredSchema();
-    const requestId = crypto.randomUUID();
-    const now = Date.now();
-    this.sql.exec(
-      `INSERT INTO deferred_requests
-         (request_id, idempotency_key, target, method, args_json, context_json,
-          status, is_error, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`,
-      requestId,
-      options?.idempotencyKey ?? null,
-      target,
-      method,
-      JSON.stringify(args),
-      options?.context !== undefined ? JSON.stringify(options.context) : null,
-      now,
-      now
-    );
-    const ack = await this.rpc.callDeferred(target, method, args, {
-      requestId,
-      ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
-    });
-    if (ack.status === "completed") {
-      await this.applyDeferredResult(requestId, ack.result, false);
-      return { status: "completed", requestId, result: ack.result };
-    }
-    return { status: "deferred", requestId };
-  }
-
-  /**
-   * Inbound delivery of a settled deferred call. Server-only; reached via the
-   * direct method dispatch path (caller headers present) so the gate sees
-   * `callerKind === "server"`. Idempotent: duplicate / unknown / already-settled
-   * deliveries are no-ops.
-   */
-  async onDeferredResult(payload: {
-    requestId: string;
-    result: unknown;
-    isError: boolean;
-  }): Promise<{ ok: boolean }> {
-    if (this.caller?.callerKind !== "server") {
-      throw new Error("onDeferredResult requires a server caller");
-    }
-    if (!payload || typeof payload.requestId !== "string") {
-      throw new Error("onDeferredResult requires a requestId");
-    }
-    if (!this.deferredTableExists()) return { ok: true };
-    await this.applyDeferredResult(payload.requestId, payload.result, Boolean(payload.isError));
-    return { ok: true };
-  }
-
-  /**
-   * Atomic check-and-set: mark a pending deferred row terminal and dispatch the
-   * subclass hook exactly once. The SELECT→UPDATE runs synchronously (no await
-   * between), so concurrent deliveries cannot double-fire the hook.
-   */
-  private async applyDeferredResult(
-    requestId: string,
-    result: unknown,
-    isError: boolean
-  ): Promise<void> {
-    const rows = this.sql
-      .exec(`SELECT status, context_json FROM deferred_requests WHERE request_id = ?`, requestId)
-      .toArray();
-    if (rows.length === 0) return; // unknown / superseded
-    if ((rows[0]!["status"] as string) !== "pending") return; // already terminal
-    const contextJson = rows[0]!["context_json"] as string | null;
-    this.sql.exec(
-      `UPDATE deferred_requests SET status = ?, result_json = ?, is_error = ?, updated_at = ?
-       WHERE request_id = ?`,
-      isError ? "failed" : "completed",
-      JSON.stringify(result ?? null),
-      isError ? 1 : 0,
-      Date.now(),
-      requestId
-    );
-    const context = contextJson != null ? JSON.parse(contextJson) : undefined;
-    try {
-      await this.onDeferredResolved(requestId, result, isError, context);
-    } catch (err) {
-      console.warn(`[DurableObjectBase] onDeferredResolved threw for ${requestId}:`, err);
-    }
-  }
-
-  /**
-   * Re-drive still-pending deferred calls (backstop for a dropped push). Safe to
-   * call on any reactivation; reissues with the original requestId so the server
-   * dedups against in-flight/just-completed work and grant-backed resolutions
-   * return inline without a re-prompt. No-op if nothing was ever deferred.
-   */
-  protected async redriveDeferredRequests(): Promise<void> {
-    if (!this.deferredTableExists()) return;
-    const rows = this.sql
-      .exec(
-        `SELECT request_id, idempotency_key, target, method, args_json
-         FROM deferred_requests WHERE status = 'pending'`
-      )
-      .toArray();
-    for (const row of rows) {
-      const requestId = row["request_id"] as string;
-      const target = row["target"] as string;
-      const method = row["method"] as string;
-      const idempotencyKey = row["idempotency_key"] as string | null;
-      let args: unknown[];
-      try {
-        args = JSON.parse(row["args_json"] as string) as unknown[];
-      } catch {
-        continue;
-      }
-      try {
-        const ack = await this.rpc.callDeferred(target, method, args, {
-          requestId,
-          ...(idempotencyKey ? { idempotencyKey } : {}),
-        });
-        if (ack.status === "completed") {
-          await this.applyDeferredResult(requestId, ack.result, false);
-        }
-      } catch (err) {
-        console.warn(`[DurableObjectBase] re-drive of deferred ${requestId} failed:`, err);
-      }
-    }
-  }
-
-  /**
-   * Override to react when a deferred call settles. `context` is the opaque JSON
-   * passed to `callDeferred`. Default: no-op.
-   */
-  protected async onDeferredResolved(
-    _requestId: string,
-    _result: unknown,
-    _isError: boolean,
-    _context: unknown
-  ): Promise<void> {}
+  // The generic deferred-RPC layer (`deferred_requests` + redrive) existed for
+  // agent suspensions; the event-sourced harness journals intentions in the
+  // trajectory log and re-derives dispatch from the fold, so the table and its
+  // machinery are gone. Server-side deferral (capability approvals) still uses
+  // the rpc bridge's deferral registry — that path never touched this DO table.
 
   /** Parse a POST body into positional method arguments. */
   protected parseRequestBody(body: string): {
@@ -627,6 +439,7 @@ export abstract class DurableObjectBase {
     return {
       callerId,
       callerKind: (this._currentRpcCallerKind as AuthenticatedCaller["callerKind"]) ?? "unknown",
+      ...(this._currentRpcCallerPanelId ? { callerPanelId: this._currentRpcCallerPanelId } : {}),
     };
   }
 
@@ -696,7 +509,7 @@ export abstract class DurableObjectBase {
       kind: meta.kind,
       parentId: meta.parentId,
       contextId: meta.contextId ?? null,
-      rpcTargetId: meta.runtimeEntityId ?? meta.id ?? id,
+      rpcTargetId: meta.runtimeEntityId ?? null,
       effectiveVersion: meta.effectiveVersion ?? null,
       ref: meta.ref ?? null,
     };
@@ -738,6 +551,8 @@ export abstract class DurableObjectBase {
       close: (id) => this.panelCall<PanelLifecycleResult>("close", [id]),
       archive: (id) => this.panelCall("archive", [id]),
       unload: (id) => this.panelCall<PanelLifecycleResult>("unload", [id]),
+      navigate: (id, source, options) =>
+        this.panelCall<{ id: string; title: string }>("navigate", [id, source, options]),
       movePanel: (id, newParentId, targetPosition) =>
         this.panelCall("movePanel", [{ panelId: id, newParentId, targetPosition }]),
       takeOver: (id) => this.panelCall("takeOver", [id]),
@@ -776,7 +591,7 @@ export abstract class DurableObjectBase {
       kind: item.kind,
       parentId: item.parentId,
       contextId: item.contextId,
-      rpcTargetId: item.runtimeEntityId ?? item.panelId,
+      rpcTargetId: item.runtimeEntityId ?? null,
       effectiveVersion: item.effectiveVersion ?? null,
       ref: item.ref ?? null,
     });
@@ -800,6 +615,16 @@ export abstract class DurableObjectBase {
     roots(): Promise<PanelHandle[]>;
     children(id: string): Promise<PanelHandle[]>;
     parent(id: string): PanelHandle | null;
+    navigate(
+      id: string,
+      source: string,
+      options?: {
+        contextId?: string;
+        env?: Record<string, string>;
+        ref?: string;
+        stateArgs?: Record<string, unknown>;
+      }
+    ): Promise<{ id: string; title: string }>;
     open(
       source: string,
       options?: {
@@ -841,6 +666,8 @@ export abstract class DurableObjectBase {
         const parentId = this._panelMetadataCache.get(id)?.parentId ?? null;
         return parentId ? this.createRuntimePanelHandle(parentId) : null;
       },
+      navigate: (id, source, options) =>
+        this.panelCall<{ id: string; title: string }>("navigate", [id, source, options]),
       open: async (source, options) => {
         const parentId = options?.parentId ?? null;
         const result = await this.panelCall<{
@@ -857,7 +684,7 @@ export abstract class DurableObjectBase {
           kind: result.kind,
           parentId,
           contextId: "",
-          runtimeEntityId: result.runtimeEntityId ?? result.id,
+          runtimeEntityId: result.runtimeEntityId ?? null,
           effectiveVersion: result.effectiveVersion ?? null,
         });
       },
@@ -1215,10 +1042,8 @@ export abstract class DurableObjectBase {
   }
 
   async resumeAfterRestart(_input: LifecycleResumeInput): Promise<void> {
-    // Generic backstop: re-drive any pending deferred calls. Subclasses that
-    // override this and maintain their own continuation store need not call
-    // super (they don't use the generic deferred_requests table).
-    await this.redriveDeferredRequests();
+    // No generic continuation store: event-sourced subclasses re-derive their
+    // pending work from their logs on wake.
   }
 
   protected async markCheckpointableWorkActive(detail?: unknown): Promise<void> {

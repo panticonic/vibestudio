@@ -108,6 +108,11 @@ function createRpcCall() {
           rebuilt: true,
           reloaded: true,
         };
+      case "panelTree.navigate":
+        return {
+          id: args[0],
+          title: "Navigated",
+        };
       default:
         return undefined;
     }
@@ -259,7 +264,84 @@ describe("PanelHandle", () => {
     expect(rpcCall).toHaveBeenCalledWith("panel:parent-entity", "ping", []);
   });
 
-  it("targets parent slot, not self, when reloading and rebuilding parent handles", async () => {
+  it("lazily resolves arbitrary panel handles before target RPC", async () => {
+    const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
+    const rpcCall = createRpcCall();
+    const rpcEmit = vi.fn(async () => undefined);
+    _initPanelHandleBridge({ call: rpcCall, emit: rpcEmit, on: vi.fn() } as never);
+
+    const handle = panelTree.get("arbitrary");
+    await (handle.call as Record<string, () => Promise<unknown>>)["ping"]!();
+    await handle.emit("ready", { ok: true });
+
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.metadata", ["arbitrary"]);
+    expect(rpcCall).toHaveBeenCalledWith("panel:arbitrary-entity", "ping", []);
+    expect(rpcEmit).toHaveBeenCalledWith("panel:arbitrary-entity", "ready", { ok: true });
+  });
+
+  it("resolves arbitrary panel event targets once and filters synchronously afterward", async () => {
+    const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
+    let resolveMetadata!: (value: unknown) => void;
+    const metadataPromise = new Promise<unknown>((resolve) => {
+      resolveMetadata = resolve;
+    });
+    const rpcCall = vi.fn(async (_target: string, method: string) => {
+      if (method === "panelTree.metadata") return metadataPromise;
+      return undefined;
+    });
+    const eventHandlers: Array<
+      (event: { caller: { callerId: string }; payload: unknown }) => void
+    > = [];
+    const rpcOn = vi.fn(
+      (
+        _event: string,
+        handler: (event: { caller: { callerId: string }; payload: unknown }) => void
+      ) => {
+        eventHandlers.push(handler);
+        return vi.fn();
+      }
+    );
+    _initPanelHandleBridge({ call: rpcCall, on: rpcOn } as never);
+
+    const handle = panelTree.get("arbitrary-events");
+    const listener = vi.fn();
+    handle.on("status", listener);
+
+    for (let i = 0; i < 5; i += 1) {
+      eventHandlers[0]?.({
+        caller: { callerId: "panel:arbitrary-events-entity" },
+        payload: { before: i },
+      });
+    }
+    expect(rpcCall).toHaveBeenCalledTimes(1);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.metadata", ["arbitrary-events"]);
+    expect(listener).not.toHaveBeenCalled();
+
+    resolveMetadata({
+      id: "arbitrary-events",
+      title: "Events",
+      source: "panels/events",
+      kind: "workspace",
+      parentId: null,
+      runtimeEntityId: "panel:arbitrary-events-entity",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    eventHandlers[0]?.({
+      caller: { callerId: "panel:other-entity" },
+      payload: { ignored: true },
+    });
+    eventHandlers[0]?.({
+      caller: { callerId: "panel:arbitrary-events-entity" },
+      payload: { ok: true },
+    });
+
+    expect(rpcCall).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it("targets parent slot, not self, when navigating, reloading, and rebuilding parent handles", async () => {
     const { _initPanelHandleBridge, panelTree } = await import("./handle.js");
     const rpcCall = createRpcCall();
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never, {
@@ -282,13 +364,26 @@ describe("PanelHandle", () => {
       panelId: "panel-parent",
       operation: "rebuildAndReload",
     });
+    await expect(
+      parent?.navigate("panels/next", { contextId: "ctx-next", stateArgs: { mode: "live" } })
+    ).resolves.toEqual({ id: "panel-parent", title: "Navigated" });
 
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-parent"]);
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.reload", ["panel-parent"]);
     expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.rebuildAndReload", ["panel-parent"]);
+    expect(rpcCall).toHaveBeenCalledWith("main", "panelTree.navigate", [
+      "panel-parent",
+      "panels/next",
+      { contextId: "ctx-next", stateArgs: { mode: "live" } },
+    ]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildPanel", ["panel-self"]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.reload", ["panel-self"]);
     expect(rpcCall).not.toHaveBeenCalledWith("main", "panelTree.rebuildAndReload", ["panel-self"]);
+    expect(rpcCall).not.toHaveBeenCalledWith(
+      "main",
+      "panelTree.navigate",
+      expect.arrayContaining(["panel-self"])
+    );
   });
 
   it("hydrates arbitrary parent handles from discovered tree metadata", async () => {

@@ -182,7 +182,7 @@ describe("initRuntime", () => {
     });
   });
 
-  it("normalizes loopback gateway and git URLs to the panel page origin", () => {
+  it("normalizes loopback gateway URLs to the panel page origin", () => {
     vi.stubGlobal("location", { origin: "http://localhost:3000" });
     g.__natstackEntityId = "panel:panel-1";
     g.__natstackSlotId = "slot-1";
@@ -195,16 +195,13 @@ describe("initRuntime", () => {
       focusPanel: vi.fn(),
     };
 
-    const { config, runtime } = initRuntime({
+    const { config } = initRuntime({
       createTransport,
       fs: {} as never,
     });
 
     expect(config.gatewayConfig.serverUrl).toBe("http://localhost:3000");
     expect(config.gatewayConfig.aliases).toContain("http://127.0.0.1:3000");
-    expect(config.gitConfig?.serverUrl).toBe("http://localhost:3000/_git");
-    expect(config.gitConfig?.internalOrigins).toContain("http://127.0.0.1:3000/_git");
-    expect(runtime.gitConfig?.serverUrl).toBe("http://localhost:3000/_git");
   });
 
   it("does not normalize non-equivalent gateway origins", () => {
@@ -227,10 +224,9 @@ describe("initRuntime", () => {
 
     expect(config.gatewayConfig.serverUrl).toBe("http://127.0.0.1:4000");
     expect(config.gatewayConfig.aliases).toBeUndefined();
-    expect(config.gitConfig?.serverUrl).toBe("http://127.0.0.1:4000/_git");
   });
 
-  it("uses the parent slot id for handle identity and the parent entity id for RPC", async () => {
+  it("uses the parent slot id for handle identity/control and the parent entity id for RPC", async () => {
     const sends: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     g.__natstackEntityId = "panel:child-entity";
     g.__natstackSlotId = "child-slot";
@@ -328,12 +324,19 @@ describe("initRuntime", () => {
 
     const parent = runtime.parent;
     await parent.close();
+    await parent.navigate("panels/next", { contextId: "ctx-next" });
     await parent.stateArgs.set({ mode: "fixture" });
     const children = await parent.children();
 
     expect(children.map((child) => child.id)).toEqual(["sibling-slot"]);
     expect(sends).toEqual([
       { targetId: "main", method: "panelTree.close", args: ["parent-slot"] },
+      {
+        targetId: "main",
+        method: "panelTree.navigate",
+        args: ["parent-slot", "panels/next", { contextId: "ctx-next" }],
+      },
+      { targetId: "main", method: "panelTree.metadata", args: ["parent-slot"] },
       {
         targetId: "main",
         method: "panelTree.setStateArgs",

@@ -124,6 +124,73 @@ describe("worker panelTree handles", () => {
     ]);
   });
 
+  it("refreshes arbitrary handles after ensureLoaded before target RPC", async () => {
+    const calls: Array<{ type?: string; targetId: string; method: string; args: unknown[] }> = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as {
+        type?: string;
+        targetId: string;
+        method: string;
+        args: unknown[];
+      };
+      calls.push({
+        type: body.type,
+        targetId: body.targetId,
+        method: body.method,
+        args: body.args,
+      });
+      if (body.method === "panelTree.metadata") {
+        return new Response(
+          JSON.stringify({
+            result: {
+              id: "slot-a",
+              title: "Panel A",
+              source: "panels/a",
+              kind: "workspace",
+              parentId: "root",
+              runtimeEntityId: "panel:slot-a-current-entity",
+            },
+          })
+        );
+      }
+      return new Response(JSON.stringify({ result: { loaded: true } }));
+    }) as typeof fetch;
+
+    const { createWorkerRuntime } = await import("./index.js");
+    const runtime = createWorkerRuntime({
+      WORKER_ID: "agent",
+      RPC_AUTH_TOKEN: "token",
+      CONTEXT_ID: "ctx",
+      GATEWAY_URL: "http://server.test",
+    });
+
+    const handle = runtime.panelTree.get("slot-a");
+    await handle.ensureLoaded();
+    await handle.call["ping"]?.();
+    runtime.destroy();
+
+    expect(calls).toEqual([
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.ensureLoaded",
+        args: ["slot-a"],
+      },
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.metadata",
+        args: ["slot-a"],
+      },
+      {
+        type: "call",
+        targetId: "panel:slot-a-current-entity",
+        method: "ping",
+        args: [],
+      },
+    ]);
+  });
+
   it("lists, hydrates children, and opens panels through the server panelTree service", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -237,7 +304,7 @@ describe("worker panelTree handles", () => {
     ]);
   });
 
-  it("builds panel parent handles with workspace CDP refusal, slot-scoped control, and entity-scoped RPC", async () => {
+  it("builds panel parent handles with slot-scoped CDP/control and entity-scoped RPC", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as {

@@ -24,6 +24,10 @@ function extractNamedExports(source: string): Set<string> {
     exported.add(match[1]!);
   }
 
+  for (const match of source.matchAll(/export (?:async )?function ([A-Za-z0-9_]+)\s*\(/g)) {
+    exported.add(match[1]!);
+  }
+
   for (const match of source.matchAll(/export \{([^}]*)\}(?: from [^;]+)?;/g)) {
     for (const part of match[1]!.split(",")) {
       const item = part.trim();
@@ -93,6 +97,7 @@ describe("runtimeSurface manifests", () => {
       "workspace",
       "credentials",
       "git",
+      "vcs",
       "webhooks",
       "extensions",
       "approvals",
@@ -113,6 +118,7 @@ describe("runtimeSurface manifests", () => {
       "workspace",
       "credentials",
       "git",
+      "vcs",
       "webhooks",
       "extensions",
       "approvals",

@@ -1,5 +1,5 @@
 // Buffer polyfill for browser environments - must be first to ensure availability
-// for any code that uses Buffer (including isomorphic-git via @natstack/git)
+// for bundled dependencies that expect a Node-compatible Buffer global.
 import { Buffer } from "buffer";
 if (typeof globalThis.Buffer === "undefined") {
   globalThis.Buffer = Buffer;
@@ -47,7 +47,6 @@ export const id = config.entityId;
 export const slotId = config.slotId ?? config.entityId;
 const gatewayConfig = config.gatewayConfig;
 const gatewayFetch = createGatewayFetch(gatewayConfig);
-const gitConfig = config.gitConfig;
 const env = config.env;
 const {
   parentId: runtimeParentId,
@@ -59,9 +58,6 @@ const {
   onConnectionError,
   getInfo,
   focusPanel,
-  getWorkspaceTree,
-  listBranches,
-  listCommits,
   getTheme,
   onThemeChange,
   onFocus,
@@ -76,9 +72,6 @@ export {
   onConnectionError,
   getInfo,
   focusPanel,
-  getWorkspaceTree,
-  listBranches,
-  listCommits,
   getTheme,
   onThemeChange,
   onFocus,
@@ -89,7 +82,7 @@ export {
 };
 const { workers } = runtime;
 const helpfulWorkers = helpfulNamespace("workers", workers);
-export { fs, gatewayConfig, gatewayFetch, gitConfig, env, helpfulWorkers as workers };
+export { fs, gatewayConfig, gatewayFetch, env, helpfulWorkers as workers };
 export { doTargetId };
 export const createDurableObjectServiceClient = (query: string, objectKey?: string | null) =>
   createDurableObjectServiceClientForRpc(rpc, query, objectKey);
@@ -98,6 +91,31 @@ export const gad = helpfulNamespace("gad", createGadClient(rpc));
 export { normalizePath, getFileName, resolvePath } from "../shared/pathUtils.js";
 // State args API for panel state management
 export { getStateArgs, useStateArgs, setStateArgs, setStateArgsForPanel } from "./stateArgs.js";
+/**
+ * Reopen THIS panel in place under a (possibly new) context + state args — a
+ * snapshot replacement, not a child. The canonical way to rebind a panel to a
+ * different durable context head (e.g. switching vault → `ctx:vault-<hash>`):
+ * unlike `setStateArgs`, this moves the panel's `contextId`, which fixes which
+ * `ctx:` vcs head every subsequent `vcs.*` / agent spawn resolves to. Defaults
+ * `source` to the current panel's source.
+ */
+export async function reopen(opts: {
+  source?: string;
+  contextId?: string;
+  stateArgs?: Record<string, unknown>;
+} = {}): Promise<{ id: string; title: string }> {
+  let source = opts.source;
+  if (!source) {
+    const meta = await rpc.call<{ source?: string } | null>("main", "panelTree.metadata", [slotId]);
+    source = meta?.source ?? undefined;
+    if (!source) throw new Error("reopen: could not resolve the current panel source");
+  }
+  return rpc.call<{ id: string; title: string }>("main", "panelTree.navigate", [
+    slotId,
+    source,
+    { contextId: opts.contextId, stateArgs: opts.stateArgs },
+  ]);
+}
 // Panel handle API
 import { _initPanelHandleBridge, openPanel as _openPanel } from "./handle.js";
 _initPanelHandleBridge(rpc, {
@@ -107,6 +125,8 @@ _initPanelHandleBridge(rpc, {
   parentRpcTargetId: runtimeParentEntityId,
   effectiveVersion: config.effectiveVersion,
 });
+import { installPanelErrorDiagnosticLauncher } from "./errorDebugChat.js";
+installPanelErrorDiagnosticLauncher({ slotId, contextId });
 export {
   openExternal,
   onChildCreated,
@@ -116,6 +136,16 @@ export {
   panelTree,
 } from "./handle.js";
 export type { PanelHandle } from "./handle.js";
+export {
+  buildPanelRenderErrorPrompt,
+  installPanelErrorDiagnosticLauncher,
+  openPanelErrorDiagnosticChat,
+} from "./errorDebugChat.js";
+export type {
+  PanelErrorDiagnosticChatResult,
+  PanelErrorDiagnosticLauncher,
+  PanelRenderErrorDiagnosticRequest,
+} from "./errorDebugChat.js";
 export type { CdpAutomation, CdpEndpoint } from "./cdpAutomation.js";
 export { agentApi } from "./agentApi.js";
 export { Journal, withJournal, currentJournal } from "./journal.js";
@@ -194,20 +224,9 @@ const credentialApi = {
   gitHttp: credentialGitHttp,
 };
 export const credentials = helpfulNamespace("credentials", credentialApi);
-// Git client helper. Relative repo paths route to NatStack's internal git
-// server; absolute external remotes route through host-mediated credentials.
-import { GitClient, createBearerHttpClient, createRoutingHttpClient } from "@natstack/git";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { gitMethods } from "@natstack/shared/serviceSchemas/git";
-import { buildMethods } from "@natstack/shared/serviceSchemas/build";
-import { createContextAwareGitClient } from "../shared/contextGitClient.js";
-import {
-  publishWorkspaceRepo as publishWorkspaceRepoWithClient,
-  type PublishWorkspaceRepoOptions,
-  type PublishWorkspaceRepoResult,
-} from "../shared/workspaceGitPublish.js";
-export type { GitClient, GitClientOptions } from "@natstack/git";
-export type { PublishWorkspaceRepoOptions, PublishWorkspaceRepoResult };
+import { gitInteropMethods } from "@natstack/shared/serviceSchemas/gitInterop";
+import { createVcsClient } from "../shared/vcsClient.js";
 export interface GitRemoteSpec {
   name: string;
   url: string;
@@ -232,94 +251,44 @@ export interface CompleteWorkspaceDependenciesResult {
     error: string;
   }>;
 }
-export interface BuildEventTriggerOrigin {
-  callerId: string;
-  callerKind: string;
-  code?: unknown;
-}
-export interface RecentBuildEvent {
-  type: "build-started" | "build-complete" | "build-error";
-  name: string;
-  relativePath?: string;
-  buildKey?: string;
-  error?: string;
-  trigger?: {
-    repo: string;
-    branch: string;
-    commit: string;
-    origin?: BuildEventTriggerOrigin;
-  };
-  timestamp: string;
-}
-const gitService = createTypedServiceClient("git", gitMethods, (svc, method, args) =>
-  rpc.call("main", `${svc}.${method}`, args)
-);
-const buildService = createTypedServiceClient("build", buildMethods, (svc, method, args) =>
+const gitInteropService = createTypedServiceClient("gitInterop", gitInteropMethods, (svc, method, args) =>
   rpc.call("main", `${svc}.${method}`, args)
 );
 const gitApi = {
   http: credentialGitHttp,
   importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo> {
-    return gitService.importProject(request);
+    return gitInteropService.importProject(request);
   },
   completeWorkspaceDependencies(
     options: {
       credentialId?: string;
     } = {}
   ): Promise<CompleteWorkspaceDependenciesResult> {
-    return gitService.completeWorkspaceDependencies(options);
+    return gitInteropService.completeWorkspaceDependencies(options);
   },
   setSharedRemote(
     repoPath: string,
     remote: GitRemoteSpec
   ): Promise<Record<string, unknown> | undefined> {
-    return gitService.setSharedRemote(repoPath, remote);
+    return gitInteropService.setSharedRemote(repoPath, remote);
   },
   removeSharedRemote(
     repoPath: string,
     remoteName: string
   ): Promise<Record<string, unknown> | undefined> {
-    return gitService.removeSharedRemote(repoPath, remoteName);
-  },
-  ensureRepoPresentInContexts(repoPath: string): Promise<{ ensured: string }> {
-    return gitService.ensureRepoPresentInContexts(repoPath);
-  },
-  listRecentBuildEvents(unitNameOrPath?: string): Promise<RecentBuildEvent[]> {
-    return buildService.listRecentBuildEvents(unitNameOrPath);
-  },
-  publishWorkspaceRepo(
-    repoPath: string,
-    message: string,
-    options: PublishWorkspaceRepoOptions = {}
-  ): Promise<PublishWorkspaceRepoResult> {
-    return publishWorkspaceRepoWithClient(gitApi.client(), repoPath, message, options);
-  },
-  client(
-    options: {
-      credentialId?: string;
-    } = {}
-  ) {
-    if (!gitConfig) {
-      return createContextAwareGitClient(
-        new GitClient(fs, { http: credentialGitHttp({ credentialId: options.credentialId }) }),
-        rpc
-      );
-    }
-    return createContextAwareGitClient(
-      new GitClient(fs, {
-        serverUrl: gitConfig.serverUrl,
-        http: createRoutingHttpClient({
-          internalOrigin: gitConfig.serverUrl,
-          internalOrigins: gitConfig.internalOrigins,
-          internal: createBearerHttpClient(gitConfig.token),
-          external: credentialGitHttp({ credentialId: options.credentialId }),
-        }),
-      }),
-      rpc
-    );
+    return gitInteropService.removeSharedRemote(repoPath, remoteName);
   },
 };
 export const git = helpfulNamespace("git", gitApi);
+// GAD-native workspace version control (commit/status/log/diff).
+export const vcs = helpfulNamespace(
+  "vcs",
+  createVcsClient(
+    <T>(method: string, ...vcsArgs: unknown[]) => rpc.call<T>("main", method, vcsArgs),
+    rpc
+  )
+);
+export type { VcsClient, VcsCommitResult, VcsStatusResult } from "../shared/vcsClient.js";
 // Generic public webhook ingress.
 import { createWebhookIngressClient } from "../shared/webhooks.js";
 export type {

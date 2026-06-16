@@ -11,7 +11,6 @@ import {
   type PanelHandle,
   type PanelHandleFromContract,
   type EndpointInfo,
-  type GitConfig,
   type Rpc,
 } from "../core/index.js";
 import type { GatewayConfig } from "../shared/globals.js";
@@ -41,7 +40,6 @@ export interface RuntimeDeps {
   fs: RuntimeFs;
   setupGlobals?: () => void;
   gatewayConfig?: GatewayConfig | null;
-  gitConfig?: GitConfig | null;
 }
 
 interface PanelTreeItem {
@@ -96,7 +94,7 @@ export function createRuntime(deps: RuntimeDeps) {
       kind: item.kind ?? (item.source?.startsWith("browser:") ? "browser" : "workspace"),
       parentId: item.parentId ?? null,
       contextId: item.contextId ?? null,
-      rpcTargetId: item.runtimeEntityId ?? id,
+      rpcTargetId: item.runtimeEntityId ?? null,
       effectiveVersion: item.effectiveVersion ?? null,
       ref: item.ref ?? null,
     };
@@ -108,7 +106,7 @@ export function createRuntime(deps: RuntimeDeps) {
     kind: "workspace",
     parentId: null,
     contextId: null,
-    rpcTargetId: id,
+    rpcTargetId: null,
     effectiveVersion: null,
   });
   const hydrateRuntimeHandle = (metadata: PanelHandleMetadata): PanelHandle =>
@@ -144,6 +142,8 @@ export function createRuntime(deps: RuntimeDeps) {
     close: (id) => panelCall<PanelLifecycleResult>("close", [id]),
     archive: (id) => panelCall("archive", [id]),
     unload: (id) => panelCall<PanelLifecycleResult>("unload", [id]),
+    navigate: (id, source, options) =>
+      panelCall<{ id: string; title: string }>("navigate", [id, source, options]),
     movePanel: (id, newParentId, targetPosition) =>
       panelCall("movePanel", [{ panelId: id, newParentId, targetPosition }]),
     takeOver: (id) => panelCall("takeOver", [id]),
@@ -216,9 +216,6 @@ export function createRuntime(deps: RuntimeDeps) {
 
     getInfo: () => shell.getInfo() as Promise<EndpointInfo>,
     focusPanel: (panelId: string) => shell.focusPanel(panelId),
-    getWorkspaceTree: base.getWorkspaceTree,
-    listBranches: base.listBranches,
-    listCommits: base.listCommits,
 
     getTheme: base.getTheme,
     onThemeChange: base.onThemeChange,
@@ -227,7 +224,6 @@ export function createRuntime(deps: RuntimeDeps) {
 
     expose: base.expose,
 
-    gitConfig: base.gitConfig,
     contextId: base.contextId,
   };
 }

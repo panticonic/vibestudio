@@ -4,7 +4,6 @@
  * Both environments receive the same global names.
  */
 
-import type { GitConfig } from "../core/index.js";
 import type { PanelEntityId, PanelSlotId } from "@natstack/shared/panel/ids";
 
 export interface GatewayConfig {
@@ -33,11 +32,11 @@ declare global {
   var __natstackParentEntityId: string | null | undefined;
   /** Initial theme appearance */
   var __natstackInitialTheme: "light" | "dark" | undefined;
-  /** Single gateway configuration for HTTP, RPC-derived clients, and git */
+  /** Single gateway configuration for HTTP and RPC-derived clients. */
   var __natstackGatewayConfig: GatewayConfig | undefined;
   /** Source repo path for this endpoint */
   var __natstackSourceRepo: string | undefined;
-  /** Exact effective version/git commit for the source currently running. */
+  /** Exact effective version for the source currently running. */
   var __natstackEffectiveVersion: string | null | undefined;
   /** Environment variables */
   var __natstackEnv: Record<string, string> | undefined;
@@ -53,7 +52,6 @@ export interface InjectedConfig {
   parentEntityId: PanelEntityId | null;
   initialTheme: "light" | "dark";
   gatewayConfig: GatewayConfig;
-  gitConfig: GitConfig | null;
   env: Record<string, string>;
   effectiveVersion: string | null;
 }
@@ -123,16 +121,9 @@ export function getInjectedConfig(): InjectedConfig {
     );
   }
 
-  const sourceRepo = g.__natstackSourceRepo ?? g.__natstackEnv?.["__NATSTACK_SOURCE_REPO"] ?? "";
   const effectiveVersion =
     g.__natstackEffectiveVersion ?? g.__natstackEnv?.["__NATSTACK_EFFECTIVE_VERSION"] ?? null;
   const gatewayConfig = normalizeGatewayConfigForBrowser(g.__natstackGatewayConfig);
-  const gitConfig: GitConfig = {
-    serverUrl: `${gatewayConfig.serverUrl.replace(/\/$/, "")}/_git`,
-    internalOrigins: gatewayConfig.aliases?.map((url) => `${url.replace(/\/$/, "")}/_git`),
-    token: gatewayConfig.token,
-    sourceRepo,
-  };
 
   return {
     entityId: entityId as PanelEntityId,
@@ -150,7 +141,6 @@ export function getInjectedConfig(): InjectedConfig {
         : null,
     initialTheme: g.__natstackInitialTheme === "dark" ? "dark" : "light",
     gatewayConfig,
-    gitConfig,
     env: g.__natstackEnv ?? {},
     effectiveVersion,
   };
