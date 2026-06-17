@@ -19,6 +19,8 @@ export interface ServerEventBridgeDeps {
   warn(message: string): void;
   /** OS-level attention (badge/flash/notification) for pending approvals. */
   onApprovalPendingChanged?(pending: PendingApproval[]): void;
+  /** Host-target apps changed state; desktop bootstrap can retry launch. */
+  onAppHostTargetChanged?(): void;
 }
 
 /**
@@ -120,6 +122,7 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
     }
 
     if (bareEvent === "apps:available") {
+      deps.onAppHostTargetChanged?.();
       void appOrchestrator
         ?.applyAppAvailable(payload as AppAvailableEvent)
         .catch((err: unknown) => {
@@ -133,6 +136,23 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
         emitNormalized(bareEvent, payload);
       }
       return;
+    }
+
+    if (
+      bareEvent === "host-targets:changed" ||
+      bareEvent === "host-target-launch:session-changed"
+    ) {
+      const target =
+        payload && typeof payload === "object" ? (payload as { target?: unknown }).target : null;
+      if (!target || target === "electron") deps.onAppHostTargetChanged?.();
+      if (isValidEventName(bareEvent)) {
+        emitNormalized(bareEvent, payload);
+      }
+      return;
+    }
+
+    if (bareEvent === "apps:status" || bareEvent === "extensions:status") {
+      deps.onAppHostTargetChanged?.();
     }
 
     if (bareEvent === "panel-tree-updated") {

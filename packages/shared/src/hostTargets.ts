@@ -75,9 +75,77 @@ export type HostTargetLaunchResult =
       approvals: PendingUnitBatchApproval[];
     }
   | {
+      status: "preparing";
+      launched: false;
+      target: HostTarget;
+      reason: string;
+      details: string[];
+    }
+  | {
       status: "unavailable";
       launched: false;
       target: HostTarget;
       reason: string;
       details: string[];
     };
+
+export type HostTargetLaunchSessionStatus =
+  | "starting"
+  | "approval-required"
+  | "preparing"
+  | "ready"
+  | "unavailable"
+  | "denied";
+
+export type HostTargetLaunchPhaseId =
+  | "pair"
+  | "review-trust"
+  | "start-units"
+  | "build-app"
+  | "activate-target"
+  | "connected";
+
+export type HostTargetLaunchPhaseState =
+  | "pending"
+  | "active"
+  | "complete"
+  | "blocked"
+  | "failed"
+  | "skipped";
+
+export interface HostTargetLaunchTimelinePhase {
+  id: HostTargetLaunchPhaseId;
+  label: string;
+  state: HostTargetLaunchPhaseState;
+  detail?: string;
+}
+
+export interface HostTargetLaunchApprovalView {
+  approvalId: string;
+  title: string;
+  summary: string;
+  chips: string[];
+  units: Array<{
+    name: string;
+    source: string;
+    capabilities: string;
+    kind: string;
+  }>;
+}
+
+export interface HostTargetLaunchSessionSnapshot {
+  sessionId: string;
+  target: HostTarget;
+  status: HostTargetLaunchSessionStatus;
+  currentPhase: HostTargetLaunchPhaseId;
+  message: string;
+  detail?: string;
+  timeline: HostTargetLaunchTimelinePhase[];
+  approvals: PendingUnitBatchApproval[];
+  approvalViews: HostTargetLaunchApprovalView[];
+  approvalsResolved: number;
+  launch?: HostTargetLaunchResult;
+  startedAt: number;
+  updatedAt: number;
+  settled: boolean;
+}

@@ -20,6 +20,7 @@ import type {
   HostTarget,
   HostTargetCandidate,
   HostTargetLaunchResult,
+  HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "@natstack/shared/hostTargets";
@@ -771,6 +772,17 @@ export interface CommonDeps {
   launchHostTarget?: (
     target: HostTarget
   ) => Promise<HostTargetLaunchResult> | HostTargetLaunchResult;
+  beginHostTargetLaunch?: (
+    target: HostTarget
+  ) => Promise<HostTargetLaunchSessionSnapshot> | HostTargetLaunchSessionSnapshot;
+  getHostTargetLaunchSession?: (
+    sessionId: string
+  ) => Promise<HostTargetLaunchSessionSnapshot | null> | HostTargetLaunchSessionSnapshot | null;
+  resolveHostTargetLaunchSessionApproval?: (
+    sessionId: string,
+    decision: "once" | "deny"
+  ) => Promise<HostTargetLaunchSessionSnapshot> | HostTargetLaunchSessionSnapshot;
+  cancelHostTargetLaunchSession?: (sessionId: string) => Promise<void> | void;
   approvalQueue?: ApprovalQueue;
   getEffectiveVersion?: (source: string) => Promise<string | undefined>;
   registerEntityTitleListener?: (
@@ -873,6 +885,10 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         listHostTargetVersions: deps.listHostTargetVersions,
         prepareHostTargetPinnedRef: deps.prepareHostTargetPinnedRef,
         launchHostTarget: deps.launchHostTarget,
+        beginHostTargetLaunch: deps.beginHostTargetLaunch,
+        getHostTargetLaunchSession: deps.getHostTargetLaunchSession,
+        resolveHostTargetLaunchSessionApproval: deps.resolveHostTargetLaunchSessionApproval,
+        cancelHostTargetLaunchSession: deps.cancelHostTargetLaunchSession,
         approvalQueue: deps.approvalQueue,
       })
     );

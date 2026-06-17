@@ -17,6 +17,7 @@ import type {
   HostTarget,
   HostTargetCandidate,
   HostTargetLaunchResult as SharedHostTargetLaunchResult,
+  HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "../hostTargets.js";
@@ -56,9 +57,20 @@ export type HostTargetSelectionStatus = z.infer<typeof HostTargetSelectionStatus
 export const HostTargetLaunchResultSchema = z.custom<SharedHostTargetLaunchResult>((value) => {
   if (!value || typeof value !== "object") return false;
   const status = (value as { status?: unknown }).status;
-  return status === "ready" || status === "approval-required" || status === "unavailable";
+  return (
+    status === "ready" ||
+    status === "approval-required" ||
+    status === "preparing" ||
+    status === "unavailable"
+  );
 });
 export type HostTargetLaunchResult = z.infer<typeof HostTargetLaunchResultSchema>;
+export const HostTargetLaunchSessionSnapshotSchema =
+  z.custom<HostTargetLaunchSessionSnapshot>((value) => {
+    if (!value || typeof value !== "object") return false;
+    return typeof (value as { sessionId?: unknown }).sessionId === "string";
+  });
+export type HostTargetLaunchSession = z.infer<typeof HostTargetLaunchSessionSnapshotSchema>;
 
 // ─── Workspace data schemas ───────────────────────────────────────────────────
 
@@ -147,7 +159,9 @@ export const WorkspaceUnitLogRecordSchema = z.object({
   level: z.enum(["debug", "info", "warn", "error"]),
   message: z.string(),
   fields: z.record(z.unknown()).optional(),
-  source: z.enum(["stdout", "stderr", "ctx.log", "console", "lifecycle", "system"]).optional(),
+  source: z
+    .enum(["stdout", "stderr", "ctx.log", "console", "lifecycle", "system", "runner"])
+    .optional(),
   /** Monotonic per-unit sequence — exact resume cursor for `sinceSeq` polling. */
   seq: z.number().optional(),
 });
@@ -382,6 +396,26 @@ export const workspaceMethods = defineServiceMethods({
   "hostTargets.launch": {
     args: z.tuple([HostTargetSchema]),
     returns: HostTargetLaunchResultSchema,
+    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+  },
+  "hostTargets.beginLaunch": {
+    args: z.tuple([HostTargetSchema]),
+    returns: HostTargetLaunchSessionSnapshotSchema,
+    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+  },
+  "hostTargets.getLaunchSession": {
+    args: z.tuple([z.string()]),
+    returns: HostTargetLaunchSessionSnapshotSchema.nullable(),
+    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+  },
+  "hostTargets.resolveLaunchSessionApproval": {
+    args: z.tuple([z.string(), z.enum(["once", "deny"])]),
+    returns: HostTargetLaunchSessionSnapshotSchema,
+    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+  },
+  "hostTargets.cancelLaunchSession": {
+    args: z.tuple([z.string()]),
+    returns: z.void(),
     policy: { allowed: ["shell", "shell-remote", "app", "server"] },
   },
 });

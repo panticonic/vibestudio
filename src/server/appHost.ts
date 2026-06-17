@@ -329,6 +329,7 @@ export interface AppHostDeps {
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
   getGatewayUrl(): string;
   getReactNativeBootstrapUrl(): string;
+  onHostTargetChanged?(target: HostTarget, reason: string): void;
 }
 
 export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
@@ -342,6 +343,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   >;
   private readonly sourceChangeGrants: UnitSourceChangeGrantStore;
   private readonly terminalRunner: TerminalAppRunner | null;
+  private readonly pendingReactNativeLaunchPreflightKeys = new Set<string>();
+  private readonly approvedReactNativeLaunchPreflights = new Map<string, WorkspaceAppDeclaration>();
   private readonly appLogs = new Map<
     string,
     Array<{
@@ -405,6 +408,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
           status: "stopped",
           error: null,
         });
+        this.deps.onHostTargetChanged?.(entry.target, "app-removed");
       },
       notifyUnresolved: (sources) => {
         this.deps.notificationService?.show({
@@ -659,6 +663,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       autoSelected: input.autoSelected,
     };
     this.writeHostTargetSelection(selection);
+    this.deps.onHostTargetChanged?.(target, "selection-changed");
     if (target === "electron" || target === "terminal") {
       void this.launchHostTarget(target).catch((err) => {
         console.error(
@@ -676,6 +681,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         !(selection.workspaceId === this.deps.workspaceId && selection.target === target)
     );
     this.writeHostTargetSelections(selections);
+    this.deps.onHostTargetChanged?.(target, "selection-cleared");
   }
 
   listHostTargetVersions(
@@ -785,6 +791,15 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
           approvals,
         };
       }
+      if (isPreparingReadiness(readiness)) {
+        return {
+          status: "preparing",
+          launched: false,
+          target,
+          reason: readiness.reason,
+          details: readiness.details,
+        };
+      }
       return {
         status: "unavailable",
         launched: false,
@@ -837,10 +852,6 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       return launchReadyResult(target, entry);
     }
     return launchReadyResult(target, entry);
-  }
-
-  listPendingHostTargetApprovals(target: HostTarget): PendingUnitBatchApproval[] {
-    return this.pendingLaunchApprovals(target);
   }
 
   private async prepareHostTargetForLaunch(target: HostTarget): Promise<{
@@ -1207,18 +1218,6 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     const first = this.reactNativeReadinessSnapshot(source);
     if (first.ready) return first;
 
-    const provider = this.deps.buildSystem.getBuildProviderDetails?.("react-native") ?? null;
-    if (!provider) {
-      return {
-        ...first,
-        reason: "React Native build provider is not active",
-        details: [
-          ...first.details,
-          "The declared extensions must start extensions/react-native before apps/mobile can build.",
-        ],
-      };
-    }
-
     const resolvedSource = first.source ?? source ?? this.getSelectedReactNativeSource();
     if (!resolvedSource) return first;
     const candidate = this.listHostTargetCandidates("react-native").find(
@@ -1239,8 +1238,89 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       };
     }
 
+    const provider = this.deps.buildSystem.getBuildProviderDetails?.("react-native") ?? null;
+    if (!provider) {
+      this.stageReactNativeLaunchPreflightApproval(candidate, declared);
+      const missingProvider = this.reactNativeReadinessSnapshot(candidate.source);
+      if (missingProvider.ready) return missingProvider;
+      return {
+        ...missingProvider,
+        reason: "React Native build provider is not active",
+        details: [
+          ...missingProvider.details,
+          "The declared extensions must start extensions/react-native before apps/mobile can build.",
+        ],
+      };
+    }
+
+    this.acceptReactNativeLaunchPreflight(candidate, declared);
     await this.reconcileHostTargetDeclaration("react-native", declared, opts);
     return this.reactNativeReadinessSnapshot(candidate.source);
+  }
+
+  private stageReactNativeLaunchPreflightApproval(
+    candidate: HostTargetCandidate,
+    declared: WorkspaceAppDeclaration
+  ): void {
+    const coordinator = this.deps.approvalCoordinator;
+    if (!coordinator) return;
+    const sourceKey = normalizeRepoPath(candidate.source);
+    const approved = this.approvedReactNativeLaunchPreflights.get(sourceKey);
+    if (
+      approved &&
+      normalizeRepoPath(approved.source) === sourceKey &&
+      approved.ref === declared.ref
+    )
+      return;
+
+    const approval = this.unitHost.approvalForDeclarations([declared]);
+    if (approval.entries.length === 0 || approval.identityKeys.length === 0) return;
+    const keys = approval.identityKeys.filter(
+      (key) => !this.pendingReactNativeLaunchPreflightKeys.has(key)
+    );
+    if (keys.length === 0) return;
+    for (const key of keys) this.pendingReactNativeLaunchPreflightKeys.add(key);
+
+    void coordinator
+      .enqueue({
+        entries: approval.entries,
+        trigger: "startup",
+        applyApproved: async () => {
+          this.approvedReactNativeLaunchPreflights.set(sourceKey, { ...declared });
+        },
+        applyDenied: () => {
+          this.emitStatus(candidate.name, "pending-approval", null);
+        },
+      })
+      .catch((err) => {
+        console.error(
+          "[AppHost] React Native launch preflight approval failed:",
+          err instanceof Error ? err.message : String(err)
+        );
+      })
+      .finally(() => {
+        for (const key of keys) this.pendingReactNativeLaunchPreflightKeys.delete(key);
+      });
+  }
+
+  private acceptReactNativeLaunchPreflight(
+    candidate: HostTargetCandidate,
+    declared: WorkspaceAppDeclaration
+  ): void {
+    const sourceKey = normalizeRepoPath(candidate.source);
+    const approved = this.approvedReactNativeLaunchPreflights.get(sourceKey);
+    if (
+      !approved ||
+      normalizeRepoPath(approved.source) !== sourceKey ||
+      approved.ref !== declared.ref
+    )
+      return;
+
+    const approval = this.unitHost.approvalForDeclarations([declared]);
+    if (approval.identityKeys.length > 0) {
+      this.unitHost.acceptPreapprovedTrust(approval.identityKeys);
+    }
+    this.approvedReactNativeLaunchPreflights.delete(sourceKey);
   }
 
   async ensureElectronReady(
@@ -1717,7 +1797,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       buildKey: entry?.activeBundleKey ?? null,
       effectiveVersion: entry?.activeEv ?? null,
       canRollback: !!entry?.previousVersions?.length,
+      target: entry?.target,
     });
+    if (entry?.target) this.deps.onHostTargetChanged?.(entry.target, "app-status");
   }
 
   private emitAppLifecycle(payload: {
@@ -2218,6 +2300,13 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
 
   private async reconcileAfterProviderChange(_providerName: string): Promise<void> {
     this.emitDevStatusDiagnostic("provider-change");
+    const source = this.getSelectedReactNativeSource();
+    if (!source) return;
+    const candidate = this.listHostTargetCandidates("react-native").find(
+      (item) => item.source === normalizeRepoPath(source) || item.name === source
+    );
+    const entry = candidate ? this.registry.get(candidate.name) : null;
+    if (entry) this.emitStatus(entry.name, entry.status, entry.lastError);
   }
 
   private declaredForCandidate(
@@ -2571,6 +2660,10 @@ function launchReadyResult(
         }
       : {}),
   };
+}
+
+function isPreparingReadiness(readiness: { reason: string; details: string[] }): boolean {
+  return readiness.details.some((detail) => /\b(?:pending-approval|building)\b/i.test(detail));
 }
 
 function appLaunchMode(

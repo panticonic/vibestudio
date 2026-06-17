@@ -20,7 +20,6 @@ import * as fs from "fs";
 import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@natstack/shared/runtime/entitySpec";
-import { normalizeUnitRepoPath } from "@natstack/unit-host";
 import { formatPairUrlLine } from "./pairingBanner.js";
 import { getPublicUrl, isPublicUrlVerified } from "./publicUrl.js";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
@@ -626,7 +625,10 @@ async function main() {
       process.env["NODE_ENV"] === "development" && process.env["NATSTACK_AUTO_APPROVE"] === "1",
   });
   const { ServerUnitApprovalCoordinator } = await import("./unitApprovalCoordinator.js");
-  const unitApprovalCoordinator = new ServerUnitApprovalCoordinator({ approvalQueue });
+  const unitApprovalCoordinator = new ServerUnitApprovalCoordinator({
+    approvalQueue,
+    delayMs: 250,
+  });
   const requireMobileReady =
     args.requireMobileReady || process.env["NATSTACK_REQUIRE_MOBILE_READY"] === "1";
   const requireElectronReady =
@@ -720,6 +722,14 @@ async function main() {
     [extensionHostForGateway, appHostForGateway].filter(
       (host): host is TrustedUnitHostInstance => host !== null
     );
+  const { HostTargetLaunchCoordinator } = await import("./hostTargetLaunchCoordinator.js");
+  const hostTargetLaunchCoordinator = new HostTargetLaunchCoordinator({
+    approvalQueue,
+    eventService,
+    startupApprovals: unitApprovalCoordinator,
+    getAppHost: () => appHostForGateway,
+    getTrustedUnitHosts: trustedUnitHosts,
+  });
   // Workspace VCS (GAD-native): starts local-first (no DO needed), attaches
   // to the gad-store DO once workerd is up (see "vcsAttach" below).
   const { WorkspaceVcs } = await import("./gadVcs/workspaceVcs.js");
@@ -801,95 +811,6 @@ async function main() {
       await Promise.all(tasks);
     };
     await reconcile();
-  };
-
-  type MobileHostReadinessForPairing = {
-    ready: boolean;
-    reason?: string;
-    details?: string[];
-    source?: string | null;
-    appId?: string | null;
-    buildKey?: string;
-    approvalRequired?: boolean;
-    approvals?: import("@natstack/shared/approvals").PendingUnitBatchApproval[];
-  };
-
-  const ensureReactNativeProviderReadyForPairing =
-    async (): Promise<MobileHostReadinessForPairing> => {
-      const extensionHost = extensionHostForGateway;
-      if (!extensionHost) {
-        return { ready: false, reason: "Extension host is not available", details: [] };
-      }
-      const buildSystemInst =
-        container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-      if (buildSystemInst.getBuildProviderDetails?.("react-native")) {
-        return { ready: true };
-      }
-
-      const currentConfig = loadWorkspaceConfig(workspacePath);
-      const declaredExtensions = resolveDeclaredExtensions(currentConfig);
-      const hasReactNativeProvider = declaredExtensions.some(
-        (decl) => normalizeUnitRepoPath(decl.source) === "extensions/react-native"
-      );
-      if (!hasReactNativeProvider) {
-        return {
-          ready: false,
-          reason: "React Native build provider extension is not declared",
-          details: ["Declare extensions/react-native before pairing a React Native host."],
-        };
-      }
-
-      await extensionHost.reconcileDeclared(declaredExtensions, { trigger: "startup" });
-      await extensionHost.whenSettled();
-
-      if (buildSystemInst.getBuildProviderDetails?.("react-native")) {
-        return { ready: true };
-      }
-
-      const providerUnit = extensionHost
-        .listWorkspaceUnits()
-        .find((unit) => normalizeUnitRepoPath(unit.source) === "extensions/react-native");
-      return {
-        ready: false,
-        reason: "React Native build provider extension is not ready",
-        details: [
-          providerUnit
-            ? `${providerUnit.displayName || providerUnit.name}: ${providerUnit.status}${
-                providerUnit.lastError ? ` (${providerUnit.lastError})` : ""
-              }`
-            : "extensions/react-native is declared but no workspace unit status is available.",
-        ],
-      };
-    };
-
-  const ensureMobileHostReadyForPairing = async (
-    source?: string | null
-  ): Promise<MobileHostReadinessForPairing> => {
-    const provider = await ensureReactNativeProviderReadyForPairing();
-    if (!provider.ready) return provider;
-    const appHost = appHostForGateway;
-    if (!appHost) {
-      return {
-        ready: false,
-        reason: "App host is not available",
-        details: [],
-      };
-    }
-    const readiness = await appHost.ensureReactNativeReady(source, { waitForApproval: false });
-    if (readiness.ready) return readiness;
-    const approvals = appHost.listPendingHostTargetApprovals("react-native");
-    if (approvals.length > 0) {
-      return {
-        ready: false,
-        approvalRequired: true,
-        approvals,
-        reason: "React Native workspace app requires approval",
-        details: readiness.details,
-        source: readiness.source,
-        appId: readiness.appId,
-      };
-    }
-    return readiness;
   };
 
   const { WorkspaceTreeScanner } = await import("./gadVcs/workspaceTree.js");
@@ -1258,6 +1179,20 @@ async function main() {
     createEventsServiceDefinition(eventService, {
       snapshots: {
         "shell-approval:pending-changed": () => ({ pending: approvalQueue.listPending() }),
+        "apps:status": () => ({
+          snapshot: true,
+          apps:
+            appHostForGateway?.listWorkspaceUnits().map((entry) => ({
+              name: entry.name,
+              status: entry.status,
+              error: entry.lastError,
+              errorDetails: entry.lastErrorDetails ?? null,
+              buildKey: entry.activeBundleKey ?? null,
+              effectiveVersion: entry.activeEv ?? null,
+              canRollback: entry.canRollback,
+              target: entry.target,
+            })) ?? [],
+        }),
       },
     })
   );
@@ -1783,6 +1718,8 @@ async function main() {
         readWorkspaceFileAtCommit,
         getContextIdForCaller: (callerId) => entityCache.resolveContext(callerId),
         getGatewayUrl: () => getLocalGatewayUrl("extension startup"),
+        onWorkspaceUnitsChanged: (reason) =>
+          hostTargetLaunchCoordinator.notifyAllTargetsChanged(reason),
         extensionTransport: {
           call(name, method, ...args) {
             const rpcServer = rpcServerForGateway;
@@ -1837,6 +1774,8 @@ async function main() {
         readWorkspaceFileAtCommit,
         getGatewayUrl: () => getLocalGatewayUrl("app startup"),
         getReactNativeBootstrapUrl: () => getConnectUrl("React Native bootstrap"),
+        onHostTargetChanged: (target, reason) =>
+          hostTargetLaunchCoordinator.notifyTargetChanged(target, reason),
       });
       appHostForGateway = host;
       return host;
@@ -2625,18 +2564,20 @@ async function main() {
       if (!appHost) throw new Error("App host is not available");
       return appHost.prepareHostTargetPinnedRef(target, sourceOrName, ref);
     },
-    launchHostTarget: (target: import("@natstack/shared/hostTargets").HostTarget) => {
-      const appHost = appHostForGateway;
-      return (
-        appHost?.launchHostTarget(target) ??
-        ({
-          status: "unavailable",
-          launched: false,
-          target,
-          reason: "App host is not available",
-          details: [],
-        } satisfies import("@natstack/shared/hostTargets").HostTargetLaunchResult)
-      );
+    launchHostTarget: async (target: import("@natstack/shared/hostTargets").HostTarget) => {
+      return hostTargetLaunchCoordinator.launch(target);
+    },
+    beginHostTargetLaunch: async (target: import("@natstack/shared/hostTargets").HostTarget) => {
+      return hostTargetLaunchCoordinator.beginLaunch(target);
+    },
+    getHostTargetLaunchSession: (sessionId: string) => {
+      return hostTargetLaunchCoordinator.getLaunchSession(sessionId);
+    },
+    resolveHostTargetLaunchSessionApproval: (sessionId: string, decision: "once" | "deny") => {
+      return hostTargetLaunchCoordinator.resolveLaunchSessionApproval(sessionId, decision);
+    },
+    cancelHostTargetLaunchSession: (sessionId: string) => {
+      hostTargetLaunchCoordinator.cancelLaunchSession(sessionId);
     },
     approvalQueue,
     registerEntityTitleListener: (
@@ -2711,7 +2652,8 @@ async function main() {
           auditLog,
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-          ensureMobileAppReady: ensureMobileHostReadyForPairing,
+          ensureMobileAppReady: (source) =>
+            hostTargetLaunchCoordinator.ensureMobileHostReadyForPairing(source),
           getMobileAppBootstrap: async (source) =>
             appHostForGateway?.getReactNativeBootstrap(source) ?? null,
           registerMobileAppPrincipal: (deviceId, source) =>
@@ -3161,6 +3103,7 @@ async function main() {
     }
     await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
   } while (pendingStartupMetaConfigReload);
+  unitApprovalCoordinator.publishPending("startup");
   initialWorkspaceUnitReconcileComplete = true;
   if (syncDeclaredRemotesAfterStartupReload) {
     syncDeclaredRemotesForSource().catch((err: unknown) =>
@@ -3169,7 +3112,7 @@ async function main() {
   }
 
   if (requireMobileReady) {
-    const readiness = await ensureMobileHostReadyForPairing();
+    const readiness = await hostTargetLaunchCoordinator.ensureMobileHostReadyForPairing();
     if (!readiness?.ready) {
       printReadinessActionBlock("React Native mobile app is not ready", [
         "This server was started with mobile pairing enabled, but the",

@@ -8,6 +8,7 @@ import { writeProductSeedSourceRecord } from "@natstack/shared/productSeedTrust"
 import { EntityCache } from "@natstack/shared/runtime/entityCache";
 import type { PendingApproval } from "@natstack/shared/approvals";
 import { AppHost } from "./appHost.js";
+import { ServerUnitApprovalCoordinator } from "./unitApprovalCoordinator.js";
 
 const roots: string[] = [];
 const originalAppDevStatus = process.env["NATSTACK_APP_DEV_STATUS"];
@@ -35,6 +36,7 @@ function makeHarness(
     seeded?: boolean;
     invalidManifest?: boolean;
     approvalDecision?: "once" | "session" | "version" | "repo" | "deny";
+    useApprovalCoordinator?: boolean;
     readWorkspaceFileAtCommit?: (commit: string, filePath: string) => Promise<string | null>;
     reactNativeBootstrapUrl?: string;
   } = {}
@@ -167,6 +169,9 @@ function makeHarness(
   };
   const notificationService = { show: vi.fn(() => "notification-id") };
   const entityCache = new EntityCache();
+  const approvalCoordinator = opts.useApprovalCoordinator
+    ? new ServerUnitApprovalCoordinator({ approvalQueue, delayMs: 10_000 })
+    : undefined;
   const host = new AppHost({
     statePath: path.join(root, "state"),
     workspacePath,
@@ -174,6 +179,7 @@ function makeHarness(
     buildSystem,
     eventService: eventService as never,
     approvalQueue,
+    approvalCoordinator,
     notificationService,
     entityCache,
     readWorkspaceFileAtCommit: opts.readWorkspaceFileAtCommit ?? (async () => null),
@@ -185,6 +191,7 @@ function makeHarness(
     buildSystem,
     eventService,
     approvalQueue,
+    approvalCoordinator,
     notificationService,
     graphNode,
     appPath,
@@ -762,6 +769,34 @@ describe("AppHost", () => {
         source: "apps/shell",
         target: "electron",
         selectedForHost: true,
+      })
+    );
+  });
+
+  it("publishes pending startup approvals through the shared coordinator", async () => {
+    const { host, graphNode, approvalQueue, approvalCoordinator } = makeHarness({
+      useApprovalCoordinator: true,
+    });
+    graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
+
+    await host.reconcileDeclared([{ source: "apps/shell", ref: "main" }]);
+
+    expect(host.registry.get(graphNode.name)).toMatchObject({ status: "pending-approval" });
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+
+    approvalCoordinator?.publishPending("startup");
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        trigger: "startup",
+        units: [
+          expect.objectContaining({
+            unitKind: "app",
+            unitName: "@workspace-apps/shell",
+            target: "electron",
+          }),
+        ],
       })
     );
   });
@@ -1693,6 +1728,103 @@ describe("AppHost", () => {
       buildKey: "rn-provider-change-key",
     });
     expect(host.registry.get(graphNode.name)?.activeBundleKey).toBe("rn-provider-change-key");
+  });
+
+  it("stages React Native app approval before the provider is active and consumes it after provider startup", async () => {
+    const { host, buildSystem, approvalQueue, approvalCoordinator, graphNode } = makeHarness({
+      useApprovalCoordinator: true,
+    });
+    setAppManifestTarget(graphNode, "react-native", ["notifications"]);
+    host.setDeclared([{ source: graphNode.relativePath, ref: "main" }]);
+
+    const waitingForProvider = await host.ensureReactNativeReady(null, { waitForApproval: false });
+
+    expect(waitingForProvider).toMatchObject({
+      ready: false,
+      source: graphNode.relativePath,
+      appId: graphNode.name,
+      reason: "React Native build provider is not active",
+    });
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+
+    approvalCoordinator?.publishPending("startup");
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "unit-batch",
+        trigger: "startup",
+        units: [
+          expect.objectContaining({
+            unitKind: "app",
+            unitName: graphNode.name,
+            target: "react-native",
+          }),
+        ],
+      })
+    );
+
+    approvalQueue.request.mockClear();
+
+    const provider = {
+      name: "@workspace-extensions/react-native",
+      activeEv: "ev-provider",
+      activeBuildKey: "provider-build",
+      contractVersion: "natstack-build-provider-v1",
+    };
+    const rnBuild = {
+      dir: path.join(
+        path.dirname(graphNode.path),
+        "..",
+        "..",
+        "state",
+        "builds",
+        "rn-preflight-key"
+      ),
+      metadata: {
+        ev: "ev-app",
+        sourceStateHash: "state:test",
+        details: {
+          kind: "app",
+          target: "react-native",
+          integrity: "sha256-rn-app",
+          rnHostAbi: "rn-host-1",
+          provider,
+        },
+      },
+      artifacts: [
+        {
+          path: "index.android.bundle",
+          role: "primary",
+          contentType: "application/javascript; charset=utf-8",
+          encoding: "utf8",
+          platform: "android",
+          integrity: "sha256-android",
+          content: "android bundle",
+        },
+      ],
+    };
+    buildSystem.getBuildProviderDetails.mockReturnValue(provider);
+    buildSystem.getBuild.mockResolvedValueOnce(rnBuild as never);
+    buildSystem.getBuildByKey.mockImplementation((key: string) =>
+      key === "rn-preflight-key" ? (rnBuild as never) : null
+    );
+
+    const readiness = await host.ensureReactNativeReady();
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+    expect(readiness).toMatchObject({
+      ready: true,
+      source: graphNode.relativePath,
+      appId: graphNode.name,
+      buildKey: "rn-preflight-key",
+    });
+    expect(host.registry.get(graphNode.name)).toMatchObject({
+      status: "running",
+      activeBundleKey: "rn-preflight-key",
+    });
   });
 
   it("ensures React Native readiness by rebuilding an errored app after provider startup", async () => {

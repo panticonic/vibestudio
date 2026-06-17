@@ -204,6 +204,7 @@ export interface ExtensionHostDeps {
   extensionTransport: ExtensionTransportLike;
   registerBuildProvider?: (provider: BuildProvider) => void;
   unregisterBuildProvider?: (target: BuildProviderTarget, name: string) => void;
+  onWorkspaceUnitsChanged?: (reason: string) => void;
 }
 
 export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
@@ -243,6 +244,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           this.registry.patch(name, { status, lastError: error ?? null });
         }
         this.deps.eventService.emit("extensions:status", { name, status, error: error ?? null });
+        this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
       onError: (name, error, attempts) => {
         this.rememberExtensionError(name, error, attempts);
@@ -290,6 +292,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           status: this.registry.get(name)?.status ?? "running",
           inspectorUrl,
         });
+        this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
     });
     this.unitHost = new UnitHost({
@@ -314,6 +317,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           status: "stopped",
           error: null,
         });
+        this.deps.onWorkspaceUnitsChanged?.("extension-removed");
       },
       notifyUnresolved: (sources) => {
         this.deps.notificationService?.show({
@@ -330,6 +334,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
           status: "error",
           error: message,
         });
+        this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl.ref),
       requestApproval: (entries, trigger) =>
@@ -349,6 +354,7 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
             error: null,
           });
         }
+        this.deps.onWorkspaceUnitsChanged?.("extension-status");
         this.deps.notificationService?.show({
           id: `extensions-pending-approval-${names.join(",")}`,
           type: "info",
