@@ -12,6 +12,7 @@ import type {
   HostTarget,
   HostTargetCandidate,
   HostTargetLaunchResult,
+  HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "../hostTargets.js";
@@ -85,5 +86,20 @@ export class WorkspaceClient {
   }
   launchHostTarget(target: HostTarget): Promise<HostTargetLaunchResult> {
     return this.typed.hostTargets.launch(target);
+  }
+  beginHostTargetLaunch(target: HostTarget): Promise<HostTargetLaunchSessionSnapshot> {
+    return this.typed.hostTargets.beginLaunch(target);
+  }
+  getHostTargetLaunchSession(sessionId: string): Promise<HostTargetLaunchSessionSnapshot | null> {
+    return this.typed.hostTargets.getLaunchSession(sessionId);
+  }
+  resolveHostTargetLaunchSessionApproval(
+    sessionId: string,
+    decision: "once" | "deny"
+  ): Promise<HostTargetLaunchSessionSnapshot> {
+    return this.typed.hostTargets.resolveLaunchSessionApproval(sessionId, decision);
+  }
+  cancelHostTargetLaunchSession(sessionId: string): Promise<void> {
+    return this.typed.hostTargets.cancelLaunchSession(sessionId);
   }
 }

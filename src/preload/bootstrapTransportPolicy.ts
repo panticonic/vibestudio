@@ -1,7 +1,9 @@
 const BOOTSTRAP_RPC_METHODS = new Set([
-  "shellApproval.listPending",
-  "shellApproval.resolveBootstrap",
-  "workspace.hostTargets.launch",
+  "events.subscribe",
+  "workspace.hostTargets.beginLaunch",
+  "workspace.hostTargets.getLaunchSession",
+  "workspace.hostTargets.resolveLaunchSessionApproval",
+  "workspace.hostTargets.cancelLaunchSession",
 ]);
 
 export function assertBootstrapRpcMessageAllowed(targetId: string, message: unknown): void {

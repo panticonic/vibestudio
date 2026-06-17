@@ -62,14 +62,14 @@ create a bare workspace if that template is not present.
 
 Common development entrypoints:
 
-| Command | Use when | Workspace behavior |
-| --- | --- | --- |
-| `pnpm dev` | Developing the local Electron app from a source checkout | Creates an ephemeral workspace from `workspace/`; accepted workspace-unit pushes mirror back to that template |
-| `pnpm server:dev` | Running only `dist/server.mjs` from a source checkout | Uses the checked-in `workspace/` template when `--init` creates a managed workspace |
-| `pnpm server:live` | Running the standalone server directly from TypeScript | Uses the checked-in `workspace/` template when `--init` creates a managed workspace |
-| `pnpm cli mobile pair --dev` | Pairing a phone against a disposable source-checkout workspace | Creates an ephemeral phone-reachable workspace from `workspace/` |
-| `pnpm cli mobile dev` | Full Android dev loop with Metro, install, launch, and local server | Starts Metro, a local ephemeral server, installs/launches the app, wires ADB reverse ports, and runs the server from TypeScript |
-| `pnpm dev:self:server` | Letting a paired client edit this NatStack checkout | Uses a persistent dogfood workspace with `projects/natstack` mirroring back to the host checkout |
+| Command                      | Use when                                                            | Workspace behavior                                                                                                              |
+| ---------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm dev`                   | Developing the local Electron app from a source checkout            | Creates an ephemeral workspace from `workspace/`; accepted workspace-unit pushes mirror back to that template                   |
+| `pnpm server:dev`            | Running only `dist/server.mjs` from a source checkout               | Uses the checked-in `workspace/` template when `--init` creates a managed workspace                                             |
+| `pnpm server:live`           | Running the standalone server directly from TypeScript              | Uses the checked-in `workspace/` template when `--init` creates a managed workspace                                             |
+| `pnpm cli mobile pair --dev` | Pairing a phone against a disposable source-checkout workspace      | Creates an ephemeral phone-reachable workspace from `workspace/`                                                                |
+| `pnpm cli mobile dev`        | Full Android dev loop with Metro, install, launch, and local server | Starts Metro, a local ephemeral server, installs/launches the app, wires ADB reverse ports, and runs the server from TypeScript |
+| `pnpm dev:self:server`       | Letting a paired client edit this NatStack checkout                 | Uses a persistent dogfood workspace with `projects/natstack` mirroring back to the host checkout                                |
 
 Use `--help` for a full list of options:
 
@@ -202,6 +202,10 @@ pnpm build
 natstack remote start --pair "natstack://connect?url=...&code=..."
 ```
 
+After pairing, Electron asks the server to launch the selected desktop app and
+shows the startup approval UI if privileged workspace units need trust. The app
+does not run until that gate is approved.
+
 Later launches can reuse the saved device credential:
 
 ```bash
@@ -288,8 +292,13 @@ running a new server pairing command.
 For terminal-driven pairing, run:
 
 ```bash
-natstack remote start --pair "natstack://connect?url=...&code=..."
+natstack terminal start --pair "natstack://connect?url=...&code=..."
 ```
+
+That command redeems the pairing code, asks the server to launch the selected
+terminal app, renders the same startup approval details in the terminal, and
+starts the terminal app after approval. `natstack remote terminal` is the same
+launch gate under the remote command group for older scripts.
 
 From an already-paired terminal client, mint another invite with:
 

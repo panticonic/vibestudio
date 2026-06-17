@@ -63,6 +63,13 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
     });
   }
 
+  publishPending(trigger?: "startup" | "meta-change"): void {
+    const triggers = trigger ? [trigger] : Array.from(this.pending.keys());
+    for (const candidate of triggers) {
+      void this.flush(candidate);
+    }
+  }
+
   private async flush(trigger: "startup" | "meta-change"): Promise<void> {
     const batch = this.pending.get(trigger);
     if (!batch) return;
@@ -86,13 +93,23 @@ export class ServerUnitApprovalCoordinator implements UnitApprovalCoordinator<Un
       if (decision === "deny") {
         for (const request of requests) request.applyDenied();
       } else {
-        for (const request of requests) await request.applyApproved();
+        for (const request of applyOrder(requests)) {
+          await request.applyApproved();
+        }
       }
       for (const request of requests) request.resolve();
     } catch (err) {
       for (const request of requests) request.reject(err);
     }
   }
+}
+
+function applyOrder(requests: PendingRequest[]): PendingRequest[] {
+  return [...requests].sort((a, b) => requestApplyRank(a) - requestApplyRank(b));
+}
+
+function requestApplyRank(request: PendingRequest): number {
+  return request.entries.some((entry) => entry.unitKind === "extension") ? 0 : 1;
 }
 
 function unitBatchTitle(units: UnitBatchEntry[], trigger: "startup" | "meta-change"): string {

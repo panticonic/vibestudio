@@ -62,7 +62,7 @@
         font-size: 12px;
         font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.08em;
+        letter-spacing: 0;
       }
       .launch-card {
         border: 1px solid #31383d;
@@ -216,6 +216,53 @@
       }
       .empty {
         color: #aab3b8;
+      }
+      .empty-message {
+        color: #dbe3e6;
+        line-height: 1.5;
+      }
+      .launch-timeline {
+        display: grid;
+        gap: 8px;
+        margin: 14px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .launch-phase {
+        display: grid;
+        grid-template-columns: 12px 1fr;
+        gap: 10px;
+        align-items: start;
+        color: #859198;
+        font-size: 13px;
+        line-height: 1.45;
+      }
+      .launch-phase-dot {
+        width: 8px;
+        height: 8px;
+        margin-top: 5px;
+        border-radius: 999px;
+        background: #434d54;
+      }
+      .launch-phase.complete {
+        color: #a7d7cd;
+      }
+      .launch-phase.complete .launch-phase-dot {
+        background: #74c7b8;
+      }
+      .launch-phase.active {
+        color: #f5f7f8;
+      }
+      .launch-phase.active .launch-phase-dot {
+        background: #f2c46d;
+      }
+      .launch-phase.blocked,
+      .launch-phase.failed {
+        color: #ffb3b3;
+      }
+      .launch-phase.blocked .launch-phase-dot,
+      .launch-phase.failed .launch-phase-dot {
+        background: #d56b6b;
       }
       @keyframes spin {
         to {

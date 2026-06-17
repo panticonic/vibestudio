@@ -13,7 +13,7 @@
  */
 
 import { EventEmitter } from "events";
-import type { PackageGraph } from "./packageGraph.js";
+import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import {
   computeEffectiveVersions,
   recomputeFromNodes,
@@ -75,6 +75,12 @@ export interface BuildRecord {
   error?: string;
 }
 
+export interface StateChangedUnit {
+  name: string;
+  relativePath: string;
+  kind: GraphNode["kind"];
+}
+
 export interface WorkspaceStateSource {
   /** Scan-on-demand: commit any out-of-band edits, return the main head's current state. */
   ensureFresh(): Promise<{ stateHash: string }>;
@@ -100,7 +106,11 @@ export interface StateTriggerEvents {
   "build-started": { name: string; trigger?: StateAdvancedEvent };
   "build-complete": { name: string; buildKey: string; trigger?: StateAdvancedEvent };
   "build-error": { name: string; error: string; trigger?: StateAdvancedEvent };
-  "change-detected": { names: string[] };
+  "change-detected": {
+    names: string[];
+    units: StateChangedUnit[];
+    trigger: StateAdvancedEvent;
+  };
   "graph-updated": {
     graph: PackageGraph;
     evMap: EffectiveVersionMap;
@@ -383,7 +393,18 @@ export class StateTransitionTrigger extends EventEmitter {
     sourceUnitName: string | null
   ): Promise<void> {
     if (names.length === 0) return;
-    this.emit("change-detected", { names });
+    this.emit("change-detected", {
+      names,
+      units: names
+        .map((name) => graph.tryGet(name))
+        .filter((node): node is GraphNode => !!node)
+        .map((node) => ({
+          name: node.name,
+          relativePath: node.relativePath,
+          kind: node.kind,
+        })),
+      trigger,
+    });
 
     for (const name of names) {
       const node = graph.tryGet(name);

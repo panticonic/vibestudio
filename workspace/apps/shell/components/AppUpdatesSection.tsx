@@ -6,14 +6,16 @@ import { useShellEvent } from "../shell/useShellEvent";
 
 type PendingUpdate = Awaited<ReturnType<typeof app.listPendingUpdates>>[number];
 type WorkspaceUnit = Awaited<ReturnType<typeof workspaceUnits.list>>[number];
-type WorkspaceUnitLog = Awaited<ReturnType<typeof workspaceUnits.logs>>[number];
+type WorkspaceUnitDiagnostics = Awaited<ReturnType<typeof workspaceUnits.diagnostics>>;
 
 export function AppUpdatesSection() {
   const [pending, setPending] = useState<PendingUpdate[]>([]);
   const [apps, setApps] = useState<WorkspaceUnit[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expandedLogs, setExpandedLogs] = useState<Record<string, WorkspaceUnitLog[]>>({});
+  const [expandedDiagnostics, setExpandedDiagnostics] = useState<
+    Record<string, WorkspaceUnitDiagnostics>
+  >({});
 
   const load = useCallback(async () => {
     try {
@@ -97,7 +99,7 @@ export function AppUpdatesSection() {
       setError(null);
       await workspaceUnits.restart(appId);
       await load();
-      await loadLogs(appId);
+      await loadDiagnostics(appId);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -105,12 +107,12 @@ export function AppUpdatesSection() {
     }
   };
 
-  const loadLogs = async (appId: string) => {
-    setBusy(`logs:${appId}`);
+  const loadDiagnostics = async (appId: string) => {
+    setBusy(`diagnostics:${appId}`);
     try {
       setError(null);
-      const rows = await workspaceUnits.logs(appId, { limit: 80 });
-      setExpandedLogs((current) => ({ ...current, [appId]: rows }));
+      const diagnostics = await workspaceUnits.diagnostics(appId, { limit: 80, errorLimit: 20 });
+      setExpandedDiagnostics((current) => ({ ...current, [appId]: diagnostics }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -118,16 +120,16 @@ export function AppUpdatesSection() {
     }
   };
 
-  const toggleLogs = async (appId: string) => {
-    if (expandedLogs[appId]) {
-      setExpandedLogs((current) => {
+  const toggleDiagnostics = async (appId: string) => {
+    if (expandedDiagnostics[appId]) {
+      setExpandedDiagnostics((current) => {
         const next = { ...current };
         delete next[appId];
         return next;
       });
       return;
     }
-    await loadLogs(appId);
+    await loadDiagnostics(appId);
   };
 
   if (apps.length === 0) return null;
@@ -165,7 +167,7 @@ export function AppUpdatesSection() {
           {apps.map((unit) => {
             const pendingUpdate = pendingByApp.get(unit.name);
             const latestPrevious = unit.previousVersions?.[0];
-            const logs = expandedLogs[unit.name];
+            const diagnostics = expandedDiagnostics[unit.name];
             return (
               <Fragment key={unit.name}>
                 <Table.Row>
@@ -213,25 +215,23 @@ export function AppUpdatesSection() {
                         </Button>
                       ) : null}
                       {unit.target === "terminal" ? (
-                        <>
-                          <Button
-                            size="1"
-                            variant="soft"
-                            disabled={busy === `restart:${unit.name}` || !unit.activeBundleKey}
-                            onClick={() => void restart(unit.name)}
-                          >
-                            {unit.status === "running" ? "Restart" : "Start"}
-                          </Button>
-                          <Button
-                            size="1"
-                            variant="ghost"
-                            disabled={busy === `logs:${unit.name}`}
-                            onClick={() => void toggleLogs(unit.name)}
-                          >
-                            Logs
-                          </Button>
-                        </>
+                        <Button
+                          size="1"
+                          variant="soft"
+                          disabled={busy === `restart:${unit.name}` || !unit.activeBundleKey}
+                          onClick={() => void restart(unit.name)}
+                        >
+                          {unit.status === "running" ? "Restart" : "Start"}
+                        </Button>
                       ) : null}
+                      <Button
+                        size="1"
+                        variant="ghost"
+                        disabled={busy === `diagnostics:${unit.name}`}
+                        onClick={() => void toggleDiagnostics(unit.name)}
+                      >
+                        Diagnostics
+                      </Button>
                       {latestPrevious ? (
                         <Button
                           size="1"
@@ -245,27 +245,76 @@ export function AppUpdatesSection() {
                     </Flex>
                   </Table.Cell>
                 </Table.Row>
-                {logs ? (
-                  <Table.Row key={`${unit.name}:logs`}>
+                {diagnostics ? (
+                  <Table.Row key={`${unit.name}:diagnostics`}>
                     <Table.Cell colSpan={6}>
-                      <Flex direction="column" gap="1">
-                        {logs.length === 0 ? (
-                          <Text size="1" color="gray">
-                            No logs
-                          </Text>
-                        ) : (
-                          logs.map((row) => (
-                            <Text
-                              as="div"
-                              size="1"
-                              color={row.level === "error" ? "red" : "gray"}
-                              key={`${row.timestamp}:${row.source ?? ""}:${row.message}`}
-                            >
-                              <Code size="1">{row.level}</Code>{" "}
-                              {row.source ? <Code size="1">{row.source}</Code> : null} {row.message}
+                      <Flex direction="column" gap="2">
+                        {diagnostics.builds.length > 0 ? (
+                          <Flex direction="column" gap="1">
+                            <Text size="1" weight="medium">
+                              Builds
                             </Text>
-                          ))
-                        )}
+                            {diagnostics.builds.map((row) => (
+                              <Text
+                                as="div"
+                                size="1"
+                                color={row.type === "build-error" ? "red" : "gray"}
+                                key={`${row.timestamp}:${row.type}:${row.buildKey ?? row.error ?? ""}`}
+                              >
+                                <Code size="1">{row.type}</Code>{" "}
+                                {row.buildKey ? <Code size="1">{shortBuild(row.buildKey)}</Code> : null}{" "}
+                                {row.error ?? ""}
+                              </Text>
+                            ))}
+                          </Flex>
+                        ) : null}
+                        {diagnostics.errors.length > 0 ? (
+                          <Flex direction="column" gap="1">
+                            <Text size="1" weight="medium" color="red">
+                              Errors
+                            </Text>
+                            {diagnostics.errors.map((row) => (
+                              <Text
+                                as="div"
+                                size="1"
+                                color="red"
+                                key={`${row.timestamp}:${row.source ?? ""}:${row.message}`}
+                              >
+                                {row.source ? <Code size="1">{row.source}</Code> : null}{" "}
+                                {row.message}
+                              </Text>
+                            ))}
+                          </Flex>
+                        ) : null}
+                        <Flex direction="column" gap="1">
+                          <Text size="1" weight="medium">
+                            Logs
+                          </Text>
+                          {diagnostics.logs.length === 0 ? (
+                            <Text size="1" color="gray">
+                              No logs
+                            </Text>
+                          ) : (
+                            diagnostics.logs.map((row) => (
+                              <Text
+                                as="div"
+                                size="1"
+                                color={row.level === "error" ? "red" : "gray"}
+                                key={`${row.timestamp}:${row.source ?? ""}:${row.message}`}
+                              >
+                                <Code size="1">{row.level}</Code>{" "}
+                                {row.source ? <Code size="1">{row.source}</Code> : null}{" "}
+                                {row.message}
+                              </Text>
+                            ))
+                          )}
+                        </Flex>
+                        {diagnostics.dropped.entries > 0 || diagnostics.dropped.errors > 0 ? (
+                          <Text size="1" color="amber">
+                            Dropped {diagnostics.dropped.entries} log entries and{" "}
+                            {diagnostics.dropped.errors} errors from the diagnostics buffer.
+                          </Text>
+                        ) : null}
                       </Flex>
                     </Table.Cell>
                   </Table.Row>

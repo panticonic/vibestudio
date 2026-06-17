@@ -32,6 +32,7 @@ import type {
   HostTarget,
   HostTargetCandidate,
   HostTargetLaunchResult,
+  HostTargetLaunchSessionSnapshot,
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "@natstack/shared/hostTargets";
@@ -200,6 +201,17 @@ export interface WorkspaceServiceDeps {
   launchHostTarget?: (
     target: HostTarget
   ) => Promise<HostTargetLaunchResult> | HostTargetLaunchResult;
+  beginHostTargetLaunch?: (
+    target: HostTarget
+  ) => Promise<HostTargetLaunchSessionSnapshot> | HostTargetLaunchSessionSnapshot;
+  getHostTargetLaunchSession?: (
+    sessionId: string
+  ) => Promise<HostTargetLaunchSessionSnapshot | null> | HostTargetLaunchSessionSnapshot | null;
+  resolveHostTargetLaunchSessionApproval?: (
+    sessionId: string,
+    decision: "once" | "deny"
+  ) => Promise<HostTargetLaunchSessionSnapshot> | HostTargetLaunchSessionSnapshot;
+  cancelHostTargetLaunchSession?: (sessionId: string) => Promise<void> | void;
   /** Queue used to gate userland workspace mutations. */
   approvalQueue?: Pick<ApprovalQueue, "requestUserland">;
 }
@@ -784,6 +796,33 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           }
           const [target] = args as [HostTarget];
           return await deps.launchHostTarget(target);
+        }
+
+        case "hostTargets.beginLaunch": {
+          const [target] = args as [HostTarget];
+          if (!deps.beginHostTargetLaunch) {
+            throw new Error("Host target launch sessions are unavailable");
+          }
+          return await deps.beginHostTargetLaunch(target);
+        }
+
+        case "hostTargets.getLaunchSession": {
+          const [sessionId] = args as [string];
+          return (await deps.getHostTargetLaunchSession?.(sessionId)) ?? null;
+        }
+
+        case "hostTargets.resolveLaunchSessionApproval": {
+          const [sessionId, decision] = args as [string, "once" | "deny"];
+          if (!deps.resolveHostTargetLaunchSessionApproval) {
+            throw new Error("Host target launch sessions are unavailable");
+          }
+          return await deps.resolveHostTargetLaunchSessionApproval(sessionId, decision);
+        }
+
+        case "hostTargets.cancelLaunchSession": {
+          const [sessionId] = args as [string];
+          await deps.cancelHostTargetLaunchSession?.(sessionId);
+          return;
         }
 
         default:
