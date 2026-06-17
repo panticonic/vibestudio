@@ -99,11 +99,13 @@ export { getStateArgs, useStateArgs, setStateArgs, setStateArgsForPanel } from "
  * `ctx:` vcs head every subsequent `vcs.*` / agent spawn resolves to. Defaults
  * `source` to the current panel's source.
  */
-export async function reopen(opts: {
-  source?: string;
-  contextId?: string;
-  stateArgs?: Record<string, unknown>;
-} = {}): Promise<{ id: string; title: string }> {
+export async function reopen(
+  opts: {
+    source?: string;
+    contextId?: string;
+    stateArgs?: Record<string, unknown>;
+  } = {}
+): Promise<{ id: string; title: string }> {
   let source = opts.source;
   if (!source) {
     const meta = await rpc.call<{ source?: string } | null>("main", "panelTree.metadata", [slotId]);
@@ -251,8 +253,10 @@ export interface CompleteWorkspaceDependenciesResult {
     error: string;
   }>;
 }
-const gitInteropService = createTypedServiceClient("gitInterop", gitInteropMethods, (svc, method, args) =>
-  rpc.call("main", `${svc}.${method}`, args)
+const gitInteropService = createTypedServiceClient(
+  "gitInterop",
+  gitInteropMethods,
+  (svc, method, args) => rpc.call("main", `${svc}.${method}`, args)
 );
 const gitApi = {
   http: credentialGitHttp,
@@ -295,8 +299,14 @@ export type {
   CreateWebhookIngressSubscriptionRequest,
   RotateWebhookIngressSecretRequest,
   RotateWebhookIngressSecretResult,
+  WebhookDeliveredPayload,
+  WebhookDeliveryConfig,
+  WebhookDeliveryEvent,
   WebhookIngressClient,
   WebhookIngressSubscriptionSummary,
+  WebhookPayloadFormat,
+  WebhookReplayConfig,
+  WebhookResponsePolicy,
   WebhookTarget,
   WebhookVerifierConfig,
 } from "../shared/webhooks.js";

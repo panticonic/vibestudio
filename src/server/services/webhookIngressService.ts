@@ -14,14 +14,19 @@ import {
   type CreateWebhookIngressSubscriptionRequest,
   type RotateWebhookIngressSecretRequest,
   type RotateWebhookIngressSecretResult,
+  type WebhookDeliveredPayload,
+  type WebhookDeliveryEvent,
   type WebhookIngressSubscription,
   type WebhookIngressSubscriptionSummary,
+  type WebhookReplayKey,
   type WebhookTarget,
 } from "../../../packages/shared/src/webhooks/ingress.js";
 
-const DEFAULT_PUBLIC_BASE_URL = "https://hooks.snugenv.com";
-const DEFAULT_REPLAY_TTL_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RELAY_PUBLIC_BASE_URL = "https://hooks.snugenv.com";
 const DEFAULT_RELAY_TOLERANCE_MS = 5 * 60 * 1000;
+const GOOGLE_OIDC_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs";
+
+type JwkWithKeyId = crypto.JsonWebKey & { kid?: string };
 
 const identifierSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._@+=:-]{0,127}$/);
 
@@ -69,25 +74,72 @@ const verifierSchema = z.discriminatedUnion("type", [
       scheme: z.string().min(1).max(64).optional(),
     })
     .strict(),
+  z
+    .object({
+      type: z.literal("query-token"),
+      paramName: z.string().min(1).max(128),
+      token: z.string().min(1).max(4096),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("oidc-jwt"),
+      issuer: z.string().min(1).max(256),
+      audience: z.string().min(1).max(2048),
+      jwksUrl: z.string().url().default(GOOGLE_OIDC_JWKS_URL),
+      headerName: z.string().min(1).max(128).optional(),
+      serviceAccountEmail: z.string().email().optional(),
+    })
+    .strict(),
+]);
+
+const deliverySchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("relay") }).strict(),
+  z.object({ mode: z.literal("direct") }).strict(),
+]);
+
+const payloadFormatSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("raw") }).strict(),
+  z.object({ type: z.literal("json") }).strict(),
+  z
+    .object({
+      type: z.literal("cloud-pubsub"),
+      decodeData: z.enum(["base64", "text", "json"]),
+    })
+    .strict(),
+]);
+
+const replayKeySchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("header"), name: z.string().min(1).max(128) }).strict(),
+  z.object({ type: z.literal("json-pointer"), pointer: z.string().min(1).max(512) }).strict(),
+  z.object({ type: z.literal("body-sha256") }).strict(),
 ]);
 
 const createSubscriptionSchema = z
   .object({
     label: z.string().min(1).max(256).optional(),
     target: targetSchema,
+    delivery: deliverySchema,
+    payload: payloadFormatSchema,
     verifier: verifierSchema,
     replay: z
       .object({
-        deliveryIdHeader: z.string().min(1).max(128).optional(),
+        key: replayKeySchema,
         ttlMs: z
           .number()
           .int()
           .positive()
-          .max(7 * 24 * 60 * 60 * 1000)
-          .optional(),
+          .max(7 * 24 * 60 * 60 * 1000),
       })
       .strict()
       .optional(),
+    response: z
+      .object({
+        successStatus: z.union([z.literal(200), z.literal(201), z.literal(202), z.literal(204)]),
+        malformedPayload: z.enum(["ack", "reject"]),
+        dispatchError: z.enum(["ack", "retry"]),
+      })
+      .strict(),
   })
   .strict();
 
@@ -185,20 +237,12 @@ export class DOWebhookIngressStore implements WebhookIngressStore {
 
 export interface WebhookIngressServiceDeps {
   relaySigningSecret?: string;
-  publicBaseUrl?: string;
+  relayPublicBaseUrl?: string;
+  directPublicBaseUrl?: string | null;
   store?: WebhookIngressStore;
   rpc?: RpcCallerLike;
   now?: () => number;
   dispatchToTarget?: (target: WebhookTarget, event: WebhookDeliveryEvent) => Promise<unknown>;
-}
-
-export interface WebhookDeliveryEvent {
-  subscriptionId: string;
-  publicUrl: string;
-  receivedAt: number;
-  headers: Record<string, string | string[] | undefined>;
-  rawBodyBase64: string;
-  json?: unknown;
 }
 
 export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}): {
@@ -213,9 +257,15 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   const store =
     deps.store ??
     (deps.rpc ? new DOWebhookIngressStore(deps.rpc) : new InMemoryWebhookIngressStore());
-  const publicBaseUrl = normalizeBaseUrl(deps.publicBaseUrl ?? DEFAULT_PUBLIC_BASE_URL);
+  const relayPublicBaseUrl = normalizeBaseUrl(
+    deps.relayPublicBaseUrl ?? DEFAULT_RELAY_PUBLIC_BASE_URL
+  );
+  const directPublicBaseUrl = deps.directPublicBaseUrl
+    ? normalizeBaseUrl(deps.directPublicBaseUrl)
+    : null;
   const now = deps.now ?? Date.now;
   const seenReplayKeys = new Map<string, number>();
+  const jwksCache = new Map<string, { expiresAt: number; keys: JwkWithKeyId[] }>();
 
   function toSummary(subscription: WebhookIngressSubscription): WebhookIngressSubscriptionSummary {
     return summarizeWebhookIngressSubscription(subscription);
@@ -245,18 +295,30 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   ): Promise<WebhookIngressSubscriptionSummary> {
     const parsed = createSubscriptionSchema.parse(input) as CreateWebhookIngressSubscriptionRequest;
     ensureTargetIsCallerSource(ctx, parsed.target);
+    if (parsed.delivery.mode === "direct" && !directPublicBaseUrl) {
+      throw new Error("direct webhook subscriptions require a configured direct public URL");
+    }
+    const pendingBase =
+      parsed.delivery.mode === "direct" ? directPublicBaseUrl! : relayPublicBaseUrl;
     const subscription = await store.create({
       label: parsed.label,
       ownerCallerId: ctx.caller.runtime.id,
       ownerCallerKind: ctx.caller.runtime.kind,
       target: parsed.target,
+      delivery: parsed.delivery,
+      payload: parsed.payload,
       verifier: parsed.verifier,
       replay: parsed.replay,
-      publicUrl: `${publicBaseUrl}/i/pending`,
+      response: parsed.response,
+      publicUrl: `${pendingBase}/i/pending`,
     });
+    const base = parsed.delivery.mode === "direct" ? directPublicBaseUrl! : relayPublicBaseUrl;
     const withUrl = {
       ...subscription,
-      publicUrl: `${publicBaseUrl}/i/${encodeURIComponent(subscription.subscriptionId)}`,
+      publicUrl:
+        parsed.delivery.mode === "direct"
+          ? `${base}/_r/s/webhookIngress/${encodeURIComponent(subscription.subscriptionId)}`
+          : `${base}/i/${encodeURIComponent(subscription.subscriptionId)}`,
       updatedAt: now(),
     };
     await store.replace(withUrl);
@@ -291,8 +353,11 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     }
     ensureOwner(ctx, subscription);
     const secret = parsed.secret ?? crypto.randomBytes(32).toString("base64url");
+    if (subscription.verifier.type === "oidc-jwt") {
+      throw new Error("oidc-jwt webhook subscriptions do not have a rotatable secret");
+    }
     const verifier =
-      subscription.verifier.type === "bearer"
+      subscription.verifier.type === "bearer" || subscription.verifier.type === "query-token"
         ? { ...subscription.verifier, token: secret }
         : { ...subscription.verifier, secret };
     const updated = {
@@ -344,32 +409,65 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
       return sendJson(res, 400, { error: "missing subscriptionId" });
     }
     const rawBody = await readRawBody(req);
-    if (!verifyRelayEnvelope(req, rawBody)) {
-      return sendJson(res, 401, { error: "invalid relay envelope" });
-    }
     const subscription = await store.get(subscriptionId);
     if (!subscription || subscription.revokedAt) {
       return sendJson(res, 404, { error: "webhook subscription not found" });
     }
-    if (isReplay(subscription, req.headers, rawBody, seenReplayKeys, now())) {
-      return sendJson(res, 409, { error: "webhook replay rejected" });
+    if (subscription.delivery.mode === "relay" && !verifyRelayEnvelope(req, rawBody)) {
+      return sendJson(res, 401, { error: "invalid relay envelope" });
     }
-    if (!verifyWebhookPayload(subscription.verifier, rawBody, req.headers, now())) {
+    if (!(await verifySubscriptionRequest(subscription, req, rawBody))) {
       return sendJson(res, 401, { error: "invalid webhook signature" });
     }
 
+    const payload = parseDeliveryPayload(subscription, rawBody);
+    if (!payload) {
+      if (subscription.response.malformedPayload === "ack") {
+        return sendAccepted(res, subscription, { accepted: false, reason: "malformed-payload" });
+      }
+      return sendJson(res, 400, { error: "malformed webhook payload" });
+    }
+    if (isReplay(subscription, req.headers, rawBody, payload, seenReplayKeys, now())) {
+      return sendJson(res, 409, { error: "webhook replay rejected" });
+    }
     const event: WebhookDeliveryEvent = {
       subscriptionId,
       publicUrl: subscription.publicUrl,
       receivedAt: now(),
+      delivery: subscription.delivery,
       headers: req.headers,
       rawBodyBase64: rawBody.toString("base64"),
-      json: parseJson(rawBody),
+      payload,
     };
     if (deps.dispatchToTarget) {
-      await deps.dispatchToTarget(subscription.target, event);
+      try {
+        await deps.dispatchToTarget(subscription.target, event);
+      } catch (err) {
+        if (subscription.response.dispatchError === "ack") {
+          return sendAccepted(res, subscription, {
+            accepted: false,
+            reason: "dispatch-error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return sendJson(res, 502, { error: "webhook target dispatch failed" });
+      }
     }
-    return sendJson(res, 202, { accepted: true, subscriptionId });
+    return sendAccepted(res, subscription, { accepted: true, subscriptionId });
+  }
+
+  async function verifySubscriptionRequest(
+    subscription: WebhookIngressSubscription,
+    req: IncomingMessage,
+    rawBody: Buffer
+  ): Promise<boolean> {
+    if (subscription.verifier.type === "oidc-jwt") {
+      return verifyOidcJwt(subscription.verifier, req.headers, jwksCache, now());
+    }
+    return verifyWebhookPayload(subscription.verifier, rawBody, req.headers, {
+      now: now(),
+      url: req.url ?? "",
+    });
   }
 
   const definition: ServiceDefinition = {
@@ -438,24 +536,145 @@ function isReplay(
   subscription: WebhookIngressSubscription,
   headers: IncomingMessage["headers"],
   rawBody: Buffer,
+  payload: WebhookDeliveredPayload,
   seen: Map<string, number>,
   now: number
 ): boolean {
-  const ttlMs = subscription.replay?.ttlMs ?? DEFAULT_REPLAY_TTL_MS;
+  if (!subscription.replay) return false;
+  const ttlMs = subscription.replay.ttlMs;
   for (const [key, expiresAt] of seen) {
     if (expiresAt <= now) seen.delete(key);
   }
-  const deliveryId = subscription.replay?.deliveryIdHeader
-    ? getHeader(headers, subscription.replay.deliveryIdHeader)
-    : undefined;
-  const replayKey = deliveryId
-    ? `${subscription.subscriptionId}:id:${deliveryId}`
-    : `${subscription.subscriptionId}:sha:${crypto.createHash("sha256").update(rawBody).digest("hex")}`;
+  const key = computeReplayKey(subscription.replay.key, headers, rawBody, payload);
+  if (!key) return false;
+  const replayKey = `${subscription.subscriptionId}:${key}`;
   if (seen.has(replayKey)) {
     return true;
   }
   seen.set(replayKey, now + ttlMs);
   return false;
+}
+
+function computeReplayKey(
+  key: WebhookReplayKey,
+  headers: IncomingMessage["headers"],
+  rawBody: Buffer,
+  payload: WebhookDeliveredPayload
+): string | null {
+  switch (key.type) {
+    case "header": {
+      const value = getHeader(headers, key.name);
+      return value ? `header:${key.name.toLowerCase()}:${value}` : null;
+    }
+    case "json-pointer": {
+      const value = jsonPointerValue(payloadToPointerRoot(payload), key.pointer);
+      return value === undefined || value === null ? null : `json:${key.pointer}:${String(value)}`;
+    }
+    case "body-sha256":
+      return `sha:${crypto.createHash("sha256").update(rawBody).digest("hex")}`;
+  }
+}
+
+function payloadToPointerRoot(payload: WebhookDeliveredPayload): unknown {
+  if (payload.type === "json") return payload.json;
+  if (payload.type === "cloud-pubsub") {
+    return {
+      subscription: payload.subscription,
+      message: {
+        messageId: payload.messageId,
+        publishTime: payload.publishTime,
+        attributes: payload.attributes,
+        orderingKey: payload.orderingKey,
+        data: payload.dataBase64,
+        dataText: payload.dataText,
+        dataJson: payload.dataJson,
+      },
+    };
+  }
+  return {};
+}
+
+function jsonPointerValue(root: unknown, pointer: string): unknown {
+  if (pointer === "") return root;
+  if (!pointer.startsWith("/")) return undefined;
+  let current = root;
+  for (const rawPart of pointer.slice(1).split("/")) {
+    const part = rawPart.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (Array.isArray(current)) {
+      const index = Number(part);
+      current = Number.isInteger(index) ? current[index] : undefined;
+    } else if (current && typeof current === "object") {
+      current = (current as Record<string, unknown>)[part];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
+function parseDeliveryPayload(
+  subscription: WebhookIngressSubscription,
+  rawBody: Buffer
+): WebhookDeliveredPayload | null {
+  switch (subscription.payload.type) {
+    case "raw":
+      return { type: "raw" };
+    case "json": {
+      const json = parseJson(rawBody);
+      return json === undefined ? null : { type: "json", json };
+    }
+    case "cloud-pubsub":
+      return parseCloudPubSubPayload(rawBody, subscription.payload.decodeData);
+  }
+}
+
+function parseCloudPubSubPayload(
+  rawBody: Buffer,
+  decodeData: "base64" | "text" | "json"
+): WebhookDeliveredPayload | null {
+  const envelope = parseJson(rawBody);
+  if (!envelope || typeof envelope !== "object") return null;
+  const record = envelope as Record<string, unknown>;
+  const message = record["message"];
+  if (!message || typeof message !== "object") return null;
+  const messageRecord = message as Record<string, unknown>;
+  const dataBase64 = typeof messageRecord["data"] === "string" ? messageRecord["data"] : undefined;
+  let dataText: string | undefined;
+  let dataJson: unknown;
+  if (dataBase64 && decodeData !== "base64") {
+    try {
+      dataText = Buffer.from(dataBase64, "base64").toString("utf8");
+      if (decodeData === "json") dataJson = JSON.parse(dataText);
+    } catch {
+      return null;
+    }
+  }
+  const attributesRaw = messageRecord["attributes"];
+  const attributes =
+    attributesRaw && typeof attributesRaw === "object"
+      ? Object.fromEntries(
+          Object.entries(attributesRaw as Record<string, unknown>).filter(
+            (entry): entry is [string, string] => typeof entry[1] === "string"
+          )
+        )
+      : undefined;
+  return {
+    type: "cloud-pubsub",
+    ...(typeof record["subscription"] === "string" ? { subscription: record["subscription"] } : {}),
+    ...(typeof messageRecord["messageId"] === "string"
+      ? { messageId: messageRecord["messageId"] }
+      : {}),
+    ...(typeof messageRecord["publishTime"] === "string"
+      ? { publishTime: messageRecord["publishTime"] }
+      : {}),
+    ...(attributes ? { attributes } : {}),
+    ...(typeof messageRecord["orderingKey"] === "string"
+      ? { orderingKey: messageRecord["orderingKey"] }
+      : {}),
+    ...(dataBase64 ? { dataBase64 } : {}),
+    ...(dataText !== undefined ? { dataText } : {}),
+    ...(dataJson !== undefined ? { dataJson } : {}),
+  };
 }
 
 function normalizeBaseUrl(value: string): string {
@@ -479,10 +698,95 @@ function parseJson(rawBody: Buffer): unknown | undefined {
   }
 }
 
+function sendAccepted(
+  res: ServerResponse,
+  subscription: WebhookIngressSubscription,
+  body: Record<string, unknown>
+): void {
+  if (subscription.response.successStatus === 204) {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
+  sendJson(res, subscription.response.successStatus, body);
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, {
     "content-type": "application/json; charset=utf-8",
     "cache-control": "no-store",
   });
   res.end(JSON.stringify(body));
+}
+
+async function verifyOidcJwt(
+  config: Extract<WebhookIngressSubscription["verifier"], { type: "oidc-jwt" }>,
+  headers: IncomingMessage["headers"],
+  cache: Map<string, { expiresAt: number; keys: JwkWithKeyId[] }>,
+  now: number
+): Promise<boolean> {
+  const auth = getHeader(headers, config.headerName ?? "Authorization");
+  const token = auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : undefined;
+  if (!token) return false;
+  const parts = token.split(".");
+  if (parts.length !== 3) return false;
+  const [encodedHeader, encodedPayload, encodedSignature] = parts as [string, string, string];
+  let header: Record<string, unknown>;
+  let payload: Record<string, unknown>;
+  try {
+    header = JSON.parse(Buffer.from(encodedHeader, "base64url").toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+    payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as Record<
+      string,
+      unknown
+    >;
+  } catch {
+    return false;
+  }
+  if (header["alg"] !== "RS256" || typeof header["kid"] !== "string") return false;
+  if (payload["iss"] !== config.issuer) return false;
+  if (payload["aud"] !== config.audience) return false;
+  if (config.serviceAccountEmail && payload["email"] !== config.serviceAccountEmail) return false;
+  if (config.serviceAccountEmail && payload["email_verified"] === false) return false;
+  const exp = typeof payload["exp"] === "number" ? payload["exp"] * 1000 : 0;
+  const iat = typeof payload["iat"] === "number" ? payload["iat"] * 1000 : 0;
+  if (exp <= now || iat - 5 * 60 * 1000 > now) return false;
+
+  const jwk = (await getJwks(config.jwksUrl, cache, now)).find((key) => key.kid === header["kid"]);
+  if (!jwk) return false;
+  try {
+    const publicKey = crypto.createPublicKey({ key: jwk, format: "jwk" });
+    return crypto.verify(
+      "RSA-SHA256",
+      Buffer.from(`${encodedHeader}.${encodedPayload}`),
+      publicKey,
+      Buffer.from(encodedSignature, "base64url")
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function getJwks(
+  url: string,
+  cache: Map<string, { expiresAt: number; keys: JwkWithKeyId[] }>,
+  now: number
+): Promise<JwkWithKeyId[]> {
+  const cached = cache.get(url);
+  if (cached && cached.expiresAt > now) return cached.keys;
+  const response = await fetch(url);
+  if (!response.ok) return [];
+  const json = (await response.json()) as { keys?: JwkWithKeyId[] };
+  const maxAge = parseMaxAge(response.headers.get("cache-control"));
+  const keys = Array.isArray(json.keys) ? json.keys : [];
+  cache.set(url, { keys, expiresAt: now + (maxAge ?? 5 * 60 * 1000) });
+  return keys;
+}
+
+function parseMaxAge(header: string | null): number | null {
+  if (!header) return null;
+  const match = /(?:^|,)\s*max-age=(\d+)/i.exec(header);
+  return match ? Number(match[1]) * 1000 : null;
 }

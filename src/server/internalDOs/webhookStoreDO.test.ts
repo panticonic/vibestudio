@@ -16,6 +16,8 @@ function input(overrides: Partial<CreateInput> = {}): CreateInput {
       objectKey: "main",
       method: "onPush",
     },
+    delivery: overrides.delivery ?? { mode: "relay" },
+    payload: overrides.payload ?? { type: "json" },
     verifier: overrides.verifier ?? {
       type: "hmac-sha256",
       headerName: "X-Hub-Signature-256",
@@ -23,6 +25,11 @@ function input(overrides: Partial<CreateInput> = {}): CreateInput {
       prefix: "sha256=",
     },
     replay: overrides.replay,
+    response: overrides.response ?? {
+      successStatus: 202,
+      malformedPayload: "reject",
+      dispatchError: "retry",
+    },
     publicUrl: overrides.publicUrl ?? "https://example.test/_w/abc",
     revokedAt: overrides.revokedAt,
   };
@@ -91,7 +98,10 @@ describe("WebhookStoreDO", () => {
           signedPayload: "slack-v0",
           toleranceMs: 300000,
         },
-        replay: { deliveryIdHeader: "X-GitHub-Delivery", ttlMs: 60000 },
+        delivery: { mode: "direct" },
+        payload: { type: "cloud-pubsub", decodeData: "json" },
+        replay: { key: { type: "json-pointer", pointer: "/message/messageId" }, ttlMs: 60000 },
+        response: { successStatus: 204, malformedPayload: "ack", dispatchError: "ack" },
       })
     );
 
@@ -101,6 +111,16 @@ describe("WebhookStoreDO", () => {
       toleranceMs: 300000,
       signedPayload: "slack-v0",
     });
-    expect(fetched!.replay).toEqual({ deliveryIdHeader: "X-GitHub-Delivery", ttlMs: 60000 });
+    expect(fetched!.delivery).toEqual({ mode: "direct" });
+    expect(fetched!.payload).toEqual({ type: "cloud-pubsub", decodeData: "json" });
+    expect(fetched!.replay).toEqual({
+      key: { type: "json-pointer", pointer: "/message/messageId" },
+      ttlMs: 60000,
+    });
+    expect(fetched!.response).toEqual({
+      successStatus: 204,
+      malformedPayload: "ack",
+      dispatchError: "ack",
+    });
   });
 });

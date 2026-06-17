@@ -1607,7 +1607,9 @@ async function main() {
         );
         webhookIngress = createWebhookIngressService({
           relaySigningSecret: process.env["NATSTACK_RELAY_SIGNING_SECRET"],
-          publicBaseUrl: process.env["NATSTACK_WEBHOOK_PUBLIC_URL"] ?? "https://hooks.snugenv.com",
+          relayPublicBaseUrl:
+            process.env["NATSTACK_WEBHOOK_PUBLIC_URL"] ?? "https://hooks.snugenv.com",
+          directPublicBaseUrl: getConfiguredPublicUrl(),
           rpc: {
             call: (targetId, method, ...args) =>
               rpcServer.server.callTarget(targetId, method, ...args),

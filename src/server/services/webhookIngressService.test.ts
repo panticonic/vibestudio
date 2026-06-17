@@ -6,18 +6,19 @@ import { describe, expect, it } from "vitest";
 import {
   InMemoryWebhookIngressStore,
   createWebhookIngressService,
-  type WebhookDeliveryEvent,
   type WebhookIngressServiceDeps,
 } from "./webhookIngressService.js";
 import { createVerifiedCaller, type ServiceContext } from "@natstack/shared/serviceDispatcher";
 import type {
   CreateWebhookIngressSubscriptionRequest,
+  WebhookDeliveryEvent,
   WebhookIngressSubscriptionSummary,
   WebhookTarget,
 } from "../../../packages/shared/src/webhooks/ingress.js";
 
 const RELAY_SECRET = "relay-secret-for-tests-only";
-const PUBLIC_BASE_URL = "https://hooks.test";
+const RELAY_BASE_URL = "https://hooks.test";
+const DIRECT_BASE_URL = "https://direct.test";
 
 function shellCtx(callerId = "shell-1"): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "shell") };
@@ -133,7 +134,8 @@ function setup(extra: Partial<WebhookIngressServiceDeps> = {}) {
   const dispatched: Array<{ target: WebhookTarget; event: WebhookDeliveryEvent }> = [];
   const svc = createWebhookIngressService({
     relaySigningSecret: RELAY_SECRET,
-    publicBaseUrl: PUBLIC_BASE_URL,
+    relayPublicBaseUrl: RELAY_BASE_URL,
+    directPublicBaseUrl: DIRECT_BASE_URL,
     store,
     dispatchToTarget: async (target, event) => {
       dispatched.push({ target, event });
@@ -152,18 +154,21 @@ describe("webhookIngressService — RPC surface", () => {
       {
         label: "github",
         target: TARGET,
+        delivery: { mode: "relay" },
+        payload: { type: "json" },
         verifier: {
           type: "hmac-sha256",
           headerName: "X-Hub-Signature-256",
           secret: "shh",
           prefix: "sha256=",
         },
+        response: { successStatus: 202, malformedPayload: "reject", dispatchError: "retry" },
       } satisfies CreateWebhookIngressSubscriptionRequest,
     ])) as WebhookIngressSubscriptionSummary;
 
     expect(created.subscriptionId).toMatch(/^[0-9a-f-]{36}$/);
     expect(created.publicUrl).toBe(
-      `${PUBLIC_BASE_URL}/i/${encodeURIComponent(created.subscriptionId)}`
+      `${RELAY_BASE_URL}/i/${encodeURIComponent(created.subscriptionId)}`
     );
     expect(created.verifier).toMatchObject({ type: "hmac-sha256", hasSecret: true });
     // Secret is stripped from the summary surface
@@ -202,13 +207,19 @@ describe("webhookIngressService — RPC surface", () => {
     const subA = (await svc.definition.handler(a, "createSubscription", [
       {
         target: TARGET,
+        delivery: { mode: "relay" },
+        payload: { type: "raw" },
         verifier: { type: "bearer", headerName: "Authorization", token: "tok-a", scheme: "Bearer" },
+        response: { successStatus: 202, malformedPayload: "reject", dispatchError: "retry" },
       },
     ])) as WebhookIngressSubscriptionSummary;
     await svc.definition.handler(b, "createSubscription", [
       {
         target: TARGET,
+        delivery: { mode: "relay" },
+        payload: { type: "raw" },
         verifier: { type: "bearer", headerName: "Authorization", token: "tok-b", scheme: "Bearer" },
+        response: { successStatus: 202, malformedPayload: "reject", dispatchError: "retry" },
       },
     ]);
 
@@ -239,7 +250,10 @@ describe("webhookIngressService — RPC surface", () => {
       svc.definition.handler(wrongSourceCtx, "createSubscription", [
         {
           target: TARGET,
+          delivery: { mode: "relay" },
+          payload: { type: "raw" },
           verifier: { type: "hmac-sha256", headerName: "X-Sig", secret: "s" },
+          response: { successStatus: 202, malformedPayload: "reject", dispatchError: "retry" },
         },
       ])
     ).rejects.toThrow(/must belong to caller source/);
@@ -250,13 +264,23 @@ describe("webhookIngressService — public ingress route", () => {
   async function provision(
     svc: ReturnType<typeof setup>["svc"],
     verifier: CreateWebhookIngressSubscriptionRequest["verifier"],
-    replay?: CreateWebhookIngressSubscriptionRequest["replay"]
+    replay?: CreateWebhookIngressSubscriptionRequest["replay"],
+    overrides: Partial<
+      Pick<CreateWebhookIngressSubscriptionRequest, "delivery" | "payload" | "response">
+    > = {}
   ) {
     return (await svc.definition.handler(shellCtx(), "createSubscription", [
       {
         target: TARGET,
+        delivery: overrides.delivery ?? { mode: "relay" },
+        payload: overrides.payload ?? { type: "json" },
         verifier,
         replay,
+        response: overrides.response ?? {
+          successStatus: 202,
+          malformedPayload: "reject",
+          dispatchError: "retry",
+        },
       },
     ])) as WebhookIngressSubscriptionSummary;
   }
@@ -285,7 +309,7 @@ describe("webhookIngressService — public ingress route", () => {
     const sub = await provision(
       svc,
       { type: "hmac-sha256", headerName: "X-Sig", secret: "shh", prefix: "sha256=" },
-      { deliveryIdHeader: "X-Delivery-Id", ttlMs: 60_000 }
+      { key: { type: "header", name: "X-Delivery-Id" }, ttlMs: 60_000 }
     );
     const handler = findRoute(svc);
     const body = Buffer.from(`{"event":"push"}`);
@@ -305,7 +329,7 @@ describe("webhookIngressService — public ingress route", () => {
     expect(first.captured.body).toEqual({ accepted: true, subscriptionId: sub.subscriptionId });
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]!.target).toEqual(TARGET);
-    expect(dispatched[0]!.event.json).toEqual({ event: "push" });
+    expect(dispatched[0]!.event.payload).toEqual({ type: "json", json: { event: "push" } });
 
     // Replay with the same delivery id must be rejected
     const second = createMockReqRes("POST", path, body, {
@@ -380,6 +404,84 @@ describe("webhookIngressService — public ingress route", () => {
     });
     await handler(req, res, { subscriptionId: sub.subscriptionId });
     expect(captured.status).toBe(202);
+    expect(dispatched).toHaveLength(1);
+  });
+
+  it("accepts direct query-token deliveries without the relay envelope", async () => {
+    const { svc, dispatched } = setup();
+    const sub = await provision(
+      svc,
+      { type: "query-token", paramName: "token", token: "tok" },
+      { key: { type: "body-sha256" }, ttlMs: 60_000 },
+      { delivery: { mode: "direct" }, payload: { type: "json" } }
+    );
+    expect(sub.publicUrl).toBe(
+      `${DIRECT_BASE_URL}/_r/s/webhookIngress/${encodeURIComponent(sub.subscriptionId)}`
+    );
+    const handler = findRoute(svc);
+    const body = Buffer.from(`{"provider":"direct"}`);
+    const path = `/_r/s/webhookIngress/${sub.subscriptionId}?token=tok`;
+    const { req, res, captured } = createMockReqRes("POST", path, body, {
+      "content-type": "application/json",
+    });
+    await handler(req, res, { subscriptionId: sub.subscriptionId });
+    expect(captured.status).toBe(202);
+    expect(dispatched[0]!.event.delivery).toEqual({ mode: "direct" });
+    expect(dispatched[0]!.event.payload).toEqual({
+      type: "json",
+      json: { provider: "direct" },
+    });
+  });
+
+  it("decodes Cloud Pub/Sub envelopes generically", async () => {
+    const { svc, dispatched } = setup();
+    const sub = await provision(
+      svc,
+      { type: "query-token", paramName: "token", token: "tok" },
+      { key: { type: "json-pointer", pointer: "/message/messageId" }, ttlMs: 60_000 },
+      {
+        delivery: { mode: "direct" },
+        payload: { type: "cloud-pubsub", decodeData: "json" },
+        response: { successStatus: 204, malformedPayload: "ack", dispatchError: "ack" },
+      }
+    );
+    const body = Buffer.from(
+      JSON.stringify({
+        message: {
+          data: Buffer.from(
+            JSON.stringify({ emailAddress: "me@example.com", historyId: "h1" })
+          ).toString("base64"),
+          messageId: "m-1",
+          publishTime: "2026-06-17T10:00:00Z",
+          attributes: { source: "gmail" },
+        },
+        subscription: "projects/p/subscriptions/s",
+      })
+    );
+    const first = createMockReqRes(
+      "POST",
+      `/_r/s/webhookIngress/${sub.subscriptionId}?token=tok`,
+      body,
+      {}
+    );
+    await findRoute(svc)(first.req, first.res, { subscriptionId: sub.subscriptionId });
+    expect(first.captured.status).toBe(204);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]!.event.payload).toMatchObject({
+      type: "cloud-pubsub",
+      subscription: "projects/p/subscriptions/s",
+      messageId: "m-1",
+      dataJson: { emailAddress: "me@example.com", historyId: "h1" },
+    });
+
+    const replay = createMockReqRes(
+      "POST",
+      `/_r/s/webhookIngress/${sub.subscriptionId}?token=tok`,
+      body,
+      {}
+    );
+    await findRoute(svc)(replay.req, replay.res, { subscriptionId: sub.subscriptionId });
+    expect(replay.captured.status).toBe(409);
     expect(dispatched).toHaveLength(1);
   });
 });

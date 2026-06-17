@@ -83,8 +83,14 @@ export type {
   CreateWebhookIngressSubscriptionRequest,
   RotateWebhookIngressSecretRequest,
   RotateWebhookIngressSecretResult,
+  WebhookDeliveredPayload,
+  WebhookDeliveryConfig,
+  WebhookDeliveryEvent,
   WebhookIngressClient,
   WebhookIngressSubscriptionSummary,
+  WebhookPayloadFormat,
+  WebhookReplayConfig,
+  WebhookResponsePolicy,
   WebhookTarget,
   WebhookVerifierConfig,
 } from "../shared/webhooks.js";
@@ -348,8 +354,10 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   const gatewayAliases = parseGatewayAliases(env.GATEWAY_URL_ALIASES);
   const gatewayConfig = { serverUrl, token: env.RPC_AUTH_TOKEN, aliases: gatewayAliases };
   const gatewayFetch = createGatewayFetch(gatewayConfig);
-  const gitInteropService = createTypedServiceClient("gitInterop", gitInteropMethods, (svc, method, args) =>
-    rpc.call("main", `${svc}.${method}`, args)
+  const gitInteropService = createTypedServiceClient(
+    "gitInterop",
+    gitInteropMethods,
+    (svc, method, args) => rpc.call("main", `${svc}.${method}`, args)
   );
   const vcs = helpfulNamespace(
     "vcs",
