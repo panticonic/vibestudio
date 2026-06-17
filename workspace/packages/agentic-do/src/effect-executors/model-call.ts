@@ -21,7 +21,11 @@ import {
   type AgenticEvent,
 } from "@workspace/agentic-protocol";
 import { buildRawThinkingOptions, type RawThinkingModel } from "./pi-raw-thinking-options.js";
-import { CredentialPendingError, type EffectExecutor } from "./types.js";
+import {
+  CredentialApprovalDeferredError,
+  CredentialPendingError,
+  type EffectExecutor,
+} from "./types.js";
 
 const DEFAULT_MODEL_STREAM_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const PI_REPLAY_METADATA_KEY = "pi";
@@ -374,8 +378,13 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
       credentials = await deps.credentials.getApiKey({
         providerId: request.provider,
         ...(modelBaseUrl ? { modelBaseUrl } : {}),
+        requestId: descriptor.effectId,
+        idempotencyKey: descriptor.idempotencyKey,
       });
     } catch (err) {
+      if (err instanceof CredentialApprovalDeferredError) {
+        return { deferred: true };
+      }
       if (err instanceof CredentialPendingError) {
         return {
           kind: "model-suspended",

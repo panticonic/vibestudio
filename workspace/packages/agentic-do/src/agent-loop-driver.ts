@@ -130,6 +130,15 @@ function mapScheduledModelResumeRow(row: Record<string, unknown>): ScheduledMode
   };
 }
 
+function deferredErrorMessage(result: unknown): string {
+  if (result instanceof Error) return result.message;
+  if (result && typeof result === "object") {
+    const message = (result as Record<string, unknown>)["message"];
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  return typeof result === "string" && result.trim() ? result : "Deferred call failed";
+}
+
 /** Append failures that mean "our in-memory fold is behind the log" —
  *  classified by the store's typed error contract, never by prose. */
 function isStaleStateAppendError(err: Error): boolean {
@@ -160,10 +169,17 @@ export class AgentLoopDriver {
   }
 
   private dispatchDescriptor(row: OutboxRow, descriptor: EffectDescriptor): EffectDescriptor {
-    if (descriptor.kind !== "http_call" && descriptor.kind !== "credential_wait") {
+    if (
+      descriptor.kind !== "model_call" &&
+      descriptor.kind !== "http_call" &&
+      descriptor.kind !== "credential_wait"
+    ) {
       return descriptor;
     }
-    return { ...descriptor, effectId: outboxExternalId(row.branchId, row.effectId) } as EffectDescriptor;
+    return {
+      ...descriptor,
+      effectId: outboxExternalId(row.branchId, row.effectId),
+    } as EffectDescriptor;
   }
 
   private outcomeRow(effectId: string, address: OutcomeAddress = {}): OutboxRow | null {
@@ -550,19 +566,43 @@ export class AgentLoopDriver {
     }
     this.aborts.delete(this.rowKey(row));
     if ((outcome as { deferred?: boolean }).deferred) {
-      // result arrives via deliverEffectOutcome; nudge-redrive later
-      this.outbox.releaseLease(row.branchId, row.effectId);
-      this.deps.sql.exec(
-        `UPDATE effect_outbox
-         SET next_attempt_at = ?
-         WHERE branch_id = ? AND effect_id = ?`,
-        this.deps.now() + 60_000,
-        row.branchId,
-        row.effectId
-      );
+      // Result arrives out-of-band. Keep an earlier wake if the result raced
+      // this deferred ack; otherwise redrive later as a backstop.
+      this.deferRedrive(row, 60_000);
       return;
     }
     await this.applyOutcome(row, outcome as EffectOutcome);
+  }
+
+  private deferRedrive(row: OutboxRow, delayMs: number): void {
+    const now = this.deps.now();
+    this.deps.sql.exec(
+      `UPDATE effect_outbox
+       SET lease_expires_at = NULL,
+           next_attempt_at = CASE
+             WHEN next_attempt_at IS NOT NULL AND next_attempt_at <= ? THEN next_attempt_at
+             ELSE ?
+           END
+       WHERE branch_id = ? AND effect_id = ?`,
+      now,
+      now + delayMs,
+      row.branchId,
+      row.effectId
+    );
+    this.scheduleEarliest();
+  }
+
+  private nudgeRedrive(row: OutboxRow): void {
+    this.deps.sql.exec(
+      `UPDATE effect_outbox
+       SET lease_expires_at = NULL,
+           next_attempt_at = ?
+       WHERE branch_id = ? AND effect_id = ?`,
+      this.deps.now(),
+      row.branchId,
+      row.effectId
+    );
+    this.requestPump();
   }
 
   /** Outcome protocol: append outcome events FIRST, then delete the row. */
@@ -796,6 +836,38 @@ export class AgentLoopDriver {
     const row = this.outcomeRow(effectId, address);
     if (!row) return; // already settled — deterministic ids make this a no-op
     await this.applyOutcome(row, outcome);
+  }
+
+  async deliverDeferredResult(
+    requestId: string,
+    result: unknown,
+    isError: boolean,
+    address: OutcomeAddress = {}
+  ): Promise<void> {
+    const row = this.outcomeRow(requestId, address);
+    if (!row) return;
+    if (row.kind === "model_call") {
+      if (isError) {
+        await this.failEffect(row, { message: deferredErrorMessage(result) });
+        return;
+      }
+      this.nudgeRedrive(row);
+      return;
+    }
+    if (row.kind === "credential_wait") {
+      if (isError) {
+        await this.failEffect(row, { message: deferredErrorMessage(result) });
+        return;
+      }
+      await this.applyOutcome(row, { kind: "credential", resolved: true });
+      return;
+    }
+    await this.applyOutcome(row, {
+      kind: "tool",
+      result,
+      isError,
+      ...(isError ? { reason: deferredErrorMessage(result) } : {}),
+    });
   }
 
   async failEffect(row: OutboxRow, error: { message: string }): Promise<void> {

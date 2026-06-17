@@ -51,6 +51,8 @@ export interface CredentialPort {
   getApiKey(input: {
     providerId: string;
     modelBaseUrl?: string;
+    requestId?: string;
+    idempotencyKey?: string;
   }): Promise<{ apiKey: string; headers?: Record<string, string> }>;
   /** Register interest in a credential with the server-side service;
    *  resolution is delivered back via deliverEffectOutcome (http callback). */
@@ -69,6 +71,16 @@ export class CredentialPendingError extends Error {
   ) {
     super(`credential pending for ${providerId}`);
     this.name = "CredentialPendingError";
+  }
+}
+
+export class CredentialApprovalDeferredError extends Error {
+  constructor(
+    public readonly providerId: string,
+    public readonly modelBaseUrl?: string
+  ) {
+    super(`credential approval deferred for ${providerId}`);
+    this.name = "CredentialApprovalDeferredError";
   }
 }
 

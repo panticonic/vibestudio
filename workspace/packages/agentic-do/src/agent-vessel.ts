@@ -61,6 +61,7 @@ import { FeedbackIngest } from "./feedback-ingest.js";
 import { CardManager } from "./custom-cards.js";
 import { AgentLoopDriver } from "./agent-loop-driver.js";
 import {
+  CredentialApprovalDeferredError,
   CredentialPendingError,
   type EphemeralEmit,
   type ExecutorDeps,
@@ -443,28 +444,51 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         },
       },
       credentials: {
-        getApiKey: async ({ providerId, modelBaseUrl }) => {
+        getApiKey: async ({ providerId, modelBaseUrl, requestId, idempotencyKey }) => {
           // Prefer URL-bound credentials when the model exposes a concrete
           // endpoint; fall back to provider-scoped credentials for providers
           // whose registry entries do not carry a base URL.
           let summary: ModelCredentialSummary | null;
+          const resolveRequest = modelBaseUrl ? { url: modelBaseUrl } : { providerId };
           try {
-            summary = await this.rpc.call<ModelCredentialSummary | null>(
-              "main",
-              "credentials.resolveCredential",
-              [modelBaseUrl ? { url: modelBaseUrl } : { providerId }]
-            );
+            if (requestId) {
+              const ack = await this.rpc.callDeferred(
+                "main",
+                "credentials.resolveCredential",
+                [resolveRequest],
+                { requestId, idempotencyKey: idempotencyKey ?? requestId }
+              );
+              if (ack.status === "deferred") {
+                throw new CredentialApprovalDeferredError(providerId, modelBaseUrl);
+              }
+              summary = ack.result as ModelCredentialSummary | null;
+            } else {
+              summary = await this.rpc.call<ModelCredentialSummary | null>(
+                "main",
+                "credentials.resolveCredential",
+                [resolveRequest]
+              );
+            }
             if (!summary) throw new CredentialPendingError(providerId, modelBaseUrl);
           } catch (err) {
-            if (!(err instanceof CredentialPendingError)) {
+            if (
+              !(
+                err instanceof CredentialPendingError ||
+                err instanceof CredentialApprovalDeferredError
+              )
+            ) {
               console.warn(
                 `[AgentVessel] resolveCredential(${modelBaseUrl ?? providerId}) failed:`,
                 err instanceof Error ? err.message : err
               );
             }
-            throw err instanceof CredentialPendingError
-              ? err
-              : new CredentialPendingError(providerId, modelBaseUrl);
+            if (
+              err instanceof CredentialPendingError ||
+              err instanceof CredentialApprovalDeferredError
+            ) {
+              throw err;
+            }
+            throw new CredentialPendingError(providerId, modelBaseUrl);
           }
           installUrlBoundModelFetchProxy(modelBaseUrl ?? "*", (url, init) =>
             this.credentials.fetch(url, init)
@@ -1584,11 +1608,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     result?: unknown;
     isError?: boolean;
   }): Promise<void> {
-    await this.driver.deliverEffectOutcome(payload.requestId, {
-      kind: "tool",
-      result: payload.result ?? null,
-      isError: payload.isError === true,
-    } as EffectOutcome);
+    await this.driver.deliverDeferredResult(
+      payload.requestId,
+      payload.result ?? null,
+      payload.isError === true
+    );
   }
 
   // ── Custom message recovery (CardManager read path) ─────────────────────
