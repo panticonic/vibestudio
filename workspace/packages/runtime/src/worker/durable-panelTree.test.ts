@@ -284,7 +284,7 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
   });
 
-  it("builds a panel parent handle with slot-scoped CDP and entity-scoped RPC", async () => {
+  it("builds a panel parent handle with entity-scoped RPC and slot-scoped CDP", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
@@ -310,21 +310,16 @@ describe("DurableObjectBase panelTree handles", () => {
       async probeParent(): Promise<{
         id: string;
         title: string | undefined;
-        cdpError: string;
+        cdpEndpoint: unknown;
       } | null> {
         const parent = this.getParent();
         if (!parent) return null;
         const info = await parent.getInfo();
         await parent.call["ping"]?.();
-        let cdpError = "";
-        try {
-          await parent.cdp.getCdpEndpoint();
-        } catch (error) {
-          cdpError = error instanceof Error ? error.message : String(error);
-        }
+        const cdpEndpoint = await parent.cdp.getCdpEndpoint();
         await parent.reload();
         await parent.rebuildAndReload();
-        return { id: info.id, title: info.title, cdpError };
+        return { id: info.id, title: info.title, cdpEndpoint };
       }
     }
 
@@ -348,7 +343,7 @@ describe("DurableObjectBase panelTree handles", () => {
     await expect(response.json()).resolves.toEqual({
       id: "parent-slot",
       title: "parent-slot",
-      cdpError: "",
+      cdpEndpoint: { wsEndpoint: "ws://cdp.test" },
     });
     expect(calls).toEqual([
       {

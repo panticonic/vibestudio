@@ -304,7 +304,7 @@ describe("worker panelTree handles", () => {
     ]);
   });
 
-  it("builds panel parent handles with slot-scoped CDP/control and entity-scoped RPC", async () => {
+  it("builds panel parent handles with entity-scoped RPC and slot-scoped CDP", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
