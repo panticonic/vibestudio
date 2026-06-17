@@ -14,6 +14,7 @@ import {
   createUnitBatchEntryBase,
   findUnitGraphNode,
   normalizeUnitRepoPath as normalizeRepoPath,
+  normalizeUnitRef as normalizeRef,
   requestUnitBatchApproval,
   unitBuildIdentityFromRegistryEntry,
   canonicalUnitBuildIdentity,
@@ -217,7 +218,15 @@ interface BuildSystemLike {
   getGraph(): {
     allNodes(): AppGraphNode[];
   };
-  onPushBuild(callback: (source: string) => void): void;
+  onPushBuild(callback: (source: string, trigger?: { head: string }) => void): void;
+  onUnitChange?(
+    callback: (event: {
+      name: string;
+      relativePath: string;
+      kind: string;
+      trigger: { head: string };
+    }) => void
+  ): () => void;
 }
 
 interface HostTargetSelectionState {
@@ -328,6 +337,7 @@ export interface AppHostDeps {
   entityCache?: Pick<EntityCache, "resolve" | "listActive" | "_onActivate" | "_onRetire">;
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
   getGatewayUrl(): string;
+  getAppArtifactBaseUrl?(): string;
   getReactNativeBootstrapUrl(): string;
   onHostTargetChanged?(target: HostTarget, reason: string): void;
 }
@@ -440,10 +450,19 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         );
       },
     });
-    deps.buildSystem.onPushBuild((source) => {
-      this.handleSourceRebuilt(source).catch((err) => {
+    deps.buildSystem.onPushBuild((source, trigger) => {
+      this.handleSourceRebuilt(source, trigger).catch((err) => {
         console.error(
           `[AppHost] Failed to reload rebuilt app source ${source}:`,
+          err instanceof Error ? err.message : String(err)
+        );
+      });
+    });
+    deps.buildSystem.onUnitChange?.((event) => {
+      if (event.kind !== "app") return;
+      this.handleChangedAppUnit(event).catch((err) => {
+        console.error(
+          `[AppHost] Failed to reconcile changed app unit ${event.relativePath}:`,
           err instanceof Error ? err.message : String(err)
         );
       });
@@ -1426,7 +1445,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       };
     }
 
-    const baseUrl = `${this.deps.getGatewayUrl()}/_a/${encodeURIComponent(entry.activeBundleKey)}`;
+    const baseUrl = this.getAppArtifactBuildUrl(entry.activeBundleKey);
     return {
       ready: true,
       source: candidate.source,
@@ -1647,7 +1666,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     } = {}
   ): AppAvailablePayload {
     const buildKey = entry.activeBundleKey ?? "";
-    const baseUrl = `${this.deps.getGatewayUrl()}/_a/${encodeURIComponent(buildKey)}`;
+    const baseUrl = this.getAppArtifactBuildUrl(buildKey);
     const build = buildKey ? this.deps.buildSystem.getBuildByKey?.(buildKey) : null;
     const artifactUrls = (build?.artifacts ?? []).map((artifact) => ({
       path: artifact.path,
@@ -1707,6 +1726,11 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     if (opts.notify) this.notifyAppUpdateAvailable(entry);
     this.emitStatus(entry.name, entry.status, entry.lastError ?? null);
     return payload;
+  }
+
+  private getAppArtifactBuildUrl(buildKey: string): string {
+    const gatewayUrl = this.deps.getAppArtifactBaseUrl?.() ?? this.deps.getGatewayUrl();
+    return `${gatewayUrl}/_a/${encodeURIComponent(buildKey)}`;
   }
 
   private validateActiveBuild(entry: AppRegistryEntry): void {
@@ -2340,12 +2364,39 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     this.emitDevStatusDiagnostic(`launch:${target}`);
   }
 
-  private async handleSourceRebuilt(source: string): Promise<void> {
+  private async handleChangedAppUnit(event: {
+    name: string;
+    relativePath: string;
+    trigger?: { head: string };
+  }): Promise<void> {
+    const entry =
+      this.registry.get(event.name) ??
+      this.registry
+        .list()
+        .find(
+          (candidate) =>
+            normalizeRepoPath(candidate.source.repo) === normalizeRepoPath(event.relativePath)
+        );
+    if (!entry) return;
+    if (!this.sourceChangeAppliesToEntry(event.trigger, entry)) return;
+    await this.handleSourceRebuilt(entry.source.repo, event.trigger);
+  }
+
+  private sourceChangeAppliesToEntry(
+    trigger: { head: string } | undefined,
+    entry: AppRegistryEntry
+  ): boolean {
+    if (!trigger?.head) return true;
+    return normalizeRef(trigger.head) === normalizeRef(entry.source.ref);
+  }
+
+  private async handleSourceRebuilt(source: string, trigger?: { head: string }): Promise<void> {
     const normalized = normalizeRepoPath(source);
     const entry = this.registry
       .list()
       .find((candidate) => normalizeRepoPath(candidate.source.repo) === normalized);
     if (!entry) return;
+    if (!this.sourceChangeAppliesToEntry(trigger, entry)) return;
     const node = this.findAppNode(entry.name);
     try {
       await this.buildAndActivate(node, {

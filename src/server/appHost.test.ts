@@ -38,6 +38,7 @@ function makeHarness(
     approvalDecision?: "once" | "session" | "version" | "repo" | "deny";
     useApprovalCoordinator?: boolean;
     readWorkspaceFileAtCommit?: (commit: string, filePath: string) => Promise<string | null>;
+    appArtifactBaseUrl?: string;
     reactNativeBootstrapUrl?: string;
   } = {}
 ) {
@@ -161,6 +162,7 @@ function makeHarness(
       allNodes: () => [graphNode],
     })),
     onPushBuild: vi.fn(),
+    onUnitChange: vi.fn(),
   };
   const eventService = { emit: vi.fn(), getOrCreateSubscriber: vi.fn(), subscribe: vi.fn() };
   const approvalQueue = {
@@ -184,6 +186,9 @@ function makeHarness(
     entityCache,
     readWorkspaceFileAtCommit: opts.readWorkspaceFileAtCommit ?? (async () => null),
     getGatewayUrl: () => "http://127.0.0.1:1234",
+    ...(opts.appArtifactBaseUrl
+      ? { getAppArtifactBaseUrl: () => opts.appArtifactBaseUrl as string }
+      : {}),
     getReactNativeBootstrapUrl: () => opts.reactNativeBootstrapUrl ?? "http://127.0.0.1:1234",
   });
   return {
@@ -480,6 +485,74 @@ describe("AppHost", () => {
       expect.objectContaining({
         type: "error",
         title: "App update failed",
+      })
+    );
+  });
+
+  it("rebuilds an installed app when its main-head effective version changes", async () => {
+    const { host, buildSystem, eventService, graphNode } = makeHarness();
+    installApp(host, graphNode);
+    const changedBuild = {
+      dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "app-key-2"),
+      metadata: {
+        ev: "ev-app-2",
+        sourceStateHash: "state:test",
+        details: { kind: "app" as const, target: "electron" as const, integrity: "sha256-app-2" },
+      },
+      artifacts: [
+        {
+          path: "index.html",
+          role: "html",
+          contentType: "text/html; charset=utf-8",
+          encoding: "utf8",
+          content: "<!doctype html><div>new</div>",
+        },
+      ],
+    };
+    buildSystem.getBuild.mockResolvedValueOnce(changedBuild as never);
+
+    const onUnitChange = buildSystem.onUnitChange.mock.calls[0]?.[0] as
+      | ((event: {
+          name: string;
+          relativePath: string;
+          kind: string;
+          trigger: { head: string };
+        }) => void)
+      | undefined;
+    expect(onUnitChange).toBeDefined();
+
+    onUnitChange?.({
+      name: "@workspace-apps/shell",
+      relativePath: "apps/shell",
+      kind: "app",
+      trigger: { head: "ctx:other" },
+    });
+    await flushAsyncWork();
+    expect(buildSystem.getBuild).not.toHaveBeenCalled();
+
+    onUnitChange?.({
+      name: "@workspace-apps/shell",
+      relativePath: "apps/shell",
+      kind: "app",
+      trigger: { head: "main" },
+    });
+    await flushAsyncWork();
+
+    expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
+    expect(host.registry.get("@workspace-apps/shell")).toMatchObject({
+      status: "running",
+      activeBundleKey: "app-key-2",
+      activeEv: "ev-app-2",
+      previousVersions: [
+        expect.objectContaining({ activeBundleKey: "app-key", activeEv: "ev-app" }),
+      ],
+    });
+    expect(eventService.emit).toHaveBeenCalledWith(
+      "apps:lifecycle",
+      expect.objectContaining({
+        type: "update-available",
+        appId: "@workspace-apps/shell",
+        buildKey: "app-key-2",
       })
     );
   });
@@ -816,6 +889,39 @@ describe("AppHost", () => {
       url: "http://127.0.0.1:1234/_a/app-key/index.html",
     });
     expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
+  });
+
+  it("advertises Electron shell artifacts from the paired connect origin", async () => {
+    const { host, eventService, graphNode } = makeHarness({
+      appArtifactBaseUrl: "https://host.tailnet.ts.net",
+    });
+    graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
+
+    host.setDeclared([{ source: "apps/shell", ref: "main" }]);
+    const readiness = await host.ensureElectronReady();
+
+    expect(readiness).toMatchObject({
+      ready: true,
+      source: "apps/shell",
+      appId: "@workspace-apps/shell",
+      buildKey: "app-key",
+      url: "https://host.tailnet.ts.net/_a/app-key/index.html",
+    });
+    expect(eventService.emit).toHaveBeenCalledWith(
+      "apps:available",
+      expect.objectContaining({
+        appId: "@workspace-apps/shell",
+        source: "apps/shell",
+        target: "electron",
+        url: "https://host.tailnet.ts.net/_a/app-key/index.html",
+        artifacts: expect.arrayContaining([
+          expect.objectContaining({
+            path: "index.html",
+            url: "https://host.tailnet.ts.net/_a/app-key/index.html",
+          }),
+        ]),
+      })
+    );
   });
 
   it("marks unselected Electron app availability events for the host to ignore", async () => {

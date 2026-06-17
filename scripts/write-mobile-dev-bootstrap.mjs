@@ -1,5 +1,7 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
+import crypto from "crypto";
 
 function parseArgs(argv) {
   const args = {
@@ -36,6 +38,14 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2));
 const targetPath = path.resolve("workspace/apps/mobile/src/generated/devBootstrap.ts");
+const backupPath = path.join(
+  os.tmpdir(),
+  `natstack-mobile-dev-bootstrap-${crypto
+    .createHash("sha256")
+    .update(process.cwd())
+    .digest("hex")
+    .slice(0, 16)}.ts`
+);
 
 const contents = args.clear ? `/**
  * Development bootstrap for the mobile workspace app.
@@ -75,5 +85,14 @@ export const devBootstrapConfig: DevBootstrapConfig | null = {
 };
 `;
 
-fs.writeFileSync(targetPath, contents, "utf8");
-console.log(`Wrote ${targetPath}`);
+if (args.clear && fs.existsSync(backupPath)) {
+  fs.writeFileSync(targetPath, fs.readFileSync(backupPath, "utf8"), "utf8");
+  fs.rmSync(backupPath, { force: true });
+  console.log(`Restored ${targetPath}`);
+} else {
+  if (!args.clear && !fs.existsSync(backupPath)) {
+    fs.writeFileSync(backupPath, fs.readFileSync(targetPath, "utf8"), "utf8");
+  }
+  fs.writeFileSync(targetPath, contents, "utf8");
+  console.log(`Wrote ${targetPath}`);
+}

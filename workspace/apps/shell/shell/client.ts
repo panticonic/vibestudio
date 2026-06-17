@@ -503,6 +503,16 @@ export const workspaceUnits = {
     name: string,
     opts?: { since?: number; level?: "debug" | "info" | "warn" | "error"; limit?: number }
   ) => workspaceClient.units.logs(name, opts),
+  diagnostics: (
+    name: string,
+    opts?: {
+      since?: number;
+      sinceSeq?: number;
+      level?: "debug" | "info" | "warn" | "error";
+      limit?: number;
+      errorLimit?: number;
+    }
+  ) => workspaceClient.units.diagnostics(name, opts),
 };
 // =============================================================================
 // Shell Approval Service (consent approval queue)

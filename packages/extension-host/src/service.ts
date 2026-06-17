@@ -41,6 +41,7 @@ import {
   createUnitBatchEntryBase,
   findUnitGraphNode,
   normalizeUnitRepoPath as normalizeRepoPath,
+  normalizeUnitRef as normalizeRef,
   requestUnitBatchApproval,
   unitBuildIdentityFromRegistryEntry,
   type UnitDeclaration,
@@ -120,7 +121,15 @@ interface BuildSystemLike {
       };
     }>;
   };
-  onPushBuild(callback: (source: string) => void): void;
+  onPushBuild(callback: (source: string, trigger?: { head: string }) => void): void;
+  onUnitChange?(
+    callback: (event: {
+      name: string;
+      relativePath: string;
+      kind: string;
+      trigger: { head: string };
+    }) => void
+  ): () => void;
 }
 
 interface ExtensionBuildMetadataLike {
@@ -369,10 +378,19 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
         );
       },
     });
-    deps.buildSystem.onPushBuild((source) => {
-      this.handleSourceRebuilt(source).catch((err) => {
+    deps.buildSystem.onPushBuild((source, trigger) => {
+      this.handleSourceRebuilt(source, trigger).catch((err) => {
         console.error(
           `[ExtensionHost] Failed to reload rebuilt extension source ${source}:`,
+          err instanceof Error ? err.message : String(err)
+        );
+      });
+    });
+    deps.buildSystem.onUnitChange?.((event) => {
+      if (event.kind !== "extension") return;
+      this.handleChangedExtensionUnit(event).catch((err) => {
+        console.error(
+          `[ExtensionHost] Failed to reconcile changed extension unit ${event.relativePath}:`,
           err instanceof Error ? err.message : String(err)
         );
       });
@@ -1361,9 +1379,36 @@ export class ExtensionHost implements UnitMetaChangeApprovalProvider<UnitBatchEn
     }
   }
 
-  private async handleSourceRebuilt(source: string): Promise<void> {
+  private async handleChangedExtensionUnit(event: {
+    name: string;
+    relativePath: string;
+    trigger?: { head: string };
+  }): Promise<void> {
+    const installed =
+      this.registry.get(event.name) ??
+      this.registry
+        .list()
+        .find(
+          (candidate) =>
+            normalizeRepoPath(candidate.source.repo) === normalizeRepoPath(event.relativePath)
+        );
+    if (!installed) return;
+    if (!this.sourceChangeAppliesToEntry(event.trigger, installed)) return;
+    await this.handleSourceRebuilt(installed.source.repo, event.trigger);
+  }
+
+  private sourceChangeAppliesToEntry(
+    trigger: { head: string } | undefined,
+    entry: RegistryEntry
+  ): boolean {
+    if (!trigger?.head) return true;
+    return normalizeRef(trigger.head) === normalizeRef(entry.source.ref);
+  }
+
+  private async handleSourceRebuilt(source: string, trigger?: { head: string }): Promise<void> {
     const installed = this.unitHost.findInstalledByRepo(source);
     if (!installed) return;
+    if (!this.sourceChangeAppliesToEntry(trigger, installed.entry)) return;
     try {
       await this.buildAndActivate(installed.entry.name, installed.entry.source.ref);
     } catch (err) {
