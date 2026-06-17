@@ -128,7 +128,12 @@ function scriptCommand(
   name: string,
   scriptName: string,
   summary: string,
-  options: { aliases?: string[]; usage?: string; prependArgs?: string[] } = {}
+  options: {
+    aliases?: string[];
+    usage?: string;
+    prependArgs?: string[];
+    passthroughHelp?: boolean;
+  } = {}
 ): CliCommand {
   return {
     group,
@@ -137,6 +142,7 @@ function scriptCommand(
     summary,
     usage: options.usage,
     passthrough: true,
+    ...(options.passthroughHelp ? { passthroughHelp: true } : {}),
     run: (_inv, rawArgs) => runScript(scriptName, [...(options.prependArgs ?? []), ...rawArgs]),
   };
 }
@@ -155,6 +161,8 @@ const remoteCommands: CliCommand[] = [
   scriptCommand("remote", "serve", "remote-serve.mjs", "Start a QR/deep-link pairing server", {
     aliases: ["server"],
     usage: "natstack remote serve [--host tailscale] [--port 3030]",
+    // The pair server's own help documents the resolved server entry.
+    passthroughHelp: true,
   }),
   {
     group: "remote",
@@ -335,6 +343,8 @@ async function remoteHost(inv: ParsedInvocation): Promise<number> {
 const mobileCommands: CliCommand[] = [
   scriptCommand("mobile", "pair", "mobile-pair.mjs", "Start the QR/deep-link pairing server", {
     usage: "natstack mobile pair [--host tailscale] [--port 3030]",
+    // The pair server's own help documents the resolved server entry.
+    passthroughHelp: true,
   }),
   scriptCommand("mobile", "dev", "mobile-dev.mjs", "Metro + local server + debug APK", {
     usage: "natstack mobile dev [--avd <name>] [--device <serial>]",
@@ -401,7 +411,7 @@ export async function main(argv: string[]): Promise<number> {
     printGroupHelp(group);
     return 2;
   }
-  if (command.passthrough && wantsScriptHelp(subArgs)) {
+  if (command.passthrough && command.passthroughHelp && wantsScriptHelp(subArgs)) {
     return await command.run({ positionals: subArgs, flags: {} }, subArgs);
   }
   if (wantsHelp(subArgs)) {

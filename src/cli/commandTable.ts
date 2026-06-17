@@ -36,6 +36,12 @@ export interface CliCommand {
    * skip flag validation entirely.
    */
   passthrough?: boolean;
+  /**
+   * Forward --help/-h to the passthrough script instead of rendering the
+   * registry usage — for scripts that own a richer help screen (e.g. the
+   * pair server, which documents the resolved server entry).
+   */
+  passthroughHelp?: boolean;
   run: (inv: ParsedInvocation, rawArgs: string[]) => Promise<number>;
 }
 
