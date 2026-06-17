@@ -109,6 +109,23 @@ export class CardManager {
   }
 
   /**
+   * Adopt a card recovered from channel replay (e.g. after a fork or
+   * hibernation) into the registry so subsequent `find`/`getOrCreate` calls
+   * reuse its message identity instead of minting a duplicate card.
+   */
+  adoptRecovered(channelId: string, naturalKey: string, typeId: string, messageId: string): void {
+    this.deps.sql.exec(
+      `INSERT OR IGNORE INTO custom_cards (natural_key, channel_id, message_id, type_id, seq, created_at)
+       VALUES (?, ?, ?, ?, 0, ?)`,
+      `${channelId}:${naturalKey}`,
+      channelId,
+      messageId,
+      typeId,
+      Date.now()
+    );
+  }
+
+  /**
    * Create a card with a fresh identity. Prefer `getOrCreate` for cards with a
    * stable role (a dashboard, a per-thread card) so restarts reuse them.
    */
