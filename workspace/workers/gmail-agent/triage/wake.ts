@@ -1,6 +1,6 @@
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { GmailAttentionDecision } from "@workspace/gmail/card-types";
-import type { GmailAttentionEvent } from "./rules.js";
+import type { GmailAttentionEvent } from "../sync/thread-model.js";
 
 export const WAKE_DEBOUNCE_MS = 90_000;
 export const WAKE_TURN_CAP_PER_HOUR = 4;
@@ -59,19 +59,19 @@ export function computeWakeDecision(opts: {
 /** Single digest prompt covering every queued hit in one agent turn. */
 export function buildWakeDigestPrompt(hits: QueuedAttentionHit[], overflowNote?: string): string {
   const lines: string[] = [
-    `${hits.length} message${hits.length === 1 ? "" : "s"} matched your attention rules since the last digest.`,
+    `${hits.length} new message${hits.length === 1 ? "" : "s"} matched your attention preferences since the last digest.`,
     "",
   ];
   for (const hit of hits) {
     lines.push(
       `- Thread ${hit.threadId} | From: ${hit.from || "(unknown)"} | Subject: ${hit.subject || "(no subject)"}`,
-      `  Reason: ${hit.reason} | Requested actions: ${hit.actions.length ? hit.actions.join(", ") : "surface"}`,
+      `  Why: ${hit.reason}`,
       `  Snippet: ${hit.snippet || "(none)"}`
     );
   }
   lines.push(
     "",
-    "Narrate a single concise digest of these messages to the user, perform the requested actions where appropriate, and update Gmail cards as needed.",
+    "Write ONE short digest message for the user, then publish a digest card with gmail_publish_digest covering these threads (at most 5 items, with a one-line gist each).",
     "Do not send mail without an explicit user request; agent-prepared drafts must stay in review on a compose card."
   );
   if (overflowNote) lines.push("", overflowNote);

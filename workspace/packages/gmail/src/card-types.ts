@@ -11,7 +11,7 @@
 
 import type { GmailThreadState } from "./renderers/gmail-thread.reducer.js";
 
-// ── Attention rule model (embedded in the inbox card) ──────────────────────
+// ── Attention/triage decisions ──────────────────────────────────────────────
 
 export type GmailAttentionAction =
   | "surface"
@@ -20,50 +20,10 @@ export type GmailAttentionAction =
   | "archive"
   | "markRead";
 
-export type GmailAttentionScope = "metadata" | "snippet" | "full-thread-on-wake";
-
-export type GmailAttentionField =
-  | "from"
-  | "fromDomain"
-  | "to"
-  | "subject"
-  | "snippet"
-  | "label"
-  | "category"
-  | "hasAttachment"
-  | "priorReplyToSender"
-  | "wakeAll";
-
-export type GmailAttentionOperator = "contains" | "equals" | "matches" | "present";
-
-export interface GmailAttentionCondition {
-  field: GmailAttentionField;
-  op?: GmailAttentionOperator;
-  value?: string;
-}
-
-export interface GmailAttentionMatcher {
-  any?: GmailAttentionCondition[];
-  all?: GmailAttentionCondition[];
-  not?: GmailAttentionCondition[];
-}
-
-export interface GmailAttentionDirective {
-  id: string;
-  name: string;
-  description?: string;
-  enabled: boolean;
-  scope: GmailAttentionScope;
-  priority: number;
-  match: GmailAttentionMatcher;
-  actions: GmailAttentionAction[];
-}
-
-export interface GmailAttentionRuleSet {
-  version: 1;
-  directives: GmailAttentionDirective[];
-}
-
+/**
+ * Why a thread surfaced. `directiveId`/`directiveName` are freeform labels
+ * ("known-sender", "triage"); `reason` is the triage model's explanation.
+ */
 export interface GmailAttentionDecision {
   wake: boolean;
   directiveId?: string;
@@ -79,6 +39,15 @@ export interface GmailAttentionHit {
   reason: string;
   actions: GmailAttentionAction[];
   matchedAt: number;
+}
+
+/** Natural-language attention preferences (replaces the old rule sets). */
+export interface GmailAttentionPrefs {
+  /** The user's standing triage preferences, in their own words. */
+  preferencesText: string;
+  /** Deterministic fast-path: wake for senders the user has replied to. */
+  knownSenderShortcut: boolean;
+  updatedAt: number;
 }
 
 // ── Card states ─────────────────────────────────────────────────────────────
@@ -121,6 +90,10 @@ export interface GmailComposeCardState {
   to?: string;
   cc?: string;
   bcc?: string;
+  /** Send-as alias to send from (must be a configured alias). */
+  from?: string;
+  /** Available send-as aliases, default first; renderer shows a picker when >1. */
+  fromOptions?: string[];
   subject?: string;
   body?: string;
   draftId?: string;
@@ -132,19 +105,8 @@ export interface GmailComposeCardState {
   toCandidates?: GmailContactCandidate[];
 }
 
-export interface GmailInboxAuthState {
-  status: "reconnect-required";
-}
-
 export interface GmailSetupAuthState {
   status: "ok" | "reconnect-required" | "unknown";
-}
-
-export interface GmailSetupRuleSummary {
-  id: string;
-  name: string;
-  enabled: boolean;
-  priority: number;
 }
 
 export interface GmailSetupAddressBookState {
@@ -159,33 +121,44 @@ export interface GmailSetupState {
   auth: GmailSetupAuthState;
   email?: string;
   setupSummary?: string;
-  attentionRules: GmailSetupRuleSummary[];
+  /** The user's natural-language attention preference, agent-maintained. */
+  attentionPreference?: string;
   pollIntervalMs: number;
   lastSyncAt?: string;
   lastError?: string;
   addressBook?: GmailSetupAddressBookState;
 }
 
-export interface GmailInboxCardState {
-  email?: string;
-  unread: number;
-  inbox: number;
-  urgent: number;
-  draftCount: number;
-  perCategory?: Record<string, number>;
-  actionable: GmailThreadCardState[];
-  attentionRules?: GmailAttentionRuleSet;
-  attentionHits?: GmailAttentionHit[];
-  searchQuery?: string;
-  searchResults?: GmailThreadCardState[];
-  lastSyncedAt?: string;
-  lastError?: string;
-  /** Present when the Google credential needs reconnecting. */
-  auth?: GmailInboxAuthState;
-  /** Epoch ms until which Gmail polling is rate-limit backed off. */
-  rateLimitedUntil?: number;
-  /** Attention hits queued past the wake rate cap, awaiting the next digest. */
-  needsAttentionCount?: number;
+/** One row in a digest or search-result card. */
+export interface GmailDigestItem {
+  threadId: string;
+  from: string;
+  subject: string;
+  /** Agent-written one-liner: why this matters / what it says. */
+  gist?: string;
+  suggested?: "reply" | "archive" | "read" | "open";
+  unread?: boolean;
+}
+
+/** Immutable per-wake digest card: posted once, scrolls away with chat. */
+export interface GmailDigestCardState {
+  generatedAt: number;
+  /** Agent-written headline, e.g. "3 new — 1 needs a reply". */
+  headline: string;
+  unread?: number;
+  items: GmailDigestItem[];
+  /** Count of additional surfaced threads not shown ("ask me to list them"). */
+  moreCount?: number;
+}
+
+/** Ephemeral search-results card; a new search creates a new card. */
+export interface GmailSearchCardState {
+  query: string;
+  status: "searching" | "done" | "error";
+  results: GmailDigestItem[];
+  totalEstimate?: number;
+  error?: string;
+  searchedAt: number;
 }
 
 // ── JSON Schemas (registered with the channel message types) ───────────────
@@ -236,33 +209,57 @@ export const GMAIL_THREAD_UPDATE_SCHEMA: Record<string, unknown> = {
   },
 };
 
-export const GMAIL_INBOX_STATE_SCHEMA: Record<string, unknown> = {
+const DIGEST_ITEM_SCHEMA = {
   type: "object",
   additionalProperties: true,
   properties: {
-    email: { type: "string" },
-    unread: { type: "number" },
-    inbox: { type: "number" },
-    urgent: { type: "number" },
-    draftCount: { type: "number" },
-    perCategory: { type: "object", additionalProperties: { type: "number" } },
-    actionable: { type: "array", items: THREAD_CARD_SCHEMA },
-    attentionRules: { type: "object", additionalProperties: true },
-    attentionHits: { type: "array", items: { type: "object", additionalProperties: true } },
-    searchQuery: { type: "string" },
-    searchResults: { type: "array", items: THREAD_CARD_SCHEMA },
-    lastSyncedAt: { type: "string" },
-    lastError: { type: "string" },
-    auth: {
-      type: "object",
-      additionalProperties: true,
-      properties: { status: { enum: ["reconnect-required"] } },
-      required: ["status"],
-    },
-    rateLimitedUntil: { type: "number" },
-    needsAttentionCount: { type: "number" },
+    threadId: { type: "string" },
+    from: { type: "string" },
+    subject: { type: "string" },
+    gist: { type: "string" },
+    suggested: { enum: ["reply", "archive", "read", "open"] },
+    unread: { type: "boolean" },
   },
-  required: ["unread", "inbox", "actionable"],
+  required: ["threadId", "from", "subject"],
+} as const;
+
+export const GMAIL_DIGEST_STATE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    generatedAt: { type: "number" },
+    headline: { type: "string" },
+    unread: { type: "number" },
+    items: { type: "array", items: DIGEST_ITEM_SCHEMA },
+    moreCount: { type: "number" },
+  },
+  required: ["generatedAt", "headline", "items"],
+};
+
+export const GMAIL_SEARCH_STATE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    query: { type: "string" },
+    status: { enum: ["searching", "done", "error"] },
+    results: { type: "array", items: DIGEST_ITEM_SCHEMA },
+    totalEstimate: { type: "number" },
+    error: { type: "string" },
+    searchedAt: { type: "number" },
+  },
+  required: ["query", "status", "results", "searchedAt"],
+};
+
+/** Search updates are merge patches over the search card state. */
+export const GMAIL_SEARCH_UPDATE_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    status: { enum: ["searching", "done", "error"] },
+    results: { type: "array", items: DIGEST_ITEM_SCHEMA },
+    totalEstimate: { type: "number" },
+    error: { type: "string" },
+  },
 };
 
 export const GMAIL_SETUP_STATE_SCHEMA: Record<string, unknown> = {
@@ -278,20 +275,7 @@ export const GMAIL_SETUP_STATE_SCHEMA: Record<string, unknown> = {
     },
     email: { type: "string" },
     setupSummary: { type: "string" },
-    attentionRules: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: true,
-        properties: {
-          id: { type: "string" },
-          name: { type: "string" },
-          enabled: { type: "boolean" },
-          priority: { type: "number" },
-        },
-        required: ["id"],
-      },
-    },
+    attentionPreference: { type: "string" },
     pollIntervalMs: { type: "number" },
     lastSyncAt: { type: "string" },
     lastError: { type: "string" },
@@ -304,7 +288,7 @@ export const GMAIL_SETUP_STATE_SCHEMA: Record<string, unknown> = {
       },
     },
   },
-  required: ["status", "auth", "attentionRules", "pollIntervalMs"],
+  required: ["status", "auth", "pollIntervalMs"],
 };
 
 export const GMAIL_COMPOSE_STATE_SCHEMA: Record<string, unknown> = {
@@ -314,6 +298,8 @@ export const GMAIL_COMPOSE_STATE_SCHEMA: Record<string, unknown> = {
     to: { type: "string" },
     cc: { type: "string" },
     bcc: { type: "string" },
+    from: { type: "string" },
+    fromOptions: { type: "array", items: { type: "string" } },
     subject: { type: "string" },
     body: { type: "string" },
     draftId: { type: "string" },

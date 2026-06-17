@@ -92,18 +92,18 @@ describe("computeWakeDecision", () => {
 describe("buildWakeDigestPrompt", () => {
   it("folds all queued hits into one digest prompt", () => {
     const prompt = buildWakeDigestPrompt([hit("thr-1"), hit("thr-2", { subject: "Invoice" })]);
-    expect(prompt).toContain("2 messages matched your attention rules");
+    expect(prompt).toContain("2 new messages matched your attention preferences");
     expect(prompt).toContain("Thread thr-1");
     expect(prompt).toContain("Thread thr-2");
     expect(prompt).toContain("Subject: Invoice");
-    expect(prompt).toContain("Requested actions: surface, summarize");
-    expect(prompt).toContain("single concise digest");
+    expect(prompt).toContain("ONE short digest message");
+    expect(prompt).toContain("gmail_publish_digest");
     expect(prompt).toContain("Do not send mail without an explicit user request");
   });
 
   it("uses singular phrasing for one hit", () => {
     expect(buildWakeDigestPrompt([hit("thr-1")])).toContain(
-      "1 message matched your attention rules"
+      "1 new message matched your attention preferences"
     );
   });
 });

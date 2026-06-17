@@ -1,7 +1,6 @@
 import { Badge, Button, Flex, Text, TextArea } from "@radix-ui/themes";
-import { ChevronDownIcon, ChevronRightIcon } from "@radix-ui/react-icons";
-import { useState } from "react";
-import { useContainerWidth } from "./use-container-width";
+import { ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon } from "@radix-ui/react-icons";
+import { useEffect, useState } from "react";
 import type {
   GmailThreadState,
   GmailThreadUpdate,
@@ -50,42 +49,67 @@ export function reduce(state: GmailThreadState, update: GmailThreadUpdate): Gmai
   }
 }
 
+interface ThreadAttachment {
+  filename: string;
+  mimeType?: string;
+  attachmentId?: string;
+  size?: number;
+}
+
 interface ThreadBody {
-  messages: Array<{ id: string; from?: string; date?: string; snippet?: string; bodyText?: string }>;
+  messages: Array<{
+    id: string;
+    from?: string;
+    date?: string;
+    snippet?: string;
+    bodyText?: string;
+    attachments?: ThreadAttachment[];
+  }>;
 }
 
 export function Pill({ state }: { state: GmailThreadState }) {
   return (
-    <Flex align="center" gap="1">
-      <Text size="1" weight="medium">{state.subject}</Text>
-      <Text size="1" color="gray">{state.lastSnippet}</Text>
+    <Flex align="center" gap="1" style={{ minWidth: 0 }}>
+      <Text size="1" weight={state.unreadCount > 0 ? "bold" : "medium"} truncate style={{ minWidth: 0 }}>
+        {state.subject}
+      </Text>
       {state.unreadCount > 0 ? <Badge size="1" color="blue">{state.unreadCount}</Badge> : null}
     </Flex>
   );
 }
 
+/**
+ * Thread card, mobile-first: auto-loads contents on expand, latest message
+ * open, reply box with two primary actions (AI draft / Send with two-tap
+ * confirm); Archive / Mark read / Refresh behind one "More" disclosure.
+ */
 export default function GmailThread({ state, expanded, chat }: {
   state: GmailThreadState;
   expanded: boolean;
   chat: { callMethodByHandle: (handle: string, method: string, args: unknown) => Promise<unknown> };
 }) {
-  const { ref, compact } = useContainerWidth();
   const [thread, setThread] = useState<ThreadBody | null>(null);
   const [openMessageIds, setOpenMessageIds] = useState<Set<string>>(() => new Set());
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
-  const [reviewingSend, setReviewingSend] = useState(false);
+  const [confirmingSend, setConfirmingSend] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [savedNote, setSavedNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadThread() {
-    if (thread || loading) return;
+  async function loadThread(force = false) {
+    if ((thread && !force) || loading) return;
     setLoading(true);
     setError(null);
     try {
       const result = await chat.callMethodByHandle("gmail", "getThread", { threadId: state.threadId });
       if (result && typeof result === "object" && Array.isArray((result as ThreadBody).messages)) {
-        setThread(result as ThreadBody);
+        const body = result as ThreadBody;
+        setThread(body);
+        // Latest message opens by default; older ones stay collapsed.
+        const latest = body.messages[body.messages.length - 1];
+        if (latest) setOpenMessageIds(new Set([latest.id]));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -94,12 +118,20 @@ export default function GmailThread({ state, expanded, chat }: {
     }
   }
 
+  useEffect(() => {
+    if (expanded) void loadThread();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expanded]);
+
   async function call(method: string, args: unknown, label: string) {
     setBusy(label);
     setError(null);
     try {
       await chat.callMethodByHandle("gmail", method, args);
-      if (method === "send") setDraft("");
+      if (method === "send") {
+        setDraft("");
+        setConfirmingSend(false);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -120,24 +152,19 @@ export default function GmailThread({ state, expanded, chat }: {
     });
   }
 
-  const buttonSize = compact ? "2" : "1";
-
   return (
-    <Flex ref={ref} direction="column" gap="2">
+    <Flex direction="column" gap="2">
       <Flex align="center" justify="between" gap="2" style={{ minWidth: 0 }}>
-        <Text
-          size="3"
-          weight="bold"
-          truncate={compact}
-          style={{ minWidth: 0 }}
-          title={state.subject}
-        >
+        <Text size="3" weight="bold" style={{ minWidth: 0, wordBreak: "break-word" }} title={state.subject}>
           {state.subject}
         </Text>
-        <Badge color={state.status === "archived" ? "gray" : "blue"}>{state.status}</Badge>
+        <Badge color={state.status === "archived" ? "gray" : "blue"} style={{ flex: "0 0 auto" }}>
+          {state.status}
+        </Badge>
       </Flex>
-      <Text size="2" color="gray">{state.participants.join(", ")}</Text>
+      <Text size="1" color="gray" truncate>{state.participants.join(", ")}</Text>
       {error ? <Text size="1" color="red">{error}</Text> : null}
+
       {thread ? (
         <Flex direction="column" gap="2">
           {thread.messages.map((message) => {
@@ -145,10 +172,10 @@ export default function GmailThread({ state, expanded, chat }: {
             return (
               <Flex key={message.id} direction="column" gap="1">
                 <Button
-                  size="1"
+                  size="2"
                   variant="ghost"
                   color="gray"
-                  style={{ alignSelf: "flex-start", maxWidth: "100%" }}
+                  style={{ alignSelf: "flex-start", maxWidth: "100%", minHeight: 36 }}
                   aria-expanded={open}
                   onClick={() => toggleMessage(message.id)}
                 >
@@ -158,65 +185,131 @@ export default function GmailThread({ state, expanded, chat }: {
                   </Text>
                 </Button>
                 {open ? (
-                  <Text size="2" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                    {message.bodyText ?? message.snippet}
-                  </Text>
-                ) : (
-                  <Text size="1" color="gray" truncate>
-                    {message.snippet ?? ""}
-                  </Text>
-                )}
+                  <>
+                    <Text size="2" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                      {message.bodyText ?? message.snippet}
+                    </Text>
+                    {(message.attachments ?? [])
+                      .filter((attachment) => attachment.attachmentId)
+                      .map((attachment) => (
+                        <Flex key={attachment.attachmentId} align="center" gap="2" style={{ minHeight: 36 }}>
+                          <Text size="1" color="gray" truncate style={{ minWidth: 0 }}>
+                            📎 {attachment.filename}
+                            {attachment.size ? ` (${Math.ceil(attachment.size / 1024)} KB)` : ""}
+                          </Text>
+                          <Button
+                            size="1"
+                            variant="ghost"
+                            disabled={busy !== null}
+                            onClick={() =>
+                              void call(
+                                "getAttachment",
+                                {
+                                  messageId: message.id,
+                                  attachmentId: attachment.attachmentId,
+                                  filename: attachment.filename,
+                                  mimeType: attachment.mimeType,
+                                  threadId: state.threadId,
+                                },
+                                `attach:${attachment.attachmentId}`
+                              ).then(() => setSavedNote(`Saved ${attachment.filename}`))
+                            }
+                          >
+                            {busy === `attach:${attachment.attachmentId}` ? "Saving…" : "Save"}
+                          </Button>
+                        </Flex>
+                      ))}
+                  </>
+                ) : null}
               </Flex>
             );
           })}
+          {savedNote ? <Text size="1" color="gray">{savedNote}</Text> : null}
         </Flex>
       ) : (
-        <Text size="2" color="gray">{loading ? "Loading thread..." : state.lastSnippet}</Text>
+        <Text size="2" color="gray">{loading ? "Loading thread…" : state.lastSnippet}</Text>
       )}
-      <TextArea value={draft} onChange={(event) => setDraft(event.target.value)} placeholder="Draft reply" />
-      <Flex gap="2" wrap="wrap">
-        <Button size={buttonSize} variant="soft" disabled={loading || busy !== null} onClick={() => void loadThread()}>
-          {loading ? "Loading" : thread ? "Refresh thread" : "Load thread"}
-        </Button>
+
+      <TextArea
+        value={draft}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          setConfirmingSend(false);
+        }}
+        placeholder="Reply…"
+        style={{ minHeight: 88, fontSize: 16 }}
+      />
+      <Flex gap="2" align="center" wrap="wrap">
         <Button
-          size={buttonSize}
+          size="2"
           disabled={busy !== null}
           onClick={() => void call("draftReply", { threadId: state.threadId }, "draft")}
         >
-          {busy === "draft" ? "Drafting" : "AI draft"}
+          {busy === "draft" ? "Drafting…" : "AI draft"}
         </Button>
         <Button
-          size={buttonSize}
+          size="2"
           variant="soft"
+          color={confirmingSend ? "red" : undefined}
           disabled={!draft.trim() || busy !== null}
           onClick={() => {
-            if (!reviewingSend) {
-              setReviewingSend(true);
+            if (!confirmingSend) {
+              setConfirmingSend(true);
               return;
             }
             void call("send", { threadId: state.threadId, body: draft }, "send");
           }}
         >
-          {busy === "send" ? "Sending" : reviewingSend ? "Confirm send" : "Review send"}
+          {busy === "send" ? "Sending…" : confirmingSend ? "Confirm send" : "Send"}
         </Button>
         <Button
-          size={buttonSize}
+          size="2"
           variant="ghost"
-          disabled={busy !== null}
-          onClick={() => void call("markRead", { threadId: state.threadId }, "read")}
+          color="gray"
+          aria-expanded={moreOpen}
+          aria-label="More actions"
+          onClick={() => setMoreOpen((open) => !open)}
         >
-          Mark read
+          <DotsHorizontalIcon /> More
         </Button>
-        <Button
-          size={buttonSize}
-          variant="ghost"
-          disabled={busy !== null}
-          onClick={() => void call("archiveThread", { threadId: state.threadId }, "archive")}
-        >
-          Archive
-        </Button>
-        <Button size={buttonSize} variant="ghost" onClick={() => setDraft("")}>Discard</Button>
       </Flex>
+      {moreOpen ? (
+        <Flex gap="2" wrap="wrap">
+          <Button
+            size="2"
+            variant="ghost"
+            disabled={busy !== null}
+            onClick={() => void call("markRead", { threadId: state.threadId }, "read")}
+          >
+            Mark read
+          </Button>
+          <Button
+            size="2"
+            variant="ghost"
+            disabled={busy !== null}
+            onClick={() => void call("archiveThread", { threadId: state.threadId }, "archive")}
+          >
+            Archive
+          </Button>
+          <Button
+            size="2"
+            variant="ghost"
+            disabled={busy !== null}
+            title="Archive now, remind me tomorrow"
+            onClick={() => void call("snooze", { threadId: state.threadId }, "snooze")}
+          >
+            {busy === "snooze" ? "Snoozing…" : "Snooze 1d"}
+          </Button>
+          <Button
+            size="2"
+            variant="ghost"
+            disabled={loading || busy !== null}
+            onClick={() => void loadThread(true)}
+          >
+            {loading ? "Refreshing…" : "Refresh"}
+          </Button>
+        </Flex>
+      ) : null}
     </Flex>
   );
 }

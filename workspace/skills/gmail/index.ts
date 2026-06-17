@@ -5,7 +5,6 @@ const GMAIL_AGENT_SOURCE = "workers/gmail-agent";
 const GMAIL_AGENT_CLASS = "GmailAgentWorker";
 const GMAIL_AGENT_HANDLE = "gmail";
 
-
 export interface GmailAgentSetupStatus {
   stage: "needs-google-workspace" | "needs-channel-setup" | "ready" | "error";
   message: string;
@@ -24,10 +23,11 @@ interface InstalledAgentRecord {
 interface GmailAgentSetupArgs {
   channelId?: string | null;
   contextId?: string | null;
+  googlePubSubTopicName?: string | null;
 }
 
 function record(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
 export async function getGmailAgentSetupStatus(): Promise<GmailAgentSetupStatus> {
@@ -56,12 +56,15 @@ export async function getGmailAgentSetupStatus(): Promise<GmailAgentSetupStatus>
     }
     if (status.stage === "verified") {
       const installedAgents = (getStateArgs() as Record<string, unknown>)["installedAgents"];
-      const hasGmailAgent = Array.isArray(installedAgents)
-        && installedAgents.some((agent) => {
+      const hasGmailAgent =
+        Array.isArray(installedAgents) &&
+        installedAgents.some((agent) => {
           const entry = record(agent);
-          return entry["handle"] === GMAIL_AGENT_HANDLE
-            || entry["source"] === GMAIL_AGENT_SOURCE
-            || entry["className"] === GMAIL_AGENT_CLASS;
+          return (
+            entry["handle"] === GMAIL_AGENT_HANDLE ||
+            entry["source"] === GMAIL_AGENT_SOURCE ||
+            entry["className"] === GMAIL_AGENT_CLASS
+          );
         });
       return {
         stage: hasGmailAgent ? "ready" : "needs-channel-setup",
@@ -108,8 +111,11 @@ export async function callGmailAgent<T = unknown>(
   return rpc.call<T>(target.targetId, method, [channelId, args]);
 }
 
-function updateInstalledAgents(existing: unknown, next: InstalledAgentRecord): InstalledAgentRecord[] {
-  const current = Array.isArray(existing) ? existing as InstalledAgentRecord[] : [];
+function updateInstalledAgents(
+  existing: unknown,
+  next: InstalledAgentRecord
+): InstalledAgentRecord[] {
+  const current = Array.isArray(existing) ? (existing as InstalledAgentRecord[]) : [];
   return [...current.filter((agent) => agent.handle !== next.handle), next];
 }
 
@@ -135,23 +141,35 @@ export async function setupGmailAgent(args: GmailAgentSetupArgs = {}): Promise<{
   }
 
   const key = gmailAgentObjectKey(channelId);
-  const entity = await rpc.call<{ id: string; targetId: string }>("main", "runtime.createEntity", [{
-    kind: "do",
-    source: GMAIL_AGENT_SOURCE,
-    className: GMAIL_AGENT_CLASS,
-    key,
-    contextId,
-  }]);
-  const subscription = await rpc.call<{ ok: boolean; participantId?: string }>(entity.targetId, "subscribeChannel", [{
-    channelId,
-    contextId,
-    config: {
-      handle: GMAIL_AGENT_HANDLE,
-      name: "Gmail",
-      approvalLevel: 2,
-      googleCredentialId,
+  const entity = await rpc.call<{ id: string; targetId: string }>("main", "runtime.createEntity", [
+    {
+      kind: "do",
+      source: GMAIL_AGENT_SOURCE,
+      className: GMAIL_AGENT_CLASS,
+      key,
+      contextId,
     },
-  }]);
+  ]);
+  const agentConfig = {
+    handle: GMAIL_AGENT_HANDLE,
+    name: "Gmail",
+    approvalLevel: 2,
+    googleCredentialId,
+    ...(args.googlePubSubTopicName?.trim()
+      ? { googlePubSubTopicName: args.googlePubSubTopicName.trim() }
+      : {}),
+  };
+  const subscription = await rpc.call<{ ok: boolean; participantId?: string }>(
+    entity.targetId,
+    "subscribeChannel",
+    [
+      {
+        channelId,
+        contextId,
+        config: agentConfig,
+      },
+    ]
+  );
 
   const stateArgs = getStateArgs() as Record<string, unknown>;
   await setStateArgs({
@@ -161,7 +179,7 @@ export async function setupGmailAgent(args: GmailAgentSetupArgs = {}): Promise<{
       key,
       source: GMAIL_AGENT_SOURCE,
       className: GMAIL_AGENT_CLASS,
-      config: { googleCredentialId },
+      config: agentConfig,
     }),
   });
 

@@ -28,36 +28,25 @@ await setupGmailAgent({ channelId: chat.channelId });
 ```
 
 The setup helper subscribes the Gmail worker and records it for panel reloads.
-The Gmail worker then installs its own channel UI: custom message renderers,
-the Gmail action bar, and the first-run attention setup turn.
+The Gmail worker then installs its own channel UI (renderers + action bar) and
+starts the first-run attention conversation: it asks what mail deserves the
+user's attention and saves the answer as natural-language preferences via its
+`gmail_set_attention` tool.
 
-Default incoming-mail attention is conservative: it only starts an agent turn
-for unread inbox messages from senders the user has replied to before. During
-setup, ask whether the user wants to add or replace that rule with sender,
-domain, invoice, scheduling, urgent-mail, attachment, quiet-mode, or wake-all
-behavior.
+Default incoming-mail attention is conservative: mail from senders the user
+has replied to before wakes the agent (deterministic, free); everything else
+goes through a batched cheap-model triage pass against the saved preference
+text — and only after onboarding completes.
 
-Attention-rule edits should go through the Gmail worker's public DO API. From
-eval, resolve the concrete worker with `workers.resolveDurableObject` rather
-than registering a userland service in `workspace/meta/natstack.yml`:
+To set preferences programmatically (user-facing callers only):
 
 ```typescript
-const target = await workers.resolveDurableObject(
-  "workers/gmail-agent",
-  "GmailAgentWorker",
-  `gmail-${chat.channelId}`,
-);
-await rpc.call(target.targetId, "upsertAttentionRule", [chat.channelId, {
-  rule: {
-    id: "customer-domain",
-    name: "Customer domain",
-    enabled: true,
-    scope: "snippet",
-    priority: 150,
-    match: { any: [{ field: "fromDomain", op: "equals", value: "customer.example" }] },
-    actions: ["surface", "summarize"],
-  },
-}]);
+import { callGmailAgent } from "@workspace-skills/gmail";
+
+await callGmailAgent(chat.channelId, "setAttentionPrefs", {
+  preferences: "Invoices, scheduling changes, and anything from customer.example.",
+  markConfigured: true,
+});
 ```
 
 ## Completion Criteria
@@ -66,5 +55,5 @@ await rpc.call(target.targetId, "upsertAttentionRule", [chat.channelId, {
 - The Gmail agent participant is present with handle `gmail`.
 - Gmail custom message renderers are registered in the channel by the worker.
 - The Gmail action bar is loaded from the worker's channel UI event.
-- The user has either accepted the default prior-reply wake rule, installed
-  explicit watch rules, chosen quiet mode, or asked for wake-all behavior.
+- The user has either saved attention preferences in their own words or
+  explicitly kept the default (known-sender wakes only).

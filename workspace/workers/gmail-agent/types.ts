@@ -11,9 +11,6 @@ export interface GmailChannelState {
   pollIntervalMs: number;
   lastSyncAt?: number;
   lastError?: string;
-  lastOverviewJson?: string;
-  lastSearchQuery?: string;
-  lastSearchJson?: string;
   setupStatus: "needs-user-preferences" | "configured";
   setupPromptedAt?: number;
   configuredAt?: number;
@@ -23,6 +20,8 @@ export interface GmailChannelState {
   backoffMs?: number;
   lastSetupJson?: string;
   peopleApiStatus?: "ok" | "unavailable";
+  /** Epoch ms until which the Gmail users.watch push registration is live. */
+  watchExpiration?: number;
 }
 
 export interface GmailThreadStateRow {

@@ -1,19 +1,16 @@
-import { Badge, Box, Button, Callout, Flex, Switch, Text } from "@radix-ui/themes";
-import {
-  ChevronDownIcon,
-  ChevronRightIcon,
-  ExclamationTriangleIcon,
-  GearIcon,
-  ReloadIcon,
-} from "@radix-ui/react-icons";
+import { Badge, Button, Callout, Flex, Text } from "@radix-ui/themes";
+import { ExclamationTriangleIcon, GearIcon, Pencil1Icon, ReloadIcon } from "@radix-ui/react-icons";
 import { useState } from "react";
-import { useContainerWidth } from "./use-container-width";
 import type { GmailSetupState } from "@workspace/gmail/card-types";
 
 type GmailSetupCardState = Partial<GmailSetupState> & { status: GmailSetupState["status"] };
 
+/** One-tap onboarding answers, handed to the agent as a chat message. */
+const ONBOARDING_PRESETS = ["Invoices & receipts", "Scheduling", "Urgent ops mail"];
+
 interface GmailChat {
   callMethodByHandle: (handle: string, method: string, args: unknown) => Promise<unknown>;
+  send: (content: string) => Promise<unknown>;
 }
 
 export function Pill({ state }: { state: GmailSetupCardState }) {
@@ -21,15 +18,18 @@ export function Pill({ state }: { state: GmailSetupCardState }) {
   return (
     <Flex align="center" gap="1">
       <GearIcon />
-      <Text size="1" weight="medium">Gmail setup</Text>
+      <Text size="1" weight="medium">Gmail</Text>
       <Badge size="1" color={auth === "ok" ? "green" : auth === "reconnect-required" ? "red" : "gray"}>
-        {auth === "ok" ? "Connected" : auth === "reconnect-required" ? "Reconnect" : "Unknown"}
+        {auth === "ok" ? "Connected" : auth === "reconnect-required" ? "Reconnect" : "Connecting"}
       </Badge>
-      {state.status === "onboarding" ? <Badge size="1" color="blue">Default rules</Badge> : null}
     </Flex>
   );
 }
 
+/**
+ * Lean connection/preference card. No rule editor: the attention preference
+ * is natural-language text the agent maintains — Edit hands off to chat.
+ */
 export default function GmailSetup({
   state,
   expanded,
@@ -39,11 +39,9 @@ export default function GmailSetup({
   expanded: boolean;
   chat: GmailChat;
 }) {
-  const { ref, compact } = useContainerWidth();
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reconnectResult, setReconnectResult] = useState<string | null>(null);
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
 
   if (!expanded) return <Pill state={state} />;
 
@@ -60,51 +58,71 @@ export default function GmailSetup({
     }
   }
 
-  const keepingDefaults = busy === "keep-defaults";
-  async function keepDefaults() {
-    await run("keep-defaults", "markConfigured", {
-      summary: "Using the default watch rule (unread inbox mail from people you have replied to).",
-    });
-  }
-
   async function reconnect() {
-    setReconnectResult(null);
+    setNote(null);
     const result = (await run("reconnect", "reconnect")) as
       | { ok: boolean; auth?: { status?: string }; error?: string }
       | undefined;
     if (!result) return;
-    setReconnectResult(
+    setNote(
       result.auth?.status === "ok"
         ? "Connection verified."
         : `Still disconnected${result.error ? `: ${result.error}` : "."}`
     );
   }
 
+  async function sendPreset(preset: string) {
+    setBusy(`preset:${preset}`);
+    setError(null);
+    try {
+      // The agent saves this via gmail_set_attention — one tap, no typing.
+      await chat.send(`@gmail Watch for: ${preset}. Plus the default (people I reply to).`);
+      setNote("Asked the Gmail agent — it will confirm in chat.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function editPreference() {
+    setBusy("edit");
+    setError(null);
+    try {
+      await chat.send(
+        `@gmail I'd like to change what email you wake me for. Currently: "${preference}"`
+      );
+      setNote("Asked the Gmail agent — continue in chat.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   const auth = state.auth?.status ?? "unknown";
-  const rules = state.attentionRules ?? [];
-  const pollMinutes = state.pollIntervalMs ? Math.round(state.pollIntervalMs / 60_000) : null;
-  const lastSynced = state.lastSyncAt ? new Date(state.lastSyncAt).toLocaleString() : "never";
+  const preference =
+    state.attentionPreference ?? "Mail from people you have replied to before.";
 
   return (
-    <Flex ref={ref} direction="column" gap="2">
+    <Flex direction="column" gap="2">
       <Flex align="center" justify="between" gap="2" wrap="wrap">
         <Flex align="center" gap="2" style={{ minWidth: 0 }}>
           <GearIcon />
-          <Text size="3" weight="bold">Gmail setup</Text>
+          <Text size="3" weight="bold">Gmail</Text>
           <Badge color={auth === "ok" ? "green" : auth === "reconnect-required" ? "red" : "gray"} variant="soft">
             {auth === "ok"
-              ? "Connected"
+              ? state.email ?? "Connected"
               : auth === "reconnect-required"
                 ? "Reconnect required"
-                : "Connection unknown"}
+                : "Connecting"}
           </Badge>
         </Flex>
         {auth !== "ok" ? (
           <Button
-            size={compact ? "2" : "1"}
+            size="2"
             variant="soft"
             disabled={busy !== null}
-            style={compact ? { width: "100%" } : undefined}
             onClick={() => void reconnect()}
           >
             <ReloadIcon /> {busy === "reconnect" ? "Verifying" : "Reconnect"}
@@ -112,8 +130,7 @@ export default function GmailSetup({
         ) : null}
       </Flex>
 
-      {/* Errors always surface */}
-      {reconnectResult ? <Text size="1" color="gray">{reconnectResult}</Text> : null}
+      {note ? <Text size="1" color="gray">{note}</Text> : null}
       {state.lastError || error ? (
         <Callout.Root color="red" size="1">
           <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
@@ -121,106 +138,58 @@ export default function GmailSetup({
         </Callout.Root>
       ) : null}
 
+      <Flex align="start" justify="between" gap="2">
+        <Text size="2" style={{ minWidth: 0, wordBreak: "break-word" }}>
+          Watching for: <Text as="span" color="gray">{preference}</Text>
+        </Text>
+        <Button
+          size="2"
+          variant="ghost"
+          disabled={busy !== null}
+          style={{ flex: "0 0 auto" }}
+          onClick={() => void editPreference()}
+        >
+          <Pencil1Icon /> Edit
+        </Button>
+      </Flex>
+
       {state.status === "onboarding" ? (
         <Callout.Root color="blue" size="1">
           <Callout.Icon><GearIcon /></Callout.Icon>
           <Callout.Text>
             <Flex direction="column" gap="2" align="start">
               <Text size="1">
-                Watching with the default rule (unread inbox mail from people you have replied
-                to). Tell the Gmail agent what else to watch for, add a rule on the inbox card —
-                or keep the default.
+                Tell the Gmail agent what mail deserves your attention — tap a preset, type in
+                chat, or keep the default (mail from people you have replied to).
               </Text>
-              <Button
-                size="1"
-                variant="soft"
-                disabled={keepingDefaults}
-                onClick={() => void keepDefaults()}
-              >
-                {keepingDefaults ? "Saving…" : "Keep the default"}
-              </Button>
+              <Flex gap="1" wrap="wrap">
+                <Button
+                  size="2"
+                  variant="soft"
+                  disabled={busy !== null}
+                  onClick={() =>
+                    void run("keep-defaults", "markConfigured", {
+                      summary: "Using the default: mail from people you have replied to before.",
+                    })
+                  }
+                >
+                  {busy === "keep-defaults" ? "Saving…" : "Keep the default"}
+                </Button>
+                {ONBOARDING_PRESETS.map((preset) => (
+                  <Button
+                    key={preset}
+                    size="2"
+                    variant="surface"
+                    disabled={busy !== null}
+                    onClick={() => void sendPreset(preset)}
+                  >
+                    {preset}
+                  </Button>
+                ))}
+              </Flex>
             </Flex>
           </Callout.Text>
         </Callout.Root>
-      ) : null}
-
-      {/* Everything diagnostic/secondary lives behind the Details disclosure */}
-      <Button
-        size="1"
-        variant="ghost"
-        color="gray"
-        style={{ alignSelf: "flex-start" }}
-        aria-expanded={detailsOpen}
-        onClick={() => setDetailsOpen((open) => !open)}
-      >
-        {detailsOpen ? <ChevronDownIcon /> : <ChevronRightIcon />}
-        Details
-      </Button>
-
-      {detailsOpen ? (
-        <Flex direction="column" gap="2">
-          {auth === "ok" ? (
-            <Button
-              size="1"
-              variant="soft"
-              disabled={busy !== null}
-              style={{ alignSelf: "flex-start" }}
-              onClick={() => void reconnect()}
-            >
-              <ReloadIcon /> {busy === "reconnect" ? "Verifying" : "Reconnect"}
-            </Button>
-          ) : null}
-          <Text size="1" color="gray">
-            {state.email ?? "Gmail account"} - last synced {lastSynced}
-            {pollMinutes ? ` - polls every ${pollMinutes} min` : ""}
-          </Text>
-
-          {state.addressBook ? (
-            <Text size="1" color="gray">
-              Address book: history-derived ({state.addressBook.knownPeople} people) - Google
-              contacts:{" "}
-              {state.addressBook.googleContacts === "available"
-                ? "available"
-                : state.addressBook.googleContacts === "unavailable"
-                  ? "unavailable — reconnect Google to enable it"
-                  : "not checked yet"}
-            </Text>
-          ) : null}
-
-          {state.setupSummary ? <Text size="1" color="gray">{state.setupSummary}</Text> : null}
-
-          <Text size="2" weight="medium">Attention rules</Text>
-          {rules.length === 0 ? (
-            <Text size="2" color="gray">No wake rules installed. Incoming mail will not wake the agent.</Text>
-          ) : (
-            rules.map((rule) => (
-              <Flex
-                key={rule.id}
-                align="center"
-                justify="between"
-                gap="2"
-                style={{ border: "1px solid var(--gray-a5)", borderRadius: 6, padding: "8px" }}
-              >
-                <Box style={{ minWidth: 0 }}>
-                  <Text size="2" weight="medium" style={{ wordBreak: "break-word" }}>{rule.name}</Text>
-                  <Text size="1" color="gray" style={{ display: "block" }}>
-                    priority {rule.priority}
-                  </Text>
-                </Box>
-                <Switch
-                  checked={rule.enabled}
-                  disabled={busy !== null}
-                  onCheckedChange={(checked) =>
-                    void run(`rule:${rule.id}`, "setAttentionRuleEnabled", {
-                      id: rule.id,
-                      enabled: checked === true,
-                    })
-                  }
-                />
-              </Flex>
-            ))
-          )}
-        </Flex>
       ) : null}
     </Flex>
   );

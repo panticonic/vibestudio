@@ -2,10 +2,28 @@ import type { GmailMessage, GmailThread } from "@workspace/gmail";
 import type {
   GmailAttentionDecision,
   GmailAttentionHit,
+  GmailDigestItem,
   GmailThreadCardState,
 } from "@workspace/gmail/card-types";
-import type { GmailAttentionEvent } from "../attention/rules.js";
 import type { GmailThreadStateRow } from "../types.js";
+
+/** The static/cheap signal snapshot triage decisions are made against. */
+export interface GmailAttentionEvent {
+  threadId: string;
+  messageId?: string;
+  from: string;
+  to: string;
+  subject: string;
+  snippet: string;
+  labels: string[];
+  category?: string;
+  hasAttachment: boolean;
+  priorReplyToSender?: boolean;
+  unread: boolean;
+  inInbox: boolean;
+  addressedToUser: boolean;
+  internalDate?: number;
+}
 
 export const METADATA_HEADERS = [
   "Subject",
@@ -35,14 +53,18 @@ export function latestMessage(thread: GmailThread): GmailMessage | undefined {
   return thread.messages?.[thread.messages.length - 1];
 }
 
-export function decodeBase64Url(data: string): string {
+/** Raw bytes from base64url — REQUIRED for binary payloads (attachments). */
+export function decodeBase64UrlBytes(data: string): Uint8Array {
   const normalized = data.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
-  const bytes =
-    typeof Buffer !== "undefined"
-      ? Buffer.from(padded, "base64")
-      : Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
-  return new TextDecoder().decode(bytes);
+  return typeof Buffer !== "undefined"
+    ? new Uint8Array(Buffer.from(padded, "base64"))
+    : Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+}
+
+/** Text from base64url. Do NOT use for binary data — TextDecoder corrupts it. */
+export function decodeBase64Url(data: string): string {
+  return new TextDecoder().decode(decodeBase64UrlBytes(data));
 }
 
 export function textFromPart(part: NonNullable<GmailMessage["payload"]> | undefined): string {
@@ -212,6 +234,17 @@ export function threadCardFromRow(
       : {}),
     ...(row.category ? { category: row.category } : {}),
     updatedAt: row.updated_at,
+  };
+}
+
+/** Compact row shape used by the digest and search-result cards. */
+export function digestItemFromCard(card: GmailThreadCardState): GmailDigestItem {
+  return {
+    threadId: card.threadId,
+    from: card.from,
+    subject: card.subject,
+    ...(card.lastSnippet || card.snippet ? { gist: (card.lastSnippet || card.snippet).slice(0, 140) } : {}),
+    ...(card.unreadCount > 0 ? { unread: true } : {}),
   };
 }
 

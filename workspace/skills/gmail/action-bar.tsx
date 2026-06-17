@@ -1,33 +1,6 @@
-import { Badge, Button, Flex, Text, TextField } from "@radix-ui/themes";
-import {
-  ArchiveIcon,
-  EnvelopeClosedIcon,
-  MagnifyingGlassIcon,
-  Pencil1Icon,
-  ReloadIcon,
-} from "@radix-ui/react-icons";
-import { useEffect, useRef, useState } from "react";
-
-/** Inline copy of renderers/use-container-width — the action bar compiles standalone. */
-function useContainerWidth<T extends HTMLElement = HTMLDivElement>(): {
-  ref: React.RefObject<T | null>;
-  compact: boolean;
-} {
-  const ref = useRef<T | null>(null);
-  const [width, setWidth] = useState<number | null>(null);
-  useEffect(() => {
-    const element = ref.current;
-    if (!element || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[entries.length - 1];
-      if (entry) setWidth(entry.contentRect.width);
-    });
-    observer.observe(element);
-    setWidth(element.getBoundingClientRect().width);
-    return () => observer.disconnect();
-  }, []);
-  return { ref, compact: width !== null && width < 480 };
-}
+import { Button, Flex, Text, TextField } from "@radix-ui/themes";
+import { MagnifyingGlassIcon, Pencil1Icon } from "@radix-ui/react-icons";
+import { useState } from "react";
 
 interface GmailActionBarProps {
   chat: {
@@ -35,147 +8,86 @@ interface GmailActionBarProps {
   };
 }
 
-interface ActionableThread {
-  threadId: string;
-  subject?: string;
-}
-
+/**
+ * One-row Gmail action bar: Compose, plus a search field that expands in
+ * place. Everything else (check now, triage, bulk ops) happens in chat.
+ */
 export default function GmailActionBar({ chat }: GmailActionBarProps) {
-  const { ref, compact } = useContainerWidth();
   const [busy, setBusy] = useState<string | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [threads, setThreads] = useState<ActionableThread[]>([]);
-  const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function run(label: string, method: string, args: unknown = {}, success?: string) {
+  async function run(label: string, method: string, args: unknown = {}) {
     setBusy(label);
     setError(null);
     try {
-      const result = await chat.callMethodByHandle("gmail", method, args);
-      setStatus(success ?? null);
-      return result;
+      await chat.callMethodByHandle("gmail", method, args);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      return undefined;
     } finally {
       setBusy(null);
     }
   }
 
-  async function refreshQueue(cancelled?: () => boolean) {
-    try {
-      const result = await chat.callMethodByHandle("gmail", "listActionableThreads", { limit: 3 });
-      if (cancelled?.() || !Array.isArray(result)) return;
-      setThreads(
-        result.filter((item): item is ActionableThread =>
-          Boolean(item && typeof item === "object" && "threadId" in item)
-        )
-      );
-    } catch (err) {
-      if (!cancelled?.()) setError(err instanceof Error ? err.message : String(err));
-    }
+  function submitSearch() {
+    const q = query.trim();
+    if (!q) return;
+    void run("search", "search", { q }).then(() => {
+      setQuery("");
+      setSearchOpen(false);
+    });
   }
 
-  useEffect(() => {
-    let cancelled = false;
-    void refreshQueue(() => cancelled).catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [chat]);
-
   return (
-    <Flex ref={ref} direction="column" gap="2" p="2">
-      <Flex align="center" gap="2" wrap="wrap">
-        <Flex align="center" gap="1">
-          <EnvelopeClosedIcon />
-          <Text size="2" weight="bold">Gmail</Text>
-          {threads.length > 0 ? <Badge size="1" color="red">{threads.length}</Badge> : null}
-        </Flex>
-        <Button
-          size={compact ? "2" : "1"}
-          variant="soft"
-          disabled={busy !== null}
-          title="Check now"
-          aria-label="Check now"
-          onClick={() =>
-            void run("check", "checkNow", {}, "Inbox checked").then(() => refreshQueue())
-          }
-        >
-          <ReloadIcon /> {compact ? null : busy === "check" ? "Checking" : "Check"}
-        </Button>
-        <Button
-          size={compact ? "2" : "1"}
-          variant="soft"
-          disabled={busy !== null}
-          title="Compose"
-          aria-label="Compose"
-          onClick={() => void run("compose", "compose", {}, "Compose card created")}
-        >
-          <Pencil1Icon /> {compact ? null : "Compose"}
-        </Button>
-        <Flex align="center" gap="1" style={{ minWidth: 0, flex: "1 1 160px" }}>
+    <Flex align="center" gap="2" p="2" style={{ minHeight: 44 }}>
+      <Button
+        size="2"
+        variant="soft"
+        disabled={busy !== null}
+        onClick={() => void run("compose", "compose")}
+      >
+        <Pencil1Icon /> {busy === "compose" ? "Opening…" : "Compose"}
+      </Button>
+      {searchOpen ? (
+        <Flex align="center" gap="1" style={{ flex: "1 1 auto", minWidth: 0 }}>
           <TextField.Root
-            size={compact ? "2" : "1"}
+            size="2"
+            autoFocus
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") submitSearch();
+              if (event.key === "Escape") setSearchOpen(false);
+            }}
             placeholder="Search mail"
-            style={{ flex: 1, minWidth: 0 }}
+            style={{ flex: 1, minWidth: 0, fontSize: 16 }}
           />
           <Button
-            size={compact ? "2" : "1"}
+            size="2"
             disabled={busy !== null || query.trim().length === 0}
-            title="Search"
             aria-label="Search"
-            onClick={() => void run("search", "search", { q: query.trim() }, "Search updated")}
+            onClick={submitSearch}
           >
-            <MagnifyingGlassIcon /> {compact ? null : "Search"}
+            <MagnifyingGlassIcon />
           </Button>
         </Flex>
-      </Flex>
-      {threads.length > 0 ? (
-        <Flex gap="1" align="center" wrap="wrap">
-          <Text size="1" color="gray">Queue</Text>
-          {threads.map((thread) => (
-            <Button
-              key={thread.threadId}
-              size="1"
-              variant="ghost"
-              disabled={busy !== null}
-              title={`Draft reply: ${thread.subject ?? thread.threadId}`}
-              onClick={() =>
-                void run(
-                  `draft:${thread.threadId}`,
-                  "draftReply",
-                  { threadId: thread.threadId },
-                  "Reply draft created"
-                )
-              }
-            >
-              <Pencil1Icon /> {thread.subject ?? thread.threadId}
-            </Button>
-          ))}
-          <Button
-            size="1"
-            variant="ghost"
-            disabled={busy !== null || threads.length === 0}
-            title="Archive first queued thread"
-            onClick={() =>
-              void run(
-                "archive-first",
-                "archiveThread",
-                { threadId: threads[0]?.threadId },
-                "Archived first queued thread"
-              ).then(() => refreshQueue())
-            }
-          >
-            <ArchiveIcon /> Archive next
-          </Button>
-        </Flex>
+      ) : (
+        <Button
+          size="2"
+          variant="soft"
+          aria-label="Search mail"
+          disabled={busy !== null}
+          onClick={() => setSearchOpen(true)}
+        >
+          <MagnifyingGlassIcon /> Search
+        </Button>
+      )}
+      {error ? (
+        <Text size="1" color="red" truncate style={{ minWidth: 0 }}>
+          {error}
+        </Text>
       ) : null}
-      {status && !error ? <Text size="1" color="gray">{status}</Text> : null}
-      {error ? <Text size="1" color="red">{error}</Text> : null}
     </Flex>
   );
 }

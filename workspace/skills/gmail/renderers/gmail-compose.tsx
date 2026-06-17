@@ -1,4 +1,4 @@
-import { Badge, Button, Callout, Flex, Text, TextArea } from "@radix-ui/themes";
+import { Badge, Button, Callout, Flex, Select, Text, TextArea } from "@radix-ui/themes";
 import { Cross2Icon, ExclamationTriangleIcon, PaperPlaneIcon, PersonIcon } from "@radix-ui/react-icons";
 import { useEffect, useRef, useState } from "react";
 import type { GmailComposeCardState, GmailContactCandidate } from "@workspace/gmail/card-types";
@@ -146,7 +146,8 @@ function RecipientField({
             outline: "none",
             background: "transparent",
             font: "inherit",
-            fontSize: 13,
+            // ≥16px keeps iOS from zooming the page on focus.
+            fontSize: 16,
             color: "var(--gray-12)",
           }}
         />
@@ -177,8 +178,14 @@ function RecipientField({
               align="center"
               justify="between"
               gap="2"
-              style={{ padding: "6px 10px", cursor: "pointer" }}
+              style={{ padding: "6px 10px", cursor: "pointer", minHeight: 44 }}
               onMouseDown={(event) => {
+                event.preventDefault();
+                setChips([...chips, candidate.email]);
+                setText("");
+                setSuggestions([]);
+              }}
+              onTouchEnd={(event) => {
                 event.preventDefault();
                 setChips([...chips, candidate.email]);
                 setText("");
@@ -221,6 +228,7 @@ export default function GmailCompose({
   const [to, setTo] = useState<string[]>(splitRecipients(state.to));
   const [cc, setCc] = useState<string[]>(splitRecipients(state.cc));
   const [bcc, setBcc] = useState<string[]>(splitRecipients(state.bcc));
+  const [from, setFrom] = useState(state.from ?? state.fromOptions?.[0] ?? "");
   const [subject, setSubject] = useState(state.subject ?? "");
   const [body, setBody] = useState(state.body ?? "");
   const [reviewingSend, setReviewingSend] = useState(false);
@@ -247,15 +255,20 @@ export default function GmailCompose({
     state.status === "discarded";
 
   // Wire-compat with the compose handler: recipients stay comma-joined strings.
+  // draftId lets a re-save update the existing Gmail draft instead of
+  // creating a duplicate.
   const payload = {
     messageId,
     to: to.join(", "),
     cc: cc.join(", "),
     bcc: bcc.join(", "),
+    // Only send an explicit From when the user has aliases to pick between.
+    ...(state.fromOptions && state.fromOptions.length > 1 && from ? { from } : {}),
     subject,
     body,
     threadId: state.threadId,
     sourceThreadId: state.sourceThreadId,
+    draftId: state.draftId,
   };
 
   async function call(method: string, args: unknown, label: string) {
@@ -298,6 +311,21 @@ export default function GmailCompose({
           <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
           <Callout.Text>{state.error ?? localError}</Callout.Text>
         </Callout.Root>
+      ) : null}
+      {state.fromOptions && state.fromOptions.length > 1 ? (
+        <Flex align="center" gap="2">
+          <Text size="1" color="gray">From</Text>
+          <Select.Root size="2" value={from} onValueChange={setFrom} disabled={disabled}>
+            <Select.Trigger style={{ flex: 1, minWidth: 0 }} />
+            <Select.Content>
+              {state.fromOptions.map((option) => (
+                <Select.Item key={option} value={option}>
+                  {option}
+                </Select.Item>
+              ))}
+            </Select.Content>
+          </Select.Root>
+        </Flex>
       ) : null}
       <RecipientField label="To" chips={to} setChips={setTo} disabled={disabled} chat={chat} />
       {!hasTo && candidates.length > 0 ? (
@@ -347,9 +375,10 @@ export default function GmailCompose({
         style={{
           border: "1px solid var(--gray-a7)",
           borderRadius: 6,
-          padding: "6px 8px",
+          padding: "8px 10px",
           font: "inherit",
-          fontSize: 13,
+          // ≥16px keeps iOS from zooming the page on focus.
+          fontSize: 16,
           background: "var(--color-surface)",
           color: "var(--gray-12)",
         }}
@@ -359,7 +388,7 @@ export default function GmailCompose({
         onChange={(event) => setBody(event.target.value)}
         placeholder="Body"
         disabled={disabled}
-        style={{ minHeight: 160 }}
+        style={{ minHeight: 160, fontSize: 16 }}
       />
       <Flex gap="2" wrap="wrap" direction={compact ? "column" : "row"}>
         {reviewingSend ? (

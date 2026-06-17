@@ -67,7 +67,12 @@ export class GmailParticipantApi {
       const results = rows.map((row) => summarizeThreadCard(threadCardFromRow(row)));
       return { source: "cache", query: q, count: results.length, results };
     }
-    const result = await this.deps.handlers.search(channelId, { q, limit: maxResults });
+    // Agent-to-agent lookups are silent: no search card in the channel.
+    const result = await this.deps.handlers.search(channelId, {
+      q,
+      limit: maxResults,
+      mirrorToCard: false,
+    });
     if ("error" in result) return result;
     return {
       source: "api",

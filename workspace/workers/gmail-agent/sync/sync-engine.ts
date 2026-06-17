@@ -2,8 +2,8 @@ import type { SqlStorage } from "@workspace/runtime/worker";
 import { isGmailApiError, type GmailClient, type GmailThread } from "@workspace/gmail";
 import type { GmailAttentionDecision, GmailThreadCardState } from "@workspace/gmail/card-types";
 import { handleGmailError, type GmailFailure } from "../errors.js";
-import type { AttentionEngine } from "../attention/attention-engine.js";
-import { evaluateAttentionRules, type GmailAttentionEvent } from "../attention/rules.js";
+import type { TriageEngine } from "../triage/triage-engine.js";
+import type { TriageStore } from "../triage/triage-store.js";
 import type { GmailCards } from "../cards/cards.js";
 import { parseAddressEntries } from "../people/address.js";
 import type { PeopleStore } from "../people/people-store.js";
@@ -25,6 +25,10 @@ const MAX_TRANSIENT_RETRIES = 2;
 const RATE_LIMIT_BASE_BACKOFF_MS = 60_000;
 const RATE_LIMIT_MAX_BACKOFF_MS = 15 * 60 * 1000;
 
+// NOTE: Gmail push notifications (users.watch → Cloud Pub/Sub) would replace
+// this polling loop entirely, but they require a GCP topic the deployment
+// does not have. History-based incremental polling stays for now.
+
 export type SyncResult =
   | { ok: true; historyId: string; threadsUpdated: number }
   | { ok: false; error: GmailFailure };
@@ -32,26 +36,23 @@ export type SyncResult =
 export interface SyncEngineDeps {
   sql: SqlStorage;
   gmailFor: (channelId: string) => GmailClient;
-  attention: AttentionEngine;
+  triage: TriageEngine;
+  store: TriageStore;
   people: PeopleStore;
   cards: GmailCards;
   getChannelState: (channelId: string) => GmailChannelState;
   saveChannelState: (state: GmailChannelState) => void;
-  publishOverview: (channelId: string, email?: string) => Promise<void>;
-  startAttentionTurn: (
-    channelId: string,
-    event: GmailAttentionEvent,
-    decision: GmailAttentionDecision
-  ) => Promise<void>;
+  publishSetup: (channelId: string) => Promise<void>;
   /** Schedule the poll alarm to fire in `ms` (earliest-wins). */
   schedulePoll: (ms: number) => void;
   now?: () => number;
 }
 
 /**
- * History-based incremental Gmail sync into the local thread cache, with the
- * Task B failure policy: auth errors pause polling, rate limits back off,
- * network/server errors retry then surface lastError.
+ * History-based incremental Gmail sync into the local thread cache. Thread
+ * refreshes go through the multipart batch endpoint. Failure policy: auth
+ * errors pause polling, rate limits back off, network/server errors retry
+ * then surface lastError.
  */
 export class SyncEngine {
   constructor(private readonly deps: SyncEngineDeps) {}
@@ -70,7 +71,7 @@ export class SyncEngine {
       try {
         const result = await this.syncOnce(channelId);
         this.clearFailureState(channelId);
-        await this.deps.publishOverview(channelId);
+        await this.deps.publishSetup(channelId).catch(() => undefined);
         return result;
       } catch (err) {
         if (
@@ -110,11 +111,12 @@ export class SyncEngine {
       state.emailAddress = profile.emailAddress;
     }
     const diff = await gmail.syncSince(state.historyId);
-    for (const thread of diff.threads) {
-      await this.refreshThread(channelId, thread.threadId, state.emailAddress, {
-        allowWake: true,
-      });
-    }
+    await this.refreshThreads(
+      channelId,
+      diff.threads.map((thread) => thread.threadId),
+      state.emailAddress,
+      { allowWake: true }
+    );
     state.historyId = diff.historyId;
     state.lastSyncAt = this.now();
     state.lastError = undefined;
@@ -122,7 +124,7 @@ export class SyncEngine {
     return { ok: true, historyId: diff.historyId, threadsUpdated: diff.threads.length };
   }
 
-  /** Apply the failure policy to persisted channel state + inbox card. */
+  /** Apply the failure policy to persisted channel state + setup card. */
   private async recordSyncFailure(channelId: string, failure: GmailFailure): Promise<void> {
     const state = this.deps.getChannelState(channelId);
     state.lastSyncAt = this.now();
@@ -142,7 +144,7 @@ export class SyncEngine {
       state.lastError = failure.message;
     }
     this.deps.saveChannelState(state);
-    await this.deps.publishOverview(channelId).catch(() => undefined);
+    await this.deps.publishSetup(channelId).catch(() => undefined);
   }
 
   private clearFailureState(channelId: string): void {
@@ -177,9 +179,7 @@ export class SyncEngine {
           .filter((threadId): threadId is string => Boolean(threadId))
       )
     );
-    for (const threadId of threadIds) {
-      await this.refreshThread(channelId, threadId, userEmail);
-    }
+    await this.refreshThreads(channelId, threadIds, userEmail);
   }
 
   async seedRepliedSendersFromSentMail(channelId: string): Promise<void> {
@@ -196,7 +196,7 @@ export class SyncEngine {
         // The same sent-mail pass backfills the derived people store.
         if (headerName !== "Bcc") this.deps.people.recordOutgoing(channelId, entries, at);
         for (const entry of entries) {
-          this.deps.attention.recordRepliedSender(channelId, entry.email, entry.email, "sent-mail");
+          this.deps.store.recordRepliedSender(channelId, entry.email, entry.email, "sent-mail");
           this.deps.people.markReplied(channelId, entry.email);
         }
       }
@@ -223,13 +223,47 @@ export class SyncEngine {
     }
   }
 
+  /**
+   * Refresh many threads with one multipart batch call (chunked at 50 by the
+   * client). Per-thread not-found reconciles locally as archived, exactly
+   * like the single-thread path.
+   */
+  async refreshThreads(
+    channelId: string,
+    threadIds: string[],
+    userEmail?: string,
+    opts: { allowWake?: boolean } = {}
+  ): Promise<GmailThreadCardState[]> {
+    if (threadIds.length === 0) return [];
+    const gmail = this.deps.gmailFor(channelId);
+    const items = await gmail.batchGetThreads(threadIds, {
+      format: "metadata",
+      metadataHeaders: METADATA_HEADERS,
+    });
+    const cards: GmailThreadCardState[] = [];
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index]!;
+      const threadId = threadIds[index]!;
+      if (item.error) {
+        if (item.error.code === "not-found") {
+          const archived = await this.reconcileMissingThread(channelId, threadId);
+          if (archived) cards.push(archived);
+          continue;
+        }
+        throw item.error;
+      }
+      cards.push(await this.ingestThread(channelId, item.value!, userEmail, opts));
+    }
+    return cards;
+  }
+
+  /** Single-thread refresh (openThread / post-send paths). */
   async refreshThread(
     channelId: string,
     threadId: string,
     userEmail?: string,
     opts: { allowWake?: boolean } = {}
   ): Promise<GmailThreadCardState> {
-    const existing = this.threadRow(channelId, threadId);
     const gmail = this.deps.gmailFor(channelId);
     let thread: GmailThread;
     try {
@@ -238,42 +272,87 @@ export class SyncEngine {
         metadataHeaders: METADATA_HEADERS,
       });
     } catch (err) {
-      // not-found: the thread vanished in Gmail; reconcile locally as archived.
-      if (!existing || !isGmailApiError(err, "not-found")) throw err;
-      const archived = threadCardFromRow({
-        ...existing,
-        unread: 0,
-        in_inbox: 0,
-        actionable: 0,
-        updated_at: this.now(),
-      });
-      this.sql.exec(
-        `UPDATE gmail_threads SET unread = 0, in_inbox = 0, actionable = 0, updated_at = ? WHERE channel_id = ? AND thread_id = ?`,
-        archived.updatedAt,
-        channelId,
-        threadId
-      );
-      await this.deps.cards.updateThread(channelId, threadId, {
-        kind: "statusChange",
-        status: "archived",
-      });
+      if (!isGmailApiError(err, "not-found")) throw err;
+      const archived = await this.reconcileMissingThread(channelId, threadId);
+      if (!archived) throw err;
       return archived;
     }
+    return this.ingestThread(channelId, thread, userEmail, opts);
+  }
+
+  /** not-found: the thread vanished in Gmail; reconcile locally as archived. */
+  private async reconcileMissingThread(
+    channelId: string,
+    threadId: string
+  ): Promise<GmailThreadCardState | null> {
+    const existing = this.threadRow(channelId, threadId);
+    if (!existing) return null;
+    const archived = threadCardFromRow({
+      ...existing,
+      unread: 0,
+      in_inbox: 0,
+      actionable: 0,
+      updated_at: this.now(),
+    });
+    this.sql.exec(
+      `UPDATE gmail_threads SET unread = 0, in_inbox = 0, actionable = 0, updated_at = ? WHERE channel_id = ? AND thread_id = ?`,
+      archived.updatedAt,
+      channelId,
+      threadId
+    );
+    await this.deps.cards.updateThread(channelId, threadId, {
+      kind: "statusChange",
+      status: "archived",
+    });
+    return archived;
+  }
+
+  /** Shared post-fetch path: people harvest, triage routing, row + card upsert. */
+  private async ingestThread(
+    channelId: string,
+    thread: GmailThread,
+    userEmail?: string,
+    opts: { allowWake?: boolean } = {}
+  ): Promise<GmailThreadCardState> {
+    const existing = this.threadRow(channelId, thread.id);
     this.harvestPeople(channelId, thread, userEmail);
     const event = attentionEventFromThread(thread, userEmail);
-    if (event) {
-      event.priorReplyToSender = this.deps.attention.hasRepliedToSender(channelId, event.from);
+    let decision: GmailAttentionDecision | null = null;
+    if (event && opts.allowWake) {
+      event.priorReplyToSender = this.deps.store.hasRepliedToSender(channelId, event.from);
+      decision = this.deps.triage.considerEvent(channelId, event);
     }
-    const attention = event
-      ? evaluateAttentionRules(this.deps.attention.getRulesRecord(channelId).ruleSet, event)
-      : { wake: false };
-    if (event && attention.wake) {
-      this.deps.attention.recordHit(channelId, thread.id, attention);
-      if (opts.allowWake && this.deps.attention.shouldStartTurn(channelId, event, attention)) {
-        await this.deps.startAttentionTurn(channelId, event, attention);
-      }
+    const card = threadCardState(thread, existing?.category, userEmail, decision ?? undefined);
+    this.upsertThreadRow(channelId, card);
+    await this.deps.cards.updateThread(channelId, thread.id, card);
+    return card;
+  }
+
+  /** Apply a deferred triage decision to the cached row + thread card. */
+  async applyTriageDecision(
+    channelId: string,
+    threadId: string,
+    decision: GmailAttentionDecision
+  ): Promise<void> {
+    const row = this.threadRow(channelId, threadId);
+    if (!row) return;
+    this.sql.exec(
+      `UPDATE gmail_threads SET actionable = 1, updated_at = ? WHERE channel_id = ? AND thread_id = ?`,
+      this.now(),
+      channelId,
+      threadId
+    );
+    const fresh = this.threadRow(channelId, threadId);
+    if (fresh) {
+      await this.deps.cards.updateThread(channelId, threadId, {
+        ...threadCardFromRow(fresh),
+        actionable: true,
+        attention: decision,
+      });
     }
-    const card = threadCardState(thread, existing?.category, userEmail, attention);
+  }
+
+  private upsertThreadRow(channelId: string, card: GmailThreadCardState): void {
     this.sql.exec(
       `INSERT OR REPLACE INTO gmail_threads
        (channel_id, thread_id, subject, from_addr, snippet, unread, in_inbox, actionable, category, updated_at)
@@ -289,8 +368,6 @@ export class SyncEngine {
       card.category ?? null,
       card.updatedAt
     );
-    await this.deps.cards.updateThread(channelId, threadId, card);
-    return card;
   }
 
   threadRow(channelId: string, threadId: string): GmailThreadStateRow | null {
@@ -317,7 +394,7 @@ export class SyncEngine {
       )
       .toArray() as unknown as GmailThreadStateRow[];
     return rows.map((row) =>
-      threadCardFromRow(row, this.deps.attention.hitForThread(channelId, row.thread_id))
+      threadCardFromRow(row, this.deps.store.hitForThread(channelId, row.thread_id))
     );
   }
 
@@ -356,20 +433,36 @@ export class SyncEngine {
     }
   }
 
-  async recomputeAttentionForStoredThreads(channelId: string): Promise<void> {
-    const state = this.deps.getChannelState(channelId);
-    this.deps.attention.clearHits(channelId);
+  /**
+   * Re-enqueue stored unread inbox threads into the triage queue (after a
+   * preference change). Works from the local cache — no Gmail re-fetch.
+   */
+  retriageStoredThreads(channelId: string): number {
+    this.deps.store.clearHits(channelId);
     const rows = this.sql
-      .exec(`SELECT thread_id FROM gmail_threads WHERE channel_id = ?`, channelId)
-      .toArray();
+      .exec(
+        `SELECT * FROM gmail_threads WHERE channel_id = ? AND unread = 1 AND in_inbox = 1`,
+        channelId
+      )
+      .toArray() as unknown as GmailThreadStateRow[];
     for (const row of rows) {
-      const threadId = String(row["thread_id"]);
-      try {
-        await this.refreshThread(channelId, threadId, state.emailAddress);
-      } catch {
-        // Stale or inaccessible threads will be reconciled by the next Gmail sync.
-      }
+      this.deps.store.enqueueCandidate(channelId, {
+        threadId: row.thread_id,
+        messageId: `retriage-${row.updated_at}`,
+        from: row.from_addr,
+        to: "",
+        subject: row.subject,
+        snippet: row.snippet,
+        labels: ["INBOX", "UNREAD"],
+        ...(row.category ? { category: row.category } : {}),
+        hasAttachment: false,
+        priorReplyToSender: this.deps.store.hasRepliedToSender(channelId, row.from_addr),
+        unread: true,
+        inInbox: true,
+        addressedToUser: true,
+      });
     }
+    return rows.length;
   }
 
   /** Polling interval helper used by the worker alarm. */

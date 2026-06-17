@@ -11,31 +11,31 @@ client, save its client ID and client secret, then connect the account.
 
 ## Required Console Links
 
-| Step | Link |
-|------|------|
-| Create project | `https://console.cloud.google.com/projectcreate` |
-| Credentials overview | `https://console.cloud.google.com/apis/credentials` |
-| Enable Gmail API | `https://console.cloud.google.com/apis/api/gmail.googleapis.com` |
-| Enable Google Calendar API | `https://console.cloud.google.com/apis/api/calendar-json.googleapis.com` |
-| Enable Google Drive API | `https://console.cloud.google.com/apis/api/drive.googleapis.com` |
-| OAuth branding | `https://console.cloud.google.com/auth/branding` |
-| OAuth audience / publish state | `https://console.cloud.google.com/auth/audience` |
-| OAuth clients | `https://console.cloud.google.com/auth/clients` |
+| Step                           | Link                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------ |
+| Create project                 | `https://console.cloud.google.com/projectcreate`                         |
+| Credentials overview           | `https://console.cloud.google.com/apis/credentials`                      |
+| Enable Gmail API               | `https://console.cloud.google.com/apis/api/gmail.googleapis.com`         |
+| Enable Google Calendar API     | `https://console.cloud.google.com/apis/api/calendar-json.googleapis.com` |
+| Enable Google Drive API        | `https://console.cloud.google.com/apis/api/drive.googleapis.com`         |
+| OAuth branding                 | `https://console.cloud.google.com/auth/branding`                         |
+| OAuth audience / publish state | `https://console.cloud.google.com/auth/audience`                         |
+| OAuth clients                  | `https://console.cloud.google.com/auth/clients`                          |
 
 Optional APIs when the user's task needs them:
 
-| Service | Link |
-|---------|------|
-| Admin SDK | `https://console.cloud.google.com/apis/api/admin.googleapis.com` |
-| Apps Script | `https://console.cloud.google.com/apis/api/script.googleapis.com` |
+| Service                 | Link                                                                     |
+| ----------------------- | ------------------------------------------------------------------------ |
+| Admin SDK               | `https://console.cloud.google.com/apis/api/admin.googleapis.com`         |
+| Apps Script             | `https://console.cloud.google.com/apis/api/script.googleapis.com`        |
 | Cloud Identity / Groups | `https://console.cloud.google.com/apis/api/cloudidentity.googleapis.com` |
-| Google Chat | `https://console.cloud.google.com/apis/api/chat.googleapis.com` |
-| Google Docs | `https://console.cloud.google.com/apis/api/docs.googleapis.com` |
-| Google Sheets | `https://console.cloud.google.com/apis/api/sheets.googleapis.com` |
-| Google Slides | `https://console.cloud.google.com/apis/api/slides.googleapis.com` |
-| Google Forms | `https://console.cloud.google.com/apis/api/forms.googleapis.com` |
-| Google Tasks | `https://console.cloud.google.com/apis/api/tasks.googleapis.com` |
-| People API | `https://console.cloud.google.com/apis/api/people.googleapis.com` |
+| Google Chat             | `https://console.cloud.google.com/apis/api/chat.googleapis.com`          |
+| Google Docs             | `https://console.cloud.google.com/apis/api/docs.googleapis.com`          |
+| Google Sheets           | `https://console.cloud.google.com/apis/api/sheets.googleapis.com`        |
+| Google Slides           | `https://console.cloud.google.com/apis/api/slides.googleapis.com`        |
+| Google Forms            | `https://console.cloud.google.com/apis/api/forms.googleapis.com`         |
+| Google Tasks            | `https://console.cloud.google.com/apis/api/tasks.googleapis.com`         |
+| People API              | `https://console.cloud.google.com/apis/api/people.googleapis.com`        |
 
 ## Agent Flow
 
@@ -131,7 +131,10 @@ const requiredSteps = [
 const optionalApis = [
   ["Admin SDK", "https://console.cloud.google.com/apis/api/admin.googleapis.com"],
   ["Apps Script", "https://console.cloud.google.com/apis/api/script.googleapis.com"],
-  ["Cloud Identity / Groups", "https://console.cloud.google.com/apis/api/cloudidentity.googleapis.com"],
+  [
+    "Cloud Identity / Groups",
+    "https://console.cloud.google.com/apis/api/cloudidentity.googleapis.com",
+  ],
   ["Google Chat", "https://console.cloud.google.com/apis/api/chat.googleapis.com"],
   ["Google Docs", "https://console.cloud.google.com/apis/api/docs.googleapis.com"],
   ["Google Sheets", "https://console.cloud.google.com/apis/api/sheets.googleapis.com"],
@@ -143,10 +146,7 @@ const optionalApis = [
 
 export default function GoogleWorkspaceSetup({ onSubmit, onCancel }) {
   const [done, setDone] = useState({});
-  const completed = useMemo(
-    () => requiredSteps.filter((step) => done[step.id]).length,
-    [done],
-  );
+  const completed = useMemo(() => requiredSteps.filter((step) => done[step.id]).length, [done]);
   const allDone = completed === requiredSteps.length;
 
   const openInside = async (href) => {
@@ -186,12 +186,20 @@ export default function GoogleWorkspaceSetup({ onSubmit, onCancel }) {
               <Flex align="start" gap="2">
                 <Checkbox
                   checked={Boolean(done[step.id])}
-                  onCheckedChange={(checked) => setDone((prev) => ({ ...prev, [step.id]: checked === true }))}
+                  onCheckedChange={(checked) =>
+                    setDone((prev) => ({ ...prev, [step.id]: checked === true }))
+                  }
                 />
                 <Box>
-                  <Text size="2" weight="bold">{index + 1}. {step.title}</Text>
-                  <Text as="p" size="1" color="gray" mt="1">{step.note}</Text>
-                  <Link size="1" href={step.href} target="_blank">{step.href}</Link>
+                  <Text size="2" weight="bold">
+                    {index + 1}. {step.title}
+                  </Text>
+                  <Text as="p" size="1" color="gray" mt="1">
+                    {step.note}
+                  </Text>
+                  <Link size="1" href={step.href} target="_blank">
+                    {step.href}
+                  </Link>
                 </Box>
               </Flex>
               <Flex gap="2" wrap="wrap">
@@ -210,7 +218,9 @@ export default function GoogleWorkspaceSetup({ onSubmit, onCancel }) {
       <Separator size="4" />
 
       <Flex direction="column" gap="2">
-        <Text size="2" weight="bold">Optional APIs</Text>
+        <Text size="2" weight="bold">
+          Optional APIs
+        </Text>
         <Flex gap="2" wrap="wrap">
           {optionalApis.map(([label, href]) => (
             <Button key={label} size="1" variant="soft" onClick={() => openInside(href)}>
@@ -221,8 +231,14 @@ export default function GoogleWorkspaceSetup({ onSubmit, onCancel }) {
       </Flex>
 
       <Flex justify="end" gap="2">
-        <Button variant="soft" color="gray" onClick={onCancel}>Cancel</Button>
-        <Button onClick={() => onSubmit({ completed: Object.keys(done).filter((id) => done[id]), allDone })}>
+        <Button variant="soft" color="gray" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          onClick={() =>
+            onSubmit({ completed: Object.keys(done).filter((id) => done[id]), allDone })
+          }
+        >
           <CheckCircledIcon /> I created the Desktop client
         </Button>
       </Flex>
@@ -239,5 +255,70 @@ export default function GoogleWorkspaceSetup({ onSubmit, onCancel }) {
   Prefer this when the user is already signed into Google in their normal
   browser or needs password-manager/passkey/device auth.
 - OAuth authorize URLs should use `openExternal(authorizeUrl, {
-  expectedRedirectUri })` so the host validates the OAuth callback binding
+expectedRedirectUri })` so the host validates the OAuth callback binding
   before opening the browser.
+
+## Gmail Push Notifications (optional, Cloud Pub/Sub)
+
+Without this, the Gmail agent polls via the history API (default 5 min).
+With it, Gmail pushes new-mail notifications to the natstack server and syncs
+arrive in seconds; polling drops to a 30-minute safety net.
+
+Requirements: a GCP project, a Pub/Sub topic, and a publicly reachable
+natstack server URL (`NATSTACK_PUBLIC_URL`).
+
+1. Create the topic and grant Gmail publish rights:
+   ```bash
+   gcloud pubsub topics create gmail-push
+   gcloud pubsub topics add-iam-policy-binding gmail-push \
+     --member=serviceAccount:gmail-api-push@system.gserviceaccount.com \
+     --role=roles/pubsub.publisher
+   ```
+2. Create one generic NatStack webhook subscription for Google Cloud Pub/Sub
+   deliveries. Run this from a trusted panel/shell eval and keep the token:
+
+   ```ts
+   import { webhooks } from "@workspace/runtime";
+
+   const token = "<secret>";
+   const subscription = await webhooks.createSubscription({
+     label: "gmail-cloud-pubsub",
+     target: {
+       source: "workers/gmail-agent",
+       className: "GmailAgentWorker",
+       objectKey: "gmail-push-router",
+       method: "onWebhookDelivery",
+     },
+     delivery: { mode: "direct" },
+     payload: { type: "cloud-pubsub", decodeData: "json" },
+     verifier: { type: "query-token", paramName: "token", token },
+     replay: { key: { type: "json-pointer", pointer: "/message/messageId" }, ttlMs: 86400000 },
+     response: { successStatus: 204, malformedPayload: "ack", dispatchError: "ack" },
+   });
+
+   subscription.publicUrl; // append ?token=<secret> for the Google push endpoint
+   ```
+
+3. Create a Google Pub/Sub push subscription pointing at that generic webhook
+   URL:
+   ```bash
+   gcloud pubsub subscriptions create gmail-push-natstack \
+     --topic gmail-push \
+     --push-endpoint="<subscription.publicUrl>?token=<secret>"
+   ```
+4. Configure the Gmail agent with the topic when subscribing it to a channel:
+
+   ```ts
+   import { setupGmailAgent } from "@workspace-skills/gmail";
+
+   await setupGmailAgent({
+     channelId: chat.channelId,
+     googlePubSubTopicName: "projects/<project>/topics/gmail-push",
+   });
+   ```
+
+The Gmail agent calls `users.watch` automatically on subscribe and renews it
+daily via its alarm (watches last ~7 days). The generic server ingress only
+verifies and decodes the Cloud Pub/Sub envelope; Gmail-specific mailbox fanout
+lives in the Gmail worker's `gmail-push-router` object. Without
+`googlePubSubTopicName`, history-API polling remains the only sync driver.
