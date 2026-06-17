@@ -14,6 +14,38 @@ function jsonResponse(body: unknown, init?: ResponseInit): Response {
 function createClient(routes: Record<string, unknown | ((url: URL, init?: RequestInit) => unknown)>) {
   const fetch = vi.fn(async (url: string | URL, init?: RequestInit) => {
     const parsed = new URL(String(url));
+    if (parsed.pathname === "/batch/gmail/v1") {
+      // Resolve each inner GET against the same route table and assemble a
+      // multipart response (response boundary intentionally differs).
+      const body = String(init?.body);
+      const inner = [...body.matchAll(/Content-ID: <([^>]+)>\r\n\r\n(GET|POST) (\S+) HTTP\/1\.1/g)];
+      const parts = inner.map(([, id, method, path]) => {
+        const innerUrl = new URL(`https://gmail.googleapis.com${path}`);
+        const key = `${method} ${innerUrl.pathname}${innerUrl.search}`;
+        const route = routes[key];
+        const status = route === undefined ? 404 : 200;
+        const payload =
+          route === undefined
+            ? { error: `No route for ${key}` }
+            : typeof route === "function"
+              ? route(innerUrl, init)
+              : route;
+        return [
+          "--resp_boundary",
+          "Content-Type: application/http",
+          `Content-ID: <response-${id}>`,
+          "",
+          `HTTP/1.1 ${status} ${status === 200 ? "OK" : "Not Found"}`,
+          "Content-Type: application/json; charset=UTF-8",
+          "",
+          JSON.stringify(payload),
+        ].join("\r\n");
+      });
+      return new Response(parts.join("\r\n") + "\r\n--resp_boundary--\r\n", {
+        status: 200,
+        headers: { "Content-Type": "multipart/mixed; boundary=resp_boundary" },
+      });
+    }
     const key = `${init?.method ?? "GET"} ${parsed.pathname}${parsed.search}`;
     const route = routes[key];
     if (route === undefined) {
@@ -30,7 +62,7 @@ function createClient(routes: Record<string, unknown | ((url: URL, init?: Reques
 }
 
 describe("Gmail client", () => {
-  it("lists messages and fetches each message with requested metadata headers", async () => {
+  it("lists messages and fetches message details via one batch call", async () => {
     const { client, fetch } = createClient({
       "GET /gmail/v1/users/me/messages?maxResults=2": {
         messages: [{ id: "m1", threadId: "t1" }],

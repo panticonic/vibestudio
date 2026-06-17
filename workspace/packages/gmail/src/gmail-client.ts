@@ -3,7 +3,15 @@ import type {
   UrlCredentialHandle,
 } from "@workspace/runtime/credentials";
 
-const GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me";
+import {
+  BatchHttpError,
+  executeBatch,
+  type BatchPart,
+  type BatchPartResult,
+} from "./batch.js";
+
+const GMAIL_API_PATH_PREFIX = "/gmail/v1/users/me";
+const GMAIL_API_BASE = `https://gmail.googleapis.com${GMAIL_API_PATH_PREFIX}`;
 const PEOPLE_API_BASE = "https://people.googleapis.com/v1";
 
 export type GmailApiErrorCode =
@@ -78,6 +86,30 @@ function classifyHttpFailure(
   if (status === 429) return { code: "rate-limited" };
   if (status >= 500) return { code: "server" };
   return { code: "invalid-request" };
+}
+
+function httpFailureToError(
+  status: number,
+  statusText: string,
+  bodyText: string,
+  opts: { retryAfterHeader: string | null; resource?: GmailResourceKind }
+): GmailApiError {
+  const { code } = classifyHttpFailure(status, bodyText);
+  const retryAfterMs =
+    code === "rate-limited" &&
+    opts.retryAfterHeader &&
+    Number.isFinite(Number(opts.retryAfterHeader))
+      ? Number(opts.retryAfterHeader) * 1000
+      : undefined;
+  return new GmailApiError(
+    `Gmail API request failed: ${status} ${statusText}${bodyText ? ` - ${bodyText.slice(0, 500)}` : ""}`,
+    code,
+    {
+      status,
+      ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      ...(opts.resource ? { resource: opts.resource } : {}),
+    }
+  );
 }
 
 const googleWorkspaceCredential = {
@@ -161,6 +193,16 @@ export interface GmailProfile {
   [key: string]: unknown;
 }
 
+/** Send-as alias from GET /settings/sendAs. `signature` is HTML. */
+export interface GmailSendAsAlias {
+  sendAsEmail: string;
+  displayName?: string;
+  signature?: string;
+  isDefault?: boolean;
+  isPrimary?: boolean;
+  [key: string]: unknown;
+}
+
 export interface GmailHistoryMessageRef {
   id: string;
   threadId: string;
@@ -191,6 +233,19 @@ export interface ListHistoryOptions {
   historyTypes?: GmailHistoryType[];
 }
 
+export interface WatchParams {
+  /** Cloud Pub/Sub topic, e.g. "projects/my-proj/topics/gmail-push". */
+  topicName: string;
+  labelIds?: string[];
+  labelFilterBehavior?: "include" | "exclude";
+}
+
+export interface WatchResult {
+  historyId: string;
+  /** Epoch ms (the API returns a string). */
+  expiration: number;
+}
+
 export interface ListMessagesOptions {
   maxResults?: number;
   labelIds?: string[];
@@ -209,6 +264,25 @@ export interface GetThreadOptions extends GetMessageOptions {}
 
 export interface ListMessagesResult {
   messages: GmailMessage[];
+  nextPageToken?: string;
+  resultSizeEstimate?: number;
+}
+
+export interface ListThreadsOptions {
+  q?: string;
+  labelIds?: string[];
+  maxResults?: number;
+  pageToken?: string;
+}
+
+export interface GmailThreadRef {
+  id: string;
+  snippet?: string;
+  historyId?: string;
+}
+
+export interface ListThreadsResult {
+  threads: GmailThreadRef[];
   nextPageToken?: string;
   resultSizeEstimate?: number;
 }
@@ -234,6 +308,39 @@ export interface ModifyLabelsParams {
   threadId?: string;
   addLabelIds?: string[];
   removeLabelIds?: string[];
+}
+
+export interface BatchModifyParams {
+  /** Message ids (max 1000 per Gmail API call). */
+  messageIds: string[];
+  addLabelIds?: string[];
+  removeLabelIds?: string[];
+}
+
+export interface CreateLabelParams {
+  name: string;
+  labelListVisibility?: "labelShow" | "labelShowIfUnread" | "labelHide";
+  messageListVisibility?: "show" | "hide";
+  color?: { textColor?: string; backgroundColor?: string };
+}
+
+export interface GmailAttachmentBody {
+  size: number;
+  /** base64url-encoded bytes. */
+  data: string;
+  [key: string]: unknown;
+}
+
+export interface ListDraftsResult {
+  drafts: GmailDraft[];
+  nextPageToken?: string;
+}
+
+/** Per-item result of a batched fetch: exactly one of value/error is set. */
+export interface GmailBatchItem<T> {
+  id: string;
+  value?: T;
+  error?: GmailApiError;
 }
 
 export interface GmailThreadDiff {
@@ -286,15 +393,42 @@ function normalizeContactResults(data: PeopleSearchResponse): GoogleContact[] {
 export interface GmailClient {
   handle(): Promise<UrlCredentialHandle>;
   getProfile(): Promise<GmailProfile>;
+  listSendAs(): Promise<GmailSendAsAlias[]>;
   listLabels(): Promise<GmailLabel[]>;
+  createLabel(params: CreateLabelParams): Promise<GmailLabel>;
+  updateLabel(labelId: string, params: Partial<CreateLabelParams>): Promise<GmailLabel>;
+  deleteLabel(labelId: string): Promise<void>;
   listMessages(opts?: ListMessagesOptions): Promise<ListMessagesResult>;
+  /** True thread-level listing (GET /threads) — refs only, no hydration. */
+  listThreads(opts?: ListThreadsOptions): Promise<ListThreadsResult>;
   search(q: string, opts?: Omit<ListMessagesOptions, "q">): Promise<ListMessagesResult>;
   listHistory(opts: ListHistoryOptions): Promise<GmailHistoryResponse>;
   syncSince(historyId: string): Promise<GmailSyncDiff>;
+  /** Start (or renew) push notifications to a Cloud Pub/Sub topic. */
+  watch(params: WatchParams): Promise<WatchResult>;
+  /** Stop push notifications for this mailbox. */
+  stopWatch(): Promise<void>;
   getMessage(messageId: string, opts?: GetMessageOptions): Promise<GmailMessage>;
   getThread(threadId: string, opts?: GetThreadOptions): Promise<GmailThread>;
+  /** Batched GET /messages/{id} via the multipart batch endpoint. */
+  batchGetMessages(
+    messageIds: string[],
+    opts?: GetMessageOptions
+  ): Promise<Array<GmailBatchItem<GmailMessage>>>;
+  /** Batched GET /threads/{id} via the multipart batch endpoint. */
+  batchGetThreads(
+    threadIds: string[],
+    opts?: GetThreadOptions
+  ): Promise<Array<GmailBatchItem<GmailThread>>>;
+  /** Native POST /messages/batchModify (≤1000 ids, returns no body). */
+  batchModify(params: BatchModifyParams): Promise<void>;
+  getAttachment(messageId: string, attachmentId: string): Promise<GmailAttachmentBody>;
   sendMessage(params: SendMessageParams): Promise<GmailMessage>;
   createDraft(params: CreateDraftParams): Promise<GmailDraft>;
+  listDrafts(opts?: { maxResults?: number; pageToken?: string; q?: string }): Promise<ListDraftsResult>;
+  getDraft(draftId: string): Promise<GmailDraft>;
+  updateDraft(draftId: string, params: CreateDraftParams): Promise<GmailDraft>;
+  deleteDraft(draftId: string): Promise<void>;
   sendDraft(draftId: string): Promise<GmailMessage>;
   modifyLabels(params: ModifyLabelsParams): Promise<GmailMessage | GmailThread>;
   searchContacts(query: string, opts?: SearchContactsOptions): Promise<GoogleContact[]>;
@@ -452,12 +586,13 @@ export function createGmailClient(
     return handlePromise;
   };
 
-  // Absolute-URL fetch shared by the Gmail and People API surfaces.
-  const fetchJson = async <T>(
+  // Absolute-URL fetch shared by the Gmail and People API surfaces. Returns
+  // the ok Response; non-2xx and transport failures throw GmailApiError.
+  const fetchRaw = async (
     url: string,
     init?: RequestInit,
     resource?: GmailResourceKind
-  ): Promise<T> => {
+  ): Promise<Response> => {
     let auth: UrlCredentialHandle;
     try {
       auth = await handle();
@@ -485,27 +620,88 @@ export function createGmailClient(
     }
     if (!response.ok) {
       const bodyText = await response.text();
-      const { code } = classifyHttpFailure(response.status, bodyText);
-      const retryAfterHeader = response.headers.get("Retry-After");
-      const retryAfterMs =
-        code === "rate-limited" && retryAfterHeader && Number.isFinite(Number(retryAfterHeader))
-          ? Number(retryAfterHeader) * 1000
-          : undefined;
-      throw new GmailApiError(
-        `Gmail API request failed: ${response.status} ${response.statusText}${bodyText ? ` - ${bodyText.slice(0, 500)}` : ""}`,
-        code,
-        {
-          status: response.status,
-          ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
-          ...(resource ? { resource } : {}),
-        }
-      );
+      throw httpFailureToError(response.status, response.statusText, bodyText, {
+        retryAfterHeader: response.headers.get("Retry-After"),
+        ...(resource ? { resource } : {}),
+      });
     }
+    return response;
+  };
+
+  const fetchJson = async <T>(
+    url: string,
+    init?: RequestInit,
+    resource?: GmailResourceKind
+  ): Promise<T> => {
+    const response = await fetchRaw(url, init, resource);
     return (await response.json()) as T;
   };
 
   const apiFetch = <T>(path: string, init?: RequestInit): Promise<T> =>
     fetchJson<T>(`${GMAIL_API_BASE}${path}`, init, resourceFromPath(path));
+
+  /** Like apiFetch for endpoints that return 204/empty bodies. */
+  const apiFetchVoid = async (path: string, init?: RequestInit): Promise<void> => {
+    await fetchRaw(`${GMAIL_API_BASE}${path}`, init, resourceFromPath(path));
+  };
+
+  // ── batch ──────────────────────────────────────────────────────────────────
+
+  const runBatch = async (parts: BatchPart[]): Promise<Map<string, BatchPartResult>> => {
+    try {
+      return await executeBatch((url, init) => fetchRaw(url, init), parts);
+    } catch (err) {
+      // fetchRaw already classifies whole-batch HTTP failures into
+      // GmailApiError; BatchHttpError only escapes for malformed responses.
+      if (err instanceof BatchHttpError) {
+        throw httpFailureToError(err.status, err.message, err.bodyText, {
+          retryAfterHeader: null,
+        });
+      }
+      throw err;
+    }
+  };
+
+  const batchPartError = (part: BatchPartResult, resource: GmailResourceKind): GmailApiError => {
+    const { code } = classifyHttpFailure(part.status, part.bodyText);
+    return new GmailApiError(
+      `Gmail batch item failed: ${part.status}${part.bodyText ? ` - ${part.bodyText.slice(0, 300)}` : ""}`,
+      code,
+      { status: part.status, resource }
+    );
+  };
+
+  const batchGet = async <T>(
+    collection: "messages" | "threads",
+    ids: string[],
+    opts?: GetMessageOptions
+  ): Promise<Array<GmailBatchItem<T>>> => {
+    if (ids.length === 0) return [];
+    const query = toQueryParams({
+      format: opts?.format,
+      metadataHeaders: opts?.metadataHeaders,
+    });
+    const parts: BatchPart[] = ids.map((id, index) => ({
+      id: `item-${index}`,
+      method: "GET",
+      path: `${GMAIL_API_PATH_PREFIX}/${collection}/${encodeURIComponent(id)}${query}`,
+    }));
+    const results = await runBatch(parts);
+    const resource: GmailResourceKind = collection === "messages" ? "message" : "thread";
+    return ids.map((id, index) => {
+      const part = results.get(`item-${index}`);
+      if (!part) {
+        return {
+          id,
+          error: new GmailApiError(`Gmail batch item missing from response: ${id}`, "server", {
+            resource,
+          }),
+        };
+      }
+      if (!part.ok) return { id, error: batchPartError(part, resource) };
+      return { id, value: part.json as T };
+    });
+  };
 
   // The People search endpoints need a warmup request (empty query) to prime
   // the search cache per Google docs; fire it once per client, best-effort.
@@ -588,9 +784,18 @@ export function createGmailClient(
       };
     }
 
-    const messages = await Promise.all(
-      data.messages.map((message) => getMessage(message.id, { format, metadataHeaders })),
+    // One multipart batch call instead of N sequential GETs. Preserve the old
+    // all-or-nothing contract: any per-item failure fails the whole list.
+    const items = await batchGet<GmailMessage>(
+      "messages",
+      data.messages.map((message) => message.id),
+      { format, metadataHeaders }
     );
+    const messages: GmailMessage[] = [];
+    for (const item of items) {
+      if (item.error) throw item.error;
+      messages.push(item.value!);
+    }
     return {
       messages,
       nextPageToken: data.nextPageToken,
@@ -607,11 +812,43 @@ export function createGmailClient(
   return {
     handle,
     getProfile: () => apiFetch<GmailProfile>("/profile"),
+    listSendAs: async () => {
+      const data = await apiFetch<{ sendAs?: GmailSendAsAlias[] }>("/settings/sendAs");
+      return data.sendAs ?? [];
+    },
     listLabels: async () => {
       const data = await apiFetch<{ labels?: GmailLabel[] }>("/labels");
       return data.labels ?? [];
     },
+    createLabel: (params) =>
+      apiFetch<GmailLabel>("/labels", { method: "POST", body: JSON.stringify(params) }),
+    updateLabel: (labelId, params) =>
+      apiFetch<GmailLabel>(`/labels/${encodeURIComponent(labelId)}`, {
+        method: "PUT",
+        body: JSON.stringify(params),
+      }),
+    deleteLabel: (labelId) =>
+      apiFetchVoid(`/labels/${encodeURIComponent(labelId)}`, { method: "DELETE" }),
     listMessages,
+    listThreads: async (opts) => {
+      const data = await apiFetch<{
+        threads?: GmailThreadRef[];
+        nextPageToken?: string;
+        resultSizeEstimate?: number;
+      }>(
+        `/threads${toQueryParams({
+          q: opts?.q,
+          labelIds: opts?.labelIds,
+          maxResults: opts?.maxResults,
+          pageToken: opts?.pageToken,
+        })}`
+      );
+      return {
+        threads: data.threads ?? [],
+        nextPageToken: data.nextPageToken,
+        resultSizeEstimate: data.resultSizeEstimate,
+      };
+    },
     search: (q, opts) => listMessages({ ...opts, q }),
     listHistory,
     syncSince: async (historyId) => {
@@ -625,8 +862,42 @@ export function createGmailClient(
         threads: aggregateHistoryByThread(rawHistory),
       };
     },
+    watch: async (params) => {
+      const data = await apiFetch<{ historyId: string; expiration: string }>("/watch", {
+        method: "POST",
+        body: JSON.stringify({
+          topicName: params.topicName,
+          ...(params.labelIds ? { labelIds: params.labelIds } : {}),
+          ...(params.labelFilterBehavior
+            ? { labelFilterBehavior: params.labelFilterBehavior.toUpperCase() }
+            : {}),
+        }),
+      });
+      return { historyId: data.historyId, expiration: Number(data.expiration) };
+    },
+    stopWatch: () => apiFetchVoid("/stop", { method: "POST" }),
     getMessage,
     getThread,
+    batchGetMessages: (messageIds, opts) => batchGet<GmailMessage>("messages", messageIds, opts),
+    batchGetThreads: (threadIds, opts) => batchGet<GmailThread>("threads", threadIds, opts),
+    batchModify: async (params) => {
+      if (params.messageIds.length === 0) return;
+      if (params.messageIds.length > 1000) {
+        throw new Error("Gmail batchModify accepts at most 1000 message ids per call");
+      }
+      await apiFetchVoid("/messages/batchModify", {
+        method: "POST",
+        body: JSON.stringify({
+          ids: params.messageIds,
+          addLabelIds: params.addLabelIds ?? [],
+          removeLabelIds: params.removeLabelIds ?? [],
+        }),
+      });
+    },
+    getAttachment: (messageId, attachmentId) =>
+      apiFetch<GmailAttachmentBody>(
+        `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`
+      ),
     sendMessage,
     createDraft: (params) => apiFetch<GmailDraft>("/drafts", {
       method: "POST",
@@ -634,6 +905,22 @@ export function createGmailClient(
         message: appendThread({ raw: buildRawMessage(params) }, params.threadId),
       }),
     }),
+    listDrafts: async (opts) => {
+      const data = await apiFetch<{ drafts?: GmailDraft[]; nextPageToken?: string }>(
+        `/drafts${toQueryParams({ maxResults: opts?.maxResults, pageToken: opts?.pageToken, q: opts?.q })}`
+      );
+      return { drafts: data.drafts ?? [], nextPageToken: data.nextPageToken };
+    },
+    getDraft: (draftId) => apiFetch<GmailDraft>(`/drafts/${encodeURIComponent(draftId)}`),
+    updateDraft: (draftId, params) =>
+      apiFetch<GmailDraft>(`/drafts/${encodeURIComponent(draftId)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          message: appendThread({ raw: buildRawMessage(params) }, params.threadId),
+        }),
+      }),
+    deleteDraft: (draftId) =>
+      apiFetchVoid(`/drafts/${encodeURIComponent(draftId)}`, { method: "DELETE" }),
     sendDraft: async (draftId) => {
       return apiFetch<GmailMessage>("/drafts/send", {
         method: "POST",

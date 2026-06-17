@@ -7,6 +7,7 @@
     ".": "./src/index.ts",
     "./gmail-client": "./src/gmail-client.ts",
     "./card-types": "./src/card-types.ts",
+    "./test-utils": "./src/test-utils.ts",
     "./renderers/gmail-thread.reducer": "./src/renderers/gmail-thread.reducer.ts"
   },
   "dependencies": {
