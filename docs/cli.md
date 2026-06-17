@@ -54,19 +54,27 @@ natstack remote serve --host tailscale --port 3030
 pnpm cli remote serve --host tailscale --port 3030
 ```
 
-Pair this terminal, launch Electron, and mint new invites:
+Pair this terminal, launch Electron, start the terminal app, and mint new invites:
 
 ```sh
 natstack remote pair "natstack://connect?url=...&code=..."
 natstack remote start --pair "natstack://connect?url=...&code=..."
 natstack remote start
+natstack terminal start --pair "natstack://connect?url=...&code=..."
+natstack terminal start
 natstack remote invite
 natstack remote status
 natstack remote logout
 ```
 
+Pairing saves a durable device credential. After pairing, desktop, mobile, and
+terminal hosts all ask the server to launch their selected host target and show
+the same privileged workspace-unit approval before running workspace code.
+
 `remote start` launches Electron and therefore uses built Electron artifacts,
-even when invoked as `pnpm cli remote start`.
+even when invoked as `pnpm cli remote start`. `terminal start` runs fully in the
+CLI; use `--yes` only for automation that should approve each startup request
+once.
 
 Credentials are stored in `~/.config/natstack/cli-credentials.json` with file
 mode `0600`. The CLI does not use a system keyring.

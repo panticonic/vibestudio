@@ -307,6 +307,146 @@ describe("natstack CLI", () => {
     });
   });
 
+  it("pairs inline before starting the terminal app through the launch gate", async () => {
+    const rpcMethods: string[] = [];
+    const bodies: Array<{ url: string; body: unknown }> = [];
+    const approval = {
+      approvalId: "approval-1",
+      kind: "unit-batch",
+      callerId: "system:apps",
+      callerKind: "system",
+      repoPath: "apps/remote-cli",
+      effectiveVersion: "ev-1",
+      trigger: "startup",
+      title: "Approve terminal app",
+      description: "Approve before launch",
+      units: [
+        {
+          unitKind: "app",
+          unitName: "@workspace-apps/remote-cli",
+          displayName: "Remote CLI",
+          target: "terminal",
+          source: { kind: "workspace-repo", repo: "apps/remote-cli", ref: "main" },
+          ev: "terminal-ev",
+          capabilities: ["connection-management"],
+        },
+      ],
+      requestedAt: 1,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        bodies.push({ url: String(url), body });
+        if (String(url).endsWith("/_r/s/auth/complete-pairing")) {
+          return new Response(
+            JSON.stringify({ deviceId: "dev_terminal", refreshToken: "refresh_terminal" })
+          );
+        }
+        if (String(url).endsWith("/_r/s/auth/refresh-shell")) {
+          return new Response(JSON.stringify({ shellToken: "shell_token" }));
+        }
+        rpcMethods.push(body.method);
+        if (body.method === "workspace.hostTargets.beginLaunch") {
+          return new Response(
+            JSON.stringify({
+              result: {
+                sessionId: "launch_terminal",
+                target: "terminal",
+                status: "approval-required",
+                currentPhase: "review-trust",
+                message: "Terminal launch needs approval.",
+                timeline: [],
+                approvals: [approval],
+                approvalViews: [],
+                approvalsResolved: 0,
+                startedAt: 1,
+                updatedAt: 1,
+                settled: false,
+              },
+            })
+          );
+        }
+        if (body.method === "workspace.hostTargets.resolveLaunchSessionApproval") {
+          return new Response(
+            JSON.stringify({
+              result: {
+                sessionId: "launch_terminal",
+                target: "terminal",
+                status: "ready",
+                currentPhase: "connected",
+                message: "Terminal app is ready.",
+                timeline: [],
+                approvals: [],
+                approvalViews: [],
+                approvalsResolved: 1,
+                startedAt: 1,
+                updatedAt: 2,
+                settled: true,
+                launch: {
+                  status: "ready",
+                  target: "terminal",
+                  appId: "@workspace-apps/remote-cli",
+                  buildKey: "build-terminal",
+                },
+              },
+            })
+          );
+        }
+        return new Response(JSON.stringify({ error: `unexpected ${body.method}` }), {
+          status: 500,
+        });
+      })
+    );
+
+    const { main } = await import("./client.js");
+    const code = await main([
+      "terminal",
+      "start",
+      "--pair",
+      createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24)),
+      "--yes",
+      "--json",
+    ]);
+
+    expect(code).toBe(0);
+    expect(bodies[0]).toMatchObject({
+      url: "https://host.tailnet.ts.net/_r/s/auth/complete-pairing",
+      body: {
+        code: "A".repeat(24),
+        label: expect.stringContaining("Terminal on "),
+        platform: "desktop",
+      },
+    });
+    expect(rpcMethods).toEqual([
+      "workspace.hostTargets.beginLaunch",
+      "workspace.hostTargets.resolveLaunchSessionApproval",
+    ]);
+    const filePath = path.join(tmpDir, ".config", "natstack", "cli-credentials.json");
+    expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toMatchObject({
+      schemaVersion: 1,
+      kind: "device",
+      url: "https://host.tailnet.ts.net",
+      deviceId: "dev_terminal",
+      refreshToken: "refresh_terminal",
+    });
+    const output = vi
+      .mocked(console.log)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(JSON.parse(output)).toMatchObject({ status: "ready", approvalsResolved: 1 });
+  });
+
+  it("points unpaired terminal users at the inline pairing command", async () => {
+    const { main } = await import("./client.js");
+    await expect(main(["terminal", "start"])).resolves.toBe(3);
+    const output = vi
+      .mocked(console.error)
+      .mock.calls.map((call) => String(call[0]))
+      .join("\n");
+    expect(output).toContain("natstack terminal start --pair");
+  });
+
   function writeCredentials(content?: string): void {
     const credentialDir = path.join(tmpDir, ".config", "natstack");
     fs.mkdirSync(credentialDir, { recursive: true });

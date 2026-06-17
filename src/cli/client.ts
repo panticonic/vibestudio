@@ -11,8 +11,9 @@ import {
   saveCliCredentials,
   credentialPath,
 } from "./credentialStore.js";
-import { completePairing, createPairingInvite } from "./remoteClient.js";
-import { refreshShell } from "./rpcClient.js";
+import { completePairing, createPairingInvite, type PairOptions } from "./remoteClient.js";
+import { refreshShell, type DeviceCredential } from "./rpcClient.js";
+import { runTerminalLaunchGate } from "./terminalLaunchGate.js";
 import { agentCommands } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
@@ -123,6 +124,99 @@ async function remoteInvite(inv: ParsedInvocation): Promise<number> {
   }
 }
 
+function terminalPairOptions(inv: ParsedInvocation): PairOptions | null {
+  const opts: PairOptions = {};
+  if (typeof inv.flags["pair"] === "string") opts.link = inv.flags["pair"];
+  if (typeof inv.flags["url"] === "string") opts.url = inv.flags["url"];
+  if (typeof inv.flags["code"] === "string") opts.code = inv.flags["code"];
+  if (typeof inv.flags["label"] === "string") opts.label = inv.flags["label"];
+
+  const positional = inv.positionals[0];
+  if (positional?.startsWith("natstack://")) opts.link = positional;
+  else if (positional) {
+    throw new UsageError(
+      `Unexpected argument for terminal start: ${positional}. Pass a natstack://connect link with --pair.`
+    );
+  }
+
+  if (opts.link || opts.url || opts.code) {
+    if (!opts.label) opts.label = `Terminal on ${os.hostname()}`;
+    return opts;
+  }
+  if (opts.label) {
+    throw new UsageError("--label is only valid when pairing with --pair or --url/--code");
+  }
+  return null;
+}
+
+async function terminalCredentials(
+  inv: ParsedInvocation,
+  json: boolean
+): Promise<DeviceCredential> {
+  const pairOptions = terminalPairOptions(inv);
+  if (pairOptions) {
+    const creds = await completePairing(pairOptions);
+    saveCliCredentials(creds);
+    if (!json) console.log(`paired ${creds.url}`);
+    return creds;
+  }
+  const creds = loadCliCredentials();
+  if (!creds) {
+    throw new AuthError(
+      'not paired - run `natstack terminal start --pair "natstack://connect?url=...&code=..."`'
+    );
+  }
+  return creds;
+}
+
+async function terminalStart(inv: ParsedInvocation): Promise<number> {
+  const json = jsonMode(inv.flags["json"] === true);
+  try {
+    const creds = await terminalCredentials(inv, json);
+    const result = await runTerminalLaunchGate(creds, {
+      target: "terminal",
+      yes: inv.flags["yes"] === true,
+      json,
+    });
+    printResult(result, {
+      json,
+      human: () => {
+        if (result.status === "ready") {
+          const launch = result.launch?.status === "ready" ? result.launch : null;
+          console.log(`terminal app started${launch?.appId ? `: ${launch.appId}` : ""}`);
+          if (launch?.buildKey) console.log(`build: ${launch.buildKey}`);
+          if (result.approvalsResolved > 0) {
+            console.log(`approvals resolved: ${result.approvalsResolved}`);
+          }
+          return;
+        }
+        if (result.status === "denied") {
+          console.log("terminal app startup denied");
+          return;
+        }
+        if (result.launch?.status === "unavailable") {
+          const details = result.launch.details.length
+            ? `: ${result.launch.details.join("; ")}`
+            : "";
+          console.log(`${result.launch.reason}${details}`);
+          return;
+        }
+        if (result.launch?.status === "preparing") {
+          const details = result.launch.details.length
+            ? `: ${result.launch.details.join("; ")}`
+            : "";
+          console.log(`${result.launch.reason}${details}`);
+          return;
+        }
+        console.log(`terminal app did not start: ${result.status}`);
+      },
+    });
+    return result.status === "ready" ? 0 : 1;
+  } catch (error) {
+    return printError(error, { json });
+  }
+}
+
 function scriptCommand(
   group: string,
   name: string,
@@ -195,6 +289,29 @@ const remoteCommands: CliCommand[] = [
   },
   {
     group: "remote",
+    name: "terminal",
+    summary: "Review approvals and start the selected terminal app",
+    usage: "natstack remote terminal [--pair <link>] [--yes]",
+    flags: [
+      {
+        name: "pair",
+        takesValue: true,
+        description: "Pair from a natstack://connect link before starting",
+      },
+      { name: "url", takesValue: true, description: "Server URL for --code pairing" },
+      { name: "code", takesValue: true, description: "Pairing code for --url pairing" },
+      { name: "label", takesValue: true, description: "Device label used while pairing" },
+      {
+        name: "yes",
+        takesValue: false,
+        description: "Approve each terminal startup approval once without prompting",
+      },
+      JSON_FLAG,
+    ],
+    run: terminalStart,
+  },
+  {
+    group: "remote",
     name: "logout",
     summary: "Remove the stored CLI device credential",
     usage: "natstack remote logout",
@@ -259,6 +376,33 @@ const remoteCommands: CliCommand[] = [
       },
     ],
     run: remoteHost,
+  },
+];
+
+const terminalCommands: CliCommand[] = [
+  {
+    group: "terminal",
+    name: "start",
+    aliases: ["launch"],
+    summary: "Review approvals and start the selected terminal app",
+    usage: "natstack terminal start [--pair <link>] [--yes]",
+    flags: [
+      {
+        name: "pair",
+        takesValue: true,
+        description: "Pair from a natstack://connect link before starting",
+      },
+      { name: "url", takesValue: true, description: "Server URL for --code pairing" },
+      { name: "code", takesValue: true, description: "Pairing code for --url pairing" },
+      { name: "label", takesValue: true, description: "Device label used while pairing" },
+      {
+        name: "yes",
+        takesValue: false,
+        description: "Approve each terminal startup approval once without prompting",
+      },
+      JSON_FLAG,
+    ],
+    run: terminalStart,
   },
 ];
 
@@ -380,6 +524,7 @@ const mobileCommands: CliCommand[] = [
  */
 const commandRegistry: CliCommand[] = [
   ...remoteCommands,
+  ...terminalCommands,
   ...mobileCommands,
   ...agentCommands,
   ...fsCommands,
@@ -387,7 +532,7 @@ const commandRegistry: CliCommand[] = [
   ...evalCommands,
 ];
 
-const GROUP_ORDER = ["remote", "mobile", "agent", "fs", "vcs", "eval"];
+const GROUP_ORDER = ["remote", "terminal", "mobile", "agent", "fs", "vcs", "eval"];
 
 export async function main(argv: string[]): Promise<number> {
   const [group, ...rest] = argv;
