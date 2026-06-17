@@ -8,6 +8,7 @@
     "title": "Fork Worker"
   },
   "dependencies": {
-    "@workspace/runtime": "workspace:*"
+    "@workspace/runtime": "workspace:*",
+    "@workspace/channel-fork": "workspace:*"
   }
 }

@@ -9,8 +9,7 @@
 
 import { createWorkerRuntime, handleWorkerRpc } from "@workspace/runtime/worker";
 import type { WorkerEnv, ExecutionContext } from "@workspace/runtime/worker";
-import { fork } from "./fork.js";
-import type { ForkOpts } from "./fork.js";
+import { fork, type ForkOpts } from "@workspace/channel-fork";
 
 export default {
   async fetch(request: Request, env: WorkerEnv, _ctx: ExecutionContext) {
