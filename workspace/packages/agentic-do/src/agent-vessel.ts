@@ -17,7 +17,7 @@ import {
   createGadServiceClient,
   type DurableObjectServiceClient,
 } from "@workspace/runtime/workerd-client";
-import type { RpcChannelMessage } from "@workspace/pubsub";
+import type { ChannelReplayEnvelope, RpcChannelMessage } from "@workspace/pubsub";
 import {
   composeSystemPrompt,
   type ChannelEvent,
@@ -117,7 +117,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   protected readonly feedback: FeedbackIngest;
   protected readonly cards: CardManager;
   private _driver: AgentLoopDriver | null = null;
-  private readonly channelsInReplay = new Set<string>();
   private readonly localTools = new Map<string, Map<string, AgentTool>>();
   private readonly deltaBuffers = new Map<string, { events: AgenticEvent[]; timer: unknown }>();
   private readonly channelClients = new Map<string, ChannelClient>();
@@ -941,7 +940,36 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
     }
     await this.ensurePromptArtifacts(opts.channelId);
+    await this.ingestSubscriptionReplay(opts.channelId, result.envelope);
     return { ok: result.ok, participantId: result.participantId };
+  }
+
+  private async ingestSubscriptionReplay(
+    channelId: string,
+    envelope: ChannelReplayEnvelope | undefined
+  ): Promise<void> {
+    if (envelope?.logEvents?.length) {
+      for (const event of envelope.logEvents) {
+        await this.processChannelEvent(channelId, {
+          id: event.id,
+          messageId: event.messageId,
+          type: event.type,
+          payload: event.payload,
+          senderId: event.senderId,
+          ts: event.ts,
+          ...(event.senderMetadata ? { senderMetadata: event.senderMetadata } : {}),
+          ...(event.contentType ? { contentType: event.contentType } : {}),
+          ...(event.attachments ? { attachments: event.attachments } : {}),
+          ...((event as unknown as { annotations?: Record<string, unknown> }).annotations
+            ? {
+                annotations: (event as unknown as { annotations: Record<string, unknown> })
+                  .annotations,
+              }
+            : {}),
+        });
+      }
+    }
+    await this.driver.wake(channelId);
   }
 
   async unsubscribeChannel(channelId: string): Promise<{ ok: boolean }> {
@@ -963,14 +991,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   async onChannelEnvelope(channelId: string, envelope: RpcChannelMessage): Promise<void> {
     if (envelope.kind === "control") {
       if (envelope.type === "ready") {
-        this.channelsInReplay.delete(channelId);
         await this.driver.wake(channelId);
       }
       return;
     }
     if (envelope.kind === "log" && envelope.event) {
-      if (envelope.phase === "replay") this.channelsInReplay.add(channelId);
-      if (envelope.event.type === "presence") this.participantCache.delete(channelId);
       await this.processChannelEvent(channelId, envelope.event);
       return;
     }
@@ -988,6 +1013,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   async processChannelEvent(channelId: string, event: ChannelEvent): Promise<void> {
+    // Invalidate the cached participant roster on any presence change, in the one sink both the
+    // live stream and subscription-replay paths funnel through — so neither path serves a stale
+    // roster to shouldRespond / maybeRefreshRoster.
+    if (event.type === "presence") this.participantCache.delete(channelId);
     if (await this.onChannelEvent(channelId, event)) return;
     if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return;
     const maybeFeedback = event.payload as AgenticEvent | null;

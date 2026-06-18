@@ -383,6 +383,106 @@ describe("AgentLoopDriver", () => {
     ]);
   });
 
+  it("closes a completed assistant turn when replay missed the terminal cascade", async () => {
+    const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
+    const host = await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" });
+    let armed = true;
+    const crashed = await makeHarness({
+      script: { model: [textReply("done")], tool: [] },
+      gad,
+      driverSql: host,
+      killPoint: (point) => {
+        if (armed && point === "after-outcome-append") {
+          armed = false;
+          throw new Error("crash after terminal append");
+        }
+      },
+    });
+
+    await crashed.driver.handleIncoming(CHANNEL, promptIncoming());
+    await crashed.driver.alarm().catch(() => {});
+
+    expect(await logKinds(gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.completed",
+    ]);
+
+    const recovered = await makeHarness({
+      script: { model: [], tool: [] },
+      gad,
+      driverSql: host,
+    });
+    await recovered.driver.wake(CHANNEL);
+
+    expect(await logKinds(gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.completed",
+      "turn.closed",
+    ]);
+    expect((await recovered.driver.loop(CHANNEL)).state.openTurn).toBeNull();
+    expect(recovered.driver.outbox.all()).toHaveLength(0);
+  });
+
+  it("parks a reset-aware model failure when replay missed the terminal cascade", async () => {
+    const gad = await createTestDO(GadWorkspaceDO, { __objectKey: "gad" });
+    const host = await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" });
+    let armed = true;
+    const crashed = await makeHarness({
+      script: {
+        model: [
+          {
+            kind: "model",
+            blocks: [],
+            stopReason: "error",
+            errorReason: rawUsageLimitError(),
+          },
+        ],
+        tool: [],
+      },
+      gad,
+      driverSql: host,
+      killPoint: (point) => {
+        if (armed && point === "after-outcome-append") {
+          armed = false;
+          throw new Error("crash after terminal append");
+        }
+      },
+    });
+
+    await crashed.driver.handleIncoming(CHANNEL, promptIncoming());
+    await crashed.driver.alarm().catch(() => {});
+
+    expect(await logKinds(gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.failed",
+    ]);
+
+    const recovered = await makeHarness({
+      script: { model: [], tool: [] },
+      gad,
+      driverSql: host,
+    });
+    await recovered.driver.wake(CHANNEL);
+
+    expect(await logKinds(gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.failed",
+      "turn.waiting",
+    ]);
+    const loop = await recovered.driver.loop(CHANNEL);
+    expect(loop.state.openTurn?.waitingCount).toBe(1);
+    expect(loop.state.inFlightModelCall).toBeNull();
+    expect(recovered.driver.outbox.all()).toHaveLength(0);
+  });
+
   it("pauses usage-limit failures and resumes after a scheduled reset alarm", async () => {
     const harness = await makeHarness({
       script: {

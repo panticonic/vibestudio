@@ -1,12 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { PROVIDER_CREDENTIAL_SETUPS, DEFAULT_MODEL } from "@workspace/agentic-do";
+import {
+  AGENTIC_EVENT_PAYLOAD_KIND,
+  AGENTIC_PROTOCOL_VERSION,
+} from "@workspace/agentic-protocol";
+import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 
 import { AiChatWorker } from "./ai-chat-worker.js";
 
 class TestableAiChatWorker extends AiChatWorker {
   readonly blobs = new Map<string, string>();
   readonly published: Array<{ participantId: string; event: unknown; opts?: unknown }> = [];
+  readonly driverHandleIncoming = vi.fn(async () => undefined);
+  readonly driverWake = vi.fn(async () => undefined);
+  readonly fakeDriver = {
+    handleIncoming: this.driverHandleIncoming,
+    wake: this.driverWake,
+    abortChannel: vi.fn(),
+    dropLoop: vi.fn(),
+    deliverEffectOutcome: vi.fn(async () => undefined),
+    scheduleResumeAtReset: vi.fn(async () => ({ scheduled: true })),
+    getDebugState: vi.fn(async () => ({})),
+    foldCache: { delete: vi.fn() },
+  };
+  subscribeEnvelope: ChannelReplayEnvelope = {
+    mode: "initial",
+    logEvents: [],
+    snapshots: [],
+    ready: { totalCount: 0, envelopeCount: 0 },
+  };
   workspaceAgentsMd: unknown = "WORKSPACE AGENTS";
   workspaceSkills: unknown = [
     {
@@ -42,6 +65,10 @@ class TestableAiChatWorker extends AiChatWorker {
     } as never;
   }
 
+  protected override get driver(): never {
+    return this.fakeDriver as never;
+  }
+
   protected override createChannelClient() {
     return {
       publishAgenticEvent: async (participantId: string, event: unknown, opts?: unknown) => {
@@ -51,7 +78,7 @@ class TestableAiChatWorker extends AiChatWorker {
       subscribe: async () => ({
         ok: true,
         channelConfig: undefined,
-        envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
+        envelope: this.subscribeEnvelope,
       }),
       unsubscribe: async () => undefined,
       getParticipants: async () => [],
@@ -107,6 +134,52 @@ describe("AiChatWorker", () => {
       );
     }
     expect(worker.credentialSetup("nope")).toBeNull();
+  });
+
+  it("ingests subscription replay and wakes the loop after subscribing", async () => {
+    const worker = await makeWorker();
+    worker.subscribeEnvelope = {
+      mode: "initial",
+      logEvents: [
+        {
+          id: 1,
+          messageId: "msg-1",
+          type: AGENTIC_EVENT_PAYLOAD_KIND,
+          senderId: "user-1",
+          senderMetadata: { type: "panel", name: "User" },
+          ts: Date.parse("2026-06-17T12:00:00.000Z"),
+          payload: {
+            kind: "message.completed",
+            actor: { kind: "panel", id: "user-1", displayName: "User" },
+            causality: { messageId: "msg-1" },
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              role: "user",
+              blocks: [{ type: "text", content: "hello" }],
+              outcome: "completed",
+            },
+            createdAt: "2026-06-17T12:00:00.000Z",
+          },
+        },
+      ],
+      snapshots: [],
+      ready: { totalCount: 1, envelopeCount: 1 },
+    };
+
+    await worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1", replay: true });
+
+    expect(worker.driverHandleIncoming).toHaveBeenCalledWith(
+      "ch-1",
+      expect.objectContaining({
+        type: "command",
+        command: expect.objectContaining({
+          kind: "prompt",
+          channelId: "ch-1",
+          source: { envelopeId: "msg-1" },
+        }),
+      })
+    );
+    expect(worker.driverWake).toHaveBeenCalledWith("ch-1");
   });
 
   it("materializes workspace, skill, and subscription prompts into the model prompt artifact", async () => {
@@ -191,6 +264,9 @@ describe("AiChatWorker", () => {
     const worker = await makeWorker();
     const before = await worker.onMethodCall("ch-1", "tc-1", "getAgentSettings", {});
     expect((before.result as { model: string }).model).toBe(DEFAULT_MODEL);
+    expect((before.result as { modelStreamIdleTimeoutMs: number }).modelStreamIdleTimeoutMs).toBe(
+      90_000
+    );
 
     const switched = await worker.onMethodCall("ch-1", "tc-2", "setModel", {
       model: "anthropic:claude-sonnet-4-6",

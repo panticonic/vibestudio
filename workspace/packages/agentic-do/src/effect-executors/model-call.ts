@@ -104,10 +104,7 @@ function modelStreamIdleTimeoutReason(timeoutMs: number, phase: ModelStreamIdleP
   return `model_stream_idle_timeout: no ${phase} within ${timeoutMs}ms`;
 }
 
-function modelFailureOutcome(
-  err: unknown,
-  request: ModelCallEffect["request"]
-): EffectOutcome {
+function modelFailureOutcome(err: unknown, request: ModelCallEffect["request"]): EffectOutcome {
   const failure = classifyModelFailure(
     modelFailureInputFromUnknown(err, {
       provider: request.provider,
@@ -138,6 +135,34 @@ function modelFailureOutcomeFromMessage(
   request: ModelCallEffect["request"]
 ): EffectOutcome {
   return modelFailureOutcome(new Error(message), request);
+}
+
+function traceModelCallStage(
+  stage: string,
+  descriptor: ModelCallEffect,
+  extra?: Record<string, unknown>,
+  env?: Record<string, unknown>
+): void {
+  const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+    .process?.env;
+  const traceEnabled =
+    env?.["NATSTACK_MODEL_CALL_TRACE"] === "1" ||
+    env?.["NATSTACK_MODEL_CALL_TRACE"] === true ||
+    processEnv?.["NATSTACK_MODEL_CALL_TRACE"] === "1" ||
+    processEnv?.["NATSTACK_MODEL_CALL_TRACE"] === "true" ||
+    env?.["NATSTACK_LOG_LEVEL"] === "verbose" ||
+    processEnv?.["NATSTACK_LOG_LEVEL"] === "verbose";
+  if (!traceEnabled) return;
+  console.info("[model-call] trace:", {
+    stage,
+    channelId: descriptor.channelId,
+    turnId: descriptor.turnId,
+    messageId: descriptor.messageId,
+    provider: descriptor.request.provider,
+    model: descriptor.request.model,
+    attemptId: descriptor.request.attemptId,
+    ...extra,
+  });
 }
 
 function modelStreamSessionId(
@@ -323,8 +348,8 @@ function deterministicTestModeModelOutcome(
   env?: Record<string, unknown>
 ): EffectOutcome | null {
   const testMode = env?.["NATSTACK_TEST_MODE"];
-  const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
-    ?.env;
+  const processEnv = (globalThis as { process?: { env?: Record<string, string | undefined> } })
+    .process?.env;
   if (testMode !== "1" && processEnv?.["NATSTACK_TEST_MODE"] !== "1") return null;
   if (descriptor.request.provider !== "openai-codex") return null;
   return {
@@ -346,6 +371,9 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
 
   async execute({ descriptor, state, signal, deps, onEphemeral }) {
     const request = descriptor.request;
+    const trace = (stage: string, extra?: Record<string, unknown>) =>
+      traceModelCallStage(stage, descriptor, extra, deps.env);
+    trace("start");
 
     // Resolve the model first: credentials are URL-bound, so the lookup (and
     // any connect-card suspension) needs the model's base URL even when the
@@ -367,16 +395,30 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
     systemPromptPromise.catch(() => {});
     toolsJsonPromise.catch(() => {});
 
+    const testModeOutcome = deterministicTestModeModelOutcome(descriptor, deps.env);
+    if (testModeOutcome) {
+      trace("test-mode.completed");
+      return testModeOutcome;
+    }
+
     // A pending connect suspends the turn, not fails it. Immutable prompt/tool
     // blob reads above can run concurrently with this lookup.
     let credentials: { apiKey: string; headers?: Record<string, string> };
     try {
+      trace("credential.resolve.start", { modelBaseUrl });
       credentials = await deps.credentials.getApiKey({
         providerId: request.provider,
         ...(modelBaseUrl ? { modelBaseUrl } : {}),
       });
+      trace("credential.resolve.completed", {
+        hasHeaders: !!credentials.headers,
+      });
     } catch (err) {
       if (err instanceof CredentialPendingError) {
+        trace("credential.pending", {
+          providerId: err.providerId,
+          modelBaseUrl: err.modelBaseUrl ?? modelBaseUrl,
+        });
         return {
           kind: "model-suspended",
           reason: "credential",
@@ -389,13 +431,11 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
       throw err;
     }
 
-    const testModeOutcome = deterministicTestModeModelOutcome(descriptor, deps.env);
-    if (testModeOutcome) return testModeOutcome;
-
-    const [systemPromptRaw, toolsJson] = await Promise.all([
-      systemPromptPromise,
-      toolsJsonPromise,
-    ]);
+    const [systemPromptRaw, toolsJson] = await Promise.all([systemPromptPromise, toolsJsonPromise]);
+    trace("context.blobs.loaded", {
+      hasSystemPrompt: systemPromptRaw !== null,
+      hasTools: toolsJson !== null,
+    });
     const systemPrompt = systemPromptRaw ?? undefined;
     const tools = toolsJson ? (JSON.parse(toolsJson) as Context["tools"]) : undefined;
 
@@ -422,6 +462,10 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
       messages: toPiMessages(hydratedMessages),
       ...(tools ? { tools } : {}),
     };
+    trace("context.built", {
+      messageCount: context.messages.length,
+      toolCount: Array.isArray(context.tools) ? context.tools.length : undefined,
+    });
 
     const streamAbort = new AbortController();
     let idleTimedOut = false;
@@ -431,6 +475,9 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
     const forwardAbort = () => streamAbort.abort(signal.reason);
     signal.addEventListener("abort", forwardAbort, { once: true });
 
+    trace("stream.start", {
+      modelBaseUrl: request.modelBaseUrl ?? modelBaseUrl,
+    });
     const eventStream = stream(model as never, context, {
       apiKey: credentials.apiKey,
       ...(credentials.headers ? { headers: credentials.headers } : {}),
@@ -442,6 +489,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
 
     const blockIds = new Map<number, string>();
     let deltaCounter = 0;
+    let sawFirstStreamEvent = false;
     const idleTimeoutMs = modelStreamIdleTimeoutMs(request);
     let idleTimeoutPhase: ModelStreamIdlePhase | null = null;
     try {
@@ -464,6 +512,12 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
         });
         if (next.done) break;
         const event = next.value;
+        if (!sawFirstStreamEvent) {
+          sawFirstStreamEvent = true;
+          trace("stream.first-event", {
+            eventType: String(event["type"] ?? ""),
+          });
+        }
         const type = String(event["type"] ?? "");
         if (type === "text_delta" || type === "thinking_delta") {
           const index = Number(event["contentIndex"] ?? event["index"] ?? 0);
@@ -507,6 +561,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
           timeoutMs,
           phase,
         });
+        trace("stream.idle-timeout", { timeoutMs, phase });
         return {
           kind: "model",
           blocks: [],
@@ -520,12 +575,16 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
         "[model-call] stream failed:",
         err instanceof Error ? (err.stack ?? err.message) : String(err)
       );
+      trace("stream.failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
       return modelFailureOutcome(err, request);
     }
     void deltaCounter;
 
     let result: Record<string, unknown>;
     try {
+      trace("stream.result.start");
       result = await withModelStreamIdleTimeout(
         (eventStream as unknown as { result(): Promise<Record<string, unknown>> }).result(),
         {
@@ -555,6 +614,7 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
           timeoutMs,
           phase,
         });
+        trace("stream.idle-timeout", { timeoutMs, phase });
         return {
           kind: "model",
           blocks: [],
@@ -571,6 +631,10 @@ export const modelCallExecutor: EffectExecutor<ModelCallEffect> = {
     }
     const content = Array.isArray(result["content"]) ? (result["content"] as unknown[]) : [];
     const stopReason = String(result["stopReason"] ?? "stop");
+    trace("stream.result.completed", {
+      stopReason,
+      blockCount: content.length,
+    });
     if (signal.aborted || stopReason === "aborted") {
       return {
         kind: "model",

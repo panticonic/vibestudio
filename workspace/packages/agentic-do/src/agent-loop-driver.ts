@@ -28,6 +28,7 @@ import {
   modelFailureInputFromUnknown,
 } from "@workspace/agent-loop";
 import {
+  AGENTIC_PROTOCOL_VERSION,
   classifyGadAppendError,
   encodeAgenticEventStoredValues,
   hydrateStoredValueRefs,
@@ -93,6 +94,7 @@ type OutcomeAddress = { branchId?: string; channelId?: string };
 const APPEND_RETRIES = 1;
 const COMPACTION_MIN_ENTRIES = 24;
 const COMPACTION_TRIGGER_BYTES = 64 * 1024;
+const RECOVERY_READ_PAGE = 500;
 const textEncoder = new TextEncoder();
 /** Head conflicts mean our events are NEW and the fold is merely behind —
  *  worth more persistence than the divergence errors. */
@@ -128,6 +130,12 @@ function mapScheduledModelResumeRow(row: Record<string, unknown>): ScheduledMode
     resetAtMs: Number(row["reset_at_ms"]),
     createdAt: Number(row["created_at"] ?? 0),
   };
+}
+
+function recordPayload(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 /** Append failures that mean "our in-memory fold is behind the log" —
@@ -222,10 +230,12 @@ export class AgentLoopDriver {
     const loop = await this.loop(channelId);
     if (this.inFlightModelCallIsQueuedOrRunningHere(loop)) {
       await this.settle(channelId);
+      await this.recoverOpenTurnAfterReplay(channelId);
       return;
     }
     await this.runStep(loop, { type: "command", command: { kind: "wake" } }, APPEND_RETRIES);
     await this.settle(channelId);
+    await this.recoverOpenTurnAfterReplay(channelId);
   }
 
   private inFlightModelCallIsQueuedOrRunningHere(loop: LoopInstance): boolean {
@@ -266,6 +276,231 @@ export class AgentLoopDriver {
     await this.maybeCompact(await this.loop(channelId));
     await this.reconcile(await this.loop(channelId));
     this.requestPump();
+  }
+
+  /**
+   * Replay invariant: after a subscribe/reload wake, an open turn must have a
+   * concrete path forward. Normal recovery is handled by C-wake and reconcile:
+   * in-flight model calls become model rows, pending invocations/approvals/
+   * credential waits derive effects, and scheduled reset resumes remain
+   * parked as explicit waiting turns. The only remaining unsafe state is an
+   * open, non-waiting turn with no in-flight call, no derived effects, and no
+   * scheduled resume. That usually means the process crashed after appending a
+   * terminal event but before running its event-appended cascade. Re-feed the
+   * latest durable cascade event first; only if the log cannot explain the
+   * open turn do we publish a deterministic recovery failure and close it.
+   */
+  private async recoverOpenTurnAfterReplay(channelId: string): Promise<void> {
+    let loop = await this.loop(channelId);
+    if (!this.isOpenTurnStranded(loop)) return;
+
+    const cascade = await this.latestCascadeEnvelopeForOpenTurn(loop);
+    if (cascade) {
+      await this.runStep(loop, { type: "event-appended", envelope: cascade }, APPEND_RETRIES);
+      await this.settle(channelId);
+      loop = await this.loop(channelId);
+      if (!this.isOpenTurnStranded(loop)) return;
+    }
+
+    await this.appendStrandedOpenTurnFailure(loop);
+    await this.settle(channelId);
+  }
+
+  private isOpenTurnStranded(loop: LoopInstance): boolean {
+    const turn = loop.state.openTurn;
+    if (!turn) return false;
+    if (loop.state.inFlightModelCall) return false;
+    if (turn.waitingCount > 0) return false;
+    if (derivePendingEffects(loop.state).length > 0) return false;
+    if (this.outbox.forBranch(loop.logId).length > 0) return false;
+    if (this.hasScheduledModelResumeForTurn(loop.channelId, turn.turnId)) return false;
+    return true;
+  }
+
+  private hasScheduledModelResumeForTurn(channelId: string, turnId: string): boolean {
+    const rows = this.deps.sql
+      .exec(
+        `SELECT message_id FROM scheduled_model_resumes
+         WHERE channel_id = ?`,
+        channelId
+      )
+      .toArray() as Record<string, unknown>[];
+    const prefix = `m:${turnId}:`;
+    return rows.some((row) => String(row["message_id"] ?? "").startsWith(prefix));
+  }
+
+  private async latestCascadeEnvelopeForOpenTurn(loop: LoopInstance): Promise<LogEnvelope | null> {
+    const turn = loop.state.openTurn;
+    if (!turn) return null;
+    let cursor = Math.max(0, turn.openedAtSeq - 1);
+    let latest: LogEnvelope | null = null;
+    for (;;) {
+      const page = await this.deps.gad.call<LogEnvelope[]>("readLog", {
+        logId: loop.logId,
+        head: loop.head,
+        afterSeq: cursor,
+        limit: RECOVERY_READ_PAGE,
+      });
+      if (page.length === 0) break;
+      for (const envelope of page) {
+        if (this.isReplayCascadeEnvelope(envelope, turn.turnId)) latest = envelope;
+      }
+      cursor = page[page.length - 1]!.seq;
+      if (page.length < RECOVERY_READ_PAGE) break;
+    }
+    return latest;
+  }
+
+  private isReplayCascadeEnvelope(envelope: LogEnvelope, turnId: string): boolean {
+    switch (envelope.payloadKind) {
+      case "message.completed": {
+        if (!this.envelopeBelongsToTurn(envelope, turnId)) return false;
+        const payload = recordPayload(envelope.payload);
+        return payload["role"] === "assistant";
+      }
+      case "message.failed":
+        return this.envelopeBelongsToTurn(envelope, turnId);
+      case "invocation.completed":
+      case "invocation.failed":
+      case "invocation.cancelled":
+      case "invocation.abandoned":
+      case "approval.resolved":
+        if (envelope.causality?.turnId !== turnId) return false;
+        return true;
+      case "system.event": {
+        if (envelope.causality?.turnId !== turnId) return false;
+        const payload = recordPayload(envelope.payload);
+        const details = recordPayload(payload["details"]);
+        const kind = String(details["kind"] ?? payload["kind"] ?? "");
+        return (
+          kind === "credential.wait_resolved" ||
+          kind === "credential.resolved" ||
+          kind === "interrupt"
+        );
+      }
+      default:
+        return false;
+    }
+  }
+
+  private envelopeBelongsToTurn(envelope: LogEnvelope, turnId: string): boolean {
+    if (envelope.causality?.turnId === turnId) return true;
+    const messageId = String(envelope.causality?.messageId ?? "");
+    return messageId.startsWith(`m:${turnId}:`);
+  }
+
+  private async appendStrandedOpenTurnFailure(loop: LoopInstance): Promise<void> {
+    const turn = loop.state.openTurn;
+    if (!turn) return;
+    const messageId = `recovery:${turn.turnId}:stranded-open-turn`;
+    const reason =
+      "Agent turn recovery failed: replay found an open turn with no pending model call, " +
+      "tool, approval, credential wait, scheduled resume, or terminal assistant cascade.";
+    const items: AppendItem[] = [
+      {
+        envelopeId: ids.messageTerminal(messageId),
+        payloadKind: "message.failed",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          reason,
+          recoverable: false,
+          code: "stranded_open_turn",
+        },
+        causality: { messageId: messageId as never, turnId: turn.turnId },
+        publish: true,
+      },
+      ...this.strandedOpenTurnCleanupItems(loop.state),
+      {
+        envelopeId: ids.turnClosed(turn.turnId),
+        payloadKind: "turn.closed",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          reason: "work_failed",
+          summary: "Recovery failed: no pending work remained for the open turn.",
+        },
+        causality: { turnId: turn.turnId },
+        publish: true,
+      },
+    ];
+
+    try {
+      const envelopes = await this.append(loop, items);
+      for (const envelope of envelopes) loop.state = applyEvent(loop.state, envelope);
+      this.foldCache.write(loop.state);
+    } catch (err) {
+      if (err instanceof Error && isStaleStateAppendError(err)) {
+        this.loops.delete(loop.channelId);
+        const fresh = await this.loop(loop.channelId);
+        if (!this.isOpenTurnStranded(fresh)) return;
+        const envelopes = await this.append(fresh, items);
+        for (const envelope of envelopes) fresh.state = applyEvent(fresh.state, envelope);
+        this.foldCache.write(fresh.state);
+        return;
+      }
+      throw err;
+    }
+  }
+
+  private strandedOpenTurnCleanupItems(state: AgentState): AppendItem[] {
+    const turn = state.openTurn;
+    if (!turn) return [];
+    const items: AppendItem[] = [];
+    for (const invocation of Object.values(state.pendingInvocations)) {
+      items.push({
+        envelopeId: ids.invocationTerminal(invocation.invocationId),
+        payloadKind: "invocation.abandoned",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          reason: "Agent turn recovery failed before invocation completed",
+          terminalOutcome: "abandoned",
+          terminalReasonCode: "stranded_open_turn",
+        },
+        causality: {
+          invocationId: invocation.invocationId as never,
+          turnId: invocation.turnId,
+        },
+        publish: true,
+      });
+    }
+    for (const approval of Object.values(state.pendingApprovals)) {
+      items.push({
+        envelopeId: ids.approvalResolved(approval.approvalId),
+        payloadKind: "approval.resolved",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          granted: false,
+          resolvedBy: { kind: "system", id: "agent-loop" },
+          reason: "stranded_open_turn",
+        },
+        causality: {
+          approvalId: approval.approvalId as never,
+          invocationId: approval.invocationId as never,
+          turnId: approval.turnId,
+        },
+        publish: true,
+      });
+    }
+    for (const wait of Object.values(state.pendingCredentialWaits)) {
+      items.push({
+        envelopeId: ids.systemEvent(wait.credKey, "resolved", wait.startedAtSeq),
+        payloadKind: "system.event",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          kind: "credential.wait_resolved",
+          credKey: wait.credKey,
+          details: {
+            kind: "credential.wait_resolved",
+            credKey: wait.credKey,
+            providerId: wait.providerId,
+            resolved: false,
+            reason: "stranded_open_turn",
+          },
+        },
+        causality: { turnId: wait.turnId },
+        publish: true,
+      });
+    }
+    return items;
   }
 
   /** Isolated so a failing compaction append can never fail the delivery

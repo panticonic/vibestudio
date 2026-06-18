@@ -307,7 +307,7 @@ describe("modelCallExecutor", () => {
     });
   });
 
-  it("returns a deterministic OpenAI Codex response in NATSTACK_TEST_MODE after credential lookup", async () => {
+  it("returns a deterministic OpenAI Codex response in NATSTACK_TEST_MODE without credential lookup", async () => {
     const previous = process.env["NATSTACK_TEST_MODE"];
     delete process.env["NATSTACK_TEST_MODE"];
     try {
@@ -328,10 +328,7 @@ describe("modelCallExecutor", () => {
         onEphemeral: () => {},
       });
 
-      expect(getApiKey).toHaveBeenCalledWith({
-        providerId: "openai-codex",
-        modelBaseUrl: "https://chatgpt.com/backend-api",
-      });
+      expect(getApiKey).not.toHaveBeenCalled();
       expect(mocks.stream).not.toHaveBeenCalled();
       expect(outcome).toMatchObject({
         kind: "model",
@@ -410,5 +407,33 @@ describe("modelCallExecutor", () => {
         thoughtSignature: "tool-sig-1",
       },
     ]);
+  });
+
+  it("does not emit model-call traces unless tracing is enabled", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const inputDescriptor = descriptor();
+    inputDescriptor.request.provider = "openai-codex";
+    inputDescriptor.request.model = "gpt-5.3-codex-spark";
+
+    await modelCallExecutor.execute({
+      descriptor: inputDescriptor,
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: new AbortController().signal,
+      deps: { ...deps(), env: { NATSTACK_TEST_MODE: "1" } },
+      onEphemeral: () => {},
+    });
+    expect(info).not.toHaveBeenCalled();
+
+    await modelCallExecutor.execute({
+      descriptor: inputDescriptor,
+      state: initialAgentState({ channelId: "channel-1", config }),
+      signal: new AbortController().signal,
+      deps: { ...deps(), env: { NATSTACK_TEST_MODE: "1", NATSTACK_MODEL_CALL_TRACE: "1" } },
+      onEphemeral: () => {},
+    });
+    expect(info).toHaveBeenCalledWith(
+      "[model-call] trace:",
+      expect.objectContaining({ stage: "start", provider: "openai-codex" })
+    );
   });
 });

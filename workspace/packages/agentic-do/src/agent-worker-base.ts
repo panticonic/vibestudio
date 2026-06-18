@@ -55,6 +55,7 @@ type StandardAgentMethodOptions = {
 };
 
 const PROMPT_RESOURCE_CACHE_TTL_MS = 5_000;
+const DEFAULT_WORKSPACE_AGENT_MODEL_STREAM_IDLE_TIMEOUT_MS = 90_000;
 
 export abstract class AgentWorkerBase extends AgentVesselBase {
   private promptResourceCache:
@@ -80,6 +81,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
 
   protected override getDefaultRespondPolicy(): RespondPolicy {
     return DEFAULT_RESPOND_POLICY as RespondPolicy;
+  }
+
+  protected override getDefaultModelStreamIdleTimeoutMs(): number | null {
+    return DEFAULT_WORKSPACE_AGENT_MODEL_STREAM_IDLE_TIMEOUT_MS;
   }
 
   protected override getModelCredentialSetupProps(
