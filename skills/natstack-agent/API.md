@@ -239,7 +239,7 @@ Allowed callers: `shell`, `app`, `server`
 
 Server-mediated panel tree handles and control operations
 
-Allowed callers: `panel`, `worker`, `do`, `shell`, `shell-remote`, `server`
+Allowed callers: `panel`, `worker`, `do`, `shell`, `shell-remote`, `server`, `app`
 
 | Method | Description |
 |--------|-------------|
