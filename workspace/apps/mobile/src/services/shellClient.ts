@@ -145,6 +145,15 @@ class MobilePanels {
     if (!this.registryInstance) throw new Error("Panels not initialized");
     return this.registryInstance;
   }
+  /**
+   * Tree mutations route through the single server authority (panelTree); the
+   * mobile mirror updates reactively from the panel-tree-updated broadcast (the
+   * UI materializes panels from the tree atom). Mobile connects as a "shell"
+   * host, which panelTree's policy allows.
+   */
+  private callPanelTree<T = unknown>(method: string, args: unknown[]): Promise<T> {
+    return this.deps.transport.call("main", `panelTree.${method}`, args) as Promise<T>;
+  }
   async init(workspaceId: string, workspaceConfig?: WorkspaceConfig): Promise<void> {
     if (!this.panelManager) {
       const core = createMobileShellCore({
@@ -176,11 +185,8 @@ class MobilePanels {
     if (tree.rootPanels.length > 0) return;
     const entries = workspaceConfig?.initPanels ?? [];
     for (const entry of entries) {
-      await this.panelManager.create(entry.source, {
-        isRoot: true,
-        addAsRoot: true,
-        stateArgs: entry.stateArgs,
-      });
+      // Root init panel: no parentId ⇒ server creates it as a root.
+      await this.callPanelTree("create", [entry.source, { stateArgs: entry.stateArgs }]);
     }
     const nextTree = await this.panelManager.syncSnapshot();
     await this.syncRuntimeLeases();
@@ -205,25 +211,23 @@ class MobilePanels {
     return this.registry.getCollapsedIds();
   }
   async archive(panelId: string): Promise<void> {
-    await this.requireManager().close(asPanelSlotId(panelId));
+    await this.callPanelTree("archive", [panelId]);
   }
   async movePanel(
     panelId: string,
     newParentId: string | null,
     targetPosition: number
   ): Promise<void> {
-    await this.requireManager().movePanel(
-      asPanelSlotId(panelId),
-      newParentId ? asPanelSlotId(newParentId) : null,
-      targetPosition
-    );
+    await this.callPanelTree("movePanel", [{ panelId, newParentId, targetPosition }]);
   }
   async createAboutPanel(page: string): Promise<{
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().createAboutPanel(page);
-    await this.requireManager().notifyFocused(asPanelSlotId(result.id));
+    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
+      `about/${page}`,
+      { name: `${page}~${Date.now().toString(36)}` },
+    ]);
     this.deps.navigateToPanel(result.id);
     return result;
   }
@@ -237,8 +241,10 @@ class MobilePanels {
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().createFromSource(source, options);
-    await this.requireManager().notifyFocused(asPanelSlotId(result.id));
+    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
+      source,
+      { name: options?.name, stateArgs: options?.stateArgs },
+    ]);
     this.deps.navigateToPanel(result.id);
     return result;
   }
@@ -256,18 +262,12 @@ class MobilePanels {
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().create(source, {
-      parentId: asPanelSlotId(parentId),
-      name: options?.name,
-      contextId: options?.contextId,
-      ref: options?.ref,
-      stateArgs: options?.stateArgs,
-    });
-    if (options?.focus !== false) {
-      await this.requireManager().notifyFocused(result.panelId);
-      this.deps.navigateToPanel(result.panelId);
-    }
-    return { id: result.panelId, title: result.title };
+    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
+      source,
+      { parentId, name: options?.name, ref: options?.ref, stateArgs: options?.stateArgs },
+    ]);
+    if (options?.focus !== false) this.deps.navigateToPanel(result.id);
+    return result;
   }
   async createBrowserUrlPanel(
     parentId: string | null,
@@ -280,19 +280,12 @@ class MobilePanels {
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().createBrowser(
-      parentId ? asPanelSlotId(parentId) : null,
+    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
       url,
-      {
-        name: options?.name,
-        addAsRoot: parentId == null,
-      }
-    );
-    if (options?.focus !== false) {
-      await this.requireManager().notifyFocused(result.panelId);
-      this.deps.navigateToPanel(result.panelId);
-    }
-    return { id: result.panelId, title: result.title };
+      { parentId: parentId ?? undefined, name: options?.name },
+    ]);
+    if (options?.focus !== false) this.deps.navigateToPanel(result.id);
+    return result;
   }
   async createRootPanel(
     source: string,
@@ -303,14 +296,12 @@ class MobilePanels {
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().create(source, {
-      isRoot: true,
-      addAsRoot: true,
-      ref: options?.ref,
-    });
-    await this.requireManager().notifyFocused(result.panelId);
-    this.deps.navigateToPanel(result.panelId);
-    return { id: result.panelId, title: result.title };
+    const result = await this.callPanelTree<{ id: string; title: string }>("create", [
+      source,
+      { ref: options?.ref },
+    ]);
+    this.deps.navigateToPanel(result.id);
+    return result;
   }
   async setCollapsed(panelId: string, collapsed: boolean): Promise<void> {
     await this.requireManager().setCollapsed(asPanelSlotId(panelId), collapsed);
@@ -325,7 +316,7 @@ class MobilePanels {
     panelId: string,
     updates: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    return this.requireManager().updateStateArgs(asPanelSlotId(panelId), updates);
+    return this.callPanelTree<Record<string, unknown>>("setStateArgs", [panelId, updates]);
   }
   async updateTitle(panelId: string, title: string): Promise<void> {
     await this.requireManager().updateTitle(asPanelSlotId(panelId), title);
@@ -349,9 +340,12 @@ class MobilePanels {
     id: string;
     title: string;
   }> {
-    const result = await this.requireManager().navigate(asPanelSlotId(panelId), source, options);
-    this.deps.onTreeUpdated?.(this.getTree());
-    return { id: result.panelId, title: result.title };
+    const result = await this.callPanelTree<{ id?: string; title?: string }>("navigate", [
+      panelId,
+      source,
+      options,
+    ]);
+    return { id: result?.id ?? panelId, title: result?.title ?? "" };
   }
   async getAddressOptions(source: string, ref?: string): Promise<PanelAddressOptions> {
     return getSharedPanelAddressOptions({
@@ -493,6 +487,12 @@ export class ShellClient {
     this.transport.on("event:panel:runtimeLeaseChanged", (event) => {
       this.panels.applyRuntimeLeaseEvent(event.payload as PanelRuntimeLeaseChangedEvent);
     });
+    // Reflect tree mutations made by ANY client (desktop/terminal/other mobile):
+    // the server broadcasts panel-tree-updated after every authoritative change
+    // (including the Phase 0 self-heal), so mobile re-syncs its mirror to match.
+    this.transport.on("event:panel-tree-updated", () => {
+      void this.panels.refresh().catch(() => {});
+    });
   }
   async init(): Promise<void> {
     const info = await this.connectWorkspace();
@@ -590,6 +590,7 @@ export class ShellClient {
     await this.panels.init(info.config.id, info.config);
     smokePhase("workspace-panels-initialized");
     await this.events.subscribe("panel:runtimeLeaseChanged");
+    await this.events.subscribe("panel-tree-updated");
     await this.panels.syncRuntimeLeases();
     await drainWorkspaceMutationQueue(this);
     this.registerPanelRecoveryHandlers();

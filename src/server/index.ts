@@ -1427,6 +1427,23 @@ async function main() {
   // managed service below; the workspace-state `onAlarmChanged` hook pokes it.
   let alarmDriverInstance: import("./services/alarmDriver.js").AlarmDriver | null = null;
 
+  // Slot-tree change fan-out: the workspace-state service pokes this after any
+  // mutating slot.* method; the panel-tree bridge subscribes (registerSlotStateListener)
+  // to self-heal its mirror + re-broadcast. Decoupled via a Set so the bridge
+  // (created later in registerPanelServices) can register lazily.
+  const slotStateListeners = new Set<() => void>();
+  const notifySlotStateListeners = () => {
+    for (const listener of slotStateListeners) {
+      try {
+        listener();
+      } catch (error) {
+        console.warn(
+          `[server] slot-state listener failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+  };
+
   // Declarative scheduled jobs from natstack.yml `recurring:`. Managed service
   // below; the meta-change reload hook pokes it after approved config changes.
   let recurringRegistryInstance:
@@ -1462,6 +1479,7 @@ async function main() {
             entityTitleService.mirrorCachedTitle(entityId, title);
           },
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
+          onSlotStateChanged: notifySlotStateListeners,
         });
       },
       getServiceDefinition() {
@@ -2607,6 +2625,10 @@ async function main() {
           );
         });
       }),
+    registerSlotStateListener: (listener: () => void) => {
+      slotStateListeners.add(listener);
+      return () => slotStateListeners.delete(listener);
+    },
     getEffectiveVersion: async (source: string) => {
       const buildSystem = container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
       return buildSystem?.getEffectiveVersion(source) ?? undefined;

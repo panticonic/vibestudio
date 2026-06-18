@@ -4,7 +4,7 @@ import {
   type AgentLoopConfig,
   type ModelCallEffect,
 } from "@workspace/agent-loop";
-import type { ExecutorDeps } from "./types.js";
+import { CredentialApprovalDeferredError, type ExecutorDeps } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   clampThinkingLevel: vi.fn((_model: unknown, level: unknown) => level),
@@ -84,6 +84,33 @@ describe("modelCallExecutor", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
+  });
+
+  it("defers the model call when credential approval parks server-side", async () => {
+    mocks.getModel.mockReturnValue({ baseUrl: "https://model.test" });
+    const getApiKey = vi.fn(async () => {
+      throw new CredentialApprovalDeferredError("test", "https://model.test");
+    });
+    const inputDeps = deps();
+    inputDeps.credentials.getApiKey = getApiKey;
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: descriptor(),
+        state: initialAgentState({ channelId: "channel-1", config }),
+        signal: new AbortController().signal,
+        deps: inputDeps,
+        onEphemeral: () => {},
+      })
+    ).resolves.toEqual({ deferred: true });
+
+    expect(getApiKey).toHaveBeenCalledWith({
+      providerId: "test",
+      modelBaseUrl: "https://model.test",
+      requestId: "model:msg-1",
+      idempotencyKey: "attempt-1",
+    });
+    expect(mocks.stream).not.toHaveBeenCalled();
   });
 
   it("returns a model error and aborts the stream after an idle timeout", async () => {

@@ -251,9 +251,20 @@ interface Bounds {
   width: number;
   height: number;
 }
+export interface ShellOverlayRow {
+  label: string;
+  meta?: string;
+  labelRanges?: Array<{ start: number; end: number }>;
+  metaRanges?: Array<{ start: number; end: number }>;
+  icon?: string;
+  selected?: boolean;
+  type: string;
+  payload?: unknown;
+}
 export interface NativeShellOverlayOptions {
   id: string;
-  html: string;
+  rows: ShellOverlayRow[];
+  empty: string;
   bounds: Bounds;
   focus?: boolean;
 }

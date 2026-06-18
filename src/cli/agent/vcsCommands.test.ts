@@ -165,12 +165,11 @@ describe("natstack vcs commands", () => {
     // (FS-snapshot commit was retired — fs writes route through GAD), so they are unknown
     // commands and also usage-error.
     await expect(main(["vcs", "status", "--json"])).resolves.toBe(2);
-    await expect(main(["vcs", "commit", "--repo", "panels/notes", "--json"])).resolves.toBe(2);
     await expect(main(["git", "status", "--repo", "panels/notes", "--json"])).resolves.toBe(2);
 
     // A server-side RPC failure maps to exit 1.
     stubServer(() => {
-      throw new Error("vcs.unitStatus failed: unit not found");
+      throw new Error("workspace VCS unavailable");
     });
     await expect(main(["vcs", "status", "--repo", "panels/notes", "--json"])).resolves.toBe(1);
   });

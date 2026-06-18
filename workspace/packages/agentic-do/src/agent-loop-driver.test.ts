@@ -619,6 +619,55 @@ describe("AgentLoopDriver", () => {
     ]);
   });
 
+  it("redrives a model call after deferred credential approval resolves", async () => {
+    let dispatches = 0;
+    let deferredRequestId = "";
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      executorOverride: (descriptor) => {
+        if (descriptor.kind !== "model_call") return null;
+        return {
+          kind: "model_call",
+          async execute() {
+            dispatches += 1;
+            deferredRequestId = descriptor.effectId;
+            return dispatches === 1 ? { deferred: true } : textReply("done");
+          },
+        } satisfies EffectExecutor;
+      },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await harness.driver.alarm();
+
+    expect(dispatches).toBe(1);
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+    ]);
+    expect(harness.driver.outbox.all()).toEqual([
+      expect.objectContaining({
+        kind: "model_call",
+        leaseExpiresAt: null,
+        nextAttemptAt: expect.any(Number),
+      }),
+    ]);
+
+    await harness.driver.deliverDeferredResult(deferredRequestId, { id: "cred-1" }, false);
+    await harness.driver.alarm();
+
+    expect(dispatches).toBe(2);
+    expect(await logKinds(harness.gad)).toEqual([
+      "message.completed",
+      "turn.opened",
+      "message.started",
+      "message.completed",
+      "turn.closed",
+    ]);
+    expect(harness.driver.outbox.all()).toHaveLength(0);
+  });
+
   it("does not mark a locally running model call failed when wake arrives during credential approval", async () => {
     const started = deferred<void>();
     const released = deferred<EffectOutcome>();
