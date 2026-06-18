@@ -618,6 +618,48 @@ describe("NewsAgentWorker", () => {
     expect(worker.rowsForTest(`SELECT briefing_id FROM news_briefings`).length).toBeGreaterThan(0);
   });
 
+  it("triage categorizes/clusters/drops stories; the reader shows only triaged items", async () => {
+    const worker = await makeWorker();
+    await addExampleFeed(worker, [
+      { title: "Quake hits region", link: "https://a.example/quake" },
+      { title: "Earthquake update", link: "https://b.example/quake2" },
+      { title: "SEO spam listicle", link: "https://spam.example/x" },
+    ]);
+    // Nothing is triaged yet → the reader (triagedOnly) shows nothing.
+    expect(
+      ((await worker.listArticles("ch-1", { triagedOnly: true })) as { articles: unknown[] }).articles
+    ).toHaveLength(0);
+
+    const started = (await worker.triageNow("ch-1", {})) as { started: boolean; pending: number };
+    expect(started).toMatchObject({ started: true });
+    expect(started.pending).toBe(3);
+
+    // Simulate the agent's triage tool call.
+    const quakeId = await articleId("https://a.example/quake");
+    const quake2Id = await articleId("https://b.example/quake2");
+    const spamId = await articleId("https://spam.example/x");
+    await worker.triageStories("ch-1", {
+      items: [
+        { articleId: quakeId.slice(0, 8), category: "World", clusterKey: "quake-2026", blurb: "A quake hit." },
+        { articleId: quake2Id.slice(0, 8), category: "World", clusterKey: "quake-2026", blurb: "Quake aftermath." },
+        { articleId: spamId.slice(0, 8), keep: false },
+      ],
+    });
+
+    const after = (await worker.listArticles("ch-1", { triagedOnly: true })) as {
+      articles: Array<{ title: string; category?: string; clusterKey?: string }>;
+    };
+    // Spam dropped; the two quake stories show with a category and a shared cluster.
+    expect(after.articles.map((a) => a.title).sort()).toEqual([
+      "Earthquake update",
+      "Quake hits region",
+    ]);
+    expect(after.articles.every((a) => a.category === "World")).toBe(true);
+    expect(new Set(after.articles.map((a) => a.clusterKey))).toEqual(new Set(["quake-2026"]));
+    // Backlog cleared → a second triageNow is a no-op.
+    expect(((await worker.triageNow("ch-1", {})) as { pending: number }).pending).toBe(0);
+  });
+
   it("scheduler alarm drives polls and watchdogs stuck briefings", async () => {
     const worker = await makeWorker();
     await worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1" } as never);

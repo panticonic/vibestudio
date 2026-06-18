@@ -89,6 +89,61 @@ export const NEWS_SETUP_ONBOARDING_PROMPT = [
   "Keep it to one friendly question — don't interrogate. As they answer, follow topics, add feeds, and save standing preferences (tone, what to skip) with news_set_preferences. The setup card reflects every change you make.",
 ].join("\n");
 
+export interface TriageStoryInput {
+  articleId: string;
+  title: string;
+  url: string;
+  source: string;
+  publishedAt?: string;
+  blurb?: string;
+}
+
+export interface TriagePromptInput {
+  stories: TriageStoryInput[];
+  followedTopics: string[];
+  /** Categories already in use, so the agent reuses them instead of inventing dupes. */
+  existingCategories: string[];
+}
+
+/**
+ * Tier-1.5 triage: a light, broad pass so the reader only ever shows
+ * agent-processed items. The agent categorizes, clusters (same-event), and
+ * one-line-summarizes each new story, and drops noise — distinct from the
+ * heavier Tier-2 briefing, which deeply synthesizes the most important stories.
+ */
+export function buildTriagePrompt(input: TriagePromptInput): string {
+  const lines: string[] = [
+    "Triage these newly-fetched stories for the reader feed. The reader shows a story ONLY after you process it here, so categorize every one.",
+    "",
+  ];
+  if (input.followedTopics.length > 0) {
+    lines.push(`The user follows: ${input.followedTopics.join(", ")}.`, "");
+  }
+  if (input.existingCategories.length > 0) {
+    lines.push(
+      `Reuse these existing categories when one fits (keep the overall set small): ${input.existingCategories.join(", ")}.`,
+      ""
+    );
+  }
+  lines.push("Stories:");
+  for (const story of input.stories) {
+    const meta = [story.source, story.publishedAt?.slice(0, 16)].filter(Boolean).join(", ");
+    lines.push(`- [${story.articleId.slice(0, 8)}] ${story.title} (${meta}) ${story.url}`);
+    if (story.blurb) lines.push(`  ${story.blurb}`);
+  }
+  lines.push(
+    "",
+    "Call news_triage exactly once, with one item per story above:",
+    "- articleId: the [id] prefix above.",
+    "- category: a short section name. Reuse an existing/followed-topic category where it fits; coin a new one only when needed. Keep the total set small and stable.",
+    "- clusterKey: a short shared key for stories about the SAME underlying event (so duplicate coverage collapses into one). Omit for standalone stories.",
+    "- blurb: one tight sentence capturing what the story actually says (not 'an article about X').",
+    "- keep: false for spam, navigation/search/listing pages, non-stories, or redundant duplicates you don't want shown at all.",
+    "No chat commentary — just the tool call."
+  );
+  return lines.join("\n");
+}
+
 export interface BriefingPromptInput {
   briefingId: string;
   dateLabel: string;

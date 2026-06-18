@@ -79,12 +79,23 @@ export function createNewsTables(sql: SqlStorage): void {
       saved INTEGER NOT NULL DEFAULT 0,
       briefed_in TEXT,
       blurb TEXT,
+      -- Agent triage (Tier 1.5): the reader only shows triaged items, so nothing
+      -- raw/un-curated surfaces. triaged=1 once the agent has categorized it.
+      triaged INTEGER NOT NULL DEFAULT 0,
+      category TEXT,
+      -- Agent-assigned key shared by stories about the SAME event (semantic
+      -- clustering, unlike the lexical title_sim_key used only for dedup).
+      cluster_key TEXT,
       PRIMARY KEY (channel_id, article_id)
     )
   `);
   sql.exec(
     `CREATE INDEX IF NOT EXISTS idx_news_articles_unbriefed
      ON news_articles(channel_id, briefed_in, fetched_at)`
+  );
+  sql.exec(
+    `CREATE INDEX IF NOT EXISTS idx_news_articles_triaged
+     ON news_articles(channel_id, triaged, fetched_at)`
   );
   sql.exec(`
     CREATE TABLE IF NOT EXISTS news_briefings (

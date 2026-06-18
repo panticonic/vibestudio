@@ -66,6 +66,7 @@ import {
   NEWS_SYSTEM_PROMPT,
   buildBriefingPrompt,
   buildDeepDivePrompt,
+  buildTriagePrompt,
 } from "./prompts.js";
 
 type NewsTool = AgentTool;
@@ -84,7 +85,9 @@ const MAX_OPML_FEEDS = 30;
 /** Columns (with the feed-title join) behind the reader-facing article shape. */
 const ARTICLE_COLUMNS = `a.article_id, a.title, a.canonical_url, a.published_at, a.fetched_at,
   a.briefed_in, a.read, a.saved, a.origin, a.blurb, a.summary, a.source, a.title_sim_key,
-  f.title AS feed_title`;
+  a.triaged, a.category, a.cluster_key, f.title AS feed_title`;
+/** How many un-triaged articles a single triage turn processes. */
+const TRIAGE_BATCH_SIZE = 50;
 
 /** Next run for the briefing job: anchored to local HH:MM when set. */
 function nextBriefingRunAt(now: number, intervalMs: number, atMinutes?: number): number {
@@ -99,9 +102,9 @@ function nextBriefingRunAt(now: number, intervalMs: number, atMinutes?: number):
 export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   // News tables are versioned by drop-and-recreate (dev mode: articles
   // re-ingest from feeds; configuration is cheap to redo). Bump when the
-  // news_* schema changes (e.g. the channel-mode column, the article source,
-  // the feedback signals, sources-read, notify, saved, and briefing-paused columns).
-  static override schemaVersion = AgentWorkerBase.schemaVersion + 6;
+  // news_* schema changes (channel-mode, article source, feedback signals,
+  // sources-read, notify, saved, briefing-paused, and triage columns).
+  static override schemaVersion = AgentWorkerBase.schemaVersion + 7;
 
   private readonly syncEngine: NewsSyncEngine;
   private readonly scheduler: RecurringScheduler;
@@ -528,6 +531,8 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   private async runBriefing(channelId: string, opts?: { notify?: boolean }): Promise<void> {
     // Fresh articles first; a stale snapshot makes a stale briefing.
     await this.runPoll(channelId);
+    // Briefing time also triages the backlog so the reader feed stays curated.
+    await this.runTriage(channelId);
     const state = this.getChannelState(channelId);
     const stories = this.syncEngine.rankUnbriefed(channelId, state.topK);
     const scanned = this.syncEngine.countUnbriefed(channelId);
@@ -585,6 +590,81 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       },
       { mode: "sequential", steeringId: `news-briefing:${channelId}:${briefingId}` }
     );
+  }
+
+  // ── Tier 1.5: triage ────────────────────────────────────────────────────────
+
+  private countUntriaged(channelId: string): number {
+    const row = this.sql
+      .exec(
+        `SELECT COUNT(*) AS n FROM news_articles
+         WHERE channel_id = ? AND triaged = 0 AND read = 0
+           AND (briefed_in IS NULL OR briefed_in NOT LIKE 'dropped:%')`,
+        channelId
+      )
+      .toArray()[0];
+    return Number(row?.["n"] ?? 0);
+  }
+
+  private listCategories(channelId: string): string[] {
+    return this.sql
+      .exec(
+        `SELECT DISTINCT category FROM news_articles
+         WHERE channel_id = ? AND category IS NOT NULL AND category != '' LIMIT 24`,
+        channelId
+      )
+      .toArray()
+      .map((row) => String(row["category"]));
+  }
+
+  /** Submit a triage turn over the un-triaged backlog. Returns false when there
+   *  is nothing to triage. The agent answers via the news_triage tool. */
+  private async runTriage(channelId: string): Promise<boolean> {
+    const rows = this.sql
+      .exec(
+        `SELECT a.article_id, a.title, a.canonical_url, a.published_at, a.origin, a.blurb, a.summary,
+                a.source, f.title AS feed_title
+         FROM news_articles a
+         LEFT JOIN news_feeds f ON f.channel_id = a.channel_id AND f.feed_id = a.feed_id
+         WHERE a.channel_id = ? AND a.triaged = 0 AND a.read = 0
+           AND (a.briefed_in IS NULL OR a.briefed_in NOT LIKE 'dropped:%')
+         ORDER BY COALESCE(a.published_at, a.fetched_at) DESC
+         LIMIT ?`,
+        channelId,
+        TRIAGE_BATCH_SIZE
+      )
+      .toArray();
+    if (rows.length === 0) return false;
+    const stories = rows.map((row) => ({
+      articleId: String(row["article_id"]),
+      title: String(row["title"]),
+      url: String(row["canonical_url"]),
+      source:
+        (row["feed_title"] as string | null) ??
+        (row["source"] as string | null) ??
+        (String(row["origin"]) === "search" ? "web" : "feed"),
+      publishedAt:
+        row["published_at"] === null
+          ? undefined
+          : new Date(Number(row["published_at"])).toISOString(),
+      blurb:
+        (row["blurb"] as string | null) ?? plainTextSnippet(row["summary"] as string | null, 200),
+    }));
+    const topics = this.listTopics(channelId)
+      .filter((topic) => topic.enabled)
+      .map((topic) => topic.topic);
+    await this.submitAgentInitiatedTurn(
+      channelId,
+      {
+        content: buildTriagePrompt({
+          stories,
+          followedTopics: topics,
+          existingCategories: this.listCategories(channelId),
+        }),
+      },
+      { mode: "sequential", steeringId: `news-triage:${channelId}:${this.now()}` }
+    );
+    return true;
   }
 
   private previousTldr(channelId: string, excludeBriefingId: string): string | undefined {
@@ -1030,8 +1110,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       // Epoch ms when WE first ingested it — lets the reader flag "new since
       // your last visit" independent of the story's own publish date.
       fetchedAt: Number(row["fetched_at"]),
-      // Title-similarity key: lets the reader collapse near-duplicate coverage.
-      simKey: (row["title_sim_key"] as string | null) ?? undefined,
+      // Agent triage outputs: category (section) + cluster key (same-event group).
+      category: (row["category"] as string | null) ?? undefined,
+      clusterKey: (row["cluster_key"] as string | null) ?? undefined,
       briefedIn: (row["briefed_in"] as string | null) ?? undefined,
       read: Number(row["read"]) === 1,
       saved: Number(row["saved"]) === 1,
@@ -1042,6 +1123,9 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     const limit = Math.min(numberArg(args, "limit") ?? 30, 200);
     const unbriefedOnly = booleanArg(args, "unbriefedOnly") ?? false;
     const savedOnly = booleanArg(args, "savedOnly") ?? false;
+    // The reader passes triagedOnly so nothing un-curated surfaces; the agent's
+    // own listing (no flag) still sees everything.
+    const triagedOnly = booleanArg(args, "triagedOnly") ?? false;
     const sinceMs = numberArg(args, "sinceMs");
     const clauses = ["a.channel_id = ?"];
     const params: unknown[] = [channelId];
@@ -1053,6 +1137,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       // Dropped candidates were explicitly cut from a briefing — never surface
       // them in the reader (they are the opposite of "interesting").
       clauses.push("(a.briefed_in IS NULL OR a.briefed_in NOT LIKE 'dropped:%')");
+      if (triagedOnly) clauses.push("a.triaged = 1");
     }
     if (sinceMs !== undefined) {
       clauses.push("a.fetched_at >= ?");
@@ -1147,6 +1232,61 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     return { briefingPaused: paused };
   }
 
+  /** Tool handler: record the agent's triage of a batch of stories. */
+  async triageStories(channelId: string, args: Record<string, unknown>): Promise<unknown> {
+    const items = Array.isArray(args["items"]) ? args["items"] : [];
+    let triaged = 0;
+    let dropped = 0;
+    for (const entry of items) {
+      const item = record(entry);
+      const idOrPrefix = stringArg(item, "articleId");
+      if (!idOrPrefix) continue;
+      const row = this.sql
+        .exec(
+          `SELECT article_id FROM news_articles
+           WHERE channel_id = ? AND (article_id = ? OR article_id LIKE ? || '%') LIMIT 1`,
+          channelId,
+          idOrPrefix,
+          idOrPrefix
+        )
+        .toArray()[0];
+      if (!row) continue;
+      const articleId = String(row["article_id"]);
+      if (booleanArg(item, "keep") === false) {
+        // Drop noise: mark triaged + hidden so it never surfaces and isn't re-triaged.
+        this.sql.exec(
+          `UPDATE news_articles SET triaged = 1, read = 1,
+             briefed_in = COALESCE(briefed_in, 'dropped:triage')
+           WHERE channel_id = ? AND article_id = ?`,
+          channelId,
+          articleId
+        );
+        dropped += 1;
+        continue;
+      }
+      this.sql.exec(
+        `UPDATE news_articles SET triaged = 1, category = ?, cluster_key = ?, blurb = COALESCE(?, blurb)
+         WHERE channel_id = ? AND article_id = ?`,
+        stringArg(item, "category") ?? null,
+        stringArg(item, "clusterKey") ?? null,
+        stringArg(item, "blurb") ?? null,
+        channelId,
+        articleId
+      );
+      triaged += 1;
+    }
+    return { triaged, dropped };
+  }
+
+  /** On-demand triage entry point (the reader calls this when it opens with a
+   *  backlog). Fires a triage turn if anything is un-triaged. */
+  async triageNow(channelId: string, _args: Record<string, unknown>): Promise<unknown> {
+    const pending = this.countUntriaged(channelId);
+    if (pending === 0) return { started: false, pending: 0 };
+    const started = await this.runTriage(channelId);
+    return { started, pending };
+  }
+
   async publishBriefing(channelId: string, args: Record<string, unknown>): Promise<unknown> {
     const briefingId = stringArg(args, "briefingId");
     const tldr = stringArg(args, "tldr");
@@ -1236,7 +1376,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     );
     for (const story of kept) {
       this.sql.exec(
-        `UPDATE news_articles SET briefed_in = ?, blurb = COALESCE(?, blurb) WHERE channel_id = ? AND article_id = ?`,
+        `UPDATE news_articles SET briefed_in = ?, blurb = COALESCE(?, blurb), triaged = 1 WHERE channel_id = ? AND article_id = ?`,
         briefingId,
         story.blurb ?? null,
         channelId,
@@ -1503,6 +1643,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       setup: this.buildSetupCardState(channelId),
       articleCount: this.syncEngine.countArticles(channelId),
       unbriefedCount: this.syncEngine.countUnbriefed(channelId),
+      untriagedCount: this.countUntriaged(channelId),
       lastBriefingId: state.lastBriefingId,
     };
   }

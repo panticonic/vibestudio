@@ -23,6 +23,8 @@ export interface NewsHandlers {
   setSaved(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   reactToStory(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   searchArchive(channelId: string, args: Record<string, unknown>): Promise<unknown>;
+  triageStories(channelId: string, args: Record<string, unknown>): Promise<unknown>;
+  triageNow(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   refreshNow(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   requestDeepDive(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   getOverview(channelId: string, args: Record<string, unknown>): Promise<unknown>;
@@ -156,6 +158,8 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
       properties: {
         limit: { type: "number", minimum: 1, maximum: 200 },
         unbriefedOnly: { type: "boolean" },
+        savedOnly: { type: "boolean" },
+        triagedOnly: { type: "boolean" },
         sinceMs: { type: "number" },
       },
       additionalProperties: false,
@@ -289,6 +293,43 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     },
     exposure: ["method"],
     run: (ctx, channelId, args) => ctx.handlers.searchArchive(channelId, args),
+  },
+  {
+    name: "news_triage",
+    description:
+      "Triage a batch of newly-fetched stories for the reader feed: categorize, cluster same-event coverage, one-line summarize, and drop noise. Call once per triage turn with one item per story. The reader shows a story only after it's triaged.",
+    schema: {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              articleId: { type: "string", minLength: 1 },
+              category: { type: "string" },
+              clusterKey: { type: "string" },
+              blurb: { type: "string" },
+              keep: { type: "boolean" },
+            },
+            required: ["articleId"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["items"],
+      additionalProperties: false,
+    },
+    exposure: ["tool"],
+    run: (ctx, channelId, args) => ctx.handlers.triageStories(channelId, args),
+  },
+  {
+    name: "triageNow",
+    description:
+      "Trigger an on-demand triage pass over any un-triaged stories (the reader calls this when it opens with a backlog).",
+    schema: NO_ARGS,
+    exposure: ["method"],
+    run: (ctx, channelId, args) => ctx.handlers.triageNow(channelId, args),
   },
   {
     name: "reactToStory",
