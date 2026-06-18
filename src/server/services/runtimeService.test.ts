@@ -182,8 +182,8 @@ const panelHostAppCaller = (
     effectiveVersion: "v-host",
   });
 
-const shellCaller = createVerifiedCaller("shell:main", "shell");
-const serverCaller = createVerifiedCaller("server:main", "server");
+const shellCaller = createVerifiedCaller("shell", "shell");
+const serverCaller = createVerifiedCaller("server", "server");
 
 const doCreateSpec = (
   overrides: Partial<Extract<RuntimeEntityCreateSpec, { kind: "do" }>> = {}
@@ -769,11 +769,11 @@ describe("runtimeService session entities", () => {
     expect(contextFolders.ensureContextFolder).toHaveBeenCalledWith("ctx-given");
   });
 
-  it("allows harness callers and rejects non-host callers", async () => {
+  it("allows host callers and rejects non-host callers", async () => {
     const { service } = await buildDeps();
-    const harnessCaller = createVerifiedCaller("harness:cli", "harness");
+    const hostCaller = createVerifiedCaller("shell", "shell");
     await expect(
-      service.handler({ caller: harnessCaller }, "createEntity", [sessionSpec()])
+      service.handler({ caller: hostCaller }, "createEntity", [sessionSpec()])
     ).resolves.toMatchObject({ kind: "session" });
 
     await expect(

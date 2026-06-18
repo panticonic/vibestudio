@@ -171,7 +171,7 @@ services:
     protocols:
       - natstack.gad.workspace.v1
     policy:
-      allowed: [panel, shell, server, worker, do, harness]
+      allowed: [panel, shell, server, worker, do]
     durableObject:
       className: GadWorkspaceDO
 
@@ -181,7 +181,7 @@ services:
     protocols:
       - natstack.channel.v1
     policy:
-      allowed: [panel, shell, server, worker, do, extension, harness]
+      allowed: [panel, shell, server, worker, do, extension]
     durableObject:
       className: PubSubChannel
 
@@ -191,7 +191,7 @@ services:
     protocols:
       - natstack.models.v1
     policy:
-      allowed: [panel, shell, server, worker, do, extension, harness]
+      allowed: [panel, shell, server, worker, do, extension]
     durableObject:
       className: ModelSettingsDO
 
@@ -201,7 +201,7 @@ services:
     protocols:
       - natstack.testkit-driver.v1
     policy:
-      allowed: [panel, shell, server, worker, do, harness]
+      allowed: [panel, shell, server, worker, do]
     durableObject:
       className: TestkitDriverDO
 

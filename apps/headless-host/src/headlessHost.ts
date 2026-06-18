@@ -7,13 +7,16 @@
 import { randomUUID } from "crypto";
 import { createDevLogger } from "@natstack/dev-log";
 import type {
+  PanelHost,
+  PanelHostRegistration,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
 } from "@natstack/shared/panel/panelLease";
+import { createPanelHostRegistration } from "@natstack/shared/panel/panelLease";
+import { LeaseTracker, type LeaseIntent } from "@natstack/shared/panel/leaseTracker";
 import type { HeadlessHostConfig } from "./config.js";
 import { connectToServer, type ServerConnection } from "./serverConnection.js";
 import { PanelInitClient } from "./panelInitClient.js";
-import { LeaseTracker, type LeaseIntent } from "./leaseTracker.js";
 import { resolveChromium } from "./browser/acquire.js";
 import { launchChromium, type LaunchedChromium } from "./browser/launch.js";
 import { CdpConnection } from "./browser/cdpConnection.js";
@@ -25,7 +28,7 @@ const log = createDevLogger("HeadlessHost");
 
 const IDLE_CHECK_INTERVAL_MS = 30_000;
 
-export class HeadlessHost {
+export class HeadlessHost implements PanelHost {
   private connection: ServerConnection | null = null;
   private panelInit: PanelInitClient | null = null;
   private tracker: LeaseTracker;
@@ -43,11 +46,19 @@ export class HeadlessHost {
   private browserRelaunches = 0;
   private browserGeneration = 0;
   private browserRecovery: Promise<void> | null = null;
+  readonly registration: PanelHostRegistration;
   /** Resolves when stop() completes; main.ts awaits this. */
   readonly done: Promise<void>;
   private resolveDone!: () => void;
 
   constructor(private readonly config: HeadlessHostConfig) {
+    this.registration = createPanelHostRegistration({
+      clientSessionId: config.clientSessionId,
+      label: config.label,
+      platform: "headless",
+      supportsCdp: true,
+      loadOnLeaseAssignment: true,
+    });
     this.tracker = new LeaseTracker(config.clientSessionId);
     this.done = new Promise((resolve) => {
       this.resolveDone = resolve;
@@ -67,9 +78,7 @@ export class HeadlessHost {
     await this.registerClient();
     connection.onServerEvent((event, payload) => {
       if (event === "panel:runtimeLeaseChanged") {
-        this.enqueueIntents(() =>
-          this.tracker.apply(payload as PanelRuntimeLeaseChangedEvent)
-        );
+        void this.handleRuntimeLeaseChanged(payload as PanelRuntimeLeaseChangedEvent);
       }
     });
     await connection.rpc.call("main", "events.subscribe", ["panel:runtimeLeaseChanged"]);
@@ -121,16 +130,15 @@ export class HeadlessHost {
   // ── internals ────────────────────────────────────────────────────────────
 
   private async registerClient(): Promise<void> {
-    await this.connection!.rpc.call("main", "panelRuntime.registerClient", [
-      {
-        clientSessionId: this.config.clientSessionId,
-        hostConnectionId: this.config.clientSessionId,
-        label: this.config.label,
-        platform: "headless",
-        supportsCdp: true,
-        loadOnLeaseAssignment: true,
-      },
-    ]);
+    await this.connection!.rpc.call("main", "panelRuntime.registerClient", [this.registration]);
+  }
+
+  handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
+    this.enqueueIntents(() => this.tracker.apply(event));
+  }
+
+  async syncRuntimeLeases(): Promise<void> {
+    await this.reconcile();
   }
 
   private async startBrowser(): Promise<void> {
@@ -264,12 +272,7 @@ export class HeadlessHost {
               })
             : undefined;
         const connectionId = `navigate-${slotId}-${randomUUID()}`;
-        const result = await this.panelInit!.navigatePanel(
-          slotId,
-          source,
-          options,
-          connectionId
-        );
+        const result = await this.panelInit!.navigatePanel(slotId, source, options, connectionId);
         await this.reconcile();
         return { id: result.panelId, title: result.title };
       }

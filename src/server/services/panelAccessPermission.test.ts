@@ -439,7 +439,7 @@ describe("panelAccessPermission", () => {
       grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
     };
 
-    for (const kind of ["shell", "shell-remote", "server"] as const) {
+    for (const kind of ["shell", "server"] as const) {
       await expect(
         requirePanelAccessPermission(deps, { caller: createVerifiedCaller(kind, kind) }, "close", {
           id: "target",
@@ -448,5 +448,51 @@ describe("panelAccessPermission", () => {
     }
 
     expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("bypasses authorized chrome app callers", async () => {
+    const approvalQueue = approvalQueueMock("deny");
+
+    await expect(
+      requirePanelAccessPermission(
+        {
+          approvalQueue,
+          grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+          hasAppCapability: (callerId, capability) =>
+            callerId === "app:apps/mobile:device-1" && capability === "panel-hosting",
+        },
+        { caller: createVerifiedCaller("app:apps/mobile:device-1", "app") },
+        "close",
+        { id: "target" }
+      )
+    ).resolves.toEqual({ allowed: true });
+
+    expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("keeps non-authorized app callers scoped even when they reach panel access", async () => {
+    const approvalQueue = approvalQueueMock("session");
+
+    await expect(
+      requirePanelAccessPermission(
+        {
+          approvalQueue,
+          grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+          hasAppCapability: () => false,
+        },
+        {
+          caller: createVerifiedCaller("app:apps/field-mobile:device-1", "app", {
+            callerId: "app:apps/field-mobile:device-1",
+            callerKind: "app",
+            repoPath: "apps/field-mobile",
+            effectiveVersion: "version-1",
+          }),
+        },
+        "close",
+        { id: "target" }
+      )
+    ).resolves.toMatchObject({ allowed: true, capability: PANEL_STRUCTURAL_CAPABILITY });
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
   });
 });

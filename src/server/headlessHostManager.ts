@@ -5,7 +5,7 @@
  * the manager forks the host, waits for it to register, and the caller
  * retries lease assignment.
  *
- * The shell-remote token is delivered over the fork IPC channel (never via
+ * The shell token is delivered over the fork IPC channel (never via
  * env/argv). Idle shutdown: when the spawned host holds zero leases for
  * idleShutdownMs, it gets SIGTERM (the host also self-exits via its own
  * idle-exit backstop). Crash backoff: respawn only on next demand, with
@@ -161,7 +161,7 @@ export class HeadlessHostManager {
     });
 
     // Token over the IPC channel — not visible in /proc/*/environ or ps.
-    const token = this.deps.tokenManager.ensureToken(HEADLESS_HOST_CALLER_ID, "shell-remote");
+    const token = this.deps.tokenManager.ensureToken(HEADLESS_HOST_CALLER_ID, "shell");
     child.send({
       type: "init",
       token,

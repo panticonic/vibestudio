@@ -82,10 +82,6 @@ function makeShellCtx(callerId: string): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "shell") };
 }
 
-function makeHarnessCtx(callerId: string): ServiceContext {
-  return { caller: createVerifiedCaller(callerId, "harness") };
-}
-
 describe("FsService", () => {
   let tmpRoot: string;
   let service: FsService;
@@ -324,7 +320,7 @@ describe("FsService", () => {
     });
   });
 
-  describe("explicit-contextId callers (shell/harness)", () => {
+  describe("explicit-contextId callers (shell)", () => {
     it("shell callers resolve an existing context passed as the first argument", async () => {
       mkdirSync(path.join(tmpRoot, "ctx-shell"), { recursive: true });
       const ctx = makeShellCtx("shell-1");
@@ -335,15 +331,6 @@ describe("FsService", () => {
       ).resolves.toBe("from-shell");
     });
 
-    it("harness callers resolve an existing context passed as the first argument", async () => {
-      mkdirSync(path.join(tmpRoot, "ctx-harness"), { recursive: true });
-      writeFileSync(path.join(tmpRoot, "ctx-harness", "probe.txt"), "hi");
-      const ctx = makeHarnessCtx("harness-1");
-      await expect(
-        service.handleCall(ctx, "readFile", ["ctx-harness", "/probe.txt", "utf8"])
-      ).resolves.toBe("hi");
-    });
-
     it("accepts a contextId known only through an active entity", async () => {
       registerContext("do:src:class:entity-only", "do", "ctx-entity-only");
       const ctx = makeShellCtx("shell-1");
@@ -351,12 +338,9 @@ describe("FsService", () => {
       expect(existsSync(path.join(tmpRoot, "ctx-entity-only", "x.txt"))).toBe(true);
     });
 
-    it("rejects unknown contextIds for shell and harness callers", async () => {
+    it("rejects unknown contextIds for shell callers", async () => {
       await expect(
         service.handleCall(makeShellCtx("shell-1"), "readFile", ["ctx-nope", "/a.txt", "utf8"])
-      ).rejects.toThrow(/Unknown contextId: ctx-nope/);
-      await expect(
-        service.handleCall(makeHarnessCtx("harness-1"), "stat", ["ctx-nope", "/a.txt"])
       ).rejects.toThrow(/Unknown contextId: ctx-nope/);
     });
 

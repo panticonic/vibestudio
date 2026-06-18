@@ -25,6 +25,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@natstack/shared/serviceDispatcher";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import type { Workspace, WorkspaceConfig } from "@natstack/shared/workspace/types";
 import { normalizeWorkspaceRepoPath } from "@natstack/shared/workspace/remotes";
 import type { ApprovalPrincipal } from "@natstack/shared/approvals";
@@ -46,6 +47,7 @@ import type {
 } from "@natstack/shared/serviceSchemas/workspace";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { WorkspaceTreeScanner } from "../gadVcs/workspaceTree.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 // Wire data types live in the shared schema module (single source of truth
 // for server registration and typed clients). Re-exported here because many
@@ -214,6 +216,7 @@ export interface WorkspaceServiceDeps {
   cancelHostTargetLaunchSession?: (sessionId: string) => Promise<void> | void;
   /** Queue used to gate userland workspace mutations. */
   approvalQueue?: Pick<ApprovalQueue, "requestUserland">;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
 }
 
 type WorkspaceApprovalOperation =
@@ -240,8 +243,8 @@ function collectWorkspaceUnitPaths(nodes: WorkspaceTreeNode[]): Set<string> {
   return units;
 }
 
-function isTrustedWorkspaceCaller(ctx: ServiceContext): boolean {
-  return ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server";
+function isTrustedWorkspaceCaller(ctx: ServiceContext, deps: WorkspaceServiceDeps): boolean {
+  return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
 }
 
 async function requireAppUnitManagementAccess(
@@ -250,7 +253,7 @@ async function requireAppUnitManagementAccess(
   method: string,
   name: string
 ): Promise<void> {
-  if (isTrustedWorkspaceCaller(ctx)) return;
+  if (isTrustedWorkspaceCaller(ctx, deps)) return;
   if (ctx.caller.runtime.kind !== "app") {
     throw new ServiceError(
       "workspace",
@@ -259,7 +262,6 @@ async function requireAppUnitManagementAccess(
       "EACCES"
     );
   }
-  if (ctx.caller.runtime.id === "@workspace-apps/shell") return;
   const rows = deps.listUnits ? await deps.listUnits() : [];
   const row = rows.find(
     (unit) => unit.kind === "app" && (unit.name === name || unit.source === name)
@@ -363,7 +365,7 @@ async function requireWorkspaceApproval(
     details?: Array<{ label: string; value: string }>;
   }
 ): Promise<void> {
-  if (isTrustedWorkspaceCaller(ctx)) return;
+  if (isTrustedWorkspaceCaller(ctx, deps)) return;
   const principal = resolveWorkspacePrincipal(deps, ctx, operation);
   const approvalQueue = deps.approvalQueue;
   if (!approvalQueue) {
@@ -434,7 +436,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
     name: "workspace",
     description: "Workspace catalog, configuration, and lifecycle (list, create, switch, etc.)",
     policy: {
-      allowed: ["shell", "shell-remote", "app", "panel", "worker", "do", "extension", "server"],
+      allowed: ["shell", "app", "panel", "worker", "do", "extension", "server"],
     },
     methods,
     handler: async (ctx, method, args) => {
@@ -719,7 +721,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         }
 
         case "units.bakeAppDist": {
-          if (ctx.caller.runtime.kind !== "shell" && ctx.caller.runtime.kind !== "server") {
+          if (!isTrustedWorkspaceCaller(ctx, deps)) {
             throw new ServiceError(
               "workspace",
               method,

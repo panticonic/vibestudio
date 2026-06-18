@@ -1,6 +1,10 @@
 import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import type { AppCapability } from "@natstack/shared/unitManifest";
-import type { CallerKind } from "@natstack/shared/principalKinds";
+import {
+  callerHasAppCapability,
+  callerHasPlatformCapability,
+  type CapabilityTrustDeps,
+} from "./chromeTrust.js";
 
 export interface CapabilityDecision {
   allowed: boolean;
@@ -8,20 +12,8 @@ export interface CapabilityDecision {
 }
 
 export interface CapabilityAuthorizer {
-  check(
-    caller: VerifiedCaller,
-    capability: AppCapability,
-    options?: CapabilityCheckOptions
-  ): CapabilityDecision;
-  require(
-    caller: VerifiedCaller,
-    capability: AppCapability,
-    options?: CapabilityCheckOptions
-  ): void;
-}
-
-export interface CapabilityCheckOptions {
-  hostKinds?: readonly CallerKind[];
+  check(caller: VerifiedCaller, capability: AppCapability): CapabilityDecision;
+  require(caller: VerifiedCaller, capability: AppCapability): void;
 }
 
 export class CapabilityAccessError extends Error {
@@ -33,17 +25,13 @@ export class CapabilityAccessError extends Error {
   }
 }
 
-export function createCapabilityAuthorizer(deps: {
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
-}): CapabilityAuthorizer {
+export function createCapabilityAuthorizer(deps: CapabilityTrustDeps = {}): CapabilityAuthorizer {
   return {
-    check(caller, capability, options = {}) {
+    check(caller, capability) {
       const kind = caller.runtime.kind;
-      if (options.hostKinds?.includes(kind)) {
-        return { allowed: true };
-      }
+      if (callerHasAppCapability(caller, capability, deps)) return { allowed: true };
+      if (callerHasPlatformCapability(caller, capability, deps)) return { allowed: true };
       if (kind === "app") {
-        if (deps.hasAppCapability?.(caller.runtime.id, capability)) return { allowed: true };
         return {
           allowed: false,
           reason: `App ${caller.runtime.id} does not have capability '${capability}'`,
@@ -54,8 +42,8 @@ export function createCapabilityAuthorizer(deps: {
         reason: `Caller kind '${kind}' cannot use capability '${capability}'`,
       };
     },
-    require(caller, capability, options) {
-      const decision = this.check(caller, capability, options);
+    require(caller, capability) {
+      const decision = this.check(caller, capability);
       if (decision.allowed) return;
       throw new CapabilityAccessError(decision.reason ?? `Capability '${capability}' is required`);
     },

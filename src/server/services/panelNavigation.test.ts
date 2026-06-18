@@ -166,7 +166,7 @@ describe("panel navigation: capability grants and retire hooks", () => {
     });
 
     const handle = (await service.handler(
-      { caller: createVerifiedCaller("server:main", "server") },
+      { caller: createVerifiedCaller("server", "server") },
       "createEntity",
       [
         {
@@ -180,11 +180,9 @@ describe("panel navigation: capability grants and retire hooks", () => {
 
     expect(handle.id).toBe(canonicalEntityId({ kind: "panel", key: "nav-entry-1" }));
 
-    await service.handler(
-      { caller: createVerifiedCaller("server:main", "server") },
-      "retireEntity",
-      [{ id: handle.id }]
-    );
+    await service.handler({ caller: createVerifiedCaller("server", "server") }, "retireEntity", [
+      { id: handle.id },
+    ]);
 
     // Hook was called with the retired panel record. Real bootstrap wires this
     // to egressProxy.dropCaller(record.id) etc. — proving the call site is

@@ -166,7 +166,7 @@ function responseForCredential(
 ): Record<string, unknown> {
   return {
     ...credential,
-    shellToken: state.tokenManager.ensureToken(shellCallerId(credential.deviceId), "shell-remote"),
+    shellToken: state.tokenManager.ensureToken(shellCallerId(credential.deviceId), "shell"),
     callerId: shellCallerId(credential.deviceId),
     serverId: state.deviceAuthStore.getServerId(),
     serverBootId: state.serverBootId,
@@ -277,7 +277,7 @@ async function handleAuthRoute(
       const refreshToken = typeof body["refreshToken"] === "string" ? body["refreshToken"] : "";
       const device = state.deviceAuthStore.validateRefresh(deviceId, refreshToken);
       sendJson(res, 200, {
-        shellToken: state.tokenManager.ensureToken(shellCallerId(deviceId), "shell-remote"),
+        shellToken: state.tokenManager.ensureToken(shellCallerId(deviceId), "shell"),
         callerId: shellCallerId(deviceId),
         deviceId,
         label: device.label,

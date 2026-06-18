@@ -19,6 +19,7 @@ const panelEntityIdSchema = z.string().min(1).transform(asPanelEntityId);
 export const registerClientSchema = z.object({
   clientSessionId: z.string().min(1),
   hostConnectionId: z.string().min(1).optional(),
+  ownerCallerId: z.string().min(1).optional(),
   label: z.string().min(1),
   platform: clientPlatformSchema,
   supportsCdp: z.boolean().optional(),

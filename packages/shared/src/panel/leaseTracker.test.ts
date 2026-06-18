@@ -3,14 +3,15 @@ import type {
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
-} from "@natstack/shared/panel/panelLease";
-import { LeaseTracker } from "./leaseTracker.js";
+} from "./panelLease.js";
+import { classifyRuntimeLeaseChange, LeaseTracker } from "./leaseTracker.js";
+import type { PanelSlotId } from "./ids.js";
 
 const ME = "headless-test";
 
 function lease(slotId: string, overrides: Partial<PanelRuntimeLease> = {}): PanelRuntimeLease {
   return {
-    slotId,
+    slotId: slotId as PanelSlotId,
     runtimeEntityId: `panel:${slotId}-entry`,
     clientSessionId: ME,
     hostConnectionId: ME,
@@ -37,7 +38,7 @@ function event(
   return {
     type: "panel:runtimeLeaseChanged",
     version: { epoch: "e1", counter },
-    slotId,
+    slotId: slotId as PanelSlotId,
     runtimeEntityId: (next ?? previous)!.runtimeEntityId,
     previous,
     next,
@@ -52,7 +53,12 @@ describe("LeaseTracker", () => {
       snapshot([lease("a"), lease("b", { clientSessionId: "someone-else" })])
     );
     expect(intents).toEqual([
-      { kind: "load", slotId: "a", runtimeEntityId: "panel:a-entry", connectionId: "default-cdp-a-1" },
+      {
+        kind: "load",
+        slotId: "a",
+        runtimeEntityId: "panel:a-entry",
+        connectionId: "default-cdp-a-1",
+      },
     ]);
     expect(tracker.heldSlots()).toEqual(["a"]);
   });
@@ -72,23 +78,31 @@ describe("LeaseTracker", () => {
     );
     expect(intents).toEqual([
       { kind: "unload", slotId: "a", reason: "stale" },
-      { kind: "load", slotId: "a", runtimeEntityId: "panel:a-entry", connectionId: "default-cdp-a-2" },
+      {
+        kind: "load",
+        slotId: "a",
+        runtimeEntityId: "panel:a-entry",
+        connectionId: "default-cdp-a-2",
+      },
     ]);
   });
 
   it("applies acquire/transfer/release events", () => {
     const tracker = new LeaseTracker(ME);
     expect(tracker.apply(event("a", lease("a"), null, 1))).toEqual([
-      { kind: "load", slotId: "a", runtimeEntityId: "panel:a-entry", connectionId: "default-cdp-a-1" },
+      {
+        kind: "load",
+        slotId: "a",
+        runtimeEntityId: "panel:a-entry",
+        connectionId: "default-cdp-a-1",
+      },
     ]);
-    // Transfer to another client.
     expect(
       tracker.apply(event("a", lease("a", { clientSessionId: "desktop-1" }), lease("a"), 2))
     ).toEqual([{ kind: "unload", slotId: "a", reason: "lease-transfer" }]);
-    // Release of a lease we don't hold is a no-op.
-    expect(tracker.apply(event("a", null, lease("a", { clientSessionId: "desktop-1" }), 3))).toEqual(
-      []
-    );
+    expect(
+      tracker.apply(event("a", null, lease("a", { clientSessionId: "desktop-1" }), 3))
+    ).toEqual([]);
   });
 
   it("drops stale events older than the reconciled version", () => {
@@ -112,5 +126,26 @@ describe("LeaseTracker", () => {
     const tracker = new LeaseTracker(ME);
     tracker.apply(event("a", lease("a"), null, 1));
     expect(tracker.apply(event("a", lease("a"), null, 2))).toEqual([]);
+  });
+});
+
+describe("classifyRuntimeLeaseChange", () => {
+  it("classifies ownership transitions without mutating tracker state", () => {
+    expect(classifyRuntimeLeaseChange(ME, event("a", lease("a"), null, 1))).toMatchObject({
+      kind: "assigned",
+      lease: expect.objectContaining({ slotId: "a" }),
+    });
+    expect(
+      classifyRuntimeLeaseChange(
+        ME,
+        event("a", lease("a", { clientSessionId: "desktop" }), lease("a"), 2)
+      )
+    ).toMatchObject({ kind: "unassigned", reason: "lease-transfer", slotId: "a" });
+    expect(
+      classifyRuntimeLeaseChange(
+        ME,
+        event("a", null, lease("a", { clientSessionId: "desktop" }), 3)
+      )
+    ).toEqual({ kind: "unrelated" });
   });
 });

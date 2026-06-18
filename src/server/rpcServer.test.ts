@@ -699,23 +699,23 @@ describe("RpcServer caller identity", () => {
     return JSON.parse(raw) as { message: { result?: unknown; error?: string } };
   }
 
-  it("rejects WS authentication when the token resolves to a bare shell caller", () => {
+  it("rejects WS authentication for the reserved in-process shell caller id", () => {
     const { server, tokenManager } = createServer();
-    const shellToken = tokenManager.createToken("electron-main", "shell");
+    const shellToken = tokenManager.createToken("shell", "shell");
     const ws = createTestWs();
 
     testServer(server).handleAuth(ws, shellToken, "conn-shell");
 
     expect(ws.close).toHaveBeenCalledWith(4006, expect.stringContaining("shell"));
-    expect(testServer(server).connections.getCallerConnections("electron-main")).toHaveLength(0);
+    expect(testServer(server).connections.getCallerConnections("shell")).toHaveLength(0);
   });
 
-  it("accepts WS authentication for shell-remote tokens and rebrands callerKind to shell", () => {
+  it("accepts WS authentication for concrete shell host callers", () => {
     const { server, tokenManager } = createServer();
-    const remoteToken = tokenManager.createToken("electron-main", "shell-remote");
+    const remoteToken = tokenManager.createToken("electron-main", "shell");
     const ws = createTestWs();
 
-    testServer(server).handleAuth(ws, remoteToken, "conn-shell-remote");
+    testServer(server).handleAuth(ws, remoteToken, "conn-shell-host");
 
     expect(ws.close).not.toHaveBeenCalled();
     const callers = testServer(server).connections.getCallerConnections("electron-main");
@@ -723,15 +723,12 @@ describe("RpcServer caller identity", () => {
     expect(callers[0]!.caller.runtime.kind).toBe("shell");
   });
 
-  it("rejects WS authentication when a connection grant resolves to a bare shell principal", () => {
+  it("accepts WS authentication when a connection grant resolves to a shell host principal", () => {
     const { server, connectionGrants, entityCache } = createServer();
     entityCache._onActivate(makeRecord("electron-main", "shell"));
     const grant = connectionGrants.grant("electron-main", "shell:test").token;
     const ws = createTestWs();
 
-    // The principal-kind registry maps shell entities to shell-remote at the
-    // WS boundary; the connection rebrand collapses it back to shell for
-    // downstream policy.
     testServer(server).handleAuth(ws, grant, "conn-grant");
     expect(ws.close).not.toHaveBeenCalled();
     const callers = testServer(server).connections.getCallerConnections("electron-main");

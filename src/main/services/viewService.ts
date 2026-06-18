@@ -2,6 +2,7 @@ import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import { viewMethods } from "@natstack/shared/serviceSchemas/view";
 import type { ViewManager } from "../viewManager.js";
 import { assertHttpUrl } from "../utils.js";
+import { callerHasPlatformCapability, viewHasAppCapability } from "./appCapabilities.js";
 
 export function createViewService(deps: { getViewManager: () => ViewManager }): ServiceDefinition {
   /**
@@ -12,9 +13,9 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
    * reach self-targeted methods if this policy is expanded later.
    */
   const hasViewHostAuthority = (vm: ViewManager, callerId: string, callerKind: string): boolean => {
-    if (callerKind === "shell") return true;
+    if (callerHasPlatformCapability(callerId, callerKind, "panel-hosting")) return true;
     const viewInfo = vm.getViewInfo(callerId);
-    return viewInfo?.type === "app" && viewInfo.capabilities.includes("panel-hosting");
+    return viewHasAppCapability(callerId, viewInfo, "panel-hosting");
   };
 
   const assertViewHost = (
@@ -34,23 +35,10 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
     method: string
   ): void => {
     const viewInfo = vm.getViewInfo(callerId);
-    if (
-      callerKind === "app" &&
-      viewInfo?.type === "app" &&
-      viewInfo.capabilities.includes("panel-hosting")
-    ) {
+    if (callerKind === "app" && viewHasAppCapability(callerId, viewInfo, "panel-hosting")) {
       return;
     }
     throw new Error(`view.${method}: caller '${callerId}' cannot place native panel slots`);
-  };
-
-  const assertLegacyShellLayoutHost = (
-    callerId: string,
-    callerKind: string,
-    method: string
-  ): void => {
-    if (callerKind === "shell") return;
-    throw new Error(`view.${method}: hosted apps must place panels with native panel slots`);
   };
 
   const assertOwnsOrViewHost = (
@@ -120,33 +108,6 @@ export function createViewService(deps: { getViewManager: () => ViewManager }): 
           assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setThemeCss");
           const css = args[0] as string;
           vm.setThemeCss(css);
-          return;
-        }
-        case "updateLayout": {
-          assertLegacyShellLayoutHost(
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "updateLayout"
-          );
-          const layoutUpdate = args[0] as {
-            titleBarHeight?: number;
-            sidebarVisible?: boolean;
-            sidebarWidth?: number;
-            saveBarHeight?: number;
-            notificationBarHeight?: number;
-            consentBarHeight?: number;
-          };
-          vm.updateLayout(layoutUpdate);
-          return;
-        }
-        case "updatePanelViewportBounds": {
-          assertLegacyShellLayoutHost(
-            ctx.caller.runtime.id,
-            ctx.caller.runtime.kind,
-            "updatePanelViewportBounds"
-          );
-          const bounds = args[0] as { x: number; y: number; width: number; height: number } | null;
-          vm.setPanelViewportBounds(bounds);
           return;
         }
         case "bindNativePanelSlot": {

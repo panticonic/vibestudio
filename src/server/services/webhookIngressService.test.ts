@@ -20,7 +20,7 @@ const RELAY_SECRET = "relay-secret-for-tests-only";
 const RELAY_BASE_URL = "https://hooks.test";
 const DIRECT_BASE_URL = "https://direct.test";
 
-function shellCtx(callerId = "shell-1"): ServiceContext {
+function shellCtx(callerId = "shell"): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "shell") };
 }
 

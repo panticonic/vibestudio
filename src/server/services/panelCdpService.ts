@@ -113,7 +113,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
   return {
     name: "panelCdp",
     description: "Approval-gated server CDP access for panel targets",
-    policy: { allowed: ["shell", "server", "panel", "worker", "do"] },
+    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
     methods: {
       getCdpEndpoint: { args: z.tuple([z.string()]) },
       navigate: { args: z.tuple([z.string(), z.string()]) },

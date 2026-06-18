@@ -31,9 +31,6 @@ vi.mock("../shell/client", () => ({
   shellPresence: {
     heartbeat: shellClient.heartbeat,
   },
-  view: {
-    updateLayout: vi.fn(() => Promise.resolve()),
-  },
   events: {
     subscribe: shellClient.subscribe,
     unsubscribe: shellClient.unsubscribe,

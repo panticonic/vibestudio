@@ -53,8 +53,8 @@ Remote clients use two layers of identity:
 - `ConnectionInfo` describes the server URL clients should use for HTTP/RPC and
   pairing deep links.
 
-Desktop remote shells refresh a `shell-remote` token from their device
-credential. Mobile native hosts refresh a principal grant with
+Desktop and mobile remote shells refresh a `shell` token from their device
+credential. Mobile native hosts may also refresh a principal grant with
 `/_r/s/auth/refresh-principal-grant` and `principal: "react-native-app"`.
 
 ## Capability Checks
@@ -63,6 +63,6 @@ Capabilities are declared in the app manifest and checked at the service
 boundary. `connection-management` is required for app callers that mint pairing
 invites through `auth.createPairingInvite`.
 
-Shell, shell-remote, and server callers are trusted host principals for this
+Shell and server callers are trusted host principals for this
 operation. App callers must be active and running with the requested capability.
 Capability denial is returned with code `EACCES`.

@@ -7,6 +7,7 @@ import YAML from "yaml";
 import { GitClient } from "@natstack/git";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ServiceContext, VerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import type { WorkspaceTreeScanner } from "../gadVcs/workspaceTree.js";
 import type { WorkspaceConfig, WorkspaceGitRemoteConfig } from "@natstack/shared/workspace/types";
 import {
@@ -26,6 +27,7 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import type { EgressProxy } from "./egressProxy.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 const SHARED_GIT_REMOTE_CAPABILITY = "workspace-shared-git-remote";
 const PROJECT_IMPORT_CAPABILITY = "workspace-project-import";
@@ -37,6 +39,7 @@ type GitInteropServiceDeps = {
   egressProxy?: Pick<EgressProxy, "forwardGitHttp">;
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
 };
 
 type WorkspaceTreeNode = {
@@ -256,11 +259,11 @@ async function importWorkspaceRepo(
 
 async function ensureImportProjectPermission(
   ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore">,
+  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore" | "hasAppCapability">,
   unitPath: string,
   remote: WorkspaceGitRemoteConfig
 ): Promise<void> {
-  if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") return;
+  if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
   if (
     ctx.caller.runtime.kind !== "panel" &&
     ctx.caller.runtime.kind !== "app" &&
@@ -301,12 +304,12 @@ function isSupportedImportRepoPath(repoPath: string): boolean {
 
 async function ensureSharedRemotePermission(
   ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore">,
+  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore" | "hasAppCapability">,
   unitPath: string,
   operation: "set" | "remove",
   remote: WorkspaceGitRemoteConfig | null
 ): Promise<void> {
-  if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") return;
+  if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
   if (
     ctx.caller.runtime.kind !== "panel" &&
     ctx.caller.runtime.kind !== "app" &&

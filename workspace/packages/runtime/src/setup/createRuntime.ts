@@ -23,7 +23,7 @@ import {
 import { createCdpAutomation } from "../panel/cdpAutomation.js";
 import type { RuntimeFs, ThemeAppearance } from "../types.js";
 import { _applyStateArgsFromHost, _initStateArgsRuntime } from "../panel/stateArgs.js";
-import { exposeAgentApi, registerAgentApi } from "../panel/agentApi.js";
+import { exposeAgentApi } from "../panel/agentApi.js";
 import type { PanelEntityId, PanelSlotId } from "@natstack/shared/panel/ids";
 import type { PanelLifecycleResult } from "@natstack/shared/types";
 
@@ -73,7 +73,6 @@ export function createRuntime(deps: RuntimeDeps) {
   const shell = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
 
   _initStateArgsRuntime(slotId, (service, method, args) => base.rpc.call(service, method, args));
-  registerAgentApi(shell);
   exposeAgentApi(base.expose);
   if (typeof shell?.addEventListener === "function") {
     shell.addEventListener((event: string, payload: unknown) => {

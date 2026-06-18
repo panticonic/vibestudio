@@ -16,13 +16,12 @@ import {
   getCurrentSnapshot,
   getPanelSource,
   getPanelContextId,
-  getPanelRef,
   updatePanelNavigationState,
 } from "@natstack/shared/panelTypes";
 import { contextIdToPartition } from "@natstack/shared/contextIdToPartition.js";
 import { isManagedHost, parsePanelUrl } from "@natstack/shared/shell/urlParsing.js";
 import { isBrowserPanelSource, panelSourceFromBrowserUrl } from "@natstack/shared/panelChrome";
-import type { Panel, PanelNavigationState } from "@natstack/shared/types";
+import type { PanelNavigationState } from "@natstack/shared/types";
 import { logMemorySnapshot } from "./memoryMonitor.js";
 import type { BrowserHistoryRecorder, BrowserNavigationIntent } from "./browserHistoryRecorder.js";
 // Persistence removed — server panel service handles all persistence
@@ -42,22 +41,6 @@ interface CdpHostLike {
 }
 
 interface PanelOrchestratorLike {
-  createPanel(
-    callerId: string,
-    source: string,
-    options?: { name?: string; contextId?: string; focus?: boolean; env?: Record<string, string> },
-    stateArgs?: Record<string, unknown>
-  ): Promise<{ id: string; title: string }>;
-  createBrowserUrlPanel(
-    callerId: string,
-    url: string,
-    options?: { name?: string; focus?: boolean }
-  ): Promise<{ id: string; title: string }>;
-  navigatePanel(
-    panelId: string,
-    source: string,
-    options?: { ref?: string; contextId?: string; stateArgs?: Record<string, unknown> }
-  ): Promise<{ id: string; title: string }>;
   replaceCurrentSnapshot(
     panelId: string,
     contextId: string,
@@ -368,11 +351,7 @@ export class PanelView implements PanelViewLike {
         }
 
         if (/^https?:\/\//i.test(url) && !isManagedHost(url, this.externalHost)) {
-          void this.panelOrchestrator
-            .navigatePanel(panelId, panelSourceFromBrowserUrl(url), {
-              contextId: getPanelContextId(panel),
-            })
-            .catch((err) => log.warn(`[PanelNav] External navigation failed for ${panelId}:`, err));
+          this.rejectPanelTreeProxy(panelId, url, "main-frame external navigation");
           return;
         }
 
@@ -534,18 +513,11 @@ export class PanelView implements PanelViewLike {
       const url = details.url;
       const parsed = parsePanelUrl(url, this.externalHost);
       if (parsed) {
-        void this.panelOrchestrator
-          .createPanel(panelId, parsed.source, parsed.options, parsed.stateArgs)
-          .catch((err: unknown) => this.handleChildCreationError(panelId, err, url));
+        this.rejectPanelTreeProxy(panelId, url, "window.open");
         return { action: "deny" as const };
       }
       if (/^https?:\/\//i.test(url)) {
-        void this.panelOrchestrator
-          .createBrowserUrlPanel(panelId, url, { focus: true })
-          .then(({ id }) => {
-            this.sendPanelEvent?.(panelId, "runtime:child-created", { childId: id, url });
-          })
-          .catch((err: unknown) => this.handleChildCreationError(panelId, err, url));
+        this.rejectPanelTreeProxy(panelId, url, "window.open");
         return { action: "deny" as const };
       }
       return { action: "deny" as const };
@@ -555,12 +527,7 @@ export class PanelView implements PanelViewLike {
       if (!isManagedHost(url, this.externalHost)) {
         if (/^https?:\/\//i.test(url)) {
           event.preventDefault();
-          void this.panelOrchestrator
-            .createBrowserUrlPanel(panelId, url, { focus: true })
-            .then(({ id }) => {
-              this.sendPanelEvent?.(panelId, "runtime:child-created", { childId: id, url });
-            })
-            .catch((err: unknown) => this.handleChildCreationError(panelId, err, url));
+          this.rejectPanelTreeProxy(panelId, url, "navigation");
         }
         return;
       }
@@ -570,23 +537,15 @@ export class PanelView implements PanelViewLike {
       const parsed = parsePanelUrl(url, this.externalHost);
       if (!parsed) return;
 
-      const currentSource = getPanelSource(panel);
       const currentContextId = getPanelContextId(panel);
       const targetContextId = parsed.contextId ?? currentContextId;
-      const sourceChanged = parsed.source !== currentSource;
+      const sourceChanged = parsed.source !== getPanelSource(panel);
       const contextChanged = targetContextId !== currentContextId;
-      const refChanged = parsed.ref !== getPanelRef(panel);
-      if (!sourceChanged && !contextChanged && !refChanged) return;
+      const stateArgsChanged = parsed.stateArgs !== undefined;
+      if (!sourceChanged && !contextChanged && !stateArgsChanged) return;
 
       event.preventDefault();
-      void this.handleManagedNavigation(
-        panelId,
-        panel,
-        parsed.source,
-        targetContextId,
-        parsed.ref,
-        parsed.stateArgs
-      ).catch((err) => log.warn(`[PanelNav] Navigation failed for ${panelId}:`, err));
+      this.rejectPanelTreeProxy(panelId, url, "managed navigation");
     };
 
     this.linkInterceptionHandlers.set(panelId, willNavigateHandler);
@@ -601,35 +560,11 @@ export class PanelView implements PanelViewLike {
     }
   }
 
-  private handleChildCreationError(parentId: string, error: unknown, url: string): void {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`[PanelView] Failed to create child from ${url}:`, error);
-    this.sendPanelEvent?.(parentId, "runtime:child-creation-error", { url, error: message });
-  }
-
-  // ==== Managed navigation ==================================================
-
-  /**
-   * Handle navigation to another managed panel source and/or context by
-   * updating shell state first, then recreating the view when the storage
-   * partition changes.
-   */
-  private async handleManagedNavigation(
-    panelId: string,
-    panel: Panel,
-    source: string,
-    newContextId: string,
-    ref?: string,
-    stateArgs?: Record<string, unknown>
-  ): Promise<void> {
-    log.info(
-      `[PanelNav] Panel ${panelId}: ${getPanelSource(panel)} -> ${source} (context ${getPanelContextId(panel)} -> ${newContextId})`
-    );
-    await this.panelOrchestrator.navigatePanel(panelId, source, {
-      contextId: newContextId,
-      ref,
-      stateArgs,
-    });
+  private rejectPanelTreeProxy(panelId: string, url: string, action: string): void {
+    const error =
+      "Electron view host does not proxy panelTree mutations; use authenticated panelTree RPC.";
+    log.warn(`[PanelView] Rejected ${action} panelTree proxy for ${panelId}: ${url}`);
+    this.sendPanelEvent?.(panelId, "runtime:child-creation-error", { url, error });
   }
 
   // ==== Crash recovery ======================================================

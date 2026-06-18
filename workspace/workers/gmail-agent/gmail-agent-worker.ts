@@ -548,7 +548,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    */
   async onWebhookDelivery(event: WebhookDeliveryEvent): Promise<{ synced: string[] }> {
     const caller = this.caller;
-    if (caller && !["server", "harness"].includes(caller.callerKind)) {
+    if (caller && !["server"].includes(caller.callerKind)) {
       throw new Error("onWebhookDelivery is only dispatched by webhookIngress");
     }
     if (event.payload.type !== "cloud-pubsub") return { synced: [] };
@@ -653,7 +653,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     synced: string[];
   }> {
     const caller = this.caller;
-    if (caller && !["do", "harness"].includes(caller.callerKind)) {
+    if (caller && !["do"].includes(caller.callerKind)) {
       throw new Error("onGmailPushNotification is only dispatched by the Gmail push router");
     }
     const email = String(payload?.emailAddress ?? "").toLowerCase();
@@ -795,7 +795,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
   private assertAttentionWriteAllowed(): void {
     const caller = this.caller;
     if (!caller) return;
-    if (["panel", "shell", "server", "harness"].includes(caller.callerKind)) return;
+    if (["panel", "shell", "server"].includes(caller.callerKind)) return;
     throw new Error(
       "Gmail attention preference changes must be initiated from a user-facing panel"
     );

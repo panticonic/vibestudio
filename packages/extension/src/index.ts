@@ -21,7 +21,6 @@ export interface ExtensionInvocation {
       | "do"
       | "shell"
       | "server"
-      | "shell-remote"
       | "extension"
       | "http";
     connectionId?: string;
@@ -104,7 +103,7 @@ export interface ExtensionsClient {
 
 /**
  * Minimal RPC surface the extensions client needs. Both the workspace runtime
- * (`RpcCaller`) and host-side callers (harness, etc.) satisfy this shape.
+ * (`RpcCaller`) and host-side callers satisfy this shape.
  */
 export interface ExtensionsClientRpc {
   call(target: string, method: string, args: unknown[]): Promise<unknown>;

@@ -167,7 +167,7 @@ rollback history and restores the pinned build as the active host target. The
 user can return to normal update adoption by switching that target back to
 `follow-ref`.
 
-Host-target management RPC is shell-only (`shell`, `shell-remote`, `server`).
+Host-target management RPC is restricted to host principals (`shell`, `server`).
 Panels, workers, extensions, and ordinary apps should not change which trusted
 app a native host executes. They may still receive app lifecycle events and
 should honor `selectedForHost` when deciding whether a notification applies to

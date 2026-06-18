@@ -62,15 +62,6 @@ export const agentApi = {
   },
 };
 
-export function registerAgentApi(shell: any): void {
-  if (!shell?.panel?.registerAgentHandler) return;
-  shell.panel.registerAgentHandler("_agent.snapshot", () => agentApi.snapshot());
-  shell.panel.registerAgentHandler("_agent.tree", () => agentApi.tree());
-  shell.panel.registerAgentHandler("_agent.state", () => agentApi.state());
-  shell.panel.registerAgentHandler("_agent.routes", () => agentApi.routes());
-  shell.panel.registerAgentHandler("_agent.setMode", (mode: AgentDataMode) => agentApi.setMode(mode));
-}
-
 export function exposeAgentApi(
   expose: (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) => void
 ): void {

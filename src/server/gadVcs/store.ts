@@ -230,7 +230,7 @@ export function vcsLogActor(actor: VcsActor): VcsLogActor {
   const kind =
     actor.kind === "do" || actor.kind === "worker"
       ? "agent"
-      : actor.kind === "server" || actor.kind === "harness"
+      : actor.kind === "server"
         ? "system"
         : actor.kind === "shell"
           ? "user"

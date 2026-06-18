@@ -195,7 +195,7 @@ describe("vcsService", () => {
     it("allows shell and server callers to merge into main", async () => {
       for (const kind of ["shell", "server"] as const) {
         const { service, mergeHeads } = mergeService();
-        const caller = createVerifiedCaller(`${kind}:test`, kind);
+        const caller = createVerifiedCaller(kind, kind);
 
         const result = (await service.handler({ caller }, "merge", ["ctx:ctx-1", "main"])) as {
           status: string;

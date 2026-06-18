@@ -5,11 +5,13 @@ import {
   accessDecision,
 } from "@natstack/shared/panelAccessPolicy";
 import type { ServiceContext, VerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import {
   panelCapabilityResourceKey,
   requestCapabilityPermission,
   type CapabilityPermissionDeps,
 } from "./capabilityPermission.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {
   title?: string;
@@ -21,12 +23,8 @@ export interface PanelAccessPermissionTarget extends PanelAccessTarget {
 export interface PanelAccessPermissionDeps extends CapabilityPermissionDeps {
   resolveRequesterPanel?(caller: VerifiedCaller): Promise<PanelAccessPermissionTarget | null>;
   hasApprovalSession?(): boolean;
-  /**
-   * Whether a workspace-app caller declares a capability. Used to recognize the
-   * mobile shell (an `app` principal that declares `panel-hosting`) as trusted
-   * chrome — without trusting every workspace app.
-   */
-  hasAppCapability?(callerId: string, capability: string): boolean;
+  /** Whether a workspace-app caller holds an authorized activation capability. */
+  hasAppCapability?(callerId: string, capability: AppCapability): boolean;
 }
 
 export interface PanelAccessPermissionResult {
@@ -52,21 +50,16 @@ export async function requirePanelAccessPermission(
   ) {
     return { allowed: true };
   }
-  // The mobile shell calls panelTree directly as an `app` principal
-  // (app:apps/mobile); it is trusted chrome ONLY because it declares the
-  // panel-hosting capability. Plain app callers (non-chrome workspace apps) stay
-  // scoped. Desktop's shell mutations arrive as `server` via the electron-main
-  // proxy and are already trusted.
-  const isPanelHostingApp =
-    ctx.caller.runtime.kind === "app" &&
-    deps.hasAppCapability?.(ctx.caller.runtime.id, "panel-hosting") === true;
+  const authorizedChrome = isAuthorizedChrome(ctx.caller, {
+    hasAppCapability: deps.hasAppCapability,
+  });
   const decision = accessDecision(
     op,
     {
       id: ctx.caller.runtime.id,
       kind: ctx.caller.runtime.kind,
       privileged:
-        requesterPanel?.privileged === true || requesterPanel?.shell === true || isPanelHostingApp,
+        requesterPanel?.privileged === true || requesterPanel?.shell === true || authorizedChrome,
     },
     target
   );

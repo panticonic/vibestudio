@@ -130,7 +130,7 @@ const appCtx: ServiceContext = {
     effectiveVersion: "ev-app",
   }),
 };
-const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell-1", "shell") };
+const shellCtx: ServiceContext = { caller: createVerifiedCaller("shell", "shell") };
 
 // ─── Contract: client/server method-name alignment ───────────────────────────
 

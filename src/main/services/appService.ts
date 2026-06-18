@@ -9,7 +9,7 @@ import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";
 import type { AppOrchestrator } from "../appOrchestrator.js";
-import { requireAppCapability } from "./appCapabilities.js";
+import { callerHasPlatformCapability, requireAppCapability } from "./appCapabilities.js";
 
 export function createAppService(deps: {
   panelOrchestrator: PanelOrchestrator;
@@ -137,6 +137,10 @@ function requireShellOrPanelHostingApp(
   viewManager: ViewManager,
   operation: string
 ): void {
-  if (ctx.caller.runtime.kind === "shell") return;
+  if (
+    callerHasPlatformCapability(ctx.caller.runtime.id, ctx.caller.runtime.kind, "panel-hosting")
+  ) {
+    return;
+  }
   requireAppCapability(ctx, viewManager, "panel-hosting", operation);
 }

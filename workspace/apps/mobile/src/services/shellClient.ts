@@ -9,8 +9,14 @@ import { createRecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordi
 import type { RecoveryCoordinator } from "@natstack/shared/shell/recoveryCoordinator";
 import type { PanelManager } from "@natstack/shared/shell/panelManager";
 import type {
+  PanelHost,
+  PanelHostRegistration,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
+} from "@natstack/shared/panel/panelLease";
+import {
+  createPanelHostRegistration,
+  createPanelRuntimeLeaseRequest,
 } from "@natstack/shared/panel/panelLease";
 import { asPanelSlotId } from "@natstack/shared/panel/ids";
 import {
@@ -26,7 +32,7 @@ import {
   type RecordHistoryVisitRequest,
   type UpdateHistoryTitleRequest,
 } from "@natstack/browser-data/client";
-import { createBridgeAdapter, type MobilePanelRuntimeHost } from "./bridgeAdapter";
+import { createBridgeAdapter } from "./bridgeAdapter";
 import { MobileRpcClient, type ConnectionStatus } from "./mobileTransport";
 import { createMobileShellCore } from "../shellCore/createMobileShellCore";
 import type { Credentials } from "./auth";
@@ -116,7 +122,7 @@ function formatHostTargetLaunchSession(session: HostTargetLaunchSessionSnapshot)
   return [session.message, session.detail].filter(Boolean).join(" ");
 }
 
-class MobilePanels {
+class MobilePanels implements PanelHost {
   private panelManager: PanelManager | null = null;
   private registryInstance: PanelRegistry | null = null;
   private bridgeAdapterInstance: ReturnType<typeof createBridgeAdapter> | null = null;
@@ -124,6 +130,7 @@ class MobilePanels {
   private readonly browserData: BrowserDataClient;
   private readonly workspaceRpc: WorkspaceRpcClient;
   private readonly vcs: VcsClient;
+  readonly registration: PanelHostRegistration;
   constructor(
     private readonly deps: {
       serverUrl: string;
@@ -133,6 +140,13 @@ class MobilePanels {
       clientSessionId: string;
     }
   ) {
+    this.registration = createPanelHostRegistration({
+      clientSessionId: deps.clientSessionId,
+      label: "Mobile",
+      platform: "mobile",
+      supportsCdp: false,
+      loadOnLeaseAssignment: false,
+    });
     this.panelRuntime = createPanelRuntimeClient(this.deps.transport);
     this.workspaceRpc = createWorkspaceRpcClient(this.deps.transport);
     this.vcs = createVcsClient(this.deps.transport);
@@ -166,7 +180,6 @@ class MobilePanels {
       this.registryInstance = core.registry;
       this.bridgeAdapterInstance = createBridgeAdapter({
         panelManager: core.panelManager,
-        registry: core.registry,
         transport: this.deps.transport,
         callbacks: {
           navigateToPanel: this.deps.navigateToPanel,
@@ -175,11 +188,7 @@ class MobilePanels {
     }
     const initialTheme = Appearance.getColorScheme() === "light" ? "light" : "dark";
     this.panelManager.setCurrentTheme(initialTheme);
-    await this.panelRuntime.registerClient({
-      clientSessionId: this.deps.clientSessionId,
-      label: "Mobile",
-      platform: "mobile",
-    });
+    await this.panelRuntime.registerClient(this.registration);
     const tree = await this.panelManager.syncSnapshot();
     await this.syncRuntimeLeases();
     if (tree.rootPanels.length > 0) return;
@@ -304,10 +313,10 @@ class MobilePanels {
     return result;
   }
   async setCollapsed(panelId: string, collapsed: boolean): Promise<void> {
-    await this.requireManager().setCollapsed(asPanelSlotId(panelId), collapsed);
+    await this.callPanelTree("setCollapsed", [panelId, collapsed]);
   }
   async expandIds(panelIds: string[]): Promise<void> {
-    await this.requireManager().expandIds(panelIds.map(asPanelSlotId));
+    await this.callPanelTree("expandIds", [panelIds]);
   }
   async notifyFocused(panelId: string): Promise<void> {
     await this.requireManager().notifyFocused(asPanelSlotId(panelId));
@@ -323,10 +332,7 @@ class MobilePanels {
     this.deps.onTreeUpdated?.(this.getTree());
   }
   async updateBrowserUrl(panelId: string, url: string): Promise<void> {
-    await this.requireManager().replaceCurrentSnapshot(asPanelSlotId(panelId), {
-      source: `browser:${url}`,
-    });
-    this.deps.onTreeUpdated?.(this.getTree());
+    await this.callPanelTree("navigate", [panelId, url, undefined]);
   }
   async navigatePanel(
     panelId: string,
@@ -397,29 +403,32 @@ class MobilePanels {
     runtimeEntityId: string,
     opts: { connectionId: string }
   ): Promise<{ acquired: boolean; lease?: { holderLabel: string } }> {
-    return this.panelRuntime.acquire(runtimeEntityId, {
-      slotId: panelId,
-      clientSessionId: this.deps.clientSessionId,
-      connectionId: opts.connectionId,
-    });
+    return this.panelRuntime.acquire(
+      runtimeEntityId,
+      createPanelRuntimeLeaseRequest({
+        slotId: panelId,
+        clientSessionId: this.deps.clientSessionId,
+        connectionId: opts.connectionId,
+      })
+    );
   }
   async takeOverLease(
     panelId: string,
     runtimeEntityId: string,
     opts: { connectionId: string }
   ): Promise<{ acquired: boolean; lease?: { holderLabel: string } }> {
-    return this.panelRuntime.takeOver(runtimeEntityId, {
-      slotId: panelId,
-      clientSessionId: this.deps.clientSessionId,
-      connectionId: opts.connectionId,
-    });
+    return this.panelRuntime.takeOver(
+      runtimeEntityId,
+      createPanelRuntimeLeaseRequest({
+        slotId: panelId,
+        clientSessionId: this.deps.clientSessionId,
+        connectionId: opts.connectionId,
+      })
+    );
   }
-  applyRuntimeLeaseEvent(event: PanelRuntimeLeaseChangedEvent): void {
+  handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
     this.registry.applyRuntimeLeaseChanged(event);
     this.deps.onTreeUpdated?.(this.getTree());
-  }
-  setRuntimeHost(host: MobilePanelRuntimeHost | null): void {
-    this.bridgeAdapterInstance?.setRuntimeHost(host);
   }
   async syncRuntimeLeases(): Promise<void> {
     const snapshot = await this.panelRuntime.getSnapshot();
@@ -485,7 +494,7 @@ export class ShellClient {
     this.credentialService = createCredentialsClient(this.transport);
     this.push = createPushClient(this.transport);
     this.transport.on("event:panel:runtimeLeaseChanged", (event) => {
-      this.panels.applyRuntimeLeaseEvent(event.payload as PanelRuntimeLeaseChangedEvent);
+      this.panels.handleRuntimeLeaseChanged(event.payload as PanelRuntimeLeaseChangedEvent);
     });
     // Reflect tree mutations made by ANY client (desktop/terminal/other mobile):
     // the server broadcasts panel-tree-updated after every authoritative change

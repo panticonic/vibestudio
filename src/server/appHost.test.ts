@@ -1011,7 +1011,7 @@ describe("AppHost", () => {
       effectiveVersion: "ev-field",
     });
     expect(host.registerReactNativeAppPrincipal("device-1")).toBe("app:apps/field-mobile:device-1");
-    expect(host.hasAppCapability("app:apps/field-mobile:device-1", "panel-hosting")).toBe(true);
+    expect(host.hasAppCapability("app:apps/field-mobile:device-1", "panel-hosting")).toBe(false);
     expect(host.hasAppCapability("app:apps/mobile:device-1", "panel-hosting")).toBe(false);
   });
 
@@ -1255,7 +1255,7 @@ describe("AppHost", () => {
     const { host, graphNode } = makeHarness();
     installApp(host, graphNode);
     host.registry.patch(graphNode.name, {
-      capabilities: ["connection-management"],
+      capabilities: ["connection-management", "panel-hosting"],
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
     });
     const authorizer = host.capabilityAuthorizer();
@@ -1274,10 +1274,66 @@ describe("AppHost", () => {
     ).toEqual({ allowed: true });
     expect(
       authorizer.check(createVerifiedCaller("@workspace-apps/shell", "app"), "panel-hosting")
+    ).toEqual({ allowed: true });
+
+    host.registry.patch(graphNode.name, {
+      source: { kind: "workspace-repo", repo: "apps/field-mobile", ref: "main" },
+    });
+    expect(
+      authorizer.check(
+        createVerifiedCaller("app:apps/field-mobile:device-1", "app"),
+        "panel-hosting"
+      )
     ).toMatchObject({ allowed: false });
-    expect(() =>
-      authorizer.require(createVerifiedCaller("@workspace-apps/shell", "app"), "panel-hosting")
-    ).toThrow(/does not have capability 'panel-hosting'/);
+    expect(
+      authorizer.check(
+        createVerifiedCaller("app:apps/field-mobile:device-1", "app"),
+        "connection-management"
+      )
+    ).toMatchObject({ allowed: false });
+  });
+
+  it("only authorizes connection-management for explicit app sources", () => {
+    const { host, graphNode } = makeHarness();
+    installApp(host, graphNode);
+    host.registry.patch(graphNode.name, {
+      capabilities: ["connection-management"],
+      source: { kind: "workspace-repo", repo: "apps/other", ref: "main" },
+    });
+    const authorizer = host.capabilityAuthorizer();
+
+    expect(
+      authorizer.check(
+        createVerifiedCaller("app:apps/other:device-1", "app"),
+        "connection-management"
+      )
+    ).toMatchObject({ allowed: false });
+
+    host.registry.upsert({
+      unitKind: "app",
+      name: "@workspace-apps/remote-cli",
+      version: "1.0.0",
+      target: "terminal",
+      capabilities: ["connection-management"],
+      source: { kind: "workspace-repo", repo: "apps/remote-cli", ref: "main" },
+      installedAt: Date.now(),
+      activeEv: "ev-remote-cli",
+      activeSourceHash: "abc123",
+      activeBundleKey: "remote-cli-key",
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+      status: "available",
+      lastError: null,
+      previousVersions: [],
+    });
+
+    expect(
+      authorizer.check(
+        createVerifiedCaller("@workspace-apps/remote-cli", "app"),
+        "connection-management"
+      )
+    ).toEqual({ allowed: true });
   });
 
   it("activates terminal apps as launchable terminal process builds", async () => {

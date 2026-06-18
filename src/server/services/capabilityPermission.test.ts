@@ -282,11 +282,10 @@ describe("capabilityPermission", () => {
       expect(normalizeCallerKind("do")).toBe("do");
     });
 
-    it("rejects shell, server, extension, and harness caller kinds", () => {
+    it("rejects shell, server, and extension caller kinds", () => {
       expect(normalizeCallerKind("shell")).toBeNull();
       expect(normalizeCallerKind("server")).toBeNull();
       expect(normalizeCallerKind("extension")).toBeNull();
-      expect(normalizeCallerKind("harness")).toBeNull();
     });
   });
 

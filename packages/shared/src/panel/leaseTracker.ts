@@ -1,53 +1,85 @@
 /**
- * Pure lease state machine: turns runtime-lease snapshots and change events
- * into load/unload intents for this host. Version-guarded so stale buffered
- * events (delivered after a fresher snapshot reconcile) are ignored.
- *
- * A lease connectionId change for the same slot means the server re-issued
- * the lease (e.g. expiry + default re-assignment): the page must be reloaded
- * with the new connectionId, expressed as unload + load.
+ * Host-neutral runtime lease state machine. It converts server lease snapshots
+ * and lease-change events into load/unload intents for one panel host.
  */
 import type {
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
   RuntimeLeaseVersion,
-} from "@natstack/shared/panel/panelLease";
+} from "./panelLease.js";
+import type { PanelEntityId, PanelSlotId } from "./ids.js";
 
 export type LeaseIntent =
-  | { kind: "load"; slotId: string; runtimeEntityId: string; connectionId: string }
-  | { kind: "unload"; slotId: string; reason: "lease-transfer" | "released" | "stale" };
+  | {
+      kind: "load";
+      slotId: PanelSlotId;
+      runtimeEntityId: PanelEntityId;
+      connectionId: string;
+    }
+  | {
+      kind: "unload";
+      slotId: PanelSlotId;
+      reason: "lease-transfer" | "released" | "stale";
+    };
+
+export type RuntimeLeaseChangeDisposition =
+  | { kind: "assigned"; lease: PanelRuntimeLease }
+  | {
+      kind: "unassigned";
+      slotId: PanelSlotId;
+      reason: "lease-transfer" | "released";
+      previous: PanelRuntimeLease;
+    }
+  | { kind: "unrelated" };
 
 interface HeldLease {
-  runtimeEntityId: string;
+  runtimeEntityId: PanelEntityId;
   connectionId: string;
 }
 
 function versionNewer(a: RuntimeLeaseVersion, b: RuntimeLeaseVersion | null): boolean {
   if (!b) return true;
-  if (a.epoch !== b.epoch) return true; // new epoch: always treat as fresh
+  if (a.epoch !== b.epoch) return true;
   return a.counter > b.counter;
 }
 
+export function classifyRuntimeLeaseChange(
+  clientSessionId: string,
+  event: PanelRuntimeLeaseChangedEvent
+): RuntimeLeaseChangeDisposition {
+  if (event.next?.clientSessionId === clientSessionId) {
+    return { kind: "assigned", lease: event.next };
+  }
+  if (event.previous?.clientSessionId === clientSessionId) {
+    return {
+      kind: "unassigned",
+      slotId: event.slotId,
+      reason: event.next ? "lease-transfer" : "released",
+      previous: event.previous,
+    };
+  }
+  return { kind: "unrelated" };
+}
+
 export class LeaseTracker {
-  private readonly held = new Map<string, HeldLease>();
+  private readonly held = new Map<PanelSlotId, HeldLease>();
   private version: RuntimeLeaseVersion | null = null;
 
   constructor(private readonly clientSessionId: string) {}
 
-  heldSlots(): string[] {
+  heldSlots(): PanelSlotId[] {
     return [...this.held.keys()];
   }
 
-  heldLease(slotId: string): HeldLease | undefined {
+  heldLease(slotId: PanelSlotId): HeldLease | undefined {
     return this.held.get(slotId);
   }
 
-  /** Full-state reconcile against a snapshot. Returns intents to converge. */
   reconcile(snapshot: RuntimeLeaseSnapshot): LeaseIntent[] {
     this.version = snapshot.version;
     const intents: LeaseIntent[] = [];
-    const mine = new Map<string, PanelRuntimeLease>();
+    const mine = new Map<PanelSlotId, PanelRuntimeLease>();
     for (const lease of snapshot.leases) {
       if (lease.clientSessionId === this.clientSessionId) mine.set(lease.slotId, lease);
     }
@@ -87,63 +119,55 @@ export class LeaseTracker {
     return intents;
   }
 
-  /** Apply a single lease-changed event. */
   apply(event: PanelRuntimeLeaseChangedEvent): LeaseIntent[] {
     if (!versionNewer(event.version, this.version)) return [];
     this.version = event.version;
-    const slotId = event.slotId as string;
+    const disposition = classifyRuntimeLeaseChange(this.clientSessionId, event);
+    const slotId = event.slotId;
     const current = this.held.get(slotId);
-    const next = event.next;
 
-    if (next && next.clientSessionId === this.clientSessionId) {
+    if (disposition.kind === "assigned") {
+      const { lease } = disposition;
       if (!current) {
         this.held.set(slotId, {
-          runtimeEntityId: next.runtimeEntityId,
-          connectionId: next.connectionId,
+          runtimeEntityId: lease.runtimeEntityId,
+          connectionId: lease.connectionId,
         });
         return [
           {
             kind: "load",
             slotId,
-            runtimeEntityId: next.runtimeEntityId,
-            connectionId: next.connectionId,
+            runtimeEntityId: lease.runtimeEntityId,
+            connectionId: lease.connectionId,
           },
         ];
       }
-      if (current.connectionId !== next.connectionId) {
+      if (current.connectionId !== lease.connectionId) {
         this.held.set(slotId, {
-          runtimeEntityId: next.runtimeEntityId,
-          connectionId: next.connectionId,
+          runtimeEntityId: lease.runtimeEntityId,
+          connectionId: lease.connectionId,
         });
         return [
           { kind: "unload", slotId, reason: "stale" },
           {
             kind: "load",
             slotId,
-            runtimeEntityId: next.runtimeEntityId,
-            connectionId: next.connectionId,
+            runtimeEntityId: lease.runtimeEntityId,
+            connectionId: lease.connectionId,
           },
         ];
       }
       return [];
     }
 
-    // Lease gone or moved to another client.
-    if (current) {
+    if (current && disposition.kind === "unassigned") {
       this.held.delete(slotId);
-      return [
-        {
-          kind: "unload",
-          slotId,
-          reason: next ? "lease-transfer" : "released",
-        },
-      ];
+      return [{ kind: "unload", slotId, reason: disposition.reason }];
     }
     return [];
   }
 
-  /** Forget a slot locally (e.g. after we released the lease ourselves). */
-  drop(slotId: string): void {
+  drop(slotId: PanelSlotId): void {
     this.held.delete(slotId);
   }
 }

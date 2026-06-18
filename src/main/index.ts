@@ -119,6 +119,7 @@ import { createEventsServiceDefinition } from "@natstack/shared/eventsService";
 import { setupTestApi } from "./testApi.js";
 import { AdBlockManager } from "./adblock/index.js";
 import { startMemoryMonitor, setMemoryMonitorViewManager } from "./memoryMonitor.js";
+import { callerHasPlatformCapability, viewHasAppCapability } from "./services/appCapabilities.js";
 // ServerProcessManager and createServerClient are now used by serverSession.ts
 import { assertPresent } from "../lintHelpers";
 
@@ -2040,7 +2041,12 @@ app.on("ready", async () => {
             loadOnLeaseAssignment: true,
             restorePolicy: "none",
           }
-        : undefined,
+        : {
+            label: "Desktop",
+            platform: "desktop",
+            supportsCdp: true,
+            loadOnLeaseAssignment: true,
+          },
     });
 
     await panelOrchestrator.registerRuntimeClient();
@@ -2270,10 +2276,12 @@ app.on("ready", async () => {
     {
       const baseEventsService = createEventsServiceDefinition(eventService);
       const shouldForwardServerEvents = (caller: ServiceContext["caller"]): boolean => {
-        if (caller.runtime.kind === "shell") return true;
+        if (callerHasPlatformCapability(caller.runtime.id, caller.runtime.kind, "panel-hosting")) {
+          return true;
+        }
         if (caller.runtime.kind !== "app") return false;
-        const viewInfo = viewManager?.getViewInfo(caller.runtime.id);
-        return viewInfo?.type === "app" && viewInfo.capabilities.includes("panel-hosting");
+        const viewInfo = viewManager?.getViewInfo(caller.runtime.id) ?? null;
+        return viewHasAppCapability(caller.runtime.id, viewInfo, "panel-hosting");
       };
       electronContainer.registerRpc({
         ...baseEventsService,
@@ -2372,8 +2380,8 @@ app.on("ready", async () => {
     ): { callerId: string; callerKind: "shell" | "panel" | "app" } => {
       const caller = resolveCaller(event);
       if (caller.callerKind !== "app") return caller;
-      const viewInfo = viewManager?.getViewInfo(caller.callerId);
-      if (viewInfo?.type === "app" && viewInfo.capabilities.includes(capability)) {
+      const viewInfo = viewManager?.getViewInfo(caller.callerId) ?? null;
+      if (viewHasAppCapability(caller.callerId, viewInfo, capability)) {
         return caller;
       }
       console.warn(
@@ -2388,87 +2396,14 @@ app.on("ready", async () => {
       return panelOrchestrator?.getBootstrapConfig(callerId);
     });
 
-    // Panel lifecycle
-    ipcMain.handle("natstack:panel.close", async (event, panelId: string) => {
-      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.close");
-      return assertPresent(panelOrchestrator).closePanel(panelId);
-    });
     ipcMain.handle("natstack:focusPanel", async (event, panelId: string) => {
       requireAppCapabilityForIpc(event, "panel-hosting", "natstack:focusPanel");
       assertPresent(panelOrchestrator).focusPanel(panelId);
-    });
-    ipcMain.handle(
-      "natstack:panel.create",
-      async (
-        event,
-        source: string,
-        opts?: { name?: string; focus?: boolean; stateArgs?: Record<string, unknown> }
-      ) => {
-        const { callerId } = requireAppCapabilityForIpc(
-          event,
-          "panel-hosting",
-          "natstack:panel.create"
-        );
-        return assertPresent(panelOrchestrator).createRuntimePanel(callerId, source, opts);
-      }
-    );
-    ipcMain.handle("natstack:panel.list", async (event, parentId?: string | null) => {
-      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.list");
-      return assertPresent(panelOrchestrator).listRuntimePanels(parentId);
     });
     ipcMain.handle("natstack:bridge.getInfo", async (event) => {
       const callerId = resolveCallerId(event);
       return shellCore?.panelManager.getInfo(asPanelSlotId(callerId));
     });
-    ipcMain.handle(
-      "natstack:bridge.setStateArgs",
-      async (event, updates: Record<string, unknown>) => {
-        const callerId = resolveCallerId(event);
-        return assertPresent(panelOrchestrator).handleSetStateArgs(callerId, updates);
-      }
-    );
-    ipcMain.handle("natstack:panel.getStateArgs", async (event, panelId: string) => {
-      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.getStateArgs");
-      return assertPresent(panelOrchestrator).getStateArgs(panelId);
-    });
-    ipcMain.handle(
-      "natstack:panel.setStateArgs",
-      async (event, panelId: string, updates: Record<string, unknown>) => {
-        requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.setStateArgs");
-        return assertPresent(panelOrchestrator).handleSetStateArgs(panelId, updates);
-      }
-    );
-    ipcMain.handle("natstack:panel.reload", async (event, panelId: string) => {
-      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.reload");
-      return assertPresent(panelOrchestrator).reloadPanel(panelId);
-    });
-    ipcMain.handle("natstack:panel.snapshot", async (event, panelId: string) => {
-      requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.snapshot");
-      return assertPresent(panelOrchestrator).snapshot(panelId);
-    });
-    ipcMain.handle(
-      "natstack:panel.callAgent",
-      async (
-        event,
-        panelId: string,
-        method: string,
-        args?: unknown[],
-        options?: { timeoutMs?: number }
-      ) => {
-        requireAppCapabilityForIpc(event, "panel-hosting", "natstack:panel.callAgent");
-        return assertPresent(panelOrchestrator).callAgent(panelId, method, args ?? [], options);
-      }
-    );
-    ipcMain.on(
-      "natstack:panel.callAgent.response",
-      (
-        _event,
-        requestId: number,
-        response: { ok: boolean; value?: unknown; error?: { code?: string; message?: string } }
-      ) => {
-        panelOrchestrator?.resolveAgentCallResponse(requestId, _event.sender.id, response);
-      }
-    );
     ipcMain.handle("natstack:getBootstrapConfig", async (event) => {
       const callerId = tryResolveCallerId(event);
       if (!callerId) return null;

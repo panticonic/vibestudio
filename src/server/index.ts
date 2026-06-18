@@ -1024,6 +1024,8 @@ async function main() {
       egressProxy,
       approvalQueue,
       grantStore: capabilityGrantStore,
+      hasAppCapability: (callerId, capability) =>
+        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     })
   );
   {
@@ -1035,6 +1037,8 @@ async function main() {
       grantStore: new FileMetaApprovalGrantStore({ statePath }),
       grantTtlMs: 4 * 60 * 60 * 1000,
       capabilityGrantStore,
+      hasAppCapability: (callerId, capability) =>
+        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
       getProviders: () => [...trustedUnitHosts(), recurringMetaChangeProvider],
     });
     let buildSystemForVcs: import("./buildV2/index.js").BuildSystemV2 | null = null;
@@ -1052,6 +1056,8 @@ async function main() {
           entityCache,
           getBuildSystem: () => buildSystemForVcs,
           mainAdvanceGate,
+          hasAppCapability: (callerId, capability) =>
+            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
         });
       },
     });
@@ -1323,6 +1329,8 @@ async function main() {
       approvalQueue,
       sessionGrantStore: credentialSessionGrantStore,
       credentialLifecycle,
+      hasAppCapability: (callerId, capability) =>
+        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
       sessionCredentialCapture: {
         captureCookies: async (params) => {
           const response = await captureSessionCredential<{
@@ -1540,6 +1548,8 @@ async function main() {
           canCreateCrossContextEntity: (caller, spec) =>
             spec.kind === "panel" &&
             appHostForGateway?.hasAppCapability(caller.runtime.id, "panel-hosting") === true,
+          hasAppCapability: (callerId, capability) =>
+            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           setEntityTitle: (entityId, title, options) =>
             entityTitleService.setTitle(entityId, title, options),
         });
@@ -1578,6 +1588,8 @@ async function main() {
             call: (targetId, method, ...args) =>
               rpcServer.server.callTarget(targetId, method, ...args),
           },
+          hasAppCapability: (callerId, capability) =>
+            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           dispatchToTarget: async (target, event) => {
             await rpcServer.server.callTarget(
               `do:${target.source}:${target.className}:${target.objectKey}`,
@@ -2296,8 +2308,8 @@ async function main() {
     isIpcMode: !!ipcChannel,
     tokenManager,
     grantStore: capabilityGrantStore,
-    hasAppCapability: (callerId: string, capability: string) =>
-      appHostForGateway?.hasAppCapability(callerId, capability as AppCapability) ?? false,
+    hasAppCapability: (callerId: string, capability: AppCapability) =>
+      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     panelRuntimeCoordinator,
     ensureDefaultHeadlessHost: async () => {
       const manager = getHeadlessHostManager();
@@ -2887,6 +2899,8 @@ async function main() {
         workerdInspectorDefinition = createWorkerdInspectorService({
           approvalQueue,
           grantStore: capabilityGrantStore,
+          hasAppCapability: (callerId, capability) =>
+            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
           listTargets: () => bridge.listTargets(),
           getEndpoint: (targetPath, principalId) => bridge.getEndpoint(targetPath, principalId),
         });
@@ -3204,11 +3218,9 @@ async function main() {
   const workerdMgr = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
 
   if (ipcChannel) {
-    // The in-process Electron main retains kind:"shell" for its synchronous
-    // service dispatch; for the WS connection it uses kind:"shell-remote",
-    // which the WS-handshake invariant in rpcServer accepts while rejecting
-    // bare kind:"shell".
-    const shellToken = tokenManager.ensureToken("electron-main", "shell-remote");
+    // Electron main is a host client over WS; the reserved caller id "shell"
+    // remains in-process only.
+    const shellToken = tokenManager.ensureToken("electron-main", "shell");
     ipcChannel.postMessage({
       type: "ready",
       workerdPort: workerdMgr?.getPort() ?? 0,

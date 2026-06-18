@@ -108,13 +108,11 @@ export function createAuthService(deps: {
   const definition: ServiceDefinition = {
     name: "auth",
     description: "Gateway authentication bootstrap routes",
-    policy: { allowed: ["server", "shell", "shell-remote"] },
+    policy: { allowed: ["server", "shell"] },
     methods: authMethods,
     handler: async (ctx, method, args) => {
       if (method === "grantConnection") {
-        capabilityAuthorizer.require(ctx.caller, "panel-hosting", {
-          hostKinds: ["server", "shell", "shell-remote"],
-        });
+        capabilityAuthorizer.require(ctx.caller, "panel-hosting");
         if (!deps.connectionGrants) throw new Error("Connection grants are not configured");
         return deps.connectionGrants.grant(args[0] as string, ctx.caller.runtime.id);
       }
@@ -122,9 +120,7 @@ export function createAuthService(deps: {
         return connectionInfoResponse(deps);
       }
       if (method === "createPairingInvite") {
-        capabilityAuthorizer.require(ctx.caller, "connection-management", {
-          hostKinds: ["server", "shell", "shell-remote"],
-        });
+        capabilityAuthorizer.require(ctx.caller, "connection-management");
         const body = CreatePairingInviteArgsSchema.parse(args[0] ?? {});
         const response = createPairingInviteResponse(deps, body.ttlMs);
         await auditPairingEvent(deps, {
@@ -239,10 +235,7 @@ export function createAuthService(deps: {
         try {
           const body = RefreshShellBodySchema.parse(await readJson(req));
           const device = deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken);
-          const shellToken = deps.tokenManager.ensureToken(
-            shellCallerId(body.deviceId),
-            "shell-remote"
-          );
+          const shellToken = deps.tokenManager.ensureToken(shellCallerId(body.deviceId), "shell");
           sendJson(res, 200, {
             shellToken,
             callerId: shellCallerId(body.deviceId),

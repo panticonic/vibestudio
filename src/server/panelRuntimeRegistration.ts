@@ -49,6 +49,7 @@ import type {
   RuntimeEntityHandle,
 } from "@natstack/shared/runtime/entitySpec";
 import type { PanelNavigationState } from "@natstack/shared/types";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import type {
   IndexablePanel,
   PanelSearchIndex,
@@ -443,6 +444,14 @@ export async function createServerPanelTreeBridge(
           registry.getRootPanels().map((panel) => withRuntimeEntity(panelToListItem(panel, null)))
         );
       }
+      case "getTreeSnapshot": {
+        await sync();
+        return registry.getPanelTreeSnapshot();
+      }
+      case "getFocusedPanelId": {
+        await sync();
+        return registry.getFocusedPanelId();
+      }
       case "metadata": {
         await sync();
         const panelId = String(args[0]);
@@ -530,8 +539,11 @@ export async function createServerPanelTreeBridge(
         return ensureDefaultLoaded(panelId);
       }
       case "getRuntimeLease": {
-        const host = deps.panelRuntimeCoordinator?.resolveHostForSlot(String(args[0])) ?? null;
-        return host ? { leased: true, ...host } : { leased: false };
+        await sync();
+        const runtimeEntityId = await panelManager.getCurrentEntityId(
+          asPanelSlotId(String(args[0]))
+        );
+        return deps.panelRuntimeCoordinator?.getLease(runtimeEntityId) ?? null;
       }
       case "getStateArgs": {
         await sync();
@@ -624,6 +636,16 @@ export async function createServerPanelTreeBridge(
           normalizePanelNavigationState((args[1] ?? {}) as Record<string, unknown>)
         );
         emitTreeSnapshot();
+        return;
+      case "getCollapsedIds":
+        return panelManager.getCollapsedIds();
+      case "setCollapsed":
+        await panelManager.setCollapsed(asPanelSlotId(String(args[0])), Boolean(args[1]));
+        return;
+      case "expandIds":
+        await panelManager.expandIds(
+          Array.isArray(args[0]) ? (args[0] as unknown[]).map((id) => String(id)) : []
+        );
         return;
       case "reload": {
         const panelId = String(args[0]);
@@ -760,7 +782,7 @@ export interface CommonDeps {
   eventService?: import("@natstack/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
-  hasAppCapability?: (callerId: string, capability: string) => boolean;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   panelRuntimeCoordinator?: import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator;
   /**
    * Renderer of last resort: spawn (or reuse) the standalone headless host
@@ -960,6 +982,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         getHostTargetLaunchSession: deps.getHostTargetLaunchSession,
         resolveHostTargetLaunchSessionApproval: deps.resolveHostTargetLaunchSessionApproval,
         cancelHostTargetLaunchSession: deps.cancelHostTargetLaunchSession,
+        hasAppCapability: deps.hasAppCapability,
         approvalQueue: deps.approvalQueue,
       })
     );
@@ -1004,7 +1027,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           authenticateHostProvider: (token, hostConnectionId) => {
             if (deps.tokenManager?.validateAdminToken(token)) return true;
             const entry = deps.tokenManager?.validateToken(token);
-            if (!entry || entry.callerKind !== "shell-remote") return false;
+            if (!entry || entry.callerKind !== "shell") return false;
             return Boolean(
               hostConnectionId &&
               deps.panelRuntimeCoordinator?.hasClientHostConnection(

@@ -32,7 +32,8 @@ function createTestSetup(opts?: { entityCache?: EntityCache }) {
   tokenManager.setAdminToken(adminToken);
   const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
   const shellToken = tokenManager.ensureToken("shell:test", "shell");
-  const shellRemoteToken = tokenManager.ensureToken("shell:remote-test", "shell-remote");
+  const literalShellToken = tokenManager.ensureToken("shell", "shell");
+  const remoteShellToken = tokenManager.ensureToken("shell:remote-test", "shell");
   const entityCache = opts?.entityCache ?? new EntityCache();
 
   const dispatchResults = new Map<string, unknown>();
@@ -55,8 +56,7 @@ function createTestSetup(opts?: { entityCache?: EntityCache }) {
     getPolicy: vi.fn((service: string) => {
       if (service === "credentials")
         return { allowed: ["shell", "panel", "worker"] as CallerKind[] };
-      if (service === "harness")
-        return { allowed: ["harness", "server", "worker"] as CallerKind[] };
+      if (service === "automation") return { allowed: ["server", "worker"] as CallerKind[] };
       if (service === "build")
         return { allowed: ["panel", "shell", "server", "worker"] as CallerKind[] };
       return undefined;
@@ -77,7 +77,8 @@ function createTestSetup(opts?: { entityCache?: EntityCache }) {
     adminToken,
     workerToken,
     shellToken,
-    shellRemoteToken,
+    literalShellToken,
+    remoteShellToken,
     entityCache,
     dispatcher,
     dispatched,
@@ -168,8 +169,8 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(body["result"]).toBeDefined();
     });
 
-    it("normalizes shell-remote tokens to shell for HTTP RPC service policy", async () => {
-      const { status, body } = await postRpc(port, setup.shellRemoteToken, {
+    it("uses shell tokens for HTTP RPC service policy", async () => {
+      const { status, body } = await postRpc(port, setup.remoteShellToken, {
         method: "build.status",
         args: [],
       });
@@ -180,6 +181,17 @@ describe("RpcServer HTTP POST /rpc", () => {
         id: "shell:remote-test",
         kind: "shell",
       });
+    });
+
+    it("rejects the in-process shell principal over HTTP RPC", async () => {
+      const { status, body } = await postRpc(port, setup.literalShellToken, {
+        method: "build.status",
+        args: [],
+      });
+
+      expect(status).toBe(403);
+      expect(body["error"]).toBe('callerId:"shell" cannot authenticate over HTTP RPC');
+      expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
     });
   });
 
@@ -458,9 +470,9 @@ describe("RpcServer HTTP POST /rpc", () => {
   // ── Policy enforcement ──────────────────────────────────────────────────────
 
   describe("policy enforcement", () => {
-    it("rejects shell calling harness service", async () => {
+    it("rejects shell calling automation service", async () => {
       const { body } = await postRpc(port, setup.shellToken, {
-        method: "harness.spawn",
+        method: "automation.spawn",
         args: [{}],
       });
 
@@ -564,6 +576,25 @@ describe("RpcServer HTTP POST /rpc", () => {
   });
 
   describe("/rpc/stream service-policy enforcement", () => {
+    it("rejects the in-process shell principal over HTTP stream RPC", async () => {
+      const res = await fetch(`http://127.0.0.1:${port}/rpc/stream`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${setup.literalShellToken}`,
+        },
+        body: JSON.stringify({
+          targetId: "main",
+          method: "credentials.proxyFetch",
+          args: [{ url: "https://example.com/", method: "GET" }],
+        }),
+      });
+      expect(res.status).toBe(403);
+      const body = (await res.json()) as { error?: string };
+      expect(body.error).toBe('callerId:"shell" cannot authenticate over HTTP RPC');
+      expect(setup.dispatcher.dispatch).not.toHaveBeenCalled();
+    });
+
     it("denies a caller-kind not in the credentials service policy", async () => {
       // Set up an RpcServer whose dispatcher only allows `shell` on
       // `credentials`. A worker token should be rejected by

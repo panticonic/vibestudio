@@ -39,23 +39,6 @@ export const viewMethods = defineServiceMethods({
   setVisible: { args: z.tuple([z.string(), z.boolean()]), returns: z.void() },
   forwardMouseClick: { args: z.tuple([z.string(), ViewPointSchema]), returns: z.boolean() },
   setThemeCss: { args: z.tuple([z.string()]), returns: z.void() },
-  updateLayout: {
-    args: z.tuple([
-      z.object({
-        titleBarHeight: z.number().optional(),
-        sidebarVisible: z.boolean().optional(),
-        sidebarWidth: z.number().optional(),
-        saveBarHeight: z.number().optional(),
-        notificationBarHeight: z.number().optional(),
-        consentBarHeight: z.number().optional(),
-      }),
-    ]),
-    returns: z.void(),
-  },
-  updatePanelViewportBounds: {
-    args: z.tuple([ViewBoundsSchema.nullable()]),
-    returns: z.void(),
-  },
   bindNativePanelSlot: {
     args: z.tuple([
       z.object({
