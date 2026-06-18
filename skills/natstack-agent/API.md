@@ -332,7 +332,6 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`,
 
 | Method | Description |
 |--------|-------------|
-| `vcs.commit` |  |
 | `vcs.applyEdits` |  |
 | `vcs.readFile` |  |
 | `vcs.listFiles` |  |
@@ -435,6 +434,10 @@ Allowed callers: `shell`, `shell-remote`, `app`, `panel`, `worker`, `do`, `exten
 | `workspace.hostTargets.versions` |  |
 | `workspace.hostTargets.preparePinnedRef` |  |
 | `workspace.hostTargets.launch` |  |
+| `workspace.hostTargets.beginLaunch` |  |
+| `workspace.hostTargets.getLaunchSession` |  |
+| `workspace.hostTargets.resolveLaunchSessionApproval` |  |
+| `workspace.hostTargets.cancelLaunchSession` |  |
 
 ## `workspace-state`
 

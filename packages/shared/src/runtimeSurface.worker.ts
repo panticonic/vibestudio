@@ -68,7 +68,6 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "removeSharedRemote",
     ]),
     vcs: namespaceEntry([
-      "commit",
       "applyEdits",
       "readFile",
       "listFiles",
@@ -84,7 +83,7 @@ export const workerRuntimeSurface: RuntimeSurface = {
       "publishStatus",
       "publish",
       "recall",
-    ]),
+    ], "Workspace GAD VCS (edit-first): applyEdits commits and projects edits atomically; status reports a head's unpublished changes vs main; diff compares state hashes."),
     gad: namespaceEntry([
       "rawSql",
       "query",

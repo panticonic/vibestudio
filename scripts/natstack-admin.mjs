@@ -11,6 +11,7 @@ Commands:
   units list
   units restart <name>
   units logs <name> [--limit <n>]
+  units diagnostics <name> [--limit <n>]
   units rollback <name> [buildKey]
 `);
 }
@@ -130,6 +131,18 @@ export async function run(argv = process.argv.slice(2)) {
     for (const row of logs) {
       console.log(`[${row.level}] ${row.source ?? ""} ${row.message}`.trim());
     }
+    return 0;
+  }
+  if (group === "units" && action === "diagnostics") {
+    const name = rest[0];
+    if (!name) throw new Error("units diagnostics requires a unit name");
+    const limitIndex = rest.indexOf("--limit");
+    const limit = limitIndex >= 0 ? Number(rest[limitIndex + 1] ?? 200) : 200;
+    const diagnostics = await rpc(opts.url, shellToken, "workspace.units.diagnostics", [
+      name,
+      { limit },
+    ]);
+    console.log(JSON.stringify(diagnostics, null, 2));
     return 0;
   }
   if (group === "units" && action === "rollback") {

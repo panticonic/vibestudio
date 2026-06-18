@@ -7,19 +7,25 @@ describe("bootstrap transport policy", () => {
     expect(() =>
       assertBootstrapRpcMessageAllowed("main", {
         type: "request",
-        method: "workspace.hostTargets.launch",
+        method: "workspace.hostTargets.beginLaunch",
       })
     ).not.toThrow();
     expect(() =>
       assertBootstrapRpcMessageAllowed("main", {
         type: "request",
-        method: "shellApproval.resolveBootstrap",
+        method: "workspace.hostTargets.getLaunchSession",
       })
     ).not.toThrow();
     expect(() =>
       assertBootstrapRpcMessageAllowed("main", {
         type: "request",
-        method: "shellApproval.listPending",
+        method: "workspace.hostTargets.resolveLaunchSessionApproval",
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertBootstrapRpcMessageAllowed("main", {
+        type: "request",
+        method: "events.subscribe",
       })
     ).not.toThrow();
   });
@@ -40,19 +46,19 @@ describe("bootstrap transport policy", () => {
     expect(() =>
       assertBootstrapRpcMessageAllowed("main", {
         type: "request",
-        method: "shellApproval.resolve",
+        method: "workspace.hostTargets.launch",
       })
     ).toThrow(/not allowed/);
     expect(() =>
       assertBootstrapRpcMessageAllowed("main", {
         type: "request",
-        method: "shellApproval.listBootstrapPending",
+        method: "shellApproval.resolveBootstrap",
       })
     ).toThrow(/not allowed/);
     expect(() =>
       assertBootstrapRpcMessageAllowed("panel-1", {
         type: "request",
-        method: "shellApproval.listBootstrapPending",
+        method: "workspace.hostTargets.beginLaunch",
       })
     ).toThrow(/only call the host/);
     expect(() =>

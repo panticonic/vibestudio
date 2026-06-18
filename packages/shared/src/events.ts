@@ -6,6 +6,11 @@
  */
 
 import type { PendingApproval } from "./approvals.js";
+import type {
+  HostTarget,
+  HostTargetLaunchResult,
+  HostTargetLaunchSessionSnapshot,
+} from "./hostTargets.js";
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { VcsHeadAdvance } from "./serviceSchemas/vcs.js";
@@ -44,6 +49,8 @@ export type EventName =
   | "notification:action"
   | "server-connection-changed"
   | "server-health"
+  | "host-targets:changed"
+  | "host-target-launch:session-changed"
   | "shell-approval:pending-changed";
 
 /**
@@ -106,6 +113,19 @@ export interface NotificationPayload {
   history?: NotificationHistoryItem[];
   /** Panel that triggered this notification */
   sourcePanelId?: string;
+}
+
+export interface HostTargetChangedPayload {
+  target: HostTarget;
+  status: HostTargetLaunchResult["status"] | "unknown";
+  revision: number;
+  reason?: string | null;
+  details?: string[];
+  source?: string | null;
+  appId?: string | null;
+  buildKey?: string | null;
+  approvals?: number;
+  snapshot?: boolean;
 }
 
 /**
@@ -190,6 +210,8 @@ export interface EventPayloads {
     /** Epoch ms when this sample was captured. */
     sampledAt: number;
   };
+  "host-targets:changed": HostTargetChangedPayload;
+  "host-target-launch:session-changed": HostTargetLaunchSessionSnapshot;
   "shell-approval:pending-changed": { pending: PendingApproval[] };
   "workspace:revision-bumped": { workspaceId: string; revision: number };
   "presence:panel-active": { panelId: string; ownerCallerId: string; updatedAt: number };
@@ -204,7 +226,7 @@ export interface EventPayloads {
     level: "debug" | "info" | "warn" | "error";
     message: string;
     fields?: Record<string, unknown>;
-    source?: "stdout" | "stderr" | "ctx.log" | "console" | "lifecycle" | "system";
+    source?: "stdout" | "stderr" | "ctx.log" | "console" | "lifecycle" | "system" | "runner";
   };
 }
 
@@ -235,6 +257,8 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "notification:action",
   "server-connection-changed",
   "server-health",
+  "host-targets:changed",
+  "host-target-launch:session-changed",
   "shell-approval:pending-changed",
   "workspace:revision-bumped",
   "presence:panel-active",

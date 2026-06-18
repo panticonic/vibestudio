@@ -374,6 +374,13 @@ export const workspace = {
     preparePinnedRef: (target: HostTarget, sourceOrName: string, ref: string) =>
       workspaceClient.hostTargets.preparePinnedRef(target, sourceOrName, ref),
     launch: (target: HostTarget) => workspaceClient.hostTargets.launch(target),
+    beginLaunch: (target: HostTarget) => workspaceClient.hostTargets.beginLaunch(target),
+    getLaunchSession: (sessionId: string) =>
+      workspaceClient.hostTargets.getLaunchSession(sessionId),
+    resolveLaunchSessionApproval: (sessionId: string, decision: "once" | "deny") =>
+      workspaceClient.hostTargets.resolveLaunchSessionApproval(sessionId, decision),
+    cancelLaunchSession: (sessionId: string) =>
+      workspaceClient.hostTargets.cancelLaunchSession(sessionId),
   },
 };
 // =============================================================================
@@ -507,6 +514,16 @@ export const workspaceUnits = {
     name: string,
     opts?: { since?: number; level?: "debug" | "info" | "warn" | "error"; limit?: number }
   ) => workspaceClient.units.logs(name, opts),
+  diagnostics: (
+    name: string,
+    opts?: {
+      since?: number;
+      sinceSeq?: number;
+      level?: "debug" | "info" | "warn" | "error";
+      limit?: number;
+      errorLimit?: number;
+    }
+  ) => workspaceClient.units.diagnostics(name, opts),
 };
 // =============================================================================
 // Shell Approval Service (consent approval queue)

@@ -5,15 +5,27 @@ import {
   type RpcClient,
   type RpcEnvelope,
 } from "@natstack/rpc";
-import type {
-  PendingApproval,
-  PendingUnitBatchApproval,
-  UnitBatchEntry,
-} from "@natstack/shared/approvals";
-import { RPC_METHODS } from "@natstack/shared/approvalContract";
-import { filterBootstrapApprovalsForTarget } from "@natstack/shared/bootstrapApprovals";
+import type { PendingUnitBatchApproval } from "@natstack/shared/approvals";
+import {
+  approvalIds,
+  formatCapabilities,
+  launchCopy as getLaunchCopy,
+  plural,
+  samePendingApprovals,
+  type BootstrapDecision,
+  unitKindLabel,
+  unitReviewRows,
+  unitSourceLabel,
+  unitSummaryChips,
+} from "@natstack/shared/bootstrapLaunchGate";
+import {
+  HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT,
+  isLaunchSessionEventFor,
+  isLaunchSessionEventForTarget,
+} from "@natstack/shared/hostTargetLaunchGate";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
+import type { HostTargetLaunchSessionSnapshot } from "@natstack/shared/hostTargets";
 
 type ShellTransportBridge = {
   send: (targetId: string, message: unknown) => Promise<void>;
@@ -54,59 +66,61 @@ const workspaceClient = createTypedServiceClient(
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const hostTarget = "electron";
+const launchEventNames = [HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT] as const;
 let pending: PendingUnitBatchApproval[] = [];
 let rendering = false;
-let refreshTimer: number | null = null;
 let refreshInFlight = false;
-let launchAttempted = false;
+let refreshScheduled = false;
+let launchSession: HostTargetLaunchSessionSnapshot | null = null;
+let emptyLaunchText = "No workspace approval is pending. Starting the workspace...";
 const decidingApprovalIds = new Set<string>();
 const openReviewApprovalIds = new Set<string>();
 let decisionError: string | null = null;
-type BootstrapDecision = "once" | "deny";
 
-function stopRefreshLoop(): void {
-  if (refreshTimer === null) return;
-  clearInterval(refreshTimer);
-  refreshTimer = null;
-}
-
-function approvalSignature(approval: PendingUnitBatchApproval): string {
-  return [
-    approval.approvalId,
-    approval.trigger,
-    ...approval.units.map((unit) =>
-      [
-        unit.unitKind,
-        unit.unitName,
-        unit.target ?? "",
-        unit.source.repo,
-        unit.source.ref,
-        unit.ev ?? "",
-      ].join(":")
-    ),
-  ].join("|");
-}
-
-function pendingSignature(approvals: PendingUnitBatchApproval[]): string {
-  return approvals.map(approvalSignature).join("\n");
+function scheduleRefresh(): void {
+  if (refreshScheduled || refreshInFlight) return;
+  refreshScheduled = true;
+  window.setTimeout(() => {
+    refreshScheduled = false;
+    void refresh();
+  }, 0);
 }
 
 function setPending(next: PendingUnitBatchApproval[]): boolean {
-  if (pendingSignature(pending) === pendingSignature(next)) return false;
+  if (samePendingApprovals(pending, next)) return false;
   pending = next;
-  const pendingIds = new Set(next.map((approval) => approval.approvalId));
+  const pendingIds = approvalIds(next);
   for (const id of openReviewApprovalIds) {
     if (!pendingIds.has(id)) openReviewApprovalIds.delete(id);
   }
   return true;
 }
 
+function setLaunchSession(next: HostTargetLaunchSessionSnapshot): boolean {
+  const previousSession = launchSession;
+  launchSession = next;
+  const pendingChanged = setPending(next.approvals);
+  const text = launchSessionText(next);
+  const textChanged = text !== emptyLaunchText;
+  emptyLaunchText = text;
+  return (
+    pendingChanged ||
+    textChanged ||
+    previousSession?.sessionId !== next.sessionId ||
+    previousSession?.status !== next.status ||
+    previousSession?.currentPhase !== next.currentPhase ||
+    previousSession?.detail !== next.detail
+  );
+}
+
 async function decide(
   approval: PendingUnitBatchApproval,
   decision: BootstrapDecision
 ): Promise<void> {
+  const sessionId = launchSession?.sessionId;
+  if (!sessionId) return;
   if (decidingApprovalIds.has(approval.approvalId)) return;
-  decidingApprovalIds.add(approval.approvalId);
+  for (const item of pending) decidingApprovalIds.add(item.approvalId);
   decisionError = null;
   if (launchCopy) {
     launchCopy.textContent =
@@ -116,16 +130,16 @@ async function decide(
   }
   render();
   try {
-    await rpc.call("main", RPC_METHODS.shellApproval.resolveBootstrap, [
-      approval.approvalId,
-      decision,
-    ]);
-    setPending(pending.filter((item) => item.approvalId !== approval.approvalId));
+    const session = await workspaceClient.hostTargets.resolveLaunchSessionApproval(
+      sessionId,
+      decision
+    );
+    setLaunchSession(session);
     await refresh();
   } catch (err) {
     decisionError = `Approval failed: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
-    decidingApprovalIds.delete(approval.approvalId);
+    decidingApprovalIds.clear();
     if (pending.some((item) => item.approvalId === approval.approvalId)) {
       render();
     }
@@ -158,52 +172,7 @@ function appendDecisionButton(
   card.append(button);
 }
 
-function launchTitle(approval: PendingUnitBatchApproval): string {
-  return approval.trigger === "meta-change"
-    ? "Workspace code changed"
-    : "Apps and extensions requesting trust";
-}
-
-function launchSummary(approval: PendingUnitBatchApproval): string {
-  if (approval.trigger === "meta-change") {
-    return "The workspace configuration changed. Review the privileged workspace code before continuing.";
-  }
-  return "Approving lets NatStack run the listed apps and extensions locally.";
-}
-
-function unitKindLabel(unit: UnitBatchEntry): string {
-  if (unit.target === "electron") return "Desktop";
-  if (unit.target === "react-native") return "Mobile";
-  if (unit.target === "terminal") return "Terminal";
-  return unit.unitKind === "extension" ? "Extension" : "App";
-}
-
-function plural(count: number, singular: string, pluralLabel = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : pluralLabel}`;
-}
-
-function unitCounts(approval: PendingUnitBatchApproval): {
-  apps: number;
-  extensions: number;
-  desktop: number;
-  mobile: number;
-  terminal: number;
-} {
-  return approval.units.reduce(
-    (counts, unit) => {
-      if (unit.unitKind === "app") counts.apps += 1;
-      if (unit.unitKind === "extension") counts.extensions += 1;
-      if (unit.target === "electron") counts.desktop += 1;
-      if (unit.target === "react-native") counts.mobile += 1;
-      if (unit.target === "terminal") counts.terminal += 1;
-      return counts;
-    },
-    { apps: 0, extensions: 0, desktop: 0, mobile: 0, terminal: 0 }
-  );
-}
-
 function appendUnitSummary(card: HTMLElement, approval: PendingUnitBatchApproval): void {
-  const counts = unitCounts(approval);
   const summary = document.createElement("div");
   summary.className = "unit-summary";
   const total = document.createElement("div");
@@ -213,14 +182,7 @@ function appendUnitSummary(card: HTMLElement, approval: PendingUnitBatchApproval
 
   const chips = document.createElement("div");
   chips.className = "unit-summary-chips";
-  const chipInputs = [
-    counts.apps > 0 ? plural(counts.apps, "app") : null,
-    counts.extensions > 0 ? plural(counts.extensions, "extension") : null,
-    counts.desktop > 0 ? plural(counts.desktop, "desktop app") : null,
-    counts.mobile > 0 ? plural(counts.mobile, "mobile app") : null,
-    counts.terminal > 0 ? plural(counts.terminal, "terminal app") : null,
-  ].filter((item): item is string => item !== null);
-  for (const label of chipInputs) {
+  for (const label of unitSummaryChips(approval)) {
     const chip = document.createElement("span");
     chip.className = "unit-chip";
     chip.textContent = label;
@@ -228,11 +190,6 @@ function appendUnitSummary(card: HTMLElement, approval: PendingUnitBatchApproval
   }
   summary.append(chips);
   card.append(summary);
-}
-
-function formatCapabilities(unit: UnitBatchEntry): string {
-  if (!unit.capabilities.length) return "No declared capabilities";
-  return unit.capabilities.join(", ");
 }
 
 function appendUnitReview(card: HTMLElement, approval: PendingUnitBatchApproval): void {
@@ -254,15 +211,17 @@ function appendUnitReview(card: HTMLElement, approval: PendingUnitBatchApproval)
 
   const list = document.createElement("ul");
   list.className = "unit-list";
-  for (const unit of approval.units) {
+  const rows = unitReviewRows(approval);
+  approval.units.forEach((unit, index) => {
+    const review = rows[index]!;
     const row = document.createElement("li");
     const text = document.createElement("div");
     const name = document.createElement("div");
     name.className = "unit-name";
-    name.textContent = unit.displayName || unit.unitName;
+    name.textContent = review.name;
     const meta = document.createElement("div");
     meta.className = "unit-meta";
-    meta.textContent = `${unit.source.repo}@${unit.source.ref}${unit.ev ? ` - ${unit.ev.slice(0, 12)}` : ""}`;
+    meta.textContent = unitSourceLabel(unit);
     const caps = document.createElement("div");
     caps.className = "unit-capabilities";
     caps.textContent = formatCapabilities(unit);
@@ -272,7 +231,7 @@ function appendUnitReview(card: HTMLElement, approval: PendingUnitBatchApproval)
     text.append(name, meta, caps);
     row.append(text, kind);
     list.append(row);
-  }
+  });
   details.append(list);
   card.append(details);
 }
@@ -291,6 +250,36 @@ function appendApprovalActions(card: HTMLElement, approval: PendingUnitBatchAppr
   }
 }
 
+function appendLaunchTimeline(parent: HTMLElement, session: HostTargetLaunchSessionSnapshot): void {
+  const list = document.createElement("ol");
+  list.className = "launch-timeline";
+  for (const phase of session.timeline) {
+    const item = document.createElement("li");
+    item.className = `launch-phase ${phase.state}`;
+    const dot = document.createElement("span");
+    dot.className = "launch-phase-dot";
+    dot.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.className = "launch-phase-text";
+    text.textContent = phase.detail ? `${phase.label}: ${phase.detail}` : phase.label;
+    item.append(dot, text);
+    list.append(item);
+  }
+  parent.append(list);
+}
+
+function launchSessionText(session: HostTargetLaunchSessionSnapshot): string {
+  if (session.status === "ready") return "The workspace is approved and launching.";
+  if (session.status === "denied") return session.message;
+  if (session.status === "unavailable") {
+    return [session.message, session.detail].filter(Boolean).join(" ");
+  }
+  if (session.status === "approval-required") {
+    return decisionError ?? "Review the workspace code that wants to run before NatStack starts.";
+  }
+  return [session.message, session.detail].filter(Boolean).join(" ");
+}
+
 function render(): void {
   if (rendering) return;
   rendering = true;
@@ -298,11 +287,13 @@ function render(): void {
     approvalsContainer.replaceChildren();
     if (pending.length === 0) {
       approvalsContainer.className = "launch-card empty";
-      approvalsContainer.textContent =
-        "No workspace approval is pending. Starting the workspace...";
+      const message = document.createElement("div");
+      message.className = "empty-message";
+      message.textContent = emptyLaunchText;
+      approvalsContainer.append(message);
+      if (launchSession) appendLaunchTimeline(approvalsContainer, launchSession);
       if (launchCopy) {
-        launchCopy.textContent =
-          "The workspace is starting. Additional approvals may appear after launch.";
+        launchCopy.textContent = emptyLaunchText;
       }
       return;
     }
@@ -312,16 +303,17 @@ function render(): void {
         decisionError ?? "Review the workspace code that wants to run before NatStack starts.";
     }
     for (const approval of pending) {
+      const copy = getLaunchCopy(approval);
       const card = document.createElement("article");
       card.className = "approval";
 
       const title = document.createElement("div");
       title.className = "title";
-      title.textContent = launchTitle(approval);
+      title.textContent = copy.title;
 
       const meta = document.createElement("div");
       meta.className = "meta";
-      meta.textContent = launchSummary(approval);
+      meta.textContent = copy.summary;
 
       card.append(title, meta);
       appendUnitSummary(card, approval);
@@ -338,35 +330,11 @@ async function refresh(): Promise<void> {
   if (refreshInFlight) return;
   refreshInFlight = true;
   try {
-    if (launchAttempted && pending.length > 0) {
-      const approvals = await rpc.call<PendingApproval[]>(
-        "main",
-        RPC_METHODS.shellApproval.listPending,
-        []
-      );
-      const bootstrapApprovals = filterBootstrapApprovalsForTarget(approvals, hostTarget);
-      if (bootstrapApprovals.length > 0) {
-        if (setPending(bootstrapApprovals)) render();
-        return;
-      }
-    }
-
-    const launch = await workspaceClient.hostTargets.launch(hostTarget);
-    launchAttempted = true;
-    if (launch.status === "approval-required") {
-      if (setPending(launch.approvals)) render();
-      return;
-    }
-    if (launch.status === "ready") {
-      setPending([]);
-      if (launchCopy) launchCopy.textContent = "The workspace is approved and launching.";
-      stopRefreshLoop();
-      render();
-      return;
-    }
-    setPending([]);
-    if (launchCopy) launchCopy.textContent = launch.reason;
-    render();
+    const session =
+      (launchSession
+        ? await workspaceClient.hostTargets.getLaunchSession(launchSession.sessionId)
+        : null) ?? (await workspaceClient.hostTargets.beginLaunch(hostTarget));
+    if (setLaunchSession(session)) render();
   } catch (err) {
     approvalsContainer.className = "launch-card empty";
     approvalsContainer.textContent = `Launch gate could not reach the host: ${err instanceof Error ? err.message : String(err)}`;
@@ -375,5 +343,24 @@ async function refresh(): Promise<void> {
   }
 }
 
-void refresh();
-refreshTimer = window.setInterval(() => void refresh(), 2000);
+async function subscribeToLaunchEvents(): Promise<void> {
+  for (const eventName of launchEventNames) {
+    rpc.on(`event:${eventName}`, (payload) => {
+      if (launchSession && isLaunchSessionEventFor(launchSession.sessionId, eventName, payload)) {
+        if (setLaunchSession(payload)) render();
+        return;
+      }
+      if (isLaunchSessionEventForTarget(hostTarget, eventName, payload)) scheduleRefresh();
+    });
+    await rpc.call("main", "events.subscribe", [eventName]);
+  }
+}
+
+void subscribeToLaunchEvents()
+  .catch((err) => {
+    approvalsContainer.className = "launch-card empty";
+    approvalsContainer.textContent = `Launch gate could not subscribe to host events: ${
+      err instanceof Error ? err.message : String(err)
+    }`;
+  })
+  .finally(() => void refresh());

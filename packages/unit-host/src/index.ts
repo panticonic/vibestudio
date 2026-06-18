@@ -40,10 +40,7 @@ export interface UnitBuildIdentity<Kind extends UnitKind = UnitKind> {
   capabilities?: string[];
 }
 
-export type UnitTrustDecision =
-  | "user-approved"
-  | "preapproved"
-  | "needs-approval";
+export type UnitTrustDecision = "user-approved" | "preapproved" | "needs-approval";
 
 export interface UnitTrustResolution {
   decision: UnitTrustDecision;
@@ -74,9 +71,13 @@ export class UnitTrustResolver<Entry extends UnitRegistryEntryBase> {
     return { decision: "needs-approval", identityKey };
   }
 
-  private isUserApproved(entry: Entry | null, identity: UnitBuildIdentity<Entry["unitKind"]>): boolean {
+  private isUserApproved(
+    entry: Entry | null,
+    identity: UnitBuildIdentity<Entry["unitKind"]>
+  ): boolean {
     if (!entry?.activeBundleKey || entry.status === "pending-approval") return false;
-    const entryIdentity = this.opts.entryIdentity?.(entry) ?? unitBuildIdentityFromRegistryEntry(entry);
+    const entryIdentity =
+      this.opts.entryIdentity?.(entry) ?? unitBuildIdentityFromRegistryEntry(entry);
     if (!entryIdentity) return false;
     return unitBuildIdentitiesMatch(entryIdentity, identity);
   }
@@ -121,15 +122,18 @@ export interface UnitTypedGraphNode extends UnitGraphNode {
 
 export function findUnitGraphNode<Node extends UnitTypedGraphNode>(
   nodes: Iterable<Node>,
-  descriptor: { buildKind: UnitKind; approvalFraming: Pick<UnitDescriptor["approvalFraming"], "unitLabel"> },
-  nameOrRepo: string,
+  descriptor: {
+    buildKind: UnitKind;
+    approvalFraming: Pick<UnitDescriptor["approvalFraming"], "unitLabel">;
+  },
+  nameOrRepo: string
 ): Node {
   const normalizedRepo = normalizeUnitRepoPath(nameOrRepo);
   for (const candidate of nodes) {
     if (candidate.kind !== descriptor.buildKind) continue;
     if (
-      candidate.name === nameOrRepo
-      || normalizeUnitRepoPath(candidate.relativePath) === normalizedRepo
+      candidate.name === nameOrRepo ||
+      normalizeUnitRepoPath(candidate.relativePath) === normalizedRepo
     ) {
       return candidate;
     }
@@ -140,7 +144,7 @@ export function findUnitGraphNode<Node extends UnitTypedGraphNode>(
 export function collectTransitiveUnitDependencyEvs<Node extends UnitDependencyGraphNode>(
   nodes: Iterable<Node>,
   root: Node,
-  getEffectiveVersion: (name: string) => string | null | undefined,
+  getEffectiveVersion: (name: string) => string | null | undefined
 ): Record<string, string> {
   const activeDependencyEvs: Record<string, string> = {};
   const byName = new Map(Array.from(nodes, (node) => [node.name, node] as const));
@@ -219,7 +223,7 @@ export interface UnitBuildIdentityOptions<Kind extends UnitKind> {
 }
 
 export function createUnitBuildIdentity<Kind extends UnitKind>(
-  opts: UnitBuildIdentityOptions<Kind>,
+  opts: UnitBuildIdentityOptions<Kind>
 ): UnitBuildIdentity<Kind> {
   const capabilities = opts.capabilities ? [...opts.capabilities].sort() : undefined;
   return {
@@ -297,7 +301,7 @@ export interface UnitHostOptions<
   approvalEntry(node: Node, decl: Decl): ApprovalEntry;
   requestApproval(
     entries: ApprovalEntry[],
-    trigger: UnitReconcileTrigger,
+    trigger: UnitReconcileTrigger
   ): Promise<UnitApprovalDecision>;
   approvalCoordinator?: UnitApprovalCoordinator<ApprovalEntry>;
   onApprovalDenied(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void;
@@ -363,9 +367,7 @@ export function requestUnitBatchApproval<
 
 function unitBatchApprovalDescription(descriptor: UnitDescriptor, count: number): string {
   const label =
-    count === 1
-      ? descriptor.approvalFraming.unitLabel
-      : descriptor.approvalFraming.unitLabelPlural;
+    count === 1 ? descriptor.approvalFraming.unitLabel : descriptor.approvalFraming.unitLabelPlural;
   const privilege =
     descriptor.kind === "app"
       ? "privileged"
@@ -410,16 +412,19 @@ export class UnitSourceChangeGrantStore {
 
   private load(): void {
     try {
-      const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as UnitSourceChangeGrantFile;
+      const parsed = JSON.parse(
+        fs.readFileSync(this.filePath, "utf8")
+      ) as UnitSourceChangeGrantFile;
       const now = Date.now();
       this.grants = new Map(
         (Array.isArray(parsed.grants) ? parsed.grants : [])
-          .filter((grant) =>
-            typeof grant.key === "string"
-            && typeof grant.expiresAt === "number"
-            && grant.expiresAt > now
+          .filter(
+            (grant) =>
+              typeof grant.key === "string" &&
+              typeof grant.expiresAt === "number" &&
+              grant.expiresAt > now
           )
-          .map((grant) => [grant.key, grant.expiresAt]),
+          .map((grant) => [grant.key, grant.expiresAt])
       );
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -468,7 +473,7 @@ export interface UnitSourceChangeAuthorizationDecision {
 
 export interface UnitSourceChangeHandler {
   authorizeSourceChange(
-    request: UnitSourceChangeRequest,
+    request: UnitSourceChangeRequest
   ): Promise<UnitSourceChangeAuthorizationDecision> | UnitSourceChangeAuthorizationDecision;
 }
 
@@ -478,16 +483,19 @@ export interface UnitSourceChangeTarget {
 }
 
 export interface UnitMetaChangeApprovalProvider<ApprovalEntry = unknown> {
-  metaChangeApprovalForCommit(
-    commit: string,
-  ): Promise<{ units: ApprovalEntry[]; identityKeys: string[] }> | {
-    units: ApprovalEntry[];
-    identityKeys: string[];
-  };
+  metaChangeApprovalForCommit(commit: string):
+    | Promise<{ units: ApprovalEntry[]; identityKeys: string[] }>
+    | {
+        units: ApprovalEntry[];
+        identityKeys: string[];
+      };
   acceptPreapprovedTrust(keys: Iterable<string>): void;
 }
 
-export interface InstalledUnitForSourceChange<Entry extends UnitRegistryEntryBase, Node extends UnitGraphNode> {
+export interface InstalledUnitForSourceChange<
+  Entry extends UnitRegistryEntryBase,
+  Node extends UnitGraphNode,
+> {
   entry: Entry;
   node: Node;
 }
@@ -512,7 +520,9 @@ export interface UnitSourceChangeAuthorizerOptions<
   grantStore: Pick<UnitSourceChangeGrantStore, "hasActive" | "grant">;
   grantTtlMs: number;
   findInstalledByRepo(repoPath: string): InstalledUnitForSourceChange<Entry, Node> | null;
-  requestApproval(ctx: UnitSourceChangeApprovalContext<Entry, Node>): Promise<UnitSourceChangeDecision>;
+  requestApproval(
+    ctx: UnitSourceChangeApprovalContext<Entry, Node>
+  ): Promise<UnitSourceChangeDecision>;
 }
 
 export async function authorizeUnitSourceChange<
@@ -520,7 +530,7 @@ export async function authorizeUnitSourceChange<
   Node extends UnitGraphNode,
 >(
   opts: UnitSourceChangeAuthorizerOptions<Entry, Node>,
-  request: UnitSourceChangeRequest,
+  request: UnitSourceChangeRequest
 ): Promise<UnitSourceChangeAuthorizationDecision> {
   const repoPath = normalizeUnitRepoPath(request.repoPath);
   const branch = normalizeUnitRef(request.branch);
@@ -539,7 +549,7 @@ export async function authorizeUnitSourceChange<
     request.caller.runtime.id,
     installed.entry.name,
     repoPath,
-    branch,
+    branch
   );
   if (opts.grantStore.hasActive(sessionGrantKey)) {
     return { allowed: true };
@@ -593,7 +603,7 @@ export function unitChangeSessionGrantKey(
   callerId: string,
   unitName: string,
   repoPath: string,
-  branch: string,
+  branch: string
 ): string {
   return `${callerId}\x00${unitName}\x00${repoPath}\x00${branch}`;
 }
@@ -634,15 +644,12 @@ export class UnitHost<
     }
   }
 
-  async reconcileDeclared(
-    declared: Decl[],
-    opts: UnitReconcileOptions = {},
-  ): Promise<void> {
+  async reconcileDeclared(declared: Decl[], opts: UnitReconcileOptions = {}): Promise<void> {
     const run = (this.reconciling ?? Promise.resolve()).then(() =>
       this.reconcileDeclaredOnce(declared, {
         trigger: opts.trigger ?? "startup",
         removeUndeclared: opts.removeUndeclared ?? true,
-      }),
+      })
     );
     this.reconciling = run.catch(() => {});
     await run;
@@ -680,15 +687,17 @@ export class UnitHost<
     return this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
   }
 
-  async applyRuntimeDeclaration(
-    opts: UnitRuntimeApplyOptions<Entry, Decl, Node>,
-  ): Promise<void> {
+  async applyRuntimeDeclaration(opts: UnitRuntimeApplyOptions<Entry, Decl, Node>): Promise<void> {
     const { node, decl } = opts;
     try {
       opts.validateBeforeApply?.(node, decl);
       const entry = this.opts.registry.get(node.name);
       const trust = this.trustForCandidate(node, decl, entry);
-      if (!entry || trust.decision !== "user-approved" || opts.needsBuildRefresh(entry, node, decl)) {
+      if (
+        !entry ||
+        trust.decision !== "user-approved" ||
+        opts.needsBuildRefresh(entry, node, decl)
+      ) {
         if (!entry) {
           this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
         }
@@ -708,7 +717,11 @@ export class UnitHost<
   activateBuild(opts: UnitBuildActivationOptions<Entry>): Entry {
     return this.opts.registry.patch(opts.name, {
       ...opts.extra,
-      source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
+      source: {
+        kind: "workspace-repo",
+        repo: normalizeUnitRepoPath(opts.sourceRepo),
+        ref: opts.ref,
+      },
       version: opts.version,
       activeEv: opts.effectiveVersion,
       activeSourceHash: opts.activeSourceHash,
@@ -721,11 +734,7 @@ export class UnitHost<
     } as Partial<Entry>);
   }
 
-  activeSourceMatches(
-    entry: Entry,
-    sourceRepo: string,
-    ref: string,
-  ): boolean {
+  activeSourceMatches(entry: Entry, sourceRepo: string, ref: string): boolean {
     return unitEntrySourceMatches(entry, sourceRepo, ref);
   }
 
@@ -735,8 +744,8 @@ export class UnitHost<
     if (!recordsEqual(entry.activeDependencyEvs ?? {}, opts.dependencyEvs)) return true;
     if (!recordsEqual(entry.activeExternalDeps ?? {}, opts.externalDeps)) return true;
     if (
-      opts.runtimeDepsKey !== undefined
-      && (entry.activeRuntimeDepsKey ?? null) !== opts.runtimeDepsKey
+      opts.runtimeDepsKey !== undefined &&
+      (entry.activeRuntimeDepsKey ?? null) !== opts.runtimeDepsKey
     ) {
       return true;
     }
@@ -770,10 +779,10 @@ export class UnitHost<
       const sourceRepo = normalizeUnitRepoPath(entry.source.repo);
       const relativePath = normalizeUnitRepoPath(node.relativePath);
       if (
-        normalizedRepo === sourceRepo
-        || normalizedRepo.startsWith(`${sourceRepo}/`)
-        || normalizedRepo === relativePath
-        || normalizedRepo.startsWith(`${relativePath}/`)
+        normalizedRepo === sourceRepo ||
+        normalizedRepo.startsWith(`${sourceRepo}/`) ||
+        normalizedRepo === relativePath ||
+        normalizedRepo.startsWith(`${relativePath}/`)
       ) {
         return { entry, node };
       }
@@ -793,19 +802,23 @@ export class UnitHost<
 
   listWorkspaceUnitLogs(
     workspaceId: string,
-    sourceOrName: string,
+    sourceOrName: string
   ): Array<UnitWorkspaceLogRecord<Entry["unitKind"]>> {
-    const entry = this.opts.registry.get(sourceOrName)
-      ?? this.opts.registry.list().find((candidate) =>
-        normalizeUnitRepoPath(candidate.source.repo) === normalizeUnitRepoPath(sourceOrName)
-      );
+    const entry =
+      this.opts.registry.get(sourceOrName) ??
+      this.opts.registry
+        .list()
+        .find(
+          (candidate) =>
+            normalizeUnitRepoPath(candidate.source.repo) === normalizeUnitRepoPath(sourceOrName)
+        );
     if (!entry) return [];
     return [unitWorkspaceLogRecord(this.opts.descriptor.kind, workspaceId, entry)];
   }
 
   private async reconcileDeclaredOnce(
     declared: Decl[],
-    opts: { trigger: UnitReconcileTrigger; removeUndeclared: boolean },
+    opts: { trigger: UnitReconcileTrigger; removeUndeclared: boolean }
   ): Promise<void> {
     const preApproved = this.preapprovedTrust;
     this.preapprovedTrust = new Set();
@@ -821,9 +834,7 @@ export class UnitHost<
     if (unresolved.length > 0) this.opts.notifyUnresolved(unresolved);
 
     const declaredByName = new Map(resolved.map((item) => [item.node.name, item]));
-    const needsApproval: Array<
-      ResolvedUnitDeclaration<Decl, Node> & { identityKey: string }
-    > = [];
+    const needsApproval: Array<ResolvedUnitDeclaration<Decl, Node> & { identityKey: string }> = [];
 
     for (const { node, decl } of resolved) {
       const entry = this.opts.registry.get(node.name);
@@ -880,7 +891,7 @@ export class UnitHost<
 
   private async promptAndApply(
     items: Array<ResolvedUnitDeclaration<Decl, Node>>,
-    trigger: UnitReconcileTrigger,
+    trigger: UnitReconcileTrigger
   ): Promise<void> {
     const entries = items.map(({ node, decl }) => this.opts.approvalEntry(node, decl));
     if (this.opts.approvalCoordinator) {
@@ -888,9 +899,7 @@ export class UnitHost<
         entries,
         trigger,
         applyApproved: async () => {
-          for (const { node, decl } of items) {
-            await this.opts.applyTrusted(node, decl);
-          }
+          await Promise.all(items.map(({ node, decl }) => this.opts.applyTrusted(node, decl)));
         },
         applyDenied: () => this.opts.onApprovalDenied(items),
       });
@@ -901,16 +910,10 @@ export class UnitHost<
       this.opts.onApprovalDenied(items);
       return;
     }
-    for (const { node, decl } of items) {
-      await this.opts.applyTrusted(node, decl);
-    }
+    await Promise.all(items.map(({ node, decl }) => this.opts.applyTrusted(node, decl)));
   }
 
-  private trustForCandidate(
-    node: Node,
-    decl: Decl,
-    entry: Entry | null,
-  ): UnitTrustResolution {
+  private trustForCandidate(node: Node, decl: Decl, entry: Entry | null): UnitTrustResolution {
     const identity = this.opts.candidateIdentity(node, decl);
     return this.trustResolver.resolve({
       identity,
@@ -925,13 +928,12 @@ export class UnitHost<
       return null;
     }
   }
-
 }
 
 export function unitWorkspaceStatus<Entry extends UnitRegistryEntryBase>(
   kind: Entry["unitKind"],
   entry: Entry,
-  opts: { source?: string; displayName?: string } = {},
+  opts: { source?: string; displayName?: string } = {}
 ): UnitWorkspaceStatus<Entry["unitKind"]> {
   return {
     name: entry.name,
@@ -951,7 +953,7 @@ export function unitWorkspaceStatus<Entry extends UnitRegistryEntryBase>(
 export function unitWorkspaceLogRecord<Entry extends UnitRegistryEntryBase>(
   kind: Entry["unitKind"],
   workspaceId: string,
-  entry: Entry,
+  entry: Entry
 ): UnitWorkspaceLogRecord<Entry["unitKind"]> {
   const level = entry.status === "error" ? "error" : "info";
   return {
@@ -960,7 +962,8 @@ export function unitWorkspaceLogRecord<Entry extends UnitRegistryEntryBase>(
     kind,
     timestamp: entry.installedAt,
     level,
-    message: entry.lastError ?? `${kind === "app" ? "App" : "Extension"} ${entry.name} is ${entry.status}`,
+    message:
+      entry.lastError ?? `${kind === "app" ? "App" : "Extension"} ${entry.name} is ${entry.status}`,
   };
 }
 
@@ -991,7 +994,7 @@ export function createPendingUnitRegistryEntry<Kind extends UnitKind>(opts: {
 }
 
 export function createUnitBatchEntryBase<Kind extends UnitKind>(
-  opts: UnitBatchEntryBaseOptions<Kind>,
+  opts: UnitBatchEntryBaseOptions<Kind>
 ): UnitBatchEntryBase<Kind> {
   return {
     unitKind: opts.unitKind,
@@ -1027,7 +1030,8 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   constructor(opts: UnitRegistryOptions<Entry>) {
     this.unitKind = opts.unitKind;
     this.filePath = path.join(opts.statePath, "units", this.unitKind, "registry.json");
-    this.isEntry = opts.isEntry ?? ((value): value is Entry => isUnitRegistryEntry(value, this.unitKind));
+    this.isEntry =
+      opts.isEntry ?? ((value): value is Entry => isUnitRegistryEntry(value, this.unitKind));
     this.normalizeEntry = opts.normalizeEntry ?? ((entry) => normalizeUnitRegistryEntry(entry));
     this.load();
   }
@@ -1071,7 +1075,9 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.filePath, "utf8")) as UnitRegistryFile<Entry>;
       if (parsed.unitKind !== this.unitKind) {
-        throw new Error(`Registry kind mismatch: expected ${this.unitKind}, found ${String(parsed.unitKind)}`);
+        throw new Error(
+          `Registry kind mismatch: expected ${this.unitKind}, found ${String(parsed.unitKind)}`
+        );
       }
       const entries = Array.isArray(parsed.entries)
         ? parsed.entries.filter(this.isEntry).map(this.normalizeEntry)
@@ -1103,7 +1109,9 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   }
 }
 
-export function normalizeUnitRegistryEntry<Entry extends UnitRegistryEntryBase>(entry: Entry): Entry {
+export function normalizeUnitRegistryEntry<Entry extends UnitRegistryEntryBase>(
+  entry: Entry
+): Entry {
   return {
     ...entry,
     activeDependencyEvs: entry.activeDependencyEvs ?? {},
@@ -1113,26 +1121,26 @@ export function normalizeUnitRegistryEntry<Entry extends UnitRegistryEntryBase>(
 
 export function isUnitRegistryEntry<Kind extends UnitKind>(
   value: unknown,
-  unitKind: Kind,
+  unitKind: Kind
 ): value is UnitRegistryEntryBase & { unitKind: Kind } {
   if (!value || typeof value !== "object") return false;
   const entry = value as Partial<UnitRegistryEntryBase>;
   return (
-    entry.unitKind === unitKind
-    && typeof entry.name === "string"
-    && typeof entry.version === "string"
-    && !!entry.source
-    && entry.source.kind === "workspace-repo"
-    && typeof entry.source.repo === "string"
-    && typeof entry.source.ref === "string"
-    && typeof entry.installedAt === "number"
-    && typeof entry.status === "string"
+    entry.unitKind === unitKind &&
+    typeof entry.name === "string" &&
+    typeof entry.version === "string" &&
+    !!entry.source &&
+    entry.source.kind === "workspace-repo" &&
+    typeof entry.source.repo === "string" &&
+    typeof entry.source.ref === "string" &&
+    typeof entry.installedAt === "number" &&
+    typeof entry.status === "string"
   );
 }
 
 export function unitBuildIdentityFromRegistryEntry<Entry extends UnitRegistryEntryBase>(
   entry: Entry,
-  capabilities?: Iterable<string>,
+  capabilities?: Iterable<string>
 ): UnitBuildIdentity<Entry["unitKind"]> {
   return createUnitBuildIdentity({
     unitKind: entry.unitKind,
@@ -1152,7 +1160,7 @@ export function canonicalUnitBuildIdentity(identity: UnitBuildIdentity): string 
 
 function unitBuildIdentitiesMatch(
   approved: UnitBuildIdentity,
-  candidate: UnitBuildIdentity,
+  candidate: UnitBuildIdentity
 ): boolean {
   if (approved.unitKind !== candidate.unitKind) return false;
   if (approved.name !== candidate.name) return false;
@@ -1166,7 +1174,11 @@ function unitBuildIdentitiesMatch(
   const approvedCapabilities = approved.capabilities ?? null;
   const candidateCapabilities = candidate.capabilities ?? null;
   if ((approvedCapabilities === null) !== (candidateCapabilities === null)) return false;
-  if (approvedCapabilities && candidateCapabilities && approvedCapabilities.join("\0") !== candidateCapabilities.join("\0")) {
+  if (
+    approvedCapabilities &&
+    candidateCapabilities &&
+    approvedCapabilities.join("\0") !== candidateCapabilities.join("\0")
+  ) {
     return false;
   }
   return true;
@@ -1185,10 +1197,12 @@ function recordsEqual(a: Record<string, string>, b: Record<string, string>): boo
 function unitEntrySourceMatches(
   entry: UnitRegistryEntryBase,
   sourceRepo: string,
-  ref: string,
+  ref: string
 ): boolean {
-  return normalizeUnitRepoPath(entry.source.repo) === normalizeUnitRepoPath(sourceRepo)
-    && entry.source.ref === ref;
+  return (
+    normalizeUnitRepoPath(entry.source.repo) === normalizeUnitRepoPath(sourceRepo) &&
+    entry.source.ref === ref
+  );
 }
 
 function canonicalize(value: unknown): unknown {

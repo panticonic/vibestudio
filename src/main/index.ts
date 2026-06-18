@@ -87,6 +87,7 @@ import type { ServerClient } from "./serverClient.js";
 import { CdpHostProvider } from "./cdpHostProvider.js";
 import { EventService } from "@natstack/shared/eventsService";
 import type { EventName } from "@natstack/shared/events";
+import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@natstack/shared/hostTargetLaunchGate";
 import { createServerEventBridge } from "./serverEventBridge.js";
 import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
@@ -215,8 +216,9 @@ let panelOrchestrator: PanelOrchestrator | null = null;
 let panelView: PanelView | null = null;
 let appOrchestrator: AppOrchestrator | null = null;
 let pendingReadyElectronLaunch: AppAvailableEvent | null = null;
-let electronHostLaunchTimer: ReturnType<typeof setInterval> | null = null;
+let electronHostLaunchTimer: ReturnType<typeof setTimeout> | null = null;
 let electronHostLaunchBlockedByApproval = false;
+let electronHostLaunchInFlight = false;
 let panelTreeInitializationStarted = false;
 let shellCore: ReturnType<
   typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
@@ -922,6 +924,13 @@ async function applyReadyElectronLaunchResult(result: unknown): Promise<boolean>
   return true;
 }
 
+function electronLaunchFromSessionResult(result: unknown): unknown | null {
+  if (!result || typeof result !== "object") return null;
+  const session = result as { target?: unknown; status?: unknown; launch?: unknown };
+  if (session.target !== "electron" || session.status !== "ready") return null;
+  return session.launch ?? null;
+}
+
 async function drainPendingReadyElectronLaunch(): Promise<void> {
   if (!pendingReadyElectronLaunch || !appOrchestrator) return;
   const event = pendingReadyElectronLaunch;
@@ -949,11 +958,11 @@ function initializePanelTreeOnce(reason: string): void {
 
 function stopElectronHostTargetLaunchLoop(): void {
   if (!electronHostLaunchTimer) return;
-  clearInterval(electronHostLaunchTimer);
+  clearTimeout(electronHostLaunchTimer);
   electronHostLaunchTimer = null;
 }
 
-type ElectronHostTargetSyncResult = "adopted" | "blocked-by-approval" | "retry";
+type ElectronHostTargetSyncResult = "adopted" | "blocked-by-approval" | "preparing" | "retry";
 
 async function syncElectronHostTarget(
   serverClient: Pick<ServerClient, "call">
@@ -986,6 +995,11 @@ async function syncElectronHostTarget(
       electronHostLaunchBlockedByApproval = false;
       return (await applyReadyElectronLaunchResult(result)) ? "adopted" : "retry";
     }
+    if (status === "preparing") {
+      electronHostLaunchBlockedByApproval = false;
+      log.info("[apps] Electron host target is approved and preparing");
+      return "preparing";
+    }
     electronHostLaunchBlockedByApproval = false;
     if (status !== "ready") {
       log.warn("[apps] No launchable Electron host target is selected");
@@ -1004,23 +1018,22 @@ async function syncElectronHostTarget(
 function startElectronHostTargetLaunchLoop(serverClient: Pick<ServerClient, "call">): void {
   stopElectronHostTargetLaunchLoop();
   electronHostLaunchBlockedByApproval = false;
-  let inFlight = false;
-  const run = async () => {
-    if (inFlight) return;
-    inFlight = true;
-    try {
-      const result = await syncElectronHostTarget(serverClient);
-      if (result === "adopted" || result === "blocked-by-approval") {
-        stopElectronHostTargetLaunchLoop();
-      }
-    } finally {
-      inFlight = false;
-    }
-  };
-  electronHostLaunchTimer = setInterval(() => {
-    void run();
-  }, 2_000);
-  void run();
+  scheduleElectronHostTargetLaunch(serverClient);
+}
+
+function scheduleElectronHostTargetLaunch(
+  serverClient: Pick<ServerClient, "call">,
+  delayMs = 0
+): void {
+  if (electronHostLaunchTimer) return;
+  electronHostLaunchTimer = setTimeout(() => {
+    electronHostLaunchTimer = null;
+    if (electronHostLaunchInFlight) return;
+    electronHostLaunchInFlight = true;
+    void syncElectronHostTarget(serverClient).finally(() => {
+      electronHostLaunchInFlight = false;
+    });
+  }, delayMs);
 }
 
 function retryElectronHostTargetLaunchAfterApprovalChange(pending: PendingApproval[]): void {
@@ -1028,7 +1041,13 @@ function retryElectronHostTargetLaunchAfterApprovalChange(pending: PendingApprov
   if (filterBootstrapApprovalsForTarget(pending, "electron").length > 0) return;
   const client = serverSession?.serverClient;
   if (!client) return;
-  startElectronHostTargetLaunchLoop(client);
+  scheduleElectronHostTargetLaunch(client);
+}
+
+function retryElectronHostTargetLaunchAfterAppEvent(): void {
+  const client = serverSession?.serverClient;
+  if (!client) return;
+  scheduleElectronHostTargetLaunch(client);
 }
 
 // =============================================================================
@@ -1389,6 +1408,7 @@ app.on("ready", async () => {
     getServerClient: () => serverClientRef,
     openExternal: (url) => shell.openExternal(url),
     warn: (message) => log.warn(message),
+    onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
     onApprovalPendingChanged: (pending) => {
       approvalAttention?.handlePendingChanged(pending);
       retryElectronHostTargetLaunchAfterApprovalChange(pending);
@@ -1454,6 +1474,10 @@ app.on("ready", async () => {
     }
     serverClientRef = serverSession.serverClient;
     serverEventSubscriptions.add("apps:available");
+    serverEventSubscriptions.add("apps:status");
+    serverEventSubscriptions.add("extensions:status");
+    serverEventSubscriptions.add("host-targets:changed");
+    serverEventSubscriptions.add(HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT);
     serverEventSubscriptions.add("external-open:open");
     serverEventSubscriptions.add("browser-panel:open");
     serverEventSubscriptions.add("panel-tree-updated");
@@ -1546,6 +1570,16 @@ app.on("ready", async () => {
       onServerRpcResult: async ({ service, method, args, result }) => {
         if (service === "workspace" && method === "hostTargets.launch" && args[0] === "electron") {
           await applyReadyElectronLaunchResult(result);
+          return;
+        }
+        if (
+          service === "workspace" &&
+          (method === "hostTargets.beginLaunch" ||
+            method === "hostTargets.resolveLaunchSessionApproval" ||
+            method === "hostTargets.getLaunchSession")
+        ) {
+          const launch = electronLaunchFromSessionResult(result);
+          if (launch) await applyReadyElectronLaunchResult(launch);
         }
       },
       eventService,

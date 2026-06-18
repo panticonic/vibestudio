@@ -50,6 +50,7 @@ import {
   sourcemapForKind,
   MAIN_HEAD,
   type StateAdvancedEvent,
+  type StateChangedUnit,
   type WorkspaceStateSource,
 } from "./stateTrigger.js";
 import {
@@ -91,6 +92,10 @@ export interface BuildSystemBuildEvent {
   timestamp: string;
 }
 
+export interface BuildSystemUnitChangeEvent extends StateChangedUnit {
+  trigger: StateAdvancedEvent;
+}
+
 export interface RuntimeImageBinding {
   source: string;
   unitName: string;
@@ -100,7 +105,12 @@ export interface RuntimeImageBinding {
 }
 
 export type { BuildUnitOptions } from "./builder.js";
-export type { WorkspaceStateSource, StateAdvancedEvent, BuildRecord } from "./stateTrigger.js";
+export type {
+  WorkspaceStateSource,
+  StateAdvancedEvent,
+  BuildRecord,
+  StateChangedUnit,
+} from "./stateTrigger.js";
 export type { BuildSourceProvider } from "./buildSource.js";
 export { setBuildSourceProvider, directorySourceProvider } from "./buildSource.js";
 export {
@@ -208,6 +218,14 @@ export interface BuildSystemV2 {
    * failures are queryable alongside runtime logs.
    */
   onBuildEvent(callback: (event: BuildSystemBuildEvent) => void): () => void;
+
+  /**
+   * Subscribe to effective-version changes detected from VCS state advances.
+   * Trusted unit hosts use this to rebuild apps/extensions through their
+   * approval-aware activation paths because the state trigger intentionally
+   * does not build trusted units directly.
+   */
+  onUnitChange(callback: (event: BuildSystemUnitChangeEvent) => void): () => void;
 
   /**
    * Register a callback for when a state-triggered build completes.
@@ -322,6 +340,7 @@ export async function initBuildSystemV2(
   const currentState = () => trigger.getState();
   const recentBuildEvents: BuildSystemBuildEvent[] = [];
   const buildEventListeners = new Set<(event: BuildSystemBuildEvent) => void>();
+  const unitChangeListeners = new Set<(event: BuildSystemUnitChangeEvent) => void>();
   const recordBuildEvent = (event: Omit<BuildSystemBuildEvent, "relativePath" | "timestamp">) => {
     const node = currentState().graph.tryGet(event.name);
     const full: BuildSystemBuildEvent = {
@@ -350,6 +369,18 @@ export async function initBuildSystemV2(
   });
   trigger.on("build-error", ({ name, error, trigger: t }) => {
     recordBuildEvent({ type: "build-error", name, error, trigger: t });
+  });
+  trigger.on("change-detected", ({ units, trigger: t }) => {
+    for (const unit of units) {
+      const event: BuildSystemUnitChangeEvent = { ...unit, trigger: t };
+      for (const listener of unitChangeListeners) {
+        try {
+          listener(event);
+        } catch (err) {
+          console.error("[BuildV2] unit-change listener failed:", err);
+        }
+      }
+    }
   });
 
   // ---------------------------------------------------------------------------
@@ -807,6 +838,11 @@ export async function initBuildSystemV2(
     onBuildEvent(callback: (event: BuildSystemBuildEvent) => void): () => void {
       buildEventListeners.add(callback);
       return () => buildEventListeners.delete(callback);
+    },
+
+    onUnitChange(callback: (event: BuildSystemUnitChangeEvent) => void): () => void {
+      unitChangeListeners.add(callback);
+      return () => unitChangeListeners.delete(callback);
     },
 
     whenSettled(): Promise<void> {
