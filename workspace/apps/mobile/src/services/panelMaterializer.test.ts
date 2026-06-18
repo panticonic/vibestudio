@@ -5,6 +5,7 @@ const hostConfig = {
   protocol: "https",
   host: "natstack.example.com",
   port: "3000",
+  basePath: "/_workspace/dev",
 };
 
 function makePanel(source: string): Panel {
@@ -103,7 +104,7 @@ describe("materializeMobilePanel", () => {
 
     expect(result).toMatchObject({
       panelId: "panel-1",
-      url: "https://natstack.example.com:3000/panels/editor/?contextId=ctx-panel-1",
+      url: "https://natstack.example.com:3000/_workspace/dev/panels/editor/?contextId=ctx-panel-1",
       managed: true,
       panelInit: {
         entityId: "entity-1",

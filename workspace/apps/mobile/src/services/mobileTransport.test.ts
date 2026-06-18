@@ -140,10 +140,75 @@ describe("MobileRpcClient", () => {
     }
   });
 
-  it("builds websocket URLs only from server origins", () => {
+  it("dispatches server event frames to local listeners", async () => {
+    const OriginalWebSocket = global.WebSocket;
+    const payload = { pending: [{ approvalId: "approval-1", kind: "credential" }] };
+    const events: unknown[] = [];
+
+    class FakeWebSocket {
+      static readonly OPEN = 1;
+      readyState = 0;
+      onopen: (() => void) | null = null;
+      onmessage: ((event: { data: string }) => void) | null = null;
+      onclose: ((event: { code?: number; reason?: string }) => void) | null = null;
+      onerror: ((event: unknown) => void) | null = null;
+
+      constructor(readonly url: string) {
+        setTimeout(() => {
+          this.readyState = 1;
+          this.onopen?.();
+        }, 0);
+      }
+
+      send(data: string): void {
+        if (!data.includes('"type":"ws:auth"')) return;
+        setTimeout(() => {
+          this.onmessage?.({
+            data: JSON.stringify({ type: "ws:auth-result", success: true }),
+          });
+          this.onmessage?.({
+            data: JSON.stringify({
+              type: "ws:event",
+              event: "event:shell-approval:pending-changed",
+              payload,
+            }),
+          });
+        }, 0);
+      }
+
+      close(code?: number, reason?: string): void {
+        this.readyState = 3;
+        setTimeout(() => this.onclose?.({ code, reason }), 0);
+      }
+    }
+
+    global.WebSocket = FakeWebSocket as unknown as typeof WebSocket;
+    const transport = new MobileRpcClient({
+      serverUrl: "https://server.example",
+      issueConnectionGrant: async () => ({
+        callerId: "app:apps/field-mobile:dev_123",
+        connectionGrant: "grant_123",
+      }),
+    });
+    transport.on("event:shell-approval:pending-changed", (event) => {
+      events.push(event.payload);
+    });
+
+    try {
+      await transport.connectAndWait();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events).toEqual([payload]);
+    } finally {
+      global.WebSocket = OriginalWebSocket;
+    }
+  });
+
+  it("builds websocket URLs while preserving selected workspace paths", () => {
     expect(buildWsUrl("https://server.example")).toBe("wss://server.example/rpc");
     expect(buildWsUrl("http://127.0.0.1:3030")).toBe("ws://127.0.0.1:3030/rpc");
-    expect(() => buildWsUrl("https://server.example/base")).toThrow(/Invalid server URL/);
+    expect(buildWsUrl("https://server.example/_workspace/dev")).toBe(
+      "wss://server.example/_workspace/dev/rpc"
+    );
     expect(() => buildWsUrl("https://user@server.example")).toThrow(/Invalid server URL/);
   });
 });

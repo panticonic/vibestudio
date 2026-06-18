@@ -59,7 +59,7 @@ class NatStackMobileHostModule(
     }
 
     @ReactMethod
-    fun completePairing(serverUrl: String, code: String, source: String?, promise: Promise) {
+    fun pairServer(serverUrl: String, code: String, promise: Promise) {
         thread(start = true, isDaemon = true, name = "NatStackPairing") {
             try {
                 val normalizedUrl = normalizeServerUrl(serverUrl)
@@ -73,24 +73,105 @@ class NatStackMobileHostModule(
                 )
                 val credential = Credential(
                     serverUrl = normalizedUrl,
+                    hubUrl = normalizedUrl,
                     deviceId = response.getString("deviceId"),
                     refreshToken = response.getString("refreshToken"),
                     serverId = response.getString("serverId").takeIf { it.isNotBlank() }
                         ?: throw IllegalStateException("Pairing response did not include a server id"),
-                    workspaceId = response.getString("workspaceId").takeIf { it.isNotBlank() }
-                        ?: throw IllegalStateException("Pairing response did not include a workspace id"),
+                    workspaceId = "",
+                    workspaceName = null,
                 )
                 saveCredential(credential)
-                val grant = try {
-                    shellGrantFromJson(credential, response)
-                } catch (error: Exception) {
-                    clearStoredCredentials()
-                    throw error
-                }
                 Log.i(TAG, "[NatStackMobileSmoke] phase=native-pairing-complete")
-                promise.resolve(grant)
+                promise.resolve(Arguments.createMap().apply {
+                    putString("serverUrl", credential.serverUrl)
+                    putString("hubUrl", credential.hubUrl)
+                    putString("deviceId", credential.deviceId)
+                    putString("serverId", credential.serverId)
+                })
             } catch (error: Exception) {
                 promise.reject("pairing_failed", error.message, error)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun listWorkspaces(promise: Promise) {
+        thread(start = true, isDaemon = true, name = "NatStackWorkspaceList") {
+            try {
+                val credential = loadCredential()
+                    ?: throw IllegalStateException("No mobile credentials are stored")
+                val hubUrl = credential.hubUrl
+                    ?: throw IllegalStateException("Stored credential is missing a hub URL")
+                val response = postJson(
+                    hubUrl,
+                    "/_r/s/workspaces/list",
+                    JSONObject()
+                        .put("deviceId", credential.deviceId)
+                        .put("refreshToken", credential.refreshToken)
+                )
+                val workspaces = Arguments.createArray()
+                val jsonWorkspaces = response.optJSONArray("workspaces")
+                if (jsonWorkspaces != null) {
+                    for (i in 0 until jsonWorkspaces.length()) {
+                        val item = jsonWorkspaces.getJSONObject(i)
+                        workspaces.pushMap(Arguments.createMap().apply {
+                            putString("name", item.getString("name"))
+                            putDouble("lastOpened", item.optDouble("lastOpened", 0.0))
+                            if (item.has("running")) putBoolean("running", item.optBoolean("running"))
+                            if (item.has("ephemeral")) putBoolean("ephemeral", item.optBoolean("ephemeral"))
+                        })
+                    }
+                }
+                promise.resolve(Arguments.createMap().apply {
+                    putArray("workspaces", workspaces)
+                })
+            } catch (error: Exception) {
+                promise.reject("workspace_list_failed", error.message, error)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun selectWorkspace(name: String, source: String?, promise: Promise) {
+        thread(start = true, isDaemon = true, name = "NatStackWorkspaceSelect") {
+            try {
+                val credential = loadCredential()
+                    ?: throw IllegalStateException("No mobile credentials are stored")
+                val hubUrl = credential.hubUrl
+                    ?: throw IllegalStateException("Stored credential is missing a hub URL")
+                val selected = postJson(
+                    hubUrl,
+                    "/_r/s/workspaces/select",
+                    JSONObject()
+                        .put("deviceId", credential.deviceId)
+                        .put("refreshToken", credential.refreshToken)
+                        .put("name", name)
+                )
+                val workspaceUrl = normalizeWorkspaceServerUrl(selected.getString("serverUrl"))
+                val selectedCredential = credential.copy(
+                    serverUrl = workspaceUrl,
+                    workspaceName = selected.optString("workspaceName", name).takeIf { it.isNotBlank() },
+                )
+                val grantJson = postJson(
+                    selectedCredential.serverUrl,
+                    "/_r/s/auth/refresh-shell",
+                    JSONObject()
+                        .put("deviceId", selectedCredential.deviceId)
+                        .put("refreshToken", selectedCredential.refreshToken)
+                )
+                val finalCredential = selectedCredential.copy(
+                    workspaceId = grantJson.getString("workspaceId").takeIf { it.isNotBlank() }
+                        ?: throw IllegalStateException("Mobile shell grant response did not include a workspace id")
+                )
+                // Validate the shell grant BEFORE persisting. A rejected grant must never leave a
+                // half-updated workspace-scoped credential behind, or the next launch would treat
+                // it as a fully selected workspace and skip re-pairing despite having no usable grant.
+                val grant = shellGrantFromJson(finalCredential, grantJson)
+                saveCredential(finalCredential)
+                promise.resolve(grant)
+            } catch (error: Exception) {
+                promise.reject("workspace_select_failed", error.message, error)
             }
         }
     }
@@ -315,8 +396,8 @@ class NatStackMobileHostModule(
     private fun postJson(serverUrl: String, path: String, body: JSONObject): JSONObject {
         val connection = URL("$serverUrl$path").openConnection() as HttpURLConnection
         connection.requestMethod = "POST"
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 15_000
+        connection.connectTimeout = HTTP_CONNECT_TIMEOUT_MS
+        connection.readTimeout = JSON_POST_READ_TIMEOUT_MS
         connection.setRequestProperty("Content-Type", "application/json")
         connection.doOutput = true
         OutputStreamWriter(connection.outputStream, Charsets.UTF_8).use { writer ->
@@ -334,8 +415,8 @@ class NatStackMobileHostModule(
     private fun getBytes(url: String): ByteArray {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
-        connection.connectTimeout = 15_000
-        connection.readTimeout = 30_000
+        connection.connectTimeout = HTTP_CONNECT_TIMEOUT_MS
+        connection.readTimeout = BUNDLE_READ_TIMEOUT_MS
         val stream = if (connection.responseCode in 200..299) connection.inputStream else connection.errorStream
         val payload = stream.use { it.readBytes() }
         if (connection.responseCode !in 200..299) {
@@ -445,6 +526,8 @@ class NatStackMobileHostModule(
     private fun saveCredential(credential: Credential) {
         val json = JSONObject()
             .put("serverUrl", credential.serverUrl)
+            .put("hubUrl", credential.hubUrl ?: credential.serverUrl)
+            .put("workspaceName", credential.workspaceName ?: JSONObject.NULL)
             .put("deviceId", credential.deviceId)
             .put("refreshToken", credential.refreshToken)
             .put("serverId", credential.serverId)
@@ -457,12 +540,13 @@ class NatStackMobileHostModule(
         val json = JSONObject(decrypt(encrypted))
         return Credential(
             serverUrl = json.getString("serverUrl"),
+            hubUrl = json.optString("hubUrl").takeIf { it.isNotBlank() },
             deviceId = json.getString("deviceId"),
             refreshToken = json.getString("refreshToken"),
             serverId = json.getString("serverId").takeIf { it.isNotBlank() }
                 ?: throw IllegalStateException("Stored credential payload is missing a server id"),
-            workspaceId = json.getString("workspaceId").takeIf { it.isNotBlank() }
-                ?: throw IllegalStateException("Stored credential payload is missing a workspace id"),
+            workspaceId = json.optString("workspaceId"),
+            workspaceName = json.optString("workspaceName").takeIf { it.isNotBlank() },
         )
     }
 
@@ -506,13 +590,17 @@ class NatStackMobileHostModule(
 
     private data class Credential(
         val serverUrl: String,
+        val hubUrl: String?,
         val deviceId: String,
         val refreshToken: String,
         val serverId: String,
         val workspaceId: String,
+        val workspaceName: String?,
     ) {
         fun toPublicMap() = Arguments.createMap().apply {
             putString("serverUrl", serverUrl)
+            hubUrl?.let { putString("hubUrl", it) }
+            workspaceName?.let { putString("workspaceName", it) }
             putString("deviceId", deviceId)
             putString("serverId", serverId)
             putString("workspaceId", workspaceId)
@@ -527,6 +615,9 @@ class NatStackMobileHostModule(
         const val GCM_IV_BYTES = 12
         const val GCM_TAG_BITS = 128
         const val WORKSPACE_APP_CALLER_PREFIX = "app:apps/"
+        const val HTTP_CONNECT_TIMEOUT_MS = 15_000
+        const val JSON_POST_READ_TIMEOUT_MS = 120_000
+        const val BUNDLE_READ_TIMEOUT_MS = 30_000
 
         fun normalizeServerUrl(serverUrl: String): String {
             val url = URL(serverUrl.trim())
@@ -542,6 +633,23 @@ class NatStackMobileHostModule(
             }
             val port = if (url.port >= 0) ":${url.port}" else ""
             return "$protocol://${url.host}$port"
+        }
+
+        fun normalizeWorkspaceServerUrl(serverUrl: String): String {
+            val url = URL(serverUrl.trim())
+            val protocol = url.protocol.lowercase()
+            if (protocol != "http" && protocol != "https") {
+                throw IllegalArgumentException("Workspace server URL must use http or https")
+            }
+            if (url.host.isBlank() || !url.userInfo.isNullOrBlank()) {
+                throw IllegalArgumentException("Workspace server URL must include a host")
+            }
+            if (!url.query.isNullOrEmpty() || url.ref != null) {
+                throw IllegalArgumentException("Workspace server URL must not include a query or fragment")
+            }
+            val port = if (url.port >= 0) ":${url.port}" else ""
+            val path = url.path.trimEnd('/').takeIf { it.isNotBlank() && it != "/" } ?: ""
+            return "$protocol://${url.host}$port$path"
         }
 
         fun normalizedPort(url: URL): Int = if (url.port >= 0) url.port else url.defaultPort

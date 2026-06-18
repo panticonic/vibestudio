@@ -5,9 +5,12 @@
  * loads, so the URL only needs to point at the static panel bundle.
  */
 
-import { isManagedHost, parsePanelUrl } from "@natstack/shared/shell/urlParsing";
+import {
+  isManagedHost,
+  parsePanelUrl as parseSharedPanelUrl,
+} from "@natstack/shared/shell/urlParsing";
 
-export { isManagedHost, parsePanelUrl };
+export { isManagedHost };
 
 /**
  * Host configuration extracted from the server URL.
@@ -24,6 +27,8 @@ export interface HostConfig {
   host: string;
   /** Port string, or empty if using default port for protocol */
   port: string;
+  /** Path prefix for a selected workspace endpoint, without trailing slash */
+  basePath: string;
 }
 
 /**
@@ -33,14 +38,16 @@ export interface HostConfig {
  */
 export function parseHostConfig(serverUrl: string): HostConfig {
   // Manual parsing instead of `new URL()` — Hermes doesn't fully implement URL API
-  const match = serverUrl.trim().match(/^(https?):\/\/(\[[^\]]+\]|[^/?#:@]+)(?::(\d+))?\/?$/);
+  const match = serverUrl.trim().match(/^(https?):\/\/(\[[^\]]+\]|[^/?#:@]+)(?::(\d+))?(\/[^?#]*)?$/);
   if (!match) throw new Error(`Invalid server URL: ${serverUrl}`);
-  const [, protocol, host, port] = match;
+  const [, protocol, host, port, rawPath] = match;
   if (!protocol || !host) throw new Error(`Invalid server URL: ${serverUrl}`);
+  const path = (rawPath ?? "").replace(/\/+$/, "");
   return {
     protocol,
     host,
     port: port ?? "",
+    basePath: path === "/" ? "" : path,
   };
 }
 
@@ -59,9 +66,33 @@ export function buildPanelUrl(
   hostConfig: HostConfig,
 ): string {
   const portSuffix = hostConfig.port ? `:${hostConfig.port}` : "";
-  const origin = `${hostConfig.protocol}://${hostConfig.host}${portSuffix}`;
+  const origin = `${hostConfig.protocol}://${hostConfig.host}${portSuffix}${hostConfig.basePath ?? ""}`;
   const encodedPath = encodeURIComponent(source).replace(/%2F/g, "/");
   return `${origin}/${encodedPath}/?contextId=${encodeURIComponent(contextId)}`;
+}
+
+function normalizeBasePath(basePath: string): string {
+  if (!basePath || basePath === "/") return "";
+  return basePath.startsWith("/") ? basePath.replace(/\/+$/, "") : `/${basePath.replace(/\/+$/, "")}`;
+}
+
+function stripBasePath(url: string, basePath: string): string | null {
+  const normalizedBasePath = normalizeBasePath(basePath);
+  if (!normalizedBasePath) return url;
+
+  const match = url.match(/^(https?:\/\/[^/?#]+)([^?#]*)(\?[^#]*)?(#.*)?$/i);
+  if (!match) return null;
+  const [, origin, rawPath = "/", query = "", hash = ""] = match;
+  const path = rawPath || "/";
+  if (path !== normalizedBasePath && !path.startsWith(`${normalizedBasePath}/`)) return null;
+  const nextPath = path.slice(normalizedBasePath.length) || "/";
+  return `${origin}${nextPath}${query}${hash}`;
+}
+
+export function parsePanelUrl(url: string, externalHost: string, basePath = "") {
+  const stripped = stripBasePath(url, basePath);
+  if (!stripped) return null;
+  return parseSharedPanelUrl(stripped, externalHost);
 }
 
 /**

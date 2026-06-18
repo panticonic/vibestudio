@@ -9,9 +9,10 @@ import {
   type RpcConnectionStatus,
   type RpcEventContext,
 } from "@natstack/rpc";
-import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
 import type { WsLike } from "@natstack/rpc/protocol/wsAdapter";
 import type { RecoveryKind } from "@natstack/rpc/protocol/recoveryCoordinator";
+import { serverRpcWsUrl } from "@natstack/shared/connect";
+import { createServerWsTransport } from "@natstack/shared/shell/transport/serverWsTransport";
 import { isWorkspaceMobileAppCallerId, isWorkspaceMobileHostCallerId } from "./auth";
 
 function smokePhase(phase: string, details?: Record<string, unknown>): void {
@@ -120,7 +121,7 @@ function describeWebSocketEvent(event: unknown): Record<string, unknown> {
   };
 }
 
-type MobileWsTransport = ReturnType<typeof wsClientTransport>;
+type MobileWsTransport = ReturnType<typeof createServerWsTransport>;
 
 export class MobileRpcClient implements Pick<
   RpcClient,
@@ -339,6 +340,10 @@ export class MobileRpcClient implements Pick<
     this.transport = null;
     this.rpc = null;
     this.preissuedGrant = null;
+    // The caller-principal pin is scoped to a single connection lifetime. A failed initial connect
+    // tears that lifetime down, so clear it (as updateConfig does) — otherwise the fresh native
+    // grant minted on retry is wrongly rejected as a "different principal".
+    this.currentCallerId = null;
     this.activeEventUnsubs.clear();
     await transport?.close().catch(() => undefined);
   }
@@ -372,11 +377,12 @@ export class MobileRpcClient implements Pick<
   private createTransport(callerId: string): MobileWsTransport {
     const wsUrl = buildWsUrl(this.config.serverUrl);
     smokePhase("workspace-ws-url", { url: wsUrl });
-    const transport = wsClientTransport({
+    const transport = createServerWsTransport({
       selfId: callerId,
-      getWsUrl: () => wsUrl,
+      serverUrl: this.config.serverUrl,
       terminalCloseCodes: [4001, 4005, 4006],
       logPrefix: "MobileRpcClient",
+      onServerEvent: (event, payload) => this.dispatchServerEvent(event, payload),
       onRecovery: (kind) => {
         for (const listener of this.recoveryListeners.get(kind) ?? []) {
           void listener();
@@ -394,6 +400,16 @@ export class MobileRpcClient implements Pick<
     });
     transport.onStatusChange?.((status) => this.setStatus(status));
     return transport;
+  }
+
+  private dispatchServerEvent(event: string, payload: unknown): void {
+    const context: RpcEventContext = {
+      caller: { callerId: "main", callerKind: "server" },
+      origin: { callerId: "main", callerKind: "server" },
+      event,
+      payload,
+    };
+    for (const listener of this.eventSubscriptions.get(event) ?? []) listener(context);
   }
 
   private attachEventSubscription(event: string): void {
@@ -429,12 +445,10 @@ export function buildWsUrl(serverUrl: string): string {
     (url.protocol !== "https:" && url.protocol !== "http:") ||
     url.username ||
     url.password ||
-    (url.pathname !== "" && url.pathname !== "/") ||
     url.search ||
     url.hash
   ) {
     throw new Error(`Invalid server URL: ${serverUrl}`);
   }
-  const protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${url.host}/rpc`;
+  return serverRpcWsUrl(url);
 }

@@ -2,27 +2,42 @@ import { NativeModules } from "react-native";
 import {
   activatePreparedAppBundle,
   clearCredentials,
-  completePairing,
   getCredentials,
   issueConnectionGrant,
+  listWorkspaces,
+  pairServer,
   prepareAppBundle,
+  selectWorkspace,
   StoredCredentialsNeedRepairError,
 } from "./auth";
 
 const nativeHost = NativeModules["NatStackMobileHost"] as {
   clearCredentials: jest.Mock;
-  completePairing: jest.Mock;
   getCredentials: jest.Mock;
   issueConnectionGrant: jest.Mock;
+  listWorkspaces: jest.Mock;
+  pairServer: jest.Mock;
   prepareAppBundle: jest.Mock;
+  selectWorkspace: jest.Mock;
   activatePreparedAppBundle: jest.Mock;
 };
 
 describe("native-held mobile credentials", () => {
   beforeEach(() => {
     nativeHost.clearCredentials.mockReset().mockResolvedValue(undefined);
-    nativeHost.completePairing.mockReset().mockResolvedValue({
+    nativeHost.pairServer.mockReset().mockResolvedValue({
       serverUrl: "https://server.example",
+      hubUrl: "https://server.example",
+      deviceId: "dev_123",
+      serverId: "srv_123",
+    });
+    nativeHost.listWorkspaces.mockReset().mockResolvedValue({
+      workspaces: [{ name: "dev", lastOpened: 123, running: true }],
+    });
+    nativeHost.selectWorkspace.mockReset().mockResolvedValue({
+      serverUrl: "https://server.example/_workspace/dev",
+      hubUrl: "https://server.example",
+      workspaceName: "dev",
       deviceId: "dev_123",
       callerId: "shell:dev_123",
       connectionGrant: "grant_123",
@@ -30,7 +45,9 @@ describe("native-held mobile credentials", () => {
       workspaceId: "workspace_123",
     });
     nativeHost.getCredentials.mockReset().mockResolvedValue({
-      serverUrl: "https://server.example",
+      serverUrl: "https://server.example/_workspace/dev",
+      hubUrl: "https://server.example",
+      workspaceName: "dev",
       deviceId: "dev_123",
       serverId: "srv_123",
       workspaceId: "workspace_123",
@@ -59,28 +76,48 @@ describe("native-held mobile credentials", () => {
 
   it("loads only non-secret credential metadata from native storage", async () => {
     await expect(getCredentials()).resolves.toEqual({
-      serverUrl: "https://server.example",
+      serverUrl: "https://server.example/_workspace/dev",
+      hubUrl: "https://server.example",
+      workspaceName: "dev",
       deviceId: "dev_123",
       serverId: "srv_123",
       workspaceId: "workspace_123",
     });
   });
 
-  it("completes pairing inside the native host and returns a connection grant handle", async () => {
-    await expect(completePairing("https://server.example", "pairing-code")).resolves.toMatchObject({
+  it("pairs a server inside the native host without selecting a workspace", async () => {
+    await expect(pairServer("https://server.example", "pairing-code")).resolves.toMatchObject({
       deviceId: "dev_123",
-      connectionGrant: "grant_123",
+      hubUrl: "https://server.example",
     });
-    expect(nativeHost.completePairing).toHaveBeenCalledWith(
-      "https://server.example",
-      "pairing-code",
-      null
-    );
+    expect(nativeHost.pairServer).toHaveBeenCalledWith("https://server.example", "pairing-code");
   });
 
-  it("passes an explicit selected app source while pairing", async () => {
-    nativeHost.completePairing.mockResolvedValueOnce({
+  it("accepts hub-only credentials while workspace choice is pending", async () => {
+    nativeHost.getCredentials.mockResolvedValueOnce({
       serverUrl: "https://server.example",
+      hubUrl: "https://server.example",
+      deviceId: "dev_123",
+      serverId: "srv_123",
+    });
+
+    await expect(getCredentials()).resolves.toMatchObject({
+      serverUrl: "https://server.example",
+      hubUrl: "https://server.example",
+    });
+  });
+
+  it("lists workspaces from the paired server", async () => {
+    await expect(listWorkspaces()).resolves.toEqual([
+      { name: "dev", lastOpened: 123, running: true },
+    ]);
+  });
+
+  it("passes an explicit selected app source while selecting a workspace", async () => {
+    nativeHost.selectWorkspace.mockResolvedValueOnce({
+      serverUrl: "https://server.example/_workspace/dev",
+      hubUrl: "https://server.example",
+      workspaceName: "dev",
       deviceId: "dev_123",
       callerId: "shell:dev_123",
       connectionGrant: "grant_123",
@@ -89,16 +126,12 @@ describe("native-held mobile credentials", () => {
     });
 
     await expect(
-      completePairing("https://server.example", "pairing-code", "apps/field-mobile")
+      selectWorkspace("dev", "apps/field-mobile")
     ).resolves.toMatchObject({
       callerId: "shell:dev_123",
     });
 
-    expect(nativeHost.completePairing).toHaveBeenCalledWith(
-      "https://server.example",
-      "pairing-code",
-      "apps/field-mobile"
-    );
+    expect(nativeHost.selectWorkspace).toHaveBeenCalledWith("dev", "apps/field-mobile");
   });
 
   it("issues one-time mobile host connection grants without exposing the refresh token", async () => {
@@ -134,9 +167,9 @@ describe("native-held mobile credentials", () => {
     await expect(issueConnectionGrant()).rejects.toThrow(/valid mobile host connection grant/);
   });
 
-  it("rejects native pairing responses without a mobile host principal grant", async () => {
-    nativeHost.completePairing.mockResolvedValueOnce({
-      serverUrl: "https://server.example",
+  it("rejects native workspace selection responses without a mobile host principal grant", async () => {
+    nativeHost.selectWorkspace.mockResolvedValueOnce({
+      serverUrl: "https://server.example/_workspace/dev",
       deviceId: "dev_123",
       callerId: "app:other-app:dev_123",
       connectionGrant: "grant_123",
@@ -144,9 +177,7 @@ describe("native-held mobile credentials", () => {
       workspaceId: "workspace_123",
     });
 
-    await expect(completePairing("https://server.example", "pairing-code")).rejects.toThrow(
-      /valid mobile host connection grant/
-    );
+    await expect(selectWorkspace("dev")).rejects.toThrow(/valid mobile host connection grant/);
   });
 
   it("rejects native grants without server and workspace identity", async () => {

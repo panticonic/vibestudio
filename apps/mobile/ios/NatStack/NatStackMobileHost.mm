@@ -18,6 +18,8 @@ static NSString *const NatStackActiveBundleBuildKey = @"activeBundle.buildKey";
 static NSString *const NatStackActiveBundleIntegrity = @"activeBundle.integrity";
 static NSString *const NatStackActiveBundleSource = @"activeBundle.source";
 static NSString *const NatStackWorkspaceAppCallerPrefix = @"app:apps/";
+static NSTimeInterval const NatStackJsonPostTimeout = 120;
+static NSTimeInterval const NatStackBundleDownloadTimeout = 30;
 
 + (BOOL)requiresMainQueueSetup
 {
@@ -43,8 +45,10 @@ RCT_EXPORT_METHOD(getCredentials:(RCTPromiseResolveBlock)resolve
       @"serverUrl": credential[@"serverUrl"],
       @"deviceId": credential[@"deviceId"],
       @"serverId": credential[@"serverId"],
-      @"workspaceId": credential[@"workspaceId"],
     } mutableCopy];
+    if (credential[@"hubUrl"] != nil) publicCredential[@"hubUrl"] = credential[@"hubUrl"];
+    if (credential[@"workspaceName"] != nil) publicCredential[@"workspaceName"] = credential[@"workspaceName"];
+    if (credential[@"workspaceId"] != nil) publicCredential[@"workspaceId"] = credential[@"workspaceId"];
     resolve(publicCredential);
   } @catch (NSException *exception) {
     reject(@"needs_repair", @"Stored mobile credentials could not be decrypted", nil);
@@ -58,9 +62,8 @@ RCT_EXPORT_METHOD(clearCredentials:(RCTPromiseResolveBlock)resolve
   resolve(nil);
 }
 
-RCT_EXPORT_METHOD(completePairing:(NSString *)serverUrl
+RCT_EXPORT_METHOD(pairServer:(NSString *)serverUrl
                   code:(NSString *)code
-                  source:(NSString *)source
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
@@ -74,20 +77,103 @@ RCT_EXPORT_METHOD(completePairing:(NSString *)serverUrl
       }];
       NSDictionary *credential = @{
         @"serverUrl": normalizedUrl,
+        @"hubUrl": normalizedUrl,
         @"deviceId": [self requiredString:response key:@"deviceId"],
         @"refreshToken": [self requiredString:response key:@"refreshToken"],
         @"serverId": [self requiredString:response key:@"serverId"],
-        @"workspaceId": [self requiredString:response key:@"workspaceId"],
+        @"workspaceId": @"",
       };
       [self saveCredential:credential];
-      @try {
-        resolve([self shellGrantFromResponse:response credential:credential]);
-      } @catch (NSException *exception) {
-        [self clearStoredCredentials];
-        @throw;
-      }
+      resolve(@{
+        @"serverUrl": normalizedUrl,
+        @"hubUrl": normalizedUrl,
+        @"deviceId": credential[@"deviceId"],
+        @"serverId": credential[@"serverId"],
+      });
     } @catch (NSException *exception) {
       reject(@"pairing_failed", exception.reason, nil);
+    }
+  });
+}
+
+RCT_EXPORT_METHOD(listWorkspaces:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    @try {
+      NSDictionary *credential = [self loadCredential];
+      if (credential == nil) {
+        [NSException raise:@"NatStackNoCredentials" format:@"No mobile credentials are stored"];
+      }
+      NSString *hubUrl = [self optionalString:credential key:@"hubUrl"];
+      if (hubUrl.length == 0) {
+        [NSException raise:@"NatStackNoHubURL" format:@"Stored credential is missing a hub URL"];
+      }
+      NSDictionary *response = [self postJson:hubUrl path:@"/_r/s/workspaces/list" body:@{
+        @"deviceId": credential[@"deviceId"],
+        @"refreshToken": credential[@"refreshToken"],
+      }];
+      NSArray *rawWorkspaces = [response[@"workspaces"] isKindOfClass:[NSArray class]]
+        ? response[@"workspaces"]
+        : @[];
+      NSMutableArray *workspaces = [NSMutableArray array];
+      for (NSDictionary *item in rawWorkspaces) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        NSString *name = [self optionalString:item key:@"name"];
+        if (name.length == 0) continue;
+        NSMutableDictionary *entry = [@{
+          @"name": name,
+          @"lastOpened": item[@"lastOpened"] ?: @0,
+        } mutableCopy];
+        if ([item[@"running"] isKindOfClass:[NSNumber class]]) entry[@"running"] = item[@"running"];
+        if ([item[@"ephemeral"] isKindOfClass:[NSNumber class]]) entry[@"ephemeral"] = item[@"ephemeral"];
+        [workspaces addObject:entry];
+      }
+      resolve(@{ @"workspaces": workspaces });
+    } @catch (NSException *exception) {
+      reject(@"workspace_list_failed", exception.reason, nil);
+    }
+  });
+}
+
+RCT_EXPORT_METHOD(selectWorkspace:(NSString *)name
+                  source:(NSString *)source
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    @try {
+      NSDictionary *credential = [self loadCredential];
+      if (credential == nil) {
+        [NSException raise:@"NatStackNoCredentials" format:@"No mobile credentials are stored"];
+      }
+      NSString *hubUrl = [self optionalString:credential key:@"hubUrl"];
+      if (hubUrl.length == 0) {
+        [NSException raise:@"NatStackNoHubURL" format:@"Stored credential is missing a hub URL"];
+      }
+      NSDictionary *selected = [self postJson:hubUrl path:@"/_r/s/workspaces/select" body:@{
+        @"deviceId": credential[@"deviceId"],
+        @"refreshToken": credential[@"refreshToken"],
+        @"name": name,
+      }];
+      NSString *workspaceUrl = [self normalizeWorkspaceServerUrl:[self requiredString:selected key:@"serverUrl"]];
+      NSString *workspaceName = [self optionalString:selected key:@"workspaceName"] ?: name;
+      NSMutableDictionary *selectedCredential = [credential mutableCopy];
+      selectedCredential[@"serverUrl"] = workspaceUrl;
+      selectedCredential[@"workspaceName"] = workspaceName;
+      NSDictionary *grantResponse = [self postJson:workspaceUrl path:@"/_r/s/auth/refresh-shell" body:@{
+        @"deviceId": selectedCredential[@"deviceId"],
+        @"refreshToken": selectedCredential[@"refreshToken"],
+      }];
+      selectedCredential[@"workspaceId"] = [self requiredString:grantResponse key:@"workspaceId"];
+      // Validate the shell grant BEFORE persisting. A rejected grant must never leave a
+      // half-updated workspace-scoped credential behind, or the next launch would treat it
+      // as a fully selected workspace and skip re-pairing despite having no usable grant.
+      NSDictionary *grant = [self shellGrantFromResponse:grantResponse credential:selectedCredential];
+      [self saveCredential:selectedCredential];
+      resolve(grant);
+    } @catch (NSException *exception) {
+      reject(@"workspace_select_failed", exception.reason, nil);
     }
   });
 }
@@ -314,7 +400,7 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"%@%@", serverUrl, path]];
   NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
   request.HTTPMethod = @"POST";
-  request.timeoutInterval = 15;
+  request.timeoutInterval = NatStackJsonPostTimeout;
   [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
   request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
 
@@ -350,7 +436,7 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   NSURL *url = [NSURL URLWithString:urlString];
   NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
   request.HTTPMethod = @"GET";
-  request.timeoutInterval = 30;
+  request.timeoutInterval = NatStackBundleDownloadTimeout;
 
   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
   __block NSData *responseData = nil;
@@ -511,7 +597,6 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   [self requiredString:credential key:@"deviceId"];
   [self requiredString:credential key:@"refreshToken"];
   [self requiredString:credential key:@"serverId"];
-  [self requiredString:credential key:@"workspaceId"];
   return credential;
 }
 
@@ -545,6 +630,32 @@ RCT_EXPORT_METHOD(activatePreparedAppBundle:(NSString *)localPath
   }
   components.scheme = scheme;
   components.path = @"";
+  components.query = nil;
+  components.fragment = nil;
+  components.user = nil;
+  components.password = nil;
+  return components.string;
+}
+
+- (NSString *)normalizeWorkspaceServerUrl:(NSString *)serverUrl
+{
+  NSString *trimmed = [serverUrl stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  NSURLComponents *components = [NSURLComponents componentsWithString:trimmed];
+  NSString *scheme = components.scheme.lowercaseString ?: @"";
+  if (![scheme isEqualToString:@"http"] && ![scheme isEqualToString:@"https"]) {
+    [NSException raise:@"NatStackInvalidServerURL" format:@"Workspace server URL must use http or https"];
+  }
+  if (components.host.length == 0 || components.user.length > 0 || components.password.length > 0) {
+    [NSException raise:@"NatStackInvalidServerURL" format:@"Workspace server URL must include a host"];
+  }
+  if (components.query.length > 0 || components.fragment.length > 0) {
+    [NSException raise:@"NatStackInvalidServerURL" format:@"Workspace server URL must not include a query or fragment"];
+  }
+  components.scheme = scheme;
+  while ([components.path hasSuffix:@"/"] && components.path.length > 1) {
+    components.path = [components.path substringToIndex:components.path.length - 1];
+  }
+  if ([components.path isEqualToString:@"/"]) components.path = @"";
   components.query = nil;
   components.fragment = nil;
   components.user = nil;

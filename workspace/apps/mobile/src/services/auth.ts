@@ -7,6 +7,7 @@
 
 import { NativeModules } from "react-native";
 import type { AppCapability } from "@natstack/shared/unitManifest";
+import { isSelectedWorkspaceUrl } from "@natstack/shared/connect";
 
 export class StoredCredentialsNeedRepairError extends Error {
   constructor(
@@ -19,9 +20,25 @@ export class StoredCredentialsNeedRepairError extends Error {
 
 export interface Credentials {
   serverUrl: string;
+  hubUrl?: string;
+  workspaceName?: string;
   deviceId: string;
   serverId: string;
-  workspaceId: string;
+  workspaceId?: string;
+}
+
+export interface ServerPairingResponse {
+  serverUrl: string;
+  hubUrl: string;
+  deviceId: string;
+  serverId: string;
+}
+
+export interface RemoteWorkspaceEntry {
+  name: string;
+  lastOpened: number;
+  running?: boolean;
+  ephemeral?: boolean;
 }
 
 export interface ConnectionGrantResponse {
@@ -75,7 +92,9 @@ export function isWorkspaceMobileHostCallerId(callerId: string, deviceId?: strin
 interface NatStackMobileHostNative {
   getCredentials(): Promise<Credentials | null>;
   clearCredentials(): Promise<void>;
-  completePairing(serverUrl: string, code: string, source: string | null): Promise<PairingResponse>;
+  pairServer(serverUrl: string, code: string): Promise<ServerPairingResponse>;
+  listWorkspaces(): Promise<{ workspaces: RemoteWorkspaceEntry[] }>;
+  selectWorkspace(name: string, source: string | null): Promise<PairingResponse>;
   issueConnectionGrant(): Promise<ConnectionGrantResponse>;
   prepareAppBundle(
     expectedRnHostAbi: string,
@@ -107,10 +126,23 @@ export async function getCredentials(): Promise<Credentials | null> {
       typeof credentials.serverUrl !== "string" ||
       typeof credentials.deviceId !== "string" ||
       typeof credentials.serverId !== "string" ||
-      credentials.serverId.length === 0 ||
-      typeof credentials.workspaceId !== "string" ||
-      credentials.workspaceId.length === 0
+      credentials.serverId.length === 0
     ) {
+      await clearCredentials().catch(() => {});
+      throw new StoredCredentialsNeedRepairError(
+        "Stored mobile credentials are incomplete. Scan a new pairing QR code to reconnect."
+      );
+    }
+    const hasWorkspaceId =
+      typeof credentials.workspaceId === "string" && credentials.workspaceId.length > 0;
+    const hasHubUrl = typeof credentials.hubUrl === "string" && credentials.hubUrl.length > 0;
+    if (hasWorkspaceId && !isSelectedWorkspaceUrl(credentials.serverUrl)) {
+      await clearCredentials().catch(() => {});
+      throw new StoredCredentialsNeedRepairError(
+        "Stored mobile credentials are not scoped to a workspace. Scan a new pairing QR code to reconnect."
+      );
+    }
+    if (!hasWorkspaceId && !hasHubUrl) {
       await clearCredentials().catch(() => {});
       throw new StoredCredentialsNeedRepairError(
         "Stored mobile credentials are incomplete. Scan a new pairing QR code to reconnect."
@@ -130,13 +162,38 @@ export async function clearCredentials(): Promise<void> {
   await nativeHost().clearCredentials();
 }
 
-export async function completePairing(
-  serverUrl: string,
-  code: string,
+export async function pairServer(serverUrl: string, code: string): Promise<ServerPairingResponse> {
+  const response = await nativeHost().pairServer(serverUrl, code);
+  if (
+    typeof response.serverUrl !== "string" ||
+    typeof response.hubUrl !== "string" ||
+    typeof response.deviceId !== "string" ||
+    typeof response.serverId !== "string"
+  ) {
+    throw new Error("Native host returned an invalid server pairing response");
+  }
+  return response;
+}
+
+export async function listWorkspaces(): Promise<RemoteWorkspaceEntry[]> {
+  const response = await nativeHost().listWorkspaces();
+  if (!response || !Array.isArray(response.workspaces)) {
+    throw new Error("Native host returned an invalid workspace list");
+  }
+  return response.workspaces.filter(
+    (entry): entry is RemoteWorkspaceEntry =>
+      entry &&
+      typeof entry === "object" &&
+      typeof (entry as RemoteWorkspaceEntry).name === "string"
+  );
+}
+
+export async function selectWorkspace(
+  name: string,
   source?: string | null
 ): Promise<PairingResponse> {
-  const response = await nativeHost().completePairing(serverUrl, code, source ?? null);
-  validateNativeHostGrant(response, "Pairing response");
+  const response = await nativeHost().selectWorkspace(name, source ?? null);
+  validateNativeHostGrant(response, "Workspace selection response");
   return response;
 }
 

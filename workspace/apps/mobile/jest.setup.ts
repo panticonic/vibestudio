@@ -76,8 +76,19 @@ const { NativeModules } = jest.requireActual("react-native");
 NativeModules.NatStackMobileHost = {
   firebaseConfigured: true,
   clearCredentials: jest.fn(async () => undefined),
-  completePairing: jest.fn(async () => ({
+  pairServer: jest.fn(async () => ({
     serverUrl: "https://server.example",
+    hubUrl: "https://server.example",
+    deviceId: "dev_123",
+    serverId: "srv_123",
+  })),
+  listWorkspaces: jest.fn(async () => ({
+    workspaces: [{ name: "dev", lastOpened: 123, running: true }],
+  })),
+  selectWorkspace: jest.fn(async () => ({
+    serverUrl: "https://server.example/_workspace/dev",
+    hubUrl: "https://server.example",
+    workspaceName: "dev",
     deviceId: "dev_123",
     callerId: "shell:dev_123",
     connectionGrant: "grant_123",

@@ -17,9 +17,12 @@ import { useSetAtom, useAtomValue } from "jotai";
 import type { RootStackParamList } from "../navigation/RootNavigator";
 import {
   clearCredentials,
-  completePairing,
+  listWorkspaces,
+  pairServer,
+  selectWorkspace,
   StoredCredentialsNeedRepairError,
   type Credentials,
+  type RemoteWorkspaceEntry,
 } from "../services/auth";
 import { getConnectionBootstrap } from "../services/connectionBootstrap";
 import { MobileHostTargetApprovalRequiredError, ShellClient } from "../services/shellClient";
@@ -105,6 +108,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
   const [bootstrapPending, setBootstrapPending] = React.useState(true);
   const [autoConnecting, setAutoConnecting] = React.useState(false);
   const [hostApproval, setHostApproval] = React.useState<HostApprovalState | null>(null);
+  const [remoteWorkspaces, setRemoteWorkspaces] = React.useState<RemoteWorkspaceEntry[] | null>(null);
   const [openApprovalIds, setOpenApprovalIds] = React.useState<Set<string>>(() => new Set());
   const hostApprovalRef = React.useRef<HostApprovalState | null>(null);
   const colors = useAtomValue(themeColorsAtom);
@@ -241,32 +245,82 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
     });
   }, []);
 
-  const pairAndConnect = async (
+  // Returns true when pairing succeeded and the UI now owns the flow (workspace chooser,
+  // including the empty-state). Returns false only when pairing genuinely failed.
+  const pairAndLoadWorkspaces = async (
     targetUrl: string,
     code: string,
     options?: { showAlert?: boolean; connectLinkUrl?: string }
   ): Promise<boolean> => {
     setAuthLoading(true);
     setAuthError(null);
-    let pairingCompleted = false;
     try {
-      const credentials = await completePairing(targetUrl, code);
-      pairingCompleted = true;
+      await pairServer(targetUrl, code);
       smokePhase("workspace-pairing-complete");
+      const workspaces = await listWorkspaces();
       if (options?.connectLinkUrl) {
         await markConnectLinkConsumed(options.connectLinkUrl).catch(() => {});
       }
-      return await connectRef.current(credentials, options);
+      // Show the chooser even when the list is empty — the credential is valid and the hub may
+      // simply have no workspaces yet. The chooser's empty-state offers Check again / Disconnect,
+      // so a momentarily-empty hub never costs the user their pairing.
+      setRemoteWorkspaces(workspaces);
+      setAuthLoading(false);
+      return true;
     } catch (error) {
-      if (pairingCompleted) {
-        await clearCredentials().catch(() => {});
-      }
+      // pairServer is the only step that persists a credential. If it threw, nothing was saved.
+      // If listWorkspaces threw after a successful pair, the credential is intact and the next
+      // launch (or a manual retry) recovers it — so we never clear a successfully-paired device.
       setAuthLoading(false);
       const message = error instanceof Error ? error.message : "Pairing failed";
       setAuthError(message);
       if (options?.showAlert !== false) {
         Alert.alert("Pairing Failed", message);
       }
+      return false;
+    }
+  };
+
+  // Escape hatch out of the workspace chooser: drop the stored pairing and return to the
+  // connect form. Always reachable from the chooser, including its empty-state.
+  const disconnectAndReset = async () => {
+    setAuthLoading(true);
+    try {
+      await clearCredentials().catch(() => {});
+    } finally {
+      setRemoteWorkspaces(null);
+      setServerUrl("");
+      setPairingCode("");
+      setAuthError(null);
+      setAuthLoading(false);
+    }
+  };
+
+  // Re-list workspaces without re-pairing — for the case where the hub had none a moment ago.
+  const refreshWorkspaces = async () => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      setRemoteWorkspaces(await listWorkspaces());
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : "Failed to load workspaces");
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const selectWorkspaceAndConnect = async (workspaceName: string): Promise<boolean> => {
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      const credentials = await selectWorkspace(workspaceName);
+      setRemoteWorkspaces(null);
+      return await connectRef.current(credentials, { showAlert: true });
+    } catch (error) {
+      setAuthLoading(false);
+      const message = error instanceof Error ? error.message : "Workspace connection failed";
+      setAuthError(message);
+      Alert.alert("Connection Failed", message);
       return false;
     }
   };
@@ -297,7 +351,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
       if (!confirmed) return false;
       setServerUrl(result.serverUrl);
       setPairingCode(result.pairingCode);
-      const connected = await pairAndConnect(result.serverUrl, result.pairingCode, {
+      const connected = await pairAndLoadWorkspaces(result.serverUrl, result.pairingCode, {
         showAlert: true,
         connectLinkUrl: rawUrl,
       });
@@ -320,6 +374,11 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
 
         setServerUrl(bootstrap.serverUrl);
         setPairingCode("");
+
+        if (bootstrap.availableWorkspaces) {
+          setRemoteWorkspaces(bootstrap.availableWorkspaces);
+          return;
+        }
 
         if (bootstrap.autoConnect) {
           setAutoConnecting(true);
@@ -360,7 +419,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
       return;
     }
 
-    await pairAndConnect(trimmedUrl, trimmedCode, {
+    await pairAndLoadWorkspaces(trimmedUrl, trimmedCode, {
       showAlert: true,
     });
   };
@@ -519,6 +578,77 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
               {hostApproval.error}
             </Text>
           ) : null}
+        </ScrollView>
+      </KeyboardAvoidingView>
+    );
+  }
+
+  if (remoteWorkspaces) {
+    return (
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        style={{ flex: 1, backgroundColor: colors.background }}
+      >
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+          <Text style={[styles.title, { color: colors.text }]}>Choose a workspace</Text>
+          <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+            {remoteWorkspaces.length > 0
+              ? "Select the workspace to open on this server."
+              : "This server has no workspaces yet. Create one on the server, then check again."}
+          </Text>
+          {remoteWorkspaces.length > 0 ? (
+            <View style={styles.workspaceList}>
+              {remoteWorkspaces.map((workspace) => (
+                <Pressable
+                  key={workspace.name}
+                  style={[
+                    styles.workspaceButton,
+                    { borderColor: colors.border, backgroundColor: colors.surface },
+                    authLoading && styles.buttonDisabled,
+                  ]}
+                  onPress={() => void selectWorkspaceAndConnect(workspace.name)}
+                  disabled={authLoading}
+                >
+                  <Text style={[styles.workspaceName, { color: colors.text }]}>
+                    {workspace.name}
+                  </Text>
+                  <Text style={[styles.workspaceMeta, { color: colors.textSecondary }]}>
+                    {workspace.running ? "Running" : "Ready"}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
+          {authLoading ? <ActivityIndicator color={colors.primary} size="large" /> : null}
+          {authError && !authLoading ? (
+            <Text style={[styles.errorText, { color: colors.danger }]} accessibilityRole="alert">
+              {authError}
+            </Text>
+          ) : null}
+          <Pressable
+            style={[
+              styles.secondaryButton,
+              { borderColor: colors.border },
+              authLoading && styles.buttonDisabled,
+            ]}
+            onPress={() => void refreshWorkspaces()}
+            disabled={authLoading}
+          >
+            <Text style={[styles.secondaryButtonText, { color: colors.text }]}>Check again</Text>
+          </Pressable>
+          <Pressable
+            style={[
+              styles.secondaryButton,
+              { borderColor: colors.border },
+              authLoading && styles.buttonDisabled,
+            ]}
+            onPress={() => void disconnectAndReset()}
+            disabled={authLoading}
+          >
+            <Text style={[styles.secondaryButtonText, { color: colors.danger }]}>
+              Disconnect from server
+            </Text>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
     );
@@ -684,6 +814,25 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     flexWrap: "wrap",
     gap: 8,
+  },
+  workspaceList: {
+    width: "100%",
+    gap: 12,
+    marginBottom: 20,
+  },
+  workspaceButton: {
+    width: "100%",
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 16,
+  },
+  workspaceName: {
+    fontSize: 17,
+    fontWeight: "700",
+  },
+  workspaceMeta: {
+    marginTop: 4,
+    fontSize: 13,
   },
   approvalItem: {
     flex: 1,

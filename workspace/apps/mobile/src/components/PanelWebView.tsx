@@ -52,6 +52,7 @@ export interface PanelWebViewProps {
   managed: boolean;
   panelInit?: unknown;
   externalHost: string;
+  managedBasePath?: string;
   onNavigationStateChange?: (navState: WebViewNavigation) => void;
   onPanelNavigate?: (event: PanelNavigationEvent) => void;
   onTitleChange?: (panelId: string, title: string) => void;
@@ -346,6 +347,7 @@ function buildBridgeBootstrapScript(panelInit: unknown, enableDebug: boolean): s
         globalThis.__natstackHostPlatform = "mobile";
         if (panelInit !== null) {
           sessionStorage.setItem("__natstackPanelInit", JSON.stringify(panelInit));
+          sessionStorage.setItem("__natstackPanelInit:" + location.href, JSON.stringify(panelInit));
         }
       } catch (_) {}
 
@@ -414,6 +416,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
       managed,
       panelInit,
       externalHost,
+      managedBasePath = "",
       onNavigationStateChange,
       onPanelNavigate,
       onTitleChange,
@@ -556,7 +559,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
 
     const emitManagedNavigation = useCallback((requestUrl: string): boolean => {
       if (!isManagedHost(requestUrl, externalHost)) return false;
-      const parsed = parsePanelUrl(requestUrl, externalHost);
+      const parsed = parsePanelUrl(requestUrl, externalHost, managedBasePath);
       if (!parsed) return false;
       onPanelNavigate?.({
         type: "panel-switch",
@@ -567,7 +570,7 @@ export const PanelWebView = forwardRef<PanelWebViewHandle, PanelWebViewProps>(
         stateArgs: parsed.stateArgs,
       });
       return true;
-    }, [externalHost, onPanelNavigate, panelId]);
+    }, [externalHost, managedBasePath, onPanelNavigate, panelId]);
 
     const handleShouldStartLoad = useCallback(
       (request: ShouldStartLoadRequest): boolean => {

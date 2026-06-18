@@ -62,6 +62,12 @@ import {
 } from "@natstack/shared/panelCommands";
 import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
 import { filterRuntimeApprovals } from "@natstack/shared/bootstrapApprovals";
+import {
+  createApprovalStateController,
+  SHELL_APPROVAL_PENDING_CHANGED_CHANNEL,
+  SHELL_APPROVAL_PENDING_CHANGED_EVENT,
+  type ApprovalStateController,
+} from "@natstack/shared/shell/approvalState";
 import type { HostConfig } from "../services/panelUrls";
 import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
 const MAX_WEBVIEWS = 5;
@@ -119,6 +125,7 @@ export function MainScreen() {
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const pendingApprovalsRefreshSeq = useRef(0);
   const pendingApprovalsSignatureRef = useRef("");
+  const approvalStateControllerRef = useRef<ApprovalStateController | null>(null);
   const [addressBarVisible, setAddressBarVisible] = useState(false);
   const [addressQuery, setAddressQuery] = useState("");
   const [addressSuggestions, setAddressSuggestions] = useState<AddressAutocompleteItem[]>([]);
@@ -311,7 +318,25 @@ export function MainScreen() {
       prev.filter((entry) => shellClient.panels.registry.getPanel(entry.panelId) !== undefined)
     );
   }, [shellClient, setPanelTree]);
+  const applyPendingApprovals = useCallback((pending: PendingApproval[]) => {
+    setPendingApprovals(pending);
+    const signature = pending
+      .map((approval) => `${approval.kind}:${approval.approvalId}`)
+      .join("|");
+    if (signature !== pendingApprovalsSignatureRef.current) {
+      pendingApprovalsSignatureRef.current = signature;
+      if (pending.length > 0) {
+        smokePhase("workspace-approval-pending", {
+          count: pending.length,
+          kinds: pending.map((approval) => approval.kind),
+        });
+      }
+    }
+  }, []);
   const refreshPendingApprovals = useCallback(async () => {
+    if (approvalStateControllerRef.current) {
+      return approvalStateControllerRef.current.refresh("manual");
+    }
     if (!shellClient) {
       pendingApprovalsRefreshSeq.current++;
       setPendingApprovals([]);
@@ -320,22 +345,10 @@ export function MainScreen() {
     const seq = ++pendingApprovalsRefreshSeq.current;
     const pending = filterRuntimeApprovals(await shellClient.shellApproval.listPending());
     if (seq === pendingApprovalsRefreshSeq.current) {
-      setPendingApprovals(pending);
-      const signature = pending
-        .map((approval) => `${approval.kind}:${approval.approvalId}`)
-        .join("|");
-      if (signature !== pendingApprovalsSignatureRef.current) {
-        pendingApprovalsSignatureRef.current = signature;
-        if (pending.length > 0) {
-          smokePhase("workspace-approval-pending", {
-            count: pending.length,
-            kinds: pending.map((approval) => approval.kind),
-          });
-        }
-      }
+      applyPendingApprovals(pending);
     }
     return pending;
-  }, [shellClient]);
+  }, [applyPendingApprovals, shellClient]);
   const removeResolvedApproval = useCallback((approvalId: string) => {
     setPendingApprovals((current) =>
       current.filter((approval) => approval.approvalId !== approvalId)
@@ -548,26 +561,50 @@ export function MainScreen() {
       "external-open:open",
       "notification:show",
       "apps:lifecycle",
-      "shell-approval:pending-changed",
       "workspace:revision-bumped",
     ] as const;
     let disposed = false;
     const subscribeAll = async () => {
       await Promise.all(
-        eventNames.map((name) => shellClient.events.subscribe(name).catch(() => undefined))
+        eventNames.map(async (name) => {
+          try {
+            await shellClient.events.subscribe(name);
+          } catch (error) {
+            console.warn(`[MainScreen] Failed to subscribe to ${name}:`, error);
+          }
+        })
       );
     };
+    const approvalStateController = createApprovalStateController({
+      listPending: () => shellClient.shellApproval.listPending(),
+      subscribePendingChanged: () =>
+        shellClient.events.subscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT),
+      unsubscribePendingChanged: () =>
+        shellClient.events.unsubscribe(SHELL_APPROVAL_PENDING_CHANGED_EVENT),
+      onPendingChanged: (listener) =>
+        shellClient.transport.on(SHELL_APPROVAL_PENDING_CHANGED_CHANNEL, (event) =>
+          listener(event.payload)
+        ),
+      filter: filterRuntimeApprovals,
+      onChange: (pending) => {
+        pendingApprovalsRefreshSeq.current++;
+        applyPendingApprovals(pending);
+      },
+      onError: (error, phase) => {
+        console.warn(`[MainScreen] Approval state ${phase} failed:`, error);
+      },
+    });
+    approvalStateControllerRef.current = approvalStateController;
+    approvalStateController.start();
     void subscribeAll()
-      .then(() => {
-        if (!disposed) void refreshPendingApprovals().catch(() => {});
-      })
+      .then(() => {})
       .catch(() => {
-        if (!disposed) void refreshPendingApprovals().catch(() => {});
+        if (!disposed) void approvalStateController.refresh("manual").catch(() => {});
       });
     const unsubReconnect = shellClient.transport.onReconnect(() => {
       void subscribeAll()
-        .then(() => refreshPendingApprovals())
-        .catch(() => refreshPendingApprovals());
+        .then(() => approvalStateController.refresh("manual"))
+        .catch(() => approvalStateController.refresh("manual"));
       void shellClient.panels
         .refresh()
         .then(() => {
@@ -637,9 +674,6 @@ export function MainScreen() {
         selectedAppId: selectedMobileApp.appId,
       });
     });
-    const unsubApproval = shellClient.transport.on("event:shell-approval:pending-changed", () => {
-      void refreshPendingApprovals().catch(() => {});
-    });
     const unsubWorkspaceRevision = shellClient.transport.on(
       "event:workspace:revision-bumped",
       () => {
@@ -659,7 +693,10 @@ export function MainScreen() {
       unsubExternal();
       unsubNotification();
       unsubAppLifecycle();
-      unsubApproval();
+      approvalStateController.stop();
+      if (approvalStateControllerRef.current === approvalStateController) {
+        approvalStateControllerRef.current = null;
+      }
       unsubWorkspaceRevision();
       for (const name of eventNames) {
         void shellClient.events.unsubscribe(name).catch(() => {});
@@ -667,6 +704,7 @@ export function MainScreen() {
     };
   }, [
     activatePanel,
+    applyPendingApprovals,
     pushToast,
     refreshPendingApprovals,
     refreshTree,
@@ -1266,6 +1304,7 @@ export function MainScreen() {
                   managed={entry.managed}
                   panelInit={entry.panelInit}
                   externalHost={externalHost}
+                  managedBasePath={hostConfig?.basePath ?? ""}
                   onPanelNavigate={handlePanelNavigate}
                   onNavigationStateChange={(navState) => {
                     setWebViewNavigation((prev) => ({

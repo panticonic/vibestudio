@@ -8,6 +8,7 @@
 export interface DevBootstrapConfig {
   serverUrl: string;
   pairingCode: string;
+  workspaceName?: string;
   serverId?: string;
   workspaceId?: string;
   autoConnect?: boolean;

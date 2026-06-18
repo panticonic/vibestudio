@@ -34,6 +34,7 @@ export function createMobileShellCore(deps: {
   });
   const host = parseHostConfig(deps.serverUrl);
   const hostWithPort = `${host.host}${host.port ? `:${host.port}` : ""}`;
+  const serverUrl = `${host.protocol}://${hostWithPort}${host.basePath}`;
 
   const call = <T>(method: string, args: unknown[]) =>
     deps.transport.call("main", method, args) as Promise<T>;
@@ -97,7 +98,7 @@ export function createMobileShellCore(deps: {
     workspacePath: "",
     allowMissingManifests: true,
     serverInfo: {
-      gatewayConfig: { serverUrl: `${host.protocol}://${hostWithPort}` },
+      gatewayConfig: { serverUrl },
     },
     grantConnection: (panelId) => call<{ token: string }>("auth.grantConnection", [panelId]),
   });

@@ -23,7 +23,7 @@ import {
   View,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { parseConnectLink } from "@natstack/shared/connect";
+import { parseConnectLink, serverRpcHttpUrl, serverRpcWsUrl } from "@natstack/shared/connect";
 import {
   formatCapabilities,
   launchCopy,
@@ -95,7 +95,7 @@ async function activateApprovedWorkspaceApp(options = {}) {
 }
 
 async function rpc(serverUrl, token, method, args = []) {
-  const response = await fetch(`${serverUrl}/rpc`, {
+  const response = await fetch(serverRpcHttpUrl(serverUrl).toString(), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -111,9 +111,15 @@ async function rpc(serverUrl, token, method, args = []) {
 }
 
 function rpcWsUrl(serverUrl) {
-  const url = new URL("/rpc", serverUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
+  return serverRpcWsUrl(serverUrl);
+}
+
+function isSelectedWorkspaceUrl(serverUrl) {
+  try {
+    return new URL(serverUrl).pathname.replace(/\/+$/, "").startsWith("/_workspace/");
+  } catch {
+    return false;
+  }
 }
 
 function createLaunchReadinessEventClient(grant) {
@@ -240,20 +246,11 @@ function createLaunchReadinessEventClient(grant) {
 }
 
 async function pairParsedLink(parsed) {
-  let pairingCompleted = false;
   smokePhase("embedded-pairing-start");
-  try {
-    const grant = await nativeHost.completePairing(parsed.serverUrl, parsed.code, null);
-    pairingCompleted = true;
-    smokePhase("embedded-pairing-complete");
-    await markConnectLinkConsumed(parsed.rawUrl).catch(() => {});
-    return grant;
-  } catch (error) {
-    if (pairingCompleted) {
-      await nativeHost.clearCredentials?.().catch(() => {});
-    }
-    throw error;
-  }
+  await nativeHost.pairServer(parsed.serverUrl, parsed.code);
+  smokePhase("embedded-pairing-complete");
+  const response = await nativeHost.listWorkspaces();
+  return Array.isArray(response?.workspaces) ? response.workspaces : [];
 }
 
 function ActionButton({ title, onPress, variant = "primary", disabled = false }) {
@@ -332,6 +329,7 @@ function NatStackMobileHostBootstrap() {
   const [status, setStatus] = useState("Loading approved workspace app...");
   const [busy, setBusy] = useState(true);
   const [pendingConnect, setPendingConnect] = useState(null);
+  const [pendingWorkspaces, setPendingWorkspaces] = useState([]);
   const [launchGrant, setLaunchGrant] = useState(null);
   const [launchSession, setLaunchSession] = useState(null);
   const [approvals, setApprovals] = useState([]);
@@ -343,6 +341,7 @@ function NatStackMobileHostBootstrap() {
     const isCurrent = () => generation === launchGateGeneration.current;
     setBusy(true);
     setApprovals([]);
+    setPendingWorkspaces([]);
     setOpenApprovalIds(new Set());
     setLaunchGrant(grant);
     const deadline = Date.now() + 120000;
@@ -483,6 +482,17 @@ function NatStackMobileHostBootstrap() {
         );
         return;
       }
+      if (!credentials.workspaceName && !credentials.workspaceId) {
+        const response = await nativeHost.listWorkspaces();
+        setPendingWorkspaces(Array.isArray(response?.workspaces) ? response.workspaces : []);
+        setStatus("Choose a workspace on the paired server.");
+        return;
+      }
+      if (credentials.workspaceId && !isSelectedWorkspaceUrl(credentials.serverUrl)) {
+        await nativeHost.clearCredentials?.().catch(() => {});
+        setStatus("Stored mobile credentials are not scoped to a workspace. Scan a new pairing QR code.");
+        return;
+      }
       const grant = await nativeHost.issueConnectionGrant();
       await runLaunchGate(grant);
     } catch (error) {
@@ -495,11 +505,15 @@ function NatStackMobileHostBootstrap() {
   const confirmPendingConnect = useCallback(async () => {
     if (!pendingConnect) return;
     setBusy(true);
-    setStatus("Pairing device...");
+    setStatus("Pairing server...");
     try {
-      const grant = await pairParsedLink(pendingConnect);
-      setPendingConnect(null);
-      await runLaunchGate(grant);
+      const workspaces = await pairParsedLink(pendingConnect);
+      setPendingWorkspaces(workspaces);
+      setStatus(
+        workspaces.length > 0
+          ? "Choose a workspace on the paired server."
+          : "The paired server has no workspaces available."
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : String(error));
     } finally {
@@ -507,8 +521,31 @@ function NatStackMobileHostBootstrap() {
     }
   }, [pendingConnect]);
 
+  const selectPendingWorkspace = useCallback(
+    async (workspaceName) => {
+      setBusy(true);
+      setStatus(`Opening ${workspaceName}...`);
+      try {
+        const grant = await nativeHost.selectWorkspace(workspaceName, null);
+        smokePhase("embedded-workspace-selected");
+        if (pendingConnect?.rawUrl) {
+          await markConnectLinkConsumed(pendingConnect.rawUrl).catch(() => {});
+        }
+        setPendingConnect(null);
+        setPendingWorkspaces([]);
+        await runLaunchGate(grant);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : String(error));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [pendingConnect, runLaunchGate]
+  );
+
   const cancelPendingConnect = useCallback(() => {
     setPendingConnect(null);
+    setPendingWorkspaces([]);
     setStatus("Pairing cancelled.");
   }, []);
 
@@ -532,7 +569,8 @@ function NatStackMobileHostBootstrap() {
     return () => subscription.remove();
   }, [presentConnectLink]);
 
-  const activeStep = approvals.length > 0 ? "approve" : pendingConnect ? "pair" : "load";
+  const activeStep =
+    approvals.length > 0 ? "approve" : pendingConnect || pendingWorkspaces.length > 0 ? "pair" : "load";
 
   return (
     <SafeAreaView style={styles.root}>
@@ -625,6 +663,37 @@ function NatStackMobileHostBootstrap() {
                 onPress={() => resolveLaunchApprovals("deny")}
                 variant="danger"
               />
+            </View>
+          ) : pendingWorkspaces.length > 0 ? (
+            <View style={styles.actions}>
+              <View style={styles.connectCard}>
+                <Text style={styles.eyebrow}>Workspace</Text>
+                <Text style={styles.sectionTitle}>Choose a workspace</Text>
+                <Text style={styles.hostLabel}>
+                  {pendingConnect?.serverUrl ?? "Paired server"}
+                </Text>
+              </View>
+              {pendingWorkspaces.map((workspace) => (
+                <Pressable
+                  key={workspace.name}
+                  accessibilityRole="button"
+                  onPress={() => selectPendingWorkspace(workspace.name)}
+                  style={({ pressed }) => [
+                    styles.workspaceButton,
+                    pressed ? styles.buttonPressed : null,
+                  ]}
+                >
+                  <View>
+                    <Text style={styles.workspaceName}>{workspace.name}</Text>
+                    <Text style={styles.workspaceMeta}>
+                      {[workspace.ephemeral ? "temporary" : "saved", workspace.running ? "running" : null]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+              <ActionButton title="Cancel" onPress={cancelPendingConnect} variant="secondary" />
             </View>
           ) : pendingConnect ? (
             <View style={styles.actions}>
@@ -919,6 +988,25 @@ const styles = StyleSheet.create({
     color: "#e6eaf2",
     fontSize: 14,
     lineHeight: 20,
+  },
+  workspaceButton: {
+    backgroundColor: "#18202b",
+    borderColor: "#36465f",
+    borderRadius: 8,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  workspaceName: {
+    color: "#f8fafc",
+    fontSize: 16,
+    fontWeight: "800",
+    lineHeight: 22,
+  },
+  workspaceMeta: {
+    color: "#9eabc0",
+    fontSize: 13,
+    lineHeight: 18,
   },
   hint: {
     color: "#aab6c8",
