@@ -1,6 +1,6 @@
 /**
  * RPC WebSocket Server — handles caller-scoped app, panel, worker, extension,
- * shell-host, server, and harness communication.
+ * shell-host and server communication.
  *
  * Replaces Electron IPC with a single WebSocket transport.
  * Auth is unified through TokenManager. Events use a Subscriber interface.
@@ -323,10 +323,6 @@ function resolveHttpRuntimeCaller(
   );
 }
 
-function normalizeHttpCallerKind(kind: CallerKind): CallerKind {
-  return kind === "shell-remote" ? "shell" : kind;
-}
-
 export class RpcServer {
   private wss: WebSocketServer | null = null;
   private workerdUrl: string | null = null;
@@ -415,16 +411,7 @@ export class RpcServer {
       ) => {
         caller?: {
           callerId: string;
-          callerKind:
-            | "panel"
-            | "app"
-            | "worker"
-            | "do"
-            | "shell"
-            | "server"
-            | "shell-remote"
-            | "extension"
-            | "http";
+          callerKind: "panel" | "app" | "worker" | "do" | "shell" | "server" | "extension" | "http";
         };
         chainCaller?: {
           callerId: string;
@@ -685,26 +672,20 @@ export class RpcServer {
       ws.close(4006, "Invalid token");
       return;
     }
-    // Shell-attribution invariant (plan §Core decisions):
-    //   - kind:"shell"        — IN-PROCESS dispatch only (Electron main IPC
-    //                            handlers). Never authenticates over WS.
-    //   - kind:"shell-remote" — WS-authenticated trusted host clients
-    //                            (Electron main → child-server in standalone
-    //                            mode, or paired remote host devices).
-    // We reject any token claiming kind:"shell" at the WS boundary, then
-    // rebrand kind:"shell-remote" → kind:"shell" on the connection so all
-    // downstream policy checks see a single trust level.
-    if (entry.callerKind === "shell") {
+    // The literal caller id "shell" is reserved for in-process dispatch.
+    // Host clients that authenticate over WS use kind:"shell" with concrete
+    // caller ids such as "electron-main", headless-host, or paired devices.
+    if (entry.callerKind === "shell" && entry.callerId === "shell") {
       const msg: WsServerMessage = {
         type: "ws:auth-result",
         success: false,
-        error: 'kind:"shell" cannot authenticate over WebSocket — use a shell-remote token',
+        error: 'callerId:"shell" cannot authenticate over WebSocket',
       };
       ws.send(JSON.stringify(msg));
-      ws.close(4006, 'kind:"shell" cannot authenticate over WebSocket — use a shell-remote token');
+      ws.close(4006, 'callerId:"shell" cannot authenticate over WebSocket');
       return;
     }
-    const callerKind: CallerKind = entry.callerKind === "shell-remote" ? "shell" : entry.callerKind;
+    const callerKind: CallerKind = entry.callerKind;
     const callerId = entry.callerId;
     const connectionId = requestedConnectionId || randomUUID();
     const connectionKey = this.connectionKey(callerId, connectionId);
@@ -840,7 +821,7 @@ export class RpcServer {
 
   private callerKindForRuntimePrincipal(principalId: string): CallerKind {
     const kind = this.deps.entityCache?.resolve(principalId)?.kind;
-    return callerKindForPrincipalKind(kind, { transport: "ws" });
+    return callerKindForPrincipalKind(kind);
   }
 
   private handleMessage(client: WsClientState, data: Buffer | ArrayBuffer | Buffer[]): void {
@@ -1490,7 +1471,12 @@ export class RpcServer {
       res.end(JSON.stringify({ error: "Invalid token" }));
       return;
     }
-    let callerKind = normalizeHttpCallerKind(entry.callerKind);
+    if (entry.callerKind === "shell" && entry.callerId === "shell") {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: 'callerId:"shell" cannot authenticate over HTTP RPC' }));
+      return;
+    }
+    let callerKind = entry.callerKind;
     let callerId: string;
     try {
       callerId = resolveHttpRuntimeCaller(
@@ -1499,7 +1485,7 @@ export class RpcServer {
         req.headers[RPC_RUNTIME_ID_HEADER]
       );
       if (callerId !== entry.callerId) {
-        callerKind = normalizeHttpCallerKind(this.callerKindForRuntimePrincipal(callerId));
+        callerKind = this.callerKindForRuntimePrincipal(callerId);
       }
     } catch (err) {
       res.writeHead(403, { "Content-Type": "application/json" });
@@ -1706,7 +1692,12 @@ export class RpcServer {
       res.end(JSON.stringify({ error: "Invalid token" }));
       return;
     }
-    let callerKind = normalizeHttpCallerKind(entry.callerKind);
+    if (entry.callerKind === "shell" && entry.callerId === "shell") {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: 'callerId:"shell" cannot authenticate over HTTP RPC' }));
+      return;
+    }
+    let callerKind = entry.callerKind;
     let callerId: string;
     try {
       callerId = resolveHttpRuntimeCaller(
@@ -1715,7 +1706,7 @@ export class RpcServer {
         req.headers[RPC_RUNTIME_ID_HEADER]
       );
       if (callerId !== entry.callerId) {
-        callerKind = normalizeHttpCallerKind(this.callerKindForRuntimePrincipal(callerId));
+        callerKind = this.callerKindForRuntimePrincipal(callerId);
       }
     } catch (err) {
       res.writeHead(403, { "Content-Type": "application/json" });

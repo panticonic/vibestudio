@@ -400,8 +400,7 @@ export class PubSubChannel extends DurableObjectBase {
     return (
       caller?.callerId === "main" ||
       caller?.callerKind === "server" ||
-      caller?.callerKind === "shell" ||
-      caller?.callerKind === "harness"
+      caller?.callerKind === "shell"
     );
   }
 

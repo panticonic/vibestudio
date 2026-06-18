@@ -27,6 +27,7 @@ import {
 import {
   useRootPanels,
   useFullPanel,
+  usePanelTree,
   useAncestors,
   useSiblings,
   useDescendantSiblingGroups,
@@ -150,6 +151,7 @@ export function PanelStack({
   // Lazy data hooks
   const { panels: rootPanels, loading: rootLoading } = useRootPanels();
   const { panel: visiblePanel, loading: panelLoading } = useFullPanel(visiblePanelId);
+  const { panelMap } = usePanelTree();
   const { ancestors } = useAncestors(visiblePanelId);
   const { siblings } = useSiblings(visiblePanelId);
   const { groups: descendantGroups } = useDescendantSiblingGroups(visiblePanelId);
@@ -311,6 +313,17 @@ export function PanelStack({
     };
   }, [visiblePanelId]);
 
+  const navigatePanelHistory = useCallback(
+    (panelId: string, delta: -1 | 1): Promise<unknown> => {
+      const targetPanel = panelMap.get(panelId);
+      if (targetPanel && isBrowserPanelSource(getCurrentSnapshot(targetPanel).source)) {
+        return delta === -1 ? view.browserGoBack(panelId) : view.browserGoForward(panelId);
+      }
+      return panelService.navigateHistory(panelId, delta);
+    },
+    [panelMap]
+  );
+
   // Handle panel context menu actions (reload, unload)
   const handlePanelAction = useCallback(async (panelId: string, action: PanelContextMenuAction) => {
     switch (action) {
@@ -319,14 +332,14 @@ export function PanelStack({
           panelId,
           assertPresent(getBrowserNavigationIntentForCommand("back"))
         );
-        await panelService.goBack(panelId);
+        await navigatePanelHistory(panelId, -1);
         break;
       case "forward":
         await panelService.markBrowserNavigationIntent(
           panelId,
           assertPresent(getBrowserNavigationIntentForCommand("forward"))
         );
-        await panelService.goForward(panelId);
+        await navigatePanelHistory(panelId, 1);
         break;
       case "reload":
       case "reload-panel":
@@ -399,7 +412,7 @@ export function PanelStack({
         await panelService.archive(panelId);
         break;
     }
-  }, []);
+  }, [navigatePanelHistory, navigateToPanelId]);
 
   // Register panel action handler with parent
   useEffect(() => {
@@ -477,14 +490,14 @@ export function PanelStack({
     }
 
     void panelService
-      .notifyFocused(panelId)
+      .ensureLoaded(panelId)
       .then((result) => {
         if (result.status === "leased_elsewhere" || result.status === "view_creation_failed") {
-          console.warn("Panel focus did not load a view", result);
+          console.warn("Panel load did not create a view", result);
         }
       })
       .catch((error) => {
-        console.error("Failed to notify panel focus", error);
+        console.error("Failed to ensure panel is loaded", error);
       });
   }, [visiblePanel?.id]);
 
@@ -523,14 +536,14 @@ export function PanelStack({
             panelId,
             assertPresent(getBrowserNavigationIntentForCommand(command.type))
           );
-          void panelService.goBack(panelId);
+          void navigatePanelHistory(panelId, -1);
           return;
         case "forward":
           void panelService.markBrowserNavigationIntent(
             panelId,
             assertPresent(getBrowserNavigationIntentForCommand(command.type))
           );
-          void panelService.goForward(panelId);
+          void navigatePanelHistory(panelId, 1);
           return;
         case "reload-panel":
           void panelService.markBrowserNavigationIntent(
@@ -645,7 +658,9 @@ export function PanelStack({
                 : mode === "child"
                   ? panelService.createChild(panelId, parsed.source, { focus: true, ref })
                   : panelService.createPanel(parsed.source, { isRoot: true, ref });
-            void creator.then((result) => navigateToPanelId(result.id));
+            void creator.then((result) => {
+              if (result) navigateToPanelId(result.id);
+            });
             return;
           }
           if (parsed.type === "search") {
@@ -751,11 +766,13 @@ export function PanelStack({
                     ref: actionRef,
                   })
                 : panelService.createPanel(action.source, { isRoot: true, ref: actionRef });
-          void creator.then((result) => navigateToPanelId(result.id));
+          void creator.then((result) => {
+            if (result) navigateToPanelId(result.id);
+          });
         }
       }
     },
-    [navigateToPanelId, visiblePanel]
+    [navigatePanelHistory, navigateToPanelId, visiblePanel]
   );
 
   useEffect(() => {

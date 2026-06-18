@@ -100,10 +100,7 @@ export function responseForCredential(
 ): DeviceCredentialResponse {
   const shellFields = options.includeShellToken
     ? {
-        shellToken: deps.tokenManager.ensureToken(
-          shellCallerId(credential.deviceId),
-          "shell-remote"
-        ),
+        shellToken: deps.tokenManager.ensureToken(shellCallerId(credential.deviceId), "shell"),
         callerId: shellCallerId(credential.deviceId),
       }
     : {};

@@ -65,11 +65,12 @@ export const HostTargetLaunchResultSchema = z.custom<SharedHostTargetLaunchResul
   );
 });
 export type HostTargetLaunchResult = z.infer<typeof HostTargetLaunchResultSchema>;
-export const HostTargetLaunchSessionSnapshotSchema =
-  z.custom<HostTargetLaunchSessionSnapshot>((value) => {
+export const HostTargetLaunchSessionSnapshotSchema = z.custom<HostTargetLaunchSessionSnapshot>(
+  (value) => {
     if (!value || typeof value !== "object") return false;
     return typeof (value as { sessionId?: unknown }).sessionId === "string";
-  });
+  }
+);
 export type HostTargetLaunchSession = z.infer<typeof HostTargetLaunchSessionSnapshotSchema>;
 
 // ─── Workspace data schemas ───────────────────────────────────────────────────
@@ -361,61 +362,61 @@ export const workspaceMethods = defineServiceMethods({
   "recurring.list": {
     args: z.tuple([]),
     returns: z.array(WorkspaceRecurringJobStatusSchema),
-    policy: { allowed: ["shell", "shell-remote", "app", "panel", "worker", "do", "server"] },
+    policy: { allowed: ["shell", "app", "panel", "worker", "do", "server"] },
   },
   "hostTargets.list": {
     args: z.tuple([HostTargetSchema]),
     returns: z.array(HostTargetCandidateSchema),
-    policy: { allowed: ["shell", "shell-remote", "server"] },
+    policy: { allowed: ["shell", "server"] },
   },
   "hostTargets.getSelection": {
     args: z.tuple([HostTargetSchema]),
     returns: HostTargetSelectionStatusSchema,
-    policy: { allowed: ["shell", "shell-remote", "server"] },
+    policy: { allowed: ["shell", "server"] },
   },
   "hostTargets.setSelection": {
     args: z.tuple([HostTargetSchema, HostTargetSelectionInputSchema]),
     returns: HostTargetSelectionSchema,
-    policy: { allowed: ["shell", "shell-remote", "server"] },
+    policy: { allowed: ["shell", "server"] },
   },
   "hostTargets.clearSelection": {
     args: z.tuple([HostTargetSchema]),
     returns: z.void(),
-    policy: { allowed: ["shell", "shell-remote", "server"] },
+    policy: { allowed: ["shell", "server"] },
   },
   "hostTargets.versions": {
     args: z.tuple([HostTargetSchema, z.string()]),
     returns: WorkspaceAppVersionsSchema,
-    policy: { allowed: ["shell", "shell-remote", "server"] },
+    policy: { allowed: ["shell", "server"] },
   },
   "hostTargets.preparePinnedRef": {
     args: z.tuple([HostTargetSchema, z.string(), z.string()]),
     returns: z.unknown(),
-    policy: { allowed: ["shell", "shell-remote", "server"] },
+    policy: { allowed: ["shell", "server"] },
   },
   "hostTargets.launch": {
     args: z.tuple([HostTargetSchema]),
     returns: HostTargetLaunchResultSchema,
-    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+    policy: { allowed: ["shell", "app", "server"] },
   },
   "hostTargets.beginLaunch": {
     args: z.tuple([HostTargetSchema]),
     returns: HostTargetLaunchSessionSnapshotSchema,
-    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+    policy: { allowed: ["shell", "app", "server"] },
   },
   "hostTargets.getLaunchSession": {
     args: z.tuple([z.string()]),
     returns: HostTargetLaunchSessionSnapshotSchema.nullable(),
-    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+    policy: { allowed: ["shell", "app", "server"] },
   },
   "hostTargets.resolveLaunchSessionApproval": {
     args: z.tuple([z.string(), z.enum(["once", "deny"])]),
     returns: HostTargetLaunchSessionSnapshotSchema,
-    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+    policy: { allowed: ["shell", "app", "server"] },
   },
   "hostTargets.cancelLaunchSession": {
     args: z.tuple([z.string()]),
     returns: z.void(),
-    policy: { allowed: ["shell", "shell-remote", "app", "server"] },
+    policy: { allowed: ["shell", "app", "server"] },
   },
 });

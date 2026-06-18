@@ -155,9 +155,7 @@ export interface EventPayloads {
       | "do"
       | "extension"
       | "shell"
-      | "shell-remote"
-      | "server"
-      | "harness";
+      | "server";
   };
   "browser-panel:open": {
     url: string;
@@ -170,9 +168,7 @@ export interface EventPayloads {
       | "do"
       | "extension"
       | "shell"
-      | "shell-remote"
-      | "server"
-      | "harness";
+      | "server";
   };
   "browser-import-progress": {
     requestId: string;

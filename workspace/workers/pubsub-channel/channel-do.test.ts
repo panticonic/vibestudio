@@ -451,7 +451,7 @@ describe("PubSubChannel", () => {
 
   it("reports an envelope-only schema", async () => {
     const { instance } = await createGadBackedChannel();
-    setRpcCaller(instance, "harness:test", "harness");
+    setRpcCaller(instance, "server:test", "server");
 
     const schema = await instance.adminInspectSchema();
     const envelopeTable = schema.tables.find((table) => table.table === "channel_envelopes");
@@ -1556,7 +1556,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
 
   it("stamps agentHops into annotations without mutating the payload", async () => {
     const { instance, gad } = await createGadBackedChannel();
-    setRpcCaller(instance, "agent:one", "harness");
+    setRpcCaller(instance, "agent:one", "server");
     await instance.subscribe("agent:one", { contextId: "ctx-1", name: "Agent", type: "agent" });
 
     await instance.publish("agent:one", AGENTIC_EVENT_PAYLOAD_KIND, agentCompleted("msg-a1"));
@@ -1597,7 +1597,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
 
   it("rebuilds conversation policy state across a fork (the fork-wipe bug fix)", async () => {
     const parent = await createGadBackedChannel({ channelKey: "channel-policy-parent" });
-    setRpcCaller(parent.instance, "agent:one", "harness");
+    setRpcCaller(parent.instance, "agent:one", "server");
     await parent.instance.subscribe("agent:one", {
       contextId: "ctx-1",
       name: "Agent",
@@ -1626,7 +1626,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
     const forkState = await fork.instance.getPolicyState();
     expect(forkState.state).toMatchObject({ agentStreak: 2, lastCompletedSender: "agent:one" });
 
-    setRpcCaller(fork.instance, "agent:one", "harness");
+    setRpcCaller(fork.instance, "agent:one", "server");
     await fork.instance.subscribe("agent:one", {
       contextId: "ctx-1",
       name: "Agent",

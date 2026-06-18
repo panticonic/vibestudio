@@ -1,5 +1,6 @@
 import type { Panel } from "@natstack/shared/types";
 import { getCurrentSnapshot } from "@natstack/shared/panel/accessors";
+import { formatPanelRuntimeLeaseDeniedMessage } from "@natstack/shared/panel/panelLease";
 import { buildPanelUrl, type HostConfig } from "./panelUrls";
 
 export interface MobileMaterializedPanel {
@@ -50,9 +51,7 @@ export async function materializeMobilePanel(opts: {
     connectionId: leaseConnectionId,
   });
   if (!lease.acquired) {
-    throw new Error(
-      `Panel ${opts.panelId} is running on ${lease.lease?.holderLabel ?? "another client"}`
-    );
+    throw new Error(formatPanelRuntimeLeaseDeniedMessage(opts.panelId, lease.lease));
   }
   if (!managed) {
     return {

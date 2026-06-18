@@ -21,20 +21,7 @@ const serviceCall = (method: string, ...args: unknown[]) =>
 const natstackApp = {
   getBootstrapConfig: () => ipcRenderer.invoke("natstack:getPanelInit"),
   getInfo: () => ipcRenderer.invoke("natstack:bridge.getInfo"),
-  setStateArgs: (updates: Record<string, unknown>) =>
-    ipcRenderer.invoke("natstack:bridge.setStateArgs", updates),
   serviceCall,
-  panel: {
-    create: (source: string, opts?: unknown) =>
-      ipcRenderer.invoke("natstack:panel.create", source, opts),
-    list: (parentId?: string | null) => ipcRenderer.invoke("natstack:panel.list", parentId),
-    close: (id: string) => ipcRenderer.invoke("natstack:panel.close", id),
-    reload: (id: string) => ipcRenderer.invoke("natstack:panel.reload", id),
-    getStateArgs: (id: string) => ipcRenderer.invoke("natstack:panel.getStateArgs", id),
-    setStateArgs: (id: string, updates: Record<string, unknown>) =>
-      ipcRenderer.invoke("natstack:panel.setStateArgs", id, updates),
-    snapshot: (id: string) => ipcRenderer.invoke("natstack:panel.snapshot", id),
-  },
   native: {
     menu: {
       call: (method: string, ...args: unknown[]) => serviceCall(`menu.${method}`, ...args),

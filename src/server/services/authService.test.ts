@@ -181,7 +181,7 @@ describe("auth service device credentials", () => {
     );
     expect(issued.status).toBe(200);
     expect(issued.body.callerId).toBe(`shell:${issued.body.deviceId}`);
-    expect(tokenManager.validateToken(issued.body.shellToken)?.callerKind).toBe("shell-remote");
+    expect(tokenManager.validateToken(issued.body.shellToken)?.callerKind).toBe("shell");
 
     const completed = await postJson<PairingCompleteResponse>("/_r/s/auth/complete-pairing", {
       code: pairing.body.code,
@@ -192,7 +192,7 @@ describe("auth service device credentials", () => {
     expect(completed.body.deviceId).toMatch(/^dev_/);
     expect(completed.body.refreshToken).toBeTruthy();
     expect(completed.body.callerId).toBe(`shell:${completed.body.deviceId}`);
-    expect(tokenManager.validateToken(completed.body.shellToken)?.callerKind).toBe("shell-remote");
+    expect(tokenManager.validateToken(completed.body.shellToken)?.callerKind).toBe("shell");
 
     const refreshed = await postJson<RefreshAppGrantResponse>(
       "/_r/s/auth/refresh-principal-grant",
@@ -445,7 +445,7 @@ describe("auth service connection grants", () => {
     });
 
     expect(service.definition.methods?.["grantConnection"]?.policy).toEqual({
-      allowed: ["server", "shell", "shell-remote", "app"],
+      allowed: ["server", "shell", "app"],
     });
 
     const granted = (await service.definition.handler(

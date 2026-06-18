@@ -10,6 +10,7 @@
 
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import type { EntityCache } from "@natstack/shared/runtime/entityCache";
 import {
   vcsMethods,
@@ -25,12 +26,14 @@ import type {
   MainAdvanceApprovalCandidate,
   MainAdvanceApprovalGate,
 } from "./mainAdvanceApproval.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 export interface VcsServiceDeps {
   workspaceVcs: WorkspaceVcs;
   entityCache?: Pick<EntityCache, "resolveContext">;
   getBuildSystem?: () => BuildSystemV2 | null;
   mainAdvanceGate?: MainAdvanceApprovalGate;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
 }
 
 /** Resolve the caller's default head: context callers → their ctx head, else main. */
@@ -43,22 +46,18 @@ function headForCaller(ctx: ServiceContext, deps: VcsServiceDeps): string {
   return contextId ? vcsContextHead(contextId) : VCS_MAIN_HEAD;
 }
 
-/** Shell/server/harness are user-level surfaces; everything else (panel,
+/** Shell/server are user-level surfaces; everything else (panel,
  *  app, worker, do, extension) is sandboxed code whose writes are confined
  *  to its own context head. */
-function isPrivilegedCaller(ctx: ServiceContext): boolean {
-  return (
-    ctx.caller.runtime.kind === "shell" ||
-    ctx.caller.runtime.kind === "server" ||
-    ctx.caller.runtime.kind === "harness"
-  );
+function isPrivilegedCaller(ctx: ServiceContext, deps: VcsServiceDeps): boolean {
+  return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
 }
 
 /**
  * Authorization gate for HEAD WRITES (commit, merge target, abortMerge).
  * Policy:
  *
- * - shell / server / harness: may write any head (user-level surfaces).
+ * - shell / server: may write any head (user-level surfaces).
  * - entity callers (panel, app, worker, do, extension): may write ONLY their
  *   own `ctx:{id}` head. A caller with no context registration gets an
  *   ERROR, never a silent fallthrough to main — main is user-owned; the
@@ -70,7 +69,7 @@ function resolveWriteHead(
   requestedHead: string | undefined
 ): string {
   const callerKind = ctx.caller.runtime.kind;
-  if (isPrivilegedCaller(ctx)) return requestedHead ?? headForCaller(ctx, deps);
+  if (isPrivilegedCaller(ctx, deps)) return requestedHead ?? headForCaller(ctx, deps);
   const contextCallerId =
     callerKind === "extension" && ctx.chainCaller
       ? ctx.chainCaller.callerId
@@ -167,7 +166,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     name: "vcs",
     description: "Workspace version control (GAD-native): commit, status, log, diff",
     policy: {
-      allowed: ["shell", "panel", "app", "server", "worker", "do", "extension", "harness"],
+      allowed: ["shell", "panel", "app", "server", "worker", "do", "extension"],
     },
     methods: vcsMethods,
     handler: async (ctx, method, args) => {
@@ -308,7 +307,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           const requested = args[0] as string | undefined;
           let sourceHead = callerHead;
           if (requested && requested !== callerHead) {
-            if (!isPrivilegedCaller(ctx)) {
+            if (!isPrivilegedCaller(ctx, deps)) {
               throw new Error(`Callers may only publish their own context head (${callerHead})`);
             }
             sourceHead = requested;

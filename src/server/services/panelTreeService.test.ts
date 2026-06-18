@@ -53,11 +53,10 @@ describe("panelTreeService", () => {
       bridge: vi.fn(),
     });
 
-    // shell/shell-remote/server/app are trusted chrome (desktop routes via the
-    // electron-main serverClient as "server"; the mobile shell calls panelTree
-    // directly as an "app" principal, app:apps/mobile).
+    // Authorized chrome is trusted by capability. Runtime callers are admitted
+    // but scoped by panel access grants unless they hold the chrome capability.
     expect(service.policy).toEqual({
-      allowed: ["panel", "worker", "do", "shell", "shell-remote", "server", "app"],
+      allowed: ["panel", "worker", "do", "shell", "server", "app"],
     });
   });
 
@@ -177,8 +176,8 @@ describe("panelTreeService", () => {
     );
   });
 
-  it("delegates panel creation under the requested parent without approval", async () => {
-    const approvalQueue = approvalQueueMock("deny");
+  it("approval-gates panel creation under the requested parent before delegating", async () => {
+    const approvalQueue = approvalQueueMock("once");
     const bridge = vi.fn(async (request: { method: string; args: unknown[] }) =>
       request.method === "metadata"
         ? { id: request.args[0] as string, title: "Parent", source: "panels/parent" }
@@ -194,9 +193,22 @@ describe("panelTreeService", () => {
       service.handler(ctx(), "create", ["panels/child", { parentId: "parent" }])
     ).resolves.toEqual({ id: "created", title: "Created", kind: "workspace" });
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(bridge).toHaveBeenCalledTimes(1);
-    expect(bridge).toHaveBeenCalledWith({
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: PANEL_STRUCTURAL_CAPABILITY,
+        title: "Open panel",
+        description: "Allow this requester to open a panel under Parent.",
+        grantResourceKey: "panel:parent:requester:panel:requester",
+      })
+    );
+    expect(bridge).toHaveBeenCalledTimes(2);
+    expect(bridge).toHaveBeenNthCalledWith(1, {
+      callerId: "panel:requester",
+      callerKind: "panel",
+      method: "metadata",
+      args: ["parent"],
+    });
+    expect(bridge).toHaveBeenNthCalledWith(2, {
       callerId: "panel:requester",
       callerKind: "panel",
       method: "create",
@@ -204,12 +216,36 @@ describe("panelTreeService", () => {
     });
   });
 
-  it("delegates implicit child panel creation without resolving parent metadata for approval", async () => {
+  it("does not delegate panel creation when parent approval is denied", async () => {
     const approvalQueue = approvalQueueMock("deny");
+    const bridge = vi.fn(async (request: { method: string; args: unknown[] }) =>
+      request.method === "metadata"
+        ? { id: request.args[0] as string, title: "Parent", source: "panels/parent" }
+        : { id: "created", title: "Created", kind: "workspace" }
+    );
+    const service = createPanelTreeService({
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+      bridge,
+    });
+
+    await expect(
+      service.handler(ctx(), "create", ["panels/child", { parentId: "parent" }])
+    ).rejects.toThrow("openPanel denied for panel parent");
+
+    expect(bridge).toHaveBeenCalledTimes(1);
+    expect(bridge).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "metadata", args: ["parent"] })
+    );
+  });
+
+  it("approval-gates implicit child panel creation against the requester panel", async () => {
+    const approvalQueue = approvalQueueMock("once");
     const resolveRequesterPanel = vi.fn(async () => ({
       id: "requester-slot",
       title: "Requester Panel",
       source: "panels/requester",
+      runtimeEntityId: "panel:requester",
     }));
     const bridge = vi.fn(async (request: { method: string }) =>
       request.method === "create" ? { id: "created", title: "Created", kind: "workspace" } : null
@@ -227,9 +263,21 @@ describe("panelTreeService", () => {
       kind: "workspace",
     });
 
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(resolveRequesterPanel).not.toHaveBeenCalled();
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: PANEL_STRUCTURAL_CAPABILITY,
+        title: "Open panel",
+        description: "Allow this requester to open a panel under Requester Panel.",
+        grantResourceKey: "panel:requester-slot:requester:panel:requester",
+      })
+    );
     expect(bridge).toHaveBeenCalledTimes(1);
+    expect(bridge).toHaveBeenCalledWith({
+      callerId: "panel:requester",
+      callerKind: "panel",
+      method: "create",
+      args: ["panels/child", {}],
+    });
   });
 
   it("does not delegate structural operations when approval is denied", async () => {

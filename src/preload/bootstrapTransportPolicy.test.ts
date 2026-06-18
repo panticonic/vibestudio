@@ -34,7 +34,7 @@ describe("bootstrap transport policy", () => {
     expect(() =>
       assertBootstrapRpcMessageAllowed("main", {
         type: "request",
-        method: "panel.create",
+        method: "panel.reloadView",
       })
     ).toThrow(/not allowed/);
     expect(() =>

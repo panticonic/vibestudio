@@ -21,6 +21,10 @@ import { assertPresent } from "../lintHelpers";
 
 /** Electron-main services that are not owned by the NatStack server process. */
 const ELECTRON_LOCAL_SERVICES: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
+const DESKTOP_SHELL_APP_CALLER = {
+  callerId: "@workspace-apps/shell",
+  callerKind: "app" as const,
+};
 
 export interface IpcDispatcherDeps {
   /** Electron-local service dispatcher */
@@ -178,6 +182,8 @@ export class IpcDispatcher {
 
       try {
         let result: unknown;
+        let resultCallerId = callerId;
+        let resultCallerKind = callerKind;
         if (ELECTRON_LOCAL_SERVICES.has(service)) {
           // Dispatch locally to Electron services. The dispatcher itself
           // enforces policy via checkServiceAccess (single choke-point).
@@ -193,7 +199,18 @@ export class IpcDispatcher {
           // Server is the default owner so newly registered userland/workerd
           // services are reachable without a shared routing-list update.
           if (callerKind === "shell") {
-            result = await this.deps.serverClient.call(service, method, req.args);
+            if (service === "panelTree") {
+              result = await this.deps.serverClient.callAs(
+                DESKTOP_SHELL_APP_CALLER,
+                service,
+                method,
+                req.args
+              );
+              resultCallerId = DESKTOP_SHELL_APP_CALLER.callerId;
+              resultCallerKind = DESKTOP_SHELL_APP_CALLER.callerKind;
+            } else {
+              result = await this.deps.serverClient.call(service, method, req.args);
+            }
           } else if (callerKind === "app") {
             this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
             result = await this.deps.serverClient.callAs(
@@ -207,8 +224,8 @@ export class IpcDispatcher {
           }
         }
         await this.deps.onServerRpcResult?.({
-          callerId,
-          callerKind,
+          callerId: resultCallerId,
+          callerKind: resultCallerKind,
           service,
           method,
           args: req.args,

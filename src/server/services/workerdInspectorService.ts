@@ -10,15 +10,18 @@
  */
 import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import type { WorkerdInspectorTarget } from "../workerdInspectorBridge.js";
 import {
   requestCapabilityPermission,
   type CapabilityPermissionDeps,
 } from "./capabilityPermission.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 export const WORKERD_INSPECTOR_CAPABILITY = "workerd.inspector";
 
 export interface WorkerdInspectorServiceDeps extends CapabilityPermissionDeps {
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   listTargets(): Promise<WorkerdInspectorTarget[]>;
   getEndpoint(
     targetPath: string,
@@ -32,7 +35,7 @@ export function createWorkerdInspectorService(
   return {
     name: "workerdInspector",
     description: "Approval-gated workerd V8 inspector access for profiling workers and DOs",
-    policy: { allowed: ["shell", "server", "panel", "worker", "do"] },
+    policy: { allowed: ["shell", "server", "panel", "app", "worker", "do"] },
     methods: {
       listTargets: { args: z.tuple([]) },
       getEndpoint: { args: z.tuple([z.string()]) },
@@ -45,7 +48,7 @@ export function createWorkerdInspectorService(
         case "getEndpoint": {
           const targetPath = args[0] as string;
           const caller = ctx.caller;
-          if (caller.runtime.kind !== "shell" && caller.runtime.kind !== "server") {
+          if (!isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })) {
             const permission = await requestCapabilityPermission(deps, {
               caller,
               capability: WORKERD_INSPECTOR_CAPABILITY,

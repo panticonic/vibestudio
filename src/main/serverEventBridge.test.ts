@@ -6,10 +6,9 @@ function createHarness(opts: { resolveAppAvailableEvent?: (payload: unknown) => 
   const eventService = { emit: vi.fn() };
   const panelOrchestrator = {
     applyBuildComplete: vi.fn(),
-    applyRuntimeLeaseChanged: vi.fn(async () => {}),
+    handleRuntimeLeaseChanged: vi.fn(async () => {}),
     applyServerPanelTreeSnapshot: vi.fn(async () => undefined),
     applyServerPanelTitleUpdate: vi.fn(),
-    createBrowserUrlPanel: vi.fn(async () => ({ id: "browser", title: "Browser" })),
     recoverShellSnapshot: vi.fn(async () => undefined),
   };
   const appOrchestrator = {
@@ -66,7 +65,7 @@ describe("createServerEventBridge", () => {
     handle("event:panel:runtimeLeaseChanged", payload);
     await Promise.resolve();
 
-    expect(panelOrchestrator.applyRuntimeLeaseChanged).toHaveBeenCalledWith(payload);
+    expect(panelOrchestrator.handleRuntimeLeaseChanged).toHaveBeenCalledWith(payload);
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 
@@ -107,8 +106,8 @@ describe("createServerEventBridge", () => {
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 
-  it("handles browser-panel requests locally instead of forwarding raw events", async () => {
-    const { handle, eventService, panelOrchestrator } = createHarness();
+  it("rejects browser-panel open events instead of proxying panel creation", async () => {
+    const { handle, eventService, warn } = createHarness();
 
     handle("event:browser-panel:open", {
       url: "https://example.com/",
@@ -116,10 +115,8 @@ describe("createServerEventBridge", () => {
     });
     await Promise.resolve();
 
-    expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
-      "slot-a",
-      "https://example.com/",
-      { focus: true }
+    expect(warn).toHaveBeenCalledWith(
+      "[browserPanel] Ignoring browser-panel:open; panel creation must go through authenticated panelTree RPC"
     );
     expect(eventService.emit).not.toHaveBeenCalled();
   });

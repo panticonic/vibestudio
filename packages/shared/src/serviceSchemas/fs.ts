@@ -6,7 +6,7 @@
  * Caller-kind argument conventions (handled inside FsService):
  * - panel/app/worker/do callers: context resolved from the EntityCache.
  * - extension callers: chained caller context (or explicit host-fs capability).
- * - server/shell/harness callers: explicit contextId as the first argument.
+ * - server/shell callers: explicit contextId as the first argument.
  *
  * `symlink` and `chown` are deliberately absent (audit findings #38/#39):
  * they are sandbox-escape primitives and nothing on the service surface

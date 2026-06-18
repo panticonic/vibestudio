@@ -14,6 +14,7 @@ import { randomUUID } from "node:crypto";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import { runtimeMethods } from "@natstack/shared/serviceSchemas/runtime";
 import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import {
   canonicalEntityId,
   type EntityRecord,
@@ -27,6 +28,7 @@ import {
   requestCapabilityPermission,
   type CapabilityPermissionDeps,
 } from "./capabilityPermission.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 const WORKSPACE_DO_CLASS = "WorkspaceDO";
 export const RUNTIME_CROSS_CONTEXT_ENTITY = "runtime.crossContextEntity" as const;
@@ -94,6 +96,7 @@ export interface RuntimeServiceDeps {
     caller: VerifiedCaller,
     spec: RuntimeEntityCreateSpec
   ) => boolean | Promise<boolean>;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
 }
 
 export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinition {
@@ -114,7 +117,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       return randomUUID();
     }
     const callerKind = caller.runtime.kind;
-    if (callerKind === "server" || callerKind === "shell") {
+    if (isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })) {
       return requested;
     }
     if (await deps.canCreateCrossContextEntity?.(caller, spec)) {
@@ -136,7 +139,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
       callerKind !== "worker" &&
       callerKind !== "do"
     ) {
-      // harness/extension callers reach here too; cross-context is gated.
+      // extension callers reach here too; cross-context is gated.
       throw new Error(`Caller kind ${callerKind} cannot create cross-context entities`);
     }
     const result = await requestCapabilityPermission(deps.capability, {
@@ -172,7 +175,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
     const spec = rawSpec;
     if (spec.kind === "app" || spec.kind === "session") {
       const callerKind = caller.runtime.kind;
-      if (callerKind !== "shell" && callerKind !== "server" && callerKind !== "harness") {
+      if (callerKind !== "shell" && callerKind !== "server") {
         throw new Error(
           `${spec.kind === "app" ? "App" : "Session"} runtime entities are host-managed`
         );
@@ -243,7 +246,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         contextId = existing.contextId;
       }
       // Inert kind: no workerd/panel runtime. The only phase-4 prep is
-      // eagerly materializing the context folder so harness callers (e.g.
+      // eagerly materializing the context folder so host callers (e.g.
       // agent CLIs) get a working tree immediately.
       await deps.contextFolders.ensureContextFolder(contextId);
       effectiveVersion = existing?.status === "retired" ? existing.source.effectiveVersion : "";
@@ -349,7 +352,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
   return {
     name: "runtime",
     description: "Runtime entity creation and retirement",
-    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do", "harness"] },
+    policy: { allowed: ["panel", "app", "shell", "server", "worker", "do"] },
     methods: runtimeMethods,
     handler: async (ctx, method, args) => {
       switch (method) {

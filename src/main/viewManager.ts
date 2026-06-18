@@ -32,6 +32,7 @@ import {
 import { createDevLogger } from "@natstack/dev-log";
 import { ShellOverlayView, type ShellOverlayOptions } from "./shellOverlayView.js";
 import type { AppCapability } from "@natstack/shared/unitManifest";
+import { isAuthorizedChromeAppCaller } from "@natstack/shared/chromeTrust";
 
 const log = createDevLogger("ViewManager");
 
@@ -456,6 +457,11 @@ export class ViewManager {
     // re-assert layer order below once the view is tracked.
     this.window.contentView.addChildView(view);
 
+    const hostChrome =
+      config.type === "app" &&
+      (config.hostChrome ?? false) &&
+      isAuthorizedChromeAppCaller(config.id, config.appIdentity?.source);
+
     // Track the managed view
     const managed: ManagedView = {
       id: config.id,
@@ -467,7 +473,7 @@ export class ViewManager {
       partition: config.partition,
       injectHostThemeVariables: config.injectHostThemeVariables ?? true,
       appCapabilities: config.type === "app" ? [...(config.appCapabilities ?? [])] : [],
-      hostChrome: config.type === "app" ? (config.hostChrome ?? false) : false,
+      hostChrome,
       appIdentity: config.type === "app" ? config.appIdentity : undefined,
     };
     this.views.set(config.id, managed);
@@ -1989,7 +1995,10 @@ export class ViewManager {
     if (!managed) throw new Error(`View not found: ${id}`);
     if (managed.type !== "app") throw new Error(`View is not an app view: ${id}`);
     managed.appCapabilities = [...(capabilities ?? [])];
-    managed.hostChrome = capabilities?.includes("panel-hosting") ?? false;
+    const nextIdentity = identity;
+    managed.hostChrome =
+      capabilities?.includes("panel-hosting") === true &&
+      isAuthorizedChromeAppCaller(id, nextIdentity?.source);
     if (!managed.hostChrome && this.nativePanelSlots.activeHostedShellViewId === id) {
       this.nativePanelSlots.hostedShellReady = false;
       this.clearAllPanelSlots();
@@ -1998,7 +2007,7 @@ export class ViewManager {
       this.shellView.setVisible(true);
       this.reconcileNativeLayerOrder();
     }
-    managed.appIdentity = identity;
+    managed.appIdentity = nextIdentity;
     await managed.view.webContents.loadURL(url);
     if (managed.visible) this.updateLayout({});
   }

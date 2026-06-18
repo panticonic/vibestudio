@@ -44,7 +44,7 @@ export function invocationFromServiceContext(
   resolveContextId?: (callerId: string) => string | null,
 ): ExtensionInvocation {
   const directContextId = resolveContextId?.(ctx.caller.runtime.id) ?? null;
-  const callerKind = ctx.caller.runtime.kind === "harness" ? "shell" : ctx.caller.runtime.kind;
+  const callerKind = ctx.caller.runtime.kind;
   const invocation: ExtensionInvocation = {
     requestId,
     extensionName,

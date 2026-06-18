@@ -112,7 +112,7 @@ describe("createPanelTransport", () => {
     expect(serviceCall).not.toHaveBeenCalled();
   });
 
-  it("continues routing other Electron-local panel services through serviceCall", async () => {
+  it("routes Electron-local panel host helpers through serviceCall", async () => {
     const send = vi.fn(async () => {});
     const serviceCall = vi.fn(async () => "ok");
     g.__natstackTransport = {
@@ -126,14 +126,14 @@ describe("createPanelTransport", () => {
       type: "request",
       fromId: "panel:panel-1",
       requestId: "req-2",
-      method: "panel.list",
-      args: [null],
+      method: "panel.reloadView",
+      args: ["panel-1"],
     };
 
     await transport.send("main", message);
     await Promise.resolve();
 
-    expect(serviceCall).toHaveBeenCalledWith("panel.list", null);
+    expect(serviceCall).toHaveBeenCalledWith("panel.reloadView", "panel-1");
     expect(send).not.toHaveBeenCalled();
   });
 });

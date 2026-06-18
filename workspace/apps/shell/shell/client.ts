@@ -18,6 +18,7 @@ import { eventsMethods } from "@natstack/shared/serviceSchemas/events";
 import { menuMethods } from "@natstack/shared/serviceSchemas/menu";
 import { notificationMethods } from "@natstack/shared/serviceSchemas/notification";
 import { panelMethods } from "@natstack/shared/serviceSchemas/panel";
+import { panelTreeMethods } from "@natstack/shared/serviceSchemas/panelTree";
 import { remoteCredMethods } from "@natstack/shared/serviceSchemas/remoteCred";
 import { settingsMethods } from "@natstack/shared/serviceSchemas/settings";
 import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
@@ -80,6 +81,9 @@ const menuClient = createTypedServiceClient("menu", menuMethods, (service, metho
 const panelClient = createTypedServiceClient("panel", panelMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
+const panelTreeClient = createTypedServiceClient("panelTree", panelTreeMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
 const notificationClient = createTypedServiceClient(
   "notification",
   notificationMethods,
@@ -112,28 +116,11 @@ const workspaceClient = createTypedServiceClient(
   (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 import type {
-  AppInfo,
   ThemeMode,
   ThemeAppearance,
-  Panel,
-  PanelContextMenuAction,
-  PanelFocusResult,
-  PanelTreeSnapshot,
-  WorkspaceEntry,
-  SettingsData,
   MovePanelRequest,
-  GetChildrenPaginatedRequest,
-  PaginatedChildren,
-  PaginatedRootPanels,
 } from "@natstack/shared/types";
-import type {
-  BrowserAddressOptions,
-  PanelAddressOptions,
-  PanelChromeState,
-} from "@natstack/shared/panelChrome";
-import type { PanelRuntimeLease } from "@natstack/shared/panel/panelLease";
 import type { BrowserNavigationIntent } from "@natstack/shared/panelCommands";
-import type { PanelLifecycleResult } from "@natstack/shared/types";
 import type {
   HostTarget,
   HostTargetCandidate,
@@ -157,28 +144,27 @@ export const app = {
 // Panel Service
 // =============================================================================
 export const panel = {
-  getTree: () => panelClient.getTree(),
-  getTreeSnapshot: () => panelClient.getTreeSnapshot(),
-  getFocusedPanelId: () => panelClient.getFocusedPanelId(),
-  notifyFocused: (panelId: string) => panelClient.notifyFocused(panelId),
+  getTree: async () => (await panelTreeClient.getTreeSnapshot()).rootPanels,
+  getTreeSnapshot: () => panelTreeClient.getTreeSnapshot(),
+  getFocusedPanelId: () => panelTreeClient.getFocusedPanelId(),
+  ensureLoaded: (panelId: string) => panelTreeClient.ensureLoaded(panelId),
   updateTheme: (theme: ThemeAppearance) => panelClient.updateTheme(theme),
-  openDevTools: (panelId: string) => panelClient.openDevTools(panelId),
+  openDevTools: (panelId: string) => panelTreeClient.openDevTools(panelId),
   getChromeState: (panelId: string) => panelClient.getChromeState(panelId),
-  getRuntimeLease: (panelId: string) => panelClient.getRuntimeLease(panelId),
-  takeOver: (panelId: string) => panelClient.takeOver(panelId),
+  getRuntimeLease: (panelId: string) => panelTreeClient.getRuntimeLease(panelId),
+  takeOver: (panelId: string) => panelTreeClient.takeOver(panelId),
   getAddressOptions: (source: string, ref?: string) => panelClient.getAddressOptions(source, ref),
   getBrowserAddressOptions: (query: string) => panelClient.getBrowserAddressOptions(query),
   markBrowserNavigationIntent: (panelId: string, intent: BrowserNavigationIntent) =>
     panelClient.markBrowserNavigationIntent(panelId, intent),
-  reload: (panelId: string) => panelClient.reload(panelId),
+  reload: (panelId: string) => panelTreeClient.reload(panelId),
   reloadView: (panelId: string) => panelClient.reloadView(panelId),
   forceReloadView: (panelId: string) => panelClient.forceReloadView(panelId),
-  rebuildPanel: (panelId: string) => panelClient.rebuildPanel(panelId),
-  rebuildAndReload: (panelId: string) => panelClient.rebuildAndReload(panelId),
-  goBack: (panelId: string) => panelClient.goBack(panelId),
-  goForward: (panelId: string) => panelClient.goForward(panelId),
-  unload: (panelId: string) => panelClient.unload(panelId),
-  archive: (panelId: string) => panelClient.archive(panelId),
+  rebuildPanel: (panelId: string) => panelTreeClient.rebuildPanel(panelId),
+  rebuildAndReload: (panelId: string) => panelTreeClient.rebuildAndReload(panelId),
+  navigateHistory: (panelId: string, delta: -1 | 1) => panelTreeClient.navigateHistory(panelId, delta),
+  unload: (panelId: string) => panelTreeClient.unload(panelId),
+  archive: (panelId: string) => panelTreeClient.archive(panelId),
   updatePanelState: (
     panelId: string,
     state: {
@@ -188,8 +174,12 @@ export const panel = {
       canGoBack?: boolean;
       canGoForward?: boolean;
     }
-  ) => panelClient.updatePanelState(panelId, state),
-  createAboutPanel: (page: string) => panelClient.createAboutPanel(page),
+  ) => panelTreeClient.updatePanelState(panelId, state),
+  createAboutPanel: (page: string) =>
+    panelTreeClient.create(`about/${page}`, {
+      name: `${page}~${Date.now().toString(36)}`,
+      focus: true,
+    }),
   /** Create a panel from any source path (not prefixed with "about/"). */
   navigate: (
     panelId: string,
@@ -199,7 +189,7 @@ export const panel = {
       contextId?: string;
       stateArgs?: Record<string, unknown>;
     }
-  ) => panelClient.navigate(panelId, source, options),
+  ) => panelTreeClient.navigate(panelId, source, options),
   createPanel: (
     source: string,
     options?: {
@@ -207,7 +197,13 @@ export const panel = {
       isRoot?: boolean;
       ref?: string;
     }
-  ) => panelClient.create(source, options),
+  ) =>
+    panelTreeClient.create(source, {
+      name: options?.name,
+      ref: options?.ref,
+      parentId: options?.isRoot === false ? undefined : null,
+      focus: true,
+    }),
   createChild: (
     parentId: string,
     source: string,
@@ -216,14 +212,20 @@ export const panel = {
       focus?: boolean;
       ref?: string;
     }
-  ) => panelClient.createChild(parentId, source, options),
+  ) =>
+    panelTreeClient.create(source, {
+      parentId,
+      name: options?.name,
+      focus: options?.focus,
+      ref: options?.ref,
+    }),
   createBrowser: (
     url: string,
     options?: {
       name?: string;
       focus?: boolean;
     }
-  ) => panelClient.createBrowser(url, options),
+  ) => panelTreeClient.create(url, { parentId: null, name: options?.name, focus: options?.focus }),
   createBrowserChild: (
     parentId: string,
     url: string,
@@ -231,16 +233,17 @@ export const panel = {
       name?: string;
       focus?: boolean;
     }
-  ) => panelClient.createBrowserChild(parentId, url, options),
-  movePanel: (request: MovePanelRequest) => panelClient.movePanel(request),
-  getChildrenPaginated: (request: GetChildrenPaginatedRequest) =>
-    panelClient.getChildrenPaginated(request),
-  getRootPanelsPaginated: (offset: number, limit: number) =>
-    panelClient.getRootPanelsPaginated({ offset, limit }),
-  getCollapsedIds: () => panelClient.getCollapsedIds(),
+  ) =>
+    panelTreeClient.create(url, {
+      parentId,
+      name: options?.name,
+      focus: options?.focus,
+    }),
+  movePanel: (request: MovePanelRequest) => panelTreeClient.movePanel(request),
+  getCollapsedIds: () => panelTreeClient.getCollapsedIds(),
   setCollapsed: (panelId: string, collapsed: boolean) =>
-    panelClient.setCollapsed(panelId, collapsed),
-  expandIds: (panelIds: string[]) => panelClient.expandIds(panelIds),
+    panelTreeClient.setCollapsed(panelId, collapsed),
+  expandIds: (panelIds: string[]) => panelTreeClient.expandIds(panelIds),
 };
 // =============================================================================
 // View Service

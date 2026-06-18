@@ -278,7 +278,7 @@ export class MobileRpcClient implements Pick<
     this.transport = this.createTransport(grant.callerId);
     this.rpc = createRpcClient({
       selfId: grant.callerId,
-      callerKind: isWorkspaceMobileAppCallerId(grant.callerId) ? "app" : "shell-remote",
+      callerKind: isWorkspaceMobileAppCallerId(grant.callerId) ? "app" : "shell",
       transport: this.transport,
     });
     for (const event of this.eventSubscriptions.keys()) this.attachEventSubscription(event);

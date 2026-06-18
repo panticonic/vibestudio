@@ -151,7 +151,7 @@ accessDecision(op, requester, target) -> {
     `openDevTools`, `rebuildPanel`, `rebuildAndReload`, `updatePanelState`/`stateArgs.set`.
 - **Severity:** `severe` iff target is privileged (`shell:true`), else `standard`.
 - **Bypass (allow, no capability):** requester is the trusted shell/host
-  (`CallerKind` `shell`/`shell-remote`, or a requester whose own panel is `shell:true`).
+  (`CallerKind` `shell`, or a requester whose own panel is `shell:true`).
   For panel callers, the server must resolve `ctx.caller.runtime.id` (the panel entity id) to
   its current slot/snapshot before applying this bypass; privileged requester detection cannot
   rely only on target snapshot metadata.
@@ -626,7 +626,7 @@ no separate browserId→provider registry, no divergence.
 - Each Electron host (desktop main, headless §9) opens **one dedicated provider WS** to the
   server's existing `panelHttpServer` HTTP surface, at `/api/cdp-host` (renamed from
   `/api/cdp-bridge`).
-- It authenticates with its host token via `tokenManager` (`shell-remote`/admin — desktop main
+- It authenticates with its host token via `tokenManager` (`shell`/admin — desktop main
   already has `shellToken`, `index.ts:2277`; the headless host mints its own the same way),
   using the existing constant-time check (`cdpBridge.ts:175`).
 - On connect it declares the **stable host/provider connection id** it uses for leases. The

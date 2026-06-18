@@ -35,7 +35,7 @@ Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 Gateway authentication bootstrap routes
 
-Allowed callers: `server`, `shell`, `shell-remote`
+Allowed callers: `server`, `shell`
 
 | Method | Description |
 |--------|-------------|
@@ -125,7 +125,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Per-context filesystem operations (sandboxed to context folder)
 
-Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`, `harness`
+Allowed callers: `panel`, `app`, `server`, `worker`, `do`, `extension`, `shell`
 
 | Method | Description |
 |--------|-------------|
@@ -198,7 +198,7 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 
 Approval-gated server CDP access for panel targets
 
-Allowed callers: `shell`, `server`, `panel`, `worker`, `do`
+Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`
 
 | Method | Description |
 |--------|-------------|
@@ -239,12 +239,14 @@ Allowed callers: `shell`, `app`, `server`
 
 Server-mediated panel tree handles and control operations
 
-Allowed callers: `panel`, `worker`, `do`, `shell`, `shell-remote`, `server`, `app`
+Allowed callers: `panel`, `worker`, `do`, `shell`, `server`, `app`
 
 | Method | Description |
 |--------|-------------|
 | `panelTree.list` |  |
 | `panelTree.roots` |  |
+| `panelTree.getTreeSnapshot` |  |
+| `panelTree.getFocusedPanelId` |  |
 | `panelTree.create` |  |
 | `panelTree.ensureLoaded` |  |
 | `panelTree.focus` |  |
@@ -266,6 +268,9 @@ Allowed callers: `panel`, `worker`, `do`, `shell`, `shell-remote`, `server`, `ap
 | `panelTree.snapshot` |  |
 | `panelTree.callAgent` |  |
 | `panelTree.metadata` |  |
+| `panelTree.getCollapsedIds` |  |
+| `panelTree.setCollapsed` |  |
+| `panelTree.expandIds` |  |
 
 ## `presence`
 
@@ -294,7 +299,7 @@ Allowed callers: `shell`, `app`, `server`
 
 Runtime entity creation and retirement
 
-Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`, `harness`
+Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`
 
 | Method | Description |
 |--------|-------------|
@@ -360,7 +365,7 @@ Allowed callers: `server`, `shell`
 
 Workspace version control (GAD-native): commit, status, log, diff
 
-Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`, `harness`
+Allowed callers: `shell`, `panel`, `app`, `server`, `worker`, `do`, `extension`
 
 | Method | Description |
 |--------|-------------|
@@ -397,7 +402,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Approval-gated workerd V8 inspector access for profiling workers and DOs
 
-Allowed callers: `shell`, `server`, `panel`, `worker`, `do`
+Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`
 
 | Method | Description |
 |--------|-------------|
@@ -431,7 +436,7 @@ Allowed callers: `shell`, `server`, `panel`, `app`, `worker`, `do`, `extension`
 
 Workspace catalog, configuration, and lifecycle (list, create, switch, etc.)
 
-Allowed callers: `shell`, `shell-remote`, `app`, `panel`, `worker`, `do`, `extension`, `server`
+Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 
 | Method | Description |
 |--------|-------------|

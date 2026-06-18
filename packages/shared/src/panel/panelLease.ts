@@ -3,7 +3,7 @@ import type { ClientPlatform } from "@natstack/rpc/protocol/wsProtocol";
 
 export type { ClientPlatform } from "@natstack/rpc/protocol/wsProtocol";
 
-export interface ClientSession {
+export interface PanelHostRegistration {
   clientSessionId: string;
   hostConnectionId?: string;
   ownerCallerId?: string;
@@ -11,6 +11,24 @@ export interface ClientSession {
   platform: ClientPlatform;
   supportsCdp?: boolean;
   loadOnLeaseAssignment?: boolean;
+}
+
+export interface PanelHost {
+  registration: PanelHostRegistration;
+  handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void | Promise<void>;
+  syncRuntimeLeases?(): Promise<void>;
+}
+
+export function createPanelHostRegistration(
+  registration: PanelHostRegistration
+): PanelHostRegistration {
+  return {
+    ...registration,
+    hostConnectionId: registration.hostConnectionId ?? registration.clientSessionId,
+  };
+}
+
+export interface ClientSession extends PanelHostRegistration {
   connectedAt: number;
   lastSeenAt: number;
 }
@@ -32,6 +50,34 @@ export interface PanelRuntimeLease {
   loadOnLeaseAssignment: boolean;
   acquiredAt: number;
   expiresAt?: number;
+}
+
+export interface PanelRuntimeLeaseRequest {
+  slotId: PanelSlotId;
+  clientSessionId: string;
+  connectionId: string;
+  hostConnectionId?: string;
+}
+
+export function createPanelRuntimeLeaseRequest(args: {
+  slotId: PanelSlotId | string;
+  clientSessionId: string;
+  connectionId: string;
+  hostConnectionId?: string;
+}): PanelRuntimeLeaseRequest {
+  return {
+    slotId: args.slotId as PanelSlotId,
+    clientSessionId: args.clientSessionId,
+    connectionId: args.connectionId,
+    ...(args.hostConnectionId ? { hostConnectionId: args.hostConnectionId } : {}),
+  };
+}
+
+export function formatPanelRuntimeLeaseDeniedMessage(
+  panelId: string,
+  lease: Pick<PanelRuntimeLease, "holderLabel"> | null | undefined
+): string {
+  return `Panel ${panelId} is running on ${lease?.holderLabel ?? "another client"}`;
 }
 
 export interface RuntimeLeaseSnapshot {

@@ -160,8 +160,7 @@ export type WorkspaceServiceCallerKind =
   | "shell"
   | "server"
   | "worker"
-  | "extension"
-  | "harness";
+  | "extension";
 
 /**
  * A stable Durable Object singleton declared in `workspace/meta/natstack.yml`.

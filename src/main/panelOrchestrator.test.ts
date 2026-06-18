@@ -79,62 +79,67 @@ function createOrchestrator(
     })),
   };
   let createCounter = 0;
+  const handleServerCall = async (service: string, method: string, args?: unknown[]) => {
+    if (method === "registerClient") return undefined;
+    if (method === "acquire" || method === "takeOver") return { acquired: true };
+    if (method === "getSnapshot") return { version: { epoch: "test", counter: 1 }, leases: [] };
+    // Simulate the server panel-tree authority: create adds a panel to the
+    // mirror (as the broadcast would) and returns its identity; archive removes
+    // it. This lets the desktop orchestrator's panelTree create/close paths
+    // resolve in tests.
+    if (service === "panelTree" && method === "create") {
+      const [src, opts] = (args ?? []) as [
+        string,
+        { parentId?: string | null; name?: string } | undefined,
+      ];
+      const isBrowser = /^https?:\/\//i.test(String(src));
+      const id = `created-${++createCounter}`;
+      const contextId = `ctx-${id}`;
+      const snapshotSource = isBrowser ? `browser:${src}` : String(src);
+      registry.addPanel(
+        makePanel(id, [], {
+          snapshot: { source: snapshotSource, contextId, options: {} },
+          ...(isBrowser ? { artifacts: { buildState: "ready" } } : {}),
+        }),
+        opts?.parentId ?? null,
+        { addAsRoot: opts?.parentId == null }
+      );
+      return {
+        id,
+        title: id,
+        kind: isBrowser ? "browser" : "workspace",
+        contextId,
+        source: snapshotSource,
+      };
+    }
+    if (service === "panelTree" && method === "archive") {
+      const [id] = (args ?? []) as [string];
+      registry.removePanel(String(id));
+      return { closedIds: [String(id)] };
+    }
+    if (service === "panelTree" && method === "snapshot") {
+      const [panelId] = (args ?? []) as [string];
+      const panel = registry.getPanel(String(panelId));
+      return panel ? getCurrentSnapshot(panel) : null;
+    }
+    return undefined;
+  };
   const serverClient = {
-    call: vi.fn(async (service: string, method: string, args?: unknown[]) => {
-      if (method === "registerClient") return undefined;
-      if (method === "acquire" || method === "takeOver") return { acquired: true };
-      if (method === "getSnapshot") return { version: { epoch: "test", counter: 1 }, leases: [] };
-      // Simulate the server panel-tree authority: create adds a panel to the
-      // mirror (as the broadcast would) and returns its identity; archive removes
-      // it. This lets the desktop orchestrator's server-routed create/close paths
-      // resolve in tests.
-      if (service === "panelTree" && method === "create") {
-        const [src, opts] = (args ?? []) as [
-          string,
-          { parentId?: string | null; name?: string } | undefined,
-        ];
-        const isBrowser = /^https?:\/\//i.test(String(src));
-        const id = `created-${++createCounter}`;
-        const contextId = `ctx-${id}`;
-        const snapshotSource = isBrowser ? `browser:${src}` : String(src);
-        registry.addPanel(
-          makePanel(id, [], {
-            snapshot: { source: snapshotSource, contextId, options: {} },
-            ...(isBrowser ? { artifacts: { buildState: "ready" } } : {}),
-          }),
-          opts?.parentId ?? null,
-          { addAsRoot: opts?.parentId == null }
-        );
-        return {
-          id,
-          title: id,
-          kind: isBrowser ? "browser" : "workspace",
-          contextId,
-          source: snapshotSource,
-        };
-      }
-      if (service === "panelTree" && method === "archive") {
-        const [id] = (args ?? []) as [string];
-        registry.removePanel(String(id));
-        return { closedIds: [String(id)] };
-      }
-      // Server authority for state args: merge onto the panel's current args and
-      // return the validated result (mirrors panelTree.setStateArgs).
-      if (service === "panelTree" && method === "setStateArgs") {
-        const [panelId, updates] = (args ?? []) as [string, Record<string, unknown>];
-        const panel = registry.getPanel(String(panelId));
-        const current = panel
-          ? ((getCurrentSnapshot(panel).stateArgs ?? {}) as Record<string, unknown>)
-          : {};
-        return { ...current, ...(updates ?? {}) };
-      }
-      return undefined;
-    }),
+    call: vi.fn(handleServerCall),
+    callAs: vi.fn(
+      async (
+        _caller: { callerId: string; callerKind: string },
+        service: string,
+        method: string,
+        args?: unknown[]
+      ) => handleServerCall(service, method, args)
+    ),
   };
   const cdpHost = {
     cleanupPanelAccess: vi.fn(),
     unregisterTarget: vi.fn(),
   };
+  const sendPanelEvent = vi.fn();
   const orchestrator = new PanelOrchestrator({
     registry,
     eventService: { emit } as never,
@@ -145,7 +150,7 @@ function createOrchestrator(
     externalHost: "localhost",
     protocol: "http",
     gatewayPort: 1234,
-    sendPanelEvent: vi.fn(),
+    sendPanelEvent,
     getPanelView: () => panelView as never,
     workspaceConfig:
       opts.workspaceConfig ??
@@ -164,6 +169,7 @@ function createOrchestrator(
     panelHttpServer,
     serverClient,
     cdpHost,
+    sendPanelEvent,
   };
 }
 
@@ -408,20 +414,43 @@ describe("PanelOrchestrator.focusPanel", () => {
 });
 
 describe("PanelOrchestrator.createPanel", () => {
+  it("rejects unscoped child panel creation instead of falling back to server authority", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const caller = makePanel("caller");
+    registry.addPanel(caller, null, { addAsRoot: true });
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+
+    await expect(orchestrator.createPanel(caller.id, "panels/created-panel")).rejects.toThrow(
+      "Panel creation requires an authenticated panelTree caller"
+    );
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelTree", "create", expect.anything());
+  });
+
   it("focuses after creating the native view for focused panels", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const caller = makePanel("caller");
     registry.addPanel(caller, null, { addAsRoot: true });
 
-    const { orchestrator, panelView, emit } = createOrchestrator(registry);
+    const { orchestrator, panelView, emit, serverClient } = createOrchestrator(registry);
     panelView.hasView.mockReturnValue(true);
+    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
 
-    // Server-routed create: the harness mock adds the panel to the mirror and
-    // returns its identity; the desktop builds the view from the response.
-    const { id } = await orchestrator.createPanel(caller.id, "panels/created-panel", {
-      focus: true,
-    });
+    // Scoped panelTree create: the harness mock adds the panel to the mirror
+    // and returns its identity; the desktop builds the view from the response.
+    const { id } = await orchestrator.createPanel(
+      caller.id,
+      "panels/created-panel",
+      {
+        focus: true,
+      },
+      undefined,
+      scopedCaller
+    );
 
+    expect(serverClient.callAs).toHaveBeenCalledWith(scopedCaller, "panelTree", "create", [
+      "panels/created-panel",
+      expect.objectContaining({ parentId: caller.id }),
+    ]);
     expect(panelView.createViewForPanel).toHaveBeenCalledWith(
       id,
       expect.stringContaining("/panels/created-panel/"),
@@ -440,10 +469,16 @@ describe("PanelOrchestrator.createPanel", () => {
     registry.addPanel(caller, null, { addAsRoot: true });
 
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
+    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
 
-    const { id } = await orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/", {
-      focus: false,
-    });
+    const { id } = await orchestrator.createBrowserUrlPanel(
+      caller.id,
+      "https://example.com/",
+      {
+        focus: false,
+      },
+      scopedCaller
+    );
 
     const acquireCallIndex = serverClient.call.mock.calls.findIndex(
       ([service, method]) => service === "panelRuntime" && method === "acquire"
@@ -468,6 +503,18 @@ describe("PanelOrchestrator.createPanel", () => {
     expect(acquireOrder!).toBeLessThan(createViewOrder!);
   });
 
+  it("rejects unscoped browser child creation instead of falling back to server authority", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const caller = makePanel("caller");
+    registry.addPanel(caller, null, { addAsRoot: true });
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+
+    await expect(
+      orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/")
+    ).rejects.toThrow("Browser panel creation requires an authenticated panelTree caller");
+    expect(serverClient.call).not.toHaveBeenCalledWith("panelTree", "create", expect.anything());
+  });
+
   it("releases the browser panel runtime lease when native browser view creation fails", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const caller = makePanel("caller");
@@ -475,11 +522,17 @@ describe("PanelOrchestrator.createPanel", () => {
 
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
     panelView.createViewForBrowser.mockRejectedValueOnce(new Error("native view failed"));
+    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
 
     await expect(
-      orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/", {
-        focus: false,
-      })
+      orchestrator.createBrowserUrlPanel(
+        caller.id,
+        "https://example.com/",
+        {
+          focus: false,
+        },
+        scopedCaller
+      )
     ).rejects.toThrow("native view failed");
 
     const acquireCall = serverClient.call.mock.calls.find(
@@ -492,56 +545,10 @@ describe("PanelOrchestrator.createPanel", () => {
       "panel:nav-created-1",
       expect.stringMatching(/^desktop-created-1-/),
     ]);
-    // …and the server-routed create path archives the orphaned slot.
-    expect(serverClient.call).toHaveBeenCalledWith("panelTree", "archive", ["created-1"]);
-  });
-});
-
-describe("PanelOrchestrator.handleSetStateArgs", () => {
-  it("serializes concurrent updates for the same panel", async () => {
-    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
-    const panel = makePanel("panel-1");
-    registry.addPanel(panel, null, { addAsRoot: true });
-
-    const { orchestrator, serverClient } = createOrchestrator(registry);
-    let releaseFirst!: () => void;
-    const firstGate = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-
-    // Updates route through panelTree.setStateArgs (server authority). Gate the
-    // first server write to prove the second update waits behind it.
-    let setStateArgsCalls = 0;
-    serverClient.call.mockImplementation(
-      async (service: string, method: string, args?: unknown[]) => {
-        if (service !== "panelTree" || method !== "setStateArgs") return undefined;
-        const [panelId, updates] = (args ?? []) as [string, Record<string, unknown>];
-        if (++setStateArgsCalls === 1) await firstGate;
-        const current = (getCurrentSnapshot(registry.getPanel(panelId)!).stateArgs ?? {}) as Record<
-          string,
-          unknown
-        >;
-        return { ...current, ...updates };
-      }
-    );
-
-    const first = orchestrator.handleSetStateArgs(panel.id, { channelName: "chat-1" });
-    const second = orchestrator.handleSetStateArgs(panel.id, {
-      actionBarFile: "panels/chat/Bar.tsx",
-    });
-
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(setStateArgsCalls).toBe(1);
-
-    releaseFirst();
-    await Promise.all([first, second]);
-
-    expect(setStateArgsCalls).toBe(2);
-    expect(getCurrentSnapshot(registry.getPanel(panel.id)!).stateArgs).toEqual({
-      channelName: "chat-1",
-      actionBarFile: "panels/chat/Bar.tsx",
-    });
+    // ...and the scoped create path archives the orphaned slot with the same caller.
+    expect(serverClient.callAs).toHaveBeenCalledWith(scopedCaller, "panelTree", "archive", [
+      "created-1",
+    ]);
   });
 });
 
@@ -855,6 +862,41 @@ describe("PanelOrchestrator.applyServerPanelTreeSnapshot", () => {
     expect(lastCall?.[0]).toBe("root");
   });
 
+  it("pushes state-args-only authoritative changes to hosted panels", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    registry.repopulate([
+      makePanel("root", [], {
+        snapshot: {
+          source: "panels/root",
+          contextId: "ctx-root",
+          options: {},
+          stateArgs: { mode: "old" },
+        },
+      }),
+    ]);
+    const { orchestrator, panelView, sendPanelEvent } = createOrchestrator(registry);
+    panelView.hasView.mockImplementation((id: string) => id === "root");
+
+    await orchestrator.applyServerPanelTreeSnapshot({
+      revision: 1,
+      rootPanels: [
+        makePanel("root", [], {
+          snapshot: {
+            source: "panels/root",
+            contextId: "ctx-root",
+            options: {},
+            stateArgs: { mode: "new" },
+          },
+        }),
+      ],
+    });
+
+    expect(sendPanelEvent).toHaveBeenCalledWith("root", "runtime:stateArgsChanged", {
+      mode: "new",
+    });
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+  });
+
   it("patches title-only server snapshots without repopulating the tree", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     registry.addPanel(makePanel("root", [], { title: "Old title" }), null, { addAsRoot: true });
@@ -1015,7 +1057,7 @@ describe("PanelOrchestrator.getBootstrapConfig", () => {
   });
 });
 
-describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
+describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
   it("unloads local panel resources when the local runtime lease is released", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel-1", [], {
@@ -1028,7 +1070,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
     const { orchestrator, panelView, cdpHost } = createOrchestrator(registry);
     panelView.hasView.mockReturnValue(true);
 
-    await orchestrator.applyRuntimeLeaseChanged({
+    await orchestrator.handleRuntimeLeaseChanged({
       type: "panel:runtimeLeaseChanged",
       version: { epoch: "test", counter: 2 },
       slotId: asPanelSlotId(panel.id),
@@ -1073,7 +1115,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
       },
     });
 
-    await orchestrator.applyRuntimeLeaseChanged({
+    await orchestrator.handleRuntimeLeaseChanged({
       type: "panel:runtimeLeaseChanged",
       version: { epoch: "test", counter: 2 },
       slotId: asPanelSlotId(panel.id),
@@ -1124,7 +1166,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
         },
       });
 
-      await orchestrator.applyRuntimeLeaseChanged({
+      await orchestrator.handleRuntimeLeaseChanged({
         type: "panel:runtimeLeaseChanged",
         version: { epoch: "test", counter: 2 },
         slotId: asPanelSlotId(panel.id),
@@ -1175,7 +1217,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
       },
     });
 
-    await orchestrator.applyRuntimeLeaseChanged({
+    await orchestrator.handleRuntimeLeaseChanged({
       type: "panel:runtimeLeaseChanged",
       version: { epoch: "test", counter: 2 },
       slotId: asPanelSlotId(first.id),
@@ -1195,7 +1237,7 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
       },
       reason: "acquired",
     });
-    await orchestrator.applyRuntimeLeaseChanged({
+    await orchestrator.handleRuntimeLeaseChanged({
       type: "panel:runtimeLeaseChanged",
       version: { epoch: "test", counter: 3 },
       slotId: asPanelSlotId(second.id),
@@ -1226,14 +1268,15 @@ describe("PanelOrchestrator.applyRuntimeLeaseChanged", () => {
     ]);
   });
 
-  it("does not implicitly load unloaded panels for agent introspection", async () => {
+  it("routes panel snapshots through panelTree without loading local views", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel-1");
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, panelView } = createOrchestrator(registry);
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
 
-    await expect(orchestrator.snapshot(panel.id)).rejects.toThrow("target-not-loaded: panel-1");
+    await expect(orchestrator.snapshot(panel.id)).resolves.toEqual(getCurrentSnapshot(panel));
 
+    expect(serverClient.call).toHaveBeenCalledWith("panelTree", "snapshot", [panel.id]);
     expect(panelView.createViewForPanel).not.toHaveBeenCalled();
   });
 });

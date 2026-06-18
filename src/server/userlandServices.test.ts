@@ -18,7 +18,7 @@ function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
         source: "workers/example-store",
         name: "channel",
         protocols: ["example.store.v1"],
-        policy: { allowed: ["panel", "shell", "server", "worker", "extension", "harness"] },
+        policy: { allowed: ["panel", "shell", "server", "worker", "extension"] },
         durableObject: { className: "ExampleStoreDO" },
       },
     ],

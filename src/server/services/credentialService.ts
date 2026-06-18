@@ -57,6 +57,7 @@ import type {
   DeferredResult,
 } from "../../../packages/shared/src/serviceDispatcher.js";
 import { deferIfNeeded } from "../../../packages/shared/src/serviceDispatcher.js";
+import type { AppCapability } from "../../../packages/shared/src/unitManifest.js";
 import type { ServiceDefinition } from "../../../packages/shared/src/serviceDefinition.js";
 import {
   ConnectCredentialParamsSchema,
@@ -79,6 +80,7 @@ import {
 import type { EgressProxy } from "./egressProxy.js";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import { CredentialLifecycle, CredentialLifecycleError } from "./credentialLifecycle.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 import {
   CredentialSessionGrantStore,
   type CredentialSessionGrantResource,
@@ -364,6 +366,7 @@ interface CredentialServiceDeps {
   sessionGrantStore?: CredentialSessionGrantStore;
   credentialLifecycle?: CredentialLifecycle;
   sessionCredentialCapture?: SessionCredentialCapture;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
 }
 
 interface SessionCredentialCapture {
@@ -3129,7 +3132,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     ctx: ServiceContext,
     params: GrantCredentialParams
   ): Promise<StoredCredentialSummary> {
-    requireShellOrServer(ctx, "grantCredential");
+    requireShellOrServer(ctx, "grantCredential", deps);
     const request = params as GrantUrlBoundCredentialRequest;
     void request.callerId;
     void request.grantedBy;
@@ -3696,7 +3699,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   }
 
   function canCallerSeeStoredCredential(ctx: ServiceContext, credential: Credential): boolean {
-    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
+    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
       return true;
     }
     const identity = ctx.caller.code;
@@ -3714,7 +3717,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     credential: Credential,
     usage: CredentialUseContext
   ): boolean {
-    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
+    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
       return true;
     }
     return (
@@ -3727,7 +3730,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     ctx: ServiceContext,
     credential: Credential
   ): boolean {
-    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") {
+    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
       return true;
     }
     return canCallerSeeStoredCredential(ctx, credential);
@@ -4511,9 +4514,13 @@ function gitRemoteFromUrl(targetUrl: URL): string {
   return remote.toString();
 }
 
-function requireShellOrServer(ctx: ServiceContext, method: string): void {
-  if (ctx.caller.runtime.kind !== "shell" && ctx.caller.runtime.kind !== "server") {
-    throw new Error(`credentials.${method} is restricted to shell/server callers`);
+function requireShellOrServer(
+  ctx: ServiceContext,
+  method: string,
+  deps: Pick<CredentialServiceDeps, "hasAppCapability">
+): void {
+  if (!isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
+    throw new Error(`credentials.${method} is restricted to authorized chrome callers`);
   }
 }
 

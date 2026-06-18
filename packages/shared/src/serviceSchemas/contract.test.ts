@@ -21,6 +21,7 @@ import { notificationMethods } from "./notification.js";
 import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
+import { panelTreeMethods } from "./panelTree.js";
 import { pushMethods } from "./push.js";
 import { remoteCredMethods } from "./remoteCred.js";
 import { runtimeMethods } from "./runtime.js";
@@ -59,6 +60,7 @@ const serviceTables: ServiceTable[] = [
   { service: "panel", file: "panel.ts", methods: panelMethods },
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },
+  { service: "panelTree", file: "panelTree.ts", methods: panelTreeMethods },
   { service: "push", file: "push.ts", methods: pushMethods },
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },
   { service: "runtime", file: "runtime.ts", methods: runtimeMethods },

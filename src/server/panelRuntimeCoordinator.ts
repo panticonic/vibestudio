@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import type { EventService } from "@natstack/shared/eventsService";
 import type {
   ClientSession,
+  PanelHostRegistration,
   PanelRuntimeAcquireResult,
   PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
@@ -47,15 +48,7 @@ export class PanelRuntimeCoordinator {
     };
   }
 
-  registerClient(input: {
-    clientSessionId: string;
-    hostConnectionId?: string;
-    ownerCallerId?: string;
-    label: string;
-    platform: "desktop" | "headless" | "mobile";
-    supportsCdp?: boolean;
-    loadOnLeaseAssignment?: boolean;
-  }): void {
+  registerClient(input: PanelHostRegistration): void {
     const now = Date.now();
     const existing = this.clients.get(input.clientSessionId);
     this.clients.set(input.clientSessionId, {
@@ -130,9 +123,13 @@ export class PanelRuntimeCoordinator {
   }
 
   getDefaultCdpHostClient(options: DefaultCdpHostOptions = {}): ClientSession | null {
-    for (const client of this.clients.values()) {
+    const candidates = [...this.clients.values()].sort((a, b) => {
+      const rank = (client: ClientSession) => (client.platform === "desktop" ? 0 : 1);
+      return rank(a) - rank(b);
+    });
+    for (const client of candidates) {
       const hostConnectionId = client.hostConnectionId ?? client.clientSessionId;
-      if (client.platform !== "headless" || client.supportsCdp === false) continue;
+      if (client.supportsCdp === false) continue;
       if (client.loadOnLeaseAssignment !== true) continue;
       if (options.isHostAvailable && !options.isHostAvailable(hostConnectionId)) continue;
       return client;

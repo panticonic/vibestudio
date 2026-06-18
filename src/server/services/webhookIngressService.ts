@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import { doTargetId, type RpcCallerLike } from "@natstack/shared/userlandServiceRpc";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
@@ -21,6 +22,7 @@ import {
   type WebhookReplayKey,
   type WebhookTarget,
 } from "../../../packages/shared/src/webhooks/ingress.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 const DEFAULT_RELAY_PUBLIC_BASE_URL = "https://hooks.snugenv.com";
 const DEFAULT_RELAY_TOLERANCE_MS = 5 * 60 * 1000;
@@ -242,6 +244,7 @@ export interface WebhookIngressServiceDeps {
   store?: WebhookIngressStore;
   rpc?: RpcCallerLike;
   now?: () => number;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   dispatchToTarget?: (target: WebhookTarget, event: WebhookDeliveryEvent) => Promise<unknown>;
 }
 
@@ -272,14 +275,14 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   }
 
   function ensureOwner(ctx: ServiceContext, subscription: WebhookIngressSubscription): void {
-    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") return;
+    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
     if (subscription.ownerCallerId !== ctx.caller.runtime.id) {
       throw new Error("webhook subscription is not owned by caller");
     }
   }
 
   function ensureTargetIsCallerSource(ctx: ServiceContext, target: WebhookTarget): void {
-    if (ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server") return;
+    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
     const identity = ctx.caller.code;
     if (!identity) {
       throw new Error("webhook target source cannot be verified for caller");
@@ -328,10 +331,9 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
   async function listSubscriptions(
     ctx: ServiceContext
   ): Promise<WebhookIngressSubscriptionSummary[]> {
-    const owner =
-      ctx.caller.runtime.kind === "shell" || ctx.caller.runtime.kind === "server"
-        ? undefined
-        : ctx.caller.runtime.id;
+    const owner = isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })
+      ? undefined
+      : ctx.caller.runtime.id;
     return (await store.list(owner)).map(toSummary);
   }
 

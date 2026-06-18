@@ -23,7 +23,7 @@ Example:
 - Adding or removing capabilities changes the trusted build identity and can
   require approval.
 - Capabilities apply to active approved app principals.
-- Host callers such as server, shell, and shell-remote are trusted host
+- Host callers such as server and shell are trusted host
   principals only at call sites that explicitly allow them.
 - Capability denial should surface as `EACCES` where exposed through auth or
   service APIs.

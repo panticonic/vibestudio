@@ -7,7 +7,7 @@
  * Caller-kind argument conventions (handled inside FsService):
  * - panel/app/worker/do callers: context resolved from the EntityCache.
  * - extension callers: chained caller context (or explicit host-fs capability).
- * - server/shell/harness callers: explicit contextId as the first argument.
+ * - server/shell callers: explicit contextId as the first argument.
  *
  * `symlink` and `chown` are deliberately absent (audit findings #38/#39):
  * they are sandbox-escape primitives and nothing on the service surface
@@ -23,7 +23,7 @@ export function createFsServiceDefinition(getFsService: () => FsService): Servic
     name: "fs",
     description: "Per-context filesystem operations (sandboxed to context folder)",
     policy: {
-      allowed: ["panel", "app", "server", "worker", "do", "extension", "shell", "harness"],
+      allowed: ["panel", "app", "server", "worker", "do", "extension", "shell"],
     },
     methods: fsMethods,
     handler: (ctx, method, serviceArgs) => handleFsCall(getFsService(), ctx, method, serviceArgs),

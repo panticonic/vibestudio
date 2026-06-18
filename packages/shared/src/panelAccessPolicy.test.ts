@@ -76,11 +76,14 @@ describe("panelAccessPolicy", () => {
     });
   });
 
-  it("bypasses trusted shell/server and privileged requester panels", () => {
+  it("bypasses callers only when trusted status is surfaced explicitly", () => {
+    expect(accessDecision("cdp", { id: "shell", kind: "shell" }, { id: "target" })).toMatchObject({
+      capability: PANEL_AUTOMATE_CAPABILITY,
+    });
+
     for (const requester of [
-      { id: "shell", kind: "shell" },
-      { id: "remote", kind: "shell-remote" },
-      { id: "server", kind: "server" },
+      { id: "shell", kind: "shell", privileged: true },
+      { id: "server", kind: "server", privileged: true },
       { id: "about", kind: "panel", privileged: true },
     ] as const) {
       expect(accessDecision("cdp", requester, { id: "target", privileged: true })).toEqual({

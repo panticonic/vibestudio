@@ -185,14 +185,12 @@ export interface AuthenticatedCaller {
 
 export type CallerKind =
   | "shell"
-  | "shell-remote"
   | "panel"
   | "app"
   | "worker"
   | "do"
   | "extension"
-  | "server"
-  | "harness";
+  | "server";
 
 /**
  * Frame yielded by a streaming method handler. Mirrors the wire frame

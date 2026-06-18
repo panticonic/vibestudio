@@ -40,8 +40,9 @@ export interface PanelAccessRequester {
   id: string;
   kind: CallerKind | string;
   /**
-   * True when the caller is itself a privileged shell/about panel. Servers
-   * resolve this from the caller runtime id before calling accessDecision.
+   * True when the caller is authorized chrome or a privileged shell/about
+   * panel. Servers resolve this before calling accessDecision; caller kind is
+   * identity only.
    */
   privileged?: boolean;
 }
@@ -108,18 +109,7 @@ export function panelAccessSeverityForTarget(target: PanelAccessTarget): PanelAc
 }
 
 export function isTrustedPanelAccessRequester(requester: PanelAccessRequester): boolean {
-  return (
-    requester.kind === "shell" ||
-    requester.kind === "shell-remote" ||
-    requester.kind === "server" ||
-    // The mobile shell is a workspace-app principal (app:apps/mobile) that calls
-    // panelTree/CDP directly (unlike desktop, which proxies via the electron-main
-    // serverClient as "server"). It is trusted chrome ONLY because it declares
-    // the panel-hosting capability — that is surfaced via requester.privileged by
-    // the caller (see requirePanelAccessPermission). A plain "app" kind is NOT
-    // trusted, so a non-chrome workspace app stays scoped.
-    requester.privileged === true
-  );
+  return requester.privileged === true;
 }
 
 export function accessDecision(

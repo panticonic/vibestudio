@@ -30,7 +30,7 @@ export const authMethods = defineServiceMethods({
   grantConnection: {
     args: z.tuple([z.string()]),
     returns: z.object({ token: z.string() }),
-    policy: { allowed: ["server", "shell", "shell-remote", "app"] },
+    policy: { allowed: ["server", "shell", "app"] },
   },
   getConnectionInfo: { args: z.tuple([]), returns: ConnectionInfoResponseSchema },
   createPairingInvite: {
@@ -43,7 +43,7 @@ export const authMethods = defineServiceMethods({
       expiresAt: z.number(),
       deepLink: z.string().nullable(),
     }),
-    policy: { allowed: ["server", "shell", "shell-remote", "app"] },
+    policy: { allowed: ["server", "shell", "app"] },
   },
   listDevices: {
     args: z.tuple([]),

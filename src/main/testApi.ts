@@ -219,7 +219,10 @@ export function setupTestApi(
 
     async createPanel(parentId, source, options) {
       const { stateArgs, ...createOptions } = options ?? {};
-      return panelOrchestrator.createPanel(parentId, source, createOptions, stateArgs);
+      return panelOrchestrator.createPanel(parentId, source, createOptions, stateArgs, {
+        callerId: "@workspace-apps/shell",
+        callerKind: "app",
+      });
     },
 
     async closePanel(id) {

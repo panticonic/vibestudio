@@ -1,4 +1,4 @@
-import React, { useEffect, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useCallback, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -38,7 +38,6 @@ import {
   type AppLifecyclePayload,
 } from "../services/appUpdatePrompt";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
-import type { MobilePanelRuntimeHost } from "../services/bridgeAdapter";
 import {
   buildPanelChromeState,
   buildAddressAutocompleteItems,
@@ -514,45 +513,6 @@ export function MainScreen() {
         setLoadingPanelId((current) => (current === activePanelId ? null : current));
       });
   }, [activePanel, activePanelId, hostConfig, pushToast, shellClient]);
-  const waitForWebViewHandle = useCallback(
-    async (panelId: string): Promise<PanelWebViewHandle> => {
-      const existing = webViewRefsMap.current.get(panelId);
-      if (existing) return existing;
-      activatePanel(panelId);
-      const startedAt = Date.now();
-      while (Date.now() - startedAt < 10_000) {
-        const handle = webViewRefsMap.current.get(panelId);
-        if (handle) return handle;
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      throw new Error(`Panel ${panelId} is not loaded in a mobile WebView`);
-    },
-    [activatePanel]
-  );
-  const mobileRuntimeHost = useMemo<MobilePanelRuntimeHost>(
-    () => ({
-      ensureLoaded: async (panelId) => {
-        await waitForWebViewHandle(panelId);
-      },
-      snapshot: async (panelId) => {
-        const handle = await waitForWebViewHandle(panelId);
-        return handle.snapshot();
-      },
-      callAgent: async (panelId, method, args) => {
-        const handle = await waitForWebViewHandle(panelId);
-        return handle.callAgent(method, args);
-      },
-      reload: async (panelId) => {
-        const handle = await waitForWebViewHandle(panelId);
-        handle.reload();
-      },
-    }),
-    [waitForWebViewHandle]
-  );
-  useLayoutEffect(() => {
-    shellClient?.panels.setRuntimeHost(mobileRuntimeHost);
-    return () => shellClient?.panels.setRuntimeHost(null);
-  }, [mobileRuntimeHost, shellClient]);
   useEffect(() => {
     if (!shellClient) return;
     refreshTree();

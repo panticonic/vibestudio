@@ -7,13 +7,14 @@
  */
 import { PanelRegistry } from "@natstack/shared/panelRegistry";
 import { PanelManager } from "@natstack/shared/shell/panelManager";
-import type {
-  CreatePanelResult,
-  NavigatePanelOptions,
-} from "@natstack/shared/shell/panelManager";
+import type { CreatePanelResult, NavigatePanelOptions } from "@natstack/shared/shell/panelManager";
 import { asPanelSlotId, type PanelSlotId } from "@natstack/shared/panel/ids";
 import { buildPanelUrl } from "@natstack/shared/panelFactory";
 import type { PanelRuntimeAcquireResult } from "@natstack/shared/panel/panelLease";
+import {
+  createPanelRuntimeLeaseRequest,
+  formatPanelRuntimeLeaseDeniedMessage,
+} from "@natstack/shared/panel/panelLease";
 import type {
   RuntimeClient,
   SlotCreateInput,
@@ -181,18 +182,16 @@ export class PanelInitClient {
       "panelRuntime.acquire",
       [
         runtimeEntityId,
-        {
+        createPanelRuntimeLeaseRequest({
           slotId,
           clientSessionId: this.clientSessionId,
           hostConnectionId: this.clientSessionId,
           connectionId: leaseConnectionId,
-        },
+        }),
       ]
     );
     if (!acquired.acquired) {
-      throw new Error(
-        `Panel ${slotId} is running on ${acquired.lease?.holderLabel ?? "another client"}`
-      );
+      throw new Error(formatPanelRuntimeLeaseDeniedMessage(slotId, acquired.lease));
     }
   }
 }

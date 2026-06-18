@@ -90,24 +90,15 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
     }
 
     if (bareEvent === "browser-panel:open") {
-      const { url, parentPanelId } = payload as { url?: unknown; parentPanelId?: unknown };
-      if (typeof url === "string" && typeof parentPanelId === "string") {
-        void panelOrchestrator
-          ?.createBrowserUrlPanel(parentPanelId, url, { focus: true })
-          .catch((err: unknown) => {
-            deps.warn(
-              `[browserPanel] createBrowserUrlPanel failed: ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            );
-          });
-      }
+      deps.warn(
+        "[browserPanel] Ignoring browser-panel:open; panel creation must go through authenticated panelTree RPC"
+      );
       return;
     }
 
     if (bareEvent === "panel:runtimeLeaseChanged") {
       const leaseEvent = payload as PanelRuntimeLeaseChangedEvent;
-      void panelOrchestrator?.applyRuntimeLeaseChanged(leaseEvent).catch((err: unknown) => {
+      void panelOrchestrator?.handleRuntimeLeaseChanged(leaseEvent).catch((err: unknown) => {
         deps.warn(
           `[panelRuntime] failed to apply lease change for ${leaseEvent.slotId}/${leaseEvent.runtimeEntityId}: ${
             err instanceof Error ? err.message : String(err)

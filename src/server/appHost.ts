@@ -28,6 +28,11 @@ import {
 } from "@natstack/unit-host";
 import type { EventService } from "@natstack/shared/eventsService";
 import type { EventName } from "@natstack/shared/events";
+import {
+  isAuthorizedChromeAppSource,
+  isAuthorizedConnectionManagementAppSource,
+  normalizeAppSourcePath,
+} from "@natstack/shared/chromeTrust";
 import type {
   PendingApproval,
   PendingUnitBatchApproval,
@@ -359,6 +364,8 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
   private readonly terminalRunner: TerminalAppRunner | null;
   private readonly pendingReactNativeLaunchPreflightKeys = new Set<string>();
   private readonly approvedReactNativeLaunchPreflights = new Map<string, WorkspaceAppDeclaration>();
+  private readonly loggedUnauthorizedPanelHostingSources = new Set<string>();
+  private readonly loggedUnauthorizedConnectionManagementSources = new Set<string>();
   private readonly appLogs = new Map<
     string,
     Array<{
@@ -1038,6 +1045,38 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
         const source = normalizeRepoPath(candidate.source.repo);
         return callerId.startsWith(`app:${source}:`);
       });
+    if (
+      capability === "panel-hosting" &&
+      entry &&
+      isCapabilityActiveStatus(entry.status) &&
+      entry.capabilities.includes(capability) &&
+      !isAuthorizedChromeAppSource(entry.source.repo)
+    ) {
+      const source = normalizeAppSourcePath(entry.source.repo);
+      if (!this.loggedUnauthorizedPanelHostingSources.has(source)) {
+        this.loggedUnauthorizedPanelHostingSources.add(source);
+        console.warn(
+          `[AppHost] Ignoring panel-hosting declaration from unauthorized app source '${source}'`
+        );
+      }
+      return false;
+    }
+    if (
+      capability === "connection-management" &&
+      entry &&
+      isCapabilityActiveStatus(entry.status) &&
+      entry.capabilities.includes(capability) &&
+      !isAuthorizedConnectionManagementAppSource(entry.source.repo)
+    ) {
+      const source = normalizeAppSourcePath(entry.source.repo);
+      if (!this.loggedUnauthorizedConnectionManagementSources.has(source)) {
+        this.loggedUnauthorizedConnectionManagementSources.add(source);
+        console.warn(
+          `[AppHost] Ignoring connection-management declaration from unauthorized app source '${source}'`
+        );
+      }
+      return false;
+    }
     return (
       !!entry && isCapabilityActiveStatus(entry.status) && entry.capabilities.includes(capability)
     );

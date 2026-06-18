@@ -6,10 +6,12 @@ import {
 } from "@natstack/unit-host";
 import type { UnitBatchEntry } from "@natstack/shared/approvals";
 import type { VerifiedCaller } from "@natstack/shared/serviceDispatcher";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import type { StateAdvancedEvent } from "../buildV2/stateTrigger.js";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import { requestCapabilityPermission } from "./capabilityPermission.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { isAuthorizedChrome } from "./chromeTrust.js";
 
 const WORKSPACE_REPO_WRITE_CAPABILITY = "workspace-repo-write";
 
@@ -92,6 +94,7 @@ export function createMainAdvanceApprovalGate(deps: {
   grantStore: MetaApprovalGrantStore;
   grantTtlMs: number;
   capabilityGrantStore: CapabilityGrantStore;
+  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   getProviders(): Array<UnitMetaChangeApprovalProvider<UnitBatchEntry> | null | undefined>;
 }): MainAdvanceApprovalGate {
   return {
@@ -101,7 +104,7 @@ export function createMainAdvanceApprovalGate(deps: {
       const metaChanged = candidate.event.changedPaths.some(isMetaPath);
 
       const runtimeKind = candidate.caller.runtime.kind;
-      if (runtimeKind === "shell" || runtimeKind === "server" || runtimeKind === "harness") {
+      if (isAuthorizedChrome(candidate.caller, { hasAppCapability: deps.hasAppCapability })) {
         return;
       }
 

@@ -41,6 +41,7 @@ function makeDispatcher(opts: {
     method: string,
     args: readonly unknown[]
   ) => void;
+  onServerRpcResult?: ReturnType<typeof vi.fn>;
 }) {
   ipcHandlers.clear();
   const dispatcher = new ServiceDispatcher();
@@ -63,6 +64,7 @@ function makeDispatcher(opts: {
     getCodeIdentityForCaller: opts.getCodeIdentityForCaller,
     getWebContentsForCaller: (opts.getWebContentsForCaller ?? (() => null)) as never,
     authorizeAppServerCall: opts.authorizeAppServerCall,
+    onServerRpcResult: opts.onServerRpcResult,
     eventService: eventService as never,
   });
   return { serverClient, eventService };
@@ -109,6 +111,56 @@ describe("IpcDispatcher", () => {
         type: "response",
         requestId: "req-1",
         result: { workspace: "ok" },
+      });
+    });
+  });
+
+  it("forwards desktop shell panelTree RPC as the shell app principal", async () => {
+    const shellWc = makeWebContents(20);
+    const call = vi.fn();
+    const callAs = vi.fn(async () => ({ rootPanels: [] }));
+    const onServerRpcResult = vi.fn();
+    makeDispatcher({
+      resolve: () => ({ callerId: "shell", callerKind: "shell" }),
+      call,
+      callAs,
+      onServerRpcResult,
+    });
+
+    ipcHandlers.get("natstack:rpc:send")?.(
+      { sender: shellWc } as never,
+      "main" as never,
+      {
+        type: "request",
+        requestId: "req-paneltree",
+        fromId: "shell",
+        method: "panelTree.getTreeSnapshot",
+        args: [],
+      } satisfies RpcMessage as never
+    );
+
+    await vi.waitFor(() => {
+      expect(callAs).toHaveBeenCalledWith(
+        { callerId: "@workspace-apps/shell", callerKind: "app" },
+        "panelTree",
+        "getTreeSnapshot",
+        []
+      );
+    });
+    expect(call).not.toHaveBeenCalled();
+    expect(onServerRpcResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        callerId: "@workspace-apps/shell",
+        callerKind: "app",
+        service: "panelTree",
+        method: "getTreeSnapshot",
+      })
+    );
+    await vi.waitFor(() => {
+      expect(shellWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
+        type: "response",
+        requestId: "req-paneltree",
+        result: { rootPanels: [] },
       });
     });
   });

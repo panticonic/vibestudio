@@ -588,8 +588,8 @@ export class FsService {
    * - panel/app/worker/DO callers: look up contextId from EntityCache
    * - extension callers inside an invocation: use the chained caller context
    * - extension callers outside an invocation: unrestricted host fs
-   * - server/shell/harness callers: contextId is the first arg (shifted from
-   *   the args array). Shell and harness callers must name an existing
+   * - server/shell callers: contextId is the first arg (shifted from
+   *   the args array). Shell callers must name an existing
    *   context; server callers may create one on the fly.
    */
   private async resolveContextRoot(ctx: ServiceContext, args: unknown[]): Promise<FsCallScope> {
@@ -652,7 +652,7 @@ export class FsService {
           `on-behalf-of context and without the host-fs-access capability`
       );
     } else {
-      // Server / shell / harness callers pass an explicit contextId as the
+      // Server / shell callers pass an explicit contextId as the
       // first argument.
       const kind = ctx.caller.runtime.kind;
       contextId = args.shift() as string;
@@ -661,7 +661,7 @@ export class FsService {
         throw new Error(`${kind} fs calls must provide contextId as first argument`);
       }
       if (kind !== "server") {
-        // Shell / harness callers may only address contexts that already
+        // Shell callers may only address contexts that already
         // exist (a context folder on disk, or an active entity bound to the
         // context). Server callers are trusted to create contexts.
         const known =
