@@ -73,9 +73,33 @@ interface InlineUiMessageProps {
   compilationError?: string;
 }
 
+function isModelCredentialCard(data: InlineUiData): boolean {
+  return (
+    data.source.type === "file" && data.source.path.endsWith("ModelCredentialRequiredCard.tsx")
+  );
+}
+
 export function InlineUiMessage({ data, compiledComponent: CompiledComponent, compilationError }: InlineUiMessageProps) {
-  const { chat, scope, scopes, scopeManager } = useChatContext();
-  const componentProps = useMemo(() => data.props ?? {}, [data.props]);
+  const { browserHandoffCaller, chat, scope, scopes, scopeManager, selfId } = useChatContext();
+  const componentProps = useMemo(() => {
+    const props = data.props ?? {};
+    if (!isModelCredentialCard(data)) return props;
+    return {
+      ...props,
+      modelPersistenceParticipantId:
+        typeof props["modelPersistenceParticipantId"] === "string"
+          ? props["modelPersistenceParticipantId"]
+          : (selfId ?? undefined),
+      browserHandoffCallerId:
+        typeof props["browserHandoffCallerId"] === "string"
+          ? props["browserHandoffCallerId"]
+          : browserHandoffCaller.id,
+      browserHandoffCallerKind:
+        typeof props["browserHandoffCallerKind"] === "string"
+          ? props["browserHandoffCallerKind"]
+          : browserHandoffCaller.kind,
+    };
+  }, [browserHandoffCaller.id, browserHandoffCaller.kind, data, selfId]);
   const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
   const [asyncError, setAsyncError] = useState<Error | null>(null);
 

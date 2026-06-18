@@ -89,6 +89,48 @@ import { assertPresent } from "../../lintHelpers";
 const log = createDevLogger("CredentialService");
 type BrowserHandoffCallerKind = "app" | "panel" | "shell";
 type BrowserDeliveryCallerKind = "app" | "shell";
+type BrowserHandoffOwnerLookupStatus =
+  | "not-required"
+  | "not-configured"
+  | "found"
+  | "missing"
+  | "unsupported-kind";
+
+interface BrowserHandoffTarget {
+  deliveryCallerId: string;
+  deliveryCallerKind: BrowserDeliveryCallerKind;
+  deliveryConnectionId?: string;
+  parentPanelId?: string;
+}
+
+interface BrowserHandoffDiagnostics {
+  requestCallerId: string;
+  requestCallerKind: string;
+  targetCallerId: string;
+  targetCallerKind: string;
+  ownerLookup: BrowserHandoffOwnerLookupStatus;
+  deliveryCallerId?: string;
+  deliveryCallerKind?: BrowserDeliveryCallerKind;
+  deliveryConnectionId?: string;
+}
+
+interface BrowserHandoffResolution {
+  target: BrowserHandoffTarget | null;
+  diagnostics: BrowserHandoffDiagnostics;
+}
+
+type BrowserHandoffDeliveryAttempt =
+  | "event-service-missing"
+  | "emit-to-caller"
+  | "emit-to-connection"
+  | "emit-to-connection-fallback";
+
+interface BrowserHandoffDeliveryResult {
+  delivered: boolean;
+  attempt: BrowserHandoffDeliveryAttempt;
+  connectionDelivered?: boolean;
+  callerDelivered?: boolean;
+}
 
 /** Connect flows that block on a human (browser auth / device code) — eligible
  * for out-of-band deferral. Machine flows (client-credentials, jwt-bearer,
@@ -430,59 +472,96 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   function resolveBrowserHandoffTarget(
     ctx: ServiceContext,
     handoffTarget?: { callerId: string; callerKind: BrowserHandoffCallerKind }
-  ): {
-    deliveryCallerId: string;
-    deliveryCallerKind: BrowserDeliveryCallerKind;
-    deliveryConnectionId?: string;
-    parentPanelId?: string;
-  } | null {
+  ): BrowserHandoffResolution {
     const targetCallerId = handoffTarget?.callerId ?? ctx.caller.runtime.id;
     const targetCallerKind = handoffTarget?.callerKind ?? ctx.caller.runtime.kind;
+    const diagnosticsBase = {
+      requestCallerId: ctx.caller.runtime.id,
+      requestCallerKind: ctx.caller.runtime.kind,
+      targetCallerId,
+      targetCallerKind,
+    };
+    const resolved = (
+      target: BrowserHandoffTarget,
+      ownerLookup: BrowserHandoffOwnerLookupStatus
+    ): BrowserHandoffResolution => ({
+      target,
+      diagnostics: {
+        ...diagnosticsBase,
+        ownerLookup,
+        deliveryCallerId: target.deliveryCallerId,
+        deliveryCallerKind: target.deliveryCallerKind,
+        deliveryConnectionId: target.deliveryConnectionId,
+      },
+    });
     if (targetCallerKind === "shell") {
-      return {
-        deliveryCallerId: targetCallerId,
-        deliveryCallerKind: "shell",
-        deliveryConnectionId:
-          targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
-      };
+      return resolved(
+        {
+          deliveryCallerId: targetCallerId,
+          deliveryCallerKind: "shell",
+          deliveryConnectionId:
+            targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
+        },
+        "not-required"
+      );
     }
     if (targetCallerKind === "app") {
-      return {
-        deliveryCallerId: targetCallerId,
-        deliveryCallerKind: "app",
-        deliveryConnectionId:
-          targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
-      };
+      return resolved(
+        {
+          deliveryCallerId: targetCallerId,
+          deliveryCallerKind: "app",
+          deliveryConnectionId:
+            targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
+        },
+        "not-required"
+      );
     }
     if (targetCallerKind === "panel") {
       const shellConnection = connectionLookup?.getAuthorizingShell(targetCallerId);
       if (!shellConnection) {
         const ownerCallerId = !connectionLookup ? targetCallerId : undefined;
-        if (!ownerCallerId) return null;
-        return {
-          deliveryCallerId: ownerCallerId,
-          deliveryCallerKind: "shell",
-          parentPanelId: targetCallerId,
-        };
+        if (!ownerCallerId) {
+          return {
+            target: null,
+            diagnostics: { ...diagnosticsBase, ownerLookup: "missing" },
+          };
+        }
+        return resolved(
+          {
+            deliveryCallerId: ownerCallerId,
+            deliveryCallerKind: "shell",
+            parentPanelId: targetCallerId,
+          },
+          "not-configured"
+        );
       }
-      return {
-        deliveryCallerId: shellConnection.caller.runtime.id,
-        deliveryCallerKind: "shell",
-        deliveryConnectionId: shellConnection.connectionId,
-        parentPanelId: targetCallerId,
-      };
+      return resolved(
+        {
+          deliveryCallerId: shellConnection.caller.runtime.id,
+          deliveryCallerKind: "shell",
+          deliveryConnectionId: shellConnection.connectionId,
+          parentPanelId: targetCallerId,
+        },
+        "found"
+      );
     }
-    return null;
+    return {
+      target: null,
+      diagnostics: { ...diagnosticsBase, ownerLookup: "unsupported-kind" },
+    };
   }
 
   function emitToBrowserTarget<E extends EventName>(
     target: { deliveryCallerId: string; deliveryConnectionId?: string },
     event: E,
     payload?: EventPayloads[E]
-  ): boolean {
-    if (!eventService) return false;
+  ): BrowserHandoffDeliveryResult {
+    if (!eventService) {
+      return { delivered: false, attempt: "event-service-missing" };
+    }
     if (!target.deliveryConnectionId) {
-      return eventService.emitToCaller(target.deliveryCallerId, event, payload);
+      const delivered = eventService.emitToCaller(target.deliveryCallerId, event, payload);
+      return { delivered, attempt: "emit-to-caller", callerDelivered: delivered };
     }
     if (
       eventService.emitToConnection(
@@ -492,14 +571,58 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         payload
       )
     ) {
-      return true;
+      return { delivered: true, attempt: "emit-to-connection", connectionDelivered: true };
     }
     log.warn("Browser handoff owner connection missing; falling back to caller-wide delivery", {
       callerId: target.deliveryCallerId,
       connectionId: target.deliveryConnectionId,
       event,
     });
-    return eventService.emitToCaller(target.deliveryCallerId, event, payload);
+    const delivered = eventService.emitToCaller(target.deliveryCallerId, event, payload);
+    return {
+      delivered,
+      attempt: "emit-to-connection-fallback",
+      connectionDelivered: false,
+      callerDelivered: delivered,
+    };
+  }
+
+  function browserHandoffUnavailableMessage(
+    diagnostics: BrowserHandoffDiagnostics,
+    delivery?: BrowserHandoffDeliveryResult
+  ): string {
+    const parts = [
+      "OAuth browser handoff target is not connected",
+      `request=${diagnostics.requestCallerKind}:${diagnosticRuntimeId(diagnostics.requestCallerId)}`,
+      `target=${diagnostics.targetCallerKind}:${diagnosticRuntimeId(diagnostics.targetCallerId)}`,
+      `ownerLookup=${diagnostics.ownerLookup}`,
+    ];
+    if (diagnostics.deliveryCallerId) {
+      parts.push(
+        `delivery=${diagnostics.deliveryCallerKind ?? "unknown"}:${diagnosticRuntimeId(
+          diagnostics.deliveryCallerId
+        )}`
+      );
+    }
+    if (diagnostics.deliveryConnectionId) {
+      parts.push(`connection=${diagnosticRuntimeId(diagnostics.deliveryConnectionId)}`);
+    }
+    if (delivery) {
+      parts.push(`attempt=${delivery.attempt}`, `delivered=${String(delivery.delivered)}`);
+      if (typeof delivery.connectionDelivered === "boolean") {
+        parts.push(`connectionDelivered=${String(delivery.connectionDelivered)}`);
+      }
+      if (typeof delivery.callerDelivered === "boolean") {
+        parts.push(`callerDelivered=${String(delivery.callerDelivered)}`);
+      }
+    }
+    return parts.join("; ");
+  }
+
+  function diagnosticRuntimeId(value: string): string {
+    if (!value) return "<none>";
+    if (value.length <= 96) return value;
+    return `${value.slice(0, 48)}...${value.slice(-16)}`;
   }
 
   async function storeCredential(
@@ -1948,17 +2071,20 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         Date.now() + Math.max(1, request.flow.expiresInSeconds ?? device.expiresInSeconds) * 1000,
       oauthTokenOrigin: new URL(request.flow.tokenUrl).origin,
     });
-    const browserTarget = resolveBrowserHandoffTarget(ctx);
-    if (
-      !browserTarget ||
-      !emitToBrowserTarget(browserTarget, "external-open:open", {
-        url: verificationUrl,
-        callerId: ctx.caller.runtime.id,
-        callerKind: ctx.caller.runtime.kind,
-      })
-    ) {
+    const browserResolution = resolveBrowserHandoffTarget(ctx);
+    const browserDelivery = browserResolution.target
+      ? emitToBrowserTarget(browserResolution.target, "external-open:open", {
+          url: verificationUrl,
+          callerId: ctx.caller.runtime.id,
+          callerKind: ctx.caller.runtime.kind,
+        })
+      : undefined;
+    if (!browserResolution.target || !browserDelivery?.delivered) {
       presentation?.dispose();
-      throw new OAuthConnectionError("browser_unavailable");
+      throw new OAuthConnectionError(
+        "browser_unavailable",
+        browserHandoffUnavailableMessage(browserResolution.diagnostics, browserDelivery)
+      );
     }
     let token: Awaited<ReturnType<typeof pollDeviceToken>>;
     try {
@@ -2110,19 +2236,19 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       callback?.expectState(stateParam);
       const authorizeUrl = new URL(request.flow.authorizeUrl);
       authorizeUrl.searchParams.set("oauth_token", requestToken.token);
-      if (!eventService) {
-        throw new OAuthConnectionError("browser_unavailable");
-      }
-      const browserTarget = resolveBrowserHandoffTarget(ctx, handoffTarget);
-      if (
-        !browserTarget ||
-        !emitToBrowserTarget(browserTarget, "external-open:open", {
-          url: authorizeUrl.toString(),
-          callerId: ctx.caller.runtime.id,
-          callerKind: ctx.caller.runtime.kind,
-        })
-      ) {
-        throw new OAuthConnectionError("browser_unavailable");
+      const browserResolution = resolveBrowserHandoffTarget(ctx, handoffTarget);
+      const browserDelivery = browserResolution.target
+        ? emitToBrowserTarget(browserResolution.target, "external-open:open", {
+            url: authorizeUrl.toString(),
+            callerId: ctx.caller.runtime.id,
+            callerKind: ctx.caller.runtime.kind,
+          })
+        : undefined;
+      if (!browserResolution.target || !browserDelivery?.delivered) {
+        throw new OAuthConnectionError(
+          "browser_unavailable",
+          browserHandoffUnavailableMessage(browserResolution.diagnostics, browserDelivery)
+        );
       }
       await transitionOAuthTransaction(tx, "handoff_requested");
       if (callback) {
@@ -2260,9 +2386,6 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       await transitionOAuthTransaction(tx, "approved");
       const started = createOAuthAuthorizeRequest(oauthRequest, stateParam);
       callback?.expectState(started.state);
-      if (!eventService) {
-        throw new OAuthConnectionError("browser_unavailable");
-      }
       const openMode = request.browser ?? "external";
       if (redirectStrategy === "client-loopback" && openMode !== "external") {
         throw new OAuthConnectionError(
@@ -2270,11 +2393,12 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           "client-loopback OAuth requires an external browser"
         );
       }
-      const browserTarget = resolveBrowserHandoffTarget(ctx, explicitHandoffTarget);
+      const browserResolution = resolveBrowserHandoffTarget(ctx, explicitHandoffTarget);
+      const browserTarget = browserResolution.target;
       if (!browserTarget) {
         throw new OAuthConnectionError(
           "browser_unavailable",
-          "OAuth browser handoff target is not connected"
+          browserHandoffUnavailableMessage(browserResolution.diagnostics)
         );
       }
       if (redirectStrategy === "client-loopback") {
@@ -2289,7 +2413,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
           ? { oauthLoopback: buildClientLoopbackHandoff(tx, started.state) }
           : {}),
       };
-      let browserDelivered = false;
+      let browserDelivery: BrowserHandoffDeliveryResult;
       if (openMode === "internal") {
         if (!browserTarget.parentPanelId) {
           throw new OAuthConnectionError(
@@ -2297,19 +2421,19 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
             "Internal OAuth handoff requires a panel target"
           );
         }
-        browserDelivered = emitToBrowserTarget(browserTarget, "browser-panel:open", {
+        browserDelivery = emitToBrowserTarget(browserTarget, "browser-panel:open", {
           url: started.authorizeUrl,
           parentPanelId: browserTarget.parentPanelId,
           callerId: ctx.caller.runtime.id,
           callerKind: ctx.caller.runtime.kind,
         });
       } else {
-        browserDelivered = emitToBrowserTarget(browserTarget, "external-open:open", openPayload);
+        browserDelivery = emitToBrowserTarget(browserTarget, "external-open:open", openPayload);
       }
-      if (!browserDelivered) {
+      if (!browserDelivery.delivered) {
         throw new OAuthConnectionError(
           "browser_unavailable",
-          "OAuth browser handoff target is not connected"
+          browserHandoffUnavailableMessage(browserResolution.diagnostics, browserDelivery)
         );
       }
       await transitionOAuthTransaction(tx, "browser_open_requested");

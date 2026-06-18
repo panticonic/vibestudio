@@ -5,6 +5,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { PubSubClient } from "@workspace/pubsub";
 import { MessageList } from "./MessageList.js";
+import { channelParticipantId } from "../types.js";
 import { useChannelMessages } from "../hooks/useChannelMessages.js";
 import {
   appendTrajectoryEventsAndBroadcast,
@@ -50,7 +51,12 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
 function TranscriptView({ client }: { client: PubSubClient }) {
   const { messages } = useChannelMessages(client);
   return (
-    <MessageList messages={messages} participants={{}} selfId="panel:chat" allParticipants={{}} />
+    <MessageList
+      messages={messages}
+      participants={{}}
+      selfId={channelParticipantId("panel:chat")}
+      allParticipants={{}}
+    />
   );
 }
 

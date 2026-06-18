@@ -93,6 +93,26 @@ export interface TypingIndicatorData {
   senderType?: string;
 }
 
+declare const runtimeCallerIdBrand: unique symbol;
+declare const channelParticipantIdBrand: unique symbol;
+
+export type RuntimeCallerId = string & { readonly [runtimeCallerIdBrand]: true };
+export type ChannelParticipantId = string & { readonly [channelParticipantIdBrand]: true };
+export type BrowserHandoffCallerKind = "app" | "panel" | "shell";
+
+export interface BrowserHandoffCaller {
+  id: RuntimeCallerId;
+  kind: BrowserHandoffCallerKind;
+}
+
+export function runtimeCallerId(value: string): RuntimeCallerId {
+  return value as RuntimeCallerId;
+}
+
+export function channelParticipantId(value: string): ChannelParticipantId {
+  return value as ChannelParticipantId;
+}
+
 // ===========================================================================
 // ChatInputContext Value
 // ===========================================================================
@@ -117,6 +137,8 @@ export interface ChatContextValue {
   connected: boolean;
   status: string;
   channelId: string | null;
+  /** Connected runtime caller that can receive OAuth browser handoff events. */
+  browserHandoffCaller: BrowserHandoffCaller;
   sessionEnabled?: boolean;
   /**
    * Last connection-layer error surfaced by `ConnectionManager.onError`
@@ -152,7 +174,7 @@ export interface ChatContextValue {
 
   // Participants
   /** This client's participant ID */
-  selfId: string | null;
+  selfId: ChannelParticipantId | null;
   participants: Record<string, Participant<ChatParticipantMetadata>>;
   allParticipants: Record<string, Participant<ChatParticipantMetadata>>;
 

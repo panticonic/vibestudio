@@ -6,7 +6,14 @@ import { useScrollAnchor, type ScrollAnchorItem } from "../hooks/useScrollAnchor
 import { InlineGroup, type InlineItem } from "./InlineGroup";
 import { NewContentIndicator } from "./NewContentIndicator";
 import { MessageCard } from "./MessageCard";
-import type { ChatMessage, ChatParticipantMetadata, InlineUiComponentEntry, MessageTypeComponentEntry } from "../types";
+import type {
+  BrowserHandoffCaller,
+  ChannelParticipantId,
+  ChatMessage,
+  ChatParticipantMetadata,
+  InlineUiComponentEntry,
+  MessageTypeComponentEntry,
+} from "../types";
 import type { MdxActionHandlers } from "./markdownComponents";
 
 // Grouped item types produced by the grouping logic
@@ -192,11 +199,12 @@ export interface MessageListProps {
   /** Current active roster — typing indicators are derived from participant metadata */
   participants: Record<string, Participant<ChatParticipantMetadata>>;
   /** This client's participant ID — excluded from typing display */
-  selfId: string | null;
+  selfId: ChannelParticipantId | null;
   allParticipants: Record<string, Participant<ChatParticipantMetadata>>;
   inlineUiComponents?: Map<string, InlineUiComponentEntry>;
   messageTypeComponents?: Map<string, MessageTypeComponentEntry>;
   chat?: Record<string, unknown>;
+  browserHandoffCaller?: BrowserHandoffCaller;
   scope?: Record<string, unknown>;
   scopes?: Record<string, unknown>;
   hasMoreHistory?: boolean;
@@ -235,6 +243,7 @@ export const MessageList = React.memo(function MessageList({
   inlineUiComponents,
   messageTypeComponents,
   chat,
+  browserHandoffCaller,
   scope,
   scopes,
   hasMoreHistory,
@@ -540,6 +549,7 @@ export const MessageList = React.memo(function MessageList({
           key={msg.id || `fallback-msg-${msgIndex}`}
           msg={msg}
           index={msgIndex}
+          selfId={selfId}
           senderType={sender.type}
           senderInfo={sender as SenderInfo}
           mentionLabels={mentionLabels}
@@ -549,6 +559,7 @@ export const MessageList = React.memo(function MessageList({
           inlineUiComponents={inlineUiComponents}
           messageTypeComponents={messageTypeComponents}
           chat={chat}
+          browserHandoffCaller={browserHandoffCaller}
           scope={scope}
           scopes={scopes}
           onInterrupt={handleInterruptMessage}
@@ -561,7 +572,7 @@ export const MessageList = React.memo(function MessageList({
         />
       </Flex>
     );
-  }, [getSenderInfo, inlineUiComponents, messageTypeComponents, chat, scope, scopes, mdxActions, allParticipants, messagesById, onReply,
+  }, [getSenderInfo, inlineUiComponents, messageTypeComponents, chat, browserHandoffCaller, scope, scopes, mdxActions, allParticipants, messagesById, onReply,
       handleInterruptMessage, handleCopyMessage, handleClearCopiedMessage, handleTypingInterrupt, onCancelInvocation, onFocusPanel, onReloadPanel,
       customRenderMessage, customRenderInlineGroup]);
 

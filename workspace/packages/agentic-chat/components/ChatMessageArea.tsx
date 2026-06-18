@@ -33,6 +33,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     onFocusPanel,
     onReloadPanel,
     chat,
+    browserHandoffCaller,
     scope,
     scopes,
     clientRef,
@@ -56,6 +57,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
         inlineUiComponents={inlineUiComponents}
         messageTypeComponents={messageTypeComponents}
         chat={chat as unknown as Record<string, unknown>}
+        browserHandoffCaller={browserHandoffCaller}
         scope={scope}
         scopes={scopes as unknown as Record<string, unknown>}
         hasMoreHistory={hasMoreHistory}

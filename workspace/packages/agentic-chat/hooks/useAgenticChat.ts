@@ -44,7 +44,9 @@ import type {
   ChatContextValue,
   ChatInputContextValue,
   ActionBarData,
+  BrowserHandoffCallerKind,
 } from "../types";
+import { channelParticipantId, runtimeCallerId } from "../types";
 import type { MessageTypeComponentEntry } from "../types";
 import { customInspectorPayload } from "../components/CustomMessage";
 import { unwrapChatMethodResult } from "@workspace/agentic-core";
@@ -71,6 +73,11 @@ function actionBarLoadKey(
 function actorKindFromMetadata(type: string | undefined): ActorKind {
   if (type === "agent" || type === "system" || type === "panel" || type === "external") return type;
   return "user";
+}
+
+function browserHandoffCallerKindFromMetadata(type: string | undefined): BrowserHandoffCallerKind {
+  if (type === "app" || type === "shell") return type;
+  return "panel";
 }
 
 function actorForClient(clientId: string | undefined, metadata: ChatParticipantMetadata) {
@@ -1327,6 +1334,10 @@ Use package imports available to inline_ui plus relative imports for local helpe
       connected: core.connected,
       status: core.status,
       channelId: channelName,
+      browserHandoffCaller: {
+        id: runtimeCallerId(config.rpc.selfId),
+        kind: browserHandoffCallerKindFromMetadata(metadata.type),
+      },
       sessionEnabled,
       connectionError: core.connectionError,
       dismissConnectionError: core.dismissConnectionError,
@@ -1342,7 +1353,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
       onActionBarMaxHeightChange: updateActionBarMaxHeight,
       hasMoreHistory: core.hasMoreHistory,
       loadingMore: core.loadingMore,
-      selfId: core.selfId,
+      selfId: core.selfId ? channelParticipantId(core.selfId) : null,
       participants: core.participants,
       allParticipants: core.allParticipants,
       debugEvents: core.debugEvents,
@@ -1375,6 +1386,9 @@ Use package imports available to inline_ui plus relative imports for local helpe
     [
       core.connected,
       core.status,
+      core.selfId,
+      config.rpc.selfId,
+      metadata.type,
       core.connectionError,
       core.dismissConnectionError,
       channelName,

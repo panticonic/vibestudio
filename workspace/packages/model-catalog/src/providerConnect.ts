@@ -170,8 +170,20 @@ export function modelIsConnectable(providerId: string, baseUrl: string): boolean
   return providerIsConnectable(providerId) && !isTemplatedBaseUrl(baseUrl);
 }
 
-/** Build the panel-facing `credentials.connect` request for a provider+model. */
-export function toPanelConnectRequest(
+function credentialMetadataForPreset(preset: ProviderConnectPreset): Record<string, string> {
+  return {
+    modelProviderId: preset.providerId,
+    ...(preset.accountIdentityJwtClaimRoot
+      ? { accountIdentityJwtClaimRoot: preset.accountIdentityJwtClaimRoot }
+      : {}),
+    ...(preset.accountIdentityJwtClaimField
+      ? { accountIdentityJwtClaimField: preset.accountIdentityJwtClaimField }
+      : {}),
+  };
+}
+
+/** Build the `credentials.connect` request for a provider+model. */
+export function toCredentialConnectRequest(
   providerId: string,
   modelBaseUrl: string,
   opts?: { browser?: "internal" | "external" }
@@ -191,11 +203,20 @@ export function toPanelConnectRequest(
       label: preset.credentialLabel,
       audience: [{ url: modelBaseUrl, match: "path-prefix" }],
       injection: preset.injection,
-      metadata: { modelProviderId: providerId },
+      metadata: credentialMetadataForPreset(preset),
     },
     ...(redirect ? { redirect } : {}),
     browser,
   };
+}
+
+/** Build the panel-facing `credentials.connect` request for a provider+model. */
+export function toPanelConnectRequest(
+  providerId: string,
+  modelBaseUrl: string,
+  opts?: { browser?: "internal" | "external" }
+): ConnectCredentialRequest | null {
+  return toCredentialConnectRequest(providerId, modelBaseUrl, opts);
 }
 
 /**

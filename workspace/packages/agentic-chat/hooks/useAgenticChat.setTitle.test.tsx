@@ -28,7 +28,7 @@ vi.mock("@workspace/tool-ui", () => ({
 }));
 
 import { useAgenticChat } from "./useAgenticChat";
-import type { ConnectionConfig } from "../types";
+import type { ChatContextValue, ConnectionConfig } from "../types";
 
 function createClient(): PubSubClient & {
   updateChannelConfig: ReturnType<typeof vi.fn>;
@@ -47,8 +47,14 @@ function createClient(): PubSubClient & {
   } as unknown as PubSubClient & { updateChannelConfig: ReturnType<typeof vi.fn> };
 }
 
-function Probe({ config }: { config: ConnectionConfig }) {
-  useAgenticChat({
+function Probe({
+  config,
+  onContext,
+}: {
+  config: ConnectionConfig;
+  onContext?: (value: ChatContextValue) => void;
+}) {
+  const { contextValue } = useAgenticChat({
     config,
     channelName: "chat-title-test",
     metadata: { name: "Chat Panel", type: "panel", handle: "user" },
@@ -57,6 +63,7 @@ function Probe({ config }: { config: ConnectionConfig }) {
       loadImport: vi.fn(async () => ""),
     },
   });
+  onContext?.(contextValue);
   return null;
 }
 
@@ -68,6 +75,42 @@ describe("useAgenticChat set_title", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("uses the runtime RPC id, not the channel participant id, for browser handoff", async () => {
+    const client = createClient();
+    pubsubMock.connectViaRpc.mockReturnValue(client);
+    const latestContext: { current: ChatContextValue | null } = { current: null };
+    const config: ConnectionConfig = {
+      clientId: "panel:slot-id",
+      rpc: {
+        selfId: "panel:runtime-entity",
+        call: vi.fn(async () => undefined) as unknown as ConnectionConfig["rpc"]["call"],
+        on: vi.fn(() => () => undefined),
+      },
+    };
+
+    const { unmount } = render(
+      <Probe
+        config={config}
+        onContext={(value) => {
+          latestContext.current = value;
+        }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(latestContext.current?.selfId).toBe("panel:chat");
+    });
+    expect(latestContext.current?.browserHandoffCaller).toEqual({
+      id: "panel:runtime-entity",
+      kind: "panel",
+    });
+    expect(pubsubMock.connectViaRpc).toHaveBeenCalledWith(
+      expect.objectContaining({ clientId: "panel:slot-id" })
+    );
+
+    unmount();
   });
 
   it("sets the calling panel title directly and preserves channel title metadata", async () => {

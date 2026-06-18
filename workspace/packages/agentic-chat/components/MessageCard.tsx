@@ -9,13 +9,20 @@ import { InlineUiMessage, parseInlineUiData } from "./InlineUiMessage";
 import { AgentDisconnectedMessage } from "./AgentDisconnectedMessage";
 import { CustomMessageCard } from "./CustomMessage";
 import ModelCredentialRequiredCard from "./ModelCredentialRequiredCard";
-import type { ChatMessage, InlineUiComponentEntry, MessageTypeComponentEntry } from "../types";
+import type {
+  BrowserHandoffCaller,
+  ChannelParticipantId,
+  ChatMessage,
+  InlineUiComponentEntry,
+  MessageTypeComponentEntry,
+} from "../types";
 import type { SenderInfo } from "./MessageList";
 import type { MdxActionHandlers } from "./markdownComponents";
 
 interface MessageCardProps {
   msg: ChatMessage;
   index: number;
+  selfId: ChannelParticipantId | null;
   senderType: string;
   senderInfo: SenderInfo;
   mentionLabels: string[];
@@ -26,6 +33,7 @@ interface MessageCardProps {
   inlineUiComponents?: Map<string, InlineUiComponentEntry>;
   messageTypeComponents?: Map<string, MessageTypeComponentEntry>;
   chat?: Record<string, unknown>;
+  browserHandoffCaller?: BrowserHandoffCaller;
   scope?: Record<string, unknown>;
   scopes?: Record<string, unknown>;
   onInterrupt: (msgId: string, senderId: string) => void;
@@ -50,6 +58,7 @@ function classNames(...values: Array<string | false | null | undefined>): string
 export const MessageCard = React.memo(function MessageCard({
   msg,
   index,
+  selfId,
   senderType,
   senderInfo,
   mentionLabels,
@@ -59,6 +68,7 @@ export const MessageCard = React.memo(function MessageCard({
   inlineUiComponents,
   messageTypeComponents,
   chat = {},
+  browserHandoffCaller,
   scope = {},
   scopes = {},
   onInterrupt,
@@ -143,6 +153,13 @@ export const MessageCard = React.memo(function MessageCard({
             ...(request.reason ? { reason: request.reason } : {}),
             ...(request.failureCode ? { failureCode: request.failureCode } : {}),
             agentParticipantId: request.agentParticipantId,
+            ...(selfId ? { modelPersistenceParticipantId: selfId } : {}),
+            ...(browserHandoffCaller
+              ? {
+                  browserHandoffCallerId: browserHandoffCaller.id,
+                  browserHandoffCallerKind: browserHandoffCaller.kind,
+                }
+              : {}),
           }}
           chat={
             chat as {

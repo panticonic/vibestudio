@@ -2,6 +2,22 @@ import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as http from "node:http";
 import { generateKeyPairSync } from "node:crypto";
+import { chatMessagesFromChannelView } from "@workspace/agentic-core";
+import {
+  AGENTIC_EVENT_PAYLOAD_KIND,
+  AGENTIC_PROTOCOL_VERSION,
+  CREDENTIAL_CONNECT_PAYLOAD_KIND,
+  brandId,
+  createInitialChannelViewState,
+  reduceChannelView,
+  type AgenticEvent,
+  type BlockId,
+  type ChannelEnvelope,
+  type ChannelId,
+  type EnvelopeId,
+  type MessageId,
+  type TurnId,
+} from "@workspace/agentic-protocol";
 
 import type {
   AuditEntry,
@@ -1128,6 +1144,122 @@ describe("credentialService", () => {
         oauthTokenOrigin: "https://auth.example.test",
       })
     );
+
+    const agent = { kind: "agent" as const, id: "agent-openai", displayName: "OpenAI Codex" };
+    const participant = { ...agent, participantId: "agent-openai" };
+    const channelId = brandId<ChannelId>("channel-credential-smoke");
+    const turnId = brandId<TurnId>("turn-credential-reconnect");
+    const messageId = brandId<MessageId>("msg-credential-reconnect");
+    const blockId = brandId<BlockId>("msg-credential-reconnect:block:0");
+    const credKey = "cred:channel-credential-smoke:openai-codex";
+    const credentialEnvelope: ChannelEnvelope<Record<string, unknown>> = {
+      envelopeId: brandId<EnvelopeId>("env-credential-request"),
+      channelId,
+      seq: 1,
+      from: participant,
+      payloadKind: CREDENTIAL_CONNECT_PAYLOAD_KIND,
+      payload: {
+        credKey,
+        providerId: "openai-codex",
+        connectSpec: { providerId: "openai-codex", browser: "external" },
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
+        reason: "Provided authentication token is expired. Please try signing in again.",
+        failureCode: "auth_or_credentials",
+      },
+      publishedAt: "2026-06-18T15:00:00.000Z",
+    };
+    const eventEnvelope = (payload: AgenticEvent, seq: number): ChannelEnvelope<AgenticEvent> => ({
+      envelopeId: brandId<EnvelopeId>(`env-credential-smoke-${seq}`),
+      channelId,
+      seq,
+      from: participant,
+      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload,
+      publishedAt: payload.createdAt,
+    });
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-06-18T15:00:01.000Z",
+    };
+    const waiting: AgenticEvent<"turn.waiting"> = {
+      kind: "turn.waiting",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "model_credential_reconnect_required",
+        summary: "Waiting for model credential reconnect",
+      },
+      createdAt: "2026-06-18T15:00:02.000Z",
+    };
+    const resolved: AgenticEvent<"system.event"> = {
+      kind: "system.event",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        kind: "credential.wait_resolved",
+        details: {
+          kind: "credential.wait_resolved",
+          credKey,
+          providerId: "openai-codex",
+          resolved: true,
+        },
+      },
+      createdAt: "2026-06-18T15:00:03.000Z",
+    };
+    const resumed: AgenticEvent<"message.started"> = {
+      kind: "message.started",
+      actor: agent,
+      turnId,
+      causality: { messageId },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant" },
+      createdAt: "2026-06-18T15:00:04.000Z",
+    };
+    const delta: AgenticEvent<"message.delta"> = {
+      kind: "message.delta",
+      actor: agent,
+      turnId,
+      causality: { messageId },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        blockId,
+        type: "text",
+        text: "Resumed after reconnect.",
+      },
+      createdAt: "2026-06-18T15:00:05.000Z",
+    };
+
+    const credentialState = reduceChannelView(createInitialChannelViewState(), credentialEnvelope);
+    expect(chatMessagesFromChannelView(credentialState)).toEqual([
+      expect.objectContaining({ contentType: "credential-connect" }),
+    ]);
+
+    const activeState = [opened, waiting, resolved, resumed]
+      .map((event, index) => eventEnvelope(event, index + 2))
+      .reduce(reduceChannelView, credentialState);
+    const activeMessages = chatMessagesFromChannelView(activeState);
+    expect(activeMessages.some((message) => message.contentType === "credential-connect")).toBe(
+      false
+    );
+    expect(activeMessages).toContainEqual(
+      expect.objectContaining({
+        id: "turn:turn-credential-reconnect",
+        contentType: "typing",
+        complete: false,
+      })
+    );
+
+    const outputState = reduceChannelView(activeState, eventEnvelope(delta, 6));
+    expect(chatMessagesFromChannelView(outputState)).toContainEqual(
+      expect.objectContaining({
+        id: "msg-credential-reconnect",
+        content: "Resumed after reconnect.",
+      })
+    );
   });
 
   it("credentials.connect can open OAuth externally for a worker-requested panel handoff", async () => {
@@ -1436,8 +1568,8 @@ describe("credentialService", () => {
       approvalQueue: approvingQueue() as never,
     });
 
-    await expect(
-      service.handler({ caller: verifiedTestCaller("worker:test", "worker") }, "connect", [
+    const error = await service
+      .handler({ caller: verifiedTestCaller("worker:test", "worker") }, "connect", [
         {
           spec: {
             flow: {
@@ -1458,7 +1590,17 @@ describe("credentialService", () => {
           },
         },
       ])
-    ).rejects.toMatchObject({ code: "browser_unavailable" });
+      .then(
+        () => {
+          throw new Error("expected OAuth handoff to fail");
+        },
+        (rejection: Error & { code?: string }) => rejection
+      );
+    expect(error).toMatchObject({ code: "browser_unavailable" });
+    expect(error.message).toContain("target=panel:panel-missing");
+    expect(error.message).toContain("ownerLookup=not-configured");
+    expect(error.message).toContain("attempt=emit-to-caller");
+    expect(error.message).toContain("delivered=false");
   });
 
   it("fails immediately when a panel handoff has no connected shell owner", async () => {
@@ -1475,8 +1617,8 @@ describe("credentialService", () => {
       approvalQueue: approvingQueue() as never,
     });
 
-    await expect(
-      service.handler({ caller: verifiedTestCaller("worker:test", "worker") }, "connect", [
+    const error = await service
+      .handler({ caller: verifiedTestCaller("worker:test", "worker") }, "connect", [
         {
           spec: {
             flow: {
@@ -1497,7 +1639,16 @@ describe("credentialService", () => {
           },
         },
       ])
-    ).rejects.toMatchObject({ code: "browser_unavailable" });
+      .then(
+        () => {
+          throw new Error("expected OAuth handoff to fail");
+        },
+        (rejection: Error & { code?: string }) => rejection
+      );
+    expect(error).toMatchObject({ code: "browser_unavailable" });
+    expect(error.message).toContain("target=panel:panel-missing-owner");
+    expect(error.message).toContain("ownerLookup=missing");
+    expect(error.message).not.toContain("attempt=");
     expect(emitToCaller).not.toHaveBeenCalled();
     expect(emitToConnection).not.toHaveBeenCalled();
   });

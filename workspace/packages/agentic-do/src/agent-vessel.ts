@@ -36,6 +36,7 @@ import {
 } from "@workspace/agentic-protocol";
 import type { AgentTool } from "@workspace/pi-core";
 import { serializeByKey } from "@natstack/shared/keyedSerializer";
+import { toCredentialConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
   defaultPolicies,
   derivedTurnStatus,
@@ -53,7 +54,10 @@ import {
   createModelCredentialSentinel,
   installUrlBoundModelFetchProxy,
 } from "./model-fetch-proxy.js";
-import type { StoredCredentialSummary as ModelCredentialSummary } from "@workspace/runtime/credentials";
+import type {
+  ConnectCredentialRequest,
+  StoredCredentialSummary as ModelCredentialSummary,
+} from "@workspace/runtime/credentials";
 import { DOIdentity } from "./identity.js";
 import { SubscriptionManager } from "./subscription-manager.js";
 import { ChannelClient } from "./channel-client.js";
@@ -108,8 +112,33 @@ export interface AgentPromptOverride {
   systemPromptMode?: SystemPromptMode;
 }
 
+type BrowserOpenMode = "internal" | "external";
+type BrowserHandoffCallerKind = "app" | "panel" | "shell";
+type ConnectCredentialEnvelope = {
+  spec: ConnectCredentialRequest;
+  handoffTarget: {
+    callerId: string;
+    callerKind: BrowserHandoffCallerKind;
+  };
+};
+
 function isSystemPromptMode(value: unknown): value is SystemPromptMode {
   return value === "append" || value === "replace" || value === "replace-natstack";
+}
+
+function normalizeBrowserOpenMode(value: unknown): BrowserOpenMode {
+  return value === "internal" ? "internal" : "external";
+}
+
+function normalizeBrowserHandoffTarget(input: {
+  browserHandoffCallerId?: unknown;
+  browserHandoffCallerKind?: unknown;
+}): ConnectCredentialEnvelope["handoffTarget"] | null {
+  const callerId = input.browserHandoffCallerId;
+  const callerKind = input.browserHandoffCallerKind;
+  if (typeof callerId !== "string" || callerId.length === 0) return null;
+  if (callerKind !== "app" && callerKind !== "panel" && callerKind !== "shell") return null;
+  return { callerId, callerKind };
 }
 
 /** Context handed to {@link AgentVesselBase.onChannelForked} after a clone. */
@@ -292,6 +321,35 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     _credential: ModelCredentialSummary
   ): Record<string, unknown> {
     return {};
+  }
+
+  private async resolveModelBaseUrlForProvider(
+    providerId: string,
+    explicitModelBaseUrl: unknown,
+    explicitModelRef: unknown
+  ): Promise<string | null> {
+    if (typeof explicitModelBaseUrl === "string" && explicitModelBaseUrl.length > 0) {
+      return explicitModelBaseUrl;
+    }
+    const modelRef =
+      typeof explicitModelRef === "string" && explicitModelRef.length > 0
+        ? explicitModelRef
+        : null;
+    if (!modelRef?.includes(":")) return null;
+    const modelProviderId = modelRef.slice(0, modelRef.indexOf(":"));
+    const modelId = modelRef.slice(modelRef.indexOf(":") + 1);
+    if (modelProviderId !== providerId) return null;
+    try {
+      const { getModel } = await import("@earendil-works/pi-ai");
+      const registryModel = getModel(modelProviderId as never, modelId as never) as
+        | { baseUrl?: string }
+        | undefined;
+      return typeof registryModel?.baseUrl === "string" && registryModel.baseUrl.length > 0
+        ? registryModel.baseUrl
+        : null;
+    } catch {
+      return null;
+    }
   }
 
   /** Fork hook. The clone has been re-identified and its subscription renamed
@@ -1503,8 +1561,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       case "connectModelCredential": {
         const input = (args ?? {}) as {
           providerId?: string;
+          modelRef?: string;
           browserOpenMode?: string;
           modelBaseUrl?: string;
+          browserHandoffCallerId?: string;
+          browserHandoffCallerKind?: string;
         };
         if (!input.providerId) {
           return { result: { error: "connectModelCredential requires providerId" }, isError: true };
@@ -1516,22 +1577,35 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             isError: true,
           };
         }
+        const modelBaseUrl = await this.resolveModelBaseUrlForProvider(
+          input.providerId,
+          input.modelBaseUrl,
+          input.modelRef ?? this.getAgentSettings(channelId).model
+        );
+        if (!modelBaseUrl) {
+          return {
+            result: {
+              error: `connectModelCredential requires a concrete modelBaseUrl for provider ${input.providerId}`,
+            },
+            isError: true,
+          };
+        }
+        const browser = normalizeBrowserOpenMode(input.browserOpenMode);
+        const request = toCredentialConnectRequest(input.providerId, modelBaseUrl, { browser });
+        if (!request) {
+          return {
+            result: { error: `no credential connect request for provider ${input.providerId}` },
+            isError: true,
+          };
+        }
+        const handoffTarget = normalizeBrowserHandoffTarget(input);
+        const connectParams: ConnectCredentialRequest | ConnectCredentialEnvelope = handoffTarget
+          ? { spec: request, handoffTarget }
+          : request;
         const credential = await this.rpc.call<Record<string, unknown>>(
           "main",
           "credentials.connect",
-          [
-            {
-              ...setup,
-              ...(input.browserOpenMode ? { browserOpenMode: input.browserOpenMode } : {}),
-              ...(input.modelBaseUrl ? { modelBaseUrl: input.modelBaseUrl } : {}),
-            },
-          ]
-        );
-        // settle any in-flight credential wait for this provider
-        await this.driver.deliverEffectOutcome(
-          ids.credentialWaitEffect(ids.credKey(channelId, input.providerId)),
-          { kind: "credential", resolved: true } satisfies EffectOutcome,
-          { channelId }
+          [connectParams]
         );
         return { result: credential };
       }
@@ -1539,6 +1613,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         const input = (args ?? {}) as { providerId?: string };
         const providerId = input.providerId ?? "";
         const effectId = ids.credentialWaitEffect(ids.credKey(channelId, providerId));
+        // This is the only reconnect success path that resumes the waiting loop.
         await this.driver.deliverEffectOutcome(effectId, {
           kind: "credential",
           resolved: true,

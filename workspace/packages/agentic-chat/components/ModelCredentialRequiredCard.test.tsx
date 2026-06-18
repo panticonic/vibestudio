@@ -7,6 +7,71 @@ import { describe, expect, it, vi } from "vitest";
 import ModelCredentialRequiredCard from "./ModelCredentialRequiredCard";
 
 describe("ModelCredentialRequiredCard", () => {
+  it("explains workspace and system browser choices for initial OAuth credential setup", () => {
+    const chat = {
+      callMethod: vi.fn(async () => ({ ok: true })),
+    };
+
+    render(
+      <Theme>
+        <ModelCredentialRequiredCard
+          chat={chat}
+          props={{
+            providerId: "openai-codex",
+            modelRef: "openai-codex:gpt-5.5",
+            modelBaseUrl: "https://chatgpt.com/backend-api",
+            agentParticipantId: "do:agent",
+            flow: { type: "oauth2-auth-code-pkce" },
+          }}
+        />
+      </Theme>
+    );
+
+    expect(
+      screen.getByText(
+        "Choose the browser that is already signed in to the account you want to connect. If neither is signed in, pick the one you want to use."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Use workspace browser/i })).toBeTruthy();
+    expect(
+      screen.getByText("Choose this when the account is signed in inside this workspace.")
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Use system browser/i })).toBeTruthy();
+    expect(
+      screen.getByText("Choose this when your regular browser already has the right account.")
+    ).toBeTruthy();
+  });
+
+  it("uses refresh-specific browser labels when reconnecting credentials", () => {
+    const chat = {
+      callMethod: vi.fn(async () => ({ ok: true })),
+    };
+
+    render(
+      <Theme>
+        <ModelCredentialRequiredCard
+          chat={chat}
+          props={{
+            providerId: "openai-codex",
+            modelRef: "openai-codex:gpt-5.5",
+            modelBaseUrl: "https://chatgpt.com/backend-api",
+            agentParticipantId: "do:agent",
+            flow: { type: "oauth2-auth-code-pkce" },
+            reason: "Provided authentication token is expired. Please try signing in again.",
+          }}
+        />
+      </Theme>
+    );
+
+    expect(
+      screen.getByText(
+        "Choose the browser that is signed in to the account you want to reconnect. If neither is signed in, pick the one you want to use."
+      )
+    ).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Refresh in workspace browser/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Refresh in system browser/i })).toBeTruthy();
+  });
+
   it("switches the selected model before connecting credentials and persists best-effort", async () => {
     const calls: Array<{ participantId: string; method: string; args: unknown }> = [];
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -28,8 +93,9 @@ describe("ModelCredentialRequiredCard", () => {
             modelRef: "openai-codex:gpt-5.5",
             modelBaseUrl: "https://chatgpt.com/backend-api",
             agentParticipantId: "do:agent",
-            browserHandoffCallerId: "panel-1",
+            browserHandoffCallerId: "panel:runtime-1",
             browserHandoffCallerKind: "panel",
+            modelPersistenceParticipantId: "panel:chat-participant",
             resumeAfterConnect: true,
             providerOptions: [
               {
@@ -60,7 +126,7 @@ describe("ModelCredentialRequiredCard", () => {
     await waitFor(() => expect(chat.callMethod).toHaveBeenCalledTimes(4));
     expect(calls.map((call) => [call.participantId, call.method])).toEqual([
       ["do:agent", "setModel"],
-      ["panel-1", "persist_agent_model"],
+      ["panel:chat-participant", "persist_agent_model"],
       ["do:agent", "connectModelCredential"],
       ["do:agent", "credentialConnected"],
     ]);
@@ -73,6 +139,8 @@ describe("ModelCredentialRequiredCard", () => {
       modelBaseUrl: "https://api.anthropic.com",
       modelRef: "anthropic:claude-3-5-sonnet-20241022",
       browserOpenMode: "internal",
+      browserHandoffCallerId: "panel:runtime-1",
+      browserHandoffCallerKind: "panel",
     });
     await waitFor(() => expect(warn).toHaveBeenCalled());
     warn.mockRestore();

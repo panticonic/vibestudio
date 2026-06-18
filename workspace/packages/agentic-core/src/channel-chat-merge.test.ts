@@ -1069,6 +1069,65 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("shows typing when a credential wait resumes with a new model call", () => {
+    const turnId = brandId<TurnId>("turn-resumed-credential-model-call");
+    const credKey = "cred:channel-1:openai-codex";
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const waiting: AgenticEvent<"turn.waiting"> = {
+      kind: "turn.waiting",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        reason: "model_credential_reconnect_required",
+        summary: "Waiting for model credential reconnect",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const resolved: AgenticEvent<"system.event"> = {
+      kind: "system.event",
+      actor: agent,
+      turnId,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        kind: "credential.wait_resolved",
+        details: {
+          kind: "credential.wait_resolved",
+          credKey,
+          providerId: "openai-codex",
+          resolved: true,
+        },
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const resumed: AgenticEvent<"message.started"> = {
+      kind: "message.started",
+      actor: agent,
+      turnId,
+      causality: { messageId: brandId<MessageId>("msg-resumed-model-call") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, role: "assistant" },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [opened, waiting, resolved, resumed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state).map((message) => message.id)).toEqual([
+      "turn:turn-resumed-credential-model-call",
+    ]);
+    expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
+      contentType: "typing",
+      complete: false,
+    });
+  });
+
   it("does not surface user-interrupted agent turns as no-response errors", () => {
     const turnId = brandId<TurnId>("turn-interrupted");
     const opened: AgenticEvent<"turn.opened"> = {

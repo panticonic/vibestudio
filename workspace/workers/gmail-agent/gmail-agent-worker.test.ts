@@ -225,6 +225,10 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     } as never;
   }
 
+  driverForTest() {
+    return this.driver;
+  }
+
   protected override createGmailClient(): GmailClient {
     return fakeGmailClient({
       thread: () => this.fakeThread,
@@ -455,17 +459,52 @@ describe("GmailAgentWorker", () => {
       handle: "gmail",
       model: "openai-codex:gpt-5.5",
     });
+    const driver = worker.driverForTest();
+    const deliverEffectOutcome = vi
+      .spyOn(driver, "deliverEffectOutcome")
+      .mockResolvedValue(undefined);
+    const wake = vi.spyOn(driver, "wake").mockResolvedValue(undefined);
+
     await expect(
       worker.onMethodCall("ch-1", "call-1", "connectModelCredential", {
         providerId: "openai-codex",
+        modelBaseUrl: "https://chatgpt.com/backend-api/codex",
         browserOpenMode: "external",
+        browserHandoffCallerId: "panel-1",
+        browserHandoffCallerKind: "panel",
       })
     ).resolves.toMatchObject({ result: { id: "cred-1" } });
     expect(worker.rpcCall).toHaveBeenCalledWith("main", "credentials.connect", [
       expect.objectContaining({
-        flow: expect.objectContaining({ type: "oauth2-auth-code-pkce" }),
+        spec: expect.objectContaining({
+          flow: expect.objectContaining({ type: "oauth2-auth-code-pkce" }),
+          credential: expect.objectContaining({
+            audience: [{ url: "https://chatgpt.com/backend-api/codex", match: "path-prefix" }],
+            metadata: expect.objectContaining({
+              modelProviderId: "openai-codex",
+              accountIdentityJwtClaimField: "chatgpt_account_id",
+            }),
+          }),
+          redirect: expect.objectContaining({ type: "client-loopback" }),
+          browser: "external",
+        }),
+        handoffTarget: { callerId: "panel-1", callerKind: "panel" },
       }),
     ]);
+    expect(deliverEffectOutcome).not.toHaveBeenCalled();
+    expect(wake).not.toHaveBeenCalled();
+
+    await expect(
+      worker.onMethodCall("ch-1", "call-2", "credentialConnected", {
+        providerId: "openai-codex",
+      })
+    ).resolves.toMatchObject({ result: { resumed: true } });
+    expect(deliverEffectOutcome).toHaveBeenCalledWith(
+      ids.credentialWaitEffect(ids.credKey("ch-1", "openai-codex")),
+      { kind: "credential", resolved: true },
+      { channelId: "ch-1" }
+    );
+    expect(wake).toHaveBeenCalledWith("ch-1");
   });
 
   it("exposes the consolidated composable tool surface", async () => {
