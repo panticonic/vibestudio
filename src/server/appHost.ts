@@ -53,6 +53,7 @@ import type {
   HostTargetSelection,
   HostTargetSelectionInput,
 } from "@natstack/shared/hostTargets";
+import { appArtifactRoute, appArtifactUrl } from "@natstack/shared/appArtifacts";
 import type { EntityCache } from "@natstack/shared/runtime/entityCache";
 import type { EntityRecord } from "@natstack/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
@@ -127,7 +128,8 @@ interface AppAvailablePayload {
   source: string;
   target: WorkspaceAppTarget;
   launchMode: "hosted-view" | "native-bootstrap" | "terminal-process";
-  url: string;
+  url?: string;
+  artifactRoute: string;
   artifacts: Array<{
     path: string;
     role: string;
@@ -135,7 +137,8 @@ interface AppAvailablePayload {
     encoding: string;
     platform?: string;
     integrity?: string;
-    url: string;
+    route: string;
+    url?: string;
   }>;
   capabilities: AppCapability[];
   buildKey: string | null;
@@ -164,6 +167,7 @@ export interface ReactNativeAppBootstrap {
     encoding: string;
     platform?: string;
     integrity: string;
+    route: string;
     url: string;
   }>;
   provider?: AppBuildProviderDetails | null;
@@ -191,7 +195,7 @@ export type ElectronHostReadiness =
       source: string;
       appId: string;
       buildKey: string;
-      url: string;
+      artifactRoute: string;
       details: string[];
     }
   | {
@@ -337,8 +341,8 @@ export interface AppHostDeps {
   entityCache?: Pick<EntityCache, "resolve" | "listActive" | "_onActivate" | "_onRetire">;
   connectionGrants?: Pick<ConnectionGrantService, "grant" | "revokeForPrincipal">;
   getGatewayUrl(): string;
-  getAppArtifactBaseUrl?(): string;
-  getReactNativeBootstrapUrl(): string;
+  getReactNativeAppArtifactBaseUrl(): string;
+  getTerminalAppArtifactBaseUrl(): string;
   onHostTargetChanged?(target: HostTarget, reason: string): void;
 }
 
@@ -1195,7 +1199,6 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     ) {
       return null;
     }
-    const baseUrl = `${this.deps.getReactNativeBootstrapUrl()}/_a/${encodeURIComponent(entry.activeBundleKey)}`;
     const primaryArtifacts = (build.artifacts ?? []).filter(
       (artifact) => artifact.role === "primary"
     );
@@ -1209,6 +1212,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     ) {
       return null;
     }
+    const buildKey = entry.activeBundleKey;
     const artifacts = primaryArtifacts.map((artifact) => ({
       path: artifact.path,
       role: artifact.role,
@@ -1216,11 +1220,12 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       encoding: artifact.encoding,
       platform: artifact.platform,
       integrity: artifact.integrity ?? "",
-      url: `${baseUrl}/${encodeArtifactPath(artifact.path)}`,
+      route: appArtifactRoute(buildKey, artifact.path),
+      url: appArtifactUrl(this.deps.getReactNativeAppArtifactBaseUrl(), buildKey, artifact.path),
     }));
     return {
       appId: entry.name,
-      buildKey: entry.activeBundleKey,
+      buildKey,
       effectiveVersion: entry.activeEv,
       capabilities: entry.capabilities,
       rnHostAbi,
@@ -1447,13 +1452,13 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       };
     }
 
-    const baseUrl = this.getAppArtifactBuildUrl(entry.activeBundleKey);
+    const artifactRoute = appArtifactRoute(entry.activeBundleKey, htmlArtifact.path);
     return {
       ready: true,
       source: candidate.source,
       appId: entry.name,
       buildKey: entry.activeBundleKey,
-      url: `${baseUrl}/${encodeArtifactPath(htmlArtifact.path)}`,
+      artifactRoute,
       details: [],
     };
   }
@@ -1668,21 +1673,24 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     } = {}
   ): AppAvailablePayload {
     const buildKey = entry.activeBundleKey ?? "";
-    const baseUrl = this.getAppArtifactBuildUrl(buildKey);
     const build = buildKey ? this.deps.buildSystem.getBuildByKey?.(buildKey) : null;
-    const artifactUrls = (build?.artifacts ?? []).map((artifact) => ({
-      path: artifact.path,
-      role: artifact.role,
-      contentType: artifact.contentType,
-      encoding: artifact.encoding,
-      platform: artifact.platform,
-      integrity: artifact.integrity,
-      url: `${baseUrl}/${encodeArtifactPath(artifact.path)}`,
-    }));
+    const artifactRefs = (build?.artifacts ?? []).map((artifact) => {
+      const url = this.getAppArtifactUrl(buildKey, entry.target, artifact.path);
+      return {
+        path: artifact.path,
+        role: artifact.role,
+        contentType: artifact.contentType,
+        encoding: artifact.encoding,
+        platform: artifact.platform,
+        integrity: artifact.integrity,
+        route: appArtifactRoute(buildKey, artifact.path),
+        ...(url ? { url } : {}),
+      };
+    });
     const primaryArtifact =
-      artifactUrls.find((artifact) => entry.target === "electron" && artifact.role === "html") ??
-      artifactUrls.find((artifact) => artifact.role === "primary") ??
-      artifactUrls[0];
+      artifactRefs.find((artifact) => entry.target === "electron" && artifact.role === "html") ??
+      artifactRefs.find((artifact) => artifact.role === "primary") ??
+      artifactRefs[0];
     const selectedForHost = this.isSelectedForHost(entry);
     const details =
       build?.metadata.details &&
@@ -1690,14 +1698,16 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       "integrity" in build.metadata.details
         ? build.metadata.details
         : null;
-    const url = primaryArtifact?.url ?? `${baseUrl}/index.html`;
+    const artifactRoute = primaryArtifact?.route ?? appArtifactRoute(buildKey, "index.html");
+    const url =
+      primaryArtifact?.url ?? this.getAppArtifactUrl(buildKey, entry.target, "index.html");
     const payload: AppAvailablePayload = {
       appId: entry.name,
       source: normalizeRepoPath(entry.source.repo),
       target: entry.target,
       launchMode: appLaunchMode(entry.target),
-      url,
-      artifacts: artifactUrls,
+      artifactRoute,
+      artifacts: artifactRefs,
       capabilities: entry.capabilities,
       buildKey: entry.activeBundleKey,
       effectiveVersion: entry.activeEv,
@@ -1710,6 +1720,7 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
       rnHostAbi: details?.rnHostAbi ?? null,
       provider: details?.provider ?? null,
     };
+    if (url) payload.url = url;
     this.deps.eventService.emit("apps:available" as EventName, payload);
     this.emitAppLifecycle({
       type: opts.lifecycleType ?? "available",
@@ -1730,9 +1741,16 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
     return payload;
   }
 
-  private getAppArtifactBuildUrl(buildKey: string): string {
-    const gatewayUrl = this.deps.getAppArtifactBaseUrl?.() ?? this.deps.getGatewayUrl();
-    return `${gatewayUrl}/_a/${encodeURIComponent(buildKey)}`;
+  private getAppArtifactUrl(
+    buildKey: string,
+    target: WorkspaceAppTarget,
+    artifactPath: string
+  ): string | undefined {
+    if (target === "electron") return undefined;
+    if (target === "react-native") {
+      return appArtifactUrl(this.deps.getReactNativeAppArtifactBaseUrl(), buildKey, artifactPath);
+    }
+    return appArtifactUrl(this.deps.getTerminalAppArtifactBaseUrl(), buildKey, artifactPath);
   }
 
   private validateActiveBuild(entry: AppRegistryEntry): void {
@@ -2694,7 +2712,7 @@ function launchReadyResult(
   entry: AppRegistryEntry,
   available?: Pick<
     AppAvailablePayload,
-    "url" | "capabilities" | "effectiveVersion" | "adoptionPolicy"
+    "artifactRoute" | "capabilities" | "effectiveVersion" | "adoptionPolicy"
   >
 ): HostTargetLaunchResult {
   return {
@@ -2706,7 +2724,7 @@ function launchReadyResult(
     buildKey: entry.activeBundleKey ?? "",
     ...(available
       ? {
-          url: available.url,
+          artifactRoute: available.artifactRoute,
           capabilities: available.capabilities,
           effectiveVersion: available.effectiveVersion,
           adoptionPolicy: available.adoptionPolicy,
@@ -2838,13 +2856,6 @@ function isBuildArtifactEncoding(
   encoding: string
 ): encoding is BuildArtifactManifestEntry["encoding"] {
   return encoding === "utf8" || encoding === "base64";
-}
-
-function encodeArtifactPath(artifactPath: string): string {
-  return artifactPath
-    .split("/")
-    .map((segment) => encodeURIComponent(segment))
-    .join("/");
 }
 
 function normalizeArtifactPath(remainderPath: string): string {

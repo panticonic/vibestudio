@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { asPanelEntityId, asPanelSlotId } from "@natstack/shared/panel/ids";
 import { createServerEventBridge } from "./serverEventBridge.js";
 
-function createHarness() {
+function createHarness(opts: { resolveAppAvailableEvent?: (payload: unknown) => unknown } = {}) {
   const eventService = { emit: vi.fn() };
   const panelOrchestrator = {
     applyBuildComplete: vi.fn(),
@@ -27,6 +27,7 @@ function createHarness() {
     getServerClient: () => serverClient as never,
     openExternal: vi.fn(async () => {}),
     onAppHostTargetChanged,
+    resolveAppAvailableEvent: opts.resolveAppAvailableEvent,
     warn,
   });
   return {
@@ -138,6 +139,52 @@ describe("createServerEventBridge", () => {
     expect(appOrchestrator.applyAppAvailable).toHaveBeenCalledWith(payload);
     expect(onAppHostTargetChanged).toHaveBeenCalledWith({ event: "apps:available", payload });
     expect(eventService.emit).toHaveBeenCalledWith("apps:available", payload);
+  });
+
+  it("normalizes app availability before local apply, host sync, and shell emit", async () => {
+    const resolvedPayload = {
+      appId: "@workspace-apps/shell",
+      target: "electron",
+      artifactRoute: "/_a/app/index.html",
+      url: "http://127.0.0.1:39479/_a/app/index.html",
+      adoptionPolicy: "prompt",
+    };
+    const { handle, eventService, appOrchestrator, onAppHostTargetChanged } = createHarness({
+      resolveAppAvailableEvent: () => resolvedPayload,
+    });
+    const payload = {
+      appId: "@workspace-apps/shell",
+      target: "electron",
+      artifactRoute: "/_a/app/index.html",
+      adoptionPolicy: "prompt",
+    };
+
+    handle("event:apps:available", payload);
+    await Promise.resolve();
+
+    expect(appOrchestrator.applyAppAvailable).toHaveBeenCalledWith(resolvedPayload);
+    expect(onAppHostTargetChanged).toHaveBeenCalledWith({
+      event: "apps:available",
+      payload: resolvedPayload,
+    });
+    expect(eventService.emit).toHaveBeenCalledWith("apps:available", resolvedPayload);
+  });
+
+  it("drops app availability rejected by the local resolver", async () => {
+    const { handle, eventService, appOrchestrator, onAppHostTargetChanged } = createHarness({
+      resolveAppAvailableEvent: () => null,
+    });
+
+    handle("event:apps:available", {
+      appId: "@workspace-apps/shell",
+      target: "electron",
+      url: "https://old.example/_a/app/index.html",
+    });
+    await Promise.resolve();
+
+    expect(appOrchestrator.applyAppAvailable).not.toHaveBeenCalled();
+    expect(onAppHostTargetChanged).not.toHaveBeenCalled();
+    expect(eventService.emit).not.toHaveBeenCalled();
   });
 
   it("only wakes desktop host sync for host-target changes that can affect Electron", () => {

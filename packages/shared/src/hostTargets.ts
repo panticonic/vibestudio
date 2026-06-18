@@ -63,7 +63,7 @@ export type HostTargetLaunchResult =
       source: string;
       appId: string;
       buildKey: string;
-      url?: string;
+      artifactRoute?: string;
       capabilities?: AppCapability[];
       effectiveVersion?: string | null;
       adoptionPolicy?: "immediate" | "prompt" | "artifact-only";

@@ -21,6 +21,8 @@ export interface ServerEventBridgeDeps {
   onApprovalPendingChanged?(pending: PendingApproval[]): void;
   /** Host-target apps changed state; desktop bootstrap can retry launch. */
   onAppHostTargetChanged?(event: ServerHostTargetChangeEvent): void;
+  /** Resolve server app artifact route references for this Electron connection. */
+  resolveAppAvailableEvent?(payload: unknown): unknown | null;
 }
 
 export interface ServerHostTargetChangeEvent {
@@ -132,9 +134,13 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
     }
 
     if (bareEvent === "apps:available") {
-      deps.onAppHostTargetChanged?.({ event: "apps:available", payload });
+      const appPayload = deps.resolveAppAvailableEvent
+        ? deps.resolveAppAvailableEvent(payload)
+        : payload;
+      if (appPayload === null) return;
+      deps.onAppHostTargetChanged?.({ event: "apps:available", payload: appPayload });
       void appOrchestrator
-        ?.applyAppAvailable(payload as AppAvailableEvent)
+        ?.applyAppAvailable(appPayload as AppAvailableEvent)
         .catch((err: unknown) => {
           deps.warn(
             `[apps] failed to apply app availability: ${
@@ -143,7 +149,7 @@ export function createServerEventBridge(deps: ServerEventBridgeDeps) {
           );
         });
       if (isValidEventName(bareEvent)) {
-        emitNormalized(bareEvent, payload);
+        emitNormalized(bareEvent, appPayload);
       }
       return;
     }

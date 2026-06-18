@@ -95,6 +95,7 @@ import { CdpHostProvider } from "./cdpHostProvider.js";
 import { EventService } from "@natstack/shared/eventsService";
 import type { EventName } from "@natstack/shared/events";
 import { HOST_TARGET_LAUNCH_SESSION_CHANGED_EVENT } from "@natstack/shared/hostTargetLaunchGate";
+import { resolveGatewayRouteUrl } from "@natstack/shared/appArtifacts";
 import { createServerEventBridge, type ServerHostTargetChangeEvent } from "./serverEventBridge.js";
 import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
@@ -883,7 +884,7 @@ function readyElectronLaunchEvent(result: unknown): AppAvailableEvent | null {
           status?: unknown;
           appId?: unknown;
           source?: unknown;
-          url?: unknown;
+          artifactRoute?: unknown;
           capabilities?: unknown;
           buildKey?: unknown;
           effectiveVersion?: unknown;
@@ -891,19 +892,28 @@ function readyElectronLaunchEvent(result: unknown): AppAvailableEvent | null {
         })
       : null;
   if (launch?.status !== "ready") return null;
-  if (
-    typeof launch.appId !== "string" ||
-    typeof launch.source !== "string" ||
-    typeof launch.url !== "string"
-  ) {
+  if (typeof launch.appId !== "string" || typeof launch.source !== "string") {
     log.warn("[apps] Electron host target is ready but did not include hosted app metadata");
+    return null;
+  }
+  const artifactRoute =
+    typeof launch.artifactRoute === "string" && isAppArtifactRoute(launch.artifactRoute)
+      ? launch.artifactRoute
+      : null;
+  if (!artifactRoute) {
+    log.warn("[apps] Electron host target is ready but did not include an app artifact route");
+    return null;
+  }
+  const url = resolveElectronAppArtifactRoute(artifactRoute);
+  if (!url) {
     return null;
   }
   return {
     appId: launch.appId,
     source: launch.source,
     target: "electron",
-    url: launch.url,
+    url,
+    ...(artifactRoute ? { artifactRoute } : {}),
     capabilities: Array.isArray(launch.capabilities)
       ? (launch.capabilities as import("@natstack/shared/unitManifest").AppCapability[])
       : [],
@@ -950,6 +960,62 @@ function electronHostTargetKey(event: AppAvailableEvent): string {
 
 function recordFromUnknown(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function isAppArtifactRoute(value: string): boolean {
+  return value === "/_a" || value.startsWith("/_a/");
+}
+
+function resolveElectronAppArtifactRoute(route: string): string | null {
+  if (!serverSession) return null;
+  try {
+    return resolveGatewayRouteUrl(serverSession.gatewayConfig.serverUrl, route);
+  } catch (error) {
+    log.warn(
+      `[apps] Failed to resolve app artifact route ${route}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return null;
+  }
+}
+
+function resolveElectronAppAvailablePayload(payload: unknown): unknown | null {
+  const record = recordFromUnknown(payload);
+  if (!record) return payload;
+  const target = record["target"];
+  if (target !== undefined && target !== "electron") return payload;
+  if (target !== "electron") {
+    log.warn("[apps] Ignoring app availability without an explicit Electron target");
+    return null;
+  }
+  const artifactRoute =
+    typeof record["artifactRoute"] === "string" && isAppArtifactRoute(record["artifactRoute"])
+      ? record["artifactRoute"]
+      : null;
+  if (!artifactRoute) {
+    log.warn("[apps] Ignoring Electron app availability without an app artifact route");
+    return null;
+  }
+  const resolvedUrl = resolveElectronAppArtifactRoute(artifactRoute);
+  if (!resolvedUrl) return null;
+  const resolved: Record<string, unknown> = {
+    ...record,
+    url: resolvedUrl,
+    artifactRoute,
+  };
+  const artifacts = record["artifacts"];
+  if (Array.isArray(artifacts)) {
+    resolved["artifacts"] = artifacts.map((artifact) => {
+      const artifactRecord = recordFromUnknown(artifact);
+      if (!artifactRecord) return artifact;
+      const route = typeof artifactRecord["route"] === "string" ? artifactRecord["route"] : null;
+      if (!route) return artifactRecord;
+      const url = resolveElectronAppArtifactRoute(route);
+      return url ? { ...artifactRecord, url } : artifactRecord;
+    });
+  }
+  return resolved;
 }
 
 function electronHostTargetKeyFromPayload(payload: unknown): string | null {
@@ -1763,6 +1829,7 @@ app.on("ready", async () => {
     openExternal: (url) => shell.openExternal(url),
     warn: (message) => log.warn(message),
     onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
+    resolveAppAvailableEvent: resolveElectronAppAvailablePayload,
     onApprovalPendingChanged: (pending) => {
       approvalAttention?.handlePendingChanged(pending);
       retryElectronHostTargetLaunchAfterApprovalChange(pending);

@@ -1802,8 +1802,8 @@ async function main() {
         connectionGrants,
         readWorkspaceFileAtCommit,
         getGatewayUrl: () => getLocalGatewayUrl("app startup"),
-        getAppArtifactBaseUrl: () => getConnectUrl("app artifact"),
-        getReactNativeBootstrapUrl: () => getConnectUrl("React Native bootstrap"),
+        getReactNativeAppArtifactBaseUrl: () => getConnectUrl("React Native app artifact"),
+        getTerminalAppArtifactBaseUrl: () => getLocalGatewayUrl("Terminal app artifact"),
         onHostTargetChanged: (target, reason) =>
           hostTargetLaunchCoordinator.notifyTargetChanged(target, reason),
       });

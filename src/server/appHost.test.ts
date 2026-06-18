@@ -38,8 +38,8 @@ function makeHarness(
     approvalDecision?: "once" | "session" | "version" | "repo" | "deny";
     useApprovalCoordinator?: boolean;
     readWorkspaceFileAtCommit?: (commit: string, filePath: string) => Promise<string | null>;
-    appArtifactBaseUrl?: string;
-    reactNativeBootstrapUrl?: string;
+    reactNativeAppArtifactBaseUrl?: string;
+    terminalAppArtifactBaseUrl?: string;
   } = {}
 ) {
   const root = tempRoot();
@@ -186,10 +186,9 @@ function makeHarness(
     entityCache,
     readWorkspaceFileAtCommit: opts.readWorkspaceFileAtCommit ?? (async () => null),
     getGatewayUrl: () => "http://127.0.0.1:1234",
-    ...(opts.appArtifactBaseUrl
-      ? { getAppArtifactBaseUrl: () => opts.appArtifactBaseUrl as string }
-      : {}),
-    getReactNativeBootstrapUrl: () => opts.reactNativeBootstrapUrl ?? "http://127.0.0.1:1234",
+    getReactNativeAppArtifactBaseUrl: () =>
+      opts.reactNativeAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
+    getTerminalAppArtifactBaseUrl: () => opts.terminalAppArtifactBaseUrl ?? "http://127.0.0.1:1234",
   });
   return {
     host,
@@ -430,7 +429,7 @@ describe("AppHost", () => {
       expect.objectContaining({
         appId: "@workspace-apps/shell",
         target: "electron",
-        url: "http://127.0.0.1:1234/_a/app-key/index.html",
+        artifactRoute: "/_a/app-key/index.html",
         capabilities: ["notifications"],
       })
     );
@@ -886,14 +885,14 @@ describe("AppHost", () => {
       source: "apps/shell",
       appId: "@workspace-apps/shell",
       buildKey: "app-key",
-      url: "http://127.0.0.1:1234/_a/app-key/index.html",
+      artifactRoute: "/_a/app-key/index.html",
     });
     expect(buildSystem.getBuild).toHaveBeenCalledWith("@workspace-apps/shell", "main");
   });
 
-  it("advertises Electron shell artifacts from the paired connect origin", async () => {
+  it("advertises Electron shell artifacts as gateway routes", async () => {
     const { host, eventService, graphNode } = makeHarness({
-      appArtifactBaseUrl: "https://host.tailnet.ts.net",
+      reactNativeAppArtifactBaseUrl: "https://host.tailnet.ts.net",
     });
     graphNode.manifest.app.capabilities = ["panel-hosting"] as never;
 
@@ -905,7 +904,7 @@ describe("AppHost", () => {
       source: "apps/shell",
       appId: "@workspace-apps/shell",
       buildKey: "app-key",
-      url: "https://host.tailnet.ts.net/_a/app-key/index.html",
+      artifactRoute: "/_a/app-key/index.html",
     });
     expect(eventService.emit).toHaveBeenCalledWith(
       "apps:available",
@@ -913,11 +912,11 @@ describe("AppHost", () => {
         appId: "@workspace-apps/shell",
         source: "apps/shell",
         target: "electron",
-        url: "https://host.tailnet.ts.net/_a/app-key/index.html",
+        artifactRoute: "/_a/app-key/index.html",
         artifacts: expect.arrayContaining([
           expect.objectContaining({
             path: "index.html",
-            url: "https://host.tailnet.ts.net/_a/app-key/index.html",
+            route: "/_a/app-key/index.html",
           }),
         ]),
       })
@@ -1604,6 +1603,7 @@ describe("AppHost", () => {
   it("previews and applies React Native provider changes from trusted main", async () => {
     const { host, buildSystem, eventService, approvalQueue, graphNode } = makeHarness({
       readWorkspaceFileAtCommit: async () => "apps:\n  - source: apps/shell\n",
+      reactNativeAppArtifactBaseUrl: "https://mobile.gateway.test",
     });
     setAppManifestTarget(graphNode, "react-native", ["notifications"]);
     installApp(host, graphNode);
@@ -1709,7 +1709,8 @@ describe("AppHost", () => {
       "apps:available",
       expect.objectContaining({
         target: "react-native",
-        url: expect.stringContaining("/_a/rn-app-key/index.android.bundle"),
+        url: "https://mobile.gateway.test/_a/rn-app-key/index.android.bundle",
+        artifactRoute: "/_a/rn-app-key/index.android.bundle",
         integrity: "sha256-rn-app",
         rnHostAbi: "rn-host-1",
         provider,
@@ -1719,14 +1720,16 @@ describe("AppHost", () => {
             role: "primary",
             platform: "android",
             integrity: "sha256-android",
-            url: expect.stringContaining("/_a/rn-app-key/index.android.bundle"),
+            route: "/_a/rn-app-key/index.android.bundle",
+            url: "https://mobile.gateway.test/_a/rn-app-key/index.android.bundle",
           }),
           expect.objectContaining({
             path: "index.ios.bundle",
             role: "primary",
             platform: "ios",
             integrity: "sha256-ios",
-            url: expect.stringContaining("/_a/rn-app-key/index.ios.bundle"),
+            route: "/_a/rn-app-key/index.ios.bundle",
+            url: "https://mobile.gateway.test/_a/rn-app-key/index.ios.bundle",
           }),
         ]),
       })
@@ -1742,13 +1745,15 @@ describe("AppHost", () => {
           path: "index.android.bundle",
           platform: "android",
           integrity: "sha256-android",
-          url: expect.stringContaining("/_a/rn-app-key/index.android.bundle"),
+          route: "/_a/rn-app-key/index.android.bundle",
+          url: "https://mobile.gateway.test/_a/rn-app-key/index.android.bundle",
         }),
         expect.objectContaining({
           path: "index.ios.bundle",
           platform: "ios",
           integrity: "sha256-ios",
-          url: expect.stringContaining("/_a/rn-app-key/index.ios.bundle"),
+          route: "/_a/rn-app-key/index.ios.bundle",
+          url: "https://mobile.gateway.test/_a/rn-app-key/index.ios.bundle",
         }),
       ]),
       provider,
@@ -2154,7 +2159,7 @@ describe("AppHost", () => {
 
   it("produces React Native bootstrap for platform-specific mobile builds", async () => {
     const { host, buildSystem, graphNode } = makeHarness({
-      reactNativeBootstrapUrl: "https://host.tailnet.ts.net",
+      reactNativeAppArtifactBaseUrl: "https://host.tailnet.ts.net",
     });
     installApp(host, graphNode);
     host.registry.patch(graphNode.name, {
@@ -2208,6 +2213,7 @@ describe("AppHost", () => {
           path: "index.android.bundle",
           platform: "android",
           integrity: "sha256-android",
+          route: "/_a/rn-android-only-key/index.android.bundle",
           url: "https://host.tailnet.ts.net/_a/rn-android-only-key/index.android.bundle",
         }),
       ],
