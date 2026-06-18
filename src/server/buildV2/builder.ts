@@ -1228,7 +1228,7 @@ function relativeAssetHref(artifactPath: string): string {
 }
 
 function panelLoaderScript(bundleSrc: string): string {
-  return `<script src="/__loader.js" data-bundle-src="${escapeHtml(bundleSrc)}"></script>`;
+  return `<script src="./__loader.js" data-bundle-src="${escapeHtml(bundleSrc)}"></script>`;
 }
 
 function isPanelEntryJsOutput(outputPath: string): boolean {
@@ -1285,9 +1285,16 @@ export function injectHtmlTransforms(
   if (!/<meta[^>]+http-equiv\s*=\s*["']Content-Security-Policy["']/i.test(result)) {
     result = result.replace(/(<head\b[^>]*>)/i, `$1\n  ${PANEL_CSP_META}`);
   }
+  // Panel builds may be served behind a workspace route prefix such as
+  // /_workspace/dev. Keep the base relative so bundle/helper requests stay
+  // under the selected workspace route instead of escaping to the hub root.
+  const effectiveBaseHref = usePanelLoader && baseHref ? "./" : baseHref;
   // Inject base href if not present
-  if (baseHref && !/<base\b/i.test(result)) {
-    result = result.replace(/(<head\b[^>]*>)/i, `$1\n  <base href="${escapeHtml(baseHref)}">`);
+  if (effectiveBaseHref && !/<base\b/i.test(result)) {
+    result = result.replace(
+      /(<head\b[^>]*>)/i,
+      `$1\n  <base href="${escapeHtml(effectiveBaseHref)}">`
+    );
   }
   // If esbuild emitted CSS for imported component styles, make custom panel
   // templates load it too. The fallback HTML path already includes this link.
@@ -1333,7 +1340,7 @@ function generatePanelHtml(
   }
 ): string {
   const usePanelLoader = options.usePanelLoader ?? true;
-  const baseHref = usePanelLoader ? `/${relativePath}/` : null;
+  const baseHref = usePanelLoader ? "./" : null;
   const bundleSrc = options.bundleSrc ?? "./bundle.js";
   const cssHref = options.cssHref ?? "./bundle.css";
 

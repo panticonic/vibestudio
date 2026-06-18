@@ -56,6 +56,11 @@ export class TerminalAppRunner {
     return this.running.has(appId);
   }
 
+  isRunningBuild(appId: string, buildKey: string): boolean {
+    const running = this.running.get(appId);
+    return !!running && !running.stopping && running.launch.buildKey === buildKey;
+  }
+
   async start(launch: TerminalAppLaunch): Promise<void> {
     await this.stop(launch.appId, "restart");
     const artifact = (launch.build.artifacts ?? []).find(

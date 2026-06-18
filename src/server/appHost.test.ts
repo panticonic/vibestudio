@@ -1377,6 +1377,59 @@ describe("AppHost", () => {
     );
   });
 
+  it("does not restart an already-running terminal build during launch refresh", async () => {
+    const { host, buildSystem, graphNode } = makeHarness();
+    setAppManifestTarget(graphNode, "terminal", ["connection-management"]);
+    const terminalBuild = {
+      dir: path.join(path.dirname(graphNode.path), "..", "..", "state", "builds", "terminal-key"),
+      metadata: {
+        ev: "ev-terminal",
+        sourceStateHash: "state:test",
+        details: {
+          kind: "app" as const,
+          target: "terminal" as const,
+          integrity: null,
+          rnHostAbi: null,
+          provider: null,
+        },
+      },
+      artifacts: [
+        {
+          path: "index.mjs",
+          role: "primary",
+          contentType: "text/javascript; charset=utf-8",
+          encoding: "utf8",
+          content: "export {};\n",
+        },
+      ],
+    };
+    buildSystem.getBuild.mockResolvedValueOnce(terminalBuild as never);
+    buildSystem.getBuildByKey.mockImplementation((key: string) =>
+      key === "terminal-key" ? (terminalBuild as never) : null
+    );
+
+    await host.reconcileDeclared([{ source: graphNode.relativePath, ref: "main" }]);
+    await host.whenSettled();
+
+    const terminalRunner = {
+      isRunningBuild: vi.fn(() => true),
+      start: vi.fn(),
+      stop: vi.fn(),
+      stopAll: vi.fn(),
+      isRunning: vi.fn(() => true),
+    };
+    (host as unknown as { terminalRunner: typeof terminalRunner }).terminalRunner = terminalRunner;
+    host.registry.patch(graphNode.name, { status: "running" });
+
+    await expect(host.launchHostTarget("terminal")).resolves.toMatchObject({
+      status: "ready",
+      target: "terminal",
+      buildKey: "terminal-key",
+    });
+    expect(terminalRunner.isRunningBuild).toHaveBeenCalledWith(graphNode.name, "terminal-key");
+    expect(terminalRunner.start).not.toHaveBeenCalled();
+  });
+
   it("rolls terminal apps back to a retained terminal build", async () => {
     const { host, buildSystem, eventService, notificationService, graphNode } = makeHarness();
     const buildByKey = new Map([

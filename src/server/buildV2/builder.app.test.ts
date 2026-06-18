@@ -373,7 +373,7 @@ describe("buildUnit app builds", () => {
 
     expect(primaryPath).toMatch(/^bundle-[A-Za-z0-9]+\.js$/u);
     expect(html).toContain(
-      `<script src="/__loader.js" data-bundle-src="./${primaryPath}"></script>`
+      `<script src="./__loader.js" data-bundle-src="./${primaryPath}"></script>`
     );
     expect(html).not.toContain('data-bundle-src="./bundle.js"');
     expect(html).not.toContain('src="./bundle.js"');

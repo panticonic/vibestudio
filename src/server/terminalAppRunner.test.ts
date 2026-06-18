@@ -101,6 +101,8 @@ describe("TerminalAppRunner", () => {
       status: "running",
       error: null,
     });
+    expect(runner.isRunningBuild("@workspace-apps/remote-cli", "build-cli")).toBe(true);
+    expect(runner.isRunningBuild("@workspace-apps/remote-cli", "other-build")).toBe(false);
     expect(logs).toContainEqual(
       expect.objectContaining({
         appId: "@workspace-apps/remote-cli",

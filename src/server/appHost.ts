@@ -867,7 +867,9 @@ export class AppHost implements UnitMetaChangeApprovalProvider<UnitBatchEntry> {
           await this.stopTerminalApp(other.name);
         }
       }
-      await this.startTerminalApp(entry);
+      if (!this.terminalRunner?.isRunningBuild(entry.name, entry.activeBundleKey)) {
+        await this.startTerminalApp(entry);
+      }
       return launchReadyResult(target, entry);
     }
     return launchReadyResult(target, entry);

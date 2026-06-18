@@ -9,9 +9,9 @@ describe("CONFIG_LOADER_JS", () => {
 
   it("publishes runtime lease fields before loading the WebSocket transport", () => {
     expect(CONFIG_LOADER_JS.indexOf("__natstackConnectionId")).toBeGreaterThan(-1);
-    expect(CONFIG_LOADER_JS.indexOf('s.src = "/__transport.js"')).toBeGreaterThan(-1);
+    expect(CONFIG_LOADER_JS.indexOf('new URL("__transport.js"')).toBeGreaterThan(-1);
     expect(CONFIG_LOADER_JS.indexOf("__natstackConnectionId")).toBeLessThan(
-      CONFIG_LOADER_JS.indexOf('s.src = "/__transport.js"')
+      CONFIG_LOADER_JS.indexOf('new URL("__transport.js"')
     );
   });
 

@@ -373,20 +373,7 @@ export class PanelHttpServer {
     const pathname = url.pathname;
 
     // ── Static runtime helpers ────────────────────────────────────────────
-    if (pathname === "/__loader.js") {
-      res.writeHead(200, {
-        "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "no-store",
-      });
-      res.end(CONFIG_LOADER_JS);
-      return;
-    }
-    if (pathname === "/__transport.js") {
-      res.writeHead(200, {
-        "Content-Type": "application/javascript; charset=utf-8",
-        "Cache-Control": "no-store",
-      });
-      res.end(BROWSER_TRANSPORT_JS);
+    if (this.serveRuntimeHelper(pathname, res)) {
       return;
     }
 
@@ -404,6 +391,9 @@ export class PanelHttpServer {
 
     const parsed = extractSourcePath(pathname);
     if (parsed) {
+      if (this.serveRuntimeHelper(parsed.resource, res)) {
+        return;
+      }
       const contextId =
         url.searchParams.get("contextId") || this.contextIdFromReferer(req) || undefined;
       const routeLabel = contextId || parsed.source;
@@ -542,6 +532,26 @@ export class PanelHttpServer {
 
   private buildCacheKey(source: string, ref?: string): string {
     return ref ? `${source}@${ref}` : source;
+  }
+
+  private serveRuntimeHelper(pathname: string, res: import("http").ServerResponse): boolean {
+    if (pathname === "/__loader.js") {
+      res.writeHead(200, {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(CONFIG_LOADER_JS);
+      return true;
+    }
+    if (pathname === "/__transport.js") {
+      res.writeHead(200, {
+        "Content-Type": "application/javascript; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(BROWSER_TRANSPORT_JS);
+      return true;
+    }
+    return false;
   }
 
   private refFromReferer(req: import("http").IncomingMessage): string | null {

@@ -19,7 +19,7 @@ export interface ConnectionInfoResponse {
   gatewayPort?: number | null;
   serverId: string;
   serverBootId: string;
-  workspaceId: string;
+  workspaceId?: string | null;
 }
 
 export interface PairingInviteResponse extends ConnectionInfoResponse {
@@ -38,7 +38,7 @@ export interface DeviceCredentialResponse {
   callerId?: string;
   serverId: string;
   serverBootId: string;
-  workspaceId: string;
+  workspaceId?: string | null;
 }
 
 export function shellCallerId(deviceId: string): string {
@@ -48,7 +48,7 @@ export function shellCallerId(deviceId: string): string {
 export function connectionInfoResponse(deps: {
   deviceAuthStore: DeviceAuthStore;
   getServerBootId: () => string;
-  getWorkspaceId: () => string;
+  getWorkspaceId: () => string | null | undefined;
   getConnectionInfo?: () => AuthConnectionInfo;
 }): ConnectionInfoResponse {
   const info = deps.getConnectionInfo?.() ?? { serverUrl: "" };
@@ -63,7 +63,7 @@ export function connectionInfoResponse(deps: {
     gatewayPort: info.gatewayPort,
     serverId: deps.deviceAuthStore.getServerId(),
     serverBootId: deps.getServerBootId(),
-    workspaceId: deps.getWorkspaceId(),
+    workspaceId: deps.getWorkspaceId() ?? null,
   };
 }
 
@@ -71,7 +71,7 @@ export function createPairingInviteResponse(
   deps: {
     deviceAuthStore: DeviceAuthStore;
     getServerBootId: () => string;
-    getWorkspaceId: () => string;
+    getWorkspaceId: () => string | null | undefined;
     getConnectionInfo?: () => AuthConnectionInfo;
   },
   ttlMs?: number
@@ -93,7 +93,7 @@ export function responseForCredential(
     tokenManager: TokenManager;
     deviceAuthStore: DeviceAuthStore;
     getServerBootId: () => string;
-    getWorkspaceId: () => string;
+    getWorkspaceId: () => string | null | undefined;
   },
   credential: { deviceId: string; refreshToken: string; label: string; platform?: string },
   options: { includeShellToken: boolean }
@@ -112,6 +112,6 @@ export function responseForCredential(
     ...shellFields,
     serverId: deps.deviceAuthStore.getServerId(),
     serverBootId: deps.getServerBootId(),
-    workspaceId: deps.getWorkspaceId(),
+    workspaceId: deps.getWorkspaceId() ?? null,
   };
 }

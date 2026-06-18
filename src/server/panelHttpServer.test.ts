@@ -253,6 +253,25 @@ describe("PanelHttpServer build cache", () => {
     expect(getBuild).toHaveBeenCalledWith("panels/my-app", undefined);
   });
 
+  it("serves runtime helpers from a panel route for workspace-prefixed clients", async () => {
+    const server = new PanelHttpServer();
+    const getBuild = vi.fn(async () => buildResult);
+    server.setCallbacks({
+      listPanels: vi.fn().mockReturnValue([]),
+      onBuildComplete: vi.fn(),
+      getBuild,
+    });
+
+    const loader = await handlePanelRequest(server, "/panels/my-app/__loader.js");
+    expect(loader.statusCodeWritten).toBe(200);
+    expect(String(loader.body)).toContain("__natstackPanelInit");
+
+    const transport = await handlePanelRequest(server, "/panels/my-app/__transport.js");
+    expect(transport.statusCodeWritten).toBe(200);
+    expect(transport.body).toBe("// stub");
+    expect(getBuild).not.toHaveBeenCalled();
+  });
+
   it("uses explicit panel build refs when present", async () => {
     const server = new PanelHttpServer();
     server.setPort(1234);

@@ -185,8 +185,6 @@ Usage:
   node dist/server.mjs [options]
 
 Options:
-  --workspace <name>       Workspace name to resolve (default: last-opened or "default")
-  --workspace-dir <path>   Explicit workspace directory path
   --app-root <path>        Application root directory (default: cwd)
   --ready-file <path>      Write structured readiness JSON to this file
   --ephemeral              Use a disposable dev workspace (deleted on shutdown)
@@ -198,7 +196,6 @@ Options:
   --serve-panels           Enable panel HTTP serving
   --gateway-port <port>    Port for the gateway HTTP/WS ingress (default: auto-assigned)
   --panel-port <port>      Port for panel HTTP (default: auto-assigned)
-  --init                   Auto-create workspace from template if it doesn't exist
   --log-level <level>      Log verbosity
   --print-credentials      Print NATSTACK_ADMIN_TOKEN and NATSTACK_PAIRING_CODE for scripting
   --public-url <url>       Externally-reachable base URL (e.g. https://server.lan:3000).
@@ -224,16 +221,14 @@ Environment variables:
   NATSTACK_BIND_HOST       Explicit bind address (same as --bind-host)
   NATSTACK_PROTOCOL        Protocol for panel URLs (same as --protocol)
   NATSTACK_GATEWAY_PORT    Gateway ingress port (same as --gateway-port)
-  NATSTACK_WORKSPACE       Workspace name (same as --workspace)
-  NATSTACK_WORKSPACE_DIR   Workspace directory (same as --workspace-dir)
   NATSTACK_APP_ROOT        Application root (same as --app-root)
   NATSTACK_LOG_LEVEL       Log verbosity (same as --log-level)
   NATSTACK_PUBLIC_URL      External base URL (same as --public-url)
 
 Remote Electron connection:
-  To connect an Electron frontend to this server, set these env vars before
-  launching the Electron app:
-    NATSTACK_REMOTE_URL=https://<host>:<gateway-port>
+  Remote clients pair with the server hub, choose a workspace, then launch
+  against the selected workspace URL:
+    NATSTACK_REMOTE_URL=https://<host>:<gateway-port>/_workspace/<name>
     NATSTACK_REMOTE_TOKEN=<admin-token>
 `);
 }
@@ -459,7 +454,6 @@ if (!ipcChannel) {
     console.error("--tls-key requires --tls-cert");
     process.exit(1);
   }
-  if (args.workspaceDir) process.env["NATSTACK_WORKSPACE_DIR"] = args.workspaceDir;
   process.env["NATSTACK_APP_ROOT"] =
     args.appRoot ?? process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
   if (args.logLevel) process.env["NATSTACK_LOG_LEVEL"] = args.logLevel;
@@ -491,18 +485,31 @@ async function main() {
   loadCentralEnv();
 
   // ===========================================================================
-  // Workspace resolution
+  // Internal workspace runtime resolution
   // ===========================================================================
-  // Shared resolution via resolveLocalWorkspaceStartup():
-  //   --workspace-dir <path>   → explicit managed workspace root
-  //   --workspace <name>       → resolve by name via getWorkspaceDir()
-  //   NATSTACK_WORKSPACE_DIR   → env var (set by Electron parent or user)
-  //   (none, standalone)       → last-opened from central data, or "default"
-  //
-  // With --init: auto-create from template if workspace doesn't exist.
+  // Public standalone startup always runs the server hub. Workspace selection
+  // happens through paired clients. The flags below are a private contract for
+  // Electron and hub-managed child runtimes after a workspace has been selected.
 
   const appRoot = process.env["NATSTACK_APP_ROOT"] ?? process.cwd();
   const centralData = !ipcChannel ? new CentralDataManager() : null;
+
+  if (!ipcChannel && process.env["NATSTACK_FORCE_WORKSPACE_SERVER"] !== "1") {
+    const forbiddenWorkspaceSelection =
+      args.workspaceName ||
+      args.workspaceDir ||
+      args.init ||
+      process.env["NATSTACK_WORKSPACE"] ||
+      process.env["NATSTACK_WORKSPACE_DIR"];
+    if (forbiddenWorkspaceSelection) {
+      throw new Error(
+        "Public natstack-server starts the server hub only. Pair with the server, then choose or create a workspace from the client."
+      );
+    }
+    const { runHubServer } = await import("./hubServer.js");
+    await runHubServer({ args, appRoot });
+    return;
+  }
 
   const wsDir = args.workspaceDir ?? process.env["NATSTACK_WORKSPACE_DIR"];
   const wsName = args.workspaceName ?? process.env["NATSTACK_WORKSPACE"];
@@ -572,13 +579,16 @@ async function main() {
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
   const { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } =
     await import("./services/deviceAuthStore.js");
-  const deviceAuthStore = new DeviceAuthStore(path.join(statePath, "auth", "devices.json"));
-  const startupPairingCodes = !ipcChannel
-    ? [
-        deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
-        deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
-      ]
-    : [];
+  const authStorePath =
+    process.env["NATSTACK_AUTH_STORE_PATH"] ?? path.join(statePath, "auth", "devices.json");
+  const deviceAuthStore = new DeviceAuthStore(authStorePath);
+  const startupPairingCodes =
+    !ipcChannel && process.env["NATSTACK_DISABLE_STARTUP_PAIRING"] !== "1"
+      ? [
+          deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
+          deviceAuthStore.createPairingCode(DEFAULT_PAIRING_CODE_TTL_MS),
+        ]
+      : [];
   const startupPairingCode = startupPairingCodes[0] ?? null;
   const startupQrPairingCode = startupPairingCodes[1] ?? null;
 
@@ -2641,9 +2651,10 @@ async function main() {
           getConnectionInfo: () => {
             const gatewayPort = getResolvedGatewayPort("auth connection info");
             const protocol = gatewayProtocol();
+            const hubUrl = process.env["NATSTACK_HUB_URL"];
             return {
-              serverUrl: getExternalGatewayUrl("auth connection info"),
-              publicUrl: getConfiguredPublicUrl(),
+              serverUrl: hubUrl ?? getExternalGatewayUrl("auth connection info"),
+              publicUrl: hubUrl ?? getConfiguredPublicUrl(),
               protocol,
               externalHost: hostConfig.externalHost,
               gatewayPort,
@@ -2876,6 +2887,13 @@ async function main() {
       cliValue: args.headlessHostAutospawn,
       envValue: envAutospawn,
     });
+    const spawnTimeoutEnv = process.env["NATSTACK_HEADLESS_HOST_SPAWN_TIMEOUT_MS"];
+    const parsedSpawnTimeout = spawnTimeoutEnv ? Number.parseInt(spawnTimeoutEnv, 10) : Number.NaN;
+    // Honor an explicit 0 (don't let `|| undefined` swallow it); only fall back on missing/garbage.
+    const spawnTimeoutMs =
+      Number.isFinite(parsedSpawnTimeout) && parsedSpawnTimeout >= 0
+        ? parsedSpawnTimeout
+        : undefined;
     container.registerManaged({
       name: "headlessHostManager",
       dependencies: ["cdpBridge"],
@@ -2887,7 +2905,7 @@ async function main() {
           coordinator: panelRuntimeCoordinator,
           isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId),
           getServerUrl: () => `http://127.0.0.1:${gatewayPort}`,
-          config: { enabled: autospawnEnabled },
+          config: { enabled: autospawnEnabled, spawnTimeoutMs },
         });
         headlessHostManager = manager;
         return manager;

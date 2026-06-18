@@ -1,10 +1,10 @@
 /**
  * Config Loader — host-injected panel identity bootstrap.
  *
- * This script is served as `/__loader.js` and injected into panel HTML
- * as a blocking classic script. The host injects the full panel init bundle
- * at runtime, and this loader simply normalizes it into the globals consumed
- * by the transport/runtime code.
+ * This script is served as `__loader.js` under each panel route and injected
+ * into panel HTML as a blocking classic script. The host injects the full
+ * panel init bundle at runtime, and this loader simply normalizes it into the
+ * globals consumed by the transport/runtime code.
  */
 
 export const CONFIG_LOADER_JS = `(async () => {
@@ -16,6 +16,8 @@ export const CONFIG_LOADER_JS = `(async () => {
     loaderScript && loaderScript instanceof HTMLScriptElement
       ? loaderScript.dataset.bundleSrc
       : null;
+  const loaderScriptUrl =
+    loaderScript && loaderScript instanceof HTMLScriptElement ? loaderScript.src : null;
   const installRandomUuidPolyfill = () => {
     const cryptoObj = globalThis.crypto;
     if (!cryptoObj || typeof cryptoObj.randomUUID === "function") return;
@@ -131,7 +133,7 @@ export const CONFIG_LOADER_JS = `(async () => {
 
   await new Promise((resolve, reject) => {
     const s = document.createElement("script");
-    s.src = "/__transport.js";
+    s.src = new URL("__transport.js", loaderScriptUrl || document.baseURI || location.href).href;
     s.onload = resolve;
     s.onerror = reject;
     document.head.appendChild(s);
