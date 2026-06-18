@@ -66,18 +66,21 @@ Clean install:
 4. Native bootstrap shows a trusted recovery-surface confirmation with the
    target server URL.
 5. After user confirmation, native bootstrap calls native
-   `completePairing(serverUrl, code)`.
-6. Native code stores the device credential.
-7. Native bootstrap calls `prepareAppBundle(rnHostAbi, platform)`.
-8. Native code calls `/auth/mobile-app-bootstrap`.
-9. Native code selects the current platform artifact, verifies integrity, writes
+   `pairServer(serverUrl, code)`.
+6. Native code stores the hub device credential.
+7. Native bootstrap calls `listWorkspaces()` and asks the user to choose one.
+8. Native bootstrap calls `selectWorkspace(name)`, which stores the
+   workspace-scoped URL and returns a mobile shell grant.
+9. Native bootstrap calls `prepareAppBundle(rnHostAbi, platform, source)`.
+10. Native code verifies the selected platform artifact, writes
    it to disk, and reloads into the workspace app.
 
 Already paired:
 
 1. Bootstrap reads native credentials.
-2. Bootstrap issues a principal grant or prepares the active workspace app.
-3. Workspace app connects using native-provided connection material.
+2. If no workspace is selected, bootstrap resumes at workspace choice.
+3. Bootstrap issues a principal grant or prepares the active workspace app.
+4. Workspace app connects using native-provided connection material.
 
 ## Bootstrap Payload
 

@@ -115,7 +115,7 @@ describe("pair-server runner", () => {
     const output = logText(logSpy);
     expect(output).toContain("Desktop command:");
     expect(output).toContain(
-      "natstack remote start --pair 'natstack://connect?url=https%3A%2F%2Fhost.tailnet.ts.net&code=PAIRING_DESKTOP_CODE_123'"
+      "natstack remote pair 'natstack://connect?url=https%3A%2F%2Fhost.tailnet.ts.net&code=PAIRING_DESKTOP_CODE_123'"
     );
     expect(output).toContain("Run the desktop command.");
 
@@ -170,12 +170,11 @@ describe("pair-server runner", () => {
         requireMobileReady: true,
         requireElectronReady: true,
       },
-      ["--host", "127.0.0.1", "--port", "3456", "--", "--no-vpn-detect"],
+      ["--host", "127.0.0.1", "--port", "3456"],
       {
         spawnServer({ serverArgs }: { serverArgs: string[] }) {
           expect(serverArgs).toContain("--require-mobile-ready");
           expect(serverArgs).toContain("--require-electron-ready");
-          expect(serverArgs).toContain("--no-vpn-detect");
           const readyIndex = serverArgs.indexOf("--ready-file");
           readyFile = serverArgs[readyIndex + 1] ?? "";
           setTimeout(() => {
@@ -206,6 +205,16 @@ describe("pair-server runner", () => {
     );
 
     child.emit("exit", 0, null);
+  });
+
+  it("rejects raw server flag forwarding", () => {
+    expect(() =>
+      runPairServer(config, ["--host", "127.0.0.1", "--", "--workspace", "dev"], {
+        spawnServer() {
+          throw new Error("should not spawn");
+        },
+      })
+    ).toThrow(/Forwarding raw server flags is no longer supported/);
   });
 
   it("waits briefly for a QR-specific pairing code when reading stdout", async () => {

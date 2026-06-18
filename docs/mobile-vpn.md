@@ -64,11 +64,13 @@ the HTTPS path:
 ```bash
 natstack mobile install --device <adb-serial> --launch
 natstack mobile pair --host lan --port 3030
-natstack mobile pair --host 100.x.y.z --workspace my-workspace
-natstack mobile pair --workspace-dir /path/to/workspace
 natstack mobile pair --dev
 natstack mobile logs --device <adb-serial>
 ```
+
+Workspace selection happens in the mobile pairing flow after the app connects
+to the server hub. `natstack mobile pair` does not accept workspace launch
+flags.
 
 The internal APK is `com.natstack.mobile.internal`, is debug-signed, and allows
 HTTP to trusted VPN/LAN hosts. Release builds keep the stricter Android network

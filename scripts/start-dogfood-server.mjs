@@ -254,14 +254,9 @@ export function createDogfoodPairHooks({ workspaceName }) {
 
   return {
     beforeStart({ options, selectedHost }) {
-      if (options.workspaceDir) {
+      if (options.dev) {
         throw new Error(
-          "dogfood-server uses managed workspaces; use --workspace instead of --workspace-dir"
-        );
-      }
-      if (options.dev || options.noInit) {
-        throw new Error(
-          "dogfood-server always uses a persistent managed workspace; --dev and --no-init are not supported"
+          "dogfood-server always uses a persistent managed workspace; --dev is not supported"
         );
       }
       bootstrapWorkspace(workspaceName, {
@@ -279,9 +274,6 @@ export function createDogfoodPairHooks({ workspaceName }) {
         String(options.port),
         "--protocol",
         options.protocol,
-        "--workspace",
-        workspaceName,
-        "--init",
         "--serve-panels",
         "--print-credentials",
         ...(options.appRoot ? ["--app-root", options.appRoot] : []),
@@ -289,7 +281,6 @@ export function createDogfoodPairHooks({ workspaceName }) {
         ...(options.requirePublicUrl || options.host === "tailscale"
           ? ["--require-public-url"]
           : []),
-        ...options.serverArgs,
       ];
     },
     buildEnv(baseEnv, { options, selectedHost }) {
@@ -300,8 +291,6 @@ export function createDogfoodPairHooks({ workspaceName }) {
         NATSTACK_DOGFOOD_SOURCE_ROOT: repoRoot,
         NATSTACK_DOGFOOD_PROJECT: projectPath,
         NATSTACK_GATEWAY_ALIASES: JSON.stringify([dogfoodGatewayAlias]),
-        NATSTACK_WORKSPACE: workspaceName,
-        NATSTACK_WORKSPACE_DIR: workspaceDir(workspaceName),
       };
     },
     spawnServer({ serverArgs, env }) {
@@ -356,12 +345,11 @@ export function runDogfoodServer(argv = process.argv.slice(2)) {
     usage: [
       "pnpm dev:self:server",
       "pnpm dev:self:server --host tailscale --port 3030",
-      "pnpm dev:self:server --workspace dogfood",
     ],
     startupHint:
       "[dogfood] Self-update mirroring is unsupported under GAD VCS; workspace edits stay in the managed workspace.",
     additionalHelp:
-      "Dogfood mode always uses a persistent managed workspace. Use --workspace <name>; --workspace-dir, --dev, and --no-init are not supported.",
+      "Dogfood mode always uses a persistent managed workspace. Set NATSTACK_DOGFOOD_WORKSPACE to change the seeded workspace name.",
     bannerTitle: "NatStack dogfood server",
     deepLinkLabel: "Pair URL",
     clientCommandLabel: "Client command",
@@ -371,16 +359,7 @@ export function runDogfoodServer(argv = process.argv.slice(2)) {
     printPairHelp(config);
     return;
   }
-  let workspaceName = process.env.NATSTACK_WORKSPACE || "dogfood";
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === "--workspace" && argv[i + 1]) {
-      workspaceName = argv[i + 1];
-      i++;
-    } else if (arg?.startsWith("--workspace=")) {
-      workspaceName = arg.slice("--workspace=".length);
-    }
-  }
+  const workspaceName = process.env.NATSTACK_DOGFOOD_WORKSPACE || "dogfood";
   runPairServer(config, argv, createDogfoodPairHooks({ workspaceName }));
 }
 

@@ -13,7 +13,6 @@ import { inflateSync } from "node:zlib";
 import {
   createServerInvocation,
   serverEntryArg,
-  serverEntryDescription,
 } from "./lib/server-entry.mjs";
 import { pickMobileHost } from "./lib/connect-utils.mjs";
 
@@ -50,23 +49,18 @@ function parseArgs(argv) {
     noInstall: false,
     noReset: false,
     noTap: false,
+    realModel: false,
     network: "local",
     timeoutMs: 420_000,
     pairingTimeoutMs: 180_000,
     agentTimeoutMs: 300_000,
-    serverArgs: [],
     help: false,
   };
 
-  let passthrough = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (passthrough) {
-      options.serverArgs.push(arg);
-      continue;
-    }
     if (arg === "--") {
-      passthrough = true;
+      throw new Error("Forwarding raw server flags is no longer supported");
     } else if (arg === "--avd") {
       options.avd = argv[++i] ?? null;
     } else if (arg === "--device") {
@@ -85,6 +79,8 @@ function parseArgs(argv) {
       options.noReset = true;
     } else if (arg === "--no-tap") {
       options.noTap = true;
+    } else if (arg === "--real-model") {
+      options.realModel = true;
     } else if (arg === "--network") {
       options.network = parseNetwork(argv[++i]);
     } else if (arg === "--tailscale") {
@@ -124,7 +120,7 @@ function printHelp() {
   console.log(`natstack mobile smoke
 
 Usage:
-  natstack mobile smoke [runner options] [-- server options]
+  natstack mobile smoke [options]
 
 Runner options:
   --avd <name>        Start this AVD if no adb device is connected.
@@ -137,6 +133,8 @@ Runner options:
                        the already-installed app.
   --no-reset          Do not clear app data before pairing.
   --no-tap            Do not automate the Pair button tap.
+  --real-model        Use the real model provider/credential path instead of
+                       the deterministic E2E model stub.
   --network <mode>    Pair through local adb reverse or Tailscale HTTPS.
                        Values: local, tailscale. Defaults to local.
   --tailscale         Alias for --network tailscale.
@@ -149,8 +147,6 @@ Runner options:
                        Time to wait for the initial agent response after the
                        panel WebView loads. Defaults to 300000.
   --help              Show this help message.
-
-Everything after '--' is forwarded to ${serverEntryDescription()}.
 
 By default, the smoke delegates APK build/install/reset/launcher startup to
 natstack mobile install --reset-app --launch. It then starts a disposable local
@@ -401,7 +397,6 @@ function createServerArgs(options, readyFilePath) {
     args.push("--host", "127.0.0.1", "--bind-host", "127.0.0.1", "--no-vpn-detect");
   }
 
-  args.push(...options.serverArgs);
   return args;
 }
 
@@ -526,6 +521,19 @@ function startLogcat(device, expectedPhases, deadlineMs) {
   const hasPhase = (phase) => phases.has(phase);
 
   return { child, waitForPhase, hasPhase };
+}
+
+async function waitForLogcatReady(device, logcat) {
+  const phase = `logcat-ready-${Date.now()}`;
+  await adb(
+    device,
+    "shell",
+    "log",
+    "-t",
+    "NatStackMobileSmokeProbe",
+    `${smokePrefix} phase=${phase}`
+  );
+  await logcat.waitForPhase(phase);
 }
 
 async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
@@ -857,8 +865,28 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     }
 
     const visualAgentTurn = visibleAgentTurnState(labels);
+    if (options.rejectTestModelResponse && visualAgentTurn.hasTestModelStub) {
+      throw new Error(
+        "Real-model smoke saw the deterministic E2E model response; " +
+          "NATSTACK_TEST_MODE is still reaching the model worker"
+      );
+    }
+    if (options.failOnCredentialSetup && visualAgentTurn.hasCredentialSetupPrompt) {
+      throw new Error(
+        `Real-model smoke reached the model credential setup UI instead of an agent response. ` +
+          `Visible labels: ${summarizeLabels(labels)}`
+      );
+    }
 
-    if (visualAgentTurn.hasAgentOutput && !visualAgentTurn.isTyping) {
+    if (
+      options.requireNoUnresolvedApproval &&
+      visualAgentTurn.hasUnresolvedApproval &&
+      visualAgentTurn.hasAgentOutput &&
+      !visualAgentTurn.isTyping
+    ) {
+      stableVisualAgentFingerprint = "";
+      stableVisualAgentPolls = 0;
+    } else if (visualAgentTurn.hasFinalVisibleOutput) {
       if (visualAgentTurn.fingerprint === stableVisualAgentFingerprint) {
         stableVisualAgentPolls += 1;
       } else {
@@ -866,7 +894,10 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         stableVisualAgentPolls = 1;
       }
       if (stableVisualAgentPolls >= 3) {
-        console.log("[mobile-smoke] Initial agent turn completed by stable visible output");
+        const suffix = options.requireNoUnresolvedApproval
+          ? " with no pending approvals"
+          : "";
+        console.log(`[mobile-smoke] Initial agent turn completed by stable final visible output${suffix}`);
         return;
       }
     } else {
@@ -885,8 +916,11 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
         throw new Error(`Initial agent turn failed in durable state: ${agentState.summary}`);
       }
       if (agentState.kind === "completed") {
-        console.log(`[mobile-smoke] Initial agent turn completed: ${agentState.summary}`);
-        return;
+        if (!options.requireVisibleAgentOutput) {
+          console.log(`[mobile-smoke] Initial agent turn completed: ${agentState.summary}`);
+          return;
+        }
+        lastAgentState = `completed but waiting for visible output: ${agentState.summary}`;
       }
       if (
         (agentState.kind === "unavailable" ||
@@ -920,21 +954,64 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
 function visibleAgentTurnState(labels) {
   const text = labels.join("\n");
   const isTyping = /\b(?:AI Chat|Agent) typing\b/i.test(text);
+  const agentIndex = labels.findLastIndex((label) => isAgentAttributionLabel(label));
+  const agentLabels = agentIndex >= 0 ? labels.slice(agentIndex + 1, agentIndex + 12) : [];
+  const agentText = agentLabels.join("\n");
   const hasAgentAttribution =
-    labels.some((label) => /(?:^|\s)@agent(?:\s|$)/i.test(label)) ||
-    /(?:^|\n)AI Chat(?:\s+|\n)@agent(?:\s|\n|$)/i.test(text);
-  const hasSubstantialContent = labels.some((label) => {
-    const normalized = label.replace(/\s+/g, " ").trim();
-    if (normalized.length < 8) return false;
-    if (/^(?:AI Chat|@agent|AI Chat\s+@agent)$/i.test(normalized)) return false;
-    if (/^(?:Approve all|Use once)$/i.test(normalized)) return false;
-    return true;
-  });
+    agentIndex >= 0 || /(?:^|\n)AI Chat(?:\s*|\n)@(?:agent|ai-chat)(?:\s|\n|$)/i.test(text);
+  const hasTestModelStub = /E2E model response:\s*initial agent turn completed/i.test(text);
+  const hasCredentialSetupPrompt =
+    /Credential (?:required|needs refresh) for/i.test(agentText) ||
+    /Connect a URL-bound model credential for/i.test(agentText) ||
+    /No built-in setup is available for this model provider/i.test(agentText) ||
+    /No provider details available/i.test(agentText);
+  const hasUnresolvedApproval = hasVisibleApprovalPrompt(labels);
+  const hasSubstantialContent = agentLabels.some(isSubstantialAgentContent);
+  const hasAgentOutput =
+    hasAgentAttribution && hasSubstantialContent && !hasCredentialSetupPrompt;
   return {
-    hasAgentOutput: hasAgentAttribution && hasSubstantialContent,
+    hasAgentOutput,
+    hasFinalVisibleOutput: hasAgentOutput && !isTyping && !hasUnresolvedApproval,
+    hasCredentialSetupPrompt,
+    hasTestModelStub,
+    hasUnresolvedApproval,
     isTyping,
-    fingerprint: labels.filter(Boolean).slice(0, 60).join("|"),
+    fingerprint: (agentLabels.length ? agentLabels : labels).filter(Boolean).slice(0, 60).join("|"),
   };
+}
+
+function hasVisibleApprovalPrompt(labels) {
+  return labels.some((label) => {
+    const normalized = label.replace(/\s+/g, " ").trim();
+    return (
+      /^(?:Approve all|Use once|Trust and start)$/i.test(normalized) ||
+      /^Use once\./i.test(normalized) ||
+      /Approve workspace extensions/i.test(normalized)
+    );
+  });
+}
+
+function isAgentAttributionLabel(label) {
+  const normalized = label.replace(/\s+/g, " ").trim();
+  return (
+    /^(?:AI Chat\s*)?@(?:agent|ai-chat)$/i.test(normalized) ||
+    /^AI Chat\s*@(?:agent|ai-chat)(?:\s|$)/i.test(normalized)
+  );
+}
+
+function isSubstantialAgentContent(label) {
+  const normalized = label.replace(/\s+/g, " ").trim();
+  if (normalized.length < 8) return false;
+  if (/^(?:AI Chat|AI Chat typing|Agent typing)$/i.test(normalized)) return false;
+  if (isAgentAttributionLabel(normalized)) return false;
+  if (
+    /^(?:Approve all|Use once|Reply|Copy message|Enter API Key|Internal Browser|External Browser)$/i.test(
+      normalized
+    )
+  ) {
+    return false;
+  }
+  return true;
 }
 
 function summarizeLabels(labels) {
@@ -942,7 +1019,7 @@ function summarizeLabels(labels) {
   return compact || "(none)";
 }
 
-async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo) {
+async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, options = {}) {
   const agentProbe = createAgentTurnProbe(readyInfo);
   await ensureDeviceInteractive(device);
   await sleep(2_000);
@@ -954,11 +1031,20 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo) {
   }
   let agentTurnCompleted = true;
   try {
-    await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, {
-      visualFallbackAfterMs: defaultVisualFallbackAgentProbeMs,
-    });
+    const waitOptions = options.realModel
+        ? {
+          requireVisibleAgentOutput: true,
+          rejectTestModelResponse: true,
+          failOnCredentialSetup: true,
+          requireNoUnresolvedApproval: true,
+        }
+      : {
+          visualFallbackAfterMs: defaultVisualFallbackAgentProbeMs,
+        };
+    await waitForInitialAgentTurn(device, Date.now() + agentTimeoutMs, agentProbe, waitOptions);
   } catch (error) {
     if (!isInitialAgentProbeTimeout(error)) throw error;
+    if (options.realModel) throw error;
     agentTurnCompleted = false;
     console.warn(
       `[mobile-smoke] Initial agent turn probe did not produce an observable completion within ` +
@@ -1298,12 +1384,18 @@ async function main() {
 
     const serverArgs = createServerArgs(options, readyFilePath);
     const serverInvocation = createServerInvocation(serverArgs);
+    const serverEnv = {
+      ...process.env,
+      NODE_ENV: process.env.NODE_ENV ?? "development",
+    };
+    if (options.realModel) {
+      delete serverEnv.NATSTACK_TEST_MODE;
+    } else {
+      serverEnv.NATSTACK_TEST_MODE = "1";
+    }
     const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
       cwd: repoRoot,
-      env: {
-        ...process.env,
-        NODE_ENV: process.env.NODE_ENV ?? "development",
-      },
+      env: serverEnv,
       label: "server",
     });
     await waitForSpawn(serverChild, serverInvocation.command, serverInvocation.args);
@@ -1341,12 +1433,18 @@ async function main() {
     const pairingDeadlineMs = Date.now() + options.pairingTimeoutMs;
     const logcat = startLogcat(options.device, phases, pairingDeadlineMs);
     children.push(logcat.child);
+    await waitForLogcatReady(options.device, logcat);
 
     const link = createConnectLink(ready);
     console.log(`[mobile-smoke] Network: ${options.network}`);
     console.log(`[mobile-smoke] Gateway: ${ready.gatewayUrl}`);
     console.log(`[mobile-smoke] Connect URL: ${ready.connectUrl || ready.gatewayUrl}`);
     await ensureDeviceInteractive(options.device);
+    // The install helper may launch the app before the server is ready. Deliver
+    // the connect link as a cold-start intent so React Native can read it
+    // through Linking.getInitialURL instead of racing onNewIntent before the
+    // JS listener is attached.
+    await adb(options.device, "shell", "am", "force-stop", options.packageName).catch(() => null);
     await startConnectIntent(options.device, options.packageName, options.activityName, link);
     await logcat.waitForPhase("embedded-deep-link-received");
     await ensureDeviceInteractive(options.device);
@@ -1358,6 +1456,9 @@ async function main() {
     await logcat.waitForPhase("embedded-pairing-complete");
     await logcat.waitForPhase("native-pairing-complete");
     if (!options.noTap) {
+      await tapButtonByText(options.device, "dev", pairingDeadlineMs);
+    }
+    if (!options.noTap) {
       const approved = await tapOptionalButtonByText(options.device, "Trust and start", 15_000);
       if (approved) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
     }
@@ -1368,7 +1469,8 @@ async function main() {
     const panelResult = await captureAndAssertPanelVisible(
       options.device,
       options.agentTimeoutMs,
-      readyInfo
+      readyInfo,
+      { realModel: options.realModel }
     );
 
     console.log(

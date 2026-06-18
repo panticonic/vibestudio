@@ -148,6 +148,7 @@ const clientConfig = {
   target: "node20",
   format: "esm",
   outfile: "dist/cli/client.mjs",
+  external: ["ws"],
   sourcemap: isDev,
   minify: !isDev,
   logOverride,

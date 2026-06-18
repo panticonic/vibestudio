@@ -18,7 +18,6 @@ import { _electron as electron } from "@playwright/test";
 import {
   createServerInvocation,
   serverEntryArg,
-  serverEntryDescription,
 } from "./cli/lib/server-entry.mjs";
 import { createConnectDeepLink, pickMobileHost } from "./cli/lib/connect-utils.mjs";
 
@@ -40,17 +39,13 @@ function parseArgs(argv) {
     timeoutMs: 420_000,
     launchTimeoutMs: 180_000,
     readyFile: defaultReadyFile,
-    serverArgs: [],
     help: false,
   };
 
-  let passthrough = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (passthrough) {
-      options.serverArgs.push(arg);
-    } else if (arg === "--") {
-      passthrough = true;
+    if (arg === "--") {
+      throw new Error("Forwarding raw server flags is no longer supported");
     } else if (arg === "--network") {
       options.network = parseNetwork(argv[++i]);
     } else if (arg === "--tailscale") {
@@ -88,7 +83,7 @@ function printHelp() {
   console.log(`natstack desktop pairing smoke
 
 Usage:
-  node scripts/desktop-pairing-smoke.mjs [runner options] [-- server options]
+  node scripts/desktop-pairing-smoke.mjs [options]
 
 Runner options:
   --network <mode>          Pair and launch through local HTTP or Tailscale HTTPS.
@@ -99,8 +94,6 @@ Runner options:
                             Defaults to 180000.
   --ready-file <path>       Server ready-file path. Defaults to an OS temp path.
   --help                    Show this help message.
-
-Everything after '--' is forwarded to ${serverEntryDescription()}.
 
 The smoke starts a disposable server, redeems its pairing code as a desktop
 device, launches Electron with NATSTACK_REMOTE_URL/DEVICE_ID/REFRESH_TOKEN, then
@@ -210,7 +203,6 @@ function createServerArgs(options, readyFilePath) {
     args.push("--host", "127.0.0.1", "--bind-host", "127.0.0.1", "--no-vpn-detect");
   }
 
-  args.push(...options.serverArgs);
   return args;
 }
 
@@ -319,7 +311,22 @@ async function pairDesktopDevice(ready) {
     throw new Error("Pairing response did not include a device refresh credential");
   }
   console.log(`[desktop-smoke] Paired desktop device ${issued.deviceId}`);
-  return { url, deviceId: issued.deviceId, refreshToken: issued.refreshToken };
+  const selected = await postJson(url, "/_r/s/workspaces/select", {
+    deviceId: issued.deviceId,
+    refreshToken: issued.refreshToken,
+    name: "dev",
+  });
+  if (typeof selected.serverUrl !== "string") {
+    throw new Error("Workspace selection response did not include a server URL");
+  }
+  console.log(`[desktop-smoke] Selected workspace ${selected.workspaceName ?? "dev"}`);
+  return {
+    url: selected.serverUrl,
+    hubUrl: url,
+    workspaceName: selected.workspaceName ?? "dev",
+    deviceId: issued.deviceId,
+    refreshToken: issued.refreshToken,
+  };
 }
 
 function hasElectronDisplay() {

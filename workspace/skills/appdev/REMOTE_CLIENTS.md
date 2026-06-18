@@ -16,20 +16,16 @@ capability.
 
 ## Desktop Remote Shell
 
-Desktop remote startup can use:
+Desktop remote startup is a two-step flow:
 
-- admin token bootstrap
-- device credential bootstrap
-- hybrid admin + device bootstrap
+1. Pair with the server hub and store a device credential.
+2. Select a workspace, which returns a workspace-scoped server URL under
+   `/_workspace/<name>`.
 
-Device bootstrap refreshes a shell token through `/auth/refresh-shell`. If the
-device credential is revoked or expired, desktop startup should recover by
-falling back to local mode or asking for re-pairing rather than leaving the app
-dead.
-
-`natstack remote start --pair "natstack://connect?url=...&code=..."` exchanges a
-pairing invite, stores a CLI device credential, and launches Electron against
-the remote server.
+`natstack remote pair "natstack://connect?url=...&code=..."` exchanges a
+pairing invite and stores the hub credential. `natstack remote select <name>`
+stores the selected workspace URL. Electron launches only against selected
+workspace URLs; root hub URLs are not app-launch endpoints.
 
 ## Mobile Client
 
@@ -48,8 +44,8 @@ The resulting caller id is device-scoped, for example:
 app:apps/mobile:<device-id>
 ```
 
-For workspaces with more than one React Native app, the selected mobile source
-is supplied to pairing, bundle bootstrap, and principal-grant refresh:
+The selected mobile source is supplied during bundle bootstrap and
+principal-grant refresh:
 
 ```json
 {
@@ -65,9 +61,8 @@ app:apps/field-mobile:<device-id>
 ```
 
 The native host persists the selected source alongside the activated bundle so
-future reconnects refresh grants for the same app. If no source is supplied,
-the server keeps the legacy fallback behavior: prefer the active `apps/mobile`
-React Native app, or the only active React Native app when there is exactly one.
+future reconnects refresh grants for the same app. No implicit app-source
+fallback should be added to clients.
 
 The workspace app should use that principal grant for RPC. It should not store
 or handle the refresh token directly in JS.

@@ -9,10 +9,13 @@ Normal (local) mode:
   Electron app  ──spawns──>  server child process (localhost)
 
 Remote mode:
-  Electron app  ──WebSocket──>  standalone natstack-server (remote host)
+  Client  ──pairs/selects──>  standalone server hub  ──proxies──>  workspace runtime
 ```
 
-In remote mode, all server-side operations (build, git, workerd, panel HTTP, AI, etc.) run on the remote server. The Electron app acts as a thin shell that renders panels and forwards all RPC calls over a WebSocket connection to the gateway.
+In remote mode, clients first connect to a server hub. The hub owns device
+pairing and workspace selection; each selected workspace runs as an internal
+runtime behind `/_workspace/<name>`. The Electron app acts as a thin shell that
+renders panels and forwards RPC calls over the selected workspace URL.
 
 Panel URLs are now path-based on the managed host, with storage isolation
 coming from the panel `contextId` mapped to an Electron session partition. That
@@ -33,41 +36,31 @@ Remote panel mode does still require a trustworthy browser origin. In practice:
 
 ```bash
 pnpm server \
-  --workspace my-workspace \
   --host my-server.example.com \
-  --serve-panels \
-  --init
+  --gateway-port 3030
 ```
 
-In a source checkout, use dev mode when you want `--init` to create the managed
-workspace from the repo's checked-in `workspace/` template instead of a bare
-workspace:
+In a source checkout, use the live TypeScript entrypoint while developing the
+server:
 
 ```bash
 pnpm server:dev \
-  --workspace my-workspace \
   --host my-server.example.com \
-  --serve-panels \
-  --init
+  --gateway-port 3030
 ```
 
 `pnpm server:dev` sets `NODE_ENV=development` before launching `dist/server.mjs`.
 For source-live standalone server work, use `pnpm server:live` or
 `pnpm cli remote serve ...`; those run `src/server/index.ts` through `tsx`.
-That matters for local smoke tests from a repo checkout because a freshly
-initialized managed workspace will include the checked-in workspace runtime
-units, including apps, extensions, panels, workers, packages, and skills.
-Without it, first-run `--init` falls back to `workspace-template/` and may
-create a bare workspace if that template is not present.
 
 Common development entrypoints:
 
 | Command                      | Use when                                                            | Workspace behavior                                                                                                              |
 | ---------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `pnpm dev`                   | Developing the local Electron app from a source checkout            | Creates an ephemeral workspace from `workspace/`; accepted workspace-unit pushes mirror back to that template                   |
-| `pnpm server:dev`            | Running only `dist/server.mjs` from a source checkout               | Uses the checked-in `workspace/` template when `--init` creates a managed workspace                                             |
-| `pnpm server:live`           | Running the standalone server directly from TypeScript              | Uses the checked-in `workspace/` template when `--init` creates a managed workspace                                             |
-| `pnpm cli mobile pair --dev` | Pairing a phone against a disposable source-checkout workspace      | Creates an ephemeral phone-reachable workspace from `workspace/`                                                                |
+| `pnpm server:dev`            | Running only `dist/server.mjs` from a source checkout               | Starts the server hub; clients choose workspaces after pairing                                                                  |
+| `pnpm server:live`           | Running the standalone server directly from TypeScript              | Starts the server hub from TypeScript                                                                                           |
+| `pnpm cli mobile pair --dev` | Pairing a phone against a disposable source-checkout workspace      | Offers an ephemeral phone-reachable workspace named `dev` after pairing                                                         |
 | `pnpm cli mobile dev`        | Full Android dev loop with Metro, install, launch, and local server | Starts Metro, a local ephemeral server, installs/launches the app, wires ADB reverse ports, and runs the server from TypeScript |
 | `pnpm dev:self:server`       | Letting a paired client edit this NatStack checkout                 | Uses a persistent dogfood workspace with `projects/natstack` mirroring back to the host checkout                                |
 
@@ -82,9 +75,7 @@ The server prints its gateway URL, admin token file, and startup pairing code:
 ```
 natstack-server ready:
   Gateway:     https://my-server.example.com:38291
-  Workerd:     (via gateway /_w/)
   RPC:         wss://my-server.example.com:38291/rpc
-  Token file:  /path/to/workspace/state/admin-token
   Pairing code: abc123...
 ```
 
@@ -92,18 +83,13 @@ natstack-server ready:
 
 | Flag                       | Env var                  | Description                                                                                                                                                                                                                            |
 | -------------------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--workspace <name>`       | `NATSTACK_WORKSPACE`     | Workspace name to resolve                                                                                                                                                                                                              |
-| `--workspace-dir <path>`   | `NATSTACK_WORKSPACE_DIR` | Explicit workspace directory                                                                                                                                                                                                           |
 | `--app-root <path>`        | `NATSTACK_APP_ROOT`      | Application root (default: `cwd()`)                                                                                                                                                                                                    |
 | `--host <hostname>`        | `NATSTACK_HOST`          | External hostname; also sets bind to `0.0.0.0`                                                                                                                                                                                         |
 | `--bind-host <addr>`       | `NATSTACK_BIND_HOST`     | Explicit bind address (overrides `--host` default)                                                                                                                                                                                     |
 | `--protocol <http\|https>` | `NATSTACK_PROTOCOL`      | Protocol for panel-facing URLs                                                                                                                                                                                                         |
 | `--tls-cert <path>`        | —                        | TLS certificate file (PEM). Enables HTTPS with `--tls-key`.                                                                                                                                                                            |
 | `--tls-key <path>`         | —                        | TLS private key file (PEM). Required with `--tls-cert`.                                                                                                                                                                                |
-| `--serve-panels`           | —                        | Enable panel HTTP serving                                                                                                                                                                                                              |
 | `--gateway-port <port>`    | `NATSTACK_GATEWAY_PORT`  | Port for the gateway HTTP/WS ingress (default: auto-assigned). Use a fixed value for phone/VPN pairing or firewall rules.                                                                                                              |
-| `--panel-port <port>`      | —                        | Port for panel HTTP (default: auto-assigned)                                                                                                                                                                                           |
-| `--init`                   | —                        | Auto-create workspace from template if it doesn't exist                                                                                                                                                                                |
 | `--log-level <level>`      | `NATSTACK_LOG_LEVEL`     | Log verbosity                                                                                                                                                                                                                          |
 | `--print-credentials`      | —                        | Print `NATSTACK_ADMIN_TOKEN=...` and `NATSTACK_PAIRING_CODE=...` for scripting                                                                                                                                                         |
 | `--public-url <url>`       | `NATSTACK_PUBLIC_URL`    | Externally-reachable base URL used to build OAuth redirect URIs, webhook advertisements, etc. Defaults to `${protocol}://${host}:${gatewayPort}` but should be set explicitly when a reverse proxy or DNS-facing hostname is in front. |
@@ -119,13 +105,13 @@ Admin-token resolution on server startup:
 
 In practice you don't need to manage the token manually: the first time you run `natstack-server` standalone it writes the token and prints it. Copy that into your client(s) once. Subsequent starts reuse the same token.
 
-The token is also mirrored to `<workspace-state>/admin-token` for scripting against a specific workspace.
+The hub token is persisted under the central NatStack config directory.
 
 Override or rotate via env var:
 
 ```bash
 export NATSTACK_ADMIN_TOKEN="your-own-token-here"
-natstack-server --workspace my-workspace --host 0.0.0.0
+natstack-server --host 0.0.0.0
 ```
 
 ### Health check
@@ -158,11 +144,9 @@ To serve over HTTPS directly (without a reverse proxy):
 
 ```bash
 pnpm server \
-  --workspace my-workspace \
   --host my-server.example.com \
   --tls-cert /path/to/cert.pem \
-  --tls-key /path/to/key.pem \
-  --serve-panels
+  --tls-key /path/to/key.pem
 ```
 
 Both `--tls-cert` and `--tls-key` must be provided together. When TLS is enabled, the gateway serves HTTPS and the RPC endpoint accepts WSS connections.
@@ -175,45 +159,35 @@ non-loopback `http://` remotes are intentionally rejected by the client.
 
 ## Connecting the Electron App
 
-Run `natstack remote serve` on the server. The readiness banner prints a pairing code and a
-`Pair URL:` deep link, plus a desktop command you can paste into a source checkout
-on another machine:
+Run `natstack remote serve` on the server. The readiness banner prints a
+pairing code and a `Pair URL:` deep link:
 
 ```text
 Pairing code: abc123...
 Pair URL:     natstack://connect?url=https%3A%2F%2Fhost.tailnet.ts.net&code=abc123...
-Desktop command:
-  natstack remote start --pair 'natstack://connect?url=https%3A%2F%2Fhost.tailnet.ts.net&code=abc123...'
 ```
 
-On the laptop, run the desktop command, click the `Pair URL`, or open Connection
-Settings and paste the code on the **Pair with code** tab. Electron exchanges the
-code for a durable device credential; the admin token does not need to leave the
-server.
+On the laptop, open the desktop app. The bootstrap screen lets you pair with the
+server, choose a workspace, approve privileged workspace units if needed, and
+launch the desktop shell. Electron exchanges the code for a durable device
+credential; the admin token does not need to leave the server.
 
 Pairing codes are single-use and valid for one hour. If the startup pairing
 code is not used within that hour, the standalone pairing server exits so the
 next run prints a fresh code instead of leaving an expired URL on screen.
 
-From a source checkout, the quickest laptop flow is:
+Terminal clients use the equivalent CLI sequence:
 
 ```bash
-pnpm build
-natstack remote start --pair "natstack://connect?url=...&code=..."
+natstack remote pair "natstack://connect?url=...&code=..."
+natstack remote workspaces
+natstack remote select dev
+natstack terminal start
 ```
 
-After pairing, Electron asks the server to launch the selected desktop app and
-shows the startup approval UI if privileged workspace units need trust. The app
-does not run until that gate is approved.
-
-Later launches can reuse the saved device credential:
-
-```bash
-natstack remote start
-```
-
-Plain `pnpm start` still starts local mode unless remote credentials have been
-saved in Electron's own credential store from Connection Settings.
+After workspace selection, each host target asks the server to launch its
+selected app and shows the startup approval UI if privileged workspace units
+need trust. The app does not run until that gate is approved.
 
 Once any Electron client is connected, open **Remote server** → **Paired
 devices** → **Pair another device** to mint a fresh pairing link from the
@@ -268,8 +242,8 @@ export async function readDogfoodInfo(workspaceDir = process.cwd()) {
 ```
 
 `pnpm dev:self:server --help` shows the supported pairing flags. It deliberately
-rejects flags that would break the managed workspace contract, such as
-`--workspace-dir`, `--dev`, and `--no-init`.
+rejects flags that would break the managed workspace contract. Set
+`NATSTACK_DOGFOOD_WORKSPACE` if you need a different seeded workspace name.
 
 Admin-token bootstrap is still available for headless or scripted setups. On
 each launch, credentials resolve in this order:
@@ -278,7 +252,6 @@ each launch, credentials resolve in this order:
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------ |
 | Environment      | `NATSTACK_REMOTE_URL`, optional `NATSTACK_REMOTE_TOKEN`, optional `NATSTACK_REMOTE_DEVICE_ID` / `NATSTACK_REMOTE_REFRESH_TOKEN`, optional CA/fingerprint | 1        | —                                                      |
 | Credential store | URL, device refresh credential and/or admin bootstrap credential, optional CA/fingerprint, encrypted via Electron `safeStorage`                          | 2        | `~/.config/natstack/remote-credentials.json` (`0o600`) |
-| Config file      | `remote.url`, `remote.token`, `remote.caPath`, `remote.fingerprint`                                                                                      | 3        | `~/.config/natstack/config.yml`                        |
 
 ### Option A: Pairing code (recommended)
 
@@ -315,7 +288,7 @@ such as `DEVICE_NOT_PAIRED` or `INVALID_REFRESH_CREDENTIAL`.
 ### Option B: Environment variables (advanced)
 
 ```bash
-export NATSTACK_REMOTE_URL="https://my-server.example.com:38291"
+export NATSTACK_REMOTE_URL="https://my-server.example.com:38291/_workspace/dev"
 export NATSTACK_REMOTE_TOKEN="a1b2c3d4e5..."
 natstack
 ```
@@ -326,20 +299,9 @@ You can also use device credentials without an admin token by setting
 ### Option C: Admin token tab (advanced)
 
 Click the connection badge in the title bar → **Remote server** → **Admin
-token**. Fill in URL, admin token, and optional CA path/fingerprint, then
-**Save & relaunch**. Use this only when pairing codes are not practical.
-
-### Option D: Config file
-
-Edit `~/.config/natstack/config.yml`:
-
-```yaml
-remote:
-  url: https://my-server.example.com:38291
-  token: a1b2c3d4e5...
-  caPath: /home/you/.config/natstack/server-ca.pem # optional
-  fingerprint: "AB:CD:..." # optional, SHA-256 leaf cert
-```
+token**. Fill in the selected workspace URL, admin token, and optional CA
+path/fingerprint, then **Save & relaunch**. Use this only when pairing codes
+are not practical.
 
 ### TLS pinning for self-signed servers
 
@@ -389,9 +351,7 @@ code. A connected shell or paired terminal can create another invite later via
 `POST /_r/s/auth/create-pairing-code` route remains for headless automation.
 Mobile native hosts refresh app-scoped connection grants through
 `POST /_r/s/auth/refresh-principal-grant` with `principal:
-"react-native-app"`; the older `refresh-app-grant` path remains as a
-compatibility alias and returns deprecation headers. New clients should not
-use the alias.
+"react-native-app"`.
 
 Trusted app and extension layout, capabilities, and the device/principal model
 are described in [trusted-workspace-units.md](./trusted-workspace-units.md).
@@ -575,3 +535,5 @@ you grab it). Elsewhere, `ServerClient` and related log sites route error
 strings through `redactToken()` from `@natstack/shared/redact` so a stray
 token in an error message is masked. If you add new logging that might
 include the token, import and apply `redactTokenIn(message, token)`.
+Public standalone servers do not accept workspace launch flags. Pair with the
+hub, then choose or create a workspace from the client UI or CLI.

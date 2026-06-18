@@ -6,7 +6,7 @@ import net from "net";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
-import { createServerInvocation, serverEntryArg, serverEntryDescription } from "./lib/server-entry.mjs";
+import { createServerInvocation, serverEntryArg } from "./lib/server-entry.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileDir = path.join(repoRoot, "apps", "mobile");
@@ -44,18 +44,12 @@ function parseArgs(argv) {
     noInstall: false,
     noLaunch: false,
     help: false,
-    serverArgs: [],
   };
 
-  let passthrough = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (passthrough) {
-      options.serverArgs.push(arg);
-      continue;
-    }
     if (arg === "--") {
-      passthrough = true;
+      throw new Error("Forwarding raw server flags is no longer supported");
     } else if (arg === "--avd") {
       options.avd = argv[++i] ?? null;
     } else if (arg === "--device") {
@@ -82,7 +76,7 @@ function printHelp() {
   console.log(`natstack mobile dev
 
 Usage:
-  natstack mobile dev [runner options] [-- server options]
+  natstack mobile dev [options]
 
 Runner options:
   --avd <name>      Start this AVD if no device is connected
@@ -92,8 +86,6 @@ Runner options:
   --no-install      Do not build/install the Android app
   --no-launch       Do not launch the Android app after setup
   --help            Show this help message
-
-Everything after '--' is forwarded to ${serverEntryDescription()}.
 `);
 }
 
@@ -236,13 +228,15 @@ async function waitForAndroidBoot(device, timeoutMs = 180_000) {
   throw new Error("Timed out waiting for Android boot completion");
 }
 
-async function writeDevBootstrap(serverUrl, pairingCode) {
+async function writeDevBootstrap(serverUrl, pairingCode, workspaceName) {
   await runCommand("node", [
     "scripts/write-mobile-dev-bootstrap.mjs",
     "--server-url",
     serverUrl,
     "--pairing-code",
     pairingCode,
+    "--workspace-name",
+    workspaceName,
     "--auto-connect",
     "true",
   ], { label: "bootstrap" });
@@ -352,7 +346,6 @@ async function main() {
       "--ready-file",
       readyFilePath,
       "--ephemeral",
-      ...options.serverArgs,
     ];
     const serverInvocation = createServerInvocation(serverArgs);
     const serverChild = spawnManaged(serverInvocation.command, serverInvocation.args, {
@@ -368,7 +361,7 @@ async function main() {
 
     const ready = await waitForServerReady(readyFilePath, serverChild);
     readyInfo = ready;
-    await writeDevBootstrap(ready.gatewayUrl, ready.pairingCode);
+    await writeDevBootstrap(ready.connectUrl ?? ready.gatewayUrl, ready.pairingCode, "dev");
 
     await adb(options.device, "reverse", `tcp:${metroPort}`, `tcp:${metroPort}`);
     await adb(options.device, "reverse", `tcp:${ready.gatewayPort}`, `tcp:${ready.gatewayPort}`);

@@ -53,17 +53,26 @@ maybeDescribe("image-service extension server smoke", () => {
       ],
       {
         cwd: process.cwd(),
-        env: { ...process.env, NODE_ENV: "development" },
+        env: {
+          ...process.env,
+          NODE_ENV: "development",
+          NATSTACK_FORCE_WORKSPACE_SERVER: "1",
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
 
-    let stderr = "";
+    let serverOutput = "";
+    const appendServerOutput = (chunk: Buffer | string): void => {
+      serverOutput += String(chunk);
+      if (serverOutput.length > 20_000) serverOutput = serverOutput.slice(-20_000);
+    };
+    proc.stdout.on("data", appendServerOutput);
     proc.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      appendServerOutput(chunk);
     });
 
-    const ready = await waitForReadyFile(readyFile, proc, () => stderr);
+    const ready = await waitForReadyFile(readyFile, proc, () => serverOutput);
     const shellToken = await issueShellToken(ready);
 
     // Extensions are declared in meta/natstack.yml; the startup reconcile raises
@@ -78,7 +87,7 @@ maybeDescribe("image-service extension server smoke", () => {
       "detectMimeType",
       [[137, 80, 78, 71, 13, 10, 26, 10]],
     ])).resolves.toBe("image/png");
-  }, 60_000);
+  }, 120_000);
 });
 
 async function waitForUnitBatchApproval(

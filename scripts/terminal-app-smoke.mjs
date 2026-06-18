@@ -42,7 +42,12 @@ async function postJson(url, pathName, body, token) {
 }
 
 async function rpc(url, shellToken, method, args = []) {
-  const res = await fetch(`${url}/rpc`, {
+  const requestUrl = new URL(url);
+  const basePath = requestUrl.pathname.replace(/\/+$/, "");
+  requestUrl.pathname = `${basePath}/rpc`;
+  requestUrl.search = "";
+  requestUrl.hash = "";
+  const res = await fetch(requestUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -68,18 +73,30 @@ async function pairShellToken(ready) {
   if (typeof issued.deviceId !== "string" || typeof issued.refreshToken !== "string") {
     throw new Error("Pairing response did not include a device refresh credential");
   }
-  const refreshed = await postJson(url, "/_r/s/auth/refresh-shell", {
+  const selected = await postJson(url, "/_r/s/workspaces/select", {
+    deviceId: issued.deviceId,
+    refreshToken: issued.refreshToken,
+    name: "dev",
+  });
+  if (typeof selected.serverUrl !== "string") {
+    throw new Error("Workspace selection response did not include a server URL");
+  }
+  const refreshed = await postJson(selected.serverUrl, "/_r/s/auth/refresh-shell", {
     deviceId: issued.deviceId,
     refreshToken: issued.refreshToken,
   });
   if (typeof refreshed.shellToken !== "string") {
     throw new Error("Shell refresh response did not include a shell token");
   }
-  return { url, shellToken: refreshed.shellToken };
+  return { url: selected.serverUrl, shellToken: refreshed.shellToken };
 }
 
 function rpcWsUrl(rawUrl) {
-  const url = new URL("/rpc", rawUrl);
+  const url = new URL(rawUrl);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  url.pathname = `${basePath}/rpc`;
+  url.search = "";
+  url.hash = "";
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }

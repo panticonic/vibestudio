@@ -184,55 +184,30 @@ pnpm build
 ### Running
 
 ```bash
-node dist/server.mjs --workspace=/path/to/workspace
+node dist/server.mjs --host 0.0.0.0 --gateway-port 3030
 ```
 
 On startup the server prints connection details:
 
 ```
 natstack-server ready:
-  Git:       http://127.0.0.1:9001
-  RPC:       ws://127.0.0.1:9003
-  Admin token: <hex>
+  Gateway:     http://127.0.0.1:3030
+  Pairing code: abc123...
 ```
 
 ### CLI Flags
 
-| Flag                  | Description                                                            |
-| --------------------- | ---------------------------------------------------------------------- |
-| `--workspace=PATH`    | Path to the NatStack workspace directory (must contain `natstack.yml`) |
-| `--data-dir=PATH`     | User data directory (build cache, EV state, database)                  |
-| `--app-root=PATH`     | Application root (defaults to cwd)                                     |
-| `--log-level=LEVEL`   | Log level                                                              |
-| `--serve-panels`      | Enable HTTP panel serving for browser access                           |
-| `--gateway-port=PORT` | Port for the gateway HTTP/WS ingress (default: random)                 |
-| `--panel-port=PORT`   | Port for the panel HTTP server (default: random)                       |
+| Flag                  | Description                                             |
+| --------------------- | ------------------------------------------------------- |
+| `--app-root=PATH`     | Application root (defaults to cwd)                      |
+| `--host=HOST`         | External hostname or address clients can reach          |
+| `--gateway-port=PORT` | Port for the hub HTTP/WS ingress (default: random)      |
+| `--public-url=URL`    | Verified public URL used for OAuth/webhook routes       |
+| `--log-level=LEVEL`   | Log level                                               |
 
-### Serving Panels to a Browser
-
-With `--serve-panels`, the server starts an HTTP server that serves panel
-content to any modern web browser — no Electron required:
-
-```bash
-node dist/server.mjs \
-  --workspace=/path/to/workspace \
-  --serve-panels \
-  --panel-port=8080
-```
-
-Output includes the panel server URL:
-
-```
-natstack-server ready:
-  Git:       http://127.0.0.1:9001
-  RPC:       ws://127.0.0.1:9003
-  Panels:    http://127.0.0.1:8080
-  Admin token: <hex>
-```
-
-Open `http://localhost:8080` to see a list of running panels. Panels are
-created via the RPC `bridge.createChild` method (using the admin token), then
-accessed by clicking their link on the index page.
+The public server is always a hub. Clients pair with the hub, choose a
+workspace, and then connect to `/_workspace/<name>`. Workspace flags are
+reserved for internal child runtimes and are rejected by the public server.
 
 ### Android phone over VPN
 
@@ -253,9 +228,8 @@ natstack mobile pair --host tailscale --port 3030
 ```
 
 See [docs/mobile-vpn.md](docs/mobile-vpn.md) for host selection, workspace
-flags, dev-vs-persistent workspace mode, and reconnect behavior. Use
-`natstack remote start --pair "<Pair URL>"` to connect a laptop without copying
-an admin token.
+selection, dev workspace mode, and reconnect behavior. Use the desktop app's
+bootstrap screen to pair a laptop without copying an admin token.
 After one desktop client is connected, use **Remote server** → **Paired
 devices** → **Pair another device** to create additional pairing links.
 

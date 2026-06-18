@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pickMobileHost, printConnectBanner } from "./connect-utils.mjs";
-import { createServerInvocation, serverEntryArg, serverEntryDescription } from "./server-entry.mjs";
+import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
@@ -24,53 +24,25 @@ export function parsePairArgs(argv, config) {
       config.portEnv[0] ?? "NATSTACK_PAIR_PORT"
     ),
     protocol: process.env.NATSTACK_PROTOCOL ?? "http",
-    workspace: null,
-    workspaceDir: null,
     appRoot: null,
     publicUrl: process.env.NATSTACK_PUBLIC_URL ?? null,
     dev: process.env[config.devEnv] === "1",
-    noInit: false,
     requirePublicUrl: false,
     help: false,
-    serverArgs: [],
   };
 
-  const runnerFlags = new Set([
-    "--host",
-    "--port",
-    "--gateway-port",
-    "--protocol",
-    "--workspace",
-    "--workspace-dir",
-    "--app-root",
-    "--public-url",
-    "--require-public-url",
-    "--dev",
-    "--ephemeral",
-    "--no-init",
-    "--help",
-  ]);
-
-  let passthrough = false;
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (passthrough) {
-      options.serverArgs.push(arg);
-      continue;
-    }
     if (arg === "--") {
-      if (runnerFlags.has(argv[i + 1])) continue;
-      passthrough = true;
+      throw new Error("Forwarding raw server flags is no longer supported");
     } else if (arg === "--host") {
       options.host = argv[++i] ?? "";
     } else if (arg === "--port" || arg === "--gateway-port") {
       options.port = parsePort(argv[++i], arg);
     } else if (arg === "--protocol") {
       options.protocol = argv[++i] ?? "";
-    } else if (arg === "--workspace") {
-      options.workspace = argv[++i] ?? "";
-    } else if (arg === "--workspace-dir") {
-      options.workspaceDir = argv[++i] ?? "";
+    } else if (arg === "--workspace" || arg === "--workspace-dir") {
+      throw new Error(`${arg} is no longer supported; choose a workspace after pairing`);
     } else if (arg === "--app-root") {
       options.appRoot = argv[++i] ?? "";
     } else if (arg === "--public-url") {
@@ -80,7 +52,7 @@ export function parsePairArgs(argv, config) {
     } else if (arg === "--dev" || arg === "--ephemeral") {
       options.dev = true;
     } else if (arg === "--no-init") {
-      options.noInit = true;
+      throw new Error("--no-init is no longer supported; choose or create a workspace after pairing");
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -91,13 +63,6 @@ export function parsePairArgs(argv, config) {
   if (options.protocol !== "http" && options.protocol !== "https") {
     throw new Error("--protocol must be http or https");
   }
-  if (options.dev && (options.workspace || options.workspaceDir)) {
-    throw new Error("--dev cannot be combined with --workspace or --workspace-dir");
-  }
-  if (options.dev && options.noInit) {
-    throw new Error("--dev cannot be combined with --no-init");
-  }
-
   return options;
 }
 
@@ -121,10 +86,6 @@ Options:
       Stable gateway port for HTTP/WS traffic. Defaults through ${config.portEnv.join(", ")} or 3030.
   --protocol <http|https>
       URL protocol advertised to the client. Defaults to http.
-  --workspace <name>
-      Workspace name to open or initialize.
-  --workspace-dir <path>
-      Explicit workspace directory.
   --app-root <path>
       Application root passed to the server.
   --public-url <url>
@@ -135,14 +96,12 @@ Options:
   --dev, --ephemeral
       Use a disposable dev workspace copied fresh from the template and deleted
       when the server exits.
-  --no-init
-      Do not auto-create the workspace from the template.
   --help
       Show this help message.
 
 ${config.additionalHelp ? `${config.additionalHelp}\n\n` : ""}\
-When invoking the script directly with node, everything after '--' is forwarded
-to ${serverEntryDescription()}.
+This command starts the server hub (${serverEntryArg()}). Workspaces are chosen
+by clients after pairing.
 `);
 }
 
@@ -553,15 +512,11 @@ function buildServerArgs(options, host, config = {}) {
     "--print-credentials",
   ];
 
-  if (!options.noInit) args.push("--init");
   if (options.dev) args.push("--ephemeral");
-  if (options.workspace) args.push("--workspace", options.workspace);
-  if (options.workspaceDir) args.push("--workspace-dir", options.workspaceDir);
   if (options.appRoot) args.push("--app-root", options.appRoot);
   if (options.publicUrl) args.push("--public-url", options.publicUrl);
   if (config.requireMobileReady) args.push("--require-mobile-ready");
   if (config.requireElectronReady) args.push("--require-electron-ready");
-  args.push(...options.serverArgs);
   return args;
 }
 

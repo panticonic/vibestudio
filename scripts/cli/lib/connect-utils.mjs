@@ -23,7 +23,7 @@ export function createConnectDeepLink(gatewayUrl, pairingCode) {
 }
 
 export function createStartRemotePairCommand(gatewayUrl, pairingCode) {
-  return `natstack remote start --pair ${shellQuote(createConnectDeepLink(gatewayUrl, pairingCode))}`;
+  return `natstack remote pair ${shellQuote(createConnectDeepLink(gatewayUrl, pairingCode))}`;
 }
 
 export function parseConnectLink(rawUrl) {
@@ -109,10 +109,14 @@ export function parseConnectServerUrl(rawUrl) {
   return { kind: "ok", url: `${server.protocol}//${server.host}` };
 }
 
-function isTrustedCleartextHost(host) {
+// Standalone mirror of isTrustedCleartextHost in packages/shared/src/connect.ts. This file must
+// run under raw `node` with no workspace deps, so the logic is vendored here. The two are held in
+// lockstep by the parity test in packages/shared/src/connect.test.ts — keep them byte-identical in
+// behavior (any divergence here is a security boundary bug, e.g. an over-permissive loopback match).
+export function isTrustedCleartextHost(host) {
   const lower = host.toLowerCase();
   if (lower === "localhost" || lower === "10.0.2.2") return true;
-  if (/^127\./.test(lower)) return true;
+  if (/^127\.(\d{1,3}\.){2}\d{1,3}$/.test(lower)) return true;
   if (/^10\./.test(lower)) return true;
   const m172 = lower.match(/^172\.(\d+)\./);
   if (m172) {

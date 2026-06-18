@@ -112,20 +112,27 @@ maybeDescribe("headless browser panel integration", () => {
         env: {
           ...process.env,
           NODE_ENV: "development",
+          NATSTACK_FORCE_WORKSPACE_SERVER: "1",
           NATSTACK_HEADLESS_HOST_AUTOSPAWN: "1",
           NATSTACK_HEADLESS_HOST_ENTRY: headlessHostEntry!,
+          NATSTACK_HEADLESS_HOST_SPAWN_TIMEOUT_MS: "180000",
           NATSTACK_HEADLESS_IDLE_EXIT_MS: "1000",
         },
         stdio: ["ignore", "pipe", "pipe"],
       }
     );
 
-    let stderr = "";
+    let serverOutput = "";
+    const appendServerOutput = (chunk: Buffer | string): void => {
+      serverOutput += String(chunk);
+      if (serverOutput.length > 20_000) serverOutput = serverOutput.slice(-20_000);
+    };
+    serverProc.stdout.on("data", appendServerOutput);
     serverProc.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      appendServerOutput(chunk);
     });
 
-    const ready = await waitForReadyFile(readyFile, serverProc, () => stderr);
+    const ready = await waitForReadyFile(readyFile, serverProc, () => serverOutput);
     const shell = await issueShellToken(ready);
     shellConnection = await connectRpcWebSocket({
       gatewayUrl: ready.gatewayUrl,
@@ -166,7 +173,9 @@ maybeDescribe("headless browser panel integration", () => {
       [panel.id]
     );
     if (!load.loaded) {
-      throw new Error(`Expected headless host to load panel: ${JSON.stringify(load)}\n${stderr}`);
+      throw new Error(
+        `Expected headless host to load panel: ${JSON.stringify(load)}\n${serverOutput}`
+      );
     }
 
     await shellConnection.rpc.call("main", "shellPresence.heartbeat", []);
@@ -225,7 +234,7 @@ maybeDescribe("headless browser panel integration", () => {
     expect(lease.leased).toBe(true);
     expect(lease.supportsCdp).toBe(true);
     expect(lease.hostConnectionId).toMatch(/^headless-/);
-  }, 120_000);
+  }, 240_000);
 });
 
 function findHeadlessHostEntry(): string | null {

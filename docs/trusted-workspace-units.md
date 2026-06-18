@@ -66,9 +66,3 @@ invites through `auth.createPairingInvite`.
 Shell, shell-remote, and server callers are trusted host principals for this
 operation. App callers must be active and running with the requested capability.
 Capability denial is returned with code `EACCES`.
-
-## Compatibility Routes
-
-`/_r/s/auth/refresh-app-grant` remains available as a compatibility alias for
-older mobile clients. New clients must use `/_r/s/auth/refresh-principal-grant`.
-The alias returns deprecation headers so logs and tests can detect stale clients.

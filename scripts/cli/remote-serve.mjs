@@ -13,7 +13,6 @@ try {
       "natstack remote serve",
       "natstack remote serve --dev",
       "natstack remote serve --host tailscale --port 3030",
-      "natstack remote serve --host 100.x.y.z --workspace my-workspace",
       "natstack remote serve --host server.tailnet.ts.net --public-url http://server.tailnet.ts.net:3030",
     ],
     startupHint:

@@ -13,7 +13,6 @@ try {
       "natstack mobile pair",
       "natstack mobile pair --dev",
       "natstack mobile pair --host tailscale --port 3030",
-      "natstack mobile pair --host 100.x.y.z --workspace my-workspace",
       "natstack mobile pair --host server.tailnet.ts.net --public-url http://server.tailnet.ts.net:3030",
     ],
     startupHint:

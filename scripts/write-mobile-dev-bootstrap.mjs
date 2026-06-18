@@ -21,6 +21,8 @@ function parseArgs(argv) {
       throw new Error("--refresh-token is no longer supported; pass --pairing-code instead");
     } else if (arg === "--pairing-code") {
       args.pairingCode = argv[++i];
+    } else if (arg === "--workspace-name") {
+      args.workspaceName = argv[++i];
     } else if (arg === "--auto-connect") {
       const value = argv[++i];
       args.autoConnect = value !== "false";
@@ -32,6 +34,7 @@ function parseArgs(argv) {
   if (!args.clear) {
     if (!args.serverUrl) throw new Error("Missing --server-url");
     if (!args.pairingCode) throw new Error("Missing --pairing-code");
+    if (!args.workspaceName) throw new Error("Missing --workspace-name");
   }
   return args;
 }
@@ -57,6 +60,7 @@ const contents = args.clear ? `/**
 export interface DevBootstrapConfig {
   serverUrl: string;
   pairingCode: string;
+  workspaceName: string;
   serverId?: string;
   workspaceId?: string;
   autoConnect?: boolean;
@@ -73,6 +77,7 @@ export const devBootstrapConfig: DevBootstrapConfig | null = null;
 export interface DevBootstrapConfig {
   serverUrl: string;
   pairingCode: string;
+  workspaceName: string;
   serverId?: string;
   workspaceId?: string;
   autoConnect?: boolean;
@@ -81,6 +86,7 @@ export interface DevBootstrapConfig {
 export const devBootstrapConfig: DevBootstrapConfig | null = {
   serverUrl: ${JSON.stringify(args.serverUrl)},
   pairingCode: ${JSON.stringify(args.pairingCode)},
+  workspaceName: ${JSON.stringify(args.workspaceName)},
   autoConnect: ${args.autoConnect ? "true" : "false"},
 };
 `;
