@@ -53,10 +53,11 @@ describe("panelTreeService", () => {
       bridge: vi.fn(),
     });
 
-    // shell/shell-remote/server are trusted chrome (desktop routes via the
-    // electron-main serverClient as "server"; mobile routes via its transport).
+    // shell/shell-remote/server/app are trusted chrome (desktop routes via the
+    // electron-main serverClient as "server"; the mobile shell calls panelTree
+    // directly as an "app" principal, app:apps/mobile).
     expect(service.policy).toEqual({
-      allowed: ["panel", "worker", "do", "shell", "shell-remote", "server"],
+      allowed: ["panel", "worker", "do", "shell", "shell-remote", "server", "app"],
     });
   });
 

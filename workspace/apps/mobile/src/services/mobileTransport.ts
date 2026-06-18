@@ -123,6 +123,9 @@ function describeWebSocketEvent(event: unknown): Record<string, unknown> {
 
 type MobileWsTransport = ReturnType<typeof createServerWsTransport>;
 
+/** Max consecutive re-minted connection grants before giving up (re-pair needed). */
+const MAX_GRANT_RETRIES = 8;
+
 export class MobileRpcClient implements Pick<
   RpcClient,
   "selfId" | "call" | "emit" | "on" | "stream"
@@ -132,6 +135,12 @@ export class MobileRpcClient implements Pick<
   private rpc: RpcClient | null = null;
   private currentCallerId: string | null = null;
   private preissuedGrant: string | null = null;
+  // Connection grants are one-time + short-TTL (server-side). If one is rejected
+  // (close 4006), we re-mint a fresh native grant and let the transport retry
+  // rather than terminating — this survives webview restarts and expired grants.
+  // Bounded so a genuinely-bad credential surfaces instead of looping forever;
+  // reset to 0 on every successful (re)auth (see onRecovery in createTransport).
+  private grantRetryCount = 0;
   private statusState: ConnectionStatus = "disconnected";
   private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
   private readonly recoveryListeners = new Map<RecoveryKind, Set<() => void | Promise<void>>>();
@@ -371,6 +380,15 @@ export class MobileRpcClient implements Pick<
       this.preissuedGrant = null;
       return preissued;
     }
+    // Re-mint path: the one-time preissued grant was consumed, so this is a
+    // (re)connect/refresh. Bound it so a genuinely-rejected credential stops
+    // looping (the transport surfaces the failure instead of retrying forever).
+    if (this.grantRetryCount >= MAX_GRANT_RETRIES) {
+      throw new Error(
+        `Mobile connection grant rejected ${this.grantRetryCount}x; giving up — re-pair this device`
+      );
+    }
+    this.grantRetryCount += 1;
     return (await this.issueNativeGrant()).connectionGrant;
   }
 
@@ -380,10 +398,17 @@ export class MobileRpcClient implements Pick<
     const transport = createServerWsTransport({
       selfId: callerId,
       serverUrl: this.config.serverUrl,
-      terminalCloseCodes: [4001, 4005, 4006],
+      // 4006 (auth/invalid-token) is intentionally NOT terminal: the transport
+      // refreshes the auth token (re-mints a one-time grant via nextGrantToken)
+      // and reconnects, so a consumed/expired grant or a webview restart recovers
+      // instead of dead-ending. nextGrantToken bounds the retries. 4001/4005 stay
+      // terminal (session replaced / version mismatch — a fresh grant won't help).
+      terminalCloseCodes: [4001, 4005],
       logPrefix: "MobileRpcClient",
       onServerEvent: (event, payload) => this.dispatchServerEvent(event, payload),
       onRecovery: (kind) => {
+        // A successful (re)auth happened — clear the re-mint budget.
+        this.grantRetryCount = 0;
         for (const listener of this.recoveryListeners.get(kind) ?? []) {
           void listener();
         }

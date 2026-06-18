@@ -759,6 +759,8 @@ export interface CommonDeps {
   tokenManager?: import("@natstack/shared/tokenManager").TokenManager;
   eventService?: import("@natstack/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
+  /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
+  hasAppCapability?: (callerId: string, capability: string) => boolean;
   panelRuntimeCoordinator?: import("./panelRuntimeCoordinator.js").PanelRuntimeCoordinator;
   /**
    * Renderer of last resort: spawn (or reuse) the standalone headless host
@@ -1054,6 +1056,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           approvalQueue: assertPresent(deps.approvalQueue),
           grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
+          hasAppCapability: deps.hasAppCapability,
           hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
           getTarget: (panelId) => requestPanelMetadataForServices(panelId),
           getEndpoint: async (panelId, requesterEntityId) => {
@@ -1183,6 +1186,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           approvalQueue: assertPresent(deps.approvalQueue),
           grantStore: assertPresent(deps.grantStore),
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
+          hasAppCapability: deps.hasAppCapability,
           hasApprovalSession: () => shellPresence.internal.isAnyShellActive(),
           bridge: await getPanelTreeBridge(),
         });

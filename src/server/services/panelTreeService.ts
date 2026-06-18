@@ -142,10 +142,13 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
   return {
     name: "panelTree",
     description: "Server-mediated panel tree handles and control operations",
-    // shell/shell-remote/server: trusted chrome — desktop routes via the
-    // electron-main serverClient (identity "server"); mobile routes via its
-    // transport (identity "shell"/"shell-remote").
-    policy: { allowed: ["panel", "worker", "do", "shell", "shell-remote", "server"] },
+    // Trusted chrome (full access): shell/shell-remote/server, plus "app" — the
+    // mobile shell is a workspace-app principal (app:apps/mobile) that calls
+    // panelTree directly over its transport (unlike desktop, which proxies via
+    // the electron-main serverClient identity "server"). Runtime callers
+    // (panel/worker/do) may also reach it but are scoped by
+    // requirePanelAccessPermission.
+    policy: { allowed: ["panel", "worker", "do", "shell", "shell-remote", "server", "app"] },
     methods: methodSchemas,
     handler: async (ctx, method, args) => {
       assertAllowedAgentMethod(method, args);

@@ -112,6 +112,12 @@ export function isTrustedPanelAccessRequester(requester: PanelAccessRequester): 
     requester.kind === "shell" ||
     requester.kind === "shell-remote" ||
     requester.kind === "server" ||
+    // The mobile shell is a workspace-app principal (app:apps/mobile) that calls
+    // panelTree/CDP directly (unlike desktop, which proxies via the electron-main
+    // serverClient as "server"). It is trusted chrome ONLY because it declares
+    // the panel-hosting capability — that is surfaced via requester.privileged by
+    // the caller (see requirePanelAccessPermission). A plain "app" kind is NOT
+    // trusted, so a non-chrome workspace app stays scoped.
     requester.privileged === true
   );
 }

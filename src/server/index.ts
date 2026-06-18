@@ -18,6 +18,7 @@
 import * as path from "path";
 import * as fs from "fs";
 import { execFile } from "node:child_process";
+import type { AppCapability } from "@natstack/shared/unitManifest";
 import { createHash, randomBytes } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@natstack/shared/runtime/entitySpec";
 import { formatPairUrlLine } from "./pairingBanner.js";
@@ -2295,6 +2296,8 @@ async function main() {
     isIpcMode: !!ipcChannel,
     tokenManager,
     grantStore: capabilityGrantStore,
+    hasAppCapability: (callerId: string, capability: string) =>
+      appHostForGateway?.hasAppCapability(callerId, capability as AppCapability) ?? false,
     panelRuntimeCoordinator,
     ensureDefaultHeadlessHost: async () => {
       const manager = getHeadlessHostManager();
