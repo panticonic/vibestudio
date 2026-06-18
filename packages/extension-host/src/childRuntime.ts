@@ -13,6 +13,7 @@ import {
   type StreamingMethodFrame,
 } from "@natstack/rpc";
 import type { WsClientMessage, WsServerMessage } from "@natstack/shared/ws/protocol";
+import { serverRpcWsUrl } from "@natstack/shared/connect";
 import {
   createExtensionProxy,
   type ExtensionsClient,
@@ -29,8 +30,7 @@ import {
   type StreamEnvelope,
 } from "./wireEnvelopes.js";
 
-type ChildMessage =
-  | { type: "shutdown" };
+type ChildMessage = { type: "shutdown" };
 
 interface HealthDetail {
   summary: string;
@@ -45,7 +45,12 @@ interface UserlandApprovalRequest {
   warning?: string;
   details?: Array<{ label: string; value: string }>;
   promptOptions?: "scoped" | "choices";
-  options?: Array<{ value: string; label: string; description?: string; tone?: "primary" | "danger" | "neutral" }>;
+  options?: Array<{
+    value: string;
+    label: string;
+    description?: string;
+    tone?: "primary" | "danger" | "neutral";
+  }>;
 }
 
 type ExtensionRuntimePhase = "runtime-import" | "activate" | "invoke" | "fetch";
@@ -86,7 +91,11 @@ function likelyCauseForExtensionError(error: unknown): string | null {
   if (message.includes("Named export") && message.includes("not found")) {
     return "Generated ESM code used a named import from an external CommonJS package. Use a default import and destructure from it.";
   }
-  if (message.includes(".node") || message.includes("invalid ELF") || message.includes("NODE_MODULE_VERSION")) {
+  if (
+    message.includes(".node") ||
+    message.includes("invalid ELF") ||
+    message.includes("NODE_MODULE_VERSION")
+  ) {
     return "A native dependency could not load for this Node/Electron runtime. Reinstall or rebuild the dependency for the active runtime.";
   }
   return null;
@@ -95,7 +104,7 @@ function likelyCauseForExtensionError(error: unknown): string | null {
 function extensionRuntimeError(
   phase: ExtensionRuntimePhase,
   error: unknown,
-  fields: Record<string, unknown>,
+  fields: Record<string, unknown>
 ): Error {
   const likelyCause = likelyCauseForExtensionError(error);
   const detail = Object.entries(fields)
@@ -105,7 +114,9 @@ function extensionRuntimeError(
   const message = [
     `[ExtensionRuntime:${phase}] ${detail ? `${detail} ` : ""}${errorMessage(error)}`,
     likelyCause ? `Likely cause: ${likelyCause}` : null,
-  ].filter(Boolean).join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
   const wrapped = new Error(message);
   if (error instanceof Error) {
     (wrapped as Error & { cause?: unknown }).cause = error;
@@ -168,7 +179,9 @@ function createExtensionsClient(): ExtensionsClient {
       return createExtensionProxy(
         proxyRpc,
         name,
-        override ? (method) => override.has(method) : (method) => declaredStreaming(name).then((s) => s.has(method)),
+        override
+          ? (method) => override.has(method)
+          : (method) => declaredStreaming(name).then((s) => s.has(method))
       ) as never;
     },
     on(targetName: string, event: string, cb: (payload: unknown) => void) {
@@ -206,13 +219,17 @@ function encodeBinary(data: Uint8Array): BinaryEnvelope {
   return { __bin: true, data: Buffer.from(data).toString("base64") };
 }
 
-async function requestBodyFromEnvelope(body: BodyEnvelope | undefined): Promise<BodyInit | undefined> {
+async function requestBodyFromEnvelope(
+  body: BodyEnvelope | undefined
+): Promise<BodyInit | undefined> {
   if (!body) return undefined;
   if (isBinaryEnvelope(body)) return Buffer.from(body.data, "base64");
   if (!isStreamEnvelope(body)) return undefined;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const next = await rpcCall<StreamChunkEnvelope>("extensions.fetchRequestBodyChunk", [body.id]);
+      const next = await rpcCall<StreamChunkEnvelope>("extensions.fetchRequestBodyChunk", [
+        body.id,
+      ]);
       if (next.done) {
         controller.close();
         return;
@@ -298,17 +315,23 @@ function createFsClient() {
         async read(buffer: Uint8Array, offset: number, length: number, position: number | null) {
           const result = await rpcCall<{ bytesRead: number; buffer: BinaryEnvelope }>(
             "fs.handleRead",
-            [handleId, length, position],
+            [handleId, length, position]
           );
           buffer.set(Buffer.from(result.buffer.data, "base64"), offset);
           return { bytesRead: result.bytesRead, buffer };
         },
-        async write(buffer: Uint8Array, offset = 0, length = buffer.length, position: number | null = null) {
+        async write(
+          buffer: Uint8Array,
+          offset = 0,
+          length = buffer.length,
+          position: number | null = null
+        ) {
           const slice = buffer.subarray(offset, offset + length);
-          const result = await rpcCall<{ bytesWritten: number }>(
-            "fs.handleWrite",
-            [handleId, encodeBinary(slice), position],
-          );
+          const result = await rpcCall<{ bytesWritten: number }>("fs.handleWrite", [
+            handleId,
+            encodeBinary(slice),
+            position,
+          ]);
           return { bytesWritten: result.bytesWritten, buffer };
         },
         async close() {
@@ -345,14 +368,18 @@ function createContext() {
   const version = requiredEnv("NATSTACK_EXTENSION_VERSION");
   const storageRoot = requiredEnv("NATSTACK_EXTENSION_STORAGE_DIR");
   const normalizedRoot = path.resolve(storageRoot);
-  const rootWithSep = normalizedRoot.endsWith(path.sep) ? normalizedRoot : normalizedRoot + path.sep;
+  const rootWithSep = normalizedRoot.endsWith(path.sep)
+    ? normalizedRoot
+    : normalizedRoot + path.sep;
   const storagePath = (p: string) => {
     const resolved = path.resolve(normalizedRoot, p);
     // Boundary check: resolved must be the root itself or strictly inside it.
     // Using a prefix check on the normalized form is robust to ".." segments,
     // absolute inputs, and accidental sibling-dir prefixes (e.g. /storage-extra).
     if (resolved !== normalizedRoot && !resolved.startsWith(rootWithSep)) {
-      const err = new Error(`Storage path escapes extension storage: ${p}`) as NodeJS.ErrnoException;
+      const err = new Error(
+        `Storage path escapes extension storage: ${p}`
+      ) as NodeJS.ErrnoException;
       err.code = "EACCES";
       throw err;
     }
@@ -363,10 +390,12 @@ function createContext() {
     name,
     version,
     storage: {
-      mkdir: (p: string, opts?: { recursive?: boolean }) => nodeFs.mkdir(storagePath(p), { recursive: opts?.recursive ?? true }),
+      mkdir: (p: string, opts?: { recursive?: boolean }) =>
+        nodeFs.mkdir(storagePath(p), { recursive: opts?.recursive ?? true }),
       readFile: (p: string, encoding?: BufferEncoding) => nodeFs.readFile(storagePath(p), encoding),
       writeFile: (p: string, data: string | Uint8Array) => nodeFs.writeFile(storagePath(p), data),
-      rm: (p: string, opts?: { recursive?: boolean; force?: boolean }) => nodeFs.rm(storagePath(p), opts),
+      rm: (p: string, opts?: { recursive?: boolean; force?: boolean }) =>
+        nodeFs.rm(storagePath(p), opts),
       readdir: (p = ".") => nodeFs.readdir(storagePath(p)),
     },
     fs: createFsClient(),
@@ -375,8 +404,12 @@ function createContext() {
     rpc: {
       call: <T>(targetId: string, method: string, ...args: unknown[]) =>
         rpcCall<T>(method, args, targetId),
-      stream: (targetId: string, method: string, args: unknown[], options?: { signal?: AbortSignal }) =>
-        getRuntimeBridge().stream(targetId, method, args, options),
+      stream: (
+        targetId: string,
+        method: string,
+        args: unknown[],
+        options?: { signal?: AbortSignal }
+      ) => getRuntimeBridge().stream(targetId, method, args, options),
       on: (eventName: string, cb: (event: { payload: unknown }) => void) =>
         getRuntimeBridge().on(eventName, cb),
     },
@@ -463,12 +496,7 @@ function getRuntimeBridge(): RpcClient {
 }
 
 function gatewayWebSocketUrl(): string {
-  const gatewayUrl = new URL(requiredEnv("NATSTACK_EXTENSION_GATEWAY_URL"));
-  gatewayUrl.protocol = gatewayUrl.protocol === "https:" ? "wss:" : "ws:";
-  gatewayUrl.pathname = gatewayUrl.pathname.endsWith("/rpc") ? gatewayUrl.pathname : "/rpc";
-  gatewayUrl.search = "";
-  gatewayUrl.hash = "";
-  return gatewayUrl.toString();
+  return serverRpcWsUrl(requiredEnv("NATSTACK_EXTENSION_GATEWAY_URL"));
 }
 
 async function connectRuntimeBridge(): Promise<RpcClient> {
@@ -483,16 +511,18 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
       }
       const invocationToken = invocationStore.getStore()?.invocationToken;
       const stampedMessage =
-        invocationToken && (envelope.message.type === "request" || envelope.message.type === "stream-request")
+        invocationToken &&
+        (envelope.message.type === "request" || envelope.message.type === "stream-request")
           ? { ...envelope.message, parentInvocationToken: invocationToken }
           : envelope.message;
-      const stampedEnvelope = stampedMessage === envelope.message ? envelope : { ...envelope, message: stampedMessage };
+      const stampedEnvelope =
+        stampedMessage === envelope.message ? envelope : { ...envelope, message: stampedMessage };
       ws.send(
         JSON.stringify({
           type: "ws:rpc",
           envelope: stampedEnvelope,
           message: stampedMessage,
-        } satisfies WsClientMessage),
+        } satisfies WsClientMessage)
       );
     },
     onMessage(handler: (envelope: RpcEnvelope) => void): () => void {
@@ -517,13 +547,19 @@ async function connectRuntimeBridge(): Promise<RpcClient> {
       reject(err instanceof Error ? err : new Error(String(err)));
     };
     ws.addEventListener("error", fail, { once: true });
-    ws.addEventListener("open", () => {
-      ws.send(JSON.stringify({
-        type: "ws:auth",
-        token,
-        connectionId: `extension:${extensionName}`,
-      } satisfies WsClientMessage));
-    }, { once: true });
+    ws.addEventListener(
+      "open",
+      () => {
+        ws.send(
+          JSON.stringify({
+            type: "ws:auth",
+            token,
+            connectionId: `extension:${extensionName}`,
+          } satisfies WsClientMessage)
+        );
+      },
+      { once: true }
+    );
     ws.addEventListener("message", function onAuth(event) {
       const message = JSON.parse(String(event.data)) as WsServerMessage;
       if (message.type !== "ws:auth-result") return;
@@ -601,7 +637,9 @@ function streamChunkFromBytes(bytes: Uint8Array): StreamChunkEnvelope {
 async function readNextResponseBodyChunk(id: string): Promise<StreamChunkEnvelope> {
   const stream = fetchResponseBodies.get(id);
   if (!stream) {
-    const err = new Error(`Unknown extension fetch response body stream: ${id}`) as NodeJS.ErrnoException;
+    const err = new Error(
+      `Unknown extension fetch response body stream: ${id}`
+    ) as NodeJS.ErrnoException;
     err.code = "ENOENT";
     throw err;
   }
@@ -642,7 +680,7 @@ async function closeResponseBodyStream(id: string): Promise<void> {
 async function streamResponse(
   response: Response,
   sink: (frame: StreamingMethodFrame) => Promise<void> | void,
-  abortSignal: AbortSignal,
+  abortSignal: AbortSignal
 ): Promise<void> {
   await sink({
     kind: "head",
@@ -702,12 +740,11 @@ async function main(): Promise<void> {
   } catch (err) {
     throw extensionRuntimeError("activate", err, { extension: extensionName, bundlePath });
   }
-  const apiObject = api && typeof api === "object" ? api as Record<string, unknown> : {};
+  const apiObject = api && typeof api === "object" ? (api as Record<string, unknown>) : {};
   const methods = Object.keys(apiObject).filter((key) => typeof apiObject[key] === "function");
   const defaultExport = mod["default"] as { fetch?: unknown } | undefined;
-  const fetchHandler = typeof defaultExport?.fetch === "function"
-    ? defaultExport.fetch.bind(defaultExport)
-    : null;
+  const fetchHandler =
+    typeof defaultExport?.fetch === "function" ? defaultExport.fetch.bind(defaultExport) : null;
 
   runtimeBridge.expose("extension.invoke", async (req) => {
     const [method, args, invocation] = req.args as [string, unknown[], ExtensionInvocation];
@@ -767,54 +804,51 @@ async function main(): Promise<void> {
     return null;
   });
 
-  runtimeBridge.expose(
-    "extension.fetch",
-    async (req) => {
-      const [requestEnvelope, invocation] = req.args as [
-        { url: string; method: string; headers: Record<string, string>; body?: BodyEnvelope },
-        ExtensionInvocation,
-      ];
-      if (!fetchHandler) {
-        const err = new Error(`Extension has no fetch handler: ${ctx.name}`) as NodeJS.ErrnoException;
-        err.code = "ENOFETCH";
-        throw err;
-      }
-      return invocationStore.run(invocation, async () => {
-        const body = await requestBodyFromEnvelope(requestEnvelope.body);
-        const request = new Request(requestEnvelope.url, {
-          method: requestEnvelope.method,
-          headers: requestEnvelope.headers,
-          ...(body ? { body, duplex: "half" } : {}),
-        } as RequestInit & { duplex?: "half" });
-        const waitUntil: Promise<unknown>[] = [];
-        const fetchCtx = {
-          ...ctx,
-          waitUntil(promise: Promise<unknown>) {
-            waitUntil.push(promise);
-          },
-        };
+  runtimeBridge.expose("extension.fetch", async (req) => {
+    const [requestEnvelope, invocation] = req.args as [
+      { url: string; method: string; headers: Record<string, string>; body?: BodyEnvelope },
+      ExtensionInvocation,
+    ];
+    if (!fetchHandler) {
+      const err = new Error(`Extension has no fetch handler: ${ctx.name}`) as NodeJS.ErrnoException;
+      err.code = "ENOFETCH";
+      throw err;
+    }
+    return invocationStore.run(invocation, async () => {
+      const body = await requestBodyFromEnvelope(requestEnvelope.body);
+      const request = new Request(requestEnvelope.url, {
+        method: requestEnvelope.method,
+        headers: requestEnvelope.headers,
+        ...(body ? { body, duplex: "half" } : {}),
+      } as RequestInit & { duplex?: "half" });
+      const waitUntil: Promise<unknown>[] = [];
+      const fetchCtx = {
+        ...ctx,
+        waitUntil(promise: Promise<unknown>) {
+          waitUntil.push(promise);
+        },
+      };
+      try {
+        let response: Response;
         try {
-          let response: Response;
-          try {
-            response = await fetchHandler(request, fetchCtx);
-          } catch (err) {
-            throw extensionRuntimeError("fetch", err, {
-              extension: extensionName,
-              method: requestEnvelope.method,
-              url: requestEnvelope.url,
-            });
-          }
-          return {
-            status: response.status,
-            headers: Object.fromEntries(response.headers.entries()),
-            body: responseBodyToEnvelope(response),
-          };
-        } finally {
-          settleWaitUntil(waitUntil);
+          response = await fetchHandler(request, fetchCtx);
+        } catch (err) {
+          throw extensionRuntimeError("fetch", err, {
+            extension: extensionName,
+            method: requestEnvelope.method,
+            url: requestEnvelope.url,
+          });
         }
-      });
-    },
-  );
+        return {
+          status: response.status,
+          headers: Object.fromEntries(response.headers.entries()),
+          body: responseBodyToEnvelope(response),
+        };
+      } finally {
+        settleWaitUntil(waitUntil);
+      }
+    });
+  });
 
   const disposeSubscriptions = () => {
     while (ctx.subscriptions.length) {

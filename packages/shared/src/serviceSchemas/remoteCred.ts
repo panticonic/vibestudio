@@ -33,6 +33,8 @@ export const RemoteCredCurrentSchema = z.object({
   fingerprint: z.string().optional(),
   tokenPreview: z.string().optional(),
   deviceId: z.string().optional(),
+  hubUrl: z.string().optional(),
+  workspaceName: z.string().optional(),
 });
 export type RemoteCredCurrent = z.infer<typeof RemoteCredCurrentSchema>;
 
@@ -70,7 +72,7 @@ export const RemoteCredPairingInviteSchema = z.object({
   expiresInMs: z.number(),
   serverId: z.string(),
   serverBootId: z.string(),
-  workspaceId: z.string(),
+  workspaceId: z.string().nullable().optional(),
 });
 export type RemoteCredPairingInvite = z.infer<typeof RemoteCredPairingInviteSchema>;
 

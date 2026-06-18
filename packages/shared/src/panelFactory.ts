@@ -49,6 +49,7 @@ export interface BuildPanelUrlOpts {
   gatewayPort: number;
   externalHost: string;
   protocol: "http" | "https";
+  basePath?: string;
 }
 
 export interface BuildPanelEnvOpts {
@@ -115,7 +116,8 @@ export function buildPanelUrl(opts: BuildPanelUrlOpts): string {
   params.set("contextId", opts.contextId);
   if (opts.ref) params.set("ref", opts.ref);
   const encodedPath = encodeURIComponent(opts.source).replace(/%2F/g, "/");
-  return `${opts.protocol}://${opts.externalHost}:${opts.gatewayPort}/${encodedPath}/?${params.toString()}`;
+  const basePath = opts.basePath?.replace(/\/+$/, "") ?? "";
+  return `${opts.protocol}://${opts.externalHost}:${opts.gatewayPort}${basePath}/${encodedPath}/?${params.toString()}`;
 }
 
 /**

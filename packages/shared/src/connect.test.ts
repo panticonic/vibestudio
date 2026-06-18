@@ -1,6 +1,18 @@
 import os from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createConnectDeepLink, isTrustedCleartextHost, parseConnectLink } from "./connect";
+import {
+  createConnectDeepLink,
+  isSelectedWorkspaceUrl,
+  isTrustedCleartextHost,
+  parseConnectLink,
+  parseConnectServerUrl,
+  selectedWorkspaceNameFromUrl,
+  selectedWorkspaceUrl,
+  serverCdpHostWsUrl,
+  serverRpcHttpUrl,
+  serverRpcStreamHttpUrl,
+  serverRpcWsUrl,
+} from "./connect";
 
 function ipv4(address: string): os.NetworkInterfaceInfo {
   return {
@@ -104,13 +116,65 @@ describe("connect deep links", () => {
       createConnectDeepLink("https://host.tailnet.ts.net", "A".repeat(24))
     );
     expect(script.createStartRemotePairCommand("https://host.tailnet.ts.net", "A".repeat(24))).toBe(
-      `natstack remote start --pair '${createConnectDeepLink(
+      `natstack remote pair '${createConnectDeepLink(
         "https://host.tailnet.ts.net",
         "A".repeat(24)
       )}'`
     );
     for (const fixture of fixtures) {
       expect(script.parseConnectLink(fixture)).toEqual(parseConnectLink(fixture));
+    }
+  });
+
+  it("keeps the trusted-cleartext-host boundary identical to the script mirror", async () => {
+    const scriptUrl = new URL("../../../scripts/cli/lib/connect-utils.mjs", import.meta.url);
+    const script = (await import(scriptUrl.href)) as {
+      isTrustedCleartextHost: (host: string) => boolean;
+      parseConnectServerUrl: (raw: string) => unknown;
+    };
+    // Includes the over-permissive-loopback attack vectors that previously diverged: a non-loopback
+    // hostname or sub-label that merely starts with "127." must NOT be trusted.
+    const hosts = [
+      "localhost",
+      "10.0.2.2",
+      "127.0.0.1",
+      "127.1.2.3",
+      "127.evil.com",
+      "127.0.0.1.evil.com",
+      "1270.0.0.1",
+      "10.0.0.1",
+      "172.15.0.1",
+      "172.16.0.1",
+      "172.31.255.255",
+      "172.32.0.1",
+      "192.168.1.20",
+      "192.169.1.20",
+      "100.63.0.1",
+      "100.64.1.20",
+      "100.127.0.1",
+      "100.128.0.1",
+      "host.tailnet.ts.net",
+      "ts.net",
+      "evil-ts.net.attacker.com",
+      "box.local",
+      "single-label-host",
+      "example.com",
+      "sub.example.com",
+    ];
+    for (const host of hosts) {
+      expect(script.isTrustedCleartextHost(host), host).toBe(isTrustedCleartextHost(host));
+    }
+
+    const serverUrls = [
+      "http://127.0.0.1:3030",
+      "http://127.evil.com:3030",
+      "http://192.168.1.20",
+      "http://example.com",
+      "https://example.com",
+      "http://host.tailnet.ts.net/base",
+    ];
+    for (const url of serverUrls) {
+      expect(script.parseConnectServerUrl(url)).toEqual(parseConnectServerUrl(url));
     }
   });
 
@@ -152,5 +216,48 @@ describe("connect deep links", () => {
     expect(script.pickMobileHost("tailscale", { includeTunnel: true }).address).toBe(
       "100.75.165.121"
     );
+  });
+});
+
+describe("server route helpers", () => {
+  it("builds RPC URLs while preserving selected workspace paths", () => {
+    expect(serverRpcHttpUrl("https://server.example").toString()).toBe(
+      "https://server.example/rpc"
+    );
+    expect(serverRpcWsUrl("https://server.example/_workspace/dev")).toBe(
+      "wss://server.example/_workspace/dev/rpc"
+    );
+    expect(serverRpcStreamHttpUrl("http://127.0.0.1:3030/_workspace/dev").toString()).toBe(
+      "http://127.0.0.1:3030/_workspace/dev/rpc/stream"
+    );
+    // A workspace literally named "rpc" must still get the RPC path appended — the helpers append
+    // unconditionally and never treat a trailing "/rpc" workspace segment as an existing endpoint.
+    expect(serverRpcWsUrl("https://server.example/_workspace/rpc")).toBe(
+      "wss://server.example/_workspace/rpc/rpc"
+    );
+    expect(serverRpcStreamHttpUrl("https://server.example/_workspace/rpc").toString()).toBe(
+      "https://server.example/_workspace/rpc/rpc/stream"
+    );
+  });
+
+  it("builds CDP host URLs while preserving selected workspace paths", () => {
+    expect(serverCdpHostWsUrl("https://server.example", "host-a")).toBe(
+      "wss://server.example/api/cdp-host?hostConnectionId=host-a"
+    );
+    expect(serverCdpHostWsUrl("https://server.example/_workspace/dev", "host-a")).toBe(
+      "wss://server.example/_workspace/dev/api/cdp-host?hostConnectionId=host-a"
+    );
+    expect(serverCdpHostWsUrl("http://127.0.0.1:3030/_workspace/dev/", "host a")).toBe(
+      "ws://127.0.0.1:3030/_workspace/dev/api/cdp-host?hostConnectionId=host+a"
+    );
+  });
+
+  it("builds and parses selected workspace URLs through one shared contract", () => {
+    const url = selectedWorkspaceUrl("https://server.example", "dev workspace");
+    expect(url.toString()).toBe("https://server.example/_workspace/dev%20workspace");
+    expect(selectedWorkspaceNameFromUrl(url)).toBe("dev workspace");
+    expect(isSelectedWorkspaceUrl(url)).toBe(true);
+    expect(isSelectedWorkspaceUrl("https://server.example/_workspace/dev/rpc")).toBe(false);
+    expect(selectedWorkspaceNameFromUrl("not a url")).toBeNull();
   });
 });

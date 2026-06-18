@@ -23,7 +23,7 @@ export const ConnectionInfoResponseSchema = z.object({
   gatewayPort: z.number().nullable().optional(),
   serverId: z.string(),
   serverBootId: z.string(),
-  workspaceId: z.string(),
+  workspaceId: z.string().nullable().optional(),
 });
 
 export const authMethods = defineServiceMethods({
