@@ -1,6 +1,6 @@
 # Plan / Requirements for permissions
 
-- Control browser panels via playwright
+- Control browser panels via CDP automation
   - default: not allowed
   - whitelist for certain domains
 - Access to git subpaths

@@ -1,3 +1,14 @@
+// Lightweight, workerd-native CDP client. Speaks raw Chrome DevTools Protocol
+// over a WebSocket (via globalThis.WebSocket), so it runs in a Cloudflare
+// Worker / Durable Object isolate AND in panels. Exposes a Playwright-shaped
+// `Page`/`Locator` surface implemented entirely over the Runtime/DOM/Input/Page
+// CDP domains — no Node deps, no vendored browser bundle.
+//
+// Deliberately out of scope (no CDP-only path in a connectionless isolate):
+// file uploads (setInputFiles), multi-page/popup lifecycle, cross-origin
+// frames, and full network request interception (route). Raw `CdpConnection`
+// is always available for protocol-level work those cases would need.
+
 type CdpResponse = {
   id?: number;
   result?: unknown;
@@ -31,6 +42,28 @@ export type LightweightDomInspection = {
   attributes?: Record<string, string>;
   boundingBox?: { x: number; y: number; width: number; height: number };
 };
+
+export type BoundingBox = { x: number; y: number; width: number; height: number };
+
+/** How a locator finds its element(s). Chains resolve left-to-right. */
+type LocatorStep =
+  | { by: "css"; value: string }
+  | { by: "role"; value: string; name?: string; exact?: boolean }
+  | { by: "text"; value: string; exact?: boolean }
+  | { by: "label"; value: string; exact?: boolean }
+  | { by: "placeholder"; value: string; exact?: boolean }
+  | { by: "testid"; value: string }
+  | { by: "alt"; value: string; exact?: boolean }
+  | { by: "title"; value: string; exact?: boolean }
+  | { filter: { hasText?: string; hasTextExact?: boolean } }
+  | { nth: number };
+
+type LocatorDescriptor = { steps: LocatorStep[] };
+
+type ByTextOptions = { exact?: boolean };
+type ByRoleOptions = { name?: string; exact?: boolean };
+type ActionOptions = { timeout?: number };
+type WaitState = "attached" | "detached" | "visible" | "hidden";
 
 type WebSocketCtor = new (url: string) => WebSocket;
 
@@ -102,7 +135,7 @@ export class CdpConnection {
 
   private constructor(private readonly ws: WebSocket) {
     ws.addEventListener("message", (event) => {
-      void this.handleMessage(event.data);
+      void this.handleMessage((event as MessageEvent).data);
     });
     ws.addEventListener("error", () => {
       const error = new Error("CDP WebSocket error");
@@ -175,11 +208,198 @@ export class CdpConnection {
   }
 }
 
+// ---------------------------------------------------------------------------
+// In-page runtime. A single self-contained program injected into the target
+// page via Runtime.evaluate. It owns element resolution (CSS + getBy* engines),
+// visibility/actionability checks, and all DOM-side actions/reads. Pointer
+// actions (click/hover/...) only *probe* here for a stable hit point; the
+// actual mouse/key events are dispatched client-side via CDP Input.
+//
+// Kept as one literal string (no ${} interpolation) so it is the single source
+// of truth and is trivially serialisable. `__nsRun(payload)` is the entrypoint.
+// ---------------------------------------------------------------------------
+const INPAGE = String.raw`
+function nsNorm(s){ return (s==null?"":String(s)).replace(/\s+/g," ").trim(); }
+function nsDedupe(a){ return a.filter(function(e,i){ return a.indexOf(e)===i; }); }
+function nsText(el){ return nsNorm((el && (el.innerText!=null?el.innerText:el.textContent)) || ""); }
+function nsTextMatch(el, q, exact){ var t=nsText(el); var n=nsNorm(q); return exact ? t===n : t.indexOf(n)!==-1; }
+function nsAttr(el, name){ return el && el.getAttribute ? el.getAttribute(name) : null; }
+function nsRole(el){
+  var r = nsAttr(el,"role"); if(r) return r.trim().toLowerCase().split(/\s+/)[0];
+  var tag = el.tagName ? el.tagName.toLowerCase() : "";
+  if(tag==="a") return el.hasAttribute("href") ? "link" : "";
+  if(tag==="button") return "button";
+  if(tag==="select") return el.multiple ? "listbox" : "combobox";
+  if(tag==="textarea") return "textbox";
+  if(/^h[1-6]$/.test(tag)) return "heading";
+  if(tag==="img") return "img";
+  if(tag==="nav") return "navigation";
+  if(tag==="main") return "main";
+  if(tag==="ul"||tag==="ol") return "list";
+  if(tag==="li") return "listitem";
+  if(tag==="table") return "table";
+  if(tag==="form") return "form";
+  if(tag==="input"){
+    var ty=(nsAttr(el,"type")||"text").toLowerCase();
+    var m={checkbox:"checkbox",radio:"radio",button:"button",submit:"button",reset:"button",image:"button",range:"slider",number:"spinbutton",search:"searchbox"};
+    return m[ty]||"textbox";
+  }
+  return "";
+}
+function nsAccName(el){
+  var al=nsAttr(el,"aria-label"); if(al) return nsNorm(al);
+  var lb=nsAttr(el,"aria-labelledby");
+  if(lb){ var parts=lb.split(/\s+/).map(function(id){ var e=document.getElementById(id); return e?nsText(e):""; }); var j=nsNorm(parts.join(" ")); if(j) return j; }
+  if(el.tagName==="IMG"){ var alt=nsAttr(el,"alt"); if(alt) return nsNorm(alt); }
+  if(el.labels && el.labels.length) return nsNorm(Array.prototype.map.call(el.labels,function(l){return nsText(l);}).join(" "));
+  var t=nsText(el); if(t) return t;
+  var ph=nsAttr(el,"placeholder"); if(ph) return nsNorm(ph);
+  var ti=nsAttr(el,"title"); if(ti) return nsNorm(ti);
+  return "";
+}
+function nsVisible(el){
+  if(!el||!el.getBoundingClientRect) return false;
+  var s=getComputedStyle(el); var r=el.getBoundingClientRect();
+  return s.visibility!=="hidden" && s.display!=="none" && Number(s.opacity||"1")>0 && r.width>0 && r.height>0;
+}
+function nsEnabled(el){ return !el.disabled && nsAttr(el,"aria-disabled")!=="true"; }
+function nsEditable(el){
+  if(el.isContentEditable) return true;
+  var tag=el.tagName ? el.tagName.toLowerCase() : "";
+  if(tag!=="input" && tag!=="textarea" && tag!=="select") return false;
+  return !el.disabled && !el.readOnly;
+}
+function nsStepFind(roots, step){
+  var out=[];
+  if(step.by==="css"){
+    for(var i=0;i<roots.length;i++){ var found=(roots[i]===document?document:roots[i]).querySelectorAll(step.value); for(var j=0;j<found.length;j++) out.push(found[j]); }
+    return nsDedupe(out);
+  }
+  var pred=function(e){
+    switch(step.by){
+      case "role": { if(nsRole(e)!==String(step.value).toLowerCase()) return false; if(step.name!=null){ var n=nsAccName(e); return step.exact?n===nsNorm(step.name):n.indexOf(nsNorm(step.name))!==-1; } return true; }
+      case "text": return nsTextMatch(e, step.value, step.exact);
+      case "label": { var tag=e.tagName?e.tagName.toLowerCase():""; var formish=(tag==="input"||tag==="textarea"||tag==="select"||tag==="button")||e.isContentEditable; if(!formish) return false; var n=nsAccName(e); return step.exact?n===nsNorm(step.value):n.indexOf(nsNorm(step.value))!==-1; }
+      case "placeholder": { var ph=nsAttr(e,"placeholder"); if(ph==null) return false; var v=nsNorm(ph); return step.exact?v===nsNorm(step.value):v.indexOf(nsNorm(step.value))!==-1; }
+      case "testid": return nsAttr(e,"data-testid")===step.value;
+      case "alt": { var a=nsAttr(e,"alt"); if(a==null) return false; var v2=nsNorm(a); return step.exact?v2===nsNorm(step.value):v2.indexOf(nsNorm(step.value))!==-1; }
+      case "title": { var ti=nsAttr(e,"title"); if(ti==null) return false; var v3=nsNorm(ti); return step.exact?v3===nsNorm(step.value):v3.indexOf(nsNorm(step.value))!==-1; }
+      default: return false;
+    }
+  };
+  for(var k=0;k<roots.length;k++){
+    var scope=roots[k]===document?document:roots[k];
+    var all=scope.querySelectorAll("*");
+    for(var m=0;m<all.length;m++){ if(pred(all[m])) out.push(all[m]); }
+  }
+  return nsDedupe(out);
+}
+function nsLocate(descriptor){
+  var cur=[document];
+  var steps=descriptor.steps||[];
+  for(var i=0;i<steps.length;i++){
+    var step=steps[i];
+    if(step.filter){ cur=cur.filter(function(e){ return e!==document && (step.filter.hasText==null || nsTextMatch(e, step.filter.hasText, step.filter.hasTextExact)); }); continue; }
+    if(step.nth!=null){ var idx=step.nth<0?cur.length+step.nth:step.nth; cur=(idx>=0&&idx<cur.length)?[cur[idx]]:[]; continue; }
+    cur=nsStepFind(cur, step);
+  }
+  return cur;
+}
+function nsFirst(descriptor){ var e=nsLocate(descriptor); return e.length?e[0]:null; }
+function nsBox(el){ var r=el.getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; }
+function nsSleep(ms){ return new Promise(function(r){ setTimeout(r,ms); }); }
+async function nsWaitForState(descriptor, state, timeout){
+  var deadline=Date.now()+timeout;
+  for(;;){
+    var el=nsFirst(descriptor);
+    var ok;
+    if(state==="detached") ok=!el;
+    else if(state==="attached") ok=!!el;
+    else if(state==="hidden") ok=!el||!nsVisible(el);
+    else ok=!!el&&nsVisible(el);
+    if(ok) return el;
+    if(Date.now()>deadline) throw new Error("Timeout "+timeout+"ms waiting for element to be "+state);
+    await nsSleep(50);
+  }
+}
+async function nsActionable(descriptor, timeout){
+  var deadline=Date.now()+timeout; var prev=null;
+  for(;;){
+    var el=nsFirst(descriptor);
+    if(el && nsVisible(el) && nsEnabled(el)){
+      try{ el.scrollIntoView({block:"center",inline:"center"}); }catch(e){}
+      var b=nsBox(el);
+      if(prev && Math.abs(prev.x-b.x)<1 && Math.abs(prev.y-b.y)<1 && prev.width===b.width && prev.height===b.height){
+        return {ok:true, x:b.x+b.width/2, y:b.y+b.height/2, box:b};
+      }
+      prev=b;
+    } else { prev=null; }
+    if(Date.now()>deadline) return {ok:false, reason: el?(nsVisible(el)?"not enabled":"not visible"):"not found"};
+    await nsSleep(30);
+  }
+}
+async function __nsRun(P){
+  var d=P.descriptor, a=P.arg, t=P.timeout;
+  switch(P.op){
+    case "probe": return await nsActionable(d, t);
+    case "waitFor": { await nsWaitForState(d, P.state||"visible", t); return true; }
+    case "count": return nsLocate(d).length;
+    case "exists": return !!nsFirst(d);
+    case "isVisible": { var e=nsFirst(d); return !!e && nsVisible(e); }
+    case "isChecked": { var e=await nsWaitForState(d,"attached",t); return !!e.checked; }
+    case "isEnabled": { var e=await nsWaitForState(d,"attached",t); return nsEnabled(e); }
+    case "isDisabled": { var e=await nsWaitForState(d,"attached",t); return !nsEnabled(e); }
+    case "isEditable": { var e=await nsWaitForState(d,"attached",t); return nsEditable(e); }
+    case "textContent": { var e=nsFirst(d); return e?e.textContent:null; }
+    case "innerText": { var e=await nsWaitForState(d,"visible",t); return e.innerText!=null?e.innerText:(e.textContent||""); }
+    case "inputValue": { var e=await nsWaitForState(d,"attached",t); return "value" in e ? e.value : ""; }
+    case "getAttribute": { var e=await nsWaitForState(d,"attached",t); return e.getAttribute(a.name); }
+    case "boundingBox": { var e=nsFirst(d); return e?nsBox(e):null; }
+    case "allTextContents": return nsLocate(d).map(function(e){ return e.textContent||""; });
+    case "allInnerTexts": return nsLocate(d).map(function(e){ return e.innerText!=null?e.innerText:(e.textContent||""); });
+    case "inspect": {
+      var e=nsFirst(d);
+      if(!e) return {found:false};
+      var attrs={}; for(var i=0;i<e.attributes.length;i++){ attrs[e.attributes[i].name]=e.attributes[i].value; }
+      return {found:true, tagName:e.tagName, id:e.id||"", className:typeof e.className==="string"?e.className:"", text:nsText(e).slice(0,4000), visible:nsVisible(e), attributes:attrs, boundingBox:nsBox(e)};
+    }
+    case "fill": { var e=await nsWaitForState(d,"visible",t); if(!("value" in e) && !e.isContentEditable) throw new Error("Element is not fillable"); e.focus&&e.focus(); if(e.isContentEditable){ e.textContent=a.value; } else { e.value=a.value; } e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); return true; }
+    case "clear": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); if(e.isContentEditable) e.textContent=""; else e.value=""; e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); return true; }
+    case "setChecked": { var e=await nsWaitForState(d,"visible",t); if(e.checked!==a.checked){ e.checked=a.checked; e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); } return true; }
+    case "selectOption": { var e=await nsWaitForState(d,"visible",t); var vals=a.values; var picked=[]; for(var i=0;i<e.options.length;i++){ var o=e.options[i]; var hit=vals.indexOf(o.value)!==-1||vals.indexOf(o.label)!==-1||vals.indexOf(nsNorm(o.textContent))!==-1; o.selected=hit; if(hit) picked.push(o.value); } e.dispatchEvent(new Event("input",{bubbles:true})); e.dispatchEvent(new Event("change",{bubbles:true})); return picked; }
+    case "focus": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); return true; }
+    case "blur": { var e=await nsWaitForState(d,"attached",t); e.blur&&e.blur(); return true; }
+    case "scrollIntoView": { var e=await nsWaitForState(d,"attached",t); e.scrollIntoView({block:"center",inline:"center"}); return true; }
+    case "selectText": { var e=await nsWaitForState(d,"visible",t); if(e.select) e.select(); else { var r=document.createRange(); r.selectNodeContents(e); var sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); } return true; }
+    case "dispatchEvent": { var e=await nsWaitForState(d,"attached",t); e.dispatchEvent(new Event(a.type,{bubbles:true})); return true; }
+    case "focusForKey": { var e=await nsWaitForState(d,"visible",t); e.focus&&e.focus(); return true; }
+    default: throw new Error("Unknown op: "+P.op);
+  }
+}
+`;
+
+const KEY_DEFS: Record<string, { keyCode?: number; key?: string; text?: string }> = {
+  Enter: { keyCode: 13, key: "Enter", text: "\r" },
+  Tab: { keyCode: 9, key: "Tab" },
+  Escape: { keyCode: 27, key: "Escape" },
+  Backspace: { keyCode: 8, key: "Backspace" },
+  Delete: { keyCode: 46, key: "Delete" },
+  ArrowUp: { keyCode: 38, key: "ArrowUp" },
+  ArrowDown: { keyCode: 40, key: "ArrowDown" },
+  ArrowLeft: { keyCode: 37, key: "ArrowLeft" },
+  ArrowRight: { keyCode: 39, key: "ArrowRight" },
+  Home: { keyCode: 36, key: "Home" },
+  End: { keyCode: 35, key: "End" },
+  PageUp: { keyCode: 33, key: "PageUp" },
+  PageDown: { keyCode: 34, key: "PageDown" },
+  Space: { keyCode: 32, key: " ", text: " " },
+};
+
 class WorkerCdpPage {
   private currentUrl = "";
   private readonly consoleBuffer: LightweightConsoleEvent[] = [];
 
-  constructor(private readonly connection: CdpConnection) {
+  constructor(readonly connection: CdpConnection) {
     this.connection.on("Runtime.consoleAPICalled", (params) => {
       const event = params as {
         type?: string;
@@ -205,10 +425,33 @@ class WorkerCdpPage {
     this.currentUrl = String((await this.evaluate(() => location.href).catch(() => "")) ?? "");
   }
 
+  // ---- Navigation -------------------------------------------------------
   async goto(url: string): Promise<unknown> {
     const result = await this.connection.send("Page.navigate", { url });
     this.currentUrl = url;
     return result;
+  }
+
+  async reload(): Promise<void> {
+    await this.connection.send("Page.reload", {});
+  }
+
+  async goBack(): Promise<void> {
+    await this.navigateHistory(-1);
+  }
+
+  async goForward(): Promise<void> {
+    await this.navigateHistory(1);
+  }
+
+  private async navigateHistory(delta: number): Promise<void> {
+    const history = (await this.connection.send("Page.getNavigationHistory", {})) as {
+      currentIndex: number;
+      entries: Array<{ id: number }>;
+    };
+    const target = history.entries[history.currentIndex + delta];
+    if (!target) return;
+    await this.connection.send("Page.navigateToHistoryEntry", { entryId: target.id });
   }
 
   async title(): Promise<string> {
@@ -220,12 +463,14 @@ class WorkerCdpPage {
   }
 
   async content(): Promise<string> {
-    return String(
-      (await this.evaluate(() => document.documentElement?.outerHTML ?? "")) ?? ""
-    );
+    return String((await this.evaluate(() => document.documentElement?.outerHTML ?? "")) ?? "");
   }
 
-  async evaluate(pageFunction: string | ((arg?: unknown) => unknown), arg?: unknown): Promise<unknown> {
+  // ---- Evaluate ---------------------------------------------------------
+  async evaluate(
+    pageFunction: string | ((arg?: unknown) => unknown),
+    arg?: unknown
+  ): Promise<unknown> {
     const expression =
       typeof pageFunction === "function"
         ? `(${pageFunction.toString()})(${JSON.stringify(arg)})`
@@ -241,10 +486,65 @@ class WorkerCdpPage {
     return result.result?.value;
   }
 
-  locator(selector: string): WorkerCdpLocator {
-    return new WorkerCdpLocator(this, selector);
+  /** Run an in-page op against a locator descriptor. */
+  async runLocatorOp(
+    op: string,
+    descriptor: LocatorDescriptor,
+    arg: unknown,
+    opts: { timeout?: number; state?: WaitState } = {}
+  ): Promise<unknown> {
+    const payload = {
+      op,
+      descriptor,
+      arg: arg ?? null,
+      timeout: opts.timeout ?? 30_000,
+      state: opts.state ?? null,
+    };
+    const expr = `(async function(P){ ${INPAGE}\n return await __nsRun(P); })(${JSON.stringify(
+      payload
+    )})`;
+    return this.evaluate(expr);
   }
 
+  // ---- Locators ---------------------------------------------------------
+  locator(selector: string): WorkerCdpLocator {
+    return new WorkerCdpLocator(this, { steps: [{ by: "css", value: selector }] });
+  }
+  getByRole(role: string, options: ByRoleOptions = {}): WorkerCdpLocator {
+    return new WorkerCdpLocator(this, {
+      steps: [{ by: "role", value: role, name: options.name, exact: options.exact }],
+    });
+  }
+  getByText(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return new WorkerCdpLocator(this, {
+      steps: [{ by: "text", value: text, exact: options.exact }],
+    });
+  }
+  getByLabel(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return new WorkerCdpLocator(this, {
+      steps: [{ by: "label", value: text, exact: options.exact }],
+    });
+  }
+  getByPlaceholder(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return new WorkerCdpLocator(this, {
+      steps: [{ by: "placeholder", value: text, exact: options.exact }],
+    });
+  }
+  getByTestId(testId: string): WorkerCdpLocator {
+    return new WorkerCdpLocator(this, { steps: [{ by: "testid", value: testId }] });
+  }
+  getByAltText(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return new WorkerCdpLocator(this, {
+      steps: [{ by: "alt", value: text, exact: options.exact }],
+    });
+  }
+  getByTitle(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return new WorkerCdpLocator(this, {
+      steps: [{ by: "title", value: text, exact: options.exact }],
+    });
+  }
+
+  // ---- Waits ------------------------------------------------------------
   async waitForTimeout(timeout: number): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, timeout));
   }
@@ -295,166 +595,6 @@ class WorkerCdpPage {
     );
   }
 
-  async fill(selector: string, value: string): Promise<void> {
-    await this.evaluate(
-      `(function(selector, value) {
-        const el = document.querySelector(selector);
-        if (!el) throw new Error("No element matches selector: " + selector);
-        if (!("value" in el)) throw new Error("Element is not fillable: " + selector);
-        el.focus?.();
-        el.value = value;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      })(${JSON.stringify(selector)}, ${JSON.stringify(value)})`
-    );
-  }
-
-  async type(selector: string, text: string): Promise<void> {
-    const current = await this.evaluate(
-      `(function(selector) {
-        const el = document.querySelector(selector);
-        if (!el) throw new Error("No element matches selector: " + selector);
-        return "value" in el ? el.value : "";
-      })(${JSON.stringify(selector)})`
-    );
-    await this.fill(selector, `${current ?? ""}${text}`);
-  }
-
-  async querySelector(selector: string): Promise<WorkerCdpElementHandle | null> {
-    const exists = await this.evaluate(
-      `(function(selector) { return Boolean(document.querySelector(selector)); })(${JSON.stringify(
-        selector
-      )})`
-    );
-    return exists ? new WorkerCdpElementHandle(this, selector) : null;
-  }
-
-  async isVisible(selector: string): Promise<boolean> {
-    return Boolean(
-      await this.evaluate(
-        `(function(selector) {
-          const el = document.querySelector(selector);
-          if (!el) return false;
-          const style = getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-        })(${JSON.stringify(selector)})`
-      )
-    );
-  }
-
-  consoleEvents(): LightweightConsoleEvent[] {
-    return [...this.consoleBuffer];
-  }
-
-  clearConsoleEvents(): void {
-    this.consoleBuffer.length = 0;
-  }
-
-  async inspect(selector: string): Promise<LightweightDomInspection> {
-    return (await this.evaluate(
-      `(function(selector) {
-        const el = document.querySelector(selector);
-        if (!el) return { selector, found: false };
-        const style = getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
-        const attributes = {};
-        for (const attr of Array.from(el.attributes ?? [])) attributes[attr.name] = attr.value;
-        return {
-          selector,
-          found: true,
-          tagName: el.tagName,
-          id: el.id || "",
-          className: typeof el.className === "string" ? el.className : "",
-          text: (el.innerText ?? el.textContent ?? "").slice(0, 4000),
-          visible: style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0,
-          attributes,
-          boundingBox: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
-        };
-      })(${JSON.stringify(selector)})`
-    )) as LightweightDomInspection;
-  }
-
-  async waitForSelector(
-    selector: string,
-    options: { state?: "attached" | "detached" | "visible" | "hidden"; timeout?: number } = {}
-  ): Promise<WorkerCdpElementHandle | null> {
-    const state = options.state ?? "visible";
-    const timeout = options.timeout ?? 30_000;
-    const found = await this.evaluate(
-      `(async function(selector, state, timeout) {
-        const deadline = Date.now() + timeout;
-        function matches() {
-          const el = document.querySelector(selector);
-          if (state === "detached") return !el;
-          if (!el) return false;
-          const style = getComputedStyle(el);
-          const rect = el.getBoundingClientRect();
-          const visible = style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-          if (state === "hidden") return !visible;
-          if (state === "attached") return true;
-          return visible;
-        }
-        while (Date.now() <= deadline) {
-          if (matches()) return state === "detached" || state === "hidden" ? null : true;
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        throw new Error("Timeout " + timeout + "ms exceeded waiting for selector " + JSON.stringify(selector) + " to be " + state);
-      })(${JSON.stringify(selector)}, ${JSON.stringify(state)}, ${JSON.stringify(timeout)})`
-    );
-    return found ? new WorkerCdpElementHandle(this, selector) : null;
-  }
-
-  async textContent(selector: string): Promise<string | null> {
-    return this.locator(selector).textContent();
-  }
-
-  async innerText(selector: string): Promise<string> {
-    return this.locator(selector).innerText();
-  }
-
-  async click(selector: string): Promise<void> {
-    const point = (await this.evaluate(
-      `(function(selector) {
-        const el = document.querySelector(selector);
-        if (!el) throw new Error("No element matches selector: " + selector);
-        const rect = el.getBoundingClientRect();
-        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-      })(${JSON.stringify(selector)})`
-    )) as { x?: number; y?: number };
-    if (typeof point?.x !== "number" || typeof point?.y !== "number") {
-      throw new Error(`No clickable point for selector: ${selector}`);
-    }
-    await this.connection.send("Input.dispatchMouseEvent", {
-      type: "mouseMoved",
-      x: point.x,
-      y: point.y,
-      button: "none",
-    });
-    await this.connection.send("Input.dispatchMouseEvent", {
-      type: "mousePressed",
-      x: point.x,
-      y: point.y,
-      button: "left",
-      clickCount: 1,
-    });
-    await this.connection.send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: point.x,
-      y: point.y,
-      button: "left",
-      clickCount: 1,
-    });
-  }
-
-  async screenshot(options: { type?: "png" | "jpeg"; quality?: number } = {}): Promise<Uint8Array> {
-    const result = (await this.connection.send("Page.captureScreenshot", options)) as {
-      data?: string;
-    };
-    if (!result.data) throw new Error("CDP screenshot did not return image data");
-    return decodeBase64(result.data);
-  }
-
   async waitForLoadState(
     state: "load" | "domcontentloaded" | "networkidle" = "load",
     options: { timeout?: number } = {}
@@ -476,68 +616,348 @@ class WorkerCdpPage {
       })(${JSON.stringify(state)}, ${JSON.stringify(timeout)})`
     );
   }
+
+  async waitForSelector(
+    selector: string,
+    options: { state?: WaitState; timeout?: number } = {}
+  ): Promise<WorkerCdpElementHandle | null> {
+    const loc = this.locator(selector);
+    await loc.waitFor(options);
+    if (options.state === "detached" || options.state === "hidden") return null;
+    return new WorkerCdpElementHandle(this, { steps: [{ by: "css", value: selector }] });
+  }
+
+  // ---- Pointer / keyboard primitives (CDP Input) ------------------------
+  /** Resolve a stable, actionable hit point for a descriptor (auto-waits). */
+  async resolveHitPoint(
+    descriptor: LocatorDescriptor,
+    timeout: number
+  ): Promise<{ x: number; y: number }> {
+    const probe = (await this.runLocatorOp("probe", descriptor, null, { timeout })) as {
+      ok: boolean;
+      x?: number;
+      y?: number;
+      reason?: string;
+    };
+    if (!probe.ok || typeof probe.x !== "number" || typeof probe.y !== "number") {
+      throw new Error(`Element not actionable (${probe.reason ?? "timeout"})`);
+    }
+    return { x: probe.x, y: probe.y };
+  }
+
+  async clickDescriptor(
+    descriptor: LocatorDescriptor,
+    opts: { clickCount?: number; button?: "left" | "right" | "middle"; timeout?: number } = {}
+  ): Promise<void> {
+    const { x, y } = await this.resolveHitPoint(descriptor, opts.timeout ?? 30_000);
+    const button = opts.button ?? "left";
+    const clickCount = opts.clickCount ?? 1;
+    await this.connection.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x,
+      y,
+      button: "none",
+    });
+    await this.connection.send("Input.dispatchMouseEvent", {
+      type: "mousePressed",
+      x,
+      y,
+      button,
+      clickCount,
+    });
+    await this.connection.send("Input.dispatchMouseEvent", {
+      type: "mouseReleased",
+      x,
+      y,
+      button,
+      clickCount,
+    });
+  }
+
+  async hoverDescriptor(descriptor: LocatorDescriptor, opts: ActionOptions = {}): Promise<void> {
+    const { x, y } = await this.resolveHitPoint(descriptor, opts.timeout ?? 30_000);
+    await this.connection.send("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x,
+      y,
+      button: "none",
+    });
+  }
+
+  async pressDescriptor(
+    descriptor: LocatorDescriptor,
+    key: string,
+    opts: ActionOptions = {}
+  ): Promise<void> {
+    await this.runLocatorOp("focusForKey", descriptor, null, { timeout: opts.timeout ?? 30_000 });
+    await this.pressKey(key);
+  }
+
+  /** Dispatch a key by name (e.g. "Enter") or single character. */
+  async pressKey(key: string): Promise<void> {
+    const def = KEY_DEFS[key];
+    const base: Record<string, unknown> = def
+      ? {
+          key: def.key ?? key,
+          windowsVirtualKeyCode: def.keyCode,
+          nativeVirtualKeyCode: def.keyCode,
+        }
+      : { key, text: key.length === 1 ? key : undefined };
+    await this.connection.send("Input.dispatchKeyEvent", { type: "keyDown", ...base });
+    const text = def?.text ?? (key.length === 1 ? key : undefined);
+    if (text) {
+      await this.connection.send("Input.dispatchKeyEvent", {
+        type: "char",
+        text,
+        key: base["key"],
+      });
+    }
+    await this.connection.send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  }
+
+  // ---- Back-compat string-selector convenience methods ------------------
+  async click(selector: string, opts: ActionOptions = {}): Promise<void> {
+    await this.locator(selector).click(opts);
+  }
+  async fill(selector: string, value: string, opts: ActionOptions = {}): Promise<void> {
+    await this.locator(selector).fill(value, opts);
+  }
+  async type(selector: string, text: string, opts: ActionOptions = {}): Promise<void> {
+    await this.locator(selector).type(text, opts);
+  }
+  async isVisible(selector: string): Promise<boolean> {
+    return this.locator(selector).isVisible();
+  }
+  async inspect(selector: string): Promise<LightweightDomInspection> {
+    return this.locator(selector).inspect();
+  }
+  async textContent(selector: string): Promise<string | null> {
+    return this.locator(selector).textContent();
+  }
+  async innerText(selector: string): Promise<string> {
+    return this.locator(selector).innerText();
+  }
+  async querySelector(selector: string): Promise<WorkerCdpElementHandle | null> {
+    const exists = await this.runLocatorOp(
+      "exists",
+      { steps: [{ by: "css", value: selector }] },
+      null
+    );
+    return exists
+      ? new WorkerCdpElementHandle(this, { steps: [{ by: "css", value: selector }] })
+      : null;
+  }
+
+  // ---- Console ----------------------------------------------------------
+  consoleEvents(): LightweightConsoleEvent[] {
+    return [...this.consoleBuffer];
+  }
+  clearConsoleEvents(): void {
+    this.consoleBuffer.length = 0;
+  }
+
+  // ---- Screenshot -------------------------------------------------------
+  async screenshot(options: { type?: "png" | "jpeg"; quality?: number } = {}): Promise<Uint8Array> {
+    const result = (await this.connection.send("Page.captureScreenshot", options)) as {
+      data?: string;
+    };
+    if (!result.data) throw new Error("CDP screenshot did not return image data");
+    return decodeBase64(result.data);
+  }
 }
 
 class WorkerCdpLocator {
-  constructor(private readonly page: WorkerCdpPage, private readonly selector: string) {}
+  constructor(
+    protected readonly page: WorkerCdpPage,
+    protected readonly descriptor: LocatorDescriptor
+  ) {}
 
-  async click(): Promise<void> {
-    await this.page.click(this.selector);
+  private extend(step: LocatorStep): WorkerCdpLocator {
+    return new WorkerCdpLocator(this.page, { steps: [...this.descriptor.steps, step] });
   }
 
-  async fill(value: string): Promise<void> {
-    await this.page.fill(this.selector, value);
+  // ---- Scoped sub-locators / chaining -----------------------------------
+  locator(selector: string): WorkerCdpLocator {
+    return this.extend({ by: "css", value: selector });
+  }
+  getByRole(role: string, options: ByRoleOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "role", value: role, name: options.name, exact: options.exact });
+  }
+  getByText(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "text", value: text, exact: options.exact });
+  }
+  getByLabel(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "label", value: text, exact: options.exact });
+  }
+  getByPlaceholder(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "placeholder", value: text, exact: options.exact });
+  }
+  getByTestId(testId: string): WorkerCdpLocator {
+    return this.extend({ by: "testid", value: testId });
+  }
+  getByAltText(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "alt", value: text, exact: options.exact });
+  }
+  getByTitle(text: string, options: ByTextOptions = {}): WorkerCdpLocator {
+    return this.extend({ by: "title", value: text, exact: options.exact });
+  }
+  filter(options: { hasText?: string; hasTextExact?: boolean } = {}): WorkerCdpLocator {
+    return this.extend({
+      filter: { hasText: options.hasText, hasTextExact: options.hasTextExact },
+    });
+  }
+  nth(index: number): WorkerCdpLocator {
+    return this.extend({ nth: index });
+  }
+  first(): WorkerCdpLocator {
+    return this.nth(0);
+  }
+  last(): WorkerCdpLocator {
+    return this.nth(-1);
+  }
+  async all(): Promise<WorkerCdpLocator[]> {
+    const count = await this.count();
+    const out: WorkerCdpLocator[] = [];
+    for (let i = 0; i < count; i++) out.push(this.nth(i));
+    return out;
   }
 
-  async type(text: string): Promise<void> {
-    await this.page.type(this.selector, text);
+  // ---- Actions (auto-waiting) -------------------------------------------
+  async click(opts: ActionOptions = {}): Promise<void> {
+    await this.page.clickDescriptor(this.descriptor, opts);
   }
-
-  async isVisible(): Promise<boolean> {
-    return this.page.isVisible(this.selector);
+  async dblclick(opts: ActionOptions = {}): Promise<void> {
+    await this.page.clickDescriptor(this.descriptor, { ...opts, clickCount: 2 });
   }
-
-  async inspect(): Promise<LightweightDomInspection> {
-    return this.page.inspect(this.selector);
+  async hover(opts: ActionOptions = {}): Promise<void> {
+    await this.page.hoverDescriptor(this.descriptor, opts);
   }
-
-  async innerText(): Promise<string> {
-    return String(
-      (await this.page.evaluate(
-        `(function(selector) {
-          const el = document.querySelector(selector);
-          if (!el) throw new Error("No element matches selector: " + selector);
-          return el.innerText ?? el.textContent ?? "";
-        })(${JSON.stringify(this.selector)})`
-      )) ?? ""
+  async fill(value: string, opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("fill", this.descriptor, { value }, opts);
+  }
+  async type(text: string, opts: ActionOptions = {}): Promise<void> {
+    const current = (await this.page.runLocatorOp(
+      "inputValue",
+      this.descriptor,
+      null,
+      opts
+    )) as string;
+    await this.page.runLocatorOp(
+      "fill",
+      this.descriptor,
+      { value: `${current ?? ""}${text}` },
+      opts
     );
   }
-
-  async textContent(): Promise<string | null> {
-    const value = await this.page.evaluate(
-      `(function(selector) {
-        const el = document.querySelector(selector);
-        return el ? el.textContent : null;
-      })(${JSON.stringify(this.selector)})`
-    );
-    return value == null ? null : String(value);
+  async clear(opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("clear", this.descriptor, null, opts);
+  }
+  async press(key: string, opts: ActionOptions = {}): Promise<void> {
+    await this.page.pressDescriptor(this.descriptor, key, opts);
+  }
+  async check(opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("setChecked", this.descriptor, { checked: true }, opts);
+  }
+  async uncheck(opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("setChecked", this.descriptor, { checked: false }, opts);
+  }
+  async setChecked(checked: boolean, opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("setChecked", this.descriptor, { checked }, opts);
+  }
+  async selectOption(value: string | string[], opts: ActionOptions = {}): Promise<string[]> {
+    const values = Array.isArray(value) ? value : [value];
+    return (await this.page.runLocatorOp(
+      "selectOption",
+      this.descriptor,
+      { values },
+      opts
+    )) as string[];
+  }
+  async focus(opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("focus", this.descriptor, null, opts);
+  }
+  async blur(opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("blur", this.descriptor, null, opts);
+  }
+  async selectText(opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("selectText", this.descriptor, null, opts);
+  }
+  async scrollIntoViewIfNeeded(opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("scrollIntoView", this.descriptor, null, opts);
+  }
+  async dispatchEvent(type: string, opts: ActionOptions = {}): Promise<void> {
+    await this.page.runLocatorOp("dispatchEvent", this.descriptor, { type }, opts);
   }
 
+  // ---- State / reads ----------------------------------------------------
+  async waitFor(options: { state?: WaitState; timeout?: number } = {}): Promise<void> {
+    await this.page.runLocatorOp("waitFor", this.descriptor, null, {
+      state: options.state ?? "visible",
+      timeout: options.timeout,
+    });
+  }
   async count(): Promise<number> {
-    return Number(
-      (await this.page.evaluate(
-        `(function(selector) { return document.querySelectorAll(selector).length; })(${JSON.stringify(
-          this.selector
-        )})`
-      )) ?? 0
-    );
+    return Number((await this.page.runLocatorOp("count", this.descriptor, null)) ?? 0);
+  }
+  async isVisible(): Promise<boolean> {
+    return Boolean(await this.page.runLocatorOp("isVisible", this.descriptor, null));
+  }
+  async isChecked(opts: ActionOptions = {}): Promise<boolean> {
+    return Boolean(await this.page.runLocatorOp("isChecked", this.descriptor, null, opts));
+  }
+  async isEnabled(opts: ActionOptions = {}): Promise<boolean> {
+    return Boolean(await this.page.runLocatorOp("isEnabled", this.descriptor, null, opts));
+  }
+  async isDisabled(opts: ActionOptions = {}): Promise<boolean> {
+    return Boolean(await this.page.runLocatorOp("isDisabled", this.descriptor, null, opts));
+  }
+  async isEditable(opts: ActionOptions = {}): Promise<boolean> {
+    return Boolean(await this.page.runLocatorOp("isEditable", this.descriptor, null, opts));
+  }
+  async getAttribute(name: string, opts: ActionOptions = {}): Promise<string | null> {
+    const v = await this.page.runLocatorOp("getAttribute", this.descriptor, { name }, opts);
+    return v == null ? null : String(v);
+  }
+  async inputValue(opts: ActionOptions = {}): Promise<string> {
+    return String((await this.page.runLocatorOp("inputValue", this.descriptor, null, opts)) ?? "");
+  }
+  async innerText(opts: ActionOptions = {}): Promise<string> {
+    return String((await this.page.runLocatorOp("innerText", this.descriptor, null, opts)) ?? "");
+  }
+  async textContent(): Promise<string | null> {
+    const v = await this.page.runLocatorOp("textContent", this.descriptor, null);
+    return v == null ? null : String(v);
+  }
+  async allInnerTexts(): Promise<string[]> {
+    return (await this.page.runLocatorOp("allInnerTexts", this.descriptor, null)) as string[];
+  }
+  async allTextContents(): Promise<string[]> {
+    return (await this.page.runLocatorOp("allTextContents", this.descriptor, null)) as string[];
+  }
+  async boundingBox(): Promise<BoundingBox | null> {
+    return (await this.page.runLocatorOp(
+      "boundingBox",
+      this.descriptor,
+      null
+    )) as BoundingBox | null;
+  }
+  async inspect(): Promise<LightweightDomInspection> {
+    const raw = (await this.page.runLocatorOp("inspect", this.descriptor, null)) as
+      | (Omit<LightweightDomInspection, "selector"> & { found: boolean })
+      | { found: false };
+    const selector = JSON.stringify(this.descriptor.steps);
+    if (!raw.found) return { selector, found: false };
+    return { selector, ...(raw as object) } as LightweightDomInspection;
   }
 }
 
 class WorkerCdpElementHandle extends WorkerCdpLocator {}
 
 class WorkerBrowser {
-  constructor(private readonly page: WorkerCdpPage, private readonly connection: CdpConnection) {}
+  constructor(
+    private readonly page: WorkerCdpPage,
+    private readonly connection: CdpConnection
+  ) {}
 
   contexts(): Array<{ pages(): WorkerCdpPage[] }> {
     return [{ pages: () => [this.page] }];
@@ -553,12 +973,11 @@ export const BrowserImpl = {
     wsEndpoint: string,
     options: { transportOptions?: { authToken?: string } } = {}
   ): Promise<WorkerBrowser> {
-    const connection = await CdpConnection.connect(
-      wsEndpoint,
-      options.transportOptions?.authToken
-    );
+    const connection = await CdpConnection.connect(wsEndpoint, options.transportOptions?.authToken);
     const page = new WorkerCdpPage(connection);
     await page.initialize();
     return new WorkerBrowser(page, connection);
   },
 };
+
+export type { WorkerCdpPage, WorkerCdpLocator, WorkerCdpElementHandle, WorkerBrowser };

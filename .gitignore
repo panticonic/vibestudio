@@ -64,8 +64,5 @@ workspace/.cache/
 workspace/.env
 workspace/.secrets.yml
 
-# Playwright
-packages/playwright-core/src/generated/
-
 # Test results
 test-results/

@@ -162,8 +162,6 @@ const FORCED_SPLIT_PACKAGES = [
   "sucrase",
 ] as const;
 
-const PLAYWRIGHT_CORE_PACKAGE = "@workspace/playwright-core";
-
 function isVerboseBuildLogEnabled(): boolean {
   return process.env["NATSTACK_LOG_LEVEL"] === "verbose";
 }
@@ -1003,212 +1001,6 @@ function createWorkerBufferShimPlugin(resolveDir: string): esbuild.Plugin {
   };
 }
 
-function pathIsInside(candidate: string, root: string): boolean {
-  const rel = path.relative(root, candidate);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-function resolveExistingModulePath(basePath: string): string | null {
-  for (const candidate of [
-    basePath,
-    `${basePath}.ts`,
-    `${basePath}.tsx`,
-    `${basePath}.js`,
-    `${basePath}.mjs`,
-    `${basePath}.d.ts`,
-    path.join(basePath, "index.ts"),
-    path.join(basePath, "index.tsx"),
-    path.join(basePath, "index.js"),
-    path.join(basePath, "index.d.ts"),
-  ]) {
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return null;
-}
-
-function playwrightCoreSourcePath(
-  graph: PackageGraph,
-  workspaceRoot: string,
-  sourceRoot: string
-): string | null {
-  const node = graph.tryGet(PLAYWRIGHT_CORE_PACKAGE);
-  if (!node) return null;
-  const extractedPath = sourcePathForNode(node, sourceRoot);
-  return fs.existsSync(path.join(extractedPath, "package.json")) ? extractedPath : node.path;
-}
-
-function playwrightProtocolSourcePath(
-  graph: PackageGraph,
-  workspaceRoot: string,
-  sourceRoot: string,
-  coreSourcePath: string
-): string {
-  const node = graph.tryGet("@workspace/playwright-protocol");
-  if (!node) return path.join(coreSourcePath, "..", "playwright-protocol");
-  const extractedPath = sourcePathForNode(node, sourceRoot);
-  return fs.existsSync(path.join(extractedPath, "package.json")) ? extractedPath : node.path;
-}
-
-function createPlaywrightCoreSourcePlugin(
-  coreSourcePath: string,
-  protocolSourcePath: string
-): esbuild.Plugin {
-  const coreSrc = path.join(coreSourcePath, "src");
-  const protocolSrc = path.join(protocolSourcePath, "src");
-  const isPlaywrightImporter = (importer: string) => importer && pathIsInside(importer, coreSrc);
-  const stub = (name: string) => path.join(coreSrc, "browser-stubs", `${name}.ts`);
-  const builtinStubs: Record<string, string> = {
-    fs: stub("fs"),
-    "fs/promises": stub("fs"),
-    path: stub("path"),
-    "path/posix": stub("path"),
-    os: stub("os"),
-    crypto: stub("crypto"),
-    http: stub("http"),
-    https: stub("https"),
-    http2: stub("http2"),
-    url: stub("url"),
-    dns: stub("dns"),
-    net: stub("net"),
-    tls: stub("tls"),
-    util: stub("util"),
-    stream: stub("stream"),
-    events: stub("events"),
-    async_hooks: stub("async_hooks"),
-    child_process: stub("child_process"),
-    readline: stub("readline"),
-    electron: stub("electron"),
-    inspector: stub("inspector"),
-  };
-  for (const [specifier, target] of Object.entries({ ...builtinStubs })) {
-    builtinStubs[`node:${specifier}`] = target;
-  }
-
-  return {
-    name: "playwright-core-browser-source",
-    setup(build) {
-      build.onResolve({ filter: /^@workspace\/playwright-core(?:\/.*)?$/ }, (args) => {
-        if (args.path === PLAYWRIGHT_CORE_PACKAGE) {
-          return { path: path.join(coreSrc, "index.ts") };
-        }
-        const subpath = args.path.slice(`${PLAYWRIGHT_CORE_PACKAGE}/`.length);
-        const resolved = resolveExistingModulePath(path.join(coreSourcePath, subpath));
-        if (resolved) return { path: resolved };
-        return null;
-      });
-
-      build.onResolve({ filter: /^@protocol(?:\/.*)?$/ }, (args) => {
-        if (!isPlaywrightImporter(args.importer)) return null;
-        const subpath = args.path === "@protocol" ? "index" : args.path.slice("@protocol/".length);
-        const resolved = resolveExistingModulePath(path.join(protocolSrc, subpath));
-        if (resolved) return { path: resolved };
-        return null;
-      });
-
-      build.onResolve({ filter: /^@isomorphic(?:\/.*)?$/ }, (args) => {
-        if (!isPlaywrightImporter(args.importer)) return null;
-        const subpath =
-          args.path === "@isomorphic" ? "index" : args.path.slice("@isomorphic/".length);
-        const resolved = resolveExistingModulePath(
-          path.join(coreSrc, "utils", "isomorphic", subpath)
-        );
-        if (resolved) return { path: resolved };
-        return null;
-      });
-
-      build.onResolve({ filter: /^[^./]|^@/ }, (args) => {
-        if (!isPlaywrightImporter(args.importer)) return null;
-        const target = builtinStubs[args.path];
-        if (!target) return null;
-        return { path: target };
-      });
-    },
-  };
-}
-
-export function createPlaywrightCoreBrowserPlugins(
-  graph: PackageGraph,
-  workspaceRoot: string,
-  sourceRoot: string
-): esbuild.Plugin[] {
-  const coreSourcePath = playwrightCoreSourcePath(graph, workspaceRoot, sourceRoot);
-  if (!coreSourcePath) return [];
-  return [
-    createPlaywrightCoreSourcePlugin(
-      coreSourcePath,
-      playwrightProtocolSourcePath(graph, workspaceRoot, sourceRoot, coreSourcePath)
-    ),
-  ];
-}
-
-export function createPlaywrightCoreBrowserBuildOptions(
-  sourcePath: string,
-  outfile: string,
-  options: { entryFile?: string; nodePaths?: string[]; logLevel?: esbuild.LogLevel } = {}
-): esbuild.BuildOptions {
-  return {
-    entryPoints: [options.entryFile ?? path.join(sourcePath, "src", "index.ts")],
-    bundle: true,
-    platform: "browser",
-    target: "ES2020",
-    format: "cjs",
-    outfile,
-    write: true,
-    keepNames: true,
-    plugins: [
-      createPlaywrightCoreSourcePlugin(
-        sourcePath,
-        path.join(sourcePath, "..", "playwright-protocol")
-      ),
-      createTsExtensionPlugin(sourcePath),
-    ],
-    nodePaths: options.nodePaths ?? [],
-    logLevel: options.logLevel ?? "warning",
-    tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
-  };
-}
-
-export function createPlaywrightAwareLibraryBuildOptions(
-  entryFile: string,
-  outfile: string,
-  playwrightCoreSourcePath: string,
-  graph: PackageGraph,
-  workspaceRoot: string,
-  sourceRoot: string,
-  options: {
-    externals?: string[];
-    nodePaths?: string[];
-    logLevel?: esbuild.LogLevel;
-  } = {}
-): esbuild.BuildOptions {
-  const resolveDir = path.dirname(outfile);
-  return {
-    entryPoints: [entryFile],
-    bundle: true,
-    platform: "browser",
-    target: "ES2020",
-    format: "cjs",
-    outfile,
-    write: true,
-    keepNames: true,
-    external: options.externals ?? [],
-    plugins: [
-      createPlaywrightCoreSourcePlugin(
-        playwrightCoreSourcePath,
-        path.join(playwrightCoreSourcePath, "..", "playwright-protocol")
-      ),
-      createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, PANEL_CONDITIONS),
-      createTsExtensionPlugin(sourceRoot),
-      createFsShimPlugin({ runtimeBacked: true, resolveDir }),
-      createPathShimPlugin(resolveDir),
-      createCryptoShimPlugin({ resolveDir }),
-    ],
-    nodePaths: options.nodePaths ?? [],
-    logLevel: options.logLevel ?? "warning",
-    tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
-  };
-}
-
 // ---------------------------------------------------------------------------
 // HTML Generation
 // ---------------------------------------------------------------------------
@@ -1903,7 +1695,6 @@ async function buildPanel(
   // Build plugins: resolve plugin uses materialized source paths.
   const plugins: esbuild.Plugin[] = [
     ...(node.kind === "app" ? [createAppRuntimeShimPlugin()] : []),
-    ...createPlaywrightCoreBrowserPlugins(graph, workspaceRoot, sourceRoot),
     createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot),
     createTsExtensionPlugin(sourceRoot),
     createFsShimPlugin({ runtimeBacked: node.kind !== "app", resolveDir }),
@@ -2475,7 +2266,6 @@ async function buildWorker(
     // Terminal (Ink) workers: intercept yoga-layout / signal-exit / terminal-size
     // BEFORE the workspace resolver so these aliases win. No-op for other workers.
     ...(terminalWorker ? [createTerminalWorkerAliasPlugin(resolveDir)] : []),
-    ...createPlaywrightCoreBrowserPlugins(graph, workspaceRoot, sourceRoot),
     createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, WORKER_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
     createWorkerBufferShimPlugin(resolveDir),
@@ -2710,7 +2500,6 @@ async function buildTerminalApp(
       conditions: ["node", "import"],
       external: [...WORKER_NODE_BUILTIN_EXTERNALS],
       plugins: [
-        ...createPlaywrightCoreBrowserPlugins(graph, workspaceRoot, sourceRoot),
         createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot),
         createTsExtensionPlugin(sourceRoot),
       ],
@@ -3198,34 +2987,24 @@ async function buildLibraryBundle(
       entrySubpath === "."
         ? env.entryFile
         : resolvePackageExportEntryPoint(node, env.sourcePath, entrySubpath);
-    if (node.name === PLAYWRIGHT_CORE_PACKAGE) {
-      await esbuild.build(
-        createPlaywrightCoreBrowserBuildOptions(env.sourcePath, outfile, {
-          entryFile,
-          nodePaths: env.nodePaths,
-        })
-      );
-    } else {
-      await esbuild.build({
-        entryPoints: [entryFile],
-        bundle: true,
-        format: "cjs",
-        platform: "browser",
-        outfile,
-        write: true,
-        external: externals,
-        plugins: [
-          ...createPlaywrightCoreBrowserPlugins(graph, workspaceRoot, sourceRoot),
-          createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, PANEL_CONDITIONS),
-          createTsExtensionPlugin(sourceRoot),
-          createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
-          createPathShimPlugin(env.resolveDir),
-        ],
-        nodePaths: env.nodePaths,
-        logLevel: "warning",
-        tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
-      });
-    }
+    await esbuild.build({
+      entryPoints: [entryFile],
+      bundle: true,
+      format: "cjs",
+      platform: "browser",
+      outfile,
+      write: true,
+      external: externals,
+      plugins: [
+        createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, PANEL_CONDITIONS),
+        createTsExtensionPlugin(sourceRoot),
+        createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
+        createPathShimPlugin(env.resolveDir),
+      ],
+      nodePaths: env.nodePaths,
+      logLevel: "warning",
+      tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
+    });
 
     const bundleContent = fs.readFileSync(outfile, "utf-8");
     return storeSimpleBuild(buildKey, bundleContent, node, ev, false, sourceStateHash);

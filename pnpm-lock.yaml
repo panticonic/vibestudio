@@ -1307,51 +1307,6 @@ importers:
         specifier: ^5.9.3
         version: 5.9.3
 
-  workspace/packages/playwright-automation:
-    dependencies:
-      '@workspace/playwright-core':
-        specifier: workspace:*
-        version: link:../playwright-core
-
-  workspace/packages/playwright-core:
-    dependencies:
-      '@types/ws':
-        specifier: ^8.5.3
-        version: 8.18.1
-      '@types/xml2js':
-        specifier: ^0.4.9
-        version: 0.4.14
-      chromium-bidi:
-        specifier: ^11.0.0
-        version: 11.0.1(devtools-protocol@0.0.1577676)
-      ws:
-        specifier: ^8.17.1
-        version: 8.19.0
-      xml2js:
-        specifier: ^0.5.0
-        version: 0.5.0
-      yaml:
-        specifier: 2.6.0
-        version: 2.6.0
-      zod:
-        specifier: ^3.25.76
-        version: 3.25.76
-    devDependencies:
-      esbuild:
-        specifier: ^0.27.0
-        version: 0.27.2
-      typescript:
-        specifier: ^5.9.3
-        version: 5.9.3
-
-  workspace/packages/playwright-injected: {}
-
-  workspace/packages/playwright-protocol:
-    dependencies:
-      zod:
-        specifier: ^3.25.76
-        version: 3.25.76
-
   workspace/packages/pubsub:
     dependencies:
       '@natstack/types':
@@ -5483,9 +5438,6 @@ packages:
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
-  '@types/xml2js@0.4.14':
-    resolution: {integrity: sha512-4YnrRemBShWRO2QjvUin8ESA41rH+9nQGLUGZV/1IDhi3SL9OhdpNC/MrulTWuptXKwhx/aDxE7toV0f/ypIXQ==}
-
   '@types/yargs-parser@21.0.3':
     resolution: {integrity: sha512-I4q9QU9MQv4oEOz4tAHJtNz1cwuLxn2F3xcc2iV5WdqLPpUnj30aUuxt1mAxYTG+oe8CZMV/+6rU4S4gRDzqtQ==}
 
@@ -6272,11 +6224,6 @@ packages:
     engines: {node: '>=12.13.0'}
     hasBin: true
 
-  chromium-bidi@11.0.1:
-    resolution: {integrity: sha512-lgLoTGXbcIFsFKeU4mrpag+KNY4Oh/lAAbGkbB7jUqesl+H31spExDvHXWc98LGnjfwC49tYATd0dRcZrzBrRw==}
-    peerDependencies:
-      devtools-protocol: '*'
-
   chromium-edge-launcher@0.2.0:
     resolution: {integrity: sha512-JfJjUnq25y9yg4FABRRVPmBGWPZZi+AQXT4mxupb67766/0UlhG8PAZCz6xzEMXTbW3CsSoE8PcCWA49n35mKg==}
 
@@ -6680,9 +6627,6 @@ packages:
 
   devlop@1.1.0:
     resolution: {integrity: sha512-RWmIqhcFf1lRYBvNmr7qTNuyCt/7/ns2jbpp1+PalgE/rDQcBT0fioSMUpJ93irlUhC5hrg4cYqe6U+0ImW0rA==}
-
-  devtools-protocol@0.0.1577676:
-    resolution: {integrity: sha512-zhEeM6qv/5HpW4zq3cyGJNi93aF7PeVKJAtY65136SNt5J3Gd0qO31ghfSEBTLY1GWN0dXShwd2RxaTYGPhYBQ==}
 
   diff-sequences@29.6.3:
     resolution: {integrity: sha512-EjePK1srD3P08o2j4f0ExnylqRs5B9tJjcp9t1krH2qRi8CCdsYfwe9JgSLurFBWwq4uOlipzfk5fHNvwFKr8Q==}
@@ -8754,9 +8698,6 @@ packages:
   minizlib@3.1.0:
     resolution: {integrity: sha512-KZxYo1BUkWD2TVFLr0MQoM8vUUigWD3LlD83a/75BqC+4qE0Hb1Vo5v1FgcfaNXvfXzr+5EhQ6ing/CaBijTlw==}
     engines: {node: '>= 18'}
-
-  mitt@3.0.1:
-    resolution: {integrity: sha512-vKivATfr97l2/QBCYAkXYDbrIWPM2IIKEl7YPhjCvKlG3kE2gm+uBo6nEXK3M5/Ffh/FLpKExzOQ3JJoJGFKBw==}
 
   mkdirp@1.0.4:
     resolution: {integrity: sha512-vVqVZQyf3WLx2Shd0qJ9xuvqgAyKPLAiqITEtqW0oIUjzo3PePDd6fW9iFz30ef7Ysp/oiWqbhszeGWW2T6Gzw==}
@@ -10950,14 +10891,6 @@ packages:
     resolution: {integrity: sha512-k8KO9hrMyNk6tUWqUfkTEZbezRRpONVOzUTnc97VnCvyj6Tf9lyUR9EDAIeiVLv56jsMcoXEwjW8Kv5yPY52lw==}
     engines: {node: '>=16.0.0'}
 
-  xml2js@0.5.0:
-    resolution: {integrity: sha512-drPFnkQJik/O+uPKpqSgr22mpuFHqKdbS835iAQrUC73L2F5WkboIRd63ai/2Yg6I1jzifPFKH2NTK+cfglkIA==}
-    engines: {node: '>=4.0.0'}
-
-  xmlbuilder@11.0.1:
-    resolution: {integrity: sha512-fDlsI/kFEx7gLvbecc0/ohLG50fugQp8ryHzMTuW9vSa1GJ0XYWKnhsUx7oie3G98+r56aTQIUB4kht42R3JvA==}
-    engines: {node: '>=4.0'}
-
   xmlbuilder@15.1.1:
     resolution: {integrity: sha512-yMqGBqtXyeN1e3TGYvgNgDVZ3j84W4cwkOXQswghol6APgZWaff9lnbvN7MHYJOiXsvGPXtjTYJEiC9J2wv9Eg==}
     engines: {node: '>=8.0'}
@@ -10981,11 +10914,6 @@ packages:
   yallist@5.0.0:
     resolution: {integrity: sha512-YgvUTfwqyc7UXVMrB+SImsVYSmTS8X/tSrtdNZMImM+n7+QTriRXyXim0mBrTXNeqzVF0KWGgHPeiyViFFrNDw==}
     engines: {node: '>=18'}
-
-  yaml@2.6.0:
-    resolution: {integrity: sha512-a6ae//JvKDEra2kdi1qzCyrJW/WZCgFi8ydDV+eXExl95t+5R+ijnqHJbz9tmMh8FUjx3iv2fCQ4dclAQlO2UQ==}
-    engines: {node: '>= 14'}
-    hasBin: true
 
   yaml@2.8.2:
     resolution: {integrity: sha512-mplynKqc1C2hTVYxd0PU2xQAc22TI1vShAYGksCCfxbn/dFwnHTNi1bvYsBTkhdUNtGIf5xNOg938rrSSYvS9A==}
@@ -16178,7 +16106,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
@@ -16774,10 +16704,6 @@ snapshots:
     optional: true
 
   '@types/ws@8.18.1':
-    dependencies:
-      '@types/node': 24.10.9
-
-  '@types/xml2js@0.4.14':
     dependencies:
       '@types/node': 24.10.9
 
@@ -17720,12 +17646,6 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  chromium-bidi@11.0.1(devtools-protocol@0.0.1577676):
-    dependencies:
-      devtools-protocol: 0.0.1577676
-      mitt: 3.0.1
-      zod: 3.25.76
-
   chromium-edge-launcher@0.2.0:
     dependencies:
       '@types/node': 24.10.9
@@ -18096,8 +18016,6 @@ snapshots:
   devlop@1.1.0:
     dependencies:
       dequal: 2.0.3
-
-  devtools-protocol@0.0.1577676: {}
 
   diff-sequences@29.6.3: {}
 
@@ -21131,8 +21049,6 @@ snapshots:
     dependencies:
       minipass: 7.1.2
 
-  mitt@3.0.1: {}
-
   mkdirp@1.0.4: {}
 
   mri@1.2.0: {}
@@ -23899,13 +23815,6 @@ snapshots:
 
   xml-naming@0.1.0: {}
 
-  xml2js@0.5.0:
-    dependencies:
-      sax: 1.4.4
-      xmlbuilder: 11.0.1
-
-  xmlbuilder@11.0.1: {}
-
   xmlbuilder@15.1.1: {}
 
   xmlchars@2.2.0: {}
@@ -23919,8 +23828,6 @@ snapshots:
   yallist@4.0.0: {}
 
   yallist@5.0.0: {}
-
-  yaml@2.6.0: {}
 
   yaml@2.8.2: {}
 

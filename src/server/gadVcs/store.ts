@@ -174,7 +174,6 @@ const SNAPSHOT_IGNORE_PATTERNS = [
   "*.tsbuildinfo",
   "*.tgz",
   ".npmrc.dist-tag-temp",
-  "packages/playwright-core/src/generated/",
 ];
 
 const SIDECAR_DIR = ".gad";

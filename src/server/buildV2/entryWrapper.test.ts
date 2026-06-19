@@ -109,7 +109,6 @@ describe("generateExposeModuleCode", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
     expect(code).toContain('import * as __mod1__ from "@workspace/cdp-client"');
     expect(code).toContain('globalThis.__natstackModuleMap__["@workspace/cdp-client"] = __mod1__');
-    expect(code).not.toContain("@workspace/playwright-core");
   });
 
   it("worker target synthesizes fs shims from runtime exports", () => {

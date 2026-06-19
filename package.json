@@ -10,7 +10,6 @@
     "natstack-server": "dist/server.mjs"
   },
   "scripts": {
-    "prebuild": "node scripts/generate-channels.mjs && node scripts/generate-injected.mjs",
     "build": "NODE_ENV=production node build.mjs",
     "build:dist": "pnpm build",
     "dev": "export NODE_ENV=development && node build.mjs && (pnpm type-check &) && node scripts/run-electron.mjs",

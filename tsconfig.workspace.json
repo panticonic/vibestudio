@@ -250,9 +250,6 @@
       "@workspace/panel-browser": [
         "workspace/packages/panel-browser/src/index.ts"
       ],
-      "@workspace/playwright-client": [
-        "workspace/packages/playwright-client/index.d.ts"
-      ],
       "@workspace/pubsub": [
         "workspace/packages/pubsub/src/index.ts"
       ],
@@ -316,7 +313,6 @@
     "workspace/apps/mobile/jest.setup.ts",
     "workspace/apps/mobile/**/*.test.ts",
     "workspace/apps/mobile/**/*.test.tsx",
-    "workspace/panels/terminal/vscode-upstream",
-    "workspace/packages/playwright-*"
+    "workspace/panels/terminal/vscode-upstream"
   ]
 }
