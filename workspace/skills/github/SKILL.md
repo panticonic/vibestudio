@@ -161,6 +161,7 @@ import { git } from "@workspace/runtime";
 await git.setSharedRemote("panels/my-panel", {
   name: "origin",
   url: "https://github.com/owner/my-panel.git",
+  branch: "main",
 });
 ```
 
@@ -171,7 +172,9 @@ git:
   remotes:
     panels:
       my-panel:
-        origin: https://github.com/owner/my-panel.git
+        origin:
+          url: https://github.com/owner/my-panel.git
+          branch: main
         ci: https://github.com/owner/my-panel-ci.git
 ```
 
@@ -186,7 +189,9 @@ await git.importProject({
   remote: {
     name: "origin",
     url: "https://github.com/owner/my-panel.git",
+    branch: "feature/workspace-integration",
   },
+  branch: "feature/workspace-integration",
   credentialId: "cred_github_...",
 });
 ```
@@ -197,9 +202,9 @@ into canonical workspace source, records the shared remote in
 `meta/natstack.yml`, and makes the repo available to future contexts. It may
 also prompt to use the selected GitHub credential for the clone.
 
-When `meta/natstack.yml` already declares shared remotes, use
-`git.completeWorkspaceDependencies()` to import every configured remote whose
-workspace repo is currently missing:
+Repos declared in `meta/natstack.yml` are imported automatically at startup.
+Use `git.completeWorkspaceDependencies()` as an explicit retry/backfill when a
+configured workspace repo is still missing:
 
 ```ts
 const result = await git.completeWorkspaceDependencies({ credentialId: "cred_github_..." });

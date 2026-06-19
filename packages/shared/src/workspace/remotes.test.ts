@@ -62,6 +62,29 @@ describe("workspace remotes", () => {
     ]);
   });
 
+  it("stores branch-specific remotes as object declarations", () => {
+    const next = setDeclaredRemoteInConfig({ id: "test", git: {} }, "projects/bgkit", {
+      name: "origin",
+      url: "https://github.com/werg/bgkit.git",
+      branch: "natstack-bridge",
+    });
+
+    expect(next.git?.remotes?.["projects"]?.["bgkit"]).toEqual({
+      origin: {
+        url: "https://github.com/werg/bgkit.git",
+        branch: "natstack-bridge",
+      },
+    });
+    expect(getDeclaredRemoteForRepo(next, "projects/bgkit")).toMatchObject({
+      repoPath: "projects/bgkit",
+      section: "projects",
+      repoKey: "bgkit",
+      name: "origin",
+      url: "https://github.com/werg/bgkit.git",
+      branch: "natstack-bridge",
+    });
+  });
+
   it("removes a named remote without removing the repo declaration", () => {
     const config = setDeclaredRemoteInConfig(
       setDeclaredRemoteInConfig({ id: "test", git: {} }, "panels/chat", {
@@ -89,6 +112,16 @@ describe("workspace remotes", () => {
         url: "https://token@github.com/acme/chat.git",
       })
     ).toThrow("Remote URL must not contain embedded credentials");
+  });
+
+  it("rejects invalid remote branch names", () => {
+    expect(() =>
+      setDeclaredRemoteInConfig({ id: "test" }, "projects/bgkit", {
+        name: "origin",
+        url: "https://github.com/werg/bgkit.git",
+        branch: "../main",
+      })
+    ).toThrow("Invalid remote branch");
   });
 
   it("materializes declared remotes into git config", async () => {

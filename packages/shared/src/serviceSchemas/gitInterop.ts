@@ -12,17 +12,27 @@ import { defineServiceMethods } from "../typedServiceClient.js";
 export const gitRemoteSchema = z.object({
   name: z.string(),
   url: z.string(),
+  branch: z.string().optional(),
 });
 export type GitRemote = z.infer<typeof gitRemoteSchema>;
 
+const gitRemoteDeclarationSchema = z.union([
+  z.string(),
+  z.object({
+    url: z.string(),
+    branch: z.string().nullable().optional(),
+  }),
+]);
+
 export const gitSharedRemotesSchema = z.record(
-  z.record(z.record(z.string().nullable().optional()).optional()).optional()
+  z.record(z.record(gitRemoteDeclarationSchema.nullable().optional()).optional()).optional()
 );
 export type GitSharedRemotes = z.infer<typeof gitSharedRemotesSchema>;
 
 export const gitImportProjectSchema = z.object({
   path: z.string(),
   remote: gitRemoteSchema,
+  branch: z.string().optional(),
   credentialId: z.string().optional(),
 });
 export type GitImportProjectRequest = z.infer<typeof gitImportProjectSchema>;

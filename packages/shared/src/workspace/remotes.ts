@@ -2,7 +2,11 @@ import { execFile } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { promisify } from "node:util";
-import type { WorkspaceConfig, WorkspaceGitRemoteConfig } from "./types.js";
+import type {
+  WorkspaceConfig,
+  WorkspaceGitRemoteConfig,
+  WorkspaceGitRemoteDeclaration,
+} from "./types.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +19,7 @@ export interface ResolvedWorkspaceGitRemote {
   repoKey: string;
   name: string;
   url: string;
+  branch?: string;
 }
 
 export interface SyncDeclaredRemoteResult {
@@ -54,8 +59,10 @@ export function getDeclaredRemotesForRepo(
   const repoKey = repoParts.join("/");
   const remotes = config.git?.remotes?.[section!]?.[repoKey] ?? {};
   return Object.entries(remotes)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-    .map(([name, url]) => validateWorkspaceGitRemoteEntry(repoPath, section!, repoKey, name, url))
+    .filter((entry): entry is [string, WorkspaceGitRemoteDeclaration] => entry[1] != null)
+    .map(([name, declaration]) =>
+      validateWorkspaceGitRemoteEntry(repoPath, section!, repoKey, name, declaration)
+    )
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -77,7 +84,9 @@ export function validateWorkspaceGitRemote(
   }
   const name = validateWorkspaceGitRemoteName(remote.name);
   const url = normalizeRemoteUrl(remote.url);
-  return { name, url };
+  const branch =
+    remote.branch === undefined ? undefined : validateWorkspaceGitRemoteBranch(remote.branch);
+  return branch === undefined ? { name, url } : { name, url, branch };
 }
 
 export function validateWorkspaceGitRemoteName(nameInput: string): string {
@@ -88,21 +97,55 @@ export function validateWorkspaceGitRemoteName(nameInput: string): string {
   return name;
 }
 
+export function validateWorkspaceGitRemoteBranch(branchInput: string): string {
+  const branch = branchInput.trim();
+  if (
+    !branch ||
+    branch.startsWith("-") ||
+    branch.startsWith("/") ||
+    branch.endsWith("/") ||
+    branch.includes("..") ||
+    branch.includes("@{") ||
+    /[\s\0~^:?*[\\]/.test(branch)
+  ) {
+    throw new Error(`Invalid remote branch: ${branchInput}`);
+  }
+  return branch;
+}
+
 function validateWorkspaceGitRemoteEntry(
   repoPath: string,
   section: string,
   repoKey: string,
   nameInput: string,
-  urlInput: string
+  declaration: WorkspaceGitRemoteDeclaration
 ): ResolvedWorkspaceGitRemote {
   const name = validateWorkspaceGitRemoteName(nameInput);
+  const remote = normalizeRemoteDeclaration(declaration);
   return {
     repoPath,
     section,
     repoKey,
     name,
-    url: normalizeRemoteUrl(urlInput),
+    ...remote,
   };
+}
+
+function normalizeRemoteDeclaration(
+  declaration: WorkspaceGitRemoteDeclaration
+): { url: string; branch?: string } {
+  if (typeof declaration === "string") {
+    return { url: normalizeRemoteUrl(declaration) };
+  }
+  if (!declaration || typeof declaration !== "object") {
+    throw new Error("Remote declaration must be a URL string or an object with url");
+  }
+  const url = normalizeRemoteUrl(declaration.url);
+  const branch =
+    declaration.branch == null
+      ? undefined
+      : validateWorkspaceGitRemoteBranch(declaration.branch);
+  return branch === undefined ? { url } : { url, branch };
 }
 
 export function normalizeRemoteUrl(value: string): string {
@@ -134,6 +177,10 @@ export function setDeclaredRemoteInConfig(
   const [section, ...repoParts] = repoPath.split("/");
   const repoKey = repoParts.join("/");
   const normalized = validateWorkspaceGitRemote(remote);
+  const declaration: WorkspaceGitRemoteDeclaration =
+    normalized.branch === undefined
+      ? normalized.url
+      : { url: normalized.url, branch: normalized.branch };
   const git = config.git ?? {};
   const remotes = git.remotes ?? {};
   const sectionRemotes = remotes[section!] ?? {};
@@ -147,7 +194,7 @@ export function setDeclaredRemoteInConfig(
           ...sectionRemotes,
           [repoKey]: {
             ...(sectionRemotes[repoKey] ?? {}),
-            [normalized.name]: normalized.url,
+            [normalized.name]: declaration,
           },
         },
       },

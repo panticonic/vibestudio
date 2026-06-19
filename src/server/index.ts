@@ -21,6 +21,7 @@ import { execFile } from "node:child_process";
 import type { AppCapability } from "@natstack/shared/unitManifest";
 import { createHash, randomBytes } from "crypto";
 import { canonicalEntityId, type EntityRecord } from "@natstack/shared/runtime/entitySpec";
+import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
 import { formatPairUrlLine } from "./pairingBanner.js";
 import { getPublicUrl, isPublicUrlVerified } from "./publicUrl.js";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
@@ -1065,18 +1066,49 @@ async function main() {
       },
     });
   }
-  container.registerRpc(
-    createGitInteropService({
-      treeScanner,
-      workspacePath,
-      workspaceConfig,
-      egressProxy,
-      approvalQueue,
-      grantStore: capabilityGrantStore,
-      hasAppCapability: (callerId, capability) =>
-        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-    })
-  );
+  const gitInteropDefinition = createGitInteropService({
+    treeScanner,
+    workspacePath,
+    workspaceConfig,
+    egressProxy,
+    approvalQueue,
+    grantStore: capabilityGrantStore,
+    hasAppCapability: (callerId, capability) =>
+      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    onWorkspaceSourceChanged: async (ctx, summary) => {
+      await workspaceVcs.commit({
+        summary,
+        actor: { id: ctx.caller.runtime.id, kind: ctx.caller.runtime.kind },
+      });
+    },
+  });
+  container.registerRpc(gitInteropDefinition);
+  const completeConfiguredWorkspaceDependenciesAtStartup = async (): Promise<void> => {
+    try {
+      const result = (await gitInteropDefinition.handler(
+        { caller: createVerifiedCaller("server", "server") },
+        "completeWorkspaceDependencies",
+        []
+      )) as {
+        imported: Array<{ path: string }>;
+        failed: Array<{ path: string; error: string }>;
+      };
+      if (result.imported.length > 0) {
+        console.log(
+          `[GitRemotes] Imported configured workspace dependencies: ${result.imported
+            .map((entry) => entry.path)
+            .join(", ")}`
+        );
+      }
+      for (const failure of result.failed) {
+        console.warn(
+          `[GitRemotes] Failed to import configured workspace dependency ${failure.path}: ${failure.error}`
+        );
+      }
+    } catch (err) {
+      console.warn("[GitRemotes] Failed to import configured workspace dependencies:", err);
+    }
+  };
   {
     const { createVcsService } = await import("./services/vcsService.js");
     const { createMainAdvanceApprovalGate, FileMetaApprovalGrantStore } =
@@ -2648,10 +2680,10 @@ async function main() {
     listHeartbeats: async () => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
       const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-      const rows = await doDispatch.dispatch(
+      const rows = (await doDispatch.dispatch(
         { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspace.config.id },
         "heartbeatList"
-      ) as Array<{
+      )) as Array<{
         name: string;
         source: string;
         className: string;
@@ -2683,12 +2715,14 @@ async function main() {
       }));
     },
     runHeartbeatNow: async (
-      selector: string | {
-        name?: string;
-        target?: { source?: string; className?: string; objectKey?: string };
-        channelId?: string;
-        participantHandle?: string;
-      }
+      selector:
+        | string
+        | {
+            name?: string;
+            target?: { source?: string; className?: string; objectKey?: string };
+            channelId?: string;
+            participantHandle?: string;
+          }
     ) => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
       const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
@@ -2712,12 +2746,14 @@ async function main() {
       );
     },
     pauseHeartbeat: async (
-      selector: string | {
-        name?: string;
-        target?: { source?: string; className?: string; objectKey?: string };
-        channelId?: string;
-        participantHandle?: string;
-      }
+      selector:
+        | string
+        | {
+            name?: string;
+            target?: { source?: string; className?: string; objectKey?: string };
+            channelId?: string;
+            participantHandle?: string;
+          }
     ) => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
       const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
@@ -2741,12 +2777,14 @@ async function main() {
       ) as Promise<{ ok: true }>;
     },
     resumeHeartbeat: async (
-      selector: string | {
-        name?: string;
-        target?: { source?: string; className?: string; objectKey?: string };
-        channelId?: string;
-        participantHandle?: string;
-      }
+      selector:
+        | string
+        | {
+            name?: string;
+            target?: { source?: string; className?: string; objectKey?: string };
+            channelId?: string;
+            participantHandle?: string;
+          }
     ) => {
       const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
       const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
@@ -3362,6 +3400,7 @@ async function main() {
       }
       pendingStartupMetaConfigReload = false;
     }
+    await completeConfiguredWorkspaceDependenciesAtStartup();
     await reconcileDeclaredWorkspaceUnits(workspaceConfig, "startup");
   } while (pendingStartupMetaConfigReload);
   unitApprovalCoordinator.publishPending("startup");

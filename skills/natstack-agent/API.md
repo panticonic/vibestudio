@@ -464,6 +464,10 @@ Allowed callers: `shell`, `app`, `panel`, `worker`, `do`, `extension`, `server`
 | `workspace.units.rollback` |  |
 | `workspace.units.bakeAppDist` |  |
 | `workspace.recurring.list` |  |
+| `workspace.heartbeats.list` |  |
+| `workspace.heartbeats.runNow` |  |
+| `workspace.heartbeats.pause` |  |
+| `workspace.heartbeats.resume` |  |
 | `workspace.hostTargets.list` |  |
 | `workspace.hostTargets.getSelection` |  |
 | `workspace.hostTargets.setSelection` |  |

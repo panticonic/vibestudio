@@ -12,6 +12,7 @@ import type { WorkspaceTreeScanner } from "../gadVcs/workspaceTree.js";
 import type { WorkspaceConfig, WorkspaceGitRemoteConfig } from "@natstack/shared/workspace/types";
 import {
   getDeclaredRemoteForRepo,
+  getDeclaredRemotesForRepo,
   normalizeRemoteUrl,
   normalizeWorkspaceRepoPath,
   removeDeclaredRemoteFromConfig,
@@ -30,7 +31,6 @@ import { deleteDynamicProperty } from "../../lintHelpers";
 import { isAuthorizedChrome } from "./chromeTrust.js";
 
 const SHARED_GIT_REMOTE_CAPABILITY = "workspace-shared-git-remote";
-const PROJECT_IMPORT_CAPABILITY = "workspace-project-import";
 
 type GitInteropServiceDeps = {
   treeScanner: WorkspaceTreeScanner;
@@ -40,6 +40,7 @@ type GitInteropServiceDeps = {
   approvalQueue?: ApprovalQueue;
   grantStore?: CapabilityGrantStore;
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  onWorkspaceSourceChanged?: (ctx: ServiceContext, summary: string) => Promise<void>;
 };
 
 type WorkspaceTreeNode = {
@@ -51,6 +52,7 @@ type WorkspaceTreeNode = {
 type ImportWorkspaceRepoRequest = {
   path: string;
   remote: WorkspaceGitRemoteConfig;
+  branch?: string;
   credentialId?: string;
 };
 
@@ -185,17 +187,13 @@ function listConfiguredWorkspaceRemotes(config: WorkspaceConfig): Array<{
 }> {
   const entries: Array<{ path: string; remote: WorkspaceGitRemoteConfig }> = [];
   for (const [section, units] of Object.entries(config.git?.remotes ?? {})) {
-    for (const [unitKey, unitRemotes] of Object.entries(units ?? {})) {
-      if (!unitRemotes) continue;
+    for (const unitKey of Object.keys(units ?? {})) {
       const unitPath = normalizeWorkspaceRepoPath(`${section}/${unitKey}`);
-      const remotes = Object.entries(unitRemotes)
-        .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-        .map(([name, url]) => validateWorkspaceGitRemote({ name, url }))
-        .sort((a, b) => {
-          if (a.name === "origin") return -1;
-          if (b.name === "origin") return 1;
-          return a.name.localeCompare(b.name);
-        });
+      const remotes = getDeclaredRemotesForRepo(config, unitPath).sort((a, b) => {
+        if (a.name === "origin") return -1;
+        if (b.name === "origin") return 1;
+        return a.name.localeCompare(b.name);
+      });
       const cloneRemote = remotes[0];
       if (cloneRemote) entries.push({ path: unitPath, remote: cloneRemote });
     }
@@ -233,36 +231,60 @@ async function importWorkspaceRepo(
   }
   if (fs.existsSync(absolutePath)) throw new Error(`Path already exists: ${request.path}`);
   assertWorkspaceCreateTargetSafe(deps.workspacePath, absolutePath, "importProject");
-  const normalizedRemote = validateWorkspaceGitRemote(request.remote);
+  const normalizedRemote = validateWorkspaceGitRemote({
+    ...request.remote,
+    branch: request.branch ?? request.remote.branch,
+  });
+  const nextConfig = setDeclaredRemoteInConfig(
+    deps.workspaceConfig,
+    validRepoPath,
+    normalizedRemote
+  );
 
-  await ensureImportProjectPermission(ctx, deps, validRepoPath, normalizedRemote);
+  await ensureWorkspaceConfigWritePermission(
+    ctx,
+    deps,
+    validRepoPath,
+    normalizedRemote,
+    nextConfig
+  );
+  const configChanged = await persistWorkspaceConfigChange(
+    deps.workspacePath,
+    deps.workspaceConfig,
+    nextConfig
+  );
   await mkdir(dirname(absolutePath), { recursive: true });
   try {
     const client = new GitClient(fsPromises, {
       http: createEgressGitHttpClient(deps.egressProxy, ctx.caller, request.credentialId),
     });
-    await client.clone({ url: normalizedRemote.url, dir: absolutePath });
-    const nextConfig = setDeclaredRemoteInConfig(
-      deps.workspaceConfig,
-      validRepoPath,
-      normalizedRemote
-    );
-    await persistWorkspaceConfigChange(deps.workspacePath, deps.workspaceConfig, nextConfig);
+    await client.clone({
+      url: normalizedRemote.url,
+      dir: absolutePath,
+      ref: normalizedRemote.branch,
+    });
     await propagateSharedRemote(deps, validRepoPath);
-    deps.treeScanner.invalidate();
-    return { path: validRepoPath, remote: normalizedRemote };
   } catch (err) {
     await fsPromises.rm(absolutePath, { recursive: true, force: true }).catch(() => undefined);
+    if (configChanged) {
+      await notifyWorkspaceSourceChanged(ctx, deps, `Record Git remote for ${validRepoPath}`);
+    }
     throw err;
   }
+  deps.treeScanner.invalidate();
+  await notifyWorkspaceSourceChanged(ctx, deps, `Import workspace project ${validRepoPath}`);
+  return { path: validRepoPath, remote: normalizedRemote };
 }
 
-async function ensureImportProjectPermission(
+async function ensureWorkspaceConfigWritePermission(
   ctx: ServiceContext,
-  deps: Pick<GitInteropServiceDeps, "approvalQueue" | "grantStore" | "hasAppCapability">,
+  deps: Pick<GitInteropServiceDeps, "workspacePath" | "approvalQueue" | "hasAppCapability">,
   unitPath: string,
-  remote: WorkspaceGitRemoteConfig
+  remote: WorkspaceGitRemoteConfig,
+  nextConfig: WorkspaceConfig
 ): Promise<void> {
+  if (!deps.workspacePath) throw new Error("No workspace path configured");
+  if (!(await workspaceConfigWouldChange(deps.workspacePath, nextConfig))) return;
   if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
   if (
     ctx.caller.runtime.kind !== "panel" &&
@@ -270,31 +292,29 @@ async function ensureImportProjectPermission(
     ctx.caller.runtime.kind !== "worker" &&
     ctx.caller.runtime.kind !== "do"
   ) {
-    throw new Error("Project import is unavailable for this caller");
+    throw new Error("Workspace config edit is unavailable for this caller");
   }
-  if (!deps.approvalQueue || !deps.grantStore) throw new Error("Project import is unavailable");
-  const authorization = await requestCapabilityPermission(
-    {
-      approvalQueue: deps.approvalQueue,
-      grantStore: deps.grantStore,
+  const identity = ctx.caller.code;
+  if (!identity) throw new Error("Workspace config edit requires a verified code identity");
+  if (!deps.approvalQueue) throw new Error("Workspace config edit is unavailable");
+
+  const decision = await deps.approvalQueue.request({
+    kind: "unit-batch",
+    callerId: ctx.caller.runtime.id,
+    callerKind: ctx.caller.runtime.kind,
+    repoPath: identity.repoPath,
+    effectiveVersion: identity.effectiveVersion,
+    dedupKey: `git-import-config:${unitPath}:${remote.name}:${remote.url}:${remote.branch ?? ""}`,
+    trigger: "meta-change",
+    title: "Import external Git project",
+    description: "This import adds an external Git project declaration to workspace config.",
+    units: [],
+    configWrite: {
+      repoPath: "meta",
+      summary: workspaceConfigImportSummary(unitPath, remote),
     },
-    {
-      caller: ctx.caller,
-      capability: PROJECT_IMPORT_CAPABILITY,
-      dedupKey: null,
-      resource: { type: "workspace-project", label: "Project path", value: unitPath },
-      title: "Add project from Git",
-      description:
-        "Allow this code version to import a remote Git repository into workspace source.",
-      details: [
-        { label: "Project path", value: unitPath },
-        { label: "Remote name", value: remote.name },
-        { label: "Remote URL", value: displayRemoteUrl(remote.url) },
-      ],
-      deniedReason: "Project import denied",
-    }
-  );
-  if (!authorization.allowed) throw new Error(authorization.reason ?? "Project import denied");
+  });
+  if (decision === "deny") throw new Error("Workspace config edit denied");
 }
 
 function isSupportedImportRepoPath(repoPath: string): boolean {
@@ -331,6 +351,7 @@ async function ensureSharedRemotePermission(
   if (remote) {
     details.push({ label: "Remote name", value: remote.name });
     if (remote.url) details.push({ label: "Remote URL", value: displayRemoteUrl(remote.url) });
+    if (remote.branch) details.push({ label: "Branch", value: remote.branch });
   }
   const authorization = await requestCapabilityPermission(
     {
@@ -354,19 +375,40 @@ async function ensureSharedRemotePermission(
   }
 }
 
-async function persistWorkspaceConfigChange(
+async function workspaceConfigWouldChange(
   workspacePath: string,
-  currentConfig: WorkspaceConfig,
   nextConfig: WorkspaceConfig
-): Promise<void> {
+): Promise<boolean> {
   const metaDir = join(workspacePath, "meta");
   const configPath = join(metaDir, "natstack.yml");
   const before = await readFile(configPath, "utf-8");
   const beforeParsed = YAML.parse(before) as Record<string, unknown>;
   const nextContent = YAML.stringify({ ...beforeParsed, ...nextConfig });
-  if (before === nextContent) return;
+  return before !== nextContent;
+}
+
+async function persistWorkspaceConfigChange(
+  workspacePath: string,
+  currentConfig: WorkspaceConfig,
+  nextConfig: WorkspaceConfig
+): Promise<boolean> {
+  const metaDir = join(workspacePath, "meta");
+  const configPath = join(metaDir, "natstack.yml");
+  const before = await readFile(configPath, "utf-8");
+  const beforeParsed = YAML.parse(before) as Record<string, unknown>;
+  const nextContent = YAML.stringify({ ...beforeParsed, ...nextConfig });
+  if (before === nextContent) return false;
   await writeFile(configPath, nextContent, "utf-8");
   mutateWorkspaceConfig(currentConfig, nextConfig);
+  return true;
+}
+
+async function notifyWorkspaceSourceChanged(
+  ctx: ServiceContext,
+  deps: Pick<GitInteropServiceDeps, "onWorkspaceSourceChanged">,
+  summary: string
+): Promise<void> {
+  await deps.onWorkspaceSourceChanged?.(ctx, summary);
 }
 
 async function propagateSharedRemote(
@@ -449,6 +491,11 @@ function getRemoteForApproval(
 
 function displayRemoteUrl(value: string): string {
   return normalizeRemoteUrl(value).replace(/^https?:\/\//, "");
+}
+
+function workspaceConfigImportSummary(unitPath: string, remote: WorkspaceGitRemoteConfig): string {
+  const branch = remote.branch ? ` on ${remote.branch}` : "";
+  return `meta/natstack.yml records ${remote.name}=${displayRemoteUrl(remote.url)} for ${unitPath}${branch}`;
 }
 
 function resolveWorkspaceRepoPath(

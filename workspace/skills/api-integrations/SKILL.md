@@ -187,9 +187,9 @@ await git.importProject({
 });
 ```
 
-If the workspace already declares shared remotes in `meta/natstack.yml`, call
-`git.completeWorkspaceDependencies()` to import every configured remote whose
-workspace repo is missing.
+Repos declared in `meta/natstack.yml` are imported automatically at startup.
+Use `git.completeWorkspaceDependencies()` as an explicit retry/backfill when a
+configured workspace repo is still missing.
 
 ## Provider Setup UI Pattern
 

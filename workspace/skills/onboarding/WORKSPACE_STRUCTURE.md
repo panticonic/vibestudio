@@ -47,8 +47,8 @@ Like every other source directory, `meta/` is tracked by workspace VCS. This mea
 - It is materialized into each context folder
 - Agents can commit changes back to their context VCS head
 - Changes committed under meta/ can trigger rebuilds and config reloads
-- External git remotes declared under `git.remotes` are materialized into
-  `.git/config` for interop checkouts. Prefer
+- External git remotes declared under `git.remotes` are imported at startup
+  when missing, then materialized into `.git/config` for interop checkouts. Prefer
   `git.setSharedRemote(path, { name, url })` for targeted approval and
   propagation instead of editing a context-local remote by hand.
 
@@ -102,13 +102,15 @@ Plain projects are still external Git-backed projects when imported that way:
 - They appear in the workspace tree once initialized or cloned.
 - They are materialized into context folders like other source trees.
 - Shared remotes declared under `git.remotes.projects.<repo>.<remoteName>` are
-  materialized into their `.git/config`.
+  materialized into their `.git/config`. Use object declarations with `url` and
+  `branch` when a workspace project must clone a non-default branch.
 - `git.importProject({ path: "projects/name", remote })` creates a canonical
   workspace project from a remote and records the shared remote in `meta/natstack.yml`.
-- `git.completeWorkspaceDependencies()` imports configured shared remotes whose
-  workspace projects are currently missing.
-- They are not launchable runtime units and are not auto-imported as
-  `@workspace/*` packages.
+- Missing configured remotes are imported automatically at startup;
+  `git.completeWorkspaceDependencies()` is available as an explicit retry or
+  backfill operation.
+- They are not launchable runtime units and do not become `@workspace/*`
+  packages.
 
 ## Template vs Live Workspace
 

@@ -121,22 +121,32 @@ export interface GitConfig {
    * Example:
    * git:
    *   remotes:
-   *     panels:
-   *       chat:
-   *         origin: https://github.com/example/chat.git
-   *         ci: https://github.com/example/chat-ci.git
-   */
+ *     panels:
+ *       chat:
+ *         origin:
+ *           url: https://github.com/example/chat.git
+ *           branch: main
+ *         ci: https://github.com/example/chat-ci.git
+ */
   remotes?: WorkspaceGitRemotesConfig;
 }
 
 export interface WorkspaceGitRemoteConfig {
   name: string;
   url: string;
+  branch?: string;
 }
+
+export type WorkspaceGitRemoteDeclaration =
+  | string
+  | {
+      url: string;
+      branch?: string | null;
+    };
 
 export type WorkspaceGitRemotesConfig = Record<
   string,
-  Record<string, Record<string, string | null | undefined> | undefined> | undefined
+  Record<string, Record<string, WorkspaceGitRemoteDeclaration | null | undefined> | undefined> | undefined
 >;
 
 /**

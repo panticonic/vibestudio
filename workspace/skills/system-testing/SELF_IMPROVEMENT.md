@@ -584,17 +584,17 @@ if (retest.result.passed) {
 - **Re-run the full smoke suite after fixing.** Your fix might break something else.
 - **Use `projects/` for plain external repos.** They are editable and can have
   shared remotes, but they are not live runtime units.
-- **Shared remotes are not clone declarations.** `git.setSharedRemote()` records
+- **Shared remotes are clone declarations.** `git.setSharedRemote()` records
   and propagates remotes for a workspace repo that exists or will exist later;
-  it does not import external repository contents into workspace source.
+  configured missing repos are imported automatically at startup.
 - **Use `git.importProject()` to create a workspace repo from a remote.** It
   clones into canonical workspace source, records the shared remote, and makes
   the repo available to future contexts. Use the destination path to choose the
   category, such as `panels/name`, `skills/name`, `workers/name`, or
   `projects/name`.
-- **Use `git.completeWorkspaceDependencies()` when shared remotes are already
-  declared.** It imports each configured remote whose workspace repo is missing
-  and reports imported, skipped, and failed paths.
+- **Use `git.completeWorkspaceDependencies()` as a retry/backfill.** It imports
+  each configured remote whose workspace repo is missing and reports imported,
+  skipped, and failed paths.
 - **If an API is confusing, fix the API.** Don't add comments explaining the confusion.
 - **If an error message is unhelpful, fix the error message.** Don't add try/catch wrappers that translate it.
 - **If a service is missing a method, add the method.** Don't chain multiple calls to work around it.

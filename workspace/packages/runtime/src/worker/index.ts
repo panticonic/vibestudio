@@ -145,10 +145,12 @@ export type {
 export interface GitRemoteSpec {
   name: string;
   url: string;
+  branch?: string;
 }
 export interface ImportProjectRequest {
   path: string;
   remote: GitRemoteSpec;
+  branch?: string;
   credentialId?: string;
 }
 export interface ImportedWorkspaceRepo {
