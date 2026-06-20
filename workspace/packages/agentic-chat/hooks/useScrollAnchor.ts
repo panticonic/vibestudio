@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef } from "react";
 
 type RefWithCurrent<T> = { current: T | null };
+type ReadonlyRef<T> = { readonly current: T };
 
 export interface ScrollAnchorItem {
   id: string;
@@ -11,7 +12,12 @@ interface UseScrollAnchorOptions {
   scrollRef: RefWithCurrent<HTMLElement>;
   contentRef: RefWithCurrent<HTMLElement>;
   items: ScrollAnchorItem[];
-  isAtBottom: boolean;
+  /**
+   * Synchronous "pinned to bottom" signal. A ref (not a boolean) so gating is
+   * never a render behind the user's actual scroll — anchoring and stick-to-
+   * bottom must agree about who owns scrollTop in the same frame.
+   */
+  isAtBottomRef: ReadonlyRef<boolean>;
   onNewContent?: () => void;
 }
 
@@ -116,14 +122,33 @@ export function useScrollAnchor({
   scrollRef,
   contentRef,
   items,
-  isAtBottom,
+  isAtBottomRef,
   onNewContent,
 }: UseScrollAnchorOptions): void {
   const snapshotRef = useRef<ListSnapshot | null>(null);
-  const isAtBottomRef = useRef(isAtBottom);
   const onNewContentRef = useRef(onNewContent);
-  isAtBottomRef.current = isAtBottom;
   onNewContentRef.current = onNewContent;
+
+  // Keep the captured anchor synced to where the user is actually looking.
+  // Without this, the anchor only refreshes when `items` change, so a scroll
+  // made while the list is idle would be undone by the next streaming update —
+  // the view would snap back to the pre-scroll spot. Re-capturing on scroll
+  // means item changes always preserve the *current* viewport.
+  useEffect(() => {
+    const viewport = scrollRef.current;
+    if (!viewport || typeof viewport.addEventListener !== "function") return;
+    const handleScroll = () => {
+      if (isAtBottomRef.current) return;
+      const snapshot = snapshotRef.current;
+      const node = contentRef.current;
+      if (!snapshot || !node) return;
+      snapshot.anchor = captureAnchor(viewport, node);
+      snapshot.scrollTop = viewport.scrollTop;
+      snapshot.scrollHeight = viewport.scrollHeight;
+    };
+    viewport.addEventListener("scroll", handleScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", handleScroll);
+  }, [scrollRef, contentRef, isAtBottomRef]);
 
   const itemKey = useMemo(
     () => items.map((item) => `${item.id}:${item.signature ?? ""}`).join("\u001f"),
@@ -136,7 +161,7 @@ export function useScrollAnchor({
     if (!viewport || !content) return;
 
     const previous = snapshotRef.current;
-    if (previous && !isAtBottom) {
+    if (previous && !isAtBottomRef.current) {
       const appendOnly = isAppendOnly(previous.items, items);
       const prependOnly = isPrependOnly(previous.items, items);
       const shouldPreserveAnchor = prependOnly || !appendOnly || hasSharedChanges(previous.items, items);
@@ -172,7 +197,7 @@ export function useScrollAnchor({
       scrollTop: viewport.scrollTop,
       scrollHeight: viewport.scrollHeight,
     };
-  }, [contentRef, isAtBottom, itemKey, items, scrollRef]);
+  }, [contentRef, itemKey, items, scrollRef]);
 
   useEffect(() => {
     const viewport = scrollRef.current;

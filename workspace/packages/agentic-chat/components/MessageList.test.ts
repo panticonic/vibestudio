@@ -29,6 +29,7 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
     contentRef: hookState.contentRef,
     scrollToBottom: hookState.scrollToBottom,
     isAtBottom: true,
+    isAtBottomRef: { current: true },
   }),
 }));
 

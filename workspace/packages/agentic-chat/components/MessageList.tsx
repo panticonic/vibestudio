@@ -266,6 +266,7 @@ export const MessageList = React.memo(function MessageList({
     contentRef,
     scrollToBottom,
     isAtBottom,
+    isAtBottomRef,
   } = useStickToBottom({
     initial: "instant",
     resize: "instant",
@@ -483,7 +484,7 @@ export const MessageList = React.memo(function MessageList({
     scrollRef,
     contentRef,
     items: scrollAnchorItems,
-    isAtBottom,
+    isAtBottomRef,
     onNewContent: () => setShowNewContent(true),
   });
 

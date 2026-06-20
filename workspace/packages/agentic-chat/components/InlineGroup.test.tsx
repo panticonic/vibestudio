@@ -230,6 +230,59 @@ describe("InlineGroup custom messages", () => {
     expect(screen.getByText("skills/weather/renderer.tsx")).toBeTruthy();
   });
 
+  it("expands a pill in place, splitting its sibling row above and below", () => {
+    const items: InlineItem[] = [
+      { type: "thinking", id: "t1", content: "Alpha", complete: true },
+      { type: "thinking", id: "t2", content: "Bravo", complete: true },
+      { type: "thinking", id: "t3", content: "Charlie", complete: true },
+    ];
+    const { container } = render(<InlineGroup items={items} />);
+
+    // Collapsed: a single wrapping pill row, nothing expanded.
+    expect(container.querySelectorAll(".inline-expanded-item").length).toBe(0);
+    expect(container.querySelectorAll(".inline-pill-row").length).toBe(1);
+
+    fireEvent.click(screen.getByLabelText("Thinking: Bravo"));
+
+    // The middle pill's detail is hoisted between the surrounding pill rows:
+    // [pills: Alpha] [expanded: Bravo] [pills: Charlie] — not dumped below all.
+    const body = container.querySelector(".inline-group-body")!;
+    const segments = Array.from(body.children).map((el) => el.className);
+    expect(segments).toEqual([
+      expect.stringContaining("inline-pill-row"),
+      expect.stringContaining("inline-expanded-item"),
+      expect.stringContaining("inline-pill-row"),
+    ]);
+    expect(body.children[1]!.textContent).toContain("Bravo");
+  });
+
+  it("keeps multiple pills expanded at the same time", () => {
+    const items: InlineItem[] = [
+      { type: "thinking", id: "t1", content: "Alpha", complete: true },
+      { type: "thinking", id: "t2", content: "Bravo", complete: true },
+    ];
+    const { container } = render(<InlineGroup items={items} />);
+
+    fireEvent.click(screen.getByLabelText("Thinking: Alpha"));
+    fireEvent.click(screen.getByLabelText("Thinking: Bravo"));
+
+    // Both open at once — no single-expansion limit.
+    expect(container.querySelectorAll(".inline-expanded-item").length).toBe(2);
+    expect(container.querySelectorAll(".inline-pill-row").length).toBe(0);
+  });
+
+  it("collapses an expanded pill back into its row", () => {
+    const items: InlineItem[] = [
+      { type: "thinking", id: "t1", content: "Alpha", complete: true },
+    ];
+    render(<InlineGroup items={items} />);
+
+    fireEvent.click(screen.getByLabelText("Thinking: Alpha"));
+    expect(screen.getByText("Thinking")).toBeTruthy(); // expanded header
+    fireEvent.click(screen.getByText("Thinking")); // header toggles collapse
+    expect(screen.getByLabelText("Thinking: Alpha")).toBeTruthy(); // pill is back
+  });
+
   it("surfaces a validation callout when the schema rejects state", () => {
     const entry = customEntry();
     entry.definition.stateSchema = {

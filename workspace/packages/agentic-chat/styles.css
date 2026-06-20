@@ -159,6 +159,16 @@
   max-inline-size: 100% !important;
 }
 
+/*
+ * The transcript's scroll position is managed entirely in JS (useScrollAnchor
+ * preserves the anchored item; useStickToBottom pins to the bottom). Leave the
+ * browser's own scroll-anchoring off so the two systems don't fight over
+ * scrollTop when content above the viewport grows during streaming.
+ */
+.message-scroll-area [data-radix-scroll-area-viewport] {
+  overflow-anchor: none;
+}
+
 .message-list-card,
 .message-list-content,
 .message-item,
@@ -472,9 +482,16 @@
 
 .inline-group,
 .inline-group-body,
-.inline-pill-row {
+.inline-pill-row,
+.inline-expanded-item {
   min-inline-size: 0;
   max-inline-size: 100%;
+}
+
+/* Expanded detail hoisted in place between the pill rows of its group. */
+.inline-expanded-item {
+  inline-size: 100%;
+  overflow: hidden;
 }
 
 .inline-group {

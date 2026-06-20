@@ -63,6 +63,9 @@ vi.mock("../hooks/useStickToBottom.js", () => ({
     contentRef: hookState.contentRef,
     scrollToBottom: hookState.scrollToBottom,
     isAtBottom: hookState.isAtBottom,
+    // Live getter so tests that flip hookState.isAtBottom between renders are
+    // reflected synchronously, mirroring the real hook's ref.
+    isAtBottomRef: { get current() { return hookState.isAtBottom; } },
   }),
 }));
 
