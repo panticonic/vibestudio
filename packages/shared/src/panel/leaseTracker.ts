@@ -36,6 +36,8 @@ export type RuntimeLeaseChangeDisposition =
 interface HeldLease {
   runtimeEntityId: PanelEntityId;
   connectionId: string;
+  /** Pinned by an active CDP client: never unload on a vanish/transfer. */
+  keepLoaded: boolean;
 }
 
 function versionNewer(a: RuntimeLeaseVersion, b: RuntimeLeaseVersion | null): boolean {
@@ -86,12 +88,16 @@ export class LeaseTracker {
     for (const [slotId, current] of this.held) {
       const next = mine.get(slotId);
       if (!next) {
+        // Keep-loaded pin: a CDP client is mid-automation. Refuse the unload
+        // even if a snapshot race momentarily drops the lease.
+        if (current.keepLoaded) continue;
         this.held.delete(slotId);
         intents.push({ kind: "unload", slotId, reason: "lease-transfer" });
       } else if (next.connectionId !== current.connectionId) {
         this.held.set(slotId, {
           runtimeEntityId: next.runtimeEntityId,
           connectionId: next.connectionId,
+          keepLoaded: Boolean(next.keepLoaded),
         });
         intents.push({ kind: "unload", slotId, reason: "stale" });
         intents.push({
@@ -100,6 +106,14 @@ export class LeaseTracker {
           runtimeEntityId: next.runtimeEntityId,
           connectionId: next.connectionId,
         });
+      } else if (Boolean(next.keepLoaded) !== current.keepLoaded) {
+        // keepLoaded toggled with no connectionId change: update local state
+        // only (no load/unload — the page is already in the right state).
+        this.held.set(slotId, {
+          runtimeEntityId: current.runtimeEntityId,
+          connectionId: current.connectionId,
+          keepLoaded: Boolean(next.keepLoaded),
+        });
       }
     }
     for (const [slotId, lease] of mine) {
@@ -107,6 +121,7 @@ export class LeaseTracker {
         this.held.set(slotId, {
           runtimeEntityId: lease.runtimeEntityId,
           connectionId: lease.connectionId,
+          keepLoaded: Boolean(lease.keepLoaded),
         });
         intents.push({
           kind: "load",
@@ -132,6 +147,7 @@ export class LeaseTracker {
         this.held.set(slotId, {
           runtimeEntityId: lease.runtimeEntityId,
           connectionId: lease.connectionId,
+          keepLoaded: Boolean(lease.keepLoaded),
         });
         return [
           {
@@ -146,6 +162,7 @@ export class LeaseTracker {
         this.held.set(slotId, {
           runtimeEntityId: lease.runtimeEntityId,
           connectionId: lease.connectionId,
+          keepLoaded: Boolean(lease.keepLoaded),
         });
         return [
           { kind: "unload", slotId, reason: "stale" },
@@ -157,10 +174,21 @@ export class LeaseTracker {
           },
         ];
       }
+      // Same connection: only the keepLoaded flag may have changed. Update
+      // local state without emitting load/unload.
+      if (Boolean(lease.keepLoaded) !== current.keepLoaded) {
+        this.held.set(slotId, {
+          runtimeEntityId: current.runtimeEntityId,
+          connectionId: current.connectionId,
+          keepLoaded: Boolean(lease.keepLoaded),
+        });
+      }
       return [];
     }
 
     if (current && disposition.kind === "unassigned") {
+      // Keep-loaded pin: refuse to unload a CDP-automated panel.
+      if (current.keepLoaded) return [];
       this.held.delete(slotId);
       return [{ kind: "unload", slotId, reason: disposition.reason }];
     }

@@ -14,9 +14,9 @@ describe("bridgeAdapter CDP routing", () => {
     async (method) => {
       const adapter = createAdapter();
 
-      await expect(adapter.handle("panel-a", method, ["panel-b"])).rejects.toThrow(
-        "CDP automation is routed through the server broker"
-      );
+      await expect(
+        adapter.handle("panel:tree/panel-a", method, ["panel:tree/panel-b"])
+      ).rejects.toThrow("CDP automation is routed through the server broker");
     }
   );
 });

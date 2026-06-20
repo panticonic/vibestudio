@@ -24,6 +24,7 @@ import { createRequire } from "module";
 import { promisify } from "util";
 import { pathToFileURL } from "url";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
+import type { LibraryBuildTarget } from "@natstack/shared/serviceSchemas/build";
 import {
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
@@ -257,14 +258,24 @@ function createWorkspaceResolvePlugin(
   graph: PackageGraph,
   workspaceRoot: string,
   sourceRoot: string,
-  conditions: readonly string[] = PANEL_CONDITIONS
+  conditions: readonly string[] = PANEL_CONDITIONS,
+  externalSpecifiers: readonly string[] = []
 ): esbuild.Plugin {
+  // esbuild applies the top-level `external` option in its DEFAULT resolver,
+  // which runs AFTER plugins — so a workspace specifier this plugin resolves to
+  // source would be bundled even when listed in `external`. Honor the externals
+  // here (exact match) so caller-provided externals actually win. Used by eval
+  // library builds to keep `@workspace/runtime` (and other host-provided modules)
+  // OUT of the bundle: they must resolve at runtime to the EvalDO's hosted `rt`,
+  // not the panel entry (whose top-level `initRuntime()` crashes in a DO isolate).
+  const externalSet = new Set(externalSpecifiers);
   return {
     name: "workspace-packages",
     setup(build) {
       // Match any package discovered in the workspace graph, including
       // @workspace/* aliases and template-provided @natstack/* source packages.
       build.onResolve({ filter: /^[^./]|^@/ }, (args) => {
+        if (externalSet.has(args.path)) return { path: args.path, external: true };
         const parsed = parseGraphImport(args.path, graph);
         if (!parsed) return null;
 
@@ -699,51 +710,53 @@ function createDedupePlugin(runtimeNodeModules: string, packages: string[]): esb
 function createAppRuntimeShimPlugin(): esbuild.Plugin {
   const unavailable =
     '() => { throw new Error("@workspace/runtime panel APIs are not available in workspace app renderers"); }';
+  const ns = `new Proxy({}, { get: () => unavailable })`;
   const contents = `const unavailable = ${unavailable};
-export const fs = new Proxy({}, { get: () => unavailable });
-export const gatewayConfig = {};
-export const gatewayFetch = unavailable;
-export const env = {};
-export const entityId = "app";
+// --- Portable runtime surface (identical names on panel/worker/eval) ---
 export const id = "app";
-export const slotId = "app";
-export const parentId = null;
 export const contextId = "";
-export const runtimeParentId = null;
 export const rpc = {};
+export const fs = new Proxy({}, { get: () => unavailable });
+export const callMain = unavailable;
 export const parent = {};
-export const workers = {};
-export const gad = {};
-export const Rpc = {};
-export const z = {};
-export const recoveryCoordinator = {};
-export const getTheme = unavailable;
-export const onThemeChange = () => () => {};
-export const onFocus = () => () => {};
-export const onConnectionError = () => () => {};
-export const getInfo = unavailable;
-export const focusPanel = unavailable;
-export const expose = unavailable;
-export const openPanel = unavailable;
-export const openExternal = unavailable;
-export const listPanels = unavailable;
-export const getPanelHandle = unavailable;
 export const getParent = unavailable;
 export const getParentWithContract = unavailable;
+export const gad = ${ns};
+export const workspace = ${ns};
+export const credentials = ${ns};
+export const git = ${ns};
+export const vcs = ${ns};
+export const webhooks = ${ns};
+export const extensions = ${ns};
+export const approvals = ${ns};
+export const notifications = ${ns};
+export const workers = ${ns};
+export const doTargetId = unavailable;
 export const createDurableObjectServiceClient = unavailable;
+export const gatewayConfig = {};
+export const gatewayFetch = unavailable;
+export const openExternal = unavailable;
+export const openPanel = unavailable;
+export const listPanels = unavailable;
+export const getPanelHandle = unavailable;
+export const panelTree = ${ns};
+// --- Portable authoring helpers ---
+export const Rpc = {};
+export const z = {};
 export const defineContract = (contract) => contract;
-export const noopParent = {};
+export const buildPanelLink = unavailable;
+export const parseContextId = unavailable;
+export const isValidContextId = () => false;
+export const getInstanceId = unavailable;
 export const normalizePath = (value) => String(value);
 export const getFileName = (value) => String(value).split("/").pop() ?? "";
 export const resolvePath = (...parts) => parts.join("/");
-export const getStateArgs = unavailable;
-export const useStateArgs = unavailable;
-export const setStateArgs = unavailable;
-export const setStateArgsForPanel = unavailable;
+export const createGatewayFetch = () => unavailable;
+// --- Panel-only namespaces / domain ---
+export const panel = ${ns};
+export const journal = ${ns};
 export const agentApi = {};
-export class Journal {}
-export const withJournal = unavailable;
-export const currentJournal = null;
+export const adblock = ${ns};
 export default {};`;
   return {
     name: "app-runtime-shim",
@@ -1335,6 +1348,13 @@ export interface BuildUnitOptions {
   externals?: string[];
   /** Package export subpath to use as the library entry point. */
   libraryEntrySubpath?: string;
+  /**
+   * Which execution target will run this library bundle — selects the module
+   * resolution conditions (see `conditionsForLibraryTarget`). Defaults to
+   * `panel`; eval imports pass `eval` so workspace packages resolve their
+   * worker/workerd entry instead of a panel entry that bootstraps on load.
+   */
+  libraryTarget?: LibraryBuildTarget;
 }
 
 export function effectiveBuildVersion(
@@ -1348,6 +1368,9 @@ export function effectiveBuildVersion(
         JSON.stringify({
           externals: options.externals ?? [],
           entry: options.libraryEntrySubpath ?? ".",
+          // Distinct conditions ⇒ distinct bundle: a panel-target and a
+          // worker-target build of the same package must NOT share a cache key.
+          target: options.libraryTarget ?? null,
         })
       )
       .digest("hex")
@@ -1457,6 +1480,11 @@ async function doBuild(
     );
 
     if (options?.library) {
+      if (!options.libraryTarget) {
+        throw new Error(
+          `library build for ${node.name} requires an explicit libraryTarget ('panel' or 'worker')`
+        );
+      }
       return await buildLibraryBundle(
         node,
         ev,
@@ -1466,7 +1494,8 @@ async function doBuild(
         extracted.sourceRoot,
         stateRef,
         options.externals ?? [],
-        options.libraryEntrySubpath ?? "."
+        options.libraryEntrySubpath ?? ".",
+        conditionsForLibraryTarget(options.libraryTarget)
       );
     } else if (node.kind === "worker") {
       return await buildWorker(
@@ -1545,13 +1574,17 @@ async function prepareBuildEnv(
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
-  sourceRoot: string
+  sourceRoot: string,
+  // Resolution conditions for the unit's OWN entry point. MUST match the
+  // conditions the build's workspace-resolve plugin uses for deps, or the entry
+  // and its dependencies disagree about a package's panel-vs-worker fork.
+  conditions: readonly string[] = PANEL_CONDITIONS
 ): Promise<BuildEnv> {
   const outdir = path.join(os.tmpdir(), "natstack-builds", `build-${buildKey}`);
   fs.mkdirSync(outdir, { recursive: true });
 
   const sourcePath = sourcePathForNode(node, sourceRoot);
-  const entryFile = resolveEntryPoint(node, sourcePath);
+  const entryFile = resolveEntryPoint(node, sourcePath, conditions);
 
   const externalDeps = collectTransitiveExternalDeps(node, graph, workspaceRoot, _appNodeModules);
   const dependencyOverrides = collectTransitiveDependencyOverrides(
@@ -1874,6 +1907,22 @@ async function buildPanel(
 
 const WORKER_CONDITIONS = ["worker", "workerd", "import", "default"] as const;
 const EXTENSION_CONDITIONS = ["import", "default"] as const;
+
+/**
+ * Map a library bundle's execution target to esbuild/package-export resolution
+ * conditions. This is what lets a workerd-hosted import (incl. the eval sandbox)
+ * pick up a package's worker entry instead of its panel entry — the panel entry
+ * of `@workspace/runtime` runs `initRuntime()` at module load, which throws
+ * outside a panel. No default: the caller MUST state the host.
+ */
+function conditionsForLibraryTarget(target: LibraryBuildTarget): readonly string[] {
+  switch (target) {
+    case "worker":
+      return WORKER_CONDITIONS;
+    case "panel":
+      return PANEL_CONDITIONS;
+  }
+}
 
 /**
  * Node built-ins that workerd does NOT provide via `nodejs_compat` and must
@@ -2232,7 +2281,14 @@ async function buildWorker(
   sourceRoot: string,
   sourceStateHash: string
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const env = await prepareBuildEnv(
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    WORKER_CONDITIONS
+  );
   const { outdir, entryFile, nodePaths, resolveDir } = env;
 
   // Workers run as a single inline esModule in workerd — no module filesystem
@@ -2605,7 +2661,14 @@ async function buildExtension(
   sourceRoot: string,
   sourceStateHash: string
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const env = await prepareBuildEnv(
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    EXTENSION_CONDITIONS
+  );
   const { outdir, entryFile, nodePaths, resolveDir } = env;
 
   const extensionSourcePath = path.join(sourceRoot, node.relativePath);
@@ -2977,16 +3040,20 @@ async function buildLibraryBundle(
   sourceRoot: string,
   sourceStateHash: string,
   externals: string[],
-  entrySubpath = "."
+  entrySubpath = ".",
+  conditions: readonly string[]
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  // prepareBuildEnv resolves the `.` entry with the target conditions, so an
+  // imported package's worker/panel entry is picked for the right host (its deps
+  // resolve via the same conditions in the plugin below).
+  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot, conditions);
 
   try {
     const outfile = path.join(env.outdir, "bundle.js");
     const entryFile =
       entrySubpath === "."
         ? env.entryFile
-        : resolvePackageExportEntryPoint(node, env.sourcePath, entrySubpath);
+        : resolvePackageExportEntryPoint(node, env.sourcePath, entrySubpath, conditions);
     await esbuild.build({
       entryPoints: [entryFile],
       bundle: true,
@@ -2996,7 +3063,12 @@ async function buildLibraryBundle(
       write: true,
       external: externals,
       plugins: [
-        createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, PANEL_CONDITIONS),
+        // `conditions` selects each workspace package's export entry by execution
+        // target (panel vs worker/eval). Pass `externals` to the resolve plugin
+        // too: esbuild's `external` option alone is bypassed because this plugin's
+        // onResolve handles `@workspace/*` first. The host (EvalDO) provides those
+        // externals at runtime via its module map.
+        createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, conditions, externals),
         createTsExtensionPlugin(sourceRoot),
         createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
         createPathShimPlugin(env.resolveDir),
@@ -3321,7 +3393,11 @@ async function doPlatformBuild(
  * Resolve the entry point for a node.
  * Uses sourcePath from the materialized source state instead of node.path.
  */
-export function resolveEntryPoint(node: GraphNode, sourcePath: string): string {
+export function resolveEntryPoint(
+  node: GraphNode,
+  sourcePath: string,
+  conditions: readonly string[] = PANEL_CONDITIONS
+): string {
   const explicit = node.manifest.entry;
   if (explicit) {
     const full = path.join(sourcePath, explicit);
@@ -3336,7 +3412,7 @@ export function resolveEntryPoint(node: GraphNode, sourcePath: string): string {
     };
     let target: string | null = null;
     if (pkgJson.exports) {
-      target = resolveExportSubpath(pkgJson.exports, ".", PANEL_CONDITIONS);
+      target = resolveExportSubpath(pkgJson.exports, ".", conditions);
     }
     if (!target && pkgJson.main) {
       target = pkgJson.main;
@@ -3370,7 +3446,8 @@ export function resolveEntryPoint(node: GraphNode, sourcePath: string): string {
 function resolvePackageExportEntryPoint(
   node: GraphNode,
   sourcePath: string,
-  subpath: string
+  subpath: string,
+  conditions: readonly string[] = PANEL_CONDITIONS
 ): string {
   const normalized = subpath === "." ? "." : subpath.startsWith("./") ? subpath : `./${subpath}`;
   const pkgJsonPath = path.join(sourcePath, "package.json");
@@ -3382,7 +3459,7 @@ function resolvePackageExportEntryPoint(
     exports?: Record<string, unknown>;
   };
   const target = pkgJson.exports
-    ? resolveExportSubpath(pkgJson.exports, normalized, PANEL_CONDITIONS)
+    ? resolveExportSubpath(pkgJson.exports, normalized, conditions)
     : null;
   if (!target) {
     throw new Error(`No export ${normalized} found for ${node.name}`);

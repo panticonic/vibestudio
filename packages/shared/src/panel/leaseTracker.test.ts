@@ -127,6 +127,40 @@ describe("LeaseTracker", () => {
     tracker.apply(event("a", lease("a"), null, 1));
     expect(tracker.apply(event("a", lease("a"), null, 2))).toEqual([]);
   });
+
+  it("never unloads a keepLoaded lease that vanishes from a later snapshot", () => {
+    const tracker = new LeaseTracker(ME);
+    tracker.reconcile(snapshot([lease("a", { keepLoaded: true })]));
+    expect(tracker.reconcile(snapshot([], 2))).toEqual([]);
+    expect(tracker.heldSlots()).toEqual(["a"]);
+    expect(tracker.heldLease("a")?.keepLoaded).toBe(true);
+  });
+
+  it("never unloads a keepLoaded lease on a release/transfer event", () => {
+    const tracker = new LeaseTracker(ME);
+    tracker.apply(event("a", lease("a", { keepLoaded: true }), null, 1));
+    // Release event for a pinned lease is refused.
+    expect(tracker.apply(event("a", null, lease("a", { keepLoaded: true }), 2))).toEqual([]);
+    // Transfer to another client is also refused while pinned.
+    expect(
+      tracker.apply(
+        event("a", lease("a", { clientSessionId: "desktop-1", keepLoaded: true }), lease("a"), 3)
+      )
+    ).toEqual([]);
+    expect(tracker.heldSlots()).toEqual(["a"]);
+  });
+
+  it("tracks keepLoaded toggles without emitting load/unload", () => {
+    const tracker = new LeaseTracker(ME);
+    tracker.reconcile(snapshot([lease("a")]));
+    expect(tracker.heldLease("a")?.keepLoaded).toBe(false);
+    // Pin applied (same connectionId) → no intents, flag updates locally.
+    expect(tracker.reconcile(snapshot([lease("a", { keepLoaded: true })], 2))).toEqual([]);
+    expect(tracker.heldLease("a")?.keepLoaded).toBe(true);
+    // Unpin applied via event → still no intents.
+    expect(tracker.apply(event("a", lease("a"), lease("a", { keepLoaded: true }), 3))).toEqual([]);
+    expect(tracker.heldLease("a")?.keepLoaded).toBe(false);
+  });
 });
 
 describe("classifyRuntimeLeaseChange", () => {

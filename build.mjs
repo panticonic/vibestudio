@@ -154,21 +154,6 @@ const clientConfig = {
   logOverride,
 };
 
-// Standalone eval-runner child process spawned by `natstack eval run`.
-// Bundles @workspace/eval (and its sucrase dependency) so the runner works
-// with plain `node` next to the CLI client bundle.
-const evalRunnerConfig = {
-  entryPoints: ["src/cli/agent/evalRunner.ts"],
-  bundle: true,
-  platform: "node",
-  target: "node20",
-  format: "esm",
-  outfile: "dist/cli/eval-runner.mjs",
-  sourcemap: isDev,
-  minify: !isDev,
-  logOverride,
-};
-
 const mainConfig = {
   entryPoints: ["src/main/index.ts"],
   bundle: true,
@@ -440,29 +425,6 @@ function copyDirectoryRecursive(srcDir, destDir) {
   }
 }
 
-async function generateProtocolFiles() {
-  console.log("Generating protocol files...");
-  try {
-    execSync("node scripts/generate-channels.mjs", { stdio: "inherit" });
-    execSync("node scripts/generate-injected.mjs", { stdio: "inherit" });
-    console.log("Protocol files generated successfully!");
-  } catch (error) {
-    console.error("Failed to generate protocol files:", error);
-    throw error;
-  }
-}
-
-async function buildPlaywrightCore() {
-  console.log("Building @workspace/playwright-core (browser bundle)...");
-  try {
-    execSync('pnpm --filter "@workspace/playwright-core" build', { stdio: "inherit" });
-    console.log("@workspace/playwright-core built successfully!");
-  } catch (error) {
-    console.error("Failed to build @workspace/playwright-core:", error);
-    throw error;
-  }
-}
-
 async function buildNatstackPackages() {
   console.log("Building @natstack/* infrastructure packages...");
   try {
@@ -479,11 +441,10 @@ async function buildNatstackPackages() {
 async function buildWorkspacePackages() {
   console.log("Building @workspace/* packages...");
   try {
-    // Build all packages except playwright-core (already built separately)
     // Note: We intentionally do NOT use --parallel here because packages have
     // inter-dependencies (e.g., @workspace/ai depends on @workspace/runtime).
     // pnpm will automatically build in topological order (dependencies first).
-    execSync('pnpm --filter "!@workspace/playwright-core" --filter "@workspace/*" build', {
+    execSync('pnpm --filter "@workspace/*" build', {
       stdio: "inherit",
     });
     console.log("@workspace/* packages built successfully!");
@@ -581,31 +542,17 @@ async function build() {
     fs.mkdirSync("dist", { recursive: true });
 
     // ========================================================================
-    // STEP 0: Generate protocol files from definitions
-    // ========================================================================
-    // These must be generated first as they are used by workspace packages
-    // Dependencies: None
-    await generateProtocolFiles();
-
-    // ========================================================================
-    // STEP 0.5: Build Playwright Core (browser bundle)
-    // ========================================================================
-    // Must be built before other packages since playwright-client depends on it
-    // Dependencies: generateProtocolFiles
-    await buildPlaywrightCore();
-
-    // ========================================================================
     // STEP 0.75: Build @natstack/* infrastructure packages
     // ========================================================================
     // Must be built before @workspace/* packages since they depend on @natstack/*
-    // Dependencies: generateProtocolFiles
+    // Dependencies: none
     await buildNatstackPackages();
 
     // ========================================================================
     // STEP 1: Build @workspace/* packages
     // ========================================================================
     // These must be built as they are consumed by later steps
-    // Dependencies: buildNatstackPackages, buildPlaywrightCore
+    // Dependencies: buildNatstackPackages
     await buildWorkspacePackages();
 
     // ========================================================================
@@ -668,7 +615,6 @@ async function build() {
     await esbuild.build(serverElectronWithBundle);
     await esbuild.build(serverWithBundle);
     await esbuild.build(clientConfig);
-    await esbuild.build(evalRunnerConfig);
     await buildDependencyWorkers();
 
     // ========================================================================

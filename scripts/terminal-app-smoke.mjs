@@ -47,17 +47,25 @@ async function rpc(url, shellToken, method, args = []) {
   requestUrl.pathname = `${basePath}/rpc`;
   requestUrl.search = "";
   requestUrl.hash = "";
+  const caller = { callerId: "terminal-app-smoke", callerKind: "shell" };
   const res = await fetch(requestUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${shellToken}`,
     },
-    body: JSON.stringify({ targetId: "main", method, args }),
+    body: JSON.stringify({
+      from: caller.callerId,
+      target: "main",
+      delivery: { caller },
+      provenance: [caller],
+      message: { type: "request", requestId: crypto.randomUUID(), fromId: caller.callerId, method, args },
+    }),
   });
   const body = await res.json();
-  if (!res.ok || body.error) throw new Error(body.error ?? `/rpc failed ${res.status}`);
-  return body.result;
+  const message = (body?.envelope ?? body)?.message;
+  if (!res.ok || message?.error) throw new Error(message?.error ?? body?.error ?? `/rpc failed ${res.status}`);
+  return message?.result;
 }
 
 async function pairShellToken(ready) {

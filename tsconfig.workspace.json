@@ -271,6 +271,9 @@
       "@workspace/testkit/profiling": [
         "workspace/packages/testkit/src/profile-core.ts"
       ],
+      "@workspace/runtime/hosted": [
+        "workspace/packages/runtime/src/shared/hostedRuntime.ts"
+      ],
       "@workspace/runtime/credentials": [
         "workspace/packages/runtime/src/shared/credentials.ts"
       ],

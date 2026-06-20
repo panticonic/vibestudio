@@ -484,9 +484,40 @@ class WorkerCdpPage {
 
   // ---- Navigation -------------------------------------------------------
   async goto(url: string): Promise<unknown> {
-    const result = await this.connection.send("Page.navigate", { url });
+    const result = (await this.connection.send("Page.navigate", { url })) as {
+      frameId?: string;
+      errorText?: string;
+    };
+    // Await the navigation settling (main frame stops loading / load event fires) before returning.
+    // Without this, `goto` returns the instant Page.navigate is acknowledged, so a follow-up
+    // screenshot/evaluate races the in-flight navigation — during a cross-origin swap the page is
+    // momentarily detached and the command fails with "Not attached to an active page". Best-effort:
+    // resolve on timeout rather than throw, so a slow page doesn't hard-fail the call.
+    if (!result.errorText) {
+      await this.waitForNavigationSettled(result.frameId, this.defaultTimeout);
+    }
     this.currentUrl = url;
     return result;
+  }
+
+  /** Resolve once the page finishes (re)loading after a navigation, or after `timeout` ms. */
+  private waitForNavigationSettled(frameId: string | undefined, timeout: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const cleanups: Array<() => void> = [];
+      const finish = (): void => {
+        for (const cleanup of cleanups.splice(0)) cleanup();
+        resolve();
+      };
+      cleanups.push(this.connection.on("Page.loadEventFired", () => finish()));
+      cleanups.push(
+        this.connection.on("Page.frameStoppedLoading", (params) => {
+          const fid = (params as { frameId?: string }).frameId;
+          if (!frameId || fid === frameId) finish();
+        })
+      );
+      const timer = setTimeout(finish, timeout);
+      cleanups.push(() => clearTimeout(timer));
+    });
   }
 
   async reload(): Promise<void> {

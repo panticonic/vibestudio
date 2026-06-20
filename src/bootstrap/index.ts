@@ -846,7 +846,7 @@ function appendLocalWorkspaces(parent: HTMLElement, state: BootstrapConnectionSt
     ephemeralName.textContent = "Ephemeral workspace";
     const ephemeralMeta = document.createElement("div");
     ephemeralMeta.className = "meta";
-    ephemeralMeta.textContent = "Fresh disposable copy — deleted when the app exits.";
+    ephemeralMeta.textContent = "Fresh and disposed at exit.";
     ephemeralText.append(ephemeralName, ephemeralMeta);
     ephemeralRow.append(
       ephemeralText,

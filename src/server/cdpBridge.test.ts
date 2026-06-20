@@ -56,7 +56,7 @@ function leaseChangedEvent(
 ): PanelRuntimeLeaseChangedEvent {
   const lease = (hostConnectionId: string) => ({
     slotId: asPanelSlotId(slotId),
-    runtimeEntityId: asPanelEntityId(`panel:entity-${slotId}`),
+    runtimeEntityId: asPanelEntityId(`panel:nav-${slotId.replace("panel:tree/", "")}`),
     clientSessionId: `${hostConnectionId}-session`,
     hostConnectionId,
     connectionId: `${hostConnectionId}-connection`,
@@ -70,7 +70,7 @@ function leaseChangedEvent(
     type: "panel:runtimeLeaseChanged",
     version: { epoch: "test", counter: 1 },
     slotId: asPanelSlotId(slotId),
-    runtimeEntityId: asPanelEntityId(`panel:entity-${slotId}`),
+    runtimeEntityId: asPanelEntityId(`panel:nav-${slotId.replace("panel:tree/", "")}`),
     previous: previousHost ? lease(previousHost) : null,
     next: nextHost ? lease(nextHost) : null,
     reason: "acquired",
@@ -79,8 +79,8 @@ function leaseChangedEvent(
 
 async function waitForEndpoint(
   harness: BridgeHarness,
-  targetId = "browser-1",
-  panelId = "panel-1"
+  targetId = "panel:tree/browser-1",
+  panelId = "panel:tree/panel-1"
 ): Promise<NonNullable<ReturnType<CdpBridge["getCdpEndpoint"]>>> {
   const deadline = Date.now() + 1_000;
   while (Date.now() < deadline) {
@@ -93,7 +93,7 @@ async function waitForEndpoint(
 
 async function waitForTargetRegistered(
   harness: BridgeHarness,
-  targetId = "browser-1"
+  targetId = "panel:tree/browser-1"
 ): Promise<void> {
   const deadline = Date.now() + 1_000;
   while (Date.now() < deadline) {
@@ -137,7 +137,7 @@ async function closeHarness(harness: BridgeHarness): Promise<void> {
 async function connectHostProvider(
   harness: BridgeHarness,
   hostConnectionId: string,
-  targetId = "browser-1",
+  targetId = "panel:tree/browser-1",
   tabId = 123
 ): Promise<WebSocket> {
   const ws = await connectHostProviderOnly(harness, hostConnectionId);
@@ -172,7 +172,7 @@ describe("CdpBridge authentication", () => {
 
     const endpoint = await waitForEndpoint(harness);
     expect(endpoint).toMatchObject({
-      wsEndpoint: `ws://127.0.0.1:${harness.port}/cdp/browser-1`,
+      wsEndpoint: `ws://127.0.0.1:${harness.port}/cdp/panel:tree/browser-1`,
       token: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
     expect(endpoint?.wsEndpoint).not.toContain("token=");
@@ -194,7 +194,7 @@ describe("CdpBridge authentication", () => {
 
     const endpoint = await waitForEndpoint(harness);
 
-    expect(endpoint.wsEndpoint).toBe("wss://natstack.example.com:443/cdp/browser-1");
+    expect(endpoint.wsEndpoint).toBe("wss://natstack.example.com:443/cdp/panel:tree/browser-1");
   });
 
   it("does not accept legacy query-token authentication", async () => {
@@ -234,7 +234,7 @@ describe("CdpBridge authentication", () => {
 
     await expect(waitForJson(provider)).resolves.toMatchObject({
       type: "cdp:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       method: "Runtime.evaluate",
       params: { expression: "2+2" },
     });
@@ -262,7 +262,7 @@ describe("CdpBridge authentication", () => {
     const command = await waitForJson(provider);
     expect(command).toMatchObject({
       type: "cdp:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       method: "Page.navigate",
       params: { url: "https://example.org/" },
       requestId: expect.any(String),
@@ -271,7 +271,7 @@ describe("CdpBridge authentication", () => {
     provider.send(
       JSON.stringify({
         type: "cdp:result",
-        targetId: "browser-1",
+        targetId: "panel:tree/browser-1",
         requestId: command["requestId"],
         result: { frameId: "frame-1" },
       })
@@ -287,12 +287,14 @@ describe("CdpBridge authentication", () => {
     const harness = await createHarness();
     const provider = await connectHostProvider(harness, "desktop-host");
 
-    const commandPromise = harness.bridge.sendHostCommand("browser-1", "openDevTools", ["right"]);
+    const commandPromise = harness.bridge.sendHostCommand("panel:tree/browser-1", "openDevTools", [
+      "right",
+    ]);
     const command = await waitForJson(provider);
 
     expect(command).toMatchObject({
       type: "host:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       action: "openDevTools",
       args: ["right"],
       requestId: expect.any(String),
@@ -301,7 +303,7 @@ describe("CdpBridge authentication", () => {
     provider.send(
       JSON.stringify({
         type: "host:result",
-        targetId: "browser-1",
+        targetId: "panel:tree/browser-1",
         requestId: command["requestId"],
         result: null,
       })
@@ -314,7 +316,7 @@ describe("CdpBridge authentication", () => {
     const harness = await createHarness();
     const provider = await connectHostProvider(harness, "desktop-host");
 
-    const commandPromise = harness.bridge.sendHostCommand("browser-1", "navigatePanel", [
+    const commandPromise = harness.bridge.sendHostCommand("panel:tree/browser-1", "navigatePanel", [
       "https://example.org",
       {},
     ]);
@@ -322,7 +324,7 @@ describe("CdpBridge authentication", () => {
 
     expect(command).toMatchObject({
       type: "host:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       action: "navigatePanel",
       requestId: expect.any(String),
     });
@@ -330,39 +332,42 @@ describe("CdpBridge authentication", () => {
     provider.send(
       JSON.stringify({
         type: "cdp:unregister",
-        targetId: "browser-1",
+        targetId: "panel:tree/browser-1",
       })
     );
     provider.send(
       JSON.stringify({
         type: "host:result",
-        targetId: "browser-1",
+        targetId: "panel:tree/browser-1",
         requestId: command["requestId"],
-        result: { id: "browser-1", title: "example.org" },
+        result: { id: "panel:tree/browser-1", title: "example.org" },
       })
     );
 
-    await expect(commandPromise).resolves.toEqual({ id: "browser-1", title: "example.org" });
+    await expect(commandPromise).resolves.toEqual({
+      id: "panel:tree/browser-1",
+      title: "example.org",
+    });
   });
 
   it("rejects model-aware host commands if the provider disconnects after target unregister", async () => {
     const harness = await createHarness();
     const provider = await connectHostProvider(harness, "desktop-host");
 
-    const commandPromise = harness.bridge.sendHostCommand("browser-1", "navigatePanel", [
+    const commandPromise = harness.bridge.sendHostCommand("panel:tree/browser-1", "navigatePanel", [
       "https://example.org",
       {},
     ]);
     await expect(waitForJson(provider)).resolves.toMatchObject({
       type: "host:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       action: "navigatePanel",
     });
 
     provider.send(
       JSON.stringify({
         type: "cdp:unregister",
-        targetId: "browser-1",
+        targetId: "panel:tree/browser-1",
       })
     );
     provider.close();
@@ -375,7 +380,7 @@ describe("CdpBridge authentication", () => {
     const provider = await connectHostProvider(harness, "desktop-host");
 
     const commandPromise = harness.bridge.sendHostCommand(
-      "browser-1",
+      "panel:tree/browser-1",
       "navigatePanelHistory",
       [-1]
     );
@@ -383,7 +388,7 @@ describe("CdpBridge authentication", () => {
 
     expect(command).toMatchObject({
       type: "host:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       action: "navigatePanelHistory",
       args: [-1],
       requestId: expect.any(String),
@@ -392,29 +397,34 @@ describe("CdpBridge authentication", () => {
     provider.send(
       JSON.stringify({
         type: "cdp:unregister",
-        targetId: "browser-1",
+        targetId: "panel:tree/browser-1",
       })
     );
     provider.send(
       JSON.stringify({
         type: "host:result",
-        targetId: "browser-1",
+        targetId: "panel:tree/browser-1",
         requestId: command["requestId"],
-        result: { id: "browser-1", title: "Previous" },
+        result: { id: "panel:tree/browser-1", title: "Previous" },
       })
     );
 
-    await expect(commandPromise).resolves.toEqual({ id: "browser-1", title: "Previous" });
+    await expect(commandPromise).resolves.toEqual({
+      id: "panel:tree/browser-1",
+      title: "Previous",
+    });
   });
 
   it("rejects pending host control commands when the provider disconnects", async () => {
     const harness = await createHarness();
     const provider = await connectHostProvider(harness, "desktop-host");
 
-    const commandPromise = harness.bridge.sendHostCommand("browser-1", "openDevTools", ["right"]);
+    const commandPromise = harness.bridge.sendHostCommand("panel:tree/browser-1", "openDevTools", [
+      "right",
+    ]);
     await expect(waitForJson(provider)).resolves.toMatchObject({
       type: "host:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       action: "openDevTools",
     });
 
@@ -430,16 +440,21 @@ describe("CdpBridge authentication", () => {
     });
     const provider = await connectHostProvider(harness, "desktop-host");
 
-    const commandPromise = harness.bridge.sendTargetCommand("browser-1", "panel-1", "reload", []);
+    const commandPromise = harness.bridge.sendTargetCommand(
+      "panel:tree/browser-1",
+      "panel:tree/panel-1",
+      "reload",
+      []
+    );
     await expect(waitForJson(provider)).resolves.toMatchObject({
       type: "nav:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       action: "reload",
     });
 
     holder = "headless-host";
     harness.bridge.handleRuntimeLeaseChanged(
-      leaseChangedEvent("browser-1", "desktop-host", "headless-host")
+      leaseChangedEvent("panel:tree/browser-1", "desktop-host", "headless-host")
     );
 
     await expect(commandPromise).rejects.toThrow("CDP target host changed");
@@ -454,15 +469,15 @@ describe("CdpBridge authentication", () => {
 
     holder = "headless-host";
     harness.bridge.handleRuntimeLeaseChanged(
-      leaseChangedEvent("browser-1", "desktop-host", "headless-host")
+      leaseChangedEvent("panel:tree/browser-1", "desktop-host", "headless-host")
     );
 
     await expect(waitForJson(provider)).resolves.toMatchObject({
       type: "cdp:detach",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       reason: "CDP target host changed",
     });
-    expect(harness.bridge.isTargetRegistered("browser-1")).toBe(false);
+    expect(harness.bridge.isTargetRegistered("panel:tree/browser-1")).toBe(false);
   });
 
   it("rejects host provider connections whose stable host id is not authorized", async () => {
@@ -495,7 +510,7 @@ describe("CdpBridge authentication", () => {
 
     holder = "headless-host";
     harness.bridge.handleRuntimeLeaseChanged(
-      leaseChangedEvent("browser-1", "desktop-host", "headless-host")
+      leaseChangedEvent("panel:tree/browser-1", "desktop-host", "headless-host")
     );
 
     await expect(waitForClose(client)).resolves.toMatchObject({
@@ -514,7 +529,7 @@ describe("CdpBridge authentication", () => {
 
     holder = "headless-host";
     harness.bridge.handleRuntimeLeaseChanged(
-      leaseChangedEvent("browser-1", "desktop-host", "headless-host")
+      leaseChangedEvent("panel:tree/browser-1", "desktop-host", "headless-host")
     );
 
     const client = new WebSocket(endpoint.wsEndpoint);
@@ -539,13 +554,13 @@ describe("CdpBridge authentication", () => {
     await expect(waitForJson(client)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
 
     harness.bridge.handleRuntimeLeaseChanged(
-      leaseChangedEvent("browser-1", "desktop-host", "desktop-host")
+      leaseChangedEvent("panel:tree/browser-1", "desktop-host", "desktop-host")
     );
     client.send(JSON.stringify({ id: 8, method: "Runtime.evaluate" }));
 
     await expect(waitForJson(provider)).resolves.toMatchObject({
       type: "cdp:command",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       method: "Runtime.evaluate",
     });
   });
@@ -558,8 +573,8 @@ describe("CdpBridge authentication", () => {
     await connectHostProvider(harness, "desktop-host");
     holder = "headless-host";
 
-    expect(harness.bridge.isTargetRegistered("browser-1")).toBe(true);
-    expect(harness.bridge.getCdpEndpoint("browser-1", "panel-1")).toBeNull();
+    expect(harness.bridge.isTargetRegistered("panel:tree/browser-1")).toBe(true);
+    expect(harness.bridge.getCdpEndpoint("panel:tree/browser-1", "panel:tree/panel-1")).toBeNull();
   });
 
   it("does not route registered targets after the lease resolver loses the holder", async () => {
@@ -570,10 +585,10 @@ describe("CdpBridge authentication", () => {
     await connectHostProvider(harness, "desktop-host");
     holder = null;
 
-    expect(harness.bridge.isTargetRegistered("browser-1")).toBe(true);
-    expect(harness.bridge.getCdpEndpoint("browser-1", "panel-1")).toBeNull();
+    expect(harness.bridge.isTargetRegistered("panel:tree/browser-1")).toBe(true);
+    expect(harness.bridge.getCdpEndpoint("panel:tree/browser-1", "panel:tree/panel-1")).toBeNull();
     await expect(
-      harness.bridge.sendTargetCommand("browser-1", "panel-1", "reload", [])
+      harness.bridge.sendTargetCommand("panel:tree/browser-1", "panel:tree/panel-1", "reload", [])
     ).rejects.toThrow("CDP provider not connected");
   });
 
@@ -587,9 +602,11 @@ describe("CdpBridge authentication", () => {
     await connectHostProviderOnly(harness, "headless-host");
 
     expect(harness.bridge.isProviderConnected("headless-host")).toBe(true);
-    expect(harness.bridge.isTargetRegistered("browser-1")).toBe(true);
-    expect(harness.bridge.isTargetRegisteredForHost("browser-1", "headless-host")).toBe(false);
-    expect(harness.bridge.getCdpEndpoint("browser-1", "panel-1")).toBeNull();
+    expect(harness.bridge.isTargetRegistered("panel:tree/browser-1")).toBe(true);
+    expect(harness.bridge.isTargetRegisteredForHost("panel:tree/browser-1", "headless-host")).toBe(
+      false
+    );
+    expect(harness.bridge.getCdpEndpoint("panel:tree/browser-1", "panel:tree/panel-1")).toBeNull();
   });
 
   it("rejects target registration from a provider that does not hold the lease", async () => {
@@ -598,15 +615,17 @@ describe("CdpBridge authentication", () => {
     });
     const provider = await connectHostProviderOnly(harness, "desktop-host");
 
-    provider.send(JSON.stringify({ type: "cdp:register", targetId: "browser-1", tabId: 123 }));
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/browser-1", tabId: 123 })
+    );
 
     await expect(waitForJson(provider)).resolves.toMatchObject({
       type: "cdp:register-rejected",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       tabId: 123,
       reason: "lease_mismatch",
     });
-    expect(harness.bridge.isTargetRegistered("browser-1")).toBe(false);
+    expect(harness.bridge.isTargetRegistered("panel:tree/browser-1")).toBe(false);
   });
 
   it("rejects target registration for panels that are no longer known", async () => {
@@ -636,14 +655,16 @@ describe("CdpBridge authentication", () => {
     });
     const provider = await connectHostProviderOnly(harness, "desktop-host");
 
-    provider.send(JSON.stringify({ type: "cdp:register", targetId: "panel-1", tabId: 123 }));
-    provider.send(JSON.stringify({ type: "cdp:unregister", targetId: "panel-1" }));
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 123 })
+    );
+    provider.send(JSON.stringify({ type: "cdp:unregister", targetId: "panel:tree/panel-1" }));
 
     resolveKnown?.(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(harness.bridge.isTargetRegistered("panel-1")).toBe(false);
+    expect(harness.bridge.isTargetRegistered("panel:tree/panel-1")).toBe(false);
   });
 
   it("does not register targets after the provider closes during panel-known checks", async () => {
@@ -656,14 +677,16 @@ describe("CdpBridge authentication", () => {
     });
     const provider = await connectHostProviderOnly(harness, "desktop-host");
 
-    provider.send(JSON.stringify({ type: "cdp:register", targetId: "panel-1", tabId: 123 }));
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/panel-1", tabId: 123 })
+    );
     provider.close();
     await waitForClose(provider);
     resolveKnown(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(harness.bridge.isTargetRegistered("panel-1")).toBe(false);
+    expect(harness.bridge.isTargetRegistered("panel:tree/panel-1")).toBe(false);
   });
 
   it("rejects target registration when the lease resolver has no CDP-capable holder", async () => {
@@ -672,15 +695,17 @@ describe("CdpBridge authentication", () => {
     });
     const provider = await connectHostProviderOnly(harness, "desktop-host");
 
-    provider.send(JSON.stringify({ type: "cdp:register", targetId: "browser-1", tabId: 123 }));
+    provider.send(
+      JSON.stringify({ type: "cdp:register", targetId: "panel:tree/browser-1", tabId: 123 })
+    );
 
     await expect(waitForJson(provider)).resolves.toMatchObject({
       type: "cdp:register-rejected",
-      targetId: "browser-1",
+      targetId: "panel:tree/browser-1",
       tabId: 123,
       reason: "no_cdp_capable_lease",
     });
-    expect(harness.bridge.isTargetRegistered("browser-1")).toBe(false);
+    expect(harness.bridge.isTargetRegistered("panel:tree/browser-1")).toBe(false);
   });
 
   it("ignores unregister messages from providers that did not register the target", async () => {
@@ -688,11 +713,17 @@ describe("CdpBridge authentication", () => {
     await connectHostProvider(harness, "desktop-host");
     const otherProvider = await connectHostProviderOnly(harness, "headless-host");
 
-    otherProvider.send(JSON.stringify({ type: "cdp:unregister", targetId: "browser-1" }));
+    otherProvider.send(
+      JSON.stringify({ type: "cdp:unregister", targetId: "panel:tree/browser-1" })
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(harness.bridge.isTargetRegisteredForHost("browser-1", "desktop-host")).toBe(true);
-    expect(harness.bridge.getCdpEndpoint("browser-1", "panel-1")).not.toBeNull();
+    expect(harness.bridge.isTargetRegisteredForHost("panel:tree/browser-1", "desktop-host")).toBe(
+      true
+    );
+    expect(
+      harness.bridge.getCdpEndpoint("panel:tree/browser-1", "panel:tree/panel-1")
+    ).not.toBeNull();
   });
 
   it("ignores CDP command results from providers that do not own the target", async () => {
@@ -736,5 +767,49 @@ describe("CdpBridge authentication", () => {
       id: 42,
       result: { value: "owner-host" },
     });
+  });
+
+  it("pins on first CDP client connect and unpins on last disconnect", async () => {
+    const pinChanges: Array<{ targetId: string; pinned: boolean }> = [];
+    const harness = await createHarness({
+      onTargetClientPinChange: (targetId, pinned) => pinChanges.push({ targetId, pinned }),
+    });
+    await connectHostProvider(harness, "desktop-host");
+    const endpoint = await waitForEndpoint(harness);
+
+    // First client connects → pin true (once).
+    const clientA = new WebSocket(endpoint.wsEndpoint);
+    harness.sockets.push(clientA);
+    await waitForOpen(clientA);
+    clientA.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpoint.token }));
+    await expect(waitForJson(clientA)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+
+    const endpointB = await waitForEndpoint(harness);
+    const clientB = new WebSocket(endpointB.wsEndpoint);
+    harness.sockets.push(clientB);
+    await waitForOpen(clientB);
+    clientB.send(JSON.stringify({ type: "natstack:cdp-auth", token: endpointB.token }));
+    await expect(waitForJson(clientB)).resolves.toMatchObject({ type: "natstack:cdp-auth-ok" });
+
+    // Second client must NOT emit another pin.
+    expect(pinChanges).toEqual([{ targetId: "panel:tree/browser-1", pinned: true }]);
+
+    // Closing one of two clients does not unpin.
+    clientA.close();
+    await waitForClose(clientA);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(pinChanges).toEqual([{ targetId: "panel:tree/browser-1", pinned: true }]);
+
+    // Closing the last client unpins.
+    clientB.close();
+    await waitForClose(clientB);
+    const deadline = Date.now() + 1_000;
+    while (pinChanges.length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(pinChanges).toEqual([
+      { targetId: "panel:tree/browser-1", pinned: true },
+      { targetId: "panel:tree/browser-1", pinned: false },
+    ]);
   });
 });

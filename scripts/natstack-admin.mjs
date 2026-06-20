@@ -65,19 +65,28 @@ async function createShellToken(url, adminToken) {
 }
 
 async function rpc(url, shellToken, method, args = []) {
+  const caller = { callerId: "natstack-admin", callerKind: "shell" };
+  const envelope = {
+    from: caller.callerId,
+    target: "main",
+    delivery: { caller },
+    provenance: [caller],
+    message: { type: "request", requestId: crypto.randomUUID(), fromId: caller.callerId, method, args },
+  };
   const res = await fetch(`${url}/rpc`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${shellToken}`,
     },
-    body: JSON.stringify({ targetId: "main", method, args }),
+    body: JSON.stringify(envelope),
   });
   const body = await res.json();
-  if (!res.ok || body.error) {
-    throw new Error(body.error ?? `/rpc failed ${res.status}`);
+  const message = (body?.envelope ?? body)?.message;
+  if (!res.ok || message?.error) {
+    throw new Error(message?.error ?? body?.error ?? `/rpc failed ${res.status}`);
   }
-  return body.result;
+  return message?.result;
 }
 
 function printUnit(unit) {

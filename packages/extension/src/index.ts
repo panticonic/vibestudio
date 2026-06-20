@@ -99,6 +99,15 @@ export interface ExtensionsClient {
   list(): Promise<RegistryEntry[]>;
   /** Restart the active approved build (dev/diagnostics). Approval-gated. */
   reload(name: ExtensionName): Promise<void>;
+  /**
+   * Call an extension method by name — the untyped primitive that `use(name).method(args)`
+   * wraps. Useful when you don't have the extension's static types (e.g. server-side eval):
+   * `extensions.invoke("@workspace-extensions/typecheck-service", "checkPanel", ["panels/app"])`.
+   *
+   * `name` accepts any string (untyped escape hatch — `use()` is the typed path),
+   * while `ExtensionName` members still autocomplete.
+   */
+  invoke(name: ExtensionName | (string & {}), method: string, args: unknown[]): Promise<unknown>;
 }
 
 /**
@@ -211,6 +220,7 @@ export function createExtensionsClient(rpc: ExtensionsClientRpc): ExtensionsClie
     },
     list: () => extensionsService.list(),
     reload: (name) => extensionsService.reload(name),
+    invoke: (name, method, args) => extensionsService.invoke(name, method, args),
   };
   return client;
 }

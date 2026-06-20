@@ -100,6 +100,7 @@ export interface CdpPage {
   goBack(): Promise<void>;
   goForward(): Promise<void>;
   title(): Promise<string>;
+  /** Playwright-compatible synchronous current URL. Do not await or attach `.catch()`. */
   url(): string;
   content(): Promise<string>;
   /** Set the default timeout (ms) for auto-waiting actions/reads. Default 30000. */

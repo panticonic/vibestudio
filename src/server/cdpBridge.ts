@@ -23,7 +23,6 @@ import { constantTimeStringEqual } from "@natstack/shared/tokenManager";
 import { CdpGrantService } from "@natstack/shared/cdpGrants";
 import type { PanelRuntimeLeaseChangedEvent } from "@natstack/shared/panel/panelLease";
 import { createDevLogger } from "@natstack/dev-log";
-import { assertPresent } from "../lintHelpers";
 
 const log = createDevLogger("CdpBridge");
 
@@ -39,6 +38,12 @@ interface CdpBridgeOptions {
   getTargetInfo?: (targetId: string) => CdpTargetInfo | null | Promise<CdpTargetInfo | null>;
   /** Check if a targetId corresponds to a known panel in the registry. */
   isPanelKnown?: (targetId: string) => boolean | Promise<boolean>;
+  /**
+   * Fired when a target's active CDP client count crosses 0↔1: `pinned` true on
+   * the first client connect, false on the last disconnect. Used to keep a
+   * CDP-automated panel loaded (and eviction-exempt) for the duration.
+   */
+  onTargetClientPinChange?: (targetId: string, pinned: boolean) => void;
   protocol?: "http" | "https";
   externalHost?: string;
   port: number;
@@ -106,6 +111,7 @@ export class CdpBridge {
     targetId: string
   ) => CdpTargetInfo | null | Promise<CdpTargetInfo | null>;
   private isPanelKnown: (targetId: string) => boolean | Promise<boolean>;
+  private onTargetClientPinChange?: (targetId: string, pinned: boolean) => void;
   private protocol: "http" | "https";
   private externalHost: string;
   private port: number;
@@ -138,6 +144,7 @@ export class CdpBridge {
     this.resolveHostForTarget = options.resolveHostForTarget;
     this.getTargetInfo = options.getTargetInfo;
     this.isPanelKnown = options.isPanelKnown ?? (() => true);
+    this.onTargetClientPinChange = options.onTargetClientPinChange;
     this.protocol = options.protocol ?? "http";
     this.externalHost = options.externalHost ?? "127.0.0.1";
     this.port = options.port;
@@ -427,11 +434,9 @@ export class CdpBridge {
       this.pendingCommands.delete(requestId);
     }
 
-    // Close all client connections
-    for (const [, connections] of this.clientConnections) {
-      for (const ws of connections) {
-        ws.close(1000, "CDP bridge shutting down");
-      }
+    // Close all client connections (releases each target's keep-loaded pin).
+    for (const targetId of [...this.clientConnections.keys()]) {
+      this.dropTargetClients(targetId, "CDP bridge shutting down");
     }
     this.clientConnections.clear();
 
@@ -700,12 +705,23 @@ export class CdpBridge {
 
   private handleClientConnection(ws: WebSocket, targetId: string): void {
     // Track connection
-    if (!this.clientConnections.has(targetId)) {
-      this.clientConnections.set(targetId, new Set());
+    let connections = this.clientConnections.get(targetId);
+    const firstForTarget = !connections || connections.size === 0;
+    if (!connections) {
+      connections = new Set();
+      this.clientConnections.set(targetId, connections);
     }
-    assertPresent(this.clientConnections.get(targetId)).add(ws);
+    connections.add(ws);
 
     log.info(`Client connected for target ${targetId}`);
+    // First client for this target → pin the panel loaded while automation runs.
+    if (firstForTarget) {
+      try {
+        this.onTargetClientPinChange?.(targetId, true);
+      } catch (err) {
+        log.warn(`onTargetClientPinChange(pin) failed for ${targetId}: ${String(err)}`);
+      }
+    }
 
     ws.on("message", (data) => {
       try {
@@ -763,6 +779,14 @@ export class CdpBridge {
         connections.delete(ws);
         if (connections.size === 0) {
           this.clientConnections.delete(targetId);
+
+          // Last client closed → release the keep-loaded pin so normal
+          // unload/eviction can resume for this panel.
+          try {
+            this.onTargetClientPinChange?.(targetId, false);
+          } catch (err) {
+            log.warn(`onTargetClientPinChange(unpin) failed for ${targetId}: ${String(err)}`);
+          }
 
           // Last connection closed — tell the provider to detach its debugger
           const provider = this.providerForTarget(targetId);
@@ -897,11 +921,7 @@ export class CdpBridge {
     for (const [targetId, registration] of this.targetRegistry) {
       if (registration.hostConnectionId !== hostConnectionId) continue;
       this.rejectPendingTargetCommands(targetId, reason);
-      const connections = this.clientConnections.get(targetId);
-      if (connections) {
-        for (const ws of connections) ws.close(1000, reason);
-        this.clientConnections.delete(targetId);
-      }
+      this.dropTargetClients(targetId, reason);
     }
   }
 
@@ -912,11 +932,28 @@ export class CdpBridge {
       this.pendingCommands.delete(requestId);
     }
     this.rejectPendingTargetCommands(targetId, reason);
+    this.dropTargetClients(targetId, reason);
+  }
 
+  /**
+   * Close + forget a target's client connections and release its keep-loaded
+   * pin (so server-driven teardown can't leave a slot pinned forever). The
+   * per-socket close handlers won't fire the unpin once the map entry is gone,
+   * so we fire it here exactly once.
+   */
+  private dropTargetClients(targetId: string, reason: string): void {
     const connections = this.clientConnections.get(targetId);
     if (!connections) return;
+    const hadClients = connections.size > 0;
     for (const ws of connections) ws.close(1000, reason);
     this.clientConnections.delete(targetId);
+    if (hadClients) {
+      try {
+        this.onTargetClientPinChange?.(targetId, false);
+      } catch (err) {
+        log.warn(`onTargetClientPinChange(unpin) failed for ${targetId}: ${String(err)}`);
+      }
+    }
   }
 
   private detachTargetFromHost(targetId: string, hostConnectionId: string, reason: string): void {

@@ -132,14 +132,75 @@ describe("BuildSystemV2 library package subpaths", () => {
     );
 
     await expect(
-      buildSystem.getBuild("@workspace/split-library", undefined, { library: true })
+      buildSystem.getBuild("@workspace/split-library", undefined, {
+        library: true,
+        libraryTarget: "panel",
+      })
     ).rejects.toThrow(/Top-level await|node:buffer/);
 
     const result = await buildSystem.getBuild("@workspace/split-library/report", undefined, {
       library: true,
+      libraryTarget: "panel",
     });
     expect(result.bundle).toContain("safe-report-entry");
     expect(result.bundle).not.toContain("Buffer.from");
+  });
+
+  it("selects package export conditions by libraryTarget (panel vs eval/worker)", async () => {
+    // A package with target-forked entries — exactly the shape that broke eval
+    // imports: a panel entry that must NOT be picked for a DO host.
+    const pkgDir = path.join(workspaceRoot, "packages", "dual-entry");
+    fs.mkdirSync(path.join(pkgDir, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pkgDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace/dual-entry",
+        version: "0.1.0",
+        type: "module",
+        exports: {
+          ".": {
+            "natstack-panel": "./src/panel.ts",
+            worker: "./src/worker.ts",
+            default: "./src/default.ts",
+          },
+        },
+      })
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "src", "panel.ts"),
+      'export const marker = "PANEL-ENTRY";\n'
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "src", "worker.ts"),
+      'export const marker = "WORKER-ENTRY";\n'
+    );
+    fs.writeFileSync(
+      path.join(pkgDir, "src", "default.ts"),
+      'export const marker = "DEFAULT-ENTRY";\n'
+    );
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(() => workspaceRoot),
+      []
+    );
+
+    // Panel target resolves the `natstack-panel` condition.
+    const panelBuild = await buildSystem.getBuild("@workspace/dual-entry", undefined, {
+      library: true,
+      libraryTarget: "panel",
+    });
+    expect(panelBuild.bundle).toContain("PANEL-ENTRY");
+    expect(panelBuild.bundle).not.toContain("WORKER-ENTRY");
+
+    // Worker target (e.g. the workerd eval sandbox) resolves the `worker`
+    // condition instead — and a distinct libraryTarget MUST yield a distinct
+    // cache key, not the panel bundle.
+    const workerBuild = await buildSystem.getBuild("@workspace/dual-entry", undefined, {
+      library: true,
+      libraryTarget: "worker",
+    });
+    expect(workerBuild.bundle).toContain("WORKER-ENTRY");
+    expect(workerBuild.bundle).not.toContain("PANEL-ENTRY");
   });
 
   it("resolves a build unit that exists only at a context ref", async () => {
@@ -175,11 +236,15 @@ describe("BuildSystemV2 library package subpaths", () => {
     );
 
     await expect(
-      buildSystem.getBuild("@workspace/context-only", undefined, { library: true })
+      buildSystem.getBuild("@workspace/context-only", undefined, {
+        library: true,
+        libraryTarget: "panel",
+      })
     ).rejects.toThrow(/Unknown build unit/);
 
     const result = await buildSystem.getBuild("@workspace/context-only", "ctx:agent-1", {
       library: true,
+      libraryTarget: "panel",
     });
     expect(result.bundle).toContain("ctx-only-unit");
   });

@@ -41,8 +41,6 @@ initPanels:
         - Ask one question at a time and adapt to the user's experience level
         - Be friendly; do not dump a full tour before knowing what they want
         - Use MDX, feedback_custom, inline_ui, and load_action_bar when they fit the interaction
-        - In the first recommendation message, avoid duplicating the pinned action bar; use MDX action buttons only for follow-up choices that are not already pinned
-        - Go step by step, confirming each step works before moving on
 
         ## Side-effect actions
 
@@ -97,8 +95,7 @@ initPanels:
 
         ## Per-stage report cards (REQUIRED)
         After EACH stage eval returns — before you start the next stage — you
-        MUST post a stage report card. This is the primary per-stage deliverable;
-        do not rely on a prose message. The card renders this stage's full
+        MUST post a stage report card. The card renders this stage's full
         per-test table and failure diagnostics for the user; your job is to add
         judgment in the `prose` field. Run this eval immediately after each stage
         eval (the system-testing docs describe it):

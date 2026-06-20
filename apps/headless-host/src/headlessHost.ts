@@ -365,6 +365,8 @@ export class HeadlessHost implements PanelHost {
     if (slots.length < this.config.maxPanels) return;
     let oldest: { slotId: string; at: number } | null = null;
     for (const slotId of slots) {
+      // Never evict a panel pinned by an active CDP client (mid-automation).
+      if (this.tracker.heldLease(slotId)?.keepLoaded) continue;
       const at = this.pages!.lastUsedAt(slotId) ?? 0;
       if (!oldest || at < oldest.at) oldest = { slotId, at };
     }
@@ -389,6 +391,8 @@ export class HeadlessHost implements PanelHost {
     if (this.stopped || !this.pages) return;
     const now = Date.now();
     for (const slotId of this.pages.slots()) {
+      // Pinned by an active CDP client → exempt from idle unload.
+      if (this.tracker.heldLease(slotId)?.keepLoaded) continue;
       const lastUsed = this.pages.lastUsedAt(slotId) ?? now;
       if (now - lastUsed > this.config.idleUnloadMs) {
         void this.releaseAndUnload(slotId, "idle");

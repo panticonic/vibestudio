@@ -211,6 +211,7 @@ function createExtensionsClient(): ExtensionsClient {
     },
     list: () => rpcCall<RegistryEntry[]>("extensions.list", []),
     reload: (name) => rpcCall<void>("extensions.reload", [name]),
+    invoke: (name, method, args) => rpcCall<unknown>("extensions.invoke", [name, method, args]),
   };
   return client;
 }

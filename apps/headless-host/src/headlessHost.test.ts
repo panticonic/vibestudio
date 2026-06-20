@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { HeadlessHost } from "./headlessHost.js";
 import type { HeadlessHostConfig } from "./config.js";
+import { LeaseTracker } from "@natstack/shared/panel/leaseTracker";
+import type { PanelRuntimeLease } from "@natstack/shared/panel/panelLease";
 
 function config(): HeadlessHostConfig {
   return {
@@ -82,5 +84,55 @@ describe("HeadlessHost lifecycle guards", () => {
     await (host as unknown as { intentQueue: Promise<void> }).intentQueue;
 
     expect(releaseAndUnload).toHaveBeenCalledWith("panel-1", "load failed");
+  });
+
+  it("never capacity-evicts a panel pinned by an active CDP client", async () => {
+    const host = new HeadlessHost({ ...config(), maxPanels: 2 });
+    const tracker = new LeaseTracker("headless-test");
+    // Two slots loaded; the OLDEST one (pinned) must be skipped, evicting the next.
+    const makeLease = (slotId: string, keepLoaded: boolean, acquiredAt: number) =>
+      ({
+        slotId,
+        runtimeEntityId: `panel:${slotId}`,
+        clientSessionId: "headless-test",
+        hostConnectionId: "headless-test",
+        connectionId: `c-${slotId}`,
+        holderLabel: "Headless",
+        platform: "headless",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+        keepLoaded,
+        acquiredAt,
+      }) as unknown as PanelRuntimeLease;
+    tracker.reconcile({
+      version: { epoch: "e1", counter: 1 },
+      leases: [makeLease("pinned-old", true, 1), makeLease("free-new", false, 2)],
+    });
+
+    const lastUsed = new Map<string, number>([
+      ["pinned-old", 100],
+      ["free-new", 200],
+    ]);
+    const releaseAndUnload = vi.fn(async () => undefined);
+    Object.assign(
+      host as unknown as {
+        tracker: LeaseTracker;
+        pages: unknown;
+        releaseAndUnload: typeof releaseAndUnload;
+      },
+      {
+        tracker,
+        pages: {
+          slots: () => ["pinned-old", "free-new"],
+          lastUsedAt: (slotId: string) => lastUsed.get(slotId),
+        },
+        releaseAndUnload,
+      }
+    );
+
+    await (host as unknown as { enforcePanelCap(): Promise<void> }).enforcePanelCap();
+
+    // Oldest (pinned) was skipped; the next-oldest free panel is evicted instead.
+    expect(releaseAndUnload).toHaveBeenCalledWith("free-new", "panel cap");
   });
 });

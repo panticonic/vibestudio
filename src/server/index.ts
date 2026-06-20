@@ -624,6 +624,29 @@ async function main() {
   const entityCache = new EntityCache();
   entityCache.registerBootstrap({ id: "server", kind: "server" });
   entityCache.registerBootstrap({ id: "electron-main", kind: "shell" });
+  // Reap a connectionless DO/worker's event-push subscriptions when its entity is
+  // retired/deleted. WS panels/shells self-reap on socket close; a DoPushSubscriber
+  // has no socket, so without this the server would keep re-waking a torn-down DO on
+  // every matching emit. (resolve() is null post-delete — the preceding retire reaped.)
+  entityCache.onChange((id, change) => {
+    if (change === "activate") return;
+    const kind = entityCache.resolve(id)?.kind;
+    if (kind === "do" || kind === "worker") eventService.unsubscribeAll(id);
+  });
+  // The single owner of WorkspaceDO entity state: pairs every durable
+  // activate/retire with the hot-cache mirror so they can't drift. The
+  // write-owners (runtime + eval services) receive this instead of raw entity
+  // dispatch. Lazily built once doDispatch is resolvable (registered later).
+  const { WorkspaceEntityStore } = await import("./workspaceEntityStore.js");
+  let entityStoreInstance: import("./workspaceEntityStore.js").WorkspaceEntityStore | null = null;
+  const ensureEntityStore = (
+    doDispatch: import("./doDispatch.js").DODispatch
+  ): import("./workspaceEntityStore.js").WorkspaceEntityStore =>
+    (entityStoreInstance ??= new WorkspaceEntityStore({
+      doDispatch,
+      workspaceId: workspace.config.id,
+      entityCache,
+    }));
   const connectionGrants = new ConnectionGrantService({ entityCache });
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
   const { DEFAULT_PAIRING_CODE_TTL_MS, DeviceAuthStore } =
@@ -1010,6 +1033,37 @@ async function main() {
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
       await instance?.shutdown();
+    },
+  });
+
+  // Pre-warm the eval engine bundle at boot so the first interactive `eval.run`
+  // doesn't pay the cold esbuild compile of `@workspace/eval` (the bulk of the
+  // EvalDO cold start). Fire-and-forget: `buildUnit` caches + coalesces, so the
+  // EvalDO's identical getBuild later hits the warm cache (or awaits this
+  // in-flight build). Externals `[]` matches a fresh isolate's first engine
+  // build. cdp-client is intentionally NOT pre-warmed — it's lazily built only
+  // when an eval actually references CDP.
+  container.registerManaged({
+    name: "evalEnginePrewarm",
+    dependencies: ["buildSystem"],
+    async start(resolve) {
+      const buildSystem = assertPresent(
+        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+      );
+      void buildSystem
+        .getBuild("@workspace/eval", undefined, {
+          library: true,
+          externals: [],
+          libraryTarget: "worker",
+        })
+        .then(() => console.log("[eval] pre-warmed @workspace/eval engine bundle"))
+        .catch((err) =>
+          console.warn(
+            `[eval] engine pre-warm failed (first eval will cold-build): ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          )
+        );
     },
   });
 
@@ -1490,25 +1544,27 @@ async function main() {
     );
   }
 
-  // ── Internal DO-backed services ──
+  // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
   {
-    const { createScopeService } = await import("./services/scopeService.js");
-    let scopeDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
+    const { createEvalService } = await import("./services/evalService.js");
+    let evalDefinition: import("@natstack/shared/serviceDefinition").ServiceDefinition | null =
       null;
     container.registerManaged({
-      name: "scope",
+      name: "eval",
       dependencies: ["doDispatch"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
-        scopeDefinition = createScopeService({
+        evalDefinition = createEvalService({
           doDispatch,
+          entityStore: ensureEntityStore(doDispatch),
+          tokenManager,
         });
       },
       getServiceDefinition() {
-        if (!scopeDefinition) throw new Error("scope service not initialized");
-        return scopeDefinition;
+        if (!evalDefinition) throw new Error("eval service not initialized");
+        return evalDefinition;
       },
     });
   }
@@ -1608,9 +1664,7 @@ async function main() {
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
         runtimeDefinition = createRuntimeService({
-          doDispatch,
-          workspaceId: workspace.config.id,
-          entityCache,
+          entityStore: ensureEntityStore(doDispatch),
           contextFolders: contextFolderManager,
           hooks: {
             prepareDurableObject: (args) => workerdManager.ensureDurableObjectEntity(args),
@@ -1784,6 +1838,11 @@ async function main() {
           extensionHostForGateway?.resolveActiveInvocation(extensionName, invocationToken) ?? null,
       });
       server.initHandlers();
+      // Wire server→DO event push so connectionless DOs receive real
+      // `events.subscribe` deliveries (e.g. vcs.subscribeHead on an EvalDO).
+      eventService.setDoPushDelivery((callerId, channel, payload) =>
+        server.pushEventToCaller(callerId, channel, payload)
+      );
       rpcServerForGateway = server;
       return { server };
     },
@@ -2206,6 +2265,8 @@ async function main() {
         return createWorkerdService({
           workerdManager: workerdManagerInstance,
           buildSystem: buildSystemForWorkerd,
+          approvalQueue,
+          grantStore: capabilityGrantStore,
         });
       },
     });

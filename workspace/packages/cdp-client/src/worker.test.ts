@@ -70,6 +70,18 @@ class FakeWebSocket {
       () => this.dispatch("message", { data: JSON.stringify({ id: message.id, result }) }),
       0
     );
+    if (message.method === "Page.navigate") {
+      // Real Chrome fires the load lifecycle event AFTER the navigate response. Emit it after the
+      // response (queued later) so the client's navigation-settled wait — which goto() only registers
+      // once it has awaited the navigate response — actually catches it instead of hanging to timeout.
+      setTimeout(
+        () =>
+          this.dispatch("message", {
+            data: JSON.stringify({ method: "Page.loadEventFired", params: { timestamp: 0 } }),
+          }),
+        0
+      );
+    }
   }
 
   close(): void {

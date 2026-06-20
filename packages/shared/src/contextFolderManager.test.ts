@@ -64,7 +64,12 @@ describe("ContextFolderManager", () => {
     const cfm = manager(materialize);
     const first = cfm.ensureContextFolder("ctx-1");
     const second = cfm.ensureContextFolder("ctx-1");
-    await new Promise((res) => setTimeout(res, 0));
+    // `materializing` is set only AFTER `fs.access` rejects (real I/O), so a single
+    // macrotask tick is racy under full-suite load. Poll until materialization is
+    // actually in-flight — the gate holds it in "materializing" until we resolve it.
+    for (let i = 0; i < 200 && cfm.getContextFolderState("ctx-1").status !== "materializing"; i++) {
+      await new Promise((res) => setTimeout(res, 1));
+    }
     expect(cfm.getContextFolderState("ctx-1").status).toBe("materializing");
     resolveGate();
     expect(await first).toBe(await second);

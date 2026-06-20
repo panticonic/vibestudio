@@ -1,37 +1,37 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+import * as esbuild from "esbuild";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 
-function valueEntry(description) {
-  return { kind: "value", ...(description ? { description } : {}) };
-}
-
-function namespaceEntry(members, description) {
-  return { kind: "namespace", members, ...(description ? { description } : {}) };
-}
-
+/**
+ * Load a runtime-surface manifest by bundling it with esbuild (which resolves
+ * the cross-file imports — panel → core → portable — and strips TS types), then
+ * evaluating the resulting CJS. The manifests are no longer self-contained, so a
+ * regex/`vm` strip can't evaluate them.
+ */
 function loadRuntimeSurface(relativePath, exportName) {
   const filePath = path.join(repoRoot, relativePath);
-  const source = fs.readFileSync(filePath, "utf8");
-  const compiled = source
-    .replace(/^import .*$/gm, "")
-    .replace(
-      new RegExp(`export const ${exportName}: RuntimeSurface =`),
-      "globalThis.__runtimeSurface ="
-    );
-
-  const context = {
-    globalThis: {},
-    valueEntry,
-    namespaceEntry,
-  };
-
-  vm.runInNewContext(compiled, context, { filename: filePath });
-  const runtimeSurface = context.globalThis.__runtimeSurface;
+  const result = esbuild.buildSync({
+    entryPoints: [filePath],
+    bundle: true,
+    format: "cjs",
+    platform: "node",
+    write: false,
+    logLevel: "silent",
+  });
+  const code = result.outputFiles[0].text;
+  const module = { exports: {} };
+  vm.runInNewContext(
+    code,
+    { module, exports: module.exports, require: createRequire(import.meta.url) },
+    { filename: filePath }
+  );
+  const runtimeSurface = module.exports[exportName];
   if (!runtimeSurface || typeof runtimeSurface !== "object") {
     throw new Error(`Failed to load runtime surface from ${relativePath}`);
   }
