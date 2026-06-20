@@ -43,6 +43,10 @@ async function makeHarness(opts: {
   gad?: Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
   driverSql?: Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
   compaction?: { minEntries?: number; triggerBytes?: number };
+  /** Optional gate to inject a TRANSIENT store-load failure: return an Error to
+   *  make the gad call throw (and record nothing). Used to verify the driver
+   *  never silently drops an outcome on a transient store error (F3). */
+  gadFault?: (method: string) => Error | null;
 }) {
   const gad = opts.gad ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "gad" }));
   const driverHost =
@@ -73,8 +77,11 @@ async function makeHarness(opts: {
     gad: {
       // The driver runs INSIDE the agent DO, so its gad-store calls are attributed
       // as a "do" — gad write methods (appendLogEvent/…) are `@rpc({ callers: ["do"] })`.
-      call: <T,>(method: string, args: Record<string, unknown>) =>
-        gad.callAs<T>("do", method, args),
+      call: <T,>(method: string, args: Record<string, unknown>) => {
+        const fault = opts.gadFault?.(method);
+        if (fault) return Promise.reject(fault);
+        return gad.callAs<T>("do", method, args);
+      },
     },
     executorDeps: {
       blobstore: {
@@ -395,6 +402,59 @@ describe("AgentLoopDriver", () => {
     await harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL });
     await settle(harness.driver);
     expect(await logKinds(harness.gad)).toEqual(kindsAfterFirst);
+  });
+
+  it("F3: a TRANSIENT store-load error during deliverEffectOutcome must NOT silently drop the outcome", async () => {
+    // Park a deferred local_tool (the eval pattern), then make the store FAIL on the next fold-load
+    // (getLogHead) so deliverEffectOutcome → applyOutcome → loopForBranch hits a transient error.
+    // Previously loopForBranch swallowed this as `null` and the arriving outcome was DROPPED with the
+    // row left parked forever. Now the error propagates: the row stays parked and a later redelivery
+    // (after the store recovers) completes the invocation.
+    let faultArmed = false;
+    const harness = await makeHarness({
+      script: { model: [toolCallReply("tc-1"), textReply("done")], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "local_tool"
+          ? ({
+              kind: "local_tool",
+              async execute() {
+                return { deferred: true };
+              },
+            } satisfies EffectExecutor)
+          : null,
+      // Fail ONLY the fold-load head read, and only while armed — appends still work.
+      gadFault: (method) => (faultArmed && method === "getLogHead" ? new Error("store unavailable") : null),
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver);
+    // Parked: the deferred local_tool row is kept, the turn stays open.
+    expect(harness.driver.outbox.all()).toEqual([expect.objectContaining({ kind: "local_tool" })]);
+
+    const outcome: EffectOutcome = {
+      kind: "tool",
+      result: { protocolContent: [{ type: "text", text: "[eval] ok" }], details: { success: true } },
+      isError: false,
+    };
+
+    // Force a fresh fold (drop the cached loop) so the next deliver MUST load via getLogHead → faults.
+    harness.driver.dropLoop(CHANNEL);
+    faultArmed = true;
+    // The transient error PROPAGATES (no longer swallowed) — the caller's redrive/alarm retries.
+    await expect(
+      harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL })
+    ).rejects.toThrow(/store unavailable/);
+    // Critically: the outbox row is STILL parked (the outcome was not dropped, the row not deleted).
+    expect(harness.driver.outbox.all()).toEqual([expect.objectContaining({ kind: "local_tool" })]);
+
+    // Store recovers → the redelivery (the redrive/push backstop) settles the invocation normally.
+    faultArmed = false;
+    await harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL });
+    await settle(harness.driver);
+    expect(harness.driver.outbox.all()).toHaveLength(0);
+    const kinds = await logKinds(harness.gad);
+    expect(kinds).toContain("invocation.completed");
+    expect(kinds).toContain("turn.closed");
   });
 
   it("publishes a credential-connect card when a model call suspends for credentials", async () => {

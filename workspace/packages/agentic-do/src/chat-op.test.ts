@@ -409,11 +409,19 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
 class EvalGateProbe extends TestVessel {
   rpcCalls: Array<{ method: string; args: unknown[] }> = [];
   getRunStatus: { status: string; result?: unknown } = { status: "pending" };
+  /** When set, `eval.getRun` REJECTS with this error (a transient store/RPC hiccup). */
+  getRunError: Error | null = null;
+  /** When set, `eval.startRun` REJECTS with this error (the kick-off itself failed). */
+  startRunError: Error | null = null;
   protected override get rpc(): DeferrableRpcClient {
     return {
       call: async (_target: string, method: string, args: unknown[]) => {
         this.rpcCalls.push({ method, args });
-        if (method === "eval.getRun") return this.getRunStatus;
+        if (method === "eval.getRun") {
+          if (this.getRunError) throw this.getRunError;
+          return this.getRunStatus;
+        }
+        if (method === "eval.startRun" && this.startRunError) throw this.startRunError;
         return { runId: (args[0] as { runId: string }).runId, status: "pending" };
       },
     } as unknown as DeferrableRpcClient;
@@ -475,6 +483,40 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     const out = await probe.callGate(CHANNEL, "inv-4", { code: "x", path: "y" });
     expect(out).toMatchObject({ isError: true });
     expect(probe.rpcCalls).toHaveLength(0);
+  });
+
+  it("F4: PARKS (deferred) when the getRun poll throws AFTER startRun succeeded — never a spurious error", async () => {
+    // The run is already in flight server-side (startRun returned). A transient getRun hiccup must
+    // NOT surface as the tool result (that would settle the invocation with a fake error AND drop the
+    // real eval result when the held run later completes). It parks for the push / deferRedrive.
+    const probe = await makeGateProbe();
+    probe.getRunError = new Error("transient store load failed");
+
+    const out = await probe.callGate(CHANNEL, "inv-park", { code: "1+1" });
+
+    // Parked, not errored.
+    expect(out).toEqual({ deferred: true });
+    expect((out as { isError?: boolean }).isError).toBeUndefined();
+    // startRun still kicked off the run (so the result can arrive out-of-band).
+    expect(probe.rpcCalls.find((c) => c.method === "eval.startRun")?.args[0]).toMatchObject({
+      runId: "inv-park",
+      channelId: CHANNEL,
+    });
+    // The poll WAS attempted (and threw).
+    expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(true);
+  });
+
+  it("F4: a startRun failure still propagates (the run was never kicked off — fail fast)", async () => {
+    // startRun throwing means the eval never started; there's nothing parked to settle later, so the
+    // error must propagate to the tool executor (which renders it as the tool outcome). We only park
+    // for a getRun hiccup AFTER a successful startRun.
+    const probe = await makeGateProbe();
+    probe.startRunError = new Error("startRun dispatch failed");
+    await expect(probe.callGate(CHANNEL, "inv-fail", { code: "1+1" })).rejects.toThrow(
+      /startRun dispatch failed/
+    );
+    // The getRun poll was never reached.
+    expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(false);
   });
 });
 

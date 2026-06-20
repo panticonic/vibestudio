@@ -32,6 +32,28 @@ function parseDoRef(
  * connection) the EvalDO's boot reconciliation marks the run interrupted and the agent's `getRun`
  * poll backstop surfaces it — so this is fire-and-forget.
  */
+async function pushEvalComplete(
+  doDispatch: DODispatch,
+  agentRef: string | undefined,
+  channelId: string | undefined,
+  runId: string,
+  result: unknown
+): Promise<void> {
+  if (!agentRef) return;
+  const agentDoRef = parseDoRef(agentRef);
+  if (!agentDoRef) return;
+  // `channelId` lets the agent route the resume (deliverEffectOutcome needs the channel
+  // address); `runId` is the invocationId → effect id.
+  await doDispatch
+    .dispatch(agentDoRef, "onEvalComplete", { runId, result, channelId })
+    .catch((err) => {
+      console.warn(
+        `[eval] onEvalComplete push to ${agentRef} failed (getRun poll backstop covers it):`,
+        err instanceof Error ? err.message : err
+      );
+    });
+}
+
 async function runHeldAndDeliver(
   doDispatch: DODispatch,
   evalDoRef: { source: string; className: string; objectKey: string },
@@ -41,23 +63,43 @@ async function runHeldAndDeliver(
 ): Promise<void> {
   try {
     const result = await doDispatch.dispatchHeld(evalDoRef, "executeRun", runId);
-    if (agentRef) {
-      const agentDoRef = parseDoRef(agentRef);
-      if (agentDoRef) {
-        // `channelId` lets the agent route the resume (deliverEffectOutcome needs the channel
-        // address); `runId` is the invocationId → effect id.
-        await doDispatch
-          .dispatch(agentDoRef, "onEvalComplete", { runId, result, channelId })
-          .catch((err) => {
-            console.warn(
-              `[eval] onEvalComplete push to ${agentRef} failed (getRun poll backstop covers it):`,
-              err instanceof Error ? err.message : err
-            );
-          });
-      }
-    }
+    await pushEvalComplete(doDispatch, agentRef, channelId, runId, result);
   } catch (err) {
     console.warn(`[eval] held run ${runId} failed:`, err instanceof Error ? err.message : err);
+    // F2: the held dispatch died (e.g. a server restart dropped the connection). The agent's own
+    // `getRun` poll backstop MAY re-fire, but if its `deferRedrive` never re-runs the eval gate the
+    // parked invocation hangs forever. So reconcile the run's TERMINAL state from the EvalDO and push
+    // an `onEvalComplete` ourselves — but ONLY when the run is actually terminal. A `done`/`cancelled`
+    // run (boot reconciliation marks an interrupted run with a failed result) settles the agent's
+    // invocation; a still-`pending`/`running` run (genuinely in flight elsewhere) is LEFT ALONE so we
+    // never cut a legitimately long-running eval short — its own completion push covers it.
+    if (!agentRef) return;
+    try {
+      const reconciled = (await doDispatch.dispatch(evalDoRef, "getRun", runId)) as {
+        status?: string;
+        result?: unknown;
+      };
+      const status = String(reconciled?.status ?? "unknown");
+      if (status === "done" && reconciled.result != null) {
+        await pushEvalComplete(doDispatch, agentRef, channelId, runId, reconciled.result);
+      } else if (status === "cancelled" || status === "unknown") {
+        // No durable result to deliver — synthesize a terminal failure so the parked invocation
+        // settles instead of hanging. (`pending`/`running` deliberately fall through: do not bound.)
+        await pushEvalComplete(doDispatch, agentRef, channelId, runId, {
+          success: false,
+          console: "",
+          error:
+            reconciled?.result != null
+              ? String((reconciled.result as { error?: unknown })?.error ?? "eval run interrupted")
+              : "eval run interrupted",
+        });
+      }
+    } catch (reconcileErr) {
+      console.warn(
+        `[eval] reconcile getRun for ${runId} after held failure also failed:`,
+        reconcileErr instanceof Error ? reconcileErr.message : reconcileErr
+      );
+    }
   }
 }
 

@@ -2453,11 +2453,28 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         runId: invocationId,
       },
     ]);
-    const status = await this.rpc.call<{ status: string; result?: EvalRunResult }>(
-      "main",
-      "eval.getRun",
-      [{ subKey: channelId, runId: invocationId }]
-    );
+    // `getRun` is a poll BACKSTOP, not the primary settle path — the run is already
+    // in flight server-side (startRun succeeded). If the poll THROWS (a transient
+    // RPC/store hiccup), do NOT surface it as the tool result: that would settle the
+    // invocation with a spurious error AND drop the real eval result when the held
+    // run later completes (the parked row would be gone). Instead PARK: return
+    // `{deferred:true}` so the row stays leased for the `onEvalComplete` push (or the
+    // ~60s deferRedrive, which re-polls) to settle. This keeps the run parked — it
+    // never bounds the (legitimately long-running) eval.
+    let status: { status: string; result?: EvalRunResult };
+    try {
+      status = await this.rpc.call<{ status: string; result?: EvalRunResult }>(
+        "main",
+        "eval.getRun",
+        [{ subKey: channelId, runId: invocationId }]
+      );
+    } catch (err) {
+      console.warn(
+        `[AgentVessel] eval.getRun poll for ${invocationId} failed (run parked; push/redrive backstop covers it):`,
+        err instanceof Error ? err.message : err
+      );
+      return { deferred: true };
+    }
     if (status.status === "done" && status.result) {
       const formatted = formatEvalResult(status.result);
       return {

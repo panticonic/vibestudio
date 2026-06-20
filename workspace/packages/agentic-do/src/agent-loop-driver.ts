@@ -1319,12 +1319,20 @@ export class AgentLoopDriver {
     }
   }
 
+  /**
+   * Resolve the loop for an outbox row's channel. `this.loop()` NEVER throws for
+   * a genuinely-gone channel — `FoldCache.loadState` returns a fresh empty fold
+   * when `getLogHead` reports no log — so the only way this throws is a TRANSIENT
+   * store-load error (the gad RPC itself failed). Swallowing that as `null` would
+   * silently DROP an arriving outcome (deliverEffectOutcome / onEvalComplete /
+   * onDeferredResult → applyOutcome): the outbox row is never deleted on a load
+   * failure, so the result is lost while the parked row waits forever. Instead we
+   * let the error PROPAGATE so the caller's redrive / alarm retries — the row
+   * stays parked and the next pump re-attempts delivery. (A genuinely-gone channel
+   * still resolves to an empty fold, where reconcile prunes the orphan row.)
+   */
   private async loopForBranch(branchId: string, channelId: string): Promise<LoopInstance | null> {
-    try {
-      void branchId;
-      return await this.loop(channelId);
-    } catch {
-      return null;
-    }
+    void branchId;
+    return await this.loop(channelId);
   }
 }

@@ -337,3 +337,108 @@ describe("createEvalService", () => {
     });
   });
 });
+
+/**
+ * F2: when the held `executeRun` dispatch dies (server restart dropped the connection), the service
+ * reconciles the run's terminal state via `getRun` and pushes `onEvalComplete` itself, so the agent's
+ * parked invocation settles even if its own poll backstop never re-fires.
+ */
+function createHeldFailHarness(opts: {
+  contextId: string;
+  getRunResponse: { status: string; result?: unknown };
+}) {
+  const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
+  const doDispatch = {
+    async dispatchHeld(_ref: unknown, method: string, ..._args: unknown[]) {
+      if (method === "executeRun") {
+        throw new Error("held connection dropped (server restart)");
+      }
+      // run (the synchronous held path) is not exercised here.
+      throw new Error(`unexpected dispatchHeld ${method}`);
+    },
+    async dispatch(ref: unknown, method: string, ...args: unknown[]) {
+      calls.push({ ref, method, args });
+      if (method === "entityResolveContext") return opts.contextId;
+      if (method === "entityActivate") return undefined;
+      if (method === "entityResolve") return null;
+      if (method === "slotResolveByEntity") return null;
+      if (method === "startRun")
+        return { runId: (args[0] as { runId: string }).runId, status: "pending" };
+      if (method === "getRun") return opts.getRunResponse;
+      if (method === "onEvalComplete") return undefined;
+      throw new Error(`unexpected dispatch ${method}`);
+    },
+  } as unknown as DODispatch;
+  const ownerId = "do:agents/worker:Agent:abc";
+  const entityCache = {
+    resolveContext: () => opts.contextId,
+    resolveActive: () => null,
+    resolve: () => null,
+    _onActivate() {},
+    _onRetire() {},
+  } as unknown as EntityCache;
+  const entityStore = new WorkspaceEntityStore({ doDispatch, workspaceId: "ws_1", entityCache });
+  const service = createEvalService({
+    doDispatch,
+    entityStore,
+    tokenManager: {
+      ensureToken: (id: string) => `tok:${id}`,
+    } as unknown as Parameters<typeof createEvalService>[0]["tokenManager"],
+  });
+  return { service, calls, ownerId };
+}
+
+describe("createEvalService — F2 held-run failure reconciliation", () => {
+  it("pushes onEvalComplete with the reconciled getRun result when the held run died but completed (done)", async () => {
+    const result = { success: true, console: "ok", returnValue: 7 };
+    const { service, calls, ownerId } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "done", result },
+    });
+
+    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
+      { subKey: "chan_1", channelId: "chan_1", code: "return 7;", runId: "inv-h1" },
+    ]);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // After the held dispatch threw, the service reconciled via getRun and pushed the REAL result.
+    expect(calls.find((c) => c.method === "getRun")).toMatchObject({ args: ["inv-h1"] });
+    expect(calls.find((c) => c.method === "onEvalComplete")).toMatchObject({
+      ref: { source: "agents/worker", className: "Agent", objectKey: "abc" },
+      args: [expect.objectContaining({ runId: "inv-h1", channelId: "chan_1", result })],
+    });
+  });
+
+  it("pushes a synthetic terminal failure when the held run is gone (cancelled/unknown)", async () => {
+    const { service, calls, ownerId } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "cancelled" },
+    });
+
+    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
+      { subKey: "chan_1", channelId: "chan_1", code: "return 1;", runId: "inv-h2" },
+    ]);
+    await new Promise((r) => setTimeout(r, 10));
+
+    const push = calls.find((c) => c.method === "onEvalComplete");
+    expect(push).toBeTruthy();
+    expect((push!.args[0] as { result: { success: boolean } }).result.success).toBe(false);
+    expect((push!.args[0] as { runId: string }).runId).toBe("inv-h2");
+  });
+
+  it("does NOT push a terminal when the run is still in flight (running) — never bounds a long eval", async () => {
+    const { service, calls, ownerId } = createHeldFailHarness({
+      contextId: "ctx_agent",
+      getRunResponse: { status: "running" },
+    });
+
+    await service.handler({ caller: createVerifiedCaller(ownerId, "do") }, "startRun", [
+      { subKey: "chan_1", channelId: "chan_1", code: "while(true){}", runId: "inv-h3" },
+    ]);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // The run is genuinely still running elsewhere → leave it alone (its own completion push covers
+    // it); forcing a terminal here would cut a legitimately long-running eval short.
+    expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
+  });
+});
