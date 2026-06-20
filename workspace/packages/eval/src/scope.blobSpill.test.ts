@@ -1,0 +1,126 @@
+import { describe, expect, it } from "vitest";
+import { ScopeManager } from "./scope.js";
+import { SCOPE_BLOB_REF } from "./scopeSerialize.js";
+import type { ScopeEntry, ScopePersistence } from "./scopePersistence.js";
+
+/** In-memory persistence with a content-addressed blob store + GC — mirrors SqlScopePersistence. */
+function memPersistence() {
+  const rows = new Map<string, ScopeEntry>();
+  const blobs = new Map<string, string>();
+  const digest = (s: string) => {
+    let h = 5381;
+    for (let i = 0; i < s.length; i += 1) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+    return `h${h.toString(16)}-${s.length}`;
+  };
+  const p: ScopePersistence & { rows: typeof rows; blobs: typeof blobs } = {
+    rows,
+    blobs,
+    async upsert(e) {
+      rows.set(e.id, { ...e, blobRefs: [...(e.blobRefs ?? [])] });
+    },
+    async loadCurrent() {
+      return [...rows.values()].sort((a, b) => b.createdAt - a.createdAt)[0] ?? null;
+    },
+    async get(id) {
+      return rows.get(id) ?? null;
+    },
+    async list() {
+      return [];
+    },
+    async putBlob(json) {
+      const d = digest(json);
+      blobs.set(d, json);
+      return d;
+    },
+    async getBlob(d) {
+      return blobs.get(d) ?? null;
+    },
+    async sweepBlobs() {
+      const live = new Set<string>();
+      for (const e of rows.values()) for (const d of e.blobRefs ?? []) live.add(d);
+      for (const d of [...blobs.keys()]) if (!live.has(d)) blobs.delete(d);
+    },
+  };
+  return p;
+}
+
+const set = (m: ScopeManager, k: string, v: unknown) => {
+  (m.current as Record<string, unknown>)[k] = v;
+};
+const get = (m: ScopeManager, k: string) => (m.current as Record<string, unknown>)[k];
+
+describe("ScopeManager — blob-spilled large values", () => {
+  it("persists + hydrates a large value losslessly via the blob store", async () => {
+    const p = memPersistence();
+    const big = "x".repeat(512 * 1024);
+    const m1 = new ScopeManager({ channelId: "c", panelId: "pn", persistence: p });
+    set(m1, "results", big);
+    set(m1, "small", { ok: 1 });
+    await m1.api.save();
+
+    expect(p.blobs.size).toBe(1); // `results` spilled, `small` inline
+    const row = [...p.rows.values()][0]!;
+    expect(row.data.length).toBeLessThan(64 * 1024); // inline row stays tiny
+    expect(row.blobRefs).toHaveLength(1);
+
+    const m2 = new ScopeManager({ channelId: "c", panelId: "pn", persistence: p });
+    await m2.hydrate();
+    expect(get(m2, "results")).toBe(big); // full value back — nothing lost
+    expect(get(m2, "small")).toEqual({ ok: 1 });
+  });
+
+  it("sweeps the orphaned blob when a spilled value is overwritten with a small one", async () => {
+    const p = memPersistence();
+    const m = new ScopeManager({ channelId: "c", panelId: "pn", persistence: p });
+    set(m, "results", "x".repeat(512 * 1024));
+    await m.api.save();
+    expect(p.blobs.size).toBe(1);
+
+    set(m, "results", "now small");
+    await m.api.save();
+    expect(p.blobs.size).toBe(0); // old blob no longer referenced → GC'd
+  });
+
+  it("does NOT misinterpret user data that mimics the spill marker (no collision)", async () => {
+    const p = memPersistence();
+    const fake = { [SCOPE_BLOB_REF]: "not-a-real-digest", note: "user data" };
+    const m1 = new ScopeManager({ channelId: "c", panelId: "pn", persistence: p });
+    set(m1, "fake", fake);
+    await m1.api.save();
+    expect(p.blobs.size).toBe(0); // a small object — nothing actually spilled
+
+    const m2 = new ScopeManager({ channelId: "c", panelId: "pn", persistence: p });
+    await m2.hydrate();
+    expect(get(m2, "fake")).toEqual(fake); // round-trips intact, not resolved as a blob ref
+  });
+
+  it("surfaces a missing/corrupt spilled blob as a lost key (no brick, no silent undefined)", async () => {
+    const p = memPersistence();
+    const m1 = new ScopeManager({ channelId: "c", panelId: "pn", persistence: p });
+    set(m1, "results", "x".repeat(300 * 1024));
+    set(m1, "keep", 7);
+    await m1.api.save();
+    expect(p.blobs.size).toBe(1);
+    p.blobs.clear(); // simulate the referenced blob going missing/corrupt
+
+    const m2 = new ScopeManager({ channelId: "c", panelId: "pn", persistence: p });
+    const result = await m2.hydrate();
+
+    expect(get(m2, "keep")).toBe(7); // the rest of the scope still loads — no brick
+    expect("results" in (m2.current as object)).toBe(false); // absent, not silently set to undefined
+    expect(result.lost).toContain("results"); // surfaced, not swallowed
+    expect(result.restored).not.toContain("results");
+  });
+
+  it("dedupes identical spilled content (content-addressed)", async () => {
+    const p = memPersistence();
+    const m = new ScopeManager({ channelId: "c", panelId: "pn", persistence: p });
+    const big = "y".repeat(300 * 1024);
+    set(m, "a", big);
+    set(m, "b", big);
+    await m.api.save();
+
+    expect(p.blobs.size).toBe(1); // same content → one blob
+    expect(new Set([...p.rows.values()][0]!.blobRefs)).toEqual(new Set(p.blobs.keys()));
+  });
+});

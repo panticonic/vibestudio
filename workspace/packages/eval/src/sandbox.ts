@@ -20,6 +20,7 @@ import {
   unavailableModuleMessage,
   validateRequires,
   preloadRequires,
+  defaultCompileFunction,
 } from "./execute.js";
 import {
   getMissingPackageDeclarations,
@@ -58,6 +59,19 @@ export interface SandboxOptions {
   loadSourceFile?: LoadSourceFile;
   /** Extra scope variables injected into the sandbox */
   bindings?: Record<string, unknown>;
+  /**
+   * Per-execution module registry. When provided, loaded imports/requires are stored
+   * here instead of the per-isolate global `__natstackModuleMap__`. This isolates module
+   * state between callers that share one isolate (e.g. multi-tenant EvalDO owners). When
+   * absent, falls back to the global map for byte-identical panel behavior.
+   */
+  moduleMap?: Record<string, unknown>;
+  /**
+   * Require function paired with `moduleMap`. When provided, the engine resolves `require`
+   * calls and CJS bundle loads through this instead of the global `__natstackRequire__`.
+   * When absent, falls back to `getDefaultRequire()` (the global require).
+   */
+  require?: (id: string) => unknown;
 }
 
 export interface SandboxResult {
@@ -108,11 +122,14 @@ export interface CompileComponentOptions {
 // Module Map Helpers
 // =============================================================================
 
-function getModuleMap(): Record<string, unknown> {
-  return ((globalThis as Record<string, unknown>)["__natstackModuleMap__"] ??= {}) as Record<
-    string,
-    unknown
-  >;
+function getModuleMap(override?: Record<string, unknown>): Record<string, unknown> {
+  return (
+    override ??
+    (((globalThis as Record<string, unknown>)["__natstackModuleMap__"] ??= {}) as Record<
+      string,
+      unknown
+    >)
+  );
 }
 
 /** Tracks bundle content last loaded per specifier to skip re-execution */
@@ -122,20 +139,27 @@ const loadedBundleContent = new Map<string, string>();
  * Load a CJS library bundle into the panel's module map.
  * Skips re-execution if the bundle content is identical to what's already loaded.
  */
-function loadLibraryBundle(specifier: string, bundleCode: string): void {
-  const moduleMap = getModuleMap();
+function loadLibraryBundle(
+  specifier: string,
+  bundleCode: string,
+  moduleMap: Record<string, unknown>,
+  requireFn?: (id: string) => unknown
+): void {
+  // loadedBundleContent is a per-isolate cache, but it's gated on moduleMap[specifier],
+  // so per-object maps are correct: a fresh map has no entry → the bundle re-executes.
   if (loadedBundleContent.get(specifier) === bundleCode && moduleMap[specifier]) return;
 
-  const requireFn = (globalThis as Record<string, unknown>)["__natstackRequire__"] as
-    | ((id: string) => unknown)
-    | undefined;
-  if (!requireFn) throw new Error("__natstackRequire__ not available");
+  const resolvedRequire =
+    requireFn ??
+    ((globalThis as Record<string, unknown>)["__natstackRequire__"] as
+      | ((id: string) => unknown)
+      | undefined);
+  if (!resolvedRequire) throw new Error("__natstackRequire__ not available");
 
   const exports: Record<string, unknown> = {};
   const module = { exports };
-  // eslint-disable-next-line no-new-func
-  const fn = new Function("require", "exports", "module", bundleCode);
-  fn(requireFn, exports, module);
+  const fn = defaultCompileFunction(["require", "exports", "module"], bundleCode);
+  fn(resolvedRequire, exports, module);
   moduleMap[specifier] = module.exports;
   loadedBundleContent.set(specifier, bundleCode);
 }
@@ -145,9 +169,11 @@ function loadLibraryBundle(specifier: string, bundleCode: string): void {
  */
 async function loadImports(
   imports: Record<string, string>,
-  loadImport: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>
+  loadImport: (specifier: string, ref: string | undefined, externals: string[]) => Promise<string>,
+  moduleMapOverride?: Record<string, unknown>,
+  requireFn?: (id: string) => unknown
 ): Promise<void> {
-  const moduleMap = getModuleMap();
+  const moduleMap = getModuleMap(moduleMapOverride);
   for (const [specifier, refValue] of Object.entries(imports)) {
     // Host-provided modules (panel exposeModules: react, react/jsx-runtime,
     // @radix-ui/*, …) never go through the build service. Asking it for
@@ -158,22 +184,31 @@ async function loadImports(
     // Recompute externals each iteration so earlier imports are externalized
     const externals = Object.keys(moduleMap);
     const bundleCode = await loadImport(specifier, ref, externals);
-    loadLibraryBundle(specifier, bundleCode);
+    loadLibraryBundle(specifier, bundleCode, moduleMap, requireFn);
   }
 }
 
 function installLazyImportLoader(
-  loadImport: SandboxOptions["loadImport"] | undefined
+  loadImport: SandboxOptions["loadImport"] | undefined,
+  moduleMapOverride?: Record<string, unknown>,
+  requireFn?: (id: string) => unknown
 ): (() => void) | null {
   if (!loadImport) return null;
   const globals = globalThis as Record<string, unknown>;
   const previous = globals["__natstackLoadImport__"];
+  // NOTE: __natstackLoadImport__ is a per-isolate global, but it is NOT eval's import path:
+  // eval'd `await import(x)` is compiled by sucrase to `require(x)`, which resolves through
+  // the per-object `require`/moduleMap above (and its specifier auto-loads into that map) —
+  // fully isolated. This global is only read by the runtime's CDP-client lazy loader
+  // (`cdpAutomation.ts`). The closure captures this run's moduleMap/requireFn; the shared slot
+  // means two concurrent cross-object runs could clobber it, but it only loads the stateless
+  // CDP-client module, so there is no cross-owner data leak.
   globals["__natstackLoadImport__"] = async (specifier: string, refValue?: string) => {
-    const moduleMap = getModuleMap();
+    const moduleMap = getModuleMap(moduleMapOverride);
     if (moduleMap[specifier]) return moduleMap[specifier];
     const ref = refValue === "latest" ? undefined : refValue;
     const bundleCode = await loadImport(specifier, ref, Object.keys(moduleMap));
-    loadLibraryBundle(specifier, bundleCode);
+    loadLibraryBundle(specifier, bundleCode, moduleMap, requireFn);
     return moduleMap[specifier];
   };
   return () => {
@@ -193,16 +228,18 @@ async function ensureRequires(
     loadSourceFile?: LoadSourceFile;
     sourcePath?: string;
     imports?: Record<string, string>;
+    moduleMap?: Record<string, unknown>;
+    require?: (id: string) => unknown;
   } = {},
   context?: ExternalRequireContext
 ): Promise<void> {
   if (requires.length === 0) return;
-  const requireFn = getDefaultRequire();
+  const requireFn = options.require ?? getDefaultRequire();
   if (!requireFn) throw new Error("__natstackRequire__ not available. Build may be outdated.");
 
   let validation = validateRequires(requires, requireFn);
   if (!validation.valid && options.loadImport) {
-    const moduleMap = getModuleMap();
+    const moduleMap = getModuleMap(options.moduleMap);
     const missing = requires.filter((r) => !moduleMap[r]);
     const inferredImports = await inferImportsFromPackageJson(missing, {
       importerPath: context?.importerPath ?? options.sourcePath,
@@ -211,7 +248,7 @@ async function ensureRequires(
     });
 
     if (Object.keys(inferredImports).length > 0) {
-      await loadImports(inferredImports, options.loadImport);
+      await loadImports(inferredImports, options.loadImport, options.moduleMap, options.require);
       validation = validateRequires(requires, requireFn);
     }
   }
@@ -223,7 +260,7 @@ async function ensureRequires(
   }
 
   if (!validation.valid) {
-    const missingModules = requires.filter((r) => !getModuleMap()[r]);
+    const missingModules = requires.filter((r) => !getModuleMap(options.moduleMap)[r]);
     const missingDeclarations = await getMissingPackageDeclarations(missingModules, {
       importerPath: context?.importerPath ?? options.sourcePath,
       loadSourceFile: options.loadSourceFile,
@@ -350,6 +387,12 @@ export async function executeSandbox(
   const { syntax = "tsx", bindings = {} } = options;
   const { signal } = options;
 
+  // Per-execution module registry + require. When the caller passes a `moduleMap`/`require`
+  // (e.g. multi-tenant EvalDO, one map per owner), module state is isolated to that map.
+  // Otherwise fall back to the per-isolate globals for byte-identical panel behavior.
+  const moduleMap = options.moduleMap ?? getModuleMap();
+  const requireFn = options.require ?? getDefaultRequire();
+
   const tracking = getAsyncTracking();
   const trackingContext = tracking?.start();
 
@@ -376,14 +419,17 @@ export async function executeSandbox(
     throwIfAborted(signal);
     // (#1) Fail loudly if pre-injected globals are imported from the runtime.
     assertNoPreInjectedImports(code);
-    restoreLazyImportLoader = installLazyImportLoader(options.loadImport);
+    restoreLazyImportLoader = installLazyImportLoader(options.loadImport, moduleMap, requireFn);
 
     // Load on-demand imports
     if (options.imports && Object.keys(options.imports).length > 0) {
       if (!options.loadImport) {
         throw new Error("loadImport callback required when imports are specified");
       }
-      await withAbort(loadImports(options.imports, options.loadImport), signal);
+      await withAbort(
+        loadImports(options.imports, options.loadImport, moduleMap, requireFn),
+        signal
+      );
     }
 
     const prepared = await withAbort(
@@ -394,6 +440,8 @@ export async function executeSandbox(
           sourcePath: options.sourcePath,
           sourceFiles: options.sourceFiles,
           loadSourceFile: options.loadSourceFile,
+          moduleMap,
+          require: requireFn,
         },
         (requires, context) =>
           ensureRequires(
@@ -403,6 +451,8 @@ export async function executeSandbox(
               loadSourceFile: options.loadSourceFile,
               sourcePath: options.sourcePath,
               imports: options.imports,
+              moduleMap,
+              require: requireFn,
             },
             context
           )
@@ -415,7 +465,6 @@ export async function executeSandbox(
     throwIfAborted(signal);
 
     // Validate requires
-    const requireFn = getDefaultRequire();
     if (!requireFn) {
       return {
         success: false,
@@ -428,7 +477,6 @@ export async function executeSandbox(
     if (!validation.valid && options.loadImport) {
       throwIfAborted(signal);
       // Auto-resolve: build missing workspace packages on-demand
-      const moduleMap = getModuleMap();
       const missingModules = transformed.requires.filter((r) => !moduleMap[r]);
       const autoImports = await withAbort(
         inferImportsFromPackageJson(missingModules, {
@@ -441,7 +489,10 @@ export async function executeSandbox(
       if (Object.keys(autoImports).length > 0) {
         throwIfAborted(signal);
         options.onConsole?.(`[eval] Auto-loading: ${Object.keys(autoImports).join(", ")}...`);
-        await withAbort(loadImports(autoImports, options.loadImport), signal);
+        await withAbort(
+          loadImports(autoImports, options.loadImport, moduleMap, requireFn),
+          signal
+        );
         validation = validateRequires(transformed.requires, requireFn);
       }
     }
@@ -455,7 +506,6 @@ export async function executeSandbox(
           error: unavailableModuleMessage(missing),
         };
       }
-      const moduleMap = getModuleMap();
       const available = Object.keys(moduleMap);
       const missingModules = transformed.requires.filter((r) => !moduleMap[r]);
       // For npm packages, suggest the imports parameter
@@ -486,7 +536,7 @@ export async function executeSandbox(
 
     // (#2) Now that workspace modules are loaded, fail loudly on imports of
     // names they do not export (instead of a silent `undefined`).
-    assertNamedExportsExist(code, (specifier) => getModuleMap()[specifier]);
+    assertNamedExportsExist(code, (specifier) => moduleMap[specifier]);
 
     // Enter tracking context
     if (tracking && trackingContext) {
@@ -505,6 +555,7 @@ export async function executeSandbox(
         result = execute(wrapped, {
           console: capture.proxy,
           bindings,
+          require: requireFn,
         });
       } finally {
         tracking?.exit();
@@ -531,7 +582,7 @@ export async function executeSandbox(
     };
 
     const execution = journal
-      ? await runtimeModule.withJournal(journal, runUserCode)
+      ? await runtimeModule.journal.with(journal, runUserCode)
       : await runUserCode();
     throwIfAborted(signal);
     const panelJournalFooter = journal
@@ -574,12 +625,12 @@ function tryRequireRuntimeModule(requireFn: (id: string) => unknown): any | null
 
 function createRuntimeJournal(runtimeModule: any): any | null {
   if (
-    typeof runtimeModule?.Journal !== "function" ||
-    typeof runtimeModule?.withJournal !== "function"
+    typeof runtimeModule?.journal?.Journal !== "function" ||
+    typeof runtimeModule?.journal?.with !== "function"
   ) {
     return null;
   }
-  return new runtimeModule.Journal();
+  return new runtimeModule.journal.Journal();
 }
 
 async function renderPanelJournalFooter(

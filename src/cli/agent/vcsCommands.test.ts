@@ -23,14 +23,43 @@ function stubServer(handle: (body: RpcRequest) => unknown): { rpcBodies: RpcRequ
           JSON.stringify({ shellToken: "tok", callerId: "shell:dev_cli", deviceId: "dev_cli" })
         );
       }
-      const body = JSON.parse(String(init?.body ?? "{}")) as RpcRequest;
+      // Envelope-native /rpc: unwrap the request envelope into the legacy
+      // {type,targetId,method,args} shape tests assert on, and reply with a
+      // response envelope the CLI client unwraps.
+      const envelope = JSON.parse(String(init?.body ?? "{}")) as {
+        from?: string;
+        target?: string;
+        message?: {
+          type?: string;
+          requestId?: string;
+          method?: string;
+          args?: unknown[];
+          event?: string;
+          payload?: unknown;
+        };
+      };
+      const msg = envelope.message ?? {};
+      const target = envelope.target;
+      const body = (msg.type === "event"
+        ? { type: "emit", targetId: target, event: msg.event, payload: msg.payload }
+        : target && target !== "main"
+          ? { type: "call", targetId: target, method: msg.method, args: msg.args ?? [] }
+          : { method: msg.method, args: msg.args ?? [] }) as unknown as RpcRequest;
       rpcBodies.push(body);
-      try {
-        return new Response(JSON.stringify({ result: handle(body) }));
-      } catch (error) {
-        return new Response(
-          JSON.stringify({ error: error instanceof Error ? error.message : String(error) })
+      const respond = (payload: { result?: unknown; error?: string }): Response =>
+        new Response(
+          JSON.stringify({
+            from: envelope.target,
+            target: envelope.from,
+            delivery: { caller: { callerId: "main", callerKind: "server" } },
+            provenance: [],
+            message: { type: "response", requestId: msg.requestId, ...payload },
+          })
         );
+      try {
+        return respond({ result: handle(body) });
+      } catch (error) {
+        return respond({ error: error instanceof Error ? error.message : String(error) });
       }
     })
   );

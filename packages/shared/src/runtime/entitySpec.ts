@@ -24,6 +24,14 @@ export interface EntityRecord {
   className?: string;
   key: string;
   stateArgs?: unknown;
+  /**
+   * The entity id of the verified caller that created this entity (its launch
+   * parent), or undefined for self/bootstrap-created entities. Server-authoritative
+   * (set from `ctx.caller` at `runtime.createEntity`). Used to resolve a runtime's
+   * nearest panel ancestor — e.g. eval launched by an agent inherits the agent's
+   * owning panel as its `parent`.
+   */
+  parentId?: string;
   createdAt: number;
 
   // ── Lifecycle (mutable) ──
@@ -66,6 +74,7 @@ export type RuntimeEntityCreateSpec =
       className: string;
       key?: string;
       contextId?: string | null;
+      stateArgs?: unknown;
     }
   | {
       /** Inert session entity: no workerd/panel runtime, just identity + context. */

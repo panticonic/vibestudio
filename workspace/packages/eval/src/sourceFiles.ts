@@ -13,6 +13,14 @@ export interface SourceFileOptions {
   sourcePath?: string;
   sourceFiles?: Record<string, string>;
   loadSourceFile?: LoadSourceFile;
+  /**
+   * Per-execution module registry for local modules. When provided, compiled local modules
+   * are stored here instead of the per-isolate global `__natstackModuleMap__` (isolates
+   * multi-tenant callers sharing an isolate). Falls back to the global map when absent.
+   */
+  moduleMap?: Record<string, unknown>;
+  /** Require paired with `moduleMap`; falls back to `getDefaultRequire()` when absent. */
+  require?: (id: string) => unknown;
 }
 
 export interface PreparedSource {
@@ -510,14 +518,20 @@ async function loadLocalModules(
   files: Map<string, string>,
   resolutions: Map<string, string>,
   syntax: TransformOptions["syntax"],
-  ensureExternalRequires: EnsureExternalRequires
+  ensureExternalRequires: EnsureExternalRequires,
+  moduleMapOverride?: Record<string, unknown>,
+  requireOverride?: (id: string) => unknown
 ): Promise<void> {
   const localModuleIds = new Set(files.keys());
   const loadedContent = new Map<string, string>();
   const loading = new Set<string>();
-  const moduleMap = ((globalThis as Record<string, unknown>)["__natstackModuleMap__"] ??=
-    {}) as Record<string, unknown>;
-  const requireFn = getDefaultRequire();
+  const moduleMap =
+    moduleMapOverride ??
+    (((globalThis as Record<string, unknown>)["__natstackModuleMap__"] ??= {}) as Record<
+      string,
+      unknown
+    >);
+  const requireFn = requireOverride ?? getDefaultRequire();
   if (!requireFn) throw new Error("__natstackRequire__ not available. Build may be outdated.");
 
   async function loadModule(filePath: string): Promise<void> {
@@ -597,7 +611,9 @@ export async function prepareSourceCode(
     files,
     resolutions,
     options.syntax,
-    ensureExternalRequires
+    ensureExternalRequires,
+    options.moduleMap,
+    options.require
   );
 
   return {

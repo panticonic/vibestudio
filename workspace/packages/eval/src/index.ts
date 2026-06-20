@@ -63,7 +63,8 @@ export type {
 // REPL scope — persistent scope across eval calls
 export { ScopeManager } from "./scope.js";
 export type { ScopesApi, HydrateResult } from "./scope.js";
-export { RpcScopePersistence } from "./rpcScopePersistence.js";
+export { SqlScopePersistence, SCOPE_TABLE } from "./sqlScopePersistence.js";
+export type { SqlLike } from "./sqlScopePersistence.js";
 export type {
   ScopePersistence,
   ScopeEntry,

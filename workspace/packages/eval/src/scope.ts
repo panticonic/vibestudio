@@ -6,7 +6,16 @@
  */
 
 import type { ScopePersistence, ScopeListEntry } from "./scopePersistence.js";
-import { serializeScope, deserializeScope } from "./scopeSerialize.js";
+import {
+  serializeScope,
+  deserializeScope,
+  deserializeScopeValue,
+  isScopeBlobRef,
+  SCOPE_BLOB_REF,
+} from "./scopeSerialize.js";
+
+/** Sentinel: a referenced spill blob could not be read (missing/corrupt). Surfaced as a lost key. */
+const BLOB_RESOLVE_FAILED = Symbol("blobResolveFailed");
 
 // ---------------------------------------------------------------------------
 // Public API types
@@ -154,8 +163,17 @@ export class ScopeManager {
     this.currentCreatedAt = entry.createdAt;
 
     const restoredMap = deserializeScope(entry.data);
+    const validDigests = new Set(entry.blobRefs ?? []);
+    const blobFailures: string[] = [];
     for (const [key, value] of restoredMap) {
-      this.backing.set(key, value);
+      const resolved = await this.resolveBlobRef(value, validDigests);
+      if (resolved === BLOB_RESOLVE_FAILED) {
+        // A referenced blob was missing/corrupt — surface it as lost rather than silently
+        // setting `undefined`, and don't brick the rest of the scope.
+        blobFailures.push(key);
+        continue;
+      }
+      this.backing.set(key, resolved);
     }
 
     // Compute what was lost (dropped entirely — not in serializedKeys or partialKeys)
@@ -170,8 +188,8 @@ export class ScopeManager {
     ];
 
     return {
-      restored: entry.serializedKeys,
-      lost: lostTopLevel,
+      restored: entry.serializedKeys.filter((k) => !blobFailures.includes(k)),
+      lost: [...lostTopLevel, ...blobFailures],
       partial: entry.partialKeys,
     };
   }
@@ -186,17 +204,44 @@ export class ScopeManager {
     // Snapshot dirty before the await — if a mutation arrives during the
     // upsert, dirty will be re-set to true and we must not clear it.
     this.dirty = false;
-    const { json, serializedKeys, droppedPaths, partialKeys } = serializeScope(this.backing);
-    await this.persistence.upsert({
+    const { serialized, spills, serializedKeys, droppedPaths, partialKeys } = serializeScope(
+      this.backing
+    );
+    const p = this.persistence;
+    const blobRefs: string[] = [];
+    if (spills.length > 0) {
+      if (p.putBlob) {
+        // Spill large values to the content-addressed blob store (lossless), stamping each
+        // placeholder with its digest.
+        for (const spill of spills) {
+          const digest = await p.putBlob(spill.valueJson);
+          spill.placeholder[SCOPE_BLOB_REF] = digest;
+          blobRefs.push(digest);
+        }
+      } else {
+        // No blob store — fall back to dropping the oversized values (legacy behaviour).
+        for (const spill of spills) {
+          delete serialized[spill.key];
+          droppedPaths.push({
+            path: spill.key,
+            reason: `value too large to inline (${spill.bytes} chars) and no blob store available`,
+          });
+        }
+      }
+    }
+    await p.upsert({
       id: this.currentScopeId,
       channelId: this.channelId,
       panelId: this.panelId,
-      data: json,
+      data: JSON.stringify(serialized),
       serializedKeys,
       droppedPaths,
       partialKeys,
+      blobRefs,
       createdAt: this.currentCreatedAt,
     });
+    // GC orphaned blobs so overwritten/cleared large values don't accumulate.
+    if (p.sweepBlobs) await p.sweepBlobs();
   }
 
   // -------------------------------------------------------------------------
@@ -237,11 +282,41 @@ export class ScopeManager {
     const entry = await this.persistence.get(id);
     if (!entry) return null;
     const map = deserializeScope(entry.data);
+    const validDigests = new Set(entry.blobRefs ?? []);
     const obj: Record<string, unknown> = {};
     for (const [key, value] of map) {
-      obj[key] = value;
+      const resolved = await this.resolveBlobRef(value, validDigests);
+      if (resolved !== BLOB_RESOLVE_FAILED) obj[key] = resolved; // omit a key whose blob is unreadable
     }
     return obj;
+  }
+
+  /**
+   * Hydrate a spilled-value placeholder from the blob store; pass everything else through unchanged.
+   * Only digests this scope actually spilled (`validDigests`) are resolved — so a user value that
+   * merely *looks* like a placeholder is left untouched (no collision). A missing or corrupt blob
+   * returns `BLOB_RESOLVE_FAILED` (the caller surfaces it as a lost key) rather than throwing or
+   * silently substituting `undefined`, so one bad blob neither bricks the load nor hides the problem.
+   */
+  private async resolveBlobRef(
+    value: unknown,
+    validDigests: Set<string>
+  ): Promise<unknown | typeof BLOB_RESOLVE_FAILED> {
+    if (!isScopeBlobRef(value)) return value;
+    const digest = value[SCOPE_BLOB_REF] as string;
+    if (!validDigests.has(digest) || !this.persistence.getBlob) return value;
+    let blobJson: string | null;
+    try {
+      blobJson = await this.persistence.getBlob(digest);
+    } catch {
+      return BLOB_RESOLVE_FAILED; // store read failed
+    }
+    if (blobJson == null) return BLOB_RESOLVE_FAILED; // referenced blob missing
+    try {
+      return deserializeScopeValue(blobJson);
+    } catch {
+      return BLOB_RESOLVE_FAILED; // corrupt blob content
+    }
   }
 
   private async listScopes(): Promise<ScopeListEntry[]> {

@@ -101,22 +101,27 @@ let platformIgnoreMatcher: { ignores: (s: string) => boolean } | null = null;
  * are enforced here (not the user's dynamic `.gadignore`).
  */
 export async function assertWritableVcsPath(p: string): Promise<void> {
+  // Actionable hint: the guard is a denylist (anything not platform-ignored is trackable), so steer
+  // callers to a concrete writable location rather than just naming the rejected one.
+  const hint =
+    "VCS tracks workspace source — write to a non-ignored path (e.g. projects/…, panels/…, packages/…), " +
+    "not a platform-ignored dir (.natstack, .git, .gad, .tmp, node_modules, dist) or ignored file (.env, *.log).";
   const segs = p.split("/");
   for (let i = 0; i < segs.length - 1; i++) {
     if (ALWAYS_IGNORED_DIRS.has(segs[i]!)) {
-      throw new Error(`vcs path is in a platform-ignored directory: ${JSON.stringify(p)}`);
+      throw new Error(`vcs path is in a platform-ignored directory: ${JSON.stringify(p)}. ${hint}`);
     }
   }
   const base = segs[segs.length - 1]!;
   if (ALWAYS_IGNORED_DIRS.has(base) || ALWAYS_IGNORED_FILES.has(base)) {
-    throw new Error(`vcs path is platform-ignored: ${JSON.stringify(p)}`);
+    throw new Error(`vcs path is platform-ignored: ${JSON.stringify(p)}. ${hint}`);
   }
   if (!platformIgnoreMatcher) {
     const { default: ignore } = await import("ignore");
     platformIgnoreMatcher = ignore().add(SNAPSHOT_IGNORE_PATTERNS);
   }
   if (platformIgnoreMatcher.ignores(p)) {
-    throw new Error(`vcs path is platform-ignored: ${JSON.stringify(p)}`);
+    throw new Error(`vcs path is platform-ignored: ${JSON.stringify(p)}. ${hint}`);
   }
 }
 

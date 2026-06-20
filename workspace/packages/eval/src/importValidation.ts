@@ -2,15 +2,23 @@
  * Static-import validation for the eval sandbox.
  *
  * Turns two silent footguns into clear, actionable errors:
- *  1. Importing a pre-injected global (`chat`/`scope`/`scopes`/`help`) from
- *     `@workspace/runtime` — these are ambient and importing them shadows the
- *     working binding with `undefined`.
+ *  1. Importing an ambient-only global (the `EVAL_AMBIENT_ONLY` set:
+ *     `services`/`scope`/`scopes`/`db`/`ctx`/`help`/`chat`) from
+ *     `@workspace/runtime` — these are injected free variables, not exports, so
+ *     importing them shadows the working binding with `undefined`. (`rpc`/`fs`
+ *     are NOT in this set — they are genuinely importable.)
  *  2. Importing a name a workspace module does not export — a CJS destructure
  *     yields `undefined` silently, surfacing as a confusing error far away.
  */
 
-/** Eval globals that are injected, not exported by `@workspace/runtime`. */
-const PRE_INJECTED = new Set(["chat", "scope", "scopes", "help"]);
+import { EVAL_AMBIENT_ONLY } from "@natstack/shared/runtimeSurface.eval";
+
+/**
+ * Eval globals that are injected ambiently, NOT exported by `@workspace/runtime`
+ * — importing them shadows the working binding with `undefined`. Single source:
+ * `EVAL_AMBIENT_ONLY` (so this can't drift from the EvalDO's actual injection).
+ */
+const PRE_INJECTED = new Set<string>(EVAL_AMBIENT_ONLY);
 const RUNTIME_SPECIFIER = "@workspace/runtime";
 /** Workspace-controlled namespaces with stable, statically-known named exports. */
 const WORKSPACE_NAMESPACE = /^@(?:workspace|workspace-skills|natstack)\//;

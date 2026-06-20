@@ -6,7 +6,33 @@ import * as path from "node:path";
 
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import { GadWorkspaceDO } from "../../../workspace/workers/gad-store/index.js";
-import { GadVcs, VCS_LOG_ID, VCS_MAIN_HEAD, vcsContextHead, type GadCaller } from "./store.js";
+import {
+  assertWritableVcsPath,
+  GadVcs,
+  VCS_LOG_ID,
+  VCS_MAIN_HEAD,
+  vcsContextHead,
+  type GadCaller,
+} from "./store.js";
+
+describe("assertWritableVcsPath", () => {
+  it("rejects a platform-ignored dir with an ACTIONABLE error (names a writable location)", async () => {
+    await expect(assertWritableVcsPath(".natstack/tmp/x.txt")).rejects.toThrow(
+      /platform-ignored directory.*projects\//s
+    );
+  });
+
+  it("rejects an ignored file with the same actionable hint", async () => {
+    await expect(assertWritableVcsPath(".env")).rejects.toThrow(
+      /platform-ignored.*non-ignored path/s
+    );
+  });
+
+  it("allows a normal tracked source path", async () => {
+    await expect(assertWritableVcsPath("projects/foo.txt")).resolves.toBeUndefined();
+    await expect(assertWritableVcsPath("panels/my-panel/index.tsx")).resolves.toBeUndefined();
+  });
+});
 
 type TestGad = Awaited<ReturnType<typeof createTestDO<GadWorkspaceDO>>>;
 

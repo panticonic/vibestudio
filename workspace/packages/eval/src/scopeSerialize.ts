@@ -6,19 +6,52 @@
  * circular references, and max depth.
  */
 
-const MAX_DEPTH = 20;
-const MAX_SCOPE_VALUE_JSON_CHARS = 256 * 1024;
-const MAX_SCOPE_JSON_CHARS = 768 * 1024;
+// Depth is a safety/perf bound only — circular refs are handled separately by `seen`, so it can be
+// generous; deeply-nested legitimate data (e.g. test-result trees) is preserved, not truncated.
+const MAX_DEPTH = 100;
+/** Top-level values larger than this spill to the content-addressed blob store (never dropped). */
+const SPILL_THRESHOLD_CHARS = 128 * 1024;
+/** Inline (in-row) scope budget — the largest remaining values spill until the row fits comfortably
+ *  under the DO-SQLite per-value limit. */
+const MAX_INLINE_TOTAL_CHARS = 256 * 1024;
+/** Diagnostic cap: bounds the `dropped_paths` record so a pathological value can't overflow it. */
+const MAX_DROPPED_ENTRIES = 200;
+
+/**
+ * Marker for a spilled top-level value: `{ [SCOPE_BLOB_REF]: <digest>, bytes }`. On hydrate, the
+ * blob's content replaces it inline. Distinctive to avoid colliding with user data.
+ */
+export const SCOPE_BLOB_REF = "__natstackScopeBlob__";
+
+/** A top-level value too large to inline — its serialized JSON is stored in the blob store and the
+ *  placeholder (embedded in `serialized`) gets the content digest stamped in by `persist`. */
+export interface ScopeSpill {
+  placeholder: Record<string, unknown>;
+  valueJson: string;
+  bytes: number;
+  key: string;
+}
 
 export interface SerializedScope {
-  /** JSON string of serializable data */
-  json: string;
-  /** Top-level keys that were fully serialized */
+  /** The scope object; large top-level values are replaced by blob-ref placeholders. */
+  serialized: Record<string, unknown>;
+  /** Large values to store in the blob store (the caller stamps each placeholder's digest). */
+  spills: ScopeSpill[];
+  /** Top-level keys that were fully serialized (incl. losslessly spilled). */
   serializedKeys: string[];
-  /** Paths that were dropped, with reasons */
+  /** Paths that were dropped, with reasons (functions/symbols/circular/depth — bounded). */
   droppedPaths: Array<{ path: string; reason: string }>;
-  /** Top-level keys that were only partially serialized */
+  /** Top-level keys that were only partially serialized. */
   partialKeys: string[];
+}
+
+/** A spilled-value placeholder produced by `serializeScope` (top-level only). */
+export function isScopeBlobRef(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as Record<string, unknown>)[SCOPE_BLOB_REF] === "string"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -176,58 +209,60 @@ export function serializeScope(scope: Map<string, unknown>): SerializedScope {
   for (const [key, value] of scope) {
     const ser = serializeValue(value, key, dropped, new Set(), 0);
     if (ser !== undefined) {
-      const jsonChars = serializedJsonChars(ser);
-      if (jsonChars > MAX_SCOPE_VALUE_JSON_CHARS) {
-        dropped.push({
-          path: key,
-          reason: `serialized value too large (${jsonChars} chars > ${MAX_SCOPE_VALUE_JSON_CHARS})`,
-        });
-      } else {
-        entries.push({ key, value: ser, jsonChars });
-      }
+      entries.push({ key, value: ser, jsonChars: serializedJsonChars(ser) });
+    }
+  }
+
+  // Decide which top-level values SPILL to the content-addressed blob store (lossless) rather than
+  // being inlined in the scope row: any value over the per-value threshold, plus the largest
+  // remaining values if the inline total is still over budget. (Previously such values were DROPPED.)
+  const spillKeys = new Set<string>();
+  for (const e of entries) if (e.jsonChars > SPILL_THRESHOLD_CHARS) spillKeys.add(e.key);
+  let inlineTotal = entries
+    .filter((e) => !spillKeys.has(e.key))
+    .reduce((sum, e) => sum + e.jsonChars, 0);
+  if (inlineTotal > MAX_INLINE_TOTAL_CHARS) {
+    for (const e of entries
+      .filter((x) => !spillKeys.has(x.key))
+      .sort((a, b) => b.jsonChars - a.jsonChars)) {
+      spillKeys.add(e.key);
+      inlineTotal -= e.jsonChars;
+      if (inlineTotal <= MAX_INLINE_TOTAL_CHARS) break;
     }
   }
 
   const serialized: Record<string, unknown> = {};
-  for (const entry of entries) serialized[entry.key] = entry.value;
-
-  let json = JSON.stringify(serialized);
-  if (json.length > MAX_SCOPE_JSON_CHARS) {
-    for (const entry of [...entries].sort((a, b) => b.jsonChars - a.jsonChars)) {
-      delete serialized[entry.key];
-      dropped.push({
-        path: entry.key,
-        reason: `dropped to keep serialized scope under ${MAX_SCOPE_JSON_CHARS} chars`,
-      });
-      json = JSON.stringify(serialized);
-      if (json.length <= MAX_SCOPE_JSON_CHARS) break;
+  const spills: ScopeSpill[] = [];
+  for (const e of entries) {
+    if (spillKeys.has(e.key)) {
+      const placeholder: Record<string, unknown> = { [SCOPE_BLOB_REF]: "", bytes: e.jsonChars };
+      serialized[e.key] = placeholder;
+      spills.push({ placeholder, valueJson: JSON.stringify(e.value), bytes: e.jsonChars, key: e.key });
+    } else {
+      serialized[e.key] = e.value;
     }
   }
 
-  // Determine which top-level keys are fully vs partially serialized
+  // Bound the dropped-paths diagnostic so a pathological structure can't overflow the column.
+  if (dropped.length > MAX_DROPPED_ENTRIES) {
+    const omitted = dropped.length - MAX_DROPPED_ENTRIES;
+    dropped.length = MAX_DROPPED_ENTRIES;
+    dropped.push({ path: "(truncated)", reason: `${omitted} more dropped paths omitted` });
+  }
+
+  // serializedKeys = fully-preserved top-level keys (spilled values are lossless, so they count);
+  // partialKeys = keys with some internal drops (functions/circular/depth).
   const serializedKeys: string[] = [];
   const partialKeys: string[] = [];
-
   for (const key of scope.keys()) {
+    if (!(key in serialized)) continue; // not serializable at all (already in droppedPaths)
     const hasDrops = dropped.some(
       (d) => d.path === key || d.path.startsWith(key + ".") || d.path.startsWith(key + "["),
     );
-    if (key in serialized) {
-      if (hasDrops) {
-        partialKeys.push(key);
-      } else {
-        serializedKeys.push(key);
-      }
-    }
-    // If key not in serialized at all, it was fully dropped — already in droppedPaths
+    (hasDrops ? partialKeys : serializedKeys).push(key);
   }
 
-  return {
-    json,
-    serializedKeys,
-    droppedPaths: dropped,
-    partialKeys,
-  };
+  return { serialized, spills, serializedKeys, droppedPaths: dropped, partialKeys };
 }
 
 function serializedJsonChars(value: unknown): number {
@@ -292,4 +327,9 @@ export function deserializeScope(json: string): Map<string, unknown> {
     map.set(key, deserializeValue(value));
   }
   return map;
+}
+
+/** Deserialize a single spilled value's JSON (the content stored in the blob store). */
+export function deserializeScopeValue(json: string): unknown {
+  return deserializeValue(JSON.parse(json));
 }

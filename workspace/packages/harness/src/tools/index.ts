@@ -37,6 +37,9 @@ export type { LsToolInput, LsToolDetails } from "./ls.js";
 export { createCloseTurnWithoutResponseTool } from "./close-turn.js";
 export type { CloseTurnInput } from "./close-turn.js";
 
+export { createEvalTool, formatEvalResult, type EvalRunResult } from "./eval.js";
+export type { EvalToolInput } from "./eval.js";
+
 // Pure helpers
 export { resolveToCwd, resolveReadPath, expandPath } from "./path-utils.js";
 export {
