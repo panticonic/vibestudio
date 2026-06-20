@@ -486,7 +486,7 @@ describe("WorkspaceDO lifecycle registry", () => {
     expect(instance.alarmNextWakeAt()).toBe(1_000);
 
     // Drain only those due at/before the cutoff; the rest remain.
-    expect(instance.alarmTakeDue(1_500)).toEqual([{ ...a, wakeAt: 1_000 }]);
+    expect(instance.alarmTakeDue(1_500)).toEqual([{ ...a, wakeAt: 1_000, bestEffort: false }]);
     expect(instance.alarmNextWakeAt()).toBe(2_000);
 
     // Clearing removes a pending alarm.

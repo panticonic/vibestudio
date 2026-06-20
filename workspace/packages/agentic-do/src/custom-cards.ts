@@ -61,10 +61,18 @@ export interface CustomMessageHandle {
   readonly messageId: string;
   readonly typeId: string;
   readonly channelId: string;
-  /** Publish a new state (full replacement unless the type reduces). */
-  update(state: unknown): Promise<void>;
-  /** Mark the card failed; the UI renders a standard failed-card frame. */
-  fail(error: { message: string; details?: unknown }): Promise<void>;
+  /**
+   * Pubsub log id of the `custom.started` event that created this card, or
+   * `undefined` when the handle was fetched for a card that already existed
+   * (a getOrCreate hit) and so published nothing.
+   */
+  readonly pubsubId: number | undefined;
+  /** Publish a new state (full replacement unless the type reduces). Resolves
+   *  to the pubsub log id of the emitted `custom.updated` event. */
+  update(state: unknown): Promise<number | undefined>;
+  /** Mark the card failed; the UI renders a standard failed-card frame.
+   *  Resolves to the pubsub log id of the emitted `custom.updated` event. */
+  fail(error: { message: string; details?: unknown }): Promise<number | undefined>;
 }
 
 export interface CardManagerDeps {
@@ -197,8 +205,8 @@ export class CardManager {
       },
       createdAt: new Date().toISOString(),
     };
-    await this.publish(channelId, event, this.idempotencyKey(messageId, "start"));
-    return this.handleFor(row);
+    const pubsubId = await this.publish(channelId, event, this.idempotencyKey(messageId, "start"));
+    return this.handleFor(row, pubsubId);
   }
 
   /** Look up an existing card handle by messageId (no creation). */
@@ -221,21 +229,22 @@ export class CardManager {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  private handleFor(row: CardRow): CustomMessageHandle {
+  private handleFor(row: CardRow, pubsubId?: number): CustomMessageHandle {
     const manager = this;
     return {
       messageId: row.messageId,
       typeId: row.typeId,
       channelId: row.channelId,
-      async update(state: unknown): Promise<void> {
+      pubsubId,
+      async update(state: unknown): Promise<number | undefined> {
         const info = await manager.requireType(row.channelId, row.typeId);
         // Types with a UI reducer treat updates as patches and validate against
         // updateSchema; plain types replace state and validate against stateSchema.
         manager.validate(info, info.updateSchema ?? info.stateSchema, state);
-        await manager.publishUpdate(row, state);
+        return manager.publishUpdate(row, state);
       },
-      async fail(error: { message: string; details?: unknown }): Promise<void> {
-        await manager.publishUpdate(row, undefined, { status: "failed", error });
+      async fail(error: { message: string; details?: unknown }): Promise<number | undefined> {
+        return manager.publishUpdate(row, undefined, { status: "failed", error });
       },
     };
   }
@@ -244,7 +253,7 @@ export class CardManager {
     row: CardRow,
     update: unknown,
     failure?: { status: "failed"; error: { message: string; details?: unknown } }
-  ): Promise<void> {
+  ): Promise<number | undefined> {
     const seq = this.bumpSeq(row.naturalKey);
     const event: AgenticEvent<"custom.updated"> = {
       kind: "custom.updated",
@@ -258,16 +267,21 @@ export class CardManager {
       },
       createdAt: new Date().toISOString(),
     };
-    await this.publish(row.channelId, event, this.idempotencyKey(row.messageId, String(seq)));
+    return this.publish(row.channelId, event, this.idempotencyKey(row.messageId, String(seq)));
   }
 
-  private async publish(channelId: string, event: AgenticEvent, idempotencyKey: string): Promise<void> {
+  private async publish(
+    channelId: string,
+    event: AgenticEvent,
+    idempotencyKey: string
+  ): Promise<number | undefined> {
     const participantId = this.deps.getParticipantId(channelId);
     if (!participantId) {
       throw new Error(`Not subscribed to channel ${channelId}; cannot publish card events`);
     }
     const channel = this.deps.createChannelClient(channelId);
-    await channel.publishAgenticEvent(participantId, event, { idempotencyKey });
+    const res = await channel.publishAgenticEvent(participantId, event, { idempotencyKey });
+    return res?.id;
   }
 
   private idempotencyKey(messageId: string, suffix: string): string {

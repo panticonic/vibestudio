@@ -25,15 +25,18 @@ import { Buffer } from "buffer";
 if (typeof globalThis.Buffer === "undefined") {
   (globalThis as any).Buffer = Buffer;
 }
-import type { RpcClient } from "@natstack/rpc";
+import {
+  createConnectionlessRpcClient,
+  type ConnectionlessRpcClient,
+  type DeferrableRpcClient,
+  type RpcEnvelope,
+  type RpcRequest,
+} from "@natstack/rpc";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
-import { gitInteropMethods } from "@natstack/shared/serviceSchemas/gitInterop";
 import { workerLogMethods } from "@natstack/shared/serviceSchemas/workerLog";
-import { createHttpRpcClient } from "../shared/httpRpcBridge.js";
 import type { OpenExternalOptions, OpenExternalResult } from "@natstack/shared/externalOpen";
 import { fs, _initFsWithRpc } from "./fs.js";
-import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
-import { createWebhookIngressClient, type WebhookIngressClient } from "../shared/webhooks.js";
+import type { WebhookIngressClient } from "../shared/webhooks.js";
 import {
   createDurableObjectServiceClient,
   createWorkerdClient,
@@ -41,33 +44,25 @@ import {
   type WorkerdClient,
   type DurableObjectServiceClient,
 } from "../shared/workerd.js";
-import { createWorkspaceClient, type WorkspaceClient } from "../shared/workspace.js";
-import { createExtensionsClient, type ExtensionsClient } from "../shared/extensions.js";
-import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
-import { createGadClient, type GadClient } from "../shared/gad.js";
 import {
   createNonPanelRuntimeHandle,
-  createPanelHandle,
-  type PanelHandleHostOps,
-  type PanelHandleMetadata,
+  createRuntimeParentHandle,
 } from "../shared/handles.js";
-import { createCdpAutomation } from "../panel/cdpAutomation.js";
 import { helpfulNamespace } from "../shared/helpfulNamespace.js";
 import { createGatewayFetch, type GatewayFetch } from "../shared/gatewayFetch.js";
+import { createMainCaller } from "../shared/mainRpc.js";
 import {
-  listUserlandApprovals,
-  requestUserlandApproval,
-  revokeUserlandApproval,
-  type UserlandApprovalChoice,
-  type UserlandApprovalGrant,
-  type UserlandApprovalRequest,
-} from "../approvals.js";
-import { createVcsClient, type VcsClient } from "../shared/vcsClient.js";
-import type { PanelHandle, PanelNavigateOptions } from "../core/index.js";
+  createPanelRuntime,
+  type OpenPanelOptions,
+  type PanelRuntimeApi,
+} from "../shared/panelRuntime.js";
+import { createHostedRuntime, type RuntimeHost, type WorkspaceRuntime } from "../shared/hostedRuntime.js";
 import type { WorkerEnv } from "./types.js";
-import type { RuntimeFs } from "../types.js";
-import type { PanelLifecycleResult } from "@natstack/shared/types";
 export type { WorkerEnv, ExecutionContext } from "./types.js";
+// Portable authoring helpers (z, defineContract, Rpc, path/context helpers,
+// buildPanelLink, createGatewayFetch) — identical on panel · worker · eval.
+export * from "../shared/portable.js";
+export type * from "../core/types.js";
 export type {
   ClientConfigStatus,
   CredentialClient,
@@ -119,6 +114,8 @@ export type {
 } from "../shared/extensions.js";
 export type * from "../shared/gad.js";
 export { DurableObjectBase } from "./durable-base.js";
+// `@rpc` exposure decorator — mark a DO method as reachable over RPC (opt-in / default-deny).
+export { rpc } from "@natstack/rpc";
 export type {
   DurableObjectContext,
   SqlStorage,
@@ -130,8 +127,6 @@ export type {
 } from "./durable-base.js";
 export { fs } from "./fs.js";
 export { createRpcFs } from "../shared/rpcFs.js";
-export { createGatewayFetch } from "../shared/gatewayFetch.js";
-export type { GatewayFetch } from "../shared/gatewayFetch.js";
 export type {
   UserlandApprovalChoice,
   UserlandApprovalGrant,
@@ -139,56 +134,25 @@ export type {
   UserlandApprovalRequest,
   UserlandApprovalSubject,
 } from "../approvals.js";
+// Git interop types now live in the shared `gitApi` (used by createHostedRuntime).
+export type {
+  GitRemoteSpec,
+  ImportProjectRequest,
+  ImportedWorkspaceRepo,
+  CompleteWorkspaceDependenciesResult,
+  RuntimeGitApi,
+} from "../shared/gitApi.js";
+export type { WorkspaceRuntime } from "../shared/hostedRuntime.js";
 // Note: createTestDO is intentionally NOT exported here because it depends on
 // sql.js test-only helpers that should not be bundled into production workers.
 // Import directly from "@workspace/runtime/src/worker/durable-test-utils" in tests.
-export interface GitRemoteSpec {
-  name: string;
-  url: string;
-  branch?: string;
-}
-export interface ImportProjectRequest {
-  path: string;
-  remote: GitRemoteSpec;
-  branch?: string;
-  credentialId?: string;
-}
-export interface ImportedWorkspaceRepo {
-  path: string;
-  remote: GitRemoteSpec;
-}
-export interface CompleteWorkspaceDependenciesResult {
-  imported: ImportedWorkspaceRepo[];
-  skipped: Array<{
-    path: string;
-    reason: "already-present" | "unsupported-path";
-  }>;
-  failed: Array<{
-    path: string;
-    error: string;
-  }>;
-}
-export interface RuntimeGitApi {
-  http: CredentialClient["gitHttp"];
-  importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo>;
-  completeWorkspaceDependencies(options?: {
-    credentialId?: string;
-  }): Promise<CompleteWorkspaceDependenciesResult>;
-  setSharedRemote(
-    repoPath: string,
-    remote: GitRemoteSpec
-  ): Promise<Record<string, unknown> | undefined>;
-  removeSharedRemote(
-    repoPath: string,
-    remoteName: string
-  ): Promise<Record<string, unknown> | undefined>;
-}
+export type RuntimeOpenPanelOptions = OpenPanelOptions;
 // Cache runtime per worker ID to avoid creating multiple bridges
 let cachedRuntime: WorkerRuntime | null = null;
 let cachedWorkerId: string | null = null;
 let workerConsoleBridgeInstalled = false;
 
-function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
+function installWorkerConsoleBridge(rpc: Pick<DeferrableRpcClient, "call">): void {
   if (workerConsoleBridgeInstalled) return;
   workerConsoleBridgeInstalled = true;
   const workerLogService = createTypedServiceClient("workerLog", workerLogMethods, (svc, m, a) =>
@@ -245,70 +209,17 @@ function installWorkerConsoleBridge(rpc: Pick<RpcClient, "call">): void {
     forward("error", args, source);
   };
 }
-export interface WorkerRuntime {
-  readonly id: string;
-  readonly rpc: RpcClient;
-  readonly fs: RuntimeFs;
-  readonly doTargetId: typeof doTargetId;
-  readonly createDurableObjectServiceClient: (
-    query: string,
-    objectKey?: string | null
-  ) => DurableObjectServiceClient;
-  readonly workers: WorkerdClient;
-  readonly workspace: WorkspaceClient;
-  readonly credentials: CredentialClient;
-  readonly webhooks: WebhookIngressClient;
-  readonly notifications: NotificationClient;
-  readonly extensions: ExtensionsClient;
-  readonly approvals: {
-    request(req: UserlandApprovalRequest): Promise<UserlandApprovalChoice>;
-    revoke(subjectId: string): Promise<boolean>;
-    list(): Promise<UserlandApprovalGrant[]>;
-  };
-  readonly contextId: string;
-  readonly gatewayConfig: { serverUrl: string; token: string; aliases?: readonly string[] };
-  readonly gatewayFetch: GatewayFetch;
-  readonly git: RuntimeGitApi;
-  readonly vcs: VcsClient;
-  readonly gad: GadClient;
 
-  /** Call a server-side service method via RPC. */
-  callMain<T>(method: string, ...args: unknown[]): Promise<T>;
-  openExternal(url: string, options?: OpenExternalOptions): Promise<OpenExternalResult>;
-  requestApproval(req: UserlandApprovalRequest): Promise<UserlandApprovalChoice>;
-  revokeApproval(subjectId: string): Promise<boolean>;
-  listApprovals(): Promise<UserlandApprovalGrant[]>;
-  /** Expose a method callable by other callers (panels, workers, server). */
-  expose: (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) => void;
-  /** Get a handle to the parent panel/worker (null if no parent). */
-  getParent(): PanelHandle | null;
-  /** Tree handles for panels visible to this runtime. */
-  readonly panelTree: {
-    self(): PanelHandle;
-    get(id: string): PanelHandle;
-    list(): Promise<PanelHandle[]>;
-    roots(): Promise<PanelHandle[]>;
-    children(id: string): Promise<PanelHandle[]>;
-    parent(id: string): PanelHandle | null;
-    navigate(
-      id: string,
-      source: string,
-      options?: PanelNavigateOptions
-    ): Promise<{ id: string; title: string }>;
-    open(
-      source: string,
-      options?: {
-        parentId?: string | null;
-        name?: string;
-        focus?: boolean;
-        stateArgs?: Record<string, unknown>;
-      }
-    ): Promise<PanelHandle>;
-  };
-  /** Handle an incoming RPC POST body, returning the response payload. */
+/**
+ * The worker runtime: the portable `WorkspaceRuntime` (shared with panel + eval
+ * via `createHostedRuntime`) plus worker-only target extras.
+ */
+export interface WorkerRuntime extends WorkspaceRuntime {
+  /** Handle an incoming RPC POST body (an `RpcEnvelope`), returning the response payload. */
   handleRpcPost(body: unknown): Promise<unknown>;
   destroy(): void;
 }
+
 /**
  * Create or retrieve the worker runtime for the given environment.
  *
@@ -335,11 +246,15 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   const parentId = (env.PARENT_ID as string) || null;
   const parentEntityId = (env.PARENT_ENTITY_ID as string) || parentId;
   const parentKind = parseParentKind(env.PARENT_KIND);
-  const rpc = createHttpRpcClient({
+
+  // The unified connectionless client — same core as panel/eval, envelope-native.
+  const connectionless = createConnectionlessRpcClient({
     selfId,
     serverUrl,
     authToken: env.RPC_AUTH_TOKEN,
+    callerKind: "worker",
   });
+  const rpc = connectionless.client;
   installWorkerConsoleBridge(rpc);
 
   const runtimeFs = _initFsWithRpc(rpc);
@@ -351,89 +266,68 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
       parentKind: "worker",
     })
   );
-  const workspaceApi = helpfulNamespace("workspace", createWorkspaceClient(rpc));
-  const credentials = helpfulNamespace("credentials", createCredentialClient(rpc));
   const gatewayAliases = parseGatewayAliases(env.GATEWAY_URL_ALIASES);
   const gatewayConfig = { serverUrl, token: env.RPC_AUTH_TOKEN, aliases: gatewayAliases };
   const gatewayFetch = createGatewayFetch(gatewayConfig);
-  const gitInteropService = createTypedServiceClient(
-    "gitInterop",
-    gitInteropMethods,
-    (svc, method, args) => rpc.call("main", `${svc}.${method}`, args)
-  );
-  const vcs = helpfulNamespace(
-    "vcs",
-    createVcsClient(
-      <T>(method: string, ...vcsArgs: unknown[]) => rpc.call<T>("main", method, vcsArgs),
-      rpc
-    )
-  );
-  const git = helpfulNamespace("git", {
-    http: credentials.gitHttp,
-    importProject(request: ImportProjectRequest): Promise<ImportedWorkspaceRepo> {
-      return gitInteropService.importProject(request);
-    },
-    completeWorkspaceDependencies(
-      options: { credentialId?: string } = {}
-    ): Promise<CompleteWorkspaceDependenciesResult> {
-      return gitInteropService.completeWorkspaceDependencies(options);
-    },
-    setSharedRemote(
-      repoPath: string,
-      remote: GitRemoteSpec
-    ): Promise<Record<string, unknown> | undefined> {
-      return gitInteropService.setSharedRemote(repoPath, remote);
-    },
-    removeSharedRemote(
-      repoPath: string,
-      remoteName: string
-    ): Promise<Record<string, unknown> | undefined> {
-      return gitInteropService.removeSharedRemote(repoPath, remoteName);
-    },
-  });
-  const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));
-  const notifications = helpfulNamespace("notifications", createNotificationClient(rpc));
-  const extensions = helpfulNamespace("extensions", createExtensionsClient(rpc));
-  const approvals = helpfulNamespace("approvals", {
-    request: (req: UserlandApprovalRequest) => requestUserlandApproval(rpc, req),
-    revoke: (subjectId: string) => revokeUserlandApproval(rpc, subjectId),
-    list: () => listUserlandApprovals(rpc),
-  });
-  const gad = helpfulNamespace("gad", createGadClient(rpc));
+  const callMain = createMainCaller(rpc);
 
-  const callMain = <T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args);
-  const panelTree = createWorkerPanelTree(rpc, selfId, parentId, parentEntityId, parentKind);
+  let panelRuntime!: PanelRuntimeApi;
+  const resolveParent = () =>
+    createRuntimeParentHandle(
+      (id) => panelRuntime.getPanelHandle(id),
+      parentId,
+      parentEntityId,
+      parentKind
+    );
 
-  const runtime: WorkerRuntime = {
+  panelRuntime = createPanelRuntime({
+    rpc,
+    selfHandle: () =>
+      createNonPanelRuntimeHandle({
+        id: selfId,
+        parentId,
+        parent: resolveParent,
+      }),
+    // Pass our DIRECT parent (any kind). The server resolves it to the nearest panel ANCESTOR that
+    // still exists (walking the entity lineage) — so a worker whose direct parent is another worker
+    // still nests its panels under the owning panel further up, matching eval. `null` (no parent) ⇒ root.
+    defaultOpenParentId: parentId,
+    requesterPanelId: parentKind === "panel" ? parentId : null,
+    initialMetadata:
+      parentKind === "panel" && parentId
+        ? [
+            {
+              id: parentId,
+              title: parentId,
+              source: parentId,
+              kind: "workspace",
+              parentId: null,
+              rpcTargetId: parentEntityId ?? parentId,
+            },
+          ]
+        : [],
+  });
+
+  const host: RuntimeHost = {
     id: workerId,
+    contextId: env.CONTEXT_ID,
     rpc,
     fs: runtimeFs,
-    doTargetId,
-    createDurableObjectServiceClient: (query, objectKey) =>
-      createDurableObjectServiceClient(rpc, query, objectKey),
-    workers,
-    workspace: workspaceApi,
-    credentials,
-    git,
-    vcs,
-    gad,
-    webhooks,
-    notifications,
-    extensions,
-    approvals,
-    contextId: env.CONTEXT_ID,
     gatewayConfig,
     gatewayFetch,
-    callMain,
+    panelRuntime,
+    workers,
     openExternal: (url: string, options?: OpenExternalOptions) =>
       callMain<OpenExternalResult>("externalOpen.openExternal", url, options),
-    requestApproval: (req: UserlandApprovalRequest) => requestUserlandApproval(rpc, req),
-    revokeApproval: (subjectId: string) => revokeUserlandApproval(rpc, subjectId),
-    listApprovals: () => listUserlandApprovals(rpc),
-    expose: (method, handler) => rpc.expose(method, (request) => handler(...request.args)),
-    getParent: () => createWorkerParentPanelHandle(panelTree, parentId, parentEntityId, parentKind),
-    panelTree,
-    handleRpcPost: (body: unknown) => rpc.handleIncomingPost(body),
+    resolveParent,
+  };
+  const core = createHostedRuntime(host);
+
+  // Worker-only infra layered on the portable surface (callMain/parent/expose
+  // now come from `core` / `rpc.expose`).
+  const runtime: WorkerRuntime = {
+    ...core,
+    handleRpcPost: (body: unknown) => handleInboundWorkerEnvelope(connectionless, body),
     destroy: () => {
       if (cachedWorkerId === workerId) {
         cachedRuntime = null;
@@ -448,230 +342,25 @@ export function createWorkerRuntime(env: WorkerEnv): WorkerRuntime {
   return runtime;
 }
 
-function createWorkerPanelTree(
-  rpc: Pick<RpcClient, "call" | "emit" | "on">,
-  selfId: string,
-  parentId: string | null,
-  parentEntityId: string | null,
-  parentKind: "panel" | "worker" | "do" | null
-): WorkerRuntime["panelTree"] {
-  type PanelListItem = {
-    panelId: string;
-    title: string;
-    source: string;
-    kind: "workspace" | "browser";
-    parentId: string | null;
-    contextId: string;
-    runtimeEntityId?: string | null;
-    effectiveVersion?: string | null;
-    ref?: string | null;
-    children?: PanelListItem[];
-  };
-  type PanelMetadataResult = {
-    id?: string;
-    title?: string;
-    source?: string;
-    kind?: "workspace" | "browser";
-    parentId?: string | null;
-    runtimeEntityId?: string | null;
-    contextId?: string | null;
-    effectiveVersion?: string | null;
-    ref?: string | null;
-  };
-  const callPanel = <T>(method: string, args: unknown[]) =>
-    rpc.call<T>("main", `panelTree.${method}`, args);
-  const metadataCache = new Map<string, PanelHandleMetadata>();
-  const rememberMetadata = (metadata: PanelHandleMetadata): PanelHandleMetadata => {
-    const next = { ...(metadataCache.get(metadata.id) ?? {}), ...metadata };
-    metadataCache.set(metadata.id, next);
-    return next;
-  };
-  const toMetadata = (item: PanelListItem): PanelHandleMetadata =>
-    rememberMetadata({
-      id: item.panelId,
-      title: item.title,
-      source: item.source,
-      kind: item.kind,
-      parentId: item.parentId,
-      contextId: item.contextId,
-      rpcTargetId: item.runtimeEntityId ?? null,
-      effectiveVersion: item.effectiveVersion ?? null,
-      ref: item.ref ?? null,
-    });
-  const metadataForId = (id: string): PanelHandleMetadata =>
-    rememberMetadata({
-      id,
-      title: id,
-      source: id,
-      kind: "workspace",
-      parentId: null,
-      ...(metadataCache.get(id) ?? {}),
-    });
-  const cdpForMetadata = (metadata: PanelHandleMetadata) =>
-    createCdpAutomation(rpc, metadata.id, {
-      kind: metadata.kind,
-      requesterPanelId: parentKind === "panel" ? parentId : null,
-    });
-  const metadataFromResult = (id: string, meta: PanelMetadataResult): PanelHandleMetadata => ({
-    id,
-    title: meta.title,
-    source: meta.source,
-    kind: meta.kind,
-    parentId: meta.parentId,
-    contextId: meta.contextId ?? null,
-    rpcTargetId: meta.runtimeEntityId ?? null,
-    effectiveVersion: meta.effectiveVersion ?? null,
-    ref: meta.ref ?? null,
-  });
-  rememberMetadata({ id: selfId, title: selfId, source: selfId, kind: "workspace", parentId });
-  if (parentKind === "panel" && parentId) {
-    rememberMetadata({
-      id: parentId,
-      title: parentId,
-      source: parentId,
-      kind: "workspace",
-      parentId: null,
-      rpcTargetId: parentEntityId ?? parentId,
-    });
+/**
+ * Dispatch an inbound `RpcEnvelope` (POSTed to `/__rpc`) through the converged
+ * core: request envelopes return a response envelope; events deliver and ack.
+ */
+async function handleInboundWorkerEnvelope(
+  connectionless: ConnectionlessRpcClient,
+  body: unknown
+): Promise<unknown> {
+  const envelope = body as RpcEnvelope;
+  const message = envelope?.message as RpcRequest | undefined;
+  if (message?.type !== "request" && message?.type !== "stream-request") {
+    connectionless.deliver(envelope);
+    return {};
   }
-  const ops: PanelHandleHostOps = {
-    refresh: async (id) => {
-      const meta = await callPanel<PanelMetadataResult | null>("metadata", [id]);
-      return meta ? rememberMetadata(metadataFromResult(id, meta)) : metadataForId(id);
-    },
-    children: (id) => panelTree.children(id),
-    parent: (id, parentId) => {
-      const resolvedParentId = parentId ?? metadataCache.get(id)?.parentId ?? null;
-      return resolvedParentId ? panelTree.get(resolvedParentId) : null;
-    },
-    ensureLoaded: (id) => callPanel("ensureLoaded", [id]),
-    isLoaded: async (id) => {
-      try {
-        const lease = await callPanel<{ leased?: boolean } | null>("getRuntimeLease", [id]);
-        return Boolean(lease?.leased);
-      } catch {
-        return false;
-      }
-    },
-    reload: (id) => callPanel<PanelLifecycleResult>("reload", [id]),
-    close: (id) => callPanel<PanelLifecycleResult>("close", [id]),
-    archive: (id) => callPanel("archive", [id]),
-    unload: (id) => callPanel<PanelLifecycleResult>("unload", [id]),
-    navigate: (id, source, options) =>
-      callPanel<{ id: string; title: string }>("navigate", [id, source, options]),
-    movePanel: (id, newParentId, targetPosition) =>
-      callPanel("movePanel", [{ panelId: id, newParentId, targetPosition }]),
-    takeOver: (id) => callPanel("takeOver", [id]),
-    openDevTools: (id, mode) => callPanel("openDevTools", [id, mode]),
-    rebuildPanel: (id) => callPanel<PanelLifecycleResult>("rebuildPanel", [id]),
-    rebuildAndReload: (id) => callPanel<PanelLifecycleResult>("rebuildAndReload", [id]),
-    updatePanelState: (id, state) => callPanel("updatePanelState", [id, state]),
-    focus: (id) => callPanel("focus", [id]),
-    stateArgs: {
-      get: (id) => callPanel("getStateArgs", [id]),
-      set: (id, updates) => callPanel("setStateArgs", [id, updates]),
-    },
-    snapshot: (id) => callPanel("snapshot", [id]),
-    callAgent: (id, method, args) => callPanel("callAgent", [id, method, args]),
-  };
-  const hydrate = (item: PanelListItem): PanelHandle => {
-    const metadata = toMetadata(item);
-    return createPanelHandle({
-      rpc,
-      metadata,
-      cdp: cdpForMetadata(metadata),
-      ops,
-    });
-  };
-  const flatten = (items: PanelListItem[]): PanelListItem[] => {
-    const out: PanelListItem[] = [];
-    const visit = (item: PanelListItem) => {
-      out.push(item);
-      for (const child of item.children ?? []) visit(child);
-    };
-    for (const item of items) visit(item);
-    return out;
-  };
-  const panelTree: WorkerRuntime["panelTree"] = {
-    self: () =>
-      createNonPanelRuntimeHandle({
-        id: selfId,
-        parentId,
-        parent: () =>
-          createWorkerParentPanelHandle(panelTree, parentId, parentEntityId, parentKind),
-      }),
-    get: (id) => {
-      const metadata = metadataForId(id);
-      return createPanelHandle({
-        rpc,
-        metadata,
-        cdp: cdpForMetadata(metadata),
-        ops,
-      });
-    },
-    async list() {
-      return flatten(await callPanel<PanelListItem[]>("list", [null])).map(hydrate);
-    },
-    async roots() {
-      return (await callPanel<PanelListItem[]>("roots", [])).map(hydrate);
-    },
-    async children(id) {
-      return (await callPanel<PanelListItem[]>("list", [id])).map(hydrate);
-    },
-    parent: (id) => {
-      const resolvedParentId =
-        id === selfId
-          ? (parentId ?? metadataCache.get(id)?.parentId)
-          : metadataCache.get(id)?.parentId;
-      return resolvedParentId ? panelTree.get(resolvedParentId) : null;
-    },
-    navigate: (id, source, options) =>
-      callPanel<{ id: string; title: string }>("navigate", [id, source, options]),
-    async open(source, options) {
-      const targetParentId = options?.parentId ?? (parentKind === "panel" ? parentId : null);
-      const result = await callPanel<{
-        id: string;
-        title: string;
-        kind: "workspace" | "browser";
-        runtimeEntityId?: string | null;
-        effectiveVersion?: string | null;
-      }>("create", [source, { ...options, parentId: targetParentId }]);
-      return hydrate({
-        panelId: result.id,
-        title: result.title,
-        source: result.kind === "browser" ? `browser:${source}` : source,
-        kind: result.kind,
-        parentId: targetParentId,
-        contextId: "",
-        runtimeEntityId: result.runtimeEntityId ?? null,
-        effectiveVersion: result.effectiveVersion ?? null,
-      });
-    },
-  };
-  return panelTree;
+  return (await connectionless.respond(envelope)) ?? {};
 }
 
 function parseParentKind(kind: unknown): "panel" | "worker" | "do" | null {
   return kind === "panel" || kind === "worker" || kind === "do" ? kind : null;
-}
-
-function createWorkerParentPanelHandle(
-  panelTree: WorkerRuntime["panelTree"],
-  parentId: string | null,
-  parentEntityId: string | null,
-  parentKind: "panel" | "worker" | "do" | null
-): PanelHandle | null {
-  if (!parentId) return null;
-  if (parentKind === "panel") {
-    return panelTree.get(parentId);
-  }
-  if (parentKind === "worker" || parentKind === "do") {
-    return createNonPanelRuntimeHandle({ id: parentEntityId ?? parentId });
-  }
-  if (parentId.startsWith("worker:") || parentId.startsWith("do:")) {
-    return createNonPanelRuntimeHandle({ id: parentId });
-  }
-  return panelTree.get(parentId);
 }
 
 function parseGatewayAliases(value: unknown): string[] {

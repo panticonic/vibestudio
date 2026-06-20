@@ -11,6 +11,7 @@ import {
 import { AgentLoopDriver, type DriverDeps } from "./agent-loop-driver.js";
 import type { ChannelCallPort, EffectExecutor, EphemeralEmit } from "./effect-executors/index.js";
 import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import { summarizeTurn } from "./agent-vessel.js";
 
 const CHANNEL = "chan-d1";
 const LOG_ID = ids.logIdForChannel(CHANNEL);
@@ -70,7 +71,10 @@ async function makeHarness(opts: {
   const deps: DriverDeps = {
     sql: driverHost.sql as never,
     gad: {
-      call: <T>(method: string, args: Record<string, unknown>) => gad.call<T>(method, args),
+      // The driver runs INSIDE the agent DO, so its gad-store calls are attributed
+      // as a "do" — gad write methods (appendLogEvent/…) are `@rpc({ callers: ["do"] })`.
+      call: <T,>(method: string, args: Record<string, unknown>) =>
+        gad.callAs<T>("do", method, args),
     },
     executorDeps: {
       blobstore: {
@@ -310,6 +314,87 @@ describe("AgentLoopDriver", () => {
     expect(harness.broadcasts.flatMap((item) => item.envelopeIds)).toContain(
       `pub:${ids.messageTerminal(ids.messageId(ids.turnId(CHANNEL, "env-1"), 1))}:${CHANNEL}`
     );
+  });
+
+  it("a deferred local_tool (eval) parks the row + keeps the turn open; deliverEffectOutcome completes it → next model call", async () => {
+    let toolDispatches = 0;
+    const harness = await makeHarness({
+      script: { model: [toolCallReply("tc-1"), textReply("done")], tool: [] },
+      executorOverride: (descriptor) => {
+        if (descriptor.kind !== "local_tool") return null;
+        // Mirror the agent's eval gate: a local tool that DEFERS (eval.startRun kicked off; the
+        // result arrives out-of-band via onEvalComplete → deliverEffectOutcome).
+        return {
+          kind: "local_tool",
+          async execute() {
+            toolDispatches += 1;
+            return { deferred: true };
+          },
+        } satisfies EffectExecutor;
+      },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver);
+
+    // The deferred local_tool PARKS (row kept, not deleted) and the turn stays OPEN / non-stranded
+    // — its PendingInvocation in the fold is the keep-alive (no credential-style turn.waiting needed).
+    expect(toolDispatches).toBe(1);
+    expect(harness.driver.outbox.all()).toEqual([expect.objectContaining({ kind: "local_tool" })]);
+    expect((await harness.driver.loop(CHANNEL)).state.openTurn).not.toBeNull();
+
+    // Deliver the result out-of-band (exactly what the agent's onEvalComplete does).
+    await harness.driver.deliverEffectOutcome(
+      ids.invocationEffect("tc-1"),
+      {
+        kind: "tool",
+        result: {
+          protocolContent: [{ type: "text", text: "[eval] ok" }],
+          details: { success: true },
+        },
+        isError: false,
+      },
+      { channelId: CHANNEL }
+    );
+    await settle(harness.driver);
+
+    // Row drained; the invocation completed, the next model call ran, the turn closed.
+    expect(harness.driver.outbox.all()).toHaveLength(0);
+    const kinds = await logKinds(harness.gad);
+    expect(kinds).toContain("invocation.completed");
+    expect(kinds).toContain("turn.closed");
+    expect((await harness.driver.loop(CHANNEL)).state.openTurn).toBeNull();
+  });
+
+  it("a duplicate deliverEffectOutcome for a deferred eval is a harmless no-op (the push + poll-backstop both fire)", async () => {
+    const harness = await makeHarness({
+      script: { model: [toolCallReply("tc-1"), textReply("done")], tool: [] },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "local_tool"
+          ? ({
+              kind: "local_tool",
+              async execute() {
+                return { deferred: true };
+              },
+            } satisfies EffectExecutor)
+          : null,
+    });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    await settle(harness.driver);
+
+    const outcome: EffectOutcome = {
+      kind: "tool",
+      result: { protocolContent: [{ type: "text", text: "ok" }], details: {} },
+      isError: false,
+    };
+    await harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL });
+    await settle(harness.driver);
+    const kindsAfterFirst = await logKinds(harness.gad);
+
+    // Second delivery (the getRun poll backstop racing the onEvalComplete push) — idempotent no-op.
+    await harness.driver.deliverEffectOutcome(ids.invocationEffect("tc-1"), outcome, { channelId: CHANNEL });
+    await settle(harness.driver);
+    expect(await logKinds(harness.gad)).toEqual(kindsAfterFirst);
   });
 
   it("publishes a credential-connect card when a model call suspends for credentials", async () => {
@@ -946,5 +1031,43 @@ describe("AgentLoopDriver", () => {
     expect(await logKinds(harness.gad)).not.toContain("system.compaction_recorded");
     const loop = await harness.driver.loop(CHANNEL);
     expect(loop.state.openTurn).not.toBeNull();
+  });
+});
+
+// Integration: agent.describe()'s `turn` block is `summarizeTurn(loop.state)`.
+// Drive REAL turns through a GAD-backed loop and assert the summary over the
+// state re-folded from the persisted log (not the in-memory cache).
+describe("summarizeTurn over a real GAD-backed loop (agent.describe turn block)", () => {
+  it("reports an in-flight turn after a prompt, then idle once it settles", async () => {
+    const harness = await makeHarness({ script: { model: [textReply("done")], tool: [] } });
+
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming());
+    harness.driver.dropLoop(CHANNEL); // force a fresh fold from the log
+    const open = summarizeTurn((await harness.driver.loop(CHANNEL)).state);
+    expect(open.status).not.toBe("idle");
+    expect(["starting", "running_model"]).toContain(open.status);
+    expect(open.lastSeq).toBeGreaterThan(0);
+
+    await settle(harness.driver);
+    harness.driver.dropLoop(CHANNEL);
+    const settled = summarizeTurn((await harness.driver.loop(CHANNEL)).state);
+    expect(settled.status).toBe("idle");
+    expect(settled.lastSeq).toBeGreaterThan(open.lastSeq);
+    expect(settled.pendingInvocations).toBe(0);
+  });
+
+  it("reports a pending tool invocation as waiting_external with a live count", async () => {
+    // model emits a tool call but the tool outcome is never delivered (tool: []),
+    // so the invocation stays pending in the fold.
+    const harness = await makeHarness({
+      script: { model: [toolCallReply("tc-1"), textReply("done")], tool: [] },
+    });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming()).catch(() => {});
+    await harness.driver.alarm().catch(() => {}); // model emits the tool call
+
+    harness.driver.dropLoop(CHANNEL);
+    const s = summarizeTurn((await harness.driver.loop(CHANNEL)).state);
+    expect(s.status).toBe("waiting_external");
+    expect(s.pendingInvocations).toBeGreaterThanOrEqual(1);
   });
 });

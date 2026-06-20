@@ -46,6 +46,10 @@ interface TestDOResult<T> {
    * Throws on non-2xx responses (with the error message from the response body).
    */
   call: <R = unknown>(method: string, ...args: unknown[]) => Promise<R>;
+  /** Like `call`, but attributes the dispatch as a specific caller kind, so a
+   *  test can exercise the DO's `@rpc({ callers })` policy from the right role
+   *  (e.g. `callAs("do", ...)` to simulate an agent/channel DO). */
+  callAs: <R = unknown>(caller: string, method: string, ...args: unknown[]) => Promise<R>;
 }
 
 /** Shared sql.js initialization (cached after first call) */
@@ -189,16 +193,31 @@ export async function createTestDO<T>(
 
   // call() dispatches through fetch(), matching the production DO invocation path:
   // URL /{objectKey}/{method} → ensureReady() → ensureBootstrapped() → method dispatch
-  const call = async <R = unknown>(method: string, ...args: unknown[]): Promise<R> => {
+  const dispatch = async <R = unknown>(
+    caller: string,
+    method: string,
+    args: unknown[]
+  ): Promise<R> => {
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
     if (typeof fetchable.fetch !== "function") {
       throw new Error("DO instance does not have a fetch() method");
     }
-    const url = `http://test/${encodeURIComponent(objectKey)}/${encodeURIComponent(method)}`;
+    // Dispatch through the converged `__rpc` envelope path — the production relay
+    // path, which trusts the server-set `delivery.caller`. We attribute the call as
+    // the server (production calls always carry a verified caller; the
+    // workspace-realm default-deny gate refuses unattributed calls).
+    const url = `http://test/${encodeURIComponent(objectKey)}/__rpc`;
+    const envelope = {
+      from: "main",
+      target: `do:test:${objectKey}`,
+      delivery: { caller: { callerId: "main", callerKind: caller } },
+      provenance: [],
+      message: { type: "request", requestId: crypto.randomUUID(), fromId: "main", method, args },
+    };
     const request = new Request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(args),
+      body: JSON.stringify(envelope),
     });
     const response = await fetchable.fetch(request);
     const text = await response.text();
@@ -206,8 +225,20 @@ export async function createTestDO<T>(
       const parsed = text ? JSON.parse(text) : {};
       throw new Error(parsed.error ?? `DO call ${method} failed: ${response.status}`);
     }
-    return (text ? JSON.parse(text) : undefined) as R;
+    const respEnv = text ? JSON.parse(text) : {};
+    const msg = respEnv.message as { type?: string; result?: unknown; error?: unknown } | undefined;
+    if (msg?.type === "response" && msg.error != null) {
+      throw new Error(typeof msg.error === "string" ? msg.error : JSON.stringify(msg.error));
+    }
+    return (msg && "result" in msg ? msg.result : undefined) as R;
   };
 
-  return { instance, sql: sqlProxy, db, alarms, acceptedWebSockets, call };
+  // Default test caller is the server (the trusted relay). `callAs` lets a test
+  // exercise a specific caller kind against the workspace-realm caller policies.
+  const call = <R = unknown>(method: string, ...args: unknown[]): Promise<R> =>
+    dispatch<R>("server", method, args);
+  const callAs = <R = unknown>(caller: string, method: string, ...args: unknown[]): Promise<R> =>
+    dispatch<R>(caller, method, args);
+
+  return { instance, sql: sqlProxy, db, alarms, acceptedWebSockets, call, callAs };
 }

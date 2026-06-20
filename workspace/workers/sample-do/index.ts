@@ -1,4 +1,4 @@
-import { DurableObjectBase, type DurableObjectContext } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@workspace/runtime/worker";
 
 /**
  * Sample Durable Object showing the canonical userland storage primitive.
@@ -22,12 +22,14 @@ export class SampleDO extends DurableObjectBase {
     `);
   }
 
+  @rpc({ callers: ["server"] })
   recordVisit(): { count: number } {
     this.ensureReady();
     this.sql.exec(`INSERT INTO visits (ts) VALUES (?)`, new Date().toISOString());
     return this.visitCount();
   }
 
+  @rpc({ callers: ["server"] })
   visitCount(): { count: number } {
     this.ensureReady();
     const row = this.sql.exec(`SELECT COUNT(*) as count FROM visits`).one() as { count: number };

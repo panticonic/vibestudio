@@ -15,6 +15,7 @@ import {
   createReadTool,
   createWriteTool,
   createCloseTurnWithoutResponseTool,
+  createEvalTool,
   createWebTools,
   createToolVcs,
   loadNatStackResources,
@@ -261,7 +262,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
   /** The six workerd-clean file tools over the agent's context folder
    *  (fs RPC scopes paths to the caller's context). Without them, agents
    *  whose prompts say `read("skills/...")` can only flail. */
-  protected override getLoopTools(_channelId: string): AgentTool[] {
+  protected override getLoopTools(channelId: string): AgentTool[] {
     const fs = createRpcFs(this.rpc as never);
     const cwd = "/";
     // Reads come from the materialized working tree (fs RPC, scoped to the
@@ -277,6 +278,12 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createFindTool(cwd, fs),
       createEditTool(cwd, vcs),
       createWriteTool(cwd, vcs),
+      createEvalTool(
+        <T>(method: string, methodArgs: unknown[]) => this.rpc.call<T>("main", method, methodArgs),
+        // Scope the agent's EvalDO per channel (matches the old per-(channel,panel) scope),
+        // so one multi-channel agent doesn't share REPL scope/db across unrelated chats.
+        { subKey: channelId }
+      ),
       createCloseTurnWithoutResponseTool(),
       this.createAskUserTool(),
       ...createWebTools({

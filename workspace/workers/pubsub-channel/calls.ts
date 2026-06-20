@@ -24,7 +24,7 @@ import {
 import type { ChannelEvent } from "@workspace/harness";
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { ChannelCallEventBuilders } from "@workspace/channel-policies";
-import type { StoredAttachment } from "./types.js";
+import { participantIsAgentVessel, type StoredAttachment } from "./types.js";
 import type { ChannelLog } from "./log-store.js";
 
 export interface PendingCallRow {
@@ -334,7 +334,19 @@ export class CallTransport {
       );
       return;
     }
-    if (transport === "do") {
+    // A "do" target gets the synchronous `onMethodCall` dispatch ONLY if it's an agent vessel — it
+    // implements `onMethodCall` AND opted into structured delivery (`receivesChannelEnvelopes`, set by
+    // SubscriptionManager). An RPC-style connectionless DO client (the eval's `connectViaRpc` /
+    // HeadlessSession) has NO `onMethodCall` handler: its participant id is just the host DO's id, so
+    // `transport` is "do" purely by id-shape — but it settles method calls the RPC way, via the
+    // broadcast `started` (delivered as a `channel:message` to every participant, broadcast.ts) +
+    // `submitMethodResult`. Routing it through `deliverDoMethodCall` dispatches to a missing handler and
+    // never settles the call (the redelivery echo). Same discriminator broadcast.ts uses for the
+    // structured envelope, so the two dispatch decisions stay aligned.
+    const isAgentVesselTarget = participantIsAgentVessel(
+      this.deps.getSenderMetadata(pendingRow.targetId)
+    );
+    if (transport === "do" && isAgentVesselTarget) {
       this.deps.waitUntil(
         this.deliverDoMethodCall({
           targetPid: pendingRow.targetId,
@@ -346,7 +358,8 @@ export class CallTransport {
         })
       );
     }
-    // RPC targets receive the durable invocation start through the log broadcast.
+    // RPC participants AND RPC-style DO clients receive the durable invocation start through the log
+    // broadcast and reply via submitMethodResult.
   }
 
   private async deliverDoMethodCall(input: {

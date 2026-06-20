@@ -1,4 +1,5 @@
-import { DurableObjectBase, type DurableObjectContext } from "@natstack/durable";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@natstack/durable";
+import type { AuthenticatedCaller } from "@natstack/rpc";
 import type { WebhookIngressSubscription } from "../../../packages/shared/src/webhooks/ingress.js";
 
 interface WebhookIngressSubscriptionRow {
@@ -24,6 +25,26 @@ export class WebhookStoreDO extends DurableObjectBase {
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.ensureReady();
+  }
+
+  /**
+   * Receiver-side authorization (Layer A). WebhookStoreDO stores webhook
+   * configurations + verifier secrets + cross-entity dispatch targets, reached
+   * ONLY through the `webhook-ingress` service (dispatched as callerKind
+   * "server"). Refuse any direct relay caller so the open relay cannot read or
+   * rewrite subscriptions / redirect webhooks by addressing the DO directly.
+   * Events are owner-scoped push notifications — accept them.
+   */
+  protected override assertInboundAllowed(
+    caller: AuthenticatedCaller | null,
+    kind: "call" | "event"
+  ): void {
+    if (kind === "event") return;
+    if (caller?.callerKind !== "server") {
+      throw new Error(
+        `webhook-ingress: WebhookStoreDO is server-only; refusing caller kind ${caller?.callerKind ?? "unknown"}`
+      );
+    }
   }
 
   protected createTables(): void {
@@ -58,6 +79,7 @@ export class WebhookStoreDO extends DurableObjectBase {
     this.createTables();
   }
 
+  @rpc
   create(
     input: Omit<WebhookIngressSubscription, "subscriptionId" | "createdAt" | "updatedAt">
   ): WebhookIngressSubscription {
@@ -72,6 +94,7 @@ export class WebhookStoreDO extends DurableObjectBase {
     return subscription;
   }
 
+  @rpc
   get(subscriptionId: string): WebhookIngressSubscription | null {
     const row = this.sql
       .exec(this.selectSql("WHERE subscription_id = ?"), subscriptionId)
@@ -79,6 +102,7 @@ export class WebhookStoreDO extends DurableObjectBase {
     return row ? this.fromRow(row) : null;
   }
 
+  @rpc
   list(ownerCallerId?: string): WebhookIngressSubscription[] {
     const rows = ownerCallerId
       ? this.sql.exec(this.selectSql("WHERE owner_caller_id = ?"), ownerCallerId).toArray()
@@ -86,6 +110,7 @@ export class WebhookStoreDO extends DurableObjectBase {
     return (rows as unknown as WebhookIngressSubscriptionRow[]).map((row) => this.fromRow(row));
   }
 
+  @rpc
   replace(subscription: WebhookIngressSubscription): void {
     this.sql.exec(
       `

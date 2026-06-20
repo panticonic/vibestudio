@@ -10,6 +10,12 @@ import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 import { AiChatWorker } from "./ai-chat-worker.js";
 
 class TestableAiChatWorker extends AiChatWorker {
+  // Tests invoke onMethodCall directly (not through the relay) to exercise the
+  // standard-agent-method logic; present as the server caller so the channel-delivery
+  // gate (assertChannelDeliveryCaller) admits them.
+  protected override get rpcCallerKind(): string | null {
+    return "server";
+  }
   readonly blobs = new Map<string, string>();
   readonly published: Array<{ participantId: string; event: unknown; opts?: unknown }> = [];
   readonly driverHandleIncoming = vi.fn(async () => undefined);
@@ -276,9 +282,9 @@ describe("AiChatWorker", () => {
     // settings survive re-read (Ref-kind KV)
     const after = await worker.onMethodCall("ch-1", "tc-3", "getAgentSettings", {});
     expect((after.result as { model: string }).model).toBe("anthropic:claude-sonnet-4-6");
-    // other channels are unaffected
+    // config is per-AGENT, not per-channel: a sibling channel of the same agent sees the change
     const other = await worker.onMethodCall("ch-2", "tc-4", "getAgentSettings", {});
-    expect((other.result as { model: string }).model).toBe(DEFAULT_MODEL);
+    expect((other.result as { model: string }).model).toBe("anthropic:claude-sonnet-4-6");
   });
 
   it("validates standard method arguments", async () => {

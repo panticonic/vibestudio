@@ -5,10 +5,10 @@ import { createHash } from "node:crypto";
 export const INTERNAL_DO_SOURCE = "natstack/internal";
 
 export const INTERNAL_DO_CLASSES = [
-  "ScopeStoreDO",
   "WebhookStoreDO",
   "WorkspaceDO",
   "BrowserDataDO",
+  "EvalDO",
 ] as const;
 
 export type InternalDOClassName = (typeof INTERNAL_DO_CLASSES)[number];

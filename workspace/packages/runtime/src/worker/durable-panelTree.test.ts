@@ -1,4 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { rpc } from "@natstack/rpc";
+
+// Envelope-native /rpc: the mock receives an RpcEnvelope and must reply with a
+// response envelope echoing the requestId (else the connectionless client never
+// settles). parseReq reconstructs the legacy recorded {type,targetId,method,args}
+// shape; respond wraps a result into a response envelope.
+function parseReq(init?: RequestInit) {
+  const envelope = JSON.parse(String(init?.body ?? "{}")) as {
+    from?: string;
+    target?: string;
+    message?: { type?: string; requestId?: string; method?: string; args?: unknown[]; event?: string; payload?: unknown };
+  };
+  const msg = envelope.message ?? {};
+  return {
+    type: msg.type === "event" ? "emit" : "call",
+    targetId: envelope.target ?? "",
+    method: msg.method ?? msg.event ?? "",
+    args: msg.args ?? (msg.payload !== undefined ? [msg.payload] : []),
+  } as { type: string; targetId: string; method: string; args: unknown[] };
+}
+function respond(init: RequestInit | undefined, result: unknown) {
+  const envelope = JSON.parse(String(init?.body ?? "{}")) as {
+    from?: string; target?: string; message?: { requestId?: string };
+  };
+  return new Response(
+    JSON.stringify({
+      from: envelope.target,
+      target: envelope.from,
+      delivery: { caller: { callerId: "main", callerKind: "server" } },
+      provenance: [],
+      message: { type: "response", requestId: envelope.message?.requestId, result },
+    })
+  );
+}
+
 
 describe("DurableObjectBase panelTree handles", () => {
   const originalFetch = globalThis.fetch;
@@ -15,35 +50,24 @@ describe("DurableObjectBase panelTree handles", () => {
   it("routes bare handle RPC events through the refreshed runtime entity id", async () => {
     const calls: Array<{ type?: string; targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        type?: string;
-        targetId: string;
-        method?: string;
-        args?: unknown[];
-        event?: string;
-        payload?: unknown;
-      };
+      const body = parseReq(init);
       calls.push({
         type: body.type,
         targetId: body.targetId,
-        method: body.method ?? body.event ?? "",
-        args: body.args ?? [body.payload],
+        method: body.method,
+        args: body.args,
       });
       if (body.method === "panelTree.metadata") {
-        return new Response(
-          JSON.stringify({
-            result: {
+        return respond(init, {
               id: "slot-a",
               title: "Panel A",
               source: "panels/a",
               kind: "workspace",
               parentId: "root",
               runtimeEntityId: "panel:slot-a-current-entity",
-            },
-          })
-        );
+            });
       }
-      return new Response(JSON.stringify({ result: "ok" }));
+      return respond(init, "ok");
     }) as typeof fetch;
 
     const [{ DurableObjectBase }, { createTestDO }] = await Promise.all([
@@ -54,6 +78,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
+      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
       async probePanelTree(): Promise<{
         title: string | undefined;
         source: string | undefined;
@@ -109,19 +134,15 @@ describe("DurableObjectBase panelTree handles", () => {
   it("resolves isLoaded from the server runtime lease", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        targetId: string;
-        method: string;
-        args: unknown[];
-      };
+      const body = parseReq(init);
       // Strip the opaque transport requestId/idempotencyKey; these tests assert routing.
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
       if (body.method === "panelTree.getRuntimeLease") {
-        return new Response(JSON.stringify({ result: { leased: true } }));
+        return respond(init, { leased: true });
       }
-      return new Response(JSON.stringify({ result: null }));
+      return respond(init, null);
     }) as typeof fetch;
 
     const [{ DurableObjectBase }, { createTestDO }] = await Promise.all([
@@ -132,6 +153,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
+      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
       async probePanelTree(): Promise<boolean> {
         return this.panelTree.get("slot-a").isLoaded();
       }
@@ -156,19 +178,13 @@ describe("DurableObjectBase panelTree handles", () => {
   it("lists, hydrates children, and opens panels through the server panelTree service", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        targetId: string;
-        method: string;
-        args: unknown[];
-      };
+      const body = parseReq(init);
       // Strip the opaque transport requestId/idempotencyKey; these tests assert routing.
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
       if (body.method === "panelTree.list" && body.args[0] === null) {
-        return new Response(
-          JSON.stringify({
-            result: [
+        return respond(init, [
               {
                 panelId: "root-slot",
                 title: "Root",
@@ -189,14 +205,10 @@ describe("DurableObjectBase panelTree handles", () => {
                   },
                 ],
               },
-            ],
-          })
-        );
+            ]);
       }
       if (body.method === "panelTree.list" && body.args[0] === "root-slot") {
-        return new Response(
-          JSON.stringify({
-            result: [
+        return respond(init, [
               {
                 panelId: "child-slot",
                 title: "Child",
@@ -206,23 +218,17 @@ describe("DurableObjectBase panelTree handles", () => {
                 contextId: "ctx-child",
                 runtimeEntityId: "panel:child-entity",
               },
-            ],
-          })
-        );
+            ]);
       }
       if (body.method === "panelTree.create") {
-        return new Response(
-          JSON.stringify({
-            result: {
+        return respond(init, {
               id: "created-slot",
               title: "Created",
               kind: "workspace",
               runtimeEntityId: "panel:created-entity",
-            },
-          })
-        );
+            });
       }
-      return new Response(JSON.stringify({ result: "ok" }));
+      return respond(init, "ok");
     }) as typeof fetch;
 
     const [{ DurableObjectBase }, { createTestDO }] = await Promise.all([
@@ -233,6 +239,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class PanelTreeProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
+      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
       async probePanelTree(): Promise<{
         allIds: string[];
         childParentId: string | null | undefined;
@@ -241,7 +248,7 @@ describe("DurableObjectBase panelTree handles", () => {
       }> {
         const all = await this.panelTree.list();
         const children = await this.panelTree.children("root-slot");
-        const created = await this.panelTree.open("panels/new");
+        const created = await this.openPanel("panels/new");
         return {
           allIds: all.map((handle) => handle.id),
           childParentId: children[0]?.parent()?.id,
@@ -284,19 +291,82 @@ describe("DurableObjectBase panelTree handles", () => {
     ]);
   });
 
+  it("exposes openPanel/listPanels/getPanelHandle aliases on DurableObjectBase", async () => {
+    const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = parseReq(init);
+      delete (body as Record<string, unknown>)["requestId"];
+      delete (body as Record<string, unknown>)["idempotencyKey"];
+      calls.push(body);
+      if (body.method === "panelTree.list") {
+        return respond(init, []);
+      }
+      if (body.method === "panelTree.create") {
+        return respond(init, {
+              id: "created-slot",
+              title: "Created",
+              kind: "workspace",
+              runtimeEntityId: "panel:created-entity",
+            });
+      }
+      return respond(init, null);
+    }) as typeof fetch;
+
+    const [{ DurableObjectBase }, { createTestDO }] = await Promise.all([
+      import("./durable-base.js"),
+      import("./durable-test-utils.js"),
+    ]);
+
+    class PanelAliasProbeDO extends DurableObjectBase {
+      protected createTables(): void {}
+
+      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
+      async probePanelAliases(): Promise<{
+        createdId: string;
+        listedCount: number;
+        knownId: string;
+      }> {
+        const created = await this.openPanel("panels/new", { focus: true });
+        const listed = await this.listPanels();
+        const known = this.getPanelHandle("known-slot");
+        return { createdId: created.id, listedCount: listed.length, knownId: known.id };
+      }
+    }
+
+    const { call } = await createTestDO(PanelAliasProbeDO, {
+      GATEWAY_URL: "http://server.test",
+    });
+
+    await expect(call("probePanelAliases")).resolves.toEqual({
+      createdId: "created-slot",
+      listedCount: 0,
+      knownId: "known-slot",
+    });
+    expect(calls).toEqual([
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.create",
+        args: ["panels/new", { focus: true, parentId: null }],
+      },
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.list",
+        args: [null],
+      },
+    ]);
+  });
+
   it("builds a panel parent handle with entity-scoped RPC and slot-scoped CDP", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        targetId: string;
-        method: string;
-        args: unknown[];
-      };
+      const body = parseReq(init);
       // Strip the opaque transport requestId/idempotencyKey; these tests assert routing.
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
-      return new Response(JSON.stringify({ result: { wsEndpoint: "ws://cdp.test" } }));
+      return respond(init, { wsEndpoint: "ws://cdp.test" });
     }) as typeof fetch;
 
     const [{ DurableObjectBase }, { createTestDO }] = await Promise.all([
@@ -307,6 +377,7 @@ describe("DurableObjectBase panelTree handles", () => {
     class ParentProbeDO extends DurableObjectBase {
       protected createTables(): void {}
 
+      @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
       async probeParent(): Promise<{
         id: string;
         title: string | undefined;
@@ -327,20 +398,35 @@ describe("DurableObjectBase panelTree handles", () => {
       GATEWAY_URL: "http://server.test",
     });
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
+    // Converged inbound dispatch: caller attribution rides in the envelope's
+    // delivery.caller (POSTed to __rpc), not X-Natstack-Rpc-Caller-* headers.
+    const caller = {
+      callerId: "panel:parent-entity",
+      callerKind: "panel",
+      callerPanelId: "parent-slot",
+    };
     const response = await fetchable.fetch(
-      new Request("http://test/test-key/probeParent", {
+      new Request("http://test/test-key/__rpc", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Natstack-Rpc-Caller-Id": "panel:parent-entity",
-          "X-Natstack-Rpc-Caller-Kind": "panel",
-          "X-Natstack-Rpc-Caller-Panel-Id": "parent-slot",
-        },
-        body: JSON.stringify([]),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: caller.callerId,
+          target: "do:test:ParentProbeDO:test-key",
+          delivery: { caller },
+          provenance: [caller],
+          message: {
+            type: "request",
+            requestId: "r-probe",
+            fromId: caller.callerId,
+            method: "probeParent",
+            args: [],
+          },
+        }),
       })
     );
 
-    await expect(response.json()).resolves.toEqual({
+    const responseEnvelope = (await response.json()) as { message: { result: unknown } };
+    expect(responseEnvelope.message.result).toEqual({
       id: "parent-slot",
       title: "parent-slot",
       cdpEndpoint: { wsEndpoint: "ws://cdp.test" },

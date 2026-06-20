@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { rpc } from "@natstack/rpc";
 import initSqlJs from "sql.js";
 import { DurableObjectBase } from "./durable-base.js";
 import { createTestDO } from "./durable-test-utils.js";
@@ -6,6 +7,7 @@ import { createTestDO } from "./durable-test-utils.js";
 class EchoDO extends DurableObjectBase {
   protected createTables(): void {}
 
+  @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
   echo(...args: unknown[]): unknown[] {
     return args;
   }
@@ -25,6 +27,7 @@ class LifecycleProbeDO extends DurableObjectBase {
     this.resumed = true;
   }
 
+  @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
   callerKind(): string | null {
     return this.caller?.callerKind ?? null;
   }
@@ -45,6 +48,7 @@ class SchemaProbeDO extends DurableObjectBase {
     if (fromVersion > 0) this.sql.exec(`DROP TABLE IF EXISTS required_table`);
   }
 
+  @rpc({ callers: ["server", "panel", "do", "shell", "harness"] })
   hasRequiredTable(): boolean {
     return (
       this.sql
@@ -87,6 +91,7 @@ describe("DurableObjectBase request parsing", () => {
           args: [["op-1"], "shell:owner"],
           __instanceToken: "token",
           __instanceId: "do:internal/WorkspaceDO:test-key",
+          __caller: { callerId: "main", callerKind: "server" },
         }),
       })
     );
@@ -132,7 +137,7 @@ describe("DurableObjectBase lifecycle routing", () => {
   });
 
   it("does not leak verified lifecycle caller into later ordinary calls", async () => {
-    const { instance } = await createTestDO(LifecycleProbeDO);
+    const { instance, callAs } = await createTestDO(LifecycleProbeDO);
     const fetchable = instance as unknown as { fetch(request: Request): Promise<Response> };
 
     await fetchable.fetch(
@@ -149,10 +154,10 @@ describe("DurableObjectBase lifecycle routing", () => {
       })
     );
 
-    const response = await fetchable.fetch(
-      new Request("http://test/test-key/callerKind", { method: "POST", body: "[]" })
-    );
-    await expect(response.json()).resolves.toBeNull();
+    // A later attributed "panel" call must see "panel" — the verified "server"
+    // lifecycle caller must NOT leak into it. (The default-deny gate refuses an
+    // unattributed ordinary call, so a real caller is always present.)
+    await expect(callAs("panel", "callerKind")).resolves.toBe("panel");
   });
 });
 

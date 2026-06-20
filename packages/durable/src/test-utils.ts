@@ -185,7 +185,17 @@ export async function createTestDO<T>(
     const request = new Request(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(args),
+      // Attribute as the server (the trusted relay): `assertInboundAllowed`
+      // overrides (e.g. WebhookStoreDO/WorkspaceDO/EvalDO server-only,
+      // BrowserDataDO shell+server) refuse an unattributed caller. The
+      // instance-token gates whether `__caller` is trusted (the test token "token"
+      // resolves to this callerId; see assertInboundAllowed.test).
+      body: JSON.stringify({
+        args,
+        __instanceToken: "token",
+        __instanceId: "do:internal/WorkspaceDO:test-key",
+        __caller: { callerId: "main", callerKind: "server" },
+      }),
     });
     const response = await fetchable.fetch(request);
     const text = await response.text();

@@ -66,6 +66,23 @@ describe("CardManager", () => {
     expect(published).toHaveLength(1);
   });
 
+  it("surfaces the started-publish pubsubId on the created handle (undefined on a hit)", async () => {
+    const { manager } = await makeManager({ types: { weather: WEATHER_TYPE } });
+    // Mock publishAgenticEvent returns { id: published.length } → first is 1.
+    const created = await manager.getOrCreate("chan-1", "weather", "main", { city: "Berlin" });
+    expect(created.pubsubId).toBe(1);
+    // A getOrCreate hit publishes nothing → no pubsubId.
+    const hit = await manager.getOrCreate("chan-1", "weather", "main", { city: "Paris" });
+    expect(hit.pubsubId).toBeUndefined();
+  });
+
+  it("update/fail resolve to the pubsubId of the emitted custom.updated event", async () => {
+    const { manager } = await makeManager({ types: { weather: WEATHER_TYPE } });
+    const card = await manager.getOrCreate("chan-1", "weather", "main", { city: "Berlin" }); // id 1
+    await expect(card.update({ city: "Paris" })).resolves.toBe(2);
+    await expect(card.fail({ message: "down" })).resolves.toBe(3);
+  });
+
   it("uses deterministic, monotonic idempotency keys for updates", async () => {
     const { manager, published } = await makeManager({ types: { weather: WEATHER_TYPE } });
     const card = await manager.getOrCreate("chan-1", "weather", "main", { city: "Berlin" });

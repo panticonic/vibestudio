@@ -15,7 +15,7 @@
  */
 
 /// <reference path="../workerd.d.ts" />
-import { DurableObjectBase, type DurableObjectContext } from "@workspace/runtime/worker";
+import { rpc, DurableObjectBase, type DurableObjectContext } from "@workspace/runtime/worker";
 import type { ChannelEvent } from "@workspace/harness";
 import type { BootstrapSnapshot, ParticipantSnapshot } from "@workspace/pubsub";
 import {
@@ -31,6 +31,7 @@ import {
 import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-constants";
 import {
   participantMetadataSchema,
+  participantIsAgentVessel,
   type SubscribeResult,
   type ChannelConfig,
   type PresencePayload,
@@ -466,6 +467,7 @@ export class PubSubChannel extends DurableObjectBase {
    * Subscribe a participant to this channel. Inserts the participant first,
    * then builds replay, so an initial roster snapshot includes the subscriber.
    */
+  @rpc({ callers: ["panel", "do"] })
   async subscribe(
     participantId: string,
     metadata: Record<string, unknown>
@@ -628,11 +630,25 @@ export class PubSubChannel extends DurableObjectBase {
             wantsReplay ? (replayMessageLimit ?? REPLAY_LIMIT) : 0,
             this.currentReplayContext()
           );
-    this.queueReplayEnvelope(participantId, envelope, doRef != null);
+    // Deliver the structured `onChannelEnvelope` replay only to DO participants
+    // that opted in (agent vessels). RPC-style DO clients (the eval's
+    // connectViaRpc) receive replay via the `channel:message` emits + subscribe
+    // ACK fallback, and have no onChannelEnvelope handler.
+    this.queueReplayEnvelope(
+      participantId,
+      envelope,
+      doRef != null && metadata["receivesChannelEnvelopes"] === true
+    );
 
-    if (sessionReplaced && transport !== "do") this.calls.redeliverPendingCallsTo(participantId);
+    // Redelivery + the reconnect/redelivery alarm are RPC-STYLE concerns: they serve participants that
+    // settle method calls via the broadcast `started` + submitMethodResult — panels AND RPC-style
+    // connectionless DO clients (the eval). Agent vessels get method calls via onMethodCall and don't
+    // process the redelivered `started`, so they're excluded. Gate on the agent-vessel discriminator,
+    // NOT `transport` (which would wrongly exclude the eval just because its id is a DO id).
+    const isAgentVessel = participantIsAgentVessel(this.getSenderMetadata(participantId));
+    if (sessionReplaced && !isAgentVessel) this.calls.redeliverPendingCallsTo(participantId);
 
-    if (transport !== "do") {
+    if (!isAgentVessel) {
       this.scheduleNextAlarm();
     }
 
@@ -716,11 +732,13 @@ export class PubSubChannel extends DurableObjectBase {
     }
   }
 
+  @rpc({ callers: ["panel", "do"] })
   async unsubscribe(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "unsubscribe");
     await this.unsubscribeParticipant(participantId, "graceful");
   }
 
+  @rpc({ callers: ["server", "shell", "harness"] })
   async adminUnsubscribeParticipant(participantId: string): Promise<void> {
     this.assertAdminCaller("adminUnsubscribeParticipant");
     await this.unsubscribeParticipant(participantId, "graceful");
@@ -748,6 +766,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Heartbeat from an RPC participant. */
+  @rpc({ callers: ["panel", "do", "worker"] })
   async touch(participantId: string): Promise<void> {
     this.sql.exec(
       `UPDATE participants SET connected_at = ? WHERE id = ?`,
@@ -761,6 +780,7 @@ export class PubSubChannel extends DurableObjectBase {
    * GAD validates agentic payloads at append-time inside the txn; policies
    * annotate (never mutate) the envelope.
    */
+  @rpc({ callers: ["panel", "do", "worker"] })
   async publish(
     participantId: string,
     type: string,
@@ -813,6 +833,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Policy fold state (replaces getConversationState — WS2 §4.4). */
+  @rpc({ callers: ["panel", "do", "server"] })
   async getPolicyState(name?: string): Promise<{
     policy: string;
     version: number;
@@ -863,6 +884,7 @@ export class PubSubChannel extends DurableObjectBase {
    * Broadcast envelopes that were durably appended to GAD outside this DO
    * (trajectory publication fan-out). Folds each into the policy caches.
    */
+  @rpc({ callers: ["server", "do"] })
   async broadcastStoredEnvelopes(envelopeIds: string[]): Promise<{ broadcasted: number }> {
     let broadcasted = 0;
     for (const envelopeId of envelopeIds) {
@@ -877,6 +899,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Mark a message as errored (durable `error` channel event). */
+  @rpc({ callers: ["panel", "do", "worker"] })
   async error(
     participantId: string,
     messageId: string,
@@ -896,11 +919,13 @@ export class PubSubChannel extends DurableObjectBase {
     broadcast(this.broadcastDeps, event, { kind: "log", phase: "live" }, participantId);
   }
 
+  @rpc({ callers: ["panel", "do", "server"] })
   async getReplayAfter(sinceId: number) {
     return this.channelLog.replayAfter(sinceId, this.currentReplayContext());
   }
 
   /** Send a non-durable signal message. */
+  @rpc({ callers: ["panel", "do", "worker"] })
   async sendSignal(participantId: string, content: string, contentType?: string): Promise<void> {
     this.assertParticipantCaller(participantId, "sendSignal");
     const ts = Date.now();
@@ -923,11 +948,13 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Replace a participant's metadata entirely. */
+  @rpc({ callers: ["panel", "do", "worker"] })
   async updateMetadata(participantId: string, metadata: Record<string, unknown>): Promise<void> {
     this.assertParticipantCaller(participantId, "updateMetadata");
     await this.updateParticipantMetadata(participantId, metadata);
   }
 
+  @rpc({ callers: ["server", "shell", "harness"] })
   async adminUpdateParticipantMetadata(
     participantId: string,
     metadata: Record<string, unknown>
@@ -948,11 +975,13 @@ export class PubSubChannel extends DurableObjectBase {
     await this.publishPresenceEvent(participantId, "update", metadata);
   }
 
+  @rpc({ callers: ["panel", "do", "worker"] })
   async setTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertParticipantCaller(participantId, "setTypingState");
     this.setParticipantTypingState(participantId, typing);
   }
 
+  @rpc({ callers: ["server", "shell", "harness"] })
   async adminSetParticipantTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertAdminCaller("adminSetParticipantTypingState");
     this.setParticipantTypingState(participantId, typing);
@@ -973,6 +1002,7 @@ export class PubSubChannel extends DurableObjectBase {
   }
 
   /** Get all participants with DO identity when available. */
+  @rpc({ callers: ["panel", "do", "server", "shell"] })
   async getParticipants(): Promise<
     Array<{
       participantId: string;
@@ -1007,14 +1037,17 @@ export class PubSubChannel extends DurableObjectBase {
     });
   }
 
+  @rpc({ callers: ["panel", "do", "server", "shell"] })
   async getContextId(): Promise<string | null> {
     return this.getStateValue("contextId");
   }
 
+  @rpc({ callers: ["panel", "do", "server", "shell"] })
   async getConfig(): Promise<ChannelConfig | null> {
     return this.getChannelConfig();
   }
 
+  @rpc({ callers: ["panel", "server"] })
   async updateConfig(config: Partial<ChannelConfig>): Promise<ChannelConfig> {
     const newConfig = { ...this.getChannelConfig(), ...config };
     this.setStateValue("config", JSON.stringify(newConfig));
@@ -1029,6 +1062,7 @@ export class PubSubChannel extends DurableObjectBase {
     return newConfig;
   }
 
+  @rpc({ callers: ["panel", "do", "server"] })
   async getReplayBefore(beforeSeq: number, limit?: number) {
     return this.channelLog.replayBefore(beforeSeq, limit ?? 100, this.currentReplayContext());
   }
@@ -1036,14 +1070,17 @@ export class PubSubChannel extends DurableObjectBase {
   // Registry reads: direct passthrough to GAD's channel_message_types
   // projection (hydrated — published `source` payloads are blob-spilled).
 
+  @rpc({ callers: ["panel", "do", "server"] })
   async getMessageTypes(): Promise<MessageTypeDefinition[]> {
     return this.channelLog.listMessageTypes();
   }
 
+  @rpc({ callers: ["panel", "do", "server"] })
   async getMessageType(typeId: string): Promise<MessageTypeDefinition | null> {
     return this.channelLog.getMessageType(typeId);
   }
 
+  @rpc({ callers: ["panel", "do", "server"] })
   async getMessageSender(participantId: string, messageId: string): Promise<string | null> {
     this.assertParticipantCaller(participantId, "getMessageSender");
     const replay = await this.channelLog.replayInitial(500, this.currentReplayContext());
@@ -1057,6 +1094,7 @@ export class PubSubChannel extends DurableObjectBase {
     return null;
   }
 
+  @rpc({ callers: ["server", "shell", "harness"] })
   async adminInspectSchema() {
     this.assertAdminCaller("adminInspectSchema");
     const tableNames = ["participants", "pending_calls", "dedup_keys"];
@@ -1087,6 +1125,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
+  @rpc({ callers: ["server", "shell", "harness"] })
   async adminInspectLog(
     opts: {
       afterId?: number;
@@ -1114,11 +1153,13 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
+  @rpc({ callers: ["server", "shell", "harness"] })
   async adminInspectEnvelope(envelopeId: string) {
     this.assertAdminCaller("adminInspectMessageChain");
     return { rows: await this.channelLog.inspectEnvelope(envelopeId) };
   }
 
+  @rpc({ callers: ["server", "shell", "harness"] })
   async adminReconstructTranscript(opts: { rootLimit?: number; beforeSeq?: number } = {}) {
     this.assertAdminCaller("adminReconstructTranscript");
     const envelope =
@@ -1134,6 +1175,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
+  @rpc({ callers: ["server", "shell", "harness"] })
   async adminValidateLog(opts: { rootLimit?: number } = {}) {
     this.assertAdminCaller("adminValidateLog");
     const issues: Array<{ code: string; message: string; rowId?: number }> = [];
@@ -1173,6 +1215,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── Method calls (calls.ts — pending_calls is a declared cache) ──────────
 
+  @rpc({ callers: ["panel", "do", "worker"] })
   async callMethod(
     callerPid: string,
     targetPid: string,
@@ -1185,6 +1228,7 @@ export class PubSubChannel extends DurableObjectBase {
     await this.calls.callMethod(callerPid, targetPid, callId, method, args, opts);
   }
 
+  @rpc({ callers: ["panel", "do", "worker"] })
   async submitMethodResult(
     participantId: string,
     transportCallId: string,
@@ -1225,6 +1269,7 @@ export class PubSubChannel extends DurableObjectBase {
     return { id };
   }
 
+  @rpc({ callers: ["panel", "do", "worker"] })
   async submitMethodProgress(
     participantId: string,
     transportCallId: string,
@@ -1270,10 +1315,12 @@ export class PubSubChannel extends DurableObjectBase {
     );
   }
 
+  @rpc({ callers: ["server", "harness"] })
   async cancelMethodCall(callId: string): Promise<void> {
     await this.calls.cancelMethodCall(callId, "cancelled");
   }
 
+  @rpc({ callers: ["server", "harness"] })
   async timeoutMethodCall(callId: string, reason?: string): Promise<void> {
     const pending = await this.calls.cancelMethodCall(callId, reason ?? "timed out");
     if (!pending) return;
@@ -1480,6 +1527,7 @@ export class PubSubChannel extends DurableObjectBase {
    * caches by replaying the forked lineage — conversation state survives the
    * fork (WS2 §4.5).
    */
+  @rpc({ callers: ["worker", "server"] })
   async postClone(parentChannelId: string, forkPointId: number): Promise<void> {
     // Fix identity: cloneDO copies parent's __objectKey; overwrite with our actual key
     this.sql.exec(
@@ -1501,6 +1549,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── State introspection ─────────────────────────────────────────────────
 
+  @rpc({ callers: ["panel", "server", "shell", "harness"] })
   override async getState(): Promise<Record<string, unknown>> {
     const replay = await this.channelLog.replayInitial(1, this.currentReplayContext());
     const participants = this.sql.exec(`SELECT * FROM participants`).toArray();

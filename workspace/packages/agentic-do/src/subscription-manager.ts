@@ -6,7 +6,7 @@
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
-import type { AgentSubscriptionConfig } from "@workspace/agentic-core";
+import type { ChannelSubscriptionConfig } from "@workspace/agentic-core";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
 import { PARTICIPANT_SESSION_METADATA_KEY } from "@workspace/pubsub/internal-constants";
@@ -62,6 +62,12 @@ export class SubscriptionManager {
       contextId: opts.contextId,
       ...opts.descriptor.metadata,
     };
+    // This DO participant (an agent vessel) consumes the channel's STRUCTURED
+    // `onChannelEnvelope` delivery. RPC-style clients (connectViaRpc — e.g. the
+    // eval running system tests) do NOT set this and receive only the
+    // `channel:message` event stream, so the channel won't push onChannelEnvelope
+    // to them (they have no handler for it).
+    metadata["receivesChannelEnvelopes"] = true;
     if (this.identity.sessionId) {
       metadata[PARTICIPANT_SESSION_METADATA_KEY] = this.identity.sessionId;
     }
@@ -121,16 +127,16 @@ export class SubscriptionManager {
     return row[0]!["context_id"] as string;
   }
 
-  getConfig(channelId: string): AgentSubscriptionConfig | null {
+  getConfig(channelId: string): ChannelSubscriptionConfig | null {
     const row = this.sql
       .exec(`SELECT config FROM subscriptions WHERE channel_id = ?`, channelId)
       .toArray();
     if (row.length === 0 || !row[0]!["config"]) return null;
     const parsed = JSON.parse(row[0]!["config"] as string);
-    return parsed && typeof parsed === "object" ? (parsed as AgentSubscriptionConfig) : null;
+    return parsed && typeof parsed === "object" ? (parsed as ChannelSubscriptionConfig) : null;
   }
 
-  patchConfig(channelId: string, patch: Record<string, unknown>): AgentSubscriptionConfig {
+  patchConfig(channelId: string, patch: Record<string, unknown>): ChannelSubscriptionConfig {
     const current = this.getConfig(channelId) ?? {};
     if (!this.getParticipantId(channelId)) {
       throw new Error(`No subscription for channel ${channelId}`);
@@ -141,7 +147,7 @@ export class SubscriptionManager {
       JSON.stringify(next),
       channelId
     );
-    return next as AgentSubscriptionConfig;
+    return next as ChannelSubscriptionConfig;
   }
 
   listAll(): Array<{ channelId: string; participantId: string | null }> {

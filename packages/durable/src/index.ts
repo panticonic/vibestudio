@@ -1,4 +1,17 @@
-import type { AuthenticatedCaller, RpcClient } from "@natstack/rpc";
+import {
+  collectExposableMethods,
+  createConnectionlessRpcClient,
+  envelopeFromMessage,
+  rpcExposedMethodNames,
+  type AuthenticatedCaller,
+  type ConnectionlessRpcClient,
+  type DeferrableRpcClient,
+  type RpcEnvelope,
+  type RpcRequest,
+} from "@natstack/rpc";
+
+// Re-export the `@rpc` exposure decorator so DO authors import it alongside the base.
+export { rpc } from "@natstack/rpc";
 
 export interface DurableObjectContext {
   id: { toString(): string; name?: string };
@@ -13,6 +26,12 @@ export interface DurableObjectContext {
   getWebSockets(tag?: string): WebSocket[];
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;
   waitUntil?(promise: Promise<unknown>): void;
+  /**
+   * workerd: discard the in-memory instance (in-flight work aborted) without deleting
+   * durable SQLite. Used by EvalDO for idle GC under `preventEviction`. Present on the
+   * real workerd `DurableObjectState`; declared here because the minimal type omitted it.
+   */
+  abort(reason?: string): void;
 }
 
 export interface SqlStorage {
@@ -48,46 +67,8 @@ export interface LifecycleResumeInput {
   reason: "planned" | "crash" | "server_restart";
 }
 
-interface HttpRpcClientConfig {
-  selfId: string;
-  serverUrl: string;
-  authToken: string;
-}
-
-type HttpRpcClient = Pick<RpcClient, "call"> & {
-  handleIncomingPost(body: unknown): Promise<unknown>;
-};
-
-function createHttpRpcClient(config: HttpRpcClientConfig): HttpRpcClient {
-  const { selfId, serverUrl, authToken } = config;
-  const rpcFetch = globalThis.fetch.bind(globalThis);
-  return {
-    async call<T>(targetId: string, method: string, args: unknown[]): Promise<T> {
-      const response = await rpcFetch(`${serverUrl}/rpc`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${authToken}`,
-          "X-Natstack-Runtime-Id": selfId,
-        },
-        body: JSON.stringify({
-          type: "call",
-          requestId: crypto.randomUUID(),
-          targetId,
-          method,
-          args,
-        }),
-      });
-      if (response.status === 401) throw new Error("RPC authentication failed");
-      const json = (await response.json()) as Record<string, unknown>;
-      if (json["error"]) throw new Error(String(json["error"]));
-      return json["result"] as T;
-    },
-    async handleIncomingPost(): Promise<unknown> {
-      throw new Error("Inbound RPC is not available on @natstack/durable core objects");
-    },
-  };
-}
+// (RPC exposure is now opt-in via `@rpc` + `rpcExposedMethodNames` — no reserved deny-list needed;
+// framework/lifecycle methods are simply never `@rpc`-marked, and the base-proto boundary backstops.)
 
 export abstract class DurableObjectBase {
   static schemaVersion = 1;
@@ -97,7 +78,7 @@ export abstract class DurableObjectBase {
   protected env: Record<string, unknown>;
 
   private schemaReady = false;
-  private rpcClient: HttpRpcClient | null = null;
+  private connectionless: ConnectionlessRpcClient | null = null;
   private currentVerifiedCaller: AuthenticatedCaller | null = null;
   private currentRpcCallerId: string | null = null;
   private currentRpcCallerKind: string | null = null;
@@ -216,8 +197,42 @@ export abstract class DurableObjectBase {
     return { args: [parsed] };
   }
 
-  protected get rpc(): HttpRpcClient {
-    if (!this.rpcClient) {
+  /**
+   * Runtime identity presented on outbound RPC (the RPC_RUNTIME_ID_HEADER, distinct from
+   * the bearer token). Default is the service-level `do-service:<source>:<class>` shared by
+   * every instance of the class. Subclasses needing PER-OBJECT context (e.g. EvalDO's
+   * owner-scoped fs) override this to `do:<source>:<class>:<objectKey>`; the server accepts
+   * it because the service bearer covers the `do:<source>:<class>:*` prefix
+   * (`rpcServer.isRuntimeIdForServiceToken`).
+   */
+  protected get rpcSelfId(): string {
+    const source = String(this.env["WORKER_SOURCE"] ?? "");
+    const className = String(this.env["WORKER_CLASS_NAME"] ?? "");
+    return `do-service:${source}:${className}`;
+  }
+
+  /**
+   * Override the inbound `respond()` reaper for this DO (default 120s — `httpClient.ts`). A DO with
+   * legitimately long HELD handlers (the EvalDO's `executeRun`) returns a very large value or `0`
+   * (disabled), so the held connection isn't cut short. `undefined` ⇒ the transport default.
+   */
+  protected get respondTimeoutMs(): number | undefined {
+    return undefined;
+  }
+
+  /**
+   * The unified connectionless RPC client — the same `createRpcClient` core
+   * every target runs, behind the envelope-native `httpClientTransport`, plus
+   * the `callDeferred` extension. The DO's own public methods are `exposeAll`'d
+   * onto it so inbound envelopes dispatched via `handleEnvelope` reach the class
+   * method (`respond`/`deliver` are wired in `fetch`).
+   */
+  protected get rpc(): DeferrableRpcClient {
+    return this.connectionlessClient().client;
+  }
+
+  private connectionlessClient(): ConnectionlessRpcClient {
+    if (!this.connectionless) {
       const token = this.env["RPC_AUTH_TOKEN"];
       const source = this.env["WORKER_SOURCE"];
       const className = this.env["WORKER_CLASS_NAME"];
@@ -234,13 +249,22 @@ export abstract class DurableObjectBase {
       if (typeof gatewayUrl !== "string" || gatewayUrl.length === 0) {
         throw new Error("RPC not available: GATEWAY_URL not configured");
       }
-      this.rpcClient = createHttpRpcClient({
-        selfId: `do-service:${source}:${className}`,
+      const connectionless = createConnectionlessRpcClient({
+        selfId: this.rpcSelfId,
         serverUrl: gatewayUrl,
         authToken: token,
+        callerKind: "do",
+        ...(this.respondTimeoutMs !== undefined ? { respondTimeoutMs: this.respondTimeoutMs } : {}),
       });
+      // Expose ONLY this DO's `@rpc`-marked methods (opt-in / default-deny). Private/protected helpers
+      // and all framework plumbing (`dispatchInboundEnvelope`, state-KV, alarms) are unreachable over
+      // the open relay; a forgotten `@rpc` fails loud ("not exposed"). Boundary = backstop.
+      connectionless.client.exposeAll(
+        collectExposableMethods(this, rpcExposedMethodNames(this), DurableObjectBase.prototype)
+      );
+      this.connectionless = connectionless;
     }
-    return this.rpcClient;
+    return this.connectionless;
   }
 
   protected get caller(): AuthenticatedCaller | null {
@@ -285,12 +309,20 @@ export abstract class DurableObjectBase {
     throw new Error("objectKey not available");
   }
 
-  protected setAlarm(delayMs: number): void {
-    this.setAlarmAt(Date.now() + delayMs);
+  protected setAlarm(delayMs: number, opts?: { bestEffort?: boolean }): void {
+    this.setAlarmAt(Date.now() + delayMs, opts);
   }
 
-  protected setAlarmAt(timeMs: number): void {
-    void this.alarmRpc("workspace-state.alarmSet", { ...this.lifecycleKey(), wakeAt: timeMs });
+  /**
+   * @param opts.bestEffort fire-once, never re-armed on dispatch failure — for alarms
+   *   whose handler may abort its own DO (idle GC). Default alarms are at-least-once.
+   */
+  protected setAlarmAt(timeMs: number, opts?: { bestEffort?: boolean }): void {
+    void this.alarmRpc("workspace-state.alarmSet", {
+      ...this.lifecycleKey(),
+      wakeAt: timeMs,
+      ...(opts?.bestEffort ? { bestEffort: true } : {}),
+    });
   }
 
   protected deleteAlarm(): void {
@@ -345,6 +377,13 @@ export abstract class DurableObjectBase {
     const method = segments.slice(1).join("/") || "getState";
 
     try {
+      // Converged inbound dispatch: an `RpcEnvelope` POSTed to `__rpc` (relay
+      // traffic, server→DO event push, deferred replies) flows through the
+      // shared core's `handleEnvelope` → `exposeAll`'d method / event listeners.
+      if (method === "__rpc") {
+        return await this.handleInboundEnvelope(request);
+      }
+
       let args: unknown[] = [];
       let verifiedCallerFromBody: AuthenticatedCaller | null = null;
       if (request.method === "POST") {
@@ -385,16 +424,120 @@ export abstract class DurableObjectBase {
         });
       }
 
-      const fn = (this as unknown as Record<string, unknown>)[method];
-      if (typeof fn !== "function")
-        return jsonResponse({ error: `Unknown method: ${method}` }, 404);
-
-      return this.withRpcContext(request, verifiedCallerFromBody, async () => {
-        const result = await (fn as (...a: unknown[]) => Promise<unknown>).call(this, ...args);
-        return jsonResponse(result ?? null);
+      // Method-path dispatch (the server's instance-token channel,
+      // `DODispatch.dispatch`): build an inbound request envelope from
+      // {method, args, __caller} and route it through the SAME converged core
+      // dispatch as `__rpc`, so `(this)[method]` is gone and `exposeAll` is the
+      // single dispatch. Returns the raw method result (the relay/DODispatch
+      // contract), not the response envelope.
+      const caller: AuthenticatedCaller =
+        verifiedCallerFromBody ?? { callerId: "", callerKind: "unknown" };
+      const envelope = envelopeFromMessage({
+        selfId: this.rpcSelfId,
+        from: caller.callerId || "unknown",
+        target: this.rpcSelfId,
+        caller,
+        message: {
+          type: "request",
+          requestId: crypto.randomUUID(),
+          fromId: caller.callerId || "unknown",
+          method,
+          args,
+        },
       });
+      const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
+      const responseMessage = responseEnvelope?.message;
+      if (responseMessage?.type === "response" && "error" in responseMessage) {
+        if (responseMessage.error.startsWith('Method "')) {
+          return jsonResponse({ error: `Unknown method: ${method}` }, 404);
+        }
+        return jsonResponse(
+          {
+            error: responseMessage.error,
+            ...(responseMessage.errorCode ? { errorCode: responseMessage.errorCode } : {}),
+          },
+          500
+        );
+      }
+      return jsonResponse(
+        responseMessage?.type === "response" && "result" in responseMessage
+          ? (responseMessage.result ?? null)
+          : null
+      );
     } catch (err) {
       return jsonResponse({ error: err instanceof Error ? err.message : String(err) }, 500);
+    }
+  }
+
+  /**
+   * Gate inbound RPC by caller. Default: allow all (the generic relay is open,
+   * `rpcServer.checkRelayAuth`). Sensitive recipients that run privileged code
+   * (e.g. a server-only internal DO) OVERRIDE this to reject non-trusted callers
+   * — a blanket guard, since `exposeAll` reflects every public method (including
+   * TS-private helpers, which are runtime-public). Throwing here surfaces a 500
+   * error response and the method never runs.
+   *
+   * `kind` distinguishes a privileged inbound METHOD CALL ("call") from an event
+   * DELIVERY ("event"). Event deliveries are opt-in — the DO subscribed to a
+   * topic/channel and the publisher (server event-push, a channel DO, …) pushes
+   * to it — so a server-only DO should still ACCEPT them while refusing "call".
+   */
+  protected assertInboundAllowed(
+    _caller: AuthenticatedCaller | null,
+    _kind: "call" | "event"
+  ): void {}
+
+  /** Handle an `RpcEnvelope` POSTed to `__rpc`; returns a response envelope (or `{}` for events). */
+  private async handleInboundEnvelope(request: Request): Promise<Response> {
+    const envelope = (await request.json()) as RpcEnvelope;
+    const message = envelope.message;
+    if (message?.type !== "request" && message?.type !== "stream-request") {
+      // Event push / frames: deliver with no response (opt-in subscription).
+      this.assertInboundAllowed(envelope.delivery.caller ?? null, "event");
+      this.connectionlessClient().deliver(envelope);
+      return jsonResponse({});
+    }
+    const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
+    return jsonResponse(responseEnvelope ?? {});
+  }
+
+  /**
+   * Dispatch an inbound request envelope through the converged core
+   * (`respond` → `handleEnvelope` → `exposeAll`'d method), with the DO's
+   * caller-context getters bound to `envelope.delivery.caller` for the duration.
+   */
+  private async dispatchInboundEnvelope(envelope: RpcEnvelope): Promise<RpcEnvelope | null> {
+    const connectionless = this.connectionlessClient();
+    // An unattributed method-path call carries a synthetic empty caller; surface
+    // it as a null caller context (matching the pre-convergence behavior) rather
+    // than a forgeable `"unknown"` — methods that gate on `this.caller` rely on it.
+    const rawCaller = envelope.delivery.caller;
+    const caller = rawCaller && rawCaller.callerId !== "" ? rawCaller : null;
+    const message = envelope.message as RpcRequest;
+    this.assertInboundAllowed(caller, "call");
+    const prev = {
+      verifiedCaller: this.currentVerifiedCaller,
+      callerId: this.currentRpcCallerId,
+      callerKind: this.currentRpcCallerKind,
+      callerPanelId: this.currentRpcCallerPanelId,
+      requestId: this.currentRpcRequestId,
+      idempotencyKey: this.currentRpcIdempotencyKey,
+    };
+    this.currentVerifiedCaller = caller;
+    this.currentRpcCallerId = caller?.callerId ?? null;
+    this.currentRpcCallerKind = caller?.callerKind ?? null;
+    this.currentRpcCallerPanelId = caller?.callerPanelId ?? null;
+    this.currentRpcRequestId = message?.requestId ?? null;
+    this.currentRpcIdempotencyKey = envelope.delivery.idempotencyKey ?? null;
+    try {
+      return await connectionless.respond(envelope);
+    } finally {
+      this.currentVerifiedCaller = prev.verifiedCaller;
+      this.currentRpcCallerId = prev.callerId;
+      this.currentRpcCallerKind = prev.callerKind;
+      this.currentRpcCallerPanelId = prev.callerPanelId;
+      this.currentRpcRequestId = prev.requestId;
+      this.currentRpcIdempotencyKey = prev.idempotencyKey;
     }
   }
 
@@ -420,7 +563,7 @@ export abstract class DurableObjectBase {
   }
 
   protected resetRpcClients(): void {
-    this.rpcClient = null;
+    this.connectionless = null;
   }
 
   async getState(): Promise<Record<string, unknown>> {
@@ -441,34 +584,6 @@ export abstract class DurableObjectBase {
     }
   }
 
-  private async withRpcContext(
-    request: Request,
-    caller: AuthenticatedCaller | null,
-    callback: () => Promise<Response>
-  ): Promise<Response> {
-    const previousCaller = this.currentVerifiedCaller;
-    const previousCallerId = this.currentRpcCallerId;
-    const previousCallerKind = this.currentRpcCallerKind;
-    const previousCallerPanelId = this.currentRpcCallerPanelId;
-    const previousRequestId = this.currentRpcRequestId;
-    const previousIdempotencyKey = this.currentRpcIdempotencyKey;
-    this.currentVerifiedCaller = caller;
-    this.currentRpcCallerId = request.headers.get("X-Natstack-Rpc-Caller-Id");
-    this.currentRpcCallerKind = request.headers.get("X-Natstack-Rpc-Caller-Kind");
-    this.currentRpcCallerPanelId = request.headers.get("X-Natstack-Rpc-Caller-Panel-Id");
-    this.currentRpcRequestId = request.headers.get("X-Natstack-Rpc-Request-Id");
-    this.currentRpcIdempotencyKey = request.headers.get("X-Natstack-Rpc-Idempotency-Key");
-    try {
-      return await callback();
-    } finally {
-      this.currentVerifiedCaller = previousCaller;
-      this.currentRpcCallerId = previousCallerId;
-      this.currentRpcCallerKind = previousCallerKind;
-      this.currentRpcCallerPanelId = previousCallerPanelId;
-      this.currentRpcRequestId = previousRequestId;
-      this.currentRpcIdempotencyKey = previousIdempotencyKey;
-    }
-  }
 }
 
 function jsonResponse(value: unknown, status = 200): Response {

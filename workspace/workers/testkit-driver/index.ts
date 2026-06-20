@@ -9,7 +9,7 @@
  * instance memory: they die if the DO hibernates or restarts, which is fine
  * for test-scoped use — callers reopen on "unknown session" errors.
  */
-import { DurableObjectBase } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 import { CdpConnection } from "@workspace/cdp-client";
 import {
   cpuProfileRef,
@@ -68,6 +68,7 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Open a raw CDP session to a panel. Approval-gated via panelCdp. */
+  @rpc({ callers: ["panel"] })
   async cdpOpen(panelId: string): Promise<{ sessionId: string }> {
     this.reapIdleSessions();
     const connection = await this.connectToPanel(panelId);
@@ -83,6 +84,7 @@ export class TestkitDriverDO extends DurableObjectBase {
     return { sessionId };
   }
 
+  @rpc({ callers: ["panel"] })
   async cdpSend(
     sessionId: string,
     method: string,
@@ -94,6 +96,7 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Start buffering a CDP event stream for cursor-based draining. */
+  @rpc({ callers: ["panel"] })
   async cdpSubscribe(sessionId: string, eventMethod: string): Promise<void> {
     const session = this.session(sessionId);
     if (session.subscriptions.has(eventMethod)) return;
@@ -107,6 +110,7 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Drain buffered events after `cursor`; returns the new cursor. */
+  @rpc({ callers: ["panel"] })
   async cdpDrainEvents(
     sessionId: string,
     cursor = 0
@@ -116,6 +120,7 @@ export class TestkitDriverDO extends DurableObjectBase {
     return { events, cursor: events.length > 0 ? events[events.length - 1]!.seq : cursor };
   }
 
+  @rpc({ callers: ["panel"] })
   async cdpClose(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) return;
@@ -129,6 +134,7 @@ export class TestkitDriverDO extends DurableObjectBase {
    * the compact ref returns. For profile-around-an-action flows the caller
    * uses cdpOpen + Profiler.* commands via cdpSend instead.
    */
+  @rpc({ callers: ["panel"] })
   async profilePanel(
     panelId: string,
     opts?: { durationMs?: number; samplingIntervalUs?: number }
@@ -154,6 +160,7 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Heap snapshot of a panel; artifact to context fs, compact ref returned. */
+  @rpc({ callers: ["panel"] })
   async heapSnapshot(panelId: string): Promise<ProfileRef> {
     const connection = await this.connectToPanel(panelId);
     const startedAt = Date.now();
@@ -181,6 +188,7 @@ export class TestkitDriverDO extends DurableObjectBase {
   }
 
   /** Liveness probe for ensureWorker-style readiness checks. */
+  @rpc({ callers: ["panel", "server"] })
   async ping(): Promise<{ ok: true; sessions: number }> {
     return { ok: true, sessions: this.sessions.size };
   }

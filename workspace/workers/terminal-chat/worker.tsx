@@ -1,6 +1,6 @@
 import React from "react";
 import { render, Box, Text, type Instance } from "ink";
-import { DurableObjectBase } from "@workspace/runtime/worker";
+import { rpc, DurableObjectBase } from "@workspace/runtime/worker";
 import { HeadlessSession } from "@workspace/agentic-session";
 import { createInkTerminalSession, type InkTerminalSession } from "@workspace/terminal-shim";
 import {
@@ -49,6 +49,7 @@ export class TerminalChatWorker extends DurableObjectBase {
 
   protected createTables(): void {}
 
+  @rpc({ callers: ["app", "server", "panel"] })
   async [SESSION_METHODS.start](args: StartTerminalSessionArgs): Promise<void> {
     this.ensureReady();
     this.hostPrincipalId = args.hostPrincipalId;
@@ -121,17 +122,23 @@ export class TerminalChatWorker extends DurableObjectBase {
     }
   }
 
+  @rpc({ callers: ["app", "server", "panel"] })
   async [SESSION_METHODS.onInput](event: TerminalInputEvent): Promise<void> {
     this.session?.emitInput(decodeInputData(event));
   }
+  @rpc({ callers: ["app", "server", "panel"] })
   async [SESSION_METHODS.onResize](event: TerminalResizeEvent): Promise<void> {
     this.session?.emitResize(event.size);
   }
+  @rpc({ callers: ["app", "server", "panel"] })
   async [SESSION_METHODS.onFocus](): Promise<void> {}
+  @rpc({ callers: ["app", "server", "panel"] })
   async [SESSION_METHODS.onBlur](): Promise<void> {}
+  @rpc({ callers: ["app", "server", "panel"] })
   async [SESSION_METHODS.repaint](): Promise<void> {
     if (this.vm) this.instance?.rerender(this.renderTree());
   }
+  @rpc({ callers: ["app", "server", "panel"] })
   async [SESSION_METHODS.onClose](): Promise<void> {
     this.active = false;
     this.vm?.dispose();

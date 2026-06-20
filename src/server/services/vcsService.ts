@@ -244,7 +244,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           return await vcs.vcs.diffStates(left, right);
         }
         case "resolveHead": {
-          const [head] = args as [string];
+          // Optional head: omitted ⇒ the caller's current context head (consistent with
+          // status/publishStatus/applyEdits, which all default the same way). An explicit
+          // "main"/"ctx:…" ref still resolves directly.
+          const [requested] = args as [string?];
+          const head = requested ?? headForCaller(ctx, deps);
           return { head, stateHash: await vcs.resolveHead(head) };
         }
         case "merge": {
@@ -294,15 +298,14 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           return await vcs.publishStatus(head);
         }
         case "publish": {
-          // The privileged ctx→main path: a panel/app/shell caller may write
-          // ONLY by deliberately publishing its own context head into main.
-          // This is the one sanctioned escalation past resolveWriteHead — and
-          // it's denied to autonomous agents (do/worker), who must never move
-          // main on their own.
-          const callerKind = ctx.caller.runtime.kind;
-          if (callerKind === "do" || callerKind === "worker") {
-            throw new Error(`vcs.publish is reserved for user-facing callers, not ${callerKind}`);
-          }
+          // The privileged ctx→main path: a caller may write to main ONLY by
+          // deliberately publishing its OWN context head. Autonomous agents
+          // (do/worker) may publish too — but ONLY with explicit user approval:
+          // `mainAdvanceOptions` routes the advance through the capability gate
+          // (WORKSPACE_REPO_WRITE_CAPABILITY), which prompts userland callers
+          // (do/worker/panel/app) and bypasses server/shell/harness. This is the
+          // one sanctioned escalation past resolveWriteHead. (Replaces the old
+          // blunt do/worker block — Layer B: publish-with-approval.)
           const callerHead = headForCaller(ctx, deps);
           const requested = args[0] as string | undefined;
           let sourceHead = callerHead;
@@ -324,10 +327,10 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           });
           if (result.status === "merged") await deps.getBuildSystem?.()?.whenSettled();
           if (result.status === "conflicted") {
-            // A panel/app caller cannot resolve OR abort a merge parked on main,
-            // so a conflicted publish must NOT leave main wedged. Roll it back
-            // here (publish runs in the privileged server context) and report
-            // conflicted; the caller re-pulls main into its OWN context head
+            // No userland caller (panel/app/agent) can resolve OR abort a merge
+            // parked on main, so a conflicted publish must NOT leave main wedged.
+            // Roll it back here (publish runs in the privileged server context) and
+            // report conflicted; the caller re-pulls main into its OWN context head
             // (where the conflict IS resolvable) and re-publishes.
             await vcs.abortMerge(VCS_MAIN_HEAD, {
               actor: { id: ctx.caller.runtime.id, kind: ctx.caller.runtime.kind },

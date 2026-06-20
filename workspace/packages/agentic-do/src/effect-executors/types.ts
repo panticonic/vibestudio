@@ -93,7 +93,13 @@ export interface LocalToolPort {
     args: unknown;
     signal: AbortSignal;
     onProgress?(chunk: unknown): void;
-  }): Promise<{ result: unknown; summary?: string; isError: boolean }>;
+  }): Promise<
+    | { result: unknown; summary?: string; isError: boolean }
+    // A long-running local tool (the agent's `eval`) defers: it kicks off the work (eval.startRun)
+    // and the result arrives out-of-band via `deliverEffectOutcome` (onEvalComplete). The driver
+    // parks the leased row (deferRedrive backstop), exactly like channel_call/http_call.
+    | { deferred: true }
+  >;
   /** Mutation-replay guard (§1.4.2): true when the fold already recorded a
    *  state.file_mutation_applied for this invocation. */
   alreadyApplied(state: AgentState, invocationId: string): boolean;

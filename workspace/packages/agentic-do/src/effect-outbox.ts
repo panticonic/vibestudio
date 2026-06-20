@@ -230,9 +230,15 @@ export class EffectOutbox {
   lease(branchId: string, effectId: string, now: number): void {
     const row = this.get(branchId, effectId);
     if (!row) return;
+    // Take the row in-flight AND clear next_attempt_at: it still holds the (now-past) dispatch time,
+    // and once dispatched the NEXT attempt time is owned by the outcome — deferRedrive's backstop,
+    // recordFailure's backoff, or a racing nudge (which re-sets it to a fresh `now`). Leaving the stale
+    // past value here makes deferRedrive's "keep an earlier wake" clause preserve an already-due time,
+    // so a DEFERRED effect (channel_call/http_call/credential_wait) re-dispatches on every alarm tick
+    // (~50ms) until its result arrives — a hot redrive loop instead of the intended ~60s backstop.
     this.sql.exec(
       `UPDATE effect_outbox
-       SET lease_expires_at = ?
+       SET lease_expires_at = ?, next_attempt_at = NULL
        WHERE branch_id = ? AND effect_id = ?`,
       now + leaseMs(row.kind),
       branchId,

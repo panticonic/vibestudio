@@ -122,4 +122,29 @@ describe("workerdService", () => {
 
     expect(result).toEqual([{ name: "hello", source: "workers/hello", title: "Hello" }]);
   });
+
+  it("closes cloneDO/destroyDO to userland (panel/do) callers — fork/storage primitives", async () => {
+    const doCtx: ServiceContext = { caller: createVerifiedCaller("do:agent", "do") };
+    const ref = { source: "workers/x", className: "X", objectKey: "k" };
+    await expect(dispatcher.dispatch(doCtx, "workerd", "cloneDO", [ref, "new"])).rejects.toThrow(
+      /not permitted/
+    );
+    await expect(dispatcher.dispatch(doCtx, "workerd", "destroyDO", [ref])).rejects.toThrow(
+      /not permitted/
+    );
+    // The fork worker (a "worker") is NOT blocked — it is the legitimate caller.
+    await dispatcher.dispatch(workerCtx, "workerd", "cloneDO", [ref, "new"]);
+    expect(deps.workerdManager.cloneDO).toHaveBeenCalled();
+  });
+
+  it("engages the capability gate for a userland (do) createInstance (workers bypass)", async () => {
+    const doCtx: ServiceContext = { caller: createVerifiedCaller("do:agent", "do") };
+    // No approvalQueue/grantStore wired here, so an ungated userland call is refused —
+    // proving the gate engages for "do" (whereas the worker caller above bypasses).
+    await expect(
+      dispatcher.dispatch(doCtx, "workerd", "createInstance", [
+        { source: "workers/hello", contextId: "ctx-1" },
+      ])
+    ).rejects.toThrow(/approval is unavailable/);
+  });
 });

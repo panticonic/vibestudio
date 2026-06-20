@@ -1,45 +1,8 @@
 import { describe, expect, it } from "vitest";
 import initSqlJs from "sql.js";
 
-import { DurableObjectBase } from "@natstack/durable";
+import { DurableObjectBase, rpc } from "@natstack/durable";
 import { createTestDO } from "@natstack/durable/test-utils";
-import { ScopeStoreDO } from "./internalDOs/scopeStoreDO.js";
-
-describe("internal storage Durable Objects", () => {
-  it("persists and lists REPL scopes through ScopeStoreDO", async () => {
-    const { call } = await createTestDO(ScopeStoreDO);
-
-    await call("upsert", {
-      id: "scope-1",
-      channelId: "channel-1",
-      panelId: "panel-1",
-      data: "const answer = 42",
-      serializedKeys: ["answer"],
-      droppedPaths: [],
-      partialKeys: ["answer"],
-      createdAt: 100,
-    });
-    await call("upsert", {
-      id: "scope-2",
-      channelId: "channel-1",
-      panelId: "panel-1",
-      data: "const answer = 43",
-      serializedKeys: ["answer"],
-      droppedPaths: [{ path: "old", reason: "shadowed" }],
-      partialKeys: [],
-      createdAt: 200,
-    });
-
-    expect(await call("loadCurrent", "channel-1", "panel-1")).toMatchObject({
-      id: "scope-2",
-      data: "const answer = 43",
-    });
-    expect(await call("list", "channel-1")).toEqual([
-      { id: "scope-1", createdAt: 100, keys: ["answer"], partial: ["answer"] },
-      { id: "scope-2", createdAt: 200, keys: ["answer"], partial: [] },
-    ]);
-  });
-});
 
 class MigrationProbeDO extends DurableObjectBase {
   static override schemaVersion = 2;
@@ -59,6 +22,7 @@ class MigrationProbeDO extends DurableObjectBase {
     );
   }
 
+  @rpc
   countMigrations(): number {
     return (this.sql.exec(`SELECT COUNT(*) as count FROM migration_log`).one() as { count: number })
       .count;
@@ -80,6 +44,7 @@ class DestructiveMigrationProbeDO extends DurableObjectBase {
     if (fromVersion > 0) this.sql.exec(`DROP TABLE IF EXISTS required_table`);
   }
 
+  @rpc
   hasRequiredTable(): boolean {
     return (
       this.sql

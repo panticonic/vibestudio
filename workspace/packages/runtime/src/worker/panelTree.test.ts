@@ -1,5 +1,39 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// Envelope-native /rpc: the mock receives an RpcEnvelope and must reply with a
+// response envelope echoing the requestId (else the connectionless client never
+// settles). parseReq reconstructs the legacy recorded {type,targetId,method,args}
+// shape; respond wraps a result into a response envelope.
+function parseReq(init?: RequestInit) {
+  const envelope = JSON.parse(String(init?.body ?? "{}")) as {
+    from?: string;
+    target?: string;
+    message?: { type?: string; requestId?: string; method?: string; args?: unknown[]; event?: string; payload?: unknown };
+  };
+  const msg = envelope.message ?? {};
+  return {
+    type: msg.type === "event" ? "emit" : "call",
+    targetId: envelope.target ?? "",
+    method: msg.method ?? msg.event ?? "",
+    args: msg.args ?? (msg.payload !== undefined ? [msg.payload] : []),
+  } as { type: string; targetId: string; method: string; args: unknown[] };
+}
+function respond(init: RequestInit | undefined, result: unknown) {
+  const envelope = JSON.parse(String(init?.body ?? "{}")) as {
+    from?: string; target?: string; message?: { requestId?: string };
+  };
+  return new Response(
+    JSON.stringify({
+      from: envelope.target,
+      target: envelope.from,
+      delivery: { caller: { callerId: "main", callerKind: "server" } },
+      provenance: [],
+      message: { type: "response", requestId: envelope.message?.requestId, result },
+    })
+  );
+}
+
+
 describe("worker panelTree handles", () => {
   const originalFetch = globalThis.fetch;
 
@@ -12,38 +46,42 @@ describe("worker panelTree handles", () => {
     vi.restoreAllMocks();
   });
 
+  it("exports panel-shared pure runtime helpers from the worker entrypoint", async () => {
+    const runtimeModule = await import("./index.js");
+
+    expect(runtimeModule.Rpc).toBeDefined();
+    expect(runtimeModule.z.object).toBeTypeOf("function");
+    expect(runtimeModule.defineContract).toBeTypeOf("function");
+    expect(runtimeModule.buildPanelLink("panels/editor")).toBe("/panels/editor/");
+    expect(runtimeModule.parseContextId("ctx_project")).toEqual({ instanceId: "project" });
+    expect(runtimeModule.isValidContextId("ctx_project")).toBe(true);
+    expect(runtimeModule.getInstanceId("ctx_project")).toBe("project");
+    expect(runtimeModule.normalizePath("path\\to/mixed\\slashes")).toBe("path/to/mixed/slashes");
+    expect(runtimeModule.getFileName("path/to/file.txt")).toBe("file.txt");
+    expect(runtimeModule.resolvePath("/root", "child")).toBe("/root/child");
+  });
+
   it("routes bare handle RPC events through the refreshed runtime entity id", async () => {
     const calls: Array<{ type?: string; targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        type?: string;
-        targetId: string;
-        method: string;
-        args: unknown[];
-        event?: string;
-        payload?: unknown;
-      };
+      const body = parseReq(init);
       calls.push({
         type: body.type,
         targetId: body.targetId,
-        method: body.method ?? body.event ?? "",
-        args: body.args ?? [body.payload],
+        method: body.method,
+        args: body.args,
       });
       if (body.method === "panelTree.metadata") {
-        return new Response(
-          JSON.stringify({
-            result: {
+        return respond(init, {
               id: "slot-a",
               title: "Panel A",
               source: "panels/a",
               kind: "workspace",
               parentId: "root",
               runtimeEntityId: "panel:slot-a-current-entity",
-            },
-          })
-        );
+            });
       }
-      return new Response(JSON.stringify({ result: "ok" }));
+      return respond(init, "ok");
     }) as typeof fetch;
 
     const { createWorkerRuntime } = await import("./index.js");
@@ -89,18 +127,14 @@ describe("worker panelTree handles", () => {
   it("resolves isLoaded from the server runtime lease", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        targetId: string;
-        method: string;
-        args: unknown[];
-      };
+      const body = parseReq(init);
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
       if (body.method === "panelTree.getRuntimeLease") {
-        return new Response(JSON.stringify({ result: { leased: true } }));
+        return respond(init, { leased: true });
       }
-      return new Response(JSON.stringify({ result: null }));
+      return respond(init, null);
     }) as typeof fetch;
 
     const { createWorkerRuntime } = await import("./index.js");
@@ -127,12 +161,7 @@ describe("worker panelTree handles", () => {
   it("refreshes arbitrary handles after ensureLoaded before target RPC", async () => {
     const calls: Array<{ type?: string; targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        type?: string;
-        targetId: string;
-        method: string;
-        args: unknown[];
-      };
+      const body = parseReq(init);
       calls.push({
         type: body.type,
         targetId: body.targetId,
@@ -140,20 +169,16 @@ describe("worker panelTree handles", () => {
         args: body.args,
       });
       if (body.method === "panelTree.metadata") {
-        return new Response(
-          JSON.stringify({
-            result: {
+        return respond(init, {
               id: "slot-a",
               title: "Panel A",
               source: "panels/a",
               kind: "workspace",
               parentId: "root",
               runtimeEntityId: "panel:slot-a-current-entity",
-            },
-          })
-        );
+            });
       }
-      return new Response(JSON.stringify({ result: { loaded: true } }));
+      return respond(init, { loaded: true });
     }) as typeof fetch;
 
     const { createWorkerRuntime } = await import("./index.js");
@@ -194,18 +219,12 @@ describe("worker panelTree handles", () => {
   it("lists, hydrates children, and opens panels through the server panelTree service", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        targetId: string;
-        method: string;
-        args: unknown[];
-      };
+      const body = parseReq(init);
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
       if (body.method === "panelTree.list" && body.args[0] === null) {
-        return new Response(
-          JSON.stringify({
-            result: [
+        return respond(init, [
               {
                 panelId: "root-slot",
                 title: "Root",
@@ -226,14 +245,10 @@ describe("worker panelTree handles", () => {
                   },
                 ],
               },
-            ],
-          })
-        );
+            ]);
       }
       if (body.method === "panelTree.list" && body.args[0] === "root-slot") {
-        return new Response(
-          JSON.stringify({
-            result: [
+        return respond(init, [
               {
                 panelId: "child-slot",
                 title: "Child",
@@ -243,23 +258,17 @@ describe("worker panelTree handles", () => {
                 contextId: "ctx-child",
                 runtimeEntityId: "panel:child-entity",
               },
-            ],
-          })
-        );
+            ]);
       }
       if (body.method === "panelTree.create") {
-        return new Response(
-          JSON.stringify({
-            result: {
+        return respond(init, {
               id: "created-slot",
               title: "Created",
               kind: "workspace",
               runtimeEntityId: "panel:created-entity",
-            },
-          })
-        );
+            });
       }
-      return new Response(JSON.stringify({ result: "ok" }));
+      return respond(init, "ok");
     }) as typeof fetch;
 
     const { createWorkerRuntime } = await import("./index.js");
@@ -274,7 +283,7 @@ describe("worker panelTree handles", () => {
 
     const all = await runtime.panelTree.list();
     const children = await runtime.panelTree.children("root-slot");
-    const created = await runtime.panelTree.open("panels/new");
+    const created = await runtime.openPanel("panels/new");
     runtime.destroy();
 
     expect(all.map((handle) => handle.id)).toEqual(["root-slot", "child-slot"]);
@@ -304,18 +313,70 @@ describe("worker panelTree handles", () => {
     ]);
   });
 
-  it("builds panel parent handles with entity-scoped RPC and slot-scoped CDP", async () => {
+  it("exposes openPanel/listPanels/getPanelHandle on the worker runtime", async () => {
     const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
     globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        targetId: string;
-        method: string;
-        args: unknown[];
-      };
+      const body = parseReq(init);
       delete (body as Record<string, unknown>)["requestId"];
       delete (body as Record<string, unknown>)["idempotencyKey"];
       calls.push(body);
-      return new Response(JSON.stringify({ result: { wsEndpoint: "ws://cdp.test" } }));
+      if (body.method === "panelTree.list") {
+        return respond(init, []);
+      }
+      if (body.method === "panelTree.create") {
+        return respond(init, {
+              id: "created-slot",
+              title: "Created",
+              kind: "workspace",
+              runtimeEntityId: "panel:created-entity",
+            });
+      }
+      return respond(init, null);
+    }) as typeof fetch;
+
+    const { createWorkerRuntime } = await import("./index.js");
+    const runtime = createWorkerRuntime({
+      WORKER_ID: "agent",
+      RPC_AUTH_TOKEN: "token",
+      CONTEXT_ID: "ctx",
+      GATEWAY_URL: "http://server.test",
+      PARENT_ID: "parent-slot",
+      PARENT_KIND: "panel",
+    });
+
+    const direct = await runtime.openPanel("panels/direct", { focus: true });
+    const listed = await runtime.listPanels();
+    const browser = runtime.getPanelHandle("browser-slot", "browser");
+    runtime.destroy();
+
+    expect(direct.id).toBe("created-slot");
+    expect(listed).toEqual([]);
+    expect(browser.kind).toBe("browser");
+    expect(browser.source).toBe("browser-slot");
+    expect(calls).toEqual([
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.create",
+        args: ["panels/direct", { focus: true, parentId: "parent-slot" }],
+      },
+      {
+        type: "call",
+        targetId: "main",
+        method: "panelTree.list",
+        args: [null],
+      },
+    ]);
+  });
+
+  it("builds panel parent handles with entity-scoped RPC and slot-scoped CDP", async () => {
+    const calls: Array<{ targetId: string; method: string; args: unknown[] }> = [];
+    globalThis.fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = parseReq(init);
+      delete (body as Record<string, unknown>)["requestId"];
+      delete (body as Record<string, unknown>)["idempotencyKey"];
+      calls.push(body);
+      return respond(init, { wsEndpoint: "ws://cdp.test" });
     }) as typeof fetch;
 
     const { createWorkerRuntime } = await import("./index.js");
@@ -330,7 +391,9 @@ describe("worker panelTree handles", () => {
     });
 
     const parent = runtime.getParent();
+    expect(runtime.parent.id).toBe("parent-slot");
     expect(parent?.id).toBe("parent-slot");
+    expect(runtime.getParentWithContract({ source: "panels/child" })?.id).toBe("parent-slot");
     await expect(parent?.getInfo()).resolves.toMatchObject({
       id: "parent-slot",
       parentId: null,

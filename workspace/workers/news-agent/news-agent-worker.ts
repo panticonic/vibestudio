@@ -5,6 +5,7 @@ import {
   type ClonedChannelContext,
   type RespondPolicy,
 } from "@workspace/agentic-do";
+import { rpc } from "@workspace/runtime/worker";
 import type { DurableObjectContext } from "@workspace/runtime/worker";
 import type { ActorRef } from "@workspace/agentic-protocol";
 import type { ParticipantDescriptor } from "@workspace/harness";
@@ -294,7 +295,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
   // ── agent configuration ───────────────────────────────────────────────────
 
-  protected override getRespondPolicy(_channelId: string): RespondPolicy {
+  protected override getRespondPolicy(): RespondPolicy {
     // A news channel is the user's private 1:1 reader — every message they
     // send is for the agent, so always reply. Background polls are silent
     // (no channel messages) and agent-initiated briefings bypass this path,
@@ -406,6 +407,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
 
   /** Seed a forked deep-dive channel's opening analyst turn. The panel calls
    *  this on the freshly-cloned agent after fork(); idempotent via steeringId. */
+  @rpc({ callers: ["panel"] })
   async startDeepDive(
     channelId: string,
     args: Record<string, unknown>
@@ -466,6 +468,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
   }
 
   /** Entry point for workspace-level `recurring:` jobs (natstack.yml). */
+  @rpc({ callers: ["server", "harness"] })
   async runScheduledJob(args: unknown): Promise<{ ok: boolean }> {
     const input = record(args);
     const job = stringArg(input, "job") ?? "briefing";

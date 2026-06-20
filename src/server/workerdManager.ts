@@ -636,6 +636,7 @@ export class WorkerdManager {
     contextId: string;
     stateArgs?: unknown;
     env?: Record<string, string>;
+    parent?: { parentId: string; parentEntityId: string; parentKind?: "panel" | "worker" | "do" };
   }): Promise<{ targetId: string; effectiveVersion: string }> {
     const targetId = canonicalEntityId({ kind: "worker", source: args.source, key: args.key });
     const name = args.key.replace(/[^a-zA-Z0-9_-]/g, "_");
@@ -666,6 +667,12 @@ export class WorkerdManager {
       scopeRef,
       codeVersion: 1,
       status: "building",
+      // Launch parent (from the verified caller) → PARENT_* env (built later from
+      // these fields), so an entity-created worker's `parent` resolves like a
+      // `workers.create` one.
+      parentId: args.parent?.parentId,
+      parentEntityId: args.parent?.parentEntityId,
+      parentKind: args.parent?.parentKind,
     };
 
     this.instances.set(name, instance);
@@ -1297,7 +1304,7 @@ export class WorkerdManager {
     // Userland DO classes do NOT get per-class services — they load
     // dynamically into the static `universal-do` facet host (built below), so a
     // new userland DO class needs no config change and no workerd restart.
-    // Internal DOs (WorkspaceDO, ScopeStoreDO, …) stay static (foundational).
+    // Internal DOs (WorkspaceDO, EvalDO, …) stay static (foundational).
     for (const [serviceKey, doService] of this.doServices) {
       if (!isInternalDOSource(doService.source)) continue;
       const { className } = doService;
@@ -1342,6 +1349,15 @@ export class WorkerdManager {
         bindings.push({ name: "GATEWAY_URL_ALIASES", json: JSON.stringify(gatewayAliases) });
       }
 
+      // EvalDO runs sandboxed agent code and needs the workerd UnsafeEval API
+      // (`new Function` is blocked in workerd isolates). `--experimental` is already
+      // passed at spawn. `unsafeEval` is a Void union member in workerd's schema, so
+      // it must render as `unsafeEval = void` — `null` triggers that in capnpValue
+      // (an empty struct `{}` would emit `()`, which workerd rejects: "expected Void").
+      if (className === "EvalDO") {
+        bindings.push({ name: "UNSAFE_EVAL", unsafeEval: null });
+      }
+
       // DO storage: create a disk service and reference it by name
       const diskServiceName = `${doService.serviceName}_disk`;
       const doStoragePath = path.join(this.deps.statePath, ".databases", "workerd-do");
@@ -1368,6 +1384,9 @@ export class WorkerdManager {
             className,
             uniqueKey: `${doService.source.replace(/\//g, "_")}:${className}`,
             enableSql: true,
+            // Pin EvalDO in memory (workerd skips the ~10s idle eviction) so warm eval
+            // scope/db survive idle gaps. Namespace-wide — applies only to EvalDO's namespace.
+            ...(className === "EvalDO" ? { preventEviction: true } : {}),
           },
         ],
         durableObjectStorage: {

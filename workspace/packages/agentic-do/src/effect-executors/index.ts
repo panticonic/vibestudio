@@ -56,7 +56,13 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
             } as never,
           }),
       });
-      return { kind: "tool", ...outcome } satisfies EffectOutcome;
+      // A deferred local tool (eval) parks: the driver keeps the leased row (deferRedrive backstop)
+      // and the result arrives via deliverEffectOutcome (onEvalComplete) — NOT wrapped in kind:"tool".
+      if ("deferred" in outcome && outcome.deferred) {
+        return { deferred: true };
+      }
+      const toolOutcome = outcome as { result: unknown; summary?: string; isError: boolean };
+      return { kind: "tool", ...toolOutcome } satisfies EffectOutcome;
     } catch (err) {
       return {
         kind: "tool",

@@ -350,8 +350,8 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     );
   }
 
-  respondPolicy(channelId: string) {
-    return this.getRespondPolicy(channelId);
+  respondPolicy() {
+    return this.getRespondPolicy();
   }
 
   prompt(channelId: string) {
@@ -370,8 +370,8 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     return this.getParticipantInfo("ch-1");
   }
 
-  model(channelId = "ch-1") {
-    return this.getAgentSettings(channelId).model;
+  model() {
+    return this.getAgentSettings().model;
   }
 
   async debug(channelId = "ch-1") {
@@ -430,7 +430,7 @@ describe("GmailAgentWorker", () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
-    expect(worker.respondPolicy("ch-1")).toBe("mentioned-or-followup");
+    expect(worker.respondPolicy()).toBe("mentioned-or-followup");
     expect(worker.participant()).toMatchObject({
       handle: "gmail",
       name: "Gmail",
@@ -449,16 +449,12 @@ describe("GmailAgentWorker", () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
     worker.seedSubscription();
-    worker.updateSubscriptionConfig("ch-1", {
-      handle: "gmail",
-      model: "anthropic:claude-sonnet-4-6",
-    });
+    // Model is PER-AGENT (not per-channel subscription config) — set it via the
+    // agent settings record, which credential operations resolve from.
+    worker.configureAgent({ model: "anthropic:claude-sonnet-4-6" });
 
     expect(worker.model()).toBe("anthropic:claude-sonnet-4-6");
-    worker.updateSubscriptionConfig("ch-1", {
-      handle: "gmail",
-      model: "openai-codex:gpt-5.5",
-    });
+    worker.configureAgent({ model: "openai-codex:gpt-5.5" });
     const driver = worker.driverForTest();
     const deliverEffectOutcome = vi
       .spyOn(driver, "deliverEffectOutcome")

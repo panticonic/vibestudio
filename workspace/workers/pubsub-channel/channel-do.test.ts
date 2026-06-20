@@ -94,18 +94,14 @@ async function createGadBackedChannel(
   });
   const gadTarget = "do:workers/gad-store:GadWorkspaceDO:workspace-gad";
   const blobs = new Map<string, string>();
-  (
-    channel.instance as unknown as {
-      _rpc: {
-        emit: (target: string, event: string, payload: unknown) => Promise<void>;
-        call: (target: string, method: string, args: unknown[]) => Promise<unknown>;
-      };
-    }
-  )._rpc = {
-    emit: vi.fn(async (_target, _event, payload) => {
+  // Inject a mock RPC client. The DO base now holds a ConnectionlessRpcClient
+  // ({ client, respond, deliver }) behind the `rpc` getter; pre-setting
+  // `_connectionless` short-circuits the real (network) client construction.
+  const mockClient = {
+    emit: vi.fn(async (_target: string, _event: string, payload: unknown) => {
       options.emitted?.push(payload);
     }),
-    call: vi.fn(async (target, method, args) => {
+    call: vi.fn(async (target: string, method: string, args: unknown[]) => {
       const custom = await options.rpcCall?.(target, method, args);
       if (custom !== undefined) return custom;
       if (target === "main" && method === "workers.resolveService") {
@@ -141,6 +137,18 @@ async function createGadBackedChannel(
       }
       throw new Error(`unexpected rpc call ${target}.${method}`);
     }),
+    expose: () => {},
+    exposeAll: () => {},
+    on: () => () => {},
+  };
+  (
+    channel.instance as unknown as {
+      _connectionless: { client: unknown; respond: unknown; deliver: unknown };
+    }
+  )._connectionless = {
+    client: mockClient,
+    respond: async () => null,
+    deliver: () => {},
   };
   return { gad, blobs, ...channel };
 }
@@ -434,6 +442,9 @@ describe("PubSubChannel", () => {
         contextId: "ctx-1",
         name: "Missing agent",
         type: "agent",
+        // A real agent opts into structured onChannelEnvelope delivery; its
+        // missing-DO eviction is driven by that delivery's fatal code.
+        receivesChannelEnvelopes: true,
       });
       await new Promise((resolve) => setTimeout(resolve, 5));
 
@@ -447,6 +458,46 @@ describe("PubSubChannel", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("delivers onChannelEnvelope only to DO participants that opted in (receivesChannelEnvelopes)", async () => {
+    const envelopeTargets: string[] = [];
+    const agentDoId = "do:workers/agent-worker:AiChatWorker:agent-x";
+    const clientDoId = "do:natstack/internal:EvalDO:client-x";
+    const { instance } = await createGadBackedChannel({
+      // resolveDurableObject is an existence check (result ignored); onChannelEnvelope
+      // is the structured delivery we record per target.
+      rpcCall: async (target, method) => {
+        if (target === "main" && method === "workers.resolveDurableObject") {
+          return { kind: "durable-object", source: "s", className: "C", objectKey: "k", targetId: target };
+        }
+        if (method === "onChannelEnvelope") {
+          envelopeTargets.push(target);
+          return null;
+        }
+        return undefined;
+      },
+    });
+
+    // An agent vessel opts into the structured delivery; an rpc-style DO client
+    // (the eval running system tests, via connectViaRpc) does NOT.
+    setRpcCaller(instance, agentDoId, "durable-object");
+    await instance.subscribe(agentDoId, {
+      contextId: "ctx-1",
+      name: "Agent",
+      type: "agent",
+      receivesChannelEnvelopes: true,
+    });
+    setRpcCaller(instance, clientDoId, "durable-object");
+    await instance.subscribe(clientDoId, { contextId: "ctx-1", name: "Eval client", type: "client" });
+
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(envelopeTargets).toContain(agentDoId);
+    expect(envelopeTargets).not.toContain(clientDoId);
   });
 
   it("reports an envelope-only schema", async () => {
@@ -478,7 +529,14 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
     setRpcCaller(instance, targetPid, "durable-object");
-    await instance.subscribe(targetPid, { contextId: "ctx-1", name: "AI Chat", type: "agent" });
+    await instance.subscribe(targetPid, {
+      contextId: "ctx-1",
+      name: "AI Chat",
+      type: "agent",
+      // Agent vessels implement onMethodCall and opt into structured delivery — the flag that now
+      // gates the synchronous deliverDoMethodCall dispatch (vs RPC-style DO clients).
+      receivesChannelEnvelopes: true,
+    });
 
     setRpcCaller(instance, "panel:user", "panel");
     await instance.callMethod(
@@ -521,6 +579,71 @@ describe("PubSubChannel", () => {
         expect.objectContaining({
           kind: "invocation.completed",
           causality: { invocationId: "pause-invocation", transportCallId: "pause-call" },
+          payload: expect.objectContaining({ terminalOutcome: "success" }),
+        }),
+      ])
+    );
+  });
+
+  it("routes method calls to an RPC-style DO client (eval HeadlessSession) via the broadcast, not onMethodCall", async () => {
+    // The eval's connectViaRpc / HeadlessSession must subscribe under the EvalDO's own DO id (a
+    // do-ref shape ⇒ transport classifies as "do"), but it has NO onMethodCall handler — it settles
+    // method calls the RPC way: the broadcast `started` (delivered as channel:message to every
+    // participant) + submitMethodResult. It must NOT be routed through deliverDoMethodCall, which
+    // would dispatch onMethodCall to a missing handler and never settle the call (the redelivery echo).
+    const evalPid = "do:natstack/internal:EvalDO:eval-1";
+    const rpcCalls: Array<{ target: string; method: string }> = [];
+    const { instance, gad } = await createGadBackedChannel({
+      rpcCall: (target, method) => {
+        if (target === "main" && method === "workers.resolveDurableObject") return {};
+        rpcCalls.push({ target, method });
+        return undefined;
+      },
+    });
+
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+    // RPC-style DO client: subscribes as its own DO id, and (unlike an agent vessel) does NOT set
+    // receivesChannelEnvelopes — it has no onMethodCall / onChannelEnvelope handler.
+    setRpcCaller(instance, evalPid, "durable-object");
+    await instance.subscribe(evalPid, { contextId: "ctx-1", name: "Eval client", type: "client" });
+
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.callMethod(
+      "panel:user",
+      evalPid,
+      "title-call",
+      "set_title",
+      { title: "Hello" },
+      { invocationId: "title-inv", transportCallId: "title-call" }
+    );
+
+    // The bug: callMethod must NOT dispatch onMethodCall to a client that can't handle it.
+    expect(rpcCalls.some((c) => c.target === evalPid && c.method === "onMethodCall")).toBe(false);
+
+    // The client receives the journaled+broadcast `started` and replies via submitMethodResult, which
+    // settles the call cleanly (terminal in the log ⇒ no echo).
+    setRpcCaller(instance, evalPid, "durable-object");
+    await instance.submitMethodResult(evalPid, "title-call", { ok: true }, false, {
+      invocationId: "title-inv",
+    });
+
+    const events = gad.sql
+      .exec(
+        `SELECT payload_ref_json FROM log_events WHERE payload_kind = ? ORDER BY seq ASC`,
+        AGENTIC_EVENT_PAYLOAD_KIND
+      )
+      .toArray()
+      .map((row: Record<string, unknown>) => JSON.parse(row["payload_ref_json"] as string));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "invocation.started",
+          causality: { invocationId: "title-inv", transportCallId: "title-call" },
+        }),
+        expect.objectContaining({
+          kind: "invocation.completed",
+          causality: { invocationId: "title-inv", transportCallId: "title-call" },
           payload: expect.objectContaining({ terminalOutcome: "success" }),
         }),
       ])
@@ -1304,6 +1427,8 @@ describe("PubSubChannel", () => {
       name: "Agent",
       type: "agent",
       handle: "agent",
+      // Agent vessel: implements onMethodCall + opts into structured delivery (gates deliverDoMethodCall).
+      receivesChannelEnvelopes: true,
     });
 
     setRpcCaller(instance, "panel:caller", "panel");

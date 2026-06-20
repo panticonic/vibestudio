@@ -12,15 +12,21 @@
  * the DO surface (subscribe/envelope/methodCall/fork/alarm) into commands.
  */
 
-import { DurableObjectBase, type DurableObjectContext } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@workspace/runtime/worker";
 import {
   createGadServiceClient,
   type DurableObjectServiceClient,
 } from "@workspace/runtime/workerd-client";
-import type { ChannelReplayEnvelope, RpcChannelMessage } from "@workspace/pubsub";
+import type {
+  ChannelReplayEnvelope,
+  RegisterMessageTypeInput,
+  RpcChannelMessage,
+} from "@workspace/pubsub";
 import {
   composeSystemPrompt,
+  formatEvalResult,
   type ChannelEvent,
+  type EvalRunResult,
   type ParticipantDescriptor,
   type SystemPromptMode,
 } from "@workspace/harness";
@@ -30,8 +36,11 @@ import {
   hydrateStoredValueRefs,
   isRespondPolicy,
   resolveShouldRespond,
+  sha256Hex,
   stableSha256Hex,
+  type ActorRef,
   type AgenticEvent,
+  type CustomMessageDisplayMode,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
 import type { AgentTool } from "@workspace/pi-core";
@@ -102,6 +111,54 @@ export interface AgentSettings {
  *  values it actually used in its request descriptor, so the audit trail is
  *  the log, not this pointer. */
 interface StoredSettings extends Partial<AgentSettings> {}
+
+/**
+ * The agent's settings record is PER-AGENT (channel-independent): one model,
+ * thinking level, approval posture, respond policy, etc. for the agent across
+ * every channel it joins. Membership is per-channel (the subscriptions table);
+ * behavior config is not.
+ */
+const AGENT_SETTINGS_KEY = "agent:settings";
+
+/**
+ * Resolve a per-agent `respondFrom` allowlist (handles and/or participant ids) to
+ * THIS channel's participant ids, so "who I respond to" travels with the agent
+ * across channels. An entry matching a participant's handle maps to that
+ * participant's id; an entry that matches nothing is kept as-is (already an id).
+ * Pure + exported for direct testing.
+ */
+export function resolveRespondFromHandles(
+  respondFrom: readonly string[],
+  participants: ReadonlyArray<{ participantId: string; metadata?: Record<string, unknown> | null }>
+): string[] {
+  const handleToId = new Map<string, string>();
+  for (const p of participants) {
+    const handle = p.metadata?.["handle"];
+    if (typeof handle === "string" && handle.length > 0) handleToId.set(handle, p.participantId);
+  }
+  return respondFrom.map((entry) => handleToId.get(entry) ?? entry);
+}
+
+/**
+ * Summarize a loop's folded turn state for `agent.describe()` — derived status +
+ * the live pending-effect counts. Pure (given the folded `AgentState`) + exported
+ * so it can be verified against a REAL folded loop state in the loop-driver tests.
+ */
+export function summarizeTurn(state: Parameters<typeof derivedTurnStatus>[0]): {
+  status: ReturnType<typeof derivedTurnStatus>;
+  lastSeq: number;
+  pendingInvocations: number;
+  pendingApprovals: number;
+  pendingCredentialWaits: number;
+} {
+  return {
+    status: derivedTurnStatus(state),
+    lastSeq: state.lastSeq,
+    pendingInvocations: Object.keys(state.pendingInvocations).length,
+    pendingApprovals: Object.keys(state.pendingApprovals).length,
+    pendingCredentialWaits: Object.keys(state.pendingCredentialWaits).length,
+  };
+}
 
 export interface AgentPromptResources {
   workspacePrompt?: string;
@@ -186,6 +243,22 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   private blobTextCacheBytes = 0;
   private readonly alarmSources = new Map<string, AgentAlarmSource>();
   private readonly alarmDeadlines = new Map<string, number>();
+  /**
+   * In-flight `chat.callMethod` relays initiated on behalf of an EvalDO sandbox
+   * (keyed by transportCallId). The agent issues the call via ChannelClient,
+   * then the channel's durable invocation terminal — broadcast back to us, the
+   * caller — settles the awaiting promise in settleChatOpCall. This is a
+   * loop-independent pending-call mechanism (parallel to the loop's
+   * effect-outbox channel_call path) so the eval relay can return the delivered
+   * result synchronously to the RPC caller. */
+  private readonly chatOpPendingCalls = new Map<
+    string,
+    {
+      resolve: (value: { content: unknown }) => void;
+      reject: (error: Error) => void;
+      timer?: ReturnType<typeof setTimeout>;
+    }
+  >();
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -713,6 +786,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       },
       localTools: {
         run: async ({ channelId, tool, invocationId, args, signal, onProgress }) => {
+          // The `eval` tool DEFERS: the agent can't hold a connection for a multi-minute run (its
+          // own execution is request-capped). `runDeferredEval` kicks off a server-held run and the
+          // result arrives out-of-band (server → onEvalComplete → deliverEffectOutcome). The driver
+          // parks the leased row.
+          if (tool === "eval") {
+            return this.runDeferredEval(channelId, invocationId, args);
+          }
           const registry = await this.toolRegistry(channelId);
           const agentTool = registry.get(tool);
           if (!agentTool) {
@@ -842,72 +922,108 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Settings (Ref-kind KV; the log journals what each call actually used) ─
 
-  private settingsKey(channelId: string): string {
-    return `agent:settings:${channelId}`;
-  }
-
-  private storedSettings(channelId: string): StoredSettings {
-    const raw = this.getStateValue(this.settingsKey(channelId));
-    if (!raw) return {};
-    try {
-      return JSON.parse(raw) as StoredSettings;
-    } catch {
-      return {};
+  protected updateSettings(patch: StoredSettings): AgentSettings {
+    const next = { ...this.storedSettings(), ...patch };
+    this.setStateValue(AGENT_SETTINGS_KEY, JSON.stringify(next));
+    // Config is PER-AGENT: a change applies to EVERY channel the agent is in,
+    // so drop each channel's cached loop + fold so the next wake refolds with it.
+    for (const channelId of this.subscriptions.listChannelIds()) {
+      this.driver.dropLoop(channelId);
+      const logId = ids.logIdForChannel(channelId);
+      this.driver.foldCache.delete(logId, logId);
     }
+    return this.getAgentSettings();
   }
 
-  protected updateSettings(channelId: string, patch: StoredSettings): AgentSettings {
-    const next = { ...this.storedSettings(channelId), ...patch };
-    this.setStateValue(this.settingsKey(channelId), JSON.stringify(next));
-    // Settings feed the fold's initial config: drop the cached loop + fold
-    // cache so the next wake refolds with the new configuration.
-    this.driver.dropLoop(channelId);
-    this.driver.foldCache.delete(ids.logIdForChannel(channelId), ids.logIdForChannel(channelId));
-    return this.getAgentSettings(channelId);
+  /**
+   * The agent's settings record (channel-INDEPENDENT). On first read it is
+   * seeded from the agent's creation params (`STATE_ARGS.agentConfig`) so an
+   * invited agent starts with the config it was created with, then persisted so
+   * later reads are stable and edits (updateSettings) win over the seed.
+   */
+  private storedSettings(): StoredSettings {
+    const raw = this.getStateValue(AGENT_SETTINGS_KEY);
+    if (raw) {
+      try {
+        return JSON.parse(raw) as StoredSettings;
+      } catch {
+        /* corrupt record — fall through to a fresh seed */
+      }
+    }
+    const seed = this.seedSettingsFromStateArgs();
+    if (Object.keys(seed).length > 0) {
+      this.setStateValue(AGENT_SETTINGS_KEY, JSON.stringify(seed));
+    }
+    return seed;
   }
 
-  getAgentSettings(channelId: string): AgentSettings {
-    const stored = this.storedSettings(channelId);
-    const config = this.subscriptions.getConfig(channelId) as
-      | Record<string, unknown>
-      | undefined;
-    const approval = stored.approvalLevel ?? (config?.["approvalLevel"] as ApprovalLevel);
-    const modelStreamIdleTimeoutMs = this.modelStreamIdleTimeoutMsFrom(
-      stored.modelStreamIdleTimeoutMs,
-      config?.["modelStreamIdleTimeoutMs"],
-      this.getDefaultModelStreamIdleTimeoutMs()
-    );
-    const maxModelCallsPerTurn = this.maxModelCallsPerTurnFrom(
-      stored.maxModelCallsPerTurn,
-      config?.["maxModelCallsPerTurn"],
-      null
-    );
+  /**
+   * Initial settings from the agent's creation stateArgs (`STATE_ARGS.agentConfig`).
+   * Picks ONLY the known settings (lenient — skips invalid/unknown keys) so the
+   * persisted record stays clean even if the creation config carries presentation
+   * fields (handle/systemPrompt) or junk.
+   */
+  private seedSettingsFromStateArgs(): StoredSettings {
+    const stateArgs = this.env["STATE_ARGS"];
+    const raw =
+      stateArgs && typeof stateArgs === "object"
+        ? (stateArgs as Record<string, unknown>)["agentConfig"]
+        : undefined;
+    if (!raw || typeof raw !== "object") return {};
+    const c = raw as Record<string, unknown>;
+    const seed: StoredSettings = {};
+    if (typeof c["model"] === "string" && c["model"]) seed.model = c["model"];
+    const tl = c["thinkingLevel"];
+    if (tl === "minimal" || tl === "low" || tl === "medium" || tl === "high") seed.thinkingLevel = tl;
+    const al = c["approvalLevel"];
+    if (al === 0 || al === 1 || al === 2) seed.approvalLevel = al;
+    if (isRespondPolicy(c["respondPolicy"])) seed.respondPolicy = c["respondPolicy"];
+    const rf = c["respondFrom"];
+    if (Array.isArray(rf) && rf.every((x) => typeof x === "string")) seed.respondFrom = rf as string[];
+    const mc = c["maxModelCallsPerTurn"];
+    if (mc === null || (typeof mc === "number" && Number.isFinite(mc))) {
+      seed.maxModelCallsPerTurn = mc;
+    }
+    const to = c["modelStreamIdleTimeoutMs"];
+    if (to === null || (typeof to === "number" && Number.isFinite(to))) {
+      seed.modelStreamIdleTimeoutMs = to;
+    }
+    return seed;
+  }
+
+  getAgentSettings(): AgentSettings {
+    const stored = this.storedSettings();
+    const approval = stored.approvalLevel;
     return {
-      model:
-        stored.model ??
-        (typeof config?.["model"] === "string" ? (config["model"] as string) : undefined) ??
-        this.getDefaultModel(),
+      model: stored.model ?? this.getDefaultModel(),
       thinkingLevel: stored.thinkingLevel ?? this.getDefaultThinkingLevel(),
-      approvalLevel: approval === 0 || approval === 1 || approval === 2
-        ? approval
-        : this.getDefaultApprovalLevel(),
+      approvalLevel:
+        approval === 0 || approval === 1 || approval === 2
+          ? approval
+          : this.getDefaultApprovalLevel(),
       respondPolicy: isRespondPolicy(stored.respondPolicy)
         ? stored.respondPolicy
-        : isRespondPolicy(config?.["respondPolicy"])
-          ? (config?.["respondPolicy"] as RespondPolicy)
-          : this.getRespondPolicy(channelId),
+        : this.getRespondPolicy(),
       respondFrom: stored.respondFrom ?? this.getDefaultRespondFrom(),
-      maxModelCallsPerTurn,
-      modelStreamIdleTimeoutMs,
+      maxModelCallsPerTurn: this.maxModelCallsPerTurnFrom(
+        stored.maxModelCallsPerTurn,
+        undefined,
+        null
+      ),
+      modelStreamIdleTimeoutMs: this.modelStreamIdleTimeoutMsFrom(
+        stored.modelStreamIdleTimeoutMs,
+        undefined,
+        this.getDefaultModelStreamIdleTimeoutMs()
+      ),
     };
   }
 
-  protected getRespondPolicy(_channelId: string): RespondPolicy {
+  protected getRespondPolicy(): RespondPolicy {
     return this.getDefaultRespondPolicy();
   }
 
   private loopConfig(channelId: string): AgentLoopConfig {
-    const settings = this.getAgentSettings(channelId);
+    const settings = this.getAgentSettings();
     return {
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
@@ -938,7 +1054,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         parameters: tool.parameters,
       }));
       // Channel tools: roster participants' advertised methods become model
-      // tools dispatched as channel_call effects (the panel's eval/UI surface).
+      // tools dispatched as channel_call effects (the panel's UI surface —
+      // inline_ui/feedback/action_bar). eval is a LOCAL tool now, not a channel method.
       const seenTools = new Set(registry.keys());
       for (const participant of this.rosterSnapshot(channelId)) {
         for (const method of participant.methods) {
@@ -1150,6 +1267,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel membership ───────────────────────────────────────────────────
 
+  @rpc({ callers: ["panel", "do"] })
   async subscribeChannel(opts: {
     channelId: string;
     contextId: string;
@@ -1158,6 +1276,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }): Promise<{ ok: boolean; participantId: string }> {
     this.ensureIdentity();
     const descriptor = this.getParticipantInfo(opts.channelId, opts.config);
+    // Subscription is MEMBERSHIP + presentation only. Behavior config (model,
+    // approvalLevel, respondPolicy, …) is per-agent and seeded at creation from
+    // STATE_ARGS.agentConfig — it does NOT ride the subscription. `config` here
+    // carries only channel-presentation (handle, systemPrompt) consumed via the
+    // participant descriptor / getPromptOverride.
     const result = await this.subscriptions.subscribe({
       channelId: opts.channelId,
       contextId: opts.contextId,
@@ -1165,12 +1288,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       descriptor,
       replay: opts.replay,
     });
-    if (result.channelConfig?.["approvalLevel"] != null) {
-      const level = result.channelConfig["approvalLevel"];
-      if (level === 0 || level === 1 || level === 2) {
-        this.updateSettings(opts.channelId, { approvalLevel: level });
-      }
-    }
     await this.ensurePromptArtifacts(opts.channelId);
     await this.ingestSubscriptionReplay(opts.channelId, result.envelope);
     return { ok: result.ok, participantId: result.participantId };
@@ -1204,6 +1321,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     await this.driver.wake(channelId);
   }
 
+  @rpc({ callers: ["panel", "do"] })
   async unsubscribeChannel(channelId: string): Promise<{ ok: boolean }> {
     try {
       await this.driver.handleIncoming(channelId, {
@@ -1220,7 +1338,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Channel intake ───────────────────────────────────────────────────────
 
+  @rpc({ callers: ["do"] })
   async onChannelEnvelope(channelId: string, envelope: RpcChannelMessage): Promise<void> {
+    this.assertChannelDeliveryCaller("onChannelEnvelope");
     if (envelope.kind === "control") {
       if (envelope.type === "ready") {
         await this.driver.wake(channelId);
@@ -1259,6 +1379,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       return;
     }
+    // chatOp callMethod relay settles first: a terminal for a call WE initiated
+    // on behalf of the EvalDO's `chat.callMethod` resolves its awaiting promise.
+    // Like routeInvocationTerminal this must run before the message.completed
+    // gate and self-sender skip (the channel journals terminals with us, the
+    // caller, as sender).
+    if (this.settleChatOpCall(event)) return;
     // Outcome routing first: a channel invocation terminal for one of our
     // pending channel_call effects settles that effect. This must run BEFORE
     // the message.completed gate and the self-sender skip — the channel
@@ -1438,6 +1564,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     let conversationPolicy: "open" | "directed" | "moderated" | undefined;
     let agentHopLimit: number | undefined;
     let participantIds: string[] = [];
+    // Captured for per-agent respondFrom handle→id resolution (resolveRespondFromHandles).
+    let respondParticipants: ReadonlyArray<{
+      participantId: string;
+      metadata?: Record<string, unknown> | null;
+    }> = [];
     let agentStreakHops: number | undefined;
     try {
       const [policyState, config, participants] = await Promise.all([
@@ -1480,6 +1611,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         agentHopLimit = config["agentHopLimit"];
       }
       participantIds = participants.map((participant) => participant.participantId);
+      respondParticipants = participants;
       if (payload.replyTo) {
         replyToSenderId =
           (await channel.getMessageSender(this.participantId(), payload.replyTo)) ??
@@ -1488,7 +1620,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     } catch {
       /* addressing degrades gracefully without channel state */
     }
-    const settings = this.getAgentSettings(channelId);
+    const settings = this.getAgentSettings();
+    // respondFrom is per-agent: resolve handle entries to this channel's ids.
+    const respondFrom = resolveRespondFromHandles(settings.respondFrom, respondParticipants);
     const decision = resolveShouldRespond({
       event: {
         senderParticipantId: event.senderId,
@@ -1502,7 +1636,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       },
       self: { participantId: this.participantId() },
       policy: settings.respondPolicy,
-      respondFrom: settings.respondFrom,
+      respondFrom,
       participantIds,
       lastCompletedSender,
       conversationPolicy,
@@ -1646,12 +1780,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Method calls (agent as PROVIDER) ─────────────────────────────────────
 
+  @rpc({ callers: ["do"] })
   async onMethodCall(
     channelId: string,
     _transportCallId: string,
     methodName: string,
     args: unknown
   ): Promise<{ result: unknown; isError?: boolean }> {
+    this.assertChannelDeliveryCaller("onMethodCall");
     return (
       (await this.handleStandardAgentMethodCall(channelId, methodName, args)) ?? {
         result: { error: `unknown method: ${methodName}` },
@@ -1756,7 +1892,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             isError: true,
           };
         }
-        return { result: this.updateSettings(channelId, { model }) };
+        return { result: this.updateSettings({ model }) };
       }
       case "setThinkingLevel": {
         const level = (args as { level?: unknown } | null)?.level;
@@ -1766,14 +1902,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             isError: true,
           };
         }
-        return { result: this.updateSettings(channelId, { thinkingLevel: level }) };
+        return { result: this.updateSettings({ thinkingLevel: level }) };
       }
       case "setApprovalLevel": {
         const level = (args as { level?: unknown } | null)?.level;
         if (level !== 0 && level !== 1 && level !== 2) {
           return { result: { error: "setApprovalLevel requires level: 0, 1, or 2" }, isError: true };
         }
-        return { result: this.updateSettings(channelId, { approvalLevel: level }) };
+        return { result: this.updateSettings({ approvalLevel: level }) };
       }
       case "setRespondPolicy": {
         const input = args as { policy?: unknown; from?: unknown } | null;
@@ -1790,7 +1926,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           ? input.from.filter((id): id is string => typeof id === "string")
           : undefined;
         return {
-          result: this.updateSettings(channelId, {
+          result: this.updateSettings({
             respondPolicy: input.policy,
             ...(from !== undefined ? { respondFrom: from } : {}),
           }),
@@ -1811,7 +1947,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           };
         }
         return {
-          result: this.updateSettings(channelId, {
+          result: this.updateSettings({
             modelStreamIdleTimeoutMs: timeoutMs,
           }),
         };
@@ -1828,7 +1964,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         };
       }
       case "getAgentSettings":
-        return { result: this.getAgentSettings(channelId) };
+        return { result: this.getAgentSettings() };
       case "getDebugState":
         return { result: await this.getDebugState(channelId) };
       case "inspectMethodSuspensions":
@@ -1842,13 +1978,407 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }
   }
 
+  // ── chat proxy for server-side eval (chatOp) ─────────────────────────────
+
+  /**
+   * Forwarded channel operation from THIS agent's own EvalDO sandbox `chat`
+   * binding. The EvalDO can only publish as its own non-agent identity and
+   * cannot receive a delivered method result, so it relays every
+   * `ChatSandboxValue` op here and we perform it AS the agent (correct @agent
+   * attribution) using our existing channel machinery. Return values mirror
+   * `ChatSandboxValue`'s.
+   *
+   * Auth: the caller MUST be this agent's own EvalDO. We re-derive that DO's
+   * objectKey the SAME way evalService does — sha256(ownerId + "\\0" + subKey),
+   * hex, first 40 chars — and require the verified caller id to be
+   * `do:natstack/internal:EvalDO:<key>`. Any other caller is rejected; the
+   * generic DO relay is open, so a sensitive receiver gates on receipt.
+   */
+  @rpc({ callers: ["do"] })
+  async chatOp(channelId: string, op: string, args: unknown[]): Promise<unknown> {
+    await this.assertOwnEvalCaller(channelId);
+    const channel = this.createChannelClient(channelId);
+    const participantId = this.subscriptions.getParticipantId(channelId) ?? this.participantId();
+    const a = args ?? [];
+
+    switch (op) {
+      case "publish": {
+        const [eventType, payload, options] = a as [
+          string,
+          unknown,
+          { idempotencyKey?: string } | undefined,
+        ];
+        const target = await this.channelTarget(channelId);
+        return this.rpc.call(target, "publish", [
+          participantId,
+          eventType,
+          payload,
+          options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : undefined,
+        ]);
+      }
+      case "send": {
+        const [content, options] = a as [string, { idempotencyKey?: string } | undefined];
+        const messageId = options?.idempotencyKey ?? crypto.randomUUID();
+        const descriptor = this.getParticipantInfo(
+          channelId,
+          this.subscriptions.getConfig(channelId)
+        );
+        await channel.send(participantId, messageId, content, {
+          senderMetadata: { type: "agent", name: descriptor.name, handle: descriptor.handle },
+          ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+        });
+        return undefined;
+      }
+      case "publishCustomMessage": {
+        const [input, options] = a as [
+          { typeId: string; initialState?: unknown; displayMode?: CustomMessageDisplayMode },
+          { idempotencyKey?: string } | undefined,
+        ];
+        // create() mints a fresh card identity (random natural key), publishing
+        // custom.started as the agent. The handle carries the pubsubId of that
+        // started event — matching the panel client's { messageId, pubsubId }.
+        const handle = await this.cards.create(channelId, input.typeId, input.initialState, {
+          ...(input.displayMode ? { displayMode: input.displayMode } : {}),
+          ...(options?.idempotencyKey ? { key: options.idempotencyKey } : {}),
+        });
+        return { messageId: handle.messageId, pubsubId: handle.pubsubId };
+      }
+      case "updateCustomMessage": {
+        const [messageId, update] = a as [string, unknown];
+        const handle = this.cards.get(channelId, messageId);
+        if (!handle) {
+          throw new Error(`updateCustomMessage: no card ${messageId} on channel ${channelId}`);
+        }
+        // Resolves to the pubsubId of the custom.updated event (number | undefined).
+        return handle.update(update);
+      }
+      case "registerMessageType": {
+        const [input] = a as [RegisterMessageTypeInput, { idempotencyKey?: string } | undefined];
+        const idempotencyKey = (a[1] as { idempotencyKey?: string } | undefined)?.idempotencyKey;
+        return this.publishMessageTypeRegistered(channelId, participantId, input, idempotencyKey);
+      }
+      case "clearMessageType": {
+        const [typeId] = a as [string, { idempotencyKey?: string } | undefined];
+        const idempotencyKey = (a[1] as { idempotencyKey?: string } | undefined)?.idempotencyKey;
+        return this.publishMessageTypeCleared(channelId, participantId, typeId, idempotencyKey);
+      }
+      case "getMessageType": {
+        const [typeId] = a as [string];
+        return channel.getMessageType(typeId);
+      }
+      case "getMessageTypes":
+        return channel.getMessageTypes();
+      case "callMethod": {
+        const [targetPid, method, callArgs, options] = a as [
+          string,
+          string,
+          unknown,
+          { timeoutMs?: number } | undefined,
+        ];
+        const result = await this.relayChannelCall(channelId, targetPid, method, callArgs, options);
+        return result.content;
+      }
+      case "callMethodResult": {
+        const [targetPid, method, callArgs, options] = a as [
+          string,
+          string,
+          unknown,
+          { timeoutMs?: number } | undefined,
+        ];
+        return this.relayChannelCall(channelId, targetPid, method, callArgs, options);
+      }
+      case "participantByHandle": {
+        const [handle] = a as [string];
+        return this.resolveParticipantByHandle(channelId, handle);
+      }
+      case "callMethodByHandle": {
+        const [handle, method, callArgs, options] = a as [
+          string,
+          string,
+          unknown,
+          { timeoutMs?: number } | undefined,
+        ];
+        const target = await this.requireParticipantByHandle(channelId, handle);
+        const result = await this.relayChannelCall(channelId, target.id, method, callArgs, options);
+        return result.content;
+      }
+      case "callMethodResultByHandle": {
+        const [handle, method, callArgs, options] = a as [
+          string,
+          string,
+          unknown,
+          { timeoutMs?: number } | undefined,
+        ];
+        const target = await this.requireParticipantByHandle(channelId, handle);
+        return this.relayChannelCall(channelId, target.id, method, callArgs, options);
+      }
+      case "focusMessage":
+        // Panel-only DOM scroll; no server-side equivalent.
+        return false;
+      // ── agent self-management (the eval `agent` binding) ──────────────────
+      case "describeSelf":
+        return this.describeSelf(channelId);
+      case "configureAgent":
+        return this.configureAgent((a[0] ?? {}) as Record<string, unknown>);
+      default:
+        throw new Error(`chatOp: unknown op ${op}`);
+    }
+  }
+
+  /** Re-derive this agent's own EvalDO objectKey (matching evalService's
+   *  formula EXACTLY: sha256(`${ownerId}\0${subKey}`) hex, first 40 chars; owner
+   *  = this agent's runtime id, subKey = channelId) and require the verified
+   *  caller to be that EvalDO. */
+  private async assertOwnEvalCaller(channelId: string): Promise<void> {
+    const callerId = this.rpcCallerId;
+    const expectedKey = await sha256Hex(`${this.participantId()}\0${channelId}`);
+    const expectedCaller = `do:natstack/internal:EvalDO:${expectedKey.slice(0, 40)}`;
+    if (callerId !== expectedCaller) {
+      throw new Error(
+        `chatOp: refusing caller ${callerId ?? "unknown"} — only this agent's own EvalDO may forward chat ops`
+      );
+    }
+  }
+
+  /** Server-stamped settlement (`onEvalComplete`, `onDeferredResult`): the
+   *  server dispatches these via doDispatch / callTarget as callerKind
+   *  "server". The DO relay is open, so without this any authenticated caller
+   *  could forge an eval/deferred completion and drive the agent loop. */
+  private assertServerCaller(method: string): void {
+    if (this.rpcCallerKind !== "server") {
+      throw new Error(
+        `${method}: refusing caller ${this.rpcCallerId ?? "unknown"} (kind ${this.rpcCallerKind ?? "unknown"}) — server-only`
+      );
+    }
+  }
+
+  /** The channel→agent delivery boundary. Effect terminals (`deliverEffectOutcome`),
+   *  structured channel envelopes (`onChannelEnvelope`), and method dispatch
+   *  (`onMethodCall`) arrive from exactly two legitimate sources: the server
+   *  (http_call / credential callbacks, kind "server") and the agent's PubSubChannel
+   *  DO (a "do" caller whose id names PubSubChannel). Refuse anything else — the open
+   *  relay otherwise lets a panel, a worker, or ANOTHER agent forge channel traffic /
+   *  tool outcomes into the loop. callerId is server-authenticated, so the className
+   *  segment cannot be spoofed. */
+  private assertChannelDeliveryCaller(method: string): void {
+    const kind = this.rpcCallerKind;
+    if (kind === "server") return;
+    const callerId = this.rpcCallerId ?? "";
+    if (kind === "do" && callerId.includes(":PubSubChannel:")) return;
+    throw new Error(`${method}: refusing caller ${callerId || "unknown"} (kind ${kind ?? "unknown"})`);
+  }
+
+  /** Publish a messageType.registered event AS the agent (mirrors the ui-install
+   *  publisher + the panel client) and invalidate the CardManager type cache. */
+  private async publishMessageTypeRegistered(
+    channelId: string,
+    participantId: string,
+    input: RegisterMessageTypeInput,
+    idempotencyKey?: string
+  ): Promise<number | undefined> {
+    // Self-gate: this helper is independently RPC-exposed (collectExposableMethods
+    // reflects every method) over the open DO relay, so chatOp's assertOwnEvalCaller
+    // is bypassable by addressing it directly. Only this agent's own EvalDO may act
+    // as the agent.
+    await this.assertOwnEvalCaller(channelId);
+    const actor = this.cardActor(channelId, participantId);
+    const event: AgenticEvent<"messageType.registered"> = {
+      kind: "messageType.registered",
+      actor,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        typeId: input.typeId,
+        displayMode: input.displayMode,
+        source: input.source,
+        ...(input.imports !== undefined ? { imports: input.imports } : {}),
+        ...(input.stateSchema !== undefined ? { stateSchema: input.stateSchema } : {}),
+        ...(input.updateSchema !== undefined ? { updateSchema: input.updateSchema } : {}),
+        registeredBy: actor,
+      },
+      createdAt: new Date().toISOString(),
+    };
+    const res = await this.createChannelClient(channelId).publishAgenticEvent(participantId, event, {
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      senderMetadata: actor.metadata,
+    });
+    this.cards.invalidateType(channelId, input.typeId);
+    return res.id;
+  }
+
+  /** Publish a messageType.cleared tombstone AS the agent + invalidate cache. */
+  private async publishMessageTypeCleared(
+    channelId: string,
+    participantId: string,
+    typeId: string,
+    idempotencyKey?: string
+  ): Promise<number | undefined> {
+    await this.assertOwnEvalCaller(channelId); // direct-call gate — see publishMessageTypeRegistered
+    const actor = this.cardActor(channelId, participantId);
+    const event: AgenticEvent<"messageType.cleared"> = {
+      kind: "messageType.cleared",
+      actor,
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, typeId },
+      createdAt: new Date().toISOString(),
+    };
+    const res = await this.createChannelClient(channelId).publishAgenticEvent(participantId, event, {
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+      senderMetadata: actor.metadata,
+    });
+    this.cards.invalidateType(channelId, typeId);
+    return res.id;
+  }
+
+  private cardActor(
+    channelId: string,
+    participantId: string
+  ): ActorRef & { participantId?: string; metadata?: Record<string, unknown> } {
+    const descriptor = this.getParticipantInfo(channelId, this.subscriptions.getConfig(channelId));
+    return {
+      kind: "agent",
+      id: participantId,
+      displayName: descriptor.name,
+      participantId,
+      metadata: { type: "agent", name: descriptor.name, handle: descriptor.handle },
+    };
+  }
+
+  /** Resolve a participant by handle ("handle" or "@handle") from the channel
+   *  roster. Returns the raw participant record (id + metadata) or null. */
+  private async resolveParticipantByHandle(
+    channelId: string,
+    rawHandle: string
+  ): Promise<{ id: string; metadata: Record<string, unknown> } | null> {
+    const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
+    const participants = await this.getCachedParticipants(channelId);
+    const match = participants.find((p) => p.metadata?.["handle"] === handle);
+    return match ? { id: match.participantId, metadata: match.metadata } : null;
+  }
+
+  private async requireParticipantByHandle(
+    channelId: string,
+    rawHandle: string
+  ): Promise<{ id: string; metadata: Record<string, unknown> }> {
+    const participant = await this.resolveParticipantByHandle(channelId, rawHandle);
+    if (!participant) {
+      const handle = rawHandle.startsWith("@") ? rawHandle.slice(1) : rawHandle;
+      throw new Error(`No participant with handle @${handle}`);
+    }
+    return participant;
+  }
+
+  /**
+   * Initiate a channel method call AS the agent and resolve to the DELIVERED
+   * result. The channel broadcasts the durable invocation terminal back to us
+   * (the caller); settleChatOpCall matches it by transportCallId and resolves
+   * the promise registered here. Loop-independent (does not touch the
+   * effect-outbox) so the eval relay returns the result inline.
+   */
+  private async relayChannelCall(
+    channelId: string,
+    targetPid: string,
+    method: string,
+    args: unknown,
+    options?: { timeoutMs?: number }
+  ): Promise<{ content: unknown }> {
+    await this.assertOwnEvalCaller(channelId); // direct-call gate — see publishMessageTypeRegistered
+    const callId = crypto.randomUUID();
+    const timeoutMs = options?.timeoutMs;
+    const settled = new Promise<{ content: unknown }>((resolve, reject) => {
+      const entry: {
+        resolve: (value: { content: unknown }) => void;
+        reject: (error: Error) => void;
+        timer?: ReturnType<typeof setTimeout>;
+      } = { resolve, reject };
+      if (timeoutMs && timeoutMs > 0) {
+        entry.timer = setTimeout(() => {
+          if (this.chatOpPendingCalls.delete(callId)) {
+            reject(new Error(`chat.callMethod(${method}) timed out after ${timeoutMs}ms`));
+          }
+        }, timeoutMs);
+      }
+      this.chatOpPendingCalls.set(callId, entry);
+    });
+    try {
+      await this.createChannelClient(channelId).callMethod(
+        this.participantId(),
+        targetPid,
+        callId,
+        method,
+        args,
+        {
+          invocationId: callId,
+          transportCallId: callId,
+          ...(timeoutMs && timeoutMs > 0 ? { timeoutMs } : {}),
+        }
+      );
+    } catch (err) {
+      const entry = this.chatOpPendingCalls.get(callId);
+      if (entry?.timer) clearTimeout(entry.timer);
+      this.chatOpPendingCalls.delete(callId);
+      throw err instanceof Error ? err : new Error(String(err));
+    }
+    return settled;
+  }
+
+  /** Settle a pending chatOp relay call from a channel invocation terminal.
+   *  Returns true when the event settled (or was a non-terminal phase of) one
+   *  of our relay calls — so processChannelEvent stops routing it further. */
+  private settleChatOpCall(event: ChannelEvent): boolean {
+    if (this.chatOpPendingCalls.size === 0) return false;
+    const agentic = event.payload as AgenticEvent | null;
+    const kind = (agentic as { kind?: string } | null)?.kind ?? "";
+    if (!kind.startsWith("invocation.")) return false;
+    const causality = ((agentic as { causality?: Record<string, unknown> })?.causality ??
+      {}) as Record<string, unknown>;
+    const transportCallId =
+      typeof causality["transportCallId"] === "string"
+        ? (causality["transportCallId"] as string)
+        : typeof causality["invocationId"] === "string"
+          ? (causality["invocationId"] as string)
+          : null;
+    if (!transportCallId) return false;
+    const entry = this.chatOpPendingCalls.get(transportCallId);
+    if (!entry) return false;
+    if (!AgentVesselBase.INVOCATION_TERMINAL_KINDS.has(kind)) {
+      // started/output for our own relay call — consume but keep waiting.
+      return true;
+    }
+    this.chatOpPendingCalls.delete(transportCallId);
+    if (entry.timer) clearTimeout(entry.timer);
+    const payload = ((agentic as { payload?: Record<string, unknown> })?.payload ?? {}) as Record<
+      string,
+      unknown
+    >;
+    if (kind === "invocation.completed") {
+      // Hydrate any stored-value refs the provider spilled, then resolve with
+      // the delivered content (ChatMethodResult shape). hydrate is async; the
+      // settle hook stays sync by resolving inside the promise chain.
+      void this.hydrateTransportValue(payload["result"]).then(
+        (content) => entry.resolve({ content }),
+        (err) => entry.reject(err instanceof Error ? err : new Error(String(err)))
+      );
+    } else {
+      const reason = payload["error"] ?? payload["reason"] ?? payload["result"] ?? null;
+      const message =
+        typeof reason === "string" && reason.length > 0
+          ? reason
+          : reason && typeof reason === "object" && typeof (reason as { error?: unknown }).error === "string"
+            ? ((reason as { error: string }).error)
+            : `chat.callMethod failed (${kind})`;
+      entry.reject(new Error(message));
+    }
+    return true;
+  }
+
   /** Channel DO settle path: terminals for our channel_call effects POST back
    *  here. Duplicate delivery is a no-op (deterministic terminal ids). */
+  @rpc({ callers: ["server", "do"] })
   async deliverEffectOutcome(
     effectId: string,
     outcome: EffectOutcome,
     address?: { branchId?: string; channelId?: string }
   ): Promise<void> {
+    this.assertChannelDeliveryCaller("deliverEffectOutcome");
     await this.driver.deliverEffectOutcome(effectId, outcome, address);
   }
 
@@ -1857,15 +2387,127 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  delivery no-ops once the row is gone. Eviction between defer and delivery
    *  is healed by lease-expiry redrive: the retried call re-attaches via its
    *  idempotencyKey / already-granted capability. */
+  @rpc({ callers: ["server"] })
   async onDeferredResult(payload: {
     requestId: string;
     result?: unknown;
     isError?: boolean;
   }): Promise<void> {
+    this.assertServerCaller("onDeferredResult");
     await this.driver.deliverDeferredResult(
       payload.requestId,
       payload.result ?? null,
       payload.isError === true
+    );
+  }
+
+  /**
+   * Server push when a deferred (agent) eval finishes (the held `executeRun` returned). Format the
+   * result and deliver it as the tool outcome for the parked invocation effect — `runId` is the
+   * deterministic invocationId, so the effect id is `ids.invocationEffect(runId)`. Idempotent:
+   * `deliverEffectOutcome` no-ops if the row already settled (e.g. a getRun-poll backstop beat us).
+   */
+  /**
+   * The deferral half of the agent's `eval` tool. Kicks off a server-held run (`eval.startRun`,
+   * idempotent on the deterministic `invocationId` so crash-replay / deferRedrive re-runs never
+   * duplicate the eval) and returns `{deferred:true}` while it's in flight. The result normally
+   * arrives via the `onEvalComplete` push; if that was lost, a ~60s deferRedrive re-runs this and the
+   * `getRun` poll completes the invocation INLINE (`done` → result, `cancelled` → error).
+   */
+  protected async runDeferredEval(
+    channelId: string,
+    invocationId: string,
+    args: unknown
+  ): Promise<{ deferred: true } | { result: unknown; isError: boolean }> {
+    const p = (args ?? {}) as {
+      code?: string;
+      path?: string;
+      syntax?: "typescript" | "jsx" | "tsx";
+      imports?: Record<string, string>;
+    };
+    if ((p.code === undefined) === (p.path === undefined)) {
+      return { result: "[eval] requires exactly one of code or path", isError: true };
+    }
+    await this.rpc.call("main", "eval.startRun", [
+      {
+        subKey: channelId, // the agent's eval subKey IS its channelId
+        channelId,
+        code: p.code,
+        path: p.path,
+        syntax: p.syntax,
+        imports: p.imports,
+        runId: invocationId,
+      },
+    ]);
+    const status = await this.rpc.call<{ status: string; result?: EvalRunResult }>(
+      "main",
+      "eval.getRun",
+      [{ subKey: channelId, runId: invocationId }]
+    );
+    if (status.status === "done" && status.result) {
+      const formatted = formatEvalResult(status.result);
+      return {
+        result: { protocolContent: formatted.content, details: formatted.details },
+        isError: !status.result.success,
+      };
+    }
+    if (status.status === "cancelled") {
+      return { result: "[eval] run cancelled", isError: true };
+    }
+    return { deferred: true };
+  }
+
+  /**
+   * Streamed eval console — the rolling-output sibling of `onEvalComplete`. The agent's eval runs in
+   * a server-side EvalDO; during the held run the EvalDO forwards buffered console chunks here (gated
+   * by `assertOwnEvalCaller`, exactly like the `chat` binding's `chatOp` — only this agent's own
+   * EvalDO may act as it). Each chunk is published as an `invocation.output` event keyed to the eval
+   * invocation (`runId === invocationId`), so the chat panel renders the console live AND persists it
+   * for the card's details view. Best-effort: a dropped chunk is just a gap in the live console — the
+   * final result still carries the full console text. Ordering: the EvalDO awaits its final flush
+   * before completing, so every output precedes the `invocation.completed` terminal (the reducer drops
+   * output after terminal).
+   */
+  @rpc({ callers: ["do"] })
+  async onEvalProgress(payload: {
+    runId: string;
+    channelId: string;
+    output: string;
+  }): Promise<void> {
+    await this.assertOwnEvalCaller(payload.channelId);
+    if (!payload.output) return;
+    const participantId =
+      this.subscriptions.getParticipantId(payload.channelId) ?? this.participantId();
+    const actor = this.cardActor(payload.channelId, participantId);
+    const event: AgenticEvent<"invocation.output"> = {
+      kind: "invocation.output",
+      actor,
+      causality: { invocationId: payload.runId as never },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, output: payload.output, channel: "stdout" },
+      createdAt: new Date().toISOString(),
+    };
+    await this.createChannelClient(payload.channelId).publishAgenticEvent(participantId, event, {
+      senderMetadata: actor.metadata,
+    });
+  }
+
+  @rpc({ callers: ["server"] })
+  async onEvalComplete(payload: {
+    runId: string;
+    result?: EvalRunResult;
+    channelId?: string;
+  }): Promise<void> {
+    this.assertServerCaller("onEvalComplete");
+    if (!payload.channelId || !payload.result) return;
+    const formatted = formatEvalResult(payload.result);
+    await this.driver.deliverEffectOutcome(
+      ids.invocationEffect(payload.runId),
+      {
+        kind: "tool",
+        result: { protocolContent: formatted.content, details: formatted.details },
+        isError: !payload.result.success,
+      },
+      { channelId: payload.channelId }
     );
   }
 
@@ -2049,7 +2691,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     channelId: string,
     opts?: { connectCard?: boolean }
   ): Promise<string> {
-    const model = this.getAgentSettings(channelId).model;
+    const model = this.getAgentSettings().model;
     const providerId = model.includes(":") ? model.slice(0, model.indexOf(":")) : "anthropic";
     const modelId = model.includes(":") ? model.slice(model.indexOf(":") + 1) : model;
     try {
@@ -2097,7 +2739,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         },
         props: {
           providerId,
-          modelRef: this.getAgentSettings(channelId).model,
+          modelRef: this.getAgentSettings().model,
           agentParticipantId: participantId,
           resumeAfterConnect: opts.resumeAfterConnect,
           ...(opts.reason ? { reason: opts.reason } : {}),
@@ -2118,6 +2760,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   // ── Fork ─────────────────────────────────────────────────────────────────
 
+  @rpc({ callers: ["worker", "server"] })
   async canFork(): Promise<{ ok: boolean; subscriptionCount: number; reason?: string }> {
     const count = this.subscriptions.count();
     return count <= 1
@@ -2125,6 +2768,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       : { ok: false, subscriptionCount: count, reason: "multiple subscriptions" };
   }
 
+  @rpc({ callers: ["worker", "server"] })
   async postClone(
     _parentObjectKey: string,
     newChannelId: string,
@@ -2213,12 +2857,100 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           pendingInvocations: Object.keys(loop.state.pendingInvocations),
           pendingApprovals: Object.keys(loop.state.pendingApprovals),
           pendingCredentialWaits: Object.keys(loop.state.pendingCredentialWaits),
-          settings: this.getAgentSettings(id),
+          settings: this.getAgentSettings(),
         };
       } catch (err) {
         loops[id] = { error: err instanceof Error ? err.message : String(err) };
       }
     }
     return { participantId: this.participantId(), loops, outbox: this.driver.outbox.all() };
+  }
+
+  /**
+   * Comprehensive self-snapshot for an agent introspecting itself from eval (the
+   * `agent` binding): identity + resolved per-agent config + channel memberships
+   * + active tools + this channel's turn state + an effect summary.
+   */
+  async describeSelf(channelId: string): Promise<Record<string, unknown>> {
+    let turn: Record<string, unknown> = { status: "idle" };
+    try {
+      const loop = await this.driver.loop(channelId);
+      turn = summarizeTurn(loop.state);
+    } catch {
+      /* loop not loadable yet — report idle */
+    }
+    let activeTools: string[] = [];
+    try {
+      activeTools = [...(await this.toolRegistry(channelId)).keys()];
+    } catch {
+      /* tools unavailable */
+    }
+    return {
+      identity: {
+        id: this.participantId(),
+        objectKey: this.objectKey,
+        source: String(this.env["WORKER_SOURCE"] ?? ""),
+        className: String(this.env["WORKER_CLASS_NAME"] ?? this.constructor.name),
+      },
+      config: this.getAgentSettings(),
+      channels: this.subscriptions.listAll(),
+      tools: { active: activeTools },
+      turn,
+      effects: { outbox: { total: this.driver.outbox.all().length } },
+    };
+  }
+
+  /**
+   * Validate + apply a per-agent config patch (the `agent.configure`/setter write
+   * path from eval). Every field is freely settable — including `approvalLevel`,
+   * which is a UX convenience; all sensitive operations are gated by out-of-band
+   * app approvals. Writes the per-agent record (applies to all the agent's channels).
+   */
+  configureAgent(patch: Record<string, unknown>): AgentSettings {
+    const next: StoredSettings = {};
+    if ("model" in patch) {
+      if (typeof patch["model"] !== "string" || !patch["model"]) {
+        throw new Error("model must be a non-empty 'provider:model' string");
+      }
+      next.model = patch["model"];
+    }
+    if ("thinkingLevel" in patch) {
+      const l = patch["thinkingLevel"];
+      if (l !== "minimal" && l !== "low" && l !== "medium" && l !== "high") {
+        throw new Error("thinkingLevel must be minimal|low|medium|high");
+      }
+      next.thinkingLevel = l;
+    }
+    if ("approvalLevel" in patch) {
+      const l = patch["approvalLevel"];
+      if (l !== 0 && l !== 1 && l !== 2) throw new Error("approvalLevel must be 0, 1, or 2");
+      next.approvalLevel = l;
+    }
+    if ("respondPolicy" in patch) {
+      if (!isRespondPolicy(patch["respondPolicy"])) throw new Error("invalid respondPolicy");
+      next.respondPolicy = patch["respondPolicy"];
+    }
+    if ("respondFrom" in patch) {
+      const from = patch["respondFrom"];
+      if (!Array.isArray(from) || !from.every((x) => typeof x === "string")) {
+        throw new Error("respondFrom must be an array of handle/participant strings");
+      }
+      next.respondFrom = from as string[];
+    }
+    if ("maxModelCallsPerTurn" in patch) {
+      const n = patch["maxModelCallsPerTurn"];
+      if (n !== null && (typeof n !== "number" || !Number.isFinite(n) || n <= 0)) {
+        throw new Error("maxModelCallsPerTurn must be a positive number or null");
+      }
+      next.maxModelCallsPerTurn = n as number | null;
+    }
+    if ("modelStreamIdleTimeoutMs" in patch) {
+      const n = patch["modelStreamIdleTimeoutMs"];
+      if (n !== null && (typeof n !== "number" || !Number.isFinite(n) || n <= 0)) {
+        throw new Error("modelStreamIdleTimeoutMs must be a positive number or null");
+      }
+      next.modelStreamIdleTimeoutMs = n as number | null;
+    }
+    return this.updateSettings(next);
   }
 }

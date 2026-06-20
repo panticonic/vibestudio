@@ -1,4 +1,4 @@
-import { DurableObjectBase } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
 import type { WorkspaceConfig } from "@workspace/runtime/worker";
 import {
   DEFAULT_AGENT_MODEL_REF,
@@ -98,6 +98,7 @@ export class ModelSettingsDO extends DurableObjectBase {
     return this.getCatalog();
   }
 
+  @rpc({ callers: ["panel", "server"] })
   async getSettings(): Promise<ModelSettingsSnapshot> {
     const [catalog, config] = await Promise.all([
       this.getCatalog(),
@@ -110,6 +111,7 @@ export class ModelSettingsDO extends DurableObjectBase {
     return this.getSettings();
   }
 
+  @rpc({ callers: ["panel", "server"] })
   async setDefaultModel(modelRef: string): Promise<ModelSettingsSnapshot> {
     const catalog = await this.getCatalog();
     const model = catalog.models.find((entry) => entry.ref === modelRef);

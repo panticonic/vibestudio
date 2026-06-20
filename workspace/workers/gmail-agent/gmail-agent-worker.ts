@@ -1,5 +1,6 @@
 import { AgentWorkerBase, installMessageTypes, type RespondPolicy } from "@workspace/agentic-do";
 import { complete, getModel as getPiModel } from "@earendil-works/pi-ai";
+import { rpc } from "@workspace/runtime/worker";
 import type { DurableObjectContext, WebhookDeliveryEvent } from "@workspace/runtime/worker";
 import {
   AGENTIC_PROTOCOL_VERSION,
@@ -331,7 +332,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return "openai-codex:gpt-5.5";
   }
 
-  protected override getRespondPolicy(_channelId: string): RespondPolicy {
+  protected override getRespondPolicy(): RespondPolicy {
     return "mentioned-or-followup";
   }
 
@@ -341,7 +342,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
 
   protected async generateDraftReplyBody(channelId: string, thread: GmailThread): Promise<string> {
     return generateDraftReplyBodyLlm({
-      modelRef: this.getAgentSettings(channelId).model,
+      modelRef: this.getAgentSettings().model,
       apiKey: await this.resolveModelApiKey(channelId),
       thread,
     });
@@ -357,7 +358,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     systemPrompt: string,
     userPrompt: string
   ): Promise<string> {
-    const channelModelRef = this.getAgentSettings(channelId).model;
+    const channelModelRef = this.getAgentSettings().model;
     const override = this.store.getPrefs(channelId).triageModel;
     const colonIdx = channelModelRef.indexOf(":");
     const provider = colonIdx > 0 ? channelModelRef.slice(0, colonIdx) : channelModelRef;
@@ -546,6 +547,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * server has already verified and decoded the Cloud Pub/Sub envelope; Gmail
    * interpretation and fanout stay here.
    */
+  @rpc({ callers: ["server", "harness"] })
   async onWebhookDelivery(event: WebhookDeliveryEvent): Promise<{ synced: string[] }> {
     const caller = this.caller;
     if (caller && !["server"].includes(caller.callerKind)) {
@@ -586,6 +588,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { synced: [...synced] };
   }
 
+  @rpc({ callers: ["do"] })
   registerPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -612,6 +615,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
     return { registered: true };
   }
 
+  @rpc({ callers: ["do"] })
   unregisterPushTarget(input: {
     emailAddress: string;
     source: string;
@@ -649,6 +653,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * Sync every channel bound to that address now; the follow-up alarm runs
    * the triage/wake pipeline.
    */
+  @rpc({ callers: ["server", "harness", "do"] })
   async onGmailPushNotification(payload: { emailAddress: string; historyId: string }): Promise<{
     synced: string[];
   }> {
@@ -801,11 +806,13 @@ export class GmailAgentWorker extends AgentWorkerBase {
     );
   }
 
+  @rpc({ callers: ["panel", "do"] })
   async getAttentionPrefs(channelId: string): Promise<GmailAttentionPrefs> {
     this.assertSubscribedChannel(channelId);
     return this.handlers.getAttentionPrefs(channelId);
   }
 
+  @rpc({ callers: ["panel", "do"] })
   async setAttentionPrefs(
     channelId: string,
     args: unknown

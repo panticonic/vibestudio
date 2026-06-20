@@ -93,7 +93,12 @@ export async function fork(runtime: ForkRuntime, opts: ForkOpts): Promise<ForkRe
 
   for (const p of roster) {
     if (exclude.has(p.participantId)) { excluded.push(p.participantId); continue; }
-    if (p.transport !== "do" || !p.doRef) continue;
+    // Only AGENT VESSELS are forkable DOs — they carry conversation state and implement
+    // canFork/postClone. An RPC-style connectionless DO client (the eval's HeadlessSession) is also
+    // transport "do" with a doRef, but it's a transient host with no canFork; cloning it would fail the
+    // preflight. Gate on the agent-vessel marker (`receivesChannelEnvelopes`), NOT the id-shape
+    // transport. (Mirrors pubsub-channel's `participantIsAgentVessel`.)
+    if (p.metadata?.["receivesChannelEnvelopes"] !== true || !p.doRef) continue;
     if (replace[p.participantId]) {
       toReplace.push({ participantId: p.participantId, doRef: replace[p.participantId]! });
     } else {

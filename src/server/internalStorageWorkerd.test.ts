@@ -219,6 +219,182 @@ describe("internal storage DOs under workerd", () => {
     }
   });
 
+  // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
+  // the unbounded-eval.run design: real workerd does NOT cap a DO `fetch` handler
+  // the way it caps a regular Worker (~30s). Held 35s here and returned cleanly,
+  // proving the only sub-undici cap in the chain is our own transport
+  // `RESPOND_TIMEOUT_MS` (120s). (The relay's bare `fetch` adds undici's
+  // ~300s `headersTimeout` as a second cap — defeatable with a custom dispatcher.)
+  it.skip("real workerd holds a DO fetch handler open past the ~30s regular-Worker wall limit", async () => {
+    // Probe under the 120s respond ceiling (35s) so the value returns; a
+    // workerd-level cap would instead error around 30s. (A separate manual probe
+    // with RESPOND_TIMEOUT_MS raised confirmed a HELD request runs 150s+ cleanly —
+    // workerd does not cap long-held requests; only no-connection waitUntil is capped.)
+    const probeBuild = await bundleWorker(
+      "workers/lifecycle-probe",
+      "src/server/testFixtures/lifecycleProbeWorker.ts",
+      "lifecycle-probe-sleep"
+    );
+    const harness = await createWorkerdHarness({
+      getBuild: async (source: string) => {
+        if (source === "workers/lifecycle-probe") return probeBuild;
+        throw new Error(`unexpected build source ${source}`);
+      },
+    });
+    manager = harness.manager;
+    await manager.registerAllDOClasses([
+      { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
+    ]);
+    const ref = {
+      source: "workers/lifecycle-probe",
+      className: "LifecycleProbeDO",
+      objectKey: "sleep-probe",
+    };
+
+    // Sanity: a short hold returns its value through the full relay path.
+    const shortStart = Date.now();
+    const short = await harness.callDurableObject(ref, "sleepProbe", 2_000);
+    expect(short).toEqual({ requestedMs: 2_000, ok: true });
+    expect(Date.now() - shortStart).toBeGreaterThanOrEqual(1_800);
+
+    // The real question: a hold LONGER than a regular Worker's ~30s wall limit.
+    const longStart = Date.now();
+    const long = await harness.callDurableObject(ref, "sleepProbe", 35_000);
+    const elapsed = Date.now() - longStart;
+    expect(long).toEqual({ requestedMs: 35_000, ok: true });
+    expect(elapsed).toBeGreaterThanOrEqual(34_000);
+  }, 90_000);
+
+  it.skip("PROBE: does a DO run background work + I/O after its request returns?", async () => {
+    const probeBuild = await bundleWorker(
+      "workers/lifecycle-probe",
+      "src/server/testFixtures/lifecycleProbeWorker.ts",
+      "lifecycle-probe-bg"
+    );
+    const harness = await createWorkerdHarness({
+      getBuild: async (source: string) => {
+        if (source === "workers/lifecycle-probe") return probeBuild;
+        throw new Error(`unexpected build source ${source}`);
+      },
+    });
+    manager = harness.manager;
+    await manager.registerAllDOClasses([
+      { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
+    ]);
+    const ref = {
+      source: "workers/lifecycle-probe",
+      className: "LifecycleProbeDO",
+      objectKey: "bg-probe",
+    };
+
+    const probeRet = await harness.callDurableObject(ref, "bgRunProbe");
+    // Wait well past the 3s background timer, WITHOUT touching the DO, so the
+    // background task only runs if the isolate keeps itself alive on its own.
+    await new Promise((resolve) => setTimeout(resolve, 9000));
+    const result = (await harness.callDurableObject(ref, "bgRunResult")) as Record<string, string>;
+
+    const startedAt = Number(result["started_at"]);
+    const ranAt = result["ran_at"] ? Number(result["ran_at"]) : null;
+    const deltaMs = ranAt != null && !Number.isNaN(startedAt) ? ranAt - startedAt : null;
+    // eslint-disable-next-line no-console
+    console.log("BG-PROBE RESULT:", JSON.stringify({ probeRet, result, deltaMs }));
+    // No hard assertion — this is an exploratory probe; the console line is the finding.
+    expect(result["started_at"]).toBeDefined();
+  }, 40_000);
+
+  it.skip("PROBE: how long does ctx.waitUntil keep a DO alive in the background?", async () => {
+    const probeBuild = await bundleWorker(
+      "workers/lifecycle-probe",
+      "src/server/testFixtures/lifecycleProbeWorker.ts",
+      "lifecycle-probe-bgdur"
+    );
+    const harness = await createWorkerdHarness({
+      getBuild: async (source: string) => {
+        if (source === "workers/lifecycle-probe") return probeBuild;
+        throw new Error(`unexpected build source ${source}`);
+      },
+    });
+    manager = harness.manager;
+    await manager.registerAllDOClasses([
+      { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
+    ]);
+    const ref = {
+      source: "workers/lifecycle-probe",
+      className: "LifecycleProbeDO",
+      objectKey: "bg-dur-probe",
+    };
+
+    // 150s background task — well past respond's 120s. Don't touch the DO meanwhile.
+    await harness.callDurableObject(ref, "bgRunProbe", 150_000);
+    await new Promise((resolve) => setTimeout(resolve, 155_000));
+    const result = (await harness.callDurableObject(ref, "bgRunResult")) as Record<string, string>;
+    const startedAt = Number(result["started_at"]);
+    const ranAt = result["ran_at"] ? Number(result["ran_at"]) : null;
+    const deltaMs = ranAt != null && !Number.isNaN(startedAt) ? ranAt - startedAt : null;
+    // eslint-disable-next-line no-console
+    console.log("BG-DURATION RESULT:", JSON.stringify({ result, deltaMs }));
+    expect(result["started_at"]).toBeDefined();
+  }, 240_000);
+
+  it("starts workerd with EvalDO registered (UNSAFE_EVAL binding renders as `unsafeEval = void`)", async () => {
+    // Regression: the EvalDO binding was emitted as `unsafeEval = ()` (empty
+    // struct), which workerd rejects with "Type mismatch; expected Void", so the
+    // whole runtime failed to boot once EvalDO was registered. Other workerd tests
+    // register only WorkspaceDO/BrowserDataDO, so they never exercised this binding.
+    const harness = await createWorkerdHarness();
+    manager = harness.manager;
+    // registerAllDOClasses writes the capnp config and (re)starts workerd; a
+    // malformed config makes workerd exit before accepting HTTP and this rejects.
+    await expect(
+      manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }])
+    ).resolves.not.toThrow();
+    expect(manager.getBootGeneration()).toBeGreaterThanOrEqual(1);
+  });
+
+  it("EvalDO durable job queue: startRun idempotent, getRun reflects status, reset cancels (preserving runs)", async () => {
+    // The EvalDO's SQLite-only job-queue surface (startRun/getRun/reset) — no sandbox engine, so it
+    // runs end-to-end under real workerd. `callDurableObject` dispatches as a `server` caller, which
+    // the server-only EvalDO requires.
+    const harness = await createWorkerdHarness();
+    manager = harness.manager;
+    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }]);
+    const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
+
+    // startRun inserts a pending row and returns it.
+    expect(
+      await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "1+1" })
+    ).toEqual({
+      runId: "run-1",
+      status: "pending",
+    });
+
+    // Idempotent on runId: a re-dispatch (crash-replay / deferRedrive) returns the EXISTING row —
+    // never inserts a second run, even with different args.
+    expect(
+      await harness.callDurableObject(ref, "startRun", { runId: "run-1", code: "DIFFERENT" })
+    ).toEqual({ runId: "run-1", status: "pending" });
+
+    // getRun reflects the durable status; an unknown runId reports 'unknown'.
+    expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
+      status: "pending",
+    });
+    expect(await harness.callDurableObject(ref, "getRun", "nope")).toEqual({ status: "unknown" });
+
+    // reset cancels the pending run AND preserves the runs table (getRun still finds it as cancelled).
+    expect(await harness.callDurableObject(ref, "reset")).toEqual({ ok: true });
+    expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
+      status: "cancelled",
+    });
+
+    // A fresh run after reset is independent.
+    expect(
+      await harness.callDurableObject(ref, "startRun", { runId: "run-2", code: "2+2" })
+    ).toEqual({
+      runId: "run-2",
+      status: "pending",
+    });
+  }, 30_000);
+
   it("round-trips entity activate / resolve / retire / gc through WorkspaceDO under workerd", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
@@ -310,13 +486,18 @@ describe("internal storage DOs under workerd", () => {
     ]);
     lifecycleDriver.start();
     try {
+      // A raw caller cannot drive lifecycle. `harness.callDurableObject` reaches
+      // the DO via the converged envelope relay, where `__lifecycle/prepare` is
+      // not an exposed method (the reserved server-gated path is only reachable
+      // through the server's instance-token DODispatch channel) — so it is
+      // rejected. Either rejection ("not exposed" / 403) proves the gate holds.
       await expect(
         harness.callDurableObject(probeRef, "__lifecycle/prepare", {
           epoch: "raw",
           reason: "raw",
           deadlineMs: 1_000,
         })
-      ).rejects.toThrow("403");
+      ).rejects.toThrow(/not exposed|403/);
 
       await doDispatch.dispatch(workspaceRef, "lifecycleLeaseUpsert", {
         source: probeRef.source,

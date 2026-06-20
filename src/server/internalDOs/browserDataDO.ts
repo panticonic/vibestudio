@@ -1,4 +1,5 @@
-import { DurableObjectBase, type DurableObjectContext } from "@natstack/durable";
+import { DurableObjectBase, rpc, type DurableObjectContext } from "@natstack/durable";
+import type { AuthenticatedCaller } from "@natstack/rpc";
 import { BROWSER_DATA_SCHEMA } from "@natstack/browser-data";
 import type {
   ImportedAutofillEntry,
@@ -24,6 +25,26 @@ export class BrowserDataDO extends DurableObjectBase {
     this.ensureReady();
   }
 
+  /**
+   * Receiver-side authorization (Layer A). BrowserDataDO holds user
+   * credentials/passwords/cookies/history. Its only direct callers are the
+   * Electron shell and shell-side services; panel/agent access goes through the
+   * `@workspace-extensions/browser-data` extension, NOT this DO. Refuse any
+   * other caller kind so the open relay cannot read user secrets by addressing
+   * the DO directly. Events are owner-scoped push notifications — accept them.
+   */
+  protected override assertInboundAllowed(
+    caller: AuthenticatedCaller | null,
+    kind: "call" | "event"
+  ): void {
+    if (kind === "event") return;
+    if (caller?.callerKind !== "server" && caller?.callerKind !== "shell") {
+      throw new Error(
+        `browser-data: BrowserDataDO is shell/server-only (holds user credentials); refusing caller kind ${caller?.callerKind ?? "unknown"}`
+      );
+    }
+  }
+
   protected createTables(): void {
     for (const stmt of this.schemaStatements(BROWSER_DATA_SCHEMA)) {
       const sql = stmt.trim();
@@ -31,16 +52,19 @@ export class BrowserDataDO extends DurableObjectBase {
     }
   }
 
+  @rpc
   getBookmarks(folderPath = "/") {
     return this.sql
       .exec(`SELECT * FROM bookmarks WHERE folder_path = ? ORDER BY position`, folderPath)
       .toArray();
   }
 
+  @rpc
   getAllBookmarks() {
     return this.sql.exec(`SELECT * FROM bookmarks ORDER BY folder_path, position`).toArray();
   }
 
+  @rpc
   addBookmark(bookmark: {
     title: string;
     url?: string;
@@ -66,6 +90,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return result.id;
   }
 
+  @rpc
   updateBookmark(id: number, partial: Record<string, unknown>): void {
     this.updateByMap(
       "bookmarks",
@@ -84,10 +109,12 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
+  @rpc
   deleteBookmark(id: number): void {
     this.sql.exec(`DELETE FROM bookmarks WHERE id = ?`, id);
   }
 
+  @rpc
   moveBookmark(id: number, folderPath: string, position: number): void {
     this.sql.exec(
       `UPDATE bookmarks SET folder_path = ?, position = ?, date_modified = ? WHERE id = ?`,
@@ -98,6 +125,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
+  @rpc
   searchBookmarks(query: string) {
     return this.sql
       .exec(
@@ -108,6 +136,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
+  @rpc
   getHistory(query: {
     search?: string;
     startTime?: number;
@@ -136,6 +165,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
+  @rpc
   searchHistory(query: string, limit = 50) {
     return this.sql
       .exec(
@@ -150,6 +180,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
+  @rpc
   searchHistoryForAutocomplete(query: { query: string; limit?: number }) {
     const trimmed = query.query.trim();
     const limit = query.limit ?? 50;
@@ -206,6 +237,7 @@ export class BrowserDataDO extends DurableObjectBase {
       .slice(0, limit);
   }
 
+  @rpc
   recordHistoryVisit(request: RecordHistoryVisitRequest): number {
     const visitTime = request.visitTime ?? Date.now();
     const title = request.title?.trim() || null;
@@ -246,6 +278,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return row.id;
   }
 
+  @rpc
   updateHistoryTitle(request: UpdateHistoryTitleRequest): void {
     const title = request.title.trim();
     if (!title) return;
@@ -261,25 +294,30 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
+  @rpc
   deleteHistoryEntry(id: number): void {
     this.sql.exec(`DELETE FROM history WHERE id = ?`, id);
   }
 
+  @rpc
   deleteHistoryRange(start: number, end: number): number {
     this.sql.exec(`DELETE FROM history WHERE last_visit >= ? AND last_visit <= ?`, start, end);
     return this.changes();
   }
 
+  @rpc
   clearAllHistory(): void {
     this.sql.exec(`DELETE FROM history_visits`);
     this.sql.exec(`DELETE FROM history`);
   }
 
+  @rpc
   async getPasswords() {
     const rows = this.sql.exec(`SELECT * FROM passwords`).toArray();
     return Promise.all(rows.map((row) => this.passwordRow(row)));
   }
 
+  @rpc
   async getPasswordForSite(url: string) {
     const prefix = `${this.escapeLikePattern(url.replace(/\/+$/, ""))}/%`;
     const rows = this.sql
@@ -294,6 +332,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return Promise.all(rows.map((row) => this.passwordRow(row)));
   }
 
+  @rpc
   async addPassword(password: ImportedPassword): Promise<number> {
     const encrypted = await this.encryptPasswordFields(password.username, password.password);
     const now = Date.now();
@@ -324,6 +363,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return result.id;
   }
 
+  @rpc
   async updatePassword(id: number, partial: Partial<ImportedPassword>): Promise<void> {
     const sets: string[] = [];
     const params: unknown[] = [];
@@ -351,10 +391,12 @@ export class BrowserDataDO extends DurableObjectBase {
     this.sql.exec(`UPDATE passwords SET ${sets.join(", ")} WHERE id = ?`, ...params);
   }
 
+  @rpc
   deletePassword(id: number): void {
     this.sql.exec(`DELETE FROM passwords WHERE id = ?`, id);
   }
 
+  @rpc
   getAutofillSuggestions(fieldName: string, prefix?: string) {
     const pattern = `${prefix ?? ""}%`;
     return this.sql
@@ -366,21 +408,25 @@ export class BrowserDataDO extends DurableObjectBase {
       .toArray();
   }
 
+  @rpc
   getSearchEngines() {
     return this.sql.exec(`SELECT * FROM search_engines ORDER BY is_default DESC, name`).toArray();
   }
 
+  @rpc
   setDefaultEngine(id: number): void {
     this.sql.exec(`UPDATE search_engines SET is_default = 0`);
     this.sql.exec(`UPDATE search_engines SET is_default = 1 WHERE id = ?`, id);
   }
 
+  @rpc
   getPermissions(origin?: string) {
     return origin
       ? this.sql.exec(`SELECT * FROM permissions WHERE origin = ?`, origin).toArray()
       : this.sql.exec(`SELECT * FROM permissions`).toArray();
   }
 
+  @rpc
   setPermission(origin: string, permission: string, setting: string): void {
     this.sql.exec(
       `INSERT INTO permissions (origin, permission, setting, date_set)
@@ -393,6 +439,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
+  @rpc
   getCookies(domain?: string) {
     return domain
       ? this.sql
@@ -405,10 +452,12 @@ export class BrowserDataDO extends DurableObjectBase {
       : this.sql.exec(`SELECT * FROM cookies ORDER BY created_at DESC`).toArray();
   }
 
+  @rpc
   deleteCookie(id: number): void {
     this.sql.exec(`DELETE FROM cookies WHERE id = ?`, id);
   }
 
+  @rpc
   clearCookies(domain?: string): number {
     if (domain) {
       this.sql.exec(`DELETE FROM cookies WHERE domain = ? OR domain = ?`, domain, `.${domain}`);
@@ -418,6 +467,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return this.changes();
   }
 
+  @rpc
   async addBookmarksBatch(bookmarks: ImportedBookmark[]): Promise<number> {
     return this.runBatch(bookmarks.length, (i) => {
       const bm = assertPresent(bookmarks[i]);
@@ -433,6 +483,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
+  @rpc
   async addHistoryBatch(entries: ImportedHistoryEntry[]): Promise<number> {
     return this.runBatch(entries.length, (i) => {
       const entry = assertPresent(entries[i]);
@@ -455,6 +506,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
+  @rpc
   async addCookiesBatch(cookies: ImportedCookie[]): Promise<number> {
     const now = Date.now();
     return this.runBatch(cookies.length, (i) => {
@@ -489,6 +541,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
+  @rpc
   async addPasswordsBatch(passwords: ImportedPassword[]): Promise<number> {
     if (passwords.length === 0) return 0;
     // Encryption is async (crypto.subtle); transactionSync is synchronous.
@@ -547,6 +600,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
+  @rpc
   async addAutofillBatch(entries: ImportedAutofillEntry[]): Promise<number> {
     return this.runBatch(entries.length, (i) => {
       const entry = assertPresent(entries[i]);
@@ -565,6 +619,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
+  @rpc
   async addSearchEnginesBatch(engines: ImportedSearchEngine[]): Promise<number> {
     return this.runBatch(engines.length, (i) => {
       const engine = assertPresent(engines[i]);
@@ -581,6 +636,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
+  @rpc
   async addPermissionsBatch(permissions: ImportedPermission[]): Promise<number> {
     return this.runBatch(permissions.length, (i) => {
       const p = assertPresent(permissions[i]);
@@ -588,6 +644,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
+  @rpc
   async addFaviconsBatch(favicons: ImportedFavicon[]): Promise<number> {
     return this.runBatch(favicons.length, (i) => {
       const favicon = assertPresent(favicons[i]);
@@ -601,6 +658,7 @@ export class BrowserDataDO extends DurableObjectBase {
     });
   }
 
+  @rpc
   addNeverSave(origin: string): void {
     this.sql.exec(
       `INSERT INTO password_never_save (origin, date_added) VALUES (?, ?)
@@ -610,6 +668,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
+  @rpc
   isNeverSave(origin: string): boolean {
     const row = this.sql
       .exec(`SELECT 1 AS present FROM password_never_save WHERE origin = ?`, origin)
@@ -617,6 +676,7 @@ export class BrowserDataDO extends DurableObjectBase {
     return row !== undefined;
   }
 
+  @rpc
   updateLastUsed(id: number): void {
     this.sql.exec(
       `UPDATE passwords SET date_last_used = ?, times_used = times_used + 1 WHERE id = ?`,
@@ -625,6 +685,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
+  @rpc
   logImport(entry: Record<string, unknown>): void {
     this.sql.exec(
       `INSERT INTO import_log (browser, profile_path, data_type, items_imported, items_skipped, imported_at, warnings)
@@ -639,6 +700,7 @@ export class BrowserDataDO extends DurableObjectBase {
     );
   }
 
+  @rpc
   getImportHistory() {
     return this.sql.exec(`SELECT * FROM import_log ORDER BY imported_at DESC`).toArray();
   }

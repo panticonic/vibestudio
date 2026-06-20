@@ -10,7 +10,7 @@
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { RpcClient } from "@natstack/rpc";
 import type { ChannelEvent } from "@workspace/harness";
-import type { BroadcastEnvelope } from "./types.js";
+import { participantIsAgentVessel, type BroadcastEnvelope } from "./types.js";
 import type { RpcChannelMessage } from "@workspace/pubsub";
 import { serializeByKey } from "@natstack/shared/keyedSerializer";
 
@@ -32,6 +32,20 @@ const emitChains = new Map<string, Promise<void>>();
 
 function deliveryKey(channelId: string, participantId: string): string {
   return `${channelId}\u0000${participantId}`;
+}
+
+/**
+ * True if a DO participant is an agent vessel (opted into structured `onChannelEnvelope` delivery).
+ * RPC-style DO clients omit the flag and receive only the `channel:message` event stream. Parses the
+ * stored metadata JSON and delegates to the one canonical discriminator (`participantIsAgentVessel`).
+ */
+function participantReceivesChannelEnvelopes(metadataJson: unknown): boolean {
+  if (typeof metadataJson !== "string") return false;
+  try {
+    return participantIsAgentVessel(JSON.parse(metadataJson) as Record<string, unknown>);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -93,7 +107,7 @@ export function broadcast(
   senderId: string,
 ): void {
   const participants = deps.sql.exec(
-    `SELECT id, transport FROM participants`,
+    `SELECT id, transport, metadata FROM participants`,
   ).toArray();
 
   const msg = envelope.kind === "log"
@@ -123,8 +137,12 @@ export function broadcast(
     // during a concurrent subscribe stay ahead of live broadcasts.
     void queueEmit(deps, pid, data, removeParticipantOnFatalDelivery);
 
-    // For DO participants, also deliver the structured envelope via RPC call.
-    if (p["transport"] === "do") {
+    // Additionally deliver the STRUCTURED envelope (onChannelEnvelope) — but ONLY
+    // to DO participants that opted into it (agent vessels set
+    // `receivesChannelEnvelopes`). RPC-style DO clients (e.g. the eval's
+    // connectViaRpc) consume the `channel:message` emit above and have no
+    // onChannelEnvelope handler, so pushing it to them just 500s the delivery.
+    if (p["transport"] === "do" && participantReceivesChannelEnvelopes(p["metadata"])) {
       void queueDoEnvelope(
         deps,
         pid,

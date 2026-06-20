@@ -58,7 +58,9 @@ const agentDoRef = {
 
 const agentParticipant = {
   participantId: "do:workers/agent-worker:AiChatWorker:agent-1",
-  metadata: { name: "Agent" },
+  // Agent vessels mark themselves with receivesChannelEnvelopes (they implement onMethodCall +
+  // canFork/postClone) — the discriminator fork uses to pick clonable DOs (vs RPC-style DO clients).
+  metadata: { name: "Agent", receivesChannelEnvelopes: true },
   transport: "do",
   doRef: agentDoRef,
 };
@@ -67,6 +69,16 @@ const wsParticipant = {
   participantId: "panel-user-1",
   metadata: { callerKind: "panel" },
   transport: "ws",
+};
+
+// An RPC-style connectionless DO client (the eval's HeadlessSession): transport "do" with a doRef,
+// but NO receivesChannelEnvelopes — it is NOT an agent vessel and has no canFork/postClone, so fork
+// must skip it (cloning it would fail the preflight).
+const evalClientParticipant = {
+  participantId: "do:natstack/internal:EvalDO:eval-1",
+  metadata: { name: "Eval client" },
+  transport: "do",
+  doRef: { source: "natstack/internal", className: "EvalDO", objectKey: "eval-1" },
 };
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -102,6 +114,22 @@ describe("fork()", () => {
     // Should have called postClone on both channel and agent via RPC
     const postCloneCalls = rpcCalls.filter(c => c.method === "postClone");
     expect(postCloneCalls).toHaveLength(2);
+  });
+
+  it("skips RPC-style DO clients (eval HeadlessSession) — only agent vessels are cloned", async () => {
+    const { runtime, mainCalls, doHandlers } = createMockRuntime();
+    doHandlers.set("getParticipants", () => [agentParticipant, evalClientParticipant]);
+    doHandlers.set("getContextId", () => "ctx-123");
+    doHandlers.set("canFork", () => ({ ok: true, subscriptionCount: 1 }));
+    doHandlers.set("postClone", () => undefined);
+
+    const result = await fork(runtime, { channelId: "chan-1", forkPointPubsubId: 42 });
+
+    // The eval client is NOT a forkable participant — only the agent vessel is cloned.
+    expect(result.clonedParticipants).toEqual([agentParticipant.participantId]);
+    // channel + the single agent vessel = 2 cloneDO calls (the eval client adds nothing).
+    const cloneCalls = mainCalls.filter((c) => c.method === "workerd.cloneDO");
+    expect(cloneCalls).toHaveLength(2);
   });
 
   it("fails preflight when agent returns canFork=false", async () => {

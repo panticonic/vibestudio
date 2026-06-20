@@ -25,6 +25,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         class_name TEXT,
         key TEXT NOT NULL,
         state_args TEXT,
+        parent_id TEXT,
         created_at INTEGER NOT NULL,
         status TEXT NOT NULL DEFAULT 'active',
         retired_at INTEGER,
@@ -129,6 +130,7 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         class_name TEXT NOT NULL,
         object_key TEXT NOT NULL,
         wake_at INTEGER NOT NULL,
+        best_effort INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (source, class_name, object_key)
       )
     `);

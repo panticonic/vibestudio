@@ -15,19 +15,28 @@ import {
 import { runtimeMethods } from "@natstack/shared/serviceSchemas/runtime";
 import { workerLogMethods } from "@natstack/shared/serviceSchemas/workerLog";
 import { workspaceStateMethods } from "@natstack/shared/serviceSchemas/workspaceState";
-import { createHttpRpcClient, type HttpRpcClient } from "../shared/httpRpcBridge.js";
+import {
+  collectExposableMethods,
+  createConnectionlessRpcClient,
+  envelopeFromMessage,
+  rpcExposedMethodNames,
+  rpcMethodPolicy,
+  type ConnectionlessRpcClient,
+  type DeferrableRpcClient,
+  type RpcEnvelope,
+  type RpcRequest,
+} from "@natstack/rpc";
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
 import { _initFsWithRpc } from "./fs.js";
+import { createNonPanelRuntimeHandle } from "../shared/handles.js";
 import {
-  createNonPanelRuntimeHandle,
-  createPanelHandle,
-  type PanelHandleHostOps,
-  type PanelHandleMetadata,
-} from "../shared/handles.js";
-import { createCdpAutomation } from "../panel/cdpAutomation.js";
+  createPanelRuntime,
+  type OpenPanelOptions,
+  type PanelRuntimeApi,
+  type PanelRuntimeTree,
+} from "../shared/panelRuntime.js";
 import type { AuthenticatedCaller, RpcClient } from "@natstack/rpc";
-import type { PanelLifecycleResult } from "@natstack/shared/types";
 import type { RuntimeFs } from "../types.js";
 import type { PanelHandle } from "../core/index.js";
 
@@ -154,31 +163,6 @@ export interface DORef {
   objectKey: string;
 }
 
-type DurablePanelListItem = {
-  panelId: string;
-  title: string;
-  source: string;
-  kind: "workspace" | "browser";
-  parentId: string | null;
-  contextId: string;
-  runtimeEntityId?: string | null;
-  effectiveVersion?: string | null;
-  ref?: string | null;
-  children?: DurablePanelListItem[];
-};
-
-type DurablePanelMetadataResult = {
-  id?: string;
-  title?: string;
-  source?: string;
-  kind?: "workspace" | "browser";
-  parentId?: string | null;
-  runtimeEntityId?: string | null;
-  contextId?: string | null;
-  effectiveVersion?: string | null;
-  ref?: string | null;
-};
-
 export interface LifecyclePrepareInput {
   epoch: string;
   reason: string;
@@ -197,20 +181,23 @@ export interface LifecycleResumeInput {
   reason: "planned" | "crash" | "server_restart";
 }
 
+// (RPC exposure is now opt-in via `@rpc` + `rpcExposedMethodNames` — no reserved deny-list needed;
+// framework/lifecycle methods are simply never `@rpc`-marked, and the base-proto boundary backstops.)
+
 export abstract class DurableObjectBase {
   protected ctx: DurableObjectContext;
   protected sql: SqlStorage;
   protected env: Record<string, unknown>;
 
   private _schemaReady = false;
-  private _rpc: HttpRpcClient | null = null;
+  private _connectionless: ConnectionlessRpcClient | null = null;
   protected _currentRpcCallerId: string | null = null;
   protected _currentRpcCallerKind: string | null = null;
   protected _currentRpcCallerPanelId: string | null = null;
   protected _currentRpcRequestId: string | null = null;
   protected _currentRpcIdempotencyKey: string | null = null;
   private _currentVerifiedCaller: AuthenticatedCaller | null = null;
-  private _panelMetadataCache = new Map<string, PanelHandleMetadata>();
+  private _panelRuntime: PanelRuntimeApi | null = null;
   private _credentials: CredentialClient | null = null;
   private _notifications: NotificationClient | null = null;
   private _fs: RuntimeFs | null = null;
@@ -364,9 +351,18 @@ export abstract class DurableObjectBase {
 
   // --- RPC bridge + shared clients (lazy) ---
 
-  /** RPC bridge for calling services and other workers/DOs */
-  protected get rpc(): HttpRpcClient {
-    if (!this._rpc) {
+  /**
+   * RPC bridge — the unified connectionless `createRpcClient` core (envelope
+   * transport + `callDeferred`). The DO's public methods are `exposeAll`'d onto
+   * it so inbound request envelopes dispatch to the class method via the shared
+   * `handleEnvelope`; `respond`/`deliver` are wired in `fetch`.
+   */
+  protected get rpc(): DeferrableRpcClient {
+    return this.connectionlessClient().client;
+  }
+
+  private connectionlessClient(): ConnectionlessRpcClient {
+    if (!this._connectionless) {
       const token = this.env["RPC_AUTH_TOKEN"];
       if (typeof token !== "string" || token.length === 0) {
         throw new Error("RPC not available: RPC_AUTH_TOKEN not configured");
@@ -379,24 +375,30 @@ export abstract class DurableObjectBase {
       if (typeof className !== "string" || className.length === 0) {
         throw new Error("RPC not available: WORKER_CLASS_NAME not configured");
       }
-      if (!token) {
-        throw new Error("RPC not available: RPC_AUTH_TOKEN not configured");
-      }
       const serverUrl = this.env["GATEWAY_URL"] as string;
       if (!serverUrl) {
         throw new Error("RPC not available: GATEWAY_URL not configured");
       }
-      this._rpc = createHttpRpcClient({
+      const connectionless = createConnectionlessRpcClient({
         selfId: `do:${source}:${className}:${this.objectKey}`,
         serverUrl,
         authToken: token,
+        callerKind: "do",
       });
+      // Expose ONLY this DO's `@rpc`-marked methods (opt-in / default-deny). Private/protected helpers
+      // and all framework plumbing (`dispatchInboundEnvelope`, state KV, panel/alarm helpers) are
+      // unreachable over the open relay; a forgotten `@rpc` fails loud ("not exposed"). The
+      // base-prototype boundary remains as a backstop.
+      connectionless.client.exposeAll(
+        collectExposableMethods(this, rpcExposedMethodNames(this), DurableObjectBase.prototype)
+      );
+      this._connectionless = connectionless;
       // Bridge DO `console.*` to the server terminal. Installed lazily on
       // first rpc access — constructor-time logs are still local-only, but
       // steady-state errors reach the main terminal.
-      installConsoleBridge(this._rpc);
+      installConsoleBridge(connectionless.client);
     }
-    return this._rpc;
+    return this._connectionless;
   }
 
   /** OAuth client for token access */
@@ -447,6 +449,27 @@ export abstract class DurableObjectBase {
     return this._currentRpcCallerPanelId;
   }
 
+  /** Get a handle to the parent (first dispatcher) */
+  protected getParent(): PanelHandle | null {
+    const callerId = this.rpcCallerId;
+    if (!callerId) return null;
+    if (this.rpcCallerKind === "panel") {
+      const panelId = this.rpcCallerPanelId ?? callerId;
+      return this.panelRuntime.fromMetadata({
+        id: panelId,
+        title: panelId,
+        source: panelId,
+        kind: "workspace",
+        parentId: null,
+        rpcTargetId: callerId,
+      });
+    }
+    if (this.rpcCallerKind === "worker" || this.rpcCallerKind === "do") {
+      return createNonPanelRuntimeHandle({ id: callerId });
+    }
+    return null;
+  }
+
   /** Correlation id of the inbound call, when the caller stamped one. */
   protected get rpcRequestId(): string | null {
     return this._currentRpcRequestId;
@@ -457,238 +480,42 @@ export abstract class DurableObjectBase {
     return this._currentRpcIdempotencyKey;
   }
 
-  /** Get a handle to the parent (first dispatcher) */
-  protected getParent(): PanelHandle | null {
-    const callerId = this.rpcCallerId;
-    if (!callerId) return null;
-    if (this.rpcCallerKind === "panel") {
-      const panelId = this.rpcCallerPanelId ?? callerId;
-      return this.createRuntimePanelHandle(panelId, {
-        rpcTargetId: callerId,
+  private get panelRuntime(): PanelRuntimeApi {
+    if (!this._panelRuntime) {
+      this._panelRuntime = createPanelRuntime({
+        rpc: this.rpc,
+        selfHandle: () =>
+          createNonPanelRuntimeHandle({
+            id: String(this.env["DO_ID"] ?? this.ctx.id.toString()),
+          }),
+        defaultOpenParentId: null,
+        requesterPanelId: () =>
+          this._currentRpcCallerKind === "panel"
+            ? (this._currentRpcCallerPanelId ?? this._currentRpcCallerId)
+            : null,
       });
     }
-    if (this.rpcCallerKind === "worker" || this.rpcCallerKind === "do") {
-      return createNonPanelRuntimeHandle({ id: callerId });
-    }
-    return null;
+    return this._panelRuntime;
   }
 
-  private panelCall<T>(method: string, args: unknown[]): Promise<T> {
-    return this.rpc.call<T>("main", `panelTree.${method}`, args);
+  /** Open a workspace or browser panel. */
+  protected openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle> {
+    return this.panelRuntime.openPanel(source, options);
   }
 
-  private rememberPanelMetadata(metadata: PanelHandleMetadata): PanelHandleMetadata {
-    const next = { ...(this._panelMetadataCache.get(metadata.id) ?? {}), ...metadata };
-    this._panelMetadataCache.set(metadata.id, next);
-    return next;
+  /** List all visible panels. */
+  protected listPanels(): Promise<PanelHandle[]> {
+    return this.panelRuntime.listPanels();
   }
 
-  private metadataForPanelId(
-    id: string,
-    overrides: Partial<PanelHandleMetadata> = {}
-  ): PanelHandleMetadata {
-    return this.rememberPanelMetadata({
-      title: id,
-      source: id,
-      kind: "workspace",
-      parentId: null,
-      ...(this._panelMetadataCache.get(id) ?? {}),
-      ...overrides,
-      id,
-    });
-  }
-
-  private metadataFromPanelResult(
-    id: string,
-    meta: DurablePanelMetadataResult
-  ): PanelHandleMetadata {
-    return {
-      id,
-      title: meta.title,
-      source: meta.source,
-      kind: meta.kind,
-      parentId: meta.parentId,
-      contextId: meta.contextId ?? null,
-      rpcTargetId: meta.runtimeEntityId ?? null,
-      effectiveVersion: meta.effectiveVersion ?? null,
-      ref: meta.ref ?? null,
-    };
-  }
-
-  private cdpForPanelMetadata(metadata: PanelHandleMetadata) {
-    return createCdpAutomation(this.rpc, metadata.id, {
-      kind: metadata.kind,
-      requesterPanelId:
-        this._currentRpcCallerKind === "panel"
-          ? (this._currentRpcCallerPanelId ?? this._currentRpcCallerId)
-          : null,
-    });
-  }
-
-  private panelOps(): PanelHandleHostOps {
-    return {
-      refresh: async (id) => {
-        const meta = await this.panelCall<DurablePanelMetadataResult | null>("metadata", [id]);
-        return meta
-          ? this.rememberPanelMetadata(this.metadataFromPanelResult(id, meta))
-          : this.metadataForPanelId(id);
-      },
-      children: (id) => this.panelTree.children(id),
-      parent: (id, parentId) => {
-        const resolvedParentId = parentId ?? this._panelMetadataCache.get(id)?.parentId ?? null;
-        return resolvedParentId ? this.panelTree.get(resolvedParentId) : null;
-      },
-      ensureLoaded: (id) => this.panelCall("ensureLoaded", [id]),
-      isLoaded: async (id) => {
-        try {
-          const lease = await this.panelCall<{ leased?: boolean } | null>("getRuntimeLease", [id]);
-          return Boolean(lease?.leased);
-        } catch {
-          return false;
-        }
-      },
-      reload: (id) => this.panelCall<PanelLifecycleResult>("reload", [id]),
-      close: (id) => this.panelCall<PanelLifecycleResult>("close", [id]),
-      archive: (id) => this.panelCall("archive", [id]),
-      unload: (id) => this.panelCall<PanelLifecycleResult>("unload", [id]),
-      navigate: (id, source, options) =>
-        this.panelCall<{ id: string; title: string }>("navigate", [id, source, options]),
-      movePanel: (id, newParentId, targetPosition) =>
-        this.panelCall("movePanel", [{ panelId: id, newParentId, targetPosition }]),
-      takeOver: (id) => this.panelCall("takeOver", [id]),
-      openDevTools: (id, mode) => this.panelCall("openDevTools", [id, mode]),
-      rebuildPanel: (id) => this.panelCall<PanelLifecycleResult>("rebuildPanel", [id]),
-      rebuildAndReload: (id) => this.panelCall<PanelLifecycleResult>("rebuildAndReload", [id]),
-      updatePanelState: (id, state) => this.panelCall("updatePanelState", [id, state]),
-      focus: (id) => this.panelCall("focus", [id]),
-      stateArgs: {
-        get: (id) => this.panelCall("getStateArgs", [id]),
-        set: (id, updates) => this.panelCall("setStateArgs", [id, updates]),
-      },
-      snapshot: (id) => this.panelCall("snapshot", [id]),
-      callAgent: (id, method, args) => this.panelCall("callAgent", [id, method, args]),
-    };
-  }
-
-  private createRuntimePanelHandle(
-    id: string,
-    metadata: Partial<PanelHandleMetadata> = {}
-  ): PanelHandle {
-    const resolvedMetadata = this.metadataForPanelId(id, metadata);
-    return createPanelHandle({
-      rpc: this.rpc,
-      metadata: resolvedMetadata,
-      cdp: this.cdpForPanelMetadata(resolvedMetadata),
-      ops: this.panelOps(),
-    });
-  }
-
-  private panelListItemToMetadata(item: DurablePanelListItem): PanelHandleMetadata {
-    return this.rememberPanelMetadata({
-      id: item.panelId,
-      title: item.title,
-      source: item.source,
-      kind: item.kind,
-      parentId: item.parentId,
-      contextId: item.contextId,
-      rpcTargetId: item.runtimeEntityId ?? null,
-      effectiveVersion: item.effectiveVersion ?? null,
-      ref: item.ref ?? null,
-    });
-  }
-
-  private hydratePanelListItem(item: DurablePanelListItem): PanelHandle {
-    const metadata = this.panelListItemToMetadata(item);
-    return createPanelHandle({
-      rpc: this.rpc,
-      metadata,
-      cdp: this.cdpForPanelMetadata(metadata),
-      ops: this.panelOps(),
-    });
+  /** Get a handle for a known panel slot id. */
+  protected getPanelHandle(id: string, kind?: "workspace" | "browser"): PanelHandle {
+    return this.panelRuntime.getPanelHandle(id, kind);
   }
 
   /** Panel tree API for Durable Objects. */
-  protected get panelTree(): {
-    self(): PanelHandle;
-    get(id: string): PanelHandle;
-    list(): Promise<PanelHandle[]>;
-    roots(): Promise<PanelHandle[]>;
-    children(id: string): Promise<PanelHandle[]>;
-    parent(id: string): PanelHandle | null;
-    navigate(
-      id: string,
-      source: string,
-      options?: {
-        contextId?: string;
-        env?: Record<string, string>;
-        ref?: string;
-        stateArgs?: Record<string, unknown>;
-      }
-    ): Promise<{ id: string; title: string }>;
-    open(
-      source: string,
-      options?: {
-        parentId?: string | null;
-        name?: string;
-        focus?: boolean;
-        stateArgs?: Record<string, unknown>;
-      }
-    ): Promise<PanelHandle>;
-  } {
-    const flatten = (items: DurablePanelListItem[]): DurablePanelListItem[] => {
-      const out: DurablePanelListItem[] = [];
-      const visit = (item: DurablePanelListItem) => {
-        out.push(item);
-        for (const child of item.children ?? []) visit(child);
-      };
-      for (const item of items) visit(item);
-      return out;
-    };
-    return {
-      self: () =>
-        createNonPanelRuntimeHandle({
-          id: String(this.env["DO_ID"] ?? this.ctx.id.toString()),
-        }),
-      get: (id) => this.createRuntimePanelHandle(id),
-      list: async () =>
-        flatten(await this.panelCall<DurablePanelListItem[]>("list", [null])).map((item) =>
-          this.hydratePanelListItem(item)
-        ),
-      roots: async () =>
-        (await this.panelCall<DurablePanelListItem[]>("roots", [])).map((item) =>
-          this.hydratePanelListItem(item)
-        ),
-      children: async (id) =>
-        (await this.panelCall<DurablePanelListItem[]>("list", [id])).map((item) =>
-          this.hydratePanelListItem(item)
-        ),
-      parent: (id) => {
-        const parentId = this._panelMetadataCache.get(id)?.parentId ?? null;
-        return parentId ? this.createRuntimePanelHandle(parentId) : null;
-      },
-      navigate: (id, source, options) =>
-        this.panelCall<{ id: string; title: string }>("navigate", [id, source, options]),
-      open: async (source, options) => {
-        const parentId = options?.parentId ?? null;
-        const result = await this.panelCall<{
-          id: string;
-          title: string;
-          kind: "workspace" | "browser";
-          runtimeEntityId?: string | null;
-          effectiveVersion?: string | null;
-        }>("create", [source, { ...options, parentId }]);
-        return this.hydratePanelListItem({
-          panelId: result.id,
-          title: result.title,
-          source: result.kind === "browser" ? `browser:${source}` : source,
-          kind: result.kind,
-          parentId,
-          contextId: "",
-          runtimeEntityId: result.runtimeEntityId ?? null,
-          effectiveVersion: result.effectiveVersion ?? null,
-        });
-      },
-    };
+  protected get panelTree(): PanelRuntimeTree {
+    return this.panelRuntime.panelTree;
   }
 
   /** Last value pushed via `setOwnTitle` during this activation. Used to
@@ -899,13 +726,11 @@ export abstract class DurableObjectBase {
 
     const method = segments.slice(1).join("/") || "getState";
 
-    // RPC endpoint — handle incoming RPC calls
+    // Converged inbound dispatch: an `RpcEnvelope` POSTed to `__rpc` (relay
+    // traffic, server→DO event push, deferred replies) flows through the shared
+    // core's `handleEnvelope` → `exposeAll`'d method / event listeners.
     if (method === "__rpc") {
-      const body = await request.json();
-      const result = await this.rpc.handleIncomingPost(body);
-      return new Response(JSON.stringify(result), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return this.handleInboundEnvelope(request);
     }
 
     try {
@@ -972,63 +797,140 @@ export abstract class DurableObjectBase {
         }
       }
 
-      // Event endpoint — handle incoming events
-      if (method === "__event") {
-        if (args.length < 2) {
-          return new Response(
-            JSON.stringify({ error: "__event requires at least [event, payload]" }),
-            {
-              status: 400,
-              headers: { "Content-Type": "application/json" },
-            }
-          );
+      // Method-path dispatch (the server's instance-token channel,
+      // `DODispatch.dispatch`): build an inbound request envelope from
+      // {method, args, __caller} and route it through the SAME converged core
+      // dispatch as `__rpc`. `(this)[method]` is gone — `exposeAll` is the single
+      // dispatch. Returns the raw method result (the DODispatch contract).
+      const caller: AuthenticatedCaller =
+        verifiedCallerFromBody ?? { callerId: "", callerKind: "unknown" };
+      const envelope = envelopeFromMessage({
+        selfId: `do:${this.env["WORKER_SOURCE"]}:${this.env["WORKER_CLASS_NAME"]}:${this.objectKey}`,
+        from: caller.callerId || "unknown",
+        target: `do:${this.env["WORKER_SOURCE"]}:${this.env["WORKER_CLASS_NAME"]}:${this.objectKey}`,
+        caller,
+        message: {
+          type: "request",
+          requestId: crypto.randomUUID(),
+          fromId: caller.callerId || "unknown",
+          method,
+          args,
+        },
+      });
+      const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
+      const responseMessage = responseEnvelope?.message;
+      if (responseMessage?.type === "response" && "error" in responseMessage) {
+        if (responseMessage.error.startsWith('Method "')) {
+          return new Response(JSON.stringify({ error: `Unknown method: ${method}` }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
         }
-        const [event, payload, fromId] = args as [string, unknown, string | undefined];
-        await this.rpc.handleIncomingPost({ type: "emit", event, payload, fromId: fromId ?? "" });
-        return new Response(JSON.stringify({ result: "ok" }), {
+        return new Response(JSON.stringify({ error: responseMessage.error }), {
+          status: 500,
           headers: { "Content-Type": "application/json" },
         });
       }
-
-      const fn = (this as unknown as Record<string, unknown>)[method];
-      if (typeof fn !== "function") {
-        return new Response(JSON.stringify({ error: `Unknown method: ${method}` }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const previousCallerId = this._currentRpcCallerId;
-      const previousCallerKind = this._currentRpcCallerKind;
-      const previousCallerPanelId = this._currentRpcCallerPanelId;
-      const previousRequestId = this._currentRpcRequestId;
-      const previousIdempotencyKey = this._currentRpcIdempotencyKey;
-      const previousVerifiedCaller = this._currentVerifiedCaller;
-      this._currentVerifiedCaller = verifiedCallerFromBody;
-      this._currentRpcCallerId = request.headers.get("X-Natstack-Rpc-Caller-Id");
-      this._currentRpcCallerKind = request.headers.get("X-Natstack-Rpc-Caller-Kind");
-      this._currentRpcCallerPanelId = request.headers.get("X-Natstack-Rpc-Caller-Panel-Id");
-      this._currentRpcRequestId = request.headers.get("X-Natstack-Rpc-Request-Id");
-      this._currentRpcIdempotencyKey = request.headers.get("X-Natstack-Rpc-Idempotency-Key");
-      try {
-        const result = await (fn as (...a: unknown[]) => Promise<unknown>).call(this, ...args);
-        return new Response(JSON.stringify(result ?? null), {
-          headers: { "Content-Type": "application/json" },
-        });
-      } finally {
-        this._currentRpcCallerId = previousCallerId;
-        this._currentRpcCallerKind = previousCallerKind;
-        this._currentRpcCallerPanelId = previousCallerPanelId;
-        this._currentRpcRequestId = previousRequestId;
-        this._currentRpcIdempotencyKey = previousIdempotencyKey;
-        this._currentVerifiedCaller = previousVerifiedCaller;
-      }
+      const result =
+        responseMessage?.type === "response" && "result" in responseMessage
+          ? (responseMessage.result ?? null)
+          : null;
+      return new Response(JSON.stringify(result), {
+        headers: { "Content-Type": "application/json" },
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return new Response(JSON.stringify({ error: message }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
       });
+    }
+  }
+
+  /** Handle an `RpcEnvelope` POSTed to `__rpc`; returns a response envelope (or `{}` for events). */
+  private async handleInboundEnvelope(request: Request): Promise<Response> {
+    const envelope = (await request.json()) as RpcEnvelope;
+    const message = envelope.message;
+    if (message?.type !== "request" && message?.type !== "stream-request") {
+      this.connectionlessClient().deliver(envelope);
+      return new Response(JSON.stringify({}), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const responseEnvelope = await this.dispatchInboundEnvelope(envelope);
+    return new Response(JSON.stringify(responseEnvelope ?? {}), {
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  /**
+   * Default-deny inbound caller gate (workspace realm, Layer A). Every relay-reachable `@rpc`
+   * method must declare an `@rpc({ callers })` policy admitting the caller's kind; a method with no
+   * policy, or a caller (including an unattributed/null caller) whose kind is not listed, is refused.
+   * Identity-level tightening ("this agent's own EvalDO", a specific PubSubChannel/agent DO) stays as
+   * an inline check inside the method — this is the coarse kind floor beneath it. Returns an error
+   * string to refuse, or null to allow. Events (owner-scoped pushes) are delivered via `deliver`, not
+   * through here, so they are unaffected.
+   */
+  protected inboundCallerDenial(
+    method: string | undefined,
+    caller: AuthenticatedCaller | null
+  ): string | null {
+    if (!method) return null;
+    const policy = rpcMethodPolicy(this, method);
+    const kind = caller?.callerKind;
+    if (policy && kind && (policy.callers as readonly string[]).includes(kind)) return null;
+    return policy
+      ? `${method}: caller kind "${kind ?? "unattributed"}" is not permitted (allowed: ${policy.callers.join(", ")})`
+      : `${method}: refused — no @rpc({ callers }) policy declared (workspace DOs are default-deny over the relay)`;
+  }
+
+  /**
+   * Dispatch an inbound request envelope through the converged core
+   * (`respond` → `handleEnvelope` → `exposeAll`'d method), with the DO's
+   * caller-context getters bound to `envelope.delivery.caller` for the duration.
+   */
+  private async dispatchInboundEnvelope(envelope: RpcEnvelope): Promise<RpcEnvelope | null> {
+    const connectionless = this.connectionlessClient();
+    // An unattributed method-path call carries a synthetic empty caller; surface
+    // it as a null caller context (matching the pre-convergence behavior) rather
+    // than a forgeable `"unknown"` — methods that gate on `this.caller` rely on it.
+    const rawCaller = envelope.delivery.caller;
+    const caller = rawCaller && rawCaller.callerId !== "" ? rawCaller : null;
+    const message = envelope.message as RpcRequest;
+    const prev = {
+      verifiedCaller: this._currentVerifiedCaller,
+      callerId: this._currentRpcCallerId,
+      callerKind: this._currentRpcCallerKind,
+      callerPanelId: this._currentRpcCallerPanelId,
+      requestId: this._currentRpcRequestId,
+      idempotencyKey: this._currentRpcIdempotencyKey,
+    };
+    this._currentVerifiedCaller = caller;
+    this._currentRpcCallerId = caller?.callerId ?? null;
+    this._currentRpcCallerKind = caller?.callerKind ?? null;
+    this._currentRpcCallerPanelId = caller?.callerPanelId ?? null;
+    this._currentRpcRequestId = message?.requestId ?? null;
+    this._currentRpcIdempotencyKey = envelope.delivery.idempotencyKey ?? null;
+    try {
+      const denial = this.inboundCallerDenial(message?.method, caller);
+      if (denial) {
+        return {
+          from: envelope.target,
+          target: envelope.from,
+          delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
+          provenance: envelope.provenance ?? [],
+          message: { type: "response", requestId: message?.requestId ?? "", error: denial },
+        } as RpcEnvelope;
+      }
+      return await connectionless.respond(envelope);
+    } finally {
+      this._currentVerifiedCaller = prev.verifiedCaller;
+      this._currentRpcCallerId = prev.callerId;
+      this._currentRpcCallerKind = prev.callerKind;
+      this._currentRpcCallerPanelId = prev.callerPanelId;
+      this._currentRpcRequestId = prev.requestId;
+      this._currentRpcIdempotencyKey = prev.idempotencyKey;
     }
   }
 
@@ -1094,7 +996,8 @@ export abstract class DurableObjectBase {
   // --- Clone support ---
 
   protected resetRpcClients(): void {
-    this._rpc = null;
+    this._connectionless = null;
+    this._panelRuntime = null;
     this._credentials = null;
     this._notifications = null;
     this._fs = null;

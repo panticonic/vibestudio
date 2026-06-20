@@ -69,6 +69,35 @@ describe("vcsService", () => {
       expect(result).toMatchObject({ stateHash: "state:abc", dirty: true });
     });
 
+    it("resolveHead defaults to the caller's context head when the arg is omitted", async () => {
+      // Regression: resolveHead used to REQUIRE a head string, so the documented no-arg form
+      // (`(await vcs.resolveHead()).stateHash`) threw "expected string, received undefined". It now
+      // defaults to the caller's context head like status/publishStatus/applyEdits.
+      const resolveHead = vi.fn(async () => "state:ctxhead");
+      const service = createVcsService({
+        workspaceVcs: { resolveHead } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      const result = await service.handler({ caller: panelCaller() }, "resolveHead", []);
+
+      expect(resolveHead).toHaveBeenCalledWith("ctx:ctx-1");
+      expect(result).toEqual({ head: "ctx:ctx-1", stateHash: "state:ctxhead" });
+    });
+
+    it("resolveHead still resolves an explicit ref", async () => {
+      const resolveHead = vi.fn(async () => "state:mainhead");
+      const service = createVcsService({
+        workspaceVcs: { resolveHead } as never,
+        entityCache: entityCacheWithContext("panel-source", "ctx-1"),
+      });
+
+      const result = await service.handler({ caller: panelCaller() }, "resolveHead", ["main"]);
+
+      expect(resolveHead).toHaveBeenCalledWith("main");
+      expect(result).toEqual({ head: "main", stateHash: "state:mainhead" });
+    });
+
     it("allows context callers to inspect explicit heads", async () => {
       const statusHead = vi.fn(async () => ({
         stateHash: "state:foreign",
@@ -323,17 +352,21 @@ describe("vcsService", () => {
       expect(result.status).toBe("merged");
     });
 
-    it("denies autonomous agents (do/worker) from publishing", async () => {
+    it("lets autonomous agents (do/worker) publish their OWN context head (approval-gated)", async () => {
       for (const kind of ["do", "worker"] as const) {
         const { service, mergeHeads } = publishService({
           entityCache: entityCacheWithContext(`${kind}:agent`, "ctx-1"),
         });
         const caller = createVerifiedCaller(`${kind}:agent`, kind);
 
-        await expect(service.handler({ caller }, "publish", [])).rejects.toThrow(
-          `vcs.publish is reserved for user-facing callers, not ${kind}`
-        );
-        expect(mergeHeads).not.toHaveBeenCalled();
+        const result = (await service.handler({ caller }, "publish", [])) as { status: string };
+
+        // Layer B: agents may publish too — but only their OWN context head, and the
+        // actual user-approval gating lives in the main-advance approval path
+        // (exercised by mainAdvanceApproval / workspaceVcs.mainApproval tests). Here
+        // the gate is unwired, so the publish of the agent's own head flows through.
+        expect(mergeHeads).toHaveBeenCalledWith("main", "ctx:ctx-1", expect.anything());
+        expect(result.status).toBe("merged");
       }
     });
 
