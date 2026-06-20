@@ -67,8 +67,16 @@ export class WsSubscriber implements Subscriber {
   }
 
   send(channel: string, payload: unknown): void {
-    if (this.isAlive) {
+    if (!this.isAlive) return;
+    try {
       this.ws.send(JSON.stringify({ type: "ws:event", event: channel, payload }));
+    } catch (err) {
+      // A single failed send must not break the fan-out to sibling subscribers,
+      // but it must be observable rather than silently swallowed.
+      console.warn(
+        `[EventService] failed to deliver "${channel}" to a ${this.callerKind} subscriber:`,
+        err,
+      );
     }
   }
 
@@ -104,20 +112,59 @@ export type DoEventPushDelivery = (
 ) => Promise<void>;
 
 /**
+ * Relay error codes that mean the target DO/worker is permanently gone — there
+ * is no point retrying a push, and the subscriber should be reaped. Anything
+ * else (network blip, hibernated-but-revivable DO, transient workerd error) is
+ * treated as transient: we retry with backoff and KEEP the subscription, so a
+ * connectionless subscriber doesn't go silently deaf to all future events on a
+ * single hiccup.
+ */
+const TERMINAL_PUSH_ERROR_CODES = new Set(["DO_NOT_CREATED", "UNKNOWN_TARGET_KIND"]);
+
+function pushErrorIsTerminal(err: unknown): boolean {
+  const code = (err as { code?: unknown })?.code;
+  return typeof code === "string" && TERMINAL_PUSH_ERROR_CODES.has(code);
+}
+
+/** Tunables for `DoPushSubscriber` delivery retry (overridable in tests). */
+export interface DoPushRetryOptions {
+  /** Max delivery attempts (including the first) before reaping. Default 4. */
+  maxAttempts?: number;
+  /** Injectable backoff delay (tests collapse it). Defaults to `setTimeout`. */
+  sleep?: (ms: number) => Promise<void>;
+}
+
+/**
  * Push-subscriber for a connectionless DO/worker caller. Unlike `WsSubscriber`
- * there is no socket whose close reaps it, so it self-reaps on the first failed
- * delivery (DO evicted/hibernated) — and `EventService` also drops it when the
- * caller's last topic unsubscribes (ref-counted in `removeSubscriber`).
+ * there is no socket whose close reaps it.
+ *
+ * A single failed delivery must NOT silently make the subscriber deaf to every
+ * future event while it still believes it's subscribed. So `send` distinguishes
+ * terminal failures (DO gone → reap) from transient ones (network/hibernation →
+ * retry with backoff, keep the subscription). Every teardown logs callerId +
+ * channel first. `EventService` also drops the subscriber when the caller's last
+ * topic unsubscribes (ref-counted in `removeSubscriber`).
+ *
+ * Deliveries for one subscriber are processed in order (chained), so a slow
+ * retry can't let a later event jump ahead.
  */
 export class DoPushSubscriber implements Subscriber {
   private destroyed = false;
   private destroyHandlers: (() => void)[] = [];
+  private readonly maxAttempts: number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  /** Serializes deliveries so retries preserve event ordering. */
+  private chain: Promise<void> = Promise.resolve();
 
   constructor(
     public readonly callerId: string,
     public callerKind: CallerKind,
     private readonly deliver: DoEventPushDelivery,
-  ) {}
+    opts: DoPushRetryOptions = {},
+  ) {
+    this.maxAttempts = opts.maxAttempts ?? 4;
+    this.sleep = opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  }
 
   get isAlive(): boolean {
     return !this.destroyed;
@@ -125,10 +172,43 @@ export class DoPushSubscriber implements Subscriber {
 
   send(channel: string, payload: unknown): void {
     if (this.destroyed) return;
-    void this.deliver(this.callerId, channel, payload).catch(() => {
-      // Delivery failed: the DO is gone/hibernated — stop pushing to a corpse.
-      this.destroy();
-    });
+    this.chain = this.chain.then(() => this.deliverWithRetry(channel, payload));
+  }
+
+  private async deliverWithRetry(channel: string, payload: unknown): Promise<void> {
+    for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
+      if (this.destroyed) return;
+      try {
+        await this.deliver(this.callerId, channel, payload);
+        return;
+      } catch (err) {
+        // Terminal: the DO is permanently gone — reap (logging first) rather
+        // than wasting retries pushing to a corpse.
+        if (pushErrorIsTerminal(err)) {
+          console.warn(
+            `[EventService] push to ${this.callerKind} ${this.callerId} for "${channel}" hit a ` +
+              `terminal error; reaping subscription:`,
+            err,
+          );
+          this.destroy();
+          return;
+        }
+        const last = attempt === this.maxAttempts - 1;
+        if (last) {
+          // Exhausted retries on a transient-looking error: a revivable DO that
+          // stayed unreachable. Reap so we stop re-waking it, but make it loud —
+          // a permanently-deaf subscription must be diagnosable, never silent.
+          console.warn(
+            `[EventService] push to ${this.callerKind} ${this.callerId} for "${channel}" failed ` +
+              `after ${this.maxAttempts} attempts; reaping subscription:`,
+            err,
+          );
+          this.destroy();
+          return;
+        }
+        await this.sleep(100 * Math.pow(2, attempt));
+      }
+    }
   }
 
   isBoundTo(): boolean {
@@ -322,17 +402,22 @@ export class EventService {
     }
 
     const channel = `event:${event}`;
+    // `removeSubscriber` mutates the very maps we iterate here (it sweeps the
+    // connection out of EVERY event's table). Deliver first, COLLECT the dead
+    // tuples, then reap after the loop so a sibling subscriber can never be
+    // skipped by a mid-iteration delete.
+    const dead: Array<{ callerId: string; connectionId: string; subscriber: Subscriber }> = [];
     for (const [callerId, callerSubs] of subs) {
       for (const [connectionId, subscriber] of callerSubs) {
         if (subscriber.isAlive) {
           subscriber.send(channel, data);
         } else {
-          this.removeSubscriber(callerId, connectionId, subscriber);
+          dead.push({ callerId, connectionId, subscriber });
         }
       }
-      if (callerSubs.size === 0) {
-        subs.delete(callerId);
-      }
+    }
+    for (const { callerId, connectionId, subscriber } of dead) {
+      this.removeSubscriber(callerId, connectionId, subscriber);
     }
   }
 

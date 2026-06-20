@@ -60,6 +60,41 @@ export function createWorkspaceClient(rpc: WorkspaceRpc): WorkspaceClient {
   };
 }
 
+const SUBSCRIBE_MAX_ATTEMPTS = 4;
+
+/**
+ * Subscribe to one topic, retrying with exponential backoff. On a
+ * connectionless DO/worker a failed `events.subscribe` means no server→DO push
+ * for that topic — the watch would be silently deaf. Retry, and if every
+ * attempt fails (or the watch closed mid-retry), surface it via a warning
+ * rather than swallowing the rejection.
+ */
+async function subscribeWithRetry(
+  events: EventsTypedClient,
+  topic: string,
+  isClosed: () => boolean,
+  sleep: (ms: number) => Promise<void> = (ms) => new Promise((r) => setTimeout(r, ms))
+): Promise<void> {
+  for (let attempt = 0; attempt < SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
+    if (isClosed()) return;
+    try {
+      await events.subscribe(topic);
+      return;
+    } catch (err) {
+      if (attempt === SUBSCRIBE_MAX_ATTEMPTS - 1) {
+        console.warn(
+          `[workspace.watch] events.subscribe("${topic}") failed after ` +
+            `${SUBSCRIBE_MAX_ATTEMPTS} attempts; this watch will not receive ` +
+            `"${topic}" pushes:`,
+          err
+        );
+        return;
+      }
+      await sleep(100 * Math.pow(2, attempt));
+    }
+  }
+}
+
 function createUnitsWatch(
   rpc: WorkspaceRpc,
   listUnits: () => Promise<WorkspaceUnitStatus[]>
@@ -84,8 +119,11 @@ function createUnitsWatch(
             }
             queue.push(snapshot);
           })
-          .catch(() => {
-            // Watch is best-effort; callers can still call list() for errors.
+          .catch((err) => {
+            // Watch is best-effort (callers can still call list() for errors),
+            // but a recurring failure shouldn't be invisible — log it so a
+            // permanently-deaf watch is diagnosable instead of silent.
+            console.warn("[workspace.watch] snapshot refresh failed:", err);
           });
       };
       // Topics this watch reflects. We MUST `events.subscribe` each (not just
@@ -104,8 +142,13 @@ function createUnitsWatch(
       const unsubscribers = topics
         .map((topic) => rpc.on?.(`event:${topic}`, pushSnapshot))
         .filter((unsubscribe): unsubscribe is () => void => typeof unsubscribe === "function");
+      // Subscribing is what makes this watch live on a connectionless DO/worker
+      // (only explicitly-subscribed topics get server→DO pushes). A swallowed
+      // subscribe rejection would leave `watch()` permanently deaf to that topic
+      // while the initial snapshot masks the failure — so retry with backoff and
+      // surface a final rejection instead of silently dropping it.
       for (const topic of topics) {
-        void events.subscribe(topic).catch(() => {});
+        void subscribeWithRetry(events, topic, () => closed);
       }
 
       pushSnapshot();
