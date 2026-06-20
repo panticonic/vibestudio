@@ -1,10 +1,10 @@
 import { HeadlessSession } from "@workspace/agentic-session";
-import { createPanelSandboxConfig } from "@workspace/agentic-core";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { gad, rpc, getStateArgs, slotId } from "@workspace/runtime";
+import { gad, rpc } from "@workspace/runtime";
 
-// Panels expose a stable slotId for channel membership. `rpc.selfId` is the
-// current per-navigation runtime entity and can change when the panel reopens.
+// This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
+// uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.
+// `rpc.selfId` is the stable runtime id, used as the channel-membership clientId.
 const rpcConfig = rpc as unknown as NonNullable<ConnectionConfig["rpc"]>;
 
 export const SYSTEM_TEST_AGENT_PROMPT = `You are running inside an automated NatStack system test.
@@ -25,18 +25,26 @@ Every final response should be concise, include the requested marker tokens exac
 
 export class HeadlessRunner {
   private contextId: string;
+  private model: string | undefined;
 
-  constructor(contextId: string) {
+  /**
+   * `model` is the model spawned test agents should inherit — the orchestrating
+   * agent reads its OWN model from eval (`(await agent.describe()).config.model`)
+   * and passes it here. Model is per-agent, so each spawned headless agent is
+   * created with it as its initial config (via creation stateArgs).
+   */
+  constructor(contextId: string, opts?: { model?: string }) {
     this.contextId = contextId;
+    this.model = opts?.model;
   }
 
   /**
    * Spawn a headless session bound to this panel.
    *
-   * The test agent's eval executes in the panel context with full access to
-   * @workspace/runtime, panel APIs, browser panels, etc. The agent uses the
-   * standard NatStack chat prompt and tool surface — UI tools like inline_ui
-   * and feedback_form will be available because the panel is connected.
+   * The test agent's eval executes server-side in the agent's own EvalDO. The
+   * agent uses the standard NatStack chat prompt and tool surface; panel/UI
+   * tools like inline_ui and feedback_form are simply absent because no panel
+   * is connected to this headless session.
    *
    * Per-test prompt overrides can be passed through spawn extraConfig as
    * `systemPrompt` and `systemPromptMode`.
@@ -45,25 +53,21 @@ export class HeadlessRunner {
     source?: string;
     className?: string;
   }): Promise<HeadlessSession> {
-    // Inherit the model configured on this panel (stateArgs.agentConfig.model
-    // from natstack.yml) so headless test agents use the same model as the
-    // orchestrating panel agent.
-    const configuredModel = getStateArgs<{ agentConfig?: { model?: string } }>()
-      .agentConfig?.model;
     return HeadlessSession.createWithAgent({
       config: {
-        clientId: slotId,
+        clientId: rpc.selfId,
         rpc: rpcConfig,
       },
-      sandbox: createPanelSandboxConfig(rpcConfig),
       rpcCall: (t: string, m: string, args: unknown[]) => rpcConfig.call(t, m, args),
       source: opts?.source ?? "workers/agent-worker",
       className: opts?.className ?? "AiChatWorker",
       contextId: this.contextId,
+      // The model rides the spawned agent's CREATION config (per-agent, seeded
+      // from stateArgs.agentConfig) so it inherits the orchestrator's model.
       extraConfig: {
         systemPrompt: SYSTEM_TEST_AGENT_PROMPT,
         systemPromptMode: "append",
-        ...(configuredModel ? { model: configuredModel } : {}),
+        ...(this.model ? { model: this.model } : {}),
       },
     });
   }

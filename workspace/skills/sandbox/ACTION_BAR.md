@@ -17,10 +17,15 @@ Create a context-relative TSX file that default-exports a React component. The
 component receives the same bindings as `inline_ui`:
 
 ```tsx
-export default function ActionBar({ props = {}, chat, scope, scopes }) {
+export default function ActionBar({ props = {}, chat }) {
   // ...
 }
 ```
+
+The component receives `{ props, chat }` only. It does NOT receive
+`scope`/`scopes` — the eval REPL scope is server-side (in the agent's `EvalDO`)
+and is not shared into panel-rendered components. Reach runtime services from a
+component via `chat.rpc.call(...)`.
 
 Action bars can call agent methods by handle without first resolving a
 participant id:

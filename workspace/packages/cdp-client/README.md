@@ -20,6 +20,21 @@ await page.goto("https://example.com");
 await page.getByRole("button", { name: "Sign in" }).click();
 ```
 
+## Playwright compatibility notes
+
+The page and locator surface intentionally follows Playwright where possible.
+That includes synchronous accessors:
+
+```ts
+const url = page.url(); // string, not Promise<string>
+const events = page.consoleEvents(); // LightweightConsoleEvent[], not a Promise
+page.clearConsoleEvents(); // void
+```
+
+Do not `await page.url()` or attach `.then()` / `.catch()` to it. Use
+`await page.evaluate(() => location.href)` only when you need the page itself to
+compute the current URL after client-side routing.
+
 For protocol-level work (any CDP domain, raw commands + events):
 
 ```ts

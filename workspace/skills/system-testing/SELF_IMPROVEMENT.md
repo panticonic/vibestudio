@@ -95,7 +95,6 @@ eval({
     import { HeadlessRunner } from "@workspace-skills/system-testing/runner";
     import { TestRunner } from "@workspace-skills/system-testing/test-runner";
     import { allTests, nextSelectedStage } from "@workspace-skills/system-testing/stages";
-    import { contextId } from "@workspace/runtime";
     const tests = allTests();
     const run = scope.systemTestingRun;
     if (!run || typeof run !== "object") {
@@ -119,7 +118,7 @@ eval({
     const { stage, stagePosition, selectedStages } = next;
     const completed = new Set(Array.isArray(run.completedStages) ? run.completedStages : []);
 
-    const runner = new HeadlessRunner(contextId);
+    const runner = new HeadlessRunner(ctx.contextId);
     const tester = new TestRunner(runner, {
       onTestStart: (t) => console.log("  Running: " + t.name + "..."),
       onTestEnd: (t, r, ex) => console.log("  " + (r.passed ? "PASS" : "FAIL") + ": " + t.name + " (" + ex.duration + "ms)"),
@@ -313,12 +312,14 @@ state-triggered build event buffer before retrying. The commit call can return
 before the background build finishes:
 
 ```typescript
-import { rpc } from "@workspace/runtime";
-
+// `rpc` is injected in eval — do not import it. The eval `rpc.call(method, args)`
+// targets the server, so pass just "<svc>.<method>" (no "main" target argument).
 return {
-  recent: await rpc.call("main", "build.listRecentBuildEvents", []),
-  forUnit: await rpc.call("main", "build.listRecentBuildEvents", ["panels/example"]),
-  unit: await rpc.call("main", "build.inspectBuildProvenance", ["panels/example"]),
+  recent: await rpc.call("build.listRecentBuildEvents", []),
+  forUnit: await rpc.call("build.listRecentBuildEvents", ["panels/example"]),
+  unit: await rpc.call("build.inspectBuildProvenance", [
+    "panels/example",
+  ]),
 };
 ```
 
@@ -421,8 +422,7 @@ runtime unit, but it is a **self-edit target**:
 Userland code can detect this mode by reading `meta/dogfood.json`:
 
 ```typescript
-import { fs } from "@workspace/runtime";
-
+// `fs` is injected in eval (context-scoped) — do not import it.
 async function getDogfoodInfo() {
   try {
     return JSON.parse(await fs.readFile("meta/dogfood.json", "utf-8"));
@@ -459,8 +459,7 @@ path.
 ```
 eval({
   code: `
-    import { fs, git } from "@workspace/runtime";
-
+    // In eval, fs is injected and the git client maps to the gitInterop service.
     const dir = "projects/natstack";
     try {
       await fs.stat(dir);
@@ -477,8 +476,8 @@ eval({
       });
     }
 
-    return dir;
     scope.checkoutDir = dir;
+    return dir;
   `,
 })
 ```

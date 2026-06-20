@@ -51,16 +51,13 @@ export default function Editor() {
   const [content, setContent] = useState("");
 
   useEffect(() => {
-    rpc.expose({
-      async getContent() {
-        return content;
-      },
-      async setContent(text) {
-        setContent(text);
-      },
-      async save() {
-        await parent?.emit("saved", { path: "/file.txt", timestamp: Date.now() });
-      },
+    rpc.expose("getContent", () => content);
+    rpc.expose("setContent", (request) => {
+      const [text] = request.args as [string];
+      setContent(text);
+    });
+    rpc.expose("save", async () => {
+      await parent?.emit("saved", { path: "/file.txt", timestamp: Date.now() });
     });
   }, [content]);
 

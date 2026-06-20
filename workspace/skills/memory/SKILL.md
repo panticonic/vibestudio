@@ -31,10 +31,15 @@ recalled and why.
 
 ## Eval / panel access
 
+In eval, call the `vcs` service through the injected `services` proxy (do not
+import it):
+
 ```ts
-import { vcs } from "@workspace/runtime";
-const { results } = await vcs.recall({ query: "unified log", kinds: ["file"] });
+const { results } = await services.vcs.recall({ query: "unified log", kinds: ["file"] });
 ```
+
+In panel/worker code, import the `vcs` client from `@workspace/runtime` instead:
+`import { vcs } from "@workspace/runtime"; await vcs.recall(...)`.
 
 ## Notes
 

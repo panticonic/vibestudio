@@ -10,14 +10,13 @@ are panel-only or depend on optional services/runtime state.
 
 ```
 eval({ code: `
-  import { credentials, fs, workspace } from "@workspace/runtime";
   import { browserData } from "@workspace/panel-browser";
   import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
   import { getActiveSearchProvider } from "@workspace-skills/web-research";
 
-  const workspaces = await workspace.list();
-  const active = await workspace.getActive();
-  const storedCredentials = await credentials.listStoredCredentials().catch(() => []);
+  const workspaces = await services.workspace.list();
+  const active = await services.workspace.getActive();
+  const storedCredentials = await services.credentials.listStoredCredentials().catch(() => []);
   const google = await getGoogleOnboardingStatus()
     .catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
   const importHistory = await browserData.getImportHistory().catch(() => []);
@@ -60,8 +59,7 @@ Start by showing the user what's in their workspace:
 
 ```
 eval({ code: `
-  import { workspace, fs } from "@workspace/runtime";
-  const config = await workspace.getConfig();
+  const config = await services.workspace.getConfig();
   console.log("Workspace:", config.id);
   console.log("Init panels:", config.initPanels);
 
@@ -143,13 +141,12 @@ with internal/external deep links.
 
 ```
 eval({ code: `
-  import { credentials } from "@workspace/runtime";
   import {
     formatGoogleOnboardingStatus,
     getGoogleOnboardingStatus,
   } from "@workspace-skills/google-workspace";
   import { getActiveSearchProvider } from "@workspace-skills/web-research";
-  const storedCredentials = await credentials.listStoredCredentials();
+  const storedCredentials = await services.credentials.listStoredCredentials();
   const googleStatus = await getGoogleOnboardingStatus();
   const searchProvider = await getActiveSearchProvider();
   console.log(formatGoogleOnboardingStatus(googleStatus));
@@ -238,13 +235,11 @@ If the user wants to organize their work into separate workspaces:
 
 ```
 eval({ code: `
-  import { workspace } from "@workspace/runtime";
-
   // List existing workspaces
-  const workspaces = await workspace.list();
+  const workspaces = await services.workspace.list();
   console.log("Workspaces:");
   for (const ws of workspaces) {
-    const active = ws.name === await workspace.getActive() ? " (active)" : "";
+    const active = ws.name === await services.workspace.getActive() ? " (active)" : "";
     console.log("  " + ws.name + active);
   }
   return workspaces;
@@ -255,9 +250,8 @@ Create a new workspace (optionally forking from an existing one):
 
 ```
 eval({ code: `
-  import { workspace } from "@workspace/runtime";
-  const active = await workspace.getActive();
-  const entry = await workspace.create("my-workspace", { forkFrom: active });
+  const active = await services.workspace.getActive();
+  const entry = await services.workspace.create("my-workspace", { forkFrom: active });
   console.log("Created workspace:", entry.name);
 ` })
 ```
@@ -266,8 +260,7 @@ Configure which panels open on first launch:
 
 ```
 eval({ code: `
-  import { workspace } from "@workspace/runtime";
-  await workspace.setInitPanels([{ source: "panels/chat" }]);
+  await services.workspace.setInitPanels([{ source: "panels/chat" }]);
   console.log("Init panels set");
 ` })
 ```
@@ -276,8 +269,7 @@ Switch to a workspace (this relaunches the app):
 
 ```
 eval({ code: `
-  import { workspace } from "@workspace/runtime";
-  await workspace.switchTo("my-workspace");
+  await services.workspace.switchTo("my-workspace");
 ` })
 ```
 
@@ -301,14 +293,15 @@ eval({ code: `
 
 Then edit the generated files with Read/Edit/Write tools — each edit commits to
 your context head and projects to disk atomically (edit-first), so it is
-build-ready immediately — and launch:
+build-ready immediately — and launch.
 
-```
-eval({ code: `
-  import { openPanel } from "@workspace/runtime";
-  await openPanel("panels/hello");
-`
-})
+`openPanel` is a panel/component-runtime API; it does not initialize in
+server-side eval — run it from panel code or an `inline_ui`/`feedback_custom`
+component:
+
+```tsx
+import { openPanel } from "@workspace/runtime";
+await openPanel("panels/hello");
 ```
 
 ## Step 7: Explore the Runtime

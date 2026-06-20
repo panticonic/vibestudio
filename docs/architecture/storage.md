@@ -28,7 +28,7 @@ Framework-owned storage is implemented as internal DO classes in
 
 | Class | Service | Object key | Owns |
 |---|---|---|---|
-| `ScopeStoreDO` | `scope` | `global` | `repl_scopes` |
+| `EvalDO` | `eval` | per-owner (hash of caller id + subKey) | `repl_scopes` |
 | `WebhookStoreDO` | `webhookIngress` | `global` | `webhook_ingress_subscriptions` |
 | `WorkspaceDO` | `workspace-sync` | workspace id | `entities`, `slots`, `slot_history`, `workspace_meta`, `panel_search_metadata`, `lifecycle_*` (unified entity/slot model; replaced the former `PanelStoreDO`) |
 | `BrowserDataDO` | `browser-data` | `global` | bookmarks, history, history FTS, passwords, cookies, autofill, permissions, import log |

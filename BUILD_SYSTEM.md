@@ -161,11 +161,16 @@ Two build strategies, selected by unit kind:
 - Native addons externalized (`*.node`, `fsevents`, `bufferutil`, etc.)
 - Output: `bundle.js` in the build store with `package.json` `{"type":"module"}`
 
-**Library build** (CJS, for sandbox eval):
+**Library build** (CJS, for sandbox eval or panel-hosted sandboxes):
 
 - `platform: "browser"`, `format: "cjs"`
 - Code splitting disabled (single `bundle.js`)
 - Caller supplies `externals[]` — specifiers already in the module map
+- Caller MUST supply `libraryTarget: "panel" | "worker"` — selects the package
+  export conditions for the bundle's execution host. `"worker"` covers any
+  workerd isolate including the eval sandbox (a DO); `"panel"` covers a
+  panel-hosted sandbox. There is no default; a library build without
+  `libraryTarget` is rejected (schema refine + builder throw).
 - Used by `imports` parameter of the eval tool to load workspace packages on-demand
 
 **Npm library build** (CJS, for sandbox eval):

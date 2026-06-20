@@ -1,11 +1,20 @@
 # Chat API
 
-The `chat` object enables sandbox code (eval) and components (inline_ui, load_action_bar action-bar components, feedback_custom) to interact with the conversation.
+The `chat` object lets panel-rendered components (inline_ui, load_action_bar
+action-bar components, feedback_custom) interact with the conversation.
+
+> Note: `chat` is **also available in agent `eval`** (bound to the agent's
+> current channel). The agent `eval` tool runs server-side in your `EvalDO`,
+> which injects a `chat` proxy that forwards each call to the agent DO — so it
+> publishes as the agent. Everything below works from agent eval, except
+> `chat.focusMessage` (panel-only; resolves `false` server-side), and
+> `chat.participantByHandle` is `await`ed (the roster is fetched over RPC). CLI
+> or panel eval (no channel) gets no `chat` — use the injected `rpc`/`services`
+> instead. See [EVAL.md](EVAL.md#chat-agent-eval).
 
 ## Access
 
-- **Eval code**: `chat` is pre-injected as a binding variable
-- **Inline UI components**: received as `{ props, chat }` prop
+- **Inline UI / action-bar components**: received as `{ props, chat }` prop
 - **Feedback components**: received as `{ onSubmit, onCancel, onError, chat }` prop
 
 ## Interface
@@ -49,8 +58,9 @@ interface ChatSandboxValue {
     contentType?: string;
   }>;
 
-  /** Resolve a participant by handle, accepting "gmail" or "@gmail" */
-  participantByHandle(handle: string): { id: string; metadata: Record<string, unknown> } | null;
+  /** Resolve a participant by handle, accepting "gmail" or "@gmail" (async:
+   *  the same surface works server-side, where the roster is fetched over RPC) */
+  participantByHandle(handle: string): Promise<{ id: string; metadata: Record<string, unknown> } | null>;
 
   /** Call by participant handle and return the provider payload */
   callMethodByHandle(handle: string, method: string, args: unknown): Promise<unknown>;

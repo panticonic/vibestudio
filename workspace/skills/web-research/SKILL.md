@@ -182,24 +182,27 @@ execution, and no user session. For paywalled articles, sites that
 require login, or apps that need client-side rendering, route the
 fetch through a real browser panel instead:
 
-```
-eval({
-  imports: { "@workspace/playwright-automation": "latest" },
-  code: `
-  import { openPanel } from "@workspace/runtime";
-  import { playwrightPage } from "@workspace/playwright-automation";
-  import { htmlToReadableMarkdown } from "@workspace/harness/web-extract";
+`openPanel`/`panelTree` are **panel/component-runtime** capabilities —
+`import { openPanel } from "@workspace/runtime"` does not initialize in the
+`EvalDO`, so acquire the browser handle from panel code or an
+`inline_ui`/`feedback_custom` component (there, `rpc.call(target, method, args)`
+is the 3-arg panel-runtime form). The `handle.cdp.lightweightPage()` automation
+itself is workerd-native and runs over a WebSocket to the panel's CDP endpoint,
+so it also works in server-side eval once you hold the handle:
 
-  const browser = await openPanel("https://example.com/article");
-  const page = await playwrightPage(browser);
-  await page.waitForLoadState("networkidle");
-  const html = await page.content();
-  const { title, markdown } = htmlToReadableMarkdown(html, page.url());
-  const { digest, size } = await rpc.call("main", "blobstore.putText", [markdown]);
-  // The panel stays open by default; close it (or hand it back) when done:
-  // await browser.close();
-  return { title, digest, size, head: markdown.slice(0, 5000) };
-` })
+```tsx
+import { openPanel } from "@workspace/runtime";
+import { htmlToReadableMarkdown } from "@workspace/harness/web-extract";
+
+const browser = await openPanel("https://example.com/article");
+const page = await browser.cdp.lightweightPage();
+await page.waitForLoadState("networkidle");
+const html = await page.content();
+const { title, markdown } = htmlToReadableMarkdown(html, page.url());
+const { digest, size } = await rpc.call("main", "blobstore.putText", [markdown]);
+// The panel stays open by default; close it (or hand it back) when done:
+// await browser.close();
+const result = { title, digest, size, head: markdown.slice(0, 5000) };
 ```
 
 The blob you get back is indistinguishable from a `web_fetch` blob —
@@ -222,7 +225,8 @@ over 50 URLs this way. For batch crawls, prefer `web_fetch` and accept
 the partial results.
 
 For login flows or interactive pages, see the `sandbox` skill's
-`BROWSER_AUTOMATION.md` for the lazy Playwright-style CDP API.
+`BROWSER_AUTOMATION.md` for the Playwright-style page API on the lightweight CDP
+client.
 
 ## Summarizing long pages with an aux model (eval)
 

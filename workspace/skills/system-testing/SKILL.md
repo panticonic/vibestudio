@@ -43,9 +43,11 @@ eval({
     import { HeadlessRunner } from "@workspace-skills/system-testing/runner";
     import { TestRunner } from "@workspace-skills/system-testing/test-runner";
     import { smokeTests } from "@workspace-skills/system-testing/stages";
-    import { contextId } from "@workspace/runtime";
 
-    const runner = new HeadlessRunner(contextId);
+    // Spawned test agents inherit YOUR model — read it from your own state.
+    const runner = new HeadlessRunner(ctx.contextId, {
+      model: (await agent.describe()).config.model,
+    });
     const tester = new TestRunner(runner, {
       onTestStart: (t) => console.log("Running: " + t.name + "..."),
       onTestEnd: (t, r) => console.log((r.passed ? "PASS" : "FAIL") + ": " + t.name),
@@ -83,10 +85,11 @@ return only the compact control data needed to render the feedback form. Do not
 return `scope.systemTestingRun`, the full stage list, or test result arrays from
 eval calls.
 
-> `scope`, `scopes`, `chat`, and `help` are **pre-injected ambient globals** in
-> eval — use them directly. Do **not** `import` them (only `contextId`, `rpc`,
-> `gad`, `fs`, etc. come from `@workspace/runtime`). Run the block below as
-> written.
+> `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`, `db`, `help`, and (in agent
+> eval) `chat` are **pre-injected ambient globals** in eval — use them directly.
+> Do **not** `import` any of them from `@workspace/runtime`. The context id is
+> `ctx.contextId`; reach services through `services.<svc>.<method>(...)` or
+> `rpc.call("<svc>.<method>", [...])`. Run the block below as written.
 
 ```
 eval({
@@ -204,7 +207,6 @@ eval({
     import { HeadlessRunner } from "@workspace-skills/system-testing/runner";
     import { TestRunner } from "@workspace-skills/system-testing/test-runner";
     import { allTests, nextSelectedStage } from "@workspace-skills/system-testing/stages";
-    import { contextId } from "@workspace/runtime";
     const tests = allTests();
     const run = scope.systemTestingRun;
     if (!run || typeof run !== "object") {
@@ -228,7 +230,10 @@ eval({
     const { stage, stagePosition, selectedStages } = next;
     const completed = new Set(Array.isArray(run.completedStages) ? run.completedStages : []);
 
-    const runner = new HeadlessRunner(contextId);
+    // Spawned test agents inherit YOUR model — read it from your own state.
+    const runner = new HeadlessRunner(ctx.contextId, {
+      model: (await agent.describe()).config.model,
+    });
     const tester = new TestRunner(runner, {
       onTestStart: (t) => console.log("Running: " + t.name + "..."),
       onTestEnd: (t, r) => console.log((r.passed ? "PASS" : "FAIL") + ": " + t.name),
@@ -478,14 +483,14 @@ If `tester.runSuite(...)` throws before `scope.results` is set, capture bounded
 runtime diagnostics from the orchestrating channel instead of retrying blindly:
 
 ```typescript
-import { gad, rpc } from "@workspace/runtime";
-
+// In eval, `rpc` is injected (do not import it). `gad`/`build` are reached as
+// services: rpc.call("<svc>.<method>", [args]) or services.<svc>.<method>(...).
 const channelId = "chat-...";
 const branchId = `branch:channel:${channelId}`;
 
 return {
-  health: await gad.inspectAgentHealth({ channelId, branchId }),
-  build: await rpc.call("main", "build.inspectBuildProvenance", [
+  health: await rpc.call("gad.inspectAgentHealth", [{ channelId, branchId }]),
+  build: await rpc.call("build.inspectBuildProvenance", [
     "@workspace-skills/system-testing",
   ]),
 };
@@ -494,8 +499,9 @@ return {
 You can also call `await runner.collectDiagnostics({ channelId, error })` to
 produce the same bounded packet explicitly.
 
-System-testing runs from a panel and uses that panel's stable `slotId` as its
-channel/client identity. Do not key orchestrator channel state on `rpc.selfId`;
+System-testing runs from a panel and uses that panel's stable `panel.slotId` as
+its channel/client identity. Do not key orchestrator channel state on
+`rpc.selfId`;
 that is the current runtime entity and may change when the panel is recreated.
 
 ### Background build failures
@@ -505,12 +511,12 @@ state-triggered background build path. Those failures are not returned by the
 commit call itself. Query the build service before retrying or guessing:
 
 ```typescript
-import { rpc } from "@workspace/runtime";
-
+// `rpc` is injected in eval — do not import it. The eval `rpc.call(method, args)`
+// targets the server, so pass just "<svc>.<method>" (no "main" target argument).
 return {
-  recent: await rpc.call("main", "build.listRecentBuildEvents", []),
-  forUnit: await rpc.call("main", "build.listRecentBuildEvents", ["panels/example"]),
-  panel: await rpc.call("main", "build.inspectBuildProvenance", ["panels/example"]),
+  recent: await rpc.call("build.listRecentBuildEvents", []),
+  forUnit: await rpc.call("build.listRecentBuildEvents", ["panels/example"]),
+  panel: await rpc.call("build.inspectBuildProvenance", ["panels/example"]),
 };
 ```
 
@@ -697,4 +703,4 @@ userland detection snippet.
 
 ## Environment Compatibility
 
-This skill requires a panel context (for PubSub connection via `rpc` and `db`). It cannot run headlessly itself — it's the testing _orchestrator_ that spawns headless test sessions.
+This skill requires a panel context (it uses the panel's `rpc` and stable `panel.slotId` for the PubSub connection and channel identity). It cannot run headlessly itself — it's the testing _orchestrator_ that spawns headless test sessions.

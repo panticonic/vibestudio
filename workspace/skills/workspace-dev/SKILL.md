@@ -33,7 +33,7 @@ See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERN
 2. **NEVER use Bash** for vcs, file listing, or file creation — use the structured tools
 3. **Use filesystem tools for file edits** — Read, Edit, Write (not eval)
 4. **Use eval only for runtime operations** — project creation, typecheck, tests, launching panels
-5. **Static imports in eval** — `import { rpc, openPanel } from "@workspace/runtime"`; dynamic `await import(...)` may work in some builds, but it is not the supported path for runtime or skill packages.
+5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `services`, `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat` are injected free variables; do **not** `import` them (the engine rejects it). `rpc` and `fs` are injected ambiently **and** importable from `@workspace/runtime`. `@workspace/runtime` is importable in eval and exposes the same portable surface as panels — including `openPanel`/`listPanels`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
 6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Use `listPanels()` to reuse existing panels instead of opening another copy.
 
 ## Quick Start Workflow
@@ -50,14 +50,15 @@ eval({ code: `
 
 Edit the generated files with the `edit`/`write` tools — each edit commits to
 your context head and projects to disk atomically, so it is build-ready
-immediately — then launch:
+immediately — then launch.
 
-```
-eval({ code: `
-  import { openPanel } from "@workspace/runtime";
-  scope.myApp = await openPanel("panels/my-app");
-`
-})
+`openPanel` is a **panel/component-runtime** API (it returns a host-mediated
+`PanelHandle`); it does not initialize in server-side eval, so run it from panel
+code or an `inline_ui`/`feedback_custom` component:
+
+```tsx
+import { openPanel } from "@workspace/runtime";
+const myApp = await openPanel("panels/my-app");
 ```
 
 ## Common Tasks
@@ -67,18 +68,20 @@ eval({ code: `
 | Create project  | `eval` — `import { createProject } from "@workspace-skills/workspace-dev"` then `createProject({ projectType, name, title })`                             |
 | Fork panel      | `eval` — `import { forkProject } from "@workspace-skills/workspace-dev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })` |
 | Fork worker     | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                              |
-| Launch panel    | `eval` — `scope.handle = await openPanel(source)` (edits are already committed to your head)                                                                |
-| Launch worker   | `eval` — `workers.create({ source: "workers/my-worker", contextId })`                                                                                     |
+| Launch panel    | `eval` — `const handle = await openPanel(source)` (`openPanel` is importable/ambient in eval; edits are already committed to your head)                                                                |
+| Launch worker   | `eval` — `services.workers.create({ source: "workers/my-worker", contextId: ctx.contextId })`                                                                                     |
 | Read a file     | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                          |
 | Edit a file     | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                    |
-| Check types     | `eval` — `extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/my-app")`                                                          |
-| Run tests       | `eval` — `extensions.use("@workspace-extensions/test-runner").run("packages/my-lib")`                                                                     |
+| Check types     | `eval` — `await extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/my-app")`                                                     |
+| Run tests       | `eval` — `await extensions.use("@workspace-extensions/test-runner").run("packages/my-lib")`                                                                |
+
+(`extensions` is a runtime client — the same surface bare, as `services.extensions`, or `import { extensions } from "@workspace/runtime"`. `use(name).method(...)` is typed sugar; `extensions.invoke(name, method, [args])` is the untyped equivalent. Both work everywhere — panel, worker, and server-side eval.)
 
 Edits are edit-first: the `edit`/`write` tools (and `vcs.applyEdits` directly)
 apply each change as one atomic GAD transition on your context head and project
 it to disk, triggering rebuilds. The edit *is* the commit — there is no separate
 commit, staging, or push step.
-| Vcs status | `eval` — `import { vcs } from "@workspace/runtime"; await vcs.status()` (see TOOLS.md) |
+| Vcs status | `eval` — `await services.vcs.status()` (see TOOLS.md) |
 | List workspaces | `eval` — `workspace.list()` |
 | Get workspace config | `eval` — `workspace.getConfig()` |
 | Create workspace | `eval` — `workspace.create("name", { forkFrom: "default" })` |
@@ -87,7 +90,7 @@ commit, staging, or push step.
 
 ## Environment Compatibility
 
-- Panel lifecycle operations (`openPanel`, `listPanels`, `focusPanel`, handle `rebuildAndReload`/reload/close) require **panel context**.
+- Panel lifecycle operations (`openPanel`, `listPanels`, `panel.focusPanel`, handle `rebuildAndReload`/reload/close) require **panel context**.
 - Project scaffolding (`createProject`), vcs operations (`vcs.applyEdits`, `vcs.status`, `vcs.publish`), typecheck, and test runs work in **headless** sessions via eval + RPC.
 - Unit tests run through `@workspace-extensions/test-runner`, not shell commands.
 

@@ -288,7 +288,7 @@ panelTree.roots(): Promise<PanelHandle[]>
 panelTree.children(id): Promise<PanelHandle[]>
 panelTree.parent(id): PanelHandle | null
 panelTree.navigate(id, source, opts): Promise<{ id: string; title: string }>
-panelTree.open(source, opts): Promise<PanelHandle>
+openPanel(source, opts): Promise<PanelHandle>
 ```
 
 Wraps `packages/shared/src/panelRegistry.ts` (`listPanels`/`getChildren`/`findParentId`).
@@ -481,8 +481,7 @@ exist, so the headless extension is mostly policy + the windowless host process.
   automate/structural op triggers an approval (remembered per pair, severe for privileged);
   show child→parent (`panelTree.self().parent()`) and sibling examples; document explicit
   `ensureLoaded()` for the RPC-to-unloaded case. Files: `PANEL_DEVELOPMENT.md:291-352`,
-  `PANEL_SYSTEM.md` runtime-API list, `workspace/skills/*/{BROWSER,EVAL,WORKFLOW*}.md`,
-  `workspace/packages/playwright-core/INTEGRATION_TEST_EXAMPLE.ts`.
+  `PANEL_SYSTEM.md` runtime-API list, `workspace/skills/*/{BROWSER,EVAL,WORKFLOW*}.md`.
 - **Tests:** `src/server/cdpBridge.test.ts` (broker auth + client/provider routing), a new host
   CDP **provider agent** test (migrated `cdpServer` attach/forward/queue/screenshot logic),
   `workspace/packages/runtime/src/panel/handle.test.ts` (remove kind-gating reject at `:59`;

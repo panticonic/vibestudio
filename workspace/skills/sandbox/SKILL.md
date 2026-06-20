@@ -1,11 +1,15 @@
 ---
 name: sandbox
-description: Execute code in the chat sandbox — eval tool, inline UI components, feedback forms, browser automation, and all runtime APIs (fs, db, git, workers, ai).
+description: Execute code in the sandbox — the server-side eval tool, inline UI components, feedback forms, browser automation, and all runtime APIs (fs, db, git, workers, ai).
 ---
 
 # Sandbox Execution Skill
 
-How to use the chat panel's code execution sandbox — the eval tool, inline UI components, custom feedback forms, and all runtime APIs they can access.
+How to use the sandbox — the `eval` tool (which runs code **server-side** in your
+own per-agent `EvalDO`), inline UI components, custom feedback forms, and all
+runtime APIs they can access. `eval` runs server-side and does not require a
+connected panel; `inline_ui`/`load_action_bar`/`feedback_*` render in the chat
+panel.
 
 ## Files
 
@@ -19,31 +23,50 @@ How to use the chat panel's code execution sandbox — the eval tool, inline UI 
 | [FEEDBACK.md](FEEDBACK.md)                         | Feedback forms — block until user responds                                                                  |
 | [RUNTIME_API.md](RUNTIME_API.md)                   | Full runtime API reference — fs, db, workers, ai, git, browser data, custom shared-resource approval grants |
 | [CHAT_API.md](CHAT_API.md)                         | Chat API — publish messages, call methods, interact with the conversation                                   |
-| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)     | Browser automation — lazy Playwright-style API via CDP                                                      |
+| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)     | Browser automation — Playwright-style page API via the lightweight CDP client                               |
 | [PATTERNS.md](PATTERNS.md)                         | Common patterns and recipes                                                                                 |
 | [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity                                       |
 
 ## Execution Modes
 
-All code runs in the same sandbox (Sucrase transform + CJS execution in the panel's browser context). Eval/UI tools accept either raw `code` or a context-relative `path` where noted; file-loaded sources support static relative imports and infer bare package imports from the nearest `package.json` when possible. The execution modes differ in presentation:
+All code runs through the same compile pipeline (Sucrase transform + CJS
+execution). **`eval` executes server-side in your per-agent `EvalDO`** (a
+Durable Object) — it does not run in the panel and does not require a connected
+panel. **`inline_ui`/`load_action_bar`/`feedback_custom` render React in the
+chat panel** (panel-only). Eval/UI tools accept either raw `code` or a
+context-relative `path` where noted; file-loaded sources support static relative
+imports and infer bare package imports from the nearest `package.json` when
+possible. The execution modes differ in presentation:
 
-| Tool              | Rendering                          | Lifecycle                         | Response                             |
-| ----------------- | ---------------------------------- | --------------------------------- | ------------------------------------ |
-| `eval`            | imperative (run + return)          | transient                         | immediate (result to agent)          |
-| `inline_ui`       | component (render React)           | persistent (in chat history)      | none (fire-and-forget)               |
-| `load_action_bar` | component from file (render React) | persistent (top of current panel) | immediate tool result                |
-| `feedback_custom` | component (render React)           | transient                         | deferred (blocks until user submits) |
+| Tool              | Where it runs              | Rendering                          | Lifecycle                         | Response                             |
+| ----------------- | -------------------------- | ---------------------------------- | --------------------------------- | ------------------------------------ |
+| `eval`            | server-side (`EvalDO`)     | imperative (run + return)          | persistent scope/`db`             | immediate (result to agent)          |
+| `inline_ui`       | panel                      | component (render React)           | persistent (in chat history)      | none (fire-and-forget)               |
+| `load_action_bar` | panel                      | component from file (render React) | persistent (top of current panel) | immediate tool result                |
+| `feedback_custom` | panel                      | component (render React)           | transient                         | deferred (blocks until user submits) |
 
-## Pre-injected Variables
+## Injected Variables
 
-Only `chat`, `scope`, `scopes`, and `help` are pre-injected. Use them directly;
-do not import them from `@workspace/runtime`. Everything else (`db`, `fs`, `rpc`,
-`ai`, `workers`, `workspace`, `contextId`) must be imported from
-`@workspace/runtime` using static `import` syntax (no `await import(...)`).
+The two surfaces inject **different** variables, because eval runs server-side
+and components render in the panel:
 
-For panel identity, use `slotId` for panel-tree operations and PubSub/channel
-clients. `rpc.selfId` is the current live runtime entity and can change after a
-panel navigation or reopen.
+- **`eval`** (server-side): `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
+  `db`, and `help` are injected as free variables — use them directly, do NOT
+  `import` them, and do NOT `import` them from `@workspace/runtime` (the eval
+  engine rejects importing the pre-injected names). See
+  [EVAL.md](EVAL.md#injected-variables). When eval runs as an **agent** (bound
+  to a channel), `chat` is injected too (see [EVAL.md](EVAL.md#chat-agent-eval));
+  CLI/panel eval has no channel and gets no `chat`.
+- **`inline_ui` / `load_action_bar` components** (panel): receive
+  `{ props, chat }`. `feedback_custom` components receive
+  `{ onSubmit, onCancel, onError, chat }`. They do NOT receive `scope`/`scopes`
+  — the eval REPL scope is server-side and is not shared into rendered
+  components. Inside a component, reach runtime services via `chat.rpc.call(...)`
+  (see [CHAT_API.md](CHAT_API.md)).
+
+For panel identity inside components, use `panel.slotId` for panel-tree
+operations and PubSub/channel clients. `rpc.selfId` is the current live runtime
+entity and can change after a panel navigation or reopen.
 
 ## Path Conventions
 
@@ -60,13 +83,23 @@ panel navigation or reopen.
 
 ## Available Imports
 
-### Static imports (always available, no `imports` parameter needed)
+### In `eval` (server-side)
 
-These are pre-bundled with the panel and work as bare `import` statements:
+The injected variables above (`rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
+`db`, `help`) are NOT imports — use them as free variables. Everything else is
+loaded via the `imports` parameter (npm) or auto-resolution (workspace), then
+brought in with a normal `import`. Both static `import` and dynamic
+`await import(...)` work in eval — both compile to the EvalDO's per-object
+require (isolated per owner). See [EVAL.md](EVAL.md#imports).
+
+### In components (`inline_ui` / `load_action_bar` / `feedback_custom`)
+
+These are pre-bundled with the panel and work as bare `import` statements in
+component code:
 
 | Module                       | What it provides                                                                                                |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `@workspace/runtime`         | rpc, fs, git, db, workers, ai, workspace, contextId, panel navigation, `requestApproval` for custom shared resources |
+| `@workspace/runtime`         | rpc, fs, git, db, workers, ai, workspace, contextId, panel navigation, `approvals.request` for custom shared resources |
 | `@workspace/panel-browser`   | Browser data import/export (cookies, passwords, bookmarks, history)                                             |
 | `react`, `react/jsx-runtime` | React hooks and component APIs                                                                                  |
 | `@radix-ui/themes`           | UI components (Button, Flex, Card, Table, etc.)                                                                 |
@@ -74,13 +107,14 @@ These are pre-bundled with the panel and work as bare `import` statements:
 
 ### On-demand imports (require `imports` parameter)
 
-Use `@workspace/playwright-automation` here for full Playwright panel
-automation, then call `playwrightPage(handle)`. This intentionally keeps full
-Playwright out of the default runtime bundle.
-
-Use `handle.cdp.lightweightPage()` for lightweight panel inspection. It loads
-the standalone `@workspace/cdp-client` internally; eval code should not import
-that package directly.
+For browser automation, use `handle.cdp.lightweightPage()` — it returns a
+Playwright-style page driven by our own lightweight, workerd-native CDP client
+and is the single browser-automation surface (there is no separate "full
+Playwright" tier; do not import or install any `playwright*` package). It loads
+the standalone `@workspace/cdp-client` internally, so eval code should not import
+that package directly for ordinary page work. For protocol-level CDP, you may
+`import { CdpConnection } from "@workspace/cdp-client"` and connect via
+`handle.cdp.getCdpEndpoint()`. See [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md).
 
 These are built on first use. Pass them in the tool's `imports` parameter:
 
@@ -102,11 +136,15 @@ File-loaded package inference checks `dependencies`, `peerDependencies`,
 
 To pin a workspace package to a specific VCS ref or state hash, use the `imports` parameter explicitly: `imports: { "pkg": "ctx:agent-1" }`.
 
+In eval, reach `vcs` (and other services) through the injected `rpc`/`services`,
+not a runtime import — `import { vcs } from "@workspace/runtime"` does not
+initialize in the server-side EvalDO. Use `imports` only for npm/workspace
+*packages*:
+
 ```
 eval({ code: `
-  import { vcs } from "@workspace/runtime";
   import { createProject } from "@workspace-skills/workspace-dev";
-  const status = await vcs.status();
+  const status = await services.vcs.status(); // or rpc.call("vcs.status", [])
   // workspace packages: just import, auto-resolved
 ` })
 ```
@@ -135,10 +173,10 @@ or `feedback_custom` rather than hand-written raw channel records.
 
 ## Critical Rules
 
-1. **Static imports only** — `import { rpc } from "@workspace/runtime"` (NOT `await import(...)`). File-loaded relative imports must also be static/literal.
-2. **Workspace packages are auto-resolved** — `import { vcs } from "@workspace/runtime"` just works for workspace vcs operations; npm packages require `imports: { "lodash": "npm:4" }`
+1. **Do NOT import the eval-injected variables** — `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`, `db`, and `help` are injected free variables in eval; the engine rejects importing them (and runtime imports like `import { fs } from "@workspace/runtime"` do not initialize in the server-side EvalDO). For *packages*, both static `import` and dynamic `await import(...)` work in eval. File-loaded relative imports must be static/literal.
+2. **Workspace packages are auto-resolved** — just write `import { createProject } from "@workspace-skills/workspace-dev"` and it builds on first use; npm packages require `imports: { "lodash": "npm:4" }`. (For services like vcs, use injected `services`/`rpc`, not an import.)
 3. **Components must `export default`** — named exports alone won't work for inline_ui/load_action_bar/feedback_custom components
-4. **Inline UI components receive `{ props, chat, scope, scopes }`** — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
+4. **Inline UI / action-bar components receive `{ props, chat }`** (NOT `scope`/`scopes` — the eval REPL scope is server-side and is not shared into rendered components) — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
 5. **Feedback components receive `{ onSubmit, onCancel, onError, chat }`**
 6. **Workspace code is built from the committed context head, in lockstep with your edits** — source under `packages/`, `panels/`, `workers/`, `skills/`, `apps/`, and `extensions/` is built from committed GAD states. Edits are edit-first: the `edit`/`write` tools and `vcs.applyEdits` apply each change atomically to your context head and project it to disk, so it takes effect for builds immediately — there is no separate commit step. Do NOT edit source via `fs.writeFile` and expect it to build; the worktree is a projection and builds read GAD state, so edits must go through `edit`/`write`/`vcs.applyEdits`.
 7. **Close temporary panels you open** — when eval opens a browser/workspace panel for diagnostics, scraping, setup, or testing, keep its handle and call `await handle.close()` in `finally` when done. Reuse an existing handle instead of opening duplicates. Leave a panel open only when the user explicitly asked to inspect or continue using it, or the workflow explicitly needs it to remain open.
@@ -150,10 +188,10 @@ For optional workspace probes, prefer one of these patterns:
 - If the helper may not exist in this workspace at all, run that probe in a
   separate eval and tolerate that separate eval failing.
 
-Do not use dynamic `await import(...)` as an optional-loading mechanism for
-runtime, workspace, skill, or NatStack packages.
+(A missing package still throws even though dynamic `await import(...)` works in
+eval, so wrap optional loads in a try/catch or isolate them in a separate eval.)
 
 ## Environment Compatibility
 
-- `inline_ui`, `load_action_bar`, `feedback_form`, and `feedback_custom` are **panel-only** -- they require a browser rendering context.
-- `eval` and `set_title` work in both panel and **headless** sessions.
+- `inline_ui`, `load_action_bar`, `feedback_form`, and `feedback_custom` are **panel-only** — they render in a browser context, so they require a connected panel.
+- `eval` runs **server-side** in your per-agent `EvalDO`: it works in both panel and **headless** sessions and keeps working even if the panel or user disconnects. `set_title` works in both panel and headless sessions.

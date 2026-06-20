@@ -1,102 +1,15 @@
 # API Reference
 
-## SessionManager (from `@workspace/agentic-core`)
-
-Core session orchestrator. No React, no browser APIs.
-
-### Constructor
-
-```typescript
-new SessionManager(config: SessionManagerConfig)
-```
-
-```typescript
-interface SessionManagerConfig {
-  config: ConnectionConfig;           // serverUrl, token, clientId, optional rpc
-  metadata?: ChatParticipantMetadata; // defaults to { name: "Headless Client", type: "headless", handle: "headless" }
-  eventMiddleware?: EventMiddleware[]; // middleware pipeline for incoming events
-  scopeManager?: ScopeManager;        // optional, for eval-backed scope persistence
-  sandbox?: SandboxConfig;            // optional, for eval support
-}
-```
-
-### Lifecycle
-
-| Method | Description |
-|--------|-------------|
-| `connect(channelId, options?)` | Connect to a PubSub channel. Options: `methods`, `channelConfig`, `contextId` |
-| `disconnect()` | Disconnect from channel |
-| `dispose()` | Sync best-effort teardown (fire-and-forget scope persist) |
-| `close()` | Async teardown (awaits scope persist, then disconnects) |
-
-### Communication
-
-| Method | Description |
-|--------|-------------|
-| `send(text, options?)` | Send a message. Options: `attachments`, `idempotencyKey`. Returns `messageId` |
-| `interrupt(agentId)` | Interrupt an agent (sends "pause" method call) |
-| `callMethod(participantId, method, args)` | Call a method on another participant and return the provider payload |
-| `callMethodResult(participantId, method, args)` | Call a method and return the full `{ content, attachments, contentType }` result envelope |
-| `loadEarlierMessages()` | Load older messages (pagination) |
-| `startTyping()` | Send typing indicator |
-| `stopTyping()` | Clear typing indicator |
-
-### State (read-only)
-
-| Getter | Type |
-|--------|------|
-| `messages` | `readonly ChatMessage[]` |
-| `participants` | `Record<string, Participant<ChatParticipantMetadata>>` |
-| `allParticipants` | Same, including historical (disconnected) participants |
-| `connected` | `boolean` |
-| `status` | `string` |
-| `channelId` | `string \| null` |
-| `contextId` | `string \| undefined` |
-| `hasMoreHistory` | `boolean` |
-| `loadingMore` | `boolean` |
-| `scope` | `Record<string, unknown>` |
-| `scopeManager` | `ScopeManager \| null` |
-| `scopesApi` | `ScopesApi \| null` |
-| `client` | `PubSubClient \| null` (escape hatch) |
-| `debugEvents` | `readonly (AgentDebugPayload & { ts: number })[]` |
-| `dirtyRepoWarnings` | `ReadonlyMap<string, DirtyRepoDetails>` |
-| `pendingAgents` | `ReadonlyMap<string, PendingAgent>` |
-
-Invocation/tool-call diagnostics are exposed through `messages`: entries with
-`contentType: "invocation"` have a parsed `message.invocation` payload with
-name, arguments, progress/output, result, and error state.
-
-Custom message types are visible through `messages` as entries with
-`contentType: "custom"` and a populated `message.custom` payload (typeId,
-displayMode, initialState, folded updates). To register or publish custom
-message types from a headless session, use the underlying `manager.client`
-(PubSubClient) escape hatch — `registerMessageType`, `publishCustomMessage`,
-`updateCustomMessage`, `clearMessageType`. The full reference lives in
-[`workspace/skills/sandbox/CUSTOM_MESSAGES.md`](../sandbox/CUSTOM_MESSAGES.md).
-Note that headless sessions don't render React, so they only emit and observe
-the events; the panel side does the rendering.
-
-### Events
-
-Subscribe with `manager.on(event, handler)` — returns an unsubscribe function.
-
-| Event | Payload |
-|-------|---------|
-| `messagesChanged` | `(messages: readonly ChatMessage[])` |
-| `participantsChanged` | `(participants: Record<string, Participant>)` |
-| `allParticipantsChanged` | `(participants: Record<string, Participant>)` |
-| `connectionChanged` | `(connected: boolean, status: string)` |
-| `pendingAgentsChanged` | `(agents: ReadonlyMap<string, PendingAgent>)` |
-| `debugEvent` | `(event: AgentDebugPayload & { ts: number })` |
-| `dirtyRepoWarning` | `(handle: string, details: DirtyRepoDetails)` |
-| `scopeDirty` | `()` |
-| `error` | `(error: Error)` |
-
----
-
 ## HeadlessSession (from `@workspace/agentic-session`)
 
-Thin wrapper over SessionManager with headless defaults.
+The headless session wrapper. No React, no browser APIs. Internally it drives a
+`ConnectionManager` (from `@workspace/agentic-core`) and projects the channel log
+through the same typed reducer/selectors the panel UI uses.
+
+The session is a channel client only. The agent's own tools — including `eval`
+(server-side in the agent's per-channel `EvalDO`), file tools, and web tools —
+come from the agent worker, not from this session. The session registers only a
+`set_title` method by default.
 
 ### Static Constructors
 
@@ -112,17 +25,15 @@ HeadlessSession.createWithAgent(config: HeadlessWithAgentConfig): Promise<Headle
 
 ```typescript
 interface HeadlessSessionConfig {
-  config: ConnectionConfig;
-  metadata?: ChatParticipantMetadata;  // defaults to type:"headless"
-  sandbox?: SandboxConfig;              // enables eval + auto scope persistence
-  scopeManager?: ScopeManager;          // override auto-created scope manager
+  config: ConnectionConfig;             // serverUrl/token/clientId, or { clientId, rpc }
+  metadata?: ChatParticipantMetadata;   // defaults to { name: "Headless Client", type: "headless", handle: "headless" }
+  sandbox?: SandboxConfig;              // optional; only backs local chat-sandbox helpers (callMethod, etc.) — NOT the agent's eval
 }
 ```
 
-To customize the agent's system prompt for a session, pass
-`systemPrompt` and `systemPromptMode` through `extraConfig`. The final prompt
-is composed from the NatStack base prompt, `workspace/meta/AGENTS.md`, the
-generated skill index, and the optional session prompt override.
+`sandbox` is optional and does not enable or disable the agent's eval. The agent
+evaluates code in its own server-side `EvalDO` whether or not a session sandbox
+is provided.
 
 ### HeadlessWithAgentConfig
 
@@ -130,64 +41,143 @@ Extends `HeadlessSessionConfig` with:
 
 ```typescript
 interface HeadlessWithAgentConfig extends HeadlessSessionConfig {
-  rpcCall: (target: string, method: string, ...args: unknown[]) => Promise<unknown>;
+  rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
   source: string;           // worker source (e.g., "workers/agent-worker")
   className: string;        // DO class (e.g., "AiChatWorker")
   objectKey?: string;       // auto-generated if omitted
   contextId: string;
   channelId?: string;       // auto-generated if omitted
   channelConfig?: ChannelConfig;
-  methods?: Record<string, MethodDefinition>;  // merged with default eval/set_title
+  methods?: Record<string, MethodDefinition>;  // merged with the default set_title method
   /**
-   * Pi-native pass-through subscription config. Allowed keys: model,
-   * thinkingLevel, approvalLevel.
+   * Pi-native pass-through subscription config. Common keys: model,
+   * thinkingLevel, approvalLevel, systemPrompt, systemPromptMode.
    */
-  extraConfig?: Record<string, unknown>;
+  extraConfig?: AgentSubscriptionConfig;
 }
 ```
 
 `methods` lets you register additional client-side method definitions that the
-agent will discover and can call. There is no longer any worker-side allowlist
-filtering them out — channel membership is the trust boundary.
+agent will discover and can call. There is no worker-side allowlist filtering
+them out — channel membership is the trust boundary.
 
-### Headless-Specific Methods
+To customize the agent's system prompt for a session, pass `systemPrompt` and
+`systemPromptMode` through `extraConfig`.
+
+### Lifecycle
 
 | Method | Description |
 |--------|-------------|
-| `waitForAgentMessage()` | Wait for a complete agent message |
-| `waitForIdle(opts?)` | Wait for the conversation to settle. Options: `debounce` |
-| `sendAndWait(text, opts?)` | Send a message and wait for the agent to finish responding |
-| `getRecommendedChannelConfig()` | Returns `{ approvalLevel: 2 }` (full-auto) |
-| `manager` | Access the underlying SessionManager |
+| `connect(channelId, options?)` | Connect to a PubSub channel. Options: `channelConfig`, `contextId`, `methods` |
+| `disconnect()` | Abort the message consumer and disconnect the client |
+| `dispose()` | Sync best-effort teardown (disconnect + clear listeners) |
+| `close()` | Async teardown: unsubscribe + retire the agent subscribed by `createWithAgent`, then dispose |
+| `[Symbol.asyncDispose]()` | Supports `await using session = ...` (calls `close()`) |
 
-All SessionManager methods (send, interrupt, connect, close, etc.) are also available directly on HeadlessSession.
+### Communication
+
+| Method | Description |
+|--------|-------------|
+| `send(text, options?)` | Publish a user message. Options: `attachments`, `idempotencyKey`. Returns `messageId` |
+| `interrupt(agentId)` | Interrupt an agent (sends a `pause` method call) |
+| `callMethod(participantId, method, args)` | Call a method on another participant and return the unwrapped provider payload |
+| `callMethodResult(participantId, method, args)` | Call a method and return the full `ChatMethodResult` envelope |
+| `loadEarlierMessages()` | No-op — channel replay already delivers the full persisted history |
+
+### State (read-only)
+
+| Getter | Type |
+|--------|------|
+| `messages` | `readonly ChatMessage[]` |
+| `participants` | `Record<string, Participant<ChatParticipantMetadata>>` |
+| `allParticipants` | Same (headless sessions don't track separate historical roster) |
+| `connected` | `boolean` |
+| `status` | `string` |
+| `channelId` | `string \| null` |
+| `isStreaming` | `boolean` (any message still incomplete) |
+| `debugEvents` | `readonly (AgentDebugPayload & { ts: number })[]` |
+| `client` | `PubSubClient \| null` (escape hatch) |
+
+Invocation/tool-call diagnostics are exposed through `messages`: entries with
+`contentType: "invocation"` have a parsed `message.invocation` payload with
+name, arguments, progress/output, result, and error state. `snapshot()` also
+projects these into an `invocations` array.
+
+Custom message types are visible through `messages` as entries with
+`contentType: "custom"` and a populated `message.custom` payload. To register or
+publish custom message types from a headless session, use the underlying
+`session.client` (PubSubClient) escape hatch — `registerMessageType`,
+`publishCustomMessage`, `updateCustomMessage`, `clearMessageType`. The full
+reference lives in
+[`workspace/skills/sandbox/CUSTOM_MESSAGES.md`](../sandbox/CUSTOM_MESSAGES.md).
+Headless sessions don't render React, so they only emit and observe the events;
+the panel side does the rendering.
+
+### Listeners
+
+```typescript
+// Fires on every channel update (including streaming deltas). Returns an unsubscribe fn.
+onMessage(listener: (latest: ChatMessage) => void): () => void
+```
+
+### Headless-Specific Helpers
+
+| Method | Description |
+|--------|-------------|
+| `waitForAgentMessage(opts?)` | Resolve with the next complete agent message. Options: `timeoutMs`, `signal`. Rejects on an agent failure message |
+| `waitForIdle(opts?)` | Resolve once the agent settles (no new messages for `debounce` ms and no open agent turn). Options: `debounce` (default 3000), `timeoutMs`, `signal` |
+| `sendAndWait(text, opts?)` | `send(text)` then `waitForIdle(opts)` |
+| `getRecommendedChannelConfig()` | Returns `{ approvalLevel: 2 }` (full-auto) |
+| `snapshot()` | Diagnostic snapshot: messages, invocations, debugEvents, cleanupErrors, participants, localMethodNames, connected, duration |
+
+---
+
+## ConnectionManager (from `@workspace/agentic-core`)
+
+The lower-level PubSub connection primitive that `HeadlessSession` is built on.
+Use it directly only when you need to connect to a channel without the headless
+conveniences (auto agent subscription, `set_title`, the wait helpers, the
+transcript projection). Constructed with `{ config, metadata, callbacks }`; its
+`connect({ channelId, methods, channelConfig?, contextId? })` returns the
+underlying `PubSubClient`.
 
 ---
 
 ## Channel Helpers (from `@workspace/agentic-session`)
 
 ```typescript
-// Get recommended channel config (full-auto approval)
+// Recommended channel config for headless sessions (full-auto approval, level 2)
 getRecommendedChannelConfig(): Partial<ChannelConfig>
 
-// Subscribe a DO agent to a channel with full-auto approval.
-// The agent uses the same harness config and system prompt as panel sessions —
-// no extra restrictions are applied.
-subscribeHeadlessAgent(opts: SubscribeHeadlessAgentOptions): Promise<{ ok: boolean; participantId?: string }>
+// Subscribe a DO agent to a channel with headless defaults (full-auto approval).
+// The agent uses the same harness config and system prompt as panel sessions.
+subscribeHeadlessAgent(opts: SubscribeHeadlessAgentOptions): Promise<HeadlessAgentSubscription>
 ```
 
 ```typescript
 interface SubscribeHeadlessAgentOptions {
-  rpcCall: (target: string, method: string, ...args: unknown[]) => Promise<unknown>;
+  rpcCall: (target: string, method: string, args: unknown[]) => Promise<unknown>;
   source: string;        // e.g., "workers/agent-worker"
   className: string;     // e.g., "AiChatWorker"
   objectKey: string;
   channelId: string;
   contextId: string;
   /**
-   * Pi-native pass-through subscription config. Allowed keys: model,
-   * thinkingLevel, approvalLevel.
+   * Pi-native pass-through subscription config. Common keys: model,
+   * thinkingLevel, approvalLevel, systemPrompt, systemPromptMode.
    */
-  extraConfig?: Record<string, unknown>;
+  extraConfig?: AgentSubscriptionConfig;
+}
+
+interface HeadlessAgentSubscription {
+  ok: boolean;
+  participantId?: string;
+  entityId: string;   // pass to retireHeadlessAgent
+  targetId: string;   // pass to unsubscribeHeadlessAgent
 }
 ```
+
+`subscribeHeadlessAgent` creates the agent entity and subscribes it; pair it with
+`unsubscribeHeadlessAgent({ rpcCall, targetId, channelId })` and
+`retireHeadlessAgent({ rpcCall, entityId })` for cleanup. `createWithAgent` /
+`close()` do this wiring for you.

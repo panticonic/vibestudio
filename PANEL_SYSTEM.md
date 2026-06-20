@@ -178,7 +178,7 @@ handle.close()                    // Approval-gated structural operation
 ```
 
 Use `panelTree.get/list/roots/children` for existing panels;
-`openPanel()`/`panelTree.open()` creates a new panel. Existing handles are
+`openPanel()` creates a new panel. Existing handles are
 non-owned: do not navigate, reload, or close them unless requested; clean up
 temporary panels opened by the workflow when it is done.
 

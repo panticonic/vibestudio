@@ -4,9 +4,10 @@ Recipes for common tasks using the sandbox.
 
 ## Read a File and Display It
 
+`fs` is injected into eval (context-scoped) — do not import it.
+
 ```
 eval({ code: `
-  import { fs } from "@workspace/runtime";
   const content = await fs.readFile("src/index.ts", "utf-8");
   console.log(content);
   return content;
@@ -17,7 +18,6 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { fs } from "@workspace/runtime";
   const entries = await fs.readdir("src", { withFileTypes: true });
   for (const e of entries) {
     console.log(e.isDirectory() ? "dir:  " + e.name : "file: " + e.name);
@@ -29,8 +29,6 @@ eval({ code: `
 
 ```
 eval({ code: `
-  import { fs } from "@workspace/runtime";
-
   async function grep(dir, pattern, results = []) {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {
@@ -105,37 +103,38 @@ eval({
 })
 ```
 
-## Preload npm Package for Inline UI
+## npm Packages in Inline UI
 
 > **Defensive coding:** When using `props` in inline UI components, always default the parameter (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For small datasets, embedding constants directly in the component source is simpler and more portable than passing `props`.
 
-npm packages aren't directly available in `inline_ui`. Preload via `eval` first — the module stays in the module map:
+`eval` runs server-side (in the `EvalDO`) and `inline_ui` compiles in the chat
+panel — they have **separate module registries**, so preloading a package in
+`eval` does NOT make it available to `inline_ui`. To use a non-default npm
+package in a component, put the component in a context-relative file and declare
+the dependency in the nearest `package.json` (the panel infers file-loaded
+imports), or avoid the dependency by embedding the small bit of logic directly.
 
+```ts
+// Component lives in a file whose nearest package.json lists "lodash";
+// the panel resolves the import when it compiles the file.
+inline_ui({ path: ".natstack/ui/shuffler.tsx", props: { items: ["Apple", "Banana", "Cherry"] } })
 ```
-// Step 1: preload
-eval({
-  code: `import _ from "lodash"; console.log("lodash loaded");`,
-  imports: { "lodash": "npm:^4.17.21" }
-})
 
-// Step 2: use in inline_ui (lodash is now in the module map)
-inline_ui({
-  code: `
+```tsx
+// .natstack/ui/shuffler.tsx
 import { useState } from "react";
 import { Button, Flex, Text } from "@radix-ui/themes";
 import _ from "lodash";
 
-export default function Shuffler({ props }) {
-  const [items, setItems] = useState(props.items);
+export default function Shuffler({ props = {} }) {
+  const [items, setItems] = useState(props.items ?? []);
   return (
     <Flex direction="column" gap="2">
       <Button size="1" onClick={() => setItems(_.shuffle([...items]))}>Shuffle</Button>
       {items.map((item, i) => <Text key={i} size="2">{item}</Text>)}
     </Flex>
   );
-}`,
-  props: { items: ["Apple", "Banana", "Cherry", "Date", "Elderberry"] }
-})
+}
 ```
 
 For larger eval/UI code, prefer writing a context-relative file and using the
@@ -151,43 +150,45 @@ feedback_custom({ path: ".natstack/ui/confirm-audit.tsx", title: "Confirm audit"
 
 ## Call an API with a URL-bound credential
 
-The general pattern: store a URL-bound credential once, then fetch through the runtime credential proxy.
+The general pattern: store a URL-bound credential once, then fetch through the
+runtime credential proxy.
 
+The `credentials.fetch(url, init, { credentialId })` wrapper (which returns a
+`Response`) is part of the **panel/component runtime** (`@workspace/runtime`) —
+it is not a server-side eval capability (there is no `credentials.fetch` RPC
+method; `import { credentials } from "@workspace/runtime"` does not initialize in
+the `EvalDO`). Run credential-proxied fetches from panel code or an
+`inline_ui`/`feedback_custom` component:
+
+```tsx
+import { credentials } from "@workspace/runtime";
+
+const credential = await credentials.store({
+  label: "Notion",
+  audience: [{ url: "https://api.notion.com", match: "origin" }],
+  injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+  material: { type: "bearer-token", token },
+});
+
+const response = await credentials.fetch("https://api.notion.com/v1/search", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "Notion-Version": "2022-06-28",
+  },
+  body: JSON.stringify({ query: "meeting notes" }),
+}, { credentialId: credential.id });
+const results = await response.json();
 ```
-eval({
-  code: `
-    import { credentials } from "@workspace/runtime";
 
-    const credential = await credentials.store({
-      label: "Notion",
-      audience: [{ url: "https://api.notion.com", match: "origin" }],
-      injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
-      material: { type: "bearer-token", token: process.env.NOTION_TOKEN! },
-    });
-
-    const response = await credentials.fetch("https://api.notion.com/v1/search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Notion-Version": "2022-06-28",
-      },
-      body: JSON.stringify({ query: "meeting notes" }),
-    }, { credentialId: credential.id });
-    const results = await response.json();
-    for (const page of results.results ?? []) {
-      if (page.object === "page") {
-        console.log("-", page.properties?.Name?.title?.[0]?.text?.content ?? page.id);
-      }
-    }
-  `
-})
-```
-
-Works with any configured provider. Check `await credentials.listStoredCredentials()` to see what's available.
+See [RUNTIME_API.md](RUNTIME_API.md) for the full credentials surface (`store`,
+`connect`, `fetch`, `listStoredCredentials`, …). Works with any configured
+provider; check `await credentials.listStoredCredentials()` to see what's
+available.
 
 ## Request Access to a Custom Userland Resource
 
-Use `requestApproval()` only when custom userland code owns a shared resource
+Use `approvals.request()` only when custom userland code owns a shared resource
 and needs to grant another panel, worker, DO, or extension access to it. NatStack
 verifies the issuer, shows the user a shell consent prompt, and manages any
 remembered decision for the same issuer and stable `subject.id`.
@@ -197,93 +198,81 @@ removing files in the caller's context. The outer runtime/host permission model
 already protects sensitive filesystem, browser, credential, git, and panel
 operations where approval is required.
 
-```
-eval({
-  code: `
-    import { requestApproval } from "@workspace/runtime";
+`approvals.request`/`approvals.revoke` come from the **panel/component runtime**
+(`@workspace/runtime`) and bind to the live caller's verified issuer identity, so
+run them from panel code or an `inline_ui`/`feedback_custom` component — not from
+server-side eval (the runtime import does not initialize in the `EvalDO`):
 
-    const decision = await requestApproval({
-      subject: { id: "demo-report-service:send", label: "Report sending service" },
-      title: "Allow report service access?",
-      summary: "A custom report service wants to let this caller send reports through its shared backend.",
-    });
+```tsx
+import { approvals } from "@workspace/runtime";
 
-    console.log(decision);
-  `
-})
+const decision = await approvals.request({
+  subject: { id: "demo-report-service:send", label: "Report sending service" },
+  title: "Allow report service access?",
+  summary: "A custom report service wants to let this caller send reports through its shared backend.",
+});
+
+console.log(decision);
 ```
 
 The default prompt lets the user allow once, allow for the current session,
 trust the current code version, or deny. If you need a custom choice set, opt
 into `promptOptions: "choices"`:
 
-```
-eval({
-  code: `
-    import { requestApproval } from "@workspace/runtime";
+```tsx
+import { approvals } from "@workspace/runtime";
 
-    const decision = await requestApproval({
-      subject: { id: "demo-report-service:send", label: "Report sending service" },
-      title: "Allow report service access?",
-      summary: "A custom report service wants to let this caller send reports through its shared backend.",
-      promptOptions: "choices",
-      options: [
-        { value: "allow", label: "Send", tone: "primary" },
-        { value: "deny", label: "Cancel", tone: "danger" },
-      ],
-    });
+const decision = await approvals.request({
+  subject: { id: "demo-report-service:send", label: "Report sending service" },
+  title: "Allow report service access?",
+  summary: "A custom report service wants to let this caller send reports through its shared backend.",
+  promptOptions: "choices",
+  options: [
+    { value: "allow", label: "Send", tone: "primary" },
+    { value: "deny", label: "Cancel", tone: "danger" },
+  ],
+});
 
-    console.log(decision);
-  `
-})
+console.log(decision);
 ```
 
 If the user dismisses the prompt, the result is `{ kind: "dismissed" }` and no
 grant is stored. To forget a stored decision:
 
-```
-eval({
-  code: `
-    import { revokeApproval } from "@workspace/runtime";
-    await revokeApproval("demo-report-service:send");
-  `
-})
+```tsx
+import { approvals } from "@workspace/runtime";
+await approvals.revoke("demo-report-service:send");
 ```
 
 Do not use this for credentials, external browser opens, git writes, or project
-imports; those built-in APIs have their own trust scopes.
+imports; those built-in APIs have their own trust scopes. See
+[RUNTIME_API.md](RUNTIME_API.md#userland-approval-prompts) for the full contract.
 
-## Import Cookies from Chrome
+## Browser data (cookies/passwords/bookmarks)
 
-```
-eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
-  const browsers = await browserData.detectBrowsers();
-  const chrome = browsers.find(b => b.name === "chrome");
-  if (!chrome) { console.log("Chrome not found"); return; }
-  console.log("Profiles:", chrome.profiles.map(p => p.displayName));
-  const defaultProfile = chrome.profiles.find(p => p.isDefault) || chrome.profiles[0];
+`browserData` from `@workspace/panel-browser` is a **panel/component runtime**
+capability: it goes through the `@workspace-extensions/browser-data` extension,
+which only accepts **shell** callers. Server-side eval (caller kind `server`)
+cannot use it — run browser-data work from panel code or an
+`inline_ui`/`feedback_custom` component:
+
+```tsx
+import { browserData } from "@workspace/panel-browser";
+
+const browsers = await browserData.detectBrowsers();
+const chrome = browsers.find((b) => b.name === "chrome");
+if (chrome) {
+  const defaultProfile = chrome.profiles.find((p) => p.isDefault) || chrome.profiles[0];
   const result = await browserData.startImport({
     browser: "chrome",
     profile: defaultProfile,
     dataTypes: ["cookies"],
   });
   console.log("Import result:", result);
-  return result;
-`
-})
-```
+}
 
-## Export All Browser Data
-
-```
-eval({ code: `
-  import { browserData } from "@workspace/panel-browser";
-  const dump = await browserData.exportAll();
-  console.log("Exported " + dump.length + " bytes");
-  return JSON.parse(dump);
-`
-})
+// Export everything:
+const dump = await browserData.exportAll();
 ```
 
 ## Interactive Cookie Manager (Inline UI)
@@ -395,26 +384,26 @@ export default function SqlRunner({ props, chat }) {
 
 ## Open a Website and Import Its Cookies
 
-```
-eval({ code: `
-  import { openPanel } from "@workspace/runtime";
-  import { browserData } from "@workspace/panel-browser";
+Both `openPanel` and `browserData` are panel/shell-context capabilities (not
+available from server-side eval), so run this from panel code or an
+`inline_ui`/`feedback_custom` component:
 
-  // Open the site in a browser panel
-  const handle = await openPanel("https://github.com");
-  console.log("Opened browser panel");
+```tsx
+import { openPanel } from "@workspace/runtime";
+import { browserData } from "@workspace/panel-browser";
 
-  // Import cookies from Chrome for that domain
-  const browsers = await browserData.detectBrowsers();
-  const chrome = browsers.find(b => b.name === "chrome");
-  if (chrome) {
-    await browserData.startImport({
-      browser: "chrome",
-      profile: chrome.profiles[0] ?? chrome.dataDir,
-      dataTypes: ["cookies"],
-    });
-    console.log("Cookies imported — Electron syncs imported cookies to browser panels automatically");
-  }
-`
-})
+// Open the site in a browser panel
+const handle = await openPanel("https://github.com");
+
+// Import cookies from Chrome for that domain
+const browsers = await browserData.detectBrowsers();
+const chrome = browsers.find((b) => b.name === "chrome");
+if (chrome) {
+  await browserData.startImport({
+    browser: "chrome",
+    profile: chrome.profiles[0] ?? chrome.dataDir,
+    dataTypes: ["cookies"],
+  });
+  // Electron syncs imported cookies to browser panels automatically.
+}
 ```

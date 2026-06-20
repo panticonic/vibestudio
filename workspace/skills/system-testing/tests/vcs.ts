@@ -45,7 +45,7 @@ export const vcsTests: TestCase[] = [
     description: "Apply an exact edit onto a pinned GAD base state",
     category: "vcs",
     prompt:
-      "Read a temporary file with vcs.readFile, update it with vcs.applyEdits using the returned baseStateHash, and verify the new state. Finish with VCS_APPLY_EDITS_OK and state:.",
+      "Read a temporary file with vcs.readFile, update it with vcs.applyEdits basing the edit on the state vcs.readFile returns, and verify the new state. Finish with VCS_APPLY_EDITS_OK and state:.",
     validate: (result) => checked(result, ["VCS_APPLY_EDITS_OK", "state:"]),
   },
   {

@@ -2,15 +2,14 @@
 
 ## 1. One-liner: HeadlessSession with Agent
 
-The simplest way to run a headless agentic session with eval support:
+The simplest way to spawn an agent and drive it from code:
 
 ```typescript
-import { HeadlessSession, createRpcSandboxConfig } from "@workspace/agentic-session";
+import { HeadlessSession } from "@workspace/agentic-session";
 
 const session = await HeadlessSession.createWithAgent({
   config: { serverUrl: gatewayUrl, token, clientId: "my-harness" },
-  sandbox: createRpcSandboxConfig(rpcClient),
-  rpcCall: (t, m, ...a) => rpcClient.call(t, m, ...a),
+  rpcCall: (t, m, a) => rpcClient.call(t, m, a),
   source: "workers/agent-worker",
   className: "AiChatWorker",
   contextId: myContextId,
@@ -28,29 +27,31 @@ await session.close();
 This automatically:
 - Creates a unique channel and subscribes the DO agent
 - Configures full-auto approval (no human in the loop)
-- Registers eval and set_title methods on the client
-- Creates a ScopeManager for persistent scope across eval calls
+- Registers the default `set_title` method on the client
 - Uses the worker's normal NatStack prompt and tool surface — UI tools like
   inline_ui, load_action_bar, and feedback_form simply aren't advertised, so the agent naturally
   falls back to plain message replies
+
+The agent's `eval` (with its persistent `scope`/`db`) needs no setup here: it
+runs server-side in the agent's own per-channel `EvalDO`, so it works even though
+no panel is connected. You do not register an eval method or wire a sandbox for
+the agent to evaluate code.
 
 ## 2. Two-step: Create then Connect
 
 For more control over channel/subscription setup:
 
 ```typescript
-import { HeadlessSession } from "@workspace/agentic-session";
-import { subscribeHeadlessAgent } from "@workspace/agentic-session";
+import { HeadlessSession, subscribeHeadlessAgent } from "@workspace/agentic-session";
 
 // Create session
 const session = HeadlessSession.create({
   config: { serverUrl: gatewayUrl, token, clientId: "my-harness" },
-  sandbox: createRpcSandboxConfig(rpcClient),
 });
 
 // Subscribe agent separately
-await subscribeHeadlessAgent({
-  rpcCall: (t, m, ...a) => rpcClient.call(t, m, ...a),
+const sub = await subscribeHeadlessAgent({
+  rpcCall: (t, m, a) => rpcClient.call(t, m, a),
   source: "workers/agent-worker",
   className: "AiChatWorker",
   objectKey: "my-specific-do",
@@ -58,67 +59,57 @@ await subscribeHeadlessAgent({
   contextId: myContextId,
 });
 
-// Connect (auto-creates ScopeManager, registers eval/set_title)
+// Connect (registers the default set_title method)
 await session.connect("my-channel", { contextId: myContextId });
 ```
 
-## 3. SessionManager Directly (no headless defaults)
+## 3. ConnectionManager Directly (no headless defaults)
 
-For maximum control — no defaults, no convenience wrappers:
+For maximum control — no agent subscription, no `set_title`, no wait helpers:
 
 ```typescript
-import { SessionManager } from "@workspace/agentic-core";
+import { ConnectionManager } from "@workspace/agentic-core";
 
-const manager = new SessionManager({
+const manager = new ConnectionManager({
   config: { serverUrl: gatewayUrl, token, clientId: "raw-client" },
+  callbacks: { onEvent: (event) => console.log("event", event.type) },
 });
 
-await manager.connect("existing-channel", {
+const client = await manager.connect({
+  channelId: "existing-channel",
   methods: { /* your custom methods */ },
   contextId: myContextId,
 });
 
-// Subscribe to events
-manager.on("messagesChanged", (msgs) => console.log("Messages:", msgs.length));
-manager.on("connectionChanged", (connected) => console.log("Connected:", connected));
-
-await manager.send("Hello from headless");
-await manager.close();
+await client.send("Hello from a raw connection");
+manager.disconnect();
 ```
 
-## 4. Messaging Only (no eval)
+## 4. Messaging Only (no custom methods)
 
-When you don't need eval/scope — just messaging:
+When you only need to drive the conversation:
 
 ```typescript
 const session = await HeadlessSession.createWithAgent({
   config: { serverUrl: gatewayUrl, token, clientId: "messaging-only" },
-  // No sandbox → eval method is not registered on the client, so the agent
-  // only sees set_title in its discovered tools.
-  rpcCall: (t, m, ...a) => rpcClient.call(t, m, ...a),
+  rpcCall: (t, m, a) => rpcClient.call(t, m, a),
   source: "workers/agent-worker",
   className: "AiChatWorker",
   contextId: myContextId,
 });
 ```
 
-Without a sandbox, the headless client only advertises `set_title`. The agent's
-prompt is unchanged, but its discovered tool list naturally narrows to what's
-available.
+The headless client always advertises `set_title`. The agent still has its full
+worker tool surface — including server-side `eval` — because those tools come
+from the agent worker, not from the session's registered methods.
 
 ## 5. Worker/DO Context
 
 From inside a Durable Object or worker:
 
 ```typescript
-import { createRpcSandboxConfig } from "@workspace/agentic-session";
-
-// rpc is available in the worker runtime
-const sandbox = createRpcSandboxConfig(rpc);
-
 const session = await HeadlessSession.createWithAgent({
   config: { serverUrl: gatewayUrl, token, clientId: `worker-${objectKey}` },
-  sandbox,
   rpcCall: (t, m, a) => rpc.call(t, m, a),
   source: "workers/agent-worker",
   className: "AiChatWorker",
@@ -126,11 +117,16 @@ const session = await HeadlessSession.createWithAgent({
 });
 ```
 
-## SandboxConfig Factories
+## SandboxConfig Factories (optional)
 
-| Factory | Context | persistence behavior |
-|---------|---------|-----------------|
-| `createPanelSandboxConfig(rpc)` | Panel (browser) | Scope persistence through the `scope` RPC service |
-| `createRpcSandboxConfig(rpc)` | Worker/DO or Node server | Scope persistence through the `scope` RPC service |
+A `SandboxConfig` is only needed if you want the session's local chat-sandbox
+helpers; it is **not** required for the agent's `eval`, which runs server-side in
+the agent's `EvalDO`.
 
-Both route `loadImport` through `build.getBuild` / `build.getBuildNpm` RPC calls.
+| Factory | Context |
+|---------|---------|
+| `createPanelSandboxConfig(rpc)` | Panel (browser) |
+
+It provides an `rpc` bridge and routes `loadImport` through `build.getBuild` /
+`build.getBuildNpm` RPC calls. Non-panel contexts (worker/DO/Node) need no
+SandboxConfig — the agent's `eval` runs server-side in its `EvalDO`.

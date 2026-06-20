@@ -1,4 +1,4 @@
-import { contextId as runtimeContextId, getStateArgs, rpc, setStateArgs } from "@workspace/runtime";
+import { contextId as runtimeContextId, panel, rpc } from "@workspace/runtime";
 import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
 
 const GMAIL_AGENT_SOURCE = "workers/gmail-agent";
@@ -55,7 +55,7 @@ export async function getGmailAgentSetupStatus(): Promise<GmailAgentSetupStatus>
       };
     }
     if (status.stage === "verified") {
-      const installedAgents = (getStateArgs() as Record<string, unknown>)["installedAgents"];
+      const installedAgents = (panel.stateArgs.get() as Record<string, unknown>)["installedAgents"];
       const hasGmailAgent =
         Array.isArray(installedAgents) &&
         installedAgents.some((agent) => {
@@ -171,8 +171,8 @@ export async function setupGmailAgent(args: GmailAgentSetupArgs = {}): Promise<{
     ]
   );
 
-  const stateArgs = getStateArgs() as Record<string, unknown>;
-  await setStateArgs({
+  const stateArgs = panel.stateArgs.get() as Record<string, unknown>;
+  await panel.stateArgs.set({
     installedAgents: updateInstalledAgents(stateArgs["installedAgents"], {
       agentId: GMAIL_AGENT_CLASS,
       handle: GMAIL_AGENT_HANDLE,

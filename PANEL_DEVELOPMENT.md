@@ -314,6 +314,7 @@ const page = await handle.cdp.lightweightPage();
 await page.fill("input[name=query]", "NatStack");
 await page.click(".search-button");
 const text = await page.textContent(".results .first");
+const currentUrl = page.url(); // string, synchronous like Playwright
 
 await handle.cdp.navigate("https://other.com");
 await handle.cdp.goBack();
@@ -368,6 +369,12 @@ window.open("https://example.com");
 
 Use `handle.ensureLoaded()` before RPC calls to an unloaded panel. CDP access
 loads targets automatically after approval.
+
+The lightweight page API follows Playwright's sync/async split: actions and
+DOM reads are async, while `page.url()` returns the cached current URL as a
+plain string. Do not `await page.url()` or attach `.catch()` to it; use
+`await page.evaluate(() => location.href)` only when the URL must be computed in
+the page context.
 
 ---
 

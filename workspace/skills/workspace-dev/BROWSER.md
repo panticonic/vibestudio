@@ -9,11 +9,12 @@ them as disposable web pages.
 
 ```ts
 import { openPanel, openExternal } from "@workspace/runtime";
-import { playwrightPage } from "@workspace/playwright-automation";
 
 const handle = await openPanel("https://example.com", { focus: true });
-const page = await playwrightPage(handle);
+const page = await handle.cdp.lightweightPage();
 
+await page.goto("https://example.com");
+await page.getByRole("button", { name: "Sign in" }).click();
 await page.fill("input[name=query]", "NatStack");
 await page.click(".search-button");
 await handle.click(".search-button"); // same target, convenience wrapper
@@ -24,6 +25,13 @@ await handle.cdp.reload();
 
 await openExternal("https://docs.example.com");
 ```
+
+`handle.cdp.lightweightPage()` returns a Playwright-style page driven by our own
+lightweight, workerd-native CDP client (`@workspace/cdp-client`). It is the
+single browser-automation surface — there is no separate "full Playwright" tier
+to choose. Do not import or install any `playwright*` package; load the page
+through `handle.cdp.lightweightPage()` and do not import `@workspace/cdp-client`
+directly for ordinary page work.
 
 Use `panelTree.list/roots/children/get` for existing panels. Existing handles
 are non-owned: do not call `handle.navigate`, `handle.reload`, or
@@ -40,31 +48,127 @@ delete scope.page;
 ```
 
 Reuse one handle and one CDP page object per workflow; repeated `openPanel()`
-calls create duplicate panels.
+calls create duplicate panels, and repeated `handle.cdp.lightweightPage()` calls
+create duplicate CDP connections. There is no generic `handle.cdp.page()` alias.
 
-Choose one CDP client explicitly. This keeps ordinary panel startup fast while
-making the automation surface unambiguous:
+## Where it runs
 
-- `await handle.cdp.lightweightPage()` loads the standalone
-  `@workspace/cdp-client` internally. Use it only when you intentionally want
-  the constrained surface; do not import the CDP client package directly.
-- `await playwrightPage(handle)` from `@workspace/playwright-automation` loads
-  vendored full Playwright through `@workspace/playwright-core`. Use this for UI
-  tests, login flows, locators, waits, and screenshots.
+The lightweight CDP client is workerd-native: it works in panels **and** in
+worker/DO/server-side-eval contexts. It runs over a WebSocket to the panel's CDP
+endpoint, so any context that holds a panel handle can drive the page —
+including server-side `eval`. `openPanel` itself is a panel/component-runtime
+capability, but once you hold a panel handle, `handle.cdp.lightweightPage()`
+automation is available wherever that handle lives.
 
-There is no runtime compatibility shim and no silent fallback between clients.
-Inline eval snippets that use the full client should pass
-`imports: { "@workspace/playwright-automation": "latest" }`; source-file code
-should declare the package dependency. Deliberately switch to
-`handle.cdp.lightweightPage()` only when the smaller API is sufficient. There is
-no generic `handle.cdp.page()` alias.
+## Page surface
 
-API scope:
+`handle.cdp.lightweightPage()` returns a rich, Playwright-style page. Actions
+auto-wait for the element to be visible/stable/enabled before acting.
 
-| Client          | Entry point                                                      | Scope                                                                                                                                                                                              | Use when                                                                                       |
-| --------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Full Playwright | `playwrightPage(handle)` from `@workspace/playwright-automation` | Fuller Playwright-style page/locator surface: `url`, `title`, `goto`, `locator`, locator `click/fill/innerText/textContent/count`, `waitForSelector`, `waitForLoadState`, `evaluate`, `screenshot` | UI tests, browser workflows, login flows, anything where robust selectors/waits matter         |
-| Lightweight CDP | `handle.cdp.lightweightPage()`                                   | Small CDP wrapper for basic `goto`, `click`, `fill`, `evaluate`, `waitForSelector`, `screenshot`, console event capture, DOM `inspect(selector)`, and simple locator helpers                       | Constrained worker/DO contexts or code paths where you intentionally avoid the vendored client |
+```ts
+const page = await handle.cdp.lightweightPage();
+
+// Locators
+page.locator("css selector");
+page.getByRole("button", { name: "Sign in", exact: true });
+page.getByText("Welcome");
+page.getByLabel("Email");
+page.getByPlaceholder("Search");
+page.getByTestId("submit");
+page.getByAltText("Logo");
+page.getByTitle("Close");
+
+// Chaining
+page.getByRole("listitem").filter({ hasText: "active" }).nth(2);
+page.locator(".row").first();
+page.locator(".row").last();
+const rows = await page.locator(".row").all();
+
+// Actions (auto-wait)
+await page.getByRole("button", { name: "Save" }).click();
+await page.locator(".item").dblclick();
+await page.locator(".item").hover();
+await page.getByLabel("Email").fill("user@example.com");
+await page.getByLabel("Email").type("user@example.com");
+await page.getByLabel("Email").clear();
+await page.locator("input").press("Enter");
+await page.getByRole("checkbox").check();
+await page.getByRole("checkbox").uncheck();
+await page.getByRole("checkbox").setChecked(true);
+await page.getByLabel("Country").selectOption("US");
+await page.locator("input").focus();
+await page.locator("input").blur();
+await page.locator(".far-below").scrollIntoViewIfNeeded();
+
+// Reads / state
+await page.locator(".modal").waitFor({ state: "visible" });
+await page.locator(".row").count();
+await page.locator(".badge").isVisible();
+await page.getByRole("checkbox").isChecked();
+await page.locator("button").isEnabled();
+await page.locator("button").isDisabled();
+await page.locator("input").isEditable();
+await page.locator("a").getAttribute("href");
+await page.locator("input").inputValue();
+await page.locator(".title").innerText();
+await page.locator(".title").textContent();
+await page.locator(".row").allInnerTexts();
+await page.locator(".row").allTextContents();
+await page.locator(".box").boundingBox();
+await page.locator(".box").inspect();
+```
+
+Page-level methods:
+
+```ts
+await page.goto("https://example.com");
+await page.goto(url, { waitUntil: "networkidle" });
+await page.reload();
+await page.goBack();
+await page.goForward();
+await page.title();
+page.url(); // string, synchronous like Playwright
+await page.content(); // full HTML
+await page.evaluate(() => document.title);
+await page.screenshot();
+await page.waitForSelector(".ready");
+await page.waitForLoadState("networkidle");
+await page.waitForFunction(() => document.readyState === "complete");
+const events = page.consoleEvents(); // live console capture after connect
+
+// Back-compat string forms
+await page.click("button.submit");
+await page.fill('input[name="email"]', "user@example.com");
+```
+
+### Not supported
+
+The lightweight client deliberately omits a few full-Playwright features. These
+are out of scope: file uploads (`setInputFiles`), multiple pages/popups,
+cross-origin frames, and full network request interception (`route`). For
+protocol-level needs beyond the page surface, use raw `CdpConnection.send` (see
+below).
+
+## Protocol-level work
+
+For raw CDP, open a connection to the panel's CDP endpoint and drive the
+protocol directly:
+
+```ts
+import { CdpConnection } from "@workspace/cdp-client";
+
+const endpoint = await handle.cdp.getCdpEndpoint(); // { wsEndpoint, token }
+const c = await CdpConnection.connect(endpoint.wsEndpoint, endpoint.token);
+
+await c.send("Page.navigate", { url: "https://example.com" });
+c.on("Page.loadEventFired", () => console.log("loaded"));
+```
+
+Use `c.send(method, params)` to issue CDP commands and `c.on(event, cb)` to
+subscribe to CDP events. This is the escape hatch for anything the page surface
+does not cover (network interception, file inputs, multi-target work).
+
+## Console diagnostics
 
 Use historical console diagnostics for post-mortem panel debugging. CDP live
 console events start only after a CDP client connects; they cannot recover
@@ -86,12 +190,10 @@ host-captured console history. Renderer lifecycle failures such as crashes,
 failed loads, and unresponsive renderers are recorded in the historical error
 buffer with `source: "lifecycle"`.
 
-Use the page object returned by `playwrightPage(handle)` for full Playwright automation:
+Use the page object returned by `handle.cdp.lightweightPage()` for automation:
 
 ```ts
-import { playwrightPage } from "@workspace/playwright-automation";
-
-const page = await playwrightPage(handle);
+const page = await handle.cdp.lightweightPage();
 console.log(page.url(), await page.title());
 await page.locator("button.submit").click();
 await page.locator(".status").innerText();
@@ -99,13 +201,9 @@ await page.waitForSelector(".ready");
 await page.waitForLoadState("networkidle");
 ```
 
-Do not import full Playwright in panel UI code unless the panel itself is
-building an automation tool. For agents and UI workflows, import
-`@workspace/playwright-automation` when the full Playwright-style locator/wait
-surface is needed. Full Playwright is loaded on demand and is intentionally
-heavier than the lightweight client; a load failure should expose the
-underlying build/load problem. For quick diagnostics and simple DOM inspection,
-`handle.cdp.lightweightPage()` is usually enough.
+`page.url()` is a synchronous Playwright-style accessor. Do not `await` it or
+attach `.then()` / `.catch()`; use `await page.evaluate(() => location.href)`
+only when the URL must be computed inside the page after client-side routing.
 
 `handle.reload()` is panel lifecycle reload for the named panel's renderer; it
 does not rebuild code and does not unload the panel's runtime lease. For
@@ -118,10 +216,9 @@ that target's handle and use the same `handle.cdp` namespace:
 
 ```ts
 import { panelTree } from "@workspace/runtime";
-import { playwrightPage } from "@workspace/playwright-automation";
 
 const parent = panelTree.self().parent();
-if (parent) await playwrightPage(parent);
+if (parent) await parent.cdp.lightweightPage();
 
 const sibling = panelTree.get("sibling-panel-id");
 await sibling.cdp.navigate("https://example.com/status");
@@ -136,8 +233,8 @@ introspection before calling `handle.call`, `handle.snapshot()`, `handle.tree()`
 
 | Method                                             | Description                                                              |
 | -------------------------------------------------- | ------------------------------------------------------------------------ |
-| `playwrightPage(handle)`                           | Load full Playwright CDP client and return the page                      |
-| `handle.cdp.lightweightPage()`                     | Load the smaller CDP wrapper and return the page                         |
+| `handle.cdp.lightweightPage()`                     | Connect the lightweight CDP client and return the Playwright-style page  |
+| `handle.cdp.getCdpEndpoint()`                      | Get `{ wsEndpoint, token }` for raw `CdpConnection.connect`              |
 | `handle.cdp.consoleHistory({ limit, errorLimit })` | Read host-captured historical console logs and the separate error buffer |
 | `handle.diagnostics({ limit, errorLimit })`        | Read handle metadata plus host-captured console/lifecycle diagnostics    |
 | `handle.click(selector)`                           | Click in the target panel through CDP                                    |

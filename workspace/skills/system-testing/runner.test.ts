@@ -2,13 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createWithAgent: vi.fn(async (config: unknown) => ({ config })),
-  createPanelSandboxConfig: vi.fn(() => ({ kind: "sandbox" })),
-  getStateArgs: vi.fn(() => ({ agentConfig: { model: "anthropic:test-model" } })),
   rpc: {
-    selfId: "panel:nav-test",
+    selfId: "do:natstack/internal:EvalDO:test-eval",
     call: vi.fn(),
   },
-  slotId: "panel:slot-test",
   gad: {},
 }));
 
@@ -16,15 +13,9 @@ vi.mock("@workspace/agentic-session", () => ({
   HeadlessSession: { createWithAgent: mocks.createWithAgent },
 }));
 
-vi.mock("@workspace/agentic-core", () => ({
-  createPanelSandboxConfig: mocks.createPanelSandboxConfig,
-}));
-
 vi.mock("@workspace/runtime", () => ({
   gad: mocks.gad,
   rpc: mocks.rpc,
-  slotId: mocks.slotId,
-  getStateArgs: mocks.getStateArgs,
 }));
 
 import { HeadlessRunner, SYSTEM_TEST_AGENT_PROMPT } from "./runner.js";
@@ -32,13 +23,11 @@ import { HeadlessRunner, SYSTEM_TEST_AGENT_PROMPT } from "./runner.js";
 describe("HeadlessRunner", () => {
   beforeEach(() => {
     mocks.createWithAgent.mockClear();
-    mocks.createPanelSandboxConfig.mockClear();
-    mocks.getStateArgs.mockClear();
     mocks.rpc.call.mockClear();
   });
 
   it("spawns system-test agents without a model-call cap by default", async () => {
-    const runner = new HeadlessRunner("ctx-test");
+    const runner = new HeadlessRunner("ctx-test", { model: "anthropic:test-model" });
 
     await runner.spawn();
 
@@ -54,7 +43,7 @@ describe("HeadlessRunner", () => {
       config: { clientId: string };
       extraConfig: Record<string, unknown>;
     };
-    expect(config.config.clientId).toBe("panel:slot-test");
+    expect(config.config.clientId).toBe(mocks.rpc.selfId);
     expect(config.extraConfig).not.toHaveProperty("maxModelCallsPerTurn");
   });
 

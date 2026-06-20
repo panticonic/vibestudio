@@ -209,7 +209,7 @@ via `runner.subscribe()`.
 Pi session state is owned by Pi's `AgentSession` and persisted by the worker
 DO. NatStack framework state uses internal Durable Objects:
 
-- `ScopeStoreDO` for REPL scopes.
+- `EvalDO` for per-owner sandbox-eval REPL scopes (behind the `eval` service).
 - `WorkspaceDO` for panel tree and search (replaced the former `PanelStoreDO`).
 - `BrowserDataDO` for imported browser data.
 - `WebhookStoreDO` for webhook subscriptions.

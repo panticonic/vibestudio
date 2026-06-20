@@ -58,7 +58,7 @@ natstack vcs status --repo panels/notes | jq '.files[].path'
 ## Call a service the CLI has no command for
 
 ```bash
-natstack agent services scope --json | jq '.methods | keys'   # check the schema
+natstack agent services workspace --json | jq '.methods | keys'   # check the schema
 natstack agent call workspace.listSkills '[]'
 natstack agent call vcs.status "[\"ctx:$(natstack agent status --json | jq -r .contextId)\"]"
 ```

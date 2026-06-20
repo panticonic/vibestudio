@@ -7,7 +7,7 @@ list, inspect, open, and mutate UI panels through `panelTree`; CDP is served by
 the Electron host that currently holds the target panel's runtime lease.
 In panel code, import `panelTree` as a top-level runtime export. Do not use
 `workspace.panelTree`; `workspace` is the workspace catalog/source/unit
-namespace and only carries `workspace.openPanel` as a panel-opening convenience.
+namespace. Use top-level `openPanel` to create panels.
 
 `panelTree` return signatures:
 
@@ -19,7 +19,7 @@ panelTree.roots(): Promise<PanelHandle[]>
 panelTree.children(id): Promise<PanelHandle[]>
 panelTree.parent(id): PanelHandle | null
 panelTree.navigate(id, source, opts?): Promise<{ id: string; title: string }>
-panelTree.open(source, opts?): Promise<PanelHandle>
+openPanel(source, opts?): Promise<PanelHandle>
 ```
 
 `self()` and `get()` are synchronous handle factories. Do not call `.catch()` on
@@ -39,8 +39,8 @@ const snapshot = await handle.snapshot();
 await handle.close(); // close temporary panels opened for diagnostics/tests
 ```
 
-Inside the current panel, use `reopen({ source?, contextId?, stateArgs? })` for
-self-replacement. Use `handle.navigate(source, opts)` or
+Inside the current panel, use `panel.reopen({ source?, contextId?, stateArgs? })`
+for self-replacement. Use `handle.navigate(source, opts)` or
 `panelTree.navigate(id, source, opts)` when intentionally replacing a known
 panel slot from another runtime.
 
@@ -69,16 +69,16 @@ panel slot from another runtime.
 Inside a panel:
 
 ```ts
-import { getStateArgs, useStateArgs, setStateArgs } from "@workspace/runtime";
+import { panel } from "@workspace/runtime";
 
-const initial = getStateArgs();
-await setStateArgs({ theme: "dark" });
+const initial = panel.stateArgs.get();
+await panel.stateArgs.set({ theme: "dark" });
 ```
 
-`setStateArgs()` persists through the host and immediately applies the returned,
-validated snapshot to the caller panel. `useStateArgs()` re-renders from that
-local snapshot and from later host-published `runtime:stateArgsChanged` events
-for updates made elsewhere.
+`panel.stateArgs.set()` persists through the host and immediately applies the
+returned, validated snapshot to the caller panel. `panel.stateArgs.use()`
+re-renders from that local snapshot and from later host-published
+`runtime:stateArgsChanged` events for updates made elsewhere.
 
 From an agent-held handle:
 
@@ -157,13 +157,18 @@ panel target — workspace panels and browser panels alike, including the panel
 you are running in (`panelTree.self()`). Panels held by non-CDP hosts reject CDP
 access instead of being silently taken over. CDP access is still approval-gated
 through the `panelCdp` service.
-Use `handle.cdp.lightweightPage()` for the runtime-owned smaller wrapper. For
-full Playwright, import `playwrightPage` from
-`@workspace/playwright-automation` and call `await playwrightPage(handle)`.
-Inline eval snippets that use full Playwright should pass
-`imports: { "@workspace/playwright-automation": "latest" }`. There is no silent
-fallback and no generic `handle.cdp.page()` alias. Use these APIs instead of
-eagerly importing Playwright in panel UI code.
+`handle.cdp.lightweightPage()` returns a Playwright-style page driven by our own
+lightweight, workerd-native CDP client (`@workspace/cdp-client`). It is the
+single browser-automation surface — there is no separate "full Playwright" tier,
+and you do not import or install any `playwright*` package. The page exposes
+locators (`page.locator`, `page.getByRole`, `page.getByText`, …), auto-waiting
+actions (`click`, `fill`, `check`, `selectOption`, …), reads (`innerText`,
+`count`, `isVisible`, …), and page-level methods (`goto`, `screenshot`,
+`waitForSelector`, `evaluate`, …). For protocol-level work, `import
+{ CdpConnection } from "@workspace/cdp-client"` and connect via
+`handle.cdp.getCdpEndpoint()`. There is no generic `handle.cdp.page()` alias.
+Because the client is workerd-native, `handle.cdp.*` automation works wherever
+you hold a panel handle, including server-side eval.
 
 Approval-gated panel operations wait for a visible shell approval decision. If
 no decision arrives before the approval deadline, the request fails with an

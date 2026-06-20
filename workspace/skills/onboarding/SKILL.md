@@ -37,14 +37,13 @@ collect a lightweight setup snapshot:
 
 ```
 eval({ code: `
-  import { credentials, fs, workspace } from "@workspace/runtime";
   import { browserData } from "@workspace/panel-browser";
   import { getGoogleOnboardingStatus } from "@workspace-skills/google-workspace";
   import { getActiveSearchProvider } from "@workspace-skills/web-research";
 
-  const workspaces = await workspace.list();
-  const active = await workspace.getActive();
-  const storedCredentials = await credentials.listStoredCredentials().catch(() => []);
+  const workspaces = await services.workspace.list();
+  const active = await services.workspace.getActive();
+  const storedCredentials = await services.credentials.listStoredCredentials().catch(() => []);
   const google = await getGoogleOnboardingStatus()
     .catch(error => ({ error: error instanceof Error ? error.message : String(error) }));
   const importHistory = await browserData.getImportHistory().catch(() => []);

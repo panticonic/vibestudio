@@ -17,14 +17,16 @@
   useAgenticChat() composes useChatCore + feature hooks
 
 @workspace/agentic-session       ← thin headless convenience
-  HeadlessSession = PubSub connection + the same typed reducer/selector path
+  HeadlessSession = PubSub connection (via ConnectionManager) + the same typed reducer/selector path
   - full-auto channel config (approval level 2)
-  - automatic ScopeManager creation when sandbox provided
-  - default eval + set_title method registration on the client
+  - default set_title method registration on the client
   - convenience: createWithAgent() connects the headless client, then subscribes the agent
-  - SandboxConfig factory: createRpcSandboxConfig (workers + Node servers)
   - Uses the same agent worker prompt and tool surface as panel sessions;
     UI tools naturally drop out because no panel is advertising them.
+  - The agent's `eval` runs server-side in its own per-channel EvalDO, so it
+    works with no panel and no session-side sandbox. The optional SandboxConfig
+    here only backs local chat-sandbox helpers (e.g. callMethod), not the
+    agent's eval.
 ```
 
 ## What Lives Where
@@ -43,7 +45,6 @@
 - `HeadlessSession` — headless PubSub client + typed channel reducer
 - `getRecommendedChannelConfig()` — full-auto approval channel config
 - `subscribeHeadlessAgent()` — subscribe a DO agent to a channel with full-auto approval
-- `createRpcSandboxConfig(rpc)` — sandbox factory for any non-panel context with an RPC bridge
 
 **agentic-chat** (React adapter):
 - `useChatCore()` — owns the PubSub client, subscribes to the typed channel log, returns React state
@@ -91,20 +92,21 @@ transcript UX.
 
 ## Teardown Contract
 
-SessionManager provides two teardown paths:
+HeadlessSession provides two teardown paths:
 
-- **`dispose(): void`** — synchronous best-effort. Scope persist is fire-and-forget. Use for browser panels where the tab is closing.
-- **`close(): Promise<void>`** — awaitable. Flushes dirty scope through the `scope` RPC service, then disconnects. Use for headless consumers (workers, tests, servers).
-- **`Symbol.asyncDispose`** — supports `await using session = ...` syntax.
+- **`dispose(): void`** — synchronous best-effort: aborts the message consumer and disconnects. Use when the surrounding context is being torn down hard.
+- **`close(): Promise<void>`** — awaitable: unsubscribes and retires the agent it subscribed (when created via `createWithAgent`), then disposes. Use for headless consumers (workers, tests, servers).
+- **`Symbol.asyncDispose`** — supports `await using session = ...` syntax (calls `close()`).
 
-## Scope Ownership
+## Eval, scope, and db ownership
 
-SessionManager owns the ScopeManager when provided. It:
-- Wires `onChange` to emit `scopeDirty` events
-- Persists on `close()` / `dispose()`
-- Does NOT register browser lifecycle listeners (`beforeunload`, `visibilitychange`) — those belong in the React adapter layer
+The session does **not** own the agent's REPL scope or `db`. The agent's `eval`
+tool dispatches to the server-side `eval` service, which runs the code in a
+per-owner, per-channel `EvalDO`. That DO holds the persistent REPL `scope` (and a
+synchronous in-DO SQLite `db`) in its own storage and survives across turns
+regardless of whether any panel or headless session is connected.
 
-The React adapter (`useAgenticChat`) adds browser lifecycle persistence on top.
-
-Scope snapshots are persisted by the server-side `scope` service backed by
-`ScopeStoreDO`; sessions no longer use a userland database proxy.
+Because of this, HeadlessSession registers no `eval` method and creates no scope
+manager — there is nothing scope-related for it to persist on teardown. The
+optional `SandboxConfig` passed to a session only backs local chat-sandbox
+helpers (e.g. `callMethod`); it is not what gives the agent eval.

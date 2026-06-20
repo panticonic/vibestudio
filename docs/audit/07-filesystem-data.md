@@ -4,7 +4,7 @@ This audit was written against the pre-Durable-Object storage architecture.
 The database findings for the former host-owned SQL RPC surface are superseded:
 that surface was removed, panel tree state moved to `PanelStoreDO`, browser
 data moved to `BrowserDataDO`, webhook ingress moved to `WebhookStoreDO`, and
-REPL scopes moved to `ScopeStoreDO`.
+REPL scopes moved to per-owner `EvalDO`s (behind the server `eval` service).
 
 Current storage architecture is documented in `docs/architecture/storage.md`.
 The remaining non-storage filesystem findings from the original report should

@@ -28,7 +28,7 @@ The compiled module may export:
 
 | Export    | Purpose                                                                                                                                                                                                |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `default` | Required. React component receiving `{ typeId, state, expanded, displayMode, chat, scope, scopes }`. Render compact inline content when `expanded` is false and the full view when `expanded` is true. |
+| `default` | Required. React component receiving `{ messageId, typeId, state, expanded, displayMode, chat }`. Render compact inline content when `expanded` is false and the full view when `expanded` is true. |
 | `Pill`    | Optional. A dedicated component for the collapsed inline view (`expanded === false`). When present it renders the bead and `default` only renders the expanded card. Same props as `default`.          |
 | `reduce`  | Optional. `(state, update) => nextState`. Folds `custom.updated` payloads. Default: last update replaces state. A throwing reducer is caught — the prior state is kept and folding continues.          |
 ### Schema validation
@@ -234,26 +234,25 @@ Rules:
 - The component must be pure with respect to `state` — updates re-render via
   the reducer fold. Don't keep authoritative state in component-local refs;
   publish a `custom.updated` event instead.
-- Treat pre-injected handles (`chat`, `scope`, `scopes`, and `help`) like any
-  other sandbox handle — call `chat.publish` / `chat.callMethod` from event
-  handlers when you need to send events back to the channel.
+- The component's only injected handle is `chat` (`scope`/`scopes`/`help` are
+  eval-only and are NOT passed to rendered components). Call `chat.publish` /
+  `chat.callMethod` from event handlers when you need to send events back to the
+  channel.
 - The module is recompiled when `updatedAtSeq` advances (re-registration).
   Keep the module pure so identical re-registrations produce stable output.
 
-### `scope` / `scopes` semantics
+### State, not scope
 
-Each render receives the live panel REPL `scope` (shared mutable object) and the
-`scopes` persistence handle — the same ones `eval` and `inline_ui` see. Two
-rules follow:
+Custom-message components do **not** receive `scope`/`scopes` — that REPL scope
+is server-side in the agent's `EvalDO` and is never shared into rendered
+components. So:
 
-- **Authoritative, replayable data must live in the message `state`, not in
-  `scope`.** `scope` is panel-local and ephemeral: it is empty after reload and
-  on observer panels / replay, so a card that reads its data from `scope` will
-  render blank there. Embed what the card needs in `initialState` / updates
-  (bounded — the channel persists every byte). Use `scope` only for live,
-  best-effort enrichment that may be absent.
-- To persist interaction state across reloads, call `scopes.push()` (or publish
-  a `custom.updated`); do not keep authoritative state in component refs.
+- **Authoritative, replayable data must live in the message `state`.** Embed
+  what the card needs in `initialState` / updates (bounded — the channel
+  persists every byte). The same `state` renders identically on every observer
+  panel and on replay.
+- To persist interaction state across reloads, publish a `custom.updated` event
+  (folded by `reduce`); do not keep authoritative state in component refs.
 
 ## Reducer semantics
 

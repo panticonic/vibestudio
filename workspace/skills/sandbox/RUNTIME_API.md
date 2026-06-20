@@ -4,16 +4,43 @@ Credentials are URL-bound and may only be used through host-mediated egress.
 
 ## Panel Runtime Surface
 
-Panel identity has two layers: `slotId` is the stable visible panel slot and is
-the correct identity for panel-tree operations and PubSub/channel clients;
-`id`/`entityId`/`rpc.selfId` identify the current live runtime entity and can
-change when the panel navigates or reopens.
+Panel identity has two layers: `panel.slotId` is the stable visible panel slot
+and is the correct identity for panel-tree operations and PubSub/channel clients;
+`id`/`panel.entityId`/`rpc.selfId` identify the current live runtime entity and
+can change when the panel navigates or reopens.
 
 <!-- BEGIN GENERATED: panel-runtime-surface -->
 Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the live surface.
 
 | Export | Kind | Members | Description |
 |--------|------|---------|-------------|
+| `id` | value |  |  |
+| `contextId` | value |  |  |
+| `rpc` | value |  | Portable RPC client (the full createRpcClient). |
+| `fs` | value |  |  |
+| `callMain` | value |  | Call a `main` (server) service method: callMain("fs.readFile", path). |
+| `parent` | value |  | This runtime's parent panel handle (a no-panel handle when there is none). |
+| `getParent` | value |  | Get the parent panel handle, or null when there is no parent. |
+| `getParentWithContract` | value |  | Get the parent handle typed by a panel contract, or null. |
+| `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
+| `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
+| `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
+| `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
+| `openExternal` | value |  |  |
+| `workers` | namespace | `create`, `destroy`, `update`, `list`, `status`, `listInstanceSources`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService`, `getPort`, `restartAll`, `cloneDO`, `destroyDO` |  |
+| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
+| `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote` |  |
+| `vcs` | namespace | `applyEdits`, `readFile`, `listFiles`, `revert`, `status`, `unitStatus`, `log`, `diff`, `resolveHead`, `merge`, `abortMerge`, `pendingMerge`, `publishStatus`, `publish`, `recall` | Workspace GAD VCS (edit-first): applyEdits commits and projects edits atomically; status reports a head's unpublished changes vs main; diff compares state hashes. |
+| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `blameGadFileSnippet`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
+| `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
+| `extensions` | namespace | `use`, `invoke`, `on`, `list`, `reload` |  |
+| `approvals` | namespace | `request`, `revoke`, `list` |  |
+| `notifications` | namespace | `show`, `dismiss` |  |
+| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `sourceTree`, `findUnitForPath`, `units` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
+| `openPanel` | value |  |  |
+| `listPanels` | value |  |  |
+| `getPanelHandle` | value |  |  |
+| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle \| null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. self/get are sync; async methods refresh metadata as needed. |
 | `Rpc` | value |  | RPC helpers namespace export. |
 | `z` | value |  | Zod export. |
 | `defineContract` | value |  |  |
@@ -21,65 +48,14 @@ Generated from `runtimeSurface.panel.ts`. Use `await help()` at runtime for the 
 | `parseContextId` | value |  |  |
 | `isValidContextId` | value |  |  |
 | `getInstanceId` | value |  |  |
-| `id` | value |  |  |
-| `entityId` | value |  | Panel entity id (panel:<historyEntryKey>) - same as `id`. |
-| `slotId` | value |  | Stable panel slot id for panel tree operations and panel channel/client identity. |
-| `rpc` | value |  |  |
-| `parent` | value |  |  |
-| `getParent` | value |  |  |
-| `getParentWithContract` | value |  |  |
-| `onConnectionError` | value |  |  |
-| `getInfo` | value |  |  |
-| `focusPanel` | value |  |  |
-| `getTheme` | value |  |  |
-| `onThemeChange` | value |  |  |
-| `onFocus` | value |  |  |
-| `expose` | value |  |  |
-| `contextId` | value |  |  |
-| `recoveryCoordinator` | value |  | Panel transport recovery phase coordinator. |
-| `parentId` | value |  |  |
-| `fs` | value |  |  |
-| `createGatewayFetch` | value |  | Create a gateway-authenticated fetch helper from an explicit config. |
-| `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
-| `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
-| `env` | value |  |  |
-| `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
-| `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
-| `workers` | namespace | `create`, `destroy`, `update`, `list`, `status`, `listInstanceSources`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService`, `getPort`, `restartAll`, `cloneDO`, `destroyDO` |  |
 | `normalizePath` | value |  |  |
 | `getFileName` | value |  |  |
 | `resolvePath` | value |  |  |
-| `getStateArgs` | value |  |  |
-| `useStateArgs` | value |  |  |
-| `setStateArgs` | value |  |  |
-| `setStateArgsForPanel` | value |  |  |
-| `reopen` | value |  | Replace the current panel slot with a source/context/stateArgs using panelTree.navigate. |
-| `openExternal` | value |  |  |
-| `onChildCreated` | value |  |  |
-| `openPanel` | value |  |  |
-| `listPanels` | value |  |  |
-| `getPanelHandle` | value |  |  |
-| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate`, `open` | Top-level export, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle \| null; navigate(id, source, opts?): Promise<{ id, title }>; open(source, opts?): Promise<PanelHandle>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; open creates a new panel. self/get are sync; async methods refresh metadata as needed. |
-| `buildPanelRenderErrorPrompt` | value |  |  |
-| `installPanelErrorDiagnosticLauncher` | value |  |  |
-| `openPanelErrorDiagnosticChat` | value |  |  |
+| `createGatewayFetch` | value |  | Create a gateway-authenticated fetch helper from an explicit config. |
+| `panel` | namespace | `entityId`, `slotId`, `parentId`, `env`, `getInfo`, `focusPanel`, `getTheme`, `onThemeChange`, `onFocus`, `onConnectionError`, `onChildCreated`, `reopen`, `stateArgs` | Panel-only affordances: identity (entityId/slotId/parentId/env), introspection (getInfo/getTheme/onThemeChange/onFocus/onConnectionError), lifecycle (focusPanel/onChildCreated/reopen), and stateArgs (get/set/use/setForPanel). |
+| `journal` | namespace | `Journal`, `with`, `current` | Panel operation journaling: journal.Journal (class), journal.with(journal, fn), journal.current(). |
 | `agentApi` | value |  |  |
-| `Journal` | value |  |  |
-| `withJournal` | value |  |  |
-| `currentJournal` | value |  |  |
 | `adblock` | namespace | `getStats`, `isActive`, `getStatsForPanel`, `isEnabledForPanel`, `setEnabledForPanel`, `resetStatsForPanel`, `getPanelUrl`, `addToWhitelist`, `removeFromWhitelist` |  |
-| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `sourceTree`, `findUnitForPath`, `openPanel`, `units` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; import top-level panelTree for panel-tree handles. |
-| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp` |  |
-| `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote` |  |
-| `vcs` | namespace | `applyEdits`, `readFile`, `listFiles`, `revert`, `status`, `unitStatus`, `log`, `diff`, `resolveHead`, `merge`, `abortMerge`, `pendingMerge`, `publishStatus`, `publish`, `recall` | Workspace GAD VCS (edit-first): applyEdits commits and projects edits atomically; status reports a head's unpublished changes vs main; diff compares state hashes. |
-| `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `blameGadFileSnippet`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
-| `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
-| `extensions` | namespace | `use`, `on`, `list`, `reload` |  |
-| `approvals` | namespace | `request`, `revoke`, `list` |  |
-| `requestApproval` | value |  |  |
-| `revokeApproval` | value |  |  |
-| `listApprovals` | value |  |  |
-| `notifications` | namespace | `show`, `dismiss` |  |
 <!-- END GENERATED: panel-runtime-surface -->
 
 Workspace source edits commit immediately: the `edit`/`write` tools — and
@@ -115,6 +91,19 @@ head is ahead of `main` (has unpublished changes); `main` is always clean. To
 diff or pin states, use state hashes: `vcs.diff` accepts state hashes, not file
 paths and not head names. If you have heads, resolve them first with
 `vcs.resolveHead`; otherwise use the `stateHash` returned by `vcs.applyEdits`.
+
+VCS tracks workspace **source**, so every `applyEdits`/`write` path must live
+under a tracked directory (`projects/`, `panels/`, `packages/`, `apps/`,
+`workers/`, `skills/`, `extensions/`). A *temporary* or throwaway file you commit
+still goes under one of those — e.g. `projects/tmp-foo.txt` — **not** a
+platform-ignored path. `vcs.applyEdits` rejects ignored dirs (`.natstack`,
+`.tmp`, `.git`, `.gad`, `node_modules`, `dist`) and ignored files (`.env`,
+`*.log`); in particular do **not** pass an `fs.mktemp()` path (it returns an
+ignored `.tmp/` location) to `vcs.applyEdits`.
+
+`vcs.readFile("", path)` returns `{ content, stateHash, contentHash, mode, size }`
+— there is no `baseStateHash` field; use the returned `stateHash` as the
+`baseStateHash` for a follow-up `vcs.applyEdits`.
 
 ## Store
 
@@ -191,7 +180,7 @@ await byKnownSlot.refresh(); // hydrate title/source/parent/runtime entity metad
 await byKnownSlot.navigate("panels/spectrolite", { contextId: "ctx-vault" }); // replace slot
 ```
 
-`openPanel()`/`panelTree.open()` creates a panel owned by the workflow. Handles
+`openPanel()` creates a panel owned by the workflow. Handles
 from `list`/`roots`/`children`/`get` are existing panels; do not call
 `handle.navigate`, `handle.reload`, or `handle.close` unless requested. Inside
 the current panel, prefer `reopen({ contextId, stateArgs })` for
@@ -215,17 +204,27 @@ await same.call.someExposedMethod();
 
 const page = await same.cdp.lightweightPage();
 await page.title();
-await page.url();
+page.url(); // string, synchronous like Playwright
 await same.click("button");
 ```
 
-Use `same.cdp.lightweightPage()` for the runtime-owned smaller wrapper. For
-full Playwright, import `playwrightPage` from
-`@workspace/playwright-automation` and call `await playwrightPage(handle)`.
-Inline eval snippets that use full Playwright should pass
-`imports: { "@workspace/playwright-automation": "latest" }`. There is no
-generic `same.cdp.page()` alias and no compatibility
-runtime-owned full Playwright method.
+`same.cdp.lightweightPage()` returns a Playwright-style page driven by our own
+lightweight, workerd-native CDP client (`@workspace/cdp-client`). It is the
+single browser-automation surface — there is no separate "full Playwright" tier,
+and you do not import or install any `playwright*` package. The page exposes
+locators (`page.locator`, `page.getByRole`, `page.getByText`, `page.getByLabel`,
+…), auto-waiting actions (`click`, `fill`, `check`, `selectOption`, …), reads
+(`innerText`, `count`, `isVisible`, `getAttribute`, …), and page-level methods
+(`goto`, `screenshot`, `waitForSelector`, `evaluate`, …). For protocol-level
+work, `import { CdpConnection } from "@workspace/cdp-client"` and connect with
+`(await same.cdp.getCdpEndpoint())`. There is no generic `same.cdp.page()` alias.
+
+`panelTree`/`PanelHandle` (opening and discovering panels) are panel-runtime
+capabilities — they run in panel/component code, not in server-side `eval`. But
+the `handle.cdp.*` automation is workerd-native and runs over a WebSocket to the
+panel's CDP endpoint, so once you hold a panel handle (acquired where the panel
+runtime is available, or over `rpc`), `handle.cdp.lightweightPage()` automation
+works from server-side eval too.
 
 CDP and structural operations are approval-gated on first use per requester
 runtime entity and target panel. Privileged shell/about targets use a severe
@@ -236,22 +235,22 @@ a mobile/non-CDP host rejects CDP access.
 
 ## Userland Approval Prompts
 
-Use `requestApproval()` only when custom userland code exposes a shared resource
+Use `approvals.request()` only when custom userland code exposes a shared resource
 to other panels, workers, DOs, or extensions and needs a user decision that
 NatStack cannot represent as a built-in permission. The shell verifies the
 issuer identity (`callerId`/`callerKind`) and shows the user a trusted consent
 prompt for that custom resource.
 
-Do **not** call `requestApproval()` for ordinary actions the caller can already
+Do **not** call `approvals.request()` for ordinary actions the caller can already
 perform: context filesystem reads/writes/removes, eval work, panel operations,
 browser automation, git/runtime APIs, external opens, credential use, and other
 host-mediated capabilities are already protected by NatStack's outer permission
 systems where needed.
 
 ```ts
-import { requestApproval, revokeApproval, listApprovals } from "@workspace/runtime";
+import { approvals } from "@workspace/runtime";
 
-const result = await requestApproval({
+const result = await approvals.request({
   subject: {
     id: "team-x:calendar-write",
     label: "Team X calendar write access",
@@ -276,7 +275,7 @@ For a custom prompt, opt into `promptOptions: "choices"` and supply options.
 If you omit `options`, the host shows a simple allow/deny prompt.
 
 ```ts
-const result = await requestApproval({
+const result = await approvals.request({
   subject: { id: "team-x:calendar-write", label: "Team X calendar write access" },
   title: "Allow calendar writes?",
   promptOptions: "choices",
@@ -298,8 +297,8 @@ request resolves immediately with the stored choice and no prompt. Dismissal is
 not remembered.
 
 ```ts
-const grants = await listApprovals();
-await revokeApproval("team-x:calendar-write");
+const grants = await approvals.list();
+await approvals.revoke("team-x:calendar-write");
 ```
 
 Use stable, provider-owned `subject.id` values such as
@@ -308,7 +307,7 @@ letters/numbers/`._:/-`, and cannot start with `shell:`, `server:`,
 `system:`, or `@`. Option values must be unique, 1-40 chars, and use only
 letters/numbers/`_-`; `dismiss` is reserved.
 
-Do not use `requestApproval()` as a general confirmation dialog or a defensive
+Do not use `approvals.request()` as a general confirmation dialog or a defensive
 wrapper around actions the agent/runtime can already take. For host capabilities
 that already have a NatStack permission flow, use `openExternal()`,
 `credentials.*`, `git.*`, `vcs.*`, or the relevant runtime API so the host can apply the

@@ -111,6 +111,19 @@ Allowed callers: `shell`, `app`, `panel`, `server`, `worker`, `do`, `extension`
 | `credentials.proxyGitHttp` |  |
 | `credentials.audit` |  |
 
+## `eval`
+
+Owner-scoped sandbox eval backed by a per-owner internal EvalDO
+
+Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`
+
+| Method | Description |
+|--------|-------------|
+| `eval.run` | Run TypeScript/JS in the caller's per-owner EvalDO sandbox (persistent REPL scope + synchronous in-DO SQLite `db`). Owner is the verified caller; fs is scoped to the owner's context. |
+| `eval.reset` | Reset the eval context: wipe the persistent scope + the user `db` tables (a fresh scope), preserving the kernel's own state. The owner's existing data is cleared. |
+| `eval.startRun` | Start an eval run for a caller that cannot hold a connection (an agent DO): returns a runId at once; the eval runs server-held in the EvalDO and the result is delivered out-of-band (onEvalComplete) and/or polled via getRun. Connection-holding callers (panels/CLI) should use `run` for a one-request result. |
+| `eval.getRun` | Poll an async run started with startRun: returns its status and (when done) result. |
+
 ## `externalOpen`
 
 Approval-gated system browser opens
@@ -309,19 +322,6 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
 | `runtime.setTitle` | Set a server-controlled display title for the calling entity. Surfaced by approval UIs in place of the opaque id. Pass null/empty to clear. |
 
-## `scope`
-
-REPL scope persistence backed by an internal Durable Object
-
-Allowed callers: `panel`, `app`, `worker`, `do`, `extension`, `shell`, `server`
-
-| Method | Description |
-|--------|-------------|
-| `scope.upsert` |  |
-| `scope.loadCurrent` |  |
-| `scope.get` |  |
-| `scope.list` |  |
-
 ## `shellApproval`
 
 Shell-owned consent approval queue
@@ -492,6 +492,7 @@ Allowed callers: `shell`, `app`, `server`, `panel`, `worker`, `do`
 | `workspace-state.slot.get` | Get a single slot row by id. |
 | `workspace-state.slot.history` | Get the history for a slot. |
 | `workspace-state.entity.resolveActive` | Resolve a single active entity record by id. |
+| `workspace-state.slot.resolveByEntity` | Resolve the OPEN slot id whose current entity is the given runtime-entity (nav) id, or null. Durable nav→slot mapping used to nest launches under the owning panel's tree slot. |
 | `workspace-state.slot.create` | Create a new slot row. |
 | `workspace-state.slot.appendHistory` | Append a history entry to a slot. |
 | `workspace-state.slot.setCurrent` | Move a slot's current pointer to an existing history entry. |

@@ -28,7 +28,6 @@ feedback_custom({
 
 ```
 eval({
-  imports: { "@workspace/playwright-automation": "latest" },
   code: `
   import { browserData } from "@workspace/panel-browser";
 
@@ -50,23 +49,26 @@ eval({
 
 Cookies were auto-synced during import — just open a browser panel and check.
 
-```
-eval({ code: `
-  import { openPanel } from "@workspace/runtime";
-  import { playwrightPage } from "@workspace/playwright-automation";
+`openPanel`/`panelTree` are **panel/component-runtime** capabilities —
+`import { openPanel } from "@workspace/runtime"` does not initialize in the
+`EvalDO`, so acquire the browser handle from panel code or an
+`inline_ui`/`feedback_custom` component. The `handle.cdp.lightweightPage()`
+automation itself is workerd-native and runs over a WebSocket to the panel's CDP
+endpoint, so it also works in server-side eval once you hold the handle:
 
-  // Open target site — imported cookies are already in the browser session
-  const handle = await openPanel("https://github.com");
-  const page = await playwrightPage(handle);
+```tsx
+import { openPanel } from "@workspace/runtime";
 
-  const title = await page.title();
-  console.log("Page title:", title);
-  const isLoggedIn = await page.evaluate(() =>
-    document.querySelector("img.avatar") !== null
-  );
-  console.log(isLoggedIn ? "Logged in to GitHub!" : "Not logged in");
-`
-})
+// Open target site — imported cookies are already in the browser session
+const handle = await openPanel("https://github.com");
+const page = await handle.cdp.lightweightPage();
+
+const title = await page.title();
+console.log("Page title:", title);
+const isLoggedIn = await page.evaluate(() =>
+  document.querySelector("img.avatar") !== null
+);
+console.log(isLoggedIn ? "Logged in to GitHub!" : "Not logged in");
 ```
 
 ### Step 4: Leave management UI
@@ -203,10 +205,13 @@ export default function ComparisonTable({ props }) {
 
 Dump all imported data for backup or migration.
 
+`browserData` is shell-only (it goes through the browser-data extension), so this
+runs from panel code or a component, not server-side eval. `fs` there is the
+injected eval/runtime filesystem — do not import it.
+
 ```
 eval({ code: `
   import { browserData } from "@workspace/panel-browser";
-  import { fs } from "@workspace/runtime";
 
   const dump = await browserData.exportAll();
   const path = "/exports/browser-data-" + new Date().toISOString().slice(0, 10) + ".json";

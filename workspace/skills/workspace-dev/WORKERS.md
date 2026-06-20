@@ -10,31 +10,32 @@ Generated from `runtimeSurface.worker.ts`. Use `await help()` at runtime for the
 | Export | Kind | Members | Description |
 |--------|------|---------|-------------|
 | `id` | value |  |  |
-| `rpc` | value |  |  |
+| `contextId` | value |  |  |
+| `rpc` | value |  | Portable RPC client (the full createRpcClient). |
 | `fs` | value |  |  |
+| `callMain` | value |  | Call a `main` (server) service method: callMain("fs.readFile", path). |
+| `parent` | value |  | This runtime's parent panel handle (a no-panel handle when there is none). |
+| `getParent` | value |  | Get the parent panel handle, or null when there is no parent. |
+| `getParentWithContract` | value |  | Get the parent handle typed by a panel contract, or null. |
 | `doTargetId` | value |  | Build a unified RPC target ID for a Durable Object reference. |
 | `createDurableObjectServiceClient` | value |  | Resolve a Durable Object-backed service and call it through unified RPC. |
+| `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
+| `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
+| `openExternal` | value |  |  |
 | `workers` | namespace | `create`, `destroy`, `update`, `list`, `status`, `listInstanceSources`, `listServices`, `resolveService`, `resolveDurableObject`, `durableObjectService`, `getPort`, `restartAll`, `cloneDO`, `destroyDO` |  |
-| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `sourceTree`, `findUnitForPath`, `units` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
-| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp` |  |
+| `credentials` | namespace | `store`, `connect`, `configureClient`, `requestCredentialInput`, `getClientConfigStatus`, `deleteClientConfig`, `listStoredCredentials`, `revokeCredential`, `grantCredential`, `resolveCredential`, `fetch`, `hookForUrl`, `gitHttp`, `forAudience` |  |
 | `git` | namespace | `http`, `importProject`, `completeWorkspaceDependencies`, `setSharedRemote`, `removeSharedRemote` |  |
 | `vcs` | namespace | `applyEdits`, `readFile`, `listFiles`, `revert`, `status`, `unitStatus`, `log`, `diff`, `resolveHead`, `merge`, `abortMerge`, `pendingMerge`, `publishStatus`, `publish`, `recall` | Workspace GAD VCS (edit-first): applyEdits commits and projects edits atomically; status reports a head's unpublished changes vs main; diff compares state hashes. |
 | `gad` | namespace | `rawSql`, `query`, `status`, `ensureBlob`, `getTrajectoryBranchHead`, `appendTrajectoryBatch`, `listTrajectoryEvents`, `appendChannelEnvelope`, `getChannelEnvelope`, `getTrajectoryForEnvelope`, `listPublishedEnvelopesForTrajectory`, `getEnvelopesForTrajectory`, `getPublishedArtifactsForTurn`, `getPrivateLineageForPublishedEnvelope`, `getDownstreamConsumers`, `getChannelReplayWindow`, `listChannelEnvelopesAfter`, `listChannelEnvelopesBefore`, `getInitialChannelWindow`, `listChannelEnvelopes`, `inspectChannelEnvelopes`, `listStoredValueRefs`, `inspectStorageDiagnostics`, `listGadBranchFiles`, `diffGadStates`, `readGadFileAtState`, `getGadStateProducer`, `blameGadFileSnippet`, `validateGadHashes`, `clearDirtyAfterValidation`, `checkGadIntegrity`, `rebuildTrajectoryProjections` |  |
 | `webhooks` | namespace | `createSubscription`, `listSubscriptions`, `revokeSubscription`, `rotateSecret` |  |
-| `extensions` | namespace | `use`, `on`, `list`, `reload` |  |
+| `extensions` | namespace | `use`, `invoke`, `on`, `list`, `reload` |  |
 | `approvals` | namespace | `request`, `revoke`, `list` |  |
 | `notifications` | namespace | `show`, `dismiss` |  |
-| `contextId` | value |  |  |
-| `gatewayConfig` | value |  | Gateway base URL and bearer token for NatStack service routes. |
-| `gatewayFetch` | value |  | Fetch helper that prefixes gateway-relative paths and adds Authorization: Bearer. |
-| `callMain` | value |  |  |
-| `openExternal` | value |  |  |
-| `requestApproval` | value |  |  |
-| `revokeApproval` | value |  |  |
-| `listApprovals` | value |  |  |
-| `expose` | value |  |  |
-| `getParent` | value |  |  |
-| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate`, `open` | Runtime property, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle \| null; navigate(id, source, opts?): Promise<{ id, title }>; open(source, opts?): Promise<PanelHandle>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; open creates a new panel. self/get are sync; async methods refresh metadata as needed. |
+| `workspace` | namespace | `list`, `getActive`, `getActiveEntry`, `getConfig`, `create`, `delete`, `setInitPanels`, `setConfigField`, `switchTo`, `sourceTree`, `findUnitForPath`, `units` | Workspace catalog, source tree, and unit helpers. Does not include panelTree; use runtime.panelTree for panel-tree handles. |
+| `openPanel` | value |  | Open a workspace or browser panel and return a PanelHandle. |
+| `listPanels` | value |  | Alias for runtime.panelTree.list(). |
+| `getPanelHandle` | value |  | Alias for runtime.panelTree.get(id, kind?). |
+| `panelTree` | namespace | `self`, `get`, `list`, `roots`, `children`, `parent`, `navigate` | Runtime property, not workspace.panelTree. Signatures: self(): PanelHandle; get(id): PanelHandle; list(): Promise<PanelHandle[]>; roots(): Promise<PanelHandle[]>; children(id): Promise<PanelHandle[]>; parent(id): PanelHandle \| null; navigate(id, source, opts?): Promise<{ id, title }>. Use list/roots/children/get for existing panels; navigate replaces an existing panel slot; openPanel creates a new panel. self/get are sync; async methods refresh metadata as needed. |
 | `handleRpcPost` | value |  |  |
 | `destroy` | value |  |  |
 <!-- END GENERATED: worker-runtime-surface -->
@@ -156,6 +157,78 @@ Rules of thumb:
   throwing migration surfaces in `workspace.units.diagnostics` for the source
   and the instance stays on its old version until fixed.
 
+## Durable Object RPC Exposure & Authorization
+
+DO methods are reachable over RPC only when explicitly opted in, and the
+workspace realm enforces a per-method caller policy (default-deny). Two layers,
+kept separate — both required. Full design: [`docs/capability-approval-design.md`](../../../docs/capability-approval-design.md).
+
+### Layer 1 — `@rpc` exposure (which methods are callable)
+
+A method with no `@rpc` is private to the DO and cannot be invoked over the
+relay; forgetting `@rpc` fails loud ("not exposed"). Mark every method a caller
+should reach.
+
+### Layer 2 — `@rpc({ callers })` caller policy (who may call it)
+
+The RPC relay is open between authenticated participants, so the recipient must
+gate. **In the workspace realm, every relay-reachable method MUST declare an
+`@rpc({ callers: [...] })` policy** — a method with no policy, or a call from a
+caller kind not listed, is refused (default-deny). `callers` is a coarse
+caller-KIND floor; values: `"panel" | "do" | "server" | "worker" | "shell" |
+"app" | "harness" | "extension"`.
+
+```ts
+import { rpc } from "@workspace/runtime/worker";
+
+export class MyStoreDO extends DurableObjectBase {
+  @rpc({ callers: ["panel", "do"] })       // a panel or an agent DO may call it
+  async addItem(label: string): Promise<{ id: string }> { ... }
+
+  @rpc({ callers: ["server", "harness"] }) // server-dispatched only (webhook/alarm)
+  async onWebhookDelivery(event: WebhookEvent): Promise<void> { ... }
+
+  private bumpCounter(): void { ... }       // no @rpc — unreachable over RPC
+}
+```
+
+Typical floors: panel-driven → `["panel"]`/`["panel","do"]`; channel/agent-internal
+→ `["do"]`; server-dispatched (webhooks/alarms/lifecycle) → `["server","harness"]`;
+broad reads → `["do","panel","server"]`; admin/destructive → `["server","shell","harness"]`.
+
+### Identity-level tightening (inline)
+
+The kind floor is coarse — *any* DO is `"do"`. When a method must accept only ONE
+specific caller (this agent's own EvalDO, the agent's own PubSubChannel, a known
+class), add an inline check ON TOP of the floor using the server-authenticated
+caller, which cannot be forged:
+
+```ts
+@rpc({ callers: ["do"] })
+async onChannelOp(channelId: string): Promise<void> {
+  await this.assertOwnEvalCaller(channelId); // only THIS agent's own EvalDO
+  ...
+}
+// this.rpcCallerId / this.rpcCallerKind / this.caller are server-set from the
+// validated token. (Server-realm DOs like EvalDO use a coarser per-DO
+// `assertInboundAllowed` override instead of @rpc policies.)
+```
+
+### When to add a USER-APPROVAL gate
+
+Reachability (Layers 1–2) answers "may this caller reach the method"; it never
+asks the user. For a *userland-useful but sensitive* action, require a user
+decision:
+- **Built-in host actions** (credentials, external opens, git writes, project
+  imports, webhooks, publishing main, spawning workers): call the existing
+  runtime API and let NatStack's built-in capability-permission flow prompt — do
+  NOT re-implement approval.
+- **Custom shared resources** your worker exposes to other userland callers: use
+  `runtime.approvals.request(...)` (see "Userland Approval Prompts" below).
+
+Never cache an approval result or invent your own grant scope — the host owns
+persistence, scope (once/session/version), and revocation.
+
 ## Store
 
 ```ts
@@ -223,7 +296,7 @@ approval helpers. Use this when a worker exposes its own security-gated service
 to other userland callers and needs a human decision that NatStack cannot model
 as a built-in credential or capability permission.
 
-Do not call `requestApproval()` before actions the worker or agent can already
+Do not call `approvals.request()` before actions the worker or agent can already
 take through normal runtime APIs. Context filesystem work, eval work, panel
 operations, browser automation, git/runtime APIs, external opens, and credential
 use are protected by the outer NatStack permission model where approval is
@@ -236,7 +309,7 @@ export default {
   async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext) {
     const runtime = createWorkerRuntime(env);
 
-    const decision = await runtime.requestApproval({
+    const decision = await runtime.approvals.request({
       subject: {
         id: "team-x:calendar-write",
         label: "Team X calendar write access",
@@ -264,19 +337,19 @@ export default {
 
 Every non-dismiss choice is persisted by the server under the verified issuer
 worker and `subject.id`. Subsequent calls with the same `subject.id` return the
-stored choice immediately. Use `runtime.revokeApproval(subjectId)` to forget a
-decision, and `runtime.listApprovals()` to inspect decisions owned by the same
+stored choice immediately. Use `runtime.approvals.revoke(subjectId)` to forget a
+decision, and `runtime.approvals.list()` to inspect decisions owned by the same
 worker.
 
 ```ts
-await runtime.revokeApproval("team-x:calendar-write");
-const grants = await runtime.listApprovals();
+await runtime.approvals.revoke("team-x:calendar-write");
+const grants = await runtime.approvals.list();
 ```
 
 Keep `subject.id` stable and provider-owned. It must be 1-128 chars using only
 letters/numbers/`._:/-`, and cannot start with `shell:`, `server:`, `system:`,
 or `@`. Options must have unique values; `dismiss` is reserved. Treat
-`requestApproval()` as a userland policy gate for custom shared resources only.
+`approvals.request()` as a userland policy gate for custom shared resources only.
 For host-mediated actions such as external browser opens, credentials, git
 writes, project imports, or webhooks, call the existing runtime API and let
 NatStack's built-in permission flow handle the prompt and trust scope. For

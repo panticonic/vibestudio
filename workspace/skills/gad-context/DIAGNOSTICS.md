@@ -111,11 +111,9 @@ storage invariants need attention.
 ### Build Provenance
 
 Use the build service to check what source artifact the runtime can actually
-see:
+see. From `eval`, `rpc` is injected — call it directly (no import):
 
 ```ts
-import { rpc } from "@workspace/runtime";
-
 const provenance = await rpc.call("main", "build.inspectBuildProvenance", [
   "@workspace-skills/system-testing",
 ]);

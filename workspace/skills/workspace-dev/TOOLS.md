@@ -7,7 +7,7 @@ Your working directory is the **context folder** — an isolated copy of the wor
 - All file paths are **relative to your working directory** (e.g., `panels/my-app/index.tsx`)
 - **NEVER** use host absolute paths (e.g., `/home/.../workspace/panels/...`). Runtime `fs.*` accepts context-root absolute paths like `/panels/my-app/index.tsx`, but prefer `panels/my-app/index.tsx` in examples and source edits.
 - **NEVER** use `Bash` for git operations, file listing, or file creation — use the structured tools
-- In eval, use **static imports** (`import { rpc } from "@workspace/runtime"`). Dynamic `await import(...)` may work in some builds, but it bypasses the loader's static dependency planning and is not the supported pattern.
+- In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`, `db`, `help` (and, in agent eval, `chat`) are **injected free variables** — do **not** import them. Reach services via `services.<svc>.<method>(...)` or `rpc.call("<svc>.<method>", [args])`. For workspace/npm **packages**, use a **static import** (`import { createProject } from "@workspace-skills/workspace-dev"`). Dynamic `await import(...)` may work in some builds, but it bypasses the loader's static dependency planning and is not the supported pattern.
 
 ---
 
@@ -91,11 +91,11 @@ eval({ code: `
 
 ## eval
 
-Execute TypeScript/JavaScript code in the panel runtime. Runtime APIs are available via static imports from `@workspace/runtime`.
+Execute TypeScript/JavaScript code server-side in your own persistent sandbox (a per-agent EvalDO). It runs even when no panel is open. In eval, `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`, `db`, `help` (and, in agent eval, `chat`) are injected free variables; reach server/main services through `services.<svc>.<method>(...)` or `rpc.call("<svc>.<method>", [args])`. Do **not** import the injected names from `@workspace/runtime`.
 
 **IMPORTANT:**
 
-- Use static `import` syntax. Dynamic `await import(...)` is a fallback only for ordinary browser/ESM code; do not use it for `@workspace/runtime` or workspace skill packages.
+- Use static `import` syntax for **packages** (workspace/npm). Dynamic `await import(...)` is a fallback only for ordinary browser/ESM code; do not use it for workspace packages.
 
 **Parameters:**
 | Name | Type | Required | Description |
@@ -104,29 +104,38 @@ Execute TypeScript/JavaScript code in the panel runtime. Runtime APIs are availa
 | `syntax` | `"typescript"` \| `"tsx"` \| `"jsx"` | No | Syntax mode (default: `"tsx"`) |
 | `imports` | `Record<string, string>` | No | Packages to build on-demand. Workspace packages: `"latest"` or a git ref. npm packages: `"npm:<version>"` (e.g. `"npm:^4.17.21"`, `"npm:latest"`) |
 
-### Runtime APIs
+### Panel APIs
 
-Available via `import { ... } from "@workspace/runtime"` and `import { ... } from "@workspace/panel-browser"`:
+`openPanel`/`listPanels`/`getPanelHandle`/`panelTree` are part of the **portable runtime surface** — importable from `@workspace/runtime` (and injected ambiently) in panel, worker, **and server-side eval**. They are host-mediated over RPC: in eval they create/inspect panels via the server. A handful of panel-only extras (`panel.focusPanel`, `buildPanelLink`, `panel.reopen`, `panel.stateArgs`, `adblock`, `journal.Journal`, `agentApi`) are NOT in the eval surface — those need a real panel host:
 
 | API                            | Description                                                                     |
 | ------------------------------ | ------------------------------------------------------------------------------- |
-| `rpc`                          | RPC bridge for calling services via `rpc.call(target, method, args)`            |
-| `openPanel(source, opts?)`     | Open any panel — URLs become browser panels, source paths open workspace panels |
-| `buildPanelLink(source, opts)` | Build a URL for panel navigation (low-level — prefer `openPanel`)               |
-| `focusPanel(panelId)`          | Focus an existing panel by ID (does NOT open new panels)                        |
+| `openPanel(source, opts?)`     | Open any panel — URLs become browser panels, source paths open workspace panels (eval too) |
+| `buildPanelLink(source, opts)` | Build a URL for panel navigation (panel/component code — not in eval)            |
+| `panel.focusPanel(panelId)`    | Focus an existing panel by ID (panel/component code — not in eval)               |
+
+In **eval**, `rpc` is an injected free variable (not an import). Note the two call shapes: the eval-injected `rpc.call(method, args)` is 2-arg and targets the server (e.g. `rpc.call("build.getBuild", ["panels/my-app"])`); the panel/worker runtime client and `chat.rpc.call(target, method, args)` are the 3-arg form (e.g. `chat.rpc.call("main", "build.recompute", [])`).
 
 ### Using extensions
 
-Extensions are **declared** in `meta/natstack.yml` under `extensions:`. That declaration is the only way to add or remove one. To start using an extension, add it to the `extensions:` list in `meta/natstack.yml`; saving that change (a gated meta write) raises one joint approval covering every newly-declared extension. Once approved and running, call it with `extensions.use(name)`. Individual extension methods can still request their own approvals when the operation needs one, such as running tests.
+Extensions are **declared** in `meta/natstack.yml` under `extensions:`. That declaration is the only way to add or remove one. To start using an extension, add it to the `extensions:` list in `meta/natstack.yml`; saving that change (a gated meta write) raises one joint approval covering every newly-declared extension. Once approved and running, call it. **From eval**, invoke an extension method via
+`services.extensions.invoke(name, "method", [args])` (the underlying RPC); list
+availability with `rpc.call("extensions.list", [])`. **In panel/component code**,
+use the typed client `extensions.use(name)` instead (panel-runtime sugar over the
+same RPC). Individual extension methods can still request their own approvals when
+the operation needs one, such as running tests.
 
-`extensions.use(name)` is synchronous and returns a method proxy; do not `await`
-it and do not call `.catch(...)` on it. Catch the method call instead:
-`await extensions.use(name).method(...).catch(...)`.
-`extensions.use(name).method(...)` fails with `ENOEXT` if the extension is not declared, or `ENOTREADY` if it is still starting. If you need an extension that isn't declared yet, edit `meta/natstack.yml`.
+The panel-runtime `extensions.use(name)` is synchronous and returns a method
+proxy; do not `await` it and do not call `.catch(...)` on it. Catch the method
+call instead: `await extensions.use(name).method(...).catch(...)`. The eval form
+`services.extensions.invoke(name, "method", [args])` returns the result promise
+directly — `.catch(...)` it as usual. Either form fails with `ENOEXT` if the
+extension is not declared, or `ENOTREADY` if it is still starting. If you need an
+extension that isn't declared yet, edit `meta/natstack.yml`.
 
-Extension methods normally use unary RPC and must return JSON-serializable values. If an extension method returns a `Response` or `ReadableStream`, declare it when creating the client so the runtime uses streaming RPC end-to-end:
+Extension methods normally use unary RPC and must return JSON-serializable values. If an extension method returns a `Response` or `ReadableStream`, declare it when creating the client so the runtime uses streaming RPC end-to-end. Streaming `Response`/`ReadableStream` methods need the panel-runtime typed client (`extensions.use`), so this runs in panel/component code, not server-side eval:
 
-```ts
+```tsx
 import { extensions } from "@workspace/runtime";
 
 type ShellApi = {
@@ -139,14 +148,13 @@ const shell = extensions.use<ShellApi>("@workspace-extensions/shell", {
 });
 ```
 
-To check whether an extension is available before calling it, use `extensions.list()`:
+To check whether an extension is available before calling it from eval, list the registry with `rpc.call("extensions.list", [])`:
 
 ```ts
 eval({
   code: `
-  import { extensions } from "@workspace/runtime";
   const name = "@workspace-extensions/image-service";
-  const entry = (await extensions.list()).find((e) => e.name === name);
+  const entry = (await rpc.call("extensions.list", [])).find((e) => e.name === name);
   if (!entry || entry.status !== "running") {
     throw new Error(name + " is not available — declare it in meta/natstack.yml and approve it.");
   }
@@ -164,7 +172,7 @@ If an extension isn't declared, adding it to `meta/natstack.yml` raises a joint 
 
 ### RPC Services
 
-Called via `rpc.call("main", "service.method", args)`:
+Reached from eval via `services.<svc>.<method>(args)` or the 2-arg `rpc.call("<svc>.<method>", [args])`:
 
 #### workerd (Worker Management)
 
@@ -173,27 +181,24 @@ Manage worker instances. Available to panels, workers, and server callers. **Lim
 ```
 // Create a worker instance
 eval({ code: `
-  import { workers } from "@workspace/runtime";
-  const instance = await workers.create({
+  const instance = await services.workers.create({
     source: "workers/my-worker",
-    contextId,
+    contextId: ctx.contextId,
   });
-  console.log("Worker started:", instance.name, "on port", await workers.getPort());
+  console.log("Worker started:", instance.name, "on port", await services.workers.getPort());
 `
 })
 
 // List running workers
 eval({ code: `
-  import { workers } from "@workspace/runtime";
-  const list = await workers.list();
+  const list = await services.workers.list();
   console.log(list.map(w => w.name + " (" + w.status + ")"));
 `
 })
 
 // Destroy a worker
 eval({ code: `
-  import { workers } from "@workspace/runtime";
-  await workers.destroy("my-worker");
+  await services.workers.destroy("my-worker");
 `
 })
 ```
@@ -213,9 +218,8 @@ context head into `main`.)
 ```
 // Apply an edit directly (commits + projects atomically, rebuilds changed units)
 eval({ code: `
-  import { vcs } from "@workspace/runtime";
-  const base = (await vcs.resolveHead()).stateHash;
-  const result = await vcs.applyEdits({
+  const base = (await services.vcs.resolveHead()).stateHash;
+  const result = await services.vcs.applyEdits({
     baseStateHash: base,
     edits: [
       { kind: "write", path: "panels/my-app/index.tsx", content: { kind: "text", text: "..." } },
@@ -283,10 +287,12 @@ Returns `{ diagnostics, errorCount, warningCount }` where each diagnostic has `{
 
 ```
 eval({ code: `
-  import { extensions } from "@workspace/runtime";
-  const typecheck = extensions.use("@workspace-extensions/typecheck-service");
-  // Type-check a specific panel
-  const result = await typecheck.checkPanel("panels/my-app").catch((error) => ({
+  // Type-check a specific panel (extensions reached via services.extensions.invoke in eval)
+  const result = await services.extensions.invoke(
+    "@workspace-extensions/typecheck-service",
+    "checkPanel",
+    ["panels/my-app"],
+  ).catch((error) => ({
     error: String(error),
   }));
   if ("error" in result) return result;
@@ -308,9 +314,11 @@ Lower-level type checking with positional args. Prefer `checkPanel` for simple w
 
 ```
 eval({ code: `
-  import { extensions } from "@workspace/runtime";
-  const typecheck = extensions.use("@workspace-extensions/typecheck-service");
-  const result = await typecheck.check("panels/my-app");
+  const result = await services.extensions.invoke(
+    "@workspace-extensions/typecheck-service",
+    "check",
+    ["panels/my-app"],
+  );
   console.log(result);
 `
 })
@@ -326,9 +334,11 @@ current code version, or deny.
 
 ```
 eval({ code: `
-  import { extensions } from "@workspace/runtime";
-  const tests = extensions.use("@workspace-extensions/test-runner");
-  const result = await tests.run("packages/my-lib").catch((error) => ({
+  const result = await services.extensions.invoke(
+    "@workspace-extensions/test-runner",
+    "run",
+    ["packages/my-lib"],
+  ).catch((error) => ({
     error: String(error),
   }));
   console.log(result);
@@ -339,11 +349,11 @@ eval({ code: `
 For a single file or test name:
 
 ```
-await tests.run({
+await services.extensions.invoke("@workspace-extensions/test-runner", "run", [{
   target: "packages/my-lib",
   fileFilter: "src/index.test.ts",
   testName: "handles empty input",
-});
+}]);
 ```
 
 ### Browser Data
@@ -429,28 +439,27 @@ eval({ code: `
 
 ### Panel Lifecycle
 
+`openPanel` and panel handles are host-mediated over RPC and work in panel,
+worker, **and server-side eval** (they're part of the portable runtime surface).
+You can drive panel lifecycle from eval, panel code, or an
+`inline_ui`/`feedback_custom` component:
+
 #### First launch
 
-```
-eval({ code: `
-  import { openPanel } from "@workspace/runtime";
-  // Edits made via the edit/write tools are already committed to your head.
-  await openPanel("panels/my-app");
-`
-})
+```tsx
+import { openPanel } from "@workspace/runtime";
+// Edits made via the edit/write tools are already committed to your head.
+await openPanel("panels/my-app");
 ```
 
 #### Rebuild after edits
 
-```
-eval({ code: `
-  import { openPanel } from "@workspace/runtime";
-  // Your edits are already committed (edit-first); just reload the open panel.
-  const handle = await openPanel("panels/my-app");
-  const lifecycle = await handle.rebuildAndReload();
-  console.log(lifecycle.status, lifecycle.effectiveVersion);
-`
-})
+```tsx
+import { openPanel } from "@workspace/runtime";
+// Your edits are already committed (edit-first); just reload the open panel.
+const handle = await openPanel("panels/my-app");
+const lifecycle = await handle.rebuildAndReload();
+console.log(lifecycle.status, lifecycle.effectiveVersion);
 ```
 
 When iterating on an already-open panel after committed code changes, reuse its
