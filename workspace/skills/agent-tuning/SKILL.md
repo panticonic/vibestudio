@@ -10,12 +10,22 @@ credential setup, thinking effort, approval behavior, or response policy.
 
 ## Two Tiers
 
-Cold-start choices live in `workers/agent-worker/agent-config.ts`:
+Cold-start choices live in `packages/agentic-do/src/agent-config.ts`:
 
 - `DEFAULT_MODEL` chooses the default `provider:modelId`.
-- `PROVIDER_CREDENTIAL_SETUPS` wires OAuth or API-key credential collection.
+- `PROVIDER_CREDENTIAL_SETUPS` wires OAuth or API-key credential collection and
+  is derived from the shared provider presets in
+  `@workspace/model-catalog/providerConnect`.
 - These choices apply when a worker boots or when a channel subscribes with an
   `extraConfig.model` override. Do not expect a live `setModel` toggle.
+
+To inspect configured provider credential presets from eval, import the small
+model-catalog surface rather than the full agent DO package:
+
+```ts
+import { listProviderConnectPresets } from "@workspace/model-catalog/providerConnect";
+const providers = listProviderConnectPresets();
+```
 
 Session knobs are method calls on the agent participant:
 
@@ -27,7 +37,7 @@ Session knobs are method calls on the agent participant:
 
 ## Switching The Default Model
 
-Edit `workers/agent-worker/agent-config.ts` and set `DEFAULT_MODEL`.
+Edit `packages/agentic-do/src/agent-config.ts` and set `DEFAULT_MODEL`.
 
 Examples:
 
@@ -43,10 +53,11 @@ truth for ids wired into the runtime.
 
 ## Adding An OAuth Provider
 
-Copy a commented provider template in `PROVIDER_CREDENTIAL_SETUPS`, set the
-real provider id, and verify every URL/scope against the provider's current
-docs before enabling it. OAuth provider templates intentionally include
-`VERIFY` comments because provider endpoints and scopes are product-specific.
+Add or update the provider preset in the shared provider-connect registry
+(`@workspace/model-catalog/providerConnect` in workspace code; the NatStack
+source of truth is `packages/shared/src/providerConnect.ts`). Verify every
+URL/scope against the provider's current docs before enabling it. OAuth
+endpoints and scopes are product-specific and can drift.
 
 If the provider returns account identity in a nonstandard claim, also update
 `AiChatWorker.getModelCredentialTokenClaims()` so the model SDK receives the
@@ -54,7 +65,8 @@ claims it expects.
 
 ## Adding An API-Key Provider
 
-Copy the `__api-key-template__` block in `agent-config.ts`.
+Add or update the provider preset in `@workspace/model-catalog/providerConnect`.
+For NatStack source changes, edit `packages/shared/src/providerConnect.ts`.
 
 Set:
 

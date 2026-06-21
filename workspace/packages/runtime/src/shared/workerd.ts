@@ -7,6 +7,7 @@
  * const instance = await workers.create({
  *   source: "workers/hello",
  *   contextId: "ctx-1",
+ *   ref: "ctx:ctx-1", // for code created/edited on that context head
  * });
  * const list = await workers.list();
  * await workers.destroy("hello");
@@ -51,7 +52,7 @@ export type WorkerBindingDef = {
 export interface WorkerCreateOptions {
     /** Source path relative to workspace root (e.g., "workers/hello") */
     source: string;
-    /** Context ID for storage partition */
+    /** Context ID for runtime storage/state partition. This does not select code provenance. */
     contextId: string;
     /** Instance name (defaults to last segment of source) */
     name?: string;

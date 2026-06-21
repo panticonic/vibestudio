@@ -467,7 +467,9 @@ VCS tracks workspace **source**: every path must live under a tracked directory
 (`.natstack`, `.tmp`, `.git`, `.gad`, `node_modules`, `dist`, `.env`, `*.log`),
 so never use an `fs.mktemp()` path here. `vcs.readFile("", path)` returns
 `{ content, stateHash, ... }` (no `baseStateHash` field) — pass its `stateHash`
-as the `baseStateHash` of a later `applyEdits`.
+as the `baseStateHash` of a later `applyEdits`. `content` is a tagged union:
+use `content.text` only after checking `content.kind === "text"`; binary reads
+return `{ kind: "bytes", base64 }`.
 
 ```
 eval({ code: `
@@ -481,6 +483,30 @@ eval({ code: `
   console.log("New state:", result.stateHash);
   const status = await services.vcs.status();
   console.log("Changed files:", [...status.added, ...status.changed, ...status.removed]);
+` })
+```
+
+When editing based on a prior read, unwrap text content explicitly:
+
+```
+eval({ code: `
+  const path = \`projects/tmp-\${Date.now()}.txt\`;
+  await services.vcs.applyEdits({
+    edits: [{ kind: "write", path, content: { kind: "text", text: "initial\\n" } }],
+  });
+
+  const read = await services.vcs.readFile("", path);
+  if (!read) throw new Error(\`Missing file: \${path}\`);
+  if (read.content.kind !== "text") throw new Error(\`Not a text file: \${path}\`);
+
+  await services.vcs.applyEdits({
+    baseStateHash: read.stateHash,
+    edits: [{
+      kind: "write",
+      path,
+      content: { kind: "text", text: read.content.text + "\\nupdated\\n" },
+    }],
+  });
 ` })
 ```
 

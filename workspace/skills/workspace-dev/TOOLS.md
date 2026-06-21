@@ -184,6 +184,7 @@ eval({ code: `
   const instance = await services.workers.create({
     source: "workers/my-worker",
     contextId: ctx.contextId,
+    ref: \`ctx:${ctx.contextId}\`, // for worker code created/edited in this context
   });
   console.log("Worker started:", instance.name, "on port", await services.workers.getPort());
 `
@@ -202,6 +203,11 @@ eval({ code: `
 `
 })
 ```
+
+`contextId` selects the worker's runtime storage/state partition. It does not
+select the code build. Pass `ref: \`ctx:${ctx.contextId}\`` when launching a
+worker you just created or edited on the current context head. Omit `ref` only
+when you intentionally want the main workspace build.
 
 Methods: `create(options)`, `destroy(name)`, `update(name, updates)`, `list()`, `status(name)`, `listInstanceSources()`, `getPort()`, `restartAll()`. See [WORKERS.md](WORKERS.md) for full API.
 

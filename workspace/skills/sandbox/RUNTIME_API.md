@@ -69,6 +69,45 @@ For workspace-managed external repo declarations, startup auto-import, branches,
 approvals, and private repo retries, see
 `skills/onboarding/EXTERNAL_GIT_PROJECTS.md`.
 
+## Workspace Catalog
+
+Import `workspace` from `@workspace/runtime` to inspect the active workspace,
+workspace catalog, and registered runtime units:
+
+```ts
+import { contextId, workspace } from "@workspace/runtime";
+
+const active = await workspace.getActive();
+const activeEntry = await workspace.getActiveEntry(); // { name, lastOpened }
+const workspaces = await workspace.list();
+const units = await workspace.units.list();
+
+console.log({ contextId, active, activeEntry, workspaceCount: workspaces.length });
+console.log("Unit sample:", units.slice(0, 5).map((unit) => unit.id));
+```
+
+`workspace.getActive()` returns the active workspace id. `getActiveEntry()`
+returns the catalog entry for that id. Use `workspace.units.*` for source unit
+inspection, diagnostics, logs, versions, restart, and rollback.
+
+## Notifications
+
+Use `notifications.show()` for host chrome notifications:
+
+```ts
+import { notifications } from "@workspace/runtime";
+
+const id = await notifications.show({
+  type: "info",
+  title: "Notification test",
+  message: "notification-show-marker",
+});
+```
+
+`type` may be `info`, `success`, `warning`, `error`, or `consent`. The runtime
+client defaults omitted `type` to `info`, and accepts `body` as an alias for
+`message`.
+
 ### Workspace VCS Call Shape
 
 The `vcs` API is state-based, not cwd-based. Do not pass the workspace root,
@@ -104,7 +143,11 @@ ignored `.tmp/` location) to `vcs.applyEdits`.
 
 `vcs.readFile("", path)` returns `{ content, stateHash, contentHash, mode, size }`
 — there is no `baseStateHash` field; use the returned `stateHash` as the
-`baseStateHash` for a follow-up `vcs.applyEdits`.
+`baseStateHash` for a follow-up `vcs.applyEdits`. `content` is a tagged union:
+text files return `{ kind: "text", text: "..." }`, while binary files return
+`{ kind: "bytes", base64: "..." }`. Do not interpolate `read.content` directly;
+check `read.content.kind` and then use `read.content.text` or
+`read.content.base64`.
 
 ## Store
 

@@ -69,7 +69,7 @@ const myApp = await openPanel("panels/my-app");
 | Fork panel      | `eval` — `import { forkProject } from "@workspace-skills/workspace-dev"` then `forkProject({ from: "panels/chat", to: "panels/chat-experiment", title })` |
 | Fork worker     | `eval` — run `forkProject({ from, to, title, dryRun: true })` first; pass `classMap` for multi-class workers                                              |
 | Launch panel    | `eval` — `const handle = await openPanel(source)` (`openPanel` is importable/ambient in eval; edits are already committed to your head)                                                                |
-| Launch worker   | `eval` — `services.workers.create({ source: "workers/my-worker", contextId: ctx.contextId })`                                                                                     |
+| Launch worker   | `eval` — use `services.workers.create({ source: "workers/my-worker", contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })` for newly created or context-edited worker code; omit `ref` only when launching the main build |
 | Read a file     | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                          |
 | Edit a file     | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                    |
 | Check types     | `eval` — `await extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/my-app")`                                                     |
@@ -104,6 +104,10 @@ runtime behavior, check provenance before changing the fix:
 - Was the edit made in the same context the runtime builds from?
 - Was the edit applied through `edit`/`write`/`vcs.applyEdits` (not a stray `fs.writeFile` that never landed on the head)?
 - Did the build system rebuild that source?
+- For workers or DOs created/edited in this context, did the launch pass
+  `ref: \`ctx:${ctx.contextId}\``? `contextId` selects runtime storage/state;
+  `ref` selects the code build. Without `ref`, worker launches use the main
+  build and cannot see a worker scaffold that exists only on your context head.
 - Did the already-open panel run `handle.rebuildAndReload()` after the edit?
 - In dogfood mode, did the mirror apply or skip because the host checkout was dirty?
 

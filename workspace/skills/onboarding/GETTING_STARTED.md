@@ -193,10 +193,11 @@ with a stored credential wins.
 
 ## Step 3.5: Tune The Agent
 
-Cold-start choices live in `workers/agent-worker/agent-config.ts`: edit and
-reload or resubscribe to change the default model/provider. Session knobs
-(effort, approval, chattiness) are agent method calls that can change during a
-conversation. Use the `agent-tuning` skill for either path.
+Cold-start choices live in `packages/agentic-do/src/agent-config.ts`; provider
+credential presets are derived from `@workspace/model-catalog/providerConnect`.
+Edit and reload or resubscribe to change the default model/provider. Session
+knobs (effort, approval, chattiness) are agent method calls that can change
+during a conversation. Use the `agent-tuning` skill for either path.
 
 ## Step 4: Import Browser Data
 
