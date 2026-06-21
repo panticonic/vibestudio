@@ -1015,8 +1015,9 @@ describe("PubSubChannel", () => {
     expect(terminals).toHaveLength(1);
   });
 
-  it("returns an observable {dropped} when a result has no pending row and no terminal", async () => {
-    const { instance } = await createGadBackedChannel();
+  it("recovers a lost call: appends a terminal when a result has no pending row and no started", async () => {
+    const emitted: unknown[] = [];
+    const { instance, gad } = await createGadBackedChannel({ emitted });
 
     setRpcCaller(instance, "panel:provider", "panel");
     await instance.subscribe("panel:provider", {
@@ -1025,18 +1026,112 @@ describe("PubSubChannel", () => {
       type: "panel",
     });
 
-    // No call was ever made for this transportCallId: reconcile finds nothing
-    // and there is no durable terminal, so the result cannot land. The drop
-    // must be observable to the submitter rather than silently swallowed.
+    // No call was ever journaled for this transportCallId (cache-cold / lost
+    // started record): reconcile finds nothing and there is no durable terminal.
+    // Dropping the result would strand the caller forever — its parked
+    // invocation only settles on a terminal carrying the same invocationId. So
+    // the channel must ROOT the method and append a real terminal instead of a
+    // silent no-op.
     setRpcCaller(instance, "panel:provider", "panel");
     const result = await instance.submitMethodResult(
       "panel:provider",
-      "transport-never-existed",
-      { ok: true },
-      false
+      "transport-lost-record",
+      42,
+      false,
+      { invocationId: "invocation-lost-record", turnId: "turn-lost-record" }
     );
 
-    expect(result).toMatchObject({ id: undefined, dropped: true, reason: "no-pending-call" });
+    // The submitter still gets an observability signal, but it is a RECOVERY,
+    // not a drop — a real terminal seq id is returned.
+    expect(result).toMatchObject({ id: expect.any(Number), dropped: false, recovered: true });
+
+    // A durable terminal event now exists, keyed on the transportCallId and
+    // carrying the caller's invocationId (what routeInvocationTerminal matches).
+    const terminalRow = gad.sql
+      .exec(
+        `SELECT payload_ref_json FROM log_events WHERE envelope_id = ?`,
+        "terminal:transport-lost-record"
+      )
+      .toArray();
+    expect(terminalRow).toHaveLength(1);
+    expect(JSON.parse(terminalRow[0]!["payload_ref_json"] as string)).toMatchObject({
+      kind: "invocation.completed",
+      causality: {
+        invocationId: "invocation-lost-record",
+        transportCallId: "transport-lost-record",
+      },
+      payload: { result: 42 },
+    });
+
+    // The synthetic `started` root was appended too (fold invariant: every
+    // terminal is paired with a started carrying the same invocation id).
+    const rootRow = gad.sql
+      .exec(`SELECT payload_ref_json FROM log_events WHERE envelope_id = ?`, "invocation-lost-record")
+      .toArray();
+    expect(rootRow).toHaveLength(1);
+    expect(JSON.parse(rootRow[0]!["payload_ref_json"] as string)).toMatchObject({
+      kind: "invocation.started",
+      causality: {
+        invocationId: "invocation-lost-record",
+        transportCallId: "transport-lost-record",
+      },
+    });
+
+    // The terminal is broadcast so subscribers (the caller) actually receive it.
+    // The wire shape is { channelId, message: { kind: "log", event } } — the
+    // invocation payload lives at message.event.payload.
+    const broadcastCompleted = emitted
+      .map(
+        (payload) =>
+          (
+            payload as {
+              message?: {
+                event?: {
+                  payload?: { kind?: string; causality?: { transportCallId?: string } };
+                };
+              };
+            }
+          ).message?.event?.payload
+      )
+      .find(
+        (agentic) =>
+          agentic?.kind === "invocation.completed" &&
+          agentic?.causality?.transportCallId === "transport-lost-record"
+      );
+    expect(broadcastCompleted).toBeDefined();
+  });
+
+  it("recovers a lost call as invocation.failed when the submission isError", async () => {
+    const { instance, gad } = await createGadBackedChannel();
+
+    setRpcCaller(instance, "panel:provider", "panel");
+    await instance.subscribe("panel:provider", {
+      contextId: "ctx-1",
+      name: "Provider",
+      type: "panel",
+    });
+
+    setRpcCaller(instance, "panel:provider", "panel");
+    const result = await instance.submitMethodResult(
+      "panel:provider",
+      "transport-lost-error",
+      "boom",
+      true,
+      { invocationId: "invocation-lost-error" }
+    );
+    expect(result).toMatchObject({ id: expect.any(Number), dropped: false, recovered: true });
+
+    const terminal = gad.sql
+      .exec(
+        `SELECT payload_ref_json FROM log_events WHERE envelope_id = ?`,
+        "terminal:transport-lost-error"
+      )
+      .toArray();
+    expect(terminal).toHaveLength(1);
+    expect(JSON.parse(terminal[0]!["payload_ref_json"] as string)).toMatchObject({
+      kind: "invocation.failed",
+      causality: { invocationId: "invocation-lost-error" },
+    });
   });
 
   it("appends a durable invocation.completed terminal (no method-result envelope)", async () => {

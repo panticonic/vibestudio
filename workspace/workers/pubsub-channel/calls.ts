@@ -478,6 +478,94 @@ export class CallTransport {
     return event.id;
   }
 
+  /**
+   * Settle a call for which NO pending row exists and reconcile found no durable
+   * `invocation.started` either — a cache-cold / lost record (the started append
+   * never landed, or its envelope is gone). A naive drop strands the caller
+   * forever: its parked invocation is keyed on `transportCallId`/`invocationId`
+   * and only settles on a terminal carrying the same ids.
+   *
+   * We refuse to silently no-op the fold. The submitter knows the call's
+   * identity (it just executed it): `participantId` is the target, and the
+   * caller passes `invocationId` (the id its `routeInvocationTerminal` matches
+   * on) + `turnId` through `submitMethodResult`. We synthesize a minimal
+   * pending descriptor from that, root the method via the SANCTIONED
+   * `ensureMethodRoot` (which appends a synthetic `started` keyed on the
+   * invocation id, satisfying the fold's started⟂terminal pairing), then append
+   * + broadcast the terminal exactly as `settleCall` does. The caller now gets a
+   * real terminal instead of hanging.
+   *
+   * `callerId` is genuinely unknown here (the started that named it is missing),
+   * so we use a sentinel and FORCE the broadcast — the caller is a remote
+   * subscriber matching by `invocationId`, not by being the terminal's sender.
+   */
+  async settleMissingCall(
+    targetId: string,
+    transportCallId: string,
+    result: unknown,
+    isError: boolean,
+    opts?: {
+      invocationId?: string;
+      turnId?: string;
+      terminalOutcome?: InvocationOutcome;
+      terminalReasonCode?: string;
+      attachments?: StoredAttachment[];
+    }
+  ): Promise<number | undefined> {
+    // The terminal must carry the invocationId the caller parked on. The
+    // submitter forwards it; fall back to transportCallId (callMethod's own
+    // default when no explicit invocationId is supplied).
+    const invocationId = opts?.invocationId ?? transportCallId;
+    const synthetic: PendingCallRow = {
+      transportCallId,
+      invocationId,
+      ...(opts?.turnId ? { turnId: opts.turnId } : {}),
+      callerId: "unknown",
+      targetId,
+      method: "unknown",
+      createdAt: Date.now(),
+    };
+
+    // 1. Root the method (synthetic `started`, idempotent on invocationId).
+    await this.ensureMethodRoot(synthetic);
+
+    // 2. APPEND the terminal FIRST (deterministic envelopeId), mirroring
+    //    settleCall. Idempotent: a concurrent/duplicate settle finds it durable.
+    const terminalEnvelopeId = `terminal:${transportCallId}`;
+    let event = await this.deps.log.getEventByEnvelopeId(terminalEnvelopeId);
+    if (!event) {
+      const payload = this.deps.builders().terminal({
+        descriptor: {
+          channelId: this.deps.objectKey,
+          caller: this.deps.participantRef(synthetic.callerId),
+          invocationId: synthetic.invocationId,
+          transportCallId: synthetic.transportCallId,
+          ...(synthetic.turnId ? { turnId: synthetic.turnId } : {}),
+        },
+        result,
+        isError,
+        ...(opts?.terminalOutcome ? { terminalOutcome: opts.terminalOutcome } : {}),
+        ...(opts?.terminalReasonCode ? { terminalReasonCode: opts.terminalReasonCode } : {}),
+        createdAt: new Date().toISOString(),
+      });
+      event = await this.deps.appendDurable({
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload,
+        senderId: synthetic.callerId,
+        messageId: terminalEnvelopeId,
+        idempotency: "idempotent-by-id",
+        ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+      });
+    }
+
+    // 3. There is no cache row to consume. Record head, schedule, and FORCE the
+    //    broadcast — the caller is a subscriber matching by invocationId.
+    this.recordObservedHead(event.id);
+    this.deps.scheduleNextAlarm();
+    this.deps.broadcastLive(event, synthetic.callerId);
+    return event.id;
+  }
+
   /** Before any output/terminal append: if no envelope with the invocation id
    *  exists in the log, append a synthetic started so terminals never orphan. */
   private async ensureMethodRoot(pending: PendingCallRow): Promise<void> {

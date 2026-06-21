@@ -1241,7 +1241,7 @@ export class PubSubChannel extends DurableObjectBase {
       terminalReasonCode?: string;
       attachments?: StoredAttachment[];
     }
-  ): Promise<{ id?: number; dropped?: boolean; reason?: string }> {
+  ): Promise<{ id?: number; dropped?: boolean; reason?: string; recovered?: boolean }> {
     this.assertParticipantCaller(participantId, "submitMethodResult");
     const resolution = await this.calls.resolveSubmitterForCall(
       participantId,
@@ -1252,18 +1252,32 @@ export class PubSubChannel extends DurableObjectBase {
       return { id: resolution.eventId };
     }
     if (resolution.kind === "missing") {
-      // No live pending row AND no durable terminal even after reconcile: the
-      // result has nowhere to land. We cannot synthesize a terminal (the fold
-      // invariant pairs every terminal with a journaled `started`, which is
-      // absent here), but the drop MUST be observable rather than swallowed.
-      // The original caller is not left hanging: A4 gives tool calls a
-      // journaled deadline, so the channel's deadline sweep settles it with an
-      // abandoned/cancelled terminal even when a submit is lost.
-      console.warn(
-        `[Channel] submitMethodResult dropped: no pending call (already terminal or unknown): ` +
-          `channel=${this.objectKey} transportCallId=${transportCallId} isError=${isError}`
+      // No live pending row AND no durable `started`/terminal even after
+      // reconcile: a cache-cold / lost record. Dropping the result here strands
+      // the caller forever — its parked invocation only settles on a terminal
+      // carrying the same invocationId/transportCallId, so with NO terminal the
+      // turn never closes and waitForIdle hangs. Recover by rooting the method
+      // (sanctioned synthetic `started`, satisfying the fold) and appending +
+      // broadcasting a real terminal keyed on the caller's invocationId.
+      const id = await this.calls.settleMissingCall(
+        participantId,
+        transportCallId,
+        content,
+        isError,
+        {
+          ...(opts?.invocationId ? { invocationId: opts.invocationId } : {}),
+          ...(opts?.turnId ? { turnId: opts.turnId } : {}),
+          ...(opts?.terminalOutcome ? { terminalOutcome: opts.terminalOutcome } : {}),
+          ...(opts?.terminalReasonCode ? { terminalReasonCode: opts.terminalReasonCode } : {}),
+          ...(opts?.attachments ? { attachments: opts.attachments } : {}),
+        }
       );
-      return { id: undefined, dropped: true, reason: "no-pending-call" };
+      console.warn(
+        `[Channel] submitMethodResult recovered a lost call (no pending row): rooted method + ` +
+          `appended terminal so the caller settles: channel=${this.objectKey} ` +
+          `transportCallId=${transportCallId} isError=${isError} terminalSeq=${id}`
+      );
+      return { id, dropped: false, recovered: true };
     }
     const id = await this.calls.settleCall(
       transportCallId,
