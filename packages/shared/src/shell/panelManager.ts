@@ -270,6 +270,7 @@ export class PanelManager {
       key: historyEntryKey,
       contextId,
       stateArgs: stateArgsPayload,
+      ref: opts?.ref,
     });
     const entityId = asPanelEntityId(handle.id);
 

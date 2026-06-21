@@ -20,11 +20,17 @@ export const RuntimeEntityHandleSchema = z
   })
   .strict();
 
+const BuildRefSchema = z
+  .string()
+  .describe(
+    'Optional code build ref. Omit to use the main build; pass "ctx:<contextId>" or "state:<stateHash>" only for targeted builds.'
+  );
+
 export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("panel"),
     source: z.string(),
-    ref: z.string().optional(),
+    ref: BuildRefSchema.optional(),
     contextId: z.string().nullable().optional(),
     key: z.string().optional(),
     stateArgs: z.unknown().optional(),
@@ -32,7 +38,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("app"),
     source: z.string(),
-    ref: z.string().optional(),
+    ref: BuildRefSchema.optional(),
     contextId: z.string().nullable().optional(),
     key: z.string().optional(),
     stateArgs: z.unknown().optional(),
@@ -40,7 +46,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("worker"),
     source: z.string(),
-    ref: z.string().optional(),
+    ref: BuildRefSchema.optional(),
     contextId: z.string().nullable().optional(),
     key: z.string().optional(),
     stateArgs: z.unknown().optional(),
@@ -49,7 +55,7 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("do"),
     source: z.string(),
-    ref: z.string().optional(),
+    ref: BuildRefSchema.optional(),
     className: z.string(),
     key: z.string().optional(),
     contextId: z.string().nullable().optional(),

@@ -602,9 +602,9 @@ export class WorkerdManager {
       className: args.className,
       key: args.key,
     });
-    const scopeRef = isBootstrapMainBoundDo(args.source, args.className)
-      ? args.ref
-      : explicitScopeRef(args.ref);
+    const explicitRef = explicitScopeRef(args.ref);
+    const bootstrapMainBound = isBootstrapMainBoundDo(args.source, args.className);
+    const scopeRef = bootstrapMainBound ? args.ref : explicitRef;
     await this.ensureDOClass(args.source, args.className, {
       scopeRef,
       objectKey: args.key,
@@ -647,7 +647,8 @@ export class WorkerdManager {
 
     const callerId = targetId;
     const token = this.ensureWorkerBearer(callerId);
-    const scopeRef = explicitScopeRef(args.ref);
+    const explicitRef = explicitScopeRef(args.ref);
+    const scopeRef = explicitRef;
 
     const stateArgs =
       args.stateArgs && typeof args.stateArgs === "object" && !Array.isArray(args.stateArgs)
@@ -683,6 +684,7 @@ export class WorkerdManager {
         this.bindRuntimeImage(targetId, args.source, scopeRef),
         this.ensureWorkerdRunning(),
       ]);
+      instance.scopeRef = image.scopeRef;
       instance.buildKey = image.buildKey;
       instance.effectiveVersion = image.effectiveVersion;
       this.advanceWorkerCodeVersion(instance, image.generation);
@@ -841,6 +843,7 @@ export class WorkerdManager {
         this.bindRuntimeImage(callerId, options.source, scopeRef),
         this.ensureWorkerdRunning(),
       ]);
+      instance.scopeRef = image.scopeRef;
       instance.buildKey = image.buildKey;
       instance.effectiveVersion = image.effectiveVersion;
       this.advanceWorkerCodeVersion(instance, image.generation);
@@ -2393,7 +2396,11 @@ export default { fetch() { return new Response("universal-do host"); } };
   async ensureDOClass(
     source: string,
     className: string,
-    opts: { scopeRef?: string; objectKey?: string; imageId?: string } = {}
+    opts: {
+      scopeRef?: string;
+      objectKey?: string;
+      imageId?: string;
+    } = {}
   ): Promise<string | undefined> {
     const serviceKey = doServiceKey(source, className);
     const isNew = !this.doServices.has(serviceKey);
@@ -2407,7 +2414,7 @@ export default { fetch() { return new Response("universal-do host"); } };
       if (isInternalDOSource(source)) {
         buildKey = getInternalDOBundle().buildKey;
       } else {
-        image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, undefined);
+        image = await this.bindRuntimeImage(`do-service:${serviceKey}`, source, opts.scopeRef);
         buildKey = image.buildKey;
       }
       const sourceSanitized = source.replace(/[^a-zA-Z0-9_]/g, "_");
@@ -2418,6 +2425,7 @@ export default { fetch() { return new Response("universal-do host"); } };
         ...(image ? { imageId: image.id } : {}),
         serviceName,
         source,
+        scopeRef: image?.scopeRef ?? opts.scopeRef,
       });
       if (!isInternalDOSource(source)) {
         this.registerRoutesForDoClass(source, className);
@@ -2425,17 +2433,19 @@ export default { fetch() { return new Response("universal-do host"); } };
       }
     }
 
-    if (!isInternalDOSource(source) && opts.scopeRef && opts.objectKey) {
+    const serviceScopeRef =
+      image?.scopeRef ?? this.doServices.get(serviceKey)?.scopeRef ?? opts.scopeRef;
+    if (!isInternalDOSource(source) && serviceScopeRef && opts.objectKey) {
       const imageId =
         opts.imageId ?? canonicalEntityId({ kind: "do", source, className, key: opts.objectKey });
-      image = await this.bindRuntimeImage(imageId, source, opts.scopeRef);
+      image = await this.bindRuntimeImage(imageId, source, serviceScopeRef);
       buildKey = image.buildKey;
     }
 
-    if (!isInternalDOSource(source) && opts.scopeRef && opts.objectKey && image) {
+    if (!isInternalDOSource(source) && serviceScopeRef && opts.objectKey && image) {
       this.doObjectBuilds.set(doObjectBuildKey(source, className, opts.objectKey), {
         imageId: image.id,
-        scopeRef: opts.scopeRef,
+        scopeRef: serviceScopeRef,
         buildKey: image.buildKey,
       });
     }
@@ -2472,9 +2482,9 @@ export default { fetch() { return new Response("universal-do host"); } };
     objectKey: string,
     opts: { contextId?: string; ref?: string } = {}
   ): Promise<void> {
-    const scopeRef = isBootstrapMainBoundDo(source, className)
-      ? opts.ref
-      : explicitScopeRef(opts.ref);
+    const explicitRef = explicitScopeRef(opts.ref);
+    const bootstrapMainBound = isBootstrapMainBoundDo(source, className);
+    const scopeRef = bootstrapMainBound ? opts.ref : explicitRef;
     await this.ensureDOClass(source, className, { scopeRef, objectKey });
   }
 

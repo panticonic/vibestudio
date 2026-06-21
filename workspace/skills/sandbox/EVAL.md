@@ -562,12 +562,35 @@ eval({ code: `
   const build = await rpc.call("build.getBuild", ["panels/my-app"]);
   console.log("Build artifacts:", Object.keys(build));
 
+  // Build at a specific context branch when you intentionally want to test
+  // edits made in that context. `contextId` alone never selects code provenance.
+  const branchBuild = await rpc.call("build.getBuild", ["panels/my-app", \`ctx:\${ctx.contextId}\`]);
+  console.log("Context branch build:", branchBuild.sourceStateHash);
+
   // Build at a specific immutable GAD state ref (second arg) — e.g. an
   // outputStateHash from vcs.log(), or (await vcs.resolveHead("main")).stateHash.
   // The returned build's sourceStateHash echoes the requested ref.
   const [{ outputStateHash }] = await services.vcs.log(1);
   const pinned = await rpc.call("build.getBuild", ["panels/my-app", outputStateHash]);
   console.log("Built at:", pinned.sourceStateHash);
+
+  // Runtime launches use main code unless `ref` is explicit. This creates a
+  // worker that reads/writes ctx-1 but still runs the main build:
+  await rpc.call("runtime.createEntity", [{
+    kind: "worker",
+    source: "workers/agent-worker",
+    key: "agent-main-code",
+    contextId: "ctx-1"
+  }]);
+
+  // Targeted branch launch for testing code edited in ctx-1:
+  await rpc.call("runtime.createEntity", [{
+    kind: "worker",
+    source: "workers/agent-worker",
+    key: "agent-ctx-code",
+    contextId: "ctx-1",
+    ref: "ctx:ctx-1"
+  }]);
 
   // Check effective version
   const ev = await rpc.call("build.getEffectiveVersion", ["panels/my-app"]);

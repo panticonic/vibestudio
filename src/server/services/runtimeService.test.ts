@@ -522,6 +522,49 @@ describe("runtimeService.createEntity context policy", () => {
   });
 });
 
+describe("runtimeService.createEntity build refs", () => {
+  it("keeps context identity separate from worker build ref", async () => {
+    const { service, prepareWorker } = await buildDeps();
+
+    await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "worker",
+        source: "workers/agent",
+        key: "agent",
+        contextId: "ctx-branch",
+      } satisfies RuntimeEntityCreateSpec,
+    ]);
+
+    expect(prepareWorker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextId: "ctx-branch",
+        ref: undefined,
+      })
+    );
+  });
+
+  it("forwards explicit context refs for targeted worker builds", async () => {
+    const { service, prepareWorker } = await buildDeps();
+
+    await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "worker",
+        source: "workers/agent",
+        key: "agent",
+        contextId: "ctx-branch",
+        ref: "ctx:ctx-branch",
+      } satisfies RuntimeEntityCreateSpec,
+    ]);
+
+    expect(prepareWorker).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextId: "ctx-branch",
+        ref: "ctx:ctx-branch",
+      })
+    );
+  });
+});
+
 describe("runtimeService.setTitle", () => {
   it("allows app callers to set their display title", async () => {
     const setEntityTitle = vi.fn();

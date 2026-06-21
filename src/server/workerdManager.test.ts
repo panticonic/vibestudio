@@ -315,6 +315,74 @@ describe("WorkerdManager", () => {
       expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/hello", undefined);
     });
 
+    it("binds runtime-managed workers to main by default", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+
+      const prepared = await mgr.startWorker({
+        source: "workers/new",
+        key: "new-worker",
+        contextId: "ctx-agent",
+      });
+
+      expect(prepared.effectiveVersion).toBe("abc123");
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", undefined);
+    });
+
+    it("honors explicit context refs for runtime-managed workers", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.startWorker({
+        source: "workers/new",
+        key: "new-worker",
+        contextId: "ctx-agent",
+        ref: "ctx:ctx-agent",
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new", "ctx:ctx-agent");
+      expect(mgr.getInstanceStatus("new-worker")?.scopeRef).toBe("ctx:ctx-agent");
+    });
+
+    it("binds runtime-managed DOs to main by default", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "k1",
+        contextId: "ctx-agent",
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", undefined);
+    });
+
+    it("honors explicit context refs for runtime-managed DO object images", async () => {
+      const deps = createMockDeps();
+      const mgr = new WorkerdManager(deps);
+
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "main-object",
+        contextId: "ctx-agent",
+      });
+      vi.mocked(deps.bindRuntimeImage).mockClear();
+
+      await mgr.ensureDurableObjectEntity({
+        source: "workers/new-do",
+        className: "NewDO",
+        key: "branch-object",
+        contextId: "ctx-agent",
+        ref: "ctx:ctx-agent",
+      });
+
+      expect(deps.bindRuntimeImage).toHaveBeenCalledTimes(1);
+      expect(deps.bindRuntimeImage).toHaveBeenCalledWith("workers/new-do", "ctx:ctx-agent");
+      expect(mgr.getDoVersion("workers/new-do", "NewDO", "branch-object")).not.toBeNull();
+    });
+
     it("binds bootstrap-style singleton DOs to explicit main instead of synthetic ctx heads", async () => {
       const deps = createMockDeps();
       const mgr = new WorkerdManager(deps);

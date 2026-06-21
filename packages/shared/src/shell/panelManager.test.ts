@@ -379,6 +379,40 @@ describe("PanelManager", () => {
     expect(mem.state.retired.length).toBeGreaterThan(0);
   });
 
+  it("forwards explicit create refs to runtime entity creation", async () => {
+    const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
+    tempDirs.push(workspacePath);
+
+    const panelDir = path.join(workspacePath, "panels", "example");
+    fs.mkdirSync(panelDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({ name: "example", natstack: { title: "Example Panel" } })
+    );
+
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps(workspacePath);
+    const createEntity = vi.spyOn(deps.runtime, "createEntity");
+    const manager = new PanelManager({ registry, ...deps });
+
+    const created = await manager.create("panels/example", {
+      isRoot: true,
+      addAsRoot: true,
+      ref: "ctx:panel-dev",
+    });
+
+    expect(createEntity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "panel",
+        source: "panels/example",
+        ref: "ctx:panel-dev",
+      })
+    );
+    expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).options.ref).toBe(
+      "ctx:panel-dev"
+    );
+  });
+
   it("marks shell manifest panels as privileged in snapshots and create results", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "natstack-panel-manager-"));
     tempDirs.push(workspacePath);

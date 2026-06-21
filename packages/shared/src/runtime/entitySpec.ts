@@ -41,11 +41,21 @@ export interface EntityRecord {
   error?: string;
 }
 
+/**
+ * Optional code build selector for runtime entities.
+ *
+ * `contextId` selects the entity's filesystem/state context. It does not select
+ * code provenance. Omit `ref` to launch the workspace's current main build; pass
+ * `"ctx:<contextId>"` or `"state:<stateHash>"` only for an intentional targeted
+ * branch/state build.
+ */
+export type RuntimeEntityBuildRef = string;
+
 export type RuntimeEntityCreateSpec =
   | {
       kind: "panel";
       source: string;
-      ref?: string;
+      ref?: RuntimeEntityBuildRef;
       contextId?: string | null;
       key?: string;
       stateArgs?: unknown;
@@ -53,7 +63,7 @@ export type RuntimeEntityCreateSpec =
   | {
       kind: "app";
       source: string;
-      ref?: string;
+      ref?: RuntimeEntityBuildRef;
       contextId?: string | null;
       key?: string;
       stateArgs?: unknown;
@@ -61,7 +71,7 @@ export type RuntimeEntityCreateSpec =
   | {
       kind: "worker";
       source: string;
-      ref?: string;
+      ref?: RuntimeEntityBuildRef;
       contextId?: string | null;
       key?: string;
       stateArgs?: unknown;
@@ -70,7 +80,7 @@ export type RuntimeEntityCreateSpec =
   | {
       kind: "do";
       source: string;
-      ref?: string;
+      ref?: RuntimeEntityBuildRef;
       className: string;
       key?: string;
       contextId?: string | null;

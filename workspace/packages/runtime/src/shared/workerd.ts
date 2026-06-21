@@ -61,7 +61,11 @@ export interface WorkerCreateOptions {
     bindings?: Record<string, WorkerBindingDef>;
     /** Initial state args (available via STATE_ARGS binding) */
     stateArgs?: Record<string, unknown>;
-    /** Build at a specific GAD VCS ref: "main", "ctx:<contextId>", or "state:<stateHash>". */
+    /**
+     * Optional code build ref. Omit to use the main workspace build; pass
+     * "ctx:<contextId>" or "state:<stateHash>" for code created/edited on a
+     * context head or any other targeted build.
+     */
     ref?: string;
     /** ID of the creating caller. Worker can call getParent() to communicate back. */
     parentId?: string;
@@ -74,7 +78,7 @@ export interface WorkerUpdateOptions {
     env?: Record<string, string>;
     bindings?: Record<string, WorkerBindingDef>;
     stateArgs?: Record<string, unknown>;
-    /** Change the GAD VCS ref this instance builds at. */
+    /** Change the GAD VCS ref this instance builds at; empty string returns to main tracking. */
     ref?: string;
 }
 export interface WorkerInstanceInfo {
@@ -88,7 +92,7 @@ export interface WorkerInstanceInfo {
     bindings: Record<string, WorkerBindingDef>;
     stateArgs?: Record<string, unknown>;
     buildKey?: string;
-    /** GAD VCS ref this instance is built at. */
+    /** GAD VCS ref this instance is built at, or undefined when tracking main. */
     ref?: string;
     parentEntityId?: string;
     parentKind?: "panel" | "worker" | "do";

@@ -68,6 +68,12 @@ immediately, with no separate commit step. Do not edit via `fs.writeFile` and
 expect it to build; a stray write never lands on the head. Existing contexts do
 not auto-reset when another context publishes.
 
+Context heads are build-addressable, but only when requested explicitly. Use
+`ref: "ctx:<contextId>"` (or a `state:<stateHash>` ref) when you intentionally
+want to build/test code from that context branch. A generic launch in a context
+must omit `ref`: `contextId` gives the runtime access to the context filesystem
+and state, while code still comes from the main workspace build.
+
 ## Trusted Apps And Extensions
 
 Apps and extensions use flat source paths. A package named
