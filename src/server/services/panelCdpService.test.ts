@@ -73,7 +73,7 @@ describe("panelCdpService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: PANEL_AUTOMATE_CAPABILITY,
-        title: "Automate panel",
+        title: "Automate Target",
       })
     );
     expect(getEndpoint).toHaveBeenCalledWith("target", "panel:requester");

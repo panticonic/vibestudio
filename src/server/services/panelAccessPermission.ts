@@ -18,6 +18,9 @@ export interface PanelAccessPermissionTarget extends PanelAccessTarget {
   source?: string;
   kind?: "workspace" | "browser" | string;
   runtimeEntityId?: string;
+  requestedSource?: string;
+  requestedContextId?: string;
+  operationGroupKey?: string;
 }
 
 export interface PanelAccessPermissionDeps extends CapabilityPermissionDeps {
@@ -72,6 +75,10 @@ export async function requirePanelAccessPermission(
   }
   const requesterEntityId = ctx.caller.runtime.id;
   const targetLabel = target.title ?? target.id;
+  const operationObjectValue =
+    op === "openPanel" && target.requestedSource ? target.requestedSource : targetLabel;
+  const headlineTarget =
+    op === "openPanel" && target.requestedSource ? target.requestedSource : targetLabel;
   const resourceKey = panelCapabilityResourceKey(target.id, requesterEntityId);
   const identity = ctx.caller.code;
   const existingGrant =
@@ -100,11 +107,23 @@ export async function requirePanelAccessPermission(
       value: targetLabel,
       key: resourceKey,
     },
-    title: titleFor(op, targetLabel, decision.severity),
-    description: descriptionFor(op, targetLabel),
+    operation: {
+      kind: "panel",
+      verb: op,
+      object: { type: "panel", label: "Panel", value: operationObjectValue },
+      ...(target.operationGroupKey ? { groupKey: target.operationGroupKey } : {}),
+    },
+    title: titleFor(op, headlineTarget, decision.severity),
+    description: descriptionFor(op, targetLabel, headlineTarget),
     details: [
       { label: "Operation", value: op },
       { label: "Target panel", value: target.id },
+      ...(target.requestedSource
+        ? [{ label: "Requested source", value: target.requestedSource }]
+        : []),
+      ...(target.requestedContextId
+        ? [{ label: "Requested context", value: target.requestedContextId }]
+        : []),
       ...(target.source ? [{ label: "Source", value: target.source }] : []),
     ],
     deniedReason: `${op} denied for panel ${target.id}`,
@@ -138,23 +157,29 @@ function titleFor(
   targetLabel: string,
   severity: "standard" | "severe" | undefined
 ): string {
-  if (op === "cdp") return severity === "severe" ? "Drive privileged panel" : "Automate panel";
-  if (op === "navigate") return "Navigate panel";
-  if (op === "reload") return "Reload panel";
-  if (op === "openPanel") return "Open panel";
-  if (op === "close" || op === "archive") return "Close panel";
-  if (op === "unload") return "Unload panel";
-  if (op === "movePanel") return "Move panel";
-  if (op === "replacePanel") return "Navigate panel";
-  if (op === "takeOver") return "Take over panel";
-  if (op === "openDevTools") return "Open panel DevTools";
-  if (op === "rebuildPanel") return "Rebuild panel";
-  if (op === "rebuildAndReload") return "Rebuild and reload panel";
-  if (op === "stateArgs.set" || op === "updatePanelState") return "Change panel state";
+  if (op === "cdp") {
+    return severity === "severe" ? `Drive privileged ${targetLabel}` : `Automate ${targetLabel}`;
+  }
+  if (op === "navigate") return `Navigate ${targetLabel}`;
+  if (op === "reload") return `Reload ${targetLabel}`;
+  if (op === "openPanel") return `Open ${targetLabel}`;
+  if (op === "close" || op === "archive") return `Close ${targetLabel}`;
+  if (op === "unload") return `Unload ${targetLabel}`;
+  if (op === "movePanel") return `Move ${targetLabel}`;
+  if (op === "replacePanel") return `Navigate ${targetLabel}`;
+  if (op === "takeOver") return `Take over ${targetLabel}`;
+  if (op === "openDevTools") return `Open DevTools for ${targetLabel}`;
+  if (op === "rebuildPanel") return `Rebuild ${targetLabel}`;
+  if (op === "rebuildAndReload") return `Rebuild and reload ${targetLabel}`;
+  if (op === "stateArgs.set" || op === "updatePanelState") return `Change ${targetLabel} state`;
   return `Change ${targetLabel}`;
 }
 
-function descriptionFor(op: PanelAccessOperation, targetLabel: string): string {
+function descriptionFor(
+  op: PanelAccessOperation,
+  targetLabel: string,
+  headlineTarget: string
+): string {
   if (op === "cdp") {
     return `Allow this requester to connect to ${targetLabel} over CDP.`;
   }
@@ -168,7 +193,9 @@ function descriptionFor(op: PanelAccessOperation, targetLabel: string): string {
     return `Allow this requester to drive ${targetLabel}.`;
   }
   if (op === "openPanel") {
-    return `Allow this requester to open a panel under ${targetLabel}.`;
+    return headlineTarget === targetLabel
+      ? `Allow this requester to open a panel under ${targetLabel}.`
+      : `Allow this requester to open ${headlineTarget} under ${targetLabel}.`;
   }
   if (op === "close" || op === "archive") {
     return `Allow this requester to close ${targetLabel}.`;

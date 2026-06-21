@@ -107,6 +107,31 @@ describe("UserlandApprovalGrantStore", () => {
     ).toMatchObject({ choice: "allow", scope: "version" });
   });
 
+  it("matches internal version-scoped grants by concrete caller id", async () => {
+    const store = new UserlandApprovalGrantStore({ statePath: tempDir() });
+    const evalOne = {
+      callerId: "do:natstack/internal:EvalDO:one",
+      callerKind: "do" as const,
+      repoPath: "natstack/internal",
+      effectiveVersion: "internal",
+    };
+    await store.record(evalOne, { id: "team-x:foo" }, "allow", 10, undefined, "version");
+
+    expect(store.lookup(evalOne, "team-x:foo")).toMatchObject({
+      choice: "allow",
+      scope: "version",
+    });
+    expect(
+      store.lookup(
+        {
+          ...evalOne,
+          callerId: "do:natstack/internal:EvalDO:two",
+        },
+        "team-x:foo"
+      )
+    ).toBeNull();
+  });
+
   it("keeps session-scoped grants in memory", async () => {
     const statePath = tempDir();
     const store = new UserlandApprovalGrantStore({ statePath });

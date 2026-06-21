@@ -61,7 +61,17 @@ export function createWorkerdInspectorService(
                 // ephemeral per-service paths, not meaningful trust boundaries.
                 key: `caller:${caller.runtime.id}`,
               },
-              title: "Profile workers via the workerd inspector",
+              operation: {
+                kind: "inspection",
+                verb: "Inspect workerd",
+                object: {
+                  type: "workerd-inspector",
+                  label: "Target",
+                  value: targetPath,
+                },
+                groupKey: `workerd-inspector:${caller.runtime.id}`,
+              },
+              title: `Inspect ${targetPath}`,
               description:
                 `Allow ${caller.runtime.kind} ${caller.runtime.id} to attach the V8 inspector ` +
                 `to workerd (CPU profiles, heap inspection of workers and durable objects).`,

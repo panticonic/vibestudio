@@ -700,9 +700,16 @@ async function main() {
     },
   });
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
+  const { resolveApprovalCallerTitle, resolveApprovalRequester } =
+    await import("./services/approvalCallerTitle.js");
+  const approvalRequesterDeps = {
+    entityCache,
+    getTitle: (id: string) => entityTitleService.getTitle(id),
+  };
   const approvalQueue = createApprovalQueue({
     eventService,
-    resolveTitle: (entityId) => entityTitleService.getTitle(entityId),
+    resolveTitle: (entityId) => resolveApprovalCallerTitle(approvalRequesterDeps, entityId),
+    resolveRequester: (input) => resolveApprovalRequester(approvalRequesterDeps, input),
     autoApprove:
       process.env["NODE_ENV"] === "development" && process.env["NATSTACK_AUTO_APPROVE"] === "1",
   });

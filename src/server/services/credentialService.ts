@@ -911,7 +911,17 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         repoPath: identity.repoPath,
         effectiveVersion: identity.effectiveVersion,
         capability: "client-config-delete",
-        title: "Disable service configuration",
+        operation: {
+          kind: "service-setup",
+          verb: "Disable service configuration",
+          object: {
+            type: "client-config",
+            label: "Service",
+            value: request.configId,
+          },
+          groupKey: `delete-client-config:${request.configId}`,
+        },
+        title: `Disable ${request.configId}`,
         description: "Delete this client config for new connections and future refreshes.",
         resource: {
           type: "client-config",

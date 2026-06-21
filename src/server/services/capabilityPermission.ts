@@ -1,4 +1,9 @@
-import type { PendingCapabilityApproval } from "@natstack/shared/approvals";
+import type {
+  ApprovalOperationDescriptor,
+  ApprovalRequesterCategory,
+  ApprovalResourceScope,
+  PendingCapabilityApproval,
+} from "@natstack/shared/approvals";
 import {
   PANEL_AUTOMATE_CAPABILITY,
   PANEL_STRUCTURAL_CAPABILITY,
@@ -18,6 +23,7 @@ import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
  * permission module rather than redefining it.
  */
 export const RUNTIME_CROSS_CONTEXT_ENTITY = "runtime.crossContextEntity" as const;
+export const NETWORK_ALL_RESOURCE_KEY = "network:*" as const;
 
 export interface CapabilityPermissionResource {
   type: string;
@@ -28,6 +34,7 @@ export interface CapabilityPermissionResource {
    * call sites can choose human-readable keys for non-URL resources.
    */
   key?: string;
+  scope?: ApprovalResourceScope;
 }
 
 export function panelCapabilityResourceKey(
@@ -42,6 +49,8 @@ export interface CapabilityPermissionRequest {
   capability: string;
   severity?: PendingCapabilityApproval["severity"];
   dedupKey?: string | null;
+  requesterCategory?: ApprovalRequesterCategory;
+  operation?: ApprovalOperationDescriptor;
   signal?: AbortSignal;
   resource: CapabilityPermissionResource;
   title: string;
@@ -79,11 +88,12 @@ export async function requestCapabilityPermission(
   }
 
   const resourceKey = request.resource.key ?? request.resource.value;
+  const resourceScope = request.resource.scope ?? exactResourceScope(resourceKey);
   const dedupKey =
     request.dedupKey === undefined && isPanelCapability(request.capability)
       ? `panel-capability:${request.capability}:${resourceKey}`
       : request.dedupKey;
-  if (deps.grantStore.hasGrant(request.capability, resourceKey, identity)) {
+  if (deps.grantStore.hasGrant(request.capability, resourceKey, identity, resourceScope)) {
     return { allowed: true };
   }
 
@@ -96,6 +106,8 @@ export async function requestCapabilityPermission(
     capability: request.capability,
     severity: request.severity,
     dedupKey,
+    ...(request.requesterCategory ? { requesterCategory: request.requesterCategory } : {}),
+    ...(request.operation ? { operation: request.operation } : {}),
     title: request.title,
     description: request.description,
     resource: {
@@ -103,6 +115,7 @@ export async function requestCapabilityPermission(
       label: request.resource.label,
       value: request.resource.value,
     },
+    resourceScope,
     grantResourceKey: resourceKey,
     details: request.details,
     signal: request.signal,
@@ -111,19 +124,34 @@ export async function requestCapabilityPermission(
     return { allowed: false, reason: request.deniedReason };
   }
   if (decision !== "once") {
-    deps.grantStore.grant(request.capability, resourceKey, identity, decision);
+    const reusableDecision = decision as Exclude<GrantedDecision, "once" | "deny">;
+    const grantIntent = resourceGrantIntentForDecision(
+      request.capability,
+      resourceKey,
+      resourceScope,
+      reusableDecision
+    );
+    deps.grantStore.grant(
+      request.capability,
+      grantIntent.resourceKey,
+      identity,
+      reusableDecision,
+      grantIntent.resourceScope
+    );
     if (typeof deps.approvalQueue.resolveMatching === "function") {
       deps.approvalQueue.resolveMatching((approval) => {
         if (approval.kind !== "capability") return false;
         const pendingResourceKey = approval.grantResourceKey ?? approval.resource?.value;
-        if (approval.capability !== request.capability || pendingResourceKey !== resourceKey) {
-          return false;
-        }
-        if (decision === "session") return approval.callerId === request.caller.runtime.id;
-        if (decision === "repo") return approval.repoPath === identity.repoPath;
-        return (
-          approval.repoPath === identity.repoPath &&
-          approval.effectiveVersion === identity.effectiveVersion
+        if (!pendingResourceKey) return false;
+        return deps.grantStore.hasGrant(
+          approval.capability,
+          pendingResourceKey,
+          {
+            callerId: approval.callerId,
+            repoPath: approval.repoPath,
+            effectiveVersion: approval.effectiveVersion,
+          },
+          approval.resourceScope
         );
       }, "once");
     }
@@ -145,7 +173,12 @@ export function capabilityAlreadyGranted(
   const identity = caller.code;
   if (!identity) return false;
   const resourceKey = resource.key ?? resource.value;
-  return deps.grantStore.hasGrant(capability, resourceKey, identity);
+  return deps.grantStore.hasGrant(
+    capability,
+    resourceKey,
+    identity,
+    resource.scope ?? exactResourceScope(resourceKey)
+  );
 }
 
 /**
@@ -180,4 +213,27 @@ export function normalizeCallerKind(kind: string): "panel" | "app" | "worker" | 
 
 function isPanelCapability(capability: string): boolean {
   return capability === PANEL_AUTOMATE_CAPABILITY || capability === PANEL_STRUCTURAL_CAPABILITY;
+}
+
+function exactResourceScope(key: string): ApprovalResourceScope {
+  return { kind: "exact", key };
+}
+
+function resourceGrantIntentForDecision(
+  capability: string,
+  resourceKey: string,
+  resourceScope: ApprovalResourceScope,
+  decision: Exclude<GrantedDecision, "once" | "deny">
+): { resourceKey: string; resourceScope: ApprovalResourceScope } {
+  if (isNetworkCapability(capability) && (decision === "version" || decision === "repo")) {
+    return {
+      resourceKey: NETWORK_ALL_RESOURCE_KEY,
+      resourceScope: { kind: "network", value: "*" },
+    };
+  }
+  return { resourceKey, resourceScope };
+}
+
+function isNetworkCapability(capability: string): boolean {
+  return capability === "external-network-fetch" || capability === "cors-response-read";
 }

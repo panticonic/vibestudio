@@ -12,7 +12,10 @@ import { canonicalKey } from "@natstack/shared/canonicalKey";
 import type { EventService } from "@natstack/shared/eventsService";
 import type {
   ApprovalDecision,
+  ApprovalOperationDescriptor,
   ApprovalPrincipal,
+  ApprovalRequesterCategory,
+  ApprovalRequesterIdentity,
   PendingApproval,
   PendingCapabilityApproval,
   PendingCredentialApproval,
@@ -39,6 +42,8 @@ interface ApprovalQueueRequestBase {
   callerKind: "panel" | "app" | "worker" | "do" | "system";
   repoPath: string;
   effectiveVersion: string;
+  requesterCategory?: ApprovalRequesterCategory;
+  operation?: ApprovalOperationDescriptor;
   signal?: AbortSignal;
 }
 
@@ -74,6 +79,7 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   title: string;
   description?: string;
   resource?: PendingCapabilityApproval["resource"];
+  resourceScope?: PendingCapabilityApproval["resourceScope"];
   grantResourceKey?: string;
   details?: PendingCapabilityApproval["details"];
 }
@@ -249,6 +255,13 @@ export function createApprovalQueue(deps: {
    * the UI.
    */
   resolveTitle?: (entityId: string) => string | undefined;
+  resolveRequester?: (input: {
+    callerId: string;
+    callerKind: "panel" | "app" | "worker" | "do" | "system";
+    repoPath: string;
+    effectiveVersion: string;
+    requesterCategory?: ApprovalRequesterCategory;
+  }) => ApprovalRequesterIdentity;
   autoApprove?: ApprovalQueueAutoApproveOptions | boolean;
 }): ApprovalQueueWithListeners {
   const { eventService } = deps;
@@ -277,6 +290,9 @@ export function createApprovalQueue(deps: {
   }
 
   function dedupKeyFor(req: ApprovalQueueRequest): string {
+    if (req.operation?.groupKey) {
+      return canonicalKey(["operation", req.callerId, req.operation.groupKey]);
+    }
     if (req.kind === "capability") {
       if (req.dedupKey === null) {
         return canonicalKey(["capability-isolated", randomUUID()]);
@@ -374,8 +390,98 @@ export function createApprovalQueue(deps: {
     ]);
   }
 
+  function resolveRequesterFor(
+    req: Pick<
+      ApprovalQueueRequestBase,
+      "callerId" | "callerKind" | "repoPath" | "effectiveVersion" | "requesterCategory"
+    >
+  ): ApprovalRequesterIdentity | undefined {
+    return deps.resolveRequester?.({
+      callerId: req.callerId,
+      callerKind: req.callerKind,
+      repoPath: req.repoPath,
+      effectiveVersion: req.effectiveVersion,
+      ...(req.requesterCategory ? { requesterCategory: req.requesterCategory } : {}),
+    });
+  }
+
+  function defaultOperationFor(req: ApprovalQueueRequest): ApprovalOperationDescriptor {
+    if (req.kind === "capability") {
+      const object = req.resource
+        ? {
+            type: req.resource.type,
+            label: req.resource.label,
+            value: req.resource.value,
+          }
+        : undefined;
+      if (req.capability === "workerd.lifecycle") {
+        return { kind: "worker-lifecycle", verb: req.title, ...(object ? { object } : {}) };
+      }
+      if (req.capability === "panel.automate" || req.capability === "panel.structural") {
+        return { kind: "panel", verb: req.title, ...(object ? { object } : {}) };
+      }
+      if (
+        req.capability === "workspace-repo-write" ||
+        req.capability === "workspace-project-import" ||
+        req.capability === "workspace-shared-git-remote"
+      ) {
+        return { kind: "workspace", verb: req.title, ...(object ? { object } : {}) };
+      }
+      if (req.capability === "external-network-fetch") {
+        return { kind: "network", verb: req.title, ...(object ? { object } : {}) };
+      }
+      if (req.capability === "cors-response-read") {
+        return { kind: "network", verb: req.title, ...(object ? { object } : {}) };
+      }
+      if (req.capability === "workerd.inspector") {
+        return { kind: "inspection", verb: req.title, ...(object ? { object } : {}) };
+      }
+      if (req.capability === "runtime.crossContextEntity") {
+        return { kind: "runtime", verb: req.title, ...(object ? { object } : {}) };
+      }
+      if (req.capability === "client-config-delete") {
+        return { kind: "service-setup", verb: req.title, ...(object ? { object } : {}) };
+      }
+      if (req.capability === "external-browser-open" || req.capability === "open-url") {
+        return { kind: "browser", verb: req.title, ...(object ? { object } : {}) };
+      }
+      return { kind: "unknown", verb: req.title, ...(object ? { object } : {}) };
+    }
+    if (req.kind === "unit-batch") {
+      return { kind: "workspace", verb: req.title };
+    }
+    if (req.kind === "client-config") {
+      return {
+        kind: "service-setup",
+        verb: "configure",
+        object: { type: "client-config", label: "Service", value: req.configId },
+      };
+    }
+    if (req.kind === "credential-input") {
+      return {
+        kind: "service-setup",
+        verb: "add credential",
+        object: { type: "credential", label: "Credential", value: req.credentialLabel },
+      };
+    }
+    if (req.kind === "device-code") {
+      return {
+        kind: "device-code",
+        verb: "sign in",
+        object: { type: "credential", label: "Credential", value: req.credentialLabel },
+      };
+    }
+    return {
+      kind: "credential",
+      verb: "use credential",
+      object: { type: "credential", label: "Credential", value: req.credentialLabel },
+    };
+  }
+
   function createPendingApproval(req: ApprovalQueueRequest): PendingApproval {
-    const callerTitle = resolveTitle(req.callerId);
+    const requester = resolveRequesterFor(req);
+    const callerTitle = requester?.title ?? resolveTitle(req.callerId);
+    const operation = req.operation ?? defaultOperationFor(req);
     const base = {
       approvalId: randomUUID(),
       callerId: req.callerId,
@@ -384,6 +490,8 @@ export function createApprovalQueue(deps: {
       effectiveVersion: req.effectiveVersion,
       requestedAt: Date.now(),
       ...(callerTitle !== undefined ? { callerTitle } : {}),
+      ...(requester ? { requester } : {}),
+      operation,
     };
     if (req.kind === "capability") {
       return {
@@ -395,6 +503,7 @@ export function createApprovalQueue(deps: {
         title: req.title,
         description: req.description,
         resource: req.resource,
+        resourceScope: req.resourceScope,
         details: req.details,
       } satisfies PendingCapabilityApproval;
     }
@@ -772,7 +881,18 @@ export function createApprovalQueue(deps: {
       let entry = entriesByDedupKey.get(dedupKey);
       let newEntry = false;
       if (!entry) {
-        const callerTitle = req.principal.callerTitle ?? resolveTitle(req.principal.callerId);
+        const principalBase = {
+          callerId: req.principal.callerId,
+          callerKind: req.principal.callerKind,
+          repoPath: req.principal.repoPath,
+          effectiveVersion: req.principal.effectiveVersion,
+          ...(req.principal.requesterCategory
+            ? { requesterCategory: req.principal.requesterCategory }
+            : {}),
+        };
+        const requester = req.principal.requester ?? resolveRequesterFor(principalBase);
+        const callerTitle =
+          req.principal.callerTitle ?? requester?.title ?? resolveTitle(req.principal.callerId);
         const enrichedIssuer = req.issuer
           ? {
               ...req.issuer,
@@ -792,6 +912,16 @@ export function createApprovalQueue(deps: {
           effectiveVersion: req.principal.effectiveVersion,
           requestedAt: Date.now(),
           ...(callerTitle !== undefined ? { callerTitle } : {}),
+          ...(requester ? { requester } : {}),
+          operation: {
+            kind: "userland",
+            verb: req.title,
+            object: {
+              type: "userland-subject",
+              label: req.subject.label ?? "Subject",
+              value: req.subject.id,
+            },
+          },
           kind: "userland",
           ...(enrichedIssuer ? { issuer: enrichedIssuer } : {}),
           subject: req.subject,

@@ -334,7 +334,7 @@ describe("ApprovalSheet", () => {
 
     const { getByTestId, getByText } = renderSheet(severePanel);
 
-    expect(getByText("Drive privileged panel")).toBeTruthy();
+    expect(getByText("Drive privileged Shell")).toBeTruthy();
     expect(
       getByText(
         "This target is privileged. Approving gives the requester control of a trusted shell panel."

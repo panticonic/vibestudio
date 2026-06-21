@@ -145,7 +145,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
         value: requested,
         key: requested,
       },
-      title: "Create runtime entity in another context",
+      operation: {
+        kind: "runtime",
+        verb: `Create ${spec.kind}`,
+        object: {
+          type: "runtime-entity",
+          label: "Target source",
+          value: `${spec.source} in ${requested}`,
+        },
+        groupKey: `cross-context:${caller.runtime.id}:${spec.kind}:${requested}:${spec.source}`,
+      },
+      title: `Create ${spec.kind} in ${requested}`,
       description: `Allow ${callerKind} ${caller.runtime.id} to create a ${spec.kind} entity in context ${requested}.`,
       details: [
         { label: "Caller", value: `${callerKind} ${caller.runtime.id}` },

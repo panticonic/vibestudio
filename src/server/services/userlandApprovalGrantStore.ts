@@ -158,7 +158,11 @@ export function keyFor(
   return canonicalKey([
     "userland-grant",
     scope,
-    scope === "version" ? (principal.repoPath ?? "") : principal.callerId,
+    scope === "version"
+      ? userlandVersionGrantRequiresCaller(principal)
+        ? principal.callerId
+        : (principal.repoPath ?? "")
+      : principal.callerId,
     scope === "version" ? (principal.effectiveVersion ?? "") : "",
     issuer.kind,
     issuer.id,
@@ -174,11 +178,19 @@ function grantAppliesToPrincipal(
   if (scope === "version") {
     return (
       grant.principal.callerKind === principal.callerKind &&
+      (!userlandVersionGrantRequiresCaller(grant.principal) ||
+        grant.principal.callerId === principal.callerId) &&
       grant.principal.repoPath === principal.repoPath &&
       grant.principal.effectiveVersion === principal.effectiveVersion
     );
   }
   return grant.principal.callerId === principal.callerId;
+}
+
+function userlandVersionGrantRequiresCaller(
+  principal: Pick<UserlandApprovalGrant["principal"], "repoPath" | "effectiveVersion">
+): boolean {
+  return principal.effectiveVersion === "internal" || principal.repoPath === "natstack/internal";
 }
 
 function issuerMatches(

@@ -140,7 +140,7 @@ describe("panelTreeService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: PANEL_STRUCTURAL_CAPABILITY,
-        title: "Close panel",
+        title: "Close Target",
       })
     );
     expect(bridge).toHaveBeenLastCalledWith({
@@ -196,8 +196,8 @@ describe("panelTreeService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: PANEL_STRUCTURAL_CAPABILITY,
-        title: "Open panel",
-        description: "Allow this requester to open a panel under Parent.",
+        title: "Open panels/child",
+        description: "Allow this requester to open panels/child under Parent.",
         grantResourceKey: "panel:parent:requester:panel:requester",
       })
     );
@@ -266,8 +266,8 @@ describe("panelTreeService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: PANEL_STRUCTURAL_CAPABILITY,
-        title: "Open panel",
-        description: "Allow this requester to open a panel under Requester Panel.",
+        title: "Open panels/child",
+        description: "Allow this requester to open panels/child under Requester Panel.",
         grantResourceKey: "panel:requester-slot:requester:panel:requester",
       })
     );
@@ -398,7 +398,7 @@ describe("panelTreeService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: PANEL_STRUCTURAL_CAPABILITY,
-        title: "Navigate panel",
+        title: "Navigate Target",
         description: "Allow this requester to navigate Target to another panel source or context.",
       })
     );
@@ -430,7 +430,7 @@ describe("panelTreeService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: PANEL_STRUCTURAL_CAPABILITY,
-        title: "Move panel",
+        title: "Move Target",
       })
     );
     expect(bridge).toHaveBeenLastCalledWith({
@@ -461,21 +461,21 @@ describe("panelTreeService", () => {
     expect(approvalQueue.request).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
-        title: "Take over panel",
+        title: "Take over Target",
         description: "Allow this requester to take over hosting for Target.",
       })
     );
     expect(approvalQueue.request).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        title: "Open panel DevTools",
+        title: "Open DevTools for Target",
         description: "Allow this requester to open DevTools for Target.",
       })
     );
     expect(approvalQueue.request).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        title: "Rebuild panel",
+        title: "Rebuild Target",
         description: "Allow this requester to rebuild Target.",
       })
     );
@@ -496,7 +496,7 @@ describe("panelTreeService", () => {
 
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Rebuild and reload panel",
+        title: "Rebuild and reload Target",
         description: "Allow this requester to rebuild and reload Target.",
       })
     );
@@ -546,7 +546,7 @@ describe("panelTreeService", () => {
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
         capability: PANEL_STRUCTURAL_CAPABILITY,
-        title: "Change panel state",
+        title: "Change Target state",
         grantResourceKey: "panel:target:requester:panel:requester",
       })
     );

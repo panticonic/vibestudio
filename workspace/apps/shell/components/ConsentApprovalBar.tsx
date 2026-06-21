@@ -42,6 +42,9 @@ import {
   formatInjection,
   getApprovalAttribution,
   getApprovalCopy,
+  getApprovalOperationKindLabel,
+  getApprovalRiskTone,
+  getRequesterCategoryLabel,
   getStandardActionCopy,
   getUnitBatchActionCopy,
   originForUrl,
@@ -62,7 +65,7 @@ interface CallerInfo {
   /** Caller kind, formatted for display ("Panel" / "Worker" / "Service"). */
   kindLabel: string;
   /** Caller kind as accepted by the approval payload. */
-  kind: "panel" | "app" | "worker" | "do";
+  kind: "panel" | "app" | "worker" | "do" | "system";
   /** Set when this caller refers to a panel that exists in the live tree. */
   panelId?: string;
   /** Truncated id, retained for the expandable details panel. */
@@ -155,6 +158,17 @@ export function ConsentApprovalBar() {
   }, [current?.approvalId]);
 
   const resolveCallerInfo = useCallback((approval: PendingApproval): CallerInfo => {
+    if (approval.requester) {
+      return {
+        label: approval.requester.title ?? approval.callerTitle ?? prettifyId(approval.callerId),
+        kindLabel: getRequesterCategoryLabel(approval.requester.category),
+        kind: approval.requester.kind,
+        panelId:
+          approval.requester.panel?.id ??
+          (approval.requester.kind === "panel" ? approval.requester.id : undefined),
+        shortId: truncateId(approval.requester.ephemeralInstanceKey),
+      };
+    }
     const shortId = truncateId(approval.callerId);
     // Authoritative title comes from the server-side entity-title registry
     // (populated by `runtime.setTitle` for workers/DOs and by the
@@ -196,7 +210,7 @@ export function ConsentApprovalBar() {
       return {
         label: serverTitle ?? "Workspace",
         kindLabel: "Workspace",
-        kind: "do",
+        kind: "system",
         shortId,
       };
     }
@@ -458,11 +472,9 @@ function ApprovalGrantSummary({ approval }: { approval: PendingCredentialApprova
 }
 
 function approvalAccent(approval: PendingApproval): "sky" | "amber" | "red" {
-  if (approval.kind === "capability" && approval.severity === "severe") return "red";
-  if (approval.kind === "unit-batch") {
-    if (approval.units.some((unit) => unit.unitKind === "extension")) return "red";
-    return "amber";
-  }
+  const tone = getApprovalRiskTone(approval);
+  if (tone === "danger") return "red";
+  if (tone === "caution") return "amber";
   return "sky";
 }
 
@@ -765,7 +777,7 @@ function UserlandApprovalActions({
       </Flex>
       <Text size="1" color="gray">
         {approval.promptOptions === "scoped"
-          ? "Use Trust version to remember this approval."
+          ? "Use the trust option to remember this approval."
           : "Remembered until revoked."}
       </Text>
     </Flex>
@@ -927,14 +939,64 @@ function ApprovalDetails({
             </Flex>
           }
         />
+        {approval.requester?.breadcrumbs && approval.requester.breadcrumbs.length > 1 ? (
+          <Detail
+            icon={<GearIcon />}
+            label="Chain"
+            value={<RequesterBreadcrumbs approval={approval} />}
+          />
+        ) : null}
+        {approval.requester?.eval ? (
+          <Detail
+            icon={<GearIcon />}
+            label="Eval"
+            value={
+              <Flex align="center" gap="1" wrap="wrap">
+                {approval.requester.eval.ownerId ? (
+                  <InlineCode>owner {approval.requester.eval.ownerId}</InlineCode>
+                ) : null}
+                {approval.requester.eval.subKey ? (
+                  <InlineCode>scope {approval.requester.eval.subKey}</InlineCode>
+                ) : null}
+                {approval.requester.eval.runId ? (
+                  <InlineCode>run {approval.requester.eval.runId}</InlineCode>
+                ) : null}
+              </Flex>
+            }
+          />
+        ) : null}
+        {approval.requester ? (
+          <Detail
+            icon={<LockClosedIcon />}
+            label="Trust key"
+            value={<IdCode value={approval.requester.stableIdentityKey} />}
+          />
+        ) : null}
+        {approval.operation ? (
+          <Detail
+            icon={<GearIcon />}
+            label="Operation"
+            value={
+              <Flex align="center" gap="1" wrap="wrap">
+                <InlineCode>
+                  {getApprovalOperationKindLabel(approval.operation.kind)} ·{" "}
+                  {approval.operation.verb}
+                </InlineCode>
+                {approval.operation.object ? (
+                  <InlineCode>{approval.operation.object.value}</InlineCode>
+                ) : null}
+              </Flex>
+            }
+          />
+        ) : null}
         <Detail
           icon={<GlobeIcon />}
-          label="Repo"
+          label="Requester repo"
           value={<InlineCode>{approval.repoPath}</InlineCode>}
         />
         <Detail
           icon={<LockClosedIcon />}
-          label="Version"
+          label="Requester version"
           value={<IdCode value={approval.effectiveVersion} />}
         />
         {approval.kind === "credential" ? (
@@ -954,6 +1016,27 @@ function ApprovalDetails({
         )}
       </Flex>
     </details>
+  );
+}
+
+function RequesterBreadcrumbs({ approval }: { approval: PendingApproval }) {
+  const breadcrumbs = approval.requester?.breadcrumbs ?? [];
+  return (
+    <Flex align="center" gap="1" wrap="wrap" style={{ minWidth: 0 }}>
+      {breadcrumbs.map((breadcrumb, index) => (
+        <Flex key={`${breadcrumb.id}:${index}`} align="center" gap="1" style={{ minWidth: 0 }}>
+          {index > 0 ? (
+            <Text size="1" color="gray" style={{ flexShrink: 0 }}>
+              &gt;
+            </Text>
+          ) : null}
+          <Badge color="gray" variant="soft" style={{ maxWidth: 260 }}>
+            {getRequesterCategoryLabel(breadcrumb.category)}
+            {breadcrumb.label ? `: ${breadcrumb.label}` : ""}
+          </Badge>
+        </Flex>
+      ))}
+    </Flex>
   );
 }
 

@@ -16,7 +16,7 @@ export type { UserlandApprovalChoice, UserlandApprovalGrant, UserlandApprovalOpt
  * introduce a bug.
  *
  * By default the host presents scoped allow choices: allow once, allow for this
- * caller session, trust this code version, or deny. Positive scoped choices
+ * caller session, trust this identity or code version, or deny. Positive scoped choices
  * return `choice: "allow"`; deny returns `choice: "deny"`.
  *
  * Pass `promptOptions: "choices"` for a simple allow/deny prompt or to show

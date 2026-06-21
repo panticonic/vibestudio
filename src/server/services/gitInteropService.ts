@@ -363,7 +363,15 @@ async function ensureSharedRemotePermission(
       capability: SHARED_GIT_REMOTE_CAPABILITY,
       dedupKey: null,
       resource: { type: "git-remote", label: "Workspace unit", value: unitPath },
-      title: operation === "set" ? "Configure Git remote" : "Remove Git remote",
+      operation: {
+        kind: "git",
+        verb: operation === "set" ? "Configure shared remote" : "Remove shared remote",
+        object: { type: "git-remote", label: "Workspace unit", value: unitPath },
+      },
+      title:
+        operation === "set"
+          ? `Configure Git remote for ${unitPath}`
+          : `Remove Git remote for ${unitPath}`,
       description:
         "Allow this code version to change the external Git remote shared by workspace contexts.",
       details,

@@ -1,4 +1,6 @@
 import type {
+  ApprovalOperationDescriptor,
+  ApprovalRequesterCategory,
   PendingApproval,
   PendingCapabilityApproval,
   PendingCredentialApproval,
@@ -18,6 +20,124 @@ function prettifyApprovalId(id: string): string {
   const segments = stripped.split(":");
   const last = segments[segments.length - 1] ?? stripped;
   return truncateId(last);
+}
+
+function isIdentityScopedVersionApproval(approval: PendingApproval): boolean {
+  if (
+    approval.requester?.category === "eval" ||
+    approval.requester?.category === "internal-service"
+  ) {
+    return true;
+  }
+  return (
+    approval.effectiveVersion === "internal" || approval.repoPath === "natstack/internal"
+  );
+}
+
+function trustVersionLabel(approval: PendingApproval, fallback = "Trust version"): string {
+  return isIdentityScopedVersionApproval(approval) ? "Trust identity" : fallback;
+}
+
+function trustSubject(approval: PendingApproval): string {
+  return isIdentityScopedVersionApproval(approval)
+    ? "this requester identity"
+    : "this code version";
+}
+
+function exactTrustSubject(approval: PendingApproval): string {
+  return isIdentityScopedVersionApproval(approval)
+    ? "this exact runtime identity"
+    : "this exact code version";
+}
+
+function networkTrustLabel(approval: PendingApproval): string {
+  return isIdentityScopedVersionApproval(approval)
+    ? "Trust identity with network"
+    : "Trust version with network";
+}
+
+function corsTrustLabel(approval: PendingApproval): string {
+  return isIdentityScopedVersionApproval(approval)
+    ? "Trust identity with CORS"
+    : "Trust version with CORS";
+}
+
+export type ApprovalRiskTone = "standard" | "caution" | "danger";
+
+export function getRequesterCategoryLabel(category: ApprovalRequesterCategory): string {
+  switch (category) {
+    case "panel":
+      return "Panel";
+    case "workspace-app":
+      return "App";
+    case "agent":
+      return "Agent";
+    case "eval":
+      return "Eval";
+    case "worker":
+      return "Worker";
+    case "durable-object":
+      return "DO";
+    case "extension":
+      return "Extension";
+    case "system":
+      return "Workspace";
+    case "internal-service":
+      return "Internal service";
+    case "unknown":
+      return "Requester";
+  }
+}
+
+export function getApprovalOperationKindLabel(kind: ApprovalOperationDescriptor["kind"]): string {
+  switch (kind) {
+    case "browser":
+      return "Browser";
+    case "credential":
+      return "Credential";
+    case "filesystem":
+      return "Filesystem";
+    case "git":
+      return "Git";
+    case "inspection":
+      return "Inspection";
+    case "network":
+      return "Network access";
+    case "panel":
+      return "Panel";
+    case "runtime":
+      return "Runtime";
+    case "worker-lifecycle":
+      return "Worker lifecycle";
+    case "workspace":
+      return "Workspace";
+    case "service-setup":
+      return "Service setup";
+    case "userland":
+      return "User request";
+    case "device-code":
+      return "Device sign-in";
+    case "unknown":
+      return "Operation";
+  }
+}
+
+export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone {
+  if (approval.kind === "unit-batch") {
+    return approval.units.some((unit) => unit.unitKind === "extension") ? "danger" : "caution";
+  }
+  if (approval.kind === "credential" && approval.oauthAudienceDomainMismatch) {
+    return "caution";
+  }
+  if (approval.kind === "capability") {
+    if (approval.capability === "workerd.lifecycle") {
+      return approval.severity === "severe" && /destroy/i.test(approval.title)
+        ? "danger"
+        : "caution";
+    }
+    if (approval.severity === "severe") return "danger";
+  }
+  return "standard";
 }
 
 export function getApprovalCategoryLabel(approval: PendingApproval): string {
@@ -73,13 +193,34 @@ export function getApprovalCategoryLabel(approval: PendingApproval): string {
   if (approval.capability === "workspace-project-import") {
     return "Project import";
   }
+  if (approval.capability === "workerd.lifecycle") {
+    return "Worker lifecycle";
+  }
+  if (approval.capability === "external-network-fetch") {
+    return "Network access";
+  }
+  if (approval.capability === "cors-response-read") {
+    return "Network access";
+  }
+  if (approval.capability === "workerd.inspector") {
+    return "Inspection";
+  }
+  if (approval.capability === "runtime.crossContextEntity") {
+    return "Runtime";
+  }
+  if (approval.capability === "client-config-delete") {
+    return "Service setup";
+  }
   if (approval.capability === "panel.automate") {
     return "Panel automation";
   }
   if (approval.capability === "panel.structural") {
     return "Panel change";
   }
-  return isOAuthExternalApproval(approval) ? "Sign-in action" : "Browser action";
+  if (isBrowserOpenApproval(approval)) {
+    return isOAuthExternalApproval(approval) ? "Sign-in action" : "Browser action";
+  }
+  return "Capability request";
 }
 
 export function getStandardActionCopy(
@@ -104,8 +245,8 @@ export function getStandardActionCopy(
           description: "Save and allow use until NatStack restarts.",
         },
         version: {
-          label: "Trust version",
-          description: "Save and allow this exact stable code version to use it.",
+          label: trustVersionLabel(approval),
+          description: `Save and allow ${exactTrustSubject(approval)} to use it.`,
         },
         repo: {
           label: "Trust repo",
@@ -128,10 +269,10 @@ export function getStandardActionCopy(
             : "Allow git reads from this remote until NatStack restarts.",
         },
         version: {
-          label: "Trust version",
+          label: trustVersionLabel(approval),
           description: isWrite
-            ? "Allow this exact code version to push to this remote."
-            : "Allow this exact code version to read from this remote.",
+            ? `Allow ${exactTrustSubject(approval)} to push to this remote.`
+            : `Allow ${exactTrustSubject(approval)} to read from this remote.`,
         },
         repo: {
           label: "Trust repo",
@@ -152,8 +293,8 @@ export function getStandardActionCopy(
         description: `Reuse ${formatCredentialUseTarget(approval)} until NatStack restarts.`,
       },
       version: {
-        label: "Trust version",
-        description: `Allow this exact code version to use ${formatCredentialUseTarget(approval)}.`,
+        label: trustVersionLabel(approval),
+        description: `Allow ${exactTrustSubject(approval)} to use ${formatCredentialUseTarget(approval)}.`,
       },
       repo: {
         label: "Trust repo",
@@ -170,8 +311,8 @@ export function getStandardActionCopy(
         description: "Allow this sign-in origin until NatStack restarts.",
       },
       version: {
-        label: "Trust version",
-        description: "Allow this sign-in origin for this exact code version.",
+        label: trustVersionLabel(approval),
+        description: `Allow this sign-in origin for ${exactTrustSubject(approval)}.`,
       },
       repo: { label: "Trust repo", description: "Allow this sign-in origin for this workspace." },
       denyDescription: "Do not open this sign-in flow.",
@@ -193,8 +334,8 @@ export function getStandardActionCopy(
           description: `Allow committed changes to ${destination} until NatStack restarts.`,
         },
         version: {
-          label: "Trust version",
-          description: `Allow this code version to update ${destination}.`,
+          label: trustVersionLabel(approval),
+          description: `Allow ${trustSubject(approval)} to update ${destination}.`,
         },
         repo: {
           label: "Trust repo",
@@ -216,10 +357,10 @@ export function getStandardActionCopy(
           : "Allow writes to this repository until NatStack restarts.",
       },
       version: {
-        label: "Trust version",
+        label: trustVersionLabel(approval),
         description: isMeta
-          ? "Allow this code version to edit workspace config."
-          : "Allow this code version to write to this repository.",
+          ? `Allow ${trustSubject(approval)} to edit workspace config.`
+          : `Allow ${trustSubject(approval)} to write to this repository.`,
       },
       repo: {
         label: "Trust repo",
@@ -238,8 +379,8 @@ export function getStandardActionCopy(
         description: "Allow shared remote changes until NatStack restarts.",
       },
       version: {
-        label: "Trust version",
-        description: "Allow this code version to change shared remotes.",
+        label: trustVersionLabel(approval),
+        description: `Allow ${trustSubject(approval)} to change shared remotes.`,
       },
       repo: {
         label: "Trust repo",
@@ -256,14 +397,82 @@ export function getStandardActionCopy(
         description: "Allow project imports until NatStack restarts.",
       },
       version: {
-        label: "Trust version",
-        description: "Allow this code version to import project repos.",
+        label: trustVersionLabel(approval),
+        description: `Allow ${trustSubject(approval)} to import project repos.`,
       },
       repo: {
         label: "Trust repo",
         description: "Allow this workspace project to import project repos.",
       },
       denyDescription: "Do not import this project.",
+    };
+  }
+  if (approval.capability === "workerd.lifecycle") {
+    const target = approval.resource?.value ?? "this worker";
+    const action = workerLifecycleVerb(approval);
+    return {
+      once: {
+        label: "Allow once",
+        description: "Allow this worker lifecycle request once.",
+      },
+      session: {
+        label: "Allow this session",
+        description: `Allow worker lifecycle changes for ${target} until NatStack restarts.`,
+      },
+      version: {
+        label: trustVersionLabel(approval),
+        description: `Allow ${trustSubject(approval)} to manage ${target}.`,
+      },
+      repo: {
+        label: "Trust repo",
+        description: `Allow this workspace project to manage ${target}.`,
+      },
+      denyDescription: `Do not ${action} ${target}.`,
+    };
+  }
+  if (approval.capability === "external-network-fetch") {
+    const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
+    return {
+      once: {
+        label: "Connect once",
+        description: "Allow this network request once.",
+      },
+      session: {
+        label: "Allow this origin",
+        description: `Allow network requests to ${destination} until NatStack restarts.`,
+      },
+      version: {
+        label: networkTrustLabel(approval),
+        description: `Allow ${exactTrustSubject(approval)} to use network access without asking for each origin.`,
+      },
+      repo: {
+        label: "Trust repo with network",
+        description: "Allow this workspace project to use network access without asking for each origin.",
+      },
+      denyDescription: `Do not connect to ${destination}.`,
+    };
+  }
+  if (approval.capability === "cors-response-read") {
+    const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
+    return {
+      once: {
+        label: "Read once",
+        description: "Allow this cross-origin response read once.",
+      },
+      session: {
+        label: "Read this origin",
+        description: `Allow cross-origin response reads from ${destination} until NatStack restarts.`,
+      },
+      version: {
+        label: corsTrustLabel(approval),
+        description: `Allow ${exactTrustSubject(approval)} to read cross-origin responses without asking for each origin.`,
+      },
+      repo: {
+        label: "Trust repo with CORS",
+        description:
+          "Allow this workspace project to read cross-origin responses without asking for each origin.",
+      },
+      denyDescription: `Do not read responses from ${destination}.`,
     };
   }
   if (approval.capability === "panel.automate") {
@@ -279,8 +488,8 @@ export function getStandardActionCopy(
         description: `Allow automation of ${target} until NatStack restarts.`,
       },
       version: {
-        label: severe ? "Trust and drive" : "Trust version",
-        description: `Allow this exact code version to automate ${target}.`,
+        label: trustVersionLabel(approval, severe ? "Trust and drive" : "Trust version"),
+        description: `Allow ${exactTrustSubject(approval)} to automate ${target}.`,
       },
       repo: {
         label: severe ? "Trust repo and drive" : "Trust repo",
@@ -302,8 +511,8 @@ export function getStandardActionCopy(
         description: `Allow panel-tree changes to ${target} until NatStack restarts.`,
       },
       version: {
-        label: severe ? "Trust and change" : "Trust version",
-        description: `Allow this exact code version to change ${target}.`,
+        label: trustVersionLabel(approval, severe ? "Trust and change" : "Trust version"),
+        description: `Allow ${exactTrustSubject(approval)} to change ${target}.`,
       },
       repo: {
         label: severe ? "Trust repo and change" : "Trust repo",
@@ -312,18 +521,34 @@ export function getStandardActionCopy(
       denyDescription: `Do not change ${target}.`,
     };
   }
+  if (isBrowserOpenApproval(approval)) {
+    return {
+      once: { label: "Open once", description: "Open this browser action once." },
+      session: {
+        label: "Open this session",
+        description: "Allow this browser origin until NatStack restarts.",
+      },
+      version: {
+        label: trustVersionLabel(approval),
+        description: `Allow this browser origin for ${exactTrustSubject(approval)}.`,
+      },
+      repo: { label: "Trust repo", description: "Allow this browser origin for this workspace." },
+      denyDescription: "Do not open this site.",
+    };
+  }
+  const target = genericCapabilityTarget(approval);
   return {
-    once: { label: "Open once", description: "Open this browser action once." },
+    once: { label: "Allow once", description: "Allow this request once." },
     session: {
-      label: "Open this session",
-      description: "Allow this browser origin until NatStack restarts.",
+      label: "Allow this session",
+      description: `Allow requests for ${target} until NatStack restarts.`,
     },
     version: {
-      label: "Trust version",
-      description: "Allow this browser origin for this exact code version.",
+      label: trustVersionLabel(approval),
+      description: `Allow ${exactTrustSubject(approval)} to request ${target}.`,
     },
-    repo: { label: "Trust repo", description: "Allow this browser origin for this workspace." },
-    denyDescription: "Do not open this site.",
+    repo: { label: "Trust repo", description: `Allow this workspace project to request ${target}.` },
+    denyDescription: `Do not allow ${target}.`,
   };
 }
 
@@ -501,10 +726,63 @@ export function getApprovalCopy(approval: PendingApproval): {
         summary: `Imports ${destination} from a remote git repository.`,
       };
     }
+    if (approval.capability === "workerd.lifecycle") {
+      const target = approval.resource?.value ?? "this worker";
+      return {
+        title: targetAwareWorkerLifecycleTitle(approval.title, workerLifecycleTitle(approval, target)),
+        summary: approval.description ?? `Changes worker lifecycle state for ${target}.`,
+        ...(approval.severity === "severe"
+          ? { warning: "This changes a running worker instance." }
+          : {}),
+      };
+    }
+    if (approval.capability === "external-network-fetch") {
+      const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
+      return {
+        title: `Connect to ${destination}`,
+        summary:
+          approval.description ??
+          `Makes raw network requests to ${formatNetworkDestination(
+            approval.resource?.value ?? "this destination"
+          )}.`,
+      };
+    }
+    if (approval.capability === "cors-response-read") {
+      const destination = formatNetworkDestination(approval.resource?.value ?? "this destination");
+      return {
+        title: `Read responses from ${destination}`,
+        summary:
+          approval.description ??
+          `Reads cross-origin responses from ${destination}.`,
+      };
+    }
+    if (approval.capability === "workerd.inspector") {
+      const target = approval.resource?.value ?? approval.operation?.object?.value ?? "workerd";
+      return {
+        title: targetAwareGenericTitle(approval.title, `Inspect ${target}`),
+        summary: approval.description ?? `Attaches the workerd inspector to ${target}.`,
+      };
+    }
+    if (approval.capability === "runtime.crossContextEntity") {
+      const target = approval.resource?.value ?? approval.operation?.object?.value ?? "another context";
+      return {
+        title: targetAwareGenericTitle(approval.title, `Create runtime entity in ${target}`),
+        summary: approval.description ?? `Creates a runtime entity in ${target}.`,
+      };
+    }
+    if (approval.capability === "client-config-delete") {
+      const target = approval.resource?.value ?? "this service configuration";
+      return {
+        title: targetAwareGenericTitle(approval.title, `Disable ${formatServiceName(target)}`),
+        summary: approval.description ?? `Disables ${formatServiceName(target)}.`,
+      };
+    }
     if (approval.capability === "panel.automate") {
       const target = approval.resource?.value ?? "this panel";
+      const fallbackTitle =
+        approval.severity === "severe" ? `Drive privileged ${target}` : `Automate ${target}`;
       return {
-        title: approval.title || `Automate ${target}`,
+        title: targetAwarePanelTitle(approval.title, fallbackTitle),
         summary: `Automates ${target}.`,
         ...(approval.severity === "severe"
           ? {
@@ -516,9 +794,13 @@ export function getApprovalCopy(approval: PendingApproval): {
     }
     if (approval.capability === "panel.structural") {
       const target = approval.resource?.value ?? "this panel";
+      const subject = panelOperationSubject(approval, target);
       return {
-        title: approval.title || `Change ${target}`,
-        summary: `Changes ${target}.`,
+        title: targetAwarePanelTitle(approval.title, panelStructuralTitle(approval, target)),
+        summary:
+          panelOperationName(approval) === "openPanel" && subject !== target
+            ? `Opens ${subject} under ${target}.`
+            : `Changes ${target}.`,
         ...(approval.severity === "severe"
           ? {
               warning:
@@ -527,17 +809,24 @@ export function getApprovalCopy(approval: PendingApproval): {
           : {}),
       };
     }
-    const isOAuth = isOAuthExternalApproval(approval);
-    const destination = formatCapabilityDestination(approval, isOAuth);
-    if (isOAuth) {
+    if (isBrowserOpenApproval(approval)) {
+      const isOAuth = isOAuthExternalApproval(approval);
+      const destination = formatCapabilityDestination(approval, isOAuth);
+      if (isOAuth) {
+        return {
+          title: `Sign in at ${destination}`,
+          summary: `Opens a sign-in flow at ${destination} in your browser.`,
+        };
+      }
       return {
-        title: `Sign in at ${destination}`,
-        summary: `Opens a sign-in flow at ${destination} in your browser.`,
+        title: `Open ${destination}`,
+        summary: `Opens ${destination} in your system browser.`,
       };
     }
+    const target = genericCapabilityTarget(approval);
     return {
-      title: `Open ${destination}`,
-      summary: `Opens ${destination} in your system browser.`,
+      title: targetAwareGenericTitle(approval.title, `Allow ${target}`),
+      summary: approval.description ?? `Requests access to ${target}.`,
     };
   }
   if (approval.kind === "client-config") {
@@ -630,6 +919,140 @@ export function getCapabilityPrimaryDestination(approval: PendingCapabilityAppro
 
 export function shouldOpenApprovalDetails(approval: PendingApproval): boolean {
   return approval.kind === "unit-batch";
+}
+
+function isBrowserOpenApproval(approval: PendingCapabilityApproval): boolean {
+  return approval.capability === "external-browser-open" || approval.capability === "open-url";
+}
+
+function genericCapabilityTarget(approval: PendingCapabilityApproval): string {
+  return (
+    approval.operation?.object?.value ??
+    approval.resource?.value ??
+    approval.details?.find((detail) => detail.label.toLowerCase() === "target")?.value ??
+    approval.details?.find((detail) => detail.label.toLowerCase() === "target origin")?.value ??
+    approval.capability
+  );
+}
+
+function workerLifecycleVerb(approval: PendingCapabilityApproval): string {
+  const verb = approval.operation?.verb.toLowerCase();
+  if (verb === "spawn" || verb === "create") return "spawn";
+  if (verb === "destroy" || verb === "delete" || verb === "stop") return "destroy";
+  if (verb === "update" || verb === "reconfigure") return "update";
+  const title = approval.title.toLowerCase();
+  if (title.includes("destroy") || title.includes("stop")) return "destroy";
+  if (title.includes("update") || title.includes("reconfigure")) return "update";
+  return "spawn";
+}
+
+function workerLifecycleTitle(approval: PendingCapabilityApproval, target: string): string {
+  switch (workerLifecycleVerb(approval)) {
+    case "destroy":
+      return `Destroy ${target}`;
+    case "update":
+      return `Update ${target}`;
+    default:
+      return `Spawn ${target}`;
+  }
+}
+
+function targetAwareWorkerLifecycleTitle(title: string | undefined, fallback: string): string {
+  if (!title) return fallback;
+  const normalized = title.trim().toLowerCase();
+  const genericWorkerTitles = new Set([
+    "spawn worker",
+    "create worker",
+    "start worker",
+    "destroy worker",
+    "destroy worker instance",
+    "stop worker",
+    "stop worker instance",
+    "update worker",
+    "update worker instance",
+    "reconfigure worker",
+    "reconfigure worker instance",
+  ]);
+  return genericWorkerTitles.has(normalized) ? fallback : title;
+}
+
+function targetAwareGenericTitle(title: string | undefined, fallback: string): string {
+  if (!title) return fallback;
+  const normalized = title.trim().toLowerCase();
+  const genericTitles = new Set([
+    "allow network access",
+    "allow cross-origin response access",
+    "create runtime entity in another context",
+    "disable service configuration",
+    "profile workers via the workerd inspector",
+  ]);
+  return genericTitles.has(normalized) ? fallback : title;
+}
+
+function panelOperationName(approval: PendingCapabilityApproval): string | undefined {
+  return (
+    approval.operation?.verb ??
+    approval.details?.find((detail) => detail.label.toLowerCase() === "operation")?.value
+  );
+}
+
+function panelOperationSubject(approval: PendingCapabilityApproval, fallback: string): string {
+  return approval.operation?.object?.value ?? fallback;
+}
+
+function panelStructuralTitle(approval: PendingCapabilityApproval, target: string): string {
+  const operation = panelOperationName(approval);
+  const subject = panelOperationSubject(approval, target);
+  switch (operation) {
+    case "openPanel":
+      return `Open ${subject}`;
+    case "navigate":
+    case "replacePanel":
+      return `Navigate ${target}`;
+    case "reload":
+      return `Reload ${target}`;
+    case "close":
+    case "archive":
+      return `Close ${target}`;
+    case "unload":
+      return `Unload ${target}`;
+    case "movePanel":
+      return `Move ${target}`;
+    case "takeOver":
+      return `Take over ${target}`;
+    case "openDevTools":
+      return `Open DevTools for ${target}`;
+    case "rebuildPanel":
+      return `Rebuild ${target}`;
+    case "rebuildAndReload":
+      return `Rebuild and reload ${target}`;
+    case "stateArgs.set":
+    case "updatePanelState":
+      return `Change ${target} state`;
+    default:
+      return `Change ${target}`;
+  }
+}
+
+function targetAwarePanelTitle(title: string | undefined, fallback: string): string {
+  if (!title) return fallback;
+  const normalized = title.trim().toLowerCase();
+  const genericPanelTitles = new Set([
+    "automate panel",
+    "drive privileged panel",
+    "navigate panel",
+    "reload panel",
+    "open panel",
+    "close panel",
+    "unload panel",
+    "move panel",
+    "take over panel",
+    "open panel devtools",
+    "rebuild panel",
+    "rebuild and reload panel",
+    "change panel state",
+  ]);
+  return genericPanelTitles.has(normalized) ? fallback : title;
 }
 
 function unitBatchLabel(approval: PendingUnitBatchApproval): {
@@ -850,6 +1273,20 @@ export function formatCapabilityDestination(
 ): string {
   const rawDestination = getCapabilityPrimaryDestination(approval);
   return formatUrlForSummary(rawDestination, oauth ? "origin" : "path");
+}
+
+export function formatNetworkDestination(raw: string): string {
+  try {
+    const url = new URL(raw);
+    if (url.protocol === "mailto:") {
+      return "email";
+    }
+    const host = url.host || url.hostname;
+    const path = compactPath(url.pathname);
+    return path ? `${host}${path}` : host;
+  } catch {
+    return raw.length > 64 ? `${raw.slice(0, 61)}...` : raw;
+  }
 }
 
 export function formatUrlForSummary(raw: string, mode: "origin" | "path" = "path"): string {

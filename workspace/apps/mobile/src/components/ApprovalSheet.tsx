@@ -44,6 +44,9 @@ import {
   formatInjection,
   getApprovalAttribution,
   getApprovalCopy,
+  getApprovalOperationKindLabel,
+  getApprovalRiskTone,
+  getRequesterCategoryLabel,
   getStandardActionCopy,
   getUnitBatchActionCopy,
   originForUrl,
@@ -117,6 +120,17 @@ function prettifyId(callerId: string): string {
 }
 
 function resolveCallerInfo(approval: PendingApproval): CallerInfo {
+  if (approval.requester) {
+    return {
+      label: approval.requester.title ?? approval.callerTitle ?? prettifyId(approval.callerId),
+      kindLabel: getRequesterCategoryLabel(approval.requester.category),
+      kind: approval.requester.kind,
+      panelId:
+        approval.requester.panel?.id ??
+        (approval.requester.kind === "panel" ? approval.requester.id : undefined),
+      shortId: truncateId(approval.requester.ephemeralInstanceKey),
+    };
+  }
   const shortId = truncateId(approval.callerId);
   const serverTitle = approval.callerTitle?.trim() || undefined;
   if (approval.callerKind === "panel") {
@@ -229,12 +243,13 @@ export function ApprovalSheet({
   const callerInfo = current ? resolveCallerInfo(current) : null;
   const copy = current && callerInfo ? getApprovalCopy(current) : null;
   const attribution = current ? getApprovalAttribution(current) : null;
-  const severeCapability = current?.kind === "capability" && current.severity === "severe";
-  const accentColor = severeCapability
-    ? colors.danger
-    : current?.kind === "unit-batch"
-      ? colors.warning
-      : colors.primary;
+  const riskTone = current ? getApprovalRiskTone(current) : "standard";
+  const accentColor =
+    riskTone === "danger"
+      ? colors.danger
+      : riskTone === "caution"
+        ? colors.warning
+        : colors.primary;
 
   const isBusy = pendingAction !== null;
   const currentApprovalId = current?.approvalId;
@@ -764,6 +779,28 @@ function SecretConfigFields({
   );
 }
 
+function requesterBreadcrumbSummary(approval: PendingApproval): string | null {
+  const breadcrumbs = approval.requester?.breadcrumbs ?? [];
+  if (breadcrumbs.length <= 1) return null;
+  return breadcrumbs
+    .map((breadcrumb) => {
+      const kind = getRequesterCategoryLabel(breadcrumb.category);
+      return breadcrumb.label ? `${kind}: ${breadcrumb.label}` : kind;
+    })
+    .join(" > ");
+}
+
+function evalSummary(approval: PendingApproval): string | null {
+  const evalMeta = approval.requester?.eval;
+  if (!evalMeta) return null;
+  const parts = [
+    evalMeta.ownerId ? `owner ${evalMeta.ownerId}` : null,
+    evalMeta.subKey ? `scope ${evalMeta.subKey}` : null,
+    evalMeta.runId ? `run ${evalMeta.runId}` : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(", ") : "Eval sandbox";
+}
+
 function ApprovalDetails({
   approval,
   caller,
@@ -804,8 +841,37 @@ function ApprovalDetails({
             secondary={approval.callerId}
             secondarySelectable
           />
-          <DetailRow icon={Globe} label="Repo" value={approval.repoPath} code />
-          <DetailRow icon={Lock} label="Version" value={approval.effectiveVersion} code />
+          {requesterBreadcrumbSummary(approval) ? (
+            <DetailRow
+              icon={Workflow}
+              label="Chain"
+              value={requesterBreadcrumbSummary(approval)!}
+              code
+            />
+          ) : null}
+          {evalSummary(approval) ? (
+            <DetailRow icon={Settings2} label="Eval" value={evalSummary(approval)!} code />
+          ) : null}
+          {approval.requester ? (
+            <DetailRow
+              icon={Lock}
+              label="Trust key"
+              value={approval.requester.stableIdentityKey}
+              code
+            />
+          ) : null}
+          {approval.operation ? (
+            <DetailRow
+              icon={Settings2}
+              label="Operation"
+              value={`${getApprovalOperationKindLabel(approval.operation.kind)} · ${approval.operation.verb}${
+                approval.operation.object ? ` · ${approval.operation.object.value}` : ""
+              }`}
+              code
+            />
+          ) : null}
+          <DetailRow icon={Globe} label="Requester repo" value={approval.repoPath} code />
+          <DetailRow icon={Lock} label="Requester version" value={approval.effectiveVersion} code />
           {approval.kind === "credential" ? (
             <CredentialDetails approval={approval} />
           ) : approval.kind === "client-config" ? (
@@ -1499,7 +1565,7 @@ function RememberedHint({
       <Info size={14} color={colors.textSecondary} />
       <Text style={[styles.helperText, { color: colors.textSecondary }]}>
         {approval.promptOptions === "scoped"
-          ? "Use Trust version to remember this approval."
+          ? "Use the trust option to remember this approval."
           : `Remembered for ${caller.kindLabel.toLowerCase()} "${caller.label}" until revoked.`}
       </Text>
     </View>

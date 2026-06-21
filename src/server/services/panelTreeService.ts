@@ -67,15 +67,28 @@ export function createPanelTreeService(deps: PanelTreeServiceDeps): ServiceDefin
     ctx: ServiceContext,
     args: unknown[]
   ): Promise<PanelAccessPermissionTarget> {
-    const options = (args[1] ?? {}) as { parentId?: string | null };
+    const source = typeof args[0] === "string" ? args[0] : undefined;
+    const options = (args[1] ?? {}) as { parentId?: string | null; contextId?: string | null };
+    const requestedContextId =
+      typeof options.contextId === "string" && options.contextId.length > 0
+        ? options.contextId
+        : undefined;
+    const enrich = (target: PanelAccessPermissionTarget): PanelAccessPermissionTarget => ({
+      ...target,
+      ...(source ? { requestedSource: source } : {}),
+      ...(requestedContextId ? { requestedContextId } : {}),
+      ...(source
+        ? { operationGroupKey: `runtime-open:${requestedContextId ?? ""}:${source}` }
+        : {}),
+    });
     if (typeof options.parentId === "string" && options.parentId.length > 0) {
-      return targetFor(ctx, options.parentId);
+      return enrich(await targetFor(ctx, options.parentId));
     }
     if (ctx.caller.runtime.kind === "panel" && deps.resolveRequesterPanel) {
       const requesterPanel = await deps.resolveRequesterPanel(ctx.caller);
-      if (requesterPanel) return requesterPanel;
+      if (requesterPanel) return enrich(requesterPanel);
     }
-    return { id: "workspace-root", title: "Workspace root", source: "workspace-root" };
+    return enrich({ id: "workspace-root", title: "Workspace root", source: "workspace-root" });
   }
 
   function operationFor(method: string, args: unknown[]): PanelAccessOperation | undefined {

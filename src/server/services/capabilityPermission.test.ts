@@ -128,6 +128,79 @@ describe("capabilityPermission", () => {
     expect(approvalQueue.request).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps internal version grants scoped to the concrete caller identity", async () => {
+    const approvalQueue = createApprovalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const baseRequest = {
+      capability: "external-browser-open",
+      resource: { type: "origin", label: "Origin", value: "https://example.com" },
+      title: "Open external browser",
+      deniedReason: "Denied",
+    };
+
+    await requestCapabilityPermission(deps, {
+      ...baseRequest,
+      caller: createVerifiedCaller("do:natstack/internal:EvalDO:one", "do", {
+        callerId: "do:natstack/internal:EvalDO:one",
+        callerKind: "do",
+        repoPath: "natstack/internal",
+        effectiveVersion: "internal",
+      }),
+    });
+    await requestCapabilityPermission(deps, {
+      ...baseRequest,
+      caller: createVerifiedCaller("do:natstack/internal:EvalDO:one", "do", {
+        callerId: "do:natstack/internal:EvalDO:one",
+        callerKind: "do",
+        repoPath: "natstack/internal",
+        effectiveVersion: "internal",
+      }),
+    });
+    await requestCapabilityPermission(deps, {
+      ...baseRequest,
+      caller: createVerifiedCaller("do:natstack/internal:EvalDO:two", "do", {
+        callerId: "do:natstack/internal:EvalDO:two",
+        callerKind: "do",
+        repoPath: "natstack/internal",
+        effectiveVersion: "internal",
+      }),
+    });
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse legacy internal version grants without a caller identity", () => {
+    const statePath = tempStatePath();
+    fs.writeFileSync(
+      path.join(statePath, "capability-grants.json"),
+      JSON.stringify({
+        grants: [
+          {
+            capability: "external-browser-open",
+            resourceKey: "https://example.com",
+            scope: "version",
+            repoPath: "natstack/internal",
+            effectiveVersion: "internal",
+            grantedAt: 1,
+          },
+        ],
+      })
+    );
+
+    const grantStore = new CapabilityGrantStore({ statePath });
+
+    expect(
+      grantStore.hasGrant("external-browser-open", "https://example.com", {
+        callerId: "do:natstack/internal:EvalDO:one",
+        repoPath: "natstack/internal",
+        effectiveVersion: "internal",
+      })
+    ).toBe(false);
+  });
+
   it("keys session-scoped capability grants to the concrete caller identity", async () => {
     const approvalQueue = createApprovalQueueMock("session");
     const deps = {
@@ -159,6 +232,138 @@ describe("capabilityPermission", () => {
         effectiveVersion: "version-1",
       }),
     });
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps session network grants scoped to the requested origin", async () => {
+    const approvalQueue = createApprovalQueueMock("session");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const caller = createVerifiedCaller("worker:network", "worker", {
+      callerId: "worker:network",
+      callerKind: "worker",
+      repoPath: "workers/network",
+      effectiveVersion: "version-1",
+    });
+    const requestForOrigin = (origin: string) => ({
+      caller,
+      capability: "external-network-fetch",
+      resource: {
+        type: "url-origin",
+        label: "Target origin",
+        value: origin,
+        key: origin,
+        scope: { kind: "origin" as const, origin },
+      },
+      title: `Connect to ${origin}`,
+      deniedReason: "Denied",
+    });
+
+    await requestCapabilityPermission(deps, requestForOrigin("https://one.example"));
+    await requestCapabilityPermission(deps, requestForOrigin("https://one.example"));
+    await requestCapabilityPermission(deps, requestForOrigin("https://two.example"));
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        grantResourceKey: "https://one.example",
+        resourceScope: { kind: "origin", origin: "https://one.example" },
+      })
+    );
+    expect(approvalQueue.request).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        grantResourceKey: "https://two.example",
+        resourceScope: { kind: "origin", origin: "https://two.example" },
+      })
+    );
+  });
+
+  it("uses trust decisions for network-wide grants per capability", async () => {
+    const approvalQueue = createApprovalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const caller = createVerifiedCaller("worker:network", "worker", {
+      callerId: "worker:network",
+      callerKind: "worker",
+      repoPath: "workers/network",
+      effectiveVersion: "version-1",
+    });
+    const requestFor = (capability: string, origin: string) => ({
+      caller,
+      capability,
+      resource: {
+        type: "url-origin",
+        label: "Target origin",
+        value: origin,
+        key: origin,
+        scope: { kind: "origin" as const, origin },
+      },
+      title: `Network access to ${origin}`,
+      deniedReason: "Denied",
+    });
+
+    await requestCapabilityPermission(
+      deps,
+      requestFor("external-network-fetch", "https://one.example")
+    );
+    await requestCapabilityPermission(
+      deps,
+      requestFor("external-network-fetch", "https://two.example")
+    );
+    await requestCapabilityPermission(
+      deps,
+      requestFor("cors-response-read", "https://two.example")
+    );
+
+    expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps internal network trust scoped to the concrete caller identity", async () => {
+    const approvalQueue = createApprovalQueueMock("version");
+    const deps = {
+      approvalQueue,
+      grantStore: new CapabilityGrantStore({ statePath: tempStatePath() }),
+    };
+    const caller = (id: string) =>
+      createVerifiedCaller(id, "do", {
+        callerId: id,
+        callerKind: "do",
+        repoPath: "natstack/internal",
+        effectiveVersion: "internal",
+      });
+    const requestFor = (id: string, origin: string) => ({
+      caller: caller(id),
+      capability: "external-network-fetch",
+      resource: {
+        type: "url-origin",
+        label: "Target origin",
+        value: origin,
+        key: origin,
+        scope: { kind: "origin" as const, origin },
+      },
+      title: `Connect to ${origin}`,
+      deniedReason: "Denied",
+    });
+
+    await requestCapabilityPermission(
+      deps,
+      requestFor("do:natstack/internal:EvalDO:one", "https://one.example")
+    );
+    await requestCapabilityPermission(
+      deps,
+      requestFor("do:natstack/internal:EvalDO:one", "https://two.example")
+    );
+    await requestCapabilityPermission(
+      deps,
+      requestFor("do:natstack/internal:EvalDO:two", "https://two.example")
+    );
 
     expect(approvalQueue.request).toHaveBeenCalledTimes(2);
   });

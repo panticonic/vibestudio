@@ -80,6 +80,103 @@ export const userlandApprovalRequestSchema = z.object({
   }
 });
 
+export type ApprovalRequesterKind = "panel" | "app" | "worker" | "do" | "system";
+
+export type ApprovalRequesterCategory =
+  | "panel"
+  | "workspace-app"
+  | "agent"
+  | "eval"
+  | "worker"
+  | "durable-object"
+  | "extension"
+  | "system"
+  | "internal-service"
+  | "unknown";
+
+export interface ApprovalRequesterBreadcrumb {
+  id: string;
+  kind: ApprovalRequesterKind | "session" | "shell" | "server" | "extension";
+  category: ApprovalRequesterCategory;
+  label?: string;
+  sourcePath?: string;
+}
+
+export interface ApprovalRequesterIdentity {
+  id: string;
+  kind: ApprovalRequesterKind;
+  category: ApprovalRequesterCategory;
+  /** Primary human display name chosen by the server. */
+  title?: string;
+  /** Nearest owning panel, when this requester belongs to panel-owned work. */
+  panel?: {
+    id: string;
+    title?: string;
+  };
+  /** Code/source that created this runtime, when known. */
+  sourcePath?: string;
+  repoPath: string;
+  effectiveVersion: string;
+  contextId?: string;
+  /** Stable trust/audit key: code version for normal builds, runtime id for internal/eval. */
+  stableIdentityKey: string;
+  /** Concrete runtime instance id. Kept visible for audit/detail views. */
+  ephemeralInstanceKey: string;
+  /** Eval-specific owner handle. `runId` is present only when the caller can provide it. */
+  eval?: {
+    ownerId?: string;
+    subKey?: string;
+    runId?: string;
+    channelId?: string;
+  };
+  breadcrumbs: ApprovalRequesterBreadcrumb[];
+}
+
+export interface ApprovalOperationDescriptor {
+  kind:
+    | "browser"
+    | "credential"
+    | "filesystem"
+    | "git"
+    | "inspection"
+    | "network"
+    | "panel"
+    | "runtime"
+    | "worker-lifecycle"
+    | "workspace"
+    | "service-setup"
+    | "userland"
+    | "device-code"
+    | "unknown";
+  verb: string;
+  object?: {
+    type: string;
+    label: string;
+    value: string;
+  };
+  /** Lets related low-level prompts collapse around one user-recognizable operation. */
+  groupKey?: string;
+}
+
+export type ApprovalResourceScope =
+  | {
+      kind: "exact";
+      key: string;
+      label?: string;
+    }
+  | {
+      kind: "origin";
+      origin: string;
+    }
+  | {
+      kind: "domain";
+      domain: string;
+    }
+  | {
+      kind: "network";
+      value: "*";
+    };
+
 /** The verified runtime caller that issued the prompt. Populated by the dispatcher. */
 export interface ApprovalPrincipal {
   callerId: string;
@@ -93,6 +190,8 @@ export interface ApprovalPrincipal {
    * every entity sets one; consumers fall back to the id.
    */
   callerTitle?: string;
+  requesterCategory?: ApprovalRequesterCategory;
+  requester?: ApprovalRequesterIdentity;
 }
 
 /** What a userland approval is about. The issuing provider supplies this. */
@@ -147,6 +246,13 @@ export interface PendingApprovalBase {
    * audit/inspection in the approval bar's expandable details.
    */
   callerTitle?: string;
+  /**
+   * Structured requester identity. Optional for wire compatibility; when present,
+   * UIs should prefer it over raw caller fields.
+   */
+  requester?: ApprovalRequesterIdentity;
+  /** Structured operation metadata used for copy, grouping, and risk display. */
+  operation?: ApprovalOperationDescriptor;
 }
 
 export interface PendingCredentialApproval extends PendingApprovalBase {
@@ -189,6 +295,7 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
     label: string;
     value: string;
   };
+  resourceScope?: ApprovalResourceScope;
   details?: Array<{
     label: string;
     value: string;
@@ -362,7 +469,7 @@ export interface UserlandApprovalRequest {
     value: string;
   }>;
   /**
-   * `scoped` (default) shows host-managed Allow once / Session / Trust version
+   * `scoped` (default) shows host-managed Allow once / Session / Trust version-or-identity
    * choices and returns `choice: "allow"` or `choice: "deny"`.
    * `choices` shows the supplied `options` and persists the selected choice
    * for this concrete caller until revoked.

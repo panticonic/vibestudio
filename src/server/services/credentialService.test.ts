@@ -2179,7 +2179,11 @@ describe("credentialService", () => {
       expect.objectContaining({
         kind: "capability",
         capability: "client-config-delete",
-        title: "Disable service configuration",
+        title: "Disable google-workspace",
+        operation: expect.objectContaining({
+          kind: "service-setup",
+          object: expect.objectContaining({ value: "google-workspace" }),
+        }),
       })
     );
     expect(await clientConfigStore.load("google-workspace")).toMatchObject({ status: "deleted" });

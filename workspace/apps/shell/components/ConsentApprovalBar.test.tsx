@@ -316,10 +316,10 @@ describe("ConsentApprovalBar queue browsing", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Drive privileged panel")).toBeTruthy();
+      expect(screen.getByText("Drive privileged Shell")).toBeTruthy();
     });
     const bar = screen
-      .getByText("Drive privileged panel")
+      .getByText("Drive privileged Shell")
       .closest(".approval-bar") as HTMLElement | null;
     expect(bar?.style.getPropertyValue("--app-approval-stripe")).toBe(
       "var(--app-approval-red-stripe)"

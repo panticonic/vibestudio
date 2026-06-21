@@ -19,31 +19,43 @@ import type { ApprovalQueue } from "./approvalQueue.js";
 import type { UserlandApprovalGrantStore } from "./userlandApprovalGrantStore.js";
 
 const SERVICE_NAME = "userlandApproval";
-const SCOPED_ALLOW_OPTIONS: UserlandApprovalOption[] = [
-  {
-    value: "once",
-    label: "Allow once",
-    description: "Allow this request only.",
-    tone: "neutral",
-  },
-  {
-    value: "session",
-    label: "Allow this session",
-    description: "Remember for this caller until NatStack restarts.",
-    tone: "neutral",
-  },
-  {
-    value: "version",
-    label: "Trust version",
-    description: "Remember for this exact code version.",
-    tone: "primary",
-  },
-  { value: "deny", label: "Deny", description: "Do not allow this request.", tone: "danger" },
-];
 const BINARY_OPTIONS: UserlandApprovalOption[] = [
   { value: "allow", label: "Allow", tone: "primary" },
   { value: "deny", label: "Deny", tone: "danger" },
 ];
+
+function scopedAllowOptions(principal: ApprovalPrincipal): UserlandApprovalOption[] {
+  const identityScoped =
+    principal.effectiveVersion === "internal" ||
+    principal.repoPath === "natstack/internal" ||
+    principal.requesterCategory === "eval" ||
+    principal.requesterCategory === "internal-service" ||
+    principal.requester?.category === "eval" ||
+    principal.requester?.category === "internal-service";
+  return [
+    {
+      value: "once",
+      label: "Allow once",
+      description: "Allow this request only.",
+      tone: "neutral",
+    },
+    {
+      value: "session",
+      label: "Allow this session",
+      description: "Remember for this caller until NatStack restarts.",
+      tone: "neutral",
+    },
+    {
+      value: "version",
+      label: identityScoped ? "Trust identity" : "Trust version",
+      description: identityScoped
+        ? "Remember for this exact runtime identity."
+        : "Remember for this exact code version.",
+      tone: "primary",
+    },
+    { value: "deny", label: "Deny", description: "Do not allow this request.", tone: "danger" },
+  ];
+}
 
 export function createUserlandApprovalService(deps: {
   approvalQueue: ApprovalQueue;
@@ -127,7 +139,9 @@ export function createUserlandApprovalService(deps: {
     const decoratedReq = decorateForIssuer(req, issuer);
     const promptOptions = decoratedReq.promptOptions ?? "scoped";
     const options =
-      promptOptions === "scoped" ? SCOPED_ALLOW_OPTIONS : (decoratedReq.options ?? BINARY_OPTIONS);
+      promptOptions === "scoped"
+        ? scopedAllowOptions(principal)
+        : (decoratedReq.options ?? BINARY_OPTIONS);
     const hit = deps.grantStore.lookup(principal, decoratedReq.subject.id, issuer);
     if (hit) {
       if (isCachedChoiceValid(promptOptions, options, hit.choice)) {

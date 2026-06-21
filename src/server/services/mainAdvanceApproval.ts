@@ -213,6 +213,16 @@ async function approveWorkspaceMainAdvance(
         value: "workspace main",
         key: "workspace-source-change:main",
       },
+      operation: {
+        kind: "workspace",
+        verb: operationLabel(candidate.operation),
+        object: {
+          type: "vcs-head",
+          label: "Head",
+          value: "workspace main",
+        },
+        groupKey: `workspace-source-change:main:${candidate.event.stateHash}`,
+      },
       title: mainAdvanceTitle(candidate),
       description: mainAdvanceDescription(candidate),
       details: mainAdvanceDetails(candidate),

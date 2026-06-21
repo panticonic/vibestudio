@@ -58,6 +58,16 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
       {
         capability: CAPABILITY,
         resource,
+        operation: {
+          kind: "browser",
+          verb: "Open external browser",
+          object: {
+            type: resource.type,
+            label: resource.label,
+            value: url.toString(),
+          },
+          groupKey: `external-browser-open:${ctx.caller.runtime.id}:${resource.key}`,
+        },
         title: "Open external browser",
         description: "Allow this code to open URLs in the system browser.",
         details: externalOpenDetails(url, options),

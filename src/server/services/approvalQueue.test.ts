@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApprovalQueue, type UnitBatchApprovalQueueRequest } from "./approvalQueue.js";
 
-function createQueue() {
+function createQueue(overrides: Partial<Parameters<typeof createApprovalQueue>[0]> = {}) {
   const emit = vi.fn();
-  const queue = createApprovalQueue({ eventService: { emit } as never });
+  const queue = createApprovalQueue({ eventService: { emit } as never, ...overrides });
   return { queue, emit };
 }
 
@@ -122,6 +122,91 @@ describe("approvalQueue", () => {
     });
     queue.resolve(queue.listPending()[0]!.approvalId, "once");
     await expect(promise).resolves.toBe("once");
+  });
+
+  it("attaches structured requester identity from the resolver", async () => {
+    const { queue } = createQueue({
+      resolveRequester: (input) => ({
+        id: input.callerId,
+        kind: input.callerKind,
+        category: "eval",
+        title: "Agentic Chat",
+        panel: { id: "panel:chat", title: "Agentic Chat" },
+        sourcePath: input.repoPath,
+        repoPath: input.repoPath,
+        effectiveVersion: input.effectiveVersion,
+        stableIdentityKey: input.callerId,
+        ephemeralInstanceKey: input.callerId,
+        eval: { ownerId: "do:workers/agent:AgentDO:session", subKey: "turn-1" },
+        breadcrumbs: [
+          { id: "panel:chat", kind: "panel", category: "panel", label: "Agentic Chat" },
+          {
+            id: input.callerId,
+            kind: "do",
+            category: "eval",
+            label: "Eval turn-1",
+          },
+        ],
+      }),
+    });
+    void queue.request({
+      kind: "capability",
+      callerId: "do:natstack/internal:EvalDO:one",
+      callerKind: "do",
+      repoPath: "natstack/internal",
+      effectiveVersion: "internal",
+      capability: "external-browser-open",
+      title: "Open external browser",
+    });
+
+    expect(queue.listPending()[0]).toMatchObject({
+      callerTitle: "Agentic Chat",
+      requester: {
+        category: "eval",
+        panel: { title: "Agentic Chat" },
+        eval: { subKey: "turn-1" },
+      },
+    });
+    queue.resolve(queue.listPending()[0]!.approvalId, "deny");
+  });
+
+  it("coalesces decision approvals that share an operation group", async () => {
+    const { queue } = createQueue();
+    const first = queue.request({
+      kind: "capability",
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      capability: "panel.structural",
+      title: "Open panel",
+      operation: {
+        kind: "panel",
+        verb: "openPanel",
+        object: { type: "panel", label: "Panel", value: "workers/hello" },
+        groupKey: "runtime-open:ctx-1:workers/hello",
+      },
+    });
+    const second = queue.request({
+      kind: "capability",
+      callerId: "panel-1",
+      callerKind: "panel",
+      repoPath: "panels/example",
+      effectiveVersion: "hash-1",
+      capability: "workerd.lifecycle",
+      title: "Spawn worker",
+      operation: {
+        kind: "worker-lifecycle",
+        verb: "spawn",
+        object: { type: "worker-source", label: "Worker", value: "workers/hello" },
+        groupKey: "runtime-open:ctx-1:workers/hello",
+      },
+    });
+
+    expect(queue.listPending()).toHaveLength(1);
+    queue.resolve(queue.listPending()[0]!.approvalId, "once");
+    await expect(first).resolves.toBe("once");
+    await expect(second).resolves.toBe("once");
   });
 
   it("auto-approves decision prompts without surfacing pending UI", async () => {

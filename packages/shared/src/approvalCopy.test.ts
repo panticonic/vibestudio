@@ -3,10 +3,13 @@ import {
   formatAccount,
   formatGitRemoteSummary,
   formatInjection,
+  formatNetworkDestination,
   formatServiceName,
   getApprovalAttribution,
   getApprovalCategoryLabel,
   getApprovalCopy,
+  getApprovalRiskTone,
+  getRequesterCategoryLabel,
   getStandardActionCopy,
   getUnitBatchActionCopy,
   originForUrl,
@@ -31,6 +34,7 @@ describe("approvalCopy", () => {
     summaryIncludes: string;
     warning?: string;
     detailsOpen?: boolean;
+    risk?: "standard" | "caution" | "danger";
   }> = [
     {
       name: "capability",
@@ -96,6 +100,32 @@ describe("approvalCopy", () => {
       summaryIncludes: "github.com/acme/project",
     },
     {
+      name: "network egress",
+      approval: {
+        ...base,
+        kind: "capability",
+        capability: "external-network-fetch",
+        title: "Allow network access",
+        resource: {
+          type: "url-origin",
+          label: "Target origin",
+          value: "http://localhost:42531",
+        },
+        operation: {
+          kind: "network",
+          verb: "Connect",
+          object: {
+            type: "url-origin",
+            label: "Target origin",
+            value: "http://localhost:42531",
+          },
+        },
+      },
+      category: "Network access",
+      title: "Connect to localhost:42531",
+      summaryIncludes: "raw network requests",
+    },
+    {
       name: "credential repo binding",
       approval: {
         ...base,
@@ -135,6 +165,25 @@ describe("approvalCopy", () => {
       category: "Workspace source",
       title: "Update panels/spectrolite",
       summaryIncludes: "Updates workspace source",
+    },
+    {
+      name: "worker lifecycle",
+      approval: {
+        ...base,
+        kind: "capability",
+        capability: "workerd.lifecycle",
+        title: "Spawn worker",
+        description: 'Allow this code to start the worker "workers/hello".',
+        resource: {
+          type: "worker-source",
+          label: "Worker",
+          value: "workers/hello",
+        },
+      },
+      category: "Worker lifecycle",
+      title: "Spawn workers/hello",
+      summaryIncludes: "start the worker",
+      risk: "caution",
     },
     {
       name: "client-config",
@@ -190,6 +239,7 @@ describe("approvalCopy", () => {
       title: "Connect Google Calendar",
       summaryIncludes: "calendar.google.com",
       warning: "The sign-in domain differs from the service domain.",
+      risk: "caution",
     },
     {
       name: "app source change unit batch",
@@ -218,6 +268,7 @@ describe("approvalCopy", () => {
       summaryIncludes: "trusted workspace app code",
       warning: "Approving allows these workspace apps to run in the app host.",
       detailsOpen: true,
+      risk: "caution",
     },
     {
       name: "extension management unit batch",
@@ -246,6 +297,7 @@ describe("approvalCopy", () => {
       summaryIncludes: "reload @workspace-extensions/acme",
       warning: "Approving runs native code with filesystem, network, and process access.",
       detailsOpen: true,
+      risk: "danger",
     },
     {
       name: "userland",
@@ -288,6 +340,11 @@ describe("approvalCopy", () => {
         capability: "panel.automate",
         severity: "severe",
         title: "Drive privileged panel",
+        operation: {
+          kind: "panel",
+          verb: "cdp",
+          object: { type: "panel", label: "Panel", value: "Shell" },
+        },
         resource: {
           type: "panel",
           label: "Panel",
@@ -295,10 +352,11 @@ describe("approvalCopy", () => {
         },
       },
       category: "Panel automation",
-      title: "Drive privileged panel",
+      title: "Drive privileged Shell",
       summaryIncludes: "Automates Shell",
       warning:
         "This target is privileged. Approving gives the requester control of a trusted shell panel.",
+      risk: "danger",
     },
     {
       name: "panel structural",
@@ -307,6 +365,11 @@ describe("approvalCopy", () => {
         kind: "capability",
         capability: "panel.structural",
         title: "Close panel",
+        operation: {
+          kind: "panel",
+          verb: "close",
+          object: { type: "panel", label: "Panel", value: "Child panel" },
+        },
         resource: {
           type: "panel",
           label: "Panel",
@@ -314,14 +377,36 @@ describe("approvalCopy", () => {
         },
       },
       category: "Panel change",
-      title: "Close panel",
+      title: "Close Child panel",
       summaryIncludes: "Changes Child panel",
+    },
+    {
+      name: "open panel",
+      approval: {
+        ...base,
+        kind: "capability",
+        capability: "panel.structural",
+        title: "Open panel",
+        operation: {
+          kind: "panel",
+          verb: "openPanel",
+          object: { type: "panel", label: "Panel", value: "panels/spectrolite" },
+        },
+        resource: {
+          type: "panel",
+          label: "Panel",
+          value: "System test suite run",
+        },
+      },
+      category: "Panel change",
+      title: "Open panels/spectrolite",
+      summaryIncludes: "Opens panels/spectrolite under System test suite run",
     },
   ];
 
   it.each(fixtures)(
     "formats $name copy",
-    ({ approval, category, title, summaryIncludes, warning, detailsOpen }) => {
+    ({ approval, category, title, summaryIncludes, warning, detailsOpen, risk }) => {
       const copy = getApprovalCopy(approval);
 
       expect(getApprovalCategoryLabel(approval)).toBe(category);
@@ -329,8 +414,15 @@ describe("approvalCopy", () => {
       expect(copy.summary).toContain(summaryIncludes);
       expect(copy.warning).toBe(warning);
       expect(shouldOpenApprovalDetails(approval)).toBe(detailsOpen ?? false);
+      expect(getApprovalRiskTone(approval)).toBe(risk ?? "standard");
     }
   );
+
+  it("formats requester category labels", () => {
+    expect(getRequesterCategoryLabel("eval")).toBe("Eval");
+    expect(getRequesterCategoryLabel("agent")).toBe("Agent");
+    expect(getRequesterCategoryLabel("internal-service")).toBe("Internal service");
+  });
 
   it("derives semantic attribution chips, never raw ids", () => {
     const byName = (name: string) => fixtures.find((fixture) => fixture.name === name)!.approval;
@@ -375,12 +467,45 @@ describe("approvalCopy", () => {
     const workspaceSourceChange = fixtures.find(
       (fixture) => fixture.name === "workspace source change"
     )!.approval as Extract<PendingApproval, { kind: "capability" }>;
+    const workerLifecycle = fixtures.find((fixture) => fixture.name === "worker lifecycle")!
+      .approval as Extract<PendingApproval, { kind: "capability" }>;
+    const networkEgress = fixtures.find((fixture) => fixture.name === "network egress")!
+      .approval as Extract<PendingApproval, { kind: "capability" }>;
     const severePanelStructural = {
       ...(fixtures.find((fixture) => fixture.name === "panel structural")!.approval as Extract<
         PendingApproval,
         { kind: "capability" }
       >),
       severity: "severe" as const,
+    };
+    const internalPanelAutomation = {
+      ...severePanelAutomation,
+      repoPath: "natstack/internal",
+      effectiveVersion: "internal",
+    };
+    const repoBinding = fixtures.find((fixture) => fixture.name === "credential repo binding")!
+      .approval as Extract<PendingApproval, { kind: "credential" }>;
+    const evalCredential = {
+      ...repoBinding,
+      repoPath: "natstack/internal",
+      effectiveVersion: "internal",
+      requester: {
+        id: "do:natstack/internal:EvalDO:one",
+        kind: "do" as const,
+        category: "eval" as const,
+        title: "Agentic Chat",
+        repoPath: "natstack/internal",
+        effectiveVersion: "internal",
+        stableIdentityKey: "do:natstack/internal:EvalDO:one",
+        ephemeralInstanceKey: "do:natstack/internal:EvalDO:one",
+        breadcrumbs: [],
+      },
+    };
+    const evalNetworkEgress = {
+      ...networkEgress,
+      repoPath: "natstack/internal",
+      effectiveVersion: "internal",
+      requester: evalCredential.requester,
     };
 
     expect(
@@ -389,8 +514,6 @@ describe("approvalCopy", () => {
     expect(
       getStandardActionCopy(gitWrite as Extract<PendingApproval, { kind: "credential" }>).once.label
     ).toBe("Push once");
-    const repoBinding = fixtures.find((fixture) => fixture.name === "credential repo binding")!
-      .approval as Extract<PendingApproval, { kind: "credential" }>;
     expect(getStandardActionCopy(repoBinding).repo.description).toContain(
       "GitHub repositories at github.com/acme/project"
     );
@@ -402,8 +525,28 @@ describe("approvalCopy", () => {
     expect(getStandardActionCopy(workspaceSourceChange).session.description).toContain(
       "panels/spectrolite"
     );
+    expect(getStandardActionCopy(workerLifecycle).once.label).toBe("Allow once");
+    expect(getStandardActionCopy(workerLifecycle).version.description).toContain(
+      "manage workers/hello"
+    );
+    expect(getStandardActionCopy(networkEgress).once.label).toBe("Connect once");
+    expect(getStandardActionCopy(networkEgress).session.label).toBe("Allow this origin");
+    expect(getStandardActionCopy(networkEgress).session.description).toContain("localhost:42531");
+    expect(getStandardActionCopy(networkEgress).version.label).toBe("Trust version with network");
+    expect(getStandardActionCopy(networkEgress).repo.label).toBe("Trust repo with network");
+    expect(getStandardActionCopy(evalNetworkEgress).version.label).toBe(
+      "Trust identity with network"
+    );
     expect(getStandardActionCopy(severePanelAutomation).once.label).toBe("Drive once");
     expect(getStandardActionCopy(severePanelAutomation).version.label).toBe("Trust and drive");
+    expect(getStandardActionCopy(internalPanelAutomation).version.label).toBe("Trust identity");
+    expect(getStandardActionCopy(internalPanelAutomation).version.description).toContain(
+      "runtime identity"
+    );
+    expect(getStandardActionCopy(evalCredential).version.label).toBe("Trust identity");
+    expect(getStandardActionCopy(evalCredential).version.description).toContain(
+      "runtime identity"
+    );
     expect(getStandardActionCopy(severePanelStructural).once.label).toBe("Change once");
     expect(getStandardActionCopy(severePanelStructural).version.label).toBe("Trust and change");
   });
@@ -461,6 +604,7 @@ describe("approvalCopy", () => {
     expect(formatGitRemoteSummary("https://github.com/acme/project.git")).toBe(
       "github.com/acme/project"
     );
+    expect(formatNetworkDestination("http://localhost:42531")).toBe("localhost:42531");
     expect(originForUrl("https://accounts.google.com/o/oauth2/v2/auth")).toBe(
       "https://accounts.google.com"
     );

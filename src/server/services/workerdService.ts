@@ -11,7 +11,10 @@ import type { DORefParam } from "@natstack/shared/userlandServiceRpc";
 import type { WorkerdManager, WorkerCreateOptions } from "../workerdManager.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { ServiceContext, DeferredResult } from "@natstack/shared/serviceDispatcher";
-import type { PendingCapabilityApproval } from "@natstack/shared/approvals";
+import type {
+  ApprovalOperationDescriptor,
+  PendingCapabilityApproval,
+} from "@natstack/shared/approvals";
 import type { ApprovalQueue } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { withCapability, type CapabilityPermissionResource } from "./capabilityPermission.js";
@@ -65,6 +68,7 @@ export function createWorkerdService(deps: {
     title: string,
     description: string,
     severity: PendingCapabilityApproval["severity"] | undefined,
+    operation: ApprovalOperationDescriptor | undefined,
     action: () => Promise<T>
   ): Promise<T> | DeferredResult => {
     const kind = ctx.caller.runtime.kind;
@@ -86,6 +90,7 @@ export function createWorkerdService(deps: {
         title,
         description,
         ...(severity ? { severity } : {}),
+        ...(operation ? { operation } : {}),
         deniedReason: `${title} denied`,
       },
       async (auth) => {
@@ -141,9 +146,15 @@ export function createWorkerdService(deps: {
             ctx,
             "workerd.lifecycle",
             { type: "worker-source", label: "Worker", value: opts.source, key: opts.source },
-            "Spawn worker",
+            `Spawn ${opts.source}`,
             `Allow this code to start the worker "${opts.source}".`,
             undefined,
+            {
+              kind: "worker-lifecycle",
+              verb: "spawn",
+              object: { type: "worker-source", label: "Worker", value: opts.source },
+              groupKey: `runtime-open:${opts.contextId}:${opts.source}`,
+            },
             async () => stripToken(await wm.createInstance(opts))
           );
         }
@@ -153,9 +164,15 @@ export function createWorkerdService(deps: {
             ctx,
             "workerd.lifecycle",
             { type: "worker-instance", label: "Worker instance", value: name, key: name },
-            "Destroy worker instance",
+            `Destroy ${name}`,
             `Allow this code to stop the worker instance "${name}".`,
             "severe",
+            {
+              kind: "worker-lifecycle",
+              verb: "destroy",
+              object: { type: "worker-instance", label: "Worker instance", value: name },
+              groupKey: `worker-destroy:${name}`,
+            },
             async () => wm.destroyInstance(name)
           );
         }
@@ -166,9 +183,15 @@ export function createWorkerdService(deps: {
             ctx,
             "workerd.lifecycle",
             { type: "worker-instance", label: "Worker instance", value: name, key: name },
-            "Update worker instance",
+            `Update ${name}`,
             `Allow this code to reconfigure the worker instance "${name}".`,
             undefined,
+            {
+              kind: "worker-lifecycle",
+              verb: "update",
+              object: { type: "worker-instance", label: "Worker instance", value: name },
+              groupKey: `worker-update:${name}`,
+            },
             async () => stripToken(await wm.updateInstance(name, upd))
           );
         }

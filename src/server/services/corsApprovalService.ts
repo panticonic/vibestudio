@@ -61,9 +61,20 @@ export function createCorsApprovalService(deps: {
           label: "Target origin",
           value: target.origin,
           key: target.origin,
+          scope: { kind: "origin", origin: target.origin },
         },
-        title: "Allow cross-origin response access",
-        description: "Allow this panel to read CORS-protected responses from this origin.",
+        operation: {
+          kind: "network",
+          verb: "Read cross-origin response",
+          object: {
+            type: "url-origin",
+            label: "Target origin",
+            value: target.origin,
+          },
+          groupKey: `cors:${ctx.caller.runtime.id}:${target.origin}`,
+        },
+        title: `Read responses from ${target.origin}`,
+        description: "Allow this requester to read CORS-protected responses from this origin.",
         details: [
           { label: "Request origin", value: request.requestOrigin ?? "unknown" },
           { label: "Target origin", value: target.origin },
