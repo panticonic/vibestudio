@@ -127,6 +127,81 @@ export { createRpcFs } from "./rpcFs.js";
 export { createPanelRuntime } from "./panelRuntime.js";
 export { createRuntimeParentHandle } from "./handles.js";
 
+/**
+ * The complete `services.<name>.<method>(...)` namespace, identical on every
+ * target. `services.<anyRegisteredService>` resolves to a client that dispatches
+ * via `callMain("<name>.<method>", args)` — so EVERY registered RPC service is
+ * reachable BY NAME with no hand-curated list (gaps are structurally impossible).
+ *
+ * Two layers, composed:
+ *  1. ERGONOMIC OVERRIDE — if `<name>` is a real member of the hosted runtime
+ *     (`gad`/`fs`/`vcs`/`credentials`/`blobstore`/`workers`/…), `services.<name>`
+ *     returns that SAME rich client object, so the curated, typed surface wins.
+ *  2. DYNAMIC FALLBACK — otherwise `services.<name>` is a typed proxy whose every
+ *     `.<method>(...args)` becomes `rt.callMain("<name>.<method>", ...args)`,
+ *     i.e. `rpc.call("main", "<name>.<method>", args)`.
+ *
+ * SECURITY: the fallback adds NO new access. It routes solely through `callMain`,
+ * and the server dispatcher enforces each method's `policy.allowed`
+ * (serviceDispatcher.ts `dispatch` → `checkServiceAccess`) at the single choke
+ * point — a `do`-denied method still rejects server-side. The proxy is purely
+ * ergonomic/complete reach, never an authorization bypass.
+ *
+ * This is a FUNCTION (not a runtime-surface member): `services` is an eval-only
+ * ambient binding, not part of the portable `createHostedRuntime` key-set, so the
+ * cross-target parity gate is untouched. Panel/worker can build the identical
+ * `services` from the same helper for parity.
+ */
+export function createServicesProxy(rt: WorkspaceRuntime): Record<string, unknown> {
+  const rtRecord = rt as unknown as Record<string, unknown>;
+  // Cache per-service fallback clients so repeated `services.foo` access is stable
+  // (=== across reads) and a method proxy isn't rebuilt on every property get.
+  const fallbackClients = new Map<string, Record<string, unknown>>();
+
+  const fallbackClient = (service: string): Record<string, unknown> => {
+    const cached = fallbackClients.get(service);
+    if (cached) return cached;
+    const methodCache = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+    const client = new Proxy(
+      {},
+      {
+        get(_t, method) {
+          if (typeof method === "symbol") return undefined;
+          const m = String(method);
+          let fn = methodCache.get(m);
+          if (!fn) {
+            fn = (...args: unknown[]) => rt.callMain(`${service}.${m}`, ...args);
+            methodCache.set(m, fn);
+          }
+          return fn;
+        },
+      }
+    ) as Record<string, unknown>;
+    fallbackClients.set(service, client);
+    return client;
+  };
+
+  return new Proxy(
+    {},
+    {
+      get(_t, prop, receiver) {
+        if (typeof prop === "symbol") return Reflect.get(rtRecord, prop, receiver);
+        const name = String(prop);
+        // Layer 1 — ergonomic override: the rich, curated runtime client wins.
+        // `in` (not a truthy check) so a falsy-but-present member still overrides.
+        if (name in rtRecord) return rtRecord[name];
+        // Layer 2 — dynamic fallback: any other registered service, by name.
+        return fallbackClient(name);
+      },
+      // So `name in services` and Reflect.has are honest about the override layer
+      // (the fallback is open-ended, so membership there is always "yes").
+      has(_t, prop) {
+        return typeof prop === "string" ? true : prop in rtRecord;
+      },
+    }
+  );
+}
+
 export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const rpc = host.rpc;
   const credentials = helpfulNamespace("credentials", createCredentialClient(rpc));
@@ -135,7 +210,10 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
   const workspace = helpfulNamespace("workspace", createWorkspaceClient(rpc));
   const vcs = helpfulNamespace(
     "vcs",
-    createVcsClient(<T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args), rpc)
+    createVcsClient(
+      <T>(method: string, ...args: unknown[]) => rpc.call<T>("main", method, args),
+      rpc
+    )
   );
   const webhooks = helpfulNamespace("webhooks", createWebhookIngressClient(rpc));
   const extensions = helpfulNamespace("extensions", createExtensionsClient(rpc));

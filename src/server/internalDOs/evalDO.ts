@@ -29,6 +29,7 @@ import {
   createHostedRuntime,
   createRpcFs,
   createRuntimeParentHandle,
+  createServicesProxy,
   createWorkerdClient,
   type RuntimeHost,
   type WorkspaceRuntime,
@@ -634,12 +635,15 @@ export class EvalDO extends DurableObjectBase {
       callTarget: (targetId: string, method: string, callArgs: unknown[] = []) =>
         this.rpc.call(targetId, method, callArgs, callOptions),
     };
-    // `services` IS the runtime — `services.vcs` is the SAME curated client object as the bare
-    // `vcs` (and `import { vcs } from "@workspace/runtime"`). There is no second, stringly
-    // "services.X.Y → rpc.call('X.Y')" proxy that could diverge from the clients (the old footgun:
-    // `services.extensions.use` failing because the raw proxy only knew `invoke`). Server services
-    // that have no curated client are reached generically via `callMain("svc.method", …)` / `rpc.call`.
-    const services = rt;
+    // `services` is the COMPLETE service namespace (createServicesProxy): EVERY registered RPC
+    // service is reachable as `services.<name>.<method>(...)`, with NO hand-curated list (so a
+    // gap like the old `services.blobstore === undefined` is structurally impossible). It layers:
+    //  1. ergonomic override — when `<name>` is a rich runtime client (vcs/fs/credentials/blobstore/
+    //     …), `services.<name>` is that SAME curated object (so `services.vcs` === the bare `vcs`),
+    //  2. dynamic fallback — any other service becomes `callMain("<name>.<method>", …)`.
+    // It adds no access: the fallback routes through `callMain`, so the server dispatcher's
+    // per-method `policy.allowed` is still the sole gate (a `do`-denied method still rejects).
+    const services = createServicesProxy(rt);
 
     // Layer 2 — the importable surface (gad/workspace/credentials/openPanel/…)
     // injected ambiently too (same refs as `import {…} from "@workspace/runtime"`),
@@ -654,8 +658,9 @@ export class EvalDO extends DurableObjectBase {
       db: this.dbBinding(),
       // `help()` → discovery for an agent driving eval: the importable runtime
       // surface (what `import {…} from "@workspace/runtime"` gives), the ambient
-      // pre-injected globals (do NOT import these), the available services, and
-      // where to look next. `help("<service>")` → that service's methods.
+      // pre-injected globals (do NOT import these), the available services (EVERY
+      // one reachable as `services.<name>`), and where to look next.
+      // `help("<service>")` → that service's methods.
       help: async (serviceName?: string) => {
         if (serviceName) {
           // Prefer the INJECTED binding's surface (what eval actually calls) over the raw RPC
@@ -683,6 +688,8 @@ export class EvalDO extends DurableObjectBase {
                 `Use \`help('<name>')\` with a name from the \`services\` list for RPC services.`,
             };
           }
+          // Not a rich runtime binding — a plain RPC service. It is STILL reachable: call it as
+          // `services.${serviceName}.<method>(...)` (the complete proxy dispatches via callMain).
           return this.mainMeta().describeService(serviceName);
         }
         return {
@@ -690,11 +697,15 @@ export class EvalDO extends DurableObjectBase {
           importable: Object.keys(rt).sort(),
           ambient: [...EVAL_AMBIENT_ONLY],
           guidance:
-            "Call help('<name>') for a binding's methods — for injected runtime bindings (fs, vcs, …) " +
-            "this describes what you actually call (e.g. fs.open()→FileHandle), not the raw RPC " +
-            'service. `importable` names come from `import {…} from "@workspace/runtime"`; `ambient` ' +
-            "names are pre-injected globals (do NOT import them). Use the `imports` parameter for " +
-            "npm/workspace packages. Full reference: skills/sandbox/EVAL.md.",
+            "Every service listed in `services` is reachable as `services.<name>.<method>(...)` — the " +
+            "`services` binding is COMPLETE (no advertised-but-unreachable gaps). For rich runtime " +
+            "bindings (fs, vcs, credentials, blobstore, gad, workers, …) `services.<name>` is the SAME " +
+            "ergonomic client as the bare import; every other service is a uniform proxy over " +
+            "callMain. Call help('<name>') for a binding's methods — for the rich bindings this " +
+            "describes what you actually call (e.g. fs.open()→FileHandle), not the raw RPC service. " +
+            '`importable` names come from `import {…} from "@workspace/runtime"`; `ambient` names are ' +
+            "pre-injected globals (do NOT import them). Use the `imports` parameter for npm/workspace " +
+            "packages. Full reference: skills/sandbox/EVAL.md.",
         };
       },
     };

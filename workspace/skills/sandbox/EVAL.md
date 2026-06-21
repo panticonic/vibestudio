@@ -49,7 +49,7 @@ NOT `import` them:
 | --- | --- |
 | `rpc.call(method, args)` | Raw RPC to the server: `await rpc.call("vcs.status", ["ctx:" + ctx.contextId])` |
 | `rpc.callTarget(targetId, method, args)` | Call a runtime entity (DO/worker) by target id, e.g. after `rpc.call("workers.resolveService", [...])` |
-| `services` | The runtime service clients — `services.vcs` is the SAME object as the bare `vcs` / `import { vcs }` (e.g. `await services.extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/app")`). A server service with no curated client is reached generically via `rpc.call("meta.listServices", [])`. |
+| `services` | The COMPLETE service namespace — EVERY registered RPC service is reachable as `services.<name>.<method>(...)`, no gaps. For a rich runtime binding (`vcs`, `fs`, `credentials`, `blobstore`, …) `services.<name>` is the SAME object as the bare `vcs` / `import { vcs }` (e.g. `await services.extensions.use("@workspace-extensions/typecheck-service").checkPanel("panels/app")`); any other server service is reached uniformly via the same `services.<name>.<method>(...)` (it dispatches through `callMain`). Access is still gated server-side by each method's policy. Use `help()` to list services. |
 | `fs` | Context-scoped filesystem — the EvalDO resolves your context, so you do NOT pass a contextId: `await fs.readdir("/")`, `await fs.readFile("src/index.ts", "utf-8")` |
 | `ctx` | `{ contextId, objectKey }` for the current eval session |
 | `scope` | Persistent REPL scope (see below); `scope.x = …` survives across calls in the same channel |
