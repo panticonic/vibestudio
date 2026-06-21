@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ConnectCredentialParamsSchema } from "@natstack/shared/serviceSchemas/credentials";
+import { toCredentialConnectRequest as toSharedCredentialConnectRequest } from "@natstack/shared/providerConnect";
 
 import { toCredentialConnectRequest } from "./providerConnect";
 
@@ -47,5 +48,11 @@ describe("provider connect presets", () => {
       callbackPath: "/auth/callback",
     });
     expect(request?.browser).toBe("internal");
+  });
+
+  it("exports the presets from the shared package path", () => {
+    expect(
+      toSharedCredentialConnectRequest("openai", "https://api.openai.com/v1")?.credential.label
+    ).toBe("OpenAI API key");
   });
 });
