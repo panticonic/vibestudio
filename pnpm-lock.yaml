@@ -527,6 +527,9 @@ importers:
 
   packages/extension:
     dependencies:
+      '@natstack/shared':
+        specifier: workspace:*
+        version: link:../shared
       '@natstack/unit-host':
         specifier: workspace:*
         version: link:../unit-host

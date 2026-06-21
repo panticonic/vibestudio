@@ -783,7 +783,12 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         case "heartbeats.runNow": {
           const [name] = args as [string];
           if (!deps.runHeartbeatNow) {
-            throw new ServiceError("workspace", method, "Heartbeat controls are unavailable", "ENOENT");
+            throw new ServiceError(
+              "workspace",
+              method,
+              "Heartbeat controls are unavailable",
+              "ENOENT"
+            );
           }
           return deps.runHeartbeatNow(name);
         }
@@ -791,7 +796,12 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         case "heartbeats.pause": {
           const [name] = args as [string];
           if (!deps.pauseHeartbeat) {
-            throw new ServiceError("workspace", method, "Heartbeat controls are unavailable", "ENOENT");
+            throw new ServiceError(
+              "workspace",
+              method,
+              "Heartbeat controls are unavailable",
+              "ENOENT"
+            );
           }
           return deps.pauseHeartbeat(name);
         }
@@ -799,7 +809,12 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         case "heartbeats.resume": {
           const [name] = args as [string];
           if (!deps.resumeHeartbeat) {
-            throw new ServiceError("workspace", method, "Heartbeat controls are unavailable", "ENOENT");
+            throw new ServiceError(
+              "workspace",
+              method,
+              "Heartbeat controls are unavailable",
+              "ENOENT"
+            );
           }
           return deps.resumeHeartbeat(name);
         }

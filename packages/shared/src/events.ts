@@ -13,6 +13,7 @@ import type {
 } from "./hostTargets.js";
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
+import type { CallerKind } from "./principalKinds.js";
 import type { VcsHeadAdvance } from "./serviceSchemas/vcs.js";
 import type { PanelRecoverySnapshot, PanelTreeSnapshot } from "./types.js";
 
@@ -148,27 +149,13 @@ export interface EventPayloads {
   "external-open:open": {
     url: string;
     callerId: string;
-    callerKind:
-      | "panel"
-      | "app"
-      | "worker"
-      | "do"
-      | "extension"
-      | "shell"
-      | "server";
+    callerKind: CallerKind;
   };
   "browser-panel:open": {
     url: string;
     parentPanelId: string;
     callerId: string;
-    callerKind:
-      | "panel"
-      | "app"
-      | "worker"
-      | "do"
-      | "extension"
-      | "shell"
-      | "server";
+    callerKind: CallerKind;
   };
   "browser-import-progress": {
     requestId: string;

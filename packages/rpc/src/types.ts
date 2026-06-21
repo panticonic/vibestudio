@@ -199,6 +199,7 @@ export type CallerKind =
   | "worker"
   | "do"
   | "extension"
+  | "harness"
   | "server";
 
 /**

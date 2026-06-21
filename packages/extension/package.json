@@ -15,6 +15,7 @@
     "build": "tsc --project tsconfig.build.json"
   },
   "dependencies": {
+    "@natstack/shared": "workspace:*",
     "@natstack/unit-host": "workspace:*"
   },
   "devDependencies": {

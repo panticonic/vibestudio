@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { createDevLogger } from "@natstack/dev-log";
 import { parseWorkspaceConfigContentWithId } from "@natstack/shared/workspace/configParser";
-import type { WorkspaceHeartbeatDecl, WorkspaceRecurringDecl } from "@natstack/shared/workspace/types";
+import type {
+  WorkspaceHeartbeatDecl,
+  WorkspaceRecurringDecl,
+} from "@natstack/shared/workspace/types";
 import type { UnitBatchEntry } from "@natstack/shared/approvals";
 import type { UnitMetaChangeApprovalProvider } from "@natstack/unit-host";
 import type { DODispatch, DORef } from "../doDispatch.js";

@@ -1,4 +1,5 @@
 import type { UnitRegistryEntryBase } from "@natstack/unit-host";
+import type { CallerKind } from "@natstack/shared/serviceDispatcher";
 import { extensionsMethods } from "@natstack/shared/serviceSchemas/extensions";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 
@@ -14,15 +15,7 @@ export interface ExtensionInvocation {
   method: string;
   caller: {
     callerId: string;
-    callerKind:
-      | "panel"
-      | "app"
-      | "worker"
-      | "do"
-      | "shell"
-      | "server"
-      | "extension"
-      | "http";
+    callerKind: CallerKind | "http";
     connectionId?: string;
     contextId?: string;
   };

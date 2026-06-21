@@ -208,5 +208,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
 }
 
 function isHeartbeatCodeOwnedRegistration(input: unknown): boolean {
-  return !!input && typeof input === "object" && (input as { kind?: unknown }).kind === "code-owned";
+  return (
+    !!input && typeof input === "object" && (input as { kind?: unknown }).kind === "code-owned"
+  );
 }

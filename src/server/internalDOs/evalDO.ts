@@ -281,8 +281,7 @@ export class EvalDO extends DurableObjectBase {
       .toArray()[0];
     return {
       count: Number(row?.["count"] ?? 0),
-      oldestStartedAt:
-        row?.["oldest_started_at"] == null ? null : Number(row["oldest_started_at"]),
+      oldestStartedAt: row?.["oldest_started_at"] == null ? null : Number(row["oldest_started_at"]),
     };
   }
 

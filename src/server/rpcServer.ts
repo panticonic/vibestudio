@@ -8,6 +8,7 @@
 
 import { WebSocketServer, WebSocket } from "ws";
 import { randomUUID } from "crypto";
+import type { ExtensionInvocation } from "@natstack/extension";
 import {
   createRpcClient,
   envelopeFromMessage,
@@ -414,18 +415,7 @@ export class RpcServer {
       resolveExtensionInvocation?: (
         extensionName: string,
         invocationToken: string
-      ) => {
-        caller?: {
-          callerId: string;
-          callerKind: "panel" | "app" | "worker" | "do" | "shell" | "server" | "extension" | "http";
-        };
-        chainCaller?: {
-          callerId: string;
-          callerKind: "panel" | "app" | "worker" | "do";
-          repoPath: string;
-          effectiveVersion: string;
-        };
-      } | null;
+      ) => Pick<ExtensionInvocation, "caller" | "chainCaller"> | null;
       sessionInboxCapacity?: SessionRegistryOptions["inboxCapacity"];
       sessionTtlMs?: SessionRegistryOptions["ttlMs"];
       runtimeCoordinator?: PanelRuntimeCoordinator;
