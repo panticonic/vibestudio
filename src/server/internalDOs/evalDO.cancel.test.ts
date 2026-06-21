@@ -71,6 +71,64 @@ function seedPendingRun(
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
+  it("startRun counts as activity and re-arms idle eviction", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const setAlarmAt = vi
+      .spyOn(
+        instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
+        "setAlarmAt"
+      )
+      .mockImplementation(() => undefined);
+
+    const ret = priv<
+      (args: { runId: string; code: string; contextId: string }) => {
+        runId: string;
+        status: string;
+      }
+    >(instance, "startRun").call(instance, {
+      runId: "queued",
+      code: "return 1;",
+      contextId: "ctx",
+    });
+
+    expect(ret).toEqual({ runId: "queued", status: "pending" });
+    expect(setAlarmAt).toHaveBeenCalledTimes(1);
+    expect(setAlarmAt).toHaveBeenCalledWith(expect.any(Number), { bestEffort: true });
+  });
+
+  it.each(["pending", "running"] as const)(
+    "alarm re-arms instead of aborting when a durable %s run exists",
+    async (status) => {
+      const { instance, sql } = await createTestDO(EvalDO);
+      seedPendingRun(sql, "active-run");
+      if (status === "running") {
+        sql.exec(`UPDATE runs SET status = 'running' WHERE run_id = 'active-run'`);
+      }
+      const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => undefined);
+      const setAlarmAt = vi
+        .spyOn(
+          instance as unknown as { setAlarmAt: (timeMs: number, opts?: unknown) => void },
+          "setAlarmAt"
+        )
+        .mockImplementation(() => undefined);
+
+      await instance.alarm();
+
+      expect(setAlarmAt).toHaveBeenCalledTimes(1);
+      expect(setAlarmAt).toHaveBeenCalledWith(expect.any(Number), { bestEffort: true });
+      expect(consoleInfo).toHaveBeenCalledWith(
+        "[EvalDO] idle eviction alarm",
+        expect.objectContaining({
+          objectKey: "test-key",
+          inFlightRuns: 0,
+          durableRuns: 1,
+          oldestDurableRunStartedAt: expect.any(Number),
+        })
+      );
+      consoleInfo.mockRestore();
+    }
+  );
+
   it("cancel(runId): an in-flight run wedged on an outbound call unwinds once cancelled", async () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const { runLocked, started } = blockUntilAborted();

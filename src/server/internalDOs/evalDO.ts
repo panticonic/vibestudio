@@ -154,6 +154,11 @@ interface RunResult {
   scopeKeys?: string[];
 }
 
+interface DurableRunActivity {
+  count: number;
+  oldestStartedAt: number | null;
+}
+
 export class EvalDO extends DurableObjectBase {
   static override schemaVersion = 1;
 
@@ -251,6 +256,25 @@ export class EvalDO extends DurableObjectBase {
       `UPDATE runs SET status = 'done', result = ? WHERE status = 'running'`,
       JSON.stringify({ success: false, console: "", error: "eval interrupted by restart" })
     );
+  }
+
+  private rearmIdleEviction(): void {
+    this.setAlarmAt(Date.now() + IDLE_EVICT_MS, { bestEffort: true });
+  }
+
+  private durableRunActivity(): DurableRunActivity {
+    const row = this.sql
+      .exec(
+        `SELECT COUNT(*) AS count, MIN(started_at) AS oldest_started_at
+         FROM runs
+         WHERE status IN ('pending', 'running')`
+      )
+      .toArray()[0];
+    return {
+      count: Number(row?.["count"] ?? 0),
+      oldestStartedAt:
+        row?.["oldest_started_at"] == null ? null : Number(row["oldest_started_at"]),
+    };
   }
 
   private readonly callMainService = (
@@ -391,7 +415,11 @@ export class EvalDO extends DurableObjectBase {
   startRun(args: RunArgs & { runId: string }): { runId: string; status: string } {
     const runId = args.runId;
     const existing = this.sql.exec(`SELECT status FROM runs WHERE run_id = ?`, runId).toArray()[0];
-    if (existing) return { runId, status: String(existing["status"]) };
+    if (existing) {
+      const status = String(existing["status"]);
+      if (status === "pending" || status === "running") this.rearmIdleEviction();
+      return { runId, status };
+    }
     const deadlineAt = args.timeoutMs ? Date.now() + args.timeoutMs : null;
     this.sql.exec(
       `INSERT INTO runs (run_id, args, agent_ref, channel_id, status, started_at, deadline_at)
@@ -403,6 +431,7 @@ export class EvalDO extends DurableObjectBase {
       Date.now(),
       deadlineAt
     );
+    this.rearmIdleEviction();
     return { runId, status: "pending" };
   }
 
@@ -481,7 +510,7 @@ export class EvalDO extends DurableObjectBase {
       if (timer) clearTimeout(timer);
       this.runAborts.delete(runId);
       // Arm best-effort idle-eviction now that the run is done (never fires mid-run — see alarm()).
-      this.setAlarmAt(Date.now() + IDLE_EVICT_MS, { bestEffort: true });
+      this.rearmIdleEviction();
     }
 
     // CAS persist: write `done` only if still `running`, so a concurrent `reset` → `cancelled` wins.
@@ -591,10 +620,19 @@ export class EvalDO extends DurableObjectBase {
    * re-arm it — no resurrection loop.
    */
   override async alarm(): Promise<void> {
-    // Never evict mid-run: a held `executeRun` keeps us active anyway, but if a stray idle alarm
-    // fires while a run is in flight, re-arm instead of aborting it.
-    if (this.inFlightRuns.size > 0) {
-      this.setAlarmAt(Date.now() + IDLE_EVICT_MS, { bestEffort: true });
+    const durableActivity = this.durableRunActivity();
+    console.info("[EvalDO] idle eviction alarm", {
+      objectKey: this.objectKey,
+      inFlightRuns: this.inFlightRuns.size,
+      durableRuns: durableActivity.count,
+      oldestDurableRunStartedAt: durableActivity.oldestStartedAt,
+    });
+
+    // Never evict mid-run. The in-memory map catches normal held executeRun calls; the durable
+    // queue catches async agent runs that are pending before the held dispatch arrives, plus any
+    // re-delivery/reconstruction edge where a due alarm races the JS instance's in-memory state.
+    if (this.inFlightRuns.size > 0 || durableActivity.count > 0) {
+      this.rearmIdleEviction();
       return;
     }
     // Drop any lingering server-side event subscriptions (e.g. an eval that
