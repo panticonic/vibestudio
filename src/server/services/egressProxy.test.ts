@@ -14,7 +14,11 @@ import { WebSocketServer } from "ws";
 
 import type { AuditEntry, Credential } from "../../../packages/shared/src/credentials/types.js";
 import { createVerifiedCaller } from "@natstack/shared/serviceDispatcher";
-import { EgressProxy, shouldRetryWebSocketConnectWithIpv4 } from "./egressProxy.js";
+import {
+  EgressProxy,
+  shouldRetryWebSocketConnectWithIpv4,
+  shouldRetryWebSocketUpgradeError,
+} from "./egressProxy.js";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
 import { CredentialLifecycleError } from "./credentialLifecycle.js";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -250,6 +254,26 @@ describe("EgressProxy", () => {
         new URL("https://chatgpt.com/backend-api/codex/responses")
       )
     ).toBe(false);
+  });
+
+  it("classifies transient WebSocket upgrade errors for bounded retry", () => {
+    expect(
+      shouldRetryWebSocketUpgradeError(
+        Object.assign(new Error("read ECONNRESET"), {
+          code: "ECONNRESET",
+          syscall: "read",
+        })
+      )
+    ).toBe(true);
+    expect(
+      shouldRetryWebSocketUpgradeError(
+        Object.assign(new Error("getaddrinfo ENOTFOUND chatgpt.com"), {
+          code: "ENOTFOUND",
+          syscall: "getaddrinfo",
+        })
+      )
+    ).toBe(true);
+    expect(shouldRetryWebSocketUpgradeError(new Error("certificate has expired"))).toBe(false);
   });
 
   it("injects URL-bound credentials and strips incoming credential carriers", () => {
@@ -593,9 +617,11 @@ describe("EgressProxy", () => {
     }
   });
 
-  it("does not retry WebSocket upgrades after upstream request errors", async () => {
+  it("retries transient WebSocket upgrade request errors before failing", async () => {
     const auditLog = new MemoryAuditLog();
+    let upstreamConnections = 0;
     const upstreamServer = createNetServer((socket) => {
+      upstreamConnections += 1;
       socket.destroy();
     });
     const upstreamPort = await new Promise<number>((resolve) => {
@@ -643,12 +669,17 @@ describe("EgressProxy", () => {
       });
 
       expect(response.status).toBe(502);
+      expect(upstreamConnections).toBe(3);
+      expect(auditLog.entries[auditLog.entries.length - 1]).toMatchObject({
+        callerId: "worker:test",
+        retries: 2,
+      });
       const upstreamErrors = warn.mock.calls.filter(
         (call) =>
           call[0] === "[EgressProxy] WebSocket upgrade failed" &&
           (call[1] as { phase?: string } | undefined)?.phase === "upstream_error"
       );
-      expect(upstreamErrors).toHaveLength(1);
+      expect(upstreamErrors).toHaveLength(3);
       expect(upstreamErrors[0]?.[1]).toEqual(
         expect.objectContaining({
           reason: "upstream_request_error",
@@ -656,6 +687,81 @@ describe("EgressProxy", () => {
             name: expect.any(String),
             message: expect.any(String),
           }),
+        })
+      );
+    } finally {
+      warn.mockRestore();
+      await proxy.stop();
+      await new Promise<void>((resolve) => upstreamServer.close(() => resolve()));
+    }
+  });
+
+  it("does not retry WebSocket upstream HTTP responses after committing them", async () => {
+    const auditLog = new MemoryAuditLog();
+    let upstreamRequests = 0;
+    const upstreamServer = createServer((_req, res) => {
+      upstreamRequests += 1;
+      res.writeHead(503, { "Content-Type": "text/plain" });
+      res.end("try later");
+    });
+    const upstreamPort = await new Promise<number>((resolve) => {
+      upstreamServer.listen(0, "127.0.0.1", () => {
+        resolve((upstreamServer.address() as AddressInfo).port);
+      });
+    });
+    const credential = createCredential({
+      bindings: [
+        {
+          id: "api",
+          use: "fetch",
+          audience: [{ url: `http://127.0.0.1:${upstreamPort}/v1`, match: "path-prefix" }],
+          injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
+        },
+      ],
+      grants: [
+        {
+          bindingId: "api",
+          use: "fetch",
+          resource: `http://127.0.0.1:${upstreamPort}/v1`,
+          action: "use",
+          scope: "caller",
+          callerId: "worker:test",
+          grantedAt: 1,
+          grantedBy: "self",
+        },
+      ],
+    });
+    const proxy = createProxy(credential, auditLog);
+    proxy.setCallerResolver((callerId) =>
+      callerId === "worker:test" ? workerCaller(callerId) : null
+    );
+    const proxyPort = await proxy.startShared("secret");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const response = await requestWebSocketUpgradeThroughProxy({
+        proxyPort,
+        targetUrl: `ws://127.0.0.1:${upstreamPort}/v1/socket`,
+        headers: {
+          "X-NatStack-Egress-Caller": "worker:test",
+          "X-NatStack-Egress-Secret": "secret",
+        },
+      });
+
+      expect(response.status).toBe(503);
+      expect(response.body).toBe("try later");
+      expect(upstreamRequests).toBe(1);
+      expect(auditLog.entries[auditLog.entries.length - 1]).toMatchObject({
+        callerId: "worker:test",
+        status: 503,
+        retries: 0,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        "[EgressProxy] WebSocket upgrade failed",
+        expect.objectContaining({
+          phase: "upstream_response",
+          reason: "upstream_non_upgrade_response",
+          statusCode: 503,
         })
       );
     } finally {

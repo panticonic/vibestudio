@@ -68,6 +68,7 @@ const PASSTHROUGH_CONNECTION_ID = "passthrough";
 const RPC_RUNTIME_ID_HEADER = "x-natstack-runtime-id";
 const RAW_EGRESS_CAPABILITY = "external-network-fetch";
 const DEFAULT_RETRY_ATTEMPTS = 2;
+const DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS = 2;
 const DEFAULT_RETRY_INITIAL_DELAY_MS = 100;
 const DEFAULT_RETRY_MAX_DELAY_MS = 1_000;
 const CIRCUIT_FAILURE_THRESHOLD = 5;
@@ -779,6 +780,8 @@ export class EgressProxy {
     credentialUse?: CredentialBindingUse;
     initialBytesOut?: number;
     maxRetries?: number;
+    retryStatuses?: boolean;
+    shouldRetryError?: (error: unknown) => boolean;
     replaySafe?: boolean;
     execute: (
       targetUrl: URL,
@@ -811,6 +814,8 @@ export class EgressProxy {
           : shouldRetryRequest(params.method, params.replaySafe)
             ? DEFAULT_RETRY_ATTEMPTS
             : 0) + 1;
+      const retryStatuses = params.retryStatuses ?? true;
+      const shouldRetryError = params.shouldRetryError ?? (() => true);
       let lastError: unknown;
       let refreshedAfterAuthFailure = false;
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -842,7 +847,7 @@ export class EgressProxy {
             if (attempt === maxAttempts) maxAttempts += 1;
             continue;
           }
-          if (isRetryableStatus(statusCode) && attempt < maxAttempts) {
+          if (retryStatuses && isRetryableStatus(statusCode) && attempt < maxAttempts) {
             retries += 1;
             recordCircuitFailure(this.circuits, executionKey);
             await delay(backoffDelayMs(attempt));
@@ -857,7 +862,11 @@ export class EgressProxy {
           return result.payload;
         } catch (error) {
           lastError = error;
-          if (attempt < maxAttempts && !(error instanceof ForwardRejection)) {
+          if (
+            attempt < maxAttempts &&
+            !(error instanceof ForwardRejection) &&
+            shouldRetryError(error)
+          ) {
             retries += 1;
             recordCircuitFailure(this.circuits, executionKey);
             await delay(backoffDelayMs(attempt));
@@ -991,9 +1000,20 @@ export class EgressProxy {
           label: "Target origin",
           value: origin,
           key: origin,
+          scope: { kind: "origin", origin },
         },
-        title: "Allow network access",
-        description: "Allow this code version to make raw network requests to this origin.",
+        operation: {
+          kind: "network",
+          verb: "Connect",
+          object: {
+            type: "url-origin",
+            label: "Target origin",
+            value: origin,
+          },
+          groupKey: `raw-egress:${caller.runtime.id}:${origin}`,
+        },
+        title: `Connect to ${origin}`,
+        description: "Allow this requester to make raw network requests to this origin.",
         details: [
           { label: "Method", value: method },
           { label: "Target origin", value: origin },
@@ -1409,7 +1429,9 @@ export class EgressProxy {
         inputHeaders,
         credentialUse: "fetch",
         replaySafe: false,
-        maxRetries: 0,
+        maxRetries: DEFAULT_WEBSOCKET_CONNECT_RETRY_ATTEMPTS,
+        retryStatuses: false,
+        shouldRetryError: shouldRetryWebSocketUpgradeError,
         execute: async (preparedPolicyUrl, headers) => {
           const upstreamUrl = websocketUpstreamUrlFor(preparedPolicyUrl, targetUrl.protocol);
           const forwardHeaders = this.prepareWebSocketForwardHeaders(inputHeaders, headers);
@@ -1959,6 +1981,13 @@ const WEBSOCKET_IPV4_FALLBACK_ERROR_CODES = new Set([
   "ECONNREFUSED",
 ]);
 
+const WEBSOCKET_RETRYABLE_ERROR_CODES = new Set([
+  ...WEBSOCKET_IPV4_FALLBACK_ERROR_CODES,
+  "ECONNRESET",
+  "EAI_AGAIN",
+  "ENOTFOUND",
+]);
+
 export function shouldRetryWebSocketConnectWithIpv4(error: unknown, requestUrl: URL): boolean {
   if (requestUrl.hostname.length === 0 || isIP(requestUrl.hostname) !== 0) {
     return false;
@@ -1969,10 +1998,23 @@ export function shouldRetryWebSocketConnectWithIpv4(error: unknown, requestUrl: 
   return Array.isArray(aggregateErrors) && aggregateErrors.some(webSocketConnectErrorCode);
 }
 
+export function shouldRetryWebSocketUpgradeError(error: unknown): boolean {
+  if (webSocketRetryableErrorCode(error)) return true;
+  if (!(error instanceof AggregateError)) return false;
+  const aggregateErrors = (error as AggregateError & { errors?: unknown[] })["errors"];
+  return Array.isArray(aggregateErrors) && aggregateErrors.some(webSocketRetryableErrorCode);
+}
+
 function webSocketConnectErrorCode(error: unknown): string | null {
   if (!(error instanceof Error)) return null;
   const code = (error as Error & Record<string, unknown>)["code"];
   return typeof code === "string" && WEBSOCKET_IPV4_FALLBACK_ERROR_CODES.has(code) ? code : null;
+}
+
+function webSocketRetryableErrorCode(error: unknown): string | null {
+  if (!(error instanceof Error)) return null;
+  const code = (error as Error & Record<string, unknown>)["code"];
+  return typeof code === "string" && WEBSOCKET_RETRYABLE_ERROR_CODES.has(code) ? code : null;
 }
 
 function diagnosticAuthorizationHeader(value: number | string | string[]): string {
