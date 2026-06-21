@@ -376,16 +376,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): ServiceDefinitio
           return await resolveContext(id);
         }
         case "setTitle": {
+          // Access is enforced by the per-method policy on `runtimeMethods.setTitle`
+          // (allowed: panel/app/worker/do), checked by the dispatcher before this
+          // handler runs. We deliberately do NOT re-gate caller kind here — declared
+          // policy == enforced, with a single source of truth (no handler-side narrowing).
           const [title, options] = args as [string | null, { explicit?: boolean } | undefined];
-          const callerKind = ctx.caller.runtime.kind;
-          if (
-            callerKind !== "panel" &&
-            callerKind !== "app" &&
-            callerKind !== "worker" &&
-            callerKind !== "do"
-          ) {
-            throw new Error(`runtime.setTitle is only available to panel/app/worker/do callers`);
-          }
           await deps.setEntityTitle?.(ctx.caller.runtime.id, title == null ? undefined : title, {
             explicit: options?.explicit === true,
           });

@@ -322,7 +322,6 @@ Allowed callers: `panel`, `app`, `shell`, `server`, `worker`, `do`
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
 | `runtime.listEntities` | List live entities (id, kind, source, contextId, title, createdAt). |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
-| `runtime.setTitle` | Set a server-controlled display title for the calling entity. Surfaced by approval UIs in place of the opaque id. Pass null/empty to clear. |
 
 ## `shellApproval`
 

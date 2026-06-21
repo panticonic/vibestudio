@@ -104,6 +104,12 @@ export const runtimeMethods = defineServiceMethods({
       z.object({ explicit: z.boolean().optional() }).optional(),
     ]),
     returns: z.void(),
+    // Single source of truth for setTitle's access: only an entity that HAS a title
+    // (panel/app/worker/do) may set its own. The dispatcher checks this per-method
+    // policy first (checkServiceAccess → getMethodPolicy), so it is the sole gate —
+    // the handler performs NO caller-kind rejection. This narrows the service-level
+    // policy (which keeps shell/server for createEntity/retireEntity) for setTitle only.
+    policy: { allowed: ["panel", "app", "worker", "do"] },
     description:
       "Set a server-controlled display title for the calling entity. Surfaced by approval UIs in place of the opaque id. Pass null/empty to clear.",
   },
