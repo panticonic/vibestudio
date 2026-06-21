@@ -6,6 +6,7 @@ import { useScrollAnchor, type ScrollAnchorItem } from "../hooks/useScrollAnchor
 import { InlineGroup, type InlineItem } from "./InlineGroup";
 import { NewContentIndicator } from "./NewContentIndicator";
 import { MessageCard } from "./MessageCard";
+import type { InvocationCardPayload } from "@workspace/agentic-core";
 import type {
   BrowserHandoffCaller,
   ChannelParticipantId,
@@ -209,7 +210,7 @@ export interface MessageListProps {
   loadingMore?: boolean;
   onLoadEarlierMessages?: () => void;
   onInterrupt?: (agentId: string, messageId?: string, agentHandle?: string) => void;
-  onCancelInvocation?: (transportCallId: string) => void;
+  onCancelInvocation?: (invocation: InvocationCardPayload, senderId: string) => void;
   onFocusPanel?: (panelId: string) => void;
   onReloadPanel?: (panelId: string) => void;
   onReply?: (messageId: string) => void;

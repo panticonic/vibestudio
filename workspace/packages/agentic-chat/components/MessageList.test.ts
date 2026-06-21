@@ -252,8 +252,15 @@ describe("MessageList typing indicators (roster-based)", () => {
     expect(await screen.findByText("Scheduled")).toBeTruthy();
   });
 
-  it("shows a cancel control for pending invocation pills", () => {
+  it("shows a cancel control for a pending channel-method invocation (transportCallId)", () => {
     const onCancelInvocation = vi.fn();
+    const invocation = {
+      id: "tool-1",
+      transportCallId: "transport-1",
+      name: "set_title",
+      arguments: { title: "x" },
+      execution: { status: "pending", description: "" },
+    };
     render(React.createElement(MessageList, {
       messages: [
         makeMessage({
@@ -261,13 +268,7 @@ describe("MessageList typing indicators (roster-based)", () => {
           senderId: "agent-1",
           contentType: "invocation",
           content: "",
-          invocation: {
-            id: "tool-1",
-            transportCallId: "transport-1",
-            name: "eval",
-            arguments: { code: "await work()" },
-            execution: { status: "pending", description: "" },
-          },
+          invocation,
           complete: false,
         }),
       ],
@@ -279,7 +280,40 @@ describe("MessageList typing indicators (roster-based)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Cancel pending tool call" }));
 
-    expect(onCancelInvocation).toHaveBeenCalledWith("transport-1");
+    // The whole invocation + its sender (the owning agent) are passed so the
+    // handler can route an eval cancel to the agent vs. abort a panel/channel call.
+    expect(onCancelInvocation).toHaveBeenCalledWith(invocation, "agent-1");
+  });
+
+  it("shows a cancel control for a pending eval pill that has NO transportCallId (server-side run)", () => {
+    const onCancelInvocation = vi.fn();
+    const invocation = {
+      id: "eval-run-1",
+      // No transportCallId: an eval runs server-side, keyed by its own id.
+      name: "eval",
+      arguments: { code: "await work()" },
+      execution: { status: "pending", description: "" },
+    };
+    render(React.createElement(MessageList, {
+      messages: [
+        makeMessage({
+          id: "action-2",
+          senderId: "agent-1",
+          contentType: "invocation",
+          content: "",
+          invocation,
+          complete: false,
+        }),
+      ],
+      participants: {},
+      selfId: "user-1",
+      allParticipants: makeParticipant("agent-1", { handle: "ai-chat" }),
+      onCancelInvocation,
+    } as never));
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancel pending tool call" }));
+
+    expect(onCancelInvocation).toHaveBeenCalledWith(invocation, "agent-1");
   });
 
   it("uses the invocation description as the collapsed pill preview", () => {

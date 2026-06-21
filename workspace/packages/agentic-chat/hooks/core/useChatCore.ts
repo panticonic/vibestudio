@@ -32,6 +32,7 @@ import {
   type PendingAgent,
   type DirtyRepoDetails,
   type DisconnectedAgentInfo,
+  type InvocationCardPayload,
 } from "@workspace/agentic-core";
 import { cleanupPendingImages, type PendingImage } from "../../utils/imageUtils";
 import type { ChatInputContextValue } from "../../types";
@@ -132,7 +133,10 @@ export interface ChatCoreState {
     messageId?: string,
     agentHandle?: string
   ) => Promise<void>;
-  handleCancelInvocation: (transportCallId: string) => Promise<void>;
+  handleCancelInvocation: (
+    invocation: InvocationCardPayload,
+    senderId: string
+  ) => Promise<void>;
   handleCallMethod: (providerId: string, methodName: string, args: unknown) => void;
   handleCallMethodResult: (
     providerId: string,
@@ -654,26 +658,47 @@ export function useChatCore({
     []
   );
 
-  const handleCancelInvocation = useCallback(async (transportCallId: string) => {
-    const c = clientRef.current;
-    if (!c) return;
-    // Stop a method this panel is executing (e.g. an eval) immediately and
-    // in-process by firing its local AbortController. The executing method's
-    // own abort path publishes invocation.cancelled, which settles the agent's
-    // pending result — so the turn still learns the call ended. We do this
-    // BEFORE the channel round-trip because the round-trip is unreliable for
-    // stopping local work (the DO may have no pending_calls row left to cancel,
-    // so it never broadcasts invocation.cancelled).
-    const abortedLocally = c.abortExecutingMethod(transportCallId);
-    try {
-      // Still notify the channel so its pending_calls bookkeeping is cleared
-      // and any remote provider executing the call is asked to stop. Best
-      // effort — when we already aborted locally this is just cleanup.
-      await c.cancelMethodCall(transportCallId);
-    } catch (err) {
-      if (!abortedLocally) console.warn("[Chat] Cancel invocation failed:", err);
-    }
-  }, []);
+  const handleCancelInvocation = useCallback(
+    async (invocation: InvocationCardPayload, senderId: string) => {
+      const c = clientRef.current;
+      if (!c) return;
+      // An `eval` runs SERVER-SIDE in the owning agent's per-channel EvalDO, not
+      // in this panel — there is no transportCallId to abort locally and no
+      // pending_calls row for the channel to cancel. The run is keyed by the
+      // invocation's own id (invocationId === runId), owned by the agent that
+      // emitted it (senderId). Route the cancel THROUGH that agent: it calls
+      // eval.cancel for itself, so the eval service resolves the owner from the
+      // agent caller (the panel can't address another owner's EvalDO).
+      if (invocation.name === "eval") {
+        try {
+          const handle = c.callMethod(senderId, "cancelEval", { runId: invocation.id });
+          await (handle as { result?: Promise<unknown> }).result;
+        } catch (err) {
+          console.warn("[Chat] Cancel eval failed:", err);
+        }
+        return;
+      }
+      const transportCallId = invocation.transportCallId;
+      if (!transportCallId) return;
+      // Stop a method this panel is executing (e.g. a panel-local tool) immediately
+      // and in-process by firing its local AbortController. The executing method's
+      // own abort path publishes invocation.cancelled, which settles the agent's
+      // pending result — so the turn still learns the call ended. We do this
+      // BEFORE the channel round-trip because the round-trip is unreliable for
+      // stopping local work (the DO may have no pending_calls row left to cancel,
+      // so it never broadcasts invocation.cancelled).
+      const abortedLocally = c.abortExecutingMethod(transportCallId);
+      try {
+        // Still notify the channel so its pending_calls bookkeeping is cleared
+        // and any remote provider executing the call is asked to stop. Best
+        // effort — when we already aborted locally this is just cleanup.
+        await c.cancelMethodCall(transportCallId);
+      } catch (err) {
+        if (!abortedLocally) console.warn("[Chat] Cancel invocation failed:", err);
+      }
+    },
+    []
+  );
 
   const handleCallMethod = useCallback((providerId: string, methodName: string, args: unknown) => {
     const c = clientRef.current;

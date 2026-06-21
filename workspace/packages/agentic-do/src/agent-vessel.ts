@@ -1802,7 +1802,41 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           type: "command",
           command: { kind: "interrupt" },
         });
+        // Best-effort: clear any wedged EvalDO so a restarted/paused agent never
+        // inherits a stuck eval scope/run chain. The eval is owned by THIS agent
+        // (subKey = channelId), so we call eval.forceReset for OURSELVES (the eval
+        // service resolves the owner from the caller). Never fail the pause on this.
+        try {
+          await this.rpc.call("main", "eval.forceReset", [{ subKey: channelId }]);
+        } catch (err) {
+          console.warn(
+            `[AgentVessel] eval.forceReset during pause for ${channelId} failed (ignored):`,
+            err instanceof Error ? err.message : err
+          );
+        }
         return { result: { paused: true } };
+      }
+      case "cancelEval": {
+        // The chat-panel pill cancels a SERVER-SIDE eval run by asking THIS agent
+        // (the eval's owner, subKey = channelId) to cancel it. The agent calls
+        // eval.cancel for itself — the eval service resolves the owner from the
+        // caller, so the panel cannot address another owner's EvalDO. `runId` is
+        // the eval invocation's id (invocationId === runId for agent evals).
+        const runId = (args as { runId?: unknown } | null)?.runId;
+        if (typeof runId !== "string" || runId.length === 0) {
+          return { result: { error: "cancelEval requires a runId" }, isError: true };
+        }
+        try {
+          const result = await this.rpc.call<{ ok: boolean }>("main", "eval.cancel", [
+            { subKey: channelId, runId },
+          ]);
+          return { result };
+        } catch (err) {
+          return {
+            result: { error: err instanceof Error ? err.message : String(err) },
+            isError: true,
+          };
+        }
       }
       case "resume": {
         await this.driver.wake(channelId);

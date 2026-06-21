@@ -37,6 +37,7 @@ import type { ComponentType, RefObject } from "react";
 import type {
   ChatParticipantMetadata,
   ChatSandboxValue,
+  InvocationCardPayload,
 } from "@workspace/agentic-core";
 import type {
   ChatMessage,
@@ -183,7 +184,7 @@ export interface ChatContextValue {
   // Handlers
   onLoadEarlierMessages: () => void;
   onInterrupt: (agentId: string, messageId?: string, agentHandle?: string) => void;
-  onCancelInvocation: (transportCallId: string) => void;
+  onCancelInvocation: (invocation: InvocationCardPayload, senderId: string) => void;
   onCallMethod: (providerId: string, methodName: string, args: unknown) => void;
   /** Awaits and returns the provider's result payload (for settings UIs). */
   onCallMethodResult: (providerId: string, methodName: string, args: unknown) => Promise<unknown>;

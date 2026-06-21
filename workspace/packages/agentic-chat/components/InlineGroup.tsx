@@ -22,8 +22,23 @@ interface InlineGroupProps {
   chat?: Record<string, unknown> & Partial<Pick<ChatSandboxValue, "rpc">>;
   /** Callback to interrupt an agent (used for typing indicators). */
   onInterrupt?: (senderId: string) => void;
-  /** Callback to cancel one pending tool/invocation dispatch. */
-  onCancelInvocation?: (transportCallId: string) => void;
+  /**
+   * Callback to cancel one pending invocation. The whole invocation + its
+   * sender (the agent participant) are passed so the handler can route an eval
+   * run cancel to that agent (no transportCallId on an eval) versus the
+   * panel-local / channel-method abort for everything else.
+   */
+  onCancelInvocation?: (invocation: InvocationCardPayload, senderId: string) => void;
+}
+
+/**
+ * An invocation is cancellable from the pill when it's pending AND we can route
+ * the cancel: a channel/panel method has a transportCallId; an `eval` runs
+ * server-side keyed by its own id (no transportCallId) and is cancelled by
+ * asking its owning agent.
+ */
+function canCancelInvocation(invocation: InvocationCardPayload): boolean {
+  return invocation.transportCallId !== undefined || invocation.name === "eval";
 }
 
 /** Typing items are ephemeral and never expand. */
@@ -113,8 +128,8 @@ export const InlineGroup = React.memo(function InlineGroup({
             id={item.id}
             payload={item.invocation}
             onExpand={toggle}
-            onCancel={item.invocation.transportCallId && onCancelInvocation
-              ? () => onCancelInvocation(item.invocation.transportCallId!)
+            onCancel={canCancelInvocation(item.invocation) && onCancelInvocation
+              ? () => onCancelInvocation(item.invocation, item.senderId)
               : undefined}
           />
         );
@@ -159,8 +174,8 @@ export const InlineGroup = React.memo(function InlineGroup({
             payload={item.invocation}
             chat={chat}
             onCollapse={collapse}
-            onCancel={item.invocation.transportCallId && onCancelInvocation
-              ? () => onCancelInvocation(item.invocation.transportCallId!)
+            onCancel={canCancelInvocation(item.invocation) && onCancelInvocation
+              ? () => onCancelInvocation(item.invocation, item.senderId)
               : undefined}
           />
         );

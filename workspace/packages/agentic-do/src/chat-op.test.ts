@@ -413,6 +413,8 @@ class EvalGateProbe extends TestVessel {
   getRunError: Error | null = null;
   /** When set, `eval.startRun` REJECTS with this error (the kick-off itself failed). */
   startRunError: Error | null = null;
+  /** When set, `eval.cancel`/`eval.forceReset` REJECT with this error. */
+  cancelError: Error | null = null;
   protected override get rpc(): DeferrableRpcClient {
     return {
       call: async (_target: string, method: string, args: unknown[]) => {
@@ -422,12 +424,28 @@ class EvalGateProbe extends TestVessel {
           return this.getRunStatus;
         }
         if (method === "eval.startRun" && this.startRunError) throw this.startRunError;
+        if (method === "eval.cancel" || method === "eval.forceReset") {
+          if (this.cancelError) throw this.cancelError;
+          return { ok: true };
+        }
         return { runId: (args[0] as { runId: string }).runId, status: "pending" };
       },
     } as unknown as DeferrableRpcClient;
   }
   callGate(channelId: string, invocationId: string, args: unknown) {
     return this.runDeferredEval(channelId, invocationId, args);
+  }
+  /** Drive a channel-callable agent method (cancelEval / pause / …) directly. */
+  callAgentMethod(channelId: string, methodName: string, args: unknown) {
+    return this.handleStandardAgentMethodCall(channelId, methodName, args);
+  }
+  /** Replace the lazily-built driver with a spy so `pause` doesn't boot the real
+   *  driver (which needs a live gateway/GAD). */
+  stubDriverForPause(): { abortChannel: ReturnType<typeof vi.fn>; handleIncoming: ReturnType<typeof vi.fn> } {
+    const abortChannel = vi.fn();
+    const handleIncoming = vi.fn(async () => {});
+    (this as unknown as { _driver: unknown })._driver = { abortChannel, handleIncoming };
+    return { abortChannel, handleIncoming };
   }
 }
 
@@ -517,6 +535,55 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     );
     // The getRun poll was never reached.
     expect(probe.rpcCalls.some((c) => c.method === "eval.getRun")).toBe(false);
+  });
+});
+
+describe("AgentVesselBase.cancelEval (pill cancel → server-side eval run)", () => {
+  it("routes to eval.cancel for ITSELF (subKey=channelId) with the run id", async () => {
+    const probe = await makeGateProbe();
+    const out = await probe.callAgentMethod(CHANNEL, "cancelEval", { runId: "inv-9" });
+    expect(out).toEqual({ result: { ok: true } });
+    const cancel = probe.rpcCalls.find((c) => c.method === "eval.cancel");
+    expect(cancel?.args[0]).toEqual({ subKey: CHANNEL, runId: "inv-9" });
+  });
+
+  it("rejects a missing/empty runId WITHOUT dispatching a cancel", async () => {
+    const probe = await makeGateProbe();
+    const out = await probe.callAgentMethod(CHANNEL, "cancelEval", {});
+    expect(out).toMatchObject({ isError: true });
+    expect(probe.rpcCalls.some((c) => c.method === "eval.cancel")).toBe(false);
+  });
+
+  it("surfaces an eval.cancel failure as an error result (without throwing)", async () => {
+    const probe = await makeGateProbe();
+    probe.cancelError = new Error("cancel dispatch failed");
+    const out = await probe.callAgentMethod(CHANNEL, "cancelEval", { runId: "inv-10" });
+    expect(out).toMatchObject({ isError: true, result: { error: "cancel dispatch failed" } });
+  });
+});
+
+describe("AgentVesselBase pause (clears a wedged EvalDO)", () => {
+  it("invokes eval.forceReset for ITSELF (subKey=channelId) after aborting the channel", async () => {
+    const probe = await makeGateProbe();
+    const { abortChannel, handleIncoming } = probe.stubDriverForPause();
+
+    const out = await probe.callAgentMethod(CHANNEL, "pause", {});
+
+    expect(out).toEqual({ result: { paused: true } });
+    expect(abortChannel).toHaveBeenCalledWith(CHANNEL);
+    expect(handleIncoming).toHaveBeenCalled();
+    const forceReset = probe.rpcCalls.find((c) => c.method === "eval.forceReset");
+    expect(forceReset?.args[0]).toEqual({ subKey: CHANNEL });
+  });
+
+  it("does NOT fail the pause when eval.forceReset throws (best-effort)", async () => {
+    const probe = await makeGateProbe();
+    probe.stubDriverForPause();
+    probe.cancelError = new Error("forceReset hiccup");
+    const out = await probe.callAgentMethod(CHANNEL, "pause", {});
+    expect(out).toEqual({ result: { paused: true } });
+    // It still ATTEMPTED the forceReset.
+    expect(probe.rpcCalls.some((c) => c.method === "eval.forceReset")).toBe(true);
   });
 });
 
