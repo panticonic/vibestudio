@@ -498,30 +498,11 @@ export interface BranchPayload {
 
 export interface StatePayload {
   protocol: "agentic.trajectory.v1";
-  mutationId?: string;
-  observationId?: string;
-  path?: string;
-  paths?: string[];
-  operation?: string;
-  diff?: string;
   inputStateHash?: StateHash;
   outputStateHash?: StateHash;
   /** Merge parents beyond `inputStateHash` (which stays parent 0). */
   parentStateHashes?: StateHash[];
-  /** Optional explicit file list for snapshot events; large lists must be
-   *  blob-spilled by callers. */
-  files?: Array<{ path: string; contentHash: string; size?: number; mode?: number }>;
-  stateHash?: StateHash;
-  invocationId?: InvocationId;
-  contentHash?: string;
-  beforeHash?: string;
-  afterHash?: string;
-  hunks?: unknown[];
-  size?: number;
-  mimeType?: string;
   summary?: string;
-  error?: string;
-  rationale?: string;
   metadata?: Record<string, unknown>;
 }
 

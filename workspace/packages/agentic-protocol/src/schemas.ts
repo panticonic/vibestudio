@@ -392,38 +392,10 @@ const externalParticipantObservedPayloadSchema = z
 const statePayloadSchema = z
   .object({
     protocol: protocolSchema,
-    mutationId: z.string().optional(),
-    observationId: z.string().optional(),
-    path: z.string().optional(),
-    paths: z.array(z.string()).optional(),
-    operation: z.string().optional(),
-    diff: z.string().optional(),
     inputStateHash: idSchema.optional(),
     outputStateHash: idSchema.optional(),
     parentStateHashes: z.array(z.string()).optional(),
-    files: z
-      .array(
-        z
-          .object({
-            path: z.string(),
-            contentHash: z.string(),
-            size: z.number().optional(),
-            mode: z.number().optional(),
-          })
-          .strict()
-      )
-      .optional(),
-    stateHash: idSchema.optional(),
-    invocationId: idSchema.optional(),
-    contentHash: z.string().optional(),
-    beforeHash: z.string().optional(),
-    afterHash: z.string().optional(),
-    hunks: z.array(z.unknown()).optional(),
-    size: z.number().optional(),
-    mimeType: z.string().optional(),
     summary: z.string().optional(),
-    error: z.string().optional(),
-    rationale: z.string().optional(),
     metadata: z.record(z.unknown()).optional(),
   })
   .strict();

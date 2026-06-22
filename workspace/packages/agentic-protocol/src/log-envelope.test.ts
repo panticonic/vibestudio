@@ -275,7 +275,7 @@ describe("logEnvelopeSchema", () => {
 describe("new event kinds", () => {
   const base = { actor, createdAt: "2026-06-11T00:00:00.000Z" };
 
-  it("parses state.snapshot_ingested with parentStateHashes and files", () => {
+  it("parses state.snapshot_ingested with parentStateHashes", () => {
     const event = {
       ...base,
       kind: "state.snapshot_ingested",
@@ -284,7 +284,6 @@ describe("new event kinds", () => {
         inputStateHash: "state:abc",
         outputStateHash: "state:def",
         parentStateHashes: ["state:abc", "state:xyz"],
-        files: [{ path: "src/index.ts", contentHash: "sha:1", size: 10, mode: 0o644 }],
       },
     };
     expect(storedAgenticEventSchema.safeParse(event).success).toBe(true);

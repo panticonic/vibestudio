@@ -1033,7 +1033,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
         invocation_id TEXT,
         input_state_hash TEXT NOT NULL,
         output_state_hash TEXT NOT NULL,
-        produced_by_mutation_id TEXT,
         summary TEXT,
         metadata_json TEXT,
         created_at TEXT NOT NULL
@@ -2366,8 +2365,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const payload = envelope.payload as JsonRecord;
     const kind = envelope.payloadKind;
     const eventId = String(envelope.envelopeId);
-    const invocationId =
-      envelope.causality?.invocationId ?? asString(payload["invocationId"]) ?? null;
+    const invocationId = envelope.causality?.invocationId ?? null;
     const inputStateHash =
       asString(payload["inputStateHash"]) ?? this.latestStateHash(envelope.logId, envelope.head);
     const extraParents = Array.isArray(payload["parentStateHashes"])
@@ -2384,14 +2382,13 @@ export class GadWorkspaceDO extends DurableObjectBase {
     this.sql.exec(
       `INSERT OR IGNORE INTO gad_state_transitions (
          event_id, invocation_id, input_state_hash, output_state_hash,
-         produced_by_mutation_id, summary, metadata_json, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         summary, metadata_json, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       eventId,
       invocationId,
       inputStateHash,
       outputStateHash,
-      asString(payload["mutationId"]) ?? null,
-      asString(payload["summary"]) ?? asString(payload["rationale"]),
+      asString(payload["summary"]),
       JSON.stringify(payload),
       envelope.appendedAt
     );
