@@ -786,7 +786,9 @@ describe("internal storage DOs under workerd", () => {
     }>;
     expect(status.find((row) => row.metric === "Log heads")?.value).toBe(1);
     expect(status.find((row) => row.metric === "Log events")?.value).toBe(2);
-    expect(status.find((row) => row.metric === "Worktree states")?.value).toBe(1);
+    // Two worktree states: the always-present empty base (seeded by ensureEmptyState
+    // at schema init) plus the single state ingested above.
+    expect(status.find((row) => row.metric === "Worktree states")?.value).toBe(2);
   }, 30_000);
 
   it("records BrowserDataDO history visits and title updates without double-counting", async () => {

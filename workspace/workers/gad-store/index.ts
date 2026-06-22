@@ -709,9 +709,10 @@ interface ProjectionKey {
 }
 
 export class GadWorkspaceDO extends DurableObjectBase {
+  // v19: schema cut removes dead file mutation/observation projections.
   // v18: schema cut removes unimplemented knowledge sidecar projection tables.
   // v17 changed envelope hash preimage format v2 (length-prefixed fields).
-  static override schemaVersion = 18;
+  static override schemaVersion = 19;
 
   constructor(ctx: ConstructorParameters<typeof DurableObjectBase>[0], env: unknown) {
     super(ctx, env);
