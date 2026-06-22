@@ -79,9 +79,16 @@ const messageBlockInputSchema = z.discriminatedUnion("type", [
   z.object({ ...blockBaseShape, type: z.literal("text"), content: z.string() }).strict(),
   z.object({ ...blockBaseShape, type: z.literal("thinking"), content: z.string() }).strict(),
   z
-    .object({ ...blockBaseShape, type: z.literal("invocation"), invocationId: idSchema, content: z.string().optional() })
+    .object({
+      ...blockBaseShape,
+      type: z.literal("invocation"),
+      invocationId: idSchema,
+      content: z.string().optional(),
+    })
     .strict(),
-  z.object({ ...blockBaseShape, type: z.literal("attachment"), content: z.string().optional() }).strict(),
+  z
+    .object({ ...blockBaseShape, type: z.literal("attachment"), content: z.string().optional() })
+    .strict(),
   z.object({ ...blockBaseShape, type: z.literal("data"), content: z.string().optional() }).strict(),
   z.object({ ...blockBaseShape, type: z.literal("diagnostic"), content: z.string() }).strict(),
 ]);
@@ -460,16 +467,6 @@ const compactionPayloadSchema = z
   })
   .strict();
 
-const memoryRecalledPayloadSchema = z
-  .object({
-    protocol: protocolSchema,
-    query: z.string(),
-    results: z.unknown().optional(),
-    anchors: z.array(z.unknown()).optional(),
-    metadata: z.record(z.unknown()).optional(),
-  })
-  .strict();
-
 const buildCompletedPayloadSchema = z
   .object({
     protocol: protocolSchema,
@@ -490,8 +487,6 @@ const knowledgePayloadSchema = z
     predicate: z.string().optional(),
     object: z.string().optional(),
     claimId: z.string().optional(),
-    theoryId: z.string().optional(),
-    contradictionId: z.string().optional(),
     status: z.string().optional(),
     body: z.unknown().optional(),
     metadata: z.record(z.unknown()).optional(),
@@ -535,13 +530,9 @@ export const eventKindSchemas = {
   "messageType.cleared": eventSchema("messageType.cleared", messageTypeClearedPayloadSchema),
   "custom.started": eventSchema("custom.started", customStartedPayloadSchema),
   "custom.updated": eventSchema("custom.updated", customUpdatedPayloadSchema),
-  "state.file_observed": eventSchema("state.file_observed", statePayloadSchema),
-  "state.file_mutation_intended": eventSchema("state.file_mutation_intended", statePayloadSchema),
-  "state.file_mutation_applied": eventSchema("state.file_mutation_applied", statePayloadSchema),
   "state.transition_recorded": eventSchema("state.transition_recorded", statePayloadSchema),
   "state.snapshot_ingested": eventSchema("state.snapshot_ingested", statePayloadSchema),
   "state.merge_applied": eventSchema("state.merge_applied", statePayloadSchema),
-  "memory.recalled": eventSchema("memory.recalled", memoryRecalledPayloadSchema),
   "build.completed": eventSchema("build.completed", buildCompletedPayloadSchema),
   "external.envelope_published": eventSchema(
     "external.envelope_published",
@@ -566,22 +557,6 @@ export const eventKindSchemas = {
   "knowledge.claim_recorded": eventSchema("knowledge.claim_recorded", knowledgePayloadSchema),
   "knowledge.claim_updated": eventSchema("knowledge.claim_updated", knowledgePayloadSchema),
   "knowledge.claim_retracted": eventSchema("knowledge.claim_retracted", knowledgePayloadSchema),
-  "knowledge.theory_proposed": eventSchema("knowledge.theory_proposed", knowledgePayloadSchema),
-  "knowledge.theory_versioned": eventSchema("knowledge.theory_versioned", knowledgePayloadSchema),
-  "knowledge.theory_superseded": eventSchema("knowledge.theory_superseded", knowledgePayloadSchema),
-  "knowledge.claim_edge_added": eventSchema("knowledge.claim_edge_added", knowledgePayloadSchema),
-  "knowledge.claim_edge_removed": eventSchema(
-    "knowledge.claim_edge_removed",
-    knowledgePayloadSchema
-  ),
-  "knowledge.contradiction_recorded": eventSchema(
-    "knowledge.contradiction_recorded",
-    knowledgePayloadSchema
-  ),
-  "knowledge.contradiction_resolved": eventSchema(
-    "knowledge.contradiction_resolved",
-    knowledgePayloadSchema
-  ),
 } as const;
 
 export const agenticEventSchema = z

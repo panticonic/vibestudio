@@ -33,10 +33,7 @@ export type {
   TurnReasonCode,
 } from "./constants.js";
 
-export {
-  messageDisplayText,
-  summarizeMessageBlocks,
-} from "./message-content.js";
+export { messageDisplayText, summarizeMessageBlocks } from "./message-content.js";
 export type { MessageContentSummary } from "./message-content.js";
 
 export type {
@@ -62,7 +59,6 @@ export type {
   ApprovalPayload,
   BranchPayload,
   BuildCompletedPayload,
-  MemoryRecalledPayload,
   CompactionPayload,
   CustomMessageDisplayMode,
   CustomStartedPayload,

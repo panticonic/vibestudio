@@ -27,7 +27,7 @@ export { modelCallExecutor, toProtocolBlocks } from "./model-call.js";
 export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
   kind: "local_tool",
   async execute({ descriptor, state, signal, deps, onEphemeral }) {
-    // §1.4.2 retry rule: a mutating tool whose state.file_mutation_applied is
+    // §1.4.2 retry rule: a mutating tool whose applied worktree mutation is
     // already folded synthesizes success instead of re-executing.
     if (deps.localTools.alreadyApplied(state, descriptor.invocationId)) {
       return {

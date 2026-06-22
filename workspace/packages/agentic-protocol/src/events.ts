@@ -1,5 +1,10 @@
 import { AGENTIC_PROTOCOL_VERSION } from "./constants.js";
-import type { InvocationOutcome, MessageOutcome, MessageTier, TurnReasonCode } from "./constants.js";
+import type {
+  InvocationOutcome,
+  MessageOutcome,
+  MessageTier,
+  TurnReasonCode,
+} from "./constants.js";
 import type {
   ApprovalId,
   BlockId,
@@ -54,13 +59,9 @@ export type EventKind =
   | "messageType.cleared"
   | "custom.started"
   | "custom.updated"
-  | "state.file_observed"
-  | "state.file_mutation_intended"
-  | "state.file_mutation_applied"
   | "state.transition_recorded"
   | "state.snapshot_ingested"
   | "state.merge_applied"
-  | "memory.recalled"
   | "build.completed"
   | "external.envelope_published"
   | "external.envelope_observed"
@@ -75,14 +76,7 @@ export type EventKind =
   | "system.compaction_recorded"
   | "knowledge.claim_recorded"
   | "knowledge.claim_updated"
-  | "knowledge.claim_retracted"
-  | "knowledge.theory_proposed"
-  | "knowledge.theory_versioned"
-  | "knowledge.theory_superseded"
-  | "knowledge.claim_edge_added"
-  | "knowledge.claim_edge_removed"
-  | "knowledge.contradiction_recorded"
-  | "knowledge.contradiction_resolved";
+  | "knowledge.claim_retracted";
 
 export interface EventCausality {
   parentEventId?: EventId;
@@ -210,18 +204,13 @@ export function readDiagnosticMetadata(
   return {
     code: typeof code === "string" ? code : "diagnostic",
     severity:
-      severity === "error" || severity === "info" || severity === "warning"
-        ? severity
-        : "warning",
+      severity === "error" || severity === "info" || severity === "warning" ? severity : "warning",
     reason: typeof reason === "string" && reason.trim() ? reason : undefined,
     recoverable: typeof record["recoverable"] === "boolean" ? record["recoverable"] : undefined,
-    failureCode:
-      typeof failureCode === "string" && failureCode.trim() ? failureCode : undefined,
+    failureCode: typeof failureCode === "string" && failureCode.trim() ? failureCode : undefined,
     resetAt: typeof resetAt === "string" && resetAt.trim() ? resetAt : undefined,
     retryAfterMs:
-      typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs)
-        ? retryAfterMs
-        : undefined,
+      typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs) ? retryAfterMs : undefined,
   };
 }
 
@@ -551,14 +540,6 @@ export interface CompactionPayload {
   replacement?: unknown;
 }
 
-export interface MemoryRecalledPayload {
-  protocol: "agentic.trajectory.v1";
-  query: string;
-  results?: unknown; // recall results (blob-spilled when large)
-  anchors?: unknown[];
-  metadata?: Record<string, unknown>;
-}
-
 export interface BuildCompletedPayload {
   protocol: "agentic.trajectory.v1";
   inputStateHash: string;
@@ -576,8 +557,6 @@ export interface KnowledgePayload {
   predicate?: string;
   object?: string;
   claimId?: string;
-  theoryId?: string;
-  contradictionId?: string;
   status?: string;
   body?: unknown;
   metadata?: Record<string, unknown>;
@@ -603,32 +582,30 @@ export type PayloadFor<K extends EventKind> = K extends `message.${string}`
         ? UiFeedbackPayload
         : K extends `ui.${string}`
           ? UiPayload
-        : K extends "messageType.registered"
-          ? MessageTypeRegisteredPayload
-          : K extends "messageType.cleared"
-            ? MessageTypeClearedPayload
-            : K extends "custom.started"
-              ? CustomStartedPayload
-              : K extends "custom.updated"
-                ? CustomUpdatedPayload
-                : K extends "external.envelope_published"
-                  ? ExternalEnvelopePublishedPayload
-                  : K extends "external.envelope_observed"
-                    ? ExternalEnvelopeObservedPayload
-                    : K extends "external.participant_observed"
-                      ? ExternalParticipantObservedPayload
-                      : K extends `branch.${string}`
-                        ? BranchPayload
-                        : K extends `turn.${string}`
-                          ? TurnPayload
-                          : K extends `state.${string}`
-                            ? StatePayload
-                            : K extends "system.compaction_recorded"
-                              ? CompactionPayload
-                              : K extends "system.event"
-                                ? SystemPayload
-                                : K extends "memory.recalled"
-                                  ? MemoryRecalledPayload
+          : K extends "messageType.registered"
+            ? MessageTypeRegisteredPayload
+            : K extends "messageType.cleared"
+              ? MessageTypeClearedPayload
+              : K extends "custom.started"
+                ? CustomStartedPayload
+                : K extends "custom.updated"
+                  ? CustomUpdatedPayload
+                  : K extends "external.envelope_published"
+                    ? ExternalEnvelopePublishedPayload
+                    : K extends "external.envelope_observed"
+                      ? ExternalEnvelopeObservedPayload
+                      : K extends "external.participant_observed"
+                        ? ExternalParticipantObservedPayload
+                        : K extends `branch.${string}`
+                          ? BranchPayload
+                          : K extends `turn.${string}`
+                            ? TurnPayload
+                            : K extends `state.${string}`
+                              ? StatePayload
+                              : K extends "system.compaction_recorded"
+                                ? CompactionPayload
+                                : K extends "system.event"
+                                  ? SystemPayload
                                   : K extends "build.completed"
                                     ? BuildCompletedPayload
                                     : K extends `knowledge.${string}`

@@ -1386,7 +1386,10 @@ export class GadWorkspaceDO extends DurableObjectBase {
     for (const segment of this.logLineage(input.logId, input.head)) {
       const { where, bindings } = this.logEventWhereForSegment(segment, input);
       const row = this.sql
-        .exec(`SELECT COUNT(*) AS cnt, MIN(seq) AS first_seq FROM log_events WHERE ${where}`, ...bindings)
+        .exec(
+          `SELECT COUNT(*) AS cnt, MIN(seq) AS first_seq FROM log_events WHERE ${where}`,
+          ...bindings
+        )
         .one();
       const segmentCount = asNumber(row["cnt"]);
       count += segmentCount;
@@ -4408,9 +4411,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }): ChannelReplayWindow {
     this.ensureReady();
     const rawLimit = input.limit ?? 50;
-    const limit = Number.isFinite(rawLimit)
-      ? Math.min(Math.max(Math.trunc(rawLimit), 0), 500)
-      : 50;
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(Math.trunc(rawLimit), 0), 500) : 50;
     const stats = this.lineageEventStats({ logId: input.channelId, head: CHANNEL_LOG_HEAD });
     let rows: LogEnvelope[];
     if (input.mode === "after") {
@@ -4440,7 +4441,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
     const replayToId = rows.length > 0 ? rows[rows.length - 1]!.seq : undefined;
     let hasMoreBefore: boolean | undefined;
     if (input.mode === "initial") {
-      hasMoreBefore = replayFromId !== undefined && stats.firstSeq !== undefined && stats.firstSeq < replayFromId;
+      hasMoreBefore =
+        replayFromId !== undefined && stats.firstSeq !== undefined && stats.firstSeq < replayFromId;
     } else if (input.mode === "before") {
       const anchor = replayFromId ?? input.beforeSeq ?? 0;
       hasMoreBefore = anchor > 0 && stats.firstSeq !== undefined && stats.firstSeq < anchor;
@@ -5560,9 +5562,6 @@ const STORED_EVENT_KINDS = new Set<string>([
   "messageType.cleared",
   "custom.started",
   "custom.updated",
-  "state.file_observed",
-  "state.file_mutation_intended",
-  "state.file_mutation_applied",
   "state.transition_recorded",
   "state.snapshot_ingested",
   "state.merge_applied",
@@ -5577,7 +5576,6 @@ const STORED_EVENT_KINDS = new Set<string>([
   "turn.closed",
   "system.event",
   "system.compaction_recorded",
-  "memory.recalled",
   "build.completed",
   "knowledge.claim_recorded",
   "knowledge.claim_updated",

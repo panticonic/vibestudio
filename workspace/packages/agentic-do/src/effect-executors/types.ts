@@ -100,8 +100,8 @@ export interface LocalToolPort {
     // parks the leased row (deferRedrive backstop), exactly like channel_call/http_call.
     | { deferred: true }
   >;
-  /** Mutation-replay guard (§1.4.2): true when the fold already recorded a
-   *  state.file_mutation_applied for this invocation. */
+  /** Mutation-replay guard (§1.4.2): true when the fold already recorded an
+   *  applied worktree mutation for this invocation. */
   alreadyApplied(state: AgentState, invocationId: string): boolean;
 }
 

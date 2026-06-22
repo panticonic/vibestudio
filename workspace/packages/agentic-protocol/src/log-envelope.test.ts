@@ -99,9 +99,9 @@ describe("log envelope hashing", () => {
       head: "main",
       payloads: trajectoryPayloads.slice(0, 1),
     });
-    await expect(
-      verifyLogEnvelopeHash({ ...envelope!, hash: "f".repeat(64) })
-    ).resolves.toBe(false);
+    await expect(verifyLogEnvelopeHash({ ...envelope!, hash: "f".repeat(64) })).resolves.toBe(
+      false
+    );
   });
 
   it("excludes logId/head/seq/prevHash/hash from the semantic slice and omits absent optionals", async () => {
@@ -299,21 +299,6 @@ describe("new event kinds", () => {
         inputStateHash: "state:abc",
         outputStateHash: "state:merged",
         parentStateHashes: ["state:other"],
-      },
-    };
-    expect(storedAgenticEventSchema.safeParse(event).success).toBe(true);
-  });
-
-  it("parses memory.recalled", () => {
-    const event = {
-      ...base,
-      kind: "memory.recalled",
-      payload: {
-        protocol: "agentic.trajectory.v1",
-        query: "what changed in the build system",
-        results: [{ score: 0.9 }],
-        anchors: ["env-1"],
-        metadata: { recallRun: 1 },
       },
     };
     expect(storedAgenticEventSchema.safeParse(event).success).toBe(true);
