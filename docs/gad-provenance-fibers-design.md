@@ -22,9 +22,9 @@ single source of worktree provenance to build blame on.
 
 1. **Blame that works in production** — for any file/state, recover which edit
    changed which lines, in which trajectory, by which invocation/turn.
-2. **Read-time provenance attachment** — on first read of a file in a session,
-   attach a compact, _semantic_ summary (claims first, then sessions/files),
-   ranked by relevance to the current session. Deeper exploration is on-demand.
+2. **Read-time provenance attachment** — on each read, attach a compact summary at
+   the agent-requested depth (claims first, then sessions/files), ranked by
+   relevance to the current session. Deeper exploration is on-demand.
 3. **Session-density ranking** — rank attached provenance by the density of
    "relationship fibers" connecting the current session to each candidate, and
    improve that ranking as the session accumulates context.
@@ -373,20 +373,51 @@ ranking**: the rendered block is an ephemeral runtime decision that is never
 replayed, and we only ever persist `included`/`probed` fibers for what was
 genuinely shown/requested.
 
-### 7.5 Attachment shape
+### 7.5 Attachment format
 
-Semantic-first, compact, density-ranked, raw hunks omitted:
+The block fuses three layers of signal, cheapest-to-richest, and **never
+generates prose on the hot path** — semantics are _recalled_, not synthesized:
+
+1. **Structural skeleton + handles** — file, edit recency, editing sessions,
+   co-edited files, each carrying the short handle (`claim#42`,
+   `session:retry-rework`, `state:9f2`, `file:retry.ts`) to chase. Cheap, faithful,
+   and the query surface for follow-ons (§9.2).
+2. **Derived structural signals that _read_ as insight** — hub-ness, coupling
+   ("couples with retry.ts"), churn, staleness, and contradiction flags. Computed
+   from the graph, deterministic, high value-per-token.
+3. **Recalled claims** — the semantic flesh, taken verbatim from `gad_claims`: a
+   past agent's already-distilled, provenance-anchored insight. Zero generation
+   cost, verifiable, the highest-insight layer.
+
+Every line is **one insight + one handle**: it tells the agent something _and_
+hands it the exact thing to query next. Lines are emitted densest-first and cut at
+`resultBudget` (densest survive a tight budget; the tail shows under a generous
+one). The block scales by depth tier (§7.1):
+
+`blame` (1-hop, structural only):
 
 ```
-provenance · src/foo.ts (last edited 3 turns ago, 2 sessions)
-  ● claim#42 "foo owns the retry budget" — supports claim#7 · 4 editing sessions touched it [●●●●○]
-  ● session "rework-retries" edited L40–58 · recorded 2 claims you've touched this session [●●●○○]
-  ● co-edited with src/retry.ts in 3 of last 5 edits [●●○○○]
+prov · src/foo.ts · L40–58 last changed 3 turns ago · session:retry-rework · state:9f2→a17
 ```
 
-The density meter is a coarse bucketing of `score`. Lines are emitted
-densest-first and cut at `resultBudget`, so a tight budget keeps only the
-strongest connections and a generous one shows the tail.
+`context` (2-hop, claim-forward):
+
+```
+prov · src/foo.ts (edited 3 turns ago · 2 sessions · couples with retry.ts)
+● claim#42 "foo owns the retry budget" ·supports #7· 4 sessions touched it [●●●●○]
+● ⚠ contradicts claim#7 "retries are caller-controlled" → provenance(claim#42)
+● session:retry-rework edited L40–58 · recorded 2 claims you've touched [●●●○○]
+● co-edited with src/retry.ts ×3 of last 5 edits [●●○○○]
+```
+
+`trace` expands the claim relation graph (supports/contradicts/refines chains)
+around the file — most semantic, still entirely claim-sourced.
+
+The density meter (`●●●●○`) is a coarse bucketing of `score`. Because claims are
+sparse early and accrue over time, the block **degrades gracefully to structure
+and bootstraps toward semantics** as the agent records memory. `provenanceForFile`
+returns these as structured rows; the read attachment renders them to this compact
+text, and the agent can also call the structured form directly.
 
 ## 8. Hermeneutic claims
 
@@ -424,7 +455,9 @@ plus `gad_claim_relations`):
 The prompt frames this as the agent's durable working memory: record what you
 learn, relate it, and it returns through density-ranked provenance later.
 
-## 9. SQL-first surface
+## 9. SQL-first surface and follow-on queries
+
+### 9.1 Surface
 
 Ship tables + a few views, not a thick API:
 
@@ -435,9 +468,28 @@ Ship tables + a few views, not a thick API:
   piece that benefits from being a function rather than hand SQL, and the unit the
   warm cache and read-time attachment call.
 
-Everything else the agent reaches via `gad.query` (read-only CTEs already
-allowed). Prompt the agent that it can traverse provenance to arbitrary depth with
-SQL when a goal warrants it.
+Everything else the agent reaches via `gad.query` (read-only CTEs already allowed).
+
+### 9.2 Follow-on queries
+
+The attachment is a launchpad, not a self-contained report — it gives the agent
+just enough to decide whether a thread is worth a turn, plus the handle to chase
+it exactly:
+
+- **Every line is a query seed.** Its handle (`claim#42`, `state:9f2`,
+  `file:retry.ts`) is a precise next query — no guessing what to ask.
+- **Two mechanisms:** `provenance(path | claim | query)` for guided deepening, and
+  raw `gad.query` over the views for arbitrary traversal. We deliberately do not
+  pre-masticate; the agent chases its own goal in SQL.
+- **Exploration is itself a fiber.** `provenance(claim#42)` and follow-on queries
+  write `included`/`probed`-style fibers, so what the agent digs into becomes
+  denser and surfaces more readily next time — weighted low to avoid echo-chamber.
+- **Hint the top thread, don't dump.** The block pre-writes the suggested next
+  query for the one or two highest-signal items (a contradiction, a hub), so the
+  agent spends a follow-on only when the cheap broad signal flagged something.
+
+This is the cost model the mandatory budgets (§7.1) exist for: **cheap broad signal
+on every read, expensive deep dives only where the signal warranted one.**
 
 ## 10. What gets deleted
 
@@ -457,7 +509,8 @@ and the dead `StatePayload` fields. Reads are re-homed onto `observed` fibers
 3. **Density + attachment** — `provenanceForFile` (§6, capped 2-hop, `idf`/`norm`,
    turn/ordinality decay); mandatory `provenanceDepth`/`resultBudget` read args
    with the depth→cap mapping (§7.1); parallel + best-effort attachment (§7.2–7.5);
-   `included` + `probed` fibers; `provenance()` tool; prompt guidance on triage.
+   `included` + `probed` fibers; `provenance()` tool; attachment format (§7.5);
+   follow-on surface (§9.2); prompt guidance (§13).
 4. **Speculative warm** — `gad_provenance_cache`; warm on `turn.opened` and during
    model generation; degrade-to-hint on miss.
 5. **Tune** — decay λ, caps `K`/`M`/`N`, kind-weight ratios (esp. `included`),
@@ -497,3 +550,43 @@ Remaining knobs (need real logs, set defaults now, tune empirically):
   `trace`), the hard ceilings on agent-requested depth/budget, and a sensible
   default `resultBudget`. The `probed` fiber weight tracks `included` (same
   echo-chamber treatment).
+
+## 13. Prompting the agent
+
+The machinery only pays off if the agent wields the budgets, the block, and the
+follow-ons well. This is the system-prompt guidance — concrete, not aspirational.
+Phrase it to the agent roughly as:
+
+**Triage every read.** `provenanceDepth` and `resultBudget` are mandatory; treat
+them as a one-second judgement, not a formality:
+
+- `none` for files you know cold, glances, and re-reads.
+- `blame` when you only need "who/when last changed this."
+- `context` (your default) before you change a file, or when its ramifications
+  aren't obvious.
+- `trace` only when you need the belief structure around a file — contradictions,
+  what a claim depends on. It is expensive; reserve it.
+
+Spend a larger `resultBudget` on the few files central to the task and keep it
+small elsewhere. You are spending your own context window — economize.
+
+**Read the block as a launchpad, not a verdict.** It is intentionally partial. Act
+on it directly when it is enough; when a line flags something live — a ⚠
+contradiction, a hub, a claim you cannot reconcile — chase it with the pre-written
+`provenance(...)` call or your own `gad.query`. Do not reflexively expand every
+read; follow only the threads that change what you will do.
+
+**Record what you learn as claims.** When you establish something durable about the
+code — an invariant, an ownership boundary, a gotcha, a decision and its reason —
+`record_claim` it and `relate_claims` it to what it supports or contradicts. This
+is your memory: claims come back, density-ranked and provenance-anchored, the next
+time anyone touches the relevant files. Recording a claim is cheap; re-deriving it
+next week is not.
+
+**Trust but verify.** Provenance is recalled, not generated — a claim is a past
+judgement with a handle, not ground truth. If it matters, follow the handle to the
+trajectory or edit that produced it rather than taking it at face value.
+
+**Don't fight the budget.** If a block degraded to a `provenance("path")` hint,
+that is the system protecting your context — call it if the file is important,
+ignore it if not.
