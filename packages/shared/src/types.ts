@@ -96,6 +96,35 @@ export interface PackageManifest {
 export type ThemeMode = "light" | "dark" | "system";
 export type ThemeAppearance = "light" | "dark";
 
+/**
+ * App-wide theme IDENTITY (accent/radius/scaling/surface), distinct from
+ * light/dark `ThemeAppearance`. A user setting on the shell, broadcast live to
+ * every panel over the runtime bridge (piggybacked on the `runtime:theme`
+ * event) so changing the accent propagates everywhere without a reload.
+ */
+export interface ThemeConfig {
+  accentColor: string;
+  grayColor: string;
+  radius: "none" | "small" | "medium" | "large" | "full";
+  scaling: "90%" | "95%" | "100%" | "105%" | "110%";
+  panelBackground: "solid" | "translucent";
+}
+
+/**
+ * A command a panel contributes to the app-level command palette. The shell
+ * aggregates these across panels and dispatches the chosen one back to the
+ * owning panel over the runtime bridge (`runtime:palette-run`).
+ */
+export interface PaletteCommand {
+  /** Stable id, unique within the contributing panel. */
+  id: string;
+  label: string;
+  /** Optional secondary line. */
+  hint?: string;
+  /** Group label (e.g. the panel's name); items sharing one render together. */
+  section?: string;
+}
+
 export interface AppInfo {
   version: string;
   /** Connection mode: "local" (child process) or "remote" (standalone server) */

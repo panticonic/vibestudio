@@ -1,13 +1,20 @@
 import { useEffect, useCallback, useState, lazy, Suspense } from "react";
 import { useSetAtom } from "jotai";
 import { Theme, Flex, Spinner } from "@radix-ui/themes";
+import type { AppTheme } from "@workspace/ui";
 
 import { workspaceChooserDialogOpenAtom, activeWorkspaceNameAtom } from "../state/appModeAtoms";
-import { effectiveThemeAtom, loadThemePreferenceAtom } from "../state/themeAtoms";
+import {
+  effectiveThemeAtom,
+  loadThemePreferenceAtom,
+  themeConfigAtom,
+  loadThemeConfigAtom,
+} from "../state/themeAtoms";
 import { useAtomValue } from "jotai";
 import { useShellEvent } from "../shell/useShellEvent";
 import { panel, workspace } from "../shell/client";
 import { ChunkErrorBoundary } from "./ChunkErrorBoundary";
+import { AppCommandPalette } from "./AppCommandPalette";
 
 // Lazy-load MainMode — this creates a separate chunk containing PanelApp,
 // PanelStack, TitleBar, LazyPanelTreeSidebar, @dnd-kit/*, and all transitive deps.
@@ -27,7 +34,9 @@ function LoadingSpinner() {
  */
 export function App() {
   const effectiveTheme = useAtomValue(effectiveThemeAtom);
+  const themeConfig = useAtomValue(themeConfigAtom);
   const loadThemePreference = useSetAtom(loadThemePreferenceAtom);
+  const loadThemeConfig = useSetAtom(loadThemeConfigAtom);
   const setWorkspaceChooserOpen = useSetAtom(workspaceChooserDialogOpenAtom);
   const setActiveWorkspaceName = useSetAtom(activeWorkspaceNameAtom);
   // Counter to force remount of lazy component after a chunk load failure.
@@ -36,7 +45,16 @@ export function App() {
   // Load theme preference on mount
   useEffect(() => {
     loadThemePreference();
-  }, [loadThemePreference]);
+    loadThemeConfig();
+  }, [loadThemePreference, loadThemeConfig]);
+
+  // Broadcast the theme identity to every panel whenever it changes, so a
+  // user-picked accent/radius propagates live over the runtime bridge.
+  useEffect(() => {
+    void panel.updateThemeConfig(themeConfig).catch((error) => {
+      console.error("Failed to broadcast theme identity", error);
+    });
+  }, [themeConfig]);
 
   // Eagerly load active workspace name on mount (independent of chooser dialog)
   useEffect(() => {
@@ -74,7 +92,8 @@ export function App() {
   useShellEvent("navigate-about", handleNavigateAbout);
 
   return (
-    <Theme appearance={effectiveTheme} radius="large" className="app-shell-theme">
+    <Theme appearance={effectiveTheme} {...(themeConfig as AppTheme)} className="app-shell-theme">
+      <AppCommandPalette />
       <ChunkErrorBoundary
         onRetry={() => {
           // Reassign to create a fresh lazy() with a new import() promise

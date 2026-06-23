@@ -18,6 +18,7 @@ import { gitInteropMethods } from "./gitInterop.js";
 import { menuMethods } from "./menu.js";
 import { metaMethods } from "./meta.js";
 import { notificationMethods } from "./notification.js";
+import { paletteMethods } from "./palette.js";
 import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
@@ -57,6 +58,7 @@ const serviceTables: ServiceTable[] = [
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "meta", file: "meta.ts", methods: metaMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
+  { service: "palette", file: "palette.ts", methods: paletteMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },

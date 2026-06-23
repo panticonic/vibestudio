@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import type { ThemeAppearance } from "../types.js";
+import type { PanelFocusResult, ThemeAppearance, ThemeConfig } from "../types.js";
 import type {
   BrowserAddressOptions,
   PanelAddressOptions,
@@ -19,6 +19,12 @@ export const BrowserNavigationIntentSchema = z.object({
 
 export const panelMethods = defineServiceMethods({
   updateTheme: { args: z.tuple([z.custom<ThemeAppearance>()]), returns: z.void() },
+  updateThemeConfig: { args: z.tuple([z.custom<ThemeConfig>()]), returns: z.void() },
+  getThemeConfig: {
+    args: z.tuple([]),
+    returns: z.custom<ThemeConfig>(),
+    policy: { allowed: ["shell", "app", "panel"] },
+  },
   getChromeState: { args: z.tuple([z.string()]), returns: z.custom<PanelChromeState>() },
   getAddressOptions: {
     args: z.tuple([z.string(), z.string().optional()]),
@@ -28,6 +34,8 @@ export const panelMethods = defineServiceMethods({
     args: z.tuple([z.string()]),
     returns: z.custom<BrowserAddressOptions>(),
   },
+  ensureLoaded: { args: z.tuple([z.string()]), returns: z.custom<PanelFocusResult>() },
+  takeOver: { args: z.tuple([z.string()]), returns: z.custom<PanelFocusResult>() },
   markBrowserNavigationIntent: {
     args: z.tuple([z.string(), BrowserNavigationIntentSchema]),
     returns: z.void(),

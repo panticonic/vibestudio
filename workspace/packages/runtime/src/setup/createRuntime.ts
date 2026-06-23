@@ -112,6 +112,12 @@ export function createRuntime(deps: RuntimeDeps) {
 
     getTheme: base.getTheme,
     onThemeChange: base.onThemeChange,
+    getThemeConfig: base.getThemeConfig,
+    onThemeConfigChange: base.onThemeConfigChange,
+
+    registerPaletteCommands: base.registerPaletteCommands,
+    unregisterPaletteCommands: base.unregisterPaletteCommands,
+    onPaletteRun: base.onPaletteRun,
 
     onFocus: base.onFocus,
 

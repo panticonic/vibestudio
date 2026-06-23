@@ -6,7 +6,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import * as runtime from "@workspace/runtime";
 import { Rpc } from "@workspace/runtime";
-import type { PanelHandle, ThemeAppearance } from "@workspace/runtime";
+import type { PanelHandle, PaletteCommand, ThemeAppearance, ThemeConfig } from "@workspace/runtime";
 
 /**
  * Get the panel API object.
@@ -47,6 +47,75 @@ export function usePanelTheme(): ThemeAppearance {
   }, []);
 
   return theme;
+}
+
+/**
+ * Get the app-wide theme identity (accent/radius/scaling/surface) and subscribe
+ * to live changes pushed from the shell. Pair with `usePanelTheme()` for
+ * appearance.
+ */
+export function usePanelThemeConfig(): ThemeConfig {
+  const [config, setConfig] = useState<ThemeConfig>(() => runtime.panel.getThemeConfig());
+
+  useEffect(() => {
+    const unsubscribe = runtime.panel.onThemeConfigChange((next) => {
+      setConfig(next);
+    });
+    return unsubscribe;
+  }, []);
+
+  return config;
+}
+
+/**
+ * Contribute commands to the app-level command palette and handle the shell
+ * dispatching one back. Registers `commands` on mount / whenever they change,
+ * wires `onRun(commandId)`, and unregisters on unmount.
+ *
+ * @example
+ * ```tsx
+ * usePaletteCommands(
+ *   [{ id: "new", label: "New pane", section: "Terminal" }],
+ *   (id) => { if (id === "new") openPane(); }
+ * );
+ * ```
+ */
+export function usePaletteCommands(
+  commands: PaletteCommand[],
+  onRun: (commandId: string) => void
+): void {
+  // Keep the latest handler in a ref so re-registration only tracks `commands`.
+  const onRunRef = useRef(onRun);
+  onRunRef.current = onRun;
+
+  // Re-register whenever the command set's identity changes.
+  const key = useMemo(
+    () => JSON.stringify(commands.map((c) => [c.id, c.label, c.hint, c.section])),
+    [commands]
+  );
+
+  useEffect(() => {
+    // Palette registration must never crash a host that lacks palette support
+    // (headless runtimes, the mobile app, or tests rendering a panel without a
+    // connected bridge). The runtime's own calls are already fire-and-forget;
+    // this guards the access path itself.
+    let unsubscribe: () => void = () => {};
+    try {
+      runtime.panel.registerPaletteCommands(commands);
+      unsubscribe = runtime.panel.onPaletteRun((commandId) => onRunRef.current(commandId));
+    } catch {
+      // No palette-capable host — contribute nothing, silently.
+    }
+    return () => {
+      try {
+        unsubscribe();
+        runtime.panel.unregisterPaletteCommands();
+      } catch {
+        // ignore teardown on a host without palette support
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 }
 
 /**

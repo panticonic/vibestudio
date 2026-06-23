@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { Dialog } from "@radix-ui/themes";
+import { AppDialog } from "@workspace/ui";
 
 import { workspaceChooserDialogOpenAtom, shellOverlayActiveAtom } from "../state/appModeAtoms";
 import { view } from "../shell/client";
@@ -48,11 +48,13 @@ export default function MainMode() {
       <WorkspaceWizard />
 
       {/* Workspace Chooser Dialog (for switching workspaces in main mode) */}
-      <Dialog.Root open={workspaceChooserOpen} onOpenChange={setWorkspaceChooserOpen}>
-        <Dialog.Content maxWidth="920px">
-          <WorkspaceChooser />
-        </Dialog.Content>
-      </Dialog.Root>
+      <AppDialog
+        open={workspaceChooserOpen}
+        onOpenChange={setWorkspaceChooserOpen}
+        maxWidth="920px"
+      >
+        <WorkspaceChooser />
+      </AppDialog>
     </>
   );
 }

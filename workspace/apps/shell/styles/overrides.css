@@ -10,30 +10,45 @@ body,
   height: 100%;
   min-height: 100%;
   overflow: hidden;
-  background: #111315;
+  /* Pre-paint background before the Radix theme mounts — follow the system
+     preference so a light-mode user never gets a dark flash. */
+  background: #f8fafc;
+}
+
+@media (prefers-color-scheme: dark) {
+  html,
+  body,
+  #app {
+    background: #111315;
+  }
 }
 
 .app-shell-theme {
-  --app-chrome-bg: var(--gray-2);
-  --app-chrome-bg-strong: var(--color-panel-solid);
-  --app-chrome-border: var(--gray-a6);
+  /* Chrome vars are thin aliases over the shared surface tokens (tokens.css) so
+     the shell and panels read in one surface language. The `--app-chrome-*`
+     names are kept as the shell's local vocabulary, now backed by the tokens. */
+  --app-chrome-bg: var(--surface-chrome);
+  --app-chrome-bg-strong: var(--surface-raised);
+  --app-chrome-border: var(--surface-border);
   --app-chrome-hover: var(--gray-a3);
   --app-chrome-selected: var(--gray-a4);
   --app-chrome-selected-hover: var(--gray-a5);
-  /* Approval bar — sky (default) */
-  --app-approval-sky-bg: var(--sky-a4);
+  /* Approval bar — sky (default). The base bg shares the `--approval-*` tokens;
+     border/stripe/text remain shell-specific (the token layer only fixes the
+     surface tint). */
+  --app-approval-sky-bg: var(--approval-info-surface);
   --app-approval-sky-border: var(--sky-a7);
-  --app-approval-sky-stripe: var(--sky-9);
+  --app-approval-sky-stripe: var(--approval-info);
   --app-approval-sky-text: var(--sky-12);
   /* Approval bar — amber (workspace apps / elevated warnings) */
-  --app-approval-amber-bg: var(--amber-a4);
+  --app-approval-amber-bg: var(--approval-warning-surface);
   --app-approval-amber-border: var(--amber-a7);
   --app-approval-amber-stripe: var(--amber-10);
   --app-approval-amber-text: var(--amber-12);
   /* Approval bar — red (native extensions / privileged panel automation / structural changes) */
-  --app-approval-red-bg: var(--red-a4);
+  --app-approval-red-bg: var(--approval-danger-surface);
   --app-approval-red-border: var(--red-a7);
-  --app-approval-red-stripe: var(--red-9);
+  --app-approval-red-stripe: var(--approval-danger);
   --app-approval-red-text: var(--red-12);
   width: 100%;
   height: 100%;
@@ -43,14 +58,14 @@ body,
 }
 
 .app-shell-theme:where(.light, .light-theme) {
-  --app-chrome-bg: #eef2f7;
-  --app-chrome-bg-strong: #f5f7fa;
-  --app-chrome-border: #cfd8e3;
-  --app-chrome-hover: rgba(61, 75, 96, 0.08);
-  --app-chrome-selected: rgba(35, 52, 78, 0.12);
-  --app-chrome-selected-hover: rgba(35, 52, 78, 0.17);
-  /* Light mode: use Radix step-3 surfaces — gentler than hand-rolled hex
-     but still distinctly tinted against gray chrome. */
+  /* Light mode: lean on Radix step-3 surfaces (gentler than hand-rolled hex)
+     for chrome, and the solid step surfaces for approval tints. */
+  --app-chrome-bg: var(--gray-2);
+  --app-chrome-bg-strong: var(--gray-1);
+  --app-chrome-border: var(--gray-a6);
+  --app-chrome-hover: var(--gray-a3);
+  --app-chrome-selected: var(--gray-a4);
+  --app-chrome-selected-hover: var(--gray-a5);
   --app-approval-sky-bg: var(--sky-3);
   --app-approval-sky-border: var(--sky-7);
   --app-approval-sky-stripe: var(--sky-9);
@@ -95,9 +110,9 @@ body,
   opacity: 0.6;
   color: var(--gray-10);
   transition:
-    opacity 120ms ease,
-    color 120ms ease,
-    background-color 120ms ease;
+    opacity var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard);
 }
 
 .app-tree-action:hover {
@@ -114,7 +129,7 @@ body,
 /* Panel tree: workspace selector row (whole row switches workspace) */
 .app-tree-workspace {
   outline: none;
-  transition: background-color 120ms ease;
+  transition: background-color var(--motion-fast) var(--ease-standard);
 }
 
 .app-tree-workspace:hover {
@@ -126,11 +141,8 @@ body,
   outline-offset: -1px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .app-tree-spinner {
-    animation: none;
-  }
-}
+/* (Reduced-motion handling is centralized in tokens.css — one global block
+   collapses all animation/transition to instant; no per-rule overrides here.) */
 
 /* Responsive file overview panels: stack vertically on narrow viewports */
 @media (max-width: 500px) {
@@ -198,7 +210,7 @@ body,
   box-shadow:
     inset 6px 0 0 0 var(--app-approval-stripe),
     0 8px 20px -10px rgba(0, 0, 0, 0.5);
-  animation: app-approval-enter 240ms cubic-bezier(0.2, 0.85, 0.3, 1.1);
+  animation: app-approval-enter var(--motion-emphasized) cubic-bezier(0.2, 0.85, 0.3, 1.1);
 }
 
 /* One-shot edge flash, remounted (keyed) each time a new approval arrives so
@@ -269,13 +281,8 @@ body,
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .approval-bar,
-  .approval-attention-pulse,
-  .approval-icon-box {
-    animation: none;
-  }
-}
+/* (Approval-bar motion is collapsed by the centralized reduced-motion block in
+   tokens.css — no local override needed.) */
 
 .approval-caller-chip {
   display: inline-flex;
@@ -295,8 +302,8 @@ body,
 .approval-caller-chip[data-clickable="true"] {
   cursor: pointer;
   transition:
-    background 120ms ease,
-    border-color 120ms ease;
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard);
 }
 
 .approval-caller-chip[data-clickable="true"]:hover {
@@ -352,7 +359,7 @@ body,
 .approval-details-chevron {
   flex-shrink: 0;
   transform: rotate(-90deg);
-  transition: transform 120ms ease;
+  transition: transform var(--motion-fast) var(--ease-standard);
 }
 
 .approval-details[open] .approval-details-chevron {

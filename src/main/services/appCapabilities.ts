@@ -43,3 +43,43 @@ export function requireAppCapability(
     `${surface} requires app capability '${capability}' for ${ctx.caller.runtime.id}`
   );
 }
+
+/**
+ * Gate a service whose `policy.allowed` lists both `shell` and `app` so that
+ * the `app` grant is restricted to authorized chrome (panel-hosting) — i.e. the
+ * workspace shell renderer (`apps/shell`), never an arbitrary workspace app.
+ * Native-host `shell`/`server`/`panel` callers pass through untouched; `app`
+ * callers must carry the `panel-hosting` chrome capability.
+ */
+export function requireChromeAppCallerOrHost(
+  ctx: ServiceContext,
+  viewManager: ViewManager,
+  surface: string
+): void {
+  if (ctx.caller.runtime.kind !== "app") return;
+  requireAppCapability(ctx, viewManager, "panel-hosting", surface);
+}
+
+/**
+ * Gate a surface to CHROME only — the native host (`shell`: electron-main /
+ * bootstrap launch gate) or the authorized chrome app (the workspace shell,
+ * `apps/shell`, carrying `panel-hosting`). Unlike {@link requireChromeAppCallerOrHost},
+ * this REJECTS `panel`/`server`/arbitrary-`app` callers, so it is the correct
+ * gate for cross-panel surfaces (e.g. `palette.list`/`palette.run`,
+ * `app.openWorkspacePath`) whose `policy.allowed` also admits `panel` for OTHER
+ * methods. The hosted workspace shell now resolves as `kind:"app"` (apps/shell),
+ * so a bare `kind === "shell"` check silently rejected it.
+ */
+export function requireChromeCaller(
+  ctx: ServiceContext,
+  viewManager: ViewManager,
+  surface: string
+): void {
+  const { kind } = ctx.caller.runtime;
+  if (kind === "shell") return;
+  if (kind === "app") {
+    requireAppCapability(ctx, viewManager, "panel-hosting", surface);
+    return;
+  }
+  throw new Error(`${surface} is restricted to chrome (the shell)`);
+}

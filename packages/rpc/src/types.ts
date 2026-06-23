@@ -443,6 +443,7 @@ export const ELECTRON_LOCAL_SERVICE_NAMES = [
   "events",
   "menu",
   "notification",
+  "palette",
   "panel",
   "remoteCred",
   "settings",

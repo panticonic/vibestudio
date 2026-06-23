@@ -14,7 +14,10 @@ import {
 } from "@radix-ui/themes";
 import { ReloadIcon } from "@radix-ui/react-icons";
 import { gad, panel } from "@workspace/runtime";
-import { useIsMobile, usePanelTheme } from "@workspace/react";
+import { useIsMobile, usePaletteCommands, usePanelTheme } from "@workspace/react";
+import { PanelChrome } from "@workspace/ui";
+import { useAppTheme } from "@workspace/ui/panel";
+import "@workspace/ui/tokens.css";
 
 interface StateArgs {
   branchId?: string;
@@ -64,6 +67,7 @@ function DataTable({ rows, columns }: { rows: Row[]; columns: string[] }) {
 
 function App() {
   const appearance = usePanelTheme();
+  const appTheme = useAppTheme();
   const isMobile = useIsMobile();
   const stateArgs = panel.stateArgs.use<StateArgs>();
   const [branches, setBranches] = useState<Row[]>([]);
@@ -153,6 +157,23 @@ function App() {
     }
   }
 
+  // Contribute GAD actions to the app-level command palette (Cmd/Ctrl+K).
+  const paletteCommands = useMemo(
+    () => [
+      { id: "gad-refresh", label: "Refresh", section: "GAD Browser" },
+      { id: "gad-check-integrity", label: "Check integrity", section: "GAD Browser" },
+      { id: "gad-validate-hashes", label: "Validate hashes", section: "GAD Browser" },
+      { id: "gad-replay-events", label: "Replay events", section: "GAD Browser" },
+    ],
+    []
+  );
+  usePaletteCommands(paletteCommands, (id) => {
+    if (id === "gad-refresh") void refresh();
+    else if (id === "gad-check-integrity") void checkIntegrity();
+    else if (id === "gad-validate-hashes") void validateHashes();
+    else if (id === "gad-replay-events") void replayEvents();
+  });
+
   useEffect(() => {
     void refresh();
   }, []);
@@ -176,75 +197,70 @@ function App() {
     ]);
   }, [selectedBranchId]);
 
+  const actionButtons = (
+    <>
+      {operationStatus ? (
+        <Text color="gray" size="2">
+          {operationStatus}
+        </Text>
+      ) : null}
+      <Button size="2" variant="soft" onClick={() => void checkIntegrity()} disabled={loading}>
+        {isMobile ? "Integrity" : "Check Integrity"}
+      </Button>
+      <Button size="2" variant="soft" onClick={() => void validateHashes()} disabled={loading}>
+        {isMobile ? "Hashes" : "Validate Hashes"}
+      </Button>
+      <Button size="2" variant="soft" onClick={() => void replayEvents()} disabled={loading}>
+        Replay
+      </Button>
+      <Button
+        size="2"
+        variant="soft"
+        onClick={() => void refresh()}
+        disabled={loading}
+        title="Refresh"
+      >
+        <ReloadIcon /> Refresh
+      </Button>
+    </>
+  );
+
   return (
-    <Theme appearance={appearance}>
-      <Box p={isMobile ? "2" : "4"} style={{ height: "100dvh", boxSizing: "border-box" }}>
-        <Flex direction="column" gap="3" height="100%">
-          <Flex
-            align={isMobile ? "start" : "center"}
-            direction={isMobile ? "column" : "row"}
-            justify="between"
-            gap="3"
-          >
+    <Theme appearance={appearance} {...appTheme}>
+      <Box
+        style={{
+          height: "100dvh",
+          boxSizing: "border-box",
+          background: "var(--surface-panel)",
+        }}
+      >
+        <PanelChrome
+          bodyPadding={isMobile ? "2" : "4"}
+          header={
             <Box style={{ minWidth: 0 }}>
-              <Heading size={isMobile ? "3" : "4"}>gad Browser</Heading>
-              <Text color="gray" size="2">
+              <Heading size={isMobile ? "3" : "4"} truncate>
+                gad Browser
+              </Heading>
+              <Text color="gray" size="2" truncate as="div">
                 {selectedBranch ? asText(selectedBranch["name"]) : "Workspace provenance"}
               </Text>
             </Box>
-            <Flex
-              align="center"
-              gap="2"
-              wrap="wrap"
-              justify={isMobile ? "start" : "end"}
-              style={{ width: isMobile ? "100%" : undefined }}
+          }
+          // On narrow viewports the actions move into the body (a wrapping row)
+          // so the chrome header stays a calm title strip and nothing overflows.
+          headerActions={isMobile ? undefined : actionButtons}
+        >
+          <Flex direction="column" gap="3" style={{ height: "100%", minHeight: 0 }}>
+            {isMobile ? (
+              <Flex align="center" gap="2" wrap="wrap" justify="end" style={{ flexShrink: 0 }}>
+                {actionButtons}
+              </Flex>
+            ) : null}
+            <Grid
+              columns={{ initial: "1", md: "260px 1fr" }}
+              gap="3"
+              style={{ minHeight: 0, flex: 1 }}
             >
-              {operationStatus ? (
-                <Text color="gray" size="2">
-                  {operationStatus}
-                </Text>
-              ) : null}
-              <Button
-                size="2"
-                variant="soft"
-                onClick={() => void checkIntegrity()}
-                disabled={loading}
-              >
-                {isMobile ? "Integrity" : "Check Integrity"}
-              </Button>
-              <Button
-                size="2"
-                variant="soft"
-                onClick={() => void validateHashes()}
-                disabled={loading}
-              >
-                {isMobile ? "Hashes" : "Validate Hashes"}
-              </Button>
-              <Button
-                size="2"
-                variant="soft"
-                onClick={() => void replayEvents()}
-                disabled={loading}
-              >
-                Replay
-              </Button>
-              <Button
-                size="2"
-                variant="soft"
-                onClick={() => void refresh()}
-                disabled={loading}
-                title="Refresh"
-              >
-                <ReloadIcon /> Refresh
-              </Button>
-            </Flex>
-          </Flex>
-
-          <Grid
-            columns={{ initial: "1", md: "260px 1fr" }}
-            gap="3"
-            style={{ minHeight: 0, flex: 1 }}
-          >
             <ScrollArea
               type="auto"
               scrollbars={isMobile ? "horizontal" : "vertical"}
@@ -362,9 +378,10 @@ function App() {
                   </Tabs.Content>
                 </ScrollArea>
               </Box>
-            </Tabs.Root>
-          </Grid>
-        </Flex>
+              </Tabs.Root>
+            </Grid>
+          </Flex>
+        </PanelChrome>
       </Box>
     </Theme>
   );

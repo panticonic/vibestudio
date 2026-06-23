@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@radix-ui/themes": "^3.2.1",
+    "@workspace/ui": "workspace:*",
     "@workspace/react": "workspace:*"
   },
   "peerDependencies": {

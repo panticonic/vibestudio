@@ -217,58 +217,8 @@
   flex-shrink: 1;
 }
 
-.spectrolite-quick-row {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) minmax(0, 1.1fr);
-  align-items: center;
-  gap: var(--space-2);
-  width: 100%;
-  min-height: 36px;
-  padding: var(--space-2);
-  border: 1px solid transparent;
-  border-radius: var(--radius-3);
-  background: transparent;
-  color: inherit;
-  cursor: pointer;
-  font: inherit;
-  text-align: left;
-}
-
-.spectrolite-quick-section {
-  padding: 0 var(--space-2);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.spectrolite-quick-row:hover,
-.spectrolite-quick-row--selected {
-  background: var(--iris-a2);
-  border-color: var(--iris-a5);
-}
-
-.spectrolite-quick-row:focus-visible {
-  outline: 2px solid var(--accent-9);
-  outline-offset: -2px;
-}
-
-.spectrolite-quick-row-title,
-.spectrolite-quick-row-path {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.spectrolite-quick-row-title {
-  font-weight: 500;
-}
-
-.spectrolite-quick-row-path {
-  color: var(--gray-10);
-  font-family: var(--font-mono, monospace);
-  font-size: 12px;
-}
-
+/* Quick-open rows are rendered by the shared CommandPalette primitive; only the
+ * match-highlight mark below remains spectrolite-specific. */
 .spectrolite-quick-match {
   padding: 0 1px;
   border-radius: 2px;

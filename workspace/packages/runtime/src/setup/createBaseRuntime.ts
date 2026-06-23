@@ -15,7 +15,8 @@ import {
 import { createWorkerdClient } from "../shared/workerd.js";
 import type { GatewayConfig } from "../shared/globals.js";
 import { createMainCaller } from "../shared/mainRpc.js";
-import type { RuntimeFs, ThemeAppearance } from "../types.js";
+import type { PaletteCommand, RuntimeFs, ThemeAppearance, ThemeConfig } from "../types.js";
+import { DEFAULT_THEME_CONFIG } from "../types.js";
 export interface BaseRuntimeDeps {
     selfId: string;
     /** Primary transport (single WS for panels, WS for workers) */
@@ -39,6 +40,10 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     const workers = createWorkerdClient(rpc);
     let currentTheme: ThemeAppearance = deps.initialTheme;
     const themeListeners = new Set<(theme: ThemeAppearance) => void>();
+    // App-wide theme identity (accent/radius/…), pushed by the shell on the
+    // SAME `runtime:theme` event as appearance.
+    let currentThemeConfig: ThemeConfig = DEFAULT_THEME_CONFIG;
+    const themeConfigListeners = new Set<(config: ThemeConfig) => void>();
     const parseThemeAppearance = (payload: unknown): ThemeAppearance | null => {
         const appearance = typeof payload === "string"
             ? payload
@@ -53,7 +58,28 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
             return appearance;
         return null;
     };
+    const parseThemeConfig = (payload: unknown): ThemeConfig | null => {
+        const config = (payload as { config?: unknown } | null)?.config;
+        if (!config || typeof config !== "object") return null;
+        const c = config as Record<string, unknown>;
+        if (typeof c["accentColor"] !== "string" || typeof c["grayColor"] !== "string") return null;
+        return {
+            accentColor: c["accentColor"],
+            grayColor: c["grayColor"],
+            radius: (c["radius"] as ThemeConfig["radius"]) ?? DEFAULT_THEME_CONFIG.radius,
+            scaling: (c["scaling"] as ThemeConfig["scaling"]) ?? DEFAULT_THEME_CONFIG.scaling,
+            panelBackground:
+                (c["panelBackground"] as ThemeConfig["panelBackground"]) ??
+                DEFAULT_THEME_CONFIG.panelBackground,
+        };
+    };
+    const applyThemeConfig = (config: ThemeConfig) => {
+        currentThemeConfig = config;
+        for (const listener of themeConfigListeners) listener(currentThemeConfig);
+    };
     const onThemeEvent = (payload: unknown) => {
+        const config = parseThemeConfig(payload);
+        if (config) applyThemeConfig(config);
         const theme = parseThemeAppearance(payload);
         if (!theme)
             return;
@@ -65,6 +91,16 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     // - Electron: via __natstackElectron.addEventListener
     // - Server WS: via rpc.on (for both Electron and standalone)
     const themeUnsubscribers = [rpc.on("runtime:theme", (event) => onThemeEvent(event.payload))];
+    // Best-effort boot fetch: a late-loaded panel converges to a user-changed
+    // accent without waiting for the next theme push. Non-panel/worker contexts
+    // (no such main method) simply reject — swallow it.
+    void rpc
+        .call("main", "panel.getThemeConfig", [])
+        .then((cfg) => {
+            const parsed = parseThemeConfig({ config: cfg });
+            if (parsed) applyThemeConfig(parsed);
+        })
+        .catch(() => {});
     // Focus listeners — maintained as a direct set so Electron IPC events
     // can trigger them without going through the RPC bridge.
     const focusCallbacks = new Set<() => void>();
@@ -86,6 +122,17 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
                 focusUnsubscribers.splice(idx, 1);
         };
     };
+    // Command-palette dispatch: the shell runs a panel-contributed command and
+    // main pushes it back here as `runtime:palette-run`.
+    const paletteRunCallbacks = new Set<(commandId: string) => void>();
+    const onPaletteRunEvent = (payload: unknown) => {
+        const commandId = (payload as { commandId?: unknown } | null)?.commandId;
+        if (typeof commandId !== "string") return;
+        for (const cb of paletteRunCallbacks) cb(commandId);
+    };
+    const paletteUnsubscribers = [
+        rpc.on("runtime:palette-run", (event) => onPaletteRunEvent(event.payload)),
+    ];
     // Wire __natstackElectron events if available (Electron mode)
     const electron = (globalThis as any).__natstackShell ?? (globalThis as any).__natstackElectron;
     let electronListenerId: number | undefined;
@@ -99,6 +146,9 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
                 for (const cb of focusCallbacks)
                     cb();
             }
+            else if (event === "runtime:palette-run") {
+                onPaletteRunEvent(payload);
+            }
         });
     }
     const destroy = () => {
@@ -106,8 +156,14 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
             unsub();
         for (const unsub of focusUnsubscribers)
             unsub();
+        for (const unsub of paletteUnsubscribers)
+            unsub();
+        // Best-effort: drop our palette contributions on teardown.
+        void rpc.call("main", "palette.unregister", []).catch(() => {});
         focusUnsubscribers.length = 0;
         themeListeners.clear();
+        themeConfigListeners.clear();
+        paletteRunCallbacks.clear();
         if (electronListenerId !== undefined && electron?.removeEventListener) {
             electron.removeEventListener(electronListenerId);
         }
@@ -148,7 +204,23 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
             themeListeners.add(callback);
             return () => { themeListeners.delete(callback); };
         },
+        getThemeConfig: () => currentThemeConfig,
+        onThemeConfigChange: (callback: (config: ThemeConfig) => void) => {
+            callback(currentThemeConfig);
+            themeConfigListeners.add(callback);
+            return () => { themeConfigListeners.delete(callback); };
+        },
         onFocus,
+        registerPaletteCommands: (commands: PaletteCommand[]) => {
+            void rpc.call("main", "palette.register", [commands]).catch(() => {});
+        },
+        unregisterPaletteCommands: () => {
+            void rpc.call("main", "palette.unregister", []).catch(() => {});
+        },
+        onPaletteRun: (callback: (commandId: string) => void) => {
+            paletteRunCallbacks.add(callback);
+            return () => { paletteRunCallbacks.delete(callback); };
+        },
         expose: (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) => {
             rpc.expose(method, (request) => handler(...request.args));
         },

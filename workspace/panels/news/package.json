@@ -12,12 +12,14 @@
       "react/jsx-dev-runtime",
       "@radix-ui/themes",
       "@radix-ui/react-icons",
-      "@workspace/runtime"
+      "@workspace/runtime",
+      "@workspace/ui"
     ]
   },
   "dependencies": {
     "@natstack/shared": "workspace:*",
     "@workspace/agentic-chat": "workspace:*",
+    "@workspace/ui": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/channel-fork": "workspace:*",
     "@workspace/feeds": "workspace:*",

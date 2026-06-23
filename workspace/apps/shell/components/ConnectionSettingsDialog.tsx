@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Button, Dialog, Flex, Text, TextField, Callout, Box, Code, Tabs } from "@radix-ui/themes";
 import { ExclamationTriangleIcon, CheckCircledIcon } from "@radix-ui/react-icons";
+import { AppDialog } from "@workspace/ui";
 import { parseConnectLink } from "@natstack/shared/connect";
 import {
   incomingPairLink,
@@ -279,13 +280,14 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
   };
 
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Content maxWidth="680px">
-        <Dialog.Title>Remote server</Dialog.Title>
-        <Dialog.Description size="2" mb="3" color="gray">
-          Pair this app with a NatStack server running elsewhere.
-        </Dialog.Description>
-
+    <AppDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      maxWidth="680px"
+      title="Remote server"
+      description="Pair this app with a NatStack server running elsewhere."
+    >
+      <Box mt="3">
         {current?.isActive ? (
           <Callout.Root size="1" color="green" mb="3">
             <Callout.Text>
@@ -484,8 +486,8 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
             </Button>
           </Flex>
         </Flex>
-      </Dialog.Content>
-    </Dialog.Root>
+      </Box>
+    </AppDialog>
   );
 }
 

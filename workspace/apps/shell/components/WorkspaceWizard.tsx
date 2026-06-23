@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { Button, Callout, Dialog, Flex, Select, Spinner, Text, TextField } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
+import { AppDialog } from "@workspace/ui";
 
 import {
   wizardDialogOpenAtom,
@@ -48,15 +49,14 @@ export function WorkspaceWizard() {
   };
 
   return (
-    <Dialog.Root open={isOpen} onOpenChange={(open) => !open && handleClose()}>
-      <Dialog.Content maxWidth="450px">
-        <Dialog.Title>Create New Workspace</Dialog.Title>
-        <Dialog.Description size="2" color="gray" mb="4">
-          Create a new workspace. Fork from an existing workspace to copy its panels and packages,
-          or start with an empty workspace.
-        </Dialog.Description>
-
-        <Flex direction="column" gap="4">
+    <AppDialog
+      open={isOpen}
+      onOpenChange={(open) => !open && handleClose()}
+      maxWidth="450px"
+      title="Create New Workspace"
+      description="Create a new workspace. Fork from an existing workspace to copy its panels and packages, or start with an empty workspace."
+    >
+      <Flex direction="column" gap="4" mt="4">
           <Flex direction="column" gap="3">
             <Text size="2" weight="medium">
               Workspace Name
@@ -141,7 +141,6 @@ export function WorkspaceWizard() {
             {isCreating ? "Creating..." : "Create Workspace"}
           </Button>
         </Flex>
-      </Dialog.Content>
-    </Dialog.Root>
+    </AppDialog>
   );
 }

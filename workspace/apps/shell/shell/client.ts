@@ -19,6 +19,7 @@ import { menuMethods } from "@natstack/shared/serviceSchemas/menu";
 import { notificationMethods } from "@natstack/shared/serviceSchemas/notification";
 import { panelMethods } from "@natstack/shared/serviceSchemas/panel";
 import { panelTreeMethods } from "@natstack/shared/serviceSchemas/panelTree";
+import { paletteMethods } from "@natstack/shared/serviceSchemas/palette";
 import { remoteCredMethods } from "@natstack/shared/serviceSchemas/remoteCred";
 import { settingsMethods } from "@natstack/shared/serviceSchemas/settings";
 import { shellApprovalMethods } from "@natstack/shared/serviceSchemas/shellApproval";
@@ -84,6 +85,9 @@ const panelClient = createTypedServiceClient("panel", panelMethods, (service, me
 const panelTreeClient = createTypedServiceClient("panelTree", panelTreeMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
+const paletteClient = createTypedServiceClient("palette", paletteMethods, (service, method, args) =>
+  rpc.call("main", `${service}.${method}`, args)
+);
 const notificationClient = createTypedServiceClient(
   "notification",
   notificationMethods,
@@ -118,7 +122,9 @@ const workspaceClient = createTypedServiceClient(
 import type {
   ThemeMode,
   ThemeAppearance,
+  ThemeConfig,
   MovePanelRequest,
+  PaletteCommand,
 } from "@natstack/shared/types";
 import type { BrowserNavigationIntent } from "@natstack/shared/panelCommands";
 import type {
@@ -147,12 +153,13 @@ export const panel = {
   getTree: async () => (await panelTreeClient.getTreeSnapshot()).rootPanels,
   getTreeSnapshot: () => panelTreeClient.getTreeSnapshot(),
   getFocusedPanelId: () => panelTreeClient.getFocusedPanelId(),
-  ensureLoaded: (panelId: string) => panelTreeClient.ensureLoaded(panelId),
+  ensureLoaded: (panelId: string) => panelClient.ensureLoaded(panelId),
   updateTheme: (theme: ThemeAppearance) => panelClient.updateTheme(theme),
+  updateThemeConfig: (config: ThemeConfig) => panelClient.updateThemeConfig(config),
   openDevTools: (panelId: string) => panelTreeClient.openDevTools(panelId),
   getChromeState: (panelId: string) => panelClient.getChromeState(panelId),
   getRuntimeLease: (panelId: string) => panelTreeClient.getRuntimeLease(panelId),
-  takeOver: (panelId: string) => panelTreeClient.takeOver(panelId),
+  takeOver: (panelId: string) => panelClient.takeOver(panelId),
   getAddressOptions: (source: string, ref?: string) => panelClient.getAddressOptions(source, ref),
   getBrowserAddressOptions: (query: string) => panelClient.getBrowserAddressOptions(query),
   markBrowserNavigationIntent: (panelId: string, intent: BrowserNavigationIntent) =>
@@ -244,6 +251,15 @@ export const panel = {
   setCollapsed: (panelId: string, collapsed: boolean) =>
     panelTreeClient.setCollapsed(panelId, collapsed),
   expandIds: (panelIds: string[]) => panelTreeClient.expandIds(panelIds),
+};
+// =============================================================================
+// Palette Service (chrome lists + dispatches panel-contributed commands)
+// =============================================================================
+export const palette = {
+  register: (commands: PaletteCommand[]) => paletteClient.register(commands),
+  unregister: () => paletteClient.unregister(),
+  list: () => paletteClient.list(),
+  run: (panelId: string, commandId: string) => paletteClient.run(panelId, commandId),
 };
 // =============================================================================
 // View Service

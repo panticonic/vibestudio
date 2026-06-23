@@ -1,5 +1,6 @@
 import { Component, type ReactNode, type ErrorInfo } from "react";
 import { Flex, Text, Button } from "@radix-ui/themes";
+import { Surface, Stack } from "@workspace/ui";
 
 interface Props {
   children: ReactNode;
@@ -39,21 +40,29 @@ export class ChunkErrorBoundary extends Component<Props, State> {
     if (this.state.error) {
       return (
         <Flex
-          direction="column"
           align="center"
           justify="center"
-          gap="3"
-          style={{ height: "100dvh" }}
+          style={{ height: "100dvh", padding: "var(--space-5)", background: "var(--surface-panel)" }}
         >
-          <Text size="3" weight="medium" color="red">
-            Failed to load application
-          </Text>
-          <Text size="2" color="gray">
-            {this.state.error.message}
-          </Text>
-          <Button variant="soft" onClick={this.handleRetry}>
-            Retry
-          </Button>
+          <Surface
+            level="raised"
+            elevation={2}
+            bordered
+            padding="5"
+            style={{ maxWidth: 420, width: "100%" }}
+          >
+            <Stack gap="3" align="center">
+              <Text size="3" weight="medium" style={{ color: "var(--intent-error)" }}>
+                Failed to load application
+              </Text>
+              <Text size="2" color="gray" align="center">
+                {this.state.error.message}
+              </Text>
+              <Button variant="soft" className="app-touch-target" onClick={this.handleRetry}>
+                Retry
+              </Button>
+            </Stack>
+          </Surface>
         </Flex>
       );
     }
