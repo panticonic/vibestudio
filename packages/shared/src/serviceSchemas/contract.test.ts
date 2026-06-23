@@ -10,13 +10,13 @@ import { blobstoreMethods } from "./blobstore.js";
 import { buildMethods } from "./build.js";
 import { corsApprovalMethods } from "./corsApproval.js";
 import { credentialsMethods } from "./credentials.js";
+import { docsMethods } from "./docs.js";
 import { eventsMethods } from "./events.js";
 import { extensionsMethods } from "./extensions.js";
 import { externalOpenMethods } from "./externalOpen.js";
 import { fsMethods } from "./fs.js";
 import { gitInteropMethods } from "./gitInterop.js";
 import { menuMethods } from "./menu.js";
-import { metaMethods } from "./meta.js";
 import { notificationMethods } from "./notification.js";
 import { paletteMethods } from "./palette.js";
 import { panelMethods } from "./panel.js";
@@ -50,13 +50,13 @@ const serviceTables: ServiceTable[] = [
   { service: "build", file: "build.ts", methods: buildMethods },
   { service: "corsApproval", file: "corsApproval.ts", methods: corsApprovalMethods },
   { service: "credentials", file: "credentials.ts", methods: credentialsMethods },
+  { service: "docs", file: "docs.ts", methods: docsMethods },
   { service: "events", file: "events.ts", methods: eventsMethods },
   { service: "extensions", file: "extensions.ts", methods: extensionsMethods },
   { service: "externalOpen", file: "externalOpen.ts", methods: externalOpenMethods },
   { service: "fs", file: "fs.ts", methods: fsMethods },
   { service: "gitInterop", file: "gitInterop.ts", methods: gitInteropMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
-  { service: "meta", file: "meta.ts", methods: metaMethods },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
   { service: "palette", file: "palette.ts", methods: paletteMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },

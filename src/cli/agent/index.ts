@@ -1,5 +1,5 @@
 import type { RuntimeEntityHandle } from "@natstack/shared/runtime/entitySpec";
-import { metaMethods } from "@natstack/shared/serviceSchemas/meta";
+import { docsMethods } from "@natstack/shared/serviceSchemas/docs";
 import { runtimeMethods } from "@natstack/shared/serviceSchemas/runtime";
 import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
@@ -313,14 +313,15 @@ async function call(inv: ParsedInvocation): Promise<number> {
 async function services(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const meta = typedClient("meta", metaMethods, new RpcClient(requireWorkspaceCredentials()));
+    const docs = typedClient("docs", docsMethods, new RpcClient(requireWorkspaceCredentials()));
     const name = inv.positionals[0];
     if (name) {
-      const def = await meta.describeService(name);
+      const def = await docs.describeService(name);
+      if (!def) return printError(new Error(`Unknown service: ${name}`), { json });
       printResult(def, { json });
       return 0;
     }
-    const defs = await meta.listServices();
+    const defs = await docs.listServices();
     printResult(defs, {
       json,
       human: () => {

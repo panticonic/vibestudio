@@ -25,7 +25,7 @@ against that session's context (fs/git/vcs) automatically.
 |---------|------------|
 | `rpc.call(method, args)` | Raw RPC: `await rpc.call("vcs.status", ["ctx:" + ctx.contextId])` |
 | `rpc.callTarget(targetId, method, args)` | Call a runtime entity (DO/worker) by target id, e.g. after `workers.resolveService`: `const svc = await rpc.call("workers.resolveService", ["natstack.testkit-driver.v1", null]); await rpc.callTarget(svc.targetId, "ping", [])` |
-| `services` | Proxy over rpc: `await services.meta.listServices()` ≡ `rpc.call("meta.listServices", [])` |
+| `services` | Proxy over rpc: `await services.docs.listServices()` ≡ `rpc.call("docs.listServices", [])` |
 | `fs` | Context-bound fs service — the session contextId is injected as the first arg: `await fs.readdir("/")`, `await fs.grep("TODO", {})` |
 | `ctx` | `{contextId, sessionId, workspaceId, serverUrl}` |
 | `scope` | Persistent REPL scope (see below): `scope.results = data` survives across runs |

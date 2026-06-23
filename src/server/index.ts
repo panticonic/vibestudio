@@ -2987,11 +2987,14 @@ async function main() {
   await registerPanelServices(commonDeps);
 
   {
-    const { createMetaService } = await import("./services/metaService.js");
     const { panelRuntimeSurface } = await import("@natstack/shared/runtimeSurface.panel");
     const { workerRuntimeSurface } = await import("@natstack/shared/runtimeSurface.worker");
+    // Agent-facing capability catalog (caller-aware discovery) — the single
+    // introspection surface; it absorbed the former `meta` service
+    // (listServices/describeService now live on `docs`).
+    const { createDocsService } = await import("./services/docsService.js");
     container.registerRpc(
-      createMetaService({
+      createDocsService({
         dispatcher,
         runtimeSurfaces: {
           panel: panelRuntimeSurface,

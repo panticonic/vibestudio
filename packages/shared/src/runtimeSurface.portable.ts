@@ -158,7 +158,15 @@ export const WEBHOOKS_MEMBERS = [
 export const EXTENSIONS_MEMBERS = ["use", "invoke", "on", "list", "reload"];
 export const APPROVALS_MEMBERS = ["request", "revoke", "list"];
 export const NOTIFICATIONS_MEMBERS = ["show", "dismiss"];
-export const PANEL_TREE_MEMBERS = ["self", "get", "list", "roots", "children", "parent", "navigate"];
+export const PANEL_TREE_MEMBERS = [
+  "self",
+  "get",
+  "list",
+  "roots",
+  "children",
+  "parent",
+  "navigate",
+];
 
 /**
  * The full portable surface — every key `createHostedRuntime` returns. Entries
@@ -171,7 +179,7 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   contextId: valueEntry(),
   rpc: valueEntry("Portable RPC client (the full createRpcClient)."),
   fs: valueEntry(),
-  callMain: valueEntry("Call a `main` (server) service method: callMain(\"fs.readFile\", path)."),
+  callMain: valueEntry('Call a `main` (server) service method: callMain("fs.readFile", path).'),
   parent: valueEntry("This runtime's parent panel handle (a no-panel handle when there is none)."),
   getParent: valueEntry("Get the parent panel handle, or null when there is no parent."),
   getParentWithContract: valueEntry("Get the parent handle typed by a panel contract, or null."),
@@ -189,18 +197,19 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
   getPanelHandle: valueEntry("Get a handle to a panel by id."),
   workers: namespaceEntry(WORKERS_MEMBERS),
   workspace: namespaceEntry(WORKSPACE_MEMBERS),
-  credentials: namespaceEntry(CREDENTIALS_MEMBERS),
+  credentials: namespaceEntry(CREDENTIALS_MEMBERS, undefined, "credentials"),
   git: namespaceEntry(GIT_MEMBERS),
-  vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION),
+  vcs: namespaceEntry(VCS_MEMBERS, VCS_DESCRIPTION, "vcs"),
   gad: namespaceEntry(GAD_MEMBERS),
   blobstore: namespaceEntry(
     BLOBSTORE_MEMBERS,
-    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Persist large artifacts/screenshots and return the digest."
+    "Per-workspace content-addressable blob store: putText/putBase64 store, getText/getRange/getRangeBytes/getBase64 fetch, grep searches; returns a sha256 digest. Persist large artifacts/screenshots and return the digest.",
+    "blobstore"
   ),
   webhooks: namespaceEntry(WEBHOOKS_MEMBERS),
-  extensions: namespaceEntry(EXTENSIONS_MEMBERS),
+  extensions: namespaceEntry(EXTENSIONS_MEMBERS, undefined, "extensions"),
   approvals: namespaceEntry(APPROVALS_MEMBERS),
-  notifications: namespaceEntry(NOTIFICATIONS_MEMBERS),
+  notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),
   panelTree: namespaceEntry(PANEL_TREE_MEMBERS),
 };
 

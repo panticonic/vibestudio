@@ -11,7 +11,7 @@ import { eventsMethods } from "@natstack/shared/serviceSchemas/events";
 import { externalOpenMethods } from "@natstack/shared/serviceSchemas/externalOpen";
 import { fsMethods } from "@natstack/shared/serviceSchemas/fs";
 import { blobstoreMethods } from "@natstack/shared/serviceSchemas/blobstore";
-import { metaMethods } from "@natstack/shared/serviceSchemas/meta";
+import { docsMethods } from "@natstack/shared/serviceSchemas/docs";
 import { EVAL_AMBIENT_ONLY } from "@natstack/shared/runtimeSurface.eval";
 import { buildOwnerBindings } from "./evalOwnerBindings.js";
 import { ConsoleStreamer } from "./consoleStreamer.js";
@@ -35,6 +35,10 @@ import {
   type RuntimeHost,
   type WorkspaceRuntime,
 } from "@workspace/runtime/hosted";
+// Pure authoring helpers (z, defineContract, Rpc, path/context utils, journal …)
+// — seeded into eval's `@workspace/runtime` module so eval matches panel/worker,
+// where they arrive via the barrel `export * from "../shared/portable.js"`.
+import * as portableHelpers from "@workspace/runtime/portable";
 
 /**
  * EvalDO — the blessed, per-owner unsafe-eval kernel.
@@ -111,7 +115,7 @@ interface EvalEngine {
 type GlobalBag = Record<string, unknown>;
 type FsClient = TypedServiceClient<typeof fsMethods>;
 type BlobstoreClient = TypedServiceClient<typeof blobstoreMethods>;
-type MetaClient = TypedServiceClient<typeof metaMethods>;
+type DocsClient = TypedServiceClient<typeof docsMethods>;
 type EventsClient = TypedServiceClient<typeof eventsMethods>;
 type ExternalOpenClient = TypedServiceClient<typeof externalOpenMethods>;
 
@@ -152,6 +156,9 @@ interface RunArgs {
   runId?: string;
   /** Opt-in deadline; the run is aborted after this many ms. Absent ⇒ unbounded. */
   timeoutMs?: number;
+  /** Read-only containment: outbound service calls from this run are dispatched
+   *  with ctx.readOnly, so the server refuses any non-`read` method. */
+  readOnly?: boolean;
 }
 
 interface RunResult {
@@ -183,7 +190,7 @@ export class EvalDO extends DurableObjectBase {
   private buildClient: BuildServiceClient | null = null;
   private fsClient: FsClient | null = null;
   private blobstoreClient: BlobstoreClient | null = null;
-  private metaClient: MetaClient | null = null;
+  private docsClient: DocsClient | null = null;
   private eventsClient: EventsClient | null = null;
   private externalOpenClient: ExternalOpenClient | null = null;
   /**
@@ -205,6 +212,15 @@ export class EvalDO extends DurableObjectBase {
    * is reflected even though `hostedRuntime` is cached (the closure reads it live).
    */
   private parentMeta: RunArgs["parent"] | null = null;
+
+  /**
+   * Read-only containment for the current run (`RunArgs.readOnly`). Read LIVE by
+   * the cached hosted-runtime rpc wrapper, `callMainService`, and this run's
+   * `callOptions`, so every service call the eval makes carries `readOnly` and the
+   * server dispatcher refuses non-`read` methods. Per-run like `parentMeta`
+   * (overwritten each run; the cached closures read it live).
+   */
+  private currentRunReadOnly = false;
 
   /**
    * Per-OBJECT module registry passed to the engine on every run. Many owners' EvalDOs share
@@ -289,7 +305,13 @@ export class EvalDO extends DurableObjectBase {
     service: string,
     method: string,
     args: unknown[]
-  ): Promise<unknown> => this.rpc.call("main", `${service}.${method}`, args);
+  ): Promise<unknown> =>
+    this.rpc.call(
+      "main",
+      `${service}.${method}`,
+      args,
+      this.currentRunReadOnly ? { readOnly: true } : undefined
+    );
 
   private mainBuild(): BuildServiceClient {
     return (this.buildClient ??= createBuildServiceClient(this.callMainService));
@@ -307,10 +329,10 @@ export class EvalDO extends DurableObjectBase {
     ));
   }
 
-  private mainMeta(): MetaClient {
-    return (this.metaClient ??= createTypedServiceClient(
-      "meta",
-      metaMethods,
+  private mainDocs(): DocsClient {
+    return (this.docsClient ??= createTypedServiceClient(
+      "docs",
+      docsMethods,
       this.callMainService
     ));
   }
@@ -347,7 +369,7 @@ export class EvalDO extends DurableObjectBase {
     if (liveMethods.length === 0) return null;
     let serviceMethods: Record<string, unknown> = {};
     try {
-      const svc = (await this.mainMeta().describeService(name)) as {
+      const svc = (await this.mainDocs().describeService(name)) as {
         methods?: Record<string, unknown>;
       };
       serviceMethods = svc?.methods ?? {};
@@ -670,13 +692,17 @@ export class EvalDO extends DurableObjectBase {
     // The hosted runtime's `resolveParent` reads `this.parentMeta` live, so set it
     // before (re)building the host. Server-supplied; defaults to no parent.
     this.parentMeta = args.parent ?? null;
+    this.currentRunReadOnly = args.readOnly ?? false;
     const rt = this.ensureHostedRuntime(args.contextId ?? "", args.gatewayToken);
 
-    // Thread THIS run's abort signal into EVERY outbound rpc.call the eval makes, so a
-    // `cancel(runId)`/`forceReset()` that aborts `controller` unwinds a run wedged on an outbound
-    // call (the rpc client honors `options.signal` — client.ts rejects the pending request on abort)
-    // instead of leaving it stuck forever and blocking the run chain behind it.
-    const callOptions = signal ? { signal } : undefined;
+    // Thread THIS run's abort signal + read-only flag into EVERY outbound rpc.call the eval makes: the
+    // abort signal so a `cancel(runId)`/`forceReset()` that aborts `controller` unwinds a run wedged on
+    // an outbound call (the rpc client honors `options.signal`), and `readOnly` so a read-only run's
+    // service calls are refused by the server dispatcher unless they declare `sensitivity:"read"`.
+    const callOptions =
+      signal || args.readOnly
+        ? { ...(signal ? { signal } : {}), ...(args.readOnly ? { readOnly: true } : {}) }
+        : undefined;
     const rpcBinding = {
       // EVAL.md documents the 2-arg ambient sugar `rpc.call(method, args)` (targets "main"). For
       // ergonomics we ALSO accept the full-client habit `rpc.call(target, method, args)`
@@ -744,22 +770,26 @@ export class EvalDO extends DurableObjectBase {
           }
           // Not a rich runtime binding — a plain RPC service. It is STILL reachable: call it as
           // `services.${serviceName}.<method>(...)` (the complete proxy dispatches via callMain).
-          return this.mainMeta().describeService(serviceName);
+          return this.mainDocs().describeService(serviceName);
         }
         return {
-          services: await this.mainMeta().listServices(),
+          // Names only — keeps the eval scope lean. For a service's methods +
+          // typed schemas, call help('<name>') (rich bindings show the ergonomic
+          // surface) or use the docs_open/docs_search tools (raw catalog).
+          services: (await this.mainDocs().listServices()).map((s) => s.name),
           importable: Object.keys(rt).sort(),
           ambient: [...EVAL_AMBIENT_ONLY],
           guidance:
-            "Every service listed in `services` is reachable as `services.<name>.<method>(...)` — the " +
-            "`services` binding is COMPLETE (no advertised-but-unreachable gaps). For rich runtime " +
-            "bindings (fs, vcs, credentials, blobstore, gad, workers, …) `services.<name>` is the SAME " +
-            "ergonomic client as the bare import; every other service is a uniform proxy over " +
-            "callMain. Call help('<name>') for a binding's methods — for the rich bindings this " +
-            "describes what you actually call (e.g. fs.open()→FileHandle), not the raw RPC service. " +
-            '`importable` names come from `import {…} from "@workspace/runtime"`; `ambient` names are ' +
-            "pre-injected globals (do NOT import them). Use the `imports` parameter for npm/workspace " +
-            "packages. Full reference: skills/sandbox/EVAL.md.",
+            "Every name in `services` is reachable as `services.<name>.<method>(...)` — the `services` " +
+            "binding is COMPLETE (no advertised-but-unreachable gaps). For rich runtime bindings (fs, " +
+            "vcs, credentials, blobstore, gad, workers, …) `services.<name>` is the SAME ergonomic " +
+            "client as the bare import; every other service is a uniform proxy over callMain. Call " +
+            "help('<name>') for a binding's methods — for the rich bindings this describes what you " +
+            "actually call (e.g. fs.open()→FileHandle), not the raw RPC service; or use the " +
+            "docs_search/docs_open tools for full typed schemas in the service/runtime catalog. `importable` " +
+            'names come from `import {…} from "@workspace/runtime"`; `ambient` names are pre-injected ' +
+            "globals (do NOT import them). Use the `imports` parameter for npm/workspace packages. " +
+            "Full reference: skills/sandbox/EVAL.md.",
         };
       },
     };
@@ -995,7 +1025,27 @@ export class EvalDO extends DurableObjectBase {
       }
       return this.hostedRuntime;
     }
-    const rpc = this.rpc;
+    // Read-only containment: wrap outbound calls so that when the current run is read-only
+    // (set per-run in runLocked, read live like `parentMeta`), every service call the hosted
+    // runtime / `services` proxy makes carries `readOnly`. Only `.call` is intercepted; the rest
+    // of the client delegates unchanged. DO-infrastructure calls use `this.rpc` directly (unwrapped),
+    // so durable/trajectory writes are never read-only-blocked.
+    const baseRpc = this.rpc;
+    const rpc = new Proxy(baseRpc, {
+      get: (t, prop, receiver) =>
+        prop === "call"
+          ? (...callArgs: unknown[]) => {
+              const opts = callArgs[3] as Record<string, unknown> | undefined;
+              const merged = this.currentRunReadOnly ? { ...opts, readOnly: true } : opts;
+              return (baseRpc.call as (...a: unknown[]) => Promise<unknown>)(
+                callArgs[0],
+                callArgs[1],
+                callArgs[2],
+                merged
+              );
+            }
+          : Reflect.get(t, prop, receiver),
+    }) as typeof baseRpc;
     const gatewayConfig = {
       serverUrl: String(this.env["GATEWAY_URL"] ?? ""),
       token,
@@ -1033,7 +1083,9 @@ export class EvalDO extends DurableObjectBase {
           : null,
     };
     const rt = createHostedRuntime(host);
-    this.moduleMap["@workspace/runtime"] = rt;
+    // `@workspace/runtime` in eval = the hosted runtime instance + the pure
+    // authoring helpers (z/defineContract/journal/…), matching panel/worker barrels.
+    this.moduleMap["@workspace/runtime"] = { ...rt, ...portableHelpers };
     this.hostedRuntime = rt;
     this.hostedRuntimeIdentity = { contextId, gatewayToken: token };
     return rt;

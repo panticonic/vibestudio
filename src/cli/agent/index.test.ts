@@ -403,14 +403,14 @@ describe("natstack agent commands", () => {
     await expect(main(["agent", "call", "nope.nope", "--json"])).resolves.toBe(1);
   });
 
-  it("services lists and describes via the meta service", async () => {
+  it("services lists and describes via the docs service", async () => {
     writeCredentials(tmpDir);
     const { main } = await import("../client.js");
     const { rpcBodies } = stubServer((body) => {
-      if (body.method === "meta.listServices") {
+      if (body.method === "docs.listServices") {
         return [{ name: "runtime", description: "Runtime entity creation" }];
       }
-      if (body.method === "meta.describeService") {
+      if (body.method === "docs.describeService") {
         return { name: "runtime", policy: { allowed: ["shell"] }, methods: {} };
       }
       throw new Error(`unexpected method ${body.method}`);
@@ -420,7 +420,7 @@ describe("natstack agent commands", () => {
     expect(jsonOutput()).toEqual([{ name: "runtime", description: "Runtime entity creation" }]);
 
     await expect(main(["agent", "services", "runtime", "--json"])).resolves.toBe(0);
-    expect(rpcBodies[1]).toEqual({ method: "meta.describeService", args: ["runtime"] });
+    expect(rpcBodies[1]).toEqual({ method: "docs.describeService", args: ["runtime"] });
   });
 
   it("diag hits workspace.units.diagnostics and prints JSON", async () => {

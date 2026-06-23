@@ -383,7 +383,7 @@ natstack remote pair "natstack://connect?url=...&code=..."   # store the device 
 natstack agent attach            # create a durable session entity + context folder
 natstack fs ls /                 # files inside the session context
 natstack vcs status --repo panels/notes
-natstack eval run -e 'return await services.meta.listServices()'
+natstack eval run -e 'return await services.docs.listServices()'
 natstack agent call SERVICE.METHOD 'ARGS_JSON'               # any shell-callable RPC
 ```
 

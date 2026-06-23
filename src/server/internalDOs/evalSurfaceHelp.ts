@@ -26,7 +26,7 @@ export const EVAL_RUNTIME_METHOD_NOTES: Record<string, { description: string }> 
 /**
  * Disambiguate the eval ambient `rpc.call` arguments. EVAL.md documents the 2-arg sugar
  * `call(method, args)` (targets the server, "main"); for ergonomics we ALSO accept the full-client
- * habit `call(target, method, args)` (e.g. `call("main", "meta.describeService", [...])` or a
+ * habit `call(target, method, args)` (e.g. `call("main", "docs.describeService", [...])` or a
  * runtime-id target). They're told apart by whether the 2nd arg is a method STRING (→ 3-arg) vs an
  * args ARRAY / undefined (→ 2-arg). Returns the resolved `[target, method, args]`.
  */
