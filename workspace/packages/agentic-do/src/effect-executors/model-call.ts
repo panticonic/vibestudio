@@ -818,12 +818,28 @@ export function toProtocolBlocks(content: unknown[], messageId: string): unknown
           ? { thoughtSignature: record["thoughtSignature"] }
           : {}),
       });
+      // Recover name/args from the alternate keys some provider/pi-ai tool-call shapes
+      // use (`toolName`/`functionName`; `input`/`args`). A missing `name` here is the
+      // origin of the nameless "invocation" pill some tools (e.g. docs_*) showed.
+      const name = String(
+        record["name"] ?? record["toolName"] ?? record["functionName"] ?? ""
+      );
+      const args = record["arguments"] ?? record["input"] ?? record["args"];
+      if (!name) {
+        // Diagnostic: the model block carried no usable tool name even after the
+        // fallbacks. Log its shape so we can see whether the name lives under yet
+        // another key, or is genuinely absent from the provider's tool-call.
+        console.warn(
+          "[model-call] toolCall block has no usable name; raw block:",
+          JSON.stringify({ keys: Object.keys(record), block: record })?.slice(0, 1000)
+        );
+      }
       return [
         {
           type: "toolCall",
           id: String(record["id"] ?? ""),
-          name: String(record["name"] ?? ""),
-          arguments: record["arguments"],
+          name,
+          arguments: args,
           ...(metadata ? { metadata } : {}),
         },
       ];

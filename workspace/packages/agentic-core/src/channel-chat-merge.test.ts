@@ -140,6 +140,127 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("recovers docs_open name + args from a catalog-entry result when the tool name is lost", () => {
+    // Model tool-calls for docs_* arrive nameless/argless in the invocation event.
+    // The catalog shape of result.details lets the projection recover a useful pill
+    // ("Docs open · blobstore.getText") instead of a bare "invocation".
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-docs") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "invocation", request: {} },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const completed: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-docs") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: {
+          content: [{ type: "text", text: "# blobstore.getText  (service)" }],
+          details: {
+            id: "service:blobstore.getText",
+            surface: "service",
+            qualifiedName: "blobstore.getText",
+            title: "blobstore.getText",
+            description: "Full UTF-8 text of a blob, or null if absent.",
+          },
+        },
+        terminalOutcome: "success",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const state = [envelope(started, 1), envelope(completed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+    expect(chatMessagesFromChannelView(state)[0]?.invocation).toMatchObject({
+      name: "docs_open",
+      arguments: { id: "service:blobstore.getText" },
+    });
+  });
+
+  it("recovers docs_search name from a catalog-hit array result", () => {
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-search") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "invocation", request: {} },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const completed: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-search") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: {
+          content: [{ type: "text", text: "2 results" }],
+          details: [
+            {
+              id: "service:blobstore.putText",
+              surface: "service",
+              qualifiedName: "blobstore.putText",
+              title: "blobstore.putText",
+            },
+            {
+              id: "service:blobstore.getText",
+              surface: "service",
+              qualifiedName: "blobstore.getText",
+              title: "blobstore.getText",
+            },
+          ],
+        },
+        terminalOutcome: "success",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const state = [envelope(started, 1), envelope(completed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+    expect(chatMessagesFromChannelView(state)[0]?.invocation).toMatchObject({
+      name: "docs_search",
+    });
+  });
+
+  it("recovers docs_search name from an empty catalog-hit result", () => {
+    const started: AgenticEvent<"invocation.started"> = {
+      kind: "invocation.started",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-empty-search") },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, name: "invocation", request: {} },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const completed: AgenticEvent<"invocation.completed"> = {
+      kind: "invocation.completed",
+      actor: agent,
+      causality: { invocationId: brandId<InvocationId>("inv-empty-search") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: 'No catalog matches for "zz-nope". Try broader keywords, or a different surface.',
+            },
+          ],
+          details: [],
+        },
+        terminalOutcome: "success",
+      },
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const state = [envelope(started, 1), envelope(completed, 2)].reduce(
+      reduceChannelView,
+      createInitialChannelViewState()
+    );
+    expect(chatMessagesFromChannelView(state)[0]?.invocation).toMatchObject({
+      name: "docs_search",
+    });
+  });
+
   it("projects failed invocation error payloads into copyable expanded error data", () => {
     const started: AgenticEvent<"invocation.started"> = {
       kind: "invocation.started",
@@ -452,7 +573,11 @@ describe("chatMessagesFromChannelView", () => {
         protocol: AGENTIC_PROTOCOL_VERSION,
         role: "assistant",
         blocks: [
-          { blockId: brandId<BlockId>("msg-legacy:block:0"), type: "text", content: "let me check" },
+          {
+            blockId: brandId<BlockId>("msg-legacy:block:0"),
+            type: "text",
+            content: "let me check",
+          },
           { type: "toolCall", id: "tc-9", name: "read" } as never,
         ],
         outcome: "completed",

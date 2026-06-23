@@ -605,11 +605,20 @@ function projectedInvocationToChatMessage(invocation: ProjectedInvocation): Chat
     meaningfulInvocationName(invocation.name) ??
     meaningfulInvocationName(inferred.name) ??
     "invocation";
+  // Prefer the recorded tool-call request; fall back to the inferred request when the
+  // recorded one is absent OR empty (docs_* model tool-calls arrive argless, so `{}`
+  // would otherwise win over the request recovered from the result).
+  const request =
+    invocation.request &&
+    typeof invocation.request === "object" &&
+    Object.keys(invocation.request as Record<string, unknown>).length > 0
+      ? invocation.request
+      : (inferred.request ?? invocation.request);
   const payload: InvocationCardPayload = {
     id: invocation.invocationId,
     ...(invocation.transportCallId ? { transportCallId: invocation.transportCallId } : {}),
     name,
-    arguments: recordOrEmpty(invocation.request ?? inferred.request),
+    arguments: recordOrEmpty(request),
     execution: {
       status,
       ...(invocation.terminalOutcome ? { terminalOutcome: invocation.terminalOutcome } : {}),
@@ -898,6 +907,56 @@ function meaningfulInvocationName(value: unknown): string | undefined {
   return trimmed && trimmed !== "unknown" && trimmed !== "invocation" ? trimmed : undefined;
 }
 
+/**
+ * Recover a display for the `docs_search` / `docs_open` tools. Their model
+ * tool-call name + args don't survive into the invocation event (so the generic
+ * projection shows a nameless "invocation" pill with no args). Detect them by the
+ * catalog shape of `result.details` — a hit array or a single entry, both carrying
+ * `surface` + `qualifiedName` — and synthesize a name/summary/request.
+ */
+function inferDocsResultDisplay(
+  details: unknown,
+  content?: unknown
+): { name: string; summary?: string; request?: unknown } | undefined {
+  const isCatalogShape = (v: unknown): v is Record<string, unknown> =>
+    !!v &&
+    typeof v === "object" &&
+    typeof (v as Record<string, unknown>)["surface"] === "string" &&
+    typeof (v as Record<string, unknown>)["qualifiedName"] === "string";
+  if (Array.isArray(details)) {
+    if (details.length === 0 && contentLooksLikeEmptyDocsSearch(content)) {
+      return { name: "docs_search", summary: "0 results" };
+    }
+    return isCatalogShape(details[0])
+      ? {
+          name: "docs_search",
+          summary: `${details.length} result${details.length === 1 ? "" : "s"}`,
+        }
+      : undefined;
+  }
+  if (isCatalogShape(details)) {
+    return {
+      name: "docs_open",
+      summary: String(details["qualifiedName"]),
+      ...(typeof details["id"] === "string" ? { request: { id: details["id"] } } : {}),
+    };
+  }
+  return undefined;
+}
+
+function contentLooksLikeEmptyDocsSearch(content: unknown): boolean {
+  if (!Array.isArray(content)) return false;
+  return content.some((raw) => {
+    if (!raw || typeof raw !== "object") return false;
+    const block = raw as Record<string, unknown>;
+    return (
+      block["type"] === "text" &&
+      typeof block["text"] === "string" &&
+      block["text"].startsWith("No catalog matches for ")
+    );
+  });
+}
+
 function inferInvocationDisplay(value: unknown): {
   name?: string;
   request?: unknown;
@@ -914,6 +973,14 @@ function inferInvocationDisplay(value: unknown): {
     meaningfulInvocationName(record["toolName"]) ?? meaningfulInvocationName(record["name"]);
   const summary = typeof record["summary"] === "string" ? record["summary"] : undefined;
   const details = record["details"];
+  const docs = inferDocsResultDisplay(details, record["content"]);
+  if (docs) {
+    return {
+      name: name ?? docs.name,
+      summary: summary ?? docs.summary,
+      ...(docs.request !== undefined ? { request: docs.request } : {}),
+    };
+  }
   if (!details || typeof details !== "object" || Array.isArray(details)) return { name, summary };
   const detailRecord = details as Record<string, unknown>;
   return {

@@ -16,6 +16,8 @@ import {
   createWriteTool,
   createCloseTurnWithoutResponseTool,
   createEvalTool,
+  createDocsSearchTool,
+  createDocsOpenTool,
   createWebTools,
   createToolVcs,
   loadNatStackResources,
@@ -283,6 +285,14 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         // Scope the agent's EvalDO per channel (matches the old per-(channel,panel) scope),
         // so one multi-channel agent doesn't share REPL scope/db across unrelated chats.
         { subKey: channelId }
+      ),
+      // Capability discovery: search/open the caller-aware catalog (services
+      // and runtime APIs) with typed schemas + access rules.
+      createDocsSearchTool(<T>(method: string, methodArgs: unknown[]) =>
+        this.rpc.call<T>("main", method, methodArgs)
+      ),
+      createDocsOpenTool(<T>(method: string, methodArgs: unknown[]) =>
+        this.rpc.call<T>("main", method, methodArgs)
       ),
       createCloseTurnWithoutResponseTool(),
       this.createAskUserTool(),

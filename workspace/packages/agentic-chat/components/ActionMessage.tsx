@@ -7,6 +7,7 @@ import type { ChatSandboxValue } from "@workspace/agentic-core";
 import { ExpandableChevron } from "./shared/Chevron";
 import { CollapsibleSection } from "./shared/CollapsibleSection";
 import { ToolArgumentsView, ToolDataView } from "./shared/ToolDataView";
+import { renderDocsToolResult } from "./tool-result-renderers/DocsResult";
 import { formatArgsSummary, formatInvocationPreview } from "./action-format";
 
 // ── Status helpers ─────────────────────────────────────────────────────────
@@ -329,7 +330,9 @@ export const ExpandedAction = React.memo(function ExpandedAction({
 
         {exec.result !== undefined && !isError && (
           <CollapsibleSection label="Result" defaultOpen={!isPending} color="green">
-            <ToolDataView value={exec.result} label="Result" chat={chat} />
+            {renderDocsToolResult(payload.name, exec.result) ?? (
+              <ToolDataView value={exec.result} label="Result" chat={chat} />
+            )}
           </CollapsibleSection>
         )}
 

@@ -1,0 +1,292 @@
+/**
+ * Capability-discovery tools — `docs_search` / `docs_open`.
+ *
+ * Thin RPC tools over the server `docs` service (the caller-aware capability
+ * catalog). `docs_search` returns compact hits; `docs_open` returns the full
+ * entry (typed args/returns JSON Schema, access/restrictedness, examples).
+ *
+ * The server catalog covers the implemented automatically documented surfaces:
+ * service RPC methods and runtime API namespaces.
+ */
+import { Type, type Static } from "@sinclair/typebox";
+import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
+
+/** Wire shapes (structural; mirror serviceSchemas/docs.ts). */
+export interface CatalogHit {
+  id: string;
+  surface: string;
+  qualifiedName: string;
+  title: string;
+  description?: string;
+}
+export interface CatalogEntry extends CatalogHit {
+  parent?: string;
+  access?: Record<string, unknown>;
+  argsSchema?: Record<string, unknown>;
+  returnsSchema?: Record<string, unknown>;
+  members?: string[];
+  examples?: unknown[];
+}
+
+const surfaceParam = Type.Optional(
+  Type.Union(
+    [Type.Literal("service"), Type.Literal("runtime")],
+    { description: "Restrict results to one surface." }
+  )
+);
+
+const searchSchema = Type.Object(
+  {
+    query: Type.String({
+      description:
+        "Keywords describing the capability you want, e.g. 'store a blob and get a digest'.",
+    }),
+    surface: surfaceParam,
+    limit: Type.Optional(
+      Type.Integer({ minimum: 1, maximum: 50, description: "Max results (default 20)." })
+    ),
+  },
+  { additionalProperties: false }
+);
+export type DocsSearchInput = Static<typeof searchSchema>;
+
+const openSchema = Type.Object(
+  {
+    id: Type.String({
+      description: "Catalog id from docs_search, e.g. 'service:blobstore.putText'.",
+    }),
+  },
+  { additionalProperties: false }
+);
+export type DocsOpenInput = Static<typeof openSchema>;
+
+const MAX_SCHEMA_CHARS = 6_000;
+
+function clamp(text: string, max: number): string {
+  return text.length <= max
+    ? text
+    : `${text.slice(0, max)}\n…[truncated ${text.length - max} chars]`;
+}
+
+export function createDocsSearchTool(
+  callMain: <T>(method: string, args: unknown[]) => Promise<T>
+): AgentTool<typeof searchSchema> {
+  return {
+    name: "docs_search",
+    label: "docs_search",
+    description:
+      "Search the capability catalog — server services and runtime APIs — by keyword. Returns compact hits filtered to what you may call; use docs_open(id) for the full typed schema, access rules, and examples.",
+    parameters: searchSchema,
+    execute: async (_toolCallId, params): Promise<AgentToolResult<CatalogHit[]>> => {
+      const serverHits = await callMain<CatalogHit[]>("docs.search", [
+        params.query,
+        { surface: params.surface, limit: params.limit },
+      ]);
+      const hits = serverHits.slice(0, params.limit ?? 20);
+      if (hits.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No catalog matches for "${params.query}". Try broader keywords, or a different surface.`,
+            },
+          ],
+          details: hits,
+        };
+      }
+      const lines = hits.map(
+        (h) => `${h.id}  —  ${h.title}${h.description ? `: ${h.description}` : ""}`
+      );
+      return {
+        content: [
+          {
+            type: "text",
+            text: `${lines.join("\n")}\n\n(${hits.length} result${hits.length === 1 ? "" : "s"}. Use docs_open("<id>") for the full schema, access rules, and examples.)`,
+          },
+        ],
+        details: hits,
+      };
+    },
+  };
+}
+
+type JsonSchema = Record<string, unknown>;
+
+/**
+ * Render a JSON-Schema node (as emitted by zod-to-json-schema, openApi3 target)
+ * as a readable TypeScript-ish type — far more legible for an agent than a raw
+ * `JSON.stringify(schema)` dump. Unknown shapes degrade to their `type` or
+ * "unknown"; the precise schema is still available via `docs.getSchema`.
+ */
+function typeString(schema: unknown): string {
+  if (!schema || typeof schema !== "object") return "unknown";
+  const s = schema as JsonSchema;
+  if (s["nullable"] === true) {
+    const inner = { ...s };
+    delete inner["nullable"];
+    return `${typeString(inner)} | null`;
+  }
+  if (Array.isArray(s["enum"])) {
+    return (s["enum"] as unknown[]).map((v) => JSON.stringify(v)).join(" | ");
+  }
+  if ("const" in s) return JSON.stringify(s["const"]);
+  const union = (s["anyOf"] ?? s["oneOf"]) as unknown[] | undefined;
+  if (Array.isArray(union)) return union.map(typeString).join(" | ");
+  const t = s["type"];
+  if (Array.isArray(t)) return t.map(String).join(" | ");
+  switch (t) {
+    case "string": {
+      if (typeof s["pattern"] === "string") return `string /${s["pattern"] as string}/`;
+      if (typeof s["format"] === "string") return `string (${s["format"] as string})`;
+      return "string";
+    }
+    case "integer":
+      return "integer";
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "null":
+      return "null";
+    case "array": {
+      const items = s["items"];
+      if (Array.isArray(items)) return `[${items.map(typeString).join(", ")}]`;
+      return `${typeString(items)}[]`;
+    }
+    default: {
+      const props = s["properties"];
+      if (props && typeof props === "object") {
+        const required = new Set((s["required"] as string[] | undefined) ?? []);
+        const fields = Object.entries(props as Record<string, unknown>).map(
+          ([key, value]) => `${key}${required.has(key) ? "" : "?"}: ${typeString(value)}`
+        );
+        return `{ ${fields.join("; ")} }`;
+      }
+      return "unknown";
+    }
+  }
+}
+
+/** A method's tuple args schema → a readable parameter list, e.g.
+ *  `(string /^[0-9a-f]{64}$/, number?)`. */
+function describeArgs(argsSchema: unknown): string {
+  const s = argsSchema as JsonSchema | undefined;
+  if (!s || s["type"] !== "array" || !Array.isArray(s["items"])) {
+    return s ? `(${typeString(s)})` : "()";
+  }
+  const items = s["items"] as unknown[];
+  const min = typeof s["minItems"] === "number" ? (s["minItems"] as number) : items.length;
+  return `(${items.map((item, i) => `${typeString(item)}${i >= min ? "?" : ""}`).join(", ")})`;
+}
+
+/** Surface the `.describe()` docs on tuple args + their object fields as a
+ *  "Parameters:" block (only the ones that actually carry a description). */
+function argBreakdown(argsSchema: unknown): string {
+  const s = argsSchema as JsonSchema | undefined;
+  const items =
+    s && s["type"] === "array" && Array.isArray(s["items"]) ? (s["items"] as unknown[]) : [];
+  const lines: string[] = [];
+  items.forEach((item, i) => {
+    const arg = item as JsonSchema;
+    if (typeof arg["description"] === "string") {
+      lines.push(`  arg${i}: ${typeString(item)} — ${arg["description"] as string}`);
+    }
+    const props = arg["properties"];
+    if (props && typeof props === "object") {
+      for (const [key, value] of Object.entries(props as Record<string, unknown>)) {
+        const fieldDesc = (value as JsonSchema)["description"];
+        if (typeof fieldDesc === "string") {
+          lines.push(`  .${key}: ${typeString(value)} — ${fieldDesc}`);
+        }
+      }
+    }
+  });
+  return lines.length > 0 ? `Parameters:\n${lines.join("\n")}` : "";
+}
+
+/** Examples (`{ args: [...] }`) → readable call lines, e.g. `blobstore.putText("hi")`. */
+function formatExamples(qualifiedName: string, examples: unknown[]): string {
+  return examples
+    .map((ex) => {
+      const args =
+        ex && typeof ex === "object" && Array.isArray((ex as { args?: unknown[] }).args)
+          ? (ex as { args: unknown[] }).args
+          : undefined;
+      return args
+        ? `${qualifiedName}(${args.map((a) => JSON.stringify(a)).join(", ")})`
+        : JSON.stringify(ex);
+    })
+    .join("\n");
+}
+
+export function renderEntry(entry: CatalogEntry): string {
+  const parts: string[] = [`# ${entry.qualifiedName}  (${entry.surface})`];
+  if (entry.description) parts.push(entry.description);
+  if (entry.access) {
+    const a = entry.access as {
+      callers?: string[];
+      sensitivity?: string;
+      restrictedTo?: Array<{ when: string; callers: string[]; reason: string }>;
+      approval?: Array<{ when?: string; capability?: string; reason: string }>;
+      requires?: Array<{ kind: string; description: string }>;
+    };
+    if (a.callers) parts.push(`Callers: ${a.callers.join(", ")}`);
+    if (a.sensitivity) parts.push(`Sensitivity: ${a.sensitivity}`);
+    for (const r of a.restrictedTo ?? []) {
+      parts.push(`Restricted: ${r.reason} — when ${r.when}, only [${r.callers.join(", ")}]`);
+    }
+    for (const ap of a.approval ?? []) {
+      parts.push(
+        `Approval: ${ap.reason}${ap.capability ? ` (capability: ${ap.capability})` : ""}${ap.when ? ` — when ${ap.when}` : ""}`
+      );
+    }
+    for (const req of a.requires ?? []) parts.push(`Requires ${req.kind}: ${req.description}`);
+  }
+  if (entry.members) parts.push(`Members: ${entry.members.join(", ")}`);
+  // Readable signature + parameter docs instead of raw JSON-schema dumps (the full
+  // typed schema is still available via docs.getSchema / the panel's schema view).
+  if (entry.argsSchema || entry.returnsSchema) {
+    const sig = `${entry.qualifiedName}${describeArgs(entry.argsSchema)}`;
+    parts.push(
+      clamp(
+        entry.returnsSchema ? `${sig} → ${typeString(entry.returnsSchema)}` : sig,
+        MAX_SCHEMA_CHARS
+      )
+    );
+    const breakdown = argBreakdown(entry.argsSchema);
+    if (breakdown) parts.push(clamp(breakdown, MAX_SCHEMA_CHARS));
+  }
+  if (entry.examples?.length) {
+    parts.push(
+      `Examples:\n${clamp(formatExamples(entry.qualifiedName, entry.examples), MAX_SCHEMA_CHARS)}`
+    );
+  }
+  return parts.join("\n\n");
+}
+
+export function createDocsOpenTool(
+  callMain: <T>(method: string, args: unknown[]) => Promise<T>
+): AgentTool<typeof openSchema> {
+  return {
+    name: "docs_open",
+    label: "docs_open",
+    description:
+      "Open a catalog entry by id (from docs_search): full description, typed args/returns JSON Schema, access & restrictedness (allowed callers, approval/grant gates, sensitivity), and examples.",
+    parameters: openSchema,
+    execute: async (_toolCallId, params): Promise<AgentToolResult<CatalogEntry | null>> => {
+      const entry = await callMain<CatalogEntry | null>("docs.describe", [params.id]);
+      if (!entry) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No catalog entry "${params.id}" (unknown, or not callable by you). Use docs_search to find ids.`,
+            },
+          ],
+          details: null,
+        };
+      }
+      return { content: [{ type: "text", text: renderEntry(entry) }], details: entry };
+    },
+  };
+}
