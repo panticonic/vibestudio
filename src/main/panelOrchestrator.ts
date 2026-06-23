@@ -258,6 +258,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     createOpts: {
       parentId?: string | null;
       name?: string;
+      contextId?: string;
       ref?: string;
       stateArgs?: Record<string, unknown>;
     },
@@ -372,14 +373,55 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     scopedCaller?: ScopedServerCaller
   ): Promise<{ id: string; title: string }> {
     const caller = this.registry.getPanel(callerId);
-    if (!caller) throw new Error(`Caller panel not found: ${callerId}`);
+    if (!caller && scopedCaller?.callerKind !== "app") {
+      throw new Error(`Caller panel not found: ${callerId}`);
+    }
     const panelTreeCaller = this.requirePanelTreeCaller(scopedCaller, "Panel creation");
     return this.createViaPanelTree(
       source,
-      { parentId: asPanelSlotId(callerId), name: options?.name, ref: options?.ref, stateArgs },
+      {
+        parentId: caller ? asPanelSlotId(callerId) : null,
+        name: options?.name,
+        contextId: options?.contextId,
+        ref: options?.ref,
+        stateArgs,
+      },
       { focus: options?.focus },
       this.panelTreeCallAs(panelTreeCaller)
     );
+  }
+
+  async navigatePanel(
+    panelId: string,
+    source: string,
+    options: {
+      contextId?: string;
+      env?: Record<string, string>;
+      ref?: string;
+      stateArgs?: Record<string, unknown>;
+    } = {},
+    scopedCaller?: ScopedServerCaller
+  ): Promise<{ id: string; title: string } | null> {
+    if (!this.registry.getPanel(panelId)) throw new Error(`Panel not found: ${panelId}`);
+    const panelTreeCaller = this.requirePanelTreeCaller(scopedCaller, "Panel navigation");
+    const result = (await this.callPanelTreeAs(panelTreeCaller, "navigate", [
+      panelId,
+      source,
+      options,
+    ])) as {
+      id?: string;
+      title?: string;
+      source?: string;
+      contextId?: string;
+    } | null;
+    if (!result) return null;
+    await this.rebuildViewAfterServerNavigate(
+      panelId,
+      result.source ?? source,
+      result.contextId,
+      options
+    );
+    return { id: result.id ?? panelId, title: result.title ?? "" };
   }
 
   async navigatePanelHistory(

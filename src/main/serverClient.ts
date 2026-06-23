@@ -167,7 +167,7 @@ export async function createServerClient(
     `${caller.callerKind}\x00${caller.callerId}`;
 
   const createScopedClient = async (caller: ScopedServerCaller): Promise<ScopedClient> => {
-    if (caller.callerKind !== "app") {
+    if (caller.callerKind !== "app" && caller.callerKind !== "panel") {
       throw new Error(`Scoped server RPC is not available for ${caller.callerKind} callers`);
     }
     const grant = await authClient.grantConnection(caller.callerId);
@@ -246,11 +246,10 @@ export async function createServerClient(
       args: unknown[],
       options?: RpcCallOptions
     ): Promise<unknown> {
-      // Scoped server RPC is for `app` principals only (per-app WS connection +
-      // grant). Native-host `shell` callers (electron-main / launch gate) use
-      // the admin connection via `call()`; there is no shell→app proxy. The
-      // former `callerKind === "shell"` shortcut was the desktop shell proxy and
-      // has been removed — getScopedClient fails closed for non-app callers.
+      // Scoped server RPC is for Electron-hosted runtime principals that can be
+      // granted a caller-bound connection. Native-host `shell` callers
+      // (electron-main / launch gate) use the admin connection via `call()`;
+      // there is no shell→runtime proxy.
       const client = await getScopedClient(caller);
       return client.rpc.call("main", `${service}.${method}`, args, options);
     },

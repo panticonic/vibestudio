@@ -167,6 +167,31 @@ function createOrchestrator(
       registry.removePanel(String(id));
       return { closedIds: [String(id)] };
     }
+    if (service === "panelTree" && method === "navigate") {
+      const [id, src, opts] = (args ?? []) as [
+        string,
+        string,
+        { contextId?: string; stateArgs?: Record<string, unknown>; ref?: string } | undefined,
+      ];
+      const panel = registry.getPanel(String(id));
+      if (!panel) return null;
+      const contextId = opts?.contextId ?? getCurrentSnapshot(panel).contextId;
+      const snapshot = {
+        source: String(src),
+        contextId,
+        options: opts?.ref ? { ref: opts.ref } : {},
+        ...(opts?.stateArgs ? { stateArgs: opts.stateArgs } : {}),
+      };
+      panel.snapshot = snapshot;
+      panel.runtimeEntityId = asPanelEntityId(`panel:nav-${id}-next`);
+      return {
+        id,
+        title: id,
+        kind: "workspace",
+        contextId,
+        source: String(src),
+      };
+    }
     if (service === "panelTree" && method === "snapshot") {
       const [panelId] = (args ?? []) as [string];
       const panel = registry.getPanel(String(panelId));
@@ -676,6 +701,42 @@ describe("PanelOrchestrator.createPanel", () => {
       error: "native view failed",
       buildProgress: "native view failed",
     });
+  });
+});
+
+describe("PanelOrchestrator.navigatePanel", () => {
+  it("routes panel replacement through scoped panelTree navigate and rebuilds the view", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/current", [], {
+      runtimeEntityId: asPanelEntityId("panel:nav-current"),
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
+    const loadedPanels = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loadedPanels.add(panelId);
+    });
+    const scopedCaller = { callerId: "panel:nav-current", callerKind: "panel" as const };
+
+    await orchestrator.navigatePanel(
+      panel.id,
+      "panels/chat",
+      { stateArgs: { initialPrompt: "hello" } },
+      scopedCaller
+    );
+
+    expect(serverClient.callAs).toHaveBeenCalledWith(scopedCaller, "panelTree", "navigate", [
+      panel.id,
+      "panels/chat",
+      { stateArgs: { initialPrompt: "hello" } },
+    ]);
+    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+      panel.id,
+      expect.stringContaining("/panels/chat/"),
+      `ctx-${panel.id}`
+    );
   });
 });
 

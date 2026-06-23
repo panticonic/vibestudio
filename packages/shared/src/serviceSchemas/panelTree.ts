@@ -66,6 +66,10 @@ export const PanelTreeCreateOptionsSchema = z
       .describe("Parent panel id to nest under; null/omitted creates a root-level panel."),
     name: z.string().optional().describe("Optional display name override for the new panel."),
     focus: z.boolean().optional().describe("Focus the new panel immediately after creation."),
+    contextId: z
+      .string()
+      .optional()
+      .describe("Storage-isolation context id to create the panel in."),
     ref: z.string().optional().describe("Optional git-style ref / version pin for the source."),
     stateArgs: StateArgsSchema.optional().describe(
       "Initial validated state-args passed to the panel runtime."
