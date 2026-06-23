@@ -18,7 +18,8 @@ import { useNavigation } from "@react-navigation/native";
 import { useAtomValue, useSetAtom } from "jotai";
 import { shellClientAtom, panelTreeAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
-import { activePanelIdAtom } from "../state/navigationAtoms";
+import { activePanelIdAtom, pinnedPanelIdsAtom } from "../state/navigationAtoms";
+import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PanelTreeItem, type FlatPanelItem } from "./PanelTreeItem";
 import type { Panel } from "@natstack/shared/types";
 import { buildPanelChromeState, isBrowserPanelSource } from "@natstack/shared/panelChrome";
@@ -73,6 +74,8 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   const setPanelTree = useSetAtom(panelTreeAtom);
   const colors = useAtomValue(themeColorsAtom);
   const activePanelId = useAtomValue(activePanelIdAtom);
+  const pinnedPanelIds = useAtomValue(pinnedPanelIdsAtom);
+  const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [refreshing, setRefreshing] = useState(false);
@@ -126,6 +129,20 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     [shellClient],
   );
 
+  const togglePanelPin = useCallback(
+    (panelId: string) => {
+      setPinnedPanelIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(panelId)) next.delete(panelId);
+        else next.add(panelId);
+        const workspaceId = shellClient?.workspaceId;
+        if (workspaceId) void savePinnedPanelIds(workspaceId, [...next]);
+        return next;
+      });
+    },
+    [setPinnedPanelIds, shellClient],
+  );
+
   const performPanelCommand = useCallback((command: PanelCommandId, panelId: string) => {
     if (!shellClient) return;
     const panel = findPanelById(panelTree, panelId);
@@ -133,6 +150,9 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     const snapshot = getCurrentSnapshot(panel);
 
     switch (command) {
+      case "toggle-pin":
+        togglePanelPin(panelId);
+        return;
       case "copy-address":
         copyToClipboard(snapshot.source);
         return;
@@ -158,17 +178,15 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       default:
         onSelectPanel(panelId);
     }
-  }, [onSelectPanel, panelTree, setPanelTree, shellClient]);
+  }, [onSelectPanel, panelTree, setPanelTree, shellClient, togglePanelPin]);
 
   const handlePanelLongPress = useCallback((panelId: string) => {
     const panel = findPanelById(panelTree, panelId);
     if (!panel) return;
-    const commands = getAvailablePanelCommands({ chrome: buildPanelChromeState({ panel }) }, [
-      "copy-address",
-      "open-external",
-      "duplicate",
-      "archive",
-    ]);
+    const commands = getAvailablePanelCommands(
+      { chrome: buildPanelChromeState({ panel }), isPinned: pinnedPanelIds.has(panelId) },
+      ["copy-address", "open-external", "duplicate", "toggle-pin", "archive"],
+    );
     const labels = commands.map((command) => command.label);
     if (Platform.OS === "ios") {
       const destructiveIndex = commands.findIndex((command) => command.id === "archive");
@@ -193,7 +211,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       })),
       { text: "Cancel", style: "cancel" },
     ]);
-  }, [panelTree, performPanelCommand]);
+  }, [panelTree, performPanelCommand, pinnedPanelIds]);
 
   const handleSettingsPress = useCallback(() => {
     navigation.getParent()?.navigate("Settings" as never);
@@ -204,6 +222,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       <PanelTreeItem
         item={item}
         isActive={item.id === activePanelId}
+        isPinned={pinnedPanelIds.has(item.id)}
         colors={colors}
         onPress={handlePanelPress}
         onLongPress={handlePanelLongPress}
@@ -211,7 +230,15 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
         onArchive={handleArchive}
       />
     ),
-    [activePanelId, colors, handlePanelPress, handlePanelLongPress, handleToggleCollapse, handleArchive],
+    [
+      activePanelId,
+      pinnedPanelIds,
+      colors,
+      handlePanelPress,
+      handlePanelLongPress,
+      handleToggleCollapse,
+      handleArchive,
+    ],
   );
 
   const keyExtractor = useCallback((item: FlatPanelItem) => item.id, []);

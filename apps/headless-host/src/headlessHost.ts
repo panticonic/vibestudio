@@ -14,6 +14,11 @@ import type {
 } from "@natstack/shared/panel/panelLease";
 import { createPanelHostRegistration } from "@natstack/shared/panel/panelLease";
 import { LeaseTracker, type LeaseIntent } from "@natstack/shared/panel/leaseTracker";
+import {
+  selectCapEvictionVictims,
+  selectIdlePanelVictims,
+  type LoadedPanelSnapshot,
+} from "@natstack/shared/panel/panelGc";
 import type { HeadlessHostConfig } from "./config.js";
 import { connectToServer, type ServerConnection } from "./serverConnection.js";
 import { PanelInitClient } from "./panelInitClient.js";
@@ -360,17 +365,32 @@ export class HeadlessHost implements PanelHost {
     this.bridge?.registerTarget(intent.slotId, tabId);
   }
 
+  /**
+   * Snapshot of currently loaded slots for the shared GC selectors. No pins
+   * apply on a headless host; `keepLoaded` (active CDP/automation) is the only
+   * protection beyond the cap/idle policy.
+   */
+  private loadedSlotSnapshots(now: number): LoadedPanelSnapshot[] {
+    return this.pages!.slots().map((slotId) => ({
+      panelId: slotId,
+      lastActive: this.pages!.lastUsedAt(slotId) ?? now,
+    }));
+  }
+
+  private readonly gcIsKeepLoaded = (slotId: string): boolean =>
+    !!this.tracker.heldLease(slotId)?.keepLoaded;
+
   private async enforcePanelCap(): Promise<void> {
-    const slots = this.pages!.slots();
-    if (slots.length < this.config.maxPanels) return;
-    let oldest: { slotId: string; at: number } | null = null;
-    for (const slotId of slots) {
-      // Never evict a panel pinned by an active CDP client (mid-automation).
-      if (this.tracker.heldLease(slotId)?.keepLoaded) continue;
-      const at = this.pages!.lastUsedAt(slotId) ?? 0;
-      if (!oldest || at < oldest.at) oldest = { slotId, at };
-    }
-    if (oldest) await this.releaseAndUnload(oldest.slotId, "panel cap");
+    if (!this.pages) return;
+    // Evict down to maxPanels-1 to leave room for the incoming panel, via the
+    // same selector desktop/mobile use (unpinned-oldest-first; keepLoaded-safe).
+    const victims = selectCapEvictionVictims(this.loadedSlotSnapshots(Date.now()), {
+      cap: Math.max(0, this.config.maxPanels - 1),
+      protectedIds: [],
+      isPinned: () => false,
+      isKeepLoaded: this.gcIsKeepLoaded,
+    });
+    for (const slotId of victims) await this.releaseAndUnload(slotId, "panel cap");
   }
 
   private async releaseAndUnload(slotId: string, why: string): Promise<void> {
@@ -390,14 +410,15 @@ export class HeadlessHost implements PanelHost {
   private checkIdle(): void {
     if (this.stopped || !this.pages) return;
     const now = Date.now();
-    for (const slotId of this.pages.slots()) {
-      // Pinned by an active CDP client → exempt from idle unload.
-      if (this.tracker.heldLease(slotId)?.keepLoaded) continue;
-      const lastUsed = this.pages.lastUsedAt(slotId) ?? now;
-      if (now - lastUsed > this.config.idleUnloadMs) {
-        void this.releaseAndUnload(slotId, "idle");
-      }
-    }
+    const victims = selectIdlePanelVictims(this.loadedSlotSnapshots(now), {
+      now,
+      idleMs: this.config.idleUnloadMs,
+      protectedIds: [],
+      isPinned: () => false,
+      isKeepLoaded: this.gcIsKeepLoaded,
+    });
+    for (const slotId of victims) void this.releaseAndUnload(slotId, "idle");
+
     if (this.config.idleExitMs && this.config.idleExitMs > 0) {
       if (this.tracker.heldSlots().length === 0) {
         this.idleExitSince ??= now;

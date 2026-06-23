@@ -52,6 +52,7 @@ export interface FlatPanelItem {
 interface PanelTreeItemProps {
   item: FlatPanelItem;
   isActive: boolean;
+  isPinned?: boolean;
   colors: {
     surface: string;
     text: string;
@@ -69,6 +70,7 @@ interface PanelTreeItemProps {
 export function PanelTreeItem({
   item,
   isActive,
+  isPinned = false,
   colors,
   onPress,
   onLongPress,
@@ -204,6 +206,19 @@ export function PanelTreeItem({
             </Text>
           </Pressable>
 
+          {/* Pin indicator — quiet glyph, only when pinned */}
+          {isPinned && (
+            <Text
+              accessibilityLabel="Pinned"
+              style={[
+                styles.pinIndicator,
+                { color: isActive ? "rgba(255,255,255,0.7)" : colors.textSecondary },
+              ]}
+            >
+              {"\u{1F4CC}"}
+            </Text>
+          )}
+
           {/* Child count badge */}
           {item.childCount > 0 && (
             <Text
@@ -269,5 +284,10 @@ const styles = StyleSheet.create({
   childCount: {
     fontSize: 12,
     marginLeft: 8,
+  },
+  pinIndicator: {
+    fontSize: 12,
+    marginLeft: 6,
+    flexShrink: 0,
   },
 });

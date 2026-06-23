@@ -559,6 +559,11 @@ export class ShellClient {
     await this.initPanels(info);
   }
 
+  /** Active workspace id, available after connect; null until then. */
+  get workspaceId(): string | null {
+    return this.workspaceInfo?.config.id ?? null;
+  }
+
   private async connectWorkspace(): Promise<WorkspaceInfo> {
     if (this.workspaceInfo) return this.workspaceInfo;
     smokePhase("workspace-shell-init-start", { serverUrl: this.serverUrl });

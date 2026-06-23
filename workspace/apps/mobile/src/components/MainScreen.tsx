@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   ActionSheetIOS,
+  AppState,
   Pressable,
 } from "react-native";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
@@ -29,7 +30,16 @@ import {
   activePanelIdAtom,
   activePanelTitleAtom,
   activePanelParentIdAtom,
+  pinnedPanelIdsAtom,
+  pinsHydratedAtom,
 } from "../state/navigationAtoms";
+import {
+  addWebViewEntry,
+  sweepIdleWebViews,
+  type WebViewEntry,
+} from "./webViewStack";
+import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
+import { PANEL_UI_IDLE_SWEEP_MS } from "@natstack/shared/constants";
 import { parseHostConfig, getExternalHost } from "../services/panelUrls";
 import { materializeMobilePanel } from "../services/panelMaterializer";
 import { handleExternalOpen, type ExternalOpenPayload } from "../services/oauthLoopback";
@@ -69,25 +79,7 @@ import {
 } from "@natstack/shared/shell/approvalState";
 import type { HostConfig } from "../services/panelUrls";
 import type { ApprovalDecision, PendingApproval } from "@natstack/shared/approvals";
-const MAX_WEBVIEWS = 5;
 const PANEL_MATERIALIZE_TIMEOUT_MS = 45_000;
-interface WebViewEntry {
-  panelId: string;
-  url: string;
-  managed: boolean;
-  panelInit: unknown | null;
-  lastActive: number;
-}
-function addWebViewEntry(entries: WebViewEntry[], nextEntry: WebViewEntry): WebViewEntry[] {
-  const withoutExisting = entries.filter((entry) => entry.panelId !== nextEntry.panelId);
-  const nextEntries = [...withoutExisting, nextEntry];
-  if (nextEntries.length <= MAX_WEBVIEWS) return nextEntries;
-  const candidates = nextEntries
-    .filter((entry) => entry.panelId !== nextEntry.panelId)
-    .sort((a, b) => a.lastActive - b.lastActive);
-  const toEvict = candidates[0];
-  return toEvict ? nextEntries.filter((entry) => entry.panelId !== toEvict.panelId) : nextEntries;
-}
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | null = null;
@@ -116,7 +108,22 @@ export function MainScreen() {
   const colors = useAtomValue(themeColorsAtom);
   const [approvalDeepLinkId, setApprovalDeepLinkId] = useAtom(approvalDeepLinkAtom);
   const pushToast = useSetAtom(pushToastAtom);
+  const pinnedPanelIds = useAtomValue(pinnedPanelIdsAtom);
+  const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
+  const pinsHydrated = useAtomValue(pinsHydratedAtom);
+  const setPinsHydrated = useSetAtom(pinsHydratedAtom);
   const promptedAppUpdatesRef = useRef<Set<string>>(new Set());
+  // Refs mirror the latest values so interval/callback closures read fresh
+  // state without re-subscribing.
+  const pinnedPanelIdsRef = useRef<Set<string>>(pinnedPanelIds);
+  const isForegroundRef = useRef(true);
+  const activePanelIdRef = useRef<string | null>(activePanelId);
+  useEffect(() => {
+    pinnedPanelIdsRef.current = pinnedPanelIds;
+  }, [pinnedPanelIds]);
+  useEffect(() => {
+    activePanelIdRef.current = activePanelId;
+  }, [activePanelId]);
   useAppLifecycle(shellClient);
   const [webViewStack, setWebViewStack] = useState<WebViewEntry[]>([]);
   const [loadingPanelId, setLoadingPanelId] = useState<string | null>(null);
@@ -309,6 +316,37 @@ export function MainScreen() {
       setPendingApprovals([]);
     }
   }, [shellClient]);
+  // Persist the pin set to AsyncStorage (workspace-scoped). Best-effort.
+  const persistPins = useCallback(
+    (ids: Set<string>) => {
+      const workspaceId = shellClient?.workspaceId;
+      if (!workspaceId) return;
+      void savePinnedPanelIds(workspaceId, [...ids]);
+    },
+    [shellClient]
+  );
+  // Predicates shared by the cap insert and the idle sweep. Reads the pin ref
+  // (latest value inside interval/callback closures) and the live lease.
+  const buildStackPredicates = useCallback(
+    () => ({
+      isPinned: (id: string) => pinnedPanelIdsRef.current.has(id),
+      isKeepLoaded: (id: string) =>
+        !!shellClient?.panels.registry.getRuntimeLease(id)?.keepLoaded,
+    }),
+    [shellClient]
+  );
+  const togglePanelPin = useCallback(
+    (panelId: string) => {
+      setPinnedPanelIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(panelId)) next.delete(panelId);
+        else next.add(panelId);
+        persistPins(next);
+        return next;
+      });
+    },
+    [persistPins, setPinnedPanelIds]
+  );
   const refreshTree = useCallback(() => {
     if (!shellClient) return;
     const tree = shellClient.panels.getTree();
@@ -316,7 +354,19 @@ export function MainScreen() {
     setWebViewStack((prev) =>
       prev.filter((entry) => shellClient.panels.registry.getPanel(entry.panelId) !== undefined)
     );
-  }, [shellClient, setPanelTree]);
+    // Prune pins for panels no longer in the tree; persist if anything dropped.
+    setPinnedPanelIds((prev) => {
+      let changed = false;
+      const next = new Set<string>();
+      for (const id of prev) {
+        if (shellClient.panels.registry.getPanel(id) !== undefined) next.add(id);
+        else changed = true;
+      }
+      if (!changed) return prev;
+      persistPins(next);
+      return next;
+    });
+  }, [shellClient, setPanelTree, setPinnedPanelIds, persistPins]);
   const applyPendingApprovals = useCallback((pending: PendingApproval[]) => {
     setPendingApprovals(pending);
     const signature = pending
@@ -444,13 +494,22 @@ export function MainScreen() {
           managed: materialized.managed,
         });
         setWebViewStack((prev) =>
-          addWebViewEntry(prev, {
-            panelId,
-            url: materialized.url,
-            managed: materialized.managed,
-            panelInit: materialized.panelInit,
-            lastActive: Date.now(),
-          })
+          addWebViewEntry(
+            prev,
+            {
+              panelId,
+              url: materialized.url,
+              managed: materialized.managed,
+              panelInit: materialized.panelInit,
+              lastActive: Date.now(),
+            },
+            {
+              activePanelId: activePanelIdRef.current,
+              isPinned: (id) => pinnedPanelIdsRef.current.has(id),
+              isKeepLoaded: (id) =>
+                !!shellClient.panels.registry.getRuntimeLease(id)?.keepLoaded,
+            }
+          )
         );
         setPanelLoadErrors((prev) => {
           if (!prev[panelId]) return prev;
@@ -492,13 +551,22 @@ export function MainScreen() {
     })
       .then((materialized) => {
         setWebViewStack((prev) =>
-          addWebViewEntry(prev, {
-            panelId: materialized.panelId,
-            url: materialized.url,
-            managed: materialized.managed,
-            panelInit: materialized.panelInit,
-            lastActive: Date.now(),
-          })
+          addWebViewEntry(
+            prev,
+            {
+              panelId: materialized.panelId,
+              url: materialized.url,
+              managed: materialized.managed,
+              panelInit: materialized.panelInit,
+              lastActive: Date.now(),
+            },
+            {
+              activePanelId: activePanelIdRef.current,
+              isPinned: (id) => pinnedPanelIdsRef.current.has(id),
+              isKeepLoaded: (id) =>
+                !!shellClient.panels.registry.getRuntimeLease(id)?.keepLoaded,
+            }
+          )
         );
       })
       .catch((error: unknown) => {
@@ -676,6 +744,68 @@ export function MainScreen() {
     void shellClient.panels.notifyFocused(activePanelId);
     webViewRefsMap.current.get(activePanelId)?.dispatchHostEvent("runtime:focus", null);
   }, [activePanelId, shellClient]);
+  // Activity on blur: when the active panel changes, bump the OUTGOING panel's
+  // lastActive so "idle" means "since you last viewed it". The incoming panel
+  // is already stamped on activation.
+  const blurStampRef = useRef<string | null>(activePanelId);
+  useEffect(() => {
+    const previous = blurStampRef.current;
+    blurStampRef.current = activePanelId;
+    if (previous && previous !== activePanelId) {
+      setWebViewStack((stack) =>
+        stack.map((entry) =>
+          entry.panelId === previous ? { ...entry, lastActive: Date.now() } : entry
+        )
+      );
+    }
+  }, [activePanelId]);
+  // Hydrate persisted pins once the workspace id is known. Gate the sweep on
+  // `pinsHydrated` so a freshly reloaded app doesn't GC a just-restored pin in
+  // the first tick.
+  useEffect(() => {
+    const workspaceId = shellClient?.workspaceId;
+    if (!workspaceId) return;
+    let cancelled = false;
+    void loadPinnedPanelIds(workspaceId).then((ids) => {
+      if (cancelled) return;
+      setPinnedPanelIds(new Set(ids));
+      setPinsHydrated(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [shellClient, setPinnedPanelIds, setPinsHydrated]);
+  // Track foreground state for the idle sweep (a backgrounded app never GCs).
+  useEffect(() => {
+    isForegroundRef.current = AppState.currentState === "active";
+    const sub = AppState.addEventListener("change", (state) => {
+      isForegroundRef.current = state === "active";
+    });
+    return () => sub.remove();
+  }, []);
+  // Idle GC sweep: unload panels inactive for PANEL_UI_IDLE_UNLOAD_MS, pin- and
+  // keepLoaded-aware, foreground-gated. Mirrors the desktop sweep.
+  useEffect(() => {
+    if (!shellClient || !pinsHydrated) return;
+    const predicates = buildStackPredicates();
+    const sweepTimer = setInterval(() => {
+      setWebViewStack((prev) =>
+        sweepIdleWebViews(prev, {
+          now: Date.now(),
+          // Read activePanelId via ref so the interval isn't recreated on every
+          // panel switch — that would reset the sweep countdown and, for an
+          // actively-used app, mean it rarely (or never) reaches a tick.
+          activePanelId: activePanelIdRef.current,
+          foreground: isForegroundRef.current,
+          unload: (id) => {
+            void shellClient.panels.unload(id).catch(() => {});
+          },
+          ...predicates,
+        })
+      );
+    }, PANEL_UI_IDLE_SWEEP_MS);
+    return () => clearInterval(sweepTimer);
+  }, [shellClient, pinsHydrated, buildStackPredicates]);
   useEffect(() => {
     const mode = colorScheme === "light" ? "light" : "dark";
     for (const entry of webViewStack) {
@@ -819,6 +949,9 @@ export function MainScreen() {
           }
           return;
         }
+        case "toggle-pin":
+          togglePanelPin(panelId);
+          return;
         case "unload":
           void shellClient.panels.unload(panelId);
           setWebViewStack((prev) => prev.filter((entry) => entry.panelId !== panelId));
@@ -838,6 +971,7 @@ export function MainScreen() {
       pushToast,
       refreshTree,
       shellClient,
+      togglePanelPin,
       webViewNavigation,
     ]
   );
@@ -851,20 +985,24 @@ export function MainScreen() {
           : panel
             ? buildPanelChromeState({ panel })
             : null;
-      const commands = getAvailablePanelCommands({ chrome, addressBarVisible }, [
-        "back",
-        "forward",
-        "reload-panel",
-        "reload-view",
-        "force-reload-view",
-        "rebuild-panel",
-        "stop",
-        "copy-address",
-        "open-external",
-        "duplicate",
-        "unload",
-        "archive",
-      ]);
+      const commands = getAvailablePanelCommands(
+        { chrome, addressBarVisible, isPinned: pinnedPanelIds.has(panelId) },
+        [
+          "back",
+          "forward",
+          "reload-panel",
+          "reload-view",
+          "force-reload-view",
+          "rebuild-panel",
+          "stop",
+          "copy-address",
+          "open-external",
+          "duplicate",
+          "toggle-pin",
+          "unload",
+          "archive",
+        ]
+      );
       const labels = commands.map((command) => command.label);
       if (Platform.OS === "ios") {
         const destructiveIndex = commands.findIndex((command) => command.id === "archive");
@@ -890,7 +1028,14 @@ export function MainScreen() {
         { text: "Cancel", style: "cancel" },
       ]);
     },
-    [activeChromeState, activePanelId, addressBarVisible, performPanelCommand, shellClient]
+    [
+      activeChromeState,
+      activePanelId,
+      addressBarVisible,
+      performPanelCommand,
+      pinnedPanelIds,
+      shellClient,
+    ]
   );
   const executeAddressAction = useCallback(
     (action: AddressAction, mode: AddressNavigationMode = "current") => {

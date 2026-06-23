@@ -212,6 +212,17 @@ export function createPanelShellService(deps: {
           return;
         }
 
+        case "togglePin": {
+          requirePanelHostingAppCapability(ctx, vm, method);
+          const panelId = args[0] as string;
+          return lifecycle.togglePanelPin(panelId);
+        }
+
+        case "listPinnedPanelIds": {
+          requirePanelHostingAppCapability(ctx, vm, method);
+          return lifecycle.listPinnedPanelIds();
+        }
+
         default:
           throw new Error(`Unknown panel method: ${method}`);
       }

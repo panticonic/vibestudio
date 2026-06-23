@@ -22,10 +22,11 @@ import {
   CaretSortIcon,
   Cross2Icon,
   CubeIcon,
+  DrawingPinFilledIcon,
   LayersIcon,
   PlusIcon,
 } from "@radix-ui/react-icons";
-import { Badge, Box, Button, Flex, IconButton, Text } from "@radix-ui/themes";
+import { Badge, Box, Button, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -39,7 +40,11 @@ import {
 } from "../shell/hooks/index.js";
 import type { PanelContextMenuAction } from "@natstack/shared/types";
 import { menu, panel } from "../shell/client.js";
-import { activeWorkspaceNameAtom, workspaceChooserDialogOpenAtom } from "../state/appModeAtoms.js";
+import {
+  activeWorkspaceNameAtom,
+  pinnedPanelIdsAtom,
+  workspaceChooserDialogOpenAtom,
+} from "../state/appModeAtoms.js";
 import { assertPresent } from "../utils/assertPresent";
 
 // ============================================================================
@@ -336,6 +341,8 @@ const SortableTreeItem = memo(
   }: SortableTreeItemProps) {
     const { panel, depth, collapsed } = item;
     const [isHovered, setIsHovered] = useState(false);
+    const pinnedPanelIds = useAtomValue(pinnedPanelIdsAtom);
+    const isPinned = pinnedPanelIds.has(panel.id);
     const expandTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Clear expand timeout on unmount
@@ -506,6 +513,16 @@ const SortableTreeItem = memo(
           >
             {panel.title}
           </Text>
+
+          {/* Pin indicator — quiet glyph, only when pinned */}
+          {isPinned && (
+            <Tooltip content="Pinned — exempt from auto-unload">
+              <DrawingPinFilledIcon
+                aria-label="Pinned"
+                style={{ flexShrink: 0, color: "var(--accent-11)", width: 12, height: 12 }}
+              />
+            </Tooltip>
+          )}
 
           {/* Build state indicator */}
           <BuildIndicator buildState={panel.buildState} />

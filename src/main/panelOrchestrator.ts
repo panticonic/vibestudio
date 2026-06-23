@@ -48,7 +48,19 @@ import { panelRuntimeMethods } from "@natstack/shared/serviceSchemas/panelRuntim
 import type { WorkspaceConfig } from "@natstack/shared/workspace/types";
 import type { PanelRestorePolicy } from "@natstack/shared/workspace/types";
 import { buildPanelUrl } from "@natstack/shared/panelFactory";
+import {
+  selectCapEvictionVictims,
+  selectIdlePanelVictims,
+  type LoadedPanelSnapshot,
+} from "@natstack/shared/panel/panelGc";
+import {
+  PANEL_UI_IDLE_SWEEP_MS,
+  PANEL_UI_IDLE_SWEEP_MS_HEADLESS,
+  PANEL_UI_IDLE_UNLOAD_MS_HEADLESS,
+  PANEL_UI_MAX_LOADED_HEADLESS,
+} from "@natstack/shared/constants";
 import { asPanelSlotId } from "@natstack/shared/panel/ids";
+import type { PanelPinStoreApi } from "./panelPinStore.js";
 import {
   getCurrentSnapshot,
   getPanelSource,
@@ -86,9 +98,22 @@ export interface PanelOrchestratorDeps {
   workspaceConfig?: WorkspaceConfig;
   runtimeClient?: Partial<PanelHostRegistration> & {
     maxAssignedPanelViews?: number;
-    assignedPanelIdleMs?: number;
+    /**
+     * Idle threshold for the UI GC sweep. When set, a periodic sweep unloads
+     * panels inactive for this long via the shared GC selectors. Used by both
+     * desktop (1h) and the in-app headless host (5m) — there is one idle
+     * mechanism, not a separate per-panel-timer path.
+     */
+    uiIdleUnloadMs?: number;
+    /** Sweep cadence; defaults to PANEL_UI_IDLE_SWEEP_MS. Headless uses a finer one. */
+    uiIdleSweepMs?: number;
     restorePolicy?: PanelRestorePolicy;
   };
+  /**
+   * Client-local pin store (desktop). Absent on headless, where pins don't
+   * apply; GC then treats every panel as unpinned.
+   */
+  pinStore?: PanelPinStoreApi;
 }
 
 export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
@@ -108,16 +133,17 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   private readonly runtimeClientSupportsCdp: boolean;
   private readonly loadOnLeaseAssignment: boolean;
   private readonly maxAssignedPanelViews: number | null;
-  private readonly assignedPanelIdleMs: number | null;
+  /** Idle threshold for the UI GC sweep; null disables the sweep. */
+  private readonly uiIdleUnloadMs: number | null;
+  /** Sweep cadence; finer on headless than desktop. */
+  private readonly uiIdleSweepMs: number;
+  private idleSweepTimer?: ReturnType<typeof setInterval>;
   private runtimeClientRegistered = false;
   private readonly runtimeConnectionBySlot = new Map<
     string,
     { runtimeEntityId: string; connectionId: string }
   >();
-  private readonly assignedPanelResources = new Map<
-    string,
-    { lastUsedAt: number; idleTimer?: ReturnType<typeof setTimeout> }
-  >();
+  private readonly assignedPanelResources = new Map<string, { lastUsedAt: number }>();
   private readonly stateArgsPushUnsubs = new Map<string, () => void>();
   /** Last reactive view-build error per slot, surfaced to the imperative creator. */
   private readonly viewBuildFailures = new Map<string, string>();
@@ -143,14 +169,21 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     this.runtimeClientSupportsCdp =
       deps.runtimeClient?.supportsCdp ?? this.runtimeClientPlatform !== "mobile";
     this.loadOnLeaseAssignment = deps.runtimeClient?.loadOnLeaseAssignment ?? false;
+    const headlessAutoload =
+      this.runtimeClientPlatform === "headless" && this.loadOnLeaseAssignment;
     this.maxAssignedPanelViews =
       deps.runtimeClient?.maxAssignedPanelViews ??
-      (this.runtimeClientPlatform === "headless" && this.loadOnLeaseAssignment ? 8 : null);
-    this.assignedPanelIdleMs =
-      deps.runtimeClient?.assignedPanelIdleMs ??
-      (this.runtimeClientPlatform === "headless" && this.loadOnLeaseAssignment
-        ? 5 * 60 * 1000
-        : null);
+      (headlessAutoload ? PANEL_UI_MAX_LOADED_HEADLESS : null);
+    // One idle mechanism for every host: the sweep. Headless gets a default
+    // threshold/cadence so it keeps shedding idle panels without per-panel timers.
+    this.uiIdleUnloadMs =
+      deps.runtimeClient?.uiIdleUnloadMs ??
+      (headlessAutoload ? PANEL_UI_IDLE_UNLOAD_MS_HEADLESS : null);
+    this.uiIdleSweepMs =
+      deps.runtimeClient?.uiIdleSweepMs ??
+      (this.runtimeClientPlatform === "headless"
+        ? PANEL_UI_IDLE_SWEEP_MS_HEADLESS
+        : PANEL_UI_IDLE_SWEEP_MS);
     this.restorePolicy =
       deps.runtimeClient?.restorePolicy ?? deps.workspaceConfig?.panelRestorePolicy ?? "focused";
   }
@@ -692,8 +725,18 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       };
     }
 
+    // Capture the outgoing panel before focus moves. "Inactive" means "1h since
+    // you last *viewed* it", so the panel we're leaving restarts its idle
+    // countdown now. The newly focused panel needs no bump — while focused it's
+    // protected by the sweep's protectedIds.
+    const previousFocused = this.registry.getFocusedPanelId();
+
     this.registry.updateSelectedPath(targetPanelId);
     this.registry.notifyPanelTreeUpdate();
+
+    if (previousFocused && previousFocused !== targetPanelId) {
+      this.refreshPanelActivity(previousFocused);
+    }
 
     // Persist focus to the server fire-and-forget: it's pure bookkeeping and
     // must not add an RPC round trip before an already-loaded view is shown.
@@ -1010,9 +1053,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   async registerRuntimeClient(): Promise<void> {
     await this.ensureRuntimeClientRegistered();
+    // Arm the client-side UI GC sweep (desktop only; null on headless, which
+    // uses per-panel one-shot timers instead).
+    this.startIdleSweep();
   }
 
   async unregisterRuntimeClient(): Promise<void> {
+    this.stopIdleSweep();
     if (!this.runtimeClientRegistered) return;
     this.runtimeClientRegistered = false;
     await this.panelRuntime.unregisterClient(this.runtimeClientSessionId);
@@ -1079,6 +1126,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     for (const panelId of beforeIds) {
       if (!this.registry.getPanel(panelId)) this.pruneRemovedPanelLocally(panelId);
     }
+    // Drop pins for slot ids no longer in the tree. Main is the GC source of
+    // truth; the shell atom is reconciled separately because named-panel slot
+    // ids are reused after remove+recreate.
+    this.deps.pinStore?.prune(this.registry.listPanels().map((p) => p.panelId));
     // Reactive navigate: reload the view of any still-hosted panel whose current
     // snapshot changed source/contextId (a navigate/history/replace by any client).
     // Entity caches were already refreshed above, so the lease targets the new entity.
@@ -1725,40 +1776,101 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.viewRevision;
   }
 
+  // ===========================================================================
+  // Client-side UI garbage collection (idle sweep + pin-aware count cap)
+  // ===========================================================================
+
+  /**
+   * Predicates shared by the idle sweep and the count cap. `isPinned` reads the
+   * client-local pin store (absent on headless ⇒ always false); `isKeepLoaded`
+   * reflects an active CDP/automation client on the lease.
+   */
+  private gcPredicates() {
+    return {
+      isPinned: (id: string) => this.deps.pinStore?.has(id) ?? false,
+      isKeepLoaded: (id: string) => !!this.registry.getRuntimeLease(id)?.keepLoaded,
+    };
+  }
+
+  private loadedSnapshots(): LoadedPanelSnapshot[] {
+    return [...this.assignedPanelResources.entries()].map(([panelId, r]) => ({
+      panelId,
+      lastActive: r.lastUsedAt,
+    }));
+  }
+
+  /**
+   * Refresh the activity timestamp of an *already-tracked* panel. Never creates
+   * an entry — only loaded panels are tracked, so this can't manufacture a
+   * phantom resource for an unloaded panel.
+   */
+  private refreshPanelActivity(panelId: string): void {
+    const entry = this.assignedPanelResources.get(panelId);
+    if (!entry) return;
+    entry.lastUsedAt = Date.now();
+  }
+
+  /**
+   * Start the periodic idle GC sweep. The single idle mechanism for every host
+   * (desktop 1h, headless 5m); idempotent; disabled when `uiIdleUnloadMs` is null.
+   */
+  private startIdleSweep(): void {
+    if (this.uiIdleUnloadMs === null || this.idleSweepTimer) return;
+    const idleMs = this.uiIdleUnloadMs;
+    this.idleSweepTimer = setInterval(() => {
+      const focused = this.registry.getFocusedPanelId();
+      const victims = selectIdlePanelVictims(this.loadedSnapshots(), {
+        now: Date.now(),
+        idleMs,
+        protectedIds: focused ? [focused] : [],
+        ...this.gcPredicates(),
+      });
+      for (const id of victims) void this.unloadAssignedPanelResource(id, "idle-timeout");
+    }, this.uiIdleSweepMs);
+  }
+
+  /** Stop the idle GC sweep (cleared from unregisterRuntimeClient). */
+  private stopIdleSweep(): void {
+    if (this.idleSweepTimer) {
+      clearInterval(this.idleSweepTimer);
+      this.idleSweepTimer = undefined;
+    }
+  }
+
+  /** Toggle the client-local pin for a slot id; returns the new pinned state. */
+  togglePanelPin(panelId: string): boolean {
+    return this.deps.pinStore?.toggle(panelId) ?? false;
+  }
+
+  isPanelPinned(panelId: string): boolean {
+    return this.deps.pinStore?.has(panelId) ?? false;
+  }
+
+  listPinnedPanelIds(): string[] {
+    return this.deps.pinStore?.list() ?? [];
+  }
+
   private trackAssignedPanelResource(panelId: string): void {
     if (!this.loadOnLeaseAssignment) return;
-    const previous = this.assignedPanelResources.get(panelId);
-    if (previous?.idleTimer) clearTimeout(previous.idleTimer);
-    const next: { lastUsedAt: number; idleTimer?: ReturnType<typeof setTimeout> } = {
-      lastUsedAt: Date.now(),
-    };
-    if (this.assignedPanelIdleMs !== null && this.assignedPanelIdleMs > 0) {
-      next.idleTimer = setTimeout(() => {
-        // Pinned by an active CDP client → exempt from idle unload.
-        if (this.registry.getRuntimeLease(panelId)?.keepLoaded) return;
-        void this.unloadAssignedPanelResource(panelId, "idle-timeout");
-      }, this.assignedPanelIdleMs);
-    }
-    this.assignedPanelResources.set(panelId, next);
+    // Record activity only — the idle sweep (not a per-panel timer) decides when
+    // to unload, so every host shares one GC mechanism.
+    this.assignedPanelResources.set(panelId, { lastUsedAt: Date.now() });
   }
 
   private clearAssignedPanelResource(panelId: string): void {
-    const tracked = this.assignedPanelResources.get(panelId);
-    if (tracked?.idleTimer) clearTimeout(tracked.idleTimer);
     this.assignedPanelResources.delete(panelId);
   }
 
   private async enforceAssignedPanelResourceCap(keepPanelId: string): Promise<void> {
     if (this.maxAssignedPanelViews === null || this.maxAssignedPanelViews <= 0) return;
-    while (this.assignedPanelResources.size > this.maxAssignedPanelViews) {
-      const oldest = [...this.assignedPanelResources.entries()]
-        .filter(([panelId]) => panelId !== keepPanelId)
-        // Never evict a panel pinned by an active CDP client (mid-automation).
-        .filter(([panelId]) => !this.registry.getRuntimeLease(panelId)?.keepLoaded)
-        .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt)[0]?.[0];
-      if (!oldest) return;
-      await this.unloadAssignedPanelResource(oldest, "resource-cap");
-    }
+    const focused = this.registry.getFocusedPanelId();
+    const protectedIds = [keepPanelId, ...(focused ? [focused] : [])];
+    const victims = selectCapEvictionVictims(this.loadedSnapshots(), {
+      cap: this.maxAssignedPanelViews,
+      protectedIds,
+      ...this.gcPredicates(),
+    });
+    for (const id of victims) await this.unloadAssignedPanelResource(id, "resource-cap");
   }
 
   private async unloadAssignedPanelResource(

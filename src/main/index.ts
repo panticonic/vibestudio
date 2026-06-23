@@ -62,6 +62,8 @@ import { panelLogMethods } from "@natstack/shared/serviceSchemas/panelLog";
 import { corsApprovalMethods } from "@natstack/shared/serviceSchemas/corsApproval";
 import { externalOpenMethods } from "@natstack/shared/serviceSchemas/externalOpen";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
+import { PanelPinStore } from "./panelPinStore.js";
+import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@natstack/shared/constants";
 import { PanelView } from "./panelView.js";
 import { AppOrchestrator, type AppAvailableEvent } from "./appOrchestrator.js";
 import { resolveElectronViewCaller } from "./callerResolution.js";
@@ -2016,6 +2018,13 @@ app.on("ready", async () => {
       return pathname === "/" ? "" : pathname;
     })();
 
+    // Client-local pin store (desktop only). `userData` is already
+    // workspace-scoped, which is exactly the pin scope we want. Headless is out
+    // of scope for the UI GC and gets no pin store.
+    const panelPinStore = IS_HEADLESS_HOST
+      ? undefined
+      : new PanelPinStore(path.join(app.getPath("userData"), "panel-pins.json"));
+
     // Create PanelOrchestrator
     panelOrchestrator = new PanelOrchestrator({
       registry: panelRegistry,
@@ -2036,6 +2045,7 @@ app.on("ready", async () => {
         }
       },
       workspaceConfig: conn.workspaceConfig,
+      pinStore: panelPinStore,
       runtimeClient: IS_HEADLESS_HOST
         ? {
             label: "Headless",
@@ -2049,6 +2059,8 @@ app.on("ready", async () => {
             platform: "desktop",
             supportsCdp: true,
             loadOnLeaseAssignment: true,
+            maxAssignedPanelViews: PANEL_UI_MAX_LOADED_DESKTOP,
+            uiIdleUnloadMs: PANEL_UI_IDLE_UNLOAD_MS,
           },
     });
 

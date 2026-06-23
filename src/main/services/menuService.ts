@@ -116,22 +116,26 @@ export function createMenuService(deps: {
           const [panelId, position] = args as [string, { x: number; y: number }];
           const panel = registry.getPanel(panelId);
           const chrome = panel ? buildPanelChromeState({ panel }) : null;
-          const commands = getAvailablePanelCommands({ chrome }, [
-            "back",
-            "forward",
-            "reload-panel",
-            "reload-view",
-            "force-reload-view",
-            "rebuild-panel",
-            "stop",
-            "copy-address",
-            "copy-panel-id",
-            "open-external",
-            "duplicate",
-            "add-child",
-            "unload",
-            "archive",
-          ]);
+          const commands = getAvailablePanelCommands(
+            { chrome, isPinned: lifecycle.isPanelPinned(panelId) },
+            [
+              "back",
+              "forward",
+              "reload-panel",
+              "reload-view",
+              "force-reload-view",
+              "rebuild-panel",
+              "stop",
+              "copy-address",
+              "copy-panel-id",
+              "open-external",
+              "duplicate",
+              "add-child",
+              "toggle-pin",
+              "unload",
+              "archive",
+            ]
+          );
 
           return new Promise<PanelContextMenuAction | null>((resolve) => {
             const addCommand = (id: PanelCommandId): MenuItemConstructorOptions | null => {
@@ -155,6 +159,7 @@ export function createMenuService(deps: {
               addCommand("duplicate"),
               addCommand("add-child"),
               { type: "separator" },
+              addCommand("toggle-pin"),
               addCommand("unload"),
               { type: "separator" },
               addCommand("archive"),

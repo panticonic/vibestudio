@@ -378,6 +378,7 @@ export type PanelContextMenuAction =
   | "open-external"
   | "duplicate"
   | "add-child"
+  | "toggle-pin"
   | "unload"
   | "archive";
 

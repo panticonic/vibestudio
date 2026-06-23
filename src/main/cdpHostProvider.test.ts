@@ -41,6 +41,13 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
     stop: vi.fn(),
     debugger: debuggerApi,
   });
+  // `Page.captureScreenshot` is routed through ViewManager.captureView (which
+  // force-paints + reads back a frame), not the raw debugger — so the harness
+  // supplies a fake image.
+  const captureView = vi.fn(async () => ({
+    toPNG: () => Buffer.from("png-bytes"),
+    toJPEG: (_quality: number) => Buffer.from("jpeg-bytes"),
+  }));
   const provider = new CdpHostProvider({
     serverUrl,
     authToken: "token",
@@ -49,6 +56,7 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
       ({
         getWebContents: vi.fn(() => contents),
         openDevTools,
+        captureView,
       }) as never,
     socketFactory: (url) => {
       socketUrl = url;
@@ -61,6 +69,7 @@ function createHarness(serverUrl = "ws://127.0.0.1:1234") {
     contents,
     debuggerApi,
     openDevTools,
+    captureView,
     getSocketUrl: () => socketUrl,
   };
 }
@@ -144,9 +153,12 @@ describe("CdpHostProvider", () => {
     });
   });
 
-  it("forwards screenshot capture through the same serialized debugger command path", async () => {
-    const { provider, socket, debuggerApi } = createHarness();
-    debuggerApi.sendCommand.mockImplementationOnce(async () => ({ data: "base64-png" }));
+  it("captures screenshots via ViewManager.captureView, bypassing the raw debugger", async () => {
+    // Raw `Page.captureScreenshot` over CDP blocks forever on an unslotted/hidden
+    // panel (no compositor frame, no timeout). The provider instead routes it
+    // through Electron's capturePage (force-paint + frame read-back), which can
+    // only resolve or fail — never hang. So the debugger must NOT be used here.
+    const { provider, socket, debuggerApi, captureView } = createHarness();
     provider.registerTarget("panel-1", 42);
     provider.start();
     socket.emit("open");
@@ -160,16 +172,14 @@ describe("CdpHostProvider", () => {
       params: { format: "png" },
     });
 
-    expect(debuggerApi.sendCommand).toHaveBeenCalledWith(
-      "Page.captureScreenshot",
-      { format: "png" },
-      undefined
-    );
+    expect(captureView).toHaveBeenCalledWith("panel-1");
+    expect(debuggerApi.sendCommand).not.toHaveBeenCalled();
+    const data = Buffer.from("png-bytes").toString("base64");
     expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
       type: "cdp:result",
       targetId: "panel-1",
       requestId: "s1",
-      result: { data: "base64-png" },
+      result: { data },
     });
   });
 

@@ -102,4 +102,17 @@ export const panelMethods = defineServiceMethods({
     returns: z.void(),
     access: WRITE_ACCESS,
   },
+  togglePin: {
+    description:
+      "Toggle the client-local pin for a panel (by slot id). Returns the new pinned state.",
+    args: z.tuple([z.string()]),
+    returns: z.boolean(),
+    access: WRITE_ACCESS,
+  },
+  listPinnedPanelIds: {
+    description: "List the slot ids of all client-local pinned panels.",
+    args: z.tuple([]),
+    returns: z.array(z.string()),
+    access: READ_ACCESS,
+  },
 });

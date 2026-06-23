@@ -213,14 +213,13 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: shellWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("shell", "shell", {
         type: "request",
         requestId: "req-shell-server",
         fromId: "shell",
         method: "workspace.hostTargets.beginLaunch",
         args: ["electron"],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() => {

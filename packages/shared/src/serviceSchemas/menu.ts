@@ -41,6 +41,7 @@ const PanelContextMenuActionSchema = z.enum([
   "open-external",
   "duplicate",
   "add-child",
+  "toggle-pin",
   "unload",
   "archive",
 ]) satisfies z.ZodType<PanelContextMenuAction>;

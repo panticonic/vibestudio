@@ -28,6 +28,7 @@ function createOrchestrator(
     panelRestorePolicy?: "focused" | "none";
     runtimeClient?: ConstructorParameters<typeof PanelOrchestrator>[0]["runtimeClient"];
     workspaceConfig?: ConstructorParameters<typeof PanelOrchestrator>[0]["workspaceConfig"];
+    pinStore?: ConstructorParameters<typeof PanelOrchestrator>[0]["pinStore"];
   } = {}
 ) {
   const closedIds: string[] = [];
@@ -88,7 +89,12 @@ function createOrchestrator(
   // the orchestrator so awaitViewBuilt resolves, exactly as in production.
   const dispatchAssignedLease = async (
     runtimeEntityId: string,
-    request: { slotId: string; clientSessionId: string; connectionId: string }
+    request: {
+      slotId: string;
+      clientSessionId: string;
+      connectionId: string;
+      keepLoaded?: boolean;
+    }
   ): Promise<void> => {
     const orch = orchestratorRef;
     if (!orch) return;
@@ -103,6 +109,7 @@ function createOrchestrator(
       platform: "desktop" as const,
       supportsCdp: true,
       loadOnLeaseAssignment: false,
+      ...(request.keepLoaded ? { keepLoaded: true } : {}),
       acquiredAt: Date.now(),
     };
     await orch.handleRuntimeLeaseChanged({
@@ -201,6 +208,7 @@ function createOrchestrator(
         ? ({ id: "test", panelRestorePolicy: opts.panelRestorePolicy } as never)
         : undefined),
     runtimeClient: opts.runtimeClient,
+    pinStore: opts.pinStore,
   });
   orchestratorRef = orchestrator;
 
@@ -214,6 +222,28 @@ function createOrchestrator(
     serverClient,
     cdpHost,
     sendPanelEvent,
+    dispatchAssignedLease,
+  };
+}
+
+/** Minimal in-memory pin store for GC tests (mirrors PanelPinStore's surface). */
+function fakePinStore(initial: string[] = []) {
+  const pinned = new Set(initial);
+  return {
+    has: (id: string) => pinned.has(id),
+    toggle: (id: string) => {
+      if (pinned.has(id)) {
+        pinned.delete(id);
+        return false;
+      }
+      pinned.add(id);
+      return true;
+    },
+    list: () => [...pinned],
+    prune: (existing: Iterable<string>) => {
+      const keep = new Set(existing);
+      for (const id of pinned) if (!keep.has(id)) pinned.delete(id);
+    },
   };
 }
 
@@ -1297,7 +1327,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
     );
   });
 
-  it("unloads idle panels assigned to a load-on-assignment host", async () => {
+  it("idle-sweeps panels assigned to a load-on-assignment host (unified sweep, no per-panel timers)", async () => {
     vi.useFakeTimers();
     try {
       const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
@@ -1310,11 +1340,15 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
           platform: "headless",
           supportsCdp: true,
           loadOnLeaseAssignment: true,
-          assignedPanelIdleMs: 1000,
+          uiIdleUnloadMs: 1000,
+          uiIdleSweepMs: 500,
           restorePolicy: "none",
         },
       });
 
+      // Headless now uses the same sweep as desktop (armed on registration),
+      // not a per-panel one-shot timer.
+      await orchestrator.registerRuntimeClient();
       await orchestrator.handleRuntimeLeaseChanged({
         type: "panel:runtimeLeaseChanged",
         version: { epoch: "test", counter: 2 },
@@ -1336,7 +1370,8 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
         reason: "acquired",
       });
 
-      await vi.advanceTimersByTimeAsync(1000);
+      // First sweep at 500ms sees age 500 (< 1000); the sweep at 1000ms unloads.
+      await vi.advanceTimersByTimeAsync(1500);
 
       expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "release", [
         asPanelEntityId("panel:nav-panel-1"),
@@ -1361,7 +1396,6 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
         supportsCdp: true,
         loadOnLeaseAssignment: true,
         maxAssignedPanelViews: 1,
-        assignedPanelIdleMs: 0,
         restorePolicy: "none",
       },
     });
@@ -1427,5 +1461,211 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
 
     expect(serverClient.call).toHaveBeenCalledWith("panelTree", "snapshot", [panel.id]);
     expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+  });
+});
+
+describe("PanelOrchestrator UI GC (idle sweep + pin-aware cap)", () => {
+  const SESSION = "desktop-session";
+  const HOUR = 60 * 60 * 1000;
+
+  function gcHarness(
+    registry: PanelRegistry,
+    opts: {
+      cap?: number;
+      uiIdleUnloadMs?: number;
+      pinStore?: ConstructorParameters<typeof PanelOrchestrator>[0]["pinStore"];
+    } = {}
+  ) {
+    return createOrchestrator(registry, vi.fn(), {
+      pinStore: opts.pinStore,
+      runtimeClient: {
+        clientSessionId: SESSION,
+        platform: "desktop",
+        label: "Desktop",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+        maxAssignedPanelViews: opts.cap ?? 16,
+        uiIdleUnloadMs: opts.uiIdleUnloadMs ?? HOUR,
+      },
+    });
+  }
+
+  async function loadPanel(
+    harness: ReturnType<typeof createOrchestrator>,
+    registry: PanelRegistry,
+    id: string,
+    extra?: { keepLoaded?: boolean }
+  ) {
+    if (!registry.getPanel(id)) registry.addPanel(makePanel(id), null, { addAsRoot: true });
+    await harness.dispatchAssignedLease(`panel:nav-${id}`, {
+      slotId: id,
+      clientSessionId: SESSION,
+      connectionId: `conn-${id}`,
+      keepLoaded: extra?.keepLoaded,
+    });
+  }
+
+  it("unloads an inactive loaded panel on a sweep tick after 1h", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+      const harness = gcHarness(registry);
+      await harness.orchestrator.registerRuntimeClient();
+      await loadPanel(harness, registry, "panel:tree/idle");
+      const spy = vi.spyOn(harness.orchestrator, "unloadPanel");
+
+      vi.advanceTimersByTime(HOUR + 5 * 60 * 1000);
+
+      expect(spy).toHaveBeenCalledWith("panel:tree/idle", "unload");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not unload the focused/visible panel", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+      const harness = gcHarness(registry);
+      await harness.orchestrator.registerRuntimeClient();
+      await loadPanel(harness, registry, "panel:tree/focused");
+      await loadPanel(harness, registry, "panel:tree/bg");
+      registry.updateSelectedPath("panel:tree/focused");
+      const spy = vi.spyOn(harness.orchestrator, "unloadPanel");
+
+      vi.advanceTimersByTime(HOUR + 5 * 60 * 1000);
+
+      expect(spy).toHaveBeenCalledWith("panel:tree/bg", "unload");
+      expect(spy).not.toHaveBeenCalledWith("panel:tree/focused", "unload");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not idle-unload a pinned panel", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+      const pinStore = fakePinStore(["panel:tree/pinned"]);
+      const harness = gcHarness(registry, { pinStore });
+      await harness.orchestrator.registerRuntimeClient();
+      await loadPanel(harness, registry, "panel:tree/pinned");
+      await loadPanel(harness, registry, "panel:tree/plain");
+      const spy = vi.spyOn(harness.orchestrator, "unloadPanel");
+
+      vi.advanceTimersByTime(HOUR + 5 * 60 * 1000);
+
+      expect(spy).toHaveBeenCalledWith("panel:tree/plain", "unload");
+      expect(spy).not.toHaveBeenCalledWith("panel:tree/pinned", "unload");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not idle-unload a keepLoaded (automation) panel", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+      const harness = gcHarness(registry);
+      await harness.orchestrator.registerRuntimeClient();
+      await loadPanel(harness, registry, "panel:tree/automated", { keepLoaded: true });
+      await loadPanel(harness, registry, "panel:tree/plain");
+      const spy = vi.spyOn(harness.orchestrator, "unloadPanel");
+
+      vi.advanceTimersByTime(HOUR + 5 * 60 * 1000);
+
+      expect(spy).toHaveBeenCalledWith("panel:tree/plain", "unload");
+      expect(spy).not.toHaveBeenCalledWith("panel:tree/automated", "unload");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("makes an unpinned long-idle panel eligible on the very next sweep (no extra-hour wait)", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+      const pinStore = fakePinStore(["panel:tree/p"]);
+      const harness = gcHarness(registry, { pinStore });
+      await harness.orchestrator.registerRuntimeClient();
+      await loadPanel(harness, registry, "panel:tree/p");
+
+      // Pinned: survives 2h of sweeps. lastUsedAt is never reset by protection.
+      vi.advanceTimersByTime(2 * HOUR);
+      const spy = vi.spyOn(harness.orchestrator, "unloadPanel");
+
+      // Unpin → eligible on the very next tick (still >1h idle).
+      pinStore.toggle("panel:tree/p");
+      vi.advanceTimersByTime(5 * 60 * 1000);
+
+      expect(spy).toHaveBeenCalledWith("panel:tree/p", "unload");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("manual unload of a pinned panel still unloads and keeps the pin", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const pinStore = fakePinStore(["panel:tree/pinned"]);
+    const harness = gcHarness(registry, { pinStore });
+    await harness.orchestrator.registerRuntimeClient();
+    await loadPanel(harness, registry, "panel:tree/pinned");
+
+    await harness.orchestrator.unloadPanel("panel:tree/pinned", "unload");
+
+    expect(harness.serverClient.call).toHaveBeenCalledWith("panelRuntime", "release", [
+      "panel:nav-panel:tree/pinned",
+      "conn-panel:tree/pinned",
+    ]);
+    // The pin is independent of unload — it persists.
+    expect(pinStore.has("panel:tree/pinned")).toBe(true);
+  });
+
+  it("cap eviction prefers an unpinned panel over a pinned one", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const pinStore = fakePinStore(["panel:tree/pinned"]);
+    const harness = gcHarness(registry, { cap: 2, pinStore });
+    await harness.orchestrator.registerRuntimeClient();
+    await loadPanel(harness, registry, "panel:tree/pinned");
+    await loadPanel(harness, registry, "panel:tree/old-unpinned");
+    const spy = vi.spyOn(harness.orchestrator, "unloadPanel");
+
+    // Loading a third panel exceeds cap=2 → evict the oldest unpinned.
+    await loadPanel(harness, registry, "panel:tree/newest");
+
+    expect(spy).toHaveBeenCalledWith("panel:tree/old-unpinned", "unload");
+    expect(spy).not.toHaveBeenCalledWith("panel:tree/pinned", "unload");
+    expect(spy).not.toHaveBeenCalledWith("panel:tree/newest", "unload");
+  });
+
+  it("focusing an UNLOADED panel creates no tracked resource (no phantom entry)", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+      const harness = gcHarness(registry, { uiIdleUnloadMs: 1 });
+      await harness.orchestrator.registerRuntimeClient();
+      registry.addPanel(makePanel("panel:tree/a"), null, { addAsRoot: true });
+      registry.addPanel(makePanel("panel:tree/b"), null, { addAsRoot: true });
+
+      // Focus A (unloaded), then B (unloaded). The focus hook bumps A's activity
+      // — it must NOT create a tracked entry for the unloaded A.
+      await harness.orchestrator.focusPanel("panel:tree/a");
+      await harness.orchestrator.focusPanel("panel:tree/b");
+      const spy = vi.spyOn(harness.orchestrator, "unloadPanel");
+
+      vi.advanceTimersByTime(5 * 60 * 1000);
+
+      // Nothing is tracked, so the idle sweep unloads nothing.
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("prunes pins for slot ids removed from the tree", () => {
+    const store = fakePinStore(["panel:tree/keep", "panel:tree/gone"]);
+    store.prune(["panel:tree/keep"]);
+    expect(store.has("panel:tree/keep")).toBe(true);
+    expect(store.has("panel:tree/gone")).toBe(false);
   });
 });
