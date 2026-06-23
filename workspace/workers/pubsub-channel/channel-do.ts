@@ -738,7 +738,7 @@ export class PubSubChannel extends DurableObjectBase {
     await this.unsubscribeParticipant(participantId, "graceful");
   }
 
-  @rpc({ callers: ["server", "shell", "harness"] })
+  @rpc({ callers: ["server", "shell"] })
   async adminUnsubscribeParticipant(participantId: string): Promise<void> {
     this.assertAdminCaller("adminUnsubscribeParticipant");
     await this.unsubscribeParticipant(participantId, "graceful");
@@ -954,7 +954,7 @@ export class PubSubChannel extends DurableObjectBase {
     await this.updateParticipantMetadata(participantId, metadata);
   }
 
-  @rpc({ callers: ["server", "shell", "harness"] })
+  @rpc({ callers: ["server", "shell"] })
   async adminUpdateParticipantMetadata(
     participantId: string,
     metadata: Record<string, unknown>
@@ -981,7 +981,7 @@ export class PubSubChannel extends DurableObjectBase {
     this.setParticipantTypingState(participantId, typing);
   }
 
-  @rpc({ callers: ["server", "shell", "harness"] })
+  @rpc({ callers: ["server", "shell"] })
   async adminSetParticipantTypingState(participantId: string, typing: boolean): Promise<void> {
     this.assertAdminCaller("adminSetParticipantTypingState");
     this.setParticipantTypingState(participantId, typing);
@@ -1094,7 +1094,7 @@ export class PubSubChannel extends DurableObjectBase {
     return null;
   }
 
-  @rpc({ callers: ["server", "shell", "harness"] })
+  @rpc({ callers: ["server", "shell"] })
   async adminInspectSchema() {
     this.assertAdminCaller("adminInspectSchema");
     const tableNames = ["participants", "pending_calls", "dedup_keys"];
@@ -1125,7 +1125,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["server", "shell", "harness"] })
+  @rpc({ callers: ["server", "shell"] })
   async adminInspectLog(
     opts: {
       afterId?: number;
@@ -1153,13 +1153,13 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["server", "shell", "harness"] })
+  @rpc({ callers: ["server", "shell"] })
   async adminInspectEnvelope(envelopeId: string) {
     this.assertAdminCaller("adminInspectMessageChain");
     return { rows: await this.channelLog.inspectEnvelope(envelopeId) };
   }
 
-  @rpc({ callers: ["server", "shell", "harness"] })
+  @rpc({ callers: ["server", "shell"] })
   async adminReconstructTranscript(opts: { rootLimit?: number; beforeSeq?: number } = {}) {
     this.assertAdminCaller("adminReconstructTranscript");
     const envelope =
@@ -1175,7 +1175,7 @@ export class PubSubChannel extends DurableObjectBase {
     };
   }
 
-  @rpc({ callers: ["server", "shell", "harness"] })
+  @rpc({ callers: ["server", "shell"] })
   async adminValidateLog(opts: { rootLimit?: number } = {}) {
     this.assertAdminCaller("adminValidateLog");
     const issues: Array<{ code: string; message: string; rowId?: number }> = [];
@@ -1336,12 +1336,12 @@ export class PubSubChannel extends DurableObjectBase {
     );
   }
 
-  @rpc({ callers: ["server", "harness"] })
+  @rpc({ callers: ["server"] })
   async cancelMethodCall(callId: string): Promise<void> {
     await this.calls.cancelMethodCall(callId, "cancelled");
   }
 
-  @rpc({ callers: ["server", "harness"] })
+  @rpc({ callers: ["server"] })
   async timeoutMethodCall(callId: string, reason?: string): Promise<void> {
     const pending = await this.calls.cancelMethodCall(callId, reason ?? "timed out");
     if (!pending) return;
@@ -1570,7 +1570,7 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── State introspection ─────────────────────────────────────────────────
 
-  @rpc({ callers: ["panel", "server", "shell", "harness"] })
+  @rpc({ callers: ["panel", "server", "shell"] })
   override async getState(): Promise<Record<string, unknown>> {
     const replay = await this.channelLog.replayInitial(1, this.currentReplayContext());
     const participants = this.sql.exec(`SELECT * FROM participants`).toArray();

@@ -547,7 +547,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * server has already verified and decoded the Cloud Pub/Sub envelope; Gmail
    * interpretation and fanout stay here.
    */
-  @rpc({ callers: ["server", "harness"] })
+  @rpc({ callers: ["server"] })
   async onWebhookDelivery(event: WebhookDeliveryEvent): Promise<{ synced: string[] }> {
     const caller = this.caller;
     if (caller && !["server"].includes(caller.callerKind)) {
@@ -653,7 +653,7 @@ export class GmailAgentWorker extends AgentWorkerBase {
    * Sync every channel bound to that address now; the follow-up alarm runs
    * the triage/wake pipeline.
    */
-  @rpc({ callers: ["server", "harness", "do"] })
+  @rpc({ callers: ["server", "do"] })
   async onGmailPushNotification(payload: { emailAddress: string; historyId: string }): Promise<{
     synced: string[];
   }> {
