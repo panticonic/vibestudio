@@ -2005,7 +2005,8 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
       .toArray();
     expect(rows).toHaveLength(2);
     expect(JSON.parse(rows[0]!["annotations_json"] as string)).toMatchObject({ agentHops: 1 });
-    expect(JSON.parse(rows[1]!["annotations_json"] as string)).toMatchObject({ agentHops: 2 });
+    // agent:one's 2nd consecutive message (same author, one turn) is NOT a new hop → still 1.
+    expect(JSON.parse(rows[1]!["annotations_json"] as string)).toMatchObject({ agentHops: 1 });
     // the payload itself is never mutated by the transport
     for (const row of rows) {
       const payload = JSON.parse(row["payload_ref_json"] as string) as {
@@ -2048,7 +2049,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
       agentCompleted("msg-p2")
     );
     const parentState = await parent.instance.getPolicyState();
-    expect(parentState.state).toMatchObject({ agentStreak: 2, lastCompletedSender: "agent:one" });
+    expect(parentState.state).toMatchObject({ agentStreak: 1, lastCompletedSender: "agent:one" });
 
     const fork = await createGadBackedChannel({
       channelKey: "channel-policy-fork",
@@ -2058,7 +2059,7 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
 
     // conversation state SURVIVES the fork — rebuilt by replaying the lineage
     const forkState = await fork.instance.getPolicyState();
-    expect(forkState.state).toMatchObject({ agentStreak: 2, lastCompletedSender: "agent:one" });
+    expect(forkState.state).toMatchObject({ agentStreak: 1, lastCompletedSender: "agent:one" });
 
     setRpcCaller(fork.instance, "agent:one", "server");
     await fork.instance.subscribe("agent:one", {
@@ -2078,7 +2079,8 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
         AGENTIC_EVENT_PAYLOAD_KIND
       )
       .toArray();
-    expect(JSON.parse(stamped[0]!["annotations_json"] as string)).toMatchObject({ agentHops: 3 });
+    // msg-f1 is agent:one again (same author across the fork) → still 1 hop, not 3.
+    expect(JSON.parse(stamped[0]!["annotations_json"] as string)).toMatchObject({ agentHops: 1 });
   });
 
   it("dedupes idempotent publishes durably across a dedup_keys wipe", async () => {
