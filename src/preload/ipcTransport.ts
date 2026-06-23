@@ -6,24 +6,25 @@
  */
 
 import { ipcRenderer } from "electron";
+import type { RpcEnvelope } from "@natstack/rpc";
 import type { TransportBridge } from "./wsTransport.js";
 
-type AnyMessageHandler = (fromId: string, message: unknown) => void;
+type EnvelopeHandler = (envelope: RpcEnvelope) => void;
 
 /**
  * Create an IPC-based transport bridge for the shell.
  *
- * Messages are sent via ipcRenderer.send("natstack:rpc:send", targetId, message)
- * and received via ipcRenderer.on("natstack:rpc:message", (event, fromId, message)).
+ * Messages are sent via ipcRenderer.send("natstack:rpc:send", envelope)
+ * and received via ipcRenderer.on("natstack:rpc:message", (event, envelope)).
  */
 export function createIpcTransport(): TransportBridge {
-  const listeners = new Set<AnyMessageHandler>();
+  const listeners = new Set<EnvelopeHandler>();
 
   // Receive messages from main process
-  ipcRenderer.on("natstack:rpc:message", (_event, fromId: string, message: unknown) => {
+  ipcRenderer.on("natstack:rpc:message", (_event, envelope: RpcEnvelope) => {
     for (const listener of listeners) {
       try {
-        listener(fromId, message);
+        listener(envelope);
       } catch (error) {
         console.error("Error in IPC transport message handler:", error);
       }
@@ -31,11 +32,11 @@ export function createIpcTransport(): TransportBridge {
   });
 
   return {
-    async send(targetId: string, message: unknown): Promise<void> {
-      ipcRenderer.send("natstack:rpc:send", targetId, message);
+    async send(envelope: RpcEnvelope): Promise<void> {
+      ipcRenderer.send("natstack:rpc:send", envelope);
     },
 
-    onMessage(handler: AnyMessageHandler): () => void {
+    onMessage(handler: EnvelopeHandler): () => void {
       listeners.add(handler);
       return () => listeners.delete(handler);
     },

@@ -8,12 +8,12 @@ import { createRuntime } from "./createRuntime.js";
 import { getInjectedConfig, type InjectedConfig } from "../shared/globals.js";
 import { assertPanelPrincipalId } from "@natstack/shared/principalIds";
 import type { RuntimeFs } from "../types.js";
-import type { RpcTransport } from "@natstack/rpc";
+import type { EnvelopeRpcTransport } from "@natstack/rpc";
 import { _initFsWithRpc } from "../panel/fs.js";
 
 export interface InitRuntimeOptions {
   /** Function to create the RPC transport */
-  createTransport: () => RpcTransport;
+  createTransport: () => EnvelopeRpcTransport;
   /** Filesystem implementation (RPC-backed proxy) */
   fs: RuntimeFs;
   /** Optional function to set up globals before runtime initialization */

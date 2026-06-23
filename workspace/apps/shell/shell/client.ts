@@ -6,7 +6,6 @@
  */
 import {
   createRpcClient,
-  envelopeFromMessage,
   type EnvelopeRpcTransport,
   type RpcClient,
   type RpcEnvelope,
@@ -30,8 +29,8 @@ import { workspaceMethods } from "@natstack/shared/serviceSchemas/workspace";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
-  send: (targetId: string, message: unknown) => Promise<void>;
-  onMessage: (handler: (fromId: string, message: unknown) => void) => () => void;
+  send: (envelope: RpcEnvelope) => Promise<void>;
+  onMessage: (handler: (envelope: RpcEnvelope) => void) => () => void;
 };
 type IncomingPairLinkBridge = {
   getPending: () => Promise<{ url: string; code: string } | null>;
@@ -43,19 +42,8 @@ const g = globalThis as unknown as {
 };
 if (!g.__natstackTransport) throw new Error("Shell transport not available");
 const transport: EnvelopeRpcTransport = {
-  send: (envelope) => assertPresent(g.__natstackTransport).send(envelope.target, envelope.message),
-  onMessage: (handler) =>
-    assertPresent(g.__natstackTransport).onMessage((fromId, message) => {
-      handler(
-        envelopeFromMessage({
-          selfId: "shell",
-          from: fromId,
-          target: "shell",
-          callerKind: fromId === "main" ? "server" : "unknown",
-          message: message as RpcEnvelope["message"],
-        })
-      );
-    }),
+  send: (envelope) => assertPresent(g.__natstackTransport).send(envelope),
+  onMessage: (handler) => assertPresent(g.__natstackTransport).onMessage(handler),
   status: () => "connected",
   ready: () => Promise.resolve(),
   onStatusChange: () => () => {},
@@ -82,8 +70,10 @@ const menuClient = createTypedServiceClient("menu", menuMethods, (service, metho
 const panelClient = createTypedServiceClient("panel", panelMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
-const panelTreeClient = createTypedServiceClient("panelTree", panelTreeMethods, (service, method, args) =>
-  rpc.call("main", `${service}.${method}`, args)
+const panelTreeClient = createTypedServiceClient(
+  "panelTree",
+  panelTreeMethods,
+  (service, method, args) => rpc.call("main", `${service}.${method}`, args)
 );
 const paletteClient = createTypedServiceClient("palette", paletteMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
@@ -169,7 +159,8 @@ export const panel = {
   forceReloadView: (panelId: string) => panelClient.forceReloadView(panelId),
   rebuildPanel: (panelId: string) => panelTreeClient.rebuildPanel(panelId),
   rebuildAndReload: (panelId: string) => panelTreeClient.rebuildAndReload(panelId),
-  navigateHistory: (panelId: string, delta: -1 | 1) => panelTreeClient.navigateHistory(panelId, delta),
+  navigateHistory: (panelId: string, delta: -1 | 1) =>
+    panelTreeClient.navigateHistory(panelId, delta),
   unload: (panelId: string) => panelTreeClient.unload(panelId),
   archive: (panelId: string) => panelTreeClient.archive(panelId),
   updatePanelState: (

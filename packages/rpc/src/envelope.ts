@@ -1,9 +1,4 @@
-import type {
-  AuthenticatedCaller,
-  CallerKind,
-  RpcEnvelope,
-  RpcMessage,
-} from "./types.js";
+import type { AuthenticatedCaller, CallerKind, RpcEnvelope, RpcMessage } from "./types.js";
 
 export interface EnvelopeInput {
   selfId: string;
@@ -14,11 +9,12 @@ export interface EnvelopeInput {
   caller?: AuthenticatedCaller;
   provenance?: AuthenticatedCaller[];
   idempotencyKey?: string;
+  readOnly?: boolean;
 }
 
 export function authenticatedCaller(
   callerId: string,
-  callerKind: CallerKind | "unknown" = "unknown",
+  callerKind: CallerKind | "unknown" = "unknown"
 ): AuthenticatedCaller {
   return { callerId, callerKind };
 }
@@ -35,6 +31,7 @@ export function envelopeFromMessage(input: EnvelopeInput): RpcEnvelope {
     delivery: {
       caller,
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      ...(input.readOnly ? { readOnly: true } : {}),
     },
     provenance: input.provenance?.length ? input.provenance : [caller],
     message: input.message,
@@ -49,7 +46,7 @@ export function retargetEnvelope(envelope: RpcEnvelope, target: string): RpcEnve
 export function responseEnvelopeFor(
   requestEnvelope: RpcEnvelope,
   responder: AuthenticatedCaller,
-  message: RpcMessage,
+  message: RpcMessage
 ): RpcEnvelope {
   return {
     from: requestEnvelope.target,

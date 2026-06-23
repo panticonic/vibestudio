@@ -199,7 +199,6 @@ export type CallerKind =
   | "worker"
   | "do"
   | "extension"
-  | "harness"
   | "server";
 
 /**
@@ -224,13 +223,23 @@ export type StreamingMethodFrame =
 export type StreamingMethodHandler = (
   args: unknown[],
   sink: (frame: StreamingMethodFrame) => Promise<void> | void,
-  abortSignal: AbortSignal,
+  abortSignal: AbortSignal
 ) => Promise<void>;
 
 export interface RpcCallOptions {
   timeoutMs?: number;
   signal?: AbortSignal;
   idempotencyKey?: string;
+  /** Request read-only containment: the server dispatcher refuses any non-`read`
+   *  method for this call. Propagated to `ServiceContext.readOnly`. */
+  readOnly?: boolean;
+}
+
+export interface RpcStreamOptions {
+  signal?: AbortSignal;
+  idempotencyKey?: string;
+  /** Request read-only containment for streaming calls. */
+  readOnly?: boolean;
 }
 
 export interface RpcCaller {
@@ -238,7 +247,7 @@ export interface RpcCaller {
     targetId: string,
     method: string,
     args: unknown[],
-    options?: RpcCallOptions,
+    options?: RpcCallOptions
   ): Promise<T>;
   /**
    * Streaming call. Returns a `Response` whose body is a real
@@ -256,7 +265,7 @@ export interface RpcCaller {
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { signal?: AbortSignal; idempotencyKey?: string },
+    options?: RpcStreamOptions
   ): Promise<Response>;
 }
 
@@ -266,6 +275,8 @@ export interface RpcEnvelope {
   delivery: {
     caller: AuthenticatedCaller;
     idempotencyKey?: string;
+    /** Read-only containment flag — extracted server-side into ServiceContext.readOnly. */
+    readOnly?: boolean;
   };
   provenance: AuthenticatedCaller[];
   message: RpcMessage;
@@ -306,14 +317,14 @@ export interface RpcEventContext {
 }
 
 export type RpcContextHandler<TArgs extends unknown[] = unknown[], TReturn = unknown> = (
-  request: RpcRequestContext & { args: TArgs },
+  request: RpcRequestContext & { args: TArgs }
 ) => TReturn | Promise<TReturn>;
 
 export type RpcContextMethods = Record<string, RpcContextHandler<any, any>>;
 
 export type RpcContextStreamingHandler = (
   request: RpcRequestContext,
-  sink: (frame: StreamingMethodFrame) => Promise<void> | void,
+  sink: (frame: StreamingMethodFrame) => Promise<void> | void
 ) => Promise<void>;
 
 export type MethodMap = Record<string, (...args: any[]) => any>;
@@ -334,12 +345,12 @@ export interface RpcPeer<
   readonly call: TypedCallProxy<TMethods>;
   on<K extends keyof TEvents & string>(
     event: K,
-    listener: (event: RpcEventContext & { payload: TEvents[K] }) => void,
+    listener: (event: RpcEventContext & { payload: TEvents[K] }) => void
   ): () => void;
   emit<K extends keyof TEmitEvents & string>(event: K, payload: TEmitEvents[K]): Promise<void>;
   withContract<C extends RpcContract, Role extends keyof C & string>(
     contract: C,
-    role: Role,
+    role: Role
   ): RpcPeer<
     C[Role] extends { methods: infer M extends MethodMap } ? M : MethodMap,
     C[Role] extends { events: infer E extends EventMap } ? E : EventMap,
@@ -387,7 +398,7 @@ export type DeferrableRpcClient = RpcClient & {
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { requestId?: string; idempotencyKey?: string },
+    options?: { requestId?: string; idempotencyKey?: string }
   ): Promise<DeferredCallAck>;
 };
 
@@ -395,7 +406,7 @@ export interface RpcClient {
   readonly selfId: string;
   expose<TArgs extends unknown[], TReturn>(
     method: string,
-    handler: RpcContextHandler<TArgs, TReturn>,
+    handler: RpcContextHandler<TArgs, TReturn>
   ): void;
   exposeAll(methods: RpcContextMethods): void;
   exposeStreaming(method: string, handler: RpcContextStreamingHandler): void;
@@ -403,13 +414,13 @@ export interface RpcClient {
     targetId: string,
     method: string,
     args: unknown[],
-    options?: RpcCallOptions,
+    options?: RpcCallOptions
   ): Promise<T>;
   stream(
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { signal?: AbortSignal; idempotencyKey?: string },
+    options?: RpcStreamOptions
   ): Promise<Response>;
   emit(targetId: string, event: string, payload: unknown, options?: RpcCallOptions): Promise<void>;
   on(event: string, listener: (event: RpcEventContext) => void): () => void;
@@ -418,7 +429,7 @@ export interface RpcClient {
     TEvents extends EventMap = EventMap,
     TEmitEvents extends EventMap = TEvents,
   >(
-    targetId: string,
+    targetId: string
   ): RpcPeer<TMethods, TEvents, TEmitEvents>;
   status(): RpcConnectionStatus;
   ready(): Promise<void>;

@@ -42,7 +42,7 @@ function makeBridge(transport: WsServerTransportInternal) {
     callerKind: "server",
     transport: {
       async send(envelope) {
-        await transport.send(envelope.target, envelope.message);
+        await transport.sendEnvelope(envelope);
       },
       onMessage(handler) {
         return transport.onAnyMessage((sourceId, message, callerKind) => {
@@ -129,5 +129,37 @@ describe("createWsServerTransport", () => {
 
     // Closing afterwards must not throw / re-settle anything.
     expect(() => ws.emitClose()).not.toThrow();
+  });
+
+  it("includes delivery metadata when the bridge sends a call envelope", async () => {
+    const ws = new FakeWs();
+    const transport = createWsServerTransport({
+      ws: ws as unknown as WebSocket,
+      clientId: "panel:5:conn-e",
+    });
+    const bridge = makeBridge(transport);
+
+    const call = bridge.call<number>("panel:5", "inspect", [], {
+      idempotencyKey: "idem-1",
+      readOnly: true,
+    });
+    const frame = JSON.parse(ws.sent[0] ?? "{}") as {
+      envelope: RpcEnvelope;
+      message: { requestId: string };
+    };
+
+    expect(frame.envelope.delivery).toMatchObject({
+      idempotencyKey: "idem-1",
+      readOnly: true,
+    });
+    expect(frame.message).toEqual(frame.envelope.message);
+
+    transport.deliver("panel:5", {
+      type: "response",
+      requestId: frame.message.requestId,
+      result: 5,
+    });
+
+    await expect(call).resolves.toBe(5);
   });
 });

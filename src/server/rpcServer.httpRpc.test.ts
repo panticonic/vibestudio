@@ -124,6 +124,7 @@ function toEnvelope(body: Record<string, unknown>): Record<string, unknown> {
     delivery: {
       caller,
       ...(body["idempotencyKey"] ? { idempotencyKey: body["idempotencyKey"] } : {}),
+      ...(body["readOnly"] ? { readOnly: true } : {}),
     },
     provenance: [caller],
     message: {
@@ -143,7 +144,7 @@ function toStreamEnvelope(body: Record<string, unknown>): Record<string, unknown
   return {
     from: caller.callerId,
     target: (body["targetId"] as string | undefined) ?? "main",
-    delivery: { caller },
+    delivery: { caller, ...(body["readOnly"] ? { readOnly: true } : {}) },
     provenance: [caller],
     message: {
       type: "stream-request",
@@ -151,6 +152,7 @@ function toStreamEnvelope(body: Record<string, unknown>): Record<string, unknown
       fromId: caller.callerId,
       method: body["method"],
       args: body["args"] ?? [],
+      ...(body["readOnly"] ? { readOnly: true } : {}),
     },
   };
 }
@@ -200,6 +202,7 @@ describe("RpcServer HTTP POST /rpc", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await gateway.stop();
     await setup.server.stop();
   });
@@ -688,6 +691,53 @@ describe("RpcServer HTTP POST /rpc", () => {
       expect(body["error"]).toContain("Target not reachable");
       expect(body["error"]).not.toContain("cannot relay to unrelated panel");
     });
+
+    it("propagates readOnly metadata when relaying HTTP calls to workers", async () => {
+      setup.server.setWorkerdUrl("http://127.0.0.1:8787");
+      setup.server.setWorkerdGatewayToken("gateway-token");
+      const realFetch = globalThis.fetch.bind(globalThis);
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url =
+          typeof input === "string" || input instanceof URL ? String(input) : String(input.url);
+        if (url.startsWith("http://127.0.0.1:8787/")) {
+          return new Response(
+            JSON.stringify({
+              from: "worker:docs",
+              target: "test-caller",
+              delivery: { caller: { callerId: "worker:docs", callerKind: "worker" } },
+              provenance: [],
+              message: { type: "response", requestId: "x", result: { ok: true } },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return realFetch(input, init);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const { status, body } = await postRpc(port, setup.workerToken, {
+        type: "call",
+        targetId: "worker:docs",
+        method: "docs.list",
+        args: [],
+        idempotencyKey: "idem-1",
+        readOnly: true,
+      });
+
+      expect(status).toBe(200);
+      expect(body["result"]).toEqual({ ok: true });
+      const relayCall = fetchMock.mock.calls.find(([input]) => {
+        const url =
+          typeof input === "string" || input instanceof URL ? String(input) : String(input.url);
+        return url.startsWith("http://127.0.0.1:8787/");
+      });
+      expect(relayCall).toBeTruthy();
+      const envelope = JSON.parse(String(relayCall![1]!.body));
+      expect(envelope.delivery).toMatchObject({
+        idempotencyKey: "idem-1",
+        readOnly: true,
+      });
+    });
   });
 
   describe("/rpc/stream service-policy enforcement", () => {
@@ -752,6 +802,61 @@ describe("RpcServer HTTP POST /rpc", () => {
           ),
         });
         expect(res.status).toBe(403);
+        expect(stubEgress.forwardProxyFetchStream).not.toHaveBeenCalled();
+      } finally {
+        await gw.stop();
+        await server.stop();
+      }
+    });
+
+    it("blocks credentials.proxyFetch in read-only HTTP stream RPC", async () => {
+      const tokenManager = new TokenManager();
+      const workerToken = tokenManager.ensureToken("do:test:Worker:obj1", "worker");
+      const stubEgress = { forwardProxyFetchStream: vi.fn() };
+      const dispatcher = {
+        dispatch: vi.fn(),
+        getPolicy: vi.fn((service: string) => {
+          if (service === "credentials") {
+            return { allowed: ["worker"] as CallerKind[] };
+          }
+          return undefined;
+        }),
+        getMethodPolicy: vi.fn(() => undefined),
+        getMethodSchema: vi.fn((service: string, method: string) => {
+          if (service === "credentials" && method === "proxyFetch") {
+            return { access: { sensitivity: "write" } };
+          }
+          return undefined;
+        }),
+        initialized: true,
+      } as unknown as ServiceDispatcher;
+      const server = new RpcServer({ tokenManager, dispatcher, egressProxy: stubEgress });
+      server.initHandlers();
+      const gw = new Gateway({
+        tokenManager,
+        externalHost: "localhost",
+        getRpcHandler: () => server,
+      });
+      const p = await gw.start(0);
+      try {
+        const res = await fetch(`http://127.0.0.1:${p}/rpc/stream`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${workerToken}`,
+          },
+          body: JSON.stringify(
+            toStreamEnvelope({
+              targetId: "main",
+              method: "credentials.proxyFetch",
+              args: [{ url: "https://example.com/", method: "GET" }],
+              readOnly: true,
+            })
+          ),
+        });
+        expect(res.status).toBe(403);
+        const body = (await res.json()) as { error?: string };
+        expect(body.error).toContain("Blocked in read-only mode");
         expect(stubEgress.forwardProxyFetchStream).not.toHaveBeenCalled();
       } finally {
         await gw.stop();

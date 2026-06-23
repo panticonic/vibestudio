@@ -4,7 +4,7 @@ import {
   type ServiceContext,
   type VerifiedCodeIdentity,
 } from "@natstack/shared/serviceDispatcher";
-import type { RpcMessage } from "@natstack/rpc";
+import type { RpcEnvelope, RpcMessage } from "@natstack/rpc";
 import { IpcDispatcher } from "./ipcDispatcher.js";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
@@ -23,6 +23,38 @@ function makeWebContents(id: number) {
     isDestroyed: vi.fn(() => false),
     send: vi.fn(),
   };
+}
+
+function rpcEnvelope(
+  from: string,
+  callerKind: "server" | "shell" | "app" | "panel" | "unknown",
+  message: RpcMessage,
+  delivery?: Pick<RpcEnvelope["delivery"], "idempotencyKey" | "readOnly">,
+  target = "main"
+): RpcEnvelope {
+  const caller = { callerId: from, callerKind };
+  return {
+    from,
+    target,
+    delivery: { caller, ...delivery },
+    provenance: [caller],
+    message,
+  };
+}
+
+function expectSentRpcMessage(
+  wc: ReturnType<typeof makeWebContents>,
+  target: string,
+  message: RpcMessage
+): void {
+  expect(wc.send).toHaveBeenCalledWith(
+    "natstack:rpc:message",
+    expect.objectContaining({
+      from: "main",
+      target,
+      message,
+    })
+  );
 }
 
 function makeDispatcher(opts: {
@@ -87,14 +119,13 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: appWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
         requestId: "req-1",
         fromId: "@workspace-apps/shell",
         method: "workspace.getInfo",
         args: [],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() => {
@@ -107,7 +138,7 @@ describe("IpcDispatcher", () => {
     });
     expect(serverClient.call).not.toHaveBeenCalled();
     await vi.waitFor(() => {
-      expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
+      expectSentRpcMessage(appWc, "@workspace-apps/shell", {
         type: "response",
         requestId: "req-1",
         result: { workspace: "ok" },
@@ -132,14 +163,13 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: shellWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("shell", "shell", {
         type: "request",
         requestId: "req-paneltree",
         fromId: "@workspace-apps/shell",
         method: "panelTree.getTreeSnapshot",
         args: [],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() => {
@@ -160,7 +190,7 @@ describe("IpcDispatcher", () => {
       })
     );
     await vi.waitFor(() => {
-      expect(shellWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
+      expectSentRpcMessage(shellWc, "shell", {
         type: "response",
         requestId: "req-paneltree",
         result: { rootPanels: [] },
@@ -211,14 +241,13 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: panelWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("panel-1", "panel", {
         type: "request",
         requestId: "req-1",
         fromId: "panel-1",
         method: "workspace.getInfo",
         args: [],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -242,18 +271,17 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: appWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
         requestId: "req-fs-denied",
         fromId: "@workspace-apps/shell",
         method: "fs.readFile",
         args: ["/hello.txt", "utf8"],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() => {
-      expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
+      expectSentRpcMessage(appWc, "@workspace-apps/shell", {
         type: "response",
         requestId: "req-fs-denied",
         error: "fs.readFile requires app capability 'fs-read'",
@@ -279,14 +307,13 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: appWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
         requestId: "req-fs-ok",
         fromId: "@workspace-apps/shell",
         method: "fs.readFile",
         args: ["/hello.txt", "utf8"],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() => {
@@ -302,12 +329,50 @@ describe("IpcDispatcher", () => {
       "utf8",
     ]);
     await vi.waitFor(() => {
-      expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
+      expectSentRpcMessage(appWc, "@workspace-apps/shell", {
         type: "response",
         requestId: "req-fs-ok",
         result: "hello",
       });
     });
+  });
+
+  it("forwards IPC delivery metadata as server call options", async () => {
+    const appWc = makeWebContents(17);
+    const callAs = vi.fn(async () => "ok");
+    const request = {
+      type: "request",
+      requestId: "req-meta",
+      fromId: "@workspace-apps/shell",
+      method: "fs.readFile",
+      args: ["/hello.txt", "utf8"],
+    } satisfies RpcMessage;
+    makeDispatcher({
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      getWebContentsForCaller: () => appWc,
+      callAs,
+      authorizeAppServerCall: vi.fn(),
+    });
+
+    ipcHandlers.get("natstack:rpc:send")?.(
+      { sender: appWc } as never,
+      rpcEnvelope("@workspace-apps/shell", "app", request, {
+        idempotencyKey: "idem-1",
+        readOnly: true,
+      }) as never
+    );
+
+    await vi.waitFor(() => {
+      expect(callAs).toHaveBeenCalledWith(
+        { callerId: "@workspace-apps/shell", callerKind: "app" },
+        "fs",
+        "readFile",
+        ["/hello.txt", "utf8"],
+        { idempotencyKey: "idem-1", readOnly: true }
+      );
+    });
+    expect(request).not.toHaveProperty("idempotencyKey");
+    expect(request).not.toHaveProperty("readOnly");
   });
 
   it("attaches app source identity to Electron-local service dispatch", async () => {
@@ -337,14 +402,13 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: appWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
         requestId: "req-local",
         fromId: "@workspace-apps/shell",
         method: "app.getInfo",
         args: [],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() =>
@@ -359,7 +423,7 @@ describe("IpcDispatcher", () => {
 
   it("bridges server-originated app messages back to the current app WebContents", async () => {
     const appWc = makeWebContents(12);
-    const listenerBox: { current?: (fromId: string, message: RpcMessage) => void } = {};
+    const listenerBox: { current?: (envelope: RpcEnvelope) => void } = {};
     const addMessageListener = vi.fn((_caller, nextListener) => {
       listenerBox.current = nextListener;
       return vi.fn();
@@ -372,32 +436,33 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: appWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
         requestId: "req-1",
         fromId: "@workspace-apps/shell",
         method: "workspace.getInfo",
         args: [],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
     await vi.waitFor(() => expect(listenerBox.current).toBeTruthy());
     const emitToApp = listenerBox.current;
     if (!emitToApp) throw new Error("missing app message listener");
 
-    emitToApp("main", {
-      type: "event",
-      fromId: "main",
-      event: "workspace:changed",
-      payload: { id: "ws" },
-    });
+    const eventEnvelope = rpcEnvelope(
+      "main",
+      "server",
+      {
+        type: "event",
+        fromId: "main",
+        event: "workspace:changed",
+        payload: { id: "ws" },
+      },
+      undefined,
+      "@workspace-apps/shell"
+    );
+    emitToApp(eventEnvelope);
 
-    expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", "main", {
-      type: "event",
-      fromId: "main",
-      event: "workspace:changed",
-      payload: { id: "ws" },
-    });
+    expect(appWc.send).toHaveBeenCalledWith("natstack:rpc:message", eventEnvelope);
   });
 
   it("registers an IPC event subscriber for app-backed shell views", async () => {
@@ -409,14 +474,13 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("natstack:rpc:send")?.(
       { sender: appWc } as never,
-      "main" as never,
-      {
+      rpcEnvelope("@workspace-apps/shell", "app", {
         type: "request",
         requestId: "req-local-events",
         fromId: "@workspace-apps/shell",
         method: "events.subscribe",
         args: ["workspace:revision-bumped"],
-      } satisfies RpcMessage as never
+      } satisfies RpcMessage) as never
     );
 
     await vi.waitFor(() => {

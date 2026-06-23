@@ -67,7 +67,8 @@ globals.__natstackTransport = createWsTransport({
 // The server emits stateArgs:updated back to the panel over the server WS
 // after persisting. This listener works in both Electron and standalone.
 
-globals.__natstackTransport.onMessage((_fromId: string, message: unknown) => {
+globals.__natstackTransport.onMessage((envelope) => {
+  const message = envelope.message;
   if (isRuntimeEventMessage(message) && message.event === "stateArgs:updated") {
     const stateArgs =
       message.payload && typeof message.payload === "object"

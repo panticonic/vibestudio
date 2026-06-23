@@ -20,6 +20,7 @@ import type {
   RpcResponse,
   RpcStreamCancel,
   RpcStreamFrameMessage,
+  RpcStreamOptions,
   RpcStreamRequest,
   StreamingMethodFrame,
   TypedCallProxy,
@@ -127,7 +128,7 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
   function makeEnvelope(
     targetId: string,
     message: RpcMessage,
-    options?: { idempotencyKey?: string },
+    options?: { idempotencyKey?: string; readOnly?: boolean },
     provenance: AuthenticatedCaller[] = baseProvenance
   ): RpcEnvelope {
     return {
@@ -136,6 +137,7 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
       delivery: {
         caller: selfCaller,
         ...(options?.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+        ...(options?.readOnly ? { readOnly: true } : {}),
       },
       provenance,
       message,
@@ -177,7 +179,7 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
   async function send(
     targetId: string,
     message: RpcMessage,
-    options?: { idempotencyKey?: string },
+    options?: { idempotencyKey?: string; readOnly?: boolean },
     provenance?: AuthenticatedCaller[]
   ): Promise<void> {
     const envelope = makeEnvelope(targetId, message, options, provenance);
@@ -435,7 +437,13 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
   ): Promise<T> {
     if (options?.signal?.aborted) return Promise.reject(new Error("RPC call aborted by caller"));
     const requestId = generateRequestId();
-    const request: RpcRequest = { type: "request", requestId, fromId: config.selfId, method, args };
+    const request: RpcRequest = {
+      type: "request",
+      requestId,
+      fromId: config.selfId,
+      method,
+      args,
+    };
     return new Promise<T>((resolve, reject) => {
       let timeout: ReturnType<typeof setTimeout> | null = null;
       let abortCleanup: (() => void) | null = null;
@@ -494,7 +502,7 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { signal?: AbortSignal; idempotencyKey?: string }
+    options?: RpcStreamOptions
   ): Promise<Response> {
     // Connectionless transports (HTTP) physically stream the response body, so
     // delegate to their first-class `stream` hook. Socket transports omit it
@@ -550,7 +558,7 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
     targetId: string,
     method: string,
     args: unknown[],
-    options?: { signal?: AbortSignal; idempotencyKey?: string }
+    options?: RpcStreamOptions
   ): Promise<Response> {
     if (options?.signal?.aborted) throw new Error("Streaming RPC aborted by caller");
     const requestId = generateRequestId();
@@ -618,7 +626,13 @@ export function createRpcClient(config: RpcClientConfig): RpcClient {
     try {
       await send(
         targetId,
-        { type: "stream-request", requestId, fromId: config.selfId, method, args },
+        {
+          type: "stream-request",
+          requestId,
+          fromId: config.selfId,
+          method,
+          args,
+        },
         options,
         provenance
       );

@@ -19,14 +19,59 @@
  */
 
 import type { z } from "zod";
-import type { ServicePolicy } from "./servicePolicy.js";
+import type { ServicePolicy, MethodAccessDescriptor } from "./servicePolicy.js";
 
-/** Pure-data schema for one RPC method (no handler — that's server-side). */
+/** A worked example for a method. Realistic values allowed (hand-authored or
+ *  redacted-from-real-usage); flows to the capability catalog and JIT errors. */
+export interface MethodExample {
+  args: unknown[];
+  returns?: unknown;
+  note?: string;
+}
+
+/** A documented error outcome a method may throw. */
+export interface MethodError {
+  /** Stable code (e.g. "ENOENT", "EACCES") or a domain code. */
+  code: string;
+  description: string;
+}
+
+/** Deprecation marker for a method. */
+export interface MethodDeprecation {
+  since?: string;
+  replacedBy?: string;
+  reason?: string;
+}
+
+/**
+ * Pure-data schema for one RPC method (no handler — that's server-side).
+ *
+ * The literate home for a method's contract AND its documentation: beyond the
+ * Zod `args`/`returns`, doc/access fields below are plain serializable metadata
+ * (not Zod refinements, so `zod-to-json-schema` preserves them) that flow to
+ * agents via the capability catalog. The serializer must explicitly emit them.
+ */
 export interface MethodSchema {
   description?: string;
   args: z.ZodType;
   returns?: z.ZodType;
+  /**
+   * @deprecated Prefer service-level or method-level `policy` for caller-kind
+   * gates, and `access` for descriptive sensitivity/restriction metadata.
+   * Retained transitionally while services migrate older schema definitions.
+   */
   policy?: ServicePolicy;
+  /** Unified access & restrictedness descriptor (caller kinds, conditional
+   *  restrictions, sensitivity, side-effects, approval/grant gates). */
+  access?: MethodAccessDescriptor;
+  /** Worked examples (catalog + JIT teaching). */
+  examples?: MethodExample[];
+  /** Documented error outcomes. */
+  errors?: MethodError[];
+  /** Related methods, as qualified names (e.g. "eval.getRun"). */
+  seeAlso?: string[];
+  /** Deprecation marker. */
+  deprecated?: MethodDeprecation;
 }
 
 export type ServiceMethodSchemas = Record<string, MethodSchema>;
@@ -70,8 +115,9 @@ type SubMethods<M extends ServiceMethodSchemas, H extends string> = {
  * names become nested groups.
  */
 export type TypedServiceClient<M extends ServiceMethodSchemas> = {
-  [K in keyof M & string as K extends `${infer Head}.${string}` ? Head : K]: K extends
-    `${infer Head}.${string}`
+  [K in keyof M & string as K extends `${infer Head}.${string}`
+    ? Head
+    : K]: K extends `${infer Head}.${string}`
     ? TypedServiceClient<SubMethods<M, Head>>
     : MethodFn<M[K]>;
 };

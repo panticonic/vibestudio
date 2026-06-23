@@ -120,7 +120,8 @@ describe("ServerClient scoped runtime callers", () => {
     const events: unknown[] = [];
     client.addMessageListener(
       { callerId: "@workspace-apps/shell", callerKind: "app" },
-      (_fromId, message) => {
+      (envelope) => {
+        const message = envelope.message;
         if (message.type === "event") events.push(message.payload);
       }
     );

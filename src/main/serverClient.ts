@@ -7,8 +7,9 @@ import * as fs from "fs";
 import {
   createRpcClient,
   type RpcClient,
+  type RpcCallOptions,
   type RpcConnectionStatus,
-  type RpcMessage,
+  type RpcEnvelope,
 } from "@natstack/rpc";
 import { wsClientTransport } from "@natstack/rpc/transports/wsClient";
 import { NodeWsLike } from "@natstack/shared/shell/transport/nodeWsLike";
@@ -25,7 +26,7 @@ export interface ScopedServerCaller {
   callerKind: CallerKind;
 }
 
-export type ServerMessageListener = (fromId: string, message: RpcMessage) => void;
+export type ServerMessageListener = (envelope: RpcEnvelope) => void;
 
 export interface TlsPinningOptions {
   /** Path to a CA certificate (PEM) for self-signed servers */
@@ -36,13 +37,19 @@ export interface TlsPinningOptions {
 
 export interface ServerClient {
   /** Call a backend service via the server */
-  call(service: string, method: string, args: unknown[]): Promise<unknown>;
+  call(
+    service: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions
+  ): Promise<unknown>;
   /** Call a backend service via the server as an Electron-hosted runtime principal. */
   callAs(
     caller: ScopedServerCaller,
     service: string,
     method: string,
-    args: unknown[]
+    args: unknown[],
+    options?: RpcCallOptions
   ): Promise<unknown>;
   /** Forward server-originated messages for an Electron-hosted runtime principal. */
   addMessageListener(caller: ScopedServerCaller, listener: ServerMessageListener): () => void;
@@ -195,7 +202,7 @@ export async function createServerClient(
     });
     scopedTransport.onMessage((envelope) => {
       for (const listener of scopedListeners.get(scopedKey(caller)) ?? []) {
-        listener(envelope.from, envelope.message);
+        listener(envelope);
       }
     });
     await scopedTransport.connectAndWait();
@@ -224,14 +231,20 @@ export async function createServerClient(
   };
 
   return {
-    call(service: string, method: string, args: unknown[]): Promise<unknown> {
-      return rpc.call("main", `${service}.${method}`, args);
+    call(
+      service: string,
+      method: string,
+      args: unknown[],
+      options?: RpcCallOptions
+    ): Promise<unknown> {
+      return rpc.call("main", `${service}.${method}`, args, options);
     },
     async callAs(
       caller: ScopedServerCaller,
       service: string,
       method: string,
-      args: unknown[]
+      args: unknown[],
+      options?: RpcCallOptions
     ): Promise<unknown> {
       // Scoped server RPC is for `app` principals only (per-app WS connection +
       // grant). Native-host `shell` callers (electron-main / launch gate) use
@@ -239,7 +252,7 @@ export async function createServerClient(
       // former `callerKind === "shell"` shortcut was the desktop shell proxy and
       // has been removed — getScopedClient fails closed for non-app callers.
       const client = await getScopedClient(caller);
-      return client.rpc.call("main", `${service}.${method}`, args);
+      return client.rpc.call("main", `${service}.${method}`, args, options);
     },
     addMessageListener(caller: ScopedServerCaller, listener: ServerMessageListener): () => void {
       const key = scopedKey(caller);
