@@ -9,7 +9,11 @@ import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";
 import type { AppOrchestrator } from "../appOrchestrator.js";
-import { callerHasPlatformCapability, requireAppCapability } from "./appCapabilities.js";
+import {
+  callerHasPlatformCapability,
+  requireAppCapability,
+  requireChromeCaller,
+} from "./appCapabilities.js";
 
 export function createAppService(deps: {
   panelOrchestrator: PanelOrchestrator;
@@ -71,9 +75,9 @@ export function createAppService(deps: {
         }
 
         case "openWorkspacePath": {
-          if (ctx.caller.runtime.kind !== "shell") {
-            throw new Error("app.openWorkspacePath is shell-only");
-          }
+          // Chrome-only (cross-workspace surface). The hosted shell resolves as
+          // kind:"app" (apps/shell), so gate on authorized chrome, not kind.
+          requireChromeCaller(ctx, deps.getViewManager(), "app.openWorkspacePath");
           const info = await workspaceClient?.getInfo();
           const workspacePath = info?.path;
           if (typeof workspacePath !== "string" || workspacePath.length === 0) {

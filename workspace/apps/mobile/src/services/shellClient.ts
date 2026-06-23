@@ -11,6 +11,7 @@ import type { PanelManager } from "@natstack/shared/shell/panelManager";
 import type {
   PanelHost,
   PanelHostRegistration,
+  PanelRuntimeLease,
   PanelRuntimeLeaseChangedEvent,
   RuntimeLeaseSnapshot,
 } from "@natstack/shared/panel/panelLease";
@@ -130,6 +131,10 @@ class MobilePanels implements PanelHost {
   private readonly browserData: BrowserDataClient;
   private readonly workspaceRpc: WorkspaceRpcClient;
   private readonly vcs: VcsClient;
+  private readonly runtimeConnectionBySlot = new Map<
+    string,
+    { runtimeEntityId: string; connectionId: string }
+  >();
   readonly registration: PanelHostRegistration;
   constructor(
     private readonly deps: {
@@ -162,13 +167,13 @@ class MobilePanels implements PanelHost {
   /**
    * Tree mutations route through the single server authority (panelTree); the
    * mobile mirror updates reactively from the panel-tree-updated broadcast (the
-   * UI materializes panels from the tree atom). Mobile connects as a "shell"
-   * host, which panelTree's policy allows.
+   * UI materializes panels from the tree atom). Mobile connects as a native
+   * `shell:${deviceId}` host, which panelTree's policy allows.
    */
   private callPanelTree<T = unknown>(method: string, args: unknown[]): Promise<T> {
     return this.deps.transport.call("main", `panelTree.${method}`, args) as Promise<T>;
   }
-  async init(workspaceId: string, workspaceConfig?: WorkspaceConfig): Promise<void> {
+  async init(workspaceId: string, _workspaceConfig?: WorkspaceConfig): Promise<void> {
     if (!this.panelManager) {
       const core = createMobileShellCore({
         workspaceId,
@@ -189,17 +194,12 @@ class MobilePanels implements PanelHost {
     const initialTheme = Appearance.getColorScheme() === "light" ? "light" : "dark";
     this.panelManager.setCurrentTheme(initialTheme);
     await this.panelRuntime.registerClient(this.registration);
+    // The server is the sole tree authority and seeds initPanels server-side
+    // (seedPanelTreeIfEmpty). Mobile never seeds: it syncs the authoritative
+    // tree and focuses the first root, mirroring further changes reactively.
     const tree = await this.panelManager.syncSnapshot();
     await this.syncRuntimeLeases();
-    if (tree.rootPanels.length > 0) return;
-    const entries = workspaceConfig?.initPanels ?? [];
-    for (const entry of entries) {
-      // Root init panel: no parentId ⇒ server creates it as a root.
-      await this.callPanelTree("create", [entry.source, { stateArgs: entry.stateArgs }]);
-    }
-    const nextTree = await this.panelManager.syncSnapshot();
-    await this.syncRuntimeLeases();
-    const firstRoot = nextTree.rootPanels[0];
+    const firstRoot = tree.rootPanels[0];
     if (firstRoot) {
       await this.panelManager.notifyFocused(asPanelSlotId(firstRoot.id));
       this.deps.navigateToPanel(firstRoot.id);
@@ -394,7 +394,19 @@ class MobilePanels implements PanelHost {
   async updateTheme(theme: ThemeAppearance): Promise<void> {
     this.requireManager().setCurrentTheme(theme);
   }
-  async unload(_panelId: string): Promise<void> {}
+  async unload(panelId: string): Promise<void> {
+    const lease = this.runtimeConnectionBySlot.get(panelId);
+    this.runtimeConnectionBySlot.delete(panelId);
+    if (!lease) return;
+    try {
+      await this.panelRuntime.release(lease.runtimeEntityId, lease.connectionId);
+    } catch (error) {
+      console.warn("[MobilePanels] Failed to release panel lease", {
+        panelId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
   async getPanelInit(panelId: string): Promise<unknown> {
     return this.requireManager().getPanelInit(asPanelSlotId(panelId));
   }
@@ -403,7 +415,7 @@ class MobilePanels implements PanelHost {
     runtimeEntityId: string,
     opts: { connectionId: string }
   ): Promise<{ acquired: boolean; lease?: { holderLabel: string } }> {
-    return this.panelRuntime.acquire(
+    const result = await this.panelRuntime.acquire(
       runtimeEntityId,
       createPanelRuntimeLeaseRequest({
         slotId: panelId,
@@ -411,13 +423,20 @@ class MobilePanels implements PanelHost {
         connectionId: opts.connectionId,
       })
     );
+    if (result.acquired) {
+      this.runtimeConnectionBySlot.set(panelId, {
+        runtimeEntityId,
+        connectionId: opts.connectionId,
+      });
+    }
+    return result;
   }
   async takeOverLease(
     panelId: string,
     runtimeEntityId: string,
     opts: { connectionId: string }
   ): Promise<{ acquired: boolean; lease?: { holderLabel: string } }> {
-    return this.panelRuntime.takeOver(
+    const result = await this.panelRuntime.takeOver(
       runtimeEntityId,
       createPanelRuntimeLeaseRequest({
         slotId: panelId,
@@ -425,14 +444,28 @@ class MobilePanels implements PanelHost {
         connectionId: opts.connectionId,
       })
     );
+    if (result.acquired) {
+      this.runtimeConnectionBySlot.set(panelId, {
+        runtimeEntityId,
+        connectionId: opts.connectionId,
+      });
+    }
+    return result;
   }
   handleRuntimeLeaseChanged(event: PanelRuntimeLeaseChangedEvent): void {
     this.registry.applyRuntimeLeaseChanged(event);
+    if (event.previous?.clientSessionId === this.deps.clientSessionId) {
+      this.runtimeConnectionBySlot.delete(String(event.previous.slotId));
+    }
+    if (event.next?.clientSessionId === this.deps.clientSessionId) {
+      this.trackRuntimeLease(event.next);
+    }
     this.deps.onTreeUpdated?.(this.getTree());
   }
   async syncRuntimeLeases(): Promise<void> {
     const snapshot = await this.panelRuntime.getSnapshot();
     this.registry.applyRuntimeLeaseSnapshot(snapshot);
+    this.syncTrackedRuntimeLeases(snapshot);
     this.deps.onTreeUpdated?.(this.getTree());
   }
   async handleBridgeCall(panelId: string, method: string, args: unknown[]): Promise<unknown> {
@@ -442,6 +475,23 @@ class MobilePanels implements PanelHost {
   private requireManager(): PanelManager {
     if (!this.panelManager) throw new Error("Panels not initialized");
     return this.panelManager;
+  }
+  private trackRuntimeLease(lease: PanelRuntimeLease): void {
+    this.runtimeConnectionBySlot.set(String(lease.slotId), {
+      runtimeEntityId: String(lease.runtimeEntityId),
+      connectionId: lease.connectionId,
+    });
+  }
+  private syncTrackedRuntimeLeases(snapshot: RuntimeLeaseSnapshot): void {
+    const activeSlots = new Set<string>();
+    for (const lease of snapshot.leases) {
+      if (lease.clientSessionId !== this.deps.clientSessionId) continue;
+      activeSlots.add(String(lease.slotId));
+      this.trackRuntimeLease(lease);
+    }
+    for (const slotId of this.runtimeConnectionBySlot.keys()) {
+      if (!activeSlots.has(slotId)) this.runtimeConnectionBySlot.delete(slotId);
+    }
   }
 }
 export class ShellClient {

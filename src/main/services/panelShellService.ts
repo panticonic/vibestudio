@@ -1,9 +1,10 @@
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
+import type { ServiceContext } from "@natstack/shared/serviceDispatcher";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { PanelRegistry } from "@natstack/shared/panelRegistry";
 import type { PanelView } from "../panelView.js";
 import type { ViewManager } from "../viewManager.js";
-import type { ThemeAppearance } from "@natstack/shared/types";
+import type { ThemeAppearance, ThemeConfig } from "@natstack/shared/types";
 import type { ServerClient } from "../serverClient.js";
 import { panelMethods } from "@natstack/shared/serviceSchemas/panel";
 import {
@@ -110,6 +111,14 @@ async function getRepoState(
   }
 }
 
+function requirePanelHostingAppCapability(
+  ctx: ServiceContext,
+  viewManager: ViewManager,
+  method: string
+): void {
+  requireAppCapability(ctx, viewManager, "panel-hosting", `panel.${method}`);
+}
+
 export function createPanelShellService(deps: {
   panelOrchestrator: PanelOrchestrator;
   panelRegistry: PanelRegistry;
@@ -127,17 +136,30 @@ export function createPanelShellService(deps: {
       const registry = deps.panelRegistry;
       const pv = deps.panelView;
       const vm = deps.getViewManager();
-      requireAppCapability(ctx, vm, "panel-hosting", `panel.${method}`);
 
       switch (method) {
         case "updateTheme": {
+          requirePanelHostingAppCapability(ctx, vm, method);
           const theme = args[0] as ThemeAppearance;
           lifecycle.setCurrentTheme(theme);
           lifecycle.broadcastTheme(theme);
           return;
         }
 
+        case "updateThemeConfig": {
+          requirePanelHostingAppCapability(ctx, vm, method);
+          const config = args[0] as ThemeConfig;
+          lifecycle.setCurrentThemeConfig(config);
+          lifecycle.broadcastThemeConfig();
+          return;
+        }
+
+        case "getThemeConfig": {
+          return lifecycle.getThemeConfig();
+        }
+
         case "getChromeState": {
+          requirePanelHostingAppCapability(ctx, vm, method);
           const panelId = args[0] as string;
           const panel = registry.getPanel(panelId);
           if (!panel) throw new Error(`Panel not found: ${panelId}`);
@@ -146,28 +168,45 @@ export function createPanelShellService(deps: {
         }
 
         case "getAddressOptions": {
+          requirePanelHostingAppCapability(ctx, vm, method);
           const source = args[0] as string;
           const ref = args[1] as string | undefined;
           return getPanelAddressOptions(source, ref, deps.serverClient);
         }
 
         case "getBrowserAddressOptions": {
+          requirePanelHostingAppCapability(ctx, vm, method);
           return getBrowserAddressOptions(args[0] as string, registry, deps.serverClient);
         }
 
+        case "ensureLoaded": {
+          requirePanelHostingAppCapability(ctx, vm, method);
+          const panelId = args[0] as string;
+          return lifecycle.ensureLoaded(panelId);
+        }
+
+        case "takeOver": {
+          requirePanelHostingAppCapability(ctx, vm, method);
+          const panelId = args[0] as string;
+          return lifecycle.takeOverPanel(panelId);
+        }
+
         case "markBrowserNavigationIntent": {
+          requirePanelHostingAppCapability(ctx, vm, method);
           const [panelId, intent] = args as [string, BrowserNavigationIntent];
           pv.markBrowserNavigationIntent?.(panelId, intent);
           return;
         }
 
         case "reloadView": {
+          requirePanelHostingAppCapability(ctx, vm, method);
           const panelId = args[0] as string;
           vm.reload(panelId);
           return;
         }
 
         case "forceReloadView": {
+          requirePanelHostingAppCapability(ctx, vm, method);
           const panelId = args[0] as string;
           vm.forceReload(panelId);
           return;

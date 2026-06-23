@@ -8,6 +8,8 @@ import { createHash } from "crypto";
 import type { ServiceDefinition } from "@natstack/shared/serviceDefinition";
 import { createTypedServiceClient } from "@natstack/shared/typedServiceClient";
 import { authMethods } from "@natstack/shared/serviceSchemas/auth";
+import type { ViewManager } from "../viewManager.js";
+import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
 import { remoteCredMethods } from "@natstack/shared/serviceSchemas/remoteCred";
 import type { StartupMode } from "../startupMode.js";
 import {
@@ -500,13 +502,23 @@ export async function exchangePairingCodeForDeviceCredential(
 export function createRemoteCredService(deps: {
   startupMode: StartupMode;
   getServerClient?: () => ServerClient | null;
+  getViewManager?: () => ViewManager;
 }): ServiceDefinition {
   return {
     name: "remoteCred",
     description: "Manage the Electron-side remote-server credential store",
-    policy: { allowed: ["shell"] },
+    // The workspace shell renderer (apps/shell, connection-management) is an
+    // `app`; native-host `shell` also calls here. App callers are gated to
+    // authorized chrome (panel-hosting) so no arbitrary app can manage creds.
+    policy: { allowed: ["shell", "app"] },
     methods: remoteCredMethods,
     handler: async (_ctx, method, args) => {
+      if (_ctx.caller.runtime.kind === "app") {
+        if (!deps.getViewManager) {
+          throw new Error(`remoteCred.${method} app capability unavailable`);
+        }
+        requireChromeAppCallerOrHost(_ctx, deps.getViewManager(), `remoteCred.${method}`);
+      }
       switch (method) {
         case "getCurrent": {
           const creds = loadRemoteCredentials();

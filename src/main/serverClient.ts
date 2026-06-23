@@ -233,7 +233,11 @@ export async function createServerClient(
       method: string,
       args: unknown[]
     ): Promise<unknown> {
-      if (caller.callerKind === "shell") return rpc.call("main", `${service}.${method}`, args);
+      // Scoped server RPC is for `app` principals only (per-app WS connection +
+      // grant). Native-host `shell` callers (electron-main / launch gate) use
+      // the admin connection via `call()`; there is no shell→app proxy. The
+      // former `callerKind === "shell"` shortcut was the desktop shell proxy and
+      // has been removed — getScopedClient fails closed for non-app callers.
       const client = await getScopedClient(caller);
       return client.rpc.call("main", `${service}.${method}`, args);
     },

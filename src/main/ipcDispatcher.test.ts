@@ -115,13 +115,16 @@ describe("IpcDispatcher", () => {
     });
   });
 
-  it("forwards desktop shell panelTree RPC as the shell app principal", async () => {
+  it("forwards the workspace shell renderer panelTree RPC as the apps/shell app principal", async () => {
+    // The desktop workspace shell renders as the apps/shell app view, so its
+    // panelTree call is scoped to its own app principal via callAs (no shell→app
+    // proxy). This is the post-relabel path that replaced the deleted proxy.
     const shellWc = makeWebContents(20);
     const call = vi.fn();
     const callAs = vi.fn(async () => ({ rootPanels: [] }));
     const onServerRpcResult = vi.fn();
     makeDispatcher({
-      resolve: () => ({ callerId: "shell", callerKind: "shell" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
       call,
       callAs,
       onServerRpcResult,
@@ -133,7 +136,7 @@ describe("IpcDispatcher", () => {
       {
         type: "request",
         requestId: "req-paneltree",
-        fromId: "shell",
+        fromId: "@workspace-apps/shell",
         method: "panelTree.getTreeSnapshot",
         args: [],
       } satisfies RpcMessage as never
@@ -163,6 +166,37 @@ describe("IpcDispatcher", () => {
         result: { rootPanels: [] },
       });
     });
+  });
+
+  it("forwards a native-host shell server RPC on the admin connection (no shell→app proxy)", async () => {
+    // electron-main / bootstrap launch gate are native-host `shell` principals;
+    // they reach the server via the admin connection (plain call), never via the
+    // deleted shell→app panelTree proxy.
+    const shellWc = makeWebContents(21);
+    const call = vi.fn(async () => ({ ok: true }));
+    const callAs = vi.fn();
+    makeDispatcher({
+      resolve: () => ({ callerId: "shell", callerKind: "shell" }),
+      call,
+      callAs,
+    });
+
+    ipcHandlers.get("natstack:rpc:send")?.(
+      { sender: shellWc } as never,
+      "main" as never,
+      {
+        type: "request",
+        requestId: "req-shell-server",
+        fromId: "shell",
+        method: "workspace.hostTargets.beginLaunch",
+        args: ["electron"],
+      } satisfies RpcMessage as never
+    );
+
+    await vi.waitFor(() => {
+      expect(call).toHaveBeenCalledWith("workspace", "hostTargets.beginLaunch", ["electron"]);
+    });
+    expect(callAs).not.toHaveBeenCalled();
   });
 
   it("rejects panel renderers on the generic shell/app RPC channel", async () => {

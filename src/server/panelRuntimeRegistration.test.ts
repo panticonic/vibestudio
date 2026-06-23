@@ -3,8 +3,10 @@ import {
   cdpDefaultHostAssignmentError,
   createServerPanelTreeBridge,
   panelHostCommandAssignmentError,
+  seedPanelTreeIfEmpty,
   snapshotBrowserPanelFromCdpBridge,
 } from "./panelRuntimeRegistration.js";
+import type { PanelTreeBridgeRequest } from "./services/panelTreeService.js";
 
 describe("cdpDefaultHostAssignmentError", () => {
   it("classifies non-CDP mobile holders distinctly", () => {
@@ -538,5 +540,69 @@ describe("createServerPanelTreeBridge self-heal", () => {
     // … and re-broadcast exactly once (debounced).
     const treeEmits = eventService.emit.mock.calls.filter((c) => c[0] === "panel-tree-updated");
     expect(treeEmits).toHaveLength(1);
+  });
+});
+
+describe("seedPanelTreeIfEmpty", () => {
+  const makeBridge = (
+    roots: Array<{ id?: string; panelId?: string; source?: string }>,
+    stateArgsByRoot: Record<string, Record<string, unknown>> = {}
+  ) => {
+    const calls: PanelTreeBridgeRequest[] = [];
+    const bridge = async (request: PanelTreeBridgeRequest): Promise<unknown> => {
+      calls.push(request);
+      if (request.method === "roots") return roots;
+      if (request.method === "getStateArgs") return stateArgsByRoot[String(request.args[0])] ?? {};
+      return { id: `panel:${request.args[0]}` };
+    };
+    return { bridge, calls };
+  };
+
+  it("seeds each init panel as the server when the tree is empty", async () => {
+    const { bridge, calls } = makeBridge([]);
+    await seedPanelTreeIfEmpty(bridge, [
+      { source: "panels/chat" },
+      { source: "panels/notes", stateArgs: { folder: "inbox" } },
+    ]);
+    const creates = calls.filter((c) => c.method === "create");
+    expect(creates).toHaveLength(2);
+    expect(creates.every((c) => c.callerId === "server" && c.callerKind === "server")).toBe(true);
+    expect(creates[0]?.args).toEqual(["panels/chat", { stateArgs: undefined }]);
+    expect(creates[1]?.args).toEqual(["panels/notes", { stateArgs: { folder: "inbox" } }]);
+  });
+
+  it("seeds missing init panels when a previous seed only partially completed", async () => {
+    const { bridge, calls } = makeBridge([{ panelId: "panel:tree/chat", source: "panels/chat" }], {
+      "panel:tree/chat": {},
+    });
+    await seedPanelTreeIfEmpty(bridge, [
+      { source: "panels/chat" },
+      { source: "panels/notes", stateArgs: { folder: "inbox" } },
+    ]);
+
+    const creates = calls.filter((c) => c.method === "create");
+    expect(creates).toHaveLength(1);
+    expect(creates[0]?.args).toEqual(["panels/notes", { stateArgs: { folder: "inbox" } }]);
+  });
+
+  it("is a no-op when the tree already has unrelated roots (existing workspace)", async () => {
+    const { bridge, calls } = makeBridge([{ panelId: "panel:existing", source: "panels/custom" }]);
+    await seedPanelTreeIfEmpty(bridge, [{ source: "panels/chat" }]);
+    expect(calls.filter((c) => c.method === "create")).toHaveLength(0);
+  });
+
+  it("does nothing when there are no init panels configured", async () => {
+    const { bridge, calls } = makeBridge([]);
+    await seedPanelTreeIfEmpty(bridge, []);
+    expect(calls).toHaveLength(0); // no probe, no create
+  });
+
+  it("propagates bridge failures instead of starting with a silently empty tree", async () => {
+    const bridge = async (): Promise<unknown> => {
+      throw new Error("bridge down");
+    };
+    await expect(seedPanelTreeIfEmpty(bridge, [{ source: "panels/chat" }])).rejects.toThrow(
+      "bridge down"
+    );
   });
 });

@@ -901,7 +901,7 @@ export function PanelStack({
       return (
         <Flex direction="column" align="center" justify="center" height="100%" p="4">
           <Text color="red" size="4" weight="bold" mb="2">
-            Panel Build Error
+            Panel Error
           </Text>
           <Text color="red" size="2" style={{ fontFamily: "monospace" }}>
             {artifacts.error}

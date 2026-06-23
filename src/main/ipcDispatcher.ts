@@ -21,10 +21,6 @@ import { assertPresent } from "../lintHelpers";
 
 /** Electron-main services that are not owned by the NatStack server process. */
 const ELECTRON_LOCAL_SERVICES: ReadonlySet<string> = new Set(ELECTRON_LOCAL_SERVICE_NAMES);
-const DESKTOP_SHELL_APP_CALLER = {
-  callerId: "@workspace-apps/shell",
-  callerKind: "app" as const,
-};
 
 export interface IpcDispatcherDeps {
   /** Electron-local service dispatcher */
@@ -182,8 +178,6 @@ export class IpcDispatcher {
 
       try {
         let result: unknown;
-        let resultCallerId = callerId;
-        let resultCallerKind = callerKind;
         if (ELECTRON_LOCAL_SERVICES.has(service)) {
           // Dispatch locally to Electron services. The dispatcher itself
           // enforces policy via checkServiceAccess (single choke-point).
@@ -199,18 +193,11 @@ export class IpcDispatcher {
           // Server is the default owner so newly registered userland/workerd
           // services are reachable without a shared routing-list update.
           if (callerKind === "shell") {
-            if (service === "panelTree") {
-              result = await this.deps.serverClient.callAs(
-                DESKTOP_SHELL_APP_CALLER,
-                service,
-                method,
-                req.args
-              );
-              resultCallerId = DESKTOP_SHELL_APP_CALLER.callerId;
-              resultCallerKind = DESKTOP_SHELL_APP_CALLER.callerKind;
-            } else {
-              result = await this.deps.serverClient.call(service, method, req.args);
-            }
+            // electron-main / bootstrap launch gate are native-host `shell`
+            // principals — they reach the server on the admin connection. The
+            // workspace shell renderer is an `app` (apps/shell) and takes the
+            // app branch below; there is no longer a shell→app panelTree proxy.
+            result = await this.deps.serverClient.call(service, method, req.args);
           } else if (callerKind === "app") {
             this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
             result = await this.deps.serverClient.callAs(
@@ -224,8 +211,8 @@ export class IpcDispatcher {
           }
         }
         await this.deps.onServerRpcResult?.({
-          callerId: resultCallerId,
-          callerKind: resultCallerKind,
+          callerId,
+          callerKind,
           service,
           method,
           args: req.args,
