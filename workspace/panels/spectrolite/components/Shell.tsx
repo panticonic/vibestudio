@@ -21,7 +21,7 @@ import {
   ListBulletIcon,
   MagnifyingGlassIcon,
 } from "@radix-ui/react-icons";
-import { useIsMobile } from "@workspace/react";
+import { useIsMobile, usePaletteCommands } from "@workspace/react";
 import { useApp, useAppState } from "../app/context";
 import { WikilinkContext } from "../mdx/components";
 import { resolveWikilinkTarget } from "../mdx/wikilink";
@@ -90,6 +90,30 @@ export function Shell({ theme }: { theme: "light" | "dark" }) {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [repoRoot]);
+
+  // Contribute editor actions to the app-level command palette (Cmd/Ctrl+K).
+  usePaletteCommands(
+    useMemo(
+      () => [
+        { id: "quickOpen", label: "Quick open file…", section: "Editor" },
+        { id: "newNote", label: "New note", section: "Editor" },
+      ],
+      []
+    ),
+    (id) => {
+      if (id === "quickOpen") setQuickOpen(true);
+      else if (id === "newNote") {
+        void (async () => {
+          try {
+            const created = await app.vault.createFile("Untitled", "# Untitled\n\n");
+            app.openFile(created);
+          } catch (err) {
+            console.warn("[Spectrolite] new note failed:", err);
+          }
+        })();
+      }
+    }
+  );
 
   if (repoRoot === null) {
     return <PickerScreen />;

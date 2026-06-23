@@ -1,8 +1,8 @@
 export type CommandRunTarget = "here" | "splitRight" | "splitDown";
 
 export function commandTargetForEnter(event: Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey">): CommandRunTarget {
-  const modified = event.ctrlKey || event.metaKey;
-  if (modified && event.shiftKey) return "splitDown";
+  // Shift (with or without Ctrl/Cmd) splits down; any other modifier combo
+  // splits right.
   if (event.shiftKey) return "splitDown";
   return "splitRight";
 }

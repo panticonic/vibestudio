@@ -1,5 +1,7 @@
 import { Box, Button, Flex, Text, Theme } from "@radix-ui/themes";
-import { useIsMobile, usePanelTheme } from "@workspace/react";
+import { ShortcutsHelp, EmptyState, type ShortcutGroup } from "@workspace/ui";
+import { useAppTheme } from "@workspace/ui/panel";
+import { useIsMobile, usePaletteCommands, usePanelTheme } from "@workspace/react";
 import {
   rpc,
   panel,
@@ -23,7 +25,12 @@ import { SplitTree } from "./SplitTree.js";
 import { Toast, useToast } from "./Toast.js";
 import { parseApprovedOpenUrl } from "./approvedOpenUrl.js";
 import { type CommandRunTarget } from "./commandLauncherModel.js";
-import { isPlainEscapeEvent } from "./keybindings.js";
+import {
+  isPlainEscapeEvent,
+  actionLabel,
+  defaultKeybindings,
+  type KeybindingAction,
+} from "./keybindings.js";
 import { migrateState } from "./migrateState.js";
 import { disposePanelSessions } from "./panelLifecycle.js";
 import { findDirectionalPane, type PaneFocusDirection } from "./paneFocus.js";
@@ -78,7 +85,26 @@ export function TerminalApp() {
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [restored, setRestored] = useState(false);
+
+  // Contribute terminal actions to the app-level command palette (Cmd/Ctrl+K).
+  // `runBuiltin` is a hoisted function declaration, safe to reference here.
+  const paletteCommands = useMemo(
+    () => [
+      { id: "palette", label: "Terminal command launcher…", section: "Terminal" },
+      { id: "newPane", label: "New pane", section: "Terminal" },
+      { id: "splitRight", label: "Split right", section: "Terminal" },
+      { id: "splitDown", label: "Split down", section: "Terminal" },
+      { id: "clear", label: "Clear scrollback", section: "Terminal" },
+      { id: "toggleFind", label: "Find in terminal", section: "Terminal" },
+    ],
+    []
+  );
+  usePaletteCommands(paletteCommands, (id) => {
+    if (id === "palette") setPaletteOpen(true);
+    else runBuiltin(id);
+  });
   const [initialOpenStatus, setInitialOpenStatus] = useState<
     "idle" | "opening" | "waitingApproval" | "failed"
   >("idle");
@@ -100,6 +126,7 @@ export function TerminalApp() {
   const { toast, showToast } = useToast();
 
   const appearance = state.themeOverride === "auto" ? panelAppearance : state.themeOverride;
+  const appTheme = useAppTheme();
   const focusedSessionId = state.focusedSessionId;
   const focusedSession = focusedSessionId ? sessions[focusedSessionId] : undefined;
   const visibleTree: SplitNode | undefined =
@@ -516,6 +543,7 @@ export function TerminalApp() {
     toggleNotifications: () =>
       setState((prev) => ({ ...prev, notificationCenterOpen: !prev.notificationCenterOpen })),
     settings: () => setSettingsOpen((open) => !open),
+    shortcuts: () => setShortcutsOpen((open) => !open),
     find: () => window.dispatchEvent(new CustomEvent("terminal:find")),
     findNext: () => window.dispatchEvent(new CustomEvent("terminal:find-next")),
     findPrev: () => window.dispatchEvent(new CustomEvent("terminal:find-previous")),
@@ -749,8 +777,24 @@ export function TerminalApp() {
     />
   );
 
+  // Build the shortcuts cheat-sheet from the live keymap (defaults + overrides).
+  const mergedKeymap = { ...defaultKeybindings, ...state.keybindings };
+  const chordFor = (action: KeybindingAction) =>
+    (mergedKeymap[action] ?? defaultKeybindings[action]).split("+");
+  const SHORTCUT_SECTIONS: { title: string; actions: KeybindingAction[] }[] = [
+    { title: "Panes", actions: ["newPane", "splitRight", "splitDown", "closePane", "zoom"] },
+    { title: "Navigation", actions: ["focusUp", "focusDown", "focusLeft", "focusRight", "jumpToLatestUnread", "nextUnread"] },
+    { title: "Search", actions: ["find", "findNext", "findPrev"] },
+    { title: "View", actions: ["fontUp", "fontDown", "fontReset", "clear", "toggleNotifications"] },
+    { title: "App", actions: ["palette", "openScratch", "settings", "shortcuts"] },
+  ];
+  const shortcutGroups: ShortcutGroup[] = SHORTCUT_SECTIONS.map((section) => ({
+    title: section.title,
+    entries: section.actions.map((action) => ({ label: actionLabel(action), keys: chordFor(action) })),
+  }));
+
   return (
-    <Theme appearance={appearance}>
+    <Theme appearance={appearance} {...appTheme}>
       <Flex
         height="100vh"
         width="100vw"
@@ -903,6 +947,7 @@ export function TerminalApp() {
         onPaste={(bufferId, text) => pasteScratch(bufferId, text, false)}
         onPasteAndRun={(bufferId, text) => pasteScratch(bufferId, text, true)}
       />
+      <ShortcutsHelp open={shortcutsOpen} onOpenChange={setShortcutsOpen} groups={shortcutGroups} />
     </Theme>
   );
 }
@@ -924,29 +969,24 @@ function EmptyTerminalState(props: {
   const elapsed = props.elapsedSeconds >= 1 ? `Waiting ${props.elapsedSeconds}s` : undefined;
 
   return (
-    <Flex height="100%" align="center" justify="center" p="4">
-      <Flex
-        direction="column"
-        align="center"
-        gap="3"
-        style={{ maxWidth: 360, textAlign: "center" }}
-      >
-        <Text size="3" weight="medium">
-          {copy.title}
-        </Text>
-        <Text size="2" color="gray">
+    <EmptyState
+      title={copy.title}
+      description={
+        <>
           {copy.detail}
-        </Text>
-        {elapsed ? (
-          <Text size="1" color="gray" role="status" aria-live="polite">
-            {elapsed}
-          </Text>
-        ) : null}
+          {elapsed ? (
+            <Text as="div" size="1" color="gray" mt="2" role="status" aria-live="polite">
+              {elapsed}
+            </Text>
+          ) : null}
+        </>
+      }
+      actions={
         <Button onClick={props.onOpen} disabled={isBusy}>
           {isBusy ? "Waiting..." : props.status === "failed" ? "Retry" : "Open terminal"}
         </Button>
-      </Flex>
-    </Flex>
+      }
+    />
   );
 }
 

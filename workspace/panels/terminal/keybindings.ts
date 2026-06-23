@@ -23,6 +23,7 @@ export const defaultKeybindings = {
   clear: "Mod+Shift+L",
   settings: "Mod+,",
   openScratch: "Mod+E",
+  shortcuts: "Mod+/",
 } as const;
 
 export type KeybindingAction = keyof typeof defaultKeybindings;
