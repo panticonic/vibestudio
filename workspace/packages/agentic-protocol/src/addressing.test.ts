@@ -113,6 +113,14 @@ describe("resolveShouldRespond", () => {
         ).respond
       ).toBe(false);
     });
+
+    it("responds to an explicit @mention (the 'mentioned' half), not only a followup", () => {
+      const decision = resolveShouldRespond(
+        input({ policy: "mentioned-or-followup", event: { mentions: ["agent-a"] } })
+      );
+      expect(decision.respond).toBe(true);
+      expect(decision.reason).toBe("explicitly addressed");
+    });
   });
 
   describe("from-participants", () => {

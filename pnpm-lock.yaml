@@ -1788,6 +1788,33 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
 
+  workspace/workers/explorer-agent:
+    dependencies:
+      '@workspace-workers/agent-worker':
+        specifier: workspace:*
+        version: link:../agent-worker
+      '@workspace-workers/silent-agent-worker':
+        specifier: workspace:*
+        version: link:../silent-agent-worker
+      '@workspace/agent-loop':
+        specifier: workspace:*
+        version: link:../../packages/agent-loop
+      '@workspace/agentic-do':
+        specifier: workspace:*
+        version: link:../../packages/agentic-do
+      '@workspace/harness':
+        specifier: workspace:*
+        version: link:../../packages/harness
+      '@workspace/pubsub':
+        specifier: workspace:*
+        version: link:../../packages/pubsub
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
+
   workspace/workers/fork:
     dependencies:
       '@workspace/channel-fork':
